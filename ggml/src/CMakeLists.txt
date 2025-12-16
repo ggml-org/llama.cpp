@@ -127,10 +127,6 @@ if (NOT MSVC)
     endif()
 endif()
 
-if (MINGW)
-    add_compile_definitions(_WIN32_WINNT=${GGML_WIN_VER})
-endif()
-
 #
 # POSIX conformance
 #
@@ -221,6 +217,10 @@ if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
 endif()
 
+if (GGML_SCHED_NO_REALLOC)
+    target_compile_definitions(ggml-base PUBLIC GGML_SCHED_NO_REALLOC)
+endif()
+
 add_library(ggml
             ggml-backend-reg.cpp)
 add_library(ggml::ggml ALIAS ggml)
@@ -270,10 +270,13 @@ function(ggml_add_backend_library backend)
     endif()
 
     # Set versioning properties for all backend libraries
-    set_target_properties(${backend} PROPERTIES
-        VERSION ${GGML_VERSION}
-        SOVERSION ${GGML_VERSION_MAJOR}
-    )
+    # Building a MODULE library with a version is not supported on macOS (https://gitlab.kitware.com/cmake/cmake/-/issues/20782)
+    if (NOT (APPLE AND GGML_BACKEND_DL))
+        set_target_properties(${backend} PROPERTIES
+            VERSION ${GGML_VERSION}
+            SOVERSION ${GGML_VERSION_MAJOR}
+        )
+    endif()
 
     if(NOT GGML_AVAILABLE_BACKENDS)
         set(GGML_AVAILABLE_BACKENDS "${backend}"
@@ -437,6 +440,7 @@ ggml_add_backend(WebGPU)
 ggml_add_backend(zDNN)
 ggml_add_backend(OpenCL)
 ggml_add_backend(Hexagon)
+ggml_add_backend(ZenDNN)
 
 foreach (target ggml-base ggml)
     target_include_directories(${target} PUBLIC    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> $<INSTALL_INTERFACE:include>)

@@ -155,11 +155,12 @@ task_params server_task::params_from_json_cmpl(
 
     // Sampling parameter defaults are loaded from the global server context (but individual requests can still them)
     task_params defaults;
-    defaults.sampling    = params_base.sampling;
-    defaults.speculative = params_base.speculative;
-    defaults.n_keep      = params_base.n_keep;
-    defaults.n_predict   = params_base.n_predict;
-    defaults.antiprompt  = params_base.antiprompt;
+    defaults.sampling      = params_base.sampling;
+    defaults.speculative   = params_base.speculative;
+    defaults.n_keep        = params_base.n_keep;
+    defaults.n_predict     = params_base.n_predict;
+    defaults.n_cache_reuse = params_base.n_cache_reuse;
+    defaults.antiprompt    = params_base.antiprompt;
 
     // enabling this will output extra debug information in the HTTP responses from the server
     params.verbose           = params_base.verbosity > 9;
@@ -175,6 +176,8 @@ task_params server_task::params_from_json_cmpl(
     params.n_indent         = json_value(data,       "n_indent",           defaults.n_indent);
     params.n_keep           = json_value(data,       "n_keep",             defaults.n_keep);
     params.n_discard        = json_value(data,       "n_discard",          defaults.n_discard);
+    params.n_cmpl           = json_value(data,       "n_cmpl",             json_value(data, "n", 1));
+    params.n_cache_reuse    = json_value(data,       "n_cache_reuse",      defaults.n_cache_reuse);
     //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
     params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
     params.response_fields  = json_value(data,       "response_fields",    std::vector<std::string>());
@@ -297,6 +300,9 @@ task_params server_task::params_from_json_cmpl(
         params.oaicompat_chat_syntax.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
         params.oaicompat_chat_syntax.thinking_forced_open = json_value(data, "thinking_forced_open", false);
         params.oaicompat_chat_syntax.parse_tool_calls = json_value(data, "parse_tool_calls", false);
+        if (data.contains("chat_parser")) {
+            params.oaicompat_chat_syntax.parser.load(data.at("chat_parser").get<std::string>());
+        }
     }
 
     {
@@ -450,8 +456,9 @@ task_params server_task::params_from_json_cmpl(
         }
     }
 
-    std::string model_name = params_base.model_alias.empty() ? DEFAULT_OAICOMPAT_MODEL : params_base.model_alias;
-    params.oaicompat_model = json_value(data, "model", model_name);
+    if (params.n_cmpl > params_base.n_parallel) {
+        throw std::runtime_error("n_cmpl cannot be greater than the number of slots, please increase -np");
+    }
 
     return params;
 }
@@ -565,23 +572,26 @@ std::vector<unsigned char> completion_token_output::str_to_bytes(const std::stri
 // server_task_result_cmpl_final
 //
 json server_task_result_cmpl_final::to_json() {
-    switch (oaicompat) {
-        case OAICOMPAT_TYPE_NONE:
+    GGML_ASSERT(is_updated && "update() must be called before to_json()");
+    switch (res_type) {
+        case TASK_RESPONSE_TYPE_NONE:
             return to_json_non_oaicompat();
-        case OAICOMPAT_TYPE_COMPLETION:
+        case TASK_RESPONSE_TYPE_OAI_CMPL:
             return to_json_oaicompat();
-        case OAICOMPAT_TYPE_CHAT:
+        case TASK_RESPONSE_TYPE_OAI_CHAT:
             return stream ? to_json_oaicompat_chat_stream() : to_json_oaicompat_chat();
+        case TASK_RESPONSE_TYPE_ANTHROPIC:
+            return stream ? to_json_anthropic_stream() : to_json_anthropic();
         default:
-            GGML_ASSERT(false && "Invalid oaicompat_type");
+            GGML_ASSERT(false && "Invalid task_response_type");
     }
 }
 
 json server_task_result_cmpl_final::to_json_non_oaicompat() {
     json res = json {
         {"index",               index},
-        {"content",             stream ? "" : content}, // in stream mode, content is already in last partial chunk
-        {"tokens",              stream ? llama_tokens {} : tokens},
+        {"content",             content},
+        {"tokens",              tokens},
         {"id_slot",             id_slot},
         {"stop",                true},
         {"model",               oaicompat_model},
@@ -617,7 +627,7 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
     json res = json {
         {"choices",            json::array({
             json{
-                {"text",          stream ? "" : content}, // in stream mode, content is already in last partial chunk
+                {"text",          content},
                 {"index",         index},
                 {"logprobs",      logprobs},
                 {"finish_reason", finish_reason},
@@ -661,7 +671,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
 
     json choice {
         {"finish_reason", finish_reason},
-        {"index", 0},
+        {"index", index},
         {"message", msg.to_json_oaicompat<json>()},
     };
 
@@ -696,6 +706,25 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
     }
 
     return res;
+}
+
+common_chat_msg task_result_state::update_chat_msg(
+        const std::string & text_added,
+        bool is_partial,
+        std::vector<common_chat_msg_diff> & diffs) {
+    generated_text += text_added;
+    auto msg_prv_copy = chat_msg;
+    SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
+    auto new_msg = common_chat_parse(
+        generated_text,
+        is_partial,
+        oaicompat_chat_syntax);
+    if (!new_msg.empty()) {
+        new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
+        chat_msg = new_msg;
+        diffs = common_chat_msg_diff::compute_diffs(msg_prv_copy, new_msg.empty() ? msg_prv_copy : new_msg);
+    }
+    return chat_msg;
 }
 
 json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
@@ -768,19 +797,204 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
     return deltas;
 }
 
+json server_task_result_cmpl_final::to_json_anthropic() {
+    std::string stop_reason = "max_tokens";
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+        stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
+    }
+
+    json content_blocks = json::array();
+
+    common_chat_msg msg;
+    if (!oaicompat_msg.empty()) {
+        msg = oaicompat_msg;
+    } else {
+        msg.role = "assistant";
+        msg.content = content;
+    }
+
+    if (!msg.content.empty()) {
+        content_blocks.push_back({
+            {"type", "text"},
+            {"text", msg.content}
+        });
+    }
+
+    for (const auto & tool_call : msg.tool_calls) {
+        json tool_use_block = {
+            {"type", "tool_use"},
+            {"id", tool_call.id},
+            {"name", tool_call.name}
+        };
+
+        try {
+            tool_use_block["input"] = json::parse(tool_call.arguments);
+        } catch (const std::exception &) {
+            tool_use_block["input"] = json::object();
+        }
+
+        content_blocks.push_back(tool_use_block);
+    }
+
+    json res = {
+        {"id", oaicompat_cmpl_id},
+        {"type", "message"},
+        {"role", "assistant"},
+        {"content", content_blocks},
+        {"model", oaicompat_model},
+        {"stop_reason", stop_reason},
+        {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)},
+        {"usage", {
+            {"input_tokens", n_prompt_tokens},
+            {"output_tokens", n_decoded}
+        }}
+    };
+
+    return res;
+}
+
+json server_task_result_cmpl_final::to_json_anthropic_stream() {
+    json events = json::array();
+
+    std::string stop_reason = "max_tokens";
+    if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
+        stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
+    }
+
+    bool has_text = !oaicompat_msg.content.empty();
+    size_t num_tool_calls = oaicompat_msg.tool_calls.size();
+
+    bool text_block_started = false;
+    std::unordered_set<size_t> tool_calls_started;
+
+    for (const auto & diff : oaicompat_msg_diffs) {
+        if (!diff.content_delta.empty()) {
+            if (!text_block_started) {
+                events.push_back({
+                    {"event", "content_block_start"},
+                    {"data", {
+                        {"type", "content_block_start"},
+                        {"index", 0},
+                        {"content_block", {
+                            {"type", "text"},
+                            {"text", ""}
+                        }}
+                    }}
+                });
+                text_block_started = true;
+            }
+
+            events.push_back({
+                {"event", "content_block_delta"},
+                {"data", {
+                    {"type", "content_block_delta"},
+                    {"index", 0},
+                    {"delta", {
+                        {"type", "text_delta"},
+                        {"text", diff.content_delta}
+                    }}
+                }}
+            });
+        }
+
+        if (diff.tool_call_index != std::string::npos) {
+            size_t content_block_index = (has_text ? 1 : 0) + diff.tool_call_index;
+
+            if (tool_calls_started.find(diff.tool_call_index) == tool_calls_started.end()) {
+                const auto & full_tool_call = oaicompat_msg.tool_calls[diff.tool_call_index];
+
+                events.push_back({
+                    {"event", "content_block_start"},
+                    {"data", {
+                        {"type", "content_block_start"},
+                        {"index", content_block_index},
+                        {"content_block", {
+                            {"type", "tool_use"},
+                            {"id", full_tool_call.id},
+                            {"name", full_tool_call.name}
+                        }}
+                    }}
+                });
+                tool_calls_started.insert(diff.tool_call_index);
+            }
+
+            if (!diff.tool_call_delta.arguments.empty()) {
+                events.push_back({
+                    {"event", "content_block_delta"},
+                    {"data", {
+                        {"type", "content_block_delta"},
+                        {"index", content_block_index},
+                        {"delta", {
+                            {"type", "input_json_delta"},
+                            {"partial_json", diff.tool_call_delta.arguments}
+                        }}
+                    }}
+                });
+            }
+        }
+    }
+
+    if (has_text) {
+        events.push_back({
+            {"event", "content_block_stop"},
+            {"data", {
+                {"type", "content_block_stop"},
+                {"index", 0}
+            }}
+        });
+    }
+
+    for (size_t i = 0; i < num_tool_calls; i++) {
+        size_t content_block_index = (has_text ? 1 : 0) + i;
+        events.push_back({
+            {"event", "content_block_stop"},
+            {"data", {
+                {"type", "content_block_stop"},
+                {"index", content_block_index}
+            }}
+        });
+    }
+
+    events.push_back({
+        {"event", "message_delta"},
+        {"data", {
+            {"type", "message_delta"},
+            {"delta", {
+                {"stop_reason", stop_reason},
+                {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)}
+            }},
+            {"usage", {
+                {"output_tokens", n_decoded}
+            }}
+        }}
+    });
+
+    events.push_back({
+        {"event", "message_stop"},
+        {"data", {
+            {"type", "message_stop"}
+        }}
+    });
+
+    return events;
+}
+
 //
 // server_task_result_cmpl_partial
 //
 json server_task_result_cmpl_partial::to_json() {
-    switch (oaicompat) {
-        case OAICOMPAT_TYPE_NONE:
+    GGML_ASSERT(is_updated && "update() must be called before to_json()");
+    switch (res_type) {
+        case TASK_RESPONSE_TYPE_NONE:
             return to_json_non_oaicompat();
-        case OAICOMPAT_TYPE_COMPLETION:
+        case TASK_RESPONSE_TYPE_OAI_CMPL:
             return to_json_oaicompat();
-        case OAICOMPAT_TYPE_CHAT:
+        case TASK_RESPONSE_TYPE_OAI_CHAT:
             return to_json_oaicompat_chat();
+        case TASK_RESPONSE_TYPE_ANTHROPIC:
+            return to_json_anthropic();
         default:
-            GGML_ASSERT(false && "Invalid oaicompat_type");
+            GGML_ASSERT(false && "Invalid task_response_type");
     }
 }
 
@@ -857,7 +1071,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
             {"choices", json::array({
                 json {
                     {"finish_reason", nullptr},
-                    {"index", 0},
+                    {"index", index},
                     {"delta", delta},
                 },
             })},
@@ -905,7 +1119,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
 // server_task_result_embd
 //
 json server_task_result_embd::to_json() {
-    return oaicompat == OAICOMPAT_TYPE_EMBEDDING
+    return res_type == TASK_RESPONSE_TYPE_OAI_EMBD
         ? to_json_oaicompat()
         : to_json_non_oaicompat();
 }
@@ -934,6 +1148,102 @@ json server_task_result_rerank::to_json() {
         {"score",            score},
         {"tokens_evaluated", n_tokens},
     };
+}
+
+json server_task_result_cmpl_partial::to_json_anthropic() {
+    json events = json::array();
+    bool first = (n_decoded == 1);
+    static bool text_block_started = false;
+
+    if (first) {
+        text_block_started = false;
+
+        events.push_back({
+            {"event", "message_start"},
+            {"data", {
+                {"type", "message_start"},
+                {"message", {
+                    {"id", oaicompat_cmpl_id},
+                    {"type", "message"},
+                    {"role", "assistant"},
+                    {"content", json::array()},
+                    {"model", oaicompat_model},
+                    {"stop_reason", nullptr},
+                    {"stop_sequence", nullptr},
+                    {"usage", {
+                        {"input_tokens", n_prompt_tokens},
+                        {"output_tokens", 0}
+                    }}
+                }}
+            }}
+        });
+    }
+
+    for (const auto & diff : oaicompat_msg_diffs) {
+        if (!diff.content_delta.empty()) {
+            if (!text_block_started) {
+                events.push_back({
+                    {"event", "content_block_start"},
+                    {"data", {
+                        {"type", "content_block_start"},
+                        {"index", 0},
+                        {"content_block", {
+                            {"type", "text"},
+                            {"text", ""}
+                        }}
+                    }}
+                });
+                text_block_started = true;
+            }
+
+            events.push_back({
+                {"event", "content_block_delta"},
+                {"data", {
+                    {"type", "content_block_delta"},
+                    {"index", 0},
+                    {"delta", {
+                        {"type", "text_delta"},
+                        {"text", diff.content_delta}
+                    }}
+                }}
+            });
+        }
+
+        if (diff.tool_call_index != std::string::npos) {
+            size_t content_block_index = (text_block_started ? 1 : 0) + diff.tool_call_index;
+
+            if (!diff.tool_call_delta.name.empty()) {
+                events.push_back({
+                    {"event", "content_block_start"},
+                    {"data", {
+                        {"type", "content_block_start"},
+                        {"index", content_block_index},
+                        {"content_block", {
+                            {"type", "tool_use"},
+                            {"id", diff.tool_call_delta.id},
+                            {"name", diff.tool_call_delta.name}
+                        }}
+                    }}
+                });
+            }
+
+            if (!diff.tool_call_delta.arguments.empty()) {
+                events.push_back({
+                    {"event", "content_block_delta"},
+                    {"data", {
+                        {"type", "content_block_delta"},
+                        {"index", content_block_index},
+                        {"delta", {
+                            {"type", "input_json_delta"},
+                            {"partial_json", diff.tool_call_delta.arguments}
+                        }}
+                    }}
+                });
+            }
+        }
+    }
+
+    return events;
 }
 
 //

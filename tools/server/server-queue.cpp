@@ -199,7 +199,7 @@ server_task_result_ptr server_response::recv(const std::unordered_set<int> & id_
         std::unique_lock<std::mutex> lock(mutex_results);
         condition_results.wait(lock, [&]{
             if (!running) {
-                RES_DBG("%s : queue result stop\n", __func__);
+                RES_DBG("%s : queue result stop\n", "recv");
                 std::terminate(); // we cannot return here since the caller is HTTP code
             }
             return !queue_results.empty();
@@ -265,4 +265,106 @@ void server_response::send(server_task_result_ptr && result) {
 void server_response::terminate() {
     running = false;
     condition_results.notify_all();
+}
+
+//
+// server_response_reader
+//
+
+void server_response_reader::post_task(server_task && task) {
+    GGML_ASSERT(id_tasks.empty() && "post_task() can only be called once per reader");
+    id_tasks.insert(task.id);
+    states.push_back(task.create_state());
+    queue_results.add_waiting_task_id(task.id);
+    queue_tasks.post(std::move(task));
+}
+
+void server_response_reader::post_tasks(std::vector<server_task> && tasks) {
+    GGML_ASSERT(id_tasks.empty() && "post_tasks() can only be called once per reader");
+    id_tasks = server_task::get_list_id(tasks);
+    states.reserve(tasks.size());
+    for (size_t i = 0; i < tasks.size(); i++) {
+        states.push_back(tasks[i].create_state());
+    }
+    queue_results.add_waiting_tasks(tasks);
+    queue_tasks.post(std::move(tasks));
+}
+
+bool server_response_reader::has_next() const {
+    return !cancelled && received_count < id_tasks.size();
+}
+
+// return nullptr if should_stop() is true before receiving a result
+// note: if one error is received, it will stop further processing and return error result
+server_task_result_ptr server_response_reader::next(const std::function<bool()> & should_stop) {
+    while (true) {
+        server_task_result_ptr result = queue_results.recv_with_timeout(id_tasks, polling_interval_seconds);
+        if (result == nullptr) {
+            // timeout, check stop condition
+            if (should_stop()) {
+                SRV_DBG("%s", "stopping wait for next result due to should_stop condition\n");
+                return nullptr;
+            }
+        } else {
+            if (result->is_error()) {
+                stop(); // cancel remaining tasks
+                SRV_DBG("%s", "received error result, stopping further processing\n");
+                return result;
+            }
+            if (!states.empty()) {
+                // update the generation state if needed
+                size_t idx = result->get_index();
+                GGML_ASSERT(idx < states.size());
+                result->update(states[idx]);
+            }
+            if (result->is_stop()) {
+                received_count++;
+            }
+            return result;
+        }
+    }
+
+    // should not reach here
+}
+
+server_response_reader::batch_response server_response_reader::wait_for_all(const std::function<bool()> & should_stop) {
+    batch_response batch_res;
+    batch_res.results.resize(id_tasks.size());
+    while (has_next()) {
+        auto res = next(should_stop);
+        if (res == nullptr) {
+            batch_res.is_terminated = true;
+            return batch_res;
+        }
+        if (res->is_error()) {
+            batch_res.error = std::move(res);
+            return batch_res;
+        }
+        const size_t idx = res->get_index();
+        GGML_ASSERT(idx < batch_res.results.size() && "index out of range");
+        GGML_ASSERT(batch_res.results[idx] == nullptr && "duplicate result received");
+        batch_res.results[idx] = std::move(res);
+    }
+    return batch_res;
+}
+
+void server_response_reader::stop() {
+    queue_results.remove_waiting_task_ids(id_tasks);
+    if (has_next() && !cancelled) {
+        // if tasks is not finished yet, cancel them
+        cancelled = true;
+        std::vector<server_task> cancel_tasks;
+        cancel_tasks.reserve(id_tasks.size());
+        for (const auto & id_task : id_tasks) {
+            SRV_WRN("cancel task, id_task = %d\n", id_task);
+            server_task task(SERVER_TASK_TYPE_CANCEL);
+            task.id_target = id_task;
+            queue_results.remove_waiting_task_id(id_task);
+            cancel_tasks.push_back(std::move(task));
+        }
+        // push to beginning of the queue, so it has highest priority
+        queue_tasks.post(std::move(cancel_tasks), true);
+    } else {
+        SRV_DBG("%s", "all tasks already finished, no need to cancel\n");
+    }
 }

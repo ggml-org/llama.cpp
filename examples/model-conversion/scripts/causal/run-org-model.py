@@ -184,8 +184,12 @@ model_name = os.path.basename(model_path)
 # of using AutoModelForCausalLM.
 print(f"Model class: {model.__class__.__name__}")
 
-prompt = "Hello, my name is"
-input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+device = next(model.parameters()).device
+if os.getenv("MODEL_TESTING_PROMPT"):
+    prompt = os.getenv("MODEL_TESTING_PROMPT")
+else:
+    prompt = "Hello, my name is"
+input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
 
 print(f"Input tokens: {input_ids}")
 print(f"Input text: {repr(prompt)}")
@@ -196,7 +200,7 @@ with torch.no_grad():
     logits = outputs.logits
 
     # Extract logits for the last token (next token prediction)
-    last_logits = logits[0, -1, :].cpu().numpy()
+    last_logits = logits[0, -1, :].float().cpu().numpy()
 
     print(f"Logits shape: {logits.shape}")
     print(f"Last token logits shape: {last_logits.shape}")

@@ -86,6 +86,9 @@ static __global__ void cpy_scalar_transpose(const char * cx, char * cdst, const 
             }
         }
     }
+
+    GGML_UNUSED_VARS(ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11,
+        nb12, nb13);
 }
 
 static __device__ void cpy_blck_q8_0_f32(const char * cxi, char * cdsti) {
@@ -202,7 +205,7 @@ static void ggml_cpy_scalar_cuda(
             ne00n = ne00;
             ne01n = ne01;
             ne02n = ne02;
-        } else if (nb00 > nb02) {
+        } else {
             ne00n = ne00;
             ne01n = ne01*ne02;
             ne02n = 1;

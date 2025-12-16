@@ -50,6 +50,7 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y \
+    build-essential \
     git \
     python3 \
     python3-pip \
@@ -67,7 +68,7 @@ ENTRYPOINT ["/app/tools.sh"]
 ### Light, CLI only
 FROM base AS light
 
-COPY --from=build /app/full/llama-cli /app
+COPY --from=build /app/full/llama-cli /app/full/llama-completion /app
 
 WORKDIR /app
 

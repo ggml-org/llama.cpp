@@ -7,6 +7,8 @@
 #include <mutex>
 #include <unordered_set>
 
+// struct for managing server tasks
+// in most cases, use server_response_reader to post new tasks and retrieve results
 struct server_queue {
 private:
     int id = 0;
@@ -67,6 +69,8 @@ private:
     void cleanup_pending_task(int id_target);
 };
 
+// struct for managing server responses
+// in most cases, use server_response_reader to retrieve results
 struct server_response {
 private:
     bool running = true;
@@ -107,4 +111,48 @@ public:
 
     // terminate the waiting loop
     void terminate();
+};
+
+// utility class to make working with server_queue and server_response easier
+// it provides a generator-like API for server responses
+// support pooling connection state and aggregating multiple results
+struct server_response_reader {
+    std::unordered_set<int> id_tasks;
+    server_queue & queue_tasks;
+    server_response & queue_results;
+    size_t received_count = 0;
+    bool cancelled = false;
+    int polling_interval_seconds;
+
+    // tracking generation state and partial tool calls
+    // only used by streaming completions
+    std::vector<task_result_state> states;
+
+    // should_stop function will be called each polling_interval_seconds
+    server_response_reader(server_queue & queue_tasks, server_response & queue_results, int polling_interval_seconds)
+        : queue_tasks(queue_tasks), queue_results(queue_results), polling_interval_seconds(polling_interval_seconds) {}
+    ~server_response_reader() {
+        stop();
+    }
+
+    int get_new_id() {
+        return queue_tasks.get_new_id();
+    }
+    void post_task(server_task && task);
+    void post_tasks(std::vector<server_task> && tasks);
+    bool has_next() const;
+
+    // return nullptr if should_stop() is true before receiving a result
+    // note: if one error is received, it will stop further processing and return error result
+    server_task_result_ptr next(const std::function<bool()> & should_stop);
+
+    struct batch_response {
+        bool is_terminated = false; // if true, indicates that processing was stopped before all results were received
+        std::vector<server_task_result_ptr> results;
+        server_task_result_ptr error; // nullptr if no error
+    };
+    // aggregate multiple results
+    batch_response wait_for_all(const std::function<bool()> & should_stop);
+
+    void stop();
 };
