@@ -15,10 +15,10 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/server-webui.yml', 'tools/server/webui/**.*', 'tools/server/tests/**.*']
+    paths: ['.github/workflows/server-webui.yml', 'tools/server/webui/**.*', 'tools/server/tests/**.*', 'tools/server/public/**']
   pull_request:
     types: [opened, synchronize, reopened]
-    paths: ['.github/workflows/server-webui.yml', 'tools/server/webui/**.*', 'tools/server/tests/**.*']
+    paths: ['.github/workflows/server-webui.yml', 'tools/server/webui/**.*', 'tools/server/tests/**.*', 'tools/server/public/**']
 
 env:
   LLAMA_LOG_COLORS: 1
