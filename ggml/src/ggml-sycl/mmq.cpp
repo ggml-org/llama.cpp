@@ -92,7 +92,6 @@ load_tiles_q4_0(const void *__restrict__ vx, int *__restrict__ x_ql,
         const block_q4_0 * bxi = bx0 + i*blocks_per_row + kbx;
 
         x_ql[i * (WARP_SIZE + 1) + k] = get_int_from_uint8(bxi->qs, kqsx);
-        // x_dmf[i * (WARP_SIZE/QI4_0) + i / QI4_0 + kbx] = bxi->d;
     }
 
     const int blocks_per_tile_x_row = WARP_SIZE / QI4_0;
@@ -119,6 +118,9 @@ static __dpct_inline__ float vec_dot_q4_0_q8_1_mul_mat(
     const int &i, const int &j, const int &k) {
     (void)x_qh; (void)x_sc;
 
+    // kyqs computes an index into y_qs that can reach up to ~28 for k=15
+    // On Intel GPUs with WARP_SIZE=16, using WARP_SIZE for modulo causes wraparound
+    // Use MMQ_TILE_NE_K (32) which matches the CUDA warp size
     const int kyqs = k % (QI8_1/2) + QI8_1 * (k / (QI8_1/2));
     const float * x_dmf = (const float *) x_dm;
 
@@ -126,13 +128,14 @@ static __dpct_inline__ float vec_dot_q4_0_q8_1_mul_mat(
 
 #pragma unroll
     for (int l = 0; l < VDR_Q4_0_Q8_1_MMQ; ++l) {
-        u[2*l+0] = y_qs[j * WARP_SIZE + (kyqs + l)         % WARP_SIZE];
-        u[2*l+1] = y_qs[j * WARP_SIZE + (kyqs + l + QI4_0) % WARP_SIZE];
+        // Use MMQ_TILE_NE_K (32) for y_qs stride and modulo to avoid wraparound on Intel
+        u[2*l+0] = y_qs[j * MMQ_TILE_NE_K + (kyqs + l)         % MMQ_TILE_NE_K];
+        u[2*l+1] = y_qs[j * MMQ_TILE_NE_K + (kyqs + l + QI4_0) % MMQ_TILE_NE_K];
     }
 
     return vec_dot_q4_0_q8_1_impl<VDR_Q4_0_Q8_1_MMQ>
         (&x_ql[i * (WARP_SIZE + 1) + k], u, x_dmf[i * (WARP_SIZE/QI4_0) + i/QI4_0 + k/QI4_0],
-         y_ds[j * (WARP_SIZE/QI8_1) + (2*k/QI8_1) % (WARP_SIZE/QI8_1)]);
+         y_ds[j * (MMQ_TILE_NE_K/QI8_1) + (2*k/QI8_1) % (MMQ_TILE_NE_K/QI8_1)]);
 }
 
 template <int mmq_y>
@@ -1238,12 +1241,12 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
     // Fix for Intel GPUs: When qi > WARP_SIZE (e.g., Q6_K where qi=32 and WARP_SIZE=16),
     // blocks_per_warp = WARP_SIZE/qi = 0, causing an infinite loop.
     // Use CUDA-style blocks_per_iter = MMQ_ITER_K/qk instead (256/256=1 for Q6_K).
-    // For quant types where WARP_SIZE >= qi, this gives the same value as the original.
+    // For quant types where WARP_SIZE >= qi, use WARP_SIZE / qi as per original design.
     constexpr int blocks_per_iter = (qi > WARP_SIZE) ? (MMQ_ITER_K / qk) : (WARP_SIZE / qi);
     static_assert(blocks_per_iter > 0, "blocks_per_iter must be positive");
 
-    // Number of qr phases needed per iteration. When qi > WARP_SIZE, we need
-    // more phases to cover all qk elements. Each phase processes WARP_SIZE elements.
+    // Number of phases needed per iteration
+    // For K-quants where qi > WARP_SIZE, we need more phases to cover the full qk elements
     constexpr int phases_per_iter = (qi > WARP_SIZE) ? (qk / WARP_SIZE) : qr;
 
     const int & ncols_dst = ncols_y;
@@ -1263,8 +1266,16 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
                    nrows_x - row_x_0 - 1, item_ct1.get_local_id(2),
                    blocks_per_row_x);
 
-        // Y-tile stride: use qi when qi > WARP_SIZE (Q6_K), else WARP_SIZE
-        constexpr int y_tile_stride = (qi > WARP_SIZE) ? qi : WARP_SIZE;
+        // Y-tile stride:
+        // - For K-quants (qi > WARP_SIZE), use qi for stride
+        // - For multi-phase quants (qr > 1) on Intel GPUs (MMQ_TILE_NE_K > WARP_SIZE),
+        //   use MMQ_TILE_NE_K for stride. This is critical because vec_dot functions
+        //   like vec_dot_q4_0 compute kyqs values up to ~28 across the 2 phases,
+        //   which would wrap around with WARP_SIZE=16 stride.
+        // - For single-phase quants (qr == 1) like Q8_0, WARP_SIZE stride is sufficient
+        //   since vec_dot only accesses k ∈ [0, WARP_SIZE)
+        constexpr bool need_wide_y_tile = (qi > WARP_SIZE) || (qr > 1 && MMQ_TILE_NE_K > WARP_SIZE);
+        constexpr int y_tile_stride = need_wide_y_tile ? ((qi > WARP_SIZE) ? qi : MMQ_TILE_NE_K) : WARP_SIZE;
         constexpr int y_ds_stride = y_tile_stride / QI8_1;
 
 #pragma unroll
@@ -1280,10 +1291,10 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
 
                 const block_q8_1 * by0 = &y[col_y_eff*blocks_per_col_y + ib0 * (qk/QK8_1) + kbxd];
 
-                // When qi > WARP_SIZE, use full kqs to avoid wraparound
-                // For standard quants (qi <= WARP_SIZE), use kqs % WARP_SIZE as before
+                // When need_wide_y_tile, use full kqs to avoid wraparound when writing to positions 16-31
+                // Otherwise (single-phase on CUDA/Intel), use kqs % WARP_SIZE as before
                 const int index_y = (item_ct1.get_local_id(1) + i) * y_tile_stride +
-                                    ((qi > WARP_SIZE) ? kqs : (kqs % WARP_SIZE));
+                                    (need_wide_y_tile ? kqs : (kqs % WARP_SIZE));
                 tile_y_qs[index_y] = get_int_from_int8_aligned(
                     by0->qs, item_ct1.get_local_id(2) % QI8_1);
             }
@@ -1302,8 +1313,9 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
                     &y[col_y_eff * blocks_per_col_y + ib0 * (qk / QK8_1) +
                        ir * (WARP_SIZE / QI8_1) + kby]
                          .ds;
-                sycl::half2 *dsi_dst =
-                    &tile_y_ds[ids * y_ds_stride + ((qi > WARP_SIZE) ? (ir * (WARP_SIZE / QI8_1) + kby) : kby)];
+                // When need_wide_y_tile, use ir to index different phases for y_ds too
+                const int kby_offset = need_wide_y_tile ? (ir * (WARP_SIZE / QI8_1) + kby) : kby;
+                sycl::half2 *dsi_dst = &tile_y_ds[ids * y_ds_stride + kby_offset];
                 if (need_sum) {
                     *dsi_dst = *dsi_src;
                 } else {
@@ -1861,10 +1873,12 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<float, 1> tile_x_d_q4_0_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE / QI4_0) + mmq_y / QI4_0),
                     cgh);
+                // Y-tile must be sized for MMQ_TILE_NE_K=32 elements per column, not WARP_SIZE=16
+                // to avoid index wraparound on Intel GPUs where WARP_SIZE=16
                 sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
+                    sycl::range<1>(mmq_x * MMQ_TILE_NE_K), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
+                    sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh);
 
                 cgh.parallel_for(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
@@ -1896,10 +1910,12 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<float, 1> tile_x_d_q4_0_acc_ct1(
                     sycl::range<1>(mmq_y * (WARP_SIZE / QI4_0) + mmq_y / QI4_0),
                     cgh);
+                // Y-tile must be sized for MMQ_TILE_NE_K=32 elements per column, not WARP_SIZE=16
+                // to avoid index wraparound on Intel GPUs where WARP_SIZE=16
                 sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
+                    sycl::range<1>(mmq_x * MMQ_TILE_NE_K), cgh);
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
+                    sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh);
 
                 cgh.parallel_for(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
