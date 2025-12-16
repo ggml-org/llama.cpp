@@ -81,7 +81,7 @@ void hvx_mul_f32(const uint8_t * restrict src0,
         slinep = *vec_in1++; 
         sline2p = *vec_in2++;
         #pragma unroll(4)
-        for(uint32_t i = step_of_1 -1; i> 0; i--){
+        for(int i = step_of_1 -1; i> 0; i--){
             slinec = *vec_in1++;
             sline2c = *vec_in2++;
             sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);       
@@ -540,7 +540,7 @@ void hvx_mul_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
         slinep = *input_v_ptr++; 
 
         #pragma unroll(4)
-        for(uint32_t i = step_of_1 - 1; i > 0; i--){
+        for(int i = step_of_1 - 1; i > 0; i--){
             slinec = *input_v_ptr++;
             sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src);
             *((HVX_UVector *)(output_v_ptr++)) =  Q6_Vsf_equals_Vqf32( Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));

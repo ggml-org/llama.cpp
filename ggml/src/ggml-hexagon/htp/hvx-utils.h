@@ -1026,7 +1026,7 @@ static inline void hvx_sigmoid_f32(const uint8_t * restrict src, uint8_t * restr
 
     slinep = *input_v_ptr++; 
     #pragma unroll(4)
-    for(uint32_t i = step_of_1 -1; i> 0; i--){
+    for(int i = step_of_1 -1; i> 0; i--){
         slinec = *input_v_ptr++;
         sline = Q6_V_valign_VVR(slinec, slinep, (size_t) input);       
         *((HVX_UVector *)(output_v_ptr++)) =  hvx_vec_fast_sigmoid_fp32_guard(sline, one, max_exp, min_exp);
