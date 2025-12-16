@@ -472,29 +472,14 @@ static void dequantize_row_iq4_nl_sycl(const void *vx, dst_t *y, const int64_t k
       }
 }
 
-// MXFP4 block size = 32
-#define QK_MXFP4_SYCL_CONVERT 32
-
 template <typename dst_t>
-static void dequantize_row_mxfp4_sycl(const void *vx, dst_t *y, const int64_t k,
-                                       dpct::queue_ptr stream) {
-    const int64_t nb32 = k / QK_MXFP4_SYCL_CONVERT;
-    // Each thread block processes 8 MXFP4 blocks (32 threads, 4 per block)
-    const int64_t nb8 = (nb32 + 7) / 8;
-    {
-        dpct::has_capability_or_fail(stream->get_device(),
-                                     {sycl::aspect::fp16});
-
-        stream->submit([&](sycl::handler &cgh) {
-            cgh.parallel_for(
-                sycl::nd_range<3>(sycl::range<3>(1, 1, nb8) *
-                                      sycl::range<3>(1, 1, 32),
-                                  sycl::range<3>(1, 1, 32)),
-                [=](sycl::nd_item<3> item_ct1) {
-                    dequantize_block_mxfp4(vx, y, nb32, item_ct1);
-                });
+static void dequantize_row_mxfp4_sycl(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr stream) {
+    const int nb = (k + QK_K - 1) / QK_K;
+    stream->parallel_for(
+        sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 32), sycl::range<3>(1, 1, 32)),
+        [=](sycl::nd_item<3> item_ct1) {
+            dequantize_block_mxfp4(vx, y, item_ct1);
         });
-    }
 }
 
 template <typename src_t, typename dst_t>
@@ -542,6 +527,7 @@ template <typename src_t, typename dst_t>
 static void convert_unary_sycl(const void * vx, dst_t * y, const int64_t k, dpct::queue_ptr queue) {
     convert_unary_nc_sycl<src_t>(vx, y, k, 1, 1, 1, k, k, k, queue);
 }
+
 
 to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst) {
     switch (type) {

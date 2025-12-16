@@ -88,7 +88,7 @@ void ggml_sycl_ssm_conv(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(src0->nb[0] == sizeof(float));
     GGML_ASSERT(src1->nb[0] == sizeof(float));
 
-    GGML_ASSERT(src0->nb[1] == src0->ne[0] * static_cast<int>(sizeof(float)));
+    GGML_ASSERT(src0->nb[1] == src0->ne[0] * sizeof(float));
 
     const int src_stride_inner = ncs;
     const int src_stride_seq   = ncs * d_inner;

@@ -72,9 +72,10 @@
 
 <div
 	class="code-preview-wrapper overflow-auto rounded-lg border border-border bg-muted {className}"
-	style="max-height: {maxHeight};"
+	style="max-height: {maxHeight}; max-width: {maxWidth};"
 >
-	<pre class="m-0 overflow-x-auto p-4 max-w-[{maxWidth}]"><code class="hljs text-sm leading-relaxed"
+	<!-- Needs to be formatted as single line for proper rendering -->
+	<pre class="m-0 overflow-x-auto p-4"><code class="hljs text-sm leading-relaxed"
 			>{@html highlightedHtml}</code
 		></pre>
 </div>

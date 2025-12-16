@@ -40,10 +40,19 @@ export { setConfigValue, getConfigValue, configToParameterRecord } from './confi
 export { createMessageCountMap, getMessageCount } from './conversation-utils';
 
 // Clipboard utilities
-export { copyToClipboard, copyCodeToClipboard } from './copy';
+export {
+	copyToClipboard,
+	copyCodeToClipboard,
+	formatMessageForClipboard,
+	parseClipboardContent,
+	hasClipboardAttachments,
+	type ClipboardTextAttachment,
+	type ParsedClipboardContent
+} from './clipboard';
 
 // File preview utilities
-export { getFileTypeLabel, getPreviewText } from './file-preview';
+export { getFileTypeLabel } from './file-preview';
+export { getPreviewText } from './text';
 
 // File type utilities
 export {

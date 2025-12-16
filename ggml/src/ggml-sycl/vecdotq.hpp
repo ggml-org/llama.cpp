@@ -20,6 +20,18 @@
 typedef float (*vec_dot_q_sycl_t)(const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1,
                                   const int & iqs);
 
+static __dpct_inline__ int get_int_b1(const void * x, const int & i32) {
+    const uint8_t * x8 = (const uint8_t *) x;
+
+    int x32  = x8[4*i32 + 0] <<  0;
+    x32     |= x8[4*i32 + 1] <<  8;
+    x32     |= x8[4*i32 + 2] << 16;
+    x32     |= x8[4*i32 + 3] << 24;
+
+    return x32;
+}
+
+
 static __dpct_inline__ int get_int_from_int8(const int8_t* x8, const int& i32) {
   const uint16_t* x16 =
       (const uint16_t*)(x8 + sizeof(int) * i32); // assume at least 2 byte
@@ -73,6 +85,28 @@ static __dpct_inline__ void get_int_from_table_16(const uint32_t &q4,
     v1 = values[q8[0]] | (values[q8[1]] << 8);
     v2 = values[q8[2]] | (values[q8[3]] << 8);
     val2 = v1 | (v2 << 16);
+}
+
+static __dpct_inline__ sycl::int2 get_int_from_table_16(
+    const int& q4, const int8_t* table) {
+  const uint32_t* table32 = (const uint32_t*)table;
+  uint32_t tmp[2];
+  const uint32_t low_high_selection_indices =
+      (0x32103210 | ((q4 & 0x88888888) >> 1));
+#pragma unroll
+  for (uint32_t i = 0; i < 2; ++i) {
+    const uint32_t shift = 16 * i;
+
+    const uint32_t low =
+        dpct::byte_level_permute(table32[0], table32[1], q4 >> shift);
+    const uint32_t high =
+        dpct::byte_level_permute(table32[2], table32[3], q4 >> shift);
+    tmp[i] = dpct::byte_level_permute(
+        low, high, low_high_selection_indices >> shift);
+  }
+  return sycl::int2(
+      dpct::byte_level_permute(tmp[0], tmp[1], 0x6420),
+      dpct::byte_level_permute(tmp[0], tmp[1], 0x7531));
 }
 
 #define VDR_Q2_K_Q8_1_MMVQ 1
@@ -684,6 +718,30 @@ vec_dot_q4_1_q8_1(const void *__restrict__ vbq,
 
     return vec_dot_q4_1_q8_1_impl<VDR_Q4_1_Q8_1_MMVQ>(v, u, bq4_1->dm, bq8_1->ds);
 }
+
+#define VDR_MXFP4_Q8_1_MMVQ 2
+#define VDR_MXFP4_Q8_1_MMQ  4
+
+static __dpct_inline__ float vec_dot_mxfp4_q8_1(const void * __restrict__ vbq,
+                                                const block_q8_1 * __restrict__ bq8_1,
+                                                const int & iqs) {
+    const block_mxfp4 * bq4 = (const block_mxfp4 *) vbq;
+
+    const int * q8 = (const int *) bq8_1->qs + iqs;
+
+    int sumi = 0;
+#pragma unroll
+    for (int l = 0; l < VDR_MXFP4_Q8_1_MMVQ; ++l) {
+        const int aux_q4 = get_int_b1(bq4->qs, iqs + l);
+        const sycl::int2 v      = get_int_from_table_16(aux_q4, kvalues_mxfp4);
+        sumi = ggml_sycl_dp4a(v.x(), q8[l + 0], sumi);
+        sumi = ggml_sycl_dp4a(v.y(), q8[l + 4], sumi);
+    }
+
+    const float d = ggml_sycl_e8m0_to_fp32(bq4->e) * 0.5f * (bq8_1->ds)[0];
+    return d * sumi;
+}
+
 
 static __dpct_inline__ float
 vec_dot_q5_0_q8_1(const void *__restrict__ vbq,

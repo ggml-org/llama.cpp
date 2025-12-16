@@ -54,6 +54,10 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     # TODO
 else()
     set(GGML_STANDALONE OFF)
+
+    if (NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+        set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+    endif()
 endif()
 
 if (EMSCRIPTEN)
@@ -168,6 +172,7 @@ option(GGML_RVV              "ggml: enable rvv"              ON)
 option(GGML_RV_ZFH           "ggml: enable riscv zfh"        ON)
 option(GGML_RV_ZVFH          "ggml: enable riscv zvfh"       ON)
 option(GGML_RV_ZICBOP        "ggml: enable riscv zicbop"     ON)
+option(GGML_RV_ZIHINTPAUSE   "ggml: enable riscv zihintpause "  ON)
 option(GGML_XTHEADVECTOR     "ggml: enable xtheadvector"     OFF)
 option(GGML_VXE              "ggml: enable vxe"              ${GGML_NATIVE})
 

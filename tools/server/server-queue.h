@@ -129,13 +129,16 @@ struct server_response_reader {
     std::vector<task_result_state> states;
 
     // should_stop function will be called each polling_interval_seconds
-    server_response_reader(std::pair<server_queue &, server_response &> server_queues, int polling_interval_seconds)
-        : queue_tasks(server_queues.first), queue_results(server_queues.second), polling_interval_seconds(polling_interval_seconds) {}
+    server_response_reader(server_queue & queue_tasks, server_response & queue_results, int polling_interval_seconds)
+        : queue_tasks(queue_tasks), queue_results(queue_results), polling_interval_seconds(polling_interval_seconds) {}
     ~server_response_reader() {
         stop();
     }
 
-    void set_states(std::vector<task_result_state> && states);
+    int get_new_id() {
+        return queue_tasks.get_new_id();
+    }
+    void post_task(server_task && task);
     void post_tasks(std::vector<server_task> && tasks);
     bool has_next() const;
 

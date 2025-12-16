@@ -37,6 +37,7 @@ make -j GGML_CUDA=1
 %install
 mkdir -p %{buildroot}%{_bindir}/
 cp -p llama-cli %{buildroot}%{_bindir}/llama-cuda-cli
+cp -p llama-completion %{buildroot}%{_bindir}/llama-cuda-completion
 cp -p llama-server %{buildroot}%{_bindir}/llama-cuda-server
 cp -p llama-simple %{buildroot}%{_bindir}/llama-cuda-simple
 
@@ -68,6 +69,7 @@ rm -rf %{_builddir}/*
 
 %files
 %{_bindir}/llama-cuda-cli
+%{_bindir}/llama-cuda-completion
 %{_bindir}/llama-cuda-server
 %{_bindir}/llama-cuda-simple
 /usr/lib/systemd/system/llamacuda.service

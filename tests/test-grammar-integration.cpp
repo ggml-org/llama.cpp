@@ -32,13 +32,66 @@ static bool test_build_grammar_fails(const std::string & grammar_str) {
     return grammar_fails;
 }
 
+struct token_and_piece {
+    llama_token token;
+    std::string piece;
+};
+
+// token() encodes a 32-bit ID as 5 bytes: a 0xff marker followed by the ID in big-endian order.
+static std::string token(llama_token id) {
+    return std::string{
+        static_cast<char>(0xff),
+        static_cast<char>((id >> 24) & 0xff),
+        static_cast<char>((id >> 16) & 0xff),
+        static_cast<char>((id >> 8) & 0xff),
+        static_cast<char>(id & 0xff)
+    };
+}
+
+// parse_tokens() parses the token encodes above and UTF-8 text.
+static std::vector<token_and_piece> parse_tokens(const std::string & input) {
+    std::vector<token_and_piece> result;
+    result.reserve(input.size());
+    size_t offset = 0;
+    while (offset < input.size()) {
+        try {
+            if (static_cast<unsigned char>(input[offset]) == 0xff) {
+                if (offset + 5 > input.size()) {
+                    throw std::runtime_error("not enough bytes for token id");
+                }
+                uint32_t val =
+                    (static_cast<unsigned char>(input[offset + 1]) << 24) |
+                    (static_cast<unsigned char>(input[offset + 2]) << 16) |
+                    (static_cast<unsigned char>(input[offset + 3]) << 8)  |
+                    (static_cast<unsigned char>(input[offset + 4]));
+                auto piece = "<[" + std::to_string(val) + "]>";
+                result.push_back({static_cast<llama_token>(val), piece});
+                offset += 5;
+            } else {
+                uint32_t cpt = unicode_cpt_from_utf8(input, offset);
+                result.push_back({0, unicode_cpt_to_utf8(cpt)});
+            }
+        } catch (const std::invalid_argument & /*ex*/) {
+            // Silently ignore invalid UTF-8 input to avoid leaking the exception beyond llama_tokenize
+            ++offset;
+            result.push_back({0, unicode_cpt_to_utf8(0xFFFD)}); // replacement character
+        }
+    }
+    return result;
+}
+
 static bool match_string(const std::string & input, llama_grammar * grammar) {
-    const auto cpts = unicode_cpts_from_utf8(input);
+    const auto parsed = parse_tokens(input);
 
     auto & stacks_cur = llama_grammar_get_stacks(grammar);
 
-    for (const auto & cpt : cpts) {
-        llama_grammar_accept(grammar, cpt);
+    for (const auto & in : parsed) {
+        try {
+            llama_grammar_accept_token(*grammar, in.token, in.piece);
+        } catch (const std::runtime_error & /*e*/) {
+            // normally this shouldn't get hit because of llama_grammar_apply
+            return false;
+        }
 
         if (stacks_cur.empty()) {
             // no stacks means that the grammar failed to match at this point
@@ -426,6 +479,30 @@ static void test_simple_grammar() {
             "12a45",
         }
     );
+
+    // Test case for a simple grammar with tokens
+    test_grammar(
+        "simple grammar with tokens",
+        R"""(
+            root ::= <[10]> content <[11]>
+            content ::= (!<[11]>)*)""",
+        // Passing strings
+        {
+            token(10) + "hello world" + token(11),
+            token(10) + "text with " + token(12) + " other tokens " + token(13) + " mixed in" + token(11),
+            token(10) + token(11),
+            token(10) + token(12) + token(13) + token(14) + token(15) + token(11),
+            token(10) + "a" + token(11),
+        },
+        // Failing strings
+        {
+            token(10) + "missing end token",
+            token(10),
+            "missing start token" + token(11),
+            token(10) + token(11) + token(11),  // double end token
+            token(11) + "wrong order" + token(10),
+        }
+    );
 }
 
 static void test_complex_grammar() {
@@ -485,6 +562,34 @@ static void test_complex_grammar() {
             "a * (b + c) - d /",
             "f(g(x), h(y, z)",
             "123+456*789-123/456+789*123-456/789+123*456-789/123+456*789-123/456+789*123-456/",
+        }
+    );
+
+    // Test case for a more complex grammar with tokens
+    test_grammar(
+        "complex grammar with tokens",
+        R"""(
+            root ::= reasoning+ content tool-call*
+            reasoning ::= <[10]> (!<[11]>)* <[11]>
+            content ::= <[20]> (!<[21]>)* <[21]>
+            tool-call ::= <[12]> name <[13]> args <[14]>
+            name ::= (!<[13]>)+
+            args ::= (!<[14]>)*)""",
+        // Passing strings
+        {
+            token(10) + "I am thinking" + token(11) + token(20) + "hello world!" + token(21) + token(12) + "search" + token(13) + "query=test" + token(14),
+            token(10) + "reasoning 1" + token(11) + token(10) + "reasoning 2" + token(11) + token(20) + token(21) + token(12) + "tool" + token(13) + token(14),
+            token(10) + token(11) + token(20) + "content" + token(21),
+            token(10) + "think" + token(12) + " nested" + token(11) + token(20) + token(10) + "more content" + token(21) + token(12) + "fn" + token(13) + "x=1,y=2" + token(14) + token(12) + "fn2" + token(13) + token(14),
+            token(10) + "reasoning" + token(11) + token(10) + "more" + token(11) + token(10) + "even more" + token(11) + token(20) + "text" + token(21) + token(12) + "a" + token(13) + "b" + token(14) + token(12) + "c" + token(13) + "d" + token(14),
+        },
+        // Failing strings
+        {
+            token(20) + "content only" + token(21),
+            token(10) + "no closing reasoning",
+            token(10) + token(11) + token(20) + "no closing content",
+            token(10) + token(11) + token(20) + token(21) + token(12) + "incomplete tool",
+            token(10) + token(11) + token(11) + token(20) + token(21),
         }
     );
 }

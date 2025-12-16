@@ -173,6 +173,7 @@
 	/>
 
 	<ModelsSelector
+		{disabled}
 		bind:this={selectorModelRef}
 		currentModel={conversationModel}
 		forceForegroundText={true}

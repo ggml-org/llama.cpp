@@ -724,16 +724,10 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         if (reasoning_unclosed) {
             if (auto pos = content.find(end_think); pos == std::string::npos && builder.pos() != builder.input().size()) {
                 unclosed_reasoning_content += content;
-                if (form.allow_toolcall_in_think) {
-                    builder.move_to(tc->groups[0].begin);
-                    if (!builder.try_consume_xml_tool_calls(form)) {
-                        unclosed_reasoning_content += tool_call_start;
-                        builder.move_to(tc->groups[0].end);
-                    }
-                } else {
+                if (!(form.allow_toolcall_in_think && tc)) {
                     unclosed_reasoning_content += tool_call_start;
+                    continue;
                 }
-                continue;
             } else {
                 reasoning_unclosed = false;
                 std::string reasoning_content;
@@ -781,8 +775,12 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
                 }
             } else {
                 // This <tool_call> start is in thinking block, skip this tool call
-                auto pos = think_start + start_think.size();
-                unclosed_reasoning_content = content.substr(pos) + tool_call_start;
+                // This <tool_call> start is in thinking block
+                if (form.allow_toolcall_in_think) {
+                    unclosed_reasoning_content = content.substr(think_start + start_think.size());
+                } else {
+                    unclosed_reasoning_content = content.substr(think_start + start_think.size()) + tool_call_start;
+                }
                 reasoning_unclosed = true;
                 content.resize(think_start);
                 toolcall_in_think = true;
@@ -805,14 +803,35 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         }
 
         // remove potential partial suffix
-        if (content.size() > 0 && builder.pos() == builder.input().size() && unclosed_reasoning_content.empty()) {
-            rstrip(content);
-            trim_potential_partial_word(content);
-            rstrip(content);
+        if (builder.pos() == builder.input().size()) {
+            if (unclosed_reasoning_content.empty()) {
+                rstrip(content);
+                trim_potential_partial_word(content);
+                rstrip(content);
+            } else {
+                rstrip(unclosed_reasoning_content);
+                trim_potential_partial_word(unclosed_reasoning_content);
+                rstrip(unclosed_reasoning_content);
+            }
+        }
+
+        // consume unclosed_reasoning_content if allow_toolcall_in_think is set
+        if (form.allow_toolcall_in_think && !unclosed_reasoning_content.empty()) {
+            if (builder.syntax().reasoning_format != COMMON_REASONING_FORMAT_NONE && !builder.syntax().reasoning_in_content) {
+                builder.add_reasoning_content(unclosed_reasoning_content);
+            } else {
+                if (content.empty()) {
+                    content = start_think + unclosed_reasoning_content;
+                } else {
+                    content += "\n\n" + start_think;
+                    content += unclosed_reasoning_content;
+                }
+            }
+            unclosed_reasoning_content.clear();
         }
 
         // Add content
-        if (content.size() != 0) {
+        if (!content.empty()) {
             // If there are multiple content blocks
             if (builder.syntax().reasoning_format != COMMON_REASONING_FORMAT_NONE && !builder.syntax().reasoning_in_content && builder.result().content.size() != 0) {
                 builder.add_content("\n\n");
@@ -820,7 +839,7 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
             builder.add_content(content);
         }
 
-        // This <tool_call> start is in thinking block, skip this tool call
+        // This <tool_call> start is in thinking block and toolcall_in_think not set, skip this tool call
         if (toolcall_in_think && !form.allow_toolcall_in_think) {
             continue;
         }
@@ -829,7 +848,7 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
         if (!tc) {
             GGML_ASSERT(builder.pos() == builder.input().size());
             GGML_ASSERT(unclosed_reasoning_content.empty());
-            GGML_ASSERT(!reasoning_unclosed);
+            if (!form.allow_toolcall_in_think) GGML_ASSERT(!reasoning_unclosed);
             break;
         }
 
@@ -854,7 +873,6 @@ inline void parse_msg_with_xml_tool_calls(common_chat_msg_parser & builder, cons
 
 /**
  * Parse content uses reasoning and XML-Style tool call
- * TODO: Note that form.allow_toolcall_in_think is not tested yet. If anyone confirms it works, this comment can be removed.
  */
 void common_chat_msg_parser::consume_reasoning_with_xml_tool_calls(const struct xml_tool_call_format & form, const std::string & start_think, const std::string & end_think) {
     parse_msg_with_xml_tool_calls(*this, form, start_think, end_think);

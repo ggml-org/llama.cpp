@@ -295,13 +295,20 @@ class ModelsStore {
 	 * Fetch props for a specific model from /props endpoint
 	 * Uses caching to avoid redundant requests
 	 *
+	 * In ROUTER mode, this will only fetch props if the model is loaded,
+	 * since unloaded models return 400 from /props endpoint.
+	 *
 	 * @param modelId - Model identifier to fetch props for
-	 * @returns Props data or null if fetch failed
+	 * @returns Props data or null if fetch failed or model not loaded
 	 */
 	async fetchModelProps(modelId: string): Promise<ApiLlamaCppServerProps | null> {
 		// Return cached props if available
 		const cached = this.modelPropsCache.get(modelId);
 		if (cached) return cached;
+
+		if (serverStore.isRouterMode && !this.isModelLoaded(modelId)) {
+			return null;
+		}
 
 		// Avoid duplicate fetches
 		if (this.modelPropsFetching.has(modelId)) return null;

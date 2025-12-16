@@ -504,6 +504,14 @@
 		background: hsl(var(--muted) / 0.1);
 	}
 
+	/* User message markdown should keep table borders visible on light primary backgrounds */
+	div.markdown-user-content :global(table),
+	div.markdown-user-content :global(th),
+	div.markdown-user-content :global(td),
+	div.markdown-user-content :global(.table-wrapper) {
+		border-color: currentColor;
+	}
+
 	/* Horizontal rules */
 	div :global(hr) {
 		border: none;
@@ -640,6 +648,21 @@
 	div :global(th:hover),
 	div :global(td:hover) {
 		background: var(--muted);
+	}
+
+	/* Disable hover effects when rendering user messages */
+	.markdown-user-content :global(a),
+	.markdown-user-content :global(a:hover) {
+		color: var(--primary-foreground);
+	}
+
+	.markdown-user-content :global(table:hover) {
+		box-shadow: none;
+	}
+
+	.markdown-user-content :global(th:hover),
+	.markdown-user-content :global(td:hover) {
+		background: inherit;
 	}
 
 	/* Enhanced blockquotes */

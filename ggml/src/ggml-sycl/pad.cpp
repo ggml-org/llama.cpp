@@ -14,10 +14,10 @@
 #include "pad.hpp"
 
 static void pad_f32(const float * src, float * dst,
-                               const int lp0, const int rp0, const int lp1, const int rp1,
-                               const int lp2, const int rp2, const int lp3, const int rp3,
-                               const int ne0, const int ne1, const int ne2, const int ne3) {
-    auto item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
+                    const int lp0, const int rp0, const int lp1, const int rp1,
+                    const int lp2, const int rp2, const int lp3, const int rp3,
+                    const int ne0, const int ne1, const int ne2, const int ne3,
+                    sycl::nd_item<3> item_ct1) {
     int i0 = item_ct1.get_local_id(2) +
              item_ct1.get_group(2) * item_ct1.get_local_range(2);
     int i1 = item_ct1.get_group(1);
@@ -63,7 +63,7 @@ static void pad_f32_sycl(const float *src, float *dst, const int lp0,
                           sycl::range<3>(1, 1, SYCL_PAD_BLOCK_SIZE)),
         [=](sycl::nd_item<3> item_ct1) {
             pad_f32(src, dst, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, ne0, ne1,
-                    ne2, ne3);
+                    ne2, ne3, item_ct1);
         });
 }
 

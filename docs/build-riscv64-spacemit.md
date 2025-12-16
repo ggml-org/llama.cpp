@@ -19,6 +19,7 @@ cmake -B build \
     -DGGML_RVV=ON \
     -DGGML_RV_ZFH=ON \
     -DGGML_RV_ZICBOP=ON \
+    -DGGML_RV_ZIHINTPAUSE=ON \
     -DRISCV64_SPACEMIT_IME_SPEC=RISCV64_SPACEMIT_IME1 \
     -DCMAKE_TOOLCHAIN_FILE=${PWD}/cmake/riscv64-spacemit-linux-gnu-gcc.cmake \
     -DCMAKE_INSTALL_PREFIX=build/installed
