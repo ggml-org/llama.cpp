@@ -1,7 +1,6 @@
 #include "chat-auto-parser.h"
 #include "chat.h"
 #include "common.h"
-#include "log.h"
 
 #include <minja/chat-template.hpp>
 #include <minja/minja.hpp>
@@ -9,7 +8,6 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
-#include <vector>
 #include <string>
 
 using json = nlohmann::ordered_json;
@@ -45,7 +43,7 @@ struct templates_params {
 
 int main(int argc, char ** argv) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <template_path>" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <template_path>" << '\n';
         return 1;
     }
 
@@ -54,22 +52,22 @@ int main(int argc, char ** argv) {
     try {
         template_source = read_file(template_path);
     } catch (const std::exception & e) {
-        std::cerr << "Error reading template: " << e.what() << std::endl;
+        std::cerr << "Error reading template: " << e.what() << '\n';
         return 1;
     }
 
-    std::cout << "Analyzing template: " << template_path << std::endl;
+    std::cout << "Analyzing template: " << template_path << '\n';
 
     try {
         minja::chat_template chat_template(template_source, "", "");
         TemplatePattern pattern = TemplateAnalyzer::analyze_template(chat_template);
 
-        std::cout << "\n=== Analysis Results ===" << std::endl;
-        std::cout << "Format: " << (int)pattern.format << std::endl;
+        std::cout << "\n=== Analysis Results ===" << '\n';
+        std::cout << "Format: " << (int)pattern.format << '\n';
         
-        std::cout << "\n--- Special Markers ---" << std::endl;
+        std::cout << "\n--- Special Markers ---" << '\n';
         for (const auto & [key, value] : pattern.special_markers) {
-            std::cout << key << ": '" << value << "'" << std::endl;
+            std::cout << key << ": '" << value << "'" << '\n';
         }
 
         // Generate Parser
@@ -97,11 +95,21 @@ int main(int argc, char ** argv) {
         
         auto parser_data = UniversalPEGGenerator::generate_parser(pattern, chat_template, params);
         
-        std::cout << "\n=== Generated Parser ===" << std::endl;
-        std::cout << "Parser size: " << parser_data.parser.size() << std::endl;
+        std::cout << "\n=== Generated Parser ===" << '\n';
+        std::cout << parser_data.parser << '\n';
 
+        std::cout << "\n=== Generated Grammar ===" << '\n';
+        std::cout << parser_data.grammar << '\n';
+
+        std::cout << "\n=== Generated Lazy Grammar ===" << '\n';
+        std::cout << parser_data.grammar_lazy << '\n';
+
+        std::cout << "\n=== Generated Grammar Triggers ===" << '\n';
+        for (common_grammar_trigger cgt : parser_data.grammar_triggers) {
+            std::cout << "Token: " << cgt.token << " | Type: " << cgt.type << " | Value: " << cgt.value << "\n";
+        }
     } catch (const std::exception & e) {
-        std::cerr << "Analysis failed: " << e.what() << std::endl;
+        std::cerr << "Analysis failed: " << e.what() << '\n';
         return 1;
     }
 
