@@ -8564,7 +8564,7 @@ class NemotronHModel(GraniteHybridModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if self.is_moe and bid is not None:
             if name.endswith("mixer.gate.e_score_correction_bias"):
-                new_name = name.replace("e_score_correction_bias", "e_score_correction_bias.bias")
+                new_name = name.replace("e_score_correction_bias", "e_score_correction.bias")
                 mapped_name = self.map_tensor_name(new_name)
                 return [(mapped_name, data_torch)]
 

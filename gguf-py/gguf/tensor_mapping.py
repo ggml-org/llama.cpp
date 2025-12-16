@@ -391,7 +391,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.expert_bias",                           # afmoe
             "model.layers.{bid}.feed_forward.expert_bias",                  # lfm2moe
             "model.layers.{bid}.block_sparse_moe.e_score_correction",       # minimax-m2
-            "backbone.layers.{bid}.mixer.gate.e_score_correction_bias"      # nemotron-h-moe
+            "backbone.layers.{bid}.mixer.gate.e_score_correction"           # nemotron-h-moe
         ),
 
         # Feed-forward up
