@@ -21,29 +21,6 @@
 
 #include "htp-drv.h"
 
-RpcMemAllocFn_t htpdrv_rpcmem_alloc = nullptr;
-RpcMemAllocFn_t htpdrv_rpcmem_alloc2 = nullptr;
-RpcMemFreeFn_t htpdrv_rpcmem_free = nullptr;
-RpcMemToFdFn_t htpdrv_rpcmem_to_fd = nullptr;
-FastRpcMmapFn_t htpdrv_fastrpc_mmap = nullptr;
-FastRpcMunmapFn_t htpdrv_fastrpc_munmap = nullptr;
-
-DspQueueCreateFn_t htpdrv_dspqueue_create = nullptr;
-DspQueueCloseFn_t htpdrv_dspqueue_close = nullptr;
-DspQueueExportFn_t htpdrv_dspqueue_export = nullptr;
-DspQueueWriteFn_t htpdrv_dspqueue_write = nullptr;
-DspQueueReadFn_t htpdrv_dspqueue_read = nullptr;
-
-RemoteHandle64OpenFn_t htpdrv_remote_handle64_open = nullptr;
-RemoteHandle64InvokeFn_t htpdrv_remote_handle64_invoke = nullptr;
-RemoteHandleControlFn_t htpdrv_remote_handle_control = nullptr;
-RemoteHandle64ControlFn_t htpdrv_remote_handle64_control = nullptr;
-RemoteHandle64CloseFn_t htpdrv_remote_handle64_close = nullptr;
-
-RemoteSessionControlFn_t htpdrv_remote_session_control = nullptr;
-
-RemoteSystemRequestFn_t htpdrv_remote_system_request = nullptr;
-
 namespace fs = std::filesystem;
 
 static std::string path_str(const fs::path & path) {
@@ -229,6 +206,176 @@ static const char * dl_error() {
 
 #endif
 
+typedef void * (*rpcmem_alloc_pfn_t)(int heapid, uint32_t flags, int size);
+typedef void * (*rpcmem_alloc2_pfn_t)(int heapid, uint32_t flags, size_t size);
+typedef void   (*rpcmem_free_pfn_t)(void * po);
+typedef int    (*rpcmem_to_fd_pfn_t)(void * po);
+
+typedef AEEResult (*dspqueue_create_pfn_t)(int                 domain,
+                                           uint32_t            flags,
+                                           uint32_t            req_queue_size,
+                                           uint32_t            resp_queue_size,
+                                           dspqueue_callback_t packet_callback,
+                                           dspqueue_callback_t error_callback,
+                                           void *              callback_context,
+                                           dspqueue_t *        queue);
+typedef AEEResult (*dspqueue_close_pfn_t)(dspqueue_t queue);
+typedef AEEResult (*dspqueue_export_pfn_t)(dspqueue_t queue, uint64_t *queue_id);
+typedef AEEResult (*dspqueue_write_pfn_t)(dspqueue_t queue, uint32_t flags,
+                                          uint32_t num_buffers,
+                                          struct dspqueue_buffer *buffers,
+                                          uint32_t message_length,
+                                          const uint8_t *message,
+                                          uint32_t timeout_us);
+typedef AEEResult (*dspqueue_read_pfn_t)(dspqueue_t queue, uint32_t *flags,
+                                         uint32_t max_buffers, uint32_t *num_buffers,
+                                         struct dspqueue_buffer *buffers,
+                                         uint32_t max_message_length,
+                                         uint32_t *message_length, uint8_t *message,
+                                         uint32_t timeout_us);
+
+typedef int (*fastrpc_mmap_pfn_t)(int domain, int fd, void *addr, int offset, size_t length, enum fastrpc_map_flags flags);
+typedef int (*fastrpc_munmap_pfn_t)(int domain, int fd, void *addr, size_t length);
+
+typedef int (*remote_handle64_open_pfn_t)(const char* name, remote_handle64 *ph);
+typedef int (*remote_handle64_invoke_pfn_t)(remote_handle64 h, uint32_t dwScalars, remote_arg *pra);
+typedef int (*remote_handle64_close_pfn_t)(remote_handle h);
+typedef int (*remote_handle_control_pfn_t)(uint32_t req, void* data, uint32_t datalen);
+typedef int (*remote_handle64_control_pfn_t)(remote_handle64 h, uint32_t req, void* data, uint32_t datalen);
+typedef int (*remote_session_control_pfn_t)(uint32_t req, void *data, uint32_t datalen);
+typedef int (*remote_system_request_pfn_t)(system_req_payload *req);
+
+rpcmem_alloc_pfn_t  rpcmem_alloc_pfn  = nullptr;
+rpcmem_alloc2_pfn_t rpcmem_alloc2_pfn = nullptr;
+rpcmem_free_pfn_t   rpcmem_free_pfn   = nullptr;
+rpcmem_to_fd_pfn_t  rpcmem_to_fd_pfn  = nullptr;
+
+fastrpc_mmap_pfn_t   fastrpc_mmap_pfn   = nullptr;
+fastrpc_munmap_pfn_t fastrpc_munmap_pfn = nullptr;
+
+dspqueue_create_pfn_t dspqueue_create_pfn = nullptr;
+dspqueue_close_pfn_t dspqueue_close_pfn = nullptr;
+dspqueue_export_pfn_t dspqueue_export_pfn = nullptr;
+dspqueue_write_pfn_t dspqueue_write_pfn = nullptr;
+dspqueue_read_pfn_t dspqueue_read_pfn = nullptr;
+
+remote_handle64_open_pfn_t remote_handle64_open_pfn = nullptr;
+remote_handle64_invoke_pfn_t remote_handle64_invoke_pfn = nullptr;
+remote_handle64_close_pfn_t remote_handle64_close_pfn = nullptr;
+remote_handle_control_pfn_t remote_handle_control_pfn = nullptr;
+remote_handle64_control_pfn_t remote_handle64_control_pfn = nullptr;
+remote_session_control_pfn_t remote_session_control_pfn = nullptr;
+remote_system_request_pfn_t remote_system_request_pfn = nullptr;
+
+void * rpcmem_alloc(int heapid, uint32_t flags, int size)
+{
+    return rpcmem_alloc_pfn(heapid, flags, size);
+}
+
+void * rpcmem_alloc2(int heapid, uint32_t flags, size_t size)
+{
+    return rpcmem_alloc2_pfn(heapid, flags, size);
+}
+
+void rpcmem_free(void *po)
+{
+    return rpcmem_free_pfn(po);
+}
+
+int rpcmem_to_fd(void *po)
+{
+    return rpcmem_to_fd_pfn(po);
+}
+
+int fastrpc_mmap(int domain, int fd, void *addr, int offset, size_t length, enum fastrpc_map_flags flags)
+{
+    return fastrpc_mmap_pfn(domain, fd, addr, offset, length, flags);
+}
+
+int fastrpc_munmap(int domain, int fd, void *addr, size_t length)
+{
+    return fastrpc_munmap_pfn(domain, fd, addr, length);
+}
+
+AEEResult dspqueue_create(int                 domain,
+                          uint32_t            flags,
+                          uint32_t            req_queue_size,
+                          uint32_t            resp_queue_size,
+                          dspqueue_callback_t packet_callback,
+                          dspqueue_callback_t error_callback,
+                          void *              callback_context,
+                          dspqueue_t *        queue)
+{
+    return dspqueue_create_pfn(domain, flags, req_queue_size, resp_queue_size, packet_callback, error_callback,
+                               callback_context, queue);
+}
+
+AEEResult dspqueue_close(dspqueue_t queue)
+{
+    return dspqueue_close_pfn(queue);
+}
+
+AEEResult dspqueue_export(dspqueue_t queue, uint64_t *queue_id)
+{
+    return dspqueue_export_pfn(queue, queue_id);
+}
+
+AEEResult dspqueue_write(dspqueue_t queue, uint32_t flags,
+                         uint32_t num_buffers,
+                         struct dspqueue_buffer *buffers,
+                         uint32_t message_length,
+                         const uint8_t *message,
+                         uint32_t timeout_us)
+{
+    return dspqueue_write_pfn(queue, flags, num_buffers, buffers, message_length, message, timeout_us);
+}
+
+AEEResult dspqueue_read(dspqueue_t queue, uint32_t *flags,
+                        uint32_t max_buffers, uint32_t *num_buffers,
+                        struct dspqueue_buffer *buffers,
+                        uint32_t max_message_length,
+                        uint32_t *message_length, uint8_t *message,
+                        uint32_t timeout_us)
+{
+    return dspqueue_read_pfn(queue, flags, max_buffers, num_buffers, buffers, max_message_length, message_length,
+                             message, timeout_us);
+}
+
+int remote_handle64_open(const char* name, remote_handle64 *ph)
+{
+    return remote_handle64_open_pfn(name, ph);
+}
+
+int remote_handle64_invoke(remote_handle64 h, uint32_t dwScalars, remote_arg *pra)
+{
+    return remote_handle64_invoke_pfn(h, dwScalars, pra);
+}
+
+int remote_handle64_close(remote_handle64 h)
+{
+    return remote_handle64_close_pfn(h);
+}
+
+int remote_handle_control(uint32_t req, void* data, uint32_t datalen)
+{
+    return remote_handle_control_pfn(req, data, datalen);
+}
+
+int remote_handle64_control(remote_handle64 h, uint32_t req, void* data, uint32_t datalen)
+{
+    return remote_handle64_control_pfn(h, req, data, datalen);
+}
+
+int remote_session_control(uint32_t req, void *data, uint32_t datalen)
+{
+    return remote_session_control_pfn(req, data, datalen);
+}
+
+int remote_system_request(system_req_payload *req)
+{
+    return remote_system_request_pfn(req);
+}
+
 using dl_handle_ptr = std::unique_ptr<dl_handle, dl_handle_deleter>;
 
 static dl_handle_ptr lib_cdsp_rpc_handle = nullptr;
@@ -256,24 +403,24 @@ int htpdrv_initialize() {
         return -1;
     }
 
-    DLSYM(handle.get(), RpcMemAllocFn_t, htpdrv_rpcmem_alloc, rpcmem_alloc);
-    DLSYM(handle.get(), RpcMemAllocFn2_t, htpdrv_rpcmem_alloc2, rpcmem_alloc2);
-    DLSYM(handle.get(), RpcMemFreeFn_t, htpdrv_rpcmem_free, rpcmem_free);
-    DLSYM(handle.get(), RpcMemToFdFn_t, htpdrv_rpcmem_to_fd, rpcmem_to_fd);
-    DLSYM(handle.get(), FastRpcMmapFn_t, htpdrv_fastrpc_mmap, fastrpc_mmap);
-    DLSYM(handle.get(), FastRpcMunmapFn_t, htpdrv_fastrpc_munmap, fastrpc_munmap);
-    DLSYM(handle.get(), DspQueueCreateFn_t, htpdrv_dspqueue_create, dspqueue_create);
-    DLSYM(handle.get(), DspQueueCloseFn_t, htpdrv_dspqueue_close, dspqueue_close);
-    DLSYM(handle.get(), DspQueueExportFn_t, htpdrv_dspqueue_export, dspqueue_export);
-    DLSYM(handle.get(), DspQueueWriteFn_t, htpdrv_dspqueue_write, dspqueue_write);
-    DLSYM(handle.get(), DspQueueReadFn_t, htpdrv_dspqueue_read, dspqueue_read);
-    DLSYM(handle.get(), RemoteHandle64OpenFn_t, htpdrv_remote_handle64_open, remote_handle64_open);
-    DLSYM(handle.get(), RemoteHandle64InvokeFn_t, htpdrv_remote_handle64_invoke, remote_handle64_invoke);
-    DLSYM(handle.get(), RemoteHandleControlFn_t, htpdrv_remote_handle_control, remote_handle_control);
-    DLSYM(handle.get(), RemoteHandle64ControlFn_t, htpdrv_remote_handle64_control, remote_handle64_control);
-    DLSYM(handle.get(), RemoteSessionControlFn_t, htpdrv_remote_session_control, remote_session_control);
-    DLSYM(handle.get(), RemoteHandle64CloseFn_t, htpdrv_remote_handle64_close, remote_handle64_close);
-    DLSYM(handle.get(), RemoteSystemRequestFn_t, htpdrv_remote_system_request, remote_system_request);
+    DLSYM(handle.get(), rpcmem_alloc_pfn_t, rpcmem_alloc_pfn, rpcmem_alloc);
+    DLSYM(handle.get(), rpcmem_alloc2_pfn_t, rpcmem_alloc2_pfn, rpcmem_alloc2);
+    DLSYM(handle.get(), rpcmem_free_pfn_t, rpcmem_free_pfn, rpcmem_free);
+    DLSYM(handle.get(), rpcmem_to_fd_pfn_t, rpcmem_to_fd_pfn, rpcmem_to_fd);
+    DLSYM(handle.get(), fastrpc_mmap_pfn_t, fastrpc_mmap_pfn, fastrpc_mmap);
+    DLSYM(handle.get(), fastrpc_munmap_pfn_t, fastrpc_munmap_pfn, fastrpc_munmap);
+    DLSYM(handle.get(), dspqueue_create_pfn_t, dspqueue_create_pfn, dspqueue_create);
+    DLSYM(handle.get(), dspqueue_close_pfn_t, dspqueue_close_pfn, dspqueue_close);
+    DLSYM(handle.get(), dspqueue_export_pfn_t, dspqueue_export_pfn, dspqueue_export);
+    DLSYM(handle.get(), dspqueue_write_pfn_t, dspqueue_write_pfn, dspqueue_write);
+    DLSYM(handle.get(), dspqueue_read_pfn_t, dspqueue_read_pfn, dspqueue_read);
+    DLSYM(handle.get(), remote_handle64_open_pfn_t, remote_handle64_open_pfn, remote_handle64_open);
+    DLSYM(handle.get(), remote_handle64_invoke_pfn_t, remote_handle64_invoke_pfn, remote_handle64_invoke);
+    DLSYM(handle.get(), remote_handle_control_pfn_t, remote_handle_control_pfn, remote_handle_control);
+    DLSYM(handle.get(), remote_handle64_control_pfn_t, remote_handle64_control_pfn, remote_handle64_control);
+    DLSYM(handle.get(), remote_session_control_pfn_t, remote_session_control_pfn, remote_session_control);
+    DLSYM(handle.get(), remote_handle64_close_pfn_t, remote_handle64_close_pfn, remote_handle64_close);
+    DLSYM(handle.get(), remote_system_request_pfn_t, remote_system_request_pfn, remote_system_request);
 
     lib_cdsp_rpc_handle = std::move(handle);
 

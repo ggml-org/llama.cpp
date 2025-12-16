@@ -6,13 +6,6 @@
 #include "AEEStdDef.idl"
 #include "remote.idl"
 
-//#ifdef __QAIC_REMOTE
-//#undef __QAIC_REMOTE
-//#endif //__QAIC_REMOTE
-//#define __QAIC_REMOTE(ff) m_##ff
-
-//#include "defs.h"
-
 interface htp_iface : remote_handle64 {
     AEEResult start(in uint32 sess_id, in uint64 dsp_queue_id, in uint32 n_hvx);
     AEEResult stop();

@@ -1,4 +1,3 @@
-// sample drv interface
 
 #pragma once
 
@@ -6,12 +5,20 @@
 #include <remote.h>
 #include <dspqueue.h>
 
-#ifdef __QAIC_REMOTE
-#undef __QAIC_REMOTE
-#endif //__QAIC_REMOTE
-#define __QAIC_REMOTE(ff) m_##ff
+#ifdef GGML_BACKEND_SHARED
+#    if defined(_WIN32) && !defined(__MINGW32__)
+#        ifdef GGML_BACKEND_BUILD
+#            define HTP_DRV_API __declspec(dllexport) extern
+#        else
+#            define HTP_DRV_API __declspec(dllimport) extern
+#        endif
+#    else
+#        define HTP_DRV_API __attribute__ ((visibility ("default"))) extern
+#    endif
+#else
+#    define HTP_DRV_API extern
+#endif
 
-// Temp disable
 #ifdef _WIN32
 #   pragma clang diagnostic ignored "-Wdeprecated-declaration"
 #define _SILENCE_CXX17_CODECVT_HEADER_DEPRECATION_WARNING
@@ -21,89 +28,57 @@
 extern "C" {
 #endif
 
-typedef void *(*RpcMemAllocFn_t)(int, uint32_t, int);
+//
+// Driver API
+//
 
-typedef void *(*RpcMemAllocFn2_t)(int, uint32_t, int);
+extern void * rpcmem_alloc(int heapid, uint32_t flags, int size);
+extern void * rpcmem_alloc2(int heapid, uint32_t flags, size_t size);
+extern void   rpcmem_free(void * po);
+extern int    rpcmem_to_fd(void * po);
 
-typedef void (*RpcMemFreeFn_t)(void *);
+extern int fastrpc_mmap(int domain, int fd, void * addr, int offset, size_t length, enum fastrpc_map_flags flags);
+extern int fastrpc_munmap(int domain, int fd, void * addr, size_t length);
 
-typedef int (*RpcMemToFdFn_t)(void *);
+extern AEEResult dspqueue_create(int                 domain,
+                                 uint32_t            flags,
+                                 uint32_t            req_queue_size,
+                                 uint32_t            resp_queue_size,
+                                 dspqueue_callback_t packet_callback,
+                                 dspqueue_callback_t error_callback,
+                                 void *              callback_context,
+                                 dspqueue_t *        queue);
+extern AEEResult dspqueue_close(dspqueue_t queue);
+extern AEEResult dspqueue_export(dspqueue_t queue, uint64_t * queue_id);
+extern AEEResult dspqueue_write(dspqueue_t               queue,
+                                uint32_t                 flags,
+                                uint32_t                 num_buffers,
+                                struct dspqueue_buffer * buffers,
+                                uint32_t                 message_length,
+                                const uint8_t *          message,
+                                uint32_t                 timeout_us);
 
-typedef AEEResult (*DspQueueCreateFn_t)(int, uint32_t, uint32_t, uint32_t,
-                                        dspqueue_callback_t, dspqueue_callback_t,
-                                        void *, dspqueue_t *);
+extern AEEResult dspqueue_read(dspqueue_t               queue,
+                               uint32_t *               flags,
+                               uint32_t                 max_buffers,
+                               uint32_t *               num_buffers,
+                               struct dspqueue_buffer * buffers,
+                               uint32_t                 max_message_length,
+                               uint32_t *               message_length,
+                               uint8_t *                message,
+                               uint32_t                 timeout_us);
 
-typedef AEEResult (*DspQueueCloseFn_t)(dspqueue_t);
+extern int remote_handle64_open(const char * name, remote_handle64 * ph);
+extern int remote_handle64_invoke(remote_handle64 h, uint32_t dwScalars, remote_arg * pra);
+extern int remote_handle64_close(remote_handle64 h);
+extern int remote_handle_control(uint32_t req, void * data, uint32_t datalen);
+extern int remote_handle64_control(remote_handle64 h, uint32_t req, void * data, uint32_t datalen);
+extern int remote_session_control(uint32_t req, void * data, uint32_t datalen);
+extern int remote_system_request(system_req_payload * req);
 
-typedef AEEResult (*DspQueueExportFn_t)(dspqueue_t, uint64_t *);
-
-typedef AEEResult (*DspQueueWriteFn_t)(dspqueue_t, uint32_t, uint32_t,
-                                       struct dspqueue_buffer *, uint32_t,
-                                       const uint8_t *, uint32_t);
-
-                                       typedef AEEResult (*DspQueueReadFn_t)(dspqueue_t, uint32_t *, uint32_t,
-                                      uint32_t *, struct dspqueue_buffer *,
-                                      uint32_t, uint32_t *, uint8_t *, uint32_t);
-
-typedef int (*FastRpcMmapFn_t)(int, int, void *, int, size_t, enum fastrpc_map_flags);
-
-typedef int (*FastRpcMunmapFn_t)(int, int, void *, size_t);
-
-
-typedef int (*RemoteHandle64OpenFn_t)(const char *, remote_handle64 *);
-
-typedef int (*RemoteHandle64InvokeFn_t)(remote_handle64, uint32_t, remote_arg *);
-
-typedef int (*RemoteHandleControlFn_t)(uint32_t, void *, uint32_t);
-
-typedef int (*RemoteHandle64ControlFn_t)(remote_handle64, uint32_t, void *, uint32_t);
-
-typedef int (*RemoteHandle64CloseFn_t)(remote_handle64);
-
-typedef int (*RemoteSessionControlFn_t)(uint32_t, void *, uint32_t);
-
-typedef int (*RemoteSystemRequestFn_t)(system_req_payload *);
-
-extern RpcMemAllocFn_t htpdrv_rpcmem_alloc;
-
-extern RpcMemAllocFn_t htpdrv_rpcmem_alloc2;
-
-extern RpcMemFreeFn_t htpdrv_rpcmem_free;
-
-extern RpcMemToFdFn_t htpdrv_rpcmem_to_fd;
-
-extern FastRpcMmapFn_t htpdrv_fastrpc_mmap;
-
-extern FastRpcMunmapFn_t htpdrv_fastrpc_munmap;
- 
-extern DspQueueCreateFn_t htpdrv_dspqueue_create;
-
-extern DspQueueCloseFn_t htpdrv_dspqueue_close;
-
-extern DspQueueExportFn_t htpdrv_dspqueue_export;
-
-extern DspQueueWriteFn_t htpdrv_dspqueue_write;
-
-extern DspQueueReadFn_t htpdrv_dspqueue_read;
-
-extern RemoteHandle64OpenFn_t htpdrv_remote_handle64_open;
-
-extern RemoteHandle64InvokeFn_t htpdrv_remote_handle64_invoke;
-
-extern RemoteHandleControlFn_t htpdrv_remote_handle_control;
-
-extern RemoteHandle64ControlFn_t htpdrv_remote_handle64_control;
-
-extern RemoteHandle64CloseFn_t htpdrv_remote_handle64_close;
-
-extern RemoteSessionControlFn_t htpdrv_remote_session_control;
-
-extern RemoteSystemRequestFn_t htpdrv_remote_system_request;
-
-// CDSPRPC Driver interface
+// CDSPRPC Driver entry point
 int htpdrv_initialize(void);
 
 #ifdef __cplusplus
 }
 #endif
-
