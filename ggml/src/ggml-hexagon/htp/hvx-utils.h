@@ -1003,9 +1003,6 @@ static inline void hvx_sigmoid_f32(const uint8_t * restrict src, uint8_t * restr
     int step_of_1 = num_elems >> 5;  // divby 32, because 32 float = 128 bytes per HVX vector
     int leftover = num_elems - (step_of_1 * VLEN_FP32);
 
-    // assert(remaining == 0);//TODO: handle remaining elements later
-
-
     int32_t leftover_size = leftover * sizeof(float);
 
     static const float kMinExp = -87.f;  // 0
@@ -1053,54 +1050,12 @@ static inline void hvx_sigmoid_f32(const uint8_t * restrict src, uint8_t * restr
         sline = Q6_V_valign_VVR(slinec, slinep, (size_t) input);
 
         HVX_Vector sout = hvx_vec_fast_sigmoid_fp32_guard(sline, one, max_exp, min_exp);
-        /* Store output */
         hvx_vec_store_u(output_v_ptr, leftover_size, sout);        
     }
 
   
 }
 
-
-
-// static inline void hvx_sigmoid_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems){
-//     int step_of_1 = num_elems >> 5;  // divby 32, because 32 float = 128 bytes per HVX vector
-//     int leftover = num_elems - (step_of_1 * VLEN_FP32);
-
-//     // assert(remaining == 0);//TODO: handle remaining elements later
-
-
-//     int32_t leftover_size = leftover * sizeof(float);
-
-//     static const float kMinExp = -87.f;  // 0
-//     static const float kMaxExp = 87.f;   // 1
-
-//     const HVX_Vector one     = hvx_vec_splat_fp32(1.f);
-//     const HVX_Vector max_exp = hvx_vec_splat_fp32(kMaxExp);
-//     const HVX_Vector min_exp = hvx_vec_splat_fp32(kMinExp);
-
-//     const float *input = (float *)src;
-//     float *output = (float *)dst;
-
-//     HVX_UVector *  input_v_ptr = (HVX_UVector *) input;
-//     HVX_UVector *  output_v_ptr       = (HVX_UVector *) output;
-
-//     // #pragma unroll(4)  NOTE: this actual got slower
-//     for(uint32_t i = step_of_1; i> 0; i--){
-//         *((HVX_UVector *)(output_v_ptr++)) =  hvx_vec_fast_sigmoid_fp32_guard(*(input_v_ptr++), one, max_exp, min_exp);
- 
-//     }
-
-
-//     if(leftover> 0){
-
-
-//         HVX_Vector sout = hvx_vec_fast_sigmoid_fp32_guard(*(input_v_ptr++), one, max_exp, min_exp);
-//         /* Store output */
-//         hvx_vec_store_u(output_v_ptr, leftover_size, sout);        
-//     }
-
-  
-// }
 
 float hvx_sum_of_squares_f32(const uint8_t * restrict src, const int num_elems);
 void  hvx_mul_f32(const uint8_t * restrict src0,

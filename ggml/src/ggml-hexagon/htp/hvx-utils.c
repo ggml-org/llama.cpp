@@ -62,16 +62,6 @@ void hvx_mul_f32(const uint8_t * restrict src0,
             *vec_out++   = Q6_Vsf_equals_Vqf32(v);
         }
     } else {
-        // #pragma unroll(4)
-        // for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
-        //     HVX_Vector in1 = *(HVX_UVector *) (src0 + i * SIZEOF_FP32);
-        //     HVX_Vector in2 = *(HVX_UVector *) (src1 + i * SIZEOF_FP32);
-
-        //     HVX_Vector out = Q6_Vqf32_vmpy_VsfVsf(in1, in2);
-
-        //     *(HVX_UVector *) (dst + i * SIZEOF_FP32) = Q6_Vsf_equals_Vqf32(out);
-        // }
-
         int step_of_1 = num_elems_whole >> 5;  // divby 32, because 32 float = 128 bytes per HVX vector
         int leftover_size = left_over * sizeof(float);
 
@@ -98,7 +88,6 @@ void hvx_mul_f32(const uint8_t * restrict src0,
             sline2 = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
            
             *((HVX_UVector *)(vec_out++)) =Q6_Vsf_equals_Vqf32(  Q6_Vqf32_vmpy_VsfVsf(sline, sline2));
-            /* Prepare slinep for next iteration */
             slinep = slinec;
             sline2p = sline2c;  
         }
@@ -109,7 +98,6 @@ void hvx_mul_f32(const uint8_t * restrict src0,
             sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);       
             sline2 = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
             *((HVX_UVector *)(vec_out++)) =Q6_Vsf_equals_Vqf32(  Q6_Vqf32_vmpy_VsfVsf(sline, sline2));
-            /* Prepare slinep for next iteration */
             slinep = slinec;
             sline2p = sline2c;
         }
@@ -131,17 +119,6 @@ void hvx_mul_f32(const uint8_t * restrict src0,
         }
     }
 
-    // if (left_over > 0 ) {
-    //     const float * src0f = (const float *) src0 + num_elems_whole;
-    //     const float * src1f = (const float *) src1 + num_elems_whole;
-    //     float *       dstf  = (float *) dst + num_elems_whole;
-
-    //     HVX_Vector in1 = *(HVX_UVector *) src0f;
-    //     HVX_Vector in2 = *(HVX_UVector *) src1f;
-
-    //     HVX_Vector out = Q6_Vqf32_vmpy_VsfVsf(in1, in2);
-    //     hvx_vec_store_u((void *) dstf, left_over * SIZEOF_FP32, Q6_Vsf_equals_Vqf32(out));
-    // }
 
     if (left_over > 0 && !handled_leftover) {
         const float * src0f = (const float *) src0 + num_elems_whole;
@@ -547,15 +524,6 @@ void hvx_mul_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
             *vec_out++   = Q6_Vsf_equals_Vqf32(v);
         }
     } else {
-        // #pragma unroll(4)
-        // for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
-        //     HVX_Vector in = *(HVX_UVector *) (src + i * SIZEOF_FP32);
-
-        //     HVX_Vector out = Q6_Vqf32_vmpy_VsfVsf(in, val_vec);
-
-        //     *(HVX_UVector *) (dst + i * SIZEOF_FP32) = Q6_Vsf_equals_Vqf32(out);
-        // }
-
         int step_of_1 = num_elems >> 5;  // divby 32, because 32 float = 128 bytes per HVX vector
         int leftover_size = left_over * sizeof(float);
 
@@ -597,21 +565,10 @@ void hvx_mul_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
             sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src);
 
             HVX_Vector sout = Q6_Vsf_equals_Vqf32( Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));
-            /* Store output */
             hvx_vec_store_u(output_v_ptr, leftover_size, sout);  
             handled_leftover = true;
         }
     }
-
-    // if (left_over > 0 ) {
-    //     const float * srcf = (const float *) src + num_elems_whole;
-    //     float *       dstf = (float *) dst + num_elems_whole;
-
-    //     HVX_Vector in = *(HVX_UVector *) srcf;
-
-    //     HVX_Vector out = Q6_Vqf32_vmpy_VsfVsf(in, val_vec);
-    //     hvx_vec_store_u((void *) dstf, left_over * SIZEOF_FP32, Q6_Vsf_equals_Vqf32(out));
-    // }
 
     if (left_over > 0 && !handled_leftover) {
         const float * srcf = (const float *) src + num_elems_whole;

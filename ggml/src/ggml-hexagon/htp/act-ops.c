@@ -313,17 +313,14 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
             const float * restrict src0 = (float *) (data_src0 + (ib * src0_row_size));
             float * restrict dst        = (float *) (data_dst + (ib * dst_row_size));
 
-            // gelu = 0.5 * x * (1.0 + tanh( sqrt(2/pi) * (x + 0.044715 * x^3) )) // gelu_tanh
             // gelu = x * sigmoid(1.702 * x) // current implementation
             if (1 == opt_path) {
                 hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
                 hvx_fast_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
-
                 hvx_mul_f32_opt((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
             } 
             else {
                 hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
-                // sigmoid
                 hvx_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
                 hvx_mul_f32((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
             }
