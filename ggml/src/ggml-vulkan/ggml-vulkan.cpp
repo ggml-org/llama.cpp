@@ -659,6 +659,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_cos_f32;
     vk_pipeline pipeline_log[2];
     vk_pipeline pipeline_tri[2];
+    vk_pipeline pipeline_diag[2];
     vk_pipeline pipeline_clamp_f32;
     vk_pipeline pipeline_pad_f32;
     vk_pipeline pipeline_roll_f32;
@@ -722,6 +723,11 @@ struct vk_device_struct {
     vk_pipeline pipeline_soft_max_f32, pipeline_soft_max_f32_f16;
     vk_pipeline pipeline_soft_max_f32_wg512, pipeline_soft_max_f32_f16_wg512;
     vk_pipeline pipeline_soft_max_back_f32;
+
+    vk_pipeline pipeline_soft_max_large1_f32, pipeline_soft_max_large1_f32_f16;
+    vk_pipeline pipeline_soft_max_large2_f32, pipeline_soft_max_large2_f32_f16;
+    vk_pipeline pipeline_soft_max_large3_f32, pipeline_soft_max_large3_f32_f16;
+
     vk_pipeline pipeline_rope_norm_f32, pipeline_rope_norm_f16, pipeline_rope_norm_f32_f16;
     vk_pipeline pipeline_rope_neox_f32, pipeline_rope_neox_f16, pipeline_rope_neox_f32_f16;
     vk_pipeline pipeline_rope_multi_f32, pipeline_rope_multi_f16;
@@ -757,7 +763,8 @@ struct vk_device_struct {
 
     vk_pipeline pipeline_flash_attn_split_k_reduce;
 
-    vk_pipeline pipeline_topk_moe[num_topk_moe_pipelines][TOPK_MOE_COUNT];
+    // [2] is for whether to take n_experts from spec constant (0) or push constant (1)
+    vk_pipeline pipeline_topk_moe[num_topk_moe_pipelines][TOPK_MOE_COUNT][2];
 
     std::vector<vk_pipeline_ref> all_pipelines;
 
@@ -776,11 +783,6 @@ struct vk_device_struct {
 #ifdef GGML_VULKAN_MEMORY_DEBUG
     std::unique_ptr<vk_memory_logger> memory_logger;
 #endif
-
-    // for GGML_VK_PERF_LOGGER
-    std::unique_ptr<vk_perf_logger> perf_logger;
-    vk::QueryPool query_pool;
-    int32_t num_queries;
 
     ~vk_device_struct() {
         VK_LOG_DEBUG("destroy device " << name);
@@ -1050,6 +1052,7 @@ struct vk_op_pad_push_constants {
     uint32_t ne00; uint32_t ne01; uint32_t ne02; uint32_t ne03; uint32_t nb00; uint32_t nb01; uint32_t nb02; uint32_t nb03;
     uint32_t ne10; uint32_t ne11; uint32_t ne12; uint32_t ne13; uint32_t nb10; uint32_t nb11; uint32_t nb12; uint32_t nb13;
     uint32_t misalign_offsets;
+    uint32_t circular;
 
     uint32_t lp0; uint32_t rp0;
     uint32_t lp1; uint32_t rp1;
@@ -1092,6 +1095,7 @@ static vk_op_pad_push_constants vk_op_pad_push_constants_init(const ggml_tensor 
     p.rp2 = dst->op_params[5];
     p.lp3 = dst->op_params[6];
     p.rp3 = dst->op_params[7];
+    p.circular = dst->op_params[8];
 
     return p; // fastdiv values and offsets are initialized later in ggml_vk_op
 }
@@ -1152,6 +1156,7 @@ static_assert(sizeof(vk_op_multi_add_push_constants) <= 256);
 
 struct vk_op_topk_moe_push_constants {
     uint32_t n_rows;
+    uint32_t n_experts_push;
     uint32_t n_expert_used;
     float clamp_min;
     float clamp_max;
@@ -1521,12 +1526,21 @@ private:
 #define VK_LOG_MEMORY(msg) ((void) 0)
 #endif // GGML_VULKAN_MEMORY_DEBUG
 
+static bool vk_perf_logger_enabled = false;
+// number of calls between perf logger prints
+static uint32_t vk_perf_logger_frequency = 1;
+
 class vk_perf_logger {
   public:
-    void print_timings() {
+    void print_timings(bool force = false) {
         if (timings.empty()) {
             return;
         }
+        print_count++;
+        if ((print_count % vk_perf_logger_frequency) != 0 && !force) {
+            return;
+        }
+        print_count = 0;
         uint64_t total_all_op_times = 0;
         std::cerr << "----------------\nVulkan Timings:" << std::endl;
         for (const auto & t : timings) {
@@ -1563,16 +1577,20 @@ class vk_perf_logger {
         flops.clear();
     }
 
-    void log_timing(const ggml_tensor * node, uint64_t time) {
+    void log_timing(const ggml_tensor * node, const char *fusion_name, uint64_t time) {
+        std::string fusion_str;
+        if (fusion_name) {
+            fusion_str = fusion_name + std::string(" ");
+        }
         if (node->op == GGML_OP_UNARY) {
-            timings[ggml_unary_op_name(ggml_get_unary_op(node))].push_back(time);
+            timings[fusion_str + ggml_unary_op_name(ggml_get_unary_op(node))].push_back(time);
             return;
         }
         if (node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID) {
-            const uint64_t m     = node->src[0]->ne[1];
-            const uint64_t n     = (node->op == GGML_OP_MUL_MAT) ? node->ne[1] : node->ne[2];
+            const uint64_t m     = node->ne[0];
+            const uint64_t n     = node->ne[1];
             const uint64_t k     = node->src[1]->ne[0];
-            const uint64_t batch = node->src[1]->ne[2] * node->src[1]->ne[3];
+            const uint64_t batch = node->ne[2] * node->ne[3];
             std::string    name  = ggml_op_name(node->op);
             if ((node->op == GGML_OP_MUL_MAT && n <= mul_mat_vec_max_cols) ||
                 (node->op == GGML_OP_MUL_MAT_ID && node->src[2]->ne[1] == 1)) {
@@ -1581,9 +1599,13 @@ class vk_perf_logger {
             name += " ";
             name += ggml_type_name(node->src[0]->type);
             name += " m=" + std::to_string(m) + " n=" + std::to_string(n) + " k=" + std::to_string(k);
+            if (node->op == GGML_OP_MUL_MAT_ID) {
+                name += " n_expert=" + std::to_string(node->src[0]->ne[2]);
+            }
             if (batch > 1) {
                 name += " batch=" + std::to_string(batch);
             }
+            name = fusion_str + name;
             timings[name].push_back(time);
             flops[name].push_back(m * n * (k + (k - 1)) * batch);
             return;
@@ -1605,6 +1627,7 @@ class vk_perf_logger {
             uint64_t      n_flops = size_M * size_N * (size_K + (size_K - 1));
             name += " M=Cout=" + std::to_string(size_M) + ", K=Cin*KW*KH=" + std::to_string(size_K) +
                     ", N=N*OW*OH=" + std::to_string(size_N);
+            name = fusion_str + name;
             flops[name].push_back(n_flops);
             timings[name].push_back(time);
             return;
@@ -1612,6 +1635,7 @@ class vk_perf_logger {
         if (node->op == GGML_OP_RMS_NORM) {
             std::string   name    = ggml_op_name(node->op);
             name += "(" + std::to_string(node->ne[0]) + "," + std::to_string(node->ne[1]) + "," + std::to_string(node->ne[2]) + "," + std::to_string(node->ne[3]) + ")";
+            name = fusion_str + name;
             timings[name].push_back(time);
             return;
         }
@@ -1622,6 +1646,7 @@ class vk_perf_logger {
             const ggml_tensor * v = node->src[2];
             const ggml_tensor * m = node->src[3];
             std::stringstream name;
+            name << fusion_str;
             name << ggml_op_name(node->op) <<
                 " dst(" << dst->ne[0] << "," << dst->ne[1] << "," << dst->ne[2] << "," << dst->ne[3] << "), " <<
                 " q(" << q->ne[0] << "," << q->ne[1] << "," << q->ne[2] << "," << q->ne[3] << "), " <<
@@ -1633,17 +1658,19 @@ class vk_perf_logger {
         }
         if (node->op == GGML_OP_TOP_K) {
             std::stringstream name;
+            name << fusion_str;
             name << ggml_op_name(node->op) <<
                 " K=" << node->ne[0] <<
                 " (" << node->src[0]->ne[0] << "," << node->src[0]->ne[1] << "," << node->src[0]->ne[2] << "," << node->src[0]->ne[3] << ")";
             timings[name.str()].push_back(time);
             return;
         }
-        timings[ggml_op_name(node->op)].push_back(time);
+        timings[fusion_str + ggml_op_name(node->op)].push_back(time);
     }
   private:
     std::map<std::string, std::vector<uint64_t>> timings;
     std::map<std::string, std::vector<uint64_t>> flops;
+    uint32_t print_count {};
 };
 
 struct ggml_backend_vk_context {
@@ -1697,6 +1724,14 @@ struct ggml_backend_vk_context {
     // Bit 'i' means nodes[start_of_fusion + i] writes to memory.
     // If there's no fusion, bit 0 is still set.
     int fused_ops_write_mask {};
+
+    // for GGML_VK_PERF_LOGGER
+    std::unique_ptr<vk_perf_logger> perf_logger;
+    vk::QueryPool query_pool;
+    std::vector<const char *> query_fusion_names;
+    std::vector<ggml_tensor *> query_nodes;
+    int32_t num_queries {};
+    int32_t query_idx {};
 };
 
 static void * const vk_ptr_base = (void *)(uintptr_t) 0x1000;  // NOLINT
@@ -1821,8 +1856,6 @@ struct vk_instance_t {
 
 static bool vk_instance_initialized = false;
 static vk_instance_t vk_instance;
-
-static bool vk_perf_logger_enabled = false;
 
 #ifdef GGML_VULKAN_CHECK_RESULTS
 static size_t vk_skip_checks;
@@ -3705,6 +3738,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_get_rows[GGML_TYPE_IQ4_XS],  "get_rows_iq4_xs",  get_rows_iq4_xs_len,  get_rows_iq4_xs_data,  "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_get_rows[GGML_TYPE_IQ4_NL],  "get_rows_iq4_nl",  get_rows_iq4_nl_len,  get_rows_iq4_nl_data,  "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_get_rows[GGML_TYPE_MXFP4],   "get_rows_mxfp4",   get_rows_mxfp4_len,   get_rows_mxfp4_data,   "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_get_rows[GGML_TYPE_I32],     "get_rows_i32",     get_rows_i32_len,     get_rows_i32_data,     "main", 3, sizeof(vk_op_binary_push_constants), {1024, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_get_rows_f32[GGML_TYPE_F32 ], "get_rows_f32_f32",  get_rows_f32_f32_len,  get_rows_f32_f32_data,  "main", 3, sizeof(vk_op_binary_push_constants), { 512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_get_rows_f32[GGML_TYPE_F16 ], "get_rows_f16_f32",  get_rows_f16_f32_len,  get_rows_f16_f32_data,  "main", 3, sizeof(vk_op_binary_push_constants), { 512, 1, 1}, {}, 1);
@@ -3892,6 +3926,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_tri[0], "tri_f32", tri_f32_len, tri_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_tri[1], "tri_f16", tri_f16_len, tri_f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
+    ggml_vk_create_pipeline(device, device->pipeline_diag[0], "diag_f32", diag_f32_len, diag_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_diag[1], "diag_f16", diag_f16_len, diag_f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+
     ggml_vk_create_pipeline(device, device->pipeline_clamp_f32, "clamp_f32", clamp_f32_len, clamp_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_pad_f32, "pad_f32", pad_f32_len, pad_f32_data, "main", 2, sizeof(vk_op_pad_push_constants), {512, 1, 1}, {}, 1);
@@ -3970,6 +4007,13 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_f32_f16, "soft_max_f32_f16", soft_max_f32_f16_len, soft_max_f32_f16_data, "main", 4, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_f32_f16_wg512, "soft_max_f32_f16_wg512", soft_max_f32_f16_len, soft_max_f32_f16_data, "main", 4, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { 512 }, 1);
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_back_f32, "soft_max_back_f32", soft_max_back_f32_len, soft_max_back_f32_data, "main", 3, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1, true);
+
+    ggml_vk_create_pipeline(device, device->pipeline_soft_max_large1_f32,     "soft_max_large1_f32",     soft_max_large1_f32_len,     soft_max_large1_f32_data,     "main", 6, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { 128, 4 }, 1, true);
+    ggml_vk_create_pipeline(device, device->pipeline_soft_max_large2_f32,     "soft_max_large2_f32",     soft_max_large2_f32_len,     soft_max_large2_f32_data,     "main", 6, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { 128, 4 }, 1, true);
+    ggml_vk_create_pipeline(device, device->pipeline_soft_max_large3_f32,     "soft_max_large3_f32",     soft_max_large3_f32_len,     soft_max_large3_f32_data,     "main", 6, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { 128, 4 }, 1, true);
+    ggml_vk_create_pipeline(device, device->pipeline_soft_max_large1_f32_f16, "soft_max_large1_f32_f16", soft_max_large1_f32_f16_len, soft_max_large1_f32_f16_data, "main", 6, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { 128, 4 }, 1, true);
+    ggml_vk_create_pipeline(device, device->pipeline_soft_max_large2_f32_f16, "soft_max_large2_f32_f16", soft_max_large2_f32_f16_len, soft_max_large2_f32_f16_data, "main", 6, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { 128, 4 }, 1, true);
+    ggml_vk_create_pipeline(device, device->pipeline_soft_max_large3_f32_f16, "soft_max_large3_f32_f16", soft_max_large3_f32_f16_len, soft_max_large3_f32_f16_data, "main", 6, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { 128, 4 }, 1, true);
 
     ggml_vk_create_pipeline(device, device->pipeline_rope_norm_f32, "rope_norm_f32", rope_norm_f32_len, rope_norm_f32_data, "main", 5, sizeof(vk_op_rope_push_constants), {1, 512, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_rope_neox_f32, "rope_neox_f32", rope_neox_f32_len, rope_neox_f32_data, "main", 5, sizeof(vk_op_rope_push_constants), {1, 512, 1}, {}, 1);
@@ -4179,10 +4223,12 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_whcn_f16_f32, "conv2d_dw_whcn_f16_f32", conv2d_dw_whcn_f16_f32_len, conv2d_dw_whcn_f16_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_cwhn_f16_f32, "conv2d_dw_cwhn_f16_f32", conv2d_dw_cwhn_f16_f32_len, conv2d_dw_cwhn_f16_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
 
-    for (uint32_t i = 0; i < num_topk_moe_pipelines; ++i) {
-        ggml_vk_create_pipeline2(device, device->pipeline_topk_moe[i][TOPK_MOE_EARLY_SOFTMAX],      "topk_moe_f32_early_softmax_"+std::to_string(i),       topk_moe_f32_len, topk_moe_f32_data, "main", 3, sizeof(vk_op_topk_moe_push_constants), {1, 1, 1}, {device->subgroup_size, 1u<<i, 0, 0}, 1, true, true, device->subgroup_size);
-        ggml_vk_create_pipeline2(device, device->pipeline_topk_moe[i][TOPK_MOE_EARLY_SOFTMAX_NORM], "topk_moe_f32_early_softmax_norm"+std::to_string(i),   topk_moe_f32_len, topk_moe_f32_data, "main", 3, sizeof(vk_op_topk_moe_push_constants), {1, 1, 1}, {device->subgroup_size, 1u<<i, 1, 0}, 1, true, true, device->subgroup_size);
-        ggml_vk_create_pipeline2(device, device->pipeline_topk_moe[i][TOPK_MOE_LATE_SOFTMAX],       "topk_moe_f32_late_softmax"+std::to_string(i),         topk_moe_f32_len, topk_moe_f32_data, "main", 3, sizeof(vk_op_topk_moe_push_constants), {1, 1, 1}, {device->subgroup_size, 1u<<i, 0, 1}, 1, true, true, device->subgroup_size);
+    for (uint32_t use_push = 0; use_push < 2; ++use_push) {
+        for (uint32_t i = 0; i < num_topk_moe_pipelines; ++i) {
+            ggml_vk_create_pipeline2(device, device->pipeline_topk_moe[i][TOPK_MOE_EARLY_SOFTMAX][use_push],      "topk_moe_f32_early_softmax_"+std::to_string(i),       topk_moe_f32_len, topk_moe_f32_data, "main", 3, sizeof(vk_op_topk_moe_push_constants), {1, 1, 1}, {device->subgroup_size, 1u<<i, 0, 0, use_push}, 1, true, true, device->subgroup_size);
+            ggml_vk_create_pipeline2(device, device->pipeline_topk_moe[i][TOPK_MOE_EARLY_SOFTMAX_NORM][use_push], "topk_moe_f32_early_softmax_norm"+std::to_string(i),   topk_moe_f32_len, topk_moe_f32_data, "main", 3, sizeof(vk_op_topk_moe_push_constants), {1, 1, 1}, {device->subgroup_size, 1u<<i, 1, 0, use_push}, 1, true, true, device->subgroup_size);
+            ggml_vk_create_pipeline2(device, device->pipeline_topk_moe[i][TOPK_MOE_LATE_SOFTMAX][use_push],       "topk_moe_f32_late_softmax"+std::to_string(i),         topk_moe_f32_len, topk_moe_f32_data, "main", 3, sizeof(vk_op_topk_moe_push_constants), {1, 1, 1}, {device->subgroup_size, 1u<<i, 0, 1, use_push}, 1, true, true, device->subgroup_size);
+        }
     }
 
     for (auto &c : compiles) {
@@ -4203,9 +4249,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #ifdef GGML_VULKAN_MEMORY_DEBUG
         device->memory_logger = std::unique_ptr<vk_memory_logger>(new vk_memory_logger());
 #endif
-        if (vk_perf_logger_enabled) {
-            device->perf_logger = std::unique_ptr<vk_perf_logger>(new vk_perf_logger());
-        }
 
         size_t dev_num = vk_instance.device_indices[idx];
 
@@ -5151,6 +5194,11 @@ static void ggml_vk_instance_init() {
     }
 
     vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
+    const char* GGML_VK_PERF_LOGGER_FREQUENCY = getenv("GGML_VK_PERF_LOGGER_FREQUENCY");
+
+    if (GGML_VK_PERF_LOGGER_FREQUENCY != nullptr) {
+        vk_perf_logger_frequency = std::stoul(GGML_VK_PERF_LOGGER_FREQUENCY);
+    }
 
     // See https://github.com/KhronosGroup/Vulkan-Hpp?tab=readme-ov-file#extensions--per-device-function-pointers-
     VULKAN_HPP_DEFAULT_DISPATCHER.init(vk_instance.instance);
@@ -5327,6 +5375,10 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
 
     ctx->compute_cmd_pool.init(ctx->device, &ctx->device->compute_queue);
     ctx->transfer_cmd_pool.init(ctx->device, &ctx->device->transfer_queue);
+
+    if (vk_perf_logger_enabled) {
+        ctx->perf_logger = std::unique_ptr<vk_perf_logger>(new vk_perf_logger());
+    }
 
 #ifdef GGML_VULKAN_CHECK_RESULTS
     const char* skip_checks = getenv("GGML_VULKAN_SKIP_CHECKS");
@@ -8243,6 +8295,11 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
     switch (op) {
     case GGML_OP_GET_ROWS:
         GGML_ASSERT(src1->type == GGML_TYPE_I32);
+        if (src0->type == GGML_TYPE_I32) {
+            // i32 src only supports i32 result
+            GGML_ASSERT(dst->type == GGML_TYPE_I32);
+            return ctx->device->pipeline_get_rows[src0->type];
+        }
         if (dst->type == GGML_TYPE_F16) {
             return ctx->device->pipeline_get_rows[src0->type];
         }
@@ -8367,6 +8424,12 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         if (src0->type == dst->type &&
             (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
             return ctx->device->pipeline_tri[dst->type == GGML_TYPE_F16];
+        }
+        return nullptr;
+    case GGML_OP_DIAG:
+        if (src0->type == dst->type &&
+            (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) {
+            return ctx->device->pipeline_diag[dst->type == GGML_TYPE_F16];
         }
         return nullptr;
     case GGML_OP_CLAMP:
@@ -8523,7 +8586,9 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             uint32_t idx = (uint32_t)ceilf(log2f(float(dst->ne[0])));
             GGML_ASSERT(idx < num_topk_moe_pipelines);
             topk_moe_mode mode = ggml_vk_num_additional_ops_to_topk_moe_mode(ctx->num_additional_fused_ops);
-            return ctx->device->pipeline_topk_moe[idx][mode];
+            // use n_experts from push constant if it's not equal to the power of two spec constant
+            bool use_push = dst->ne[0] != (1u << idx);
+            return ctx->device->pipeline_topk_moe[idx][mode][use_push];
         }
 
         if (src0->type == GGML_TYPE_F32 && (src1 == nullptr || src1->type == GGML_TYPE_F32) && dst->type == GGML_TYPE_F32) {
@@ -9060,6 +9125,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_COS:
     case GGML_OP_LOG:
     case GGML_OP_TRI:
+    case GGML_OP_DIAG:
     case GGML_OP_CLAMP:
     case GGML_OP_PAD:
     case GGML_OP_ROLL:
@@ -9747,6 +9813,12 @@ static void ggml_vk_tri(ggml_backend_vk_context * ctx, vk_context& subctx, const
     ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_TRI, std::move(p));
 }
 
+static void ggml_vk_diag(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
+    vk_op_unary_push_constants p = vk_op_unary_push_constants_init(src0, dst, ggml_nelements(dst));
+
+    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_DIAG, std::move(p));
+}
+
 static void ggml_vk_clamp(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
     vk_op_unary_push_constants p = vk_op_unary_push_constants_init(src0, dst);
     p.param1 = ggml_get_op_params_f32(dst, 0);
@@ -10080,7 +10152,7 @@ static void ggml_vk_soft_max(ggml_backend_vk_context * ctx, vk_context& subctx, 
     const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
-    ggml_vk_op_f32<vk_op_soft_max_push_constants>(ctx, subctx, src0, src1, src2, nullptr, dst, GGML_OP_SOFT_MAX, {
+    vk_op_soft_max_push_constants pc {
         ncols,
         src1 != nullptr ? nrows_y : (uint32_t)0,
         (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2],
@@ -10091,7 +10163,55 @@ static void ggml_vk_soft_max(ggml_backend_vk_context * ctx, vk_context& subctx, 
         n_head_log2,
         nrows_x,
         src2 != nullptr
-    });
+    };
+
+    if (ncols <= 16384) {
+        ggml_vk_op_f32<vk_op_soft_max_push_constants>(ctx, subctx, src0, src1, src2, nullptr, dst, GGML_OP_SOFT_MAX, std::move(pc));
+    } else {
+
+        vk_subbuffer buf_a = ggml_vk_tensor_subbuffer(ctx, src0);
+        vk_subbuffer buf_b = src1 ? ggml_vk_tensor_subbuffer(ctx, src1) : buf_a;
+        vk_subbuffer buf_c = src2 ? ggml_vk_tensor_subbuffer(ctx, src2) : buf_a;
+        vk_subbuffer buf_d = ggml_vk_tensor_subbuffer(ctx, dst);
+
+        uint32_t elems_per_wg = 128 * 4;
+        uint32_t num_wgs = CEIL_DIV(ncols, elems_per_wg);
+        size_t tmp_size = num_wgs * nrows_x * sizeof(float);
+
+        if (ctx->prealloc_size_x < tmp_size) {
+            ctx->prealloc_size_x = tmp_size;
+            ggml_vk_preallocate_buffers(ctx, subctx);
+        }
+        if (ctx->prealloc_size_y < tmp_size) {
+            ctx->prealloc_size_y = tmp_size;
+            ggml_vk_preallocate_buffers(ctx, subctx);
+        }
+        if (ctx->prealloc_x_need_sync || ctx->prealloc_y_need_sync) {
+            ggml_vk_sync_buffers(ctx, subctx);
+        }
+
+        vk_subbuffer buf_x = { ctx->prealloc_x, 0, tmp_size };
+        vk_subbuffer buf_y = { ctx->prealloc_y, 0, tmp_size };
+
+        std::array<uint32_t, 3> elements = { num_wgs, nrows_x, 1 };
+
+        vk_pipeline pipeline1 = src1 && src1->type == GGML_TYPE_F16 ? ctx->device->pipeline_soft_max_large1_f32_f16 : ctx->device->pipeline_soft_max_large1_f32;
+        vk_pipeline pipeline2 = src1 && src1->type == GGML_TYPE_F16 ? ctx->device->pipeline_soft_max_large2_f32_f16 : ctx->device->pipeline_soft_max_large2_f32;
+        vk_pipeline pipeline3 = src1 && src1->type == GGML_TYPE_F16 ? ctx->device->pipeline_soft_max_large3_f32_f16 : ctx->device->pipeline_soft_max_large3_f32;
+
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline1, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline2, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline3, 1);
+
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline1, { buf_a, buf_b, buf_c, buf_d, buf_x, buf_y }, pc, elements);
+        ggml_vk_sync_buffers(ctx, subctx);
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline2, { buf_a, buf_b, buf_c, buf_d, buf_x, buf_y }, pc, elements);
+        ggml_vk_sync_buffers(ctx, subctx);
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline3, { buf_a, buf_b, buf_c, buf_d, buf_x, buf_y }, pc, elements);
+
+        ctx->prealloc_x_need_sync = true;
+        ctx->prealloc_y_need_sync = true;
+    }
 }
 
 static void ggml_vk_soft_max_back(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -10127,6 +10247,7 @@ static void ggml_vk_topk_moe(ggml_backend_vk_context * ctx, vk_context& subctx, 
 
     vk_op_topk_moe_push_constants pc {};
     pc.n_rows = n_rows;
+    pc.n_experts_push = n_experts;
     pc.n_expert_used = n_expert_used;
     if (mode == TOPK_MOE_EARLY_SOFTMAX_NORM) {
         ggml_tensor * clamp = cgraph->nodes[node_idx + 7];
@@ -11827,6 +11948,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         ggml_vk_tri(ctx, compute_ctx, src0, node);
 
         break;
+    case GGML_OP_DIAG:
+        ggml_vk_diag(ctx, compute_ctx, src0, node);
+
+        break;
     case GGML_OP_CLAMP:
         ggml_vk_clamp(ctx, compute_ctx, src0, node);
 
@@ -12203,6 +12328,9 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
 
     ctx->compute_cmd_pool.destroy(ctx->device->device);
     ctx->transfer_cmd_pool.destroy(ctx->device->device);
+    if (vk_perf_logger_enabled) {
+        ctx->perf_logger->print_timings(true);
+    }
 }
 
 static int ggml_vk_get_device_count() {
@@ -12798,8 +12926,7 @@ static bool ggml_vk_can_fuse_topk_moe(ggml_backend_vk_context * ctx, const struc
     }
 
     const int n_expert = softmax->ne[0];
-    // n_expert must be a power of 2
-    if (!is_pow2(n_expert) || n_expert > (1 << (num_topk_moe_pipelines-1))) {
+    if (n_expert > (1 << (num_topk_moe_pipelines-1))) {
         return false;
     }
 
@@ -13001,24 +13128,29 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     vk_context compute_ctx;
     if (vk_perf_logger_enabled) {
         // allocate/resize the query pool
-        if (ctx->device->num_queries < cgraph->n_nodes + 1) {
-            if (ctx->device->query_pool) {
-                ctx->device->device.destroyQueryPool(ctx->device->query_pool);
+        if (ctx->num_queries < cgraph->n_nodes + 1) {
+            if (ctx->query_pool) {
+                ctx->device->device.destroyQueryPool(ctx->query_pool);
             }
             vk::QueryPoolCreateInfo query_create_info;
             query_create_info.queryType = vk::QueryType::eTimestamp;
             query_create_info.queryCount = cgraph->n_nodes + 100;
-            ctx->device->query_pool = ctx->device->device.createQueryPool(query_create_info);
-            ctx->device->num_queries = query_create_info.queryCount;
+            ctx->query_pool = ctx->device->device.createQueryPool(query_create_info);
+            ctx->num_queries = query_create_info.queryCount;
+            ctx->query_fusion_names.resize(ctx->num_queries);
+            ctx->query_nodes.resize(ctx->num_queries);
         }
 
-        ctx->device->device.resetQueryPool(ctx->device->query_pool, 0, cgraph->n_nodes+1);
+        ctx->device->device.resetQueryPool(ctx->query_pool, 0, cgraph->n_nodes+1);
+        std::fill(ctx->query_fusion_names.begin(), ctx->query_fusion_names.end(), nullptr);
+        std::fill(ctx->query_nodes.begin(), ctx->query_nodes.end(), nullptr);
 
         GGML_ASSERT(ctx->compute_ctx.expired());
         compute_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
         ctx->compute_ctx = compute_ctx;
         ggml_vk_ctx_begin(ctx->device, compute_ctx);
-        compute_ctx->s->buffer.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->device->query_pool, 0);
+        ctx->query_idx = 0;
+        compute_ctx->s->buffer.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->query_pool, ctx->query_idx++);
     }
 
     ctx->prealloc_y_last_pipeline_used = nullptr;
@@ -13059,52 +13191,66 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             total_mul_mat_bytes += bytes;
         }
 
+        const char *fusion_string {};
         if (!ctx->device->disable_fusion) {
             uint32_t num_adds = ggml_vk_fuse_multi_add(ctx, cgraph, i);
             if (num_adds) {
                 ctx->num_additional_fused_ops = num_adds - 1;
+                fusion_string = "MULTI_ADD";
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD, GGML_OP_ADD })) {
                 ctx->num_additional_fused_ops = 2;
+                fusion_string = "MUL_MAT_ADD_ADD";
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD })) {
                 ctx->num_additional_fused_ops = 1;
+                fusion_string = "MUL_MAT_ADD";
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT_ID, GGML_OP_ADD_ID, GGML_OP_MUL })) {
                 ctx->num_additional_fused_ops = 2;
+                fusion_string = "MUL_MAT_ID_ADD_ID_MUL";
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT_ID, GGML_OP_ADD_ID })) {
                 ctx->num_additional_fused_ops = 1;
+                fusion_string = "MUL_MAT_ID_ADD_ID";
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_MUL_MAT_ID, GGML_OP_MUL })) {
                 ctx->num_additional_fused_ops = 1;
+                fusion_string = "MUL_MAT_ID_MUL";
             } else if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, { i + 4 }) &&
                        ggml_check_edges(cgraph, i, rms_norm_mul_rope_view_set_rows_edges) &&
                        ggml_vk_can_fuse_rms_norm_mul_rope(ctx, cgraph, i) &&
                        ggml_vk_can_fuse_rope_set_rows(ctx, cgraph, i + 2)) {
                 ctx->num_additional_fused_ops = 4;
+                fusion_string = "RMS_NORM_MUL_ROPE_VIEW_SET_ROWS";
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ROPE })&&
                        ggml_vk_can_fuse_rms_norm_mul_rope(ctx, cgraph, i)) {
                 ctx->num_additional_fused_ops = 2;
+                fusion_string = "RMS_NORM_MUL_ROPE";
             } else if (ggml_vk_can_fuse(ctx, cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
                 ctx->num_additional_fused_ops = 1;
+                fusion_string = "RMS_NORM_MUL";
             } else if (ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, { i + 2 }) &&
                        ggml_check_edges(cgraph, i, rope_view_set_rows_edges) &&
                        ggml_vk_can_fuse_rope_set_rows(ctx, cgraph, i)) {
                 ctx->num_additional_fused_ops = 2;
+                fusion_string = "ROPE_VIEW_SET_ROWS";
             } else if (ggml_can_fuse_subgraph(cgraph, i, topk_moe_early_softmax_norm, { i + 3, i + 9 }) &&
                        ggml_check_edges(cgraph, i, topk_moe_early_softmax_norm_edges) &&
                        ggml_vk_can_fuse_topk_moe(ctx, cgraph, i, TOPK_MOE_EARLY_SOFTMAX_NORM)) {
                 ctx->num_additional_fused_ops = topk_moe_early_softmax_norm.size() - 1;
                 // view of argsort writes to memory
                 ctx->fused_ops_write_mask |= 1 << 3;
+                fusion_string = "TOPK_MOE_EARLY_SOFTMAX_NORM";
             } else if (ggml_can_fuse_subgraph(cgraph, i, topk_moe_early_softmax, { i + 3, i + 4 }) &&
                        ggml_check_edges(cgraph, i, topk_moe_early_softmax_edges) &&
                        ggml_vk_can_fuse_topk_moe(ctx, cgraph, i, TOPK_MOE_EARLY_SOFTMAX)) {
                 ctx->num_additional_fused_ops = topk_moe_early_softmax.size() - 1;
                 // view of argsort writes to memory
                 ctx->fused_ops_write_mask |= 1 << 3;
+                fusion_string = "TOPK_MOE_EARLY_SOFTMAX";
             } else if (ggml_can_fuse_subgraph(cgraph, i, topk_moe_late_softmax, { i + 1, i + 5 }) &&
                        ggml_check_edges(cgraph, i, topk_moe_late_softmax_edges) &&
                        ggml_vk_can_fuse_topk_moe(ctx, cgraph, i, TOPK_MOE_LATE_SOFTMAX)) {
                 ctx->num_additional_fused_ops = topk_moe_late_softmax.size() - 1;
                 // view of argsort writes to memory
                 ctx->fused_ops_write_mask |= 1 << 1;
+                fusion_string = "TOPK_MOE_LATE_SOFTMAX";
             }
         }
         ctx->fused_ops_write_mask |= 1 << ctx->num_additional_fused_ops;
@@ -13118,7 +13264,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
         bool enqueued = ggml_vk_build_graph(ctx, cgraph, i, cgraph->nodes[submit_node_idx], submit_node_idx, i + ctx->num_additional_fused_ops >= last_node, almost_ready, submit);
 
-        if (vk_perf_logger_enabled) {
+        if (vk_perf_logger_enabled && enqueued) {
             if (ctx->compute_ctx.expired()) {
                 compute_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
                 ctx->compute_ctx = compute_ctx;
@@ -13126,10 +13272,9 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             } else {
                 compute_ctx = ctx->compute_ctx.lock();
             }
-            // If there are fused ops, just write out timestamps for all nodes to keep the accounting simple
-            for (int j = 0; j < ctx->num_additional_fused_ops + 1; ++j) {
-                compute_ctx->s->buffer.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->device->query_pool, i+j+1);
-            }
+            ctx->query_nodes[ctx->query_idx] = cgraph->nodes[i];
+            ctx->query_fusion_names[ctx->query_idx] = fusion_string;
+            compute_ctx->s->buffer.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->query_pool, ctx->query_idx++);
         }
 
         if (enqueued) {
@@ -13170,14 +13315,14 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
         // Get the results and pass them to the logger
         std::vector<uint64_t> timestamps(cgraph->n_nodes + 1);
-        VK_CHECK(ctx->device->device.getQueryPoolResults(ctx->device->query_pool, 0, cgraph->n_nodes + 1, (cgraph->n_nodes + 1)*sizeof(uint64_t), timestamps.data(), sizeof(uint64_t), vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait), "get timestamp results");
-        for (int i = 0; i < cgraph->n_nodes; i++) {
-            if (!ggml_vk_is_empty(cgraph->nodes[i])) {
-                ctx->device->perf_logger->log_timing(cgraph->nodes[i], uint64_t((timestamps[i+1] - timestamps[i]) * ctx->device->properties.limits.timestampPeriod));
-            }
+        VK_CHECK(ctx->device->device.getQueryPoolResults(ctx->query_pool, 0, ctx->query_idx, (cgraph->n_nodes + 1)*sizeof(uint64_t), timestamps.data(), sizeof(uint64_t), vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait), "get timestamp results");
+        for (int i = 1; i < ctx->query_idx; i++) {
+            auto node = ctx->query_nodes[i];
+            auto name = ctx->query_fusion_names[i];
+            ctx->perf_logger->log_timing(node, name, uint64_t((timestamps[i] - timestamps[i-1]) * ctx->device->properties.limits.timestampPeriod));
         }
 
-        ctx->device->perf_logger->print_timings();
+        ctx->perf_logger->print_timings();
     }
 
     if (!ctx->device->support_async) {
@@ -13825,6 +13970,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_IQ4_XS:
                     case GGML_TYPE_IQ4_NL:
                     case GGML_TYPE_MXFP4:
+                    case GGML_TYPE_I32:
                         return true;
                     default:
                         return false;
@@ -13949,6 +14095,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_LOG:
         case GGML_OP_TRI:
+        case GGML_OP_DIAG:
             return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                    op->type == op->src[0]->type;
         case GGML_OP_ARGSORT:
@@ -14539,6 +14686,8 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
             tensor_clone = ggml_log(ggml_ctx, src_clone[0]);
         } else if (tensor->op == GGML_OP_TRI) {
             tensor_clone = ggml_tri(ggml_ctx, src_clone[0], ggml_get_op_params_i32(tensor, 0));
+        } else if (tensor->op == GGML_OP_DIAG) {
+            tensor_clone = ggml_diag(ggml_ctx, src_clone[0]);
         } else if (tensor->op == GGML_OP_CLAMP) {
             const float * params = (const float *)tensor->op_params;
             tensor_clone = ggml_clamp(ggml_ctx, src_clone[0], params[0], params[1]);

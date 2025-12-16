@@ -6,16 +6,32 @@ add_library(mtmd
             mtmd.cpp
             mtmd-audio.cpp
             mtmd.h
+            mtmd-helper.cpp
+            mtmd-helper.h
             clip.cpp
             clip.h
             clip-impl.h
-            mtmd-helper.cpp
-            mtmd-helper.h
+            clip-model.h
+            clip-graph.h
+            models/models.h
+            models/cogvlm.cpp
+            models/glm4v.cpp
+            models/internvl.cpp
+            models/kimivl.cpp
+            models/llama4.cpp
+            models/llava.cpp
+            models/minicpmv.cpp
+            models/pixtral.cpp
+            models/qwen2vl.cpp
+            models/qwen3vl.cpp
+            models/siglip.cpp
+            models/whisper-enc.cpp
             )
 
 set_target_properties(mtmd PROPERTIES
     VERSION ${LLAMA_INSTALL_VERSION}
     SOVERSION 0
+    MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
 target_link_libraries     (mtmd PUBLIC ggml llama)
@@ -50,6 +66,15 @@ endif()
 if (TARGET BUILD_INFO)
     add_dependencies(mtmd        BUILD_INFO)
     add_dependencies(mtmd-helper BUILD_INFO)
+endif()
+
+# if mtmd is linked against common, we throw an error
+if (TARGET mtmd)
+    get_target_property(libs mtmd LINK_LIBRARIES)
+    if (libs AND "common" IN_LIST libs)
+        message(FATAL_ERROR "mtmd is designed to be a public library.\n"
+                            "It must not link against common")
+    endif()
 endif()
 
 add_executable(llama-llava-cli    deprecation-warning.cpp)

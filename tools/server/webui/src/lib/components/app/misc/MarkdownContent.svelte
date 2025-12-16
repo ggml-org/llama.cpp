@@ -337,19 +337,23 @@
 		line-height: 1.75;
 	}
 
+	div :global(:is(h1, h2, h3, h4, h5, h6):first-child) {
+		margin-top: 0;
+	}
+
 	/* Headers with consistent spacing */
 	div :global(h1) {
 		font-size: 1.875rem;
 		font-weight: 700;
-		margin: 1.5rem 0 0.75rem 0;
 		line-height: 1.2;
+		margin: 1.5rem 0 0.75rem 0;
 	}
 
 	div :global(h2) {
 		font-size: 1.5rem;
 		font-weight: 600;
-		margin: 1.25rem 0 0.5rem 0;
 		line-height: 1.3;
+		margin: 1.25rem 0 0.5rem 0;
 	}
 
 	div :global(h3) {
@@ -500,6 +504,14 @@
 		background: hsl(var(--muted) / 0.1);
 	}
 
+	/* User message markdown should keep table borders visible on light primary backgrounds */
+	div.markdown-user-content :global(table),
+	div.markdown-user-content :global(th),
+	div.markdown-user-content :global(td),
+	div.markdown-user-content :global(.table-wrapper) {
+		border-color: currentColor;
+	}
+
 	/* Horizontal rules */
 	div :global(hr) {
 		border: none;
@@ -636,6 +648,21 @@
 	div :global(th:hover),
 	div :global(td:hover) {
 		background: var(--muted);
+	}
+
+	/* Disable hover effects when rendering user messages */
+	.markdown-user-content :global(a),
+	.markdown-user-content :global(a:hover) {
+		color: var(--primary-foreground);
+	}
+
+	.markdown-user-content :global(table:hover) {
+		box-shadow: none;
+	}
+
+	.markdown-user-content :global(th:hover),
+	.markdown-user-content :global(td:hover) {
+		background: inherit;
 	}
 
 	/* Enhanced blockquotes */

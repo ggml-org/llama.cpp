@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { copyToClipboard, isIMEComposing } from '$lib/utils';
+	import { config } from '$lib/stores/settings.svelte';
+	import { copyToClipboard, isIMEComposing, formatMessageForClipboard } from '$lib/utils';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
+	import ChatMessageSystem from './ChatMessageSystem.svelte';
 
 	interface Props {
 		class?: string;
@@ -86,7 +88,9 @@
 	}
 
 	async function handleCopy() {
-		await copyToClipboard(message.content, 'Message copied to clipboard');
+		const asPlainText = Boolean(config().copyTextAttachmentsAsPlainText);
+		const clipboardContent = formatMessageForClipboard(message.content, message.extra, asPlainText);
+		await copyToClipboard(clipboardContent, 'Message copied to clipboard');
 		onCopy?.(message);
 	}
 
@@ -140,8 +144,7 @@
 	}
 
 	function handleSaveEdit() {
-		if (message.role === 'user') {
-			// For user messages, trim to avoid accidental whitespace
+		if (message.role === 'user' || message.role === 'system') {
 			onEditWithBranching?.(message, editedContent.trim());
 		} else {
 			// For assistant messages, preserve exact content including trailing whitespace
@@ -167,7 +170,28 @@
 	}
 </script>
 
-{#if message.role === 'user'}
+{#if message.role === 'system'}
+	<ChatMessageSystem
+		bind:textareaElement
+		class={className}
+		{deletionInfo}
+		{editedContent}
+		{isEditing}
+		{message}
+		onCancelEdit={handleCancelEdit}
+		onConfirmDelete={handleConfirmDelete}
+		onCopy={handleCopy}
+		onDelete={handleDelete}
+		onEdit={handleEdit}
+		onEditKeydown={handleEditKeydown}
+		onEditedContentChange={handleEditedContentChange}
+		{onNavigateToSibling}
+		onSaveEdit={handleSaveEdit}
+		onShowDeleteDialogChange={handleShowDeleteDialogChange}
+		{showDeleteDialog}
+		{siblingInfo}
+	/>
+{:else if message.role === 'user'}
 	<ChatMessageUser
 		bind:textareaElement
 		class={className}
