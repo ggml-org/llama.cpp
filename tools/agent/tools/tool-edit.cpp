@@ -1,4 +1,5 @@
 #include "../tool-registry.h"
+#include "../permission.h"
 
 #include <fstream>
 #include <sstream>
@@ -90,6 +91,11 @@ static tool_result edit_execute(const json & args, const tool_context & ctx) {
     // Check if file exists
     if (!fs::exists(path)) {
         return {false, "", "File not found: " + path.string()};
+    }
+
+    // Block sensitive files
+    if (permission_manager::is_sensitive_file(path.string())) {
+        return {false, "", "Cannot edit sensitive file (contains credentials/secrets): " + path.string()};
     }
 
     // Read file content

@@ -29,6 +29,7 @@ struct agent_config {
     int tool_timeout_ms = 120000;
     std::string working_dir;
     bool verbose = false;
+    bool yolo_mode = false;  // Skip all permission prompts
 };
 
 // Result from running the agent loop

@@ -53,6 +53,43 @@ int main(int argc, char ** argv) {
 
     params.verbosity = LOG_LEVEL_ERROR;
 
+    // Check for custom flags before common_params_parse
+    bool yolo_mode = false;
+    int max_iterations = 50;  // Default value
+
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--yolo") {
+            yolo_mode = true;
+            // Remove from argv
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;  // Re-check this position
+        } else if (arg == "--max-iterations" || arg == "-mi") {
+            if (i + 1 < argc) {
+                try {
+                    max_iterations = std::stoi(argv[i + 1]);
+                    if (max_iterations < 1) max_iterations = 1;
+                    if (max_iterations > 1000) max_iterations = 1000;
+                } catch (...) {
+                    fprintf(stderr, "Invalid --max-iterations value: %s\n", argv[i + 1]);
+                    return 1;
+                }
+                // Remove both the flag and its value
+                for (int j = i; j < argc - 2; j++) {
+                    argv[j] = argv[j + 2];
+                }
+                argc -= 2;
+                i--;  // Re-check this position
+            } else {
+                fprintf(stderr, "--max-iterations requires a value\n");
+                return 1;
+            }
+        }
+    }
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_CLI)) {
         return 1;
     }
@@ -114,9 +151,10 @@ int main(int argc, char ** argv) {
     // Configure agent
     agent_config config;
     config.working_dir = working_dir;
-    config.max_iterations = 50;
+    config.max_iterations = max_iterations;
     config.tool_timeout_ms = 120000;
     config.verbose = (params.verbosity >= LOG_LEVEL_INFO);
+    config.yolo_mode = yolo_mode;
 
     // Create agent loop
     agent_loop agent(ctx_server, params, config, g_is_interrupted);
@@ -127,6 +165,11 @@ int main(int argc, char ** argv) {
     console::log("build      : %s\n", inf.build_info.c_str());
     console::log("model      : %s\n", inf.model_name.c_str());
     console::log("working dir: %s\n", working_dir.c_str());
+    if (yolo_mode) {
+        console::set_display(DISPLAY_TYPE_ERROR);
+        console::log("mode       : YOLO (all permissions auto-approved)\n");
+        console::set_display(DISPLAY_TYPE_RESET);
+    }
     console::log("\n");
 
     console::log("commands:\n");

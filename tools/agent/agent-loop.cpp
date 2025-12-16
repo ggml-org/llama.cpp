@@ -68,6 +68,7 @@ agent_loop::agent_loop(server_context & server_ctx,
 
     // Set up permission manager
     permission_mgr_.set_project_root(tool_ctx_.working_dir);
+    permission_mgr_.set_yolo_mode(config.yolo_mode);
 
     // Add system prompt for tool usage
     std::string system_prompt = R"(You are llama.agent, a powerful local AI coding assistant running on llama.cpp.
@@ -491,6 +492,32 @@ tool_result agent_loop::execute_tool_call(const common_chat_tool_call & call) {
     req.type = ptype;
     req.tool_name = call.name;
     req.details = call.arguments;
+
+    // Check for external directory access on file operations
+    if (call.name == "read" || call.name == "write" || call.name == "edit") {
+        std::string file_path = args.value("file_path", "");
+        if (!file_path.empty()) {
+            // Make path absolute for comparison
+            std::filesystem::path path(file_path);
+            if (path.is_relative()) {
+                path = std::filesystem::path(tool_ctx_.working_dir) / path;
+            }
+            if (permission_mgr_.is_external_path(path.string())) {
+                permission_request ext_req;
+                ext_req.type = permission_type::EXTERNAL_DIR;
+                ext_req.tool_name = call.name;
+                ext_req.details = "External file: " + path.string();
+                ext_req.is_dangerous = true;
+                ext_req.description = "Operation outside working directory";
+
+                auto response = permission_mgr_.prompt_user(ext_req);
+                if (response == permission_response::DENY_ONCE ||
+                    response == permission_response::DENY_ALWAYS) {
+                    return {false, "", "Blocked: File is outside working directory"};
+                }
+            }
+        }
+    }
 
     // Check for dangerous commands
     if (call.name == "bash") {

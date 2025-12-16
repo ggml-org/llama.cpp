@@ -37,12 +37,28 @@ permission_manager::permission_manager() {
     defaults_[permission_type::FILE_WRITE] = permission_state::ASK;
     defaults_[permission_type::FILE_EDIT]  = permission_state::ASK;
     defaults_[permission_type::GLOB]       = permission_state::ALLOW;
+    defaults_[permission_type::EXTERNAL_DIR] = permission_state::ASK;
 
     // Dangerous bash patterns (always ask with warning)
     dangerous_patterns_ = {
-        "rm -rf", "rm -r /", "sudo ", "chmod 777",
-        "curl | sh", "wget | sh", "> /dev/",
-        "dd if=", "mkfs.", ":(){:|:&};:"
+        // Destructive commands
+        "rm -rf", "rm -r /", "rm -f", "rmdir",
+        // Privilege escalation
+        "sudo ", "su -", "doas ",
+        // Dangerous permissions
+        "chmod 777", "chmod -R", "chown -R",
+        // Remote code execution
+        "curl | sh", "curl | bash", "wget | sh", "wget | bash",
+        "curl -s | sh", "wget -O - |",
+        // System damage
+        "> /dev/", "dd if=", "mkfs.", ":(){:|:&};:",
+        // Package managers (can modify system)
+        "pip install", "pip3 install", "npm i -g", "npm install -g",
+        "brew install", "apt install", "apt-get install", "yum install",
+        // Git destructive
+        "git push -f", "git push --force", "git reset --hard",
+        // Process control
+        "kill -9", "killall", "pkill"
     };
 
     // Safe bash patterns (auto-allow)
@@ -79,6 +95,11 @@ bool permission_manager::is_path_in_project(const std::string & path) const {
 }
 
 permission_state permission_manager::check_permission(const permission_request & request) {
+    // YOLO mode - allow everything
+    if (yolo_mode_) {
+        return permission_state::ALLOW;
+    }
+
     // Check session overrides first
     std::string key = request.tool_name + ":" + request.details;
     auto it = session_overrides_.find(key);
@@ -185,4 +206,70 @@ bool permission_manager::is_doom_loop(const std::string & tool, const std::strin
 void permission_manager::clear_session() {
     session_overrides_.clear();
     recent_calls_.clear();
+}
+
+bool permission_manager::is_sensitive_file(const std::string & path) {
+    // Get filename and extension
+    fs::path p(path);
+    std::string filename = p.filename().string();
+    std::string ext = p.extension().string();
+
+    // Convert to lowercase for comparison
+    std::string filename_lower = filename;
+    std::string ext_lower = ext;
+    for (auto & c : filename_lower) c = std::tolower(c);
+    for (auto & c : ext_lower) c = std::tolower(c);
+
+    // Sensitive file patterns
+    static const std::vector<std::string> sensitive_names = {
+        ".env", ".env.local", ".env.production", ".env.development",
+        ".netrc", ".npmrc", ".pypirc",
+        "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+        "credentials", "credentials.json", "credentials.yaml",
+        "secrets", "secrets.json", "secrets.yaml", "secrets.yml",
+        ".htpasswd", ".htaccess",
+        "shadow", "passwd",
+        "private_key", "privatekey",
+        "service_account", "service-account",
+        "token", "token.json",
+        "keystore", "keystore.jks",
+        ".pgpass", ".my.cnf",
+    };
+
+    static const std::vector<std::string> sensitive_extensions = {
+        ".pem", ".key", ".p12", ".pfx", ".jks",
+        ".keystore", ".secret", ".secrets",
+        ".cert", ".crt", ".cer",
+    };
+
+    // Check exact filename matches
+    for (const auto & name : sensitive_names) {
+        if (filename_lower == name) {
+            return true;
+        }
+        // Also check if filename contains the sensitive name (e.g., "prod.env")
+        if (filename_lower.find(name) != std::string::npos && name.front() != '.') {
+            return true;
+        }
+    }
+
+    // Check extensions
+    for (const auto & sensitive_ext : sensitive_extensions) {
+        if (ext_lower == sensitive_ext) {
+            return true;
+        }
+    }
+
+    // Check for AWS/cloud credentials
+    if (filename_lower.find("aws") != std::string::npos &&
+        (filename_lower.find("credential") != std::string::npos ||
+         filename_lower.find("config") != std::string::npos)) {
+        return true;
+    }
+
+    return false;
+}
+
+bool permission_manager::is_external_path(const std::string & path) const {
+    return !is_path_in_project(path);
 }

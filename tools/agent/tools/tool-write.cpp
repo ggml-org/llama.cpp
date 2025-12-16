@@ -1,4 +1,5 @@
 #include "../tool-registry.h"
+#include "../permission.h"
 
 #include <fstream>
 #include <filesystem>
@@ -17,6 +18,11 @@ static tool_result write_execute(const json & args, const tool_context & ctx) {
     fs::path path(file_path);
     if (path.is_relative()) {
         path = fs::path(ctx.working_dir) / path;
+    }
+
+    // Block sensitive files
+    if (permission_manager::is_sensitive_file(path.string())) {
+        return {false, "", "Cannot write to sensitive file (contains credentials/secrets): " + path.string()};
     }
 
     // Check if file exists (for reporting)

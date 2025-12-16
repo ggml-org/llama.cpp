@@ -19,6 +19,7 @@ enum class permission_type {
     FILE_WRITE,
     FILE_EDIT,
     GLOB,
+    EXTERNAL_DIR,  // Operation outside working directory
 };
 
 struct permission_request {
@@ -43,6 +44,9 @@ public:
     // Set project root for external directory checks
     void set_project_root(const std::string & path);
 
+    // Enable yolo mode (skip all permission prompts)
+    void set_yolo_mode(bool enabled) { yolo_mode_ = enabled; }
+
     // Check if a tool execution is allowed
     permission_state check_permission(const permission_request & request);
 
@@ -60,6 +64,7 @@ public:
 
 private:
     std::string project_root_;
+    bool yolo_mode_ = false;
     std::map<std::string, permission_state> session_overrides_;
 
     // Recent tool calls for doom-loop detection
@@ -81,4 +86,11 @@ private:
 
     bool matches_pattern(const std::string & cmd, const std::vector<std::string> & patterns) const;
     bool is_path_in_project(const std::string & path) const;
+
+public:
+    // Check if a file path is sensitive (should be blocked)
+    static bool is_sensitive_file(const std::string & path);
+
+    // Check if path is outside working directory
+    bool is_external_path(const std::string & path) const;
 };
