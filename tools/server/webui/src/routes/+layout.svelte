@@ -24,7 +24,7 @@
 	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
 	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
 	let autoShowSidebarOnNewChat = $derived(config().autoShowSidebarOnNewChat);
-	const isMobile = new IsMobile();
+	let isMobile = new IsMobile();
 	let isDesktop = $derived(!isMobile.current);
 	let sidebarOpen = $state(false);
 	let innerHeight = $state<number | undefined>();
