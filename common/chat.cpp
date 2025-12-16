@@ -1460,8 +1460,6 @@ static common_chat_params common_chat_params_init_nemotron_v3(const common_chat_
             auto reasoning_content = p.reasoning(p.until("</think>")) + ("</think>" | p.end());
             if (data.thinking_forced_open) {
                 reasoning = reasoning_content;
-            } else {
-                reasoning = p.optional("<think>" + reasoning_content);
             }
         }
 
