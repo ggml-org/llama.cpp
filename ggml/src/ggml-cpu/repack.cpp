@@ -751,6 +751,7 @@ void ggml_gemv_q8_0_4x8_q8_0_generic(int                        n,
     const int ncols_interleaved = 4;
     const int blocklen          = 8;
 
+    assert(nr == 1);
     assert(n % qk == 0);
     assert(nc % ncols_interleaved == 0);
 
@@ -1328,38 +1329,36 @@ void ggml_gemm_q8_0_4x4_q8_0_generic(int                        n,
     assert(nr % 4 == 0);
     assert(nc % ncols_interleaved == 0);
 
-    {
-        float sumf[4][4];
-        int   sumi;
+    float sumf[4][4];
+    int   sumi;
 
-        for (int y = 0; y < nr / 4; y++) {
-            const block_q8_0x4 * a_ptr = (const block_q8_0x4 *) vy + (y * nb);
-            for (int x = 0; x < nc / ncols_interleaved; x++) {
-                const block_q8_0x4 * b_ptr = (const block_q8_0x4 *) vx + (x * nb);
-                for (int m = 0; m < 4; m++) {
-                    for (int j = 0; j < ncols_interleaved; j++) {
-                        sumf[m][j] = 0.0;
-                    }
+    for (int y = 0; y < nr / 4; y++) {
+        const block_q8_0x4 * a_ptr = (const block_q8_0x4 *) vy + (y * nb);
+        for (int x = 0; x < nc / ncols_interleaved; x++) {
+            const block_q8_0x4 * b_ptr = (const block_q8_0x4 *) vx + (x * nb);
+            for (int m = 0; m < 4; m++) {
+                for (int j = 0; j < ncols_interleaved; j++) {
+                    sumf[m][j] = 0.0;
                 }
-                for (int l = 0; l < nb; l++) {
-                    for (int k = 0; k < (qk / blocklen); k++) {
-                        for (int m = 0; m < 4; m++) {
-                            for (int j = 0; j < ncols_interleaved; j++) {
-                                sumi = 0;
-                                for (int i = 0; i < blocklen; ++i) {
-                                    const int v0 = b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i];
-                                    sumi += v0 * a_ptr[l].qs[k * 4 * blocklen + m * blocklen + i];
-                                }
-                                sumf[m][j] +=
-                                    sumi * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) * GGML_CPU_FP16_TO_FP32(a_ptr[l].d[m]);
+            }
+            for (int l = 0; l < nb; l++) {
+                for (int k = 0; k < (qk / blocklen); k++) {
+                    for (int m = 0; m < 4; m++) {
+                        for (int j = 0; j < ncols_interleaved; j++) {
+                            sumi = 0;
+                            for (int i = 0; i < blocklen; ++i) {
+                                const int v0 = b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i];
+                                sumi += v0 * a_ptr[l].qs[k * 4 * blocklen + m * blocklen + i];
                             }
+                            sumf[m][j] +=
+                                sumi * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) * GGML_CPU_FP16_TO_FP32(a_ptr[l].d[m]);
                         }
                     }
                 }
-                for (int m = 0; m < 4; m++) {
-                    for (int j = 0; j < ncols_interleaved; j++) {
-                        s[(y * 4 + m) * bs + x * ncols_interleaved + j] = sumf[m][j];
-                    }
+            }
+            for (int m = 0; m < 4; m++) {
+                for (int j = 0; j < ncols_interleaved; j++) {
+                    s[(y * 4 + m) * bs + x * ncols_interleaved + j] = sumf[m][j];
                 }
             }
         }
