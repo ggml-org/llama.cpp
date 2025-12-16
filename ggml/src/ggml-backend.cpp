@@ -11,6 +11,8 @@
 #include "ggml-backend.h"
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
+#include "ggml-cpu.h"
+#include "ggml-cuda.h"  // TODO add IFDEFs for CUDA-specific parts
 #include "ggml-impl.h"
 
 #include <assert.h>
@@ -753,6 +755,19 @@ struct ggml_backend_sched {
     int debug_prev_graph_size;
 };
 
+static void ggml_backend_synchronize_if_required(ggml_backend_t current_backend) {
+    // TODO add env-flag check here to auto-disable this change
+    // CUDA backends have an implicit order between execution and memory operations via the CUDA stream.
+    // Multiple parallel copies are also possible.
+    // There is consequently no need to synchronize in between computation and subsequent memcpys
+    if (ggml_backend_is_cuda(current_backend)) {
+        return;
+    }
+
+    // in all other cases, just sync.
+    ggml_backend_synchronize(current_backend);
+}
+
 #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
 #define tensor_backend_id(tensor) sched->hv_tensor_backend_ids[hash_id(tensor)]
 #define tensor_id_copy(id, backend_id, copy_id) sched->hv_tensor_copies[(id) * sched->n_backends * sched->n_copies + (backend_id) * sched->n_copies + (copy_id)]
@@ -1481,7 +1496,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                 } else {
-                    ggml_backend_synchronize(split_backend);
+                    ggml_backend_synchronize_if_required(split_backend);
                 }
                 ggml_backend_tensor_copy(input, input_cpy);
             } else {
@@ -1489,7 +1504,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
                 } else {
-                    ggml_backend_synchronize(split_backend);
+                    ggml_backend_synchronize_if_required(split_backend);
                 }
 
                 // when offloading MoE weights, we can reduce the amount of data copied by copying only the experts that are used
