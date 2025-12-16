@@ -136,6 +136,54 @@ Edit applied successfully.
 All 42 tests passed.
 ```
 
+## MCP Server Support
+
+llama-agent supports MCP (Model Context Protocol) servers, allowing you to extend the agent with external tools.
+
+### Configuration
+
+Create a `mcp.json` file in your working directory or `~/.config/llama-agent/mcp.json`:
+
+```json
+{
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-fs", "/allowed/path"],
+      "enabled": true,
+      "timeout": 30000
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-github"],
+      "env": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+### Configuration Options
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `command` | string | Yes | The command to run the MCP server |
+| `args` | string[] | No | Arguments to pass to the command |
+| `env` | object | No | Environment variables (supports `${VAR}` expansion) |
+| `enabled` | boolean | No | Whether to start this server (default: true) |
+| `timeout` | number | No | Tool call timeout in milliseconds (default: 60000) |
+
+### MCP Tool Names
+
+MCP tools are registered with qualified names: `mcp__<server>__<tool>`
+
+For example, a `read_file` tool from a `filesystem` server becomes `mcp__filesystem__read_file`.
+
+### Available MCP Servers
+
+See the [Anthropic MCP servers](https://github.com/anthropics/anthropic-quickstarts/tree/main/mcp-servers) repository for available servers.
+
 ## Architecture
 
 ```
@@ -144,6 +192,10 @@ tools/agent/
 ├── agent-loop.cpp      # Core agent loop (generate → parse → execute)
 ├── tool-registry.cpp   # Tool registration and execution
 ├── permission.cpp      # Permission system
+├── mcp/
+│   ├── mcp-client.cpp      # MCP JSON-RPC client (stdio transport)
+│   ├── mcp-server-manager.cpp  # Multi-server management
+│   └── mcp-tool-wrapper.cpp    # MCP → tool_def adapter
 └── tools/
     ├── tool-bash.cpp   # Shell command execution
     ├── tool-read.cpp   # File reading

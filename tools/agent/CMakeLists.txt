@@ -10,6 +10,9 @@ set(AGENT_SOURCES
     tools/tool-write.cpp
     tools/tool-edit.cpp
     tools/tool-glob.cpp
+    mcp/mcp-client.cpp
+    mcp/mcp-server-manager.cpp
+    mcp/mcp-tool-wrapper.cpp
 )
 
 add_executable(${TARGET} ${AGENT_SOURCES})

@@ -5,6 +5,8 @@
 #include "agent-loop.h"
 #include "tool-registry.h"
 #include "permission.h"
+#include "mcp/mcp-server-manager.h"
+#include "mcp/mcp-tool-wrapper.h"
 
 #include <atomic>
 #include <fstream>
@@ -23,7 +25,7 @@
 namespace fs = std::filesystem;
 
 const char * LLAMA_AGENT_LOGO = R"(
-  _ _                                                _
+  _ _                                                     _
  | | | __ _ _ __ ___   __ _        __ _  __ _  ___ _ __ | |_
  | | |/ _` | '_ ` _ \ / _` |      / _` |/ _` |/ _ \ '_ \| __|
  | | | (_| | | | | | | (_| |  _  | (_| | (_| |  __/ | | | |_
@@ -148,6 +150,20 @@ int main(int argc, char ** argv) {
     // Get working directory
     std::string working_dir = fs::current_path().string();
 
+    // Load MCP servers
+    mcp_server_manager mcp_mgr;
+    int mcp_tools_count = 0;
+    std::string mcp_config = find_mcp_config(working_dir);
+    if (!mcp_config.empty()) {
+        if (mcp_mgr.load_config(mcp_config)) {
+            int started = mcp_mgr.start_servers();
+            if (started > 0) {
+                register_mcp_tools(mcp_mgr);
+                mcp_tools_count = (int)mcp_mgr.list_all_tools().size();
+            }
+        }
+    }
+
     // Configure agent
     agent_config config;
     config.working_dir = working_dir;
@@ -169,6 +185,9 @@ int main(int argc, char ** argv) {
         console::set_display(DISPLAY_TYPE_ERROR);
         console::log("mode       : YOLO (all permissions auto-approved)\n");
         console::set_display(DISPLAY_TYPE_RESET);
+    }
+    if (mcp_tools_count > 0) {
+        console::log("mcp tools  : %d\n", mcp_tools_count);
     }
     console::log("\n");
 
@@ -262,6 +281,9 @@ int main(int argc, char ** argv) {
 
     console::set_display(DISPLAY_TYPE_RESET);
     console::log("\nExiting...\n");
+
+    // Shutdown MCP servers
+    mcp_mgr.shutdown_all();
 
     ctx_server.terminate();
     inference_thread.join();

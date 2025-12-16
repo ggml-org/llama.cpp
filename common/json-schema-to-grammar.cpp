@@ -305,6 +305,57 @@ static std::string format_literal(const std::string & literal) {
 
 std::string gbnf_format_literal(const std::string & literal) { return format_literal(literal); }
 
+// Recursively collect all $defs from nested locations and hoist to root level.
+// This handles malformed schemas where $defs appear inside properties but $ref
+// points to #/$defs/... (expecting root-level definitions).
+static void hoist_defs_to_root(json & schema) {
+    if (!schema.is_object()) return;
+
+    json collected_defs = json::object();
+
+    std::function<void(json &)> collect = [&](json & node) {
+        if (!node.is_object()) return;
+
+        // If this node has $defs, collect them
+        if (node.contains("$defs") && node["$defs"].is_object()) {
+            for (auto & [key, value] : node["$defs"].items()) {
+                if (!collected_defs.contains(key)) {
+                    collected_defs[key] = value;
+                }
+            }
+            // Remove nested $defs after collecting
+            node.erase("$defs");
+        }
+
+        // Recurse into object values
+        for (auto & [key, value] : node.items()) {
+            if (value.is_object()) {
+                collect(value);
+            } else if (value.is_array()) {
+                for (auto & item : value) {
+                    if (item.is_object()) {
+                        collect(item);
+                    }
+                }
+            }
+        }
+    };
+
+    collect(schema);
+
+    // Merge collected $defs into root
+    if (!collected_defs.empty()) {
+        if (!schema.contains("$defs")) {
+            schema["$defs"] = json::object();
+        }
+        for (auto & [key, value] : collected_defs.items()) {
+            if (!schema["$defs"].contains(key)) {
+                schema["$defs"][key] = value;
+            }
+        }
+    }
+}
+
 class common_schema_converter {
 private:
     friend class common_schema_info;
@@ -744,6 +795,10 @@ public:
         * replacing each $ref with absolute reference URL and populates _refs with the
         * respective referenced (sub)schema dictionaries.
         */
+
+        // Hoist any nested $defs to root level before resolving refs
+        hoist_defs_to_root(schema);
+
         std::function<void(json &)> visit_refs = [&](json & n) {
             if (n.is_array()) {
                 for (auto & x : n) {
