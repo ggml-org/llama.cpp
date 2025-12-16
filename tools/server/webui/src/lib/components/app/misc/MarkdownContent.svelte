@@ -26,6 +26,11 @@
 		class?: string;
 	}
 
+	interface MarkdownBlock {
+		id: string;
+		html: string;
+	}
+
 	let { content, class: className = '' }: Props = $props();
 
 	let containerRef = $state<HTMLDivElement>();
@@ -38,25 +43,7 @@
 	let pendingMarkdown: string | null = null;
 	let isProcessing = false;
 
-	function loadHighlightTheme(isDark: boolean) {
-		if (!browser) return;
-
-		const existingThemes = document.querySelectorAll('style[data-highlight-theme]');
-		existingThemes.forEach((style) => style.remove());
-
-		const style = document.createElement('style');
-		style.setAttribute('data-highlight-theme', 'true');
-		style.textContent = isDark ? githubDarkCss : githubLightCss;
-
-		document.head.appendChild(style);
-	}
-
-	$effect(() => {
-		const currentMode = mode.current;
-		const isDark = currentMode === 'dark';
-
-		loadHighlightTheme(isDark);
-	});
+	const themeStyleId = `highlight-theme-${uuid()}`;
 
 	let processor = $derived(() => {
 		return remark()
@@ -71,53 +58,42 @@
 			.use(rehypeStringify); // Convert to HTML string
 	});
 
-	type MarkdownBlock = {
-		id: string;
-		html: string;
-	};
-
 	/**
-	 * Helper to process HTML with a temporary DOM element.
-	 * Returns original HTML if not in browser or tag not found.
+	 * Removes click event listeners from copy and preview buttons.
+	 * Called on component destroy.
 	 */
-	function processHtml(
-		html: string,
-		tagCheck: string,
-		processor: (tempDiv: HTMLDivElement) => boolean
-	): string {
-		if (!browser || !html.includes(tagCheck)) {
-			return html;
+	function cleanupEventListeners() {
+		if (!containerRef) return;
+
+		const copyButtons = containerRef.querySelectorAll<HTMLButtonElement>('.copy-code-btn');
+		const previewButtons = containerRef.querySelectorAll<HTMLButtonElement>('.preview-code-btn');
+
+		for (const button of copyButtons) {
+			button.removeEventListener('click', handleCopyClick);
 		}
 
-		const tempDiv = document.createElement('div');
-		tempDiv.innerHTML = html;
-
-		const mutated = processor(tempDiv);
-
-		return mutated ? tempDiv.innerHTML : html;
+		for (const button of previewButtons) {
+			button.removeEventListener('click', handlePreviewClick);
+		}
 	}
 
-	function enhanceLinks(html: string): string {
-		return processHtml(html, '<a', (tempDiv) => {
-			const linkElements = tempDiv.querySelectorAll('a[href]');
-			let mutated = false;
+	/**
+	 * Removes this component's highlight.js theme style from the document head.
+	 * Called on component destroy to clean up injected styles.
+	 */
+	function cleanupHighlightTheme() {
+		if (!browser) return;
 
-			for (const link of linkElements) {
-				const target = link.getAttribute('target');
-				const rel = link.getAttribute('rel');
-
-				if (target !== '_blank' || rel !== 'noopener noreferrer') {
-					mutated = true;
-				}
-
-				link.setAttribute('target', '_blank');
-				link.setAttribute('rel', 'noopener noreferrer');
-			}
-
-			return mutated;
-		});
+		const existingTheme = document.getElementById(themeStyleId);
+		existingTheme?.remove();
 	}
 
+	/**
+	 * Enhances code blocks with wrapper, header, language label, and action buttons.
+	 * Adds copy button to all code blocks and preview button to HTML blocks.
+	 * @param html - The HTML string containing code blocks to enhance
+	 * @returns Enhanced HTML string with wrapped code blocks
+	 */
 	function enhanceCodeBlocks(html: string): string {
 		return processHtml(html, '<pre', (tempDiv) => {
 			const preElements = tempDiv.querySelectorAll('pre');
@@ -200,6 +176,56 @@
 		});
 	}
 
+	/**
+	 * Enhances links to open in new tabs with security attributes.
+	 * Sets target="_blank" and rel="noopener noreferrer" on all anchor elements.
+	 * @param html - The HTML string containing links to enhance
+	 * @returns Enhanced HTML string with modified link attributes
+	 */
+	function enhanceLinks(html: string): string {
+		return processHtml(html, '<a', (tempDiv) => {
+			const linkElements = tempDiv.querySelectorAll('a[href]');
+			let mutated = false;
+
+			for (const link of linkElements) {
+				const target = link.getAttribute('target');
+				const rel = link.getAttribute('rel');
+
+				// Only mutate if attributes need to change
+				if (target !== '_blank' || rel !== 'noopener noreferrer') {
+					link.setAttribute('target', '_blank');
+					link.setAttribute('rel', 'noopener noreferrer');
+					mutated = true;
+				}
+			}
+
+			return mutated;
+		});
+	}
+
+	/**
+	 * Loads the appropriate highlight.js theme based on dark/light mode.
+	 * Injects a scoped style element into the document head.
+	 * @param isDark - Whether to load the dark theme (true) or light theme (false)
+	 */
+	function loadHighlightTheme(isDark: boolean) {
+		if (!browser) return;
+
+		const existingTheme = document.getElementById(themeStyleId);
+		existingTheme?.remove();
+
+		const style = document.createElement('style');
+		style.id = themeStyleId;
+		style.textContent = isDark ? githubDarkCss : githubLightCss;
+
+		document.head.appendChild(style);
+	}
+
+	/**
+	 * Extracts code information from a button click target within a code block.
+	 * @param target - The clicked button element
+	 * @returns Object with rawCode and language, or null if extraction fails
+	 */
 	function getCodeInfoFromTarget(target: HTMLElement) {
 		const wrapper = target.closest('.code-block-wrapper');
 
@@ -228,6 +254,28 @@
 		return { rawCode, language };
 	}
 
+	/**
+	 * Generates a unique identifier for a HAST node based on its position.
+	 * Used for stable block identification during incremental rendering.
+	 * @param node - The HAST root content node
+	 * @param indexFallback - Fallback index if position is unavailable
+	 * @returns Unique string identifier for the node
+	 */
+	function getHastNodeId(node: HastRootContent, indexFallback: number): string {
+		const position = node.position;
+
+		if (position?.start?.offset != null && position?.end?.offset != null) {
+			return `hast-${position.start.offset}-${position.end.offset}`;
+		}
+
+		return `${node.type}-${indexFallback}`;
+	}
+
+	/**
+	 * Handles click events on copy buttons within code blocks.
+	 * Copies the raw code content to the clipboard.
+	 * @param event - The click event from the copy button
+	 */
 	async function handleCopyClick(event: Event) {
 		event.preventDefault();
 		event.stopPropagation();
@@ -251,6 +299,25 @@
 		}
 	}
 
+	/**
+	 * Handles preview dialog open state changes.
+	 * Clears preview content when dialog is closed.
+	 * @param open - Whether the dialog is being opened or closed
+	 */
+	function handlePreviewDialogOpenChange(open: boolean) {
+		previewDialogOpen = open;
+
+		if (!open) {
+			previewCode = '';
+			previewLanguage = 'text';
+		}
+	}
+
+	/**
+	 * Handles click events on preview buttons within HTML code blocks.
+	 * Opens a preview dialog with the rendered HTML content.
+	 * @param event - The click event from the preview button
+	 */
 	function handlePreviewClick(event: Event) {
 		event.preventDefault();
 		event.stopPropagation();
@@ -272,61 +339,32 @@
 		previewDialogOpen = true;
 	}
 
-	function setupCodeBlockActions() {
-		if (!containerRef) return;
-
-		const wrappers = containerRef.querySelectorAll<HTMLElement>('.code-block-wrapper');
-
-		for (const wrapper of wrappers) {
-			const copyButton = wrapper.querySelector<HTMLButtonElement>('.copy-code-btn');
-			const previewButton = wrapper.querySelector<HTMLButtonElement>('.preview-code-btn');
-
-			if (copyButton && copyButton.dataset.listenerBound !== 'true') {
-				copyButton.dataset.listenerBound = 'true';
-				copyButton.addEventListener('click', handleCopyClick);
-			}
-
-			if (previewButton && previewButton.dataset.listenerBound !== 'true') {
-				previewButton.dataset.listenerBound = 'true';
-				previewButton.addEventListener('click', handlePreviewClick);
-			}
-		}
-	}
-
-	function handlePreviewDialogOpenChange(open: boolean) {
-		previewDialogOpen = open;
-
-		if (!open) {
-			previewCode = '';
-			previewLanguage = 'text';
-		}
-	}
-
-	function getHastNodeId(node: HastRootContent, indexFallback: number): string {
-		const position = node.position;
-
-		if (position?.start?.offset != null && position?.end?.offset != null) {
-			return `hast-${position.start.offset}-${position.end.offset}`;
+	/**
+	 * Helper to process HTML with a temporary DOM element.
+	 * Returns original HTML if not in browser or tag not found.
+	 */
+	function processHtml(
+		html: string,
+		tagCheck: string,
+		processor: (tempDiv: HTMLDivElement) => boolean
+	): string {
+		if (!browser || !html.includes(tagCheck)) {
+			return html;
 		}
 
-		return `${node.type}-${indexFallback}`;
+		const tempDiv = document.createElement('div');
+		tempDiv.innerHTML = html;
+
+		const mutated = processor(tempDiv);
+
+		return mutated ? tempDiv.innerHTML : html;
 	}
 
-	function stringifyProcessedNode(
-		processorInstance: ReturnType<typeof processor>,
-		processedRoot: HastRoot,
-		child: unknown
-	) {
-		const root: HastRoot = {
-			...(processedRoot as HastRoot),
-			children: [child as never]
-		};
-
-		const html = processorInstance.stringify(root);
-
-		return enhanceCodeBlocks(enhanceLinks(html));
-	}
-
+	/**
+	 * Processes markdown content into stable and unstable HTML blocks.
+	 * Uses incremental rendering: stable blocks are cached, unstable block is re-rendered.
+	 * @param markdown - The raw markdown string to process
+	 */
 	async function processMarkdown(markdown: string) {
 		if (!markdown) {
 			renderedBlocks = [];
@@ -372,6 +410,59 @@
 		unstableBlockHtml = unstableHtml;
 	}
 
+	/**
+	 * Attaches click event listeners to copy and preview buttons in code blocks.
+	 * Uses data-listener-bound attribute to prevent duplicate bindings.
+	 */
+	function setupCodeBlockActions() {
+		if (!containerRef) return;
+
+		const wrappers = containerRef.querySelectorAll<HTMLElement>('.code-block-wrapper');
+
+		for (const wrapper of wrappers) {
+			const copyButton = wrapper.querySelector<HTMLButtonElement>('.copy-code-btn');
+			const previewButton = wrapper.querySelector<HTMLButtonElement>('.preview-code-btn');
+
+			if (copyButton && copyButton.dataset.listenerBound !== 'true') {
+				copyButton.dataset.listenerBound = 'true';
+				copyButton.addEventListener('click', handleCopyClick);
+			}
+
+			if (previewButton && previewButton.dataset.listenerBound !== 'true') {
+				previewButton.dataset.listenerBound = 'true';
+				previewButton.addEventListener('click', handlePreviewClick);
+			}
+		}
+	}
+
+	/**
+	 * Converts a single HAST node to an enhanced HTML string.
+	 * Applies link and code block enhancements to the output.
+	 * @param processorInstance - The remark/rehype processor instance
+	 * @param processedRoot - The full processed HAST root (for context)
+	 * @param child - The specific HAST child node to stringify
+	 * @returns Enhanced HTML string representation of the node
+	 */
+	function stringifyProcessedNode(
+		processorInstance: ReturnType<typeof processor>,
+		processedRoot: HastRoot,
+		child: unknown
+	) {
+		const root: HastRoot = {
+			...(processedRoot as HastRoot),
+			children: [child as never]
+		};
+
+		const html = processorInstance.stringify(root);
+
+		return enhanceCodeBlocks(enhanceLinks(html));
+	}
+
+	/**
+	 * Queues markdown for processing with coalescing support.
+	 * Only processes the latest markdown when multiple updates arrive quickly.
+	 * @param markdown - The markdown content to render
+	 */
 	async function updateRenderedBlocks(markdown: string) {
 		pendingMarkdown = markdown;
 
@@ -398,6 +489,13 @@
 	}
 
 	$effect(() => {
+		const currentMode = mode.current;
+		const isDark = currentMode === 'dark';
+
+		loadHighlightTheme(isDark);
+	});
+
+	$effect(() => {
 		updateRenderedBlocks(content);
 	});
 
@@ -409,28 +507,6 @@
 			setupCodeBlockActions();
 		}
 	});
-
-	function cleanupEventListeners() {
-		if (!containerRef) return;
-
-		const copyButtons = containerRef.querySelectorAll<HTMLButtonElement>('.copy-code-btn');
-		const previewButtons = containerRef.querySelectorAll<HTMLButtonElement>('.preview-code-btn');
-
-		for (const button of copyButtons) {
-			button.removeEventListener('click', handleCopyClick);
-		}
-
-		for (const button of previewButtons) {
-			button.removeEventListener('click', handlePreviewClick);
-		}
-	}
-
-	function cleanupHighlightTheme() {
-		if (!browser) return;
-
-		const existingThemes = document.querySelectorAll('style[data-highlight-theme]');
-		existingThemes.forEach((style) => style.remove());
-	}
 
 	onDestroy(() => {
 		cleanupEventListeners();
