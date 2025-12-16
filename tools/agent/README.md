@@ -1,238 +1,106 @@
-# llama-agent
+# llama.agent
 
-An agentic coding assistant built on llama.cpp that can autonomously complete software engineering tasks.
+An agentic coding assistant built on [llama.cpp](https://github.com/ggml-org/llama.cpp).
 
-## Overview
+<img width="2924" height="2168" alt="image" src="https://github.com/user-attachments/assets/00865829-532c-4294-b82b-6b025e1ea0f1" />
 
-`llama-agent` is a CLI tool that transforms a local LLM into a powerful coding assistant. It uses tool calling to:
+## What is it?
 
-- Read and analyze source code
-- Write new files and make edits
-- Execute shell commands
-- Navigate and explore codebases
-
-The agent operates in an iterative loop: generating responses, executing tool calls, and continuing until the task is complete.
+`llama.agent` transforms a local LLM into a coding assistant that can autonomously complete programming tasks. It uses tool calling to read files, write code, run commands, and navigate codebases.
 
 ## Quick Start
 
 ```bash
-# Build llama.cpp with agent support
+# Build
 cmake -B build
 cmake --build build --target llama-agent
 
-# Run with a model
+# Run (downloads model automatically)
+./build/bin/llama-agent -hf unsloth/Nemotron-3-Nano-30B-A3B-GGUF:Q5_K_M
+
+# Or with a local model
 ./build/bin/llama-agent -m model.gguf
-
-# Or download directly from Hugging Face
-./build/bin/llama-agent -hf nvidia/Nemotron-3-Nano-30B-A3B-FP8-GGUF
 ```
 
-## Recommended Models
+## Recommended Model
 
-Models with good tool-calling support work best:
+| Model | Command |
+|-------|---------|
+| Nemotron-3-Nano 30B | `-hf unsloth/Nemotron-3-Nano-30B-A3B-GGUF:Q5_K_M` |
 
-| Model | Size | Notes |
-|-------|------|-------|
-| NVIDIA Nemotron-3-Nano-30B-A3B | ~26GB (Q5_K_M) | Excellent tool calling, uses Qwen3-coder XML format |
-| Qwen3 Coder | Various | Native tool calling support |
+## Available Tools
 
-## Usage
+| Tool | Description |
+|------|-------------|
+| `bash` | Execute shell commands |
+| `read` | Read file contents with line numbers |
+| `write` | Create or overwrite files |
+| `edit` | Search and replace in files |
+| `glob` | Find files matching a pattern |
 
-### Basic Commands
-
-```bash
-# Start interactive session
-llama-agent -m model.gguf
-
-# With larger context (recommended for complex tasks)
-llama-agent -m model.gguf -c 32768
-
-# Specify chat template if auto-detection fails
-llama-agent -m model.gguf --chat-template qwen3-coder
-```
-
-### Available Tools
-
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `bash` | Execute shell commands | `command`, `timeout?`, `description?` |
-| `read` | Read file contents with line numbers | `file_path`, `offset?`, `limit?` |
-| `write` | Create or overwrite a file | `file_path`, `content` |
-| `edit` | Search and replace in a file | `file_path`, `old_string`, `new_string`, `replace_all?` |
-| `glob` | Find files matching a pattern | `pattern`, `path?` |
-
-### Permission System
-
-The agent includes a permission system to ensure you stay in control:
-
-**Default permissions:**
-- `read`: Allowed (except sensitive files like `.env`, `*.key`, `*.pem`)
-- `glob`: Allowed
-- `bash`, `write`, `edit`: Requires confirmation
-
-**Interactive prompts:**
-```
-┌─ PERMISSION: bash ──────────────────────────────────┐
-│ Command: rm -rf ./build                             │
-├─────────────────────────────────────────────────────┤
-│ [y]es  [n]o  [a]lways  [N]ever                      │
-└─────────────────────────────────────────────────────┘
-```
-
-Options:
-- `y` - Allow this action once
-- `n` - Deny this action
-- `a` - Always allow this tool for this session
-- `N` - Never allow this tool for this session
-
-## Example Sessions
-
-### Exploring a Codebase
+## Usage Examples
 
 ```
-> What files are in the src/ directory?
+> Find all TODO comments in src/
 
-[Tool: glob] pattern="src/*"
-Found 12 files:
-  src/main.cpp
-  src/parser.cpp
-  src/lexer.cpp
-  ...
+[Tool: bash] grep -r "TODO" src/
+Found 5 TODO comments...
 
-> Show me the main function in main.cpp
+> Read the main.cpp file
 
-[Tool: read] file_path="src/main.cpp"
-   1│ #include <iostream>
-   2│
-   3│ int main(int argc, char** argv) {
-   4│     // Entry point
+[Tool: read] main.cpp
+   1| #include <iostream>
+   2| int main() {
    ...
+
+> Fix the bug on line 42
+
+[Tool: edit] main.cpp
+Replaced "old code" with "fixed code"
 ```
 
-### Making Edits
+## Commands
 
-```
-> Add a comment to the main function explaining what it does
+| Command | Description |
+|---------|-------------|
+| `/exit` | Exit the agent |
+| `/clear` | Clear conversation history |
+| `/tools` | List available tools |
 
-[Tool: edit]
-  file_path="src/main.cpp"
-  old_string="int main(int argc, char** argv) {"
-  new_string="// Entry point: parses arguments and initializes the application\nint main(int argc, char** argv) {"
+## Permission System
 
-Edit applied successfully.
-```
+The agent asks for confirmation before:
+- Running shell commands
+- Writing or editing files
+- Accessing files outside the working directory
 
-### Running Commands
+When prompted: `y` (yes), `n` (no), `a` (always allow), `d` (deny always)
 
-```
-> Build the project and run the tests
+### Safety Features
 
-[Tool: bash] command="cmake -B build && cmake --build build"
--- Configuring done
--- Generating done
--- Build finished
+- **Sensitive file blocking**: Automatically blocks access to `.env`, `*.key`, `*.pem`, credentials files
+- **External directory warnings**: Prompts before accessing files outside the project
+- **Dangerous command detection**: Warns for `rm -rf`, `sudo`, `curl|bash`, etc.
+- **Doom-loop detection**: Detects and blocks repeated identical tool calls
 
-[Tool: bash] command="./build/bin/tests"
-All 42 tests passed.
-```
+### CLI Options
 
-## MCP Server Support
+| Flag | Description |
+|------|-------------|
+| `--yolo` | Skip all permission prompts (dangerous!) |
+| `--max-iterations N` | Max agent iterations (default: 50, max: 1000) |
 
-llama-agent supports MCP (Model Context Protocol) servers, allowing you to extend the agent with external tools.
+### YOLO Mode
 
-### Configuration
-
-Create a `mcp.json` file in your working directory or `~/.config/llama-agent/mcp.json`:
-
-```json
-{
-  "servers": {
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@anthropic-ai/mcp-server-fs", "/allowed/path"],
-      "enabled": true,
-      "timeout": 30000
-    },
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@anthropic-ai/mcp-server-github"],
-      "env": {
-        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
-      }
-    }
-  }
-}
-```
-
-### Configuration Options
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `command` | string | Yes | The command to run the MCP server |
-| `args` | string[] | No | Arguments to pass to the command |
-| `env` | object | No | Environment variables (supports `${VAR}` expansion) |
-| `enabled` | boolean | No | Whether to start this server (default: true) |
-| `timeout` | number | No | Tool call timeout in milliseconds (default: 60000) |
-
-### MCP Tool Names
-
-MCP tools are registered with qualified names: `mcp__<server>__<tool>`
-
-For example, a `read_file` tool from a `filesystem` server becomes `mcp__filesystem__read_file`.
-
-### Available MCP Servers
-
-See the [Anthropic MCP servers](https://github.com/anthropics/anthropic-quickstarts/tree/main/mcp-servers) repository for available servers.
-
-## Architecture
-
-```
-tools/agent/
-├── agent.cpp           # Main entry point
-├── agent-loop.cpp      # Core agent loop (generate → parse → execute)
-├── tool-registry.cpp   # Tool registration and execution
-├── permission.cpp      # Permission system
-├── mcp/
-│   ├── mcp-client.cpp      # MCP JSON-RPC client (stdio transport)
-│   ├── mcp-server-manager.cpp  # Multi-server management
-│   └── mcp-tool-wrapper.cpp    # MCP → tool_def adapter
-└── tools/
-    ├── tool-bash.cpp   # Shell command execution
-    ├── tool-read.cpp   # File reading
-    ├── tool-write.cpp  # File creation
-    ├── tool-edit.cpp   # File editing
-    └── tool-glob.cpp   # File pattern matching
-```
-
-## Building
-
-The agent is built as part of the standard llama.cpp build:
+Skip all permission prompts:
 
 ```bash
-cmake -B build
-cmake --build build --target llama-agent
+./build/bin/llama-agent -m model.gguf --yolo
 ```
 
-Or build everything:
+> [!CAUTION]
+> **YOLO mode is extremely dangerous.** The agent will execute any command without confirmation, including destructive operations like `rm -rf`. This is especially risky with smaller models that have weaker instruction-following and may hallucinate unsafe commands. Only use this flag if you fully trust the model and understand the risks.
 
-```bash
-cmake -B build
-cmake --build build
-```
+## License
 
-## Limitations
-
-- Tool calling quality depends heavily on the model
-- Complex multi-step tasks may require larger context sizes
-- Some models may not follow tool-calling formats correctly
-
-## Safety
-
-The agent includes several safety features:
-
-- Permission prompts for destructive operations
-- Blocking of sensitive file patterns (`.env`, `*.key`, etc.)
-- Loop detection (prevents infinite tool call loops)
-- Timeout for shell commands
-
-Always review tool calls before approving, especially for `bash` and `write`/`edit` operations.
+MIT - see [LICENSE](LICENSE)
