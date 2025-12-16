@@ -86,7 +86,11 @@ static void sigint_handler(int signo) {
 int main(int argc, char ** argv) {
     common_params params;
     g_params = &params;
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MAIN, print_usage)) {
+
+    // disable jinja by default
+    params.use_jinja = false;
+
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMPLETION, print_usage)) {
         return 1;
     }
 
@@ -137,13 +141,15 @@ int main(int argc, char ** argv) {
 
     // load the model and apply lora adapter, if any
     LOG_INF("%s: load the model and apply lora adapter, if any\n", __func__);
-    common_init_result llama_init = common_init_from_params(params);
 
-    model = llama_init.model.get();
-    ctx = llama_init.context.get();
+    auto llama_init = common_init_from_params(params);
 
-    if (model == NULL) {
-        LOG_ERR("%s: error: unable to load model\n", __func__);
+    ctx   = llama_init->context();
+    model = llama_init->model();
+    smpl  = llama_init->sampler(0);
+
+    if (ctx == NULL) {
+        LOG_ERR("%s: error: unable to create context\n", __func__);
         return 1;
     }
 
@@ -470,12 +476,6 @@ int main(int argc, char ** argv) {
         }
     }
 
-    smpl = common_sampler_init(model, sparams);
-    if (!smpl) {
-        LOG_ERR("%s: failed to initialize sampling subsystem\n", __func__);
-        return 1;
-    }
-
     LOG_INF("sampler seed: %u\n",     common_sampler_get_seed(smpl));
     LOG_INF("sampler params: \n%s\n", sparams.print().c_str());
     LOG_INF("sampler chain: %s\n",    common_sampler_print(smpl).c_str());
@@ -521,12 +521,6 @@ int main(int argc, char ** argv) {
         is_interacting = params.interactive_first;
     }
 
-    LOG_WRN("*****************************\n");
-    LOG_WRN("IMPORTANT: The current llama-cli will be moved to llama-completion in the near future\n");
-    LOG_WRN("  New llama-cli will have enhanced features and improved user experience\n");
-    LOG_WRN("  More info: https://github.com/ggml-org/llama.cpp/discussions/17618\n");
-    LOG_WRN("*****************************\n");
-
     bool is_antiprompt        = false;
     bool input_echo           = true;
     bool display              = true;
@@ -543,7 +537,7 @@ int main(int argc, char ** argv) {
     std::ostringstream assistant_ss; // for storing current assistant message, used in conversation mode
 
     // the first thing we will do is to output the prompt, so set color accordingly
-    console::set_display(console::prompt);
+    console::set_display(DISPLAY_TYPE_PROMPT);
     display = params.display_prompt;
 
     std::vector<llama_token> embd;
@@ -588,9 +582,9 @@ int main(int argc, char ** argv) {
                 const int skipped_tokens = (int) embd.size() - max_embd_size;
                 embd.resize(max_embd_size);
 
-                console::set_display(console::error);
+                console::set_display(DISPLAY_TYPE_ERROR);
                 LOG_WRN("<<input too long: skipped %d token%s>>", skipped_tokens, skipped_tokens != 1 ? "s" : "");
-                console::set_display(console::reset);
+                console::set_display(DISPLAY_TYPE_RESET);
             }
 
             if (ga_n == 1) {
@@ -772,7 +766,7 @@ int main(int argc, char ** argv) {
 
         // reset color to default if there is no pending user input
         if (input_echo && (int) embd_inp.size() == n_consumed) {
-            console::set_display(console::reset);
+            console::set_display(DISPLAY_TYPE_RESET);
             display = true;
         }
 
@@ -868,7 +862,7 @@ int main(int argc, char ** argv) {
                 }
 
                 // color user input only
-                console::set_display(console::user_input);
+                console::set_display(DISPLAY_TYPE_USER_INPUT);
                 display = params.display_prompt;
 
                 std::string line;
@@ -879,7 +873,7 @@ int main(int argc, char ** argv) {
                 } while (another_line);
 
                 // done taking input, reset color
-                console::set_display(console::reset);
+                console::set_display(DISPLAY_TYPE_RESET);
                 display = true;
 
                 if (buffer.empty()) { // Ctrl+D on empty line exits
@@ -994,8 +988,6 @@ int main(int argc, char ** argv) {
 
     LOG("\n\n");
     common_perf_print(ctx, smpl);
-
-    common_sampler_free(smpl);
 
     llama_backend_free();
 

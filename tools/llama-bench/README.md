@@ -80,7 +80,7 @@ Each test is repeated the number of times given by `-r`, and the results are ave
 
 Using the `-d <n>` option, each test can be run at a specified context depth, prefilling the KV cache with `<n>` tokens.
 
-For a description of the other options, see the [main example](../main/README.md).
+For a description of the other options, see the [completion example](../completion/README.md).
 
 > [!NOTE]
 > The measurements with `llama-bench` do not include the times for tokenization and for sampling.

@@ -153,7 +153,7 @@ struct server_slot {
     // sampling
     json json_schema;
 
-    struct common_sampler * smpl = nullptr;
+    common_sampler_ptr smpl;
 
     llama_token sampled; // in speculative mode, this is the last accepted token
     llama_tokens drafted;
@@ -510,8 +510,8 @@ struct server_context_impl {
     common_params params_base;
 
     // note: keep these alive - they determine the lifetime of the model, context, etc.
-    common_init_result llama_init;
-    common_init_result llama_init_dft;
+    common_init_result_ptr llama_init;
+    common_init_result_ptr llama_init_dft;
 
     llama_model * model = nullptr;
     llama_context * ctx = nullptr;
@@ -557,9 +557,6 @@ struct server_context_impl {
 
         // Clear any sampling context
         for (server_slot & slot : slots) {
-            common_sampler_free(slot.smpl);
-            slot.smpl = nullptr;
-
             llama_free(slot.ctx_dft);
             slot.ctx_dft = nullptr;
 
@@ -580,8 +577,8 @@ struct server_context_impl {
 
         llama_init = common_init_from_params(params_base);
 
-        model = llama_init.model.get();
-        ctx   = llama_init.context.get();
+        model = llama_init->model();
+        ctx   = llama_init->context();
 
         if (model == nullptr) {
             SRV_ERR("failed to load model, '%s'\n", params_base.model.path.c_str());
@@ -613,25 +610,25 @@ struct server_context_impl {
 
             llama_init_dft = common_init_from_params(params_dft);
 
-            model_dft = llama_init_dft.model.get();
+            model_dft = llama_init_dft->model();
 
             if (model_dft == nullptr) {
                 SRV_ERR("failed to load draft model, '%s'\n", params_base.speculative.model.path.c_str());
                 return false;
             }
 
-            vocab_dft_compatible = common_speculative_are_compatible(ctx, llama_init_dft.context.get());
+            vocab_dft_compatible = common_speculative_are_compatible(ctx, llama_init_dft->context());
             if (!vocab_dft_compatible) {
                 SRV_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params_base.speculative.model.path.c_str(), params_base.model.path.c_str());
             }
 
-            const int n_ctx_dft = llama_n_ctx(llama_init_dft.context.get());
+            const int n_ctx_dft = llama_n_ctx(llama_init_dft->context());
 
             cparams_dft = common_context_params_to_llama(params_dft);
             cparams_dft.n_batch = n_ctx_dft;
 
             // the context is not needed - we will create one for each slot
-            llama_init_dft.context.reset();
+            llama_init_dft->free_context();
         }
 
         chat_templates = common_chat_templates_init(model, params_base.chat_template);
@@ -1051,18 +1048,15 @@ struct server_context_impl {
 
         // initialize samplers
         {
-            if (slot.smpl != nullptr) {
-                common_sampler_free(slot.smpl);
-            }
+            slot.smpl.reset(common_sampler_init(model, task.params.sampling));
 
-            slot.smpl = common_sampler_init(model, task.params.sampling);
             if (slot.smpl == nullptr) {
                 // for now, the only error that may happen here is invalid grammar
                 send_error(task, "Failed to parse grammar", ERROR_TYPE_INVALID_REQUEST);
                 return false;
             }
 
-            SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl).c_str());
+            SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
         }
 
         // initialize draft batch
@@ -1216,11 +1210,10 @@ struct server_context_impl {
     }
 
     void populate_token_probs(const server_slot & slot, completion_token_output & result, bool post_sampling, bool special, int idx) const {
-        size_t n_probs = slot.task->params.sampling.n_probs;
-        size_t n_vocab = llama_vocab_n_tokens(vocab);
+        const size_t n_probs = slot.task->params.sampling.n_probs;
 
         if (post_sampling) {
-            const auto * cur_p = common_sampler_get_candidates(slot.smpl, true);
+            const auto * cur_p = common_sampler_get_candidates(slot.smpl.get(), true);
             const size_t max_probs = cur_p->size;
 
             // set probability for sampled token
@@ -1245,7 +1238,7 @@ struct server_context_impl {
             std::vector<llama_token_data> cur = get_token_probabilities(ctx, idx);
 
             // set probability for sampled token
-            for (size_t i = 0; i < n_vocab; i++) {
+            for (size_t i = 0; i < cur.size(); i++) {
                 // set probability for sampled token
                 if (cur[i].id == result.tok) {
                     result.prob = cur[i].p;
@@ -1255,7 +1248,7 @@ struct server_context_impl {
 
             // set probability for top n_probs tokens
             result.probs.reserve(n_probs);
-            for (size_t i = 0; i < std::min(n_vocab, n_probs); i++) {
+            for (size_t i = 0; i < std::min(cur.size(), n_probs); i++) {
                 result.probs.push_back({
                     cur[i].id,
                     common_token_to_piece(ctx, cur[i].id, special),
@@ -1474,6 +1467,44 @@ struct server_context_impl {
     // Functions to process the task
     //
 
+    // tokenize the input if it's set by CLI, return false on error
+    bool tokenize_cli_input(server_task & task) {
+        if (task.cli_input == nullptr) {
+            return true; // nothing to do
+        }
+        try {
+            auto & opt = oai_parser_opt;
+            common_chat_templates_inputs inputs;
+            inputs.messages              = common_chat_msgs_parse_oaicompat(task.cli_input);
+            inputs.tools                 = {}; // TODO
+            inputs.tool_choice           = COMMON_CHAT_TOOL_CHOICE_NONE;
+            inputs.json_schema           = ""; // TODO
+            inputs.grammar               = ""; // TODO
+            inputs.use_jinja             = opt.use_jinja;
+            inputs.parallel_tool_calls   = false;
+            inputs.add_generation_prompt = true;
+            inputs.reasoning_format      = opt.reasoning_format;
+            inputs.enable_thinking       = opt.enable_thinking;
+
+            // Apply chat template to the list of messages
+            auto chat_params = common_chat_templates_apply(opt.tmpls, inputs);
+
+            // tokenize the resulting prompt
+            auto & prompt = chat_params.prompt;
+            if (mctx != nullptr) {
+                task.tokens = process_mtmd_prompt(mctx, prompt, task.cli_files);
+            } else {
+                task.tokens = std::move(tokenize_input_prompts(vocab, mctx, prompt, true, true)[0]);
+            }
+            task.cli_input.clear();
+            task.cli_files.clear();
+        } catch (const std::exception & e) {
+            send_error(task, std::string("Failed to format input: ") + e.what(), ERROR_TYPE_INVALID_REQUEST);
+            return false;
+        }
+        return true;
+    }
+
     void process_single_task(server_task && task) {
         switch (task.type) {
             case SERVER_TASK_TYPE_COMPLETION:
@@ -1481,6 +1512,10 @@ struct server_context_impl {
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
                 {
+                    if (!tokenize_cli_input(task)) {
+                        break;
+                    }
+
                     const int id_slot = task.id_slot;
 
                     server_slot * slot = id_slot != -1 ? get_slot_by_id(id_slot) : get_available_slot(task);
@@ -1690,7 +1725,6 @@ struct server_context_impl {
                     res->id = task.id;
                     queue_results.send(std::move(res));
                 } break;
-
         }
     }
 
@@ -2260,13 +2294,13 @@ struct server_context_impl {
 
                         GGML_ASSERT(batch.n_tokens > 0);
 
-                        common_sampler_reset(slot.smpl);
+                        common_sampler_reset(slot.smpl.get());
 
                         // Process all prompt tokens through sampler system
                         for (int i = 0; i < slot.task->n_tokens(); ++i) {
                             llama_token id = input_tokens[i];
                             if (id != LLAMA_TOKEN_NULL) {
-                                common_sampler_accept(slot.smpl, id, false);
+                                common_sampler_accept(slot.smpl.get(), id, false);
                             }
                         }
 
@@ -2484,11 +2518,11 @@ struct server_context_impl {
 
                 const int tok_idx = slot.i_batch - i;
 
-                llama_token id = common_sampler_sample(slot.smpl, ctx, tok_idx);
+                llama_token id = common_sampler_sample(slot.smpl.get(), ctx, tok_idx);
 
                 slot.i_batch = -1;
 
-                common_sampler_accept(slot.smpl, id, true);
+                common_sampler_accept(slot.smpl.get(), id, true);
 
                 slot.n_decoded += 1;
 
@@ -2529,7 +2563,7 @@ struct server_context_impl {
                 size_t n_draft = slot.drafted.size();
 
                 // the accepted tokens from the speculation
-                const auto ids = common_sampler_sample_and_accept_n(slot.smpl, ctx, slot.i_batch_dft, slot.drafted);
+                const auto ids = common_sampler_sample_and_accept_n(slot.smpl.get(), ctx, slot.i_batch_dft, slot.drafted);
                 slot.i_batch_dft.clear();
                 slot.drafted.clear();
 
@@ -2624,6 +2658,15 @@ llama_context * server_context::get_llama_context() const {
 
 server_response_reader server_context::get_response_reader() {
     return impl->get_response_reader();
+}
+
+server_context_info server_context::get_info() const {
+    return server_context_info {
+        /* build_info    */ build_info,
+        /* model_name    */ impl->model_name,
+        /* has_inp_image */ impl->oai_parser_opt.allow_image,
+        /* has_inp_audio */ impl->oai_parser_opt.allow_audio,
+    };
 }
 
 
