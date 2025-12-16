@@ -1430,7 +1430,7 @@ Model presets allow advanced users to define custom configurations using an `.in
 llama-server --models-preset ./my-models.ini
 ```
 
-Each section in the file defines a new preset. Keys within a section correspond to command-line arguments (without leading dashes). For example, the argument `--n-gpu-layer 123` is written as `n-gpu-layer = 123`.
+Each section in the file defines a new preset. Keys within a section correspond to command-line arguments (without leading dashes). For example, the argument `--n-gpu-layers 123` is written as `n-gpu-layers = 123`.
 
 Short argument forms (e.g., `c`, `ngl`) and environment variable names (e.g., `LLAMA_ARG_N_GPU_LAYERS`) are also supported as keys.
 
@@ -1445,7 +1445,7 @@ version = 1
 ; string value
 chat-template = chatml
 ; numeric value
-n-gpu-layer = 123
+n-gpu-layers = 123
 ; flag value (for certain flags, you need to use the "no-" prefix for negation)
 jinja = true
 ; shorthand argument (for example, context size)
