@@ -75,7 +75,7 @@ struct llama_file::impl {
         return ret;
     }
 
-    impl(const char * fname, const char * mode) {
+    impl(const char * fname, const char * mode, const bool use_direct_io = false) {
         fp = ggml_fopen(fname, mode);
         if (fp == NULL) {
             throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
@@ -154,43 +154,50 @@ struct llama_file::impl {
         write_raw(&val, sizeof(val));
     }
 
+    bool has_direct_io() const {
+        return false;
+    }
+
+    void read_aligned_chunk(size_t offset, void * dest, size_t size, size_t alignment) const {
+        throw std::runtime_error("DirectIO is not implemented on Windows.");
+    }
+
     ~impl() {
         if (fp) {
             std::fclose(fp);
         }
     }
-#elif defined(__linux__)
-    impl(const char * fname, const char * mode) : impl(fname, mode, false) {}
-
-    impl(const char * fname, const char * mode, bool uncached_read) {
-        if (uncached_read) {
+#else
+    impl(const char * fname, const char * mode, const bool use_direct_io = false) {
+#ifdef __linux__
+        // Try unbuffered I/O for read only
+        if (use_direct_io && std::strcmp(mode, "rb") == 0) {
             fd = open(fname, O_RDONLY | O_DIRECT);
-            if (fd == -1 && (errno == EINVAL || errno == EOPNOTSUPP)) {
-                fd = open(fname, O_RDONLY);   // retry without O_DIRECT
+
+            if (fd != -1) {
+                struct stat file_stats{};
+                fstat(fd, &file_stats);
+
+                size = file_stats.st_size;
+
+                off_t ret = lseek(fd, 0, SEEK_SET);
+                if (ret == -1) {
+                    throw std::runtime_error(format("seek error: %s", strerror(errno)));
+                }
+                return;
             }
 
-            if (fd == -1) {
-                throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
-            }
-
-            struct stat file_stats{};
-            fstat(fd, &file_stats);
-
-            size = file_stats.st_size;
-
-            off_t ret = lseek(fd, 0, SEEK_SET);
-            if (ret == -1) {
-                throw std::runtime_error(format("seek error: %s", strerror(errno)));
-            }
-        } else {
-            fp = ggml_fopen(fname, mode);
-            if (fp == NULL) {
-                throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
-            }
-            seek(0, SEEK_END);
-            size = tell();
-            seek(0, SEEK_SET);
+            LLAMA_LOG_WARN("Failed to open model %s with error: %s. Falling back to buffered I/O",
+                fname, strerror(errno));
         }
+#endif
+        fp = ggml_fopen(fname, mode);
+        if (fp == NULL) {
+            throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
+        }
+        seek(0, SEEK_END);
+        size = tell();
+        seek(0, SEEK_SET);
     }
 
     size_t tell() const {
@@ -226,8 +233,8 @@ struct llama_file::impl {
         if (len == 0) {
             return;
         }
+        errno = 0;
         if (fd == -1) {
-            errno = 0;
             std::size_t ret = std::fread(ptr, len, 1, fp);
             if (ferror(fp)) {
                 throw std::runtime_error(format("read error: %s", strerror(errno)));
@@ -255,86 +262,27 @@ struct llama_file::impl {
         }
     }
 
-    uint32_t read_u32() const {
-        uint32_t ret;
-        read_raw(&ret, sizeof(ret));
-        return ret;
-    }
+    void read_aligned_chunk(size_t offset, void * dest, size_t size, size_t alignment) const {
+        off_t aligned_offset = offset & ~(alignment - 1);
+        off_t offset_from_alignment = offset - aligned_offset;
+        size_t bytes_to_read = (offset_from_alignment + size + alignment - 1) & ~(alignment - 1);
 
-    void write_raw(const void * ptr, size_t len) const {
-        if (len == 0) {
-            return;
-        }
-        errno = 0;
-        size_t ret = std::fwrite(ptr, len, 1, fp);
-        if (ret != 1) {
-            throw std::runtime_error(format("write error: %s", strerror(errno)));
-        }
-    }
-
-    void write_u32(uint32_t val) const {
-        write_raw(&val, sizeof(val));
-    }
-
-    ~impl() {
-        if (fp) {
-            std::fclose(fp);
-        } else if (fd != -1) {
-            close(fd);
-        }
-    }
-
-    int fd = -1;
-
-#else
-    impl(const char * fname, const char * mode) {
-        fp = ggml_fopen(fname, mode);
-        if (fp == NULL) {
-            throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
-        }
-        seek(0, SEEK_END);
-        size = tell();
-        seek(0, SEEK_SET);
-    }
-
-    size_t tell() const {
-// TODO: this ifdef is never true?
-#ifdef _WIN32
-        __int64 ret = _ftelli64(fp);
-#else
-        long ret = std::ftell(fp);
-#endif
-        if (ret == -1) {
-            throw std::runtime_error(format("ftell error: %s", strerror(errno)));
-        }
-
-        return (size_t) ret;
-    }
-
-    void seek(size_t offset, int whence) const {
-// TODO: this ifdef is never true?
-#ifdef _WIN32
-        int ret = _fseeki64(fp, (__int64) offset, whence);
-#else
-        int ret = std::fseek(fp, (long) offset, whence);
-#endif
+        void * raw_buffer = nullptr;
+        int ret = posix_memalign(&raw_buffer, alignment, bytes_to_read);
         if (ret != 0) {
-            throw std::runtime_error(format("seek error: %s", strerror(errno)));
+            throw std::runtime_error(format("posix_memalign failed with error %d", ret));
         }
-    }
 
-    void read_raw(void * ptr, size_t len) const {
-        if (len == 0) {
-            return;
-        }
-        errno = 0;
-        std::size_t ret = std::fread(ptr, len, 1, fp);
-        if (ferror(fp)) {
-            throw std::runtime_error(format("read error: %s", strerror(errno)));
-        }
-        if (ret != 1) {
-            throw std::runtime_error("unexpectedly reached end of file");
-        }
+        struct aligned_buffer_deleter {
+            void operator()(void * p) const { free(p); }
+        };
+        std::unique_ptr<void, aligned_buffer_deleter> buffer(raw_buffer);
+
+        seek(aligned_offset, SEEK_SET);
+        read_raw(buffer.get(), bytes_to_read);
+
+        uintptr_t actual_data = reinterpret_cast<uintptr_t>(buffer.get()) + offset_from_alignment;
+        memcpy(dest, reinterpret_cast<void *>(actual_data), size);
     }
 
     uint32_t read_u32() const {
@@ -358,25 +306,32 @@ struct llama_file::impl {
         write_raw(&val, sizeof(val));
     }
 
+    bool has_direct_io() const {
+        return fd != -1;
+    }
+
     ~impl() {
-        if (fp) {
+        if (fd != -1) {
+            close(fd);
+        } else {
             std::fclose(fp);
         }
     }
+    int fd = -1;
 #endif
 
     FILE * fp{};
     size_t size{};
 };
 
-llama_file::llama_file(const char * fname, const char * mode) : pimpl(std::make_unique<impl>(fname, mode)) {}
-#if defined(__linux__)
-llama_file::llama_file(const char * fname, const char * mode, bool uncached_read) : pimpl(std::make_unique<impl>(fname, mode, uncached_read)) {}
-#endif
+llama_file::llama_file(const char * fname, const char * mode, const bool use_direct_io) :
+    pimpl(std::make_unique<impl>(fname, mode, use_direct_io)) {}
 llama_file::~llama_file() = default;
 
 size_t llama_file::tell() const { return pimpl->tell(); }
 size_t llama_file::size() const { return pimpl->size; }
+
+bool llama_file::has_direct_io() const { return pimpl->has_direct_io(); }
 
 int llama_file::file_id() const {
 #ifdef _WIN32
@@ -392,6 +347,9 @@ int llama_file::file_id() const {
 
 void llama_file::seek(size_t offset, int whence) const { pimpl->seek(offset, whence); }
 void llama_file::read_raw(void * ptr, size_t len) const { pimpl->read_raw(ptr, len); }
+void llama_file::read_aligned_chunk(size_t offset, void * dest, size_t size, size_t alignment) const
+    { pimpl->read_aligned_chunk(offset, dest, size, alignment); }
+
 
 uint32_t llama_file::read_u32() const { return pimpl->read_u32(); }
 
