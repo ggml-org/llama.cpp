@@ -34,8 +34,11 @@ done
 MODEL_PATH="${MODEL_PATH:-"$EMBEDDING_MODEL_PATH"}"
 MODEL_NAME="${MODEL_NAME:-$(basename "$MODEL_PATH")}"
 
+CONVERTED_MODEL_PATH="${CONVERTED_EMBEDDING_PATH:-"$CONVERTED_EMBEDDING_MODEL"}"
+CONVERTED_MODEL_NAME="${CONVERTED_MODEL_NAME:-$(basename "$CONVERTED_MODEL_PATH" .gguf)}"
+
 if [ -t 0 ]; then
-    CPP_EMBEDDINGS="data/llamacpp-${MODEL_NAME}-embeddings.bin"
+    CPP_EMBEDDINGS="data/llamacpp-${CONVERTED_MODEL_NAME}-embeddings.bin"
 else
     # Process piped JSON data and convert to binary (matching logits.cpp format)
     TEMP_FILE=$(mktemp /tmp/tmp.XXXXXX.binn)
