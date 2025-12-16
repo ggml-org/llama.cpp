@@ -481,8 +481,13 @@ static void llama_params_fit_impl(
     } else {
         LLAMA_LOG_INFO("%s: filling dense-only layers back-to-front:\n", __func__);
     }
-    uint32_t n_unassigned = hp_ngl;
     for (int id = nd - 1; id >= 0; id--) {
+        uint32_t n_unassigned = hp_ngl;
+        for (size_t jd = id + 1; jd < nd; ++jd) {
+            assert(n_unassigned >= ngl_per_device[jd].n_layer);
+            n_unassigned -= ngl_per_device[jd].n_layer;
+        }
+
         std::vector<ngl_t> ngl_per_device_high = ngl_per_device;
         ngl_per_device_high[id].n_layer = n_unassigned;
         if (hp_nex > 0) {
@@ -491,7 +496,9 @@ static void llama_params_fit_impl(
         if (ngl_per_device_high[id].n_layer > 0) {
             std::vector<int64_t> mem_high = get_memory_for_layers(__func__, ngl_per_device_high, overflow_bufts, partial_moe);
             if (mem_high[id] > targets[id]) {
+                assert(ngl_per_device_high[id].n_layer > ngl_per_device[id].n_layer);
                 uint32_t delta = ngl_per_device_high[id].n_layer - ngl_per_device[id].n_layer;
+                LLAMA_LOG_DEBUG("%s: start filling device %" PRIu32 ", delta=%" PRIu32 "\n", __func__, id, delta);
                 while (delta > 1) {
                     uint32_t step_size = int64_t(delta) * (targets[id] - mem[id]) / (mem_high[id] - mem[id]);
                     step_size = std::max(step_size, uint32_t(1));
@@ -505,20 +512,19 @@ static void llama_params_fit_impl(
                     const std::vector<int64_t> mem_test = get_memory_for_layers(__func__, ngl_per_device_test, overflow_bufts, partial_moe);
 
                     if (mem_test[id] <= targets[id]) {
-                        ngl_per_device  = ngl_per_device_test;
-                        mem             = mem_test;
-                        n_unassigned   -= ngl_per_device[id].n_layer;
+                        ngl_per_device = ngl_per_device_test;
+                        mem            = mem_test;
                         LLAMA_LOG_DEBUG("%s: set ngl_per_device[%d].n_layer=%" PRIu32 "\n", __func__, id, ngl_per_device[id].n_layer);
                     } else {
                         ngl_per_device_high = ngl_per_device_test;
                         mem_high            = mem_test;
-                        LLAMA_LOG_DEBUG("%s: set ngl_per_device_high[%d].n_layer=%" PRIu32 "\n", __func__, id, ngl_per_device[id].n_layer);
+                        LLAMA_LOG_DEBUG("%s: set ngl_per_device_high[%d].n_layer=%" PRIu32 "\n", __func__, id, ngl_per_device_high[id].n_layer);
                     }
                     delta = ngl_per_device_high[id].n_layer - ngl_per_device[id].n_layer;
                 }
             } else {
-                ngl_per_device  = ngl_per_device_high;
-                n_unassigned   -= ngl_per_device[id].n_layer;
+                assert(ngl_per_device_high[id].n_layer == n_unassigned);
+                ngl_per_device = ngl_per_device_high;
                 LLAMA_LOG_DEBUG("%s: set ngl_per_device[%d].n_layer=%" PRIu32 "\n", __func__, id, ngl_per_device[id].n_layer);
             }
         }
