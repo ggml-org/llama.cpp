@@ -1483,7 +1483,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 } else {
                     ggml_backend_synchronize_if_required(split_backend);
                 }
-                ggml_backend_tensor_copy(input, input_cpy);
+                ggml_backend_tensor_copy_async(input_backend, split_backend, input, input_cpy);
+                ggml_backend_synchronize_if_required(split_backend);
             } else {
                 // wait for the split backend to finish using the input before overwriting it
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
