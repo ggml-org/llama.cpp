@@ -710,9 +710,6 @@ void ggml_gemv_q8_0_4x4_q8_0_generic(int                        n,
 
     UNUSED(bs);
     UNUSED(nr);
-    UNUSED(nb);
-    UNUSED(ncols_interleaved);
-    UNUSED(blocklen);
 
     float sumf[4];
     int   sumi;
@@ -759,9 +756,6 @@ void ggml_gemv_q8_0_4x8_q8_0_generic(int                        n,
 
     UNUSED(bs);
     UNUSED(nr);
-    UNUSED(nb);
-    UNUSED(ncols_interleaved);
-    UNUSED(blocklen);
 
     float sumf[4];
     int   sumi;
@@ -1334,10 +1328,6 @@ void ggml_gemm_q8_0_4x4_q8_0_generic(int                        n,
     assert(nr % 4 == 0);
     assert(nc % ncols_interleaved == 0);
 
-    UNUSED(nb);
-    UNUSED(ncols_interleaved);
-    UNUSED(blocklen);
-
     {
         float sumf[4][4];
         int   sumi;
@@ -1391,10 +1381,6 @@ void ggml_gemm_q8_0_4x8_q8_0_generic(int                        n,
     assert(n % qk == 0);
     assert(nr % 4 == 0);
     assert(nc % ncols_interleaved == 0);
-
-    UNUSED(nb);
-    UNUSED(ncols_interleaved);
-    UNUSED(blocklen);
 
     float sumf[4][4];
     int   sumi;
