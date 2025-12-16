@@ -2,6 +2,20 @@
 
 本文记录当前 `GGML_IFAIRY_ARM_LUT`（CPU-only）下 iFairy 3-weight LUT 的代码现状（含 NEON 加速实现）、最近一次清理/整理的结果，以及下一步工作列表。
 
+## 0. 快速使用（建议默认）
+
+- 推荐二进制：`./build-rel/bin/llama-cli`（避免误用旧的 `./build/bin/llama-cli` 导致输出异常，见 3.1）
+- 推荐扫参脚本：`bash scripts/ifairy_lut_sweep.sh`（固定 seed/prompt，输出按 tok/s 排序）
+- 当前经验上较常见的“更快”组合：`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GGML_IFAIRY_LUT_BM=64 GGML_IFAIRY_LUT_FULLACC=1`（以 sweep 结果为准）
+
+**常用环境变量（LUT 路径）**
+
+- `GGML_IFAIRY_LUT=0/1`：禁用/启用 LUT（默认启用）
+- `GGML_IFAIRY_LUT_BK_BLOCKS=<int>`：K 维按 `QK_K=256` 的 block 做 tiling（0=禁用）
+- `GGML_IFAIRY_LUT_BM=<int>`：M 维行块大小（仅 tiling 时生效）
+- `GGML_IFAIRY_LUT_FULLACC=0/1`：tiled 下启用共享大累加器，减少重复 `preprocess + barrier`
+- `GGML_IFAIRY_LUT_VALIDATE_STRICT=0/1`：严格对照 reference（用于验证，不用于性能跑分）
+
 ## 1. 当前现状（可工作的 LUT 路径：NEON 优先，标量回退）
 
 - 路由位置：`ggml/src/ggml-cpu/ggml-cpu.c` 的 `ggml_compute_forward_mul_mat()` 内，当
@@ -106,6 +120,9 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 ```
 备注：如需验证输出一致性，先跑 `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_VALIDATE_STRICT=1 ./build-rel/bin/test-ifairy`；性能脚本不建议开 strict（会强制一些路径禁用/变慢）。
 
+> 备注（脚本输出 `tok/s=nan` 的常见原因）：`llama-cli` 的性能日志字段在不同版本里可能是 `X tokens per second`（当前默认）而不是 `X tok/s`。  
+> 若你本地脚本仍在按 `tok/s` 解析，会导致抓不到数值而写入 `nan`；已在 `scripts/ifairy_lut_sweep.sh` 里同时兼容两种格式，并只从 `eval time` 行提取（排除 `prompt eval time` / `sampling time`）。
+
 ### 3.1 常见问题：`llama-cli` 输出 gibberish（例如 `I believe life isDocuments CeUNTares cred`）
 
 这类输出在 iFairy 上**几乎总是**“二进制与源码/模型不匹配（旧二进制 / 未重编译）”导致的：模型仍能加载，但类型表/算子实现落后，从而生成乱码。
@@ -162,3 +179,39 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 （贯穿）**测试与性能记录**  
    - 已补充 `tests/test-ifairy.cpp` 的 **CPU backend tiling 回归**：固定小形状（`K=512` 强制多 tile），对比 tiling 与非 tiling 输出 **bitwise 一致**。  
    - 继续补充 “LUT vs reference” 单测形状覆盖，并固定 `llama-cli` 命令/seed 记录 LUT=0 vs LUT=1 tok/s；必要时用 `llama-bench`/`llama-perplexity` 做对照。
+
+## 5. 进一步性能提升路线图（参考 `BitNet/docs/lut-arm.md`）
+
+`BitNet/docs/lut-arm.md` 的 ARM LUT 实现有几个很“工程化”的性能关键点：**int8 QLUT + `vqtbl` 查表**、**int32 累加**、**更少的 scale/元数据**、以及（在它的约束下）**对固定形状做专用内核**。iFairy 这条 3-weight LUT 路径虽然语义/布局不同，但可以借鉴同样的方向来继续提速。
+
+### 5.1 BitNet ARM LUT 的关键做法（可借鉴的点）
+
+- **激活一次性量化 + 构表**：先对激活做 `max(abs(x))` 归一化得到 `lut_scales[0]`，再把激活量化并重排为 `QLUT`（查表友好、按 nibble 直接索引）。
+- **`vqtbl` 代替“随机查表”**：把 LUT 排成 16-entry（或多表拼接）的 byte 表，靠 `vqtbl1q_s8` 做“向量化查表”，避免 NEON 不擅长的通用 gather-load。
+- **累加与反量化分离**：K 维循环里只做整数查表与 `int32` 累加，最后统一用 `Scales/LUT_Scales` 做一次反量化到 float。
+- **分块与工作区布局清晰**：`QLUT`、`lut_scales`、（可选）fp16 缓冲按固定顺序布置，线程 0 构表后 barrier，再并行 qgemm。
+- **形状专用内核（取舍明确）**：BitNet 的 ARM 路径只覆盖少量固定 `(m,k)`，用编译期常量把 unroll/布局都做死，以换取吞吐。
+
+### 5.2 映射到 iFairy：优先级最高的提升方向
+
+1) **把“64-pattern × 4ch × int16” LUT 进一步压缩到“int8 + `vqtbl` 可查”的形态**  
+   - 当前瓶颈本质上是：每个 group 都要从较大的 `4×64×int16` 表里做多次 load（属于“cache/bandwidth + load-use latency”型）。  
+   - 下一步可以把现有的 “`16 canonical + factor`” 思路工程化：让运行时查表落在 `16-entry`（或 `2×16`/`4×16`）的 byte LUT 上，然后用 `vqtbl` 做向量化查表 + `vdot`/整数 MAC（取决于具体拆分方式）。这基本是 BitNet TL1 的核心吞吐来源。
+
+2) **进一步降低 `preprocess` 的开销与同步频率（让 tiling 更稳定地赢）**  
+   - 继续沿着当前 `FULLACC` 的方向，把 “一份 LUT / 多次消费” 做到更彻底：减少 barrier 次数、减少重复构表、把构表做成对 `K-tile` 的 pipeline（例如线程 0 预取/构表下一 tile，其余线程消费上一 tile）。
+   - 参考 BitNet 的做法，尽量把 scale/元数据压到最少（例如：在误差可接受的前提下，把 per-block scale 进一步合并到 per-tile/per-col）。
+
+3) **把热路径“常见形状”做成更激进的专用内核（可选，但上限高）**  
+   - BitNet 选择“只做 matvec + 固定 (m,k)”来换取最强内核；iFairy 目前是通用 `mul_mat`（N 可变、K 可变），上限会被通用性拖累。  
+   - 实际落地方式：先用 profile/日志统计 iFairy 推理中最热的 `(M,K,N)` 组合（例如 N 常为 1/2，K 常为 256 的倍数），然后为 1~2 组最热形状提供专用 fast-path（模板化 K-tile、固定 unroll、固定布局）。
+
+4) **继续做 cache/预取与布局细化（低风险“小刀”）**  
+   - 参考 BitNet 对工作区布局/对齐的强调：保证 LUT、indexes、scales 都是 64B 对齐；对 `indexes` 做更有针对性的预取；对 LUT 做 “按访问顺序” 的线性布局，降低 cache miss。  
+   - 对当前 `accum4` 的 unroll/预取策略继续微调（配合 `scripts/ifairy_lut_sweep.sh` 扫参，记录稳定的 tok/s）。
+
+### 5.3 建议的推进顺序（避免做无用功）
+
+1) 先把 **“int8 + vqtbl” 可行的 LUT 压缩方案**做出一个 correctness 版本（严格对照 + 单测覆盖），明确误差与内存/速度收益。  
+2) 再把它接入现有 `BK/BM/FULLACC` 框架，跑 sweep 找稳定配置，并用 `llama-cli` 固定 prompt/seed 记录 tok/s。  
+3) 最后再决定是否要走 BitNet 那种“形状专用内核”的路线（收益高，但维护成本也高）。

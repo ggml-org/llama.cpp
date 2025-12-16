@@ -29,8 +29,19 @@ echo "bk_blocks,bm,fullacc,tok_per_s" > "${TMP}"
 
 extract_tok_s() {
   awk '
-    /eval time/ && /tok\/s/ {
-      for (i = 1; i <= NF; i++) if ($i ~ /tok\/s/) { print $(i-1); exit }
+    /eval time/ && !/prompt eval time/ {
+      if (match($0, /[0-9.]+[[:space:]]+tokens per second/)) {
+        s = substr($0, RSTART, RLENGTH)
+        gsub(/[[:space:]]+tokens per second/, "", s)
+        print s
+        exit
+      }
+      if (match($0, /[0-9.]+[[:space:]]+tok\/s/)) {
+        s = substr($0, RSTART, RLENGTH)
+        gsub(/[[:space:]]+tok\/s/, "", s)
+        print s
+        exit
+      }
     }
   '
 }
