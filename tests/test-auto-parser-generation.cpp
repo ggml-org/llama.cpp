@@ -332,7 +332,7 @@ static common_chat_msg simple_assist_msg(const std::string & content, const std:
     return msg;
 }
 
-void test_qwen3_coder_template(testing &t) {
+static void test_qwen3_coder_template(testing &t) {
     t.log("Testing Qwen3-Coder template analysis and parser generation");
     
     // Load the Qwen3-Coder template
@@ -422,7 +422,7 @@ void test_qwen3_coder_template(testing &t) {
     }
 }
 
-void test_bytedance_seed_oss_template(testing &t) {
+static void test_bytedance_seed_oss_template(testing &t) {
     t.log("Testing ByteDance-Seed-OSS template analysis and parser generation");
     
     // Load the ByteDance-Seed-OSS template
@@ -507,7 +507,7 @@ void test_bytedance_seed_oss_template(testing &t) {
     }
 }
 
-void test_nvidia_nemotron_nano_v2_template(testing &t) {
+static void test_nvidia_nemotron_nano_v2_template(testing &t) {
     t.log("Testing NVIDIA-Nemotron-Nano-v2 template analysis and parser generation");
     
     // Load the NVIDIA-Nemotron-Nano-v2 template
@@ -589,7 +589,7 @@ void test_nvidia_nemotron_nano_v2_template(testing &t) {
     }
 }
 
-void test_template_pattern_structure(testing &t) {
+static void test_template_pattern_structure(testing &t) {
     t.log("Testing TemplatePattern structure initialization");
     
     // Test that TemplatePattern structure is properly initialized
@@ -632,7 +632,7 @@ void test_template_pattern_structure(testing &t) {
     t.assert_true("Should have tool_call_end_marker marker", pattern.special_markers.count("tool_call_end_marker") > 0);
 }
 
-void test_universal_peg_generator_edge_cases(testing &t) {
+static void test_universal_peg_generator_edge_cases(testing &t) {
     t.log("Testing UniversalPEGGenerator edge cases");
     
     // Test with Qwen3-Coder template
@@ -704,7 +704,7 @@ void test_universal_peg_generator_edge_cases(testing &t) {
     }
 }
 
-void test_minimax_m2_template(testing &t) {
+static void test_minimax_m2_template(testing &t) {
     t.log("Testing MiniMax-M2 template analysis and parser generation");
     
     // Load the MiniMax-M2 template
@@ -769,6 +769,7 @@ void test_minimax_m2_template(testing &t) {
             
         std::vector<std::string> end_tokens = {"[e~["};
         
+        printf("DEBUG: Running MiniMax generation test\n");
         test_templates_auto(pattern, chat_template, end_tokens, test_msg, {special_function_tool}, expected_delta, true, true);
         t.log("MiniMax-M2 generation test passed");
                        
