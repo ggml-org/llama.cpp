@@ -446,7 +446,7 @@ namespace ggml_cuda_mma {
         static constexpr int         J  = J_;
         static constexpr data_layout dl = DATA_LAYOUT_J_MAJOR;
 
-        static constexpr int ne = I * J / 32;
+        static constexpr int ne = tile<I_, J_, T, DATA_LAYOUT_I_MAJOR>::ne;
         T x[ne] = {0};
 
         static constexpr __device__ bool supported() {
