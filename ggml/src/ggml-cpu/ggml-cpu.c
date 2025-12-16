@@ -2911,7 +2911,16 @@ struct ggml_cplan ggml_graph_plan(
     cplan.threadpool = threadpool;
     cplan.n_threads  = MIN(max_tasks, n_threads);
     cplan.work_size  = work_size;
-    cplan.work_data  = NULL;
+
+    if (work_size > 0) {
+        if (work_size <= GGML_CPLAN_INLINE_SIZE) {
+            cplan.work_data = cplan.work_data_inline;
+        } else {
+            cplan.work_data = NULL;
+        }
+    } else {
+        cplan.work_data = NULL;
+    }
 
     return cplan;
 }
@@ -3258,7 +3267,19 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 enum ggml_status ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct ggml_cgraph * cgraph, int n_threads) {
     struct ggml_cplan cplan = ggml_graph_plan(cgraph, n_threads, NULL);
 
-    cplan.work_data = (uint8_t *)ggml_new_buffer(ctx, cplan.work_size);
+    if (cplan.work_size > 0) {
+        if (cplan.work_data == NULL) {
+            // work_data is not inlined, so we need to allocate it
+            if (cplan.work_size > GGML_MAX_STACK_SIZE) {
+                cplan.work_data = (uint8_t *)ggml_new_buffer(ctx, cplan.work_size);
+                if (cplan.work_data == NULL) {
+                    return GGML_STATUS_ALLOC_FAILED;
+                }
+            } else {
+                cplan.work_data = (uint8_t *)alloca(cplan.work_size);
+            }
+        }
+    }
 
     return ggml_graph_compute(cgraph, &cplan);
 }

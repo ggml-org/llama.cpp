@@ -47,8 +47,11 @@ static void test_barrier(int n_threads, int n_rounds) {
     // The test runs with constant number of threads
     struct ggml_cplan cplan = ggml_graph_plan(gf, n_threads, threadpool);
 
-    std::vector<uint8_t> work_data(cplan.work_size);
-    cplan.work_data = work_data.data();
+    std::vector<uint8_t> work_data;
+    if (cplan.work_size > 0 && cplan.work_data == NULL) {
+        work_data.resize(cplan.work_size);
+        cplan.work_data = work_data.data();
+    }
 
     std::cerr << "graph-compute with"
               << "\n n_threads: " << n_threads
@@ -125,8 +128,11 @@ static void test_active(int n_threads, int n_rounds) {
     for (int i=0; i < n_rounds; i++) {
         struct ggml_cplan cplan = ggml_graph_plan(gf, (i % 4) == 0 ? 1 : n_threads, threadpool);
 
-        std::vector<uint8_t> work_data(cplan.work_size);
-        cplan.work_data = work_data.data();
+        std::vector<uint8_t> work_data;
+        if (cplan.work_size > 0 && cplan.work_data == NULL) {
+            work_data.resize(cplan.work_size);
+            cplan.work_data = work_data.data();
+        }
 
         ggml_graph_compute(gf, &cplan);
     }
@@ -197,12 +203,18 @@ static void test_multi_graph(int n_threads, int n_rounds) {
 
     for (int i=0; i < n_rounds; i++) {
         struct ggml_cplan cplan0 = ggml_graph_plan(gf0, (i % 4) == 0 ? 1 : n_threads, threadpool);
-        std::vector<uint8_t> work_data0(cplan0.work_size);
-        cplan0.work_data = work_data0.data();
+        std::vector<uint8_t> work_data0;
+        if (cplan0.work_size > 0 && cplan0.work_data == NULL) {
+            work_data0.resize(cplan0.work_size);
+            cplan0.work_data = work_data0.data();
+        }
 
         struct ggml_cplan cplan1 = ggml_graph_plan(gf1, (i % 4) == 0 ? 1 : n_threads, threadpool);
-        std::vector<uint8_t> work_data1(cplan1.work_size);
-        cplan1.work_data = work_data1.data();
+        std::vector<uint8_t> work_data1;
+        if (cplan1.work_size > 0 && cplan1.work_data == NULL) {
+            work_data1.resize(cplan1.work_size);
+            cplan1.work_data = work_data1.data();
+        }
 
         ggml_graph_compute(gf0, &cplan0);
         ggml_graph_compute(gf1, &cplan1);

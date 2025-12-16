@@ -42,6 +42,8 @@ void ggml_print_backtrace(void);
 #    define MAX(a, b) ((a) > (b) ? (a) : (b))
 #endif
 
+#define GGML_MAX_STACK_SIZE 2*1024*1024
+
 // required for mmap as gguf only guarantees 32-byte alignment
 #define TENSOR_ALIGNMENT 32
 
