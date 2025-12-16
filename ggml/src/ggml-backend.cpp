@@ -12,7 +12,9 @@
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-cpu.h"
-#include "ggml-cuda.h"  // TODO add IFDEFs for CUDA-specific parts
+#ifdef GGML_CUDA
+#include "ggml-cuda.h"
+#endif // GGML_CUDA
 #include "ggml-impl.h"
 
 #include <assert.h>
@@ -757,12 +759,15 @@ struct ggml_backend_sched {
 
 static void ggml_backend_synchronize_if_required(ggml_backend_t current_backend) {
     // TODO add env-flag check here to auto-disable this change
+
+#ifdef GGML_CUDA
     // CUDA backends have an implicit order between execution and memory operations via the CUDA stream.
     // Multiple parallel copies are also possible.
     // There is consequently no need to synchronize in between computation and subsequent memcpys
     if (ggml_backend_is_cuda(current_backend)) {
         return;
     }
+#endif // GGML_CUDA
 
     // in all other cases, just sync.
     ggml_backend_synchronize(current_backend);
