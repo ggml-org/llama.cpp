@@ -229,9 +229,29 @@ static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
         }
 
         // x (src0_spad_data) = std::min(src0_p[k], limit);
-        hvx_min_scalar_f32((const uint8_t *) src0, limit, src0_spad_data, nc);
-        // y1 (src1_spad_data) = std::clamp(src1_p[k], -limit, limit);
-        hvx_clamp_scalar_f32((const uint8_t *) src1, limit, limit, src1_spad_data, nc);
+        //hvx_min_scalar_f32((const uint8_t *) src0, limit, src0_spad_data, nc);
+        // // y1 (src1_spad_data) = std::clamp(src1_p[k], -limit, limit);
+        // hvx_clamp_scalar_f32((const uint8_t *) src1, limit, limit, src1_spad_data, nc);
+
+        // do manual limit
+        for (int i = 0; i < nc; i++) {
+            if (src0[i] > limit) {
+                ((float *) src0_spad_data)[i] = limit;
+            } else {
+                ((float *) src0_spad_data)[i] = src0[i];
+            }
+        }
+
+        for (int i = 0; i < nc; i++) {
+            if (src1[i] > limit) {
+                ((float *) src1_spad_data)[i] = limit;
+            } else if (src1[i] < -limit) {
+                ((float *) src1_spad_data)[i] = -limit;
+            } else {
+                ((float *) src1_spad_data)[i] = src1[i];
+            }
+        }
+
         // y (src1_spad_data)  = y1 + 1.f
         hvx_add_scalar_f32(src1_spad_data, 1.0, src1_spad_data, nc);
         // x1 (dst_spad_data) = alpha * (x)

@@ -886,14 +886,34 @@ void hvx_min_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
 
     HVX_Vector vec_min = Q6_V_vsplat_R(val);
 
-    HVX_Vector * restrict vec_in  = (HVX_Vector *) src;
-    HVX_Vector * restrict vec_out = (HVX_Vector *) dst;
+    int unaligned_input_addr = 0;
+    int unaligned_output_addr = 0;
 
-    #pragma unroll(4)
-    for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
-        vec_min    = Q6_Vsf_vmin_VsfVsf(vec_min, *vec_in++);
-        *vec_out++ = Q6_Vsf_equals_Vqf32(vec_min);
+    if(htp_is_aligned((void *) src, VLEN) == 0) {
+        unaligned_input_addr = 1;
     }
+    if(htp_is_aligned((void *) dst, VLEN) == 0) {
+        unaligned_output_addr = 1;
+    }
+
+
+    if(unaligned_input_addr == 0 && unaligned_output_addr == 0){
+
+        HVX_Vector * restrict vec_in  = (HVX_Vector *) src;
+        HVX_Vector * restrict vec_out = (HVX_Vector *) dst;
+
+        #pragma unroll(4)
+        for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
+            vec_min    = Q6_Vsf_vmin_VsfVsf(vec_min, *vec_in++);
+            *vec_out++ = Q6_Vsf_equals_Vqf32(vec_min);
+        }
+    }
+    else if(unaligned_output_addr == 0){
+
+    }else if()
+
+
+
 
     if (left_over > 0) {
         const float * srcf = (const float *) src + num_elems_whole;
