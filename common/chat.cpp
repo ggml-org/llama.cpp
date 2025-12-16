@@ -1536,8 +1536,6 @@ static common_chat_params common_chat_params_init_nemotron_v3(const common_chat_
             parser.build_grammar(builder, data.grammar_lazy);
         });
 
-        LOG_INF("grammar\n%s\n", data.grammar.c_str());
-
         data.grammar_triggers = {
             {COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<tool_call>"}
         };
