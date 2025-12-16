@@ -1097,8 +1097,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 cur = ggml_relu(ctx0, cur);
                 cur = ggml_sqr(ctx0, cur);
                 cb(cur, "ffn_moe_relu_sqr", il);
-            }
-            break;
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
