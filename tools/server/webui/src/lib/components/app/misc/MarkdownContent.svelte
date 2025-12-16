@@ -76,118 +76,128 @@
 		html: string;
 	};
 
-	function enhanceLinks(html: string): string {
-		if (!browser || !html.includes('<a')) {
+	/**
+	 * Helper to process HTML with a temporary DOM element.
+	 * Returns original HTML if not in browser or tag not found.
+	 */
+	function processHtml(
+		html: string,
+		tagCheck: string,
+		processor: (tempDiv: HTMLDivElement) => boolean
+	): string {
+		if (!browser || !html.includes(tagCheck)) {
 			return html;
 		}
 
 		const tempDiv = document.createElement('div');
 		tempDiv.innerHTML = html;
 
-		// Make all links open in new tabs
-		const linkElements = tempDiv.querySelectorAll('a[href]');
-		let mutated = false;
-
-		for (const link of linkElements) {
-			const target = link.getAttribute('target');
-			const rel = link.getAttribute('rel');
-
-			if (target !== '_blank' || rel !== 'noopener noreferrer') {
-				mutated = true;
-			}
-
-			link.setAttribute('target', '_blank');
-			link.setAttribute('rel', 'noopener noreferrer');
-		}
+		const mutated = processor(tempDiv);
 
 		return mutated ? tempDiv.innerHTML : html;
 	}
 
-	function enhanceCodeBlocks(html: string): string {
-		if (!browser || !html.includes('<pre')) {
-			return html;
-		}
+	function enhanceLinks(html: string): string {
+		return processHtml(html, '<a', (tempDiv) => {
+			const linkElements = tempDiv.querySelectorAll('a[href]');
+			let mutated = false;
 
-		const tempDiv = document.createElement('div');
-		tempDiv.innerHTML = html;
+			for (const link of linkElements) {
+				const target = link.getAttribute('target');
+				const rel = link.getAttribute('rel');
 
-		const preElements = tempDiv.querySelectorAll('pre');
-		let mutated = false;
-
-		for (const [index, pre] of Array.from(preElements).entries()) {
-			const codeElement = pre.querySelector('code');
-
-			if (!codeElement) {
-				continue;
-			}
-
-			mutated = true;
-
-			let language = 'text';
-			const classList = Array.from(codeElement.classList);
-
-			for (const className of classList) {
-				if (className.startsWith('language-')) {
-					language = className.replace('language-', '');
-					break;
+				if (target !== '_blank' || rel !== 'noopener noreferrer') {
+					mutated = true;
 				}
+
+				link.setAttribute('target', '_blank');
+				link.setAttribute('rel', 'noopener noreferrer');
 			}
 
-			const rawCode = codeElement.textContent || '';
-			const codeId = `code-${uuid()}-${index}`;
-			codeElement.setAttribute('data-code-id', codeId);
-			codeElement.setAttribute('data-raw-code', rawCode);
+			return mutated;
+		});
+	}
 
-			const wrapper = document.createElement('div');
-			wrapper.className = 'code-block-wrapper';
+	function enhanceCodeBlocks(html: string): string {
+		return processHtml(html, '<pre', (tempDiv) => {
+			const preElements = tempDiv.querySelectorAll('pre');
+			let mutated = false;
 
-			const header = document.createElement('div');
-			header.className = 'code-block-header';
+			for (const [index, pre] of Array.from(preElements).entries()) {
+				const codeElement = pre.querySelector('code');
 
-			const languageLabel = document.createElement('span');
-			languageLabel.className = 'code-language';
-			languageLabel.textContent = language;
+				if (!codeElement) {
+					continue;
+				}
 
-			const copyButton = document.createElement('button');
-			copyButton.className = 'copy-code-btn';
-			copyButton.setAttribute('data-code-id', codeId);
-			copyButton.setAttribute('title', 'Copy code');
-			copyButton.setAttribute('type', 'button');
+				mutated = true;
 
-			copyButton.innerHTML = `
+				let language = 'text';
+				const classList = Array.from(codeElement.classList);
+
+				for (const className of classList) {
+					if (className.startsWith('language-')) {
+						language = className.replace('language-', '');
+						break;
+					}
+				}
+
+				const rawCode = codeElement.textContent || '';
+				const codeId = `code-${uuid()}-${index}`;
+				codeElement.setAttribute('data-code-id', codeId);
+				codeElement.setAttribute('data-raw-code', rawCode);
+
+				const wrapper = document.createElement('div');
+				wrapper.className = 'code-block-wrapper';
+
+				const header = document.createElement('div');
+				header.className = 'code-block-header';
+
+				const languageLabel = document.createElement('span');
+				languageLabel.className = 'code-language';
+				languageLabel.textContent = language;
+
+				const copyButton = document.createElement('button');
+				copyButton.className = 'copy-code-btn';
+				copyButton.setAttribute('data-code-id', codeId);
+				copyButton.setAttribute('title', 'Copy code');
+				copyButton.setAttribute('type', 'button');
+
+				copyButton.innerHTML = `
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-copy-icon lucide-copy"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
 `;
 
-			const actions = document.createElement('div');
-			actions.className = 'code-block-actions';
+				const actions = document.createElement('div');
+				actions.className = 'code-block-actions';
 
-			actions.appendChild(copyButton);
+				actions.appendChild(copyButton);
 
-			if (language.toLowerCase() === 'html') {
-				const previewButton = document.createElement('button');
-				previewButton.className = 'preview-code-btn';
-				previewButton.setAttribute('data-code-id', codeId);
-				previewButton.setAttribute('title', 'Preview code');
-				previewButton.setAttribute('type', 'button');
+				if (language.toLowerCase() === 'html') {
+					const previewButton = document.createElement('button');
+					previewButton.className = 'preview-code-btn';
+					previewButton.setAttribute('data-code-id', codeId);
+					previewButton.setAttribute('title', 'Preview code');
+					previewButton.setAttribute('type', 'button');
 
-				previewButton.innerHTML = `
+					previewButton.innerHTML = `
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-eye lucide-eye-icon"><path d="M2.062 12.345a1 1 0 0 1 0-.69C3.5 7.73 7.36 5 12 5s8.5 2.73 9.938 6.655a1 1 0 0 1 0 .69C20.5 16.27 16.64 19 12 19s-8.5-2.73-9.938-6.655"/><circle cx="12" cy="12" r="3"/></svg>
 `;
 
-				actions.appendChild(previewButton);
+					actions.appendChild(previewButton);
+				}
+
+				header.appendChild(languageLabel);
+				header.appendChild(actions);
+				wrapper.appendChild(header);
+
+				const clonedPre = pre.cloneNode(true) as HTMLElement;
+				wrapper.appendChild(clonedPre);
+
+				pre.parentNode?.replaceChild(wrapper, pre);
 			}
 
-			header.appendChild(languageLabel);
-			header.appendChild(actions);
-			wrapper.appendChild(header);
-
-			const clonedPre = pre.cloneNode(true) as HTMLElement;
-			wrapper.appendChild(clonedPre);
-
-			pre.parentNode?.replaceChild(wrapper, pre);
-		}
-
-		return mutated ? tempDiv.innerHTML : html;
+			return mutated;
+		});
 	}
 
 	function getCodeInfoFromTarget(target: HTMLElement) {
