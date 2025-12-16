@@ -81,6 +81,7 @@ int main(int argc, char ** argv, char ** envp) {
         LOG_WRN("%s: setting n_batch = n_ubatch = %d to avoid assertion failure\n", __func__, params.n_ubatch);
         params.n_batch = params.n_ubatch;
     }
+
     if (params.n_parallel < 0) {
         LOG_INF("%s: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n", __func__);
 
