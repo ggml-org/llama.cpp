@@ -23,18 +23,20 @@ typedef union {
 
 /* Q6_Vsf_equals_Vw is only available on v73+.*/
 #if __HVX_ARCH__ < 73
-static inline HVX_Vector int32_to_qfloat(const HVX_Vector in) {
-    const HVX_Vector vzero      = Q6_V_vzero();
-    HVX_VectorPred   is_zero    = Q6_Q_vcmp_eq_VwVw(in, vzero);
-    HVX_Vector       lshift     = Q6_Vw_vnormamt_Vw(in);
-    HVX_Vector       normalized = Q6_Vw_vasl_VwVw(in, lshift);
-    HVX_Vector       vexp       = Q6_Vw_vsub_VwVw(Q6_V_vsplat_R(0x7f + 30), lshift);
-    HVX_Vector       mant       = Q6_V_vand_VV(Q6_V_vsplat_R(0xFFFFFF00), normalized);
-    HVX_Vector       ret        = Q6_V_vmux_QVV(is_zero, vzero, Q6_Vw_vadd_VwVw(mant, vexp));
+static inline HVX_Vector int32_to_qfloat(HVX_Vector const in)
+{
+    HVX_Vector const vzero = Q6_V_vzero();
+    HVX_VectorPred is_zero = Q6_Q_vcmp_eq_VwVw(in, vzero);
+    HVX_Vector lshift = Q6_Vw_vnormamt_Vw(in);
+    HVX_Vector normalized = Q6_Vw_vasl_VwVw(in, lshift);
+    HVX_Vector vexp = Q6_Vw_vsub_VwVw(Q6_V_vsplat_R(0x7f + 30), lshift);
+    HVX_Vector mant = Q6_V_vand_VV(Q6_V_vsplat_R(0xFFFFFF00), normalized);
+    HVX_Vector ret = Q6_V_vmux_QVV(is_zero, vzero, Q6_Vw_vadd_VwVw(mant, vexp));
     return ret;
 }
 
-static inline HVX_Vector Q6_Vsf_equals_Vw(const HVX_Vector in) {
+static inline HVX_Vector Q6_Vsf_equals_Vw(HVX_Vector const in)
+{
     return Q6_Vsf_equals_Vqf32(int32_to_qfloat(in));
 }
 #endif
@@ -107,7 +109,7 @@ static inline void hvx_copy_fp16_aa(uint8_t * restrict dst, const uint8_t * rest
 
     uint32_t i = 0;
 
-#pragma unroll(4)
+    #pragma unroll(4)
     for (; i < nvec; i++) {
         HVX_Vector v = vsrc[i];
         vdst[i]      = v;
@@ -131,7 +133,7 @@ static inline void hvx_copy_fp16_ua(uint8_t * restrict dst, const uint8_t * rest
 
     uint32_t i = 0;
 
-#pragma unroll(4)
+    #pragma unroll(4)
     for (; i < nvec; i++) {
         HVX_Vector v = vsrc[i];
         vdst[i]      = v;
@@ -155,7 +157,7 @@ static inline void hvx_copy_fp16_au(uint8_t * restrict dst, const uint8_t * rest
 
     uint32_t i = 0;
 
-#pragma unroll(4)
+    #pragma unroll(4)
     for (; i < nvec; i++) {
         HVX_Vector v = vsrc[i];
         vdst[i]      = v;
@@ -180,7 +182,7 @@ static inline void hvx_copy_fp32_aa(uint8_t * restrict dst, const uint8_t * rest
 
     uint32_t i = 0;
 
-#pragma unroll(4)
+    #pragma unroll(4)
     for (; i < nvec; i++) {
         HVX_Vector v = vsrc[i];
         vdst[i]      = v;
@@ -204,7 +206,7 @@ static inline void hvx_copy_fp32_ua(uint8_t * restrict dst, const uint8_t * rest
 
     uint32_t i = 0;
 
-#pragma unroll(4)
+    #pragma unroll(4)
     for (; i < nvec; i++) {
         HVX_Vector v = vsrc[i];
         vdst[i]      = v;
@@ -228,7 +230,7 @@ static inline void hvx_copy_fp32_au(uint8_t * restrict dst, const uint8_t * rest
 
     uint32_t i = 0;
 
-#pragma unroll(4)
+    #pragma unroll(4)
     for (; i < nvec; i++) {
         HVX_Vector v = vsrc[i];
         vdst[i]      = v;
@@ -253,7 +255,7 @@ static inline void hvx_bcast_fp32_a(uint8_t * restrict dst, float elem, uint32_t
 
     uint32_t i = 0;
 
-#pragma unroll(4)
+    #pragma unroll(4)
     for (; i < nvec; i++) {
         vdst[i] = velem;
     }
@@ -263,12 +265,15 @@ static inline void hvx_bcast_fp32_a(uint8_t * restrict dst, float elem, uint32_t
     }
 }
 
+
 /* Return whether 'n' elements from vector are in the one chunk of 'chunk_size'. */
 static __attribute__((always_inline)) int32_t is_in_one_chunk(void * addr, uint32_t n, uint32_t chunk_size) {
     uint32_t left_off  = (size_t) addr & (chunk_size - 1);
     uint32_t right_off = left_off + n;
     return right_off <= chunk_size;
 }
+
+
 
 static void hvx_vec_dump_fp16_n(char * pref, HVX_Vector v, uint32_t n) {
     HVX_VectorAlias u = { .v = v };
@@ -987,15 +992,16 @@ static inline void hvx_fast_sigmoid_f32(const uint8_t * restrict src, uint8_t * 
     const HVX_Vector max_exp = hvx_vec_splat_fp32(kMaxExp);
     const HVX_Vector min_exp = hvx_vec_splat_fp32(kMinExp);
 
-#pragma unroll(4)
+    #pragma unroll(4)
     for (int i = 0; i < step_of_1; i++) {
         v_dst[i] = hvx_vec_fast_sigmoid_fp32_guard(v_src[i], one, max_exp, min_exp);
     }
 }
 
-static inline void hvx_sigmoid_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems) {
+
+static inline void hvx_sigmoid_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems){
     int step_of_1 = num_elems >> 5;  // divby 32, because 32 float = 128 bytes per HVX vector
-    int leftover  = num_elems - (step_of_1 * VLEN_FP32);
+    int leftover = num_elems - (step_of_1 * VLEN_FP32);
 
     int32_t leftover_size = leftover * sizeof(float);
 
@@ -1006,43 +1012,50 @@ static inline void hvx_sigmoid_f32(const uint8_t * restrict src, uint8_t * restr
     const HVX_Vector max_exp = hvx_vec_splat_fp32(kMaxExp);
     const HVX_Vector min_exp = hvx_vec_splat_fp32(kMinExp);
 
-    const float * input  = (float *) src;
-    float *       output = (float *) dst;
+    const float *input = (float *)src;
+    float *output = (float *)dst;
 
-    HVX_Vector *  input_v_ptr  = (HVX_Vector *) input;
-    HVX_UVector * output_v_ptr = (HVX_UVector *) output;
+    HVX_Vector *  input_v_ptr = (HVX_Vector *) input;
+    HVX_UVector *  output_v_ptr       = (HVX_UVector *) output;
+
 
     HVX_Vector slinep;
     HVX_Vector slinec;
     HVX_Vector sline;
+    
 
-    slinep = *input_v_ptr++;
-#pragma unroll(4)
-    for (uint32_t i = step_of_1 - 1; i > 0; i--) {
-        slinec                              = *input_v_ptr++;
-        sline                               = Q6_V_valign_VVR(slinec, slinep, (size_t) input);
-        *((HVX_UVector *) (output_v_ptr++)) = hvx_vec_fast_sigmoid_fp32_guard(sline, one, max_exp, min_exp);
+    slinep = *input_v_ptr++; 
+    #pragma unroll(4)
+    for(uint32_t i = step_of_1 -1; i> 0; i--){
+        slinec = *input_v_ptr++;
+        sline = Q6_V_valign_VVR(slinec, slinep, (size_t) input);       
+        *((HVX_UVector *)(output_v_ptr++)) =  hvx_vec_fast_sigmoid_fp32_guard(sline, one, max_exp, min_exp);
         /* Prepare slinep for next iteration */
-        slinep                              = slinec;
+        slinep = slinec;        
     }
 
-    if (step_of_1 > 0) {
+    if(step_of_1> 0){
+
         slinec = htp_is_aligned(input_v_ptr, 128) && leftover == 0 ? slinep : *input_v_ptr++;
-        sline  = Q6_V_valign_VVR(slinec, slinep, (size_t) input);
-        *((HVX_UVector *) (output_v_ptr++)) = hvx_vec_fast_sigmoid_fp32_guard(sline, one, max_exp, min_exp);
-        ;
+        sline = Q6_V_valign_VVR(slinec, slinep, (size_t) input);
+        *((HVX_UVector *)(output_v_ptr++)) =  hvx_vec_fast_sigmoid_fp32_guard(sline, one, max_exp, min_exp);;
 
         slinep = slinec;
     }
-    if (leftover > 0) {
-        slinec = (is_in_one_chunk(input_v_ptr, leftover_size, 128) ? slinep : *input_v_ptr++);
+    if(leftover> 0){
+        slinec = (is_in_one_chunk(input_v_ptr, leftover_size, 128)
+                   ? slinep
+                   : *input_v_ptr++);
 
         sline = Q6_V_valign_VVR(slinec, slinep, (size_t) input);
 
         HVX_Vector sout = hvx_vec_fast_sigmoid_fp32_guard(sline, one, max_exp, min_exp);
-        hvx_vec_store_u(output_v_ptr, leftover_size, sout);
+        hvx_vec_store_u(output_v_ptr, leftover_size, sout);        
     }
+
+  
 }
+
 
 float hvx_sum_of_squares_f32(const uint8_t * restrict src, const int num_elems);
 void  hvx_mul_f32(const uint8_t * restrict src0,

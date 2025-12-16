@@ -151,7 +151,7 @@ static int vtcm_acquire(struct htp_context * ctx) {
         qurt_thread_set_priority(qurt_thread_get_id(), ctx->thread_prio - 10);
         err = HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 1000000);
         if (err != 0) {
-            FARF(ERROR, "Failed to acquire VTCM: 0x%08x", (unsigned) err);
+            FARF(ERROR, "Failed to acquire VTCM: 0x%08x", (unsigned)err);
             abort();
         }
         HAP_compute_res_release_cached(ctx->vtcm_rctx);
@@ -159,7 +159,7 @@ static int vtcm_acquire(struct htp_context * ctx) {
 
         err = HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 1000000);
         if (err != 0) {
-            FARF(ERROR, "Failed to acquire VTCM: 0x%08x", (unsigned) err);
+            FARF(ERROR, "Failed to acquire VTCM: 0x%08x", (unsigned)err);
             abort();
         }
         ctx->vtcm_valid = true;
@@ -411,7 +411,7 @@ static void proc_matmul_req(struct htp_context *     ctx,
     rsp_bufs[0].ptr    = bufs[2].ptr;
     rsp_bufs[0].size   = bufs[2].size;
     rsp_bufs[0].offset = bufs[2].offset;
-    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush HTP
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
 
     // Setup Op context
@@ -453,7 +453,7 @@ static void proc_matmul_id_req(struct htp_context *     ctx,
     rsp_bufs[0].ptr    = bufs[3].ptr;
     rsp_bufs[0].size   = bufs[3].size;
     rsp_bufs[0].offset = bufs[3].offset;
-    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush HTP
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
 
     // Setup Op context
@@ -494,7 +494,7 @@ static void proc_binary_req(struct htp_context * ctx, struct htp_general_req * r
     rsp_bufs[0].ptr    = bufs[2].ptr;
     rsp_bufs[0].offset = bufs[2].offset;
     rsp_bufs[0].size   = bufs[2].size;
-    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush HTP
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
 
     // Setup Op context
@@ -533,7 +533,7 @@ static void proc_add_id_req(struct htp_context * ctx, struct htp_general_req * r
     rsp_bufs[0].ptr    = bufs[3].ptr;
     rsp_bufs[0].offset = bufs[3].offset;
     rsp_bufs[0].size   = bufs[3].size;
-    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush HTP
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
 
     // Setup Op context
@@ -574,7 +574,7 @@ static void proc_unary_req(struct htp_context * ctx, struct htp_general_req * re
     rsp_bufs[0].ptr    = bufs[1].ptr;
     rsp_bufs[0].offset = bufs[1].offset;
     rsp_bufs[0].size   = bufs[1].size;
-    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush HTP
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
 
     // Setup Op context
@@ -618,8 +618,8 @@ static void proc_activations_req(struct htp_context *     ctx,
     rsp_bufs[0].ptr    = bufs[write_idx].ptr;
     rsp_bufs[0].offset = bufs[write_idx].offset;
     rsp_bufs[0].size   = bufs[write_idx].size;
-    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush HTP
-                         DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
+                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT); // Invalidate CPU
 
     // Setup Op context
     struct htp_ops_context octx = { 0 };
@@ -674,8 +674,8 @@ static void proc_rope_req(struct htp_context *     ctx,
     rsp_bufs[0].ptr    = bufs[write_idx].ptr;
     rsp_bufs[0].offset = bufs[write_idx].offset;
     rsp_bufs[0].size   = bufs[write_idx].size;
-    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |          // Flush HTP
-                         DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
+                          DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT); // Invalidate CPU
 
     // Setup Op context
     struct htp_ops_context octx = { 0 };

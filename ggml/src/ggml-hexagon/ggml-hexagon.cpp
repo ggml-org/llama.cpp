@@ -8,8 +8,8 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
-#include <stdexcept>
 #include <string>
+#include <stdexcept>
 
 #ifdef _WIN32
 #    include <sal.h>
@@ -53,12 +53,10 @@ static int opt_opmask = HTP_OPMASK_QUEUE | HTP_OPMASK_QUANTIZE | HTP_OPMASK_COMP
 static int opt_opsync = 0;  // synchronous ops
 
 #define HEX_VERBOSE(...) \
-    if (opt_verbose)     \
-    GGML_LOG_DEBUG(__VA_ARGS__)
+    if (opt_verbose) GGML_LOG_DEBUG(__VA_ARGS__)
 
 #define HEX_PROFILE(...) \
-    if (opt_profile)     \
-    GGML_LOG_INFO(__VA_ARGS__)
+    if (opt_profile) GGML_LOG_INFO(__VA_ARGS__)
 
 static inline uint64_t hex_is_aligned(void * addr, uint32_t align) {
     return ((size_t) addr & (align - 1)) == 0;
@@ -220,7 +218,7 @@ struct ggml_hexagon_session {
     void allocate(int dev_id) noexcept(false);
     void release() noexcept(true);
 
-    void enqueue(struct htp_general_req & req, struct dspqueue_buffer * bufs, uint32_t n_bufs, bool sync = false);
+    void enqueue(struct htp_general_req &req, struct dspqueue_buffer *bufs, uint32_t n_bufs, bool sync = false);
     void flush();
 
     ggml_backend_buffer_type buffer_type;
@@ -260,10 +258,7 @@ static inline void hex_print_op_info(const ggml_tensor * op, ggml_hexagon_sessio
                 names, dims, types, strides, buffs, req_flags);
 }
 
-void ggml_hexagon_session::enqueue(struct htp_general_req & req,
-                                   struct dspqueue_buffer * bufs,
-                                   uint32_t                 n_bufs,
-                                   bool                     sync) {
+void ggml_hexagon_session::enqueue(struct htp_general_req &req, struct dspqueue_buffer *bufs, uint32_t n_bufs, bool sync) {
     // Bump pending flag (cleared in the session::flush once we get the responce)
     this->op_pending++;  // atomic inc
 
@@ -303,13 +298,13 @@ void ggml_hexagon_session::flush() {
 
         // Read response packet from queue
         int err = dspqueue_read(q, &flags,
-                                HTP_MAX_PACKET_BUFFERS,  // Maximum number of buffer references
-                                &n_bufs,                 // Number of buffer references
-                                bufs,                    // Buffer references
-                                sizeof(rsp),             // Max message length
-                                &rsp_size,               // Message length
-                                (uint8_t *) &rsp,
-                                1000000);                // Timeout
+                                   HTP_MAX_PACKET_BUFFERS,  // Maximum number of buffer references
+                                   &n_bufs,                 // Number of buffer references
+                                   bufs,                    // Buffer references
+                                   sizeof(rsp),             // Max message length
+                                   &rsp_size,               // Message length
+                                   (uint8_t *) &rsp,
+                                   1000000);                // Timeout
 
         if (err == AEE_EEXPIRED) {
             // TODO: might need to bail out if the HTP is stuck on something
@@ -359,8 +354,8 @@ struct ggml_backend_hexagon_buffer_context {
 
         int err = fastrpc_mmap(s->domain_id, this->fd, (void *) this->base, 0, this->size, FASTRPC_MAP_FD);
         if (err != 0) {
-            GGML_LOG_ERROR("ggml-hex: buffer mapping failed : domain_id %d size %zu fd %d error 0x%08x\n", s->domain_id,
-                           this->size, this->fd, (unsigned) err);
+            GGML_LOG_ERROR("ggml-hex: buffer mapping failed : domain_id %d size %zu fd %d error 0x%08x\n",
+                    s->domain_id, this->size, this->fd, (unsigned) err);
             return false;
         }
 
@@ -391,12 +386,10 @@ struct ggml_backend_hexagon_buffer_context {
         size += 4 * 1024;  // extra page for padding
 
         if (rpcmem_alloc2) {
-            this->base =
-                (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+            this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
         } else {
             GGML_LOG_INFO("ggml-hex: %s rpcmem_alloc2 not found, falling back to rpcmem_alloc\n", sess->name.c_str());
-            this->base =
-                (uint8_t *) rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+            this->base = (uint8_t *) rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
         }
 
         if (!this->base) {
@@ -460,7 +453,7 @@ static enum ggml_status ggml_backend_hexagon_buffer_init_tensor(ggml_backend_buf
                 (int) ctx->repack);
 
     if (tensor->view_src != NULL && tensor->view_offs == 0) {
-        ;  // nothing to do for the view
+        ; // nothing to do for the view
     } else {
         if (!ctx->mapped) {
             ctx->mmap();
@@ -709,8 +702,8 @@ static void repack_q4_0_q4x4x2(ggml_tensor * t, const void * data, size_t size) 
 
     // Ensure we don't try to read more data than is available in the source buffer 'data'
     // or write more than the tensor can hold.
-    const size_t total_tensor_size = (size_t) nrows * row_size;
-    const size_t n_bytes_to_copy   = size < total_tensor_size ? size : total_tensor_size;
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
 
     // Calculate how many full rows and how many remaining bytes we need to process.
     const int64_t n_full_rows = n_bytes_to_copy / row_size;
@@ -739,7 +732,7 @@ static void repack_q4_0_q4x4x2(ggml_tensor * t, const void * data, size_t size) 
 
     // 2. Process the final, potentially partial, row
     if (n_rem_bytes > 0) {
-        const int64_t   i   = n_full_rows;
+        const int64_t i = n_full_rows;
         const uint8_t * src = (const uint8_t *) data + (i * row_size);
         uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
 
@@ -769,8 +762,8 @@ static void repack_q4x4x2_q4_0(void * data, const ggml_tensor * t, size_t size) 
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
     // Ensure we don't try to copy more data than the tensor actually contains.
-    const size_t total_tensor_size = (size_t) nrows * row_size;
-    const size_t n_bytes_to_copy   = size < total_tensor_size ? size : total_tensor_size;
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
 
     // Calculate how many full rows and how many remaining bytes we need to process.
     const int64_t n_full_rows = n_bytes_to_copy / row_size;
@@ -799,7 +792,7 @@ static void repack_q4x4x2_q4_0(void * data, const ggml_tensor * t, size_t size) 
 
     // 2. Process the final, potentially partial, row
     if (n_rem_bytes > 0) {
-        const int64_t   i   = n_full_rows;
+        const int64_t i = n_full_rows;
         const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
         uint8_t *       dst = (uint8_t *) data + (i * row_size);
 
@@ -1035,8 +1028,8 @@ static void repack_q8_0_q8x4x2(ggml_tensor * t, const void * data, size_t size) 
 
     // Ensure we don't try to read more data than is available in the source buffer 'data'
     // or write more than the tensor can hold.
-    const size_t total_tensor_size = (size_t) nrows * row_size;
-    const size_t n_bytes_to_copy   = size < total_tensor_size ? size : total_tensor_size;
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
 
     // Calculate how many full rows and how many remaining bytes we need to process.
     const int64_t n_full_rows = n_bytes_to_copy / row_size;
@@ -1065,7 +1058,7 @@ static void repack_q8_0_q8x4x2(ggml_tensor * t, const void * data, size_t size) 
 
     // 2. Process the final, potentially partial, row
     if (n_rem_bytes > 0) {
-        const int64_t   i   = n_full_rows;
+        const int64_t i = n_full_rows;
         const uint8_t * src = (const uint8_t *) data + (i * row_size);
         uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
 
@@ -1095,8 +1088,8 @@ static void repack_q8x4x2_q8_0(void * data, const ggml_tensor * t, size_t size) 
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
     // Ensure we don't try to copy more data than the tensor actually contains.
-    const size_t total_tensor_size = (size_t) nrows * row_size;
-    const size_t n_bytes_to_copy   = size < total_tensor_size ? size : total_tensor_size;
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
 
     // Calculate how many full rows and how many remaining bytes we need to process.
     const int64_t n_full_rows = n_bytes_to_copy / row_size;
@@ -1125,7 +1118,7 @@ static void repack_q8x4x2_q8_0(void * data, const ggml_tensor * t, size_t size) 
 
     // 2. Process the final, potentially partial, row
     if (n_rem_bytes > 0) {
-        const int64_t   i   = n_full_rows;
+        const int64_t i = n_full_rows;
         const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
         uint8_t *       dst = (uint8_t *) data + (i * row_size);
 
@@ -1386,8 +1379,8 @@ static void repack_mxfp4_mxfp4x4x2(ggml_tensor * t, const void * data, size_t si
 
     // Ensure we don't try to read more data than is available in the source buffer 'data'
     // or write more than the tensor can hold.
-    const size_t total_tensor_size = (size_t) nrows * row_size;
-    const size_t n_bytes_to_copy   = size < total_tensor_size ? size : total_tensor_size;
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
 
     // Calculate how many full rows and how many remaining bytes we need to process.
     const int64_t n_full_rows = n_bytes_to_copy / row_size;
@@ -1416,7 +1409,7 @@ static void repack_mxfp4_mxfp4x4x2(ggml_tensor * t, const void * data, size_t si
 
     // 2. Process the final, potentially partial, row
     if (n_rem_bytes > 0) {
-        const int64_t   i   = n_full_rows;
+        const int64_t i = n_full_rows;
         const uint8_t * src = (const uint8_t *) data + (i * row_size);
         uint8_t *       dst = (uint8_t *) t->data + (i * row_size);
 
@@ -1446,8 +1439,8 @@ static void repack_mxfp4x4x2_mxfp4(void * data, const ggml_tensor * t, size_t si
     size_t row_size_rp = row_size * 2;  // extra space for tmp pad (if any)
 
     // Ensure we don't try to copy more data than the tensor actually contains.
-    const size_t total_tensor_size = (size_t) nrows * row_size;
-    const size_t n_bytes_to_copy   = size < total_tensor_size ? size : total_tensor_size;
+    const size_t total_tensor_size = (size_t)nrows * row_size;
+    const size_t n_bytes_to_copy = size < total_tensor_size ? size : total_tensor_size;
 
     // Calculate how many full rows and how many remaining bytes we need to process.
     const int64_t n_full_rows = n_bytes_to_copy / row_size;
@@ -1476,7 +1469,7 @@ static void repack_mxfp4x4x2_mxfp4(void * data, const ggml_tensor * t, size_t si
 
     // 2. Process the final, potentially partial, row
     if (n_rem_bytes > 0) {
-        const int64_t   i   = n_full_rows;
+        const int64_t i = n_full_rows;
         const uint8_t * src = (const uint8_t *) t->data + (i * row_size);
         uint8_t *       dst = (uint8_t *) data + (i * row_size);
 
@@ -1599,28 +1592,25 @@ static const char * ggml_backend_hexagon_buffer_type_name(ggml_backend_buffer_ty
     return static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->name.c_str();
 }
 
-static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buffer_type,
-                                                                           size_t                     size) {
+static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
+            ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
     try {
-        ggml_backend_hexagon_buffer_context * ctx =
-            new ggml_backend_hexagon_buffer_context(sess, size, false /*repack*/);
+        ggml_backend_hexagon_buffer_context * ctx = new ggml_backend_hexagon_buffer_context(sess, size, false /*repack*/);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, ctx, size);
-    } catch (const std::exception & exc) {
+    } catch (std::exception const &exc) {
         GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer context: %s\n", sess->name.c_str(), exc.what());
         return nullptr;
     }
 }
 
 static ggml_backend_buffer_t ggml_backend_hexagon_repack_buffer_type_alloc_buffer(
-    ggml_backend_buffer_type_t buffer_type,
-    size_t                     size) {
+            ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
     try {
-        ggml_backend_hexagon_buffer_context * ctx =
-            new ggml_backend_hexagon_buffer_context(sess, size, true /*repack*/);
+        ggml_backend_hexagon_buffer_context * ctx = new ggml_backend_hexagon_buffer_context(sess, size, true /*repack*/);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, ctx, size);
-    } catch (const std::exception & exc) {
+    } catch (std::exception const &exc) {
         GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer context: %s\n", sess->name.c_str(), exc.what());
         return nullptr;
     }
@@ -1631,8 +1621,7 @@ static size_t ggml_backend_hexagon_buffer_type_get_alignment(ggml_backend_buffer
     GGML_UNUSED(buffer_type);
 }
 
-static size_t ggml_backend_hexagon_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft,
-                                                              const struct ggml_tensor * t) {
+static size_t ggml_backend_hexagon_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * t) {
     return ggml_nbytes(t);
 }
 
@@ -1708,8 +1697,8 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
         }
 
         // Save the IDs
-        this->session_id    = n.session_id;
-        this->domain_id     = n.effective_domain_id;
+        this->session_id = n.session_id;
+        this->domain_id  = n.effective_domain_id;
         this->valid_session = true;
     }
 
@@ -1718,17 +1707,16 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     char session_uri[256];
     {
         char htp_uri[256];
-        snprintf(htp_uri, sizeof(htp_uri), "file:///libggml-htp-v%u.so?htp_iface_skel_handle_invoke&_modver=1.0",
-                 opt_arch);
+        snprintf(htp_uri, sizeof(htp_uri), "file:///libggml-htp-v%u.so?htp_iface_skel_handle_invoke&_modver=1.0", opt_arch);
 
         struct remote_rpc_get_uri u = {};
-        u.session_id                = this->session_id;
-        u.domain_name               = const_cast<char *>(CDSP_DOMAIN_NAME);
-        u.domain_name_len           = strlen(CDSP_DOMAIN_NAME);
-        u.module_uri                = const_cast<char *>(htp_uri);
-        u.module_uri_len            = strlen(htp_uri);
-        u.uri                       = session_uri;
-        u.uri_len                   = sizeof(session_uri);
+        u.session_id      = this->session_id;
+        u.domain_name     = const_cast<char *>(CDSP_DOMAIN_NAME);
+        u.domain_name_len = strlen(CDSP_DOMAIN_NAME);
+        u.module_uri      = const_cast<char *>(htp_uri);
+        u.module_uri_len  = strlen(htp_uri);
+        u.uri             = session_uri;
+        u.uri_len         = sizeof(session_uri);
 
         int err = remote_session_control(FASTRPC_GET_URI, (void *) &u, sizeof(u));
         if (err != AEE_SUCCESS) {
@@ -1737,9 +1725,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
 
             snprintf(session_uri, htp_URI_domain_len, "%s%s", htp_uri, my_domain->uri);
 
-            GGML_LOG_WARN(
-                "ggml-hex: failed to get URI for session %d : error 0x%x. Falling back to single session URI: %s\n",
-                dev_id, err, session_uri);
+            GGML_LOG_WARN("ggml-hex: failed to get URI for session %d : error 0x%x. Falling back to single session URI: %s\n", dev_id, err, session_uri);
         }
     }
 
@@ -1765,7 +1751,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     this->valid_handle = true;
 
     GGML_LOG_INFO("ggml-hex: new session: %s : session-id %d domain-id %d uri %s handle 0x%lx\n", this->name.c_str(),
-                  this->session_id, this->domain_id, session_uri, (unsigned long) this->handle);
+            this->session_id, this->domain_id, session_uri, (unsigned long) this->handle);
 
     // Enable FastRPC QoS mode
     {
@@ -1855,8 +1841,8 @@ ggml_hexagon_session::ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) n
     buffer_type.context        = nullptr;
     repack_buffer_type.context = nullptr;
 
-    buffer_type.device        = dev;
-    repack_buffer_type.device = dev;
+    buffer_type.device         = dev;
+    repack_buffer_type.device  = dev;
 
     try {
         allocate(dev_id);
@@ -1866,7 +1852,7 @@ ggml_hexagon_session::ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) n
 
         repack_buffer_type.iface   = ggml_backend_hexagon_repack_buffer_type_interface;
         repack_buffer_type.context = new ggml_backend_hexagon_buffer_type_context(this->name + "-REPACK", this);
-    } catch (const std::exception & exc) {
+    } catch (std::exception const &exc) {
         release();
         throw;
     }
@@ -1875,8 +1861,8 @@ ggml_hexagon_session::ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) n
 ggml_hexagon_session::~ggml_hexagon_session() noexcept(true) {
     release();
 
-    delete static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type.context);
-    delete static_cast<ggml_backend_hexagon_buffer_type_context *>(repack_buffer_type.context);
+    delete static_cast<ggml_backend_hexagon_buffer_type_context*>(buffer_type.context);
+    delete static_cast<ggml_backend_hexagon_buffer_type_context*>(repack_buffer_type.context);
 }
 
 // ** backend interface
@@ -2178,11 +2164,11 @@ static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session
     }
 
     // src0, src1 & dst must be mapped to the same session
-    if (src1) {
+    if(src1){
         if (!hex_supported_buffer(sess, src0, src1, dst)) {
             return false;
         }
-    } else {
+    }else{
         if (!hex_supported_buffer(sess, src0, dst)) {
             return false;
         }
@@ -2320,11 +2306,11 @@ static size_t dspqueue_buffers_init(dspqueue_buffer * buf, const ggml_tensor * t
 
     memset(buf, 0, sizeof(*buf));
     auto tensor_buf = static_cast<ggml_backend_hexagon_buffer_context *>(t->buffer->context);
-    buf->fd         = tensor_buf->fd;
-    buf->ptr        = t->data;
-    buf->offset     = (uint8_t *) t->data - tensor_buf->base;
-    buf->size       = ggml_nbytes(t);
-    buf->flags      = (flush_host ? DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER : 0);     // Flush CPU
+    buf->fd      = tensor_buf->fd;
+    buf->ptr     = t->data;
+    buf->offset  = (uint8_t *) t->data - tensor_buf->base;
+    buf->size    = ggml_nbytes(t);
+    buf->flags   = (flush_host ? DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER : 0);        // Flush CPU
     buf->flags |= (flush_htp ? DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT : 0);  // Invalidate DSP
     return 1;
 }
@@ -2684,7 +2670,8 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
             if (ggml_get_unary_op(dst) == GGML_UNARY_OP_SILU) {
                 req.op    = HTP_OP_UNARY_SILU;
                 supported = true;
-            } else if (ggml_get_unary_op(dst) == GGML_UNARY_OP_GELU) {
+            }
+            else if (ggml_get_unary_op(dst) == GGML_UNARY_OP_GELU){
                 req.op    = HTP_OP_UNARY_GELU;
                 supported = true;
             }
@@ -2915,7 +2902,8 @@ static inline bool op_reuse_src1(const ggml_tensor * op1, const ggml_tensor * op
     return (op0 && op0->src[1] == op1->src[1]);
 }
 
-static inline bool is_compute_op(ggml_tensor * node) {
+static inline bool is_compute_op(ggml_tensor *node)
+{
     return !(ggml_op_is_empty(node->op) || ggml_is_empty(node));
 }
 
@@ -3025,17 +3013,29 @@ struct node_info {
 
     std::vector<ggml_tensor *> fused;
 
-    ggml_op op() const { return node->op; }
+    ggml_op op() const {
+        return node->op;
+    }
 
-    const ggml_tensor * dst() const { return fused.empty() ? node : fused.back(); }
+    const ggml_tensor * dst() const {
+        return fused.empty() ? node : fused.back();
+    }
 
-    const ggml_tensor * src0() const { return node->src[0]; }
+    const ggml_tensor * src0() const {
+        return node->src[0];
+    }
 
-    const ggml_tensor * src1() const { return node->src[1]; }
+    const ggml_tensor * src1() const {
+        return node->src[1];
+    }
 
-    bool is_empty() const { return ggml_op_is_empty(node->op); }
+    bool is_empty() const {
+        return ggml_op_is_empty(node->op);
+    }
 
-    void add_fused(ggml_tensor * t) { fused.push_back(t); }
+    void add_fused(ggml_tensor * t) {
+        fused.push_back(t);
+    }
 
     bool stackable() const {
         switch (this->op()) {
@@ -3047,7 +3047,9 @@ struct node_info {
         }
     }
 
-    bool same_input(const node_info & n) const { return n.src1() == this->src1(); }
+    bool same_input(const node_info& n) const {
+        return n.src1() == this->src1();
+    }
 };
 
 static std::vector<int> ggml_hexagon_graph_optimize_reorder(const std::vector<node_info> & nodes) {
@@ -3112,21 +3114,25 @@ static void ggml_backend_hexagon_graph_optimize(ggml_backend_t backend, ggml_cgr
     //   and perform the reorder over the fused nodes. after the reorder is done, we unfuse
     for (int i = 0; i < n; i++) {
         node_info node = {
-            /*.node =*/gf->nodes[i],
-            /*.fused =*/{},
+            /*.node =*/ gf->nodes[i],
+            /*.fused =*/ {},
         };
 
         // fuse only ops that start with these operations
         // can be expanded when needed
-        if (node.op() == GGML_OP_ADD || node.op() == GGML_OP_NORM || node.op() == GGML_OP_RMS_NORM) {
+        if (node.op() == GGML_OP_ADD ||
+            node.op() == GGML_OP_NORM ||
+            node.op() == GGML_OP_RMS_NORM) {
             ops[0] = node.op();
 
             int f = i + 1;
             while (f < n && f < i + MAX_FUSE) {
                 // conservatively allow fusing only these ops
                 // can be expanded when needed
-                if (gf->nodes[f]->op != GGML_OP_ADD && gf->nodes[f]->op != GGML_OP_MUL &&
-                    gf->nodes[f]->op != GGML_OP_NORM && gf->nodes[f]->op != GGML_OP_RMS_NORM) {
+                if (gf->nodes[f]->op != GGML_OP_ADD &&
+                    gf->nodes[f]->op != GGML_OP_MUL &&
+                    gf->nodes[f]->op != GGML_OP_NORM &&
+                    gf->nodes[f]->op != GGML_OP_RMS_NORM) {
                     break;
                 }
                 ops[f - i] = gf->nodes[f]->op;
@@ -3302,7 +3308,8 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_UNARY:
             if (ggml_get_unary_op(op) == GGML_UNARY_OP_SILU) {
                 supp = ggml_hexagon_supported_activations(sess, op);
-            } else if (ggml_get_unary_op(op) == GGML_UNARY_OP_GELU) {
+            }
+            else if (ggml_get_unary_op(op) == GGML_UNARY_OP_GELU){
                 supp = ggml_hexagon_supported_activations(sess, op);
             }
             break;
@@ -3409,7 +3416,7 @@ ggml_hexagon_registry::ggml_hexagon_registry(ggml_backend_reg_t reg) {
         }
     }
 
-    if (opt_arch < 75) {
+    if(opt_arch < 75) {
         opt_ndev = 1;
         GGML_LOG_WARN("ggml-hex: forcing ndev to 1 for SoCs archs lower than v75.\n");
     }
@@ -3418,11 +3425,11 @@ ggml_hexagon_registry::ggml_hexagon_registry(ggml_backend_reg_t reg) {
 
     // Create devices / sessions
     for (size_t i = 0; i < opt_ndev; i++) {
-        devices[i].iface = ggml_backend_hexagon_device_i;
-        devices[i].reg   = reg;
+        devices[i].iface   = ggml_backend_hexagon_device_i;
+        devices[i].reg     = reg;
         try {
             devices[i].context = new ggml_hexagon_session(i, &devices[i]);
-        } catch (const std::exception & exc) {
+        } catch (std::exception const &exc) {
             GGML_LOG_ERROR("ggml-hex: failed to create device/session %zu\n", i);
             devices[i].context = nullptr;
         }
