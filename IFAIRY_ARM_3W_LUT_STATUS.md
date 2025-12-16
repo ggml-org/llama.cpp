@@ -20,6 +20,7 @@
 - GEMM：`ggml/src/ggml-ifairy-lut.cpp::ggml_ifairy_lut_qgemm()`
   - 使用索引查表 + scale 累加，最终按 `ggml_vec_dot_ifairy_q16_K_generic` 语义合成输出（`w * conj(x)`）。
   - 当前实现会先在 **每个 block 内以 int32 累加 86 个 group 的 `{ac,ad,bc,bd}`**，再按该 block 的 `d_real/d_imag` 一次性缩放并累加到 float（减少 per-group 的 float convert/mul）。
+  - NEON 路径对 group 循环做了 4-way unroll（提升 ILP，让“多次查表”更容易并行在流水线里飞行；NEON 本身没有通用 gather-load）。
   - 输出默认以 **bf16-pair packed in F32** 的方式写回（与现有 ifairy vec_dot 约定一致）。
   - 在 `__aarch64__ + __ARM_NEON` 下使用 NEON 累加（否则走标量）。
 
@@ -105,6 +106,31 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 ```
 备注：如需验证输出一致性，先跑 `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_VALIDATE_STRICT=1 ./build-rel/bin/test-ifairy`；性能脚本不建议开 strict（会强制一些路径禁用/变慢）。
 
+### 3.1 常见问题：`llama-cli` 输出 gibberish（例如 `I believe life isDocuments CeUNTares cred`）
+
+这类输出在 iFairy 上**几乎总是**“二进制与源码/模型不匹配（旧二进制 / 未重编译）”导致的：模型仍能加载，但类型表/算子实现落后，从而生成乱码。
+
+**快速判断（看启动日志）**
+
+- 若出现 `llama_model_loader: unknown type ifairy` 或 `print_info: file type   = unknown, may not work`，基本可以确定你在跑旧的 `llama-cli`。
+- 正常情况下应看到 `print_info: file type   = IFairy`，且不应出现 `unknown type ifairy`。
+
+**修复方式**
+
+1) 重新编译你实际在用的那套 build 目录（不要只改源码不 rebuild）：
+
+- `build-rel`（推荐）：
+  - `cmake --build build-rel --config Release -j $(nproc 2>/dev/null || sysctl -n hw.ncpu)`
+- `build`（如果你习惯用 `./build/bin/llama-cli`）：
+  - 建议重新配置为 Release：`cmake -B build -DCMAKE_BUILD_TYPE=Release`
+  - 然后编译：`cmake --build build -j $(nproc 2>/dev/null || sysctl -n hw.ncpu)`
+
+2) 用固定 seed 做一次 sanity check（输出应可读）：
+
+`./build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 --seed 1 -p "I believe life is" -n 16 -no-cnv`
+
+如果仍然是乱码，优先检查你实际执行的二进制路径（例如 `which llama-cli` / `ls -la build*/bin/llama-cli`）是否确实来自最新构建。
+
 ## 4. 后续工作（按优先级）
 
 > 目标：优先提升 Apple Silicon（ARM64 + NEON）的 tok/s，且不破坏 `w * conj(x)` 语义与现有输出一致性。
@@ -128,6 +154,10 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 
 4) **再做 BM/BK 调参（把调参放在结构优化之后）**  
    - 在 1/2 完成前，单纯调 `GGML_IFAIRY_LUT_BK_BLOCKS / GGML_IFAIRY_LUT_BM` 往往波动大且不可复现；结构性开销下降后再调参更稳定。
+   - 推荐方法：用脚本扫参，固定 seed/prompt/token，直接输出按 tok/s 排序的结果：  
+     `bash scripts/ifairy_lut_sweep.sh`  
+     可通过环境变量覆盖：`THREADS=4 TOKENS=512 BK_LIST="0 1 2 4" BM_LIST="32 64 128" FULLACC_LIST="0 1" bash scripts/ifairy_lut_sweep.sh`
+   - 备注：扫参会多次启动 `llama-cli`（每次都会加载模型），所以默认只扫少量组合；确认方向后再扩大 `BK_LIST/BM_LIST` 范围。
 
 （贯穿）**测试与性能记录**  
    - 已补充 `tests/test-ifairy.cpp` 的 **CPU backend tiling 回归**：固定小形状（`K=512` 强制多 tile），对比 tiling 与非 tiling 输出 **bitwise 一致**。  
