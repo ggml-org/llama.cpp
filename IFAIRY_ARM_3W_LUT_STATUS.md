@@ -61,7 +61,7 @@
 ## 3. 推荐验证方式（本地）
 
 1) 重新编译（Release）  
-`cmake --build build-rel --config Release -j $(nproc)`
+`cmake --build build-rel --config Release -j $(nproc 2>/dev/null || sysctl -n hw.ncpu)`
 
 2) 单测  
 `./build-rel/bin/test-ifairy`
@@ -78,6 +78,32 @@
 
 6) 回归（tiling vs 非 tiling 一致性）  
 `./build-rel/bin/test-ifairy` 内置 `Test 5: iFairy LUT backend tiling regression`（会在测试内部设置 `GGML_IFAIRY_LUT=1`、并对比 `BK/BM` tiling 与非 tiling 的输出 bitwise 一致性；若 `GGML_IFAIRY_ARM_LUT` 未启用则自动跳过）。
+
+7) 性能测试复现脚本（tok/s，对比 LUT=0/1 与不同开关）  
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN="${ROOT}/build-rel/bin/llama-cli"
+MODEL="${ROOT}/models/Fairy-plus-minus-i-700M/ifairy.gguf"
+
+COMMON=( -m "${MODEL}" --gpu-layers 0 -t 4 -b 1 --seed 1 -p "I believe life is" -n 512 -no-cnv )
+
+run_case() {
+  local name="$1"
+  shift
+  echo
+  echo "==== ${name} ===="
+  "$@" "${COMMON[@]}" 2>&1 | tee "/tmp/ifairy_lut_${name}.log" | grep -E "tok/s|eval time|prompt eval time|sampling time" || true
+}
+
+run_case "lut0" env GGML_IFAIRY_LUT=0 "${BIN}"
+run_case "lut1" env GGML_IFAIRY_LUT=1 "${BIN}"
+run_case "lut1_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_FULLACC=1 "${BIN}"
+run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GGML_IFAIRY_LUT_FULLACC=1 "${BIN}"
+```
+备注：如需验证输出一致性，先跑 `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_VALIDATE_STRICT=1 ./build-rel/bin/test-ifairy`；性能脚本不建议开 strict（会强制一些路径禁用/变慢）。
 
 ## 4. 后续工作（按优先级）
 
@@ -96,8 +122,9 @@
    - 备注：若要推进 “16 canonical + factor”，需要配合 **int8 LUT + `vqtbl` 查表/整数累加** 的整体重构；单纯在当前 float 累加框架里增加 canonical 变换通常会带来额外 shuffle/分支而变慢。
 
 3) **索引生命周期/缓存策略升级（工程化与复用）**  
-   - 现状：`transform_tensor()` 生成的索引缓冲挂在 `tensor->extra`，在 CPU backend free 时统一释放。  
-   - 下一步：把索引缓存与生命周期绑定做得更清晰（例如 index_tensor/后端 buffer 管理、复用策略、跨图复用边界），并确保 teardown 路径一致。
+   - 已完成：`ggml_ifairy_lut_transform_tensor()` 把索引缓冲改为使用 `ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), ...)` 分配，并缓存到全局 map（key: `{data ptr, nbytes, k, rows}`），同一份权重 data（含 view/复用场景）只生成一次索引。
+   - 已完成：`ifairy_lut_extra` 增加 `index_buffer` 字段，区分 backend-buffer 分配与 legacy `ggml_aligned_malloc()`；`ggml_ifairy_lut_free()` 统一释放缓存 buffer + extras，避免 double-free。
+   - 后续：如果要进一步“按 ctx/图生命周期”做精确释放，需要引入 refcount/弱引用或把 indexes 变成真正的 tensor（目前先以工程可用、复用明确为主）。
 
 4) **再做 BM/BK 调参（把调参放在结构优化之后）**  
    - 在 1/2 完成前，单纯调 `GGML_IFAIRY_LUT_BK_BLOCKS / GGML_IFAIRY_LUT_BM` 往往波动大且不可复现；结构性开销下降后再调参更稳定。

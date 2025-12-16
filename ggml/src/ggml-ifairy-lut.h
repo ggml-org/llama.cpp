@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml.h"
+#include "ggml-backend.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -10,6 +11,7 @@ struct ifairy_lut_extra {
     uint8_t * indexes;
     size_t    size;
     struct ggml_tensor * index_tensor;
+    ggml_backend_buffer_t index_buffer;
 };
 
 // iFairy 3-weight LUT API

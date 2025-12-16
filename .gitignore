@@ -152,3 +152,4 @@ poetry.toml
 # Code Workspace
 *.code-workspace
 
+/generate_model/
