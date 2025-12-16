@@ -51,8 +51,8 @@ struct server_context {
 struct server_res_generator;
 
 struct server_routes {
-    server_routes(const common_params & params, server_context & ctx_server, std::function<bool()> is_ready = []() { return true; })
-            : params(params), ctx_server(*ctx_server.impl), is_ready(is_ready) {
+    server_routes(const common_params & params, server_context & ctx_server, std::function<bool()> is_ready = []() { return true; }, std::function<void()> on_shutdown = nullptr)
+            : params(params), ctx_server(*ctx_server.impl), is_ready(is_ready), on_shutdown(on_shutdown) {
         init_routes();
     }
 
@@ -80,6 +80,8 @@ struct server_routes {
     server_http_context::handler_t post_rerank;
     server_http_context::handler_t get_lora_adapters;
     server_http_context::handler_t post_lora_adapters;
+    server_http_context::handler_t post_exit;
+
 private:
     // TODO: move these outside of server_routes?
     std::unique_ptr<server_res_generator> handle_slots_save(const server_http_req & req, int id_slot);
@@ -90,4 +92,5 @@ private:
     const common_params & params;
     server_context_impl & ctx_server;
     std::function<bool()> is_ready;
+    const std::function<void()> on_shutdown;
 };

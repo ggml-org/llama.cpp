@@ -3590,6 +3590,59 @@ void server_routes::init_routes() {
         res->ok(result->to_json());
         return res;
     };
+
+    this->post_exit = [this](const server_http_req & req) {
+        auto res = std::make_unique<server_res_generator>(ctx_server);
+
+        if (!params.endpoint_exit) {
+            SRV_WRN("%s: exit endpoint called but exit endpoint is not enabled\n", __func__);
+            res->error(format_error_response("Exit endpoint is disabled.", ERROR_TYPE_NOT_SUPPORTED));
+            return res;
+        }
+
+        // Check for confirmation token in request body
+        try {
+            const json        body    = json::parse(req.body);
+            const std::string confirm = json_value(body, "confirm", std::string());
+
+            if (confirm != "shutdown") {
+                res->error(format_error_response("Missing or invalid confirmation. Send {\"confirm\": \"shutdown\"}",
+                                                 ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+        } catch (const std::exception & e) {
+            res->error(format_error_response("Invalid request body. Expected JSON with {\"confirm\": \"shutdown\"}",
+                                             ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        SRV_INF("%s: exit endpoint called with valid confirmation token, initiating server shutdown...\n",
+                __func__);
+
+        res->ok({
+            { "message", "Server shutdown initiated" },
+            { "status",  "terminating"               }
+        });
+
+        // Schedule shutdown after response is sent. Use the explicitly provided on_shutdown callback
+        // if main() has set it; otherwise fall back to terminating the server queue (legacy behavior).
+        if (this->on_shutdown) {
+            auto shutdown_cb = this->on_shutdown;
+            std::thread([shutdown_cb]() {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                SRV_INF("%s: executing on_shutdown callback...\n", __func__);
+                try {
+                    shutdown_cb();
+                } catch (const std::exception & e) {
+                    SRV_ERR("%s: on_shutdown callback threw: %s\n", __func__, e.what());
+                } catch (...) {
+                    SRV_ERR("%s: on_shutdown callback threw unknown exception\n", __func__);
+                }
+            }).detach();
+        }
+
+        return res;
+    };
 }
 
 std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const server_http_req & req, int id_slot) {

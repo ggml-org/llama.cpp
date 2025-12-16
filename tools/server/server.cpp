@@ -108,14 +108,29 @@ int main(int argc, char ** argv, char ** envp) {
         return 1;
     }
 
+    bool is_router_server = params.model.path.empty();
+
+    // prepare shutdown callback depending on mode (capturing by reference is fine here I think,
+    // ctx_http and ctx_server live in main and outlive routes).
+    std::function<void()> shutdown_cb;
+    if (is_router_server) {
+        shutdown_cb = [&ctx_http]() {
+            ctx_http.stop();
+        };
+    } else {
+        // ctx_server declared earlier and will outlive routes
+        shutdown_cb = [&ctx_server]() {
+            ctx_server.terminate();
+        };
+    }
+
     //
     // Router
     //
 
     // register API routes
-    server_routes routes(params, ctx_server, [&ctx_http]() { return ctx_http.is_ready.load(); });
+    server_routes routes(params, ctx_server, [&ctx_http]() { return ctx_http.is_ready.load(); }, shutdown_cb);
 
-    bool is_router_server = params.model.path.empty();
     std::optional<server_models_routes> models_routes{};
     if (is_router_server) {
         // setup server instances manager
@@ -185,6 +200,9 @@ int main(int argc, char ** argv, char ** envp) {
     // Save & load slots
     ctx_http.get ("/slots",               ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",      ex_wrapper(routes.post_slots));
+
+    // Exit endpoint
+    ctx_http.post("/exit",                ex_wrapper(routes.post_exit));
 
     //
     // Start the server
