@@ -494,6 +494,18 @@ int32_t server_tokens::process_chunk(
     return 0;
 }
 
+server_tokens server_tokens::clone() const {
+    server_tokens res;
+    res.has_mtmd = has_mtmd;
+    res.tokens   = tokens;
+    for (auto it = map_idx_to_media.begin(); it != map_idx_to_media.end(); ++it) {
+        size_t idx = it->first;
+        const mtmd::input_chunk_ptr & chunk = it->second;
+        res.map_idx_to_media[idx] = mtmd::input_chunk_ptr(mtmd_input_chunk_copy(chunk.get()));
+    }
+    return res;
+}
+
 //
 // tokenizer and input processing utils
 //
@@ -745,12 +757,6 @@ json oaicompat_completion_params_parse(const json & body) {
         llama_params["stop"] = json_value(body, "stop", json::array());
     }
 
-    // Handle "n" field
-    int n_choices = json_value(body, "n", 1);
-    if (n_choices != 1) {
-        throw std::runtime_error("Only one completion choice is allowed");
-    }
-
     // Handle "echo" field
     if (json_value(body, "echo", false)) {
         throw std::runtime_error("Only no echo is supported");
@@ -966,6 +972,9 @@ json oaicompat_chat_params_parse(
     inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", false);
     inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
     inputs.reasoning_format      = opt.reasoning_format;
+    if (body.contains("reasoning_format")) {
+        inputs.reasoning_format = common_reasoning_format_from_name(body.at("reasoning_format").get<std::string>());
+    }
     inputs.enable_thinking       = opt.enable_thinking;
     if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
         if (body.contains("grammar")) {
@@ -1047,12 +1056,6 @@ json oaicompat_chat_params_parse(
     }
     if (!chat_params.parser.empty()) {
         llama_params["chat_parser"] = chat_params.parser;
-    }
-
-    // Handle "n" field
-    int n_choices = json_value(body, "n", 1);
-    if (n_choices != 1) {
-        throw std::invalid_argument("Only one completion choice is allowed");
     }
 
     // Handle "logprobs" field

@@ -54,6 +54,10 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     # TODO
 else()
     set(GGML_STANDALONE OFF)
+
+    if (NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+        set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+    endif()
 endif()
 
 if (EMSCRIPTEN)
@@ -168,6 +172,7 @@ option(GGML_RVV              "ggml: enable rvv"              ON)
 option(GGML_RV_ZFH           "ggml: enable riscv zfh"        ON)
 option(GGML_RV_ZVFH          "ggml: enable riscv zvfh"       ON)
 option(GGML_RV_ZICBOP        "ggml: enable riscv zicbop"     ON)
+option(GGML_RV_ZIHINTPAUSE   "ggml: enable riscv zihintpause "  ON)
 option(GGML_XTHEADVECTOR     "ggml: enable xtheadvector"     OFF)
 option(GGML_VXE              "ggml: enable vxe"              ${GGML_NATIVE})
 
@@ -253,6 +258,9 @@ option(GGML_HEXAGON                         "ggml: enable Hexagon backend"      
 # toolchain for vulkan-shaders-gen
 set   (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN "" CACHE FILEPATH "ggml: toolchain file for vulkan-shaders-gen")
 
+option(GGML_ZENDNN                          "ggml: use ZenDNN"                                OFF)
+option(ZENDNN_ROOT                          "ggml: path to ZenDNN installation"               "")
+
 # extra artifacts
 option(GGML_BUILD_TESTS    "ggml: build tests"    ${GGML_STANDALONE})
 option(GGML_BUILD_EXAMPLES "ggml: build examples" ${GGML_STANDALONE})
@@ -314,6 +322,7 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-sycl.h
     include/ggml-vulkan.h
     include/ggml-webgpu.h
+    include/ggml-zendnn.h
     include/gguf.h)
 
 set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")
