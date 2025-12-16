@@ -35,8 +35,8 @@
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
 
-	let pendingMarkdown: string | null = $state(null);
-	let isProcessing = $state(false);
+	let pendingMarkdown: string | null = null;
+	let isProcessing = false;
 
 	function loadHighlightTheme(isDark: boolean) {
 		if (!browser) return;
