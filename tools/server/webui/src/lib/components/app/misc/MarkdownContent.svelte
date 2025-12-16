@@ -7,8 +7,8 @@
 	import remarkRehype from 'remark-rehype';
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
-	import type { Root as HastRoot } from 'hast';
-	import type { Root as MdastRoot, RootContent } from 'mdast';
+	import type { Root as HastRoot, RootContent as HastRootContent } from 'hast';
+	import type { Root as MdastRoot } from 'mdast';
 	import { browser } from '$app/environment';
 	import { onDestroy } from 'svelte';
 	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
@@ -302,11 +302,11 @@
 		}
 	}
 
-	function getNodeId(node: RootContent, indexFallback: number): string {
+	function getHastNodeId(node: HastRootContent, indexFallback: number): string {
 		const position = node.position;
 
 		if (position?.start?.offset != null && position?.end?.offset != null) {
-			return `${position.start.offset}-${position.end.offset}`;
+			return `hast-${position.start.offset}-${position.end.offset}`;
 		}
 
 		return `${node.type}-${indexFallback}`;
@@ -337,16 +337,14 @@
 		const normalized = preprocessLaTeX(markdown);
 		const processorInstance = processor();
 		const ast = processorInstance.parse(normalized) as MdastRoot;
-		const children = ast.children ?? [];
-		const nodeIds = children.map((node, index) => getNodeId(node as RootContent, index));
-
 		const processedRoot = (await processorInstance.run(ast)) as HastRoot;
 		const processedChildren = processedRoot.children ?? [];
 		const stableCount = Math.max(processedChildren.length - 1, 0);
 		const nextBlocks: MarkdownBlock[] = [];
 
 		for (let index = 0; index < stableCount; index++) {
-			const id = nodeIds[index] ?? `processed-${index}`;
+			const hastChild = processedChildren[index];
+			const id = getHastNodeId(hastChild, index);
 			const existing = renderedBlocks[index];
 
 			if (existing && existing.id === id) {
