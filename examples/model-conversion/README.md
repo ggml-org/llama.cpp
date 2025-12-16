@@ -10,6 +10,13 @@ and in some cases perplexity checked of the quantized model. And finally the
 model/models need to the ggml-org on Hugging Face. This tool/example tries to
 help with this process.
 
+> 📝 **Note:** When adding a new model from an existing family, verify the
+> previous version passes logits verification first. Existing models can have
+> subtle numerical differences that don't affect generation quality but cause
+> logits mismatches. Identifying these upfront whether they exist in llama.cpp,
+> the conversion script, or in an upstream implementation, can save significant
+> debugging time.
+
 ### Overview
 The idea is that the makefile targets and scripts here can be used in the
 development/conversion process assisting with things like:
