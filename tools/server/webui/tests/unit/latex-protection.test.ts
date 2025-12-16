@@ -1,6 +1,6 @@
 /* eslint-disable no-irregular-whitespace */
 import { describe, it, expect, test } from 'vitest';
-import { maskInlineLaTeX, preprocessLaTeX } from './latex-protection';
+import { maskInlineLaTeX, preprocessLaTeX } from '$lib/utils/latex-protection';
 
 describe('maskInlineLaTeX', () => {
 	it('should protect LaTeX $x + y$ but not money $3.99', () => {

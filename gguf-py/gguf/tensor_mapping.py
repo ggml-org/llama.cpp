@@ -154,7 +154,8 @@ class TensorNameMap:
             "model.layers.{bid}.operator_norm",                     # lfm2
             "model.transformer.blocks.{bid}.attn_norm",             # llada
             "layers.{bid}.input_layernorm",                         # qwen3-embedding
-            "model.layers.{bid}.attention_layernorm"                # apertus
+            "model.layers.{bid}.attention_layernorm",               # apertus
+            "model.layers.{bid}.pre_attention_layernorm",           # kormo
         ),
 
         # Attention norm 2
@@ -342,6 +343,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.ff_norm",                        # llada
             "layers.{bid}.post_attention_layernorm",                         # qwen3-embedding
             "model.layers.{bid}.feedforward_layernorm",                      # apertus
+            "model.layers.{bid}.pre_mlp_layernorm",                          # kormo
         ),
 
         # Pre feed-forward norm
@@ -377,6 +379,7 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.gate",               # lfm2moe
             "model.layers.{bid}.mlp.router.gate",               # afmoe
             "layers.{bid}.gate",                                # mistral-large
+            "backbone.layers.{bid}.mixer.gate",                 # nemotron-h-moe
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -390,6 +393,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.expert_bias",                           # afmoe
             "model.layers.{bid}.feed_forward.expert_bias",                  # lfm2moe
             "model.layers.{bid}.block_sparse_moe.e_score_correction",       # minimax-m2
+            "backbone.layers.{bid}.mixer.gate.e_score_correction"           # nemotron-h-moe
         ),
 
         # Feed-forward up
@@ -438,7 +442,7 @@ class TensorNameMap:
             "layers.{bid}.feed_forward.experts.w3",                 # mixtral (merged)
             "transformer.decoder_layer.{bid}.moe.linear_v",         # Grok (merged)
             "transformer.blocks.{bid}.ffn.experts.mlp.v1",          # dbrx
-            "model.layers.{bid}.mlp.experts.up_proj",               # qwen2moe olmoe (merged) ernie4.5-moe
+            "model.layers.{bid}.mlp.experts.up_proj",               # qwen2moe olmoe (merged) ernie4.5-moe, nemotron-h-moe (merged)
             "model.layers.{bid}.block_sparse_moe.experts.w3",       # phimoe (merged)
             "model.layers.{bid}.feed_forward.experts.up_proj",      # llama4
             "encoder.layers.{bid}.mlp.experts.mlp.w1",              # nomic-bert-moe
@@ -452,6 +456,7 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.down_proj",
             "model.layers.{bid}.mlp.shared_mlp.up_proj",             # hunyuan
             "layers.{bid}.shared_experts.w3",                        # mistral-large
+            "backbone.layers.{bid}.mixer.shared_experts.up_proj",    # nemotron-h-moe
         ),
 
         MODEL_TENSOR.FFN_UP_CHEXP: (
@@ -546,7 +551,7 @@ class TensorNameMap:
             "layers.{bid}.feed_forward.experts.w2",                 # mixtral (merged)
             "transformer.decoder_layer.{bid}.moe.linear_1",         # Grok (merged)
             "transformer.blocks.{bid}.ffn.experts.mlp.w2",          # dbrx
-            "model.layers.{bid}.mlp.experts.down_proj",             # qwen2moe olmoe (merged) ernie4.5-moe
+            "model.layers.{bid}.mlp.experts.down_proj",             # qwen2moe olmoe (merged) ernie4.5-moe nemotron-h-moe (merged)
             "model.layers.{bid}.block_sparse_moe.output_linear",    # granitemoe
             "model.layers.{bid}.block_sparse_moe.experts.w2",       # phimoe (merged)
             "model.layers.{bid}.feed_forward.experts.down_proj",    # llama4
@@ -561,6 +566,7 @@ class TensorNameMap:
             "model.layers.{bid}.shared_mlp.output_linear",             # granitemoe
             "model.layers.{bid}.mlp.shared_mlp.down_proj",             # hunyuan
             "layers.{bid}.shared_experts.w2",                          # mistral-large
+            "backbone.layers.{bid}.mixer.shared_experts.down_proj",    # nemotron-h-moe
         ),
 
         MODEL_TENSOR.FFN_DOWN_CHEXP: (
@@ -704,6 +710,7 @@ class TensorNameMap:
             "model.layers.{bid}.mamba.dt_proj",         # jamba falcon-h1 granite-hybrid
             "model.layers.layers.{bid}.mixer.dt_proj",  # plamo2
             "model.layers.{bid}.linear_attn.dt_proj",   # qwen3next
+            "backbone.layers.{bid}.mixer.dt",           # nemotron-h-moe
         ),
 
         MODEL_TENSOR.SSM_DT_NORM: (
