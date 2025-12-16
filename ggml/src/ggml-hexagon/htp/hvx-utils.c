@@ -40,13 +40,13 @@ void hvx_mul_f32(const uint8_t * restrict src0,
     int unaligned_loop = 0;
     if ((0 == htp_is_aligned((void *) src0, VLEN)) || (0 == htp_is_aligned((void *) src1, VLEN)) ||
         (0 == htp_is_aligned((void *) dst, VLEN))) {
-        //FARF(HIGH, "hvx_mul_f32: unaligned address in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_mul_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
 
     if ((1 == unaligned_addr) && (num_elems_whole != 0)) {
         unaligned_loop = 1;
-        //FARF(HIGH, "hvx_mul_f32: unaligned loop in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_mul_f32: unaligned loop in hvx op, possibly slower execution\n");
     }
 
 
@@ -324,13 +324,13 @@ void hvx_add_f32(const uint8_t * restrict src0,
     int unaligned_loop = 0;
     if ((0 == htp_is_aligned((void *) src0, VLEN)) || (0 == htp_is_aligned((void *) src1, VLEN)) ||
         (0 == htp_is_aligned((void *) dst, VLEN))) {
-        //FARF(HIGH, "hvx_add_f32: unaligned address in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_add_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
 
     if ((1 == unaligned_addr) && (num_elems_whole != 0)) {
         unaligned_loop = 1;
-        //FARF(HIGH, "hvx_add_f32: unaligned loop in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_add_f32: unaligned loop in hvx op, possibly slower execution\n");
     }
 
     if (0 == unaligned_loop) {
@@ -464,13 +464,13 @@ void hvx_add_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
     int unaligned_addr = 0;
     int unaligned_loop = 0;
     if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
-        //FARF(HIGH, "hvx_add_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_add_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
 
     if ((1 == unaligned_addr) && (num_elems_whole != 0)) {
         unaligned_loop = 1;
-        //FARF(HIGH, "hvx_add_scalar_f32: unaligned loop in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_add_scalar_f32: unaligned loop in hvx op, possibly slower execution\n");
     }
 
     static const float kInf    = INFINITY;
@@ -526,13 +526,13 @@ void hvx_mul_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
     int unaligned_addr = 0;
     int unaligned_loop = 0;
     if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
-        //FARF(HIGH, "hvx_mul_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_mul_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
 
     if ((1 == unaligned_addr) && (num_elems_whole != 0)) {
         unaligned_loop = 1;
-        //FARF(HIGH, "hvx_mul_scalar_f32: unaligned loop in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_mul_scalar_f32: unaligned loop in hvx op, possibly slower execution\n");
     }
 
     HVX_Vector val_vec = hvx_vec_splat_fp32(val);
@@ -635,13 +635,13 @@ void hvx_sub_f32(const uint8_t * restrict src0,
     int unaligned_loop = 0;
     if ((0 == htp_is_aligned((void *) src0, VLEN)) || (0 == htp_is_aligned((void *) src1, VLEN)) ||
         (0 == htp_is_aligned((void *) dst, VLEN))) {
-        //FARF(HIGH, "hvx_sub_f32: unaligned address in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_sub_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
 
     if ((1 == unaligned_addr) && (num_elems_whole != 0)) {
         unaligned_loop = 1;
-        //FARF(HIGH, "hvx_sub_f32: unaligned loop in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_sub_f32: unaligned loop in hvx op, possibly slower execution\n");
     }
 
     if (0 == unaligned_loop) {
@@ -775,13 +775,13 @@ void hvx_sub_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
     int unaligned_addr = 0;
     int unaligned_loop = 0;
     if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
-        //FARF(HIGH, "hvx_sub_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_sub_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
 
     if ((1 == unaligned_addr) && (num_elems_whole != 0)) {
         unaligned_loop = 1;
-        //FARF(HIGH, "hvx_sub_scalar_f32: unaligned loop in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_sub_scalar_f32: unaligned loop in hvx op, possibly slower execution\n");
     }
 
     HVX_Vector val_vec = hvx_vec_splat_fp32(val);
@@ -822,7 +822,7 @@ float hvx_sum_of_squares_f32(const uint8_t * restrict src, const int num_elems) 
     int num_elems_whole = num_elems - left_over;
 
     if (0 == htp_is_aligned((void *) src, VLEN)) {
-        //FARF(HIGH, "hvx_sum_of_squares_f32: unaligned address in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_sum_of_squares_f32: unaligned address in hvx op, possibly slower execution\n");
     }
 
     assert((1 == htp_is_aligned((void *) src, VLEN)) || (0 == num_elems_whole));
@@ -861,13 +861,13 @@ float hvx_self_sum_f32(const uint8_t * restrict src, const int num_elems) {
     int unaligned_addr = 0;
     int unaligned_loop = 0;
     if (0 == htp_is_aligned((void *) src, VLEN)) {
-        //FARF(HIGH, "hvx_self_sum_f32: unaligned address in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_self_sum_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
 
     if ((1 == unaligned_addr) && (num_elems_whole != 0)) {
         unaligned_loop = 1;
-        //FARF(HIGH, "hvx_self_sum_f32: unaligned loop in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_self_sum_f32: unaligned loop in hvx op, possibly slower execution\n");
     }
 
     HVX_Vector sum_vec  = Q6_V_vsplat_R(0x00000000);
@@ -910,13 +910,13 @@ void hvx_scale_f32(const uint8_t * restrict src, uint8_t * restrict dst, const i
     int unaligned_addr = 0;
     int unaligned_loop = 0;
     if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
-        //FARF(HIGH, "hvx_scale_f32: unaligned address in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_scale_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
 
     if ((1 == unaligned_addr) && (num_elems_whole != 0)) {
         unaligned_loop = 1;
-        //FARF(HIGH, "hvx_scale_f32: unaligned loop in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_scale_f32: unaligned loop in hvx op, possibly slower execution\n");
     }
 
     HVX_Vector scale_vec = hvx_vec_splat_fp32(scale);
@@ -959,13 +959,13 @@ float hvx_self_max_f32(const uint8_t * restrict src, const int num_elems) {
     int unaligned_addr = 0;
     int unaligned_loop = 0;
     if (0 == htp_is_aligned((void *) src, VLEN)) {
-        //FARF(HIGH, "hvx_self_max_f32: unaligned address in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_self_max_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
 
     if ((1 == unaligned_addr) && (num_elems_whole != 0)) {
         unaligned_loop = 1;
-        //FARF(HIGH, "hvx_self_max_f32: unaligned loop in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_self_max_f32: unaligned loop in hvx op, possibly slower execution\n");
     }
 
     HVX_Vector vec_max   = hvx_vec_splat_fp32(((const float *) src)[0]);
@@ -1005,7 +1005,7 @@ void hvx_min_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
     size_t num_elems_whole = num_elems - left_over;
 
     if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
-        //FARF(HIGH, "hvx_min_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_min_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
     }
 
     assert((1 == htp_is_aligned((void *) src, VLEN)) || (0 == num_elems_whole));
@@ -1044,7 +1044,7 @@ void hvx_clamp_scalar_f32(const uint8_t * restrict src,
     size_t num_elems_whole = num_elems - left_over;
 
     if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
-        //FARF(HIGH, "hvx_clamp_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
+        FARF(HIGH, "hvx_clamp_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
     }
 
     assert((1 == htp_is_aligned((void *) src, VLEN)) || (0 == num_elems_whole));
