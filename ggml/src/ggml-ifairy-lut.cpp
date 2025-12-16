@@ -28,6 +28,9 @@ static inline bool ggml_ifairy_env_enabled(const char * name) {
     return env && strcmp(env, "0") != 0;
 }
 
+static const int k_ifairy_lut_patterns = 64;
+static const int k_ifairy_lut_channels = 4;
+
 #if defined(__ARM_NEON) && defined(__aarch64__)
 // wr(code) / wi(code) coefficients for all 64 3-weight patterns (direct 6-bit encoding).
 // code -> (wr, wi): 0 -> (-1,0), 1 -> (1,0), 2 -> (0,-1), 3 -> (0,1)
@@ -133,8 +136,9 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
     const int64_t blocks_tile = tile_blocks > 0 ? MIN((int64_t) tile_blocks, blocks_per_col) : blocks_per_col;
     const int64_t groups_tile = blocks_tile * groups_per_block;
 
-    const size_t lut_bytes   = (size_t) N * (size_t) groups_tile * (size_t) (4 * 64) * sizeof(int16_t);
-    const size_t scale_bytes = (size_t) N * (size_t) groups_tile * 2 * sizeof(float);
+    const size_t lut_bytes   = (size_t) N * (size_t) groups_tile * (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns) * sizeof(int16_t);
+    // activation scales are per-block (shared by all groups in the block)
+    const size_t scale_bytes = (size_t) N * (size_t) blocks_tile * 2 * sizeof(float);
 
     size_t shared_bytes = GGML_PAD(lut_bytes + scale_bytes, 64);
 
@@ -234,11 +238,17 @@ void ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act, size_t ac
     for (int col = 0; col < n; ++col) {
         const uint8_t * act_col_bytes = (const uint8_t *) act + (size_t) col * act_stride;
         const block_ifairy_q16 * act_blocks = (const block_ifairy_q16 *) act_col_bytes;
-        float * scales_out = (float *) lut_scales + (size_t) col * (size_t) groups * 2;
+        float * scales_out = (float *) lut_scales + (size_t) col * (size_t) blocks * 2;
 
         // Layout: per-group, 64 patterns, interleaved 4 channels:
         //   tbl[(pat*4) + 0..3] = { sum_ac, sum_ad, sum_bc, sum_bd } (int16)
-        int16_t * lut_out = (int16_t *) ((uint8_t *) lut_buf + (size_t) col * (size_t) groups * (size_t) (4 * 64) * sizeof(int16_t));
+        int16_t * lut_out = (int16_t *) ((uint8_t *) lut_buf + (size_t) col * (size_t) groups * (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns) * sizeof(int16_t));
+
+        // per-block activation scales (shared by all groups in the block)
+        for (int64_t blk = 0; blk < blocks; ++blk) {
+            scales_out[blk * 2 + 0] = GGML_FP16_TO_FP32(act_blocks[blk].d_real);
+            scales_out[blk * 2 + 1] = GGML_FP16_TO_FP32(act_blocks[blk].d_imag);
+        }
 
         for (int64_t g = 0; g < groups; ++g) {
             const int64_t blk   = g / groups_per_block;
@@ -265,11 +275,6 @@ void ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act, size_t ac
                 xr2 = (int8_t) act_blocks[blk2].x_real[off2]; xi2 = (int8_t) act_blocks[blk2].x_imag[off2];
             }
 
-            float act_scale_r = GGML_FP16_TO_FP32(act_blocks[blk].d_real);
-            float act_scale_i = GGML_FP16_TO_FP32(act_blocks[blk].d_imag);
-            scales_out[g * 2 + 0] = act_scale_r;
-            scales_out[g * 2 + 1] = act_scale_i;
-
             // Build tables for all 64 (c0,c1,c2) patterns, matching ggml_vec_dot_ifairy_q16_K_generic:
             //   sum_ac = Σ xr * wr
             //   sum_ad = Σ xi * wr
@@ -277,7 +282,7 @@ void ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act, size_t ac
             //   sum_bd = Σ xi * wi
             // where code -> (wr,wi):
             //   0 -> (-1,0), 1 -> (1,0), 2 -> (0,-1), 3 -> (0,1)
-            int16_t * tbl = lut_out + (size_t) g * (64 * 4);
+            int16_t * tbl = lut_out + (size_t) g * (size_t) (k_ifairy_lut_patterns * k_ifairy_lut_channels);
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
             const int8_t xr0_s8 = (int8_t) xr0;
@@ -393,8 +398,8 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
         const float coeff_w_imag = GGML_FP16_TO_FP32(w_row[0].d_imag);
 
         for (int col = 0; col < n; ++col) {
-            const int16_t * lut_base = (const int16_t *) ((const uint8_t *) lut + (size_t) col * (size_t) groups * (size_t) (4 * 64) * sizeof(int16_t));
-            const float * scales = (const float *) lut_scales + (size_t) col * (size_t) groups * 2;
+            const int16_t * lut_base = (const int16_t *) ((const uint8_t *) lut + (size_t) col * (size_t) groups * (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns) * sizeof(int16_t));
+            const float * scales = (const float *) lut_scales + (size_t) col * (size_t) blocks * 2;
             const block_ifairy_q16 * act_blocks = act ? (const block_ifairy_q16 *) ((const uint8_t *) act + (size_t) col * act_stride) : NULL;
 
             float acc_ac_xr = 0.0f;
@@ -404,15 +409,23 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
             float32x4_t accv = vdupq_n_f32(0.0f); // {ac, ad, bc, bd}
-            for (int64_t g = 0; g < groups; ++g) {
-                const float32x2_t srsi = vld1_f32(scales + (size_t) g * 2);
-                const float32x4_t scv = vcombine_f32(srsi, srsi); // {sr, si, sr, si}
+            for (int64_t blk = 0; blk < blocks; ++blk) {
+                int32x4_t isum = vdupq_n_s32(0);
 
-                const uint8_t pat = (uint8_t) (idx_row[g] & 0x3f);
-                const int16_t * tbl = lut_base + (size_t) g * (64 * 4) + (size_t) pat * 4;
-                const int16x4_t sums16 = vld1_s16(tbl); // {ac, ad, bc, bd}
-                const int32x4_t sums32 = vmovl_s16(sums16);
-                const float32x4_t sumsf = vcvtq_f32_s32(sums32);
+                const uint8_t * idx_blk = idx_row + (size_t) blk * (size_t) groups_per_block;
+                const int16_t * lut_blk = lut_base + (size_t) blk * (size_t) groups_per_block * (size_t) (k_ifairy_lut_patterns * k_ifairy_lut_channels);
+
+                for (int64_t gi = 0; gi < groups_per_block; ++gi) {
+                    const uint8_t pat = (uint8_t) (idx_blk[gi] & 0x3f);
+                    const int16_t * tbl = lut_blk + (size_t) gi * (size_t) (k_ifairy_lut_patterns * k_ifairy_lut_channels) + (size_t) pat * k_ifairy_lut_channels;
+                    const int16x4_t sums16 = vld1_s16(tbl); // {ac, ad, bc, bd}
+                    const int32x4_t sums32 = vmovl_s16(sums16);
+                    isum = vaddq_s32(isum, sums32);
+                }
+
+                const float32x2_t srsi = vld1_f32(scales + (size_t) blk * 2);
+                const float32x4_t scv = vcombine_f32(srsi, srsi); // {sr, si, sr, si}
+                const float32x4_t sumsf = vcvtq_f32_s32(isum);
                 accv = vmlaq_f32(accv, sumsf, scv);
             }
 
@@ -421,17 +434,30 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
             acc_bc_xr = vgetq_lane_f32(accv, 2);
             acc_bd_xi = vgetq_lane_f32(accv, 3);
 #else
-            for (int64_t g = 0; g < groups; ++g) {
-                const float act_scale_r = scales[g * 2 + 0];
-                const float act_scale_i = scales[g * 2 + 1];
+            for (int64_t blk = 0; blk < blocks; ++blk) {
+                int32_t sum_ac = 0;
+                int32_t sum_ad = 0;
+                int32_t sum_bc = 0;
+                int32_t sum_bd = 0;
 
-                const uint8_t pat = (uint8_t) (idx_row[g] & 0x3f);
-                const int16_t * tbl = lut_base + (size_t) g * (64 * 4) + (size_t) pat * 4;
+                const uint8_t * idx_blk = idx_row + (size_t) blk * (size_t) groups_per_block;
+                const int16_t * lut_blk = lut_base + (size_t) blk * (size_t) groups_per_block * (size_t) (k_ifairy_lut_patterns * k_ifairy_lut_channels);
 
-                acc_ac_xr += act_scale_r * (float) tbl[0];
-                acc_ad_xi += act_scale_i * (float) tbl[1];
-                acc_bc_xr += act_scale_r * (float) tbl[2];
-                acc_bd_xi += act_scale_i * (float) tbl[3];
+                for (int64_t gi = 0; gi < groups_per_block; ++gi) {
+                    const uint8_t pat = (uint8_t) (idx_blk[gi] & 0x3f);
+                    const int16_t * tbl = lut_blk + (size_t) gi * (size_t) (k_ifairy_lut_patterns * k_ifairy_lut_channels) + (size_t) pat * k_ifairy_lut_channels;
+                    sum_ac += (int32_t) tbl[0];
+                    sum_ad += (int32_t) tbl[1];
+                    sum_bc += (int32_t) tbl[2];
+                    sum_bd += (int32_t) tbl[3];
+                }
+
+                const float act_scale_r = scales[blk * 2 + 0];
+                const float act_scale_i = scales[blk * 2 + 1];
+                acc_ac_xr += act_scale_r * (float) sum_ac;
+                acc_ad_xi += act_scale_i * (float) sum_ad;
+                acc_bc_xr += act_scale_r * (float) sum_bc;
+                acc_bd_xi += act_scale_i * (float) sum_bd;
             }
 #endif
 
@@ -543,21 +569,28 @@ void ggml_ifairy_lut_accum4_ex(int k, int n, const uint8_t * indexes, const void
     const int64_t groups = blocks * groups_per_block;
 
     for (int col = 0; col < n; ++col) {
-        const int16_t * lut_base = (const int16_t *) ((const uint8_t *) lut + (size_t) col * (size_t) groups * (size_t) (4 * 64) * sizeof(int16_t));
-        const float * scales = (const float *) lut_scales + (size_t) col * (size_t) groups * 2;
+        const int16_t * lut_base = (const int16_t *) ((const uint8_t *) lut + (size_t) col * (size_t) groups * (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns) * sizeof(int16_t));
+        const float * scales = (const float *) lut_scales + (size_t) col * (size_t) blocks * 2;
         float * out = (float *) ((uint8_t *) dst + (size_t) col * dst_col_stride);
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
         float32x4_t accv = add ? vld1q_f32(out) : vdupq_n_f32(0.0f);
-        for (int64_t g = 0; g < groups; ++g) {
-            const float32x2_t srsi = vld1_f32(scales + (size_t) g * 2);
-            const float32x4_t scv = vcombine_f32(srsi, srsi); // {sr, si, sr, si}
+        for (int64_t blk = 0; blk < blocks; ++blk) {
+            int32x4_t isum = vdupq_n_s32(0);
+            const uint8_t * idx_blk = indexes + (size_t) blk * (size_t) groups_per_block;
+            const int16_t * lut_blk = lut_base + (size_t) blk * (size_t) groups_per_block * (size_t) (k_ifairy_lut_patterns * k_ifairy_lut_channels);
 
-            const uint8_t pat = (uint8_t) (indexes[g] & 0x3f);
-            const int16_t * tbl = lut_base + (size_t) g * (64 * 4) + (size_t) pat * 4;
-            const int16x4_t sums16 = vld1_s16(tbl); // {ac, ad, bc, bd}
-            const int32x4_t sums32 = vmovl_s16(sums16);
-            const float32x4_t sumsf = vcvtq_f32_s32(sums32);
+            for (int64_t gi = 0; gi < groups_per_block; ++gi) {
+                const uint8_t pat = (uint8_t) (idx_blk[gi] & 0x3f);
+                const int16_t * tbl = lut_blk + (size_t) gi * (size_t) (k_ifairy_lut_patterns * k_ifairy_lut_channels) + (size_t) pat * k_ifairy_lut_channels;
+                const int16x4_t sums16 = vld1_s16(tbl); // {ac, ad, bc, bd}
+                const int32x4_t sums32 = vmovl_s16(sums16);
+                isum = vaddq_s32(isum, sums32);
+            }
+
+            const float32x2_t srsi = vld1_f32(scales + (size_t) blk * 2);
+            const float32x4_t scv = vcombine_f32(srsi, srsi); // {sr, si, sr, si}
+            const float32x4_t sumsf = vcvtq_f32_s32(isum);
             accv = vmlaq_f32(accv, sumsf, scv);
         }
         vst1q_f32(out, accv);
@@ -567,17 +600,30 @@ void ggml_ifairy_lut_accum4_ex(int k, int n, const uint8_t * indexes, const void
         float acc_bc_xr = add ? out[2] : 0.0f;
         float acc_bd_xi = add ? out[3] : 0.0f;
 
-        for (int64_t g = 0; g < groups; ++g) {
-            const float act_scale_r = scales[g * 2 + 0];
-            const float act_scale_i = scales[g * 2 + 1];
+        for (int64_t blk = 0; blk < blocks; ++blk) {
+            int32_t sum_ac = 0;
+            int32_t sum_ad = 0;
+            int32_t sum_bc = 0;
+            int32_t sum_bd = 0;
 
-            const uint8_t pat = (uint8_t) (indexes[g] & 0x3f);
-            const int16_t * tbl = lut_base + (size_t) g * (64 * 4) + (size_t) pat * 4;
+            const uint8_t * idx_blk = indexes + (size_t) blk * (size_t) groups_per_block;
+            const int16_t * lut_blk = lut_base + (size_t) blk * (size_t) groups_per_block * (size_t) (k_ifairy_lut_patterns * k_ifairy_lut_channels);
 
-            acc_ac_xr += act_scale_r * (float) tbl[0];
-            acc_ad_xi += act_scale_i * (float) tbl[1];
-            acc_bc_xr += act_scale_r * (float) tbl[2];
-            acc_bd_xi += act_scale_i * (float) tbl[3];
+            for (int64_t gi = 0; gi < groups_per_block; ++gi) {
+                const uint8_t pat = (uint8_t) (idx_blk[gi] & 0x3f);
+                const int16_t * tbl = lut_blk + (size_t) gi * (size_t) (k_ifairy_lut_patterns * k_ifairy_lut_channels) + (size_t) pat * k_ifairy_lut_channels;
+                sum_ac += (int32_t) tbl[0];
+                sum_ad += (int32_t) tbl[1];
+                sum_bc += (int32_t) tbl[2];
+                sum_bd += (int32_t) tbl[3];
+            }
+
+            const float act_scale_r = scales[blk * 2 + 0];
+            const float act_scale_i = scales[blk * 2 + 1];
+            acc_ac_xr += act_scale_r * (float) sum_ac;
+            acc_ad_xi += act_scale_i * (float) sum_ad;
+            acc_bc_xr += act_scale_r * (float) sum_bc;
+            acc_bd_xi += act_scale_i * (float) sum_bd;
         }
 
         out[0] = acc_ac_xr;
@@ -615,8 +661,8 @@ void ggml_ifairy_lut_mul_mat_scalar(int m, int k, int n, const void * qweights, 
     // workspace: indexes + LUT + scales
     const size_t index_bytes_raw = (size_t) m * (size_t) groups;
     const size_t index_bytes = GGML_PAD(index_bytes_raw, 64);
-    const size_t lut_bytes   = (size_t) n * (size_t) groups * (size_t) (4 * 64) * sizeof(int16_t);
-    const size_t scale_bytes = (size_t) n * (size_t) groups * 2 * sizeof(float);
+    const size_t lut_bytes   = (size_t) n * (size_t) groups * (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns) * sizeof(int16_t);
+    const size_t scale_bytes = (size_t) n * (size_t) blocks * 2 * sizeof(float);
     const size_t total_bytes = index_bytes + lut_bytes + scale_bytes;
 
     void * ptr = NULL;
@@ -631,7 +677,6 @@ void ggml_ifairy_lut_mul_mat_scalar(int m, int k, int n, const void * qweights, 
 
     // build indexes per row
     ggml_ifairy_3w_encode((const block_ifairy *) qweights, K, m, indexes, index_bytes_raw);
-
     ggml_ifairy_lut_mul_mat_scalar_internal(m, k, n, qweights, act, act_stride, indexes, lut, scales, dst, (size_t) m * 2 * sizeof(float));
 
     free(buf);

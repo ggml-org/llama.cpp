@@ -16,9 +16,10 @@
   - 分组按 `QK_K=256` block 内部进行：`85` 个 triplet + `1` 个尾组（`{255, pad, pad}`），不跨 block、不丢维度。
 - LUT 构表：`ggml/src/ggml-ifairy-lut.cpp::ggml_ifairy_lut_preprocess()`
   - 每组三权重对应该列激活的 `4 × 64` 表（`sum_ac/sum_ad/sum_bc/sum_bd`，`int16`），并采用 `pat` 维度上的 **4 通道交织布局**（便于 NEON `vst4/vld1`）。
-  - scale：每组 2 个 `float`（real/imag）。
+  - scale：每个 **block** 2 个 `float`（`d_real/d_imag`，被该 block 的全部 `86` 个 group 共享），用于减少重复读写与带宽。
 - GEMM：`ggml/src/ggml-ifairy-lut.cpp::ggml_ifairy_lut_qgemm()`
   - 使用索引查表 + scale 累加，最终按 `ggml_vec_dot_ifairy_q16_K_generic` 语义合成输出（`w * conj(x)`）。
+  - 当前实现会先在 **每个 block 内以 int32 累加 86 个 group 的 `{ac,ad,bc,bd}`**，再按该 block 的 `d_real/d_imag` 一次性缩放并累加到 float（减少 per-group 的 float convert/mul）。
   - 输出默认以 **bf16-pair packed in F32** 的方式写回（与现有 ifairy vec_dot 约定一致）。
   - 在 `__aarch64__ + __ARM_NEON` 下使用 NEON 累加（否则走标量）。
 
@@ -89,7 +90,10 @@
    - 下一步优先项：在此基础上继续降低 barrier 成本、做 unroll/预取，并评估 DOTPROD 版本。
 
 2) **降低 LUT 工作区与带宽（提高上限）**  
+   - 已完成一项低风险带宽优化：把 activation `d_real/d_imag` 的 `scales` 从“每 group 一份”改为“每 block 一份”（1 个 block 内 86 个 group 共享），显著减少 `scales` 读写与工作区占用。
+   - 已完成一项低风险算术/带宽优化：在 `qgemm/accum4` 内先按 block 累加 `int32` 的 `{ac,ad,bc,bd}`，再做一次 `float` 转换与缩放（减少 per-group 的 `vcvt + mul`）。
    - 从 `4×64 int16` correctness-first 结构，演进到更紧凑的布局（例如 “16 canonical + factor” 等方向），降低 `lut/scales/indexes` 的带宽压力与 cache miss。
+   - 备注：若要推进 “16 canonical + factor”，需要配合 **int8 LUT + `vqtbl` 查表/整数累加** 的整体重构；单纯在当前 float 累加框架里增加 canonical 变换通常会带来额外 shuffle/分支而变慢。
 
 3) **索引生命周期/缓存策略升级（工程化与复用）**  
    - 现状：`transform_tensor()` 生成的索引缓冲挂在 `tensor->extra`，在 CPU backend free 时统一释放。  

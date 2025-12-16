@@ -1298,7 +1298,8 @@ void ggml_compute_forward_mul_mat(
 
         const size_t quant_bytes = src1->type == GGML_TYPE_F32 ? GGML_PAD((size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16), 64) : 0;
         const size_t lut_bytes   = (size_t) N * (size_t) groups_tile * (size_t) (4 * 64) * sizeof(int16_t);
-        const size_t scale_bytes = (size_t) N * (size_t) groups_tile * 2 * sizeof(float);
+        // activation scales are per-block (shared by all groups in the block)
+        const size_t scale_bytes = (size_t) N * (size_t) blocks_tile * 2 * sizeof(float);
         const size_t shared_lut_bytes = GGML_PAD(lut_bytes + scale_bytes, 64);
 
         // Optional "full accumulator" mode (tiled only):
