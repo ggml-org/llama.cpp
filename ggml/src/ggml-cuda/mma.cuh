@@ -916,6 +916,8 @@ namespace ggml_cuda_mma {
             "%10, {0, 0}, %11, {0, 0};"
             : "+f"(Dxi[0]), "+f"(Dxi[1]), "+f"(Dxi[2]), "+f"(Dxi[3])
             : "r"(Axi[0]), "r"(Axi[1]), "r"(Axi[2]), "r"(Axi[3]), "r"(Bxi[0]), "r"(Bxi[1]), "r"(a_scale), "r"(b_scale));
+#else
+        GGML_UNUSED_VARS(D, A, B, a_scale, b_scale);
 #endif  // BLACKWELL_MMA_AVAILABLE
     }
 

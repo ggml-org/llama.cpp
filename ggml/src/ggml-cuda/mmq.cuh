@@ -3385,12 +3385,10 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 
 #if defined(BLACKWELL_MMA_AVAILABLE)
-    // blocks_per_mmq: number of qk-blocks per Y-block structure
-    // FP4 on blackwell: block_fp4_mmq holds 8 qk-blocks (256 values)
-    // Others: block_q8_1_mmq holds 4 qk-blocks (128 values)
-    constexpr int blocks_per_mmq = (type == GGML_TYPE_MXFP4) ? 8 : (4 * QK8_1) / qk;
+    // FP4 tile stores 8 blocks
+    constexpr int ne_block = (type == GGML_TYPE_MXFP4) ? 8 * QK_MXFP4 : 4 * QK8_1;
 #else
-    constexpr int blocks_per_mmq = (4 * QK8_1) / qk;
+    constexpr int ne_block = 4 * QK8_1;
 #endif  // defined(BLACKWELL_MMA_AVAILABLE)
 
     constexpr int ITER_K          = get_iter_k(type);
@@ -3403,7 +3401,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
         load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
         {
-            const int * by0 = y + ncols_y * (kb0 / blocks_per_mmq) * sz;
+            const int * by0 = y + ncols_y * (kb0 * qk / ne_block) * sz;
 #pragma unroll
             for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
                 int l = l0 + threadIdx.y*warp_size + threadIdx.x;
@@ -3419,7 +3417,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
         __syncthreads();
 
         {
-            const int * by0 = y + ncols_y * ((kb0 / blocks_per_mmq) * sz + sz);
+            const int * by0 = y + ncols_y * ((kb0 * qk / ne_block) * sz + sz);
 #pragma unroll
             for (int l0 = 0; l0 < mmq_x * MMQ_TILE_Y_K; l0 += nwarps * warp_size) {
                 int l = l0 + threadIdx.y*warp_size + threadIdx.x;
