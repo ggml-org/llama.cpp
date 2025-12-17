@@ -584,15 +584,21 @@ bool test_ifairy_lut_scalar_matmul() {
 // 测试 5: CPU backend LUT tiling 回归（非 tiling vs BK/BM tiling）
 // ============================================================================
 
-static bool run_ifairy_backend_mul_mat(std::vector<uint32_t> & packed_out, bool tiling) {
+static bool run_ifairy_backend_mul_mat(std::vector<uint32_t> & packed_out, bool tiling, int64_t n_cols, const char * layout) {
     // Keep other tests isolated.
     scoped_env_var env_lut("GGML_IFAIRY_LUT");
     scoped_env_var env_strict("GGML_IFAIRY_LUT_VALIDATE_STRICT");
     scoped_env_var env_bk("GGML_IFAIRY_LUT_BK_BLOCKS");
     scoped_env_var env_bm("GGML_IFAIRY_LUT_BM");
+    scoped_env_var env_layout("GGML_IFAIRY_LUT_LAYOUT");
 
     env_lut.set("1");
     env_strict.unset();
+    if (layout) {
+        env_layout.set(layout);
+    } else {
+        env_layout.unset();
+    }
 
     if (tiling) {
         // force multi-tile: K=512 => 2 blocks => BK_BLOCKS=1 => 2 tiles
@@ -604,7 +610,7 @@ static bool run_ifairy_backend_mul_mat(std::vector<uint32_t> & packed_out, bool 
     }
 
     const int64_t M = 8;
-    const int64_t N = 2;
+    const int64_t N = n_cols;
     const int64_t K = 2 * QK_K;
 
     const int64_t blocks_per_row = K / QK_K;
@@ -705,10 +711,10 @@ bool test_ifairy_lut_backend_tiling_regression() {
 
     std::vector<uint32_t> out_no_tile;
     std::vector<uint32_t> out_tile;
-    if (!run_ifairy_backend_mul_mat(out_no_tile, false)) {
+    if (!run_ifairy_backend_mul_mat(out_no_tile, false, 2, NULL)) {
         return false;
     }
-    if (!run_ifairy_backend_mul_mat(out_tile, true)) {
+    if (!run_ifairy_backend_mul_mat(out_tile, true, 2, NULL)) {
         return false;
     }
 
@@ -717,7 +723,24 @@ bool test_ifairy_lut_backend_tiling_regression() {
         return false;
     }
 
-    return compare_u32_arrays(out_tile.data(), out_no_tile.data(), out_no_tile.size());
+    if (!compare_u32_arrays(out_tile.data(), out_no_tile.data(), out_no_tile.size())) {
+        return false;
+    }
+
+    // Decode-like regression: N == 1, plus layout equivalence (legacy vs compact) for the same backend graph.
+    std::vector<uint32_t> out_legacy;
+    std::vector<uint32_t> out_compact;
+    if (!run_ifairy_backend_mul_mat(out_legacy, false, 1, "legacy")) {
+        return false;
+    }
+    if (!run_ifairy_backend_mul_mat(out_compact, false, 1, "compact")) {
+        return false;
+    }
+    if (out_legacy.size() != out_compact.size()) {
+        fprintf(stderr, "Size mismatch (layout): %zu vs %zu\n", out_legacy.size(), out_compact.size());
+        return false;
+    }
+    return compare_u32_arrays(out_compact.data(), out_legacy.data(), out_legacy.size());
 #endif
 }
 
