@@ -576,17 +576,16 @@ static void flash_attn_xmx_f16_kernel(
                 }
 
                 // Cross-sequence masking: set to -INF if KV belongs to different sequence
+                // Vectorized: load 4 seq_ids at once using int4
                 if (q_seq >= 0 && kv_seq_ids) {
                     const int kv_idx_base = kv_start + k;
-                    const int32_t kv_seq0 = kv_seq_ids[kv_idx_base];
-                    const int32_t kv_seq1 = kv_seq_ids[kv_idx_base + 1];
-                    const int32_t kv_seq2 = kv_seq_ids[kv_idx_base + 2];
-                    const int32_t kv_seq3 = kv_seq_ids[kv_idx_base + 3];
+                    // Vectorized load of 4 int32 sequence IDs
+                    sycl::int4 kv_seqs = *reinterpret_cast<const sycl::int4*>(&kv_seq_ids[kv_idx_base]);
                     // Mask if: KV has valid seq (>= 0) AND it doesn't match query's seq
-                    if (kv_seq0 >= 0 && kv_seq0 != q_seq) qk.x() = -FLT_MAX;
-                    if (kv_seq1 >= 0 && kv_seq1 != q_seq) qk.y() = -FLT_MAX;
-                    if (kv_seq2 >= 0 && kv_seq2 != q_seq) qk.z() = -FLT_MAX;
-                    if (kv_seq3 >= 0 && kv_seq3 != q_seq) qk.w() = -FLT_MAX;
+                    if (kv_seqs.x() >= 0 && kv_seqs.x() != q_seq) qk.x() = -FLT_MAX;
+                    if (kv_seqs.y() >= 0 && kv_seqs.y() != q_seq) qk.y() = -FLT_MAX;
+                    if (kv_seqs.z() >= 0 && kv_seqs.z() != q_seq) qk.z() = -FLT_MAX;
+                    if (kv_seqs.w() >= 0 && kv_seqs.w() != q_seq) qk.w() = -FLT_MAX;
                 }
 
                 // Multi-token decode: per-query position-based causal masking
@@ -699,9 +698,11 @@ static void flash_attn_xmx_f16_kernel(
         // Zero-pad V stride padding (XMX_PAD is 0 now, but keep for safety)
         if (XMX_PAD > 0) {
             for (int idx = tid; idx < kv_count * XMX_PAD; idx += XMX_NTHREADS) {
-                const int k = idx / XMX_PAD;
-                const int p = idx % XMX_PAD;
-                tile_V[k * V_STRIDE + D + p] = sycl::half(0.0f);
+                const int k_idx = XMX_PAD > 0 ? idx / XMX_PAD : 0;
+                const int p_idx = XMX_PAD > 0 ? idx % XMX_PAD : 0;
+                if (k_idx < kv_count && D + p_idx < V_STRIDE) { // Added bounds check for safety
+                    tile_V[k_idx * V_STRIDE + D + p_idx] = sycl::half(0.0f);
+                }
             }
         }
 
@@ -897,9 +898,11 @@ static void flash_attn_xmx_f16_kernel(
         }
         // Zero-pad S stride padding
         for (int idx = tid; idx < ncols_padded * XMX_PAD; idx += XMX_NTHREADS) {
-            const int j = idx / XMX_PAD;
-            const int p = idx % XMX_PAD;
-            tile_S[j * S_STRIDE + XMX_BATCH_KV + p] = sycl::half(0.0f);
+            const int j_idx = XMX_PAD > 0 ? idx / XMX_PAD : 0;
+            const int p_idx = XMX_PAD > 0 ? idx % XMX_PAD : 0;
+            if (j_idx < ncols_padded && XMX_BATCH_KV + p_idx < S_STRIDE) {
+                tile_S[j_idx * S_STRIDE + XMX_BATCH_KV + p_idx] = sycl::half(0.0f);
+            }
         }
         // Zero-pad S for padding rows (if ncols < ncols_padded)
         if (ncols < ncols_padded) {
@@ -951,7 +954,7 @@ static void flash_attn_xmx_f16_kernel(
             KQ_sum[j] += batch_max_shared[j];
         }
 
-        sycl::group_barrier(item.get_group());
+        // NOTE: Barrier removed - KQ_sum is per-thread private state, no sync needed
 
         // ---------------------------------------------------------------------
         // PHASE 4: XMX-based S @ V computation
@@ -1045,7 +1048,7 @@ static void flash_attn_xmx_f16_kernel(
         // Swap buffers for next iteration
         buf_compute = buf_load;
 
-        sycl::group_barrier(item.get_group());
+        // NOTE: End-of-loop barrier removed - next iteration's Q@K^T barrier provides sync
     }
 
 #if FATTN_XMX_DEBUG

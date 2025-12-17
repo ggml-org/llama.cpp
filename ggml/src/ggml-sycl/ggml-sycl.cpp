@@ -78,7 +78,7 @@ int g_ggml_sycl_disable_dnn = 0;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
 int g_ggml_sycl_use_xmx_gemm = 0;  // Enable XMX-accelerated GEMM (experimental)
-int g_ggml_sycl_xmx_threshold = 64; // Max batch size for XMX (XMX faster for N < threshold)
+int g_ggml_sycl_xmx_threshold = 1024; // Max batch size for XMX (XMX faster for N < threshold)
 thread_local bool g_ggml_sycl_graph_recording = false;  // True when SYCL graph is recording
 
 static ggml_sycl_device_info ggml_sycl_init() {
