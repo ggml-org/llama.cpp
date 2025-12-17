@@ -8,6 +8,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
+#ifdef LLAMA_USE_OPENMP
+#include <omp.h>
+#endif
 
 #define MAX_REPETITION_THRESHOLD 2000
 //
@@ -1091,13 +1094,18 @@ struct llama_grammar * llama_grammar_init_impl(
         }
     } while (true);
 
-    // Compute utf8 codepoints when partial_utf8 = {0, 0}
-    std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> utf8_cpt_cache;
+    // Precompute as much token data as possible
+    std::vector<llama_grammar_cached_token_data> token_cache;
     if (vocab) {
-        utf8_cpt_cache.reserve(vocab->n_tokens());
+        token_cache.resize(vocab->n_tokens());
         for (size_t i = 0; i < vocab->n_tokens(); i++) {
             const std::string & piece = vocab->token_to_piece(i);
-            utf8_cpt_cache[i] = decode_utf8(piece, {0, 0});
+            auto decoded = decode_utf8(piece, {0, 0});
+            token_cache.emplace_back(llama_grammar_cached_token_data{
+                vocab->is_eog(i),
+                !piece.empty() && piece[0] != 0,
+                std::move(decoded.first),
+            });
         }
     }
 
@@ -1108,7 +1116,7 @@ struct llama_grammar * llama_grammar_init_impl(
         vocab,
         std::move(vec_rules),
         std::move(stacks),
-        std::move(utf8_cpt_cache),
+        std::move(token_cache),
         /* .partial_utf8 = */             {},
         /* .lazy = */                     false,
         /* .awaiting_trigger = */         false,
@@ -1208,13 +1216,18 @@ struct llama_grammar * llama_grammar_init_impl(
         trigger.regex = std::regex(trigger.pattern);
     }
 
-    // Compute utf8 codepoints when partial_utf8 = {0, 0}
-    std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> utf8_cpt_cache;
+    // Precompute as much token data as possible
+    std::vector<llama_grammar_cached_token_data> token_cache;
     if (vocab) {
-        utf8_cpt_cache.reserve(vocab->n_tokens());
+        token_cache.resize(vocab->n_tokens());
         for (size_t i = 0; i < vocab->n_tokens(); i++) {
             const std::string & piece = vocab->token_to_piece(i);
-            utf8_cpt_cache[i] = decode_utf8(piece, {0, 0});
+            auto decoded = decode_utf8(piece, {0, 0});
+            token_cache[i] = llama_grammar_cached_token_data{
+                vocab->is_eog(i),
+                !piece.empty() && piece[0] != 0,
+                std::move(decoded.first),
+            };
         }
     }
 
@@ -1225,7 +1238,7 @@ struct llama_grammar * llama_grammar_init_impl(
         vocab,
         std::move(vec_rules),
         std::move(stacks),
-        std::move(utf8_cpt_cache),
+        std::move(token_cache),
         /* .partial_utf8 = */             {},
         /* .lazy = */                     lazy,
         /* .awaiting_trigger = */         lazy,
@@ -1249,7 +1262,7 @@ struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & gra
         grammar.vocab,
         grammar.rules,
         grammar.stacks,
-        grammar.utf8_cpt_cache,
+        grammar.token_cache,
         grammar.partial_utf8,
         grammar.lazy,
         grammar.awaiting_trigger,
@@ -1290,36 +1303,50 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
         }
     }
 
-    std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> candidates_decoded;
-    candidates_decoded.reserve(cur_p->size);
+#ifdef LLAMA_USE_OPENMP
+    size_t chunk_size = 4096;
+    size_t chunks = (cur_p->size + chunk_size - 1) / chunk_size;
 
-    llama_grammar_candidates candidates_grammar;
-    candidates_grammar.reserve(cur_p->size);
+    #pragma omp parallel for num_threads(8) schedule(dynamic, 1)
+    for (int chunk = 0; chunk < chunks; ++chunk) {
+        size_t start = chunk * chunk_size;
+        size_t end = std::min(start + chunk_size, cur_p->size);
+#else
+    {
+        size_t start = 0;
+        size_t end = cur_p->size;
+#endif
+        std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> candidates_decoded;
+        candidates_decoded.reserve(end - start);
 
-    for (size_t i = 0; i < cur_p->size; ++i) {
-        const llama_token id      = cur_p->data[i].id;
-        const std::string & piece = grammar.vocab->token_to_piece(id);
+        llama_grammar_candidates candidates_grammar;
+        candidates_grammar.reserve(end - start);
 
-        if (grammar.vocab->is_eog(id)) {
-            if (!allow_eog) {
+        for (size_t i = start; i < end; ++i) {
+            const llama_token id = cur_p->data[i].id;
+            const auto & cached  = grammar.token_cache[id];
+
+            if (cached.is_eog) {
+                if (!allow_eog) {
+                    cur_p->data[i].logit = -INFINITY;
+                }
+            } else if (!cached.is_valid) {
                 cur_p->data[i].logit = -INFINITY;
-            }
-        } else if (piece.empty() || piece[0] == 0) {
-            cur_p->data[i].logit = -INFINITY;
-        } else {
-            if (grammar.partial_utf8.value == 0 && grammar.partial_utf8.n_remain == 0) {
-                const auto & cached = grammar.utf8_cpt_cache[id];
-                candidates_grammar.push_back({ i, cached.first.data(), cached.second, id });
             } else {
-                candidates_decoded.push_back(decode_utf8(piece, grammar.partial_utf8));
-                candidates_grammar.push_back({ i, candidates_decoded.back().first.data(), candidates_decoded.back().second, id });
+                if (grammar.partial_utf8.value == 0 && grammar.partial_utf8.n_remain == 0) {
+                    candidates_grammar.push_back({ i, cached.codepoints.data(), {0, 0}, id });
+                } else {
+                    const std::string & piece = grammar.vocab->token_to_piece(id);
+                    candidates_decoded.push_back(decode_utf8(piece, grammar.partial_utf8));
+                    candidates_grammar.push_back({ i, candidates_decoded.back().first.data(), candidates_decoded.back().second, id });
+                }
             }
         }
-    }
 
-    const auto rejects = llama_grammar_reject_candidates(grammar.rules, grammar.stacks, candidates_grammar);
-    for (const auto & reject : rejects) {
-        cur_p->data[reject.index].logit = -INFINITY;
+        const auto rejects = llama_grammar_reject_candidates(grammar.rules, grammar.stacks, candidates_grammar);
+        for (const auto & reject : rejects) {
+            cur_p->data[reject.index].logit = -INFINITY;
+        }
     }
 }
 

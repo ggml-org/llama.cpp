@@ -148,6 +148,14 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
 
+if (GGML_OPENMP) # FIXME: Add LLAMA_OPENMP option?
+    find_package(OpenMP)
+    if (OpenMP_FOUND)
+        target_compile_definitions(llama PRIVATE LLAMA_USE_OPENMP)
+        target_link_libraries(llama PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
+    endif()
+endif()
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(llama PRIVATE LLAMA_BUILD)

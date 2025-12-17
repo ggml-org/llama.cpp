@@ -121,6 +121,12 @@ struct llama_grammar_trigger_pattern {
     std::regex  regex;
 };
 
+struct llama_grammar_cached_token_data {
+    bool is_eog;
+    bool is_valid;
+    std::vector<uint32_t> codepoints;
+};
+
 struct llama_grammar {
     // maintain a list of llama_tokens and their positions in the trigger_buffer
     using token_pos = std::pair<llama_token, std::pair<size_t, size_t>>;
@@ -131,7 +137,7 @@ struct llama_grammar {
     const llama_grammar_rules  rules;  // TODO: shared ptr
           llama_grammar_stacks stacks;
 
-    std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> utf8_cpt_cache;
+    std::vector<llama_grammar_cached_token_data> token_cache;
 
     // buffer for partially generated UTF-8 sequence from accepted tokens
     llama_partial_utf8 partial_utf8;
