@@ -1,154 +1,257 @@
 package com.example.llama
 
-import android.app.ActivityManager
-import android.app.DownloadManager
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.net.Uri
 import android.os.Bundle
-import android.os.StrictMode
-import android.os.StrictMode.VmPolicy
-import android.text.format.Formatter
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.viewModels
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.Button
-import androidx.compose.material3.LocalContentColor
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.core.content.getSystemService
-import com.example.llama.ui.theme.LlamaAndroidTheme
+import android.util.Log
+import android.widget.EditText
+import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.arm.aichat.AiChat
+import com.arm.aichat.InferenceEngine
+import com.arm.aichat.gguf.GgufMetadata
+import com.arm.aichat.gguf.GgufMetadataReader
+import com.google.android.material.floatingactionbutton.FloatingActionButton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStream
+import java.util.UUID
 
-class MainActivity(
-    activityManager: ActivityManager? = null,
-    downloadManager: DownloadManager? = null,
-    clipboardManager: ClipboardManager? = null,
-): ComponentActivity() {
-    private val tag: String? = this::class.simpleName
+class MainActivity : AppCompatActivity() {
 
-    private val activityManager by lazy { activityManager ?: getSystemService<ActivityManager>()!! }
-    private val downloadManager by lazy { downloadManager ?: getSystemService<DownloadManager>()!! }
-    private val clipboardManager by lazy { clipboardManager ?: getSystemService<ClipboardManager>()!! }
+    // Android views
+    private lateinit var ggufTv: TextView
+    private lateinit var messagesRv: RecyclerView
+    private lateinit var userInputEt: EditText
+    private lateinit var userActionFab: FloatingActionButton
 
-    private val viewModel: MainViewModel by viewModels()
+    // Arm AI Chat inference engine
+    private lateinit var engine: InferenceEngine
 
-    // Get a MemoryInfo object for the device's current memory status.
-    private fun availableMemory(): ActivityManager.MemoryInfo {
-        return ActivityManager.MemoryInfo().also { memoryInfo ->
-            activityManager.getMemoryInfo(memoryInfo)
-        }
-    }
+    // Conversation states
+    private var isModelReady = false
+    private val messages = mutableListOf<Message>()
+    private val lastAssistantMsg = StringBuilder()
+    private val messageAdapter = MessageAdapter(messages)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        setContentView(R.layout.activity_main)
 
-        StrictMode.setVmPolicy(
-            VmPolicy.Builder(StrictMode.getVmPolicy())
-                .detectLeakedClosableObjects()
-                .build()
-        )
+        // Find views
+        ggufTv = findViewById(R.id.gguf)
+        messagesRv = findViewById(R.id.messages)
+        messagesRv.layoutManager = LinearLayoutManager(this)
+        messagesRv.adapter = messageAdapter
+        userInputEt = findViewById(R.id.user_input)
+        userActionFab = findViewById(R.id.fab)
 
-        val free = Formatter.formatFileSize(this, availableMemory().availMem)
-        val total = Formatter.formatFileSize(this, availableMemory().totalMem)
+        // Arm AI Chat initialization
+        lifecycleScope.launch(Dispatchers.Default) {
+            engine = AiChat.getInferenceEngine(applicationContext)
+        }
 
-        viewModel.log("Current memory: $free / $total")
-        viewModel.log("Downloads directory: ${getExternalFilesDir(null)}")
-
-        val extFilesDir = getExternalFilesDir(null)
-
-        val models = listOf(
-            Downloadable(
-                "Phi-2 7B (Q4_0, 1.6 GiB)",
-                Uri.parse("https://huggingface.co/ggml-org/models/resolve/main/phi-2/ggml-model-q4_0.gguf?download=true"),
-                File(extFilesDir, "phi-2-q4_0.gguf"),
-            ),
-            Downloadable(
-                "TinyLlama 1.1B (f16, 2.2 GiB)",
-                Uri.parse("https://huggingface.co/ggml-org/models/resolve/main/tinyllama-1.1b/ggml-model-f16.gguf?download=true"),
-                File(extFilesDir, "tinyllama-1.1-f16.gguf"),
-            ),
-            Downloadable(
-                "Phi 2 DPO (Q3_K_M, 1.48 GiB)",
-                Uri.parse("https://huggingface.co/TheBloke/phi-2-dpo-GGUF/resolve/main/phi-2-dpo.Q3_K_M.gguf?download=true"),
-                File(extFilesDir, "phi-2-dpo.Q3_K_M.gguf")
-            ),
-        )
-
-        setContent {
-            LlamaAndroidTheme {
-                // A surface container using the 'background' color from the theme
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    MainCompose(
-                        viewModel,
-                        clipboardManager,
-                        downloadManager,
-                        models,
-                    )
-                }
-
+        // Upon CTA button tapped
+        userActionFab.setOnClickListener {
+            if (isModelReady) {
+                // If model is ready, validate input and send to engine
+                handleUserInput()
+            } else {
+                // Otherwise, prompt user to select a GGUF metadata on the device
+                getContent.launch(arrayOf("*/*"))
             }
         }
     }
+
+    private val getContent = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        Log.i(TAG, "Selected file uri:\n $uri")
+        uri?.let { handleSelectedModel(it) }
+    }
+
+    /**
+     * Handles the file Uri from [getContent] result
+     */
+    private fun handleSelectedModel(uri: Uri) {
+        // Update UI states
+        userActionFab.isEnabled = false
+        userInputEt.hint = "Parsing GGUF..."
+        ggufTv.text = "Parsing metadata from selected file \n$uri"
+
+        lifecycleScope.launch(Dispatchers.IO) {
+            // Parse GGUF metadata
+            Log.i(TAG, "Parsing GGUF metadata...")
+            contentResolver.openInputStream(uri)?.use {
+                GgufMetadataReader.create().readStructuredMetadata(it)
+            }?.let { metadata ->
+                // Update UI to show GGUF metadata to user
+                Log.i(TAG, "GGUF parsed: \n$metadata")
+                withContext(Dispatchers.Main) {
+                    ggufTv.text = metadata.toString()
+                }
+
+                // Ensure the model file is available
+                val modelName = metadata.filename() + FILE_EXTENSION_GGUF
+                contentResolver.openInputStream(uri)?.use { input ->
+                    ensureModelFile(modelName, input)
+                }?.let { modelFile ->
+                    loadModel(modelName, modelFile)
+
+                    withContext(Dispatchers.Main) {
+                        isModelReady = true
+                        userInputEt.hint = "Type and send a message!"
+                        userInputEt.isEnabled = true
+                        userActionFab.setImageResource(R.drawable.outline_send_24)
+                        userActionFab.isEnabled = true
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Prepare the model file within app's private storage
+     */
+    private suspend fun ensureModelFile(modelName: String, input: InputStream) =
+        withContext(Dispatchers.IO) {
+            File(ensureModelsDirectory(), modelName).also { file ->
+                // Copy the file into local storage if not yet done
+                if (!file.exists()) {
+                    Log.i(TAG, "Start copying file to $modelName")
+                    withContext(Dispatchers.Main) {
+                        userInputEt.hint = "Copying file..."
+                    }
+
+                    FileOutputStream(file).use { input.copyTo(it) }
+                    Log.i(TAG, "Finished copying file to $modelName")
+                } else {
+                    Log.i(TAG, "File already exists $modelName")
+                }
+            }
+        }
+
+    /**
+     * Load the model file from the app private storage
+     */
+    private suspend fun loadModel(modelName: String, modelFile: File) =
+        withContext(Dispatchers.IO) {
+            Log.i(TAG, "Loading model $modelName")
+            withContext(Dispatchers.Main) {
+                userInputEt.hint = "Loading model..."
+            }
+            engine.loadModel(modelFile.path)
+        }
+
+    /**
+     * Validate and send the user message into [InferenceEngine]
+     */
+    private fun handleUserInput() {
+        userInputEt.text.toString().also { userSsg ->
+            if (userSsg.isEmpty()) {
+                Toast.makeText(this, "Input message is empty!", Toast.LENGTH_SHORT).show()
+            } else {
+                userInputEt.text = null
+                userActionFab.isEnabled = false
+
+                // Update message states
+                messages.add(Message(UUID.randomUUID().toString(), userSsg, true))
+                lastAssistantMsg.clear()
+                messages.add(Message(UUID.randomUUID().toString(), lastAssistantMsg.toString(), false))
+
+                lifecycleScope.launch(Dispatchers.Default) {
+                    engine.sendUserPrompt(userSsg)
+                        .onCompletion {
+                            withContext(Dispatchers.Main) {
+                                userActionFab.isEnabled = true
+                            }
+                        }.collect { token ->
+                            val messageCount = messages.size
+                            check(messageCount > 0 && !messages[messageCount - 1].isUser)
+
+                            messages.removeAt(messageCount - 1).copy(
+                                content = lastAssistantMsg.append(token).toString()
+                            ).let { messages.add(it) }
+
+                            withContext(Dispatchers.Main) {
+                                messageAdapter.notifyItemChanged(messages.size - 1)
+                            }
+                        }
+                }
+            }
+        }
+    }
+
+    /**
+     * Run a benchmark with the model file
+     */
+    private suspend fun runBenchmark(modelName: String, modelFile: File) =
+        withContext(Dispatchers.Default) {
+            Log.i(TAG, "Starts benchmarking $modelName")
+            withContext(Dispatchers.Main) {
+                userInputEt.hint = "Running benchmark..."
+            }
+            engine.bench(
+                pp=BENCH_PROMPT_PROCESSING_TOKENS,
+                tg=BENCH_TOKEN_GENERATION_TOKENS,
+                pl=BENCH_SEQUENCE,
+                nr=BENCH_REPETITION
+            ).let { result ->
+                messages.add(Message(UUID.randomUUID().toString(), result, false))
+                withContext(Dispatchers.Main) {
+                    messageAdapter.notifyItemChanged(messages.size - 1)
+                }
+            }
+        }
+
+    /**
+     * Create the `models` directory if not exist.
+     */
+    private fun ensureModelsDirectory() =
+        File(filesDir, DIRECTORY_MODELS).also {
+            if (it.exists() && !it.isDirectory) { it.delete() }
+            if (!it.exists()) { it.mkdir() }
+        }
+
+    companion object {
+        private val TAG = MainActivity::class.java.simpleName
+
+        private const val DIRECTORY_MODELS = "models"
+        private const val FILE_EXTENSION_GGUF = ".gguf"
+
+        private const val BENCH_PROMPT_PROCESSING_TOKENS = 512
+        private const val BENCH_TOKEN_GENERATION_TOKENS = 128
+        private const val BENCH_SEQUENCE = 1
+        private const val BENCH_REPETITION = 3
+    }
 }
 
-@Composable
-fun MainCompose(
-    viewModel: MainViewModel,
-    clipboard: ClipboardManager,
-    dm: DownloadManager,
-    models: List<Downloadable>
-) {
-    Column {
-        val scrollState = rememberLazyListState()
-
-        Box(modifier = Modifier.weight(1f)) {
-            LazyColumn(state = scrollState) {
-                items(viewModel.messages) {
-                    Text(
-                        it,
-                        style = MaterialTheme.typography.bodyLarge.copy(color = LocalContentColor.current),
-                        modifier = Modifier.padding(16.dp)
-                    )
-                }
-            }
+fun GgufMetadata.filename() = when {
+    basic.name != null -> {
+        basic.name?.let { name ->
+            basic.sizeLabel?.let { size ->
+                "$name-$size"
+            } ?: name
         }
-        OutlinedTextField(
-            value = viewModel.message,
-            onValueChange = { viewModel.updateMessage(it) },
-            label = { Text("Message") },
-        )
-        Row {
-            Button({ viewModel.send() }) { Text("Send") }
-            Button({ viewModel.bench(8, 4, 1) }) { Text("Bench") }
-            Button({ viewModel.clear() }) { Text("Clear") }
-            Button({
-                viewModel.messages.joinToString("\n").let {
-                    clipboard.setPrimaryClip(ClipData.newPlainText("", it))
-                }
-            }) { Text("Copy") }
+    }
+    architecture?.architecture != null -> {
+        architecture?.architecture?.let { arch ->
+            basic.uuid?.let { uuid ->
+                "$arch-$uuid"
+            } ?: "$arch-${System.currentTimeMillis()}"
         }
-
-        Column {
-            for (model in models) {
-                Downloadable.Button(viewModel, dm, model)
-            }
-        }
+    }
+    else -> {
+        "model-${System.currentTimeMillis().toHexString()}"
     }
 }
