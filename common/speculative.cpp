@@ -315,7 +315,7 @@ llama_tokens common_speculative_gen_draft(
     for (int i = 0; i < params.n_draft; ++i) {
         common_batch_clear(batch);
 
-        common_sampler_sample(smpl, ctx_dft, 0);
+        common_sampler_sample(smpl, ctx_dft, 0, true);
 
         const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
