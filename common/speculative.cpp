@@ -307,7 +307,7 @@ static llama_tokens gen_eagle3_draft(
         /*.n_tokens  =*/ n_new,
         /*.token     =*/ nullptr,
         /*.embd      =*/ const_cast<float*>(features),
-        /*.pos       =*/ nullptr, 
+        /*.pos       =*/ nullptr,
         /*.n_seq_id  =*/ nullptr,
         /*.seq_id    =*/ nullptr,
         /*.logits    =*/ nullptr,

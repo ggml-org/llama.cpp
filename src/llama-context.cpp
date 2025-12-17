@@ -353,7 +353,7 @@ llama_context::llama_context(
 
             // Allocate tensors array for extraction
             eagle3.extract_tensors.resize(eagle3.extract_layer_indices.size(), nullptr);
-            
+
             LLAMA_LOG_INFO("%s: EAGLE3 extraction enabled for layers [%d, %d, %d]\n", __func__,
                            eagle3.extract_layer_indices[0],
                            eagle3.extract_layer_indices[1],
@@ -879,7 +879,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //const auto t_start_us = ggml_time_us();
 
         res->set_inputs(&ubatch);
-        
+
         // EAGLE3: Fill g_embeddings for decoder input
         if (model.arch == LLM_ARCH_EAGLE3 && gtype == LLM_GRAPH_TYPE_DECODER && !eagle3.g_embeddings.empty()) {
             ggml_tensor * g_embd = ggml_graph_get_tensor(gf, "inp_g_embeddings");
@@ -1265,32 +1265,32 @@ int llama_context::decode(const llama_batch & batch_inp) {
             if (n_outputs) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits_size);
-                
+
                 // EAGLE3: Map draft vocab to target vocab
                 if (model.arch == LLM_ARCH_EAGLE3 && model.d2t) {
                     static thread_local std::vector<int64_t> eagle3_d2t_map;
                     static thread_local std::vector<float>   eagle3_draft_logits;
-                    
+
                     const int64_t draft_vocab_size = t_logits->ne[0];
                     const uint32_t last_idx = n_outputs - 1;
-                    
+
                     // Load d2t mapping once (on first call)
                     if (eagle3_d2t_map.empty()) {
                         eagle3_d2t_map.resize(model.d2t->ne[0]);
                         ggml_backend_tensor_get(model.d2t, eagle3_d2t_map.data(), 0, eagle3_d2t_map.size() * sizeof(int64_t));
                     }
-                    
+
                     // Read only the last token's draft logits
                     eagle3_draft_logits.resize(draft_vocab_size);
                     const size_t last_offset = last_idx * draft_vocab_size * sizeof(float);
                     ggml_backend_tensor_get_async(backend_res, t_logits, eagle3_draft_logits.data(), last_offset, draft_vocab_size * sizeof(float));
                     synchronize();
-                    
-                    
+
+
                     // Map only the last token's draft logits to target vocab
                     float * last_logits_out = logits_out + last_idx * n_vocab;
                     std::fill(last_logits_out, last_logits_out + n_vocab, -std::numeric_limits<float>::infinity());
-                    
+
                     for (int64_t j = 0; j < draft_vocab_size; j++) {
                         const int64_t target_id = j + eagle3_d2t_map[j];
                         GGML_ASSERT(target_id >= 0 && target_id < n_vocab);
@@ -1656,7 +1656,7 @@ llm_graph_cb llama_context::graph_get_cb() const {
         if (cparams.eagle3_extract_enabled) {
             static constexpr const char * prefix = "eagle3_extract_";
             static constexpr size_t prefix_len = 15; // strlen("eagle3_extract_")
-            
+
             if (strncmp(name, prefix, prefix_len) == 0) {
                 // Parse the extraction index from the name (e.g., "eagle3_extract_0" -> 0)
                 size_t extract_idx = 0;
@@ -1667,7 +1667,7 @@ llm_graph_cb llama_context::graph_get_cb() const {
                     eagle3.extract_tensors[extract_idx] = cur;
                     LLAMA_LOG_DEBUG("%s: EAGLE3 stored tensor reference for extraction: "
                                    "index=%zu, layer=%d, target_layer=%d, tensor=%s\n",
-                                   __func__, extract_idx, il, 
+                                   __func__, extract_idx, il,
                                    eagle3.extract_layer_indices[extract_idx], name);
                 }
             }
@@ -1702,36 +1702,36 @@ void llama_context::extract_eagle3_features(const llama_ubatch & ubatch) {
     const int64_t n_tokens = ubatch.n_tokens;
     const int64_t n_embd = model.hparams.n_embd;
     const size_t n_layers = eagle3.extract_tensors.size();
-    
+
     // Allocate storage for concatenated features
     const int64_t n_embd_concat = n_embd * n_layers;
     eagle3.target_features.resize(n_embd_concat * n_tokens);
-    
+
     // Temporary buffer to hold layer features before transposing
     static thread_local std::vector<float> temp_layer_features;
     temp_layer_features.resize(n_embd * n_tokens);
-    
+
     LLAMA_LOG_DEBUG("%s: Start to extract EAGLE3 features: %zu layers, %lld tokens, %lld embd\n",
                     __func__, n_layers, (long long)n_tokens, (long long)n_embd);
-    
+
     // Extract each layer's features and interleave into token-major layout
     for (size_t layer_idx = 0; layer_idx < n_layers; ++layer_idx) {
         ggml_tensor * tensor = eagle3.extract_tensors[layer_idx];
         GGML_ASSERT(tensor != nullptr && "EAGLE3 extraction tensor is null");
-        
+
         // Get the backend where this tensor is stored
         ggml_backend_t backend = ggml_backend_sched_get_tensor_backend(sched.get(), tensor);
         GGML_ASSERT(backend != nullptr && "EAGLE3 tensor has no backend");
-        
+
         // Verify tensor shape: should be [n_embd, n_tokens]
         GGML_ASSERT(tensor->ne[0] == n_embd && tensor->ne[1] == n_tokens &&
                     "EAGLE3 extraction tensor has unexpected shape");
-        
+
         // Get layer features to temp buffer
         const size_t size_bytes = n_embd * n_tokens * sizeof(float);
         ggml_backend_tensor_get_async(backend, tensor, temp_layer_features.data(), 0, size_bytes);
         ggml_backend_sched_synchronize(sched.get());
-        
+
         // Then copy to correct position in target_features
         // target_features layout: [token_0_all_layers, token_1_all_layers, ...]
         // Each token has [layer_0_embd, layer_1_embd, layer_2_embd]
@@ -1743,7 +1743,7 @@ void llama_context::extract_eagle3_features(const llama_ubatch & ubatch) {
             std::memcpy(dest, src, n_embd * sizeof(float));
         }
     }
-    
+
 }
 
 //
@@ -3235,7 +3235,7 @@ const float * llama_context::get_eagle3_target_features() const {
 void llama_context::set_eagle3_g_embeddings(const float * g_embd, int32_t n_embd, int32_t n_tokens) {
     GGML_ASSERT(g_embd != nullptr && "g_embeddings cannot be null");
     GGML_ASSERT(n_embd > 0 && n_tokens > 0 && "invalid dimensions");
-    
+
     const size_t size = n_embd * n_tokens;
     eagle3.g_embeddings.resize(size);
     std::memcpy(eagle3.g_embeddings.data(), g_embd, size * sizeof(float));

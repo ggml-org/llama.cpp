@@ -74,18 +74,18 @@ struct llama_cross {
 struct llama_eagle3 {
     // Configuration: which layers to extract from target model
     std::vector<int> extract_layer_indices;
-    
+
     // Extracted features from target model (for encoder input)
     // Concatenated [layer_l, layer_m, layer_h] embeddings
     // Shape: [n_layers * n_embd, n_tokens] where n_layers = extract_layer_indices.size()
     std::vector<float> target_features;
-    
+
     // Encoder output (for decoder input)
     std::vector<float> g_embeddings;
-    
+
     // Tensor references for feature extraction from target model
     std::vector<ggml_tensor *> extract_tensors;
-    
+
     // Clear all stored data
     void clear() {
         target_features.clear();

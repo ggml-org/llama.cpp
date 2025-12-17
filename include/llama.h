@@ -364,7 +364,7 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
-        
+
         // EAGLE3 extraction configuration
         // When eagle3_model is set, layer extraction is automatically enabled
         const struct llama_model * eagle3_model; // EAGLE3 model to read extract_layers configuration from
@@ -876,7 +876,7 @@ extern "C" {
     // Returns NULL if no features are available
     // Format: [3*n_embd, n_tokens] - use model.hparams.n_embd and batch.n_tokens for dimensions
     LLAMA_API const float * llama_get_eagle3_target_features(struct llama_context * ctx);
-    
+
     // Set g_embeddings from EAGLE3 encoder output for decoder input
     // g_embd: pointer to encoder output embeddings
     LLAMA_API void llama_set_eagle3_g_embeddings(
