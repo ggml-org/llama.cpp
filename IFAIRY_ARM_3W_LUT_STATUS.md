@@ -36,6 +36,29 @@
 | 2025-12-17T06:53:24Z | `257c494b` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 6.88 |
 | 2025-12-17T06:59:40Z | `257c494b` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 8.01 |
 | 2025-12-17T06:59:40Z | `257c494b` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 8.08 |
+| 2025-12-17T08:06:50Z | `6ff807dc` | Apple M4 | 4 | 128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 9.02 |
+| 2025-12-17T08:27:00Z | `38c185d5` | Apple M4 | 4 | 128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 10.31 |
+
+## 0.2 Xcode Profile（以 decode 场景为准）
+
+> 目的：明确“该优化应该打在哪儿”，避免继续做低收益的微调。
+
+**配置（你提供的条件）**
+
+- 环境：`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact`
+- 命令：`./build-rel/bin/llama-cli -m /Users/liweitao/Downloads/Codefield/cpp/llama.cpp/models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 128 -no-cnv`
+
+**热点占比（Xcode 采样结果）**
+
+- `ggml_ifairy_lut_qgemm_ex`：63%
+- `ggml_graph_compute_thread`：24%
+- `ggml_compute_forward_mul_mat`：6%
+- 其他：< 2.5%
+
+**解读**
+
+- 主要瓶颈已非常明确：继续提升 tok/s，优先级应集中在 `ggml_ifairy_lut_qgemm_ex`（降低每次 matmul 的单位成本）
+- `ggml_graph_compute_thread` 的占比说明“线程调度/同步/图执行框架开销”也不可忽略；需要减少 barrier/减少 kernel 次数/减少不必要的工作区搬运
 
 ## 1. 当前现状（可工作的 LUT 路径：NEON 优先，标量回退）
 
@@ -180,24 +203,47 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 
 > 目标：优先提升 Apple Silicon（ARM64 + NEON）的 tok/s，且不破坏 `w * conj(x)` 语义与现有输出一致性。
 
-1) **减少重复 preprocess 与同步开销（先让 BK/BM “不再变慢”）**  
+（优先级依据：见 0.2 的 Xcode Profile，`ggml_ifairy_lut_qgemm_ex` 占比 63%）
+
+1) **把 63% 的热点继续压下去：优化 `ggml_ifairy_lut_qgemm_ex`（compact 优先）**  
+   - 目标：减少每 group 的 load/widen/add 指令数与依赖链，减少 L1 miss（尤其是 decode：`N≈1`、每 token 都要跑一遍）
+   - 任务拆解（不需要形状专用内核；目标是把 inner-loop 变“更像纯带宽”）：
+     - **unroll + 多累加器**：对 group 循环做 2/4-way unroll，采用 `isum0/isum1` 交错累加，减少 load-use 依赖链
+     - **减少地址计算**：把每个 position 的 16B 表当作 `4×int32`，用 `t0[c0]` 方式索引（减少 `*4`/LEA）
+     - **prefetch 策略**：prefetch `grp + k_ifairy_lut_group_bytes` 与 `idx_g + k`；对比“prefetch 太早/太晚/无效”的差异（Xcode 可直接看到 L1 miss）
+     - **N==1 快路（仍属于 LUT，不是形状模板）**：为 decode 常见 `N==1` 在 `qgemm_ex` 内加一个 runtime 分支，消掉 col 循环与部分指针运算
+   - 交付/验收：
+     - `./build-rel/bin/test-ifairy` 全通过
+     - 在 0.2 的 decode 配置下，`ggml_ifairy_lut_qgemm_ex` 占比下降（目标 < 55%），同时 eval tok/s 上升（目标 +10%）
+
+2) **降低 `ggml_graph_compute_thread` 的框架开销（24%）**  
+   - 目标：减少同步与小 kernel 调度开销，让更多时间落在“有效算术”上
+   - 可做：
+     - 继续减少 LUT 路径里的 barrier 次数（尤其 tiled/BK 版本），能用 `FULLACC` 解决的重复构表/重复同步尽量消掉
+     - 检查是否存在 “很小但很频繁” 的算子（例如某些额外拷贝/转换）可以在 LUT 路径内合并或延后
+     - 对 decode 场景（`N≈1`）评估线程数与切分策略：避免线程空转/争用（Xcode 能看到大量线程在等待就说明要改切分）
+
+3) **减少重复 preprocess 与同步开销（先让 BK/BM “不再变慢”）**  
    - 当前已落地：NEON 构表（`pat` 维度向量化）+ NEON 累加（标量回退）。  
    - 已有实验性 BK/BM tiling，但在部分 workload 上会因 `preprocess + barrier` 频繁而变慢。  
    - 已实现一条“full accumulator” 的 tiled 路径（默认对小 `N` 自动启用，可用 `GGML_IFAIRY_LUT_FULLACC=0/1` 控制）：为整个 `M×N` 维护共享 `{ac,ad,bc,bd}` 累加器，使每个 K-tile 的 `preprocess` 只做一次（不再按 BM 行块重复），显著减少 barrier 次数。
-   - 下一步优先项：在此基础上继续降低 barrier 成本、做 unroll/预取，并评估 DOTPROD 版本。
+   - 下一步优先项（保持 LUT 路线）：把 `preprocess` 做成 **多线程协作构表**，减少“线程 0 构表，其余线程等待”的空转：
+     - 对 `N==1`：按 group 范围切分（每线程写一段 group 的 LUT + scales），写入不重叠，barrier 后进入 qgemm
+     - 对 `N>1`：优先按 col 切分（每线程处理部分 col），避免跨 col 写同一 cache line
+     - 验收：在 Xcode 下 `ggml_graph_compute_thread` 占比下降（目标 < 20%），tok/s 上升（目标 +5%）
 
-2) **降低 LUT 工作区与带宽（提高上限）**  
+4) **降低 LUT 工作区与带宽（提高上限）**  
    - 已完成一项低风险带宽优化：把 activation `d_real/d_imag` 的 `scales` 从“每 group 一份”改为“每 block 一份”（1 个 block 内 86 个 group 共享），显著减少 `scales` 读写与工作区占用。
    - 已完成一项结构性带宽优化：把原本的 `4×64 int16` per-group pattern LUT 压缩为 **`3×4×4 int8`（48B/group）**（`GGML_IFAIRY_LUT_LAYOUT=compact`），并在 NEON 下用 32-bit load（4B）做 position 查表 + 整数累加（`vqtbl` 版本曾尝试但在 M4 上不占优，暂不作为默认实现）。
    - 已完成一项低风险算术/带宽优化：在 `qgemm/accum4` 内先按 block 累加 `int32` 的 `{ac,ad,bc,bd}`，再做一次 `float` 转换与缩放（减少 per-group 的 `vcvt + mul`）。
    - 下一步（更激进）：在不破坏 `w * conj(x)` 语义的前提下，进一步减少 per-group 的指令数（例如把 3 次 position 查表的开销通过 unroll/流水化隐藏，或探索更“共享 LUT”的 canonical 方案）。
 
-3) **索引生命周期/缓存策略升级（工程化与复用）**  
+5) **索引生命周期/缓存策略升级（工程化与复用）**  
    - 已完成：`ggml_ifairy_lut_transform_tensor()` 把索引缓冲改为使用 `ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), ...)` 分配，并缓存到全局 map（key: `{data ptr, nbytes, k, rows}`），同一份权重 data（含 view/复用场景）只生成一次索引。
    - 已完成：`ifairy_lut_extra` 增加 `index_buffer` 字段，区分 backend-buffer 分配与 legacy `ggml_aligned_malloc()`；`ggml_ifairy_lut_free()` 统一释放缓存 buffer + extras，避免 double-free。
    - 后续：如果要进一步“按 ctx/图生命周期”做精确释放，需要引入 refcount/弱引用或把 indexes 变成真正的 tensor（目前先以工程可用、复用明确为主）。
 
-4) **再做 BM/BK 调参（把调参放在结构优化之后）**  
+6) **再做 BM/BK 调参（把调参放在结构优化之后）**  
    - 在 1/2 完成前，单纯调 `GGML_IFAIRY_LUT_BK_BLOCKS / GGML_IFAIRY_LUT_BM` 往往波动大且不可复现；结构性开销下降后再调参更稳定。
    - 推荐方法：用脚本扫参，固定 seed/prompt/token，直接输出按 tok/s 排序的结果：  
      `bash scripts/ifairy_lut_sweep.sh`  
