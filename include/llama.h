@@ -1309,7 +1309,7 @@ extern "C" {
     /// this sampler implements a power law probability transformation with adaptive
     /// target tracking. it reshapes token probability distributions to favor tokens near a
     /// configurable target probability, rather than always selecting from the highest probability
-    /// candidates. it is ideal for creative, unpredictable text generation.
+    /// candidates.
     ///
     /// this sampler is like `greedy`, `dist`, and `mirostat` in that it actually selects a token ID
     /// rather than just transforming logits. therefore it must always be the last sampler in the

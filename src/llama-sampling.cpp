@@ -2318,7 +2318,7 @@ struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, floa
 // this sampler implements a power law probability transformation with adaptive
 // target tracking. it reshapes token probability distributions to favor tokens near a
 // configurable target probability, rather than always selecting from the highest probability
-// candidates. it is ideal for creative, unpredictable text generation.
+// candidates.
 //
 // this sampler is like `greedy`, `dist`, and `mirostat` in that it actually selects a token ID
 // rather than just transforming logits. therefore it must always be the last sampler in the
@@ -2332,7 +2332,7 @@ struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, floa
 struct llama_sampler_power_law {
 
     // the desired average probability for selected tokens (0.0 to 1.0)
-    // higher values favor more probable tokens (more deterministic)
+    // higher values favor more probable tokens (more stable and predictable)
     // lower values favor less probable tokens (more creative)
     // negative values disable Power Law sampling (sample from distribution as-is)
     const float target;
@@ -2341,19 +2341,17 @@ struct llama_sampler_power_law {
     // lower values = faster adaptation, more reactive to recent tokens
     // higher values = slower adaptation, more stable over time
     // effective history length ≈ 1/(1-decay) tokens
-    // examples: decay=0.5 → ~2 tokens, decay=0.9 → ~10, decay=0.95 → ~20
+    // example: decay=0.5 --> ~2 tokens; decay=0.9 --> ~10 tokens; decay=0.95 --> ~20 tokens
     // internally clamped to <= 0.99 to prevent unbounded accumulation
     const float decay;
 
     const uint32_t seed;
     std::mt19937   rng;
 
-    // historical token probabilities weighted by recency
-    float              weighted_sum;
-    // sum of weights, converges to 1/(1-decay)
-    float              total_weight;
-    // used to store original token probabilities (needed for history update after selection)
-    std::vector<float> original_probs;
+    // member variables
+    float              weighted_sum;   // historical token probabilities weighted by recency
+    float              total_weight;   // sum of weights, converges to 1/(1-decay)
+    std::vector<float> original_probs; // used to store original token probabilities
 };
 
 // transformation constants
@@ -2401,8 +2399,8 @@ static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_tok
     cur_p->selected = idx;
 
     // update running history with the original probability of the selected token
-    ctx->weighted_sum = ctx->original_probs[idx] + ctx->decay * ctx->weighted_sum;
-    ctx->total_weight = 1.0f + ctx->decay * ctx->total_weight; // history fades over time
+    ctx->weighted_sum = ctx->original_probs[idx] + ctx->decay * ctx->weighted_sum; // history fades over time
+    ctx->total_weight = 1.0f + ctx->decay * ctx->total_weight;
 }
 
 static void llama_sampler_power_law_reset(struct llama_sampler * smpl) {
