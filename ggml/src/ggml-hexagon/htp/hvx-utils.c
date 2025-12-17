@@ -883,9 +883,8 @@ void hvx_min_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
 
     const float * src_f = (const float *) src;
 
-    HVX_Vector vec_min =hvx_vec_splat_fp32(val);
+    HVX_Vector vec_min = hvx_vec_splat_fp32(val);
 
- 
     if(unalign_address == 0){
         HVX_Vector * restrict vec_in  = (HVX_Vector *) src;
         HVX_Vector * restrict vec_out = (HVX_Vector *) dst;
@@ -925,13 +924,12 @@ void hvx_clamp_scalar_f32(const uint8_t * restrict src,
                           const int num_elems) {
     size_t left_over       = num_elems & (VLEN_FP32 - 1);
     size_t num_elems_whole = num_elems - left_over;
-    
+
     int unalign_address = 0;
     if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
         FARF(HIGH, "hvx_clamp_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
         unalign_address = 1;
     }
-
 
     HVX_Vector range_left  = hvx_vec_splat_fp32(limit_left);
     HVX_Vector range_right = hvx_vec_splat_fp32(limit_right);
