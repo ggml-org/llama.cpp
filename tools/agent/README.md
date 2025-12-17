@@ -67,6 +67,55 @@ Replaced "old code" with "fixed code"
 | `/clear` | Clear conversation history |
 | `/tools` | List available tools |
 
+## MCP Server Support
+
+The agent supports [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers, allowing you to extend its capabilities with external tools.
+
+### Configuration
+
+Create an `mcp.json` file in your working directory or at `~/.config/llama-agent/mcp.json`:
+
+```json
+{
+  "servers": {
+    "gradio": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://tongyi-mai-z-image-turbo.hf.space/gradio_api/mcp/",
+        "--transport",
+        "streamable-http"
+      ],
+      "timeout": 120000
+    }
+  }
+}
+```
+
+### Config Options
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `command` | Executable to run (required) | - |
+| `args` | Command line arguments | `[]` |
+| `env` | Environment variables | `{}` |
+| `timeout` | Tool call timeout in ms | `60000` |
+| `enabled` | Enable/disable the server | `true` |
+
+Environment variables in config values can use `${VAR_NAME}` syntax for substitution.
+
+### Transport
+
+Only **stdio** transport is supported natively. The agent spawns the server process and communicates via stdin/stdout using JSON-RPC 2.0.
+
+For HTTP-based MCP servers (like Gradio endpoints), use a bridge such as `mcp-remote` as shown in the example above.
+
+### Tool Naming
+
+MCP tools are registered with qualified names: `mcp__<server>__<tool>`. For example, a `read_file` tool from a server named `filesystem` becomes `mcp__filesystem__read_file`.
+
+Use `/tools` to see all available tools including MCP tools.
+
 ## Permission System
 
 The agent asks for confirmation before:
