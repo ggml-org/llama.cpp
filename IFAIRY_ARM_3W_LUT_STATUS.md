@@ -20,7 +20,7 @@
 - `GGML_IFAIRY_LUT_FULLACC=0/1`：tiled 下启用共享大累加器，减少重复 `preprocess + barrier`
 - `GGML_IFAIRY_LUT_VALIDATE_STRICT=0/1`：严格对照 reference（用于验证，不用于性能跑分）
 - `GGML_IFAIRY_LUT_DEBUG=0/1`：路由/形状诊断（默认关闭；跑分时不要开）
-- `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 路径内的 prefetch（默认启用；设为 `0` 用于 profile/sweep 对照）
+- `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 路径内的 prefetch（默认启用；设为 `0` 用于 profile/sweep 对照；覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`）
 
 ## 0.0 当前共识（按优先级）
 
@@ -71,6 +71,9 @@
 | 2025-12-17T19:06:29Z | `627dea55` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 8.19 |
 | 2025-12-17T19:06:29Z | `627dea55` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 7.16 |
 | 2025-12-17T19:06:29Z | `627dea55` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_PREFETCH=0` | 7.17 |
+| 2025-12-17T19:23:32Z | `46dcb0cb` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 8.15 |
+| 2025-12-17T19:23:32Z | `46dcb0cb` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 7.17 |
+| 2025-12-17T19:23:32Z | `46dcb0cb` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_PREFETCH=0` | 7.19 |
 
 ## 0.2 Xcode Profile（以 decode 场景为准）
 
@@ -274,6 +277,7 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 - 小幅 hot-path 清理：`ggml_ifairy_lut_qgemm_ex` 的非 strict 路径不再计算 `act_blocks` 指针（strict 才需要 reference 对照）。
 - decode 场景并行化：当 `src1=F32` 且 `N < nth`（常见 `N==1`）时，把激活量化从“按列分片”改为“按 K-block range 分片”，减少线程空转（`a3296bec`）。
 - 可控 prefetch：新增 `GGML_IFAIRY_LUT_PREFETCH=0/1`（默认启用）用于 profile/sweep 对照，避免“盲目 prefetch”只能靠改代码来试（`627dea55`）。
+- prefetch 工程修复：确保 `GGML_IFAIRY_LUT_PREFETCH=0` 能覆盖 legacy/compact 的 `qgemm_ex/accum4_ex` 全部 prefetch 点位，避免 fast-path 里出现“关不掉的 prefetch”（`46dcb0cb`）。
 
 2) **降低 `ggml_graph_compute_thread` 的框架开销（24%）**  
    - 目标：减少同步与小 kernel 调度开销，让更多时间落在“有效算术”上

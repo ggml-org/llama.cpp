@@ -102,7 +102,7 @@ struct ifairy_lut_extra {
 - `GGML_IFAIRY_LUT_FULLACC=0/1`：tiling 下共享 accumulator（未设置时可能按 `(N,acc_bytes)` 自动启用）。
 - `GGML_IFAIRY_LUT_VALIDATE_STRICT=0/1`：严格对照（验证用）。
 - `GGML_IFAIRY_LUT_DEBUG=0/1`：打印少量路由诊断（默认关闭）。
-- `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 热路径中的 prefetch（默认启用；设为 `0` 方便 profile/sweep 对照）。
+- `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 热路径中的 prefetch（默认启用；设为 `0` 方便 profile/sweep 对照；覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`）。
 
 ## 6. 性能提升规划（主线，必须把 tok/s 拉上去）
 
