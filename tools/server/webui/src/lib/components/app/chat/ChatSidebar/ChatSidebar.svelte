@@ -8,6 +8,8 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import Input from '$lib/components/ui/input/input.svelte';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { getPreviewText } from '$lib/utils/text';
 	import ChatSidebarActions from './ChatSidebarActions.svelte';
 
 	const sidebar = Sidebar.useSidebar();
@@ -19,6 +21,9 @@
 	let showEditDialog = $state(false);
 	let selectedConversation = $state<DatabaseConversation | null>(null);
 	let editedName = $state('');
+	let selectedConversationNamePreview = $derived.by(() =>
+		selectedConversation ? getPreviewText(selectedConversation.name) : ''
+	);
 
 	let filteredConversations = $derived.by(() => {
 		if (searchQuery.trim().length > 0) {
@@ -98,6 +103,10 @@
 
 		await goto(`#/chat/${id}`);
 	}
+
+	function handleStopGeneration(id: string) {
+		chatStore.stopGenerationForChat(id);
+	}
 </script>
 
 <ScrollArea class="h-[100vh]">
@@ -132,6 +141,7 @@
 							onSelect={selectConversation}
 							onEdit={handleEditConversation}
 							onDelete={handleDeleteConversation}
+							onStop={handleStopGeneration}
 						/>
 					</Sidebar.MenuItem>
 				{/each}
@@ -156,7 +166,7 @@
 	bind:open={showDeleteDialog}
 	title="Delete Conversation"
 	description={selectedConversation
-		? `Are you sure you want to delete "${selectedConversation.name}"? This action cannot be undone and will permanently remove all messages in this conversation.`
+		? `Are you sure you want to delete "${selectedConversationNamePreview}"? This action cannot be undone and will permanently remove all messages in this conversation.`
 		: ''}
 	confirmText="Delete"
 	cancelText="Cancel"

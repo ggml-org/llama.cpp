@@ -159,6 +159,22 @@ class ModelsStore {
 	}
 
 	/**
+	 * Get context size (n_ctx) for a specific model from cached props
+	 */
+	getModelContextSize(modelId: string): number | null {
+		const props = this.modelPropsCache.get(modelId);
+		return props?.default_generation_settings?.n_ctx ?? null;
+	}
+
+	/**
+	 * Get context size for the currently selected model or null if no model is selected
+	 */
+	get selectedModelContextSize(): number | null {
+		if (!this.selectedModelName) return null;
+		return this.getModelContextSize(this.selectedModelName);
+	}
+
+	/**
 	 * Check if props are being fetched for a model
 	 */
 	isModelPropsFetching(modelId: string): boolean {
@@ -279,13 +295,20 @@ class ModelsStore {
 	 * Fetch props for a specific model from /props endpoint
 	 * Uses caching to avoid redundant requests
 	 *
+	 * In ROUTER mode, this will only fetch props if the model is loaded,
+	 * since unloaded models return 400 from /props endpoint.
+	 *
 	 * @param modelId - Model identifier to fetch props for
-	 * @returns Props data or null if fetch failed
+	 * @returns Props data or null if fetch failed or model not loaded
 	 */
 	async fetchModelProps(modelId: string): Promise<ApiLlamaCppServerProps | null> {
 		// Return cached props if available
 		const cached = this.modelPropsCache.get(modelId);
 		if (cached) return cached;
+
+		if (serverStore.isRouterMode && !this.isModelLoaded(modelId)) {
+			return null;
+		}
 
 		// Avoid duplicate fetches
 		if (this.modelPropsFetching.has(modelId)) return null;
@@ -579,3 +602,4 @@ export const loadedModelIds = () => modelsStore.loadedModelIds;
 export const loadingModelIds = () => modelsStore.loadingModelIds;
 export const propsCacheVersion = () => modelsStore.propsCacheVersion;
 export const singleModelName = () => modelsStore.singleModelName;
+export const selectedModelContextSize = () => modelsStore.selectedModelContextSize;

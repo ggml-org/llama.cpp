@@ -1257,7 +1257,8 @@ bool rpc_server::get_cached_file(uint64_t hash, std::vector<uint8_t> & data) {
     char hash_str[17];
     snprintf(hash_str, sizeof(hash_str), "%016" PRIx64, hash);
     fs::path cache_file = fs::path(cache_dir) / hash_str;
-    if (!fs::exists(cache_file)) {
+    std::error_code ec;
+    if (!fs::exists(cache_file, ec)) {
         return false;
     }
     std::ifstream ifs(cache_file, std::ios::binary);
