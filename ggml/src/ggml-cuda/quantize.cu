@@ -105,7 +105,7 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
     const int base = group_id * 2;
     char2 * yqs2 = (char2 *) y[ib].qs;
 
-    int64_t base_pos = i03 * s03 + i02 * s02 + i01 * s01;
+    const int64_t base_pos = i03 * s03 + i02 * s02 + i01 * s01;
 
     uint8_t scales[2];
 

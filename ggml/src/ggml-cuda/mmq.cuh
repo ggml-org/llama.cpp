@@ -207,7 +207,7 @@ static constexpr __host__ __device__ tile_x_sizes mmq_get_dp4a_tile_x_sizes(ggml
 }
 
 #define MMQ_MMA_TILE_X_K_Q8_0 (2*MMQ_TILE_NE_K + 2*MMQ_TILE_NE_K/QI8_0                   + 4)
-#define MMQ_MMA_TILE_X_K_FP4  (2*MMQ_TILE_NE_K + 2*MMQ_TILE_NE_K/QI8_0                   + 4)
+#define MMQ_MMA_TILE_X_K_FP4  (2*MMQ_TILE_NE_K + 8                                       + 4)
 #define MMQ_MMA_TILE_X_K_Q8_1 (2*MMQ_TILE_NE_K + 2*MMQ_TILE_NE_K/QI8_0                   + 4)
 #define MMQ_MMA_TILE_X_K_Q2_K (2*MMQ_TILE_NE_K + MMQ_TILE_NE_K                           + 4)
 #define MMQ_MMA_TILE_X_K_Q3_K (2*MMQ_TILE_NE_K + MMQ_TILE_NE_K/2                         + 4)
@@ -219,6 +219,7 @@ static_assert(MMQ_MMA_TILE_X_K_Q2_K % 8 == 4, "Wrong padding.");
 static_assert(MMQ_MMA_TILE_X_K_Q3_K % 8 == 4, "Wrong padding.");
 static_assert(MMQ_MMA_TILE_X_K_Q6_K % 8 == 4, "Wrong padding.");
 static_assert(MMQ_MMA_TILE_X_K_FP4  % 8 == 4, "Wrong padding.");
+static_assert(MMQ_MMA_TILE_X_K_FP4 == MMQ_MMA_TILE_X_K_Q8_1, "Wrong tile size for MXFP4");
 
 static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
     switch (type) {
@@ -247,8 +248,7 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
 }
 
 // block_q8_1_mmq has (128 8-bit ints == 32 32-bit ints + 4 32-bit scales)
-#define MMQ_TILE_Y_K (MMQ_TILE_NE_K + MMQ_TILE_NE_K/QI8_1)
-//#define MMQ_TILE_Y_FP4_K MMQ_TILE_Y_K / 2
+#define MMQ_TILE_Y_K     (MMQ_TILE_NE_K + MMQ_TILE_NE_K / QI8_1)
 #define MMQ_TILE_Y_FP4_K MMQ_TILE_Y_K
 
 static int mmq_get_granularity_host(const int mmq_x, const int cc) {
@@ -796,7 +796,9 @@ static __device__ __forceinline__ void load_tiles_mxfp4_fp4(const char * __restr
 
     const int txi = threadIdx.x;
 
-    constexpr int threads_per_row = 16;  // 16 blocks per row for 512 values (ITER_K=512)
+    constexpr int iter_k = get_iter_k(GGML_TYPE_MXFP4);
+
+    constexpr int threads_per_row = iter_k / QK_MXFP4;  // each thread processes 1 block
     constexpr int rows_per_warp   = warp_size / threads_per_row;
     const int     kbx             = txi % threads_per_row;
     const int     row_in_warp     = txi / threads_per_row;
@@ -1015,8 +1017,8 @@ static __device__ __forceinline__ void vec_dot_mxfp4_mxfp4_mma(const int * __res
     const int *      y_qs = (const int *) y + 4;
     const uint32_t * y_sc = (const uint32_t *) y;
 
-    tile_A   A[ntx][MMQ_TILE_NE_K / QI8_0];
-    uint32_t scaleA[ntx][MMQ_TILE_NE_K / QI8_0];
+    tile_A   A[ntx][MMQ_TILE_NE_K / (2 * QI_MXFP4)];
+    uint32_t scaleA[ntx][MMQ_TILE_NE_K / (2 * QI_MXFP4)];
 
     // Block scale
     // Each thread has to point to a 4 byte scale value
@@ -1027,34 +1029,35 @@ static __device__ __forceinline__ void vec_dot_mxfp4_mxfp4_mma(const int * __res
 #pragma unroll
     for (int n = 0; n < ntx; ++n) {
 #pragma unroll
-        for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {
+        for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 2 * QI_MXFP4) {
             const int k0 = k00 + k01;
 
-            load_ldmatrix(A[n][k01 / QI8_0], x_qs + (i0 + n * tile_A::I) * MMQ_MMA_TILE_X_K_FP4 + k0,
+            load_ldmatrix(A[n][k01 / (2 * QI_MXFP4)], x_qs + (i0 + n * tile_A::I) * MMQ_MMA_TILE_X_K_FP4 + k0,
                           MMQ_MMA_TILE_X_K_FP4);
 
             // based on block-scaling document, 2 threads in each quad need to supply to the scale value
             const int tidx         = threadIdx.x / 4 + (threadIdx.x % 2) * 8;
-            scaleA[n][k01 / QI8_0] = *(x_sc + (i0 + n * tile_A::I + tidx) * MMQ_MMA_TILE_X_K_FP4 + k0 / QI8_0);
+            scaleA[n][k01 / (2 * QI_MXFP4)] =
+                *(x_sc + (i0 + n * tile_A::I + tidx) * MMQ_MMA_TILE_X_K_FP4 + k0 / (2 * QI_MXFP4));
         }
     }
 
 #pragma unroll
     for (int j0 = 0; j0 < mmq_x; j0 += ntx * tile_C::J) {
 #pragma unroll
-        for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_0) {
+        for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 2 * QI_MXFP4) {
             tile_B   B;
             uint32_t scaleB;  // 2xN scales
 
             load_generic(B, y_qs + j0 * MMQ_TILE_Y_FP4_K + k01, MMQ_TILE_Y_FP4_K);
 
-            scaleB = y_sc[(j0 + threadIdx.x / 4) * MMQ_TILE_Y_FP4_K + k01 / QI8_0];
+            scaleB = y_sc[(j0 + threadIdx.x / 4) * MMQ_TILE_Y_FP4_K + k01 / (2 * QI_MXFP4)];
 
 #pragma unroll
             for (int n = 0; n < ntx; ++n) {
                 tile_C C;
 
-                mma_block_scaled(C, A[n][k01 / QI8_0], B, scaleA[n][k01 / QI8_0], scaleB);
+                mma_block_scaled(C, A[n][k01 / (2 * QI_MXFP4)], B, scaleA[n][k01 / (2 * QI_MXFP4)], scaleB);
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
                     sum[(j0 / tile_C::J + n) * tile_C::ne + l] += C.x[l];
@@ -3381,17 +3384,21 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     constexpr mmq_write_back_t write_back = mmq_write_back_dp4a<mmq_x, mmq_y, need_check>;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
 
+#if defined(BLACKWELL_MMA_AVAILABLE)
+    // blocks_per_mmq: number of qk-blocks per Y-block structure
+    // FP4 on blackwell: block_fp4_mmq holds 8 qk-blocks (256 values)
+    // Others: block_q8_1_mmq holds 4 qk-blocks (128 values)
+    constexpr int blocks_per_mmq = (type == GGML_TYPE_MXFP4) ? 8 : (4 * QK8_1) / qk;
+#else
+    constexpr int blocks_per_mmq = (4 * QK8_1) / qk;
+#endif  // defined(BLACKWELL_MMA_AVAILABLE)
+
     constexpr int ITER_K          = get_iter_k(type);
     constexpr int blocks_per_iter = ITER_K / qk;
 
     float sum[mmq_x*mmq_y / (nwarps*warp_size)] = {0.0f};
 
     constexpr int sz = sizeof(block_q8_1_mmq) / sizeof(int);
-
-    // blocks_per_mmq: number of qk-blocks per Y-block structure
-    // MXFP4: block_fp4_mmq holds 8 qk-blocks (256 values)
-    // Others: block_q8_1_mmq holds 4 qk-blocks (128 values)
-    constexpr int blocks_per_mmq = (type == GGML_TYPE_MXFP4) ? 8 : 4;
 
     for (int kb0 = kb0_start; kb0 < kb0_stop; kb0 += blocks_per_iter) {
         load_tiles(x, tile_x, offset_x + kb0, tile_x_max_i, stride_row_x);
