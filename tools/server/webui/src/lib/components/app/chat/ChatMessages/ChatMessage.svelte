@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { copyToClipboard, isIMEComposing } from '$lib/utils';
+	import { config } from '$lib/stores/settings.svelte';
+	import { copyToClipboard, isIMEComposing, formatMessageForClipboard } from '$lib/utils';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
 	import ChatMessageSystem from './ChatMessageSystem.svelte';
@@ -87,7 +88,9 @@
 	}
 
 	async function handleCopy() {
-		await copyToClipboard(message.content, 'Message copied to clipboard');
+		const asPlainText = Boolean(config().copyTextAttachmentsAsPlainText);
+		const clipboardContent = formatMessageForClipboard(message.content, message.extra, asPlainText);
+		await copyToClipboard(clipboardContent, 'Message copied to clipboard');
 		onCopy?.(message);
 	}
 
