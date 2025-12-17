@@ -12,6 +12,8 @@
 	import { browser } from '$app/environment';
 	import { onDestroy, tick } from 'svelte';
 	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
+	import { rehypeEnhanceLinks } from '$lib/markdown/enhance-links';
+	import { rehypeEnhanceCodeBlocks } from '$lib/markdown/enhance-code-blocks';
 	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 	import { copyCodeToClipboard, preprocessLaTeX } from '$lib/utils';
 	import '$styles/katex-custom.scss';
@@ -54,7 +56,9 @@
 			.use(rehypeKatex) // Render math using KaTeX
 			.use(rehypeHighlight) // Add syntax highlighting
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
-			.use(rehypeStringify); // Convert to HTML string
+			.use(rehypeEnhanceLinks) // Add target="_blank" to links
+			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
+			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
 	});
 
 	/**
@@ -85,121 +89,6 @@
 
 		const existingTheme = document.getElementById(themeStyleId);
 		existingTheme?.remove();
-	}
-
-	/**
-	 * Enhances code blocks with wrapper, header, language label, and action buttons.
-	 * Adds copy button to all code blocks and preview button to HTML blocks.
-	 * @param html - The HTML string containing code blocks to enhance
-	 * @returns Enhanced HTML string with wrapped code blocks
-	 */
-	function enhanceCodeBlocks(html: string): string {
-		return processHtml(html, '<pre', (tempDiv) => {
-			const preElements = tempDiv.querySelectorAll('pre');
-			let mutated = false;
-
-			for (const [, pre] of Array.from(preElements).entries()) {
-				const codeElement = pre.querySelector('code');
-
-				if (!codeElement) {
-					continue;
-				}
-
-				mutated = true;
-
-				let language = 'text';
-				const classList = Array.from(codeElement.classList);
-
-				for (const className of classList) {
-					if (className.startsWith('language-')) {
-						language = className.replace('language-', '');
-						break;
-					}
-				}
-
-				const rawCode = codeElement.textContent || '';
-				const codeId = `code-${(window.idxCodeBlock = (window.idxCodeBlock ?? 0) + 1)}`;
-				codeElement.setAttribute('data-code-id', codeId);
-				codeElement.setAttribute('data-raw-code', rawCode);
-
-				const wrapper = document.createElement('div');
-				wrapper.className = 'code-block-wrapper';
-
-				const header = document.createElement('div');
-				header.className = 'code-block-header';
-
-				const languageLabel = document.createElement('span');
-				languageLabel.className = 'code-language';
-				languageLabel.textContent = language;
-
-				const copyButton = document.createElement('button');
-				copyButton.className = 'copy-code-btn';
-				copyButton.setAttribute('data-code-id', codeId);
-				copyButton.setAttribute('title', 'Copy code');
-				copyButton.setAttribute('type', 'button');
-
-				copyButton.innerHTML = `
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-copy-icon lucide-copy"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-`;
-
-				const actions = document.createElement('div');
-				actions.className = 'code-block-actions';
-
-				actions.appendChild(copyButton);
-
-				if (language.toLowerCase() === 'html') {
-					const previewButton = document.createElement('button');
-					previewButton.className = 'preview-code-btn';
-					previewButton.setAttribute('data-code-id', codeId);
-					previewButton.setAttribute('title', 'Preview code');
-					previewButton.setAttribute('type', 'button');
-
-					previewButton.innerHTML = `
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-eye lucide-eye-icon"><path d="M2.062 12.345a1 1 0 0 1 0-.69C3.5 7.73 7.36 5 12 5s8.5 2.73 9.938 6.655a1 1 0 0 1 0 .69C20.5 16.27 16.64 19 12 19s-8.5-2.73-9.938-6.655"/><circle cx="12" cy="12" r="3"/></svg>
-`;
-
-					actions.appendChild(previewButton);
-				}
-
-				header.appendChild(languageLabel);
-				header.appendChild(actions);
-				wrapper.appendChild(header);
-
-				const clonedPre = pre.cloneNode(true) as HTMLElement;
-				wrapper.appendChild(clonedPre);
-
-				pre.parentNode?.replaceChild(wrapper, pre);
-			}
-
-			return mutated;
-		});
-	}
-
-	/**
-	 * Enhances links to open in new tabs with security attributes.
-	 * Sets target="_blank" and rel="noopener noreferrer" on all anchor elements.
-	 * @param html - The HTML string containing links to enhance
-	 * @returns Enhanced HTML string with modified link attributes
-	 */
-	function enhanceLinks(html: string): string {
-		return processHtml(html, '<a', (tempDiv) => {
-			const linkElements = tempDiv.querySelectorAll('a[href]');
-			let mutated = false;
-
-			for (const link of linkElements) {
-				const target = link.getAttribute('target');
-				const rel = link.getAttribute('rel');
-
-				// Only mutate if attributes need to change
-				if (target !== '_blank' || rel !== 'noopener noreferrer') {
-					link.setAttribute('target', '_blank');
-					link.setAttribute('rel', 'noopener noreferrer');
-					mutated = true;
-				}
-			}
-
-			return mutated;
-		});
 	}
 
 	/**
@@ -339,27 +228,6 @@
 	}
 
 	/**
-	 * Helper to process HTML with a temporary DOM element.
-	 * Returns original HTML if not in browser or tag not found.
-	 */
-	function processHtml(
-		html: string,
-		tagCheck: string,
-		processor: (tempDiv: HTMLDivElement) => boolean
-	): string {
-		if (!browser || !html.includes(tagCheck)) {
-			return html;
-		}
-
-		const tempDiv = document.createElement('div');
-		tempDiv.innerHTML = html;
-
-		const mutated = processor(tempDiv);
-
-		return mutated ? tempDiv.innerHTML : html;
-	}
-
-	/**
 	 * Processes markdown content into stable and unstable HTML blocks.
 	 * Uses incremental rendering: stable blocks are cached, unstable block is re-rendered.
 	 * @param markdown - The raw markdown string to process
@@ -453,9 +321,7 @@
 			children: [child as never]
 		};
 
-		const html = processorInstance.stringify(root);
-
-		return enhanceCodeBlocks(enhanceLinks(html));
+		return processorInstance.stringify(root);
 	}
 
 	/**
