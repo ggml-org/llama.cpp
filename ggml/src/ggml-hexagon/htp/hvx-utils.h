@@ -1015,45 +1015,39 @@ static inline void hvx_sigmoid_f32(const uint8_t * restrict src, uint8_t * restr
     const float *input = (float *)src;
     float *output = (float *)dst;
 
-    HVX_Vector *  input_v_ptr = (HVX_Vector *) input;
-    HVX_UVector *  output_v_ptr       = (HVX_UVector *) output;
-
+    HVX_Vector *  input_v_ptr  = (HVX_Vector *) input;
+    HVX_UVector * output_v_ptr = (HVX_UVector *) output;
 
     HVX_Vector slinep;
     HVX_Vector slinec;
     HVX_Vector sline;
-    
 
-    slinep = *input_v_ptr++; 
+    slinep = *input_v_ptr++;
     #pragma unroll(4)
-    for(int i = step_of_1 -1; i> 0; i--){
-        slinec = *input_v_ptr++;
-        sline = Q6_V_valign_VVR(slinec, slinep, (size_t) input);       
-        *((HVX_UVector *)(output_v_ptr++)) =  hvx_vec_fast_sigmoid_fp32_guard(sline, one, max_exp, min_exp);
+    for (int i = step_of_1 - 1; i > 0; i--) {
+        slinec                              = *input_v_ptr++;
+        sline                               = Q6_V_valign_VVR(slinec, slinep, (size_t) input);
+        *((HVX_UVector *) (output_v_ptr++)) = hvx_vec_fast_sigmoid_fp32_guard(sline, one, max_exp, min_exp);
         /* Prepare slinep for next iteration */
-        slinep = slinec;        
+        slinep                              = slinec;
     }
 
-    if(step_of_1> 0){
-
+    if (step_of_1 > 0) {
         slinec = htp_is_aligned(input_v_ptr, 128) && leftover == 0 ? slinep : *input_v_ptr++;
-        sline = Q6_V_valign_VVR(slinec, slinep, (size_t) input);
-        *((HVX_UVector *)(output_v_ptr++)) =  hvx_vec_fast_sigmoid_fp32_guard(sline, one, max_exp, min_exp);;
+        sline  = Q6_V_valign_VVR(slinec, slinep, (size_t) input);
+        *((HVX_UVector *) (output_v_ptr++)) = hvx_vec_fast_sigmoid_fp32_guard(sline, one, max_exp, min_exp);
+        ;
 
         slinep = slinec;
     }
-    if(leftover> 0){
-        slinec = (is_in_one_chunk(input_v_ptr, leftover_size, 128)
-                   ? slinep
-                   : *input_v_ptr++);
+    if (leftover > 0) {
+        slinec = (is_in_one_chunk(input_v_ptr, leftover_size, 128) ? slinep : *input_v_ptr++);
 
         sline = Q6_V_valign_VVR(slinec, slinep, (size_t) input);
 
         HVX_Vector sout = hvx_vec_fast_sigmoid_fp32_guard(sline, one, max_exp, min_exp);
-        hvx_vec_store_u(output_v_ptr, leftover_size, sout);        
+        hvx_vec_store_u(output_v_ptr, leftover_size, sout);
     }
-
-  
 }
 
 

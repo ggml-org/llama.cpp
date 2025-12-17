@@ -301,7 +301,7 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
     const int BLOCK = 8;
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
         const uint32_t block_end = MIN(ir + BLOCK, src0_end_row);
-        
+
         // Prefetch next block
         if (block_end < src0_end_row) {
             const float * restrict prefetch_ptr = (float *) (data_src0 + (block_end * src0_row_size));
@@ -315,11 +315,10 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
 
             // gelu = x * sigmoid(1.702 * x) // current implementation
             if (1 == opt_path) {
-                hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
+                hvx_mul_scalar_f32((const uint8_t *) src0, (float) 1.702, (uint8_t *) src0_spad_data, ne0);
                 hvx_fast_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
                 hvx_mul_f32_opt((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
-            } 
-            else {
+            } else {
                 hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
                 hvx_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
                 hvx_mul_f32((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);

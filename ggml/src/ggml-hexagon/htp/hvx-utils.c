@@ -70,7 +70,6 @@ void hvx_mul_f32(const uint8_t * restrict src0,
         HVX_Vector * restrict vec_in2 = (HVX_Vector *) src1;
         HVX_UVector * restrict vec_out = (HVX_UVector *) dst;
 
-
         HVX_Vector slinep;
         HVX_Vector slinec;
         HVX_Vector sline;
@@ -78,43 +77,38 @@ void hvx_mul_f32(const uint8_t * restrict src0,
         HVX_Vector sline2c;
         HVX_Vector sline2;
 
-        slinep = *vec_in1++; 
+        slinep  = *vec_in1++;
         sline2p = *vec_in2++;
         #pragma unroll(4)
-        for(int i = step_of_1 -1; i> 0; i--){
-            slinec = *vec_in1++;
+        for (int i = step_of_1 - 1; i > 0; i--) {
+            slinec  = *vec_in1++;
             sline2c = *vec_in2++;
-            sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);       
-            sline2 = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
-           
-            *((HVX_UVector *)(vec_out++)) =Q6_Vsf_equals_Vqf32(  Q6_Vqf32_vmpy_VsfVsf(sline, sline2));
-            slinep = slinec;
-            sline2p = sline2c;  
+            sline   = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);
+            sline2  = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
+
+            *((HVX_UVector *) (vec_out++)) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(sline, sline2));
+            slinep                         = slinec;
+            sline2p                        = sline2c;
         }
-        if(step_of_1 > 1){
-            slinec = htp_is_aligned(vec_in1, VLEN) && left_over == 0 ? slinep : *vec_in1++;
+        if (step_of_1 > 1) {
+            slinec  = htp_is_aligned(vec_in1, VLEN) && left_over == 0 ? slinep : *vec_in1++;
             sline2c = htp_is_aligned(vec_in2, VLEN) && left_over == 0 ? sline2p : *vec_in2++;
 
-            sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);       
-            sline2 = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
-            *((HVX_UVector *)(vec_out++)) =Q6_Vsf_equals_Vqf32(  Q6_Vqf32_vmpy_VsfVsf(sline, sline2));
-            slinep = slinec;
-            sline2p = sline2c;
+            sline                          = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);
+            sline2                         = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
+            *((HVX_UVector *) (vec_out++)) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(sline, sline2));
+            slinep                         = slinec;
+            sline2p                        = sline2c;
         }
-        if(left_over > 0 ){
+        if (left_over > 0) {
+            slinec = (is_in_one_chunk(vec_in1, leftover_size, VLEN) ? slinep : *vec_in1++);
 
-            slinec = (is_in_one_chunk(vec_in1, leftover_size, VLEN)
-                    ? slinep
-                    : *vec_in1++);
-
-            sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);
-            sline2c = (is_in_one_chunk(vec_in2, leftover_size, VLEN)
-                    ? sline2p
-                    : *vec_in2++);
-            sline2 = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
+            sline   = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);
+            sline2c = (is_in_one_chunk(vec_in2, leftover_size, VLEN) ? sline2p : *vec_in2++);
+            sline2  = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
 
             HVX_Vector out = Q6_Vqf32_vmpy_VsfVsf(sline, sline2);
-            hvx_vec_store_u(vec_out, leftover_size, Q6_Vsf_equals_Vqf32(out));  
+            hvx_vec_store_u(vec_out, leftover_size, Q6_Vsf_equals_Vqf32(out));
             handled_leftover = true;
         }
     }
@@ -527,45 +521,39 @@ void hvx_mul_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
         int step_of_1 = num_elems >> 5;  // divby 32, because 32 float = 128 bytes per HVX vector
         int leftover_size = left_over * sizeof(float);
 
-
-
-        HVX_Vector *  input_v_ptr = (HVX_Vector *) src;
-        HVX_UVector *  output_v_ptr       = (HVX_UVector *) dst;
-
+        HVX_Vector *  input_v_ptr  = (HVX_Vector *) src;
+        HVX_UVector * output_v_ptr = (HVX_UVector *) dst;
 
         HVX_Vector slinep;
         HVX_Vector slinec;
         HVX_Vector sline;
-            
-        slinep = *input_v_ptr++; 
+
+        slinep = *input_v_ptr++;
 
         #pragma unroll(4)
-        for(int i = step_of_1 - 1; i > 0; i--){
-            slinec = *input_v_ptr++;
-            sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src);
-            *((HVX_UVector *)(output_v_ptr++)) =  Q6_Vsf_equals_Vqf32( Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));
+        for (int i = step_of_1 - 1; i > 0; i--) {
+            slinec                              = *input_v_ptr++;
+            sline                               = Q6_V_valign_VVR(slinec, slinep, (size_t) src);
+            *((HVX_UVector *) (output_v_ptr++)) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));
             /* Prepare slinep for next iteration */
-            slinep = slinec;        
+            slinep                              = slinec;
         }
 
-        if(step_of_1 > 0){
-
+        if (step_of_1 > 0) {
             slinec = htp_is_aligned(input_v_ptr, VLEN) && left_over == 0 ? slinep : *input_v_ptr++;
-            sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src);
-            *((HVX_UVector *)(output_v_ptr++)) =  Q6_Vsf_equals_Vqf32( Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));
+            sline  = Q6_V_valign_VVR(slinec, slinep, (size_t) src);
+            *((HVX_UVector *) (output_v_ptr++)) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));
 
             slinep = slinec;
         }
 
-        if(leftover_size > 0){
-            slinec = (is_in_one_chunk(input_v_ptr, leftover_size, VLEN)
-                    ? slinep
-                    : *input_v_ptr++);
+        if (leftover_size > 0) {
+            slinec = (is_in_one_chunk(input_v_ptr, leftover_size, VLEN) ? slinep : *input_v_ptr++);
 
             sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src);
 
-            HVX_Vector sout = Q6_Vsf_equals_Vqf32( Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));
-            hvx_vec_store_u(output_v_ptr, leftover_size, sout);  
+            HVX_Vector sout = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));
+            hvx_vec_store_u(output_v_ptr, leftover_size, sout);
             handled_leftover = true;
         }
     }
