@@ -173,6 +173,7 @@ P0（必须尽快做）：
 
 - 内存/生命周期：减少 `new/delete` + 全局容器；补齐 size/overflow/bounds 检查，避免 silent failure。
 - 线程安全：明确并发模型；缩小锁粒度，避免持锁做重活；补充并发/压力测试。
+- ✅ size/overflow：为 `ggml_ifairy_lut_get_wsize` 与 `ggml-cpu.c` 的 LUT 工作区切分加入 overflow 断言，避免 size_t wrap 后的越界访问（`2a39f249`）。
 
 P1（近期做）：
 
