@@ -1085,6 +1085,7 @@ bool llama_model_loader::load_all_data(
                 // If upload_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
                 if (upload_backend) {
                     auto offset = (off_t) weight->offs;
+                    alignment = file->read_alignment();
                     off_t aligned_offset = offset & ~(alignment - 1);
                     off_t offset_from_alignment = offset - aligned_offset;
                     file->seek(aligned_offset, SEEK_SET);
