@@ -542,6 +542,7 @@ static void llama_params_fit_impl(
             } else {
                 assert(ngl_per_device_high[id].n_layer == n_unassigned);
                 ngl_per_device = ngl_per_device_high;
+                mem            = mem_high;
                 LLAMA_LOG_DEBUG("%s: set ngl_per_device[%d].n_layer=%" PRIu32 "\n", __func__, id, ngl_per_device[id].n_layer);
             }
         }
@@ -629,6 +630,7 @@ static void llama_params_fit_impl(
             }
         } else {
             ngl_per_device = ngl_per_device_high;
+            mem            = mem_high;
             id_dense_start = id_dense_start_high;
             LLAMA_LOG_DEBUG("%s: set ngl_per_device[%zu].(n_layer, n_part)=(%" PRIu32 ", %" PRIu32 "), id_dense_start=%zu\n",
                 __func__, id, ngl_per_device[id].n_layer, ngl_per_device[id].n_part, id_dense_start);
