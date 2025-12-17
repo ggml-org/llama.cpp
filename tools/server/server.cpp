@@ -1,3 +1,4 @@
+#include "server-common.h"
 #include "server-context.h"
 #include "server-http.h"
 #include "server-models.h"
@@ -8,6 +9,7 @@
 #include "log.h"
 
 #include <atomic>
+#include <exception>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
 
@@ -124,7 +126,12 @@ int main(int argc, char ** argv, char ** envp) {
     std::optional<server_models_routes> models_routes{};
     if (is_router_server) {
         // setup server instances manager
-        models_routes.emplace(params, argc, argv, envp);
+        try {
+            models_routes.emplace(params, argc, argv, envp);
+        } catch (const std::exception & e) {
+            LOG_ERR("%s: failed to initialize router models: %s\n", __func__, e.what());
+            return 1;
+        }
 
         // proxy handlers
         // note: routes.get_health stays the same

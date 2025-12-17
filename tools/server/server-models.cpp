@@ -822,6 +822,7 @@ void server_models_routes::init_routes() {
                     {"params", json{}},
                     {"n_ctx",  0},
                 }},
+                {"webui_settings", webui_settings},
             });
             return res;
         }

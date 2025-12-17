@@ -2,6 +2,7 @@
 
 #include "common.h"
 #include "preset.h"
+#include "server-common.h"
 #include "server-http.h"
 
 #include <mutex>
@@ -149,9 +150,18 @@ public:
 
 struct server_models_routes {
     common_params params;
+    json webui_settings = json::object();
     server_models models;
     server_models_routes(const common_params & params, int argc, char ** argv, char ** envp)
             : params(params), models(params, argc, argv, envp) {
+        if (!this->params.webui_config_json.empty()) {
+            try {
+                webui_settings = json::parse(this->params.webui_config_json);
+            } catch (const std::exception & e) {
+                LOG_ERR("%s: failed to parse webui config: %s\n", __func__, e.what());
+                throw;
+            }
+        }
         init_routes();
     }
 

@@ -55,7 +55,55 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 	{ key: 'dry_allowed_length', serverKey: 'dry_allowed_length', type: 'number', canSync: true },
 	{ key: 'dry_penalty_last_n', serverKey: 'dry_penalty_last_n', type: 'number', canSync: true },
 	{ key: 'max_tokens', serverKey: 'max_tokens', type: 'number', canSync: true },
-	{ key: 'samplers', serverKey: 'samplers', type: 'string', canSync: true }
+	{ key: 'samplers', serverKey: 'samplers', type: 'string', canSync: true },
+	{
+		key: 'pasteLongTextToFileLen',
+		serverKey: 'pasteLongTextToFileLen',
+		type: 'number',
+		canSync: true
+	},
+	{ key: 'pdfAsImage', serverKey: 'pdfAsImage', type: 'boolean', canSync: true },
+	{
+		key: 'showThoughtInProgress',
+		serverKey: 'showThoughtInProgress',
+		type: 'boolean',
+		canSync: true
+	},
+	{ key: 'showToolCalls', serverKey: 'showToolCalls', type: 'boolean', canSync: true },
+	{
+		key: 'disableReasoningFormat',
+		serverKey: 'disableReasoningFormat',
+		type: 'boolean',
+		canSync: true
+	},
+	{ key: 'keepStatsVisible', serverKey: 'keepStatsVisible', type: 'boolean', canSync: true },
+	{ key: 'showMessageStats', serverKey: 'showMessageStats', type: 'boolean', canSync: true },
+	{
+		key: 'askForTitleConfirmation',
+		serverKey: 'askForTitleConfirmation',
+		type: 'boolean',
+		canSync: true
+	},
+	{ key: 'disableAutoScroll', serverKey: 'disableAutoScroll', type: 'boolean', canSync: true },
+	{
+		key: 'renderUserContentAsMarkdown',
+		serverKey: 'renderUserContentAsMarkdown',
+		type: 'boolean',
+		canSync: true
+	},
+	{ key: 'autoMicOnEmpty', serverKey: 'autoMicOnEmpty', type: 'boolean', canSync: true },
+	{
+		key: 'pyInterpreterEnabled',
+		serverKey: 'pyInterpreterEnabled',
+		type: 'boolean',
+		canSync: true
+	},
+	{
+		key: 'enableContinueGeneration',
+		serverKey: 'enableContinueGeneration',
+		type: 'boolean',
+		canSync: true
+	}
 ];
 
 export class ParameterSyncService {
@@ -74,25 +122,39 @@ export class ParameterSyncService {
 	 * Extract server default parameters that can be synced
 	 */
 	static extractServerDefaults(
-		serverParams: ApiLlamaCppServerProps['default_generation_settings']['params'] | null
+		serverParams: ApiLlamaCppServerProps['default_generation_settings']['params'] | null,
+		webuiSettings?: Record<string, string | number | boolean>
 	): ParameterRecord {
-		if (!serverParams) return {};
-
 		const extracted: ParameterRecord = {};
 
-		for (const param of SYNCABLE_PARAMETERS) {
-			if (param.canSync && param.serverKey in serverParams) {
-				const value = (serverParams as unknown as Record<string, ParameterValue>)[param.serverKey];
-				if (value !== undefined) {
-					// Apply precision rounding to avoid JavaScript floating-point issues
-					extracted[param.key] = this.roundFloatingPoint(value);
+		if (serverParams) {
+			for (const param of SYNCABLE_PARAMETERS) {
+				if (param.canSync && param.serverKey in serverParams) {
+					const value = (serverParams as unknown as Record<string, ParameterValue>)[
+						param.serverKey
+					];
+					if (value !== undefined) {
+						// Apply precision rounding to avoid JavaScript floating-point issues
+						extracted[param.key] = this.roundFloatingPoint(value);
+					}
 				}
+			}
+
+			// Handle samplers array conversion to string
+			if (serverParams.samplers && Array.isArray(serverParams.samplers)) {
+				extracted.samplers = serverParams.samplers.join(';');
 			}
 		}
 
-		// Handle samplers array conversion to string
-		if (serverParams.samplers && Array.isArray(serverParams.samplers)) {
-			extracted.samplers = serverParams.samplers.join(';');
+		if (webuiSettings) {
+			for (const param of SYNCABLE_PARAMETERS) {
+				if (param.canSync && param.serverKey in webuiSettings) {
+					const value = webuiSettings[param.serverKey];
+					if (value !== undefined) {
+						extracted[param.key] = this.roundFloatingPoint(value);
+					}
+				}
+			}
 		}
 
 		return extracted;
