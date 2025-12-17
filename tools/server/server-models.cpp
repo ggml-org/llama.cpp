@@ -168,7 +168,9 @@ server_presets::server_presets(int argc, char ** argv, common_params & base_para
             env == "LLAMA_ARG_MODEL" ||
             env == "LLAMA_ARG_MMPROJ" ||
             env == "LLAMA_ARG_HF_REPO" ||
-            env == "LLAMA_ARG_NO_MODELS_AUTOLOAD") {
+            env == "LLAMA_ARG_NO_MODELS_AUTOLOAD" ||
+            env == "LLAMA_ARG_SSL_KEY_FILE" ||
+            env == "LLAMA_ARG_SSL_CERT_FILE") {
             control_args[env] = opt;
         }
     }
@@ -222,6 +224,9 @@ void server_presets::render_args(server_model_meta & meta) {
             preset.options[control_args["LLAMA_ARG_MMPROJ"]] = meta.path_mmproj;
         }
     }
+    // disable SSL for child processes (HTTPS already handled by router)
+    preset.options[control_args["LLAMA_ARG_SSL_KEY_FILE"]] = "";
+    preset.options[control_args["LLAMA_ARG_SSL_CERT_FILE"]] = "";
     meta.args = preset.to_args();
     // add back the binary path at the front
     meta.args.insert(meta.args.begin(), get_server_exec_path().string());
