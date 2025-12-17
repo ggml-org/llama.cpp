@@ -2285,7 +2285,6 @@ kernel void kernel_cross_entropy_loss(
         constant ggml_metal_kargs_cross_entropy & args,
         device const  char * src0,
         device const  char * src1,
-        device const  char * src2,
         device        char * dst,
         threadgroup  float * buf [[threadgroup(0)]],
         uint tgpig[[threadgroup_position_in_grid]],
@@ -2412,6 +2411,14 @@ kernel void kernel_cross_entropy_loss_back(
 
 }
 
+typedef decltype(kernel_cross_entropy_loss<float>)      kernel_cross_entropy_loss_t;
+typedef decltype(kernel_cross_entropy_loss_back<float>) kernel_cross_entropy_loss_back_t;
+
+template [[host_name("kernel_cross_entropy_loss_f32")]]
+kernel kernel_cross_entropy_loss_t kernel_cross_entropy_loss<float>;
+
+template [[host_name("kernel_cross_entropy_loss_back_f32")]]
+kernel kernel_cross_entropy_loss_back_t kernel_cross_entropy_loss_back<float>;
 
 // ref: ggml.c:ggml_compute_forward_ssm_conv_f32
 kernel void kernel_ssm_conv_f32_f32(

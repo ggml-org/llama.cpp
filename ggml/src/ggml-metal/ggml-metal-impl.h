@@ -910,14 +910,14 @@ typedef struct {
 
 typedef struct {
     int32_t  ne00;
-    int32_t  args;
+    int32_t  nrows;
     int32_t  k;
-} ggm_metal_kargs_cross_entropy_loss;
+} ggml_metal_kargs_cross_entropy_loss;
 
 typedef struct {
     int32_t  ne00;
-    int32_t  args;
-} ggm_metal_kargs_cross_entropy_loss_back;
+    int32_t  nrows;
+} ggml_metal_kargs_cross_entropy_loss_back;
 
 typedef struct {
      int64_t ne00;
