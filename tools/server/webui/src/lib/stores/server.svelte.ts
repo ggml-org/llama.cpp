@@ -40,6 +40,10 @@ class ServerStore {
 		return this.props?.default_generation_settings?.n_ctx ?? null;
 	}
 
+	get webuiSettings(): Record<string, string | number | boolean> | undefined {
+		return this.props?.webui_settings;
+	}
+
 	get isRouterMode(): boolean {
 		return this.role === ServerRole.ROUTER;
 	}

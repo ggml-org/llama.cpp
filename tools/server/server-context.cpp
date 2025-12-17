@@ -544,6 +544,8 @@ struct server_context_impl {
 
     server_metrics metrics;
 
+    json webui_settings = json::object();
+
     // Necessary similarity of prompt for slot selection
     float slot_prompt_similarity = 0.0f;
 
@@ -574,6 +576,16 @@ struct server_context_impl {
         SRV_INF("loading model '%s'\n", params.model.path.c_str());
 
         params_base = params;
+
+        webui_settings = json::object();
+        if (!params_base.webui_config_json.empty()) {
+            try {
+                webui_settings = json::parse(params_base.webui_config_json);
+            } catch (const std::exception & e) {
+                SRV_ERR("%s: failed to parse webui config: %s\n", __func__, e.what());
+                return false;
+            }
+        }
 
         llama_init = common_init_from_params(params_base);
 
@@ -3103,7 +3115,6 @@ void server_routes::init_routes() {
             };
         }
 
-        // this endpoint is publicly available, please only return what is safe to be exposed
         json data = {
             { "default_generation_settings", default_generation_settings_for_props },
             { "total_slots",                 ctx_server.params_base.n_parallel },
@@ -3117,6 +3128,7 @@ void server_routes::init_routes() {
             { "endpoint_props",              params.endpoint_props },
             { "endpoint_metrics",            params.endpoint_metrics },
             { "webui",                       params.webui },
+            { "webui_settings",              ctx_server.webui_settings },
             { "chat_template",               common_chat_templates_source(ctx_server.chat_templates.get()) },
             { "bos_token",                   common_token_to_piece(ctx_server.ctx, llama_vocab_bos(ctx_server.vocab), /* special= */ true)},
             { "eos_token",                   common_token_to_piece(ctx_server.ctx, llama_vocab_eos(ctx_server.vocab), /* special= */ true)},

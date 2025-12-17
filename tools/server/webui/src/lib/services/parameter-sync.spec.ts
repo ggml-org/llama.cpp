@@ -130,5 +130,19 @@ describe('ParameterSyncService', () => {
 			expect(result.max_tokens).toBe(-1);
 			expect(result.temperature).toBe(0.7);
 		});
+
+		it('should merge webui settings from props when provided', () => {
+			const result = ParameterSyncService.extractServerDefaults(null, {
+				pasteLongTextToFileLen: 0,
+				pdfAsImage: true,
+				renderUserContentAsMarkdown: false,
+				theme: 'dark'
+			});
+
+			expect(result.pasteLongTextToFileLen).toBe(0);
+			expect(result.pdfAsImage).toBe(true);
+			expect(result.renderUserContentAsMarkdown).toBe(false);
+			expect(result.theme).toBeUndefined();
+		});
 	});
 });

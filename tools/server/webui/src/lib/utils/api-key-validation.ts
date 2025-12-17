@@ -1,3 +1,4 @@
+import { base } from '$app/paths';
 import { error } from '@sveltejs/kit';
 import { browser } from '$app/environment';
 import { config } from '$lib/stores/settings.svelte';
@@ -22,7 +23,7 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 			headers.Authorization = `Bearer ${apiKey}`;
 		}
 
-		const response = await fetch(`./props`, { headers });
+		const response = await fetch(`${base}/props`, { headers });
 
 		if (!response.ok) {
 			if (response.status === 401 || response.status === 403) {
