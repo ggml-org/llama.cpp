@@ -948,35 +948,45 @@ float hvx_self_max_f32(const uint8_t * restrict src, const int num_elems) {
 void hvx_min_scalar_f32(const uint8_t * restrict src, const float val, uint8_t * restrict dst, const int num_elems) {
     size_t left_over       = num_elems & (VLEN_FP32 - 1);
     size_t num_elems_whole = num_elems - left_over;
-
+    int unalign_address = 0;
     if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
         FARF(HIGH, "hvx_min_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
+        unalign_address = 1;
     }
-
-    assert((1 == htp_is_aligned((void *) src, VLEN)) || (0 == num_elems_whole));
 
     const float * src_f = (const float *) src;
 
-    HVX_Vector vec_min = Q6_V_vsplat_R(val);
+    HVX_Vector vec_min = hvx_vec_splat_fp32(val);
 
-    HVX_Vector * restrict vec_in  = (HVX_Vector *) src;
-    HVX_Vector * restrict vec_out = (HVX_Vector *) dst;
+    if(unalign_address == 0){
+        HVX_Vector * restrict vec_in  = (HVX_Vector *) src;
+        HVX_Vector * restrict vec_out = (HVX_Vector *) dst;
 
-    #pragma unroll(4)
-    for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
-        vec_min    = Q6_Vsf_vmin_VsfVsf(vec_min, *vec_in++);
-        *vec_out++ = Q6_Vsf_equals_Vqf32(vec_min);
+        #pragma unroll(4)
+        for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
+            HVX_Vector min_clamp    = Q6_Vsf_vmin_VsfVsf(vec_min, *vec_in++);
+            *vec_out++ = (min_clamp);
+        }
+    }else{
+        HVX_UVector * restrict vec_in  = (HVX_Vector *) src;
+        HVX_UVector * restrict vec_out = (HVX_Vector *) dst;
+
+        #pragma unroll(4)
+        for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
+            HVX_Vector min_clamp     = Q6_Vsf_vmin_VsfVsf(vec_min, *vec_in++);
+            *vec_out++ = (min_clamp);
+        }
     }
 
-    if (left_over > 0) {
+    if (left_over > 0 ) {
         const float * srcf = (const float *) src + num_elems_whole;
         float *       dstf = (float *) dst + num_elems_whole;
 
-        HVX_Vector in = *(HVX_UVector *) srcf;
+        HVX_UVector in = *(HVX_UVector *) srcf;
 
-        vec_min = Q6_Vsf_vmin_VsfVsf(vec_min, in);
+        HVX_UVector min_clamp = Q6_Vsf_vmin_VsfVsf(vec_min, in);
 
-        hvx_vec_store_u((void *) dstf, left_over * SIZEOF_FP32, Q6_Vsf_equals_Vqf32(vec_min));
+        hvx_vec_store_u((void *) dstf, left_over * SIZEOF_FP32, (min_clamp));
     }
 }
 
@@ -988,46 +998,70 @@ void hvx_clamp_scalar_f32(const uint8_t * restrict src,
     size_t left_over       = num_elems & (VLEN_FP32 - 1);
     size_t num_elems_whole = num_elems - left_over;
 
+    int unalign_address = 0;
     if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
         FARF(HIGH, "hvx_clamp_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
+        unalign_address = 1;
     }
-
-    assert((1 == htp_is_aligned((void *) src, VLEN)) || (0 == num_elems_whole));
-
-    HVX_Vector * restrict vec_in  = (HVX_Vector *) src;
-    HVX_Vector * restrict vec_out = (HVX_Vector *) dst;
 
     HVX_Vector range_left  = hvx_vec_splat_fp32(limit_left);
     HVX_Vector range_right = hvx_vec_splat_fp32(limit_right);
 
-    #pragma unroll(4)
-    for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
-        HVX_Vector in_vec = *vec_in++;
-        HVX_Vector temp_v = in_vec;
+    if(unalign_address == 0){
+        HVX_Vector * restrict vec_in  = (HVX_Vector *) src;
+        HVX_Vector * restrict vec_out = (HVX_Vector *) dst;
 
-        HVX_VectorPred pred_cap_right = Q6_Q_vcmp_gt_VsfVsf(in_vec, range_right);
-        HVX_VectorPred pred_cap_left  = Q6_Q_vcmp_gt_VsfVsf(range_left, in_vec);
 
-        in_vec = Q6_V_vmux_QVV(pred_cap_right, range_right, temp_v);
-        in_vec = Q6_V_vmux_QVV(pred_cap_left, range_left, temp_v);
 
-        *vec_out++ = Q6_Vsf_equals_Vqf32(in_vec);
+        #pragma unroll(4)
+        for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
+            HVX_Vector in_vec = *vec_in++;
+            HVX_Vector temp_v = in_vec;
+
+            HVX_VectorPred pred_cap_right = Q6_Q_vcmp_gt_VsfVsf(in_vec, range_right);
+            HVX_VectorPred pred_cap_left  = Q6_Q_vcmp_gt_VsfVsf(range_left, in_vec);
+
+            in_vec = Q6_V_vmux_QVV(pred_cap_right, range_right, temp_v);
+            in_vec = Q6_V_vmux_QVV(pred_cap_left, range_left, in_vec);
+
+            *vec_out++ = in_vec;
+        }
+
+    }else{
+
+        HVX_UVector * restrict vec_in  = (HVX_UVector *) src;
+        HVX_UVector * restrict vec_out = (HVX_UVector *) dst;
+
+        #pragma unroll(4)
+        for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
+            HVX_Vector in_vec = *vec_in++;
+            HVX_Vector temp_v = in_vec;
+
+            HVX_VectorPred pred_cap_right = Q6_Q_vcmp_gt_VsfVsf(in_vec, range_right);
+            HVX_VectorPred pred_cap_left  = Q6_Q_vcmp_gt_VsfVsf(range_left, in_vec);
+
+            in_vec = Q6_V_vmux_QVV(pred_cap_right, range_right, temp_v);
+            in_vec = Q6_V_vmux_QVV(pred_cap_left, range_left, in_vec);
+
+            *vec_out++ = in_vec;
+        }
+
     }
 
     if (left_over > 0) {
         const float * srcf = (const float *) src + num_elems_whole;
         float *       dstf = (float *) dst + num_elems_whole;
 
-        HVX_Vector in = *(HVX_UVector *) srcf;
+        HVX_Vector in_vec = *(HVX_UVector *) srcf;
 
-        HVX_Vector temp_v = in;
+        HVX_Vector temp_v = in_vec;
 
-        HVX_VectorPred pred_cap_right = Q6_Q_vcmp_gt_VsfVsf(in, range_right);
-        HVX_VectorPred pred_cap_left  = Q6_Q_vcmp_gt_VsfVsf(range_left, in);
+        HVX_VectorPred pred_cap_right = Q6_Q_vcmp_gt_VsfVsf(in_vec, range_right);
+        HVX_VectorPred pred_cap_left  = Q6_Q_vcmp_gt_VsfVsf(range_left, in_vec);
 
-        in = Q6_V_vmux_QVV(pred_cap_right, range_right, temp_v);
-        in = Q6_V_vmux_QVV(pred_cap_left, range_left, temp_v);
+        in_vec = Q6_V_vmux_QVV(pred_cap_right, range_right, temp_v);
+        in_vec = Q6_V_vmux_QVV(pred_cap_left, range_left, in_vec);
 
-        hvx_vec_store_u((void *) dstf, left_over * SIZEOF_FP32, Q6_Vsf_equals_Vqf32(in));
+        hvx_vec_store_u((void *) dstf, left_over * SIZEOF_FP32, in_vec);
     }
 }
