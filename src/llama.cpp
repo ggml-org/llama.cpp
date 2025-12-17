@@ -71,8 +71,9 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
     }, &ud);
 
     llama_model_params mparams_copy = *mparams;
-    mparams_copy.no_alloc = true;
-    mparams_copy.use_mmap = false;
+    mparams_copy.no_alloc  = true;
+    mparams_copy.use_mmap  = false;
+    mparams_copy.use_mlock = false;
 
     llama_model * model = llama_model_load_from_file(path_model, mparams_copy);
     if (model == nullptr) {
@@ -180,11 +181,12 @@ static void llama_params_fit_impl(
         }
     }
 
-    int64_t sum_total          = 0;
-    int64_t sum_projected_free = 0;
-    int64_t min_projected_free = INT64_MAX;
-    int64_t sum_projected_used = 0;
-    int64_t sum_projected_ctx  = 0;
+    int64_t sum_total           = 0;
+    int64_t sum_projected_free  = 0;
+    int64_t min_projected_free  = INT64_MAX;
+    int64_t sum_projected_used  = 0;
+    int64_t sum_projected_model = 0;
+    int64_t sum_projected_ctx   = 0;
 
     if (nd > 1) {
         LLAMA_LOG_INFO("%s: projected memory use with initial parameters [MiB]:\n", __func__);
@@ -195,11 +197,12 @@ static void llama_params_fit_impl(
         const int64_t projected_used = dmd.mb.total();
         const int64_t projected_free = dmd.free - projected_used;
 
-        sum_total          += dmd.total;
-        sum_projected_used += projected_used;
-        sum_projected_free += projected_free;
-        min_projected_free  = std::min(min_projected_free, projected_free);
-        sum_projected_ctx  += dmd.mb.context;
+        sum_total           += dmd.total;
+        sum_projected_used  += projected_used;
+        sum_projected_free  += projected_free;
+        min_projected_free   = std::min(min_projected_free, projected_free);
+        sum_projected_model += dmd.mb.model;
+        sum_projected_ctx   += dmd.mb.context;
 
         if (nd > 1) {
             LLAMA_LOG_INFO("%s:   - %s: %6" PRId64 " total, %6" PRId64 " used, %6" PRId64 " %s\n",
@@ -234,10 +237,24 @@ static void llama_params_fit_impl(
             if (cparams->n_ctx == 0) {
                 if (hp_nct > n_ctx_min) {
                     const int64_t bytes_per_ctx = sum_projected_ctx / hp_nct;
-                    const uint32_t ctx_reduction = std::min(
-                        uint32_t((-global_surplus + bytes_per_ctx - 1) / bytes_per_ctx), hp_nct - n_ctx_min);
+
+                    int64_t memory_reduction = -global_surplus;
+                    if (nd > 1) {
+                        // for multiple devices we need to be more conservative in terms of how much context we think can fit:
+                        //   - for dense models only whole layers can be assigned to devices
+                        //   - for MoE models only whole tensors can be assigned to devices, which we estimate to be <= 1/3 of a layer
+                        //   - on average we expect a waste of 0.5 layers/tensors per device
+                        //   - use slightly more than the expected average for nd devices to be safe
+                        const int64_t model_per_layer = sum_projected_model / std::min(uint32_t(mparams->n_gpu_layers), hp_ngl);
+                        memory_reduction += (nd + 1) * model_per_layer / (hp_nex == 0 ? 2 : 6);
+                    }
+
+                    uint32_t ctx_reduction = std::min(uint32_t((memory_reduction + bytes_per_ctx - 1) / bytes_per_ctx), hp_nct - n_ctx_min);
                     cparams->n_ctx = hp_nct - ctx_reduction;
-                    const int64_t memory_reduction = ctx_reduction * bytes_per_ctx;
+                    cparams->n_ctx = std::max(cparams->n_ctx - cparams->n_ctx % 256, n_ctx_min); // round down context for CUDA backend
+
+                    ctx_reduction = hp_nct - cparams->n_ctx;
+                    memory_reduction = ctx_reduction * bytes_per_ctx;
                     global_surplus += memory_reduction;
                     LLAMA_LOG_INFO("%s: context size reduced from %" PRIu32 " to %" PRIu32 " -> need %" PRId64 " MiB less memory in total\n",
                         __func__, hp_nct, cparams->n_ctx, memory_reduction/MiB);
@@ -481,8 +498,13 @@ static void llama_params_fit_impl(
     } else {
         LLAMA_LOG_INFO("%s: filling dense-only layers back-to-front:\n", __func__);
     }
-    uint32_t n_unassigned = hp_ngl;
     for (int id = nd - 1; id >= 0; id--) {
+        uint32_t n_unassigned = hp_ngl;
+        for (size_t jd = id + 1; jd < nd; ++jd) {
+            assert(n_unassigned >= ngl_per_device[jd].n_layer);
+            n_unassigned -= ngl_per_device[jd].n_layer;
+        }
+
         std::vector<ngl_t> ngl_per_device_high = ngl_per_device;
         ngl_per_device_high[id].n_layer = n_unassigned;
         if (hp_nex > 0) {
@@ -491,7 +513,9 @@ static void llama_params_fit_impl(
         if (ngl_per_device_high[id].n_layer > 0) {
             std::vector<int64_t> mem_high = get_memory_for_layers(__func__, ngl_per_device_high, overflow_bufts, partial_moe);
             if (mem_high[id] > targets[id]) {
+                assert(ngl_per_device_high[id].n_layer > ngl_per_device[id].n_layer);
                 uint32_t delta = ngl_per_device_high[id].n_layer - ngl_per_device[id].n_layer;
+                LLAMA_LOG_DEBUG("%s: start filling device %" PRIu32 ", delta=%" PRIu32 "\n", __func__, id, delta);
                 while (delta > 1) {
                     uint32_t step_size = int64_t(delta) * (targets[id] - mem[id]) / (mem_high[id] - mem[id]);
                     step_size = std::max(step_size, uint32_t(1));
@@ -505,20 +529,19 @@ static void llama_params_fit_impl(
                     const std::vector<int64_t> mem_test = get_memory_for_layers(__func__, ngl_per_device_test, overflow_bufts, partial_moe);
 
                     if (mem_test[id] <= targets[id]) {
-                        ngl_per_device  = ngl_per_device_test;
-                        mem             = mem_test;
-                        n_unassigned   -= ngl_per_device[id].n_layer;
+                        ngl_per_device = ngl_per_device_test;
+                        mem            = mem_test;
                         LLAMA_LOG_DEBUG("%s: set ngl_per_device[%d].n_layer=%" PRIu32 "\n", __func__, id, ngl_per_device[id].n_layer);
                     } else {
                         ngl_per_device_high = ngl_per_device_test;
                         mem_high            = mem_test;
-                        LLAMA_LOG_DEBUG("%s: set ngl_per_device_high[%d].n_layer=%" PRIu32 "\n", __func__, id, ngl_per_device[id].n_layer);
+                        LLAMA_LOG_DEBUG("%s: set ngl_per_device_high[%d].n_layer=%" PRIu32 "\n", __func__, id, ngl_per_device_high[id].n_layer);
                     }
                     delta = ngl_per_device_high[id].n_layer - ngl_per_device[id].n_layer;
                 }
             } else {
-                ngl_per_device  = ngl_per_device_high;
-                n_unassigned   -= ngl_per_device[id].n_layer;
+                assert(ngl_per_device_high[id].n_layer == n_unassigned);
+                ngl_per_device = ngl_per_device_high;
                 LLAMA_LOG_DEBUG("%s: set ngl_per_device[%d].n_layer=%" PRIu32 "\n", __func__, id, ngl_per_device[id].n_layer);
             }
         }
