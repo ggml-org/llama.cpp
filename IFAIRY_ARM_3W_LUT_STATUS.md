@@ -38,6 +38,8 @@
 | 2025-12-17T06:59:40Z | `257c494b` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 8.08 |
 | 2025-12-17T08:06:50Z | `6ff807dc` | Apple M4 | 4 | 128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 9.02 |
 | 2025-12-17T08:27:00Z | `38c185d5` | Apple M4 | 4 | 128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 10.31 |
+| 2025-12-17T08:40:52Z | `e8e6c47b` | Apple M4 | 4 | 128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 18.96 |
+| 2025-12-17T08:40:52Z | `e8e6c47b` | Apple M4 | 4 | 128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 17.56 |
 
 ## 0.2 Xcode Profile（以 decode 场景为准）
 
@@ -212,6 +214,7 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
      - **减少地址计算**：把每个 position 的 16B 表当作 `4×int32`，用 `t0[c0]` 方式索引（减少 `*4`/LEA）
      - **prefetch 策略**：prefetch `grp + k_ifairy_lut_group_bytes` 与 `idx_g + k`；对比“prefetch 太早/太晚/无效”的差异（Xcode 可直接看到 L1 miss）
      - **N==1 快路（仍属于 LUT，不是形状模板）**：为 decode 常见 `N==1` 在 `qgemm_ex` 内加一个 runtime 分支，消掉 col 循环与部分指针运算
+     - **减少 call/拷贝开销（仍属于 LUT）**：非 tiling 情况下避免“每 row 调一次 qgemm + memcpy”，改为每线程处理连续 row-block 并直接写回 `dst`
    - 交付/验收：
      - `./build-rel/bin/test-ifairy` 全通过
      - 在 0.2 的 decode 配置下，`ggml_ifairy_lut_qgemm_ex` 占比下降（目标 < 55%），同时 eval tok/s 上升（目标 +10%）

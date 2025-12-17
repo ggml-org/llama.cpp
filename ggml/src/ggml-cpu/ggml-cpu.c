@@ -1366,24 +1366,19 @@ void ggml_compute_forward_mul_mat(
 
             uint8_t * dst_base = (uint8_t *) dst->data;
             if (tile_blocks == 0) {
-                // build LUT once (thread 0), shared across all threads
-                if (ith == 0) {
-                    ggml_ifairy_lut_preprocess((int) M, (int) K, (int) N, act_src, act_stride, scales, lut);
-                }
+                // build LUT once, shared across all threads (parallelize preprocess across threads)
+                ggml_ifairy_lut_preprocess_ex((int) M, (int) K, (int) N, act_src, act_stride, scales, lut, ith, nth);
                 ggml_barrier(params->threadpool);
 
-                for (int64_t row = ith; row < M; row += nth) {
-                    const uint8_t * row_indexes = indexes + (size_t) row * index_stride;
-                    float * tmp_row = (float *) row_tmp_bytes;
-                    const block_ifairy * w_row = (const block_ifairy *) src0->data + row * blocks_per_col;
-                    ggml_ifairy_lut_qgemm(1, (int) K, (int) N, w_row, row_indexes, lut, scales,
-                                          act_src, act_stride, tmp_row, sizeof(float), 0, true, strict);
-                    for (int64_t col = 0; col < N; ++col) {
-                        uint8_t * dst_elem = dst_base + (size_t) col * nb1 + (size_t) row * nb0;
-                        memcpy(dst_elem,
-                               (uint8_t *) tmp_row + (size_t) col * sizeof(float),
-                               sizeof(float));
-                    }
+                const int64_t row0 = (M * ith) / nth;
+                const int64_t row1 = (M * (ith + 1)) / nth;
+                const int64_t nrows = row1 - row0;
+                if (nrows > 0) {
+                    const uint8_t * row_indexes = indexes + (size_t) row0 * index_stride;
+                    const block_ifairy * w_row = (const block_ifairy *) src0->data + row0 * blocks_per_col;
+                    float * dst_f = (float *) (dst_base + (size_t) row0 * nb0);
+                    ggml_ifairy_lut_qgemm_ex((int) nrows, (int) K, (int) N, w_row, row_indexes, lut, scales,
+                                            act_src, act_stride, dst_f, nb1, nb0, true, strict, false);
                 }
                 return;
             }
@@ -1407,9 +1402,7 @@ void ggml_compute_forward_mul_mat(
 
                     const uint8_t * act_tile = (const uint8_t *) act_src + (size_t) blk0 * sizeof(block_ifairy_q16);
 
-                    if (ith == 0) {
-                        ggml_ifairy_lut_preprocess((int) M, (int) tile_k, (int) N, act_tile, act_stride, scales, lut);
-                    }
+                    ggml_ifairy_lut_preprocess_ex((int) M, (int) tile_k, (int) N, act_tile, act_stride, scales, lut, ith, nth);
                     ggml_barrier(params->threadpool);
 
                     for (int64_t row = ith; row < M; row += nth) {
@@ -1464,9 +1457,7 @@ void ggml_compute_forward_mul_mat(
 
                     const uint8_t * act_tile = (const uint8_t *) act_src + (size_t) blk0 * sizeof(block_ifairy_q16);
 
-                    if (ith == 0) {
-                        ggml_ifairy_lut_preprocess((int) M, (int) tile_k, (int) N, act_tile, act_stride, scales, lut);
-                    }
+                    ggml_ifairy_lut_preprocess_ex((int) M, (int) tile_k, (int) N, act_tile, act_stride, scales, lut, ith, nth);
                     ggml_barrier(params->threadpool);
 
                     if (nrows > 0) {

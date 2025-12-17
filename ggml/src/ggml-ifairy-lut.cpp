@@ -515,9 +515,15 @@ static void ggml_ifairy_lut_preprocess_legacy(int m, int k, int n, const void * 
 }
 
 void ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act, size_t act_stride, void * lut_scales, void * lut_buf) {
+    ggml_ifairy_lut_preprocess_ex(m, k, n, act, act_stride, lut_scales, lut_buf, 0, 1);
+}
+
+void ggml_ifairy_lut_preprocess_ex(int m, int k, int n, const void * act, size_t act_stride, void * lut_scales, void * lut_buf, int ith, int nth) {
     const ggml_ifairy_lut_layout layout = ggml_ifairy_lut_layout_from_env(n);
     if (layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY) {
-        ggml_ifairy_lut_preprocess_legacy(m, k, n, act, act_stride, lut_scales, lut_buf);
+        if (ith == 0) {
+            ggml_ifairy_lut_preprocess_legacy(m, k, n, act, act_stride, lut_scales, lut_buf);
+        }
         return;
     }
 
@@ -526,15 +532,37 @@ void ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act, size_t ac
         return;
     }
 
+    if (nth < 1) {
+        nth = 1;
+    }
+    if (ith < 0 || ith >= nth) {
+        return;
+    }
+
     const int64_t K  = k;
     const int64_t blocks = K / QK_K;
     const int64_t groups_per_block = (QK_K + 2) / 3;
     const int64_t groups = blocks * groups_per_block;
 
-    for (int col = 0; col < n; ++col) {
+    const bool shard_by_col = n >= nth;
+
+    const int col_start = shard_by_col ? ith : 0;
+    const int col_step  = shard_by_col ? nth : 1;
+    const int col_end   = n;
+
+    for (int col = col_start; col < col_end; col += col_step) {
         const uint8_t * act_col_bytes = (const uint8_t *) act + (size_t) col * act_stride;
         const block_ifairy_q16 * act_blocks = (const block_ifairy_q16 *) act_col_bytes;
         float * scales_out = (float *) lut_scales + (size_t) col * (size_t) blocks * 2;
+
+        // per-block activation scales (shared by all groups in the block)
+        // If n < nth we use group-sharding below and only thread 0 fills scales (small, avoids false sharing).
+        if (shard_by_col || ith == 0) {
+            for (int64_t blk = 0; blk < blocks; ++blk) {
+                scales_out[blk * 2 + 0] = GGML_FP16_TO_FP32(act_blocks[blk].d_real);
+                scales_out[blk * 2 + 1] = GGML_FP16_TO_FP32(act_blocks[blk].d_imag);
+            }
+        }
 
         // Layout: per-group, 3 positions (c0/c1/c2), each position is a 16B table:
         //   tbl_pos[code*4 + 0..3] = { ac, ad, bc, bd } (int8)
@@ -542,13 +570,12 @@ void ggml_ifairy_lut_preprocess(int m, int k, int n, const void * act, size_t ac
         //   0 -> (-1,0), 1 -> (1,0), 2 -> (0,-1), 3 -> (0,1)
         int8_t * lut_out = (int8_t *) ((uint8_t *) lut_buf + (size_t) col * (size_t) groups * k_ifairy_lut_group_bytes);
 
-        // per-block activation scales (shared by all groups in the block)
-        for (int64_t blk = 0; blk < blocks; ++blk) {
-            scales_out[blk * 2 + 0] = GGML_FP16_TO_FP32(act_blocks[blk].d_real);
-            scales_out[blk * 2 + 1] = GGML_FP16_TO_FP32(act_blocks[blk].d_imag);
-        }
+        // For decode-like cases (n < nth), shard by groups in a strided fashion to avoid false sharing:
+        // group size is 48B, so consecutive groups share cache lines; striding keeps threads off the same lines.
+        const int64_t g0 = shard_by_col ? 0 : ith;
+        const int64_t gstep = shard_by_col ? 1 : (int64_t) nth;
 
-        for (int64_t g = 0; g < groups; ++g) {
+        for (int64_t g = g0; g < groups; g += gstep) {
             const int64_t blk   = g / groups_per_block;
             const int64_t intra = g - blk * groups_per_block;
 
@@ -638,6 +665,241 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qw
     const int64_t groups = blocks * groups_per_block;
 
     const block_ifairy * w_blocks = (const block_ifairy *) qweights;
+
+    // Fast-path for decode: N == 1 avoids the col loop and some pointer arithmetic.
+    if (n == 1) {
+        const int8_t * lut_base = (const int8_t *) lut;
+        const float * scales = (const float *) lut_scales;
+        const block_ifairy_q16 * act_blocks = act ? (const block_ifairy_q16 *) act : NULL;
+
+        for (int row = 0; row < m; ++row) {
+            const block_ifairy * w_row = w_blocks + (size_t) row * (size_t) blocks;
+            const uint8_t * idx_row = indexes + (size_t) row * (size_t) groups;
+
+            const float coeff_w_real = GGML_FP16_TO_FP32(w_row[0].d_real);
+            const float coeff_w_imag = GGML_FP16_TO_FP32(w_row[0].d_imag);
+
+            float acc_ac_xr = 0.0f;
+            float acc_ad_xi = 0.0f;
+            float acc_bc_xr = 0.0f;
+            float acc_bd_xi = 0.0f;
+
+#if defined(__ARM_NEON) && defined(__aarch64__)
+            float32x4_t accv = vdupq_n_f32(0.0f); // {ac, ad, bc, bd}
+            for (int64_t blk = 0; blk < blocks; ++blk) {
+                int32x4_t isum0 = vdupq_n_s32(0);
+                int32x4_t isum1 = vdupq_n_s32(0);
+
+                const uint8_t * idx_g = idx_row + (size_t) blk * (size_t) groups_per_block;
+                const int8_t * grp   = lut_base + (size_t) blk * (size_t) groups_per_block * k_ifairy_lut_group_bytes;
+
+                int64_t gi = 0;
+                for (; gi + 1 < groups_per_block; gi += 2) {
+                    const uint8_t pat0 = (uint8_t) (idx_g[0] & 0x3f);
+                    const uint8_t pat1 = (uint8_t) (idx_g[1] & 0x3f);
+
+                    const uint8_t c00 = (uint8_t) (pat0 & 3);
+                    const uint8_t c01 = (uint8_t) ((pat0 >> 2) & 3);
+                    const uint8_t c02 = (uint8_t) ((pat0 >> 4) & 3);
+
+                    const uint8_t c10 = (uint8_t) (pat1 & 3);
+                    const uint8_t c11 = (uint8_t) ((pat1 >> 2) & 3);
+                    const uint8_t c12 = (uint8_t) ((pat1 >> 4) & 3);
+
+                    const int8_t * grp0 = grp;
+                    const int8_t * grp1 = grp + k_ifairy_lut_group_bytes;
+
+                    __builtin_prefetch(grp0 + 2 * k_ifairy_lut_group_bytes, 0, 1);
+
+                    const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t02 = (const int32_t *) (grp0 + 2 * k_ifairy_lut_pos_bytes);
+
+                    const int32x2_t p00 = vld1_dup_s32(t00 + c00);
+                    const int32x2_t p01 = vld1_dup_s32(t01 + c01);
+                    const int32x2_t p02 = vld1_dup_s32(t02 + c02);
+
+                    int16x8_t s160 = vmovl_s8(vreinterpret_s8_s32(p00));
+                    s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p01)));
+                    s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p02)));
+                    isum0 = vaddw_s16(isum0, vget_low_s16(s160));
+
+                    const int32_t * t10 = (const int32_t *) (grp1 + 0 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t11 = (const int32_t *) (grp1 + 1 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t12 = (const int32_t *) (grp1 + 2 * k_ifairy_lut_pos_bytes);
+
+                    const int32x2_t p10 = vld1_dup_s32(t10 + c10);
+                    const int32x2_t p11 = vld1_dup_s32(t11 + c11);
+                    const int32x2_t p12 = vld1_dup_s32(t12 + c12);
+
+                    int16x8_t s161 = vmovl_s8(vreinterpret_s8_s32(p10));
+                    s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p11)));
+                    s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p12)));
+                    isum1 = vaddw_s16(isum1, vget_low_s16(s161));
+
+                    idx_g += 2;
+                    grp   += 2 * k_ifairy_lut_group_bytes;
+                }
+                for (; gi < groups_per_block; ++gi, ++idx_g, grp += k_ifairy_lut_group_bytes) {
+                    const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
+                    const uint8_t c0 = (uint8_t) (pat & 3);
+                    const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
+                    const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
+
+                    __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
+
+                    const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t2 = (const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes);
+
+                    const int32x2_t p0 = vld1_dup_s32(t0 + c0);
+                    const int32x2_t p1 = vld1_dup_s32(t1 + c1);
+                    const int32x2_t p2 = vld1_dup_s32(t2 + c2);
+
+                    int16x8_t s16 = vmovl_s8(vreinterpret_s8_s32(p0));
+                    s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p1)));
+                    s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p2)));
+                    isum0 = vaddw_s16(isum0, vget_low_s16(s16));
+                }
+
+                const float32x2_t srsi = vld1_f32(scales + (size_t) blk * 2);
+                const float32x4_t scv = vcombine_f32(srsi, srsi); // {sr, si, sr, si}
+                const float32x4_t sumsf = vcvtq_f32_s32(vaddq_s32(isum0, isum1));
+                accv = vmlaq_f32(accv, sumsf, scv);
+            }
+
+            acc_ac_xr = vgetq_lane_f32(accv, 0);
+            acc_ad_xi = vgetq_lane_f32(accv, 1);
+            acc_bc_xr = vgetq_lane_f32(accv, 2);
+            acc_bd_xi = vgetq_lane_f32(accv, 3);
+#else
+            for (int64_t blk = 0; blk < blocks; ++blk) {
+                int32_t sum_ac = 0;
+                int32_t sum_ad = 0;
+                int32_t sum_bc = 0;
+                int32_t sum_bd = 0;
+
+                const uint8_t * idx_g = idx_row + (size_t) blk * (size_t) groups_per_block;
+                const int8_t * grp   = lut_base + (size_t) blk * (size_t) groups_per_block * k_ifairy_lut_group_bytes;
+
+                for (int64_t gi = 0; gi < groups_per_block; ++gi, ++idx_g, grp += k_ifairy_lut_group_bytes) {
+                    const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
+                    const uint8_t c0 = (uint8_t) (pat & 3);
+                    const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
+                    const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
+
+                    const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t2 = (const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes);
+
+                    const int8_t * e0 = (const int8_t *) &t0[c0];
+                    const int8_t * e1 = (const int8_t *) &t1[c1];
+                    const int8_t * e2 = (const int8_t *) &t2[c2];
+
+                    sum_ac += (int32_t) e0[0] + (int32_t) e1[0] + (int32_t) e2[0];
+                    sum_ad += (int32_t) e0[1] + (int32_t) e1[1] + (int32_t) e2[1];
+                    sum_bc += (int32_t) e0[2] + (int32_t) e1[2] + (int32_t) e2[2];
+                    sum_bd += (int32_t) e0[3] + (int32_t) e1[3] + (int32_t) e2[3];
+                }
+
+                const float act_scale_r = scales[blk * 2 + 0];
+                const float act_scale_i = scales[blk * 2 + 1];
+                acc_ac_xr += act_scale_r * (float) sum_ac;
+                acc_ad_xi += act_scale_i * (float) sum_ad;
+                acc_bc_xr += act_scale_r * (float) sum_bc;
+                acc_bd_xi += act_scale_i * (float) sum_bd;
+            }
+#endif
+
+            const float out_r = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
+            const float out_i = coeff_w_imag * acc_bc_xr - coeff_w_real * acc_ad_xi;
+
+            if (!isfinite(out_r) || !isfinite(out_i)) {
+                ggml_abort(__FILE__, __LINE__, "ifairy_lut_qgemm: non-finite output (row=%d col=%d acc_r=%f acc_i=%f)",
+                           row, 0, out_r, out_i);
+            }
+
+            if (strict) {
+                GGML_ASSERT(act_blocks != NULL);
+                double ref_ac_xr = 0.0;
+                double ref_ad_xi = 0.0;
+                double ref_bc_xr = 0.0;
+                double ref_bd_xi = 0.0;
+
+                for (int blk = 0; blk < (int) blocks; ++blk) {
+                    const uint8_t * GGML_RESTRICT w_ptr   = w_row[blk].qs;
+                    const int8_t  * GGML_RESTRICT x_r_ptr = (const int8_t *) act_blocks[blk].x_real;
+                    const int8_t  * GGML_RESTRICT x_i_ptr = (const int8_t *) act_blocks[blk].x_imag;
+
+                    int32_t sum_ac = 0;
+                    int32_t sum_ad = 0;
+                    int32_t sum_bc = 0;
+                    int32_t sum_bd = 0;
+
+                    for (int j = 0; j < QK_K; ++j) {
+                        const int chunk    = j >> 6;
+                        const int lane     = j & 0xF;
+                        const int part     = (j >> 4) & 0x3;
+                        const int byte_idx = (chunk << 4) + lane;
+                        const int bit_off  = part * 2;
+
+                        const uint8_t packed = w_ptr[byte_idx];
+                        const uint8_t code   = (packed >> bit_off) & 0x3;
+
+                        int wr = 0;
+                        int wi = 0;
+                        switch (code) {
+                            case 0: wr = -1; wi =  0; break;
+                            case 1: wr =  1; wi =  0; break;
+                            case 2: wr =  0; wi = -1; break;
+                            case 3: wr =  0; wi =  1; break;
+                        }
+
+                        const int xr = (int) x_r_ptr[j];
+                        const int xi = (int) x_i_ptr[j];
+
+                        sum_ac += xr * wr;
+                        sum_ad += xi * wr;
+                        sum_bc += xr * wi;
+                        sum_bd += xi * wi;
+                    }
+
+                    const double x_real = (double) GGML_FP16_TO_FP32(act_blocks[blk].d_real);
+                    const double x_imag = (double) GGML_FP16_TO_FP32(act_blocks[blk].d_imag);
+
+                    ref_ac_xr += x_real * (double) sum_ac;
+                    ref_ad_xi += x_imag * (double) sum_ad;
+                    ref_bc_xr += x_real * (double) sum_bc;
+                    ref_bd_xi += x_imag * (double) sum_bd;
+                }
+
+                const double ref_r = (double) coeff_w_real * ref_ac_xr + (double) coeff_w_imag * ref_bd_xi;
+                const double ref_i = (double) coeff_w_imag * ref_bc_xr - (double) coeff_w_real * ref_ad_xi;
+
+                const float dr = out_r - (float) ref_r;
+                const float di = out_i - (float) ref_i;
+                GGML_ASSERT(fabsf(dr) <= 1e-3f && fabsf(di) <= 1e-3f);
+            }
+
+            uint8_t * out_base = (uint8_t *) dst + (size_t) row * dst_row_stride;
+            if (pack_bf16) {
+                ggml_bf16_t br = GGML_FP32_TO_BF16(out_r);
+                ggml_bf16_t bi = GGML_FP32_TO_BF16(out_i);
+                ((ggml_bf16_t *) out_base)[0] = br;
+                ((ggml_bf16_t *) out_base)[1] = bi;
+            } else {
+                float * out_ptr = (float *) out_base;
+                if (add) {
+                    out_ptr[0] += out_r;
+                    out_ptr[1] += out_i;
+                } else {
+                    out_ptr[0] = out_r;
+                    out_ptr[1] = out_i;
+                }
+            }
+        }
+        return;
+    }
 
     for (int row = 0; row < m; ++row) {
         const block_ifairy * w_row = w_blocks + (size_t) row * (size_t) blocks;
@@ -867,12 +1129,60 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
 #if defined(__ARM_NEON) && defined(__aarch64__)
             float32x4_t accv = vdupq_n_f32(0.0f); // {ac, ad, bc, bd}
             for (int64_t blk = 0; blk < blocks; ++blk) {
-                int32x4_t isum = vdupq_n_s32(0);
+                int32x4_t isum0 = vdupq_n_s32(0);
+                int32x4_t isum1 = vdupq_n_s32(0);
 
                 const uint8_t * idx_g = idx_row + (size_t) blk * (size_t) groups_per_block;
                 const int8_t * grp   = lut_base + (size_t) blk * (size_t) groups_per_block * k_ifairy_lut_group_bytes;
 
-                for (int64_t gi = 0; gi < groups_per_block; ++gi, ++idx_g, grp += k_ifairy_lut_group_bytes) {
+                int64_t gi = 0;
+                for (; gi + 1 < groups_per_block; gi += 2) {
+                    const uint8_t pat0 = (uint8_t) (idx_g[0] & 0x3f);
+                    const uint8_t pat1 = (uint8_t) (idx_g[1] & 0x3f);
+
+                    const uint8_t c00 = (uint8_t) (pat0 & 3);
+                    const uint8_t c01 = (uint8_t) ((pat0 >> 2) & 3);
+                    const uint8_t c02 = (uint8_t) ((pat0 >> 4) & 3);
+
+                    const uint8_t c10 = (uint8_t) (pat1 & 3);
+                    const uint8_t c11 = (uint8_t) ((pat1 >> 2) & 3);
+                    const uint8_t c12 = (uint8_t) ((pat1 >> 4) & 3);
+
+                    const int8_t * grp0 = grp;
+                    const int8_t * grp1 = grp + k_ifairy_lut_group_bytes;
+
+                    __builtin_prefetch(grp0 + 2 * k_ifairy_lut_group_bytes, 0, 1);
+
+                    const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t02 = (const int32_t *) (grp0 + 2 * k_ifairy_lut_pos_bytes);
+
+                    const int32x2_t p00 = vld1_dup_s32(t00 + c00);
+                    const int32x2_t p01 = vld1_dup_s32(t01 + c01);
+                    const int32x2_t p02 = vld1_dup_s32(t02 + c02);
+
+                    int16x8_t s160 = vmovl_s8(vreinterpret_s8_s32(p00));
+                    s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p01)));
+                    s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p02)));
+                    isum0 = vaddw_s16(isum0, vget_low_s16(s160));
+
+                    const int32_t * t10 = (const int32_t *) (grp1 + 0 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t11 = (const int32_t *) (grp1 + 1 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t12 = (const int32_t *) (grp1 + 2 * k_ifairy_lut_pos_bytes);
+
+                    const int32x2_t p10 = vld1_dup_s32(t10 + c10);
+                    const int32x2_t p11 = vld1_dup_s32(t11 + c11);
+                    const int32x2_t p12 = vld1_dup_s32(t12 + c12);
+
+                    int16x8_t s161 = vmovl_s8(vreinterpret_s8_s32(p10));
+                    s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p11)));
+                    s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p12)));
+                    isum1 = vaddw_s16(isum1, vget_low_s16(s161));
+
+                    idx_g += 2;
+                    grp   += 2 * k_ifairy_lut_group_bytes;
+                }
+                for (; gi < groups_per_block; ++gi, ++idx_g, grp += k_ifairy_lut_group_bytes) {
                     const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
                     const uint8_t c0 = (uint8_t) (pat & 3);
                     const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
@@ -880,9 +1190,6 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
 
                     __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
 
-                    // Each position stores 4 codes, each code stores 4 signed bytes:
-                    //   tbl_pos[code*4 + 0..3] = { ac, ad, bc, bd } (int8)
-                    // Use 32-bit loads to fetch one code (4 bytes) per position and widen to accumulate.
                     const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
                     const int32_t * t2 = (const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes);
@@ -894,12 +1201,12 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                     int16x8_t s16 = vmovl_s8(vreinterpret_s8_s32(p0));
                     s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p1)));
                     s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p2)));
-                    isum = vaddw_s16(isum, vget_low_s16(s16));
+                    isum0 = vaddw_s16(isum0, vget_low_s16(s16));
                 }
 
                 const float32x2_t srsi = vld1_f32(scales + (size_t) blk * 2);
                 const float32x4_t scv = vcombine_f32(srsi, srsi); // {sr, si, sr, si}
-                const float32x4_t sumsf = vcvtq_f32_s32(isum);
+                const float32x4_t sumsf = vcvtq_f32_s32(vaddq_s32(isum0, isum1));
                 accv = vmlaq_f32(accv, sumsf, scv);
             }
 
@@ -1174,17 +1481,66 @@ void ggml_ifairy_lut_accum4_ex(int k, int n, const uint8_t * indexes, const void
 #if defined(__ARM_NEON) && defined(__aarch64__)
         float32x4_t accv = add ? vld1q_f32(out) : vdupq_n_f32(0.0f);
         for (int64_t blk = 0; blk < blocks; ++blk) {
-            int32x4_t isum = vdupq_n_s32(0);
+            int32x4_t isum0 = vdupq_n_s32(0);
+            int32x4_t isum1 = vdupq_n_s32(0);
             const uint8_t * idx_g = indexes + (size_t) blk * (size_t) groups_per_block;
             const int8_t * grp   = lut_base + (size_t) blk * (size_t) groups_per_block * k_ifairy_lut_group_bytes;
 
-            for (int64_t gi = 0; gi < groups_per_block; ++gi, ++idx_g, grp += k_ifairy_lut_group_bytes) {
+            int64_t gi = 0;
+            for (; gi + 1 < groups_per_block; gi += 2) {
+                const uint8_t pat0 = (uint8_t) (idx_g[0] & 0x3f);
+                const uint8_t pat1 = (uint8_t) (idx_g[1] & 0x3f);
+
+                const uint8_t c00 = (uint8_t) (pat0 & 3);
+                const uint8_t c01 = (uint8_t) ((pat0 >> 2) & 3);
+                const uint8_t c02 = (uint8_t) ((pat0 >> 4) & 3);
+
+                const uint8_t c10 = (uint8_t) (pat1 & 3);
+                const uint8_t c11 = (uint8_t) ((pat1 >> 2) & 3);
+                const uint8_t c12 = (uint8_t) ((pat1 >> 4) & 3);
+
+                const int8_t * grp0 = grp;
+                const int8_t * grp1 = grp + k_ifairy_lut_group_bytes;
+
+                __builtin_prefetch(grp0 + 2 * k_ifairy_lut_group_bytes, 0, 1);
+
+                const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
+                const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
+                const int32_t * t02 = (const int32_t *) (grp0 + 2 * k_ifairy_lut_pos_bytes);
+
+                const int32x2_t p00 = vld1_dup_s32(t00 + c00);
+                const int32x2_t p01 = vld1_dup_s32(t01 + c01);
+                const int32x2_t p02 = vld1_dup_s32(t02 + c02);
+
+                int16x8_t s160 = vmovl_s8(vreinterpret_s8_s32(p00));
+                s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p01)));
+                s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p02)));
+                isum0 = vaddw_s16(isum0, vget_low_s16(s160));
+
+                const int32_t * t10 = (const int32_t *) (grp1 + 0 * k_ifairy_lut_pos_bytes);
+                const int32_t * t11 = (const int32_t *) (grp1 + 1 * k_ifairy_lut_pos_bytes);
+                const int32_t * t12 = (const int32_t *) (grp1 + 2 * k_ifairy_lut_pos_bytes);
+
+                const int32x2_t p10 = vld1_dup_s32(t10 + c10);
+                const int32x2_t p11 = vld1_dup_s32(t11 + c11);
+                const int32x2_t p12 = vld1_dup_s32(t12 + c12);
+
+                int16x8_t s161 = vmovl_s8(vreinterpret_s8_s32(p10));
+                s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p11)));
+                s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p12)));
+                isum1 = vaddw_s16(isum1, vget_low_s16(s161));
+
+                idx_g += 2;
+                grp   += 2 * k_ifairy_lut_group_bytes;
+            }
+            for (; gi < groups_per_block; ++gi, ++idx_g, grp += k_ifairy_lut_group_bytes) {
                 const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
                 const uint8_t c0 = (uint8_t) (pat & 3);
                 const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
                 const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
 
                 __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
+
                 const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
                 const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
                 const int32_t * t2 = (const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes);
@@ -1196,12 +1552,12 @@ void ggml_ifairy_lut_accum4_ex(int k, int n, const uint8_t * indexes, const void
                 int16x8_t s16 = vmovl_s8(vreinterpret_s8_s32(p0));
                 s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p1)));
                 s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p2)));
-                isum = vaddw_s16(isum, vget_low_s16(s16));
+                isum0 = vaddw_s16(isum0, vget_low_s16(s16));
             }
 
             const float32x2_t srsi = vld1_f32(scales + (size_t) blk * 2);
             const float32x4_t scv = vcombine_f32(srsi, srsi); // {sr, si, sr, si}
-            const float32x4_t sumsf = vcvtq_f32_s32(isum);
+            const float32x4_t sumsf = vcvtq_f32_s32(vaddq_s32(isum0, isum1));
             accv = vmlaq_f32(accv, sumsf, scv);
         }
         vst1q_f32(out, accv);
