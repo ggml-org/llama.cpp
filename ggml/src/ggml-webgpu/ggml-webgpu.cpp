@@ -18,6 +18,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -30,7 +31,7 @@
 
 #ifdef GGML_WEBGPU_DEBUG
 #    define WEBGPU_LOG_DEBUG(msg)  std::cout << msg << std::endl
-#    define WEBGPU_DEBUG_BUF_ELEMS 32
+#    define WEBGPU_DEBUG_BUF_ELEMS 512
 #else
 #    define WEBGPU_LOG_DEBUG(msg) ((void) 0)
 #endif  // GGML_WEBGPU_DEBUG
@@ -493,12 +494,10 @@ static void ggml_backend_webgpu_debug(webgpu_context & ctx) {
     ctx->queue.Submit(1, &commands);
 
     ggml_backend_webgpu_map_buffer(ctx, ctx->debug_host_buf, wgpu::MapMode::Read, 0, ctx->debug_host_buf.GetSize());
-    const uint32_t * debug_data = (const uint32_t *) ctx->debug_host_buf.GetConstMappedRange();
-    std::cout << "debug data:";
-    for (size_t i = 0; i < WEBGPU_DEBUG_BUF_ELEMS; i++) {
-        std::cout << "  " << i << ": " << debug_data[i];
-    }
-    std::cout << "\n";
+    const float * debug_data = (const float *) ctx->debug_host_buf.GetConstMappedRange();
+
+    std::cout << "[GPU] debug[0] = " << std::fixed << std::setprecision(6) << debug_data[0] << "\n";
+
     ctx->debug_host_buf.Unmap();
 }
 #endif
@@ -1021,12 +1020,22 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     std::cout << "ggml_webgpu_flash_attn: dst type: " << ggml_type_name(dst->type) << ", ne: [" << dst->ne[0] << ", " << dst->ne[1] << ", " << dst->ne[2]
               << ", " << dst->ne[3] << "]\n";
 
+    uint32_t offset_q = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, Q) / ggml_type_size(Q->type));
+    uint32_t offset_k = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, K) / ggml_type_size(K->type));
+    uint32_t offset_v = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, V) / ggml_type_size(V->type));
+    uint32_t offset_mask = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, mask) / ggml_type_size(mask->type));
+    uint32_t offset_sinks = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, sinks) / ggml_type_size(sinks->type));
+    uint32_t offset_dst = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type));
+
+    std::cout << "ggml_webgpu_flash_attn: offsets: Q=" << offset_q << ", K=" << offset_k << ", V=" << offset_v
+              << ", mask=" << offset_mask << ", sinks=" << offset_sinks << ", dst=" << offset_dst << "\n";
+
     std::vector<uint32_t> params = {
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, Q) / ggml_type_size(Q->type)),
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, K) / ggml_type_size(K->type)),
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, V) / ggml_type_size(V->type)),
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, mask) / ggml_type_size(mask->type)),
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, sinks) / ggml_type_size(sinks->type)),
+        offset_q,
+        offset_k,
+        offset_v,
+        offset_mask,
+        offset_sinks,
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
         (uint32_t) Q->ne[0],                                  // head dimension (Q/K)
         (uint32_t) V->ne[0],                                  // head dimension (V)
@@ -1074,6 +1083,10 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
          .buffer  = ggml_webgpu_tensor_buf(dst),
          .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
          .size    = ggml_webgpu_tensor_binding_size(ctx, dst) },
+         { .binding = 6,
+         .buffer  = ctx->debug_dev_buf,
+         .offset  = 0,
+         .size    = ctx->debug_dev_buf.GetSize() }
     };
 
     uint32_t wg_per_head = CEIL_DIV(Q->ne[1], WEBGPU_FLASH_ATTN_Q_TILE);
@@ -1536,8 +1549,12 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
 
     std::vector<webgpu_command>            commands;
     std::vector<webgpu_submission_futures> futures;
+    bool contains_flash_attn = false;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (auto cmd = ggml_webgpu_encode_node(ctx, cgraph->nodes[i])) {
+            if (cgraph->nodes[i]->op == GGML_OP_FLASH_ATTN_EXT) {
+                contains_flash_attn = true;
+            }
             commands.push_back(*cmd);
         }
         // compute the batch size based on the number of inflight threads
@@ -1556,6 +1573,12 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
         webgpu_submission_futures new_futures = ggml_backend_webgpu_submit(ctx, commands);
         futures.push_back(new_futures);
     }
+
+#ifdef GGML_WEBGPU_DEBUG
+    if (contains_flash_attn)
+    ggml_backend_webgpu_debug(ctx);
+#endif
+
     ggml_backend_webgpu_wait(ctx, futures);
     ctx->inflight_threads--;
     WEBGPU_CPU_PROFILE_TOTAL_END(graph_compute, ctx);

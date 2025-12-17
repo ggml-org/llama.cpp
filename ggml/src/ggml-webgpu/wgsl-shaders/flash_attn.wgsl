@@ -45,7 +45,8 @@ struct Params {
 @group(0) @binding(3) var<storage, read> mask: array<f16>;
 @group(0) @binding(4) var<storage, read> sinks: array<f32>;
 @group(0) @binding(5) var<storage, read_write> dst: array<f32>;
-@group(0) @binding(6) var<uniform> params: Params;
+@group(0) @binding(6) var<storage, read_write> debug: array<f32>;
+@group(0) @binding(7) var<uniform> params: Params;
 
 // The number of Q rows processed per workgroup
 const Q_TILE = 8u;
@@ -72,11 +73,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         @builtin(subgroup_id) subgroup_id: u32,
         @builtin(subgroup_invocation_id) sg_inv_id: u32) {
 
-          dst[0] = Q[0] + K[0] + V[0] + f32(mask[0]) + sinks[0]; // dummy line to avoid compile error
-
     // each thread maintains its own cache for softmax intermediates
-    var row_max = array<f16, Q_TILE>(-65504, -65504, -65504, -65504, -65504, -65504, -65504, -65504);
-    var exp_sum = array<f16, Q_TILE>();
+    var row_max = array<f32, Q_TILE>(-3.4e38, -3.4e38, -3.4e38, -3.4e38, -3.4e38, -3.4e38, -3.4e38, -3.4e38);
+    var exp_sum = array<f32, Q_TILE>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
 
     // workgroups per head/batch
     let wg_per_head = (params.seq_len_q + Q_TILE - 1u) / Q_TILE;
@@ -107,10 +106,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let dst_global_offset = dst_batch_offset + q_row_start * dst2_stride + head_idx * params.head_dim_v;
 
     // Which mask row to use. TODO: support broadcasting
-    let mask_seq_offset = params.offset_mask + q_row_start * params.stride_m1;
+    let mask_seq_offset = params.offset_mask + q_row_start * params.seq_len_kv;
 
     let head = f32(head_idx);
-    let slope = select(1, select(pow(params.m1, 2 * (head - params.n_head_log2) + 1), pow(params.m0, head + 1), head < params.n_head_log2), params.max_bias > 0);
+    let slope = select(1.0, select(pow(params.m1, 2.0 * (head - params.n_head_log2) + 1.0), pow(params.m0, head + 1.0), head < params.n_head_log2), params.max_bias > 0);
 
     // load q tile into shared memory
     for (var elem_idx = local_id.x; elem_idx < Q_TILE * params.head_dim_qk; elem_idx += WG_SIZE) {
@@ -124,6 +123,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             head_q_row < params.seq_len_q && q_col < params.head_dim_qk);
         q_shmem[elem_idx] = q_val;
     }
+
     workgroupBarrier();
 
     for (var kv_tile = 0u; kv_tile < params.seq_len_kv; kv_tile += KV_TILE) {
@@ -167,6 +167,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
       // store acc to shared memory for softmax
       subgroupMatrixStore(&inter_shmem, 0, acc, false, KV_TILE);
 
+      workgroupBarrier();
+
       // online softmax
       for (var q_tile_row = 0u; q_tile_row < Q_TILE; q_tile_row++) {
           // no need to process rows beyond seq_len_q
@@ -178,22 +180,25 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           // calculate running max
           let prev_max = row_max[q_tile_row];
           // The mask value for this Q row and K col
-          let mask_val = select(f16(0.0), f16(mask[mask_seq_offset + q_tile_row * params.stride_m1 + kv_tile + sg_inv_id]), kv_tile + sg_inv_id < params.seq_len_kv && sg_inv_id < KV_TILE);
-          let thread_tile_row_max = select(f16(-65504), inter_shmem[sg_inv_id + q_tile_row * KV_TILE] * f16(params.scale) + slope * mask_val, sg_inv_id < KV_TILE);
-          row_max[q_tile_row] = subgroupMax(row_max[q_tile_row], max(prev_max, thread_tile_row_max));
+          let mask_val = select(0.0, f32(mask[mask_seq_offset + q_tile_row * params.seq_len_kv + kv_tile + sg_inv_id]), kv_tile + sg_inv_id < params.seq_len_kv && sg_inv_id < KV_TILE);
+          let mask_term = slope * mask_val;
+          let thread_tile_row_max = select(-3.4e38, f32(inter_shmem[sg_inv_id + q_tile_row * KV_TILE]) * params.scale + mask_term, sg_inv_id < KV_TILE);
+          row_max[q_tile_row] = subgroupMax(max(row_max[q_tile_row], max(prev_max, thread_tile_row_max)));
 
           // calculate running exp sum
           let cur_exp = exp(prev_max - row_max[q_tile_row]);
-          let cur_p = select(0, exp(thread_tile_row_max - row_max[q_tile_row]), sg_inv_id < KV_TILE);
-          exp_sum[q_tile_row] = exp_sum[q_tile_row] * cur_exp + subgroupSum(cur_p);
+          let cur_p = select(0.0, exp(thread_tile_row_max - row_max[q_tile_row]), sg_inv_id < KV_TILE);
+          exp_sum[q_tile_row] = exp_sum[q_tile_row] * cur_exp + subgroupAdd(cur_p);
 
           // store back to shared memory (P matrix)
           if (sg_inv_id < KV_TILE) {
-              inter_shmem[sg_inv_id + q_tile_row * KV_TILE] = cur_p;
+              inter_shmem[sg_inv_id + q_tile_row * KV_TILE] = f16(cur_p);
           }
 
           for (var elem_idx = sg_inv_id; elem_idx < params.head_dim_v; elem_idx += SUBGROUP_SIZE) {
-              o_shmem[q_tile_row * params.head_dim_v + elem_idx] *= cur_exp;
+              let idx = q_tile_row * params.head_dim_v + elem_idx;
+              let val = f32(o_shmem[idx]) * cur_exp;
+              o_shmem[idx] = f16(val);
           }
       }
 
@@ -227,7 +232,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           var v_sg_mat: subgroup_matrix_right<f16, 8, 8> = subgroupMatrixLoad<subgroup_matrix_right<f16, 8, 8>>(
               &v_shmem,
               head_dim_block,
-              true, // or false? is this transposed?
+              false, // or false? is this transposed?
               params.head_dim_v
           );
 
@@ -247,28 +252,29 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
       }
 
       workgroupBarrier();
+    }
 
-      // add sinks
-      for (var q_tile_row = 0u; q_tile_row < Q_TILE; q_tile_row++) {
-          // no need to process rows beyond seq_len_q
-          let global_q_row = q_row_start + q_tile_row;
-          if (global_q_row >= params.seq_len_q) {
-              break;
-          }
+    // add sinks (applied once after processing all KV tiles)
+    for (var q_tile_row = 0u; q_tile_row < Q_TILE; q_tile_row++) {
+        // no need to process rows beyond seq_len_q
+        let global_q_row = q_row_start + q_tile_row;
+        if (global_q_row >= params.seq_len_q) {
+            break;
+        }
 
-          let max_val = row_max[q_tile_row];
-          // for non-sink threads, exp(-65504) effectively zeroes them out
-          let sink_val = select(-65504.0, f16(sinks[params.offset_sinks + head_idx]), sg_inv_id == 0);
-          row_max[q_tile_row] = subgroupMax(max_val, sink_val);
-          let max_exp = exp(max_val - row_max[q_tile_row]);
-          let sink_exp = exp(sink_val - row_max[q_tile_row]);
+        let max_val = row_max[q_tile_row];
+        // for non-sink threads, exp(-65504) effectively zeroes them out
+        let sink_val = select(-3.4e38, sinks[params.offset_sinks + head_idx], sg_inv_id == 0);
+        row_max[q_tile_row] = subgroupMax(max(max_val, sink_val));
+        let max_exp = exp(max_val - row_max[q_tile_row]);
+        let sink_exp = exp(sink_val - row_max[q_tile_row]);
 
-          exp_sum[q_tile_row] = exp_sum[q_tile_row] * max_exp + subgroupSum(sink_exp);
-          for (var elem_idx = sg_inv_id; elem_idx < params.head_dim_v; elem_idx += SUBGROUP_SIZE) {
-              o_shmem[q_tile_row * params.head_dim_v + elem_idx] *= max_exp;
-          }
-
-      }
+        exp_sum[q_tile_row] = exp_sum[q_tile_row] * max_exp + subgroupAdd(sink_exp);
+        for (var elem_idx = sg_inv_id; elem_idx < params.head_dim_v; elem_idx += SUBGROUP_SIZE) {
+            let idx = q_tile_row * params.head_dim_v + elem_idx;
+            let val = f32(o_shmem[idx]) * max_exp;
+            o_shmem[idx] = f16(val);
+        }
     }
 
     // write output back to global memory
@@ -278,10 +284,12 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             break;
         }
 
-        let scale = select(0, 1 / exp_sum[q_tile_row], exp_sum[q_tile_row] > 0);
+        let scale = select(0.0, 1.0 / exp_sum[q_tile_row], exp_sum[q_tile_row] > 0);
 
         for (var elem_idx = sg_inv_id; elem_idx < params.head_dim_v; elem_idx += SUBGROUP_SIZE) {
-              dst[dst_global_offset + q_tile_row * dst2_stride + elem_idx] = f32(o_shmem[q_tile_row * params.head_dim_v + elem_idx] * scale);
-          }
+            let o_val = f32(o_shmem[q_tile_row * params.head_dim_v + elem_idx]);
+            let scaled = o_val * scale;
+            dst[dst_global_offset + q_tile_row * dst2_stride + elem_idx] = scaled;
+        }
     }
 }
