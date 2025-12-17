@@ -687,6 +687,9 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qw
         GGML_ASSERT(add == false);
     }
 
+    const bool prefetch = ggml_ifairy_lut_prefetch_enabled();
+    (void) prefetch;
+
     const int64_t K = k;
     const int64_t blocks = K / QK_K;
     const int64_t groups_per_block = (QK_K + 2) / 3;
@@ -815,7 +818,9 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qw
                     const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
                     const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
 
-                    __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
+                    if (prefetch) {
+                        __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
+                    }
 
                     const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
@@ -1013,8 +1018,10 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qw
                     const int16_t * grp2 = lut_blk + (size_t) (gi + 2) * group_stride;
                     const int16_t * grp3 = lut_blk + (size_t) (gi + 3) * group_stride;
 
-                    __builtin_prefetch(grp0 + group_stride, 0, 1);
-                    __builtin_prefetch(grp1 + group_stride, 0, 1);
+                    if (prefetch) {
+                        __builtin_prefetch(grp0 + group_stride, 0, 1);
+                        __builtin_prefetch(grp1 + group_stride, 0, 1);
+                    }
 
                     const int16_t * tbl0 = grp0 + (size_t) pat0 * k_ifairy_lut_channels;
                     const int16_t * tbl1 = grp1 + (size_t) pat1 * k_ifairy_lut_channels;
@@ -1144,8 +1151,10 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qw
                     const int16_t * grp2 = lut_blk + (size_t) (gi + 2) * group_stride;
                     const int16_t * grp3 = lut_blk + (size_t) (gi + 3) * group_stride;
 
-                    __builtin_prefetch(grp0 + group_stride, 0, 1);
-                    __builtin_prefetch(grp1 + group_stride, 0, 1);
+                    if (prefetch) {
+                        __builtin_prefetch(grp0 + group_stride, 0, 1);
+                        __builtin_prefetch(grp1 + group_stride, 0, 1);
+                    }
 
                     const int16_t * tbl0 = grp0 + (size_t) pat0 * k_ifairy_lut_channels;
                     const int16_t * tbl1 = grp1 + (size_t) pat1 * k_ifairy_lut_channels;
@@ -1375,7 +1384,9 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                     const int8_t * grp2 = grp + 2 * k_ifairy_lut_group_bytes;
                     const int8_t * grp3 = grp + 3 * k_ifairy_lut_group_bytes;
 
-                    __builtin_prefetch(grp0 + 4 * k_ifairy_lut_group_bytes, 0, 1);
+                    if (prefetch) {
+                        __builtin_prefetch(grp0 + 4 * k_ifairy_lut_group_bytes, 0, 1);
+                    }
 
                     const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
@@ -1918,6 +1929,9 @@ static void ggml_ifairy_lut_accum4_ex_legacy(int k, int n, const uint8_t * index
         return;
     }
 
+    const bool prefetch = ggml_ifairy_lut_prefetch_enabled();
+    (void) prefetch;
+
     const int64_t K = k;
     const int64_t blocks = K / QK_K;
     const int64_t groups_per_block = (QK_K + 2) / 3;
@@ -1949,8 +1963,10 @@ static void ggml_ifairy_lut_accum4_ex_legacy(int k, int n, const uint8_t * index
                 const int16_t * grp2 = lut_blk + (size_t) (gi + 2) * group_stride;
                 const int16_t * grp3 = lut_blk + (size_t) (gi + 3) * group_stride;
 
-                __builtin_prefetch(grp0 + group_stride, 0, 1);
-                __builtin_prefetch(grp1 + group_stride, 0, 1);
+                if (prefetch) {
+                    __builtin_prefetch(grp0 + group_stride, 0, 1);
+                    __builtin_prefetch(grp1 + group_stride, 0, 1);
+                }
 
                 const int16_t * tbl0 = grp0 + (size_t) pat0 * k_ifairy_lut_channels;
                 const int16_t * tbl1 = grp1 + (size_t) pat1 * k_ifairy_lut_channels;
@@ -2031,6 +2047,9 @@ void ggml_ifairy_lut_accum4_ex(int k, int n, const uint8_t * indexes, const void
         return;
     }
 
+    const bool prefetch = ggml_ifairy_lut_prefetch_enabled();
+    (void) prefetch;
+
     const int64_t K = k;
     const int64_t blocks = K / QK_K;
     const int64_t groups_per_block = (QK_K + 2) / 3;
@@ -2065,7 +2084,9 @@ void ggml_ifairy_lut_accum4_ex(int k, int n, const uint8_t * indexes, const void
                 const int8_t * grp0 = grp;
                 const int8_t * grp1 = grp + k_ifairy_lut_group_bytes;
 
-                __builtin_prefetch(grp0 + 2 * k_ifairy_lut_group_bytes, 0, 1);
+                if (prefetch) {
+                    __builtin_prefetch(grp0 + 2 * k_ifairy_lut_group_bytes, 0, 1);
+                }
 
                 const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
                 const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
@@ -2102,7 +2123,9 @@ void ggml_ifairy_lut_accum4_ex(int k, int n, const uint8_t * indexes, const void
                 const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
                 const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
 
-                __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
+                if (prefetch) {
+                    __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
+                }
 
                 const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
                 const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
