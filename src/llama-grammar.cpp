@@ -1305,7 +1305,7 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
 
 #ifdef LLAMA_USE_OPENMP
     size_t chunk_size = 4096;
-    size_t chunks = (cur_p->size + chunk_size - 1) / chunk_size;
+    int chunks = static_cast<int>((cur_p->size + chunk_size - 1) / chunk_size);
 
     #pragma omp parallel for num_threads(8) schedule(dynamic, 1)
     for (int chunk = 0; chunk < chunks; ++chunk) {
