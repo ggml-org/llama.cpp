@@ -1,6 +1,6 @@
 /* eslint-disable no-irregular-whitespace */
 import { describe, it, expect, test } from 'vitest';
-import { maskInlineLaTeX, preprocessLaTeX } from './latex-protection';
+import { maskInlineLaTeX, preprocessLaTeX } from '$lib/utils/latex-protection';
 
 describe('maskInlineLaTeX', () => {
 	it('should protect LaTeX $x + y$ but not money $3.99', () => {
@@ -301,6 +301,27 @@ $$\n\\pi_n(\\mathbb{S}^3) = \\begin{cases}
 		const output = preprocessLaTeX(input);
 
 		expect(output).toBe(input); // Code blocks prevent misinterpretation
+	});
+
+	test('preserves backslash parentheses in code blocks (GitHub issue)', () => {
+		const input = '```python\nfoo = "\\(bar\\)"\n```';
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe(input); // Code blocks should not have LaTeX conversion applied
+	});
+
+	test('preserves backslash brackets in code blocks', () => {
+		const input = '```python\nfoo = "\\[bar\\]"\n```';
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe(input); // Code blocks should not have LaTeX conversion applied
+	});
+
+	test('preserves backslash parentheses in inline code', () => {
+		const input = 'Use `foo = "\\(bar\\)"` in your code.';
+		const output = preprocessLaTeX(input);
+
+		expect(output).toBe(input);
 	});
 
 	test('escape backslash in mchem ce', () => {
