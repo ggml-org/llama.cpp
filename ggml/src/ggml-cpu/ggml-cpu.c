@@ -1358,8 +1358,25 @@ void ggml_compute_forward_mul_mat(
             // quantize activations once if needed (parallelize across columns to reduce thread idle)
             if (src1->type == GGML_TYPE_F32) {
                 const float * act_f32 = (const float *) src1->data;
-                for (int64_t c = ith; c < N; c += nth) {
-                    quantize_row_ifairy_q16(act_f32 + c * (nb11 / sizeof(float)), act_q + c * blocks_per_col, K);
+                const int64_t act_f32_col_stride = (int64_t) (nb11 / sizeof(float));
+
+                if (N >= nth) {
+                    // Shard by columns.
+                    for (int64_t c = ith; c < N; c += nth) {
+                        quantize_row_ifairy_q16(act_f32 + c * act_f32_col_stride, act_q + c * blocks_per_col, K);
+                    }
+                } else {
+                    // Decode-like: N is small (often 1). Shard each column by K-block ranges to keep all threads busy.
+                    const int64_t ib0 = (blocks_per_col * ith) / nth;
+                    const int64_t ib1 = (blocks_per_col * (ith + 1)) / nth;
+                    if (ib1 > ib0) {
+                        const int64_t k_part = (ib1 - ib0) * QK_K;
+                        for (int64_t c = 0; c < N; ++c) {
+                            const float * x = act_f32 + c * act_f32_col_stride + ib0 * QK_K;
+                            void * y = act_q + c * blocks_per_col + ib0;
+                            quantize_row_ifairy_q16(x, y, k_part);
+                        }
+                    }
                 }
                 ggml_barrier(params->threadpool);
             }
