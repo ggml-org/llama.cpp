@@ -24,7 +24,7 @@
 
 **基准命令（固定 prompt/seed/thread）**
 
-`./build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 --seed 1 -p "I believe life is" -n 256 -no-cnv`
+`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 --seed 1 -p "I believe life is" -n 256 -no-cnv`
 
 | time (UTC) | git | machine | threads | tokens | env | eval tok/s |
 |---|---|---|---:|---:|---|---:|
@@ -32,6 +32,10 @@
 | 2025-12-16T18:28:00Z | `9b782e0f` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GGML_IFAIRY_LUT_BM=64 GGML_IFAIRY_LUT_FULLACC=1` | 2.58 |
 | 2025-12-17T04:49:00Z | `9b782e0f` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=legacy` | 4.12 |
 | 2025-12-17T04:49:00Z | `9b782e0f` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact` | 3.94 |
+| 2025-12-17T06:53:24Z | `257c494b` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 7.05 |
+| 2025-12-17T06:53:24Z | `257c494b` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 6.88 |
+| 2025-12-17T06:59:40Z | `257c494b` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 8.01 |
+| 2025-12-17T06:59:40Z | `257c494b` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 8.08 |
 
 ## 1. 当前现状（可工作的 LUT 路径：NEON 优先，标量回退）
 
@@ -59,7 +63,7 @@
 
 ### 1.1 选择 `legacy` 还是 `compact`？
 
-- 当前（Apple M4 / `-t 4 -b 1 -n 256`）下，`legacy` 的 eval tok/s 仍高于 `compact`（见 0.1 记录），所以默认策略是 `legacy`
+- `legacy/compact` 在同一机器上多次运行会有一定波动：以 0.1 的 tok/s 记录为准；当前默认策略仍为 `legacy`（更稳）
 - `compact` 的主要价值是显著降低 per-group LUT 带宽/工作集（`512B -> 48B`），后续要想稳定胜出，需要继续压低 per-group 的额外指令开销
 
 ### 1.2 为什么 LUT 是“四通道”而不是直接存实部/虚部？

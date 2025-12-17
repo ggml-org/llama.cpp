@@ -83,12 +83,11 @@ static ggml_ifairy_lut_layout ggml_ifairy_lut_layout_from_env(int n) {
 }
 
 static const int k_ifairy_lut_patterns = 64; // legacy table size
-static const int k_ifairy_lut_positions = 3;
 static const int k_ifairy_lut_codes     = 4;
 static const int k_ifairy_lut_channels  = 4;
 
 static const size_t k_ifairy_lut_pos_bytes   = (size_t) k_ifairy_lut_codes    * (size_t) k_ifairy_lut_channels;  // 16
-static const size_t k_ifairy_lut_group_bytes = (size_t) k_ifairy_lut_positions * k_ifairy_lut_pos_bytes;         // 48
+static const size_t k_ifairy_lut_group_bytes = 3 * k_ifairy_lut_pos_bytes; // 48
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
 // wr(code) / wi(code) coefficients for all 64 3-weight patterns (direct 6-bit encoding).
@@ -870,23 +869,27 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
             for (int64_t blk = 0; blk < blocks; ++blk) {
                 int32x4_t isum = vdupq_n_s32(0);
 
-                const uint8_t * idx_blk = idx_row + (size_t) blk * (size_t) groups_per_block;
-                const int8_t * lut_blk = lut_base + (size_t) blk * (size_t) groups_per_block * k_ifairy_lut_group_bytes;
+                const uint8_t * idx_g = idx_row + (size_t) blk * (size_t) groups_per_block;
+                const int8_t * grp   = lut_base + (size_t) blk * (size_t) groups_per_block * k_ifairy_lut_group_bytes;
 
-                for (int64_t gi = 0; gi < groups_per_block; ++gi) {
-                    const uint8_t pat = (uint8_t) (idx_blk[gi] & 0x3f);
+                for (int64_t gi = 0; gi < groups_per_block; ++gi, ++idx_g, grp += k_ifairy_lut_group_bytes) {
+                    const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
                     const uint8_t c0 = (uint8_t) (pat & 3);
                     const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
                     const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
 
-                    const int8_t * grp = lut_blk + (size_t) gi * k_ifairy_lut_group_bytes;
+                    __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
 
                     // Each position stores 4 codes, each code stores 4 signed bytes:
                     //   tbl_pos[code*4 + 0..3] = { ac, ad, bc, bd } (int8)
                     // Use 32-bit loads to fetch one code (4 bytes) per position and widen to accumulate.
-                    const int32x2_t p0 = vld1_dup_s32((const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes + (size_t) c0 * 4));
-                    const int32x2_t p1 = vld1_dup_s32((const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes + (size_t) c1 * 4));
-                    const int32x2_t p2 = vld1_dup_s32((const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes + (size_t) c2 * 4));
+                    const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t2 = (const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes);
+
+                    const int32x2_t p0 = vld1_dup_s32(t0 + c0);
+                    const int32x2_t p1 = vld1_dup_s32(t1 + c1);
+                    const int32x2_t p2 = vld1_dup_s32(t2 + c2);
 
                     int16x8_t s16 = vmovl_s8(vreinterpret_s8_s32(p0));
                     s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p1)));
@@ -911,19 +914,22 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                 int32_t sum_bc = 0;
                 int32_t sum_bd = 0;
 
-                const uint8_t * idx_blk = idx_row + (size_t) blk * (size_t) groups_per_block;
-                const int8_t * lut_blk = lut_base + (size_t) blk * (size_t) groups_per_block * k_ifairy_lut_group_bytes;
+                const uint8_t * idx_g = idx_row + (size_t) blk * (size_t) groups_per_block;
+                const int8_t * grp   = lut_base + (size_t) blk * (size_t) groups_per_block * k_ifairy_lut_group_bytes;
 
-                for (int64_t gi = 0; gi < groups_per_block; ++gi) {
-                    const uint8_t pat = (uint8_t) (idx_blk[gi] & 0x3f);
+                for (int64_t gi = 0; gi < groups_per_block; ++gi, ++idx_g, grp += k_ifairy_lut_group_bytes) {
+                    const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
                     const uint8_t c0 = (uint8_t) (pat & 3);
                     const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
                     const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
 
-                    const int8_t * grp = lut_blk + (size_t) gi * k_ifairy_lut_group_bytes;
-                    const int8_t * e0 = grp + 0 * k_ifairy_lut_pos_bytes + (size_t) c0 * 4;
-                    const int8_t * e1 = grp + 1 * k_ifairy_lut_pos_bytes + (size_t) c1 * 4;
-                    const int8_t * e2 = grp + 2 * k_ifairy_lut_pos_bytes + (size_t) c2 * 4;
+                    const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
+                    const int32_t * t2 = (const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes);
+
+                    const int8_t * e0 = (const int8_t *) &t0[c0];
+                    const int8_t * e1 = (const int8_t *) &t1[c1];
+                    const int8_t * e2 = (const int8_t *) &t2[c2];
 
                     sum_ac += (int32_t) e0[0] + (int32_t) e1[0] + (int32_t) e2[0];
                     sum_ad += (int32_t) e0[1] + (int32_t) e1[1] + (int32_t) e2[1];
@@ -1169,19 +1175,23 @@ void ggml_ifairy_lut_accum4_ex(int k, int n, const uint8_t * indexes, const void
         float32x4_t accv = add ? vld1q_f32(out) : vdupq_n_f32(0.0f);
         for (int64_t blk = 0; blk < blocks; ++blk) {
             int32x4_t isum = vdupq_n_s32(0);
-            const uint8_t * idx_blk = indexes + (size_t) blk * (size_t) groups_per_block;
-            const int8_t * lut_blk = lut_base + (size_t) blk * (size_t) groups_per_block * k_ifairy_lut_group_bytes;
+            const uint8_t * idx_g = indexes + (size_t) blk * (size_t) groups_per_block;
+            const int8_t * grp   = lut_base + (size_t) blk * (size_t) groups_per_block * k_ifairy_lut_group_bytes;
 
-            for (int64_t gi = 0; gi < groups_per_block; ++gi) {
-                const uint8_t pat = (uint8_t) (idx_blk[gi] & 0x3f);
+            for (int64_t gi = 0; gi < groups_per_block; ++gi, ++idx_g, grp += k_ifairy_lut_group_bytes) {
+                const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
                 const uint8_t c0 = (uint8_t) (pat & 3);
                 const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
                 const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
 
-                const int8_t * grp = lut_blk + (size_t) gi * k_ifairy_lut_group_bytes;
-                const int32x2_t p0 = vld1_dup_s32((const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes + (size_t) c0 * 4));
-                const int32x2_t p1 = vld1_dup_s32((const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes + (size_t) c1 * 4));
-                const int32x2_t p2 = vld1_dup_s32((const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes + (size_t) c2 * 4));
+                __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
+                const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
+                const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
+                const int32_t * t2 = (const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes);
+
+                const int32x2_t p0 = vld1_dup_s32(t0 + c0);
+                const int32x2_t p1 = vld1_dup_s32(t1 + c1);
+                const int32x2_t p2 = vld1_dup_s32(t2 + c2);
 
                 int16x8_t s16 = vmovl_s8(vreinterpret_s8_s32(p0));
                 s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p1)));
@@ -1207,19 +1217,22 @@ void ggml_ifairy_lut_accum4_ex(int k, int n, const uint8_t * indexes, const void
             int32_t sum_bc = 0;
             int32_t sum_bd = 0;
 
-            const uint8_t * idx_blk = indexes + (size_t) blk * (size_t) groups_per_block;
-            const int8_t * lut_blk = lut_base + (size_t) blk * (size_t) groups_per_block * k_ifairy_lut_group_bytes;
+            const uint8_t * idx_g = indexes + (size_t) blk * (size_t) groups_per_block;
+            const int8_t * grp   = lut_base + (size_t) blk * (size_t) groups_per_block * k_ifairy_lut_group_bytes;
 
-            for (int64_t gi = 0; gi < groups_per_block; ++gi) {
-                const uint8_t pat = (uint8_t) (idx_blk[gi] & 0x3f);
+            for (int64_t gi = 0; gi < groups_per_block; ++gi, ++idx_g, grp += k_ifairy_lut_group_bytes) {
+                const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
                 const uint8_t c0 = (uint8_t) (pat & 3);
                 const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
                 const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
 
-                const int8_t * grp = lut_blk + (size_t) gi * k_ifairy_lut_group_bytes;
-                const int8_t * e0 = grp + 0 * k_ifairy_lut_pos_bytes + (size_t) c0 * 4;
-                const int8_t * e1 = grp + 1 * k_ifairy_lut_pos_bytes + (size_t) c1 * 4;
-                const int8_t * e2 = grp + 2 * k_ifairy_lut_pos_bytes + (size_t) c2 * 4;
+                const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
+                const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
+                const int32_t * t2 = (const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes);
+
+                const int8_t * e0 = (const int8_t *) &t0[c0];
+                const int8_t * e1 = (const int8_t *) &t1[c1];
+                const int8_t * e2 = (const int8_t *) &t2[c2];
 
                 sum_ac += (int32_t) e0[0] + (int32_t) e1[0] + (int32_t) e2[0];
                 sum_ad += (int32_t) e0[1] + (int32_t) e1[1] + (int32_t) e2[1];
