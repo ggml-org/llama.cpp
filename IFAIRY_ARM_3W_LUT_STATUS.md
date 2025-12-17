@@ -6,8 +6,9 @@
 
 - 推荐二进制：`./build-rel/bin/llama-cli`（避免误用旧的 `./build/bin/llama-cli` 导致输出异常，见 3.1）
 - 推荐扫参脚本：`bash scripts/ifairy_lut_sweep.sh`（固定 seed/prompt，输出按 tok/s 排序）
-- LUT 表布局默认走 `legacy`（更快/更稳），如需测试紧凑表：`GGML_IFAIRY_LUT_LAYOUT=compact`（见 1.1 / 0.1 记录）
+- LUT 表布局默认走 `legacy`（更稳；`compact` 在部分设备/形状上更快），如需测试紧凑表：`GGML_IFAIRY_LUT_LAYOUT=compact`（见 1.1 / 0.1 记录）
 - `BK/BM/FULLACC` 调参在不同形状/版本上波动较大：以 sweep 输出为准，不建议凭经验固定写死
+- 每次修改 LUT 相关代码后，先做一次 `llama-cli` sanity check（固定 seed/prompt）确认不输出 gibberish（见 3.1）
 
 **常用环境变量（LUT 路径）**
 
@@ -40,6 +41,8 @@
 | 2025-12-17T08:27:00Z | `38c185d5` | Apple M4 | 4 | 128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 10.31 |
 | 2025-12-17T08:40:52Z | `e8e6c47b` | Apple M4 | 4 | 128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 18.96 |
 | 2025-12-17T08:40:52Z | `e8e6c47b` | Apple M4 | 4 | 128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 17.56 |
+| 2025-12-17T09:05:12Z | `20f90418` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 19.28 |
+| 2025-12-17T09:05:12Z | `20f90418` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 21.59 |
 
 ## 0.2 Xcode Profile（以 decode 场景为准）
 
@@ -178,7 +181,10 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 
 ### 3.1 常见问题：`llama-cli` 输出 gibberish（例如 `I believe life isDocuments CeUNTares cred`）
 
-这类输出在 iFairy 上**几乎总是**“二进制与源码/模型不匹配（旧二进制 / 未重编译）”导致的：模型仍能加载，但类型表/算子实现落后，从而生成乱码。
+这类输出在 iFairy 上通常说明“算子输出已不可信”，常见原因：
+
+1) **跑了旧的二进制**（二进制与源码/模型不匹配）：模型仍能加载，但类型表/算子实现落后，从而生成乱码  
+2) **LUT 路径回归**（改了 LUT/调度代码但未做 sanity check）：算子返回了错误结果，采样就会变成乱码
 
 **快速判断（看启动日志）**
 
@@ -199,7 +205,10 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 
 `./build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 --seed 1 -p "I believe life is" -n 16 -no-cnv`
 
-如果仍然是乱码，优先检查你实际执行的二进制路径（例如 `which llama-cli` / `ls -la build*/bin/llama-cli`）是否确实来自最新构建。
+如果仍然是乱码：
+
+- 先确认不是旧二进制（例如 `which llama-cli` / `ls -la build*/bin/llama-cli`）
+- 再用 `GGML_IFAIRY_LUT=0` 复测：如果关闭 LUT 后输出恢复正常，则优先排查 LUT 路径（预处理/查表/写回/并行分工等）
 
 ## 4. 后续工作（按优先级）
 

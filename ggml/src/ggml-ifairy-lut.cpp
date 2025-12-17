@@ -666,6 +666,7 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qw
 
     const block_ifairy * w_blocks = (const block_ifairy *) qweights;
 
+#if 0
     // Fast-path for decode: N == 1 avoids the col loop and some pointer arithmetic.
     if (n == 1) {
         const int8_t * lut_base = (const int8_t *) lut;
@@ -900,6 +901,7 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qw
         }
         return;
     }
+#endif
 
     for (int row = 0; row < m; ++row) {
         const block_ifairy * w_row = w_blocks + (size_t) row * (size_t) blocks;
