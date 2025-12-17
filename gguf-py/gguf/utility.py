@@ -288,7 +288,7 @@ class LocalTensor:
     data_range: LocalTensorRange
 
     def mmap_bytes(self) -> np.ndarray:
-        return np.memmap(self.data_range.filename, offset=self.data_range.offset, shape=self.data_range.size)
+        return np.memmap(self.data_range.filename, mode='r', offset=self.data_range.offset, shape=self.data_range.size)
 
 
 class SafetensorsLocal:
