@@ -43,12 +43,18 @@ jobs:
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
       - name: Setup Node.js
-        id: setup
+        id: node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "npm"
           cache-dependency-path: "tools/server/webui/package-lock.json"
+
+      - name: Install dependencies
+        id: setup
+        if: ${{ steps.node.conclusion == 'success' }}
+        run: npm ci
+        working-directory: tools/server/webui
 
       - name: Run type checking
         if: ${{ steps.setup.conclusion == 'success' }}
