@@ -263,7 +263,9 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
                                        struct htp_spad *         dst_spad,
                                        uint32_t                  nth,
                                        uint32_t                  ith,
-                                       uint32_t                  src0_nrows_per_thread) {
+                                       uint32_t                  src0_nrows_per_thread,
+                                       dma_queue * dma_queue
+                                    ) {
     htp_act_preamble2;
 
     uint64_t t1, t2;
@@ -271,6 +273,8 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
 
     const size_t src0_row_size = nb01;
     const size_t dst_row_size  = nb1;
+    const size_t src0_row_size_aligned = htp_round_up(src0_row_size, VLEN);
+    const size_t dst_row_size_aligned  = htp_round_up(dst_row_size, VLEN);
 
     const uint32_t src0_nrows = ne01 * ne02 * ne03;
 
@@ -292,37 +296,126 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
         opt_path = 1;
     }
 
-    const uint8_t * restrict data_src0 = (const uint8_t *) src0->data;
-    uint8_t * restrict data_dst        = (uint8_t *) dst->data;
+    const uint8_t *  data_src0 = (const uint8_t *) src0->data;
+    uint8_t *  data_dst        = (uint8_t *) dst->data;
 
-    uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_row_size);
-    uint8_t * restrict dst_spad_data  = dst_spad->data + (ith * dst_row_size);
 
-    const int BLOCK = 8;
+
+
+
+
+
+    // While given src0_spad->size_per_thread, divide it to  two ping-pong buffer for src0
+    size_t src0_size_per_pingpong = src0_spad->size_per_thread / 2;
+
+    uint8_t *  src0_spad_data_ping = src0_spad->data + (ith * (src0_spad->size_per_thread)); 
+    uint8_t *  src0_spad_data_pong = src0_spad_data_ping  + src0_size_per_pingpong;
+    uint8_t *  dst_spad_data  = dst_spad->data + (ith * dst_spad->size_per_thread);
+
+    // const int BLOCK = 8;
+    // for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
+    //     const uint32_t block_end = MIN(ir + BLOCK, src0_end_row);
+
+    //     // Prefetch next block
+    //     if (block_end < src0_end_row) {
+    //         const float * restrict prefetch_ptr = (float *) (data_src0 + (block_end * src0_row_size));
+    //         htp_l2fetch(prefetch_ptr, 1, block_end * src0_row_size, src0_row_size);
+    //     }
+
+    //     // Process rows in current block
+    //     for (uint32_t ib = ir; ib < block_end; ib++) {
+    //         const float * restrict src0 = (float *) (data_src0 + (ib * src0_row_size));
+    //         float * restrict dst        = (float *) (data_dst + (ib * dst_row_size));
+
+    //         // gelu = x * sigmoid(1.702 * x) // current implementation
+    //         if (1 == opt_path) {
+    //             hvx_mul_scalar_f32((const uint8_t *) src0, (float) 1.702, (uint8_t *) src0_spad_data, ne0);
+    //             hvx_fast_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
+    //             hvx_mul_f32_opt((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
+    //         } else {
+    //             hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
+    //             hvx_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
+    //             hvx_mul_f32((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
+    //         }
+    //     }
+    // }
+    
+
+    // Maybe should always go to the optimal path?
+    // In gelu = x*sigmoid(x*1.702)
+    // Although we have src0_size_per_pingpong
+    const int BLOCK = src0_size_per_pingpong / src0_row_size_aligned; // How many rows can we process in one block
+
+    // TODO:
+    if(BLOCK == 0){
+        FARF(ERROR, "gelu-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n", src0_spad->size_per_thread,
+             src0_row_size_aligned );
+        return;
+    }
+    // Do the inital dma fecth
+    // fetch src0
+    dma_queue_push(dma_queue,   
+        src0_spad_data_ping, 
+        data_src0 + (src0_start_row * src0_row_size),
+        src0_row_size_aligned,
+        src0_row_size,
+        MIN(BLOCK, src0_end_row - src0_start_row)
+        
+    );
+    bool ping_pong_flag = true; // true means the program use ping data to compute, false means use pong data to compute
+
+
+
+
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
-        const uint32_t block_end = MIN(ir + BLOCK, src0_end_row);
+        const uint32_t block_end = MIN(ir + BLOCK, src0_end_row); // The start index of next block
+        
 
-        // Prefetch next block
-        if (block_end < src0_end_row) {
-            const float * restrict prefetch_ptr = (float *) (data_src0 + (block_end * src0_row_size));
-            htp_l2fetch(prefetch_ptr, 1, block_end * src0_row_size, src0_row_size);
+        const uint32_t next_block_size = MIN(BLOCK, src0_end_row - block_end);
+
+        // prefetch next loop iteration if any
+        
+        if (next_block_size > 0) {
+            if(ping_pong_flag == false){
+
+                dma_queue_push(dma_queue,   
+                    src0_spad_data_ping, 
+                    data_src0 + (block_end * src0_row_size),
+                    src0_row_size_aligned,
+                    src0_row_size,
+                    next_block_size
+                );
+
+
+            }else{
+                dma_queue_push(dma_queue,   
+                    src0_spad_data_pong, 
+                    data_src0 + (block_end * src0_row_size),
+                    src0_row_size_aligned,
+                    src0_row_size,
+                    next_block_size
+                );
+            }
+            ping_pong_flag=!ping_pong_flag;
         }
-
-        // Process rows in current block
+        const float * src0 = (float*)dma_queue_pop(dma_queue); 
         for (uint32_t ib = ir; ib < block_end; ib++) {
-            const float * restrict src0 = (float *) (data_src0 + (ib * src0_row_size));
+
+
             float * restrict dst        = (float *) (data_dst + (ib * dst_row_size));
 
-            // gelu = x * sigmoid(1.702 * x) // current implementation
-            if (1 == opt_path) {
-                hvx_mul_scalar_f32((const uint8_t *) src0, (float) 1.702, (uint8_t *) src0_spad_data, ne0);
-                hvx_fast_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
-                hvx_mul_f32_opt((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
-            } else {
-                hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
-                hvx_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
-                hvx_mul_f32((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
-            }
+            // // gelu = x * sigmoid(1.702 * x) // current implementation
+            // if (1 == opt_path) {
+            //     hvx_mul_scalar_f32((const uint8_t *) src0, (float) 1.702, (uint8_t *) dst_spad_data, ne0);
+            //     hvx_fast_sigmoid_f32((const uint8_t *) dst_spad_data, (uint8_t *) dst_spad_data, ne0);
+            //     hvx_mul_f32_opt((const uint8_t *) src0, dst_spad_data, (uint8_t *) dst, ne0);  //TODO: can dma push dst_spad_data back?
+            // } else {
+                hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) dst_spad_data, ne0);
+                hvx_sigmoid_f32((const uint8_t *) dst_spad_data, (uint8_t *) dst_spad_data, ne0);
+                hvx_mul_f32((const uint8_t *) src0, dst_spad_data, (uint8_t *) dst, ne0);
+            //}
+
+            src0 +=  src0_row_size_aligned/sizeof(float); // Move to next row
         }
     }
 
@@ -335,7 +428,7 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
 static void unary_gelu_fp32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = (struct htp_ops_context *) data;
     unary_gelu_fp32_per_thread(&octx->src0, &octx->dst, octx->op_params, &octx->src0_spad, &octx->dst_spad, n, i,
-                               octx->src0_nrows_per_thread);
+                               octx->src0_nrows_per_thread, octx->ctx->dma[i]);
 }
 
 
@@ -469,16 +562,44 @@ static int execute_op_activations_fp32(struct htp_ops_context * octx) {
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
 
     const size_t src0_row_size = src0->nb[1];
-    const size_t src1_row_size = src1->ne[0] ? src1->nb[1] : src0->nb[1];
+    const size_t src1_row_size = src1->ne[0] ? src1->nb[1] : 0; // zero bytes if src1 is not used
     const size_t dst_row_size  = dst->nb[1];
 
+
+    const size_t src0_row_size_aligned = htp_round_up(src0_row_size, VLEN);
+    const size_t src1_row_size_aligned = htp_round_up(src1_row_size, VLEN);
+    const size_t dst_row_size_aligned  = htp_round_up(dst_row_size, VLEN);
     // VTCM scratchpads for all tensors
     // N rows per thread, padded to HVX vector size
-    octx->dst_spad.size  = htp_round_up(dst_row_size, 128) * octx->n_threads;
-    octx->src0_spad.size = htp_round_up(src0_row_size, 128) * octx->n_threads;
-    octx->src1_spad.size = htp_round_up(src1_row_size, 128) * octx->n_threads;
 
-    size_t spad_size = octx->src0_spad.size + octx->src1_spad.size + octx->dst_spad.size;
+    
+    size_t spad_size_per_row = (src0_row_size_aligned +
+            src1_row_size_aligned) + dst_row_size_aligned; 
+
+    size_t vtcm_row_per_thread = (octx->ctx->vtcm_size)/ (n_threads* spad_size_per_row);
+
+
+    // Make sure the reserved vtcm size is sufficient
+    if(vtcm_row_per_thread ==0){
+        FARF(ERROR, "act-%s : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n", op_type, octx->ctx->vtcm_size,
+             spad_size_per_row * n_threads);
+        return HTP_STATUS_VTCM_TOO_SMALL;
+    }
+
+
+
+    octx->src0_spad.size_per_thread = src0_row_size_aligned * vtcm_row_per_thread;
+    octx->src1_spad.size_per_thread = src1_row_size_aligned * vtcm_row_per_thread;
+    octx->dst_spad.size_per_thread  = dst_row_size_aligned * vtcm_row_per_thread;
+
+    octx->dst_spad.size  = n_threads* octx->dst_spad.size_per_thread;
+    octx->src0_spad.size = n_threads* octx->src0_spad.size_per_thread;
+    octx->src1_spad.size = n_threads* octx->src1_spad.size_per_thread;
+
+    octx->src0_spad.data = octx->ctx->vtcm_base;
+    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
+    octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
+
 
     if (src1->ne[0]) {
         FARF(HIGH,
@@ -492,16 +613,6 @@ static int execute_op_activations_fp32(struct htp_ops_context * octx) {
              octx->src0_spad.size, octx->src1_spad.size, octx->dst_spad.size);
     }
 
-    // Make sure the reserved vtcm size is sufficient
-    if (octx->ctx->vtcm_size < spad_size) {
-        FARF(ERROR, "act-%s : current VTCM reservation %zu is too small, needed %zu\n", op_type, octx->ctx->vtcm_size,
-             spad_size);
-        return HTP_STATUS_VTCM_TOO_SMALL;
-    }
-
-    octx->src0_spad.data = octx->ctx->vtcm_base;
-    octx->src1_spad.data = octx->src0_spad.data + octx->src0_spad.size;
-    octx->dst_spad.data  = octx->src1_spad.data + octx->src1_spad.size;
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
         uint32_t n_jobs = MIN(n_threads, src0_nrows);

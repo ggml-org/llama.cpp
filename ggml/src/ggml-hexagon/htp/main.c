@@ -299,7 +299,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
 
     ctx->n_threads = n_hvx;
     for (int i = 0; i < ctx->n_threads; i++) {
-        ctx->dma[i] = dma_queue_create(HTP_SPAD_SRC0_NROWS * 2);
+        ctx->dma[i] = dma_queue_create(ctx->vtcm_size); //NOTE: for now, whole vtcm size 
     }
 
     // init worker pool
