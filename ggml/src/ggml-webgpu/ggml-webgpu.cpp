@@ -111,7 +111,7 @@
 
 // Flash Attention parameters
 #define WEBGPU_FLASH_ATTN_WG_SIZE 32
-#define WEBGPU_FLASH_ATTN_Q_TILE 8
+#define WEBGPU_FLASH_ATTN_Q_TILE  8
 #define WEBGPU_FLASH_ATTN_KV_TILE 16
 
 /* End Constants */
@@ -298,14 +298,14 @@ struct webgpu_context_struct {
 
     webgpu_pipeline flash_attn_pipeline;
 
-    std::map<int, std::map<int, webgpu_pipeline>> set_rows_pipelines;                // dst_type, vectorized
-    std::map<int, std::map<int, webgpu_pipeline>> get_rows_pipelines;                // src_type, vectorized
+    std::map<int, std::map<int, webgpu_pipeline>> set_rows_pipelines;                 // dst_type, vectorized
+    std::map<int, std::map<int, webgpu_pipeline>> get_rows_pipelines;                 // src_type, vectorized
 
-    std::map<int, std::map<int, webgpu_pipeline>> cpy_pipelines;                     // src_type, dst_type
-    std::map<int, std::map<int, webgpu_pipeline>> add_pipelines;                     // type, inplace
-    std::map<int, std::map<int, webgpu_pipeline>> sub_pipelines;                     // type, inplace
-    std::map<int, std::map<int, webgpu_pipeline>> mul_pipelines;                     // type, inplace
-    std::map<int, std::map<int, webgpu_pipeline>> div_pipelines;                     // type, inplace
+    std::map<int, std::map<int, webgpu_pipeline>> cpy_pipelines;                      // src_type, dst_type
+    std::map<int, std::map<int, webgpu_pipeline>> add_pipelines;                      // type, inplace
+    std::map<int, std::map<int, webgpu_pipeline>> sub_pipelines;                      // type, inplace
+    std::map<int, std::map<int, webgpu_pipeline>> mul_pipelines;                      // type, inplace
+    std::map<int, std::map<int, webgpu_pipeline>> div_pipelines;                      // type, inplace
 
     std::map<int, webgpu_pipeline>                               rms_norm_pipelines;  // inplace
     std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> rope_pipelines;      // type, ff, inplace
@@ -990,66 +990,68 @@ static webgpu_command ggml_webgpu_mul_mat(webgpu_context & ctx,
 }
 
 static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
-                                          ggml_tensor *    Q,
-                                          ggml_tensor *    K,
-                                          ggml_tensor *    V,
-                                          ggml_tensor *    mask,
-                                          ggml_tensor *    sinks,
-                                          ggml_tensor *    dst) {
-// For now we assume everything (mask, sink)
-    float     max_bias;
+                                             ggml_tensor *    Q,
+                                             ggml_tensor *    K,
+                                             ggml_tensor *    V,
+                                             ggml_tensor *    mask,
+                                             ggml_tensor *    sinks,
+                                             ggml_tensor *    dst) {
+    // For now we assume everything (mask, sink)
+    float scale       = *(float *) dst->op_params;
+    float max_bias;
     memcpy(&max_bias, (float *) dst->op_params + 1, sizeof(float));
+    float logit_softcap;
+    memcpy(&logit_softcap, (float *) dst->op_params + 2, sizeof(float));
+    if (logit_softcap != 0.0f) {
+        scale /= logit_softcap;
+    }
     float n_head_log2 = float(1u << (uint32_t) floor(log2(Q->ne[2])));
     float m0          = powf(2.0f, -(max_bias) / n_head_log2);
     float m1          = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
     // print type and dimensions of Q/K/V/mask/sinks/dst
-    std::cout << "ggml_webgpu_flash_attn: Q type: " << ggml_type_name(Q->type) << ", ne: [" << Q->ne[0] << ", " << Q->ne[1] << ", " << Q->ne[2]
-              << ", " << Q->ne[3] << "]\n";
-    std::cout << "ggml_webgpu_flash_attn: K type: " << ggml_type_name(K->type) << ", ne: [" << K->ne[0] << ", " << K->ne[1] << ", " << K->ne[2]
-              << ", " << K->ne[3] << "]\n";
-    std::cout << "ggml_webgpu_flash_attn: V type: " << ggml_type_name(V->type) << ", ne: [" << V->ne[0] << ", " << V->ne[1] << ", " << V->ne[2]
-              << ", " << V->ne[3] << "]\n";
-    std::cout << "ggml_webgpu_flash_attn: mask type: " << ggml_type_name(mask->type) << ", ne: [" << mask->ne[0] << ", " << mask->ne[1] << ", " << mask->ne[2]
-              << ", " << mask->ne[3] << "]\n";
-    std::cout << "ggml_webgpu_flash_attn: sinks type: " << ggml_type_name(sinks->type) << ", ne: [" << sinks->ne[0] << ", " << sinks->ne[1] << ", " << sinks->ne[2]
-              << ", " << sinks->ne[3] << "]\n";
-    std::cout << "ggml_webgpu_flash_attn: dst type: " << ggml_type_name(dst->type) << ", ne: [" << dst->ne[0] << ", " << dst->ne[1] << ", " << dst->ne[2]
-              << ", " << dst->ne[3] << "]\n";
+    //    std::cout << "ggml_webgpu_flash_attn: Q type: " << ggml_type_name(Q->type) << ", ne: [" << Q->ne[0] << ", " << Q->ne[1] << ", " << Q->ne[2]
+    //              << ", " << Q->ne[3] << "]\n";
+    //    std::cout << "ggml_webgpu_flash_attn: K type: " << ggml_type_name(K->type) << ", ne: [" << K->ne[0] << ", " << K->ne[1] << ", " << K->ne[2]
+    //              << ", " << K->ne[3] << "]\n";
+    //    std::cout << "ggml_webgpu_flash_attn: V type: " << ggml_type_name(V->type) << ", ne: [" << V->ne[0] << ", " << V->ne[1] << ", " << V->ne[2]
+    //              << ", " << V->ne[3] << "]\n";
+    //    std::cout << "ggml_webgpu_flash_attn: mask type: " << ggml_type_name(mask->type) << ", ne: [" << mask->ne[0] << ", " << mask->ne[1] << ", " << mask->ne[2]
+    //              << ", " << mask->ne[3] << "]\n";
+    //    std::cout << "ggml_webgpu_flash_attn: sinks type: " << ggml_type_name(sinks->type) << ", ne: [" << sinks->ne[0] << ", " << sinks->ne[1] << ", " << sinks->ne[2]
+    //              << ", " << sinks->ne[3] << "]\n";
+    //    std::cout << "ggml_webgpu_flash_attn: dst type: " << ggml_type_name(dst->type) << ", ne: [" << dst->ne[0] << ", " << dst->ne[1] << ", " << dst->ne[2]
+    //              << ", " << dst->ne[3] << "]\n";
 
-    uint32_t offset_q = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, Q) / ggml_type_size(Q->type));
-    uint32_t offset_k = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, K) / ggml_type_size(K->type));
-    uint32_t offset_v = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, V) / ggml_type_size(V->type));
-    uint32_t offset_mask = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, mask) / ggml_type_size(mask->type));
-    uint32_t offset_sinks = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, sinks) / ggml_type_size(sinks->type));
-    uint32_t offset_dst = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type));
-
-    std::cout << "ggml_webgpu_flash_attn: offsets: Q=" << offset_q << ", K=" << offset_k << ", V=" << offset_v
-              << ", mask=" << offset_mask << ", sinks=" << offset_sinks << ", dst=" << offset_dst << "\n";
+    //    std::cout << "ggml_webgpu_flash_attn: offsets: Q=" << offset_q << ", K=" << offset_k << ", V=" << offset_v
+    //              << ", mask=" << offset_mask << ", sinks=" << offset_sinks << ", dst=" << offset_dst << "\n";
 
     std::vector<uint32_t> params = {
-        offset_q,
-        offset_k,
-        offset_v,
-        offset_mask,
-        offset_sinks,
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, Q) / ggml_type_size(Q->type)),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, K) / ggml_type_size(K->type)),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, V) / ggml_type_size(V->type)),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, mask) / ggml_type_size(mask->type)),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, sinks) / ggml_type_size(sinks->type)),
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
-        (uint32_t) Q->ne[0],                                  // head dimension (Q/K)
-        (uint32_t) V->ne[0],                                  // head dimension (V)
-        (uint32_t) Q->ne[2],                                  // number of heads
-        (uint32_t) Q->ne[1],                                  // sequence length (Q)
-        (uint32_t) K->ne[1],                                  // sequence length (K/V)
-        (uint32_t) (Q->nb[1] / ggml_type_size(Q->type)),      // stride (elements/blocks) of Q in dimension 1
-        (uint32_t) (Q->nb[2] / ggml_type_size(Q->type)),      // stride (elements/blocks) of Q in dimension 2
-        (uint32_t) (Q->nb[3] / ggml_type_size(Q->type)),      // stride (elements/blocks) of Q in dimension 3
-        (uint32_t) (K->nb[1] / ggml_type_size(K->type)),      // stride (elements/blocks) of K in dimension 1
-        (uint32_t) (K->nb[2] / ggml_type_size(K->type)),      // stride (elements/blocks) of K in dimension 2
-        (uint32_t) (K->nb[3] / ggml_type_size(K->type)),      // stride (elements/blocks) of K in dimension 3
-        (uint32_t) (V->nb[1] / ggml_type_size(V->type)),      // stride (elements/blocks) of V in dimension 1
-        (uint32_t) (V->nb[2] / ggml_type_size(V->type)),      // stride (elements/blocks) of V in dimension 2
-        (uint32_t) (V->nb[3] / ggml_type_size(V->type)),      // stride (elements/blocks) of V in dimension 3
-        *(uint32_t *) dst->op_params,  // scale
+        (uint32_t) Q->ne[0],                              // head dimension (Q/K)
+        (uint32_t) V->ne[0],                              // head dimension (V)
+        (uint32_t) Q->ne[2],                              // number of heads
+        (uint32_t) Q->ne[1],                              // sequence length (Q)
+        (uint32_t) K->ne[1],                              // sequence length (K/V)
+        (uint32_t) (Q->nb[1] / ggml_type_size(Q->type)),  // stride (elements/blocks) of Q in dimension 1
+        (uint32_t) (Q->nb[2] / ggml_type_size(Q->type)),  // stride (elements/blocks) of Q in dimension 2
+        (uint32_t) (Q->nb[3] / ggml_type_size(Q->type)),  // stride (elements/blocks) of Q in dimension 3
+        (uint32_t) (K->nb[1] / ggml_type_size(K->type)),  // stride (elements/blocks) of K in dimension 1
+        (uint32_t) (K->nb[2] / ggml_type_size(K->type)),  // stride (elements/blocks) of K in dimension 2
+        (uint32_t) (K->nb[3] / ggml_type_size(K->type)),  // stride (elements/blocks) of K in dimension 3
+        (uint32_t) (V->nb[1] / ggml_type_size(V->type)),  // stride (elements/blocks) of V in dimension 1
+        (uint32_t) (V->nb[2] / ggml_type_size(V->type)),  // stride (elements/blocks) of V in dimension 2
+        (uint32_t) (V->nb[3] / ggml_type_size(V->type)),  // stride (elements/blocks) of V in dimension 3
+        (uint32_t) (mask->nb[3] / ggml_type_size(mask->type)),               // stride of mask dim 3
+        (uint32_t) (Q->ne[2] / K->ne[2]),                  // repeat factor for K/V in dim 2 (MHA/MQA/GQA)
+        *(uint32_t *) &scale,                             // scale (possibly adjusted for logit softcap)
         *(uint32_t *) &max_bias,
+        *(uint32_t *) &logit_softcap,
         *(uint32_t *) &n_head_log2,
         *(uint32_t *) &m0,
         *(uint32_t *) &m1
@@ -1059,19 +1061,19 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         { .binding = 0,
          .buffer  = ggml_webgpu_tensor_buf(Q),
          .offset  = ggml_webgpu_tensor_align_offset(ctx, Q),
-         .size    = ggml_webgpu_tensor_binding_size(ctx, Q) },
+         .size    = ggml_webgpu_tensor_binding_size(ctx, Q)     },
         { .binding = 1,
          .buffer  = ggml_webgpu_tensor_buf(K),
          .offset  = ggml_webgpu_tensor_align_offset(ctx, K),
-         .size    = ggml_webgpu_tensor_binding_size(ctx, K) },
+         .size    = ggml_webgpu_tensor_binding_size(ctx, K)     },
         { .binding = 2,
          .buffer  = ggml_webgpu_tensor_buf(V),
          .offset  = ggml_webgpu_tensor_align_offset(ctx, V),
-         .size    = ggml_webgpu_tensor_binding_size(ctx, V) },
+         .size    = ggml_webgpu_tensor_binding_size(ctx, V)     },
         { .binding = 3,
          .buffer  = ggml_webgpu_tensor_buf(mask),
          .offset  = ggml_webgpu_tensor_align_offset(ctx, mask),
-         .size    = ggml_webgpu_tensor_binding_size(ctx, mask) },
+         .size    = ggml_webgpu_tensor_binding_size(ctx, mask)  },
         { .binding = 4,
          .buffer  = ggml_webgpu_tensor_buf(sinks),
          .offset  = ggml_webgpu_tensor_align_offset(ctx, sinks),
@@ -1079,16 +1081,16 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         { .binding = 5,
          .buffer  = ggml_webgpu_tensor_buf(dst),
          .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
-         .size    = ggml_webgpu_tensor_binding_size(ctx, dst) },
-         { .binding = 6,
-         .buffer  = ctx->debug_dev_buf,
-         .offset  = 0,
-         .size    = ctx->debug_dev_buf.GetSize() }
+         .size    = ggml_webgpu_tensor_binding_size(ctx, dst)   },
+        //         { .binding = 6,
+        //         .buffer  = ctx->debug_dev_buf,
+        //         .offset  = 0,
+        //         .size    = ctx->debug_dev_buf.GetSize() }
     };
 
     uint32_t wg_per_head = CEIL_DIV(Q->ne[1], WEBGPU_FLASH_ATTN_Q_TILE);
-    uint32_t wg_x        = wg_per_head * Q->ne[2] * Q->ne[3]; // wg per head * number of heads * number of batches
-    std::cout << "ggml_webgpu_flash_attn: wg_x: " << wg_x << "\n";
+    uint32_t wg_x        = wg_per_head * Q->ne[2] * Q->ne[3];  // wg per head * number of heads * number of batches
+    //std::cout << "ggml_webgpu_flash_attn: wg_x: " << wg_x << "\n";
     return ggml_backend_webgpu_build(ctx, ctx->flash_attn_pipeline, params, entries, wg_x);
 }
 
@@ -1546,7 +1548,7 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
 
     std::vector<webgpu_command>            commands;
     std::vector<webgpu_submission_futures> futures;
-    bool contains_flash_attn = false;
+    bool                                   contains_flash_attn = false;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (auto cmd = ggml_webgpu_encode_node(ctx, cgraph->nodes[i])) {
             if (cgraph->nodes[i]->op == GGML_OP_FLASH_ATTN_EXT) {
@@ -1572,8 +1574,9 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
     }
 
 #ifdef GGML_WEBGPU_DEBUG
-    if (contains_flash_attn)
-    ggml_backend_webgpu_debug(ctx);
+    if (contains_flash_attn) {
+        ggml_backend_webgpu_debug(ctx);
+    }
 #endif
 
     ggml_backend_webgpu_wait(ctx, futures);
@@ -2594,7 +2597,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 break;
             }
         case GGML_OP_FLASH_ATTN_EXT:
-            supports_op = true;
+            supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 &&
+                          src2->type == GGML_TYPE_F32 && op->src[3] != nullptr && op->src[4] != nullptr;
+            supports_op &= op->ne[0] <= 128 && src0->ne[0] <= 128; // max seq len 128 for qkv
             break;
         case GGML_OP_RMS_NORM:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32;

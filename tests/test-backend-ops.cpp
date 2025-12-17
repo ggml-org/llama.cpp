@@ -1335,10 +1335,10 @@ struct test_case {
                 printf("[%s] NMSE = %.9f > %.9f ", ggml_op_desc(t1), err, ud->max_err);
                 // printing first 40 values for flash attention debugging
                 //for (int i = 0; i < 40; i++) {
-                for (int i = 0; i < (int) f1.size(); i++) {
-                    printf("%5d %9.6f %9.6f, diff = %9.6f\n", i, f1[i], f2[i], f1[i] - f2[i]);
-                }
-                printf("\n");
+                //for (int i = 0; i < (int) f1.size(); i++) {
+                //    printf("%5d %9.6f %9.6f, diff = %9.6f\n", i, f1[i], f2[i], f1[i] - f2[i]);
+                //}
+                //printf("\n");
                 //exit(1);
                 ud->ok = false;
             }
