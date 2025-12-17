@@ -65,6 +65,16 @@ static inline bool ggml_ifairy_lut_prefetch_enabled(void) {
     return !(env && strcmp(env, "0") == 0);
 }
 
+static inline size_t ggml_ifairy_checked_mul_size(size_t a, size_t b) {
+    GGML_ASSERT(a == 0 || b <= SIZE_MAX / a);
+    return a * b;
+}
+
+static inline size_t ggml_ifairy_checked_add_size(size_t a, size_t b) {
+    GGML_ASSERT(a <= SIZE_MAX - b);
+    return a + b;
+}
+
 enum ggml_ifairy_lut_layout {
     GGML_IFAIRY_LUT_LAYOUT_LEGACY  = 0, // 4x64 int16 per-group tables
     GGML_IFAIRY_LUT_LAYOUT_COMPACT = 1, // int8 per-position tables (3 positions × 4 codes × 4 channels)
@@ -185,6 +195,7 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
     if (!ggml_ifairy_lut_can_mul_mat(src0, src1, dst)) {
         return 0;
     }
+    GGML_ASSERT(n_threads > 0);
     const bool strict = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_VALIDATE_STRICT");
 
     const int64_t M = src0->ne[1];
@@ -192,9 +203,17 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
     const int64_t N = src1->ne[1];
     const int64_t blocks_per_col = K / QK_K;
     const int64_t groups_per_block = (QK_K + 2) / 3;
+
+    GGML_ASSERT(M >= 0);
+    GGML_ASSERT(K >= 0);
+    GGML_ASSERT(N >= 0);
+    GGML_ASSERT(blocks_per_col >= 0);
+    GGML_ASSERT(groups_per_block > 0);
+
     size_t quant_bytes = 0;
     if (src1->type == GGML_TYPE_F32) {
-        quant_bytes = GGML_PAD((size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16), 64);
+        const size_t q_elems = ggml_ifairy_checked_mul_size((size_t) N, (size_t) blocks_per_col);
+        quant_bytes = GGML_PAD(ggml_ifairy_checked_mul_size(q_elems, sizeof(block_ifairy_q16)), 64);
     }
 
     // Optional BK tiling (by whole 256-element blocks) to reduce LUT working set.
@@ -221,14 +240,22 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
     const int64_t blocks_tile = tile_blocks > 0 ? MIN((int64_t) tile_blocks, blocks_per_col) : blocks_per_col;
     const int64_t groups_tile = blocks_tile * groups_per_block;
 
-    const ggml_ifairy_lut_layout layout = ggml_ifairy_lut_layout_from_env((int) N);
-    const size_t lut_bytes = layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY
-            ? (size_t) N * (size_t) groups_tile * (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns) * sizeof(int16_t)
-            : (size_t) N * (size_t) groups_tile * (size_t) k_ifairy_lut_group_bytes;
-    // activation scales are per-block (shared by all groups in the block)
-    const size_t scale_bytes = (size_t) N * (size_t) blocks_tile * 2 * sizeof(float);
+    GGML_ASSERT(blocks_tile >= 0);
+    GGML_ASSERT(groups_tile >= 0);
 
-    size_t shared_bytes = GGML_PAD(lut_bytes + scale_bytes, 64);
+    const ggml_ifairy_lut_layout layout = ggml_ifairy_lut_layout_from_env((int) N);
+    const size_t lut_groups = ggml_ifairy_checked_mul_size((size_t) N, (size_t) groups_tile);
+    const size_t lut_bytes = layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY
+            ? ggml_ifairy_checked_mul_size(
+                    ggml_ifairy_checked_mul_size(lut_groups, (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns)),
+                    sizeof(int16_t))
+            : ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_group_bytes);
+    // activation scales are per-block (shared by all groups in the block)
+    const size_t scale_bytes = ggml_ifairy_checked_mul_size(
+            ggml_ifairy_checked_mul_size(ggml_ifairy_checked_mul_size((size_t) N, (size_t) blocks_tile), 2u),
+            sizeof(float));
+
+    size_t shared_bytes = GGML_PAD(ggml_ifairy_checked_add_size(lut_bytes, scale_bytes), 64);
 
     // Optional "full accumulator" mode (tiled only):
     // for small N, keep a single shared accumulator of size M*(4*N) floats so we can
@@ -236,7 +263,8 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
     bool fullacc = false;
     if (tile_blocks > 0 && M > 0) {
         const char * env = getenv("GGML_IFAIRY_LUT_FULLACC");
-        const size_t acc_bytes = (size_t) M * (size_t) (4 * N) * sizeof(float);
+        const size_t acc_elems = ggml_ifairy_checked_mul_size((size_t) M, ggml_ifairy_checked_mul_size(4u, (size_t) N));
+        const size_t acc_bytes = ggml_ifairy_checked_mul_size(acc_elems, sizeof(float));
         const bool auto_ok = (N <= 2) && (acc_bytes <= (size_t) (8 * 1024 * 1024));
         if (env && strcmp(env, "0") == 0) {
             fullacc = false;
@@ -246,7 +274,7 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
             fullacc = auto_ok;
         }
         if (fullacc) {
-            shared_bytes += GGML_PAD(acc_bytes, 64);
+            shared_bytes = ggml_ifairy_checked_add_size(shared_bytes, GGML_PAD(acc_bytes, 64));
         }
     }
 
@@ -254,10 +282,14 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
     // - non-tiled: N floats (bf16-pair packed into F32)
     // - tiled+BM:  BM*(4*N) floats accumulator (ac/ad/bc/bd), then combined and packed
     // - tiled+fullacc: minimal per-thread scratch
-    const size_t tmp_elems = tile_blocks == 0 ? (size_t) N : (fullacc ? 16u : (size_t) (bm * 4 * N));
-    const size_t tmp_bytes = GGML_PAD(tmp_elems * sizeof(float), 64);
+    const size_t tmp_elems = tile_blocks == 0
+            ? (size_t) N
+            : (fullacc ? 16u : ggml_ifairy_checked_mul_size((size_t) bm, ggml_ifairy_checked_mul_size(4u, (size_t) N)));
+    const size_t tmp_bytes = GGML_PAD(ggml_ifairy_checked_mul_size(tmp_elems, sizeof(float)), 64);
 
-    return quant_bytes + shared_bytes + tmp_bytes * (size_t) n_threads;
+    return ggml_ifairy_checked_add_size(
+            ggml_ifairy_checked_add_size(quant_bytes, shared_bytes),
+            ggml_ifairy_checked_mul_size(tmp_bytes, (size_t) n_threads));
 }
 
 bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_tensor ** index_tensor_out) {

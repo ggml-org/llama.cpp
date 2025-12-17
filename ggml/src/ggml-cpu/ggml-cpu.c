@@ -1296,15 +1296,47 @@ void ggml_compute_forward_mul_mat(
         const int64_t blocks_tile = tile_blocks > 0 ? MIN((int64_t) tile_blocks, blocks_per_col) : blocks_per_col;
         const int64_t groups_tile = blocks_tile * groups_per_block;
 
-        const size_t quant_bytes = src1->type == GGML_TYPE_F32 ? GGML_PAD((size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16), 64) : 0;
+        GGML_ASSERT(M >= 0);
+        GGML_ASSERT(K >= 0);
+        GGML_ASSERT(N >= 0);
+        GGML_ASSERT(blocks_per_col >= 0);
+        GGML_ASSERT(blocks_tile >= 0);
+        GGML_ASSERT(groups_tile >= 0);
+
+        size_t quant_bytes = 0;
+        if (src1->type == GGML_TYPE_F32) {
+            const size_t blocks_per_col_sz = (size_t) blocks_per_col;
+            GGML_ASSERT(blocks_per_col_sz == 0 || (size_t) N <= SIZE_MAX / blocks_per_col_sz);
+            const size_t q_elems = (size_t) N * blocks_per_col_sz;
+            GGML_ASSERT(q_elems == 0 || sizeof(block_ifairy_q16) <= SIZE_MAX / q_elems);
+            quant_bytes = GGML_PAD(q_elems * sizeof(block_ifairy_q16), 64);
+        }
         const char * layout_env = getenv("GGML_IFAIRY_LUT_LAYOUT");
         const bool lut_legacy = !(layout_env && strcmp(layout_env, "compact") == 0);
 
-        const size_t lut_bytes = lut_legacy
-                ? (size_t) N * (size_t) groups_tile * (size_t) (4 * 64) * sizeof(int16_t)
-                : (size_t) N * (size_t) groups_tile * (size_t) GGML_IFAIRY_LUT_COMPACT_GROUP_BYTES;
+        const size_t groups_tile_sz = (size_t) groups_tile;
+        GGML_ASSERT(groups_tile_sz == 0 || (size_t) N <= SIZE_MAX / groups_tile_sz);
+        const size_t lut_groups = (size_t) N * groups_tile_sz;
+
+        size_t lut_bytes = 0;
+        if (lut_legacy) {
+            GGML_ASSERT(lut_groups == 0 || (size_t) (4 * 64) <= SIZE_MAX / lut_groups);
+            const size_t lut_items = lut_groups * (size_t) (4 * 64);
+            GGML_ASSERT(lut_items == 0 || sizeof(int16_t) <= SIZE_MAX / lut_items);
+            lut_bytes = lut_items * sizeof(int16_t);
+        } else {
+            GGML_ASSERT(lut_groups == 0 || (size_t) GGML_IFAIRY_LUT_COMPACT_GROUP_BYTES <= SIZE_MAX / lut_groups);
+            lut_bytes = lut_groups * (size_t) GGML_IFAIRY_LUT_COMPACT_GROUP_BYTES;
+        }
         // activation scales are per-block (shared by all groups in the block)
-        const size_t scale_bytes = (size_t) N * (size_t) blocks_tile * 2 * sizeof(float);
+        const size_t blocks_tile_sz = (size_t) blocks_tile;
+        GGML_ASSERT(blocks_tile_sz == 0 || (size_t) N <= SIZE_MAX / blocks_tile_sz);
+        const size_t scale_elems0 = (size_t) N * blocks_tile_sz;
+        GGML_ASSERT(scale_elems0 == 0 || 2u <= SIZE_MAX / scale_elems0);
+        const size_t scale_elems = scale_elems0 * 2u;
+        GGML_ASSERT(scale_elems == 0 || sizeof(float) <= SIZE_MAX / scale_elems);
+        const size_t scale_bytes = scale_elems * sizeof(float);
+        GGML_ASSERT(lut_bytes <= SIZE_MAX - scale_bytes);
         const size_t shared_lut_bytes = GGML_PAD(lut_bytes + scale_bytes, 64);
 
         // Optional "full accumulator" mode (tiled only):
@@ -1313,7 +1345,15 @@ void ggml_compute_forward_mul_mat(
         size_t acc_bytes = 0;
         if (tile_blocks > 0 && M > 0) {
             const char * env = getenv("GGML_IFAIRY_LUT_FULLACC");
-            const size_t acc_bytes_raw = (size_t) M * (size_t) (4 * N) * sizeof(float);
+            GGML_ASSERT((size_t) N <= SIZE_MAX / 4u);
+            const size_t acc_elems1 = 4u * (size_t) N;
+            size_t acc_elems = 0;
+            if (acc_elems1 != 0) {
+                GGML_ASSERT((size_t) M <= SIZE_MAX / acc_elems1);
+                acc_elems = (size_t) M * acc_elems1;
+            }
+            GGML_ASSERT(acc_elems == 0 || sizeof(float) <= SIZE_MAX / acc_elems);
+            const size_t acc_bytes_raw = acc_elems * sizeof(float);
             const bool auto_ok = (N <= 2) && (acc_bytes_raw <= (size_t) (8 * 1024 * 1024));
             if (env && strcmp(env, "0") == 0) {
                 fullacc = false;
@@ -1327,9 +1367,31 @@ void ggml_compute_forward_mul_mat(
             }
         }
 
+        GGML_ASSERT(shared_lut_bytes <= SIZE_MAX - acc_bytes);
         const size_t shared_bytes = shared_lut_bytes + acc_bytes;
-        const size_t tmp_bytes = GGML_PAD((size_t) (tile_blocks == 0 ? N : (fullacc ? 16 : (bm * 4 * N))) * sizeof(float), 64);
-        const size_t need = quant_bytes + shared_bytes + tmp_bytes * (size_t) nth;
+
+        size_t tmp_elems = 0;
+        if (tile_blocks == 0) {
+            tmp_elems = (size_t) N;
+        } else if (fullacc) {
+            tmp_elems = 16u;
+        } else {
+            GGML_ASSERT((size_t) N <= SIZE_MAX / 4u);
+            const size_t four_n = 4u * (size_t) N;
+            if (four_n != 0) {
+                GGML_ASSERT((size_t) bm <= SIZE_MAX / four_n);
+                tmp_elems = (size_t) bm * four_n;
+            }
+        }
+        GGML_ASSERT(tmp_elems == 0 || sizeof(float) <= SIZE_MAX / tmp_elems);
+        const size_t tmp_bytes = GGML_PAD(tmp_elems * sizeof(float), 64);
+
+        GGML_ASSERT((size_t) nth > 0);
+        GGML_ASSERT(tmp_bytes == 0 || (size_t) nth <= SIZE_MAX / tmp_bytes);
+        const size_t tmp_all = tmp_bytes * (size_t) nth;
+        GGML_ASSERT(quant_bytes <= SIZE_MAX - shared_bytes);
+        GGML_ASSERT(quant_bytes + shared_bytes <= SIZE_MAX - tmp_all);
+        const size_t need = quant_bytes + shared_bytes + tmp_all;
 
         // Keep the workspace layout calculation consistent with the helper used by higher-level allocators.
         // Any drift here risks silent memory corruption.
