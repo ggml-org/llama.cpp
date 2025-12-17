@@ -18,7 +18,6 @@
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
-	import { v4 as uuid } from 'uuid';
 	import CodePreviewDialog from './CodePreviewDialog.svelte';
 
 	interface Props {
@@ -43,7 +42,7 @@
 	let pendingMarkdown: string | null = null;
 	let isProcessing = false;
 
-	const themeStyleId = `highlight-theme-${uuid()}`;
+	const themeStyleId = `highlight-theme-${(window.idxThemeStyle = (window.idxThemeStyle ?? 0) + 1)}`;
 
 	let processor = $derived(() => {
 		return remark()
@@ -99,7 +98,7 @@
 			const preElements = tempDiv.querySelectorAll('pre');
 			let mutated = false;
 
-			for (const [index, pre] of Array.from(preElements).entries()) {
+			for (const [, pre] of Array.from(preElements).entries()) {
 				const codeElement = pre.querySelector('code');
 
 				if (!codeElement) {
@@ -119,7 +118,7 @@
 				}
 
 				const rawCode = codeElement.textContent || '';
-				const codeId = `code-${uuid()}-${index}`;
+				const codeId = `code-${(window.idxCodeBlock = (window.idxCodeBlock ?? 0) + 1)}`;
 				codeElement.setAttribute('data-code-id', codeId);
 				codeElement.setAttribute('data-raw-code', rawCode);
 
