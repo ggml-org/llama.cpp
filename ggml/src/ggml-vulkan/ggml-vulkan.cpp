@@ -2805,12 +2805,11 @@ static void ggml_vk_load_shaders(vk_device& device) {
         const uint32_t tk_s = device->coopmat_support ? device->coopmat_k : 1;
 
         l_warptile = { 128, 128, 128, 16, subgroup_size_8 * 2, 64, 2, tm_l, tn_l, tk_l, subgroup_size_8 };
-        m_warptile = { 512,  128,  128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
+        m_warptile = { 128, 64, 64, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
         s_warptile = { subgroup_size_16, 32, 32, 16, 32, 32, 2, tm_s, tn_s, tk_s, subgroup_size_8 };
 
         l_warptile_mmq = { 128, 128, 128, 32, subgroup_size_8 * 2, 64, 2, tm_l, tn_l, tk_l, subgroup_size_8 };
-        m_warptile_mmq = { 512,  128,  128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
-        // (BLOCK SIZE, BM, BN, BK, WM, WN, WMITER, TM, TN, TK, WARP)
+        m_warptile_mmq = { 128, 64, 64, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
         s_warptile_mmq = { subgroup_size_32, 32, 32, 32, 32, 32, 2, tm_s, tn_s, tk_s, subgroup_size_8 };
 
         // Integer MMQ has a smaller shared memory profile, but heavier register use
@@ -2845,12 +2844,21 @@ static void ggml_vk_load_shaders(vk_device& device) {
             m_warptile_mmqid = m_warptile_mmqid_int = { 256, 64, 64, 32, 16, 16, 2, 2, 2, 1, 16 };
         }
 
-        l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
-        m_mmq_wg_denoms = m_wg_denoms = { 128,  128, 1 };
+        l_mmq_wg_denoms = l_wg_denoms = { 128, 128, 1 };
+        m_mmq_wg_denoms = m_wg_denoms = { 64,  64, 1 };
         s_mmq_wg_denoms = s_wg_denoms = { 32,  32, 1 };
         l_align = 128;
         m_align =  64;
         s_align =  32;
+
+        if ((device->vendor_id == VK_VENDOR_ID_INTEL) && (device->driver_id == vk::DriverId::eIntelProprietaryWindows)) {
+            if (device->coopmat_support && device->architecture == INTEL_XE2) {
+                // Xe2/Xe3 with coopmat enabled - warptile performance tuning
+                m_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
+                m_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
+                m_mmq_wg_denoms = m_wg_denoms = { 128, 128, 1 };
+            }
+        }
 
         for (uint32_t i = 0; i < GGML_TYPE_COUNT; ++i) {
             ggml_type t = (ggml_type)i;
