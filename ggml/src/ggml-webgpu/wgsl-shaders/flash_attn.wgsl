@@ -50,19 +50,19 @@ struct Params {
 
 // The number of Q rows processed per workgroup
 const Q_TILE = 8u;
-var<workgroup> q_shmem: array<f16, Q_TILE * 64>; // assumes max head_dim_qk of 64
+var<workgroup> q_shmem: array<f32, Q_TILE * 64>; // assumes max head_dim_qk of 64
 
 const KV_TILE = 8u;
 // we can reuse the same shmem for K and V since we only need one at a time right?
-var<workgroup> k_shmem: array<f16, KV_TILE * 64>; // assuming max head_dim_qkv of 64
-var<workgroup> v_shmem: array<f16, KV_TILE * 64>; // assuming max head_dim_qkv of 64
+var<workgroup> k_shmem: array<f32, KV_TILE * 64>; // assuming max head_dim_qkv of 64
+var<workgroup> v_shmem: array<f32, KV_TILE * 64>; // assuming max head_dim_qkv of 64
 
-var<workgroup> o_shmem: array<f16, Q_TILE * 64>; // output shmem
+var<workgroup> o_shmem: array<f32, Q_TILE * 64>; // output shmem
 
 // storage for output of Q*K^T scores for online softmax (S matrix from paper)
 // also storage for diagonal matrix during online softmax (P matrix from paper)
 // note that we reuse the same storage for both since we only need one at a time
-var<workgroup> inter_shmem: array<f16, Q_TILE * KV_TILE>;
+var<workgroup> inter_shmem: array<f32, Q_TILE * KV_TILE>;
 
 const WG_SIZE = 32u;
 const SUBGROUP_SIZE = 32u;
@@ -72,6 +72,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         @builtin(local_invocation_id) local_id: vec3<u32>,
         @builtin(subgroup_id) subgroup_id: u32,
         @builtin(subgroup_invocation_id) sg_inv_id: u32) {
+
+    debug[0] = 42;
 
     // each thread maintains its own cache for softmax intermediates
     var row_max = array<f32, Q_TILE>(-3.4e38, -3.4e38, -3.4e38, -3.4e38, -3.4e38, -3.4e38, -3.4e38, -3.4e38);
@@ -117,9 +119,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         let q_col = elem_idx % params.head_dim_qk;
         let head_q_row = q_row_start + q_row;
         let global_q_row_offset = q_head_offset + head_q_row * params.stride_q1;
-        let q_val: f16 = select(
+        let q_val: f32 = select(
             0.0,
-            f16(Q[global_q_row_offset + q_col]),
+            Q[global_q_row_offset + q_col],
             head_q_row < params.seq_len_q && q_col < params.head_dim_qk);
         q_shmem[elem_idx] = q_val;
     }
@@ -133,9 +135,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           let k_col = elem_idx % params.head_dim_qk;
           let global_k_row = kv_tile + k_row;
           let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
-          let k_val: f16 = select(
+          let k_val: f32 = select(
               0.0,
-              f16(K[global_k_row_offset + k_col]),
+              K[global_k_row_offset + k_col],
               global_k_row < params.seq_len_kv && k_col < params.head_dim_qk);
           k_shmem[elem_idx] = k_val;
       }
@@ -143,10 +145,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
       workgroupBarrier();
 
       // accumulate q block * k block into registers
-      var acc: subgroup_matrix_result<f16, 8, 8>;
+      var acc: subgroup_matrix_result<f32, 8, 8>;
       for (var head_dim_block = 0u; head_dim_block < params.head_dim_qk; head_dim_block += 8u) {
           // load q submatrix from shared memory
-          var q_sg_mat: subgroup_matrix_left<f16, 8, 8> = subgroupMatrixLoad<subgroup_matrix_left<f16, 8, 8>>(
+          var q_sg_mat: subgroup_matrix_left<f32, 8, 8> = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(
               &q_shmem,
               head_dim_block,
               false,
@@ -154,7 +156,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           );
 
           // load k submatrix from shared memory
-          var k_sg_mat: subgroup_matrix_right<f16, 8, 8> = subgroupMatrixLoad<subgroup_matrix_right<f16, 8, 8>>(
+          var k_sg_mat: subgroup_matrix_right<f32, 8, 8> = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(
               &k_shmem,
               head_dim_block,
               true,
@@ -182,23 +184,23 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           // The mask value for this Q row and K col
           let mask_val = select(0.0, f32(mask[mask_seq_offset + q_tile_row * params.seq_len_kv + kv_tile + sg_inv_id]), kv_tile + sg_inv_id < params.seq_len_kv && sg_inv_id < KV_TILE);
           let mask_term = slope * mask_val;
-          let thread_tile_row_max = select(-3.4e38, f32(inter_shmem[sg_inv_id + q_tile_row * KV_TILE]) * params.scale + mask_term, sg_inv_id < KV_TILE);
-          row_max[q_tile_row] = subgroupMax(max(row_max[q_tile_row], max(prev_max, thread_tile_row_max)));
+          let thread_tile_row_max = select(-3.4e38, inter_shmem[sg_inv_id + q_tile_row * KV_TILE] * params.scale + mask_term, sg_inv_id < KV_TILE);
+          row_max[q_tile_row] = subgroupMax(max(prev_max, thread_tile_row_max));
 
           // calculate running exp sum
           let cur_exp = exp(prev_max - row_max[q_tile_row]);
-          let cur_p = select(0.0, exp(thread_tile_row_max - row_max[q_tile_row]), sg_inv_id < KV_TILE);
+          let cur_p = select(0.0, exp(thread_tile_row_max - row_max[q_tile_row]), kv_tile + sg_inv_id < params.seq_len_kv && sg_inv_id < KV_TILE);
           exp_sum[q_tile_row] = exp_sum[q_tile_row] * cur_exp + subgroupAdd(cur_p);
 
           // store back to shared memory (P matrix)
           if (sg_inv_id < KV_TILE) {
-              inter_shmem[sg_inv_id + q_tile_row * KV_TILE] = f16(cur_p);
+              inter_shmem[sg_inv_id + q_tile_row * KV_TILE] = cur_p;
           }
 
           for (var elem_idx = sg_inv_id; elem_idx < params.head_dim_v; elem_idx += SUBGROUP_SIZE) {
               let idx = q_tile_row * params.head_dim_v + elem_idx;
-              let val = f32(o_shmem[idx]) * cur_exp;
-              o_shmem[idx] = f16(val);
+              let val = o_shmem[idx] * cur_exp;
+              o_shmem[idx] = val;
           }
       }
 
@@ -208,9 +210,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           let v_col = elem_idx % params.head_dim_v;
           let global_v_row = kv_tile + v_row;
           let global_v_row_offset = v_head_offset + global_v_row * params.stride_v1;
-          let v_val: f16 = select(
+          let v_val: f32 = select(
               0.0,
-              f16(V[global_v_row_offset + v_col]),
+              f32(V[global_v_row_offset + v_col]),
               global_v_row < params.seq_len_kv && v_col < params.head_dim_v);
           v_shmem[elem_idx] = v_val;
       }
@@ -220,7 +222,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
       // we have P (8x8 tile, or Q_TILE x KV_TILE) in inter_shmem and V (8 x head_dim_v, or KV_TILE x head_dim_v) in v_shmem
       // we want to compute O += P * V
       // load P submatrix from shared memory
-      var p_sg_mat: subgroup_matrix_left<f16, 8, 8> = subgroupMatrixLoad<subgroup_matrix_left<f16, 8, 8>>(
+      var p_sg_mat: subgroup_matrix_left<f32, 8, 8> = subgroupMatrixLoad<subgroup_matrix_left<f32, 8, 8>>(
           &inter_shmem,
           0,
           false,
@@ -229,7 +231,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
       for (var head_dim_block = 0u; head_dim_block < params.head_dim_v; head_dim_block += 8u) {
           // load V submatrix from shared memory
-          var v_sg_mat: subgroup_matrix_right<f16, 8, 8> = subgroupMatrixLoad<subgroup_matrix_right<f16, 8, 8>>(
+          var v_sg_mat: subgroup_matrix_right<f32, 8, 8> = subgroupMatrixLoad<subgroup_matrix_right<f32, 8, 8>>(
               &v_shmem,
               head_dim_block,
               false, // or false? is this transposed?
@@ -237,7 +239,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           );
 
           // load O submatrix from shared memory
-          var o_sg_mat: subgroup_matrix_result<f16, 8, 8> = subgroupMatrixLoad<subgroup_matrix_result<f16, 8, 8>>(
+          var o_sg_mat: subgroup_matrix_result<f32, 8, 8> = subgroupMatrixLoad<subgroup_matrix_result<f32, 8, 8>>(
               &o_shmem,
               head_dim_block,
               false,
@@ -272,8 +274,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         exp_sum[q_tile_row] = exp_sum[q_tile_row] * max_exp + subgroupAdd(sink_exp);
         for (var elem_idx = sg_inv_id; elem_idx < params.head_dim_v; elem_idx += SUBGROUP_SIZE) {
             let idx = q_tile_row * params.head_dim_v + elem_idx;
-            let val = f32(o_shmem[idx]) * max_exp;
-            o_shmem[idx] = f16(val);
+            let val = o_shmem[idx] * max_exp;
+            o_shmem[idx] = val;
         }
     }
 
@@ -284,10 +286,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             break;
         }
 
-        let scale = select(0.0, 1.0 / exp_sum[q_tile_row], exp_sum[q_tile_row] > 0);
+        let scale = select(0.0, 1.0 / exp_sum[q_tile_row], exp_sum[q_tile_row] != 0);
 
         for (var elem_idx = sg_inv_id; elem_idx < params.head_dim_v; elem_idx += SUBGROUP_SIZE) {
-            let o_val = f32(o_shmem[q_tile_row * params.head_dim_v + elem_idx]);
+            let o_val = o_shmem[q_tile_row * params.head_dim_v + elem_idx];
             let scaled = o_val * scale;
             dst[dst_global_offset + q_tile_row * dst2_stride + elem_idx] = scaled;
         }
