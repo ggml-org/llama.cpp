@@ -571,7 +571,7 @@ llama_model_loader::llama_model_loader(
                 }
             }
 
-            files.emplace_back(new llama_file(fname_split, "rb"));
+            files.emplace_back(new llama_file(fname_split, "rb", !use_mmap));
             contexts.emplace_back(ctx);
 
             // Save tensors data offset info of the shard.
