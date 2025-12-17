@@ -972,14 +972,37 @@ static void flash_attn_xmx_f16_kernel(
         sycl::group_barrier(item.get_group());
 
         // Each sub-group handles different D tiles
-        // With 8 sub-groups and D=64, each handles 8 D values (64/8)
-        // With D=128, each handles 16 D values, etc.
+        // D=64: D_TILES=4, D=128: D_TILES=8, D=256: D_TILES=16
         constexpr int D_TILES = D / XMX_TN;  // Number of output tiles in D dimension
-        constexpr int K_TILES = XMX_BATCH_KV / XMX_TK;  // Reduction tiles (64/16 = 4)
+        constexpr int K_TILES = XMX_BATCH_KV / XMX_TK;  // Reduction tiles (32/16 = 2)
 
-        // Distribute D tiles across sub-groups
-        for (int d_tile = sg_id; d_tile < D_TILES; d_tile += XMX_N_SG) {
+        // D=64 PARALLELISM FIX:
+        // For D=64, D_TILES=4 but we have 32 sub-groups → only 4 active (87.5% idle!)
+        // Solution: Distribute work as (d_tile, k_tile) pairs across sub-groups.
+        //
+        // Work distribution:
+        // - Total work items = D_TILES * K_TILES = 4 * 2 = 8 for D=64
+        // - Each sub-group handles one (d_tile, k_tile) pair
+        // - Multiple sub-groups may compute the same d_tile with different k_tiles
+        // - Results are atomically accumulated (or we use deterministic assignment)
+        //
+        // For D=64:  8 work items, each sub-group 0-7 gets one, sub-groups 8-31 idle
+        // For D=128: 16 work items, sub-groups 0-15 each get one, 16-31 idle
+        // For D=256: 32 work items, all sub-groups active
+        //
+        // This doubles active sub-groups for D=64 (4→8) and D=128 (8→16)
+        constexpr int TOTAL_WORK_ITEMS = D_TILES * K_TILES;
+        constexpr bool NEED_K_REDUCTION = (K_TILES > 1) && (TOTAL_WORK_ITEMS <= XMX_N_SG);
+
+        // Assign work: sg_id -> (d_tile, k_tile)
+        const int work_id = sg_id;
+        const int d_tile = work_id % D_TILES;
+        const int k_tile = work_id / D_TILES;
+
+        // Only process if this sub-group has assigned work
+        if (work_id < TOTAL_WORK_ITEMS) {
             const int d_start = d_tile * XMX_TN;
+            const int k_start = k_tile * XMX_TK;
 
             // XMX matrices for this tile
             sycl_xmx::joint_matrix<sycl::sub_group, sycl::half, sycl_xmx::use::a, XMX_TM, XMX_TK, sycl_xmx::layout::row_major> mat_S;
@@ -988,32 +1011,38 @@ static void flash_attn_xmx_f16_kernel(
 
             sycl_xmx::joint_matrix_fill(sg, mat_SV, 0.0f);
 
-            // Reduction over K dimension
-            #pragma unroll
-            for (int k_tile = 0; k_tile < K_TILES; ++k_tile) {
-                const int k_start = k_tile * XMX_TK;
-
-                // Load S tile: [ncols_padded, TK] from position [0, k_start]
-                sycl_xmx::joint_matrix_load(sg, mat_S,
-                    sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(
-                        &tile_S[k_start]),
-                    S_STRIDE);
-
-                // Load V tile: [TK, TN] from position [k_start, d_start]
-                sycl_xmx::joint_matrix_load(sg, mat_V,
-                    sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(
-                        &tile_V[k_start * V_STRIDE + d_start]),
-                    V_STRIDE);
-
-                // Accumulate: SV += S @ V
-                sycl_xmx::joint_matrix_mad(sg, mat_SV, mat_S, mat_V, mat_SV);
-            }
-
-            // Store result to SV_acc
-            sycl_xmx::joint_matrix_store(sg, mat_SV,
+            // Load S tile: [ncols_padded, TK] from position [0, k_start]
+            sycl_xmx::joint_matrix_load(sg, mat_S,
                 sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(
-                    &SV_acc[d_start]),
-                D, sycl_xmx::layout::row_major);
+                    &tile_S[k_start]),
+                S_STRIDE);
+
+            // Load V tile: [TK, TN] from position [k_start, d_start]
+            sycl_xmx::joint_matrix_load(sg, mat_V,
+                sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(
+                    &tile_V[k_start * V_STRIDE + d_start]),
+                V_STRIDE);
+
+            // Compute: SV = S @ V
+            sycl_xmx::joint_matrix_mad(sg, mat_SV, mat_S, mat_V, mat_SV);
+
+            if constexpr (NEED_K_REDUCTION) {
+                // Store partial result to temporary buffer for reduction
+                // Layout: [K_TILES][ncols_padded][D], indexed by [k_tile][row][d_start]
+                const int partial_offset = k_tile * ncols_padded * D;
+                sycl_xmx::joint_matrix_store(sg, mat_SV,
+                    sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(
+                        &SV_acc[partial_offset + d_start]),
+                    D, sycl_xmx::layout::row_major);
+            } else {
+                // No reduction needed - each sub-group handles full K reduction
+                // This path is taken when D_TILES >= XMX_N_SG (D >= 512, unlikely)
+                // or when there's only one K_TILE
+                sycl_xmx::joint_matrix_store(sg, mat_SV,
+                    sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(
+                        &SV_acc[d_start]),
+                    D, sycl_xmx::layout::row_major);
+            }
         }
 
 #if FATTN_XMX_DEBUG
@@ -1022,6 +1051,24 @@ static void flash_attn_xmx_f16_kernel(
         }
 #endif
         sycl::group_barrier(item.get_group());
+
+        // ---------------------------------------------------------------------
+        // PHASE 4.5: Reduce partial K results (when NEED_K_REDUCTION)
+        // ---------------------------------------------------------------------
+        if constexpr (NEED_K_REDUCTION) {
+            // Each thread reduces its assigned elements across K_TILES
+            // SV_acc layout: [K_TILES][ncols_padded][D]
+            // We sum partial[k][j][d] for k=0..K_TILES-1 into partial[0][j][d]
+            for (int idx = tid; idx < ncols_padded * D; idx += XMX_NTHREADS) {
+                float sum = SV_acc[idx];  // k_tile=0
+                #pragma unroll
+                for (int k = 1; k < K_TILES; ++k) {
+                    sum += SV_acc[k * ncols_padded * D + idx];
+                }
+                SV_acc[idx] = sum;
+            }
+            sycl::group_barrier(item.get_group());
+        }
 
         // ---------------------------------------------------------------------
         // PHASE 5: Accumulate SV_acc into per-thread VKQ
@@ -1128,17 +1175,22 @@ void launch_fattn_xmx_f16(
     // tile_V:      XMX_BATCH_KV * (D + PAD) * sizeof(half)  <-- with stride padding
     // tile_S:      ncols_padded * (XMX_BATCH_KV + PAD) * sizeof(half)  <-- softmax weights
     // QK_acc:      ncols_padded * XMX_BATCH_KV * sizeof(float)
-    // SV_acc:      ncols_padded * D * sizeof(float)  <-- S@V result
+    // SV_acc:      K_TILES * ncols_padded * D * sizeof(float)  <-- S@V partial results for K reduction
     constexpr int KT_STRIDE = XMX_BATCH_KV + XMX_PAD;
     constexpr int KT_SIZE = D * KT_STRIDE;
     constexpr int V_STRIDE = D + XMX_PAD;
     constexpr int S_STRIDE = XMX_BATCH_KV + XMX_PAD;
+    constexpr int D_TILES = D / XMX_TN;
+    constexpr int K_TILES = XMX_BATCH_KV / XMX_TK;
+    constexpr int TOTAL_WORK_ITEMS = D_TILES * K_TILES;
+    // Need K_TILES copies of SV_acc only when doing K reduction (small D)
+    constexpr int SV_ACC_COPIES = ((K_TILES > 1) && (TOTAL_WORK_ITEMS <= XMX_N_SG)) ? K_TILES : 1;
     constexpr size_t shared_half = ncols_padded * D +           // tile_Q
                                    KT_SIZE * 2 +                 // tile_KT[2]
                                    XMX_BATCH_KV * V_STRIDE +     // tile_V
                                    ncols_padded * S_STRIDE;      // tile_S
-    constexpr size_t shared_float = ncols_padded * XMX_BATCH_KV +  // QK_acc
-                                    ncols_padded * D;               // SV_acc
+    constexpr size_t shared_float = ncols_padded * XMX_BATCH_KV +        // QK_acc
+                                    SV_ACC_COPIES * ncols_padded * D;    // SV_acc (with K reduction copies)
     constexpr size_t shared_mem_size = shared_half + shared_float * 2;
 
     const int n_query_blocks = (params.ne01 + ncols - 1) / ncols;
