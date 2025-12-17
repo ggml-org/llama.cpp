@@ -1215,7 +1215,7 @@ extern "C" {
         // note: call once per sampler
         bool (*backend_init)(struct llama_sampler * smpl, ggml_backend_buffer_type_t buft);
 
-        // call after .backend_accept()
+        // call after .backend_apply()
         void (*backend_accept)(
                 struct llama_sampler * smpl,
                 struct ggml_context  * ctx,
@@ -1229,7 +1229,7 @@ extern "C" {
                 struct ggml_cgraph        * gf,
                 struct llama_sampler_data * data);
 
-        // call before .backend_apply()
+        // called before graph execution to set inputs for the current ubatch
         void (*backend_set_input)(struct llama_sampler * smpl);
     };
 
