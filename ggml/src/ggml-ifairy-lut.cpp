@@ -59,6 +59,12 @@ static inline bool ggml_ifairy_env_enabled(const char * name) {
     return env && strcmp(env, "0") != 0;
 }
 
+// Prefetch is enabled by default; set GGML_IFAIRY_LUT_PREFETCH=0 to disable for tuning.
+static inline bool ggml_ifairy_lut_prefetch_enabled(void) {
+    const char * env = getenv("GGML_IFAIRY_LUT_PREFETCH");
+    return !(env && strcmp(env, "0") == 0);
+}
+
 enum ggml_ifairy_lut_layout {
     GGML_IFAIRY_LUT_LAYOUT_LEGACY  = 0, // 4x64 int16 per-group tables
     GGML_IFAIRY_LUT_LAYOUT_COMPACT = 1, // int8 per-position tables (3 positions × 4 codes × 4 channels)
@@ -744,7 +750,9 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qw
                     const int8_t * grp2 = grp + 2 * k_ifairy_lut_group_bytes;
                     const int8_t * grp3 = grp + 3 * k_ifairy_lut_group_bytes;
 
-                    __builtin_prefetch(grp0 + 4 * k_ifairy_lut_group_bytes, 0, 1);
+                    if (prefetch) {
+                        __builtin_prefetch(grp0 + 4 * k_ifairy_lut_group_bytes, 0, 1);
+                    }
 
                     const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
@@ -1308,6 +1316,8 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
     const int64_t groups = blocks * groups_per_block;
 
     const block_ifairy * w_blocks = (const block_ifairy *) qweights;
+    const bool prefetch = ggml_ifairy_lut_prefetch_enabled();
+    (void) prefetch;
 
     // Fast-path for decode: N == 1 avoids the col loop and some pointer arithmetic.
     // Keep strict mode on the generic path (strict validation assumes the generic structure).
@@ -1437,7 +1447,9 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                     const int8_t * grp0 = grp;
                     const int8_t * grp1 = grp + k_ifairy_lut_group_bytes;
 
-                    __builtin_prefetch(grp0 + 2 * k_ifairy_lut_group_bytes, 0, 1);
+                    if (prefetch) {
+                        __builtin_prefetch(grp0 + 2 * k_ifairy_lut_group_bytes, 0, 1);
+                    }
 
                     const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
@@ -1474,7 +1486,9 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                     const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
                     const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
 
-                    __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
+                    if (prefetch) {
+                        __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
+                    }
 
                     const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
@@ -1621,7 +1635,9 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                     const int8_t * grp2 = grp + 2 * k_ifairy_lut_group_bytes;
                     const int8_t * grp3 = grp + 3 * k_ifairy_lut_group_bytes;
 
-                    __builtin_prefetch(grp0 + 4 * k_ifairy_lut_group_bytes, 0, 1);
+                    if (prefetch) {
+                        __builtin_prefetch(grp0 + 4 * k_ifairy_lut_group_bytes, 0, 1);
+                    }
 
                     const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
@@ -1693,7 +1709,9 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                     const int8_t * grp0 = grp;
                     const int8_t * grp1 = grp + k_ifairy_lut_group_bytes;
 
-                    __builtin_prefetch(grp0 + 2 * k_ifairy_lut_group_bytes, 0, 1);
+                    if (prefetch) {
+                        __builtin_prefetch(grp0 + 2 * k_ifairy_lut_group_bytes, 0, 1);
+                    }
 
                     const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
@@ -1730,7 +1748,9 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                     const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
                     const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
 
-                    __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
+                    if (prefetch) {
+                        __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
+                    }
 
                     const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
