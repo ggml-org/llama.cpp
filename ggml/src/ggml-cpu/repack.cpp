@@ -1099,11 +1099,14 @@ void ggml_gemm_q4_K_4x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                 }
 
                 // prepare partial results for tail work
+                //
+                // NOTE:
+                // the "[bsums] layout" here is from ggml_quantize_mat_q8_K_4x8_generic().
                 for (int m = 0; m < 4; m++) {
                     for (int j = 0; j < ncols_interleaved; j++) {
                         for (int i = 0; i < QK_K / 32; i++) {
-                            const int16_t bsums = a_ptr[n].bsums[i * 2 + m * 16] + a_ptr[n].bsums[i * 2 + 1 + m * 16];
-                            sum_minf[m][j] += mins[j][i] * bsums * GGML_CPU_FP16_TO_FP32(b_ptr[n].dmin[j]) * a_ptr[n].d[m];
+                            const int16_t *bsums = a_ptr[n].bsums + (i * 8) - ((i % 2) * 6) + (m * 4);
+                            sum_minf[m][j] += mins[j][i] * (bsums[0] + bsums[1]) * GGML_CPU_FP16_TO_FP32(b_ptr[n].dmin[j]) * a_ptr[n].d[m];
                         }
                     }
                 }
@@ -2314,16 +2317,16 @@ template <> void gemm<block_q4_0, 8, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t
     ggml_gemm_q4_0_4x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_q4_K, 4, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
-    ggml_gemm_q4_K_8x4_q8_K(n, s, bs, vx, vy, nr, nc);
-}
-
 template <> void gemm<block_q4_0, 8, 8, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q4_0_8x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
 template <> void gemm<block_q4_K, 8, 4, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q4_K_4x8_q8_K(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemm<block_q4_K, 4, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemm_q4_K_8x4_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
 template <> void gemm<block_q4_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
@@ -2866,9 +2869,9 @@ static size_t ggml_backend_cpu_repack_buffer_type_get_alignment(ggml_backend_buf
     GGML_UNUSED(buft);
 }
 
-// For the aarch64 q4_k repack implementation only:
-// New tensor storage size calculation after q4_kx4 repacking.
-// Because sizeof(block_q4_Kx4) is a bit larger than default sizeof(block_q4_K)*4.
+// Below func is for the aarch64 q4_K_4x8_q8_K repack case only:
+// Tensor storage after repacking is a bit larger than before -- sizeof(block_q4_Kx4) > sizeof(block_q4_K)*4
+// This is due to member "scales" are pre-decoded in repacking stage, not in execution stage.
 static inline size_t ggml_nbytes_q4_kx4(const struct ggml_tensor * tensor) {
     size_t nbytes;
     const size_t blck_size = 256;
@@ -2880,7 +2883,9 @@ static inline size_t ggml_nbytes_q4_kx4(const struct ggml_tensor * tensor) {
 static size_t ggml_backend_cpu_aarch64_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
     if (tensor->type == GGML_TYPE_Q4_K) {
         if (ggml_cpu_has_neon() && ggml_cpu_has_matmul_int8()) {
-            return ggml_nbytes_q4_kx4(tensor);
+            if (tensor->ne[1] % 4 == 0) {
+                return ggml_nbytes_q4_kx4(tensor); // for q4_K_4x8_q8_K only
+            }
         }
     }
     return ggml_nbytes(tensor);
