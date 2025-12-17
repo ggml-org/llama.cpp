@@ -1333,6 +1333,18 @@ int ggml_metal_op_soft_max(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
+int ggml_metal_op_cross_entropy_loss(ggml_metal_op_t ctx, int idx){
+    const ggml_tensor * src0 = ctx->node(idx)->src[0]; // NOTE: logits
+    const ggml_tensor * src1 = ctx->node(idx)->src[1]; // NOTE: labels
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(src1));
+
+    return 1;
+}
+
 int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
