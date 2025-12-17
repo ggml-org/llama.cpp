@@ -2844,7 +2844,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
             m_warptile_mmqid = m_warptile_mmqid_int = { 256, 64, 64, 32, 16, 16, 2, 2, 2, 1, 16 };
         }
 
-        l_mmq_wg_denoms = l_wg_denoms = { 128, 128, 1 };
+        l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
         m_mmq_wg_denoms = m_wg_denoms = { 64,  64, 1 };
         s_mmq_wg_denoms = s_wg_denoms = { 32,  32, 1 };
         l_align = 128;
