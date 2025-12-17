@@ -50,6 +50,8 @@ static int    opt_profile      = 0;
 static int    opt_hostbuf      = 1;
 static int    opt_experimental = 0;
 
+static const size_t kMaxMemPerSessInBytes = 2ULL * 1024 * 1024 * 1024;  // 2GB
+
 // Enable all stages by default
 static int opt_opmask = HTP_OPMASK_QUEUE | HTP_OPMASK_QUANTIZE | HTP_OPMASK_COMPUTE;
 static int opt_opsync = 0;  // synchronous ops
@@ -140,6 +142,7 @@ struct ggml_hexagon_session {
     uint32_t         prof_usecs;
     uint32_t         prof_cycles;
     uint32_t         prof_pkts;
+    uint64_t         avail_mem_bytes = kMaxMemPerSessInBytes;  // available memory for allocations
 };
 
 void ggml_hexagon_session::enqueue(struct htp_general_req &req, struct dspqueue_buffer *bufs, uint32_t n_bufs, bool sync) {
@@ -267,13 +270,15 @@ struct ggml_backend_hexagon_buffer_context {
     }
 
     ggml_backend_hexagon_buffer_context(ggml_hexagon_session * sess, size_t size, bool repack) {
-        size += 4 * 1024;  // extra page for padding
+        size = get_padded_buffer_size(size);  // add padding for alignment
 
         if (rpcmem_alloc2) {
-            this->base = (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+            this->base =
+                (uint8_t *) rpcmem_alloc2(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
         } else {
             GGML_LOG_INFO("ggml-hex: %s rpcmem_alloc2 not found, falling back to rpcmem_alloc\n", sess->name.c_str());
-            this->base = (uint8_t *) rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
+            this->base =
+                (uint8_t *) rpcmem_alloc(RPCMEM_HEAP_ID_SYSTEM, RPCMEM_DEFAULT_FLAGS | RPCMEM_HEAP_NOREG, size);
         }
 
         if (!this->base) {
@@ -296,6 +301,7 @@ struct ggml_backend_hexagon_buffer_context {
         this->size   = size;
         this->mapped = false;
         this->repack = repack;
+        sess->avail_mem_bytes -= size;
     }
 
     ~ggml_backend_hexagon_buffer_context() {
@@ -304,7 +310,10 @@ struct ggml_backend_hexagon_buffer_context {
             rpcmem_free(this->base);
             this->base = NULL;
         }
+        this->sess->avail_mem_bytes += this->size;
     }
+
+    static size_t get_padded_buffer_size(size_t size) { return size + 4 * 1024; }
 
     ggml_hexagon_session * sess;  // primary session
     uint8_t *              base;
@@ -1479,8 +1488,15 @@ static const char * ggml_backend_hexagon_buffer_type_name(ggml_backend_buffer_ty
 static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
+    if (sess->avail_mem_bytes < ggml_backend_hexagon_buffer_context::get_padded_buffer_size(size)) {
+        GGML_LOG_INFO("ggml-hex: %s insufficient memory to allocate buffer of size %zu bytes (available %zu bytes)\n",
+                      sess->name.c_str(), size, sess->avail_mem_bytes);
+        return nullptr;
+    }
+
     try {
-        ggml_backend_hexagon_buffer_context * ctx = new ggml_backend_hexagon_buffer_context(sess, size, false /*repack*/);
+        ggml_backend_hexagon_buffer_context * ctx =
+            new ggml_backend_hexagon_buffer_context(sess, size, false /*repack*/);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, ctx, size);
     } catch (const std::exception & exc) {
         GGML_LOG_ERROR("ggml-hex: %s failed to allocate buffer context: %s\n", sess->name.c_str(), exc.what());
@@ -1489,8 +1505,15 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
 }
 
 static ggml_backend_buffer_t ggml_backend_hexagon_repack_buffer_type_alloc_buffer(
-            ggml_backend_buffer_type_t buffer_type, size_t size) {
+    ggml_backend_buffer_type_t buffer_type,
+    size_t                     size) {
     auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
+    if (sess->avail_mem_bytes < ggml_backend_hexagon_buffer_context::get_padded_buffer_size(size)) {
+        GGML_LOG_INFO("ggml-hex: %s insufficient memory to allocate repack buffer of size %zu bytes (available %zu bytes)\n",
+                      sess->name.c_str(), size, sess->avail_mem_bytes);
+        return nullptr;
+    }
+
     try {
         ggml_backend_hexagon_buffer_context * ctx = new ggml_backend_hexagon_buffer_context(sess, size, true /*repack*/);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, ctx, size);
@@ -2681,9 +2704,11 @@ static const char * ggml_backend_hexagon_device_get_description(ggml_backend_dev
 }
 
 static void ggml_backend_hexagon_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
+    auto sess = static_cast<ggml_hexagon_session *>(dev->context);
+
     // ~2GB per session for now
-    *free  = 2ULL * 1024 * 1024 * 1024;
-    *total = *free;
+    *free  = sess->avail_mem_bytes;
+    *total = kMaxMemPerSessInBytes;
 
     GGML_UNUSED(dev);
 }
