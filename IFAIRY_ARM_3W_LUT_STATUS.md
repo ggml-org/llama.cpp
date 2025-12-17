@@ -1,9 +1,10 @@
 # iFairy ARM 3‑Weight LUT · 现状与后续工作（NEON 标量混合版）
 
-本文记录当前 `GGML_IFAIRY_ARM_LUT`（CPU-only）下 iFairy 3-weight LUT 的代码现状（含 NEON 加速实现）、最近一次清理/整理的结果，以及下一步工作列表。
+本文记录当前 `GGML_IFAIRY_ARM_LUT`（CPU-only）下 iFairy 3-weight LUT 的代码现状（含 NEON 加速实现）、可复现的 tok/s 记录、以及下一步工作列表。接口/路由约定见 `IFAIRY_ARM_3W_LUT_API_PLAN.md`，算法与数据结构见 `IFAIRY_ARM_3W_LUT_DESIGN.md`。
 
 ## 0. 快速使用（建议默认）
 
+- 前提：构建时启用了 `GGML_IFAIRY_ARM_LUT`（`ggml/CMakeLists.txt` 会在 configure 阶段强制关闭 Metal/CUDA/HIP/MUSA/Vulkan/OpenCL/SYCL/WebGPU/zDNN 等加速后端，以保证 CPU-only）。
 - 推荐二进制：`./build-rel/bin/llama-cli`（避免误用旧的 `./build/bin/llama-cli` 导致输出异常，见 3.1）
 - 推荐扫参脚本：`bash scripts/ifairy_lut_sweep.sh`（固定 seed/prompt，输出按 tok/s 排序）
 - LUT 表布局默认走 `legacy`（更稳；`compact` 在部分设备/形状上更快），如需测试紧凑表：`GGML_IFAIRY_LUT_LAYOUT=compact`（见 1.1 / 0.1 记录）
@@ -18,6 +19,17 @@
 - `GGML_IFAIRY_LUT_BM=<int>`：M 维行块大小（仅 tiling 时生效）
 - `GGML_IFAIRY_LUT_FULLACC=0/1`：tiled 下启用共享大累加器，减少重复 `preprocess + barrier`
 - `GGML_IFAIRY_LUT_VALIDATE_STRICT=0/1`：严格对照 reference（用于验证，不用于性能跑分）
+- `GGML_IFAIRY_LUT_DEBUG=0/1`：路由/形状诊断（默认关闭；跑分时不要开）
+
+## 0.0 当前共识（按优先级）
+
+> 基于 `CODE_REVIEW_lwt_3_LUT.md` 的结论：性能收益已证明，但接下来优先把可维护性与健壮性补齐，避免后续优化建立在不稳的地基上。
+
+- P0：内存/生命周期（减少 `new/delete` + 全局容器；补齐 size/overflow/bounds 检查，避免 silent failure）
+- P0：线程安全（明确并发模型，缩小锁粒度，补并发/压力测试）
+- P1：可维护性重构（拆分 `ggml/src/ggml-ifairy-lut.cpp`，减少 legacy/compact 重复代码）
+- P1：错误处理一致性（统一 `return false`/`GGML_ASSERT`/日志策略）
+- P2：测试与回归（维度边界、分配失败、misaligned buffer、并发 transform；以及 decode/prefill 形状的性能基线）
 
 ## 0.1 tok/s 记录（更新本文档时必填）
 
@@ -124,7 +136,7 @@
 
 ### 2.1 移除 debug 导致的“非必要改动”
 
-- 删除/收敛了运行时大量 `fprintf`/对照打印（包括 `GGML_IFAIRY_LUT_COMPARE`、`GGML_IFAIRY_LUT_VALIDATE_VECDOT` 相关路径），避免多线程下的噪声与非确定性输出。
+- 删除/收敛了运行时大量 `fprintf`/对照打印，避免多线程下的噪声与非确定性输出。
 - 清理了 `todo_*`/注释掉的断言等临时代码残留。
 
 ### 2.2 严格校验语义改为“验证 LUT 输出”

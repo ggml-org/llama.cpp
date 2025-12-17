@@ -93,10 +93,10 @@ def raw_index(c0: int, c1: int, c2: int) -> int:
     """
     Raw 6-bit index as defined in the design doc:
 
-        idx_raw = (c0 << 4) | (c1 << 2) | c2
+        idx_raw = c0 | (c1 << 2) | (c2 << 4)
     """
 
-    return ((c0 & 0x3) << 4) | ((c1 & 0x3) << 2) | (c2 & 0x3)
+    return (c0 & 0x3) | ((c1 & 0x3) << 2) | ((c2 & 0x3) << 4)
 
 
 def decompose_triple(c0: int, c1: int, c2: int) -> Tuple[CanonicalPattern, int]:
@@ -290,4 +290,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
