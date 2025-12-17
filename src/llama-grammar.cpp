@@ -1091,6 +1091,16 @@ struct llama_grammar * llama_grammar_init_impl(
         }
     } while (true);
 
+    // Compute utf8 codepoints when partial_utf8 = {0, 0}
+    std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> utf8_cpt_cache;
+    if (vocab) {
+        utf8_cpt_cache.reserve(vocab->n_tokens());
+        for (size_t i = 0; i < vocab->n_tokens(); i++) {
+            const std::string & piece = vocab->token_to_piece(i);
+            utf8_cpt_cache[i] = decode_utf8(piece, {0, 0});
+        }
+    }
+
     // Important: vec_rules has to be moved here, not copied, because stacks contains
     // pointers to elements of vec_rules. If vec_rules were copied into llama_grammar
     // then the pointers would be invalidated when the local vec_rules goes out of scope.
@@ -1098,6 +1108,7 @@ struct llama_grammar * llama_grammar_init_impl(
         vocab,
         std::move(vec_rules),
         std::move(stacks),
+        std::move(utf8_cpt_cache),
         /* .partial_utf8 = */             {},
         /* .lazy = */                     false,
         /* .awaiting_trigger = */         false,
@@ -1197,6 +1208,16 @@ struct llama_grammar * llama_grammar_init_impl(
         trigger.regex = std::regex(trigger.pattern);
     }
 
+    // Compute utf8 codepoints when partial_utf8 = {0, 0}
+    std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> utf8_cpt_cache;
+    if (vocab) {
+        utf8_cpt_cache.reserve(vocab->n_tokens());
+        for (size_t i = 0; i < vocab->n_tokens(); i++) {
+            const std::string & piece = vocab->token_to_piece(i);
+            utf8_cpt_cache[i] = decode_utf8(piece, {0, 0});
+        }
+    }
+
     // Important: vec_rules has to be moved here, not copied, because stacks contains
     // pointers to elements of vec_rules. If vec_rules were copied into llama_grammar
     // then the pointers would be invalidated when the local vec_rules goes out of scope.
@@ -1204,6 +1225,7 @@ struct llama_grammar * llama_grammar_init_impl(
         vocab,
         std::move(vec_rules),
         std::move(stacks),
+        std::move(utf8_cpt_cache),
         /* .partial_utf8 = */             {},
         /* .lazy = */                     lazy,
         /* .awaiting_trigger = */         lazy,
@@ -1227,6 +1249,7 @@ struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & gra
         grammar.vocab,
         grammar.rules,
         grammar.stacks,
+        grammar.utf8_cpt_cache,
         grammar.partial_utf8,
         grammar.lazy,
         grammar.awaiting_trigger,
@@ -1284,8 +1307,13 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
         } else if (piece.empty() || piece[0] == 0) {
             cur_p->data[i].logit = -INFINITY;
         } else {
-            candidates_decoded.push_back(decode_utf8(piece, grammar.partial_utf8));
-            candidates_grammar.push_back({ i, candidates_decoded.back().first.data(), candidates_decoded.back().second, id });
+            if (grammar.partial_utf8.value == 0 && grammar.partial_utf8.n_remain == 0) {
+                const auto & cached = grammar.utf8_cpt_cache[id];
+                candidates_grammar.push_back({ i, cached.first.data(), cached.second, id });
+            } else {
+                candidates_decoded.push_back(decode_utf8(piece, grammar.partial_utf8));
+                candidates_grammar.push_back({ i, candidates_decoded.back().first.data(), candidates_decoded.back().second, id });
+            }
         }
     }
 

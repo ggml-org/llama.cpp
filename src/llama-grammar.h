@@ -131,6 +131,8 @@ struct llama_grammar {
     const llama_grammar_rules  rules;  // TODO: shared ptr
           llama_grammar_stacks stacks;
 
+    std::vector<std::pair<std::vector<uint32_t>, llama_partial_utf8>> utf8_cpt_cache;
+
     // buffer for partially generated UTF-8 sequence from accepted tokens
     llama_partial_utf8 partial_utf8;
 
