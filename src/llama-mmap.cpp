@@ -154,11 +154,7 @@ struct llama_file::impl {
         write_raw(&val, sizeof(val));
     }
 
-    bool has_direct_io() const {
-        return false;
-    }
-
-    void read_aligned_chunk(size_t offset, void * dest, size_t size, size_t alignment) const {
+    void read_aligned_chunk(size_t offset, void * dest, size_t size) const {
         throw std::runtime_error("DirectIO is not implemented on Windows.");
     }
 
@@ -179,6 +175,7 @@ struct llama_file::impl {
                 fstat(fd, &file_stats);
 
                 size = file_stats.st_size;
+                alignment = file_stats.st_blksize;
 
                 off_t ret = lseek(fd, 0, SEEK_SET);
                 if (ret == -1) {
@@ -262,7 +259,7 @@ struct llama_file::impl {
         }
     }
 
-    void read_aligned_chunk(size_t offset, void * dest, size_t size, size_t alignment) const {
+    void read_aligned_chunk(size_t offset, void * dest, size_t size) const {
         off_t aligned_offset = offset & ~(alignment - 1);
         off_t offset_from_alignment = offset - aligned_offset;
         size_t bytes_to_read = (offset_from_alignment + size + alignment - 1) & ~(alignment - 1);
@@ -306,10 +303,6 @@ struct llama_file::impl {
         write_raw(&val, sizeof(val));
     }
 
-    bool has_direct_io() const {
-        return fd != -1;
-    }
-
     ~impl() {
         if (fd != -1) {
             close(fd);
@@ -319,6 +312,21 @@ struct llama_file::impl {
     }
     int fd = -1;
 #endif
+
+    void read_raw_at(void * ptr, size_t len, size_t offset) const {
+        if (alignment != 1) {
+            read_aligned_chunk(offset, ptr, len);
+        } else {
+            seek(offset, SEEK_SET);
+            read_raw(ptr, len);
+        }
+    }
+
+    size_t read_alignment() const {
+        return alignment;
+    }
+
+    size_t alignment = 1;
 
     FILE * fp{};
     size_t size{};
@@ -331,7 +339,7 @@ llama_file::~llama_file() = default;
 size_t llama_file::tell() const { return pimpl->tell(); }
 size_t llama_file::size() const { return pimpl->size; }
 
-bool llama_file::has_direct_io() const { return pimpl->has_direct_io(); }
+size_t llama_file::read_alignment() const { return pimpl->read_alignment(); }
 
 int llama_file::file_id() const {
 #ifdef _WIN32
@@ -347,9 +355,7 @@ int llama_file::file_id() const {
 
 void llama_file::seek(size_t offset, int whence) const { pimpl->seek(offset, whence); }
 void llama_file::read_raw(void * ptr, size_t len) const { pimpl->read_raw(ptr, len); }
-void llama_file::read_aligned_chunk(size_t offset, void * dest, size_t size, size_t alignment) const
-    { pimpl->read_aligned_chunk(offset, dest, size, alignment); }
-
+void llama_file::read_raw_at(void * ptr, size_t len, size_t offset) const { pimpl->read_raw_at(ptr, len, offset); }
 
 uint32_t llama_file::read_u32() const { return pimpl->read_u32(); }
 
