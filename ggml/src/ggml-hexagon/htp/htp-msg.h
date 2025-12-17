@@ -51,11 +51,12 @@ enum htp_op {
     HTP_OP_MUL_MAT_ID     = 5,
     HTP_OP_RMS_NORM       = 6,
     HTP_OP_UNARY_SILU     = 7,
-    HTP_OP_GLU_SWIGLU     = 8,
-    HTP_OP_GLU_SWIGLU_OAI = 9,
-    HTP_OP_SOFTMAX        = 10,
-    HTP_OP_ADD_ID         = 11,
-    HTP_OP_ROPE           = 12,
+    HTP_OP_UNARY_GELU     = 8,
+    HTP_OP_GLU_SWIGLU     = 9,
+    HTP_OP_GLU_SWIGLU_OAI = 10,
+    HTP_OP_SOFTMAX        = 11,
+    HTP_OP_ADD_ID         = 12,
+    HTP_OP_ROPE           = 13,
     INVALID
 };
 
