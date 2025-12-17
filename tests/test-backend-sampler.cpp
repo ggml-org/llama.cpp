@@ -176,6 +176,16 @@ struct test_model_context {
         return it->second;
     }
 
+    void update_batch_info(const llama_batch & batch) {
+        last_batch_info.clear();
+        for (int i = 0; i < batch.n_tokens; i++) {
+            if (batch.logits[i]) {
+                llama_seq_id cur_seq = batch.seq_id[i][0];
+                last_batch_info[cur_seq] = i;
+            }
+        }
+    }
+
     bool decode_token(llama_token token, llama_seq_id seq_id = 0) {
         if (ctx == nullptr) {
             fprintf(stderr, "Error: context not initialized, call setup() first\n");
@@ -192,13 +202,7 @@ struct test_model_context {
             return false;
         }
 
-        last_batch_info.clear();
-        for (int i = 0; i < batch.n_tokens; i++) {
-            if (batch.logits[i]) {
-                llama_seq_id cur_seq = batch.seq_id[i][0];
-                last_batch_info[cur_seq] = i;
-            }
-        }
+        update_batch_info(batch);
 
         seq_positions[seq_id]++;
         llama_batch_free(batch);
@@ -228,13 +232,7 @@ struct test_model_context {
             seq_positions[seq_id]++;
         }
 
-        last_batch_info.clear();
-        for (int i = 0; i < batch.n_tokens; i++) {
-            if (batch.logits[i]) {
-                llama_seq_id cur_seq = batch.seq_id[i][0];
-                last_batch_info[cur_seq] = i;
-            }
-        }
+        update_batch_info(batch);
 
         llama_batch_free(batch);
         return true;
