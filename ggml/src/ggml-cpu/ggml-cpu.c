@@ -1351,13 +1351,11 @@ void ggml_compute_forward_mul_mat(
                                             : nb11;
             const size_t index_stride = (size_t) groups;
 
-            // quantize activations once (thread 0) if needed
+            // quantize activations once if needed (parallelize across columns to reduce thread idle)
             if (src1->type == GGML_TYPE_F32) {
-                if (ith == 0) {
-                    const float * act_f32 = (const float *) src1->data;
-                    for (int64_t c = 0; c < N; ++c) {
-                        quantize_row_ifairy_q16(act_f32 + c * (nb11 / sizeof(float)), act_q + c * blocks_per_col, K);
-                    }
+                const float * act_f32 = (const float *) src1->data;
+                for (int64_t c = ith; c < N; c += nth) {
+                    quantize_row_ifairy_q16(act_f32 + c * (nb11 / sizeof(float)), act_q + c * blocks_per_col, K);
                 }
                 ggml_barrier(params->threadpool);
             }

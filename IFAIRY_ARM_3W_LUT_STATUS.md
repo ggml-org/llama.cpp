@@ -43,6 +43,8 @@
 | 2025-12-17T08:40:52Z | `e8e6c47b` | Apple M4 | 4 | 128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 17.56 |
 | 2025-12-17T09:05:12Z | `20f90418` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 19.28 |
 | 2025-12-17T09:05:12Z | `20f90418` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 21.59 |
+| 2025-12-17T13:17:09Z | `0ec52a5a` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 15.39 |
+| 2025-12-17T13:17:09Z | `0ec52a5a` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 16.99 |
 
 ## 0.2 Xcode Profile（以 decode 场景为准）
 
@@ -59,6 +61,11 @@
 - `ggml_graph_compute_thread`：24%
 - `ggml_compute_forward_mul_mat`：6%
 - 其他：< 2.5%
+
+**更新（你最新的采样结果）**
+
+- `ggml_ifairy_lut_qgemm_ex`：52%
+- `ggml_graph_compute_thread`：30%
 
 **解读**
 
@@ -239,10 +246,11 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
    - 当前已落地：NEON 构表（`pat` 维度向量化）+ NEON 累加（标量回退）。  
    - 已有实验性 BK/BM tiling，但在部分 workload 上会因 `preprocess + barrier` 频繁而变慢。  
    - 已实现一条“full accumulator” 的 tiled 路径（默认对小 `N` 自动启用，可用 `GGML_IFAIRY_LUT_FULLACC=0/1` 控制）：为整个 `M×N` 维护共享 `{ac,ad,bc,bd}` 累加器，使每个 K-tile 的 `preprocess` 只做一次（不再按 BM 行块重复），显著减少 barrier 次数。
-   - 下一步优先项（保持 LUT 路线）：把 `preprocess` 做成 **多线程协作构表**，减少“线程 0 构表，其余线程等待”的空转：
-     - 对 `N==1`：按 group 范围切分（每线程写一段 group 的 LUT + scales），写入不重叠，barrier 后进入 qgemm
-     - 对 `N>1`：优先按 col 切分（每线程处理部分 col），避免跨 col 写同一 cache line
-     - 验收：在 Xcode 下 `ggml_graph_compute_thread` 占比下降（目标 < 20%），tok/s 上升（目标 +5%）
+   - 已实现（保持 LUT 路线）：
+     - `preprocess` 多线程协作构表：`N>=nth` 按 col 切分；`N<nth` 按 group stride 切分以避免 false sharing（减少“线程 0 构表，其余线程等待”）
+     - activation 量化（`src1=F32 -> ifairy_q16`）按 col 并行，减少 thread 0 独占量化带来的空转
+   - 下一步优先项：
+     - 在 tiled/BK 路径引入 **双缓冲 LUT + pipeline**（一部分线程构下一 tile，另一部分线程消费上一 tile），减少每 tile 的同步次数并尽量重叠构表与累加
 
 4) **降低 LUT 工作区与带宽（提高上限）**  
    - 已完成一项低风险带宽优化：把 activation `d_real/d_imag` 的 `scales` 从“每 group 一份”改为“每 block 一份”（1 个 block 内 86 个 group 共享），显著减少 `scales` 读写与工作区占用。
