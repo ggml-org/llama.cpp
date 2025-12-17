@@ -146,6 +146,7 @@ struct ifairy_lut_extra {
 - 继续减少 LUT 路径里的 barrier 次数（尤其 tiled/BK 版本），能用 `FULLACC` 解决的重复构表/重复同步尽量消掉。
 - 检查是否存在“很小但很频繁”的额外拷贝/转换可在 LUT 路径合并或延后。
 - 对 decode 场景（`N≈1`）重新评估线程数与切分策略，避免线程空转/争用（以 profile 里线程等待为准）。
+- ✅ 已做（`a3296bec`）：当 `src1=F32` 且 `N < nth`（常见 `N==1`）时，激活量化改为按 `K/QK_K` block 做 range 分片，避免“只有 thread0 量化，其它线程 barrier 等待”。
 
 ### 6.3 优先级 3：让 BK/BM tiling “不再变慢”，并可稳定获益
 

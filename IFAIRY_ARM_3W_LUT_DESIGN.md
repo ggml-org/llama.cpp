@@ -144,6 +144,9 @@ NEON 内核里对每个 group 只需要：
 - 非 tiling：
   - `preprocess_ex()` 并行构表（跨列/跨 group 切分），随后 barrier；
   - `qgemm_ex()` 按行分片并行写回。
+- 激活量化（`src1=F32 -> ifairy_q16`）：
+  - `N>=nth`：按列分片；
+  - `N<nth`（decode 常见 `N==1`）：按 `K/QK_K` block range 分片以减少线程空转。
 - BK tiling（按 256-block tile）：
   - 每个 K-tile 重复一次 `preprocess_ex()` + barrier；
   - 可选 `FULLACC` 模式用共享 accumulator，减少按 BM 行块重复构表/同步。
