@@ -44,6 +44,7 @@ body:
         - Documentation/Github
         - libllama (core library)
         - llama-cli
+        - llama-completion
         - llama-server
         - llama-bench
         - llama-quantize

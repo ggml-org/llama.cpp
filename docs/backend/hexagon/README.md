@@ -62,6 +62,7 @@ To generate an installable "package" simply use cmake --install:
 ...
 -- Installing: /workspace/pkg-adb/llama.cpp/bin/llama-bench
 -- Installing: /workspace/pkg-adb/llama.cpp/bin/llama-cli
+-- Installing: /workspace/pkg-adb/llama.cpp/bin/llama-completion
 ...
 ```
 
