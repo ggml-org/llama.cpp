@@ -6,15 +6,32 @@
 
 - 推荐二进制：`./build-rel/bin/llama-cli`（避免误用旧的 `./build/bin/llama-cli` 导致输出异常，见 3.1）
 - 推荐扫参脚本：`bash scripts/ifairy_lut_sweep.sh`（固定 seed/prompt，输出按 tok/s 排序）
-- 当前经验上较常见的“更快”组合：`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GGML_IFAIRY_LUT_BM=64 GGML_IFAIRY_LUT_FULLACC=1`（以 sweep 结果为准）
+- LUT 表布局默认走 `legacy`（更快/更稳），如需测试紧凑表：`GGML_IFAIRY_LUT_LAYOUT=compact`（见 1.1 / 0.1 记录）
+- `BK/BM/FULLACC` 调参在不同形状/版本上波动较大：以 sweep 输出为准，不建议凭经验固定写死
 
 **常用环境变量（LUT 路径）**
 
 - `GGML_IFAIRY_LUT=0/1`：禁用/启用 LUT（默认启用）
+- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact`：LUT 表布局选择（默认 `legacy`）
 - `GGML_IFAIRY_LUT_BK_BLOCKS=<int>`：K 维按 `QK_K=256` 的 block 做 tiling（0=禁用）
 - `GGML_IFAIRY_LUT_BM=<int>`：M 维行块大小（仅 tiling 时生效）
 - `GGML_IFAIRY_LUT_FULLACC=0/1`：tiled 下启用共享大累加器，减少重复 `preprocess + barrier`
 - `GGML_IFAIRY_LUT_VALIDATE_STRICT=0/1`：严格对照 reference（用于验证，不用于性能跑分）
+
+## 0.1 tok/s 记录（更新本文档时必填）
+
+> 约定：每次修改/更新本文件（`IFAIRY_ARM_3W_LUT_STATUS.md`）都在这里追加一条 tok/s 记录，避免“写了很多优化但没有可复现数字”。
+
+**基准命令（固定 prompt/seed/thread）**
+
+`./build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 --seed 1 -p "I believe life is" -n 256 -no-cnv`
+
+| time (UTC) | git | machine | threads | tokens | env | eval tok/s |
+|---|---|---|---:|---:|---|---:|
+| 2025-12-16T18:28:00Z | `9b782e0f` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1` | 1.85 |
+| 2025-12-16T18:28:00Z | `9b782e0f` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GGML_IFAIRY_LUT_BM=64 GGML_IFAIRY_LUT_FULLACC=1` | 2.58 |
+| 2025-12-17T04:49:00Z | `9b782e0f` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=legacy` | 4.12 |
+| 2025-12-17T04:49:00Z | `9b782e0f` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact` | 3.94 |
 
 ## 1. 当前现状（可工作的 LUT 路径：NEON 优先，标量回退）
 
@@ -29,16 +46,23 @@
   - `pat = c0 | (c1<<2) | (c2<<4)`
   - 分组按 `QK_K=256` block 内部进行：`85` 个 triplet + `1` 个尾组（`{255, pad, pad}`），不跨 block、不丢维度。
 - LUT 构表：`ggml/src/ggml-ifairy-lut.cpp::ggml_ifairy_lut_preprocess()`
-  - 每组三权重对应该列激活的 `4 × 64` 表（`sum_ac/sum_ad/sum_bc/sum_bd`，`int16`），并采用 `pat` 维度上的 **4 通道交织布局**（便于 NEON `vst4/vld1`）。
-  - scale：每个 **block** 2 个 `float`（`d_real/d_imag`，被该 block 的全部 `86` 个 group 共享），用于减少重复读写与带宽。
+  - 支持两种表布局（通过 `GGML_IFAIRY_LUT_LAYOUT=legacy|compact` 选择，默认 `legacy`）：
+    - `legacy`：每组构造完整的 `4 × 64`（`int16`）pattern 表（`512B/group`）
+    - `compact`：每组构造紧凑表：`3 positions × 4 codes × 4 channels = 48B/group`（`int8`）
+  - `compact` 的每个 position 是一个 16B 表：`tbl_pos[code*4 + 0..3] = {ac,ad,bc,bd}`（`int8`），其中 `code∈{0,1,2,3}` 对应 `(-1,0)/(1,0)/(0,-1)/(0,1)`
+  - scale：每个 **block** 2 个 `float`（`d_real/d_imag`，被该 block 的全部 `86` 个 group 共享）
 - GEMM：`ggml/src/ggml-ifairy-lut.cpp::ggml_ifairy_lut_qgemm()`
-  - 使用索引查表 + scale 累加，最终按 `ggml_vec_dot_ifairy_q16_K_generic` 语义合成输出（`w * conj(x)`）。
-  - 当前实现会先在 **每个 block 内以 int32 累加 86 个 group 的 `{ac,ad,bc,bd}`**，再按该 block 的 `d_real/d_imag` 一次性缩放并累加到 float（减少 per-group 的 float convert/mul）。
-  - NEON 路径对 group 循环做了 4-way unroll（提升 ILP，让“多次查表”更容易并行在流水线里飞行；NEON 本身没有通用 gather-load）。
+  - `legacy`：每 group 直接读取 `{ac,ad,bc,bd}`（`int16`）并 widen+accum 到 `int32`
+  - `compact`：对每个 group 做 3 次 position 查表并相加得到 `{ac,ad,bc,bd}`，再 widen+accum；NEON 下使用 3 次 32-bit load（4B）+ `vaddw_s16` 走整数累加
   - 输出默认以 **bf16-pair packed in F32** 的方式写回（与现有 ifairy vec_dot 约定一致）。
-  - 在 `__aarch64__ + __ARM_NEON` 下使用 NEON 累加（否则走标量）。
+  - 在 `__aarch64__ + __ARM_NEON` 下使用 NEON（否则走标量）。
 
-### 1.1 为什么 LUT 是“四通道”而不是直接存实部/虚部？
+### 1.1 选择 `legacy` 还是 `compact`？
+
+- 当前（Apple M4 / `-t 4 -b 1 -n 256`）下，`legacy` 的 eval tok/s 仍高于 `compact`（见 0.1 记录），所以默认策略是 `legacy`
+- `compact` 的主要价值是显著降低 per-group LUT 带宽/工作集（`512B -> 48B`），后续要想稳定胜出，需要继续压低 per-group 的额外指令开销
+
+### 1.2 为什么 LUT 是“四通道”而不是直接存实部/虚部？
 
 当前 correctness-first 采用 `sum_ac/sum_ad/sum_bc/sum_bd` 四通道（本质是把复数乘法拆成 4 个可独立累加的基底和），原因：
 
@@ -160,9 +184,9 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 
 2) **降低 LUT 工作区与带宽（提高上限）**  
    - 已完成一项低风险带宽优化：把 activation `d_real/d_imag` 的 `scales` 从“每 group 一份”改为“每 block 一份”（1 个 block 内 86 个 group 共享），显著减少 `scales` 读写与工作区占用。
+   - 已完成一项结构性带宽优化：把原本的 `4×64 int16` per-group pattern LUT 压缩为 **`3×4×4 int8`（48B/group）**（`GGML_IFAIRY_LUT_LAYOUT=compact`），并在 NEON 下用 32-bit load（4B）做 position 查表 + 整数累加（`vqtbl` 版本曾尝试但在 M4 上不占优，暂不作为默认实现）。
    - 已完成一项低风险算术/带宽优化：在 `qgemm/accum4` 内先按 block 累加 `int32` 的 `{ac,ad,bc,bd}`，再做一次 `float` 转换与缩放（减少 per-group 的 `vcvt + mul`）。
-   - 从 `4×64 int16` correctness-first 结构，演进到更紧凑的布局（例如 “16 canonical + factor” 等方向），降低 `lut/scales/indexes` 的带宽压力与 cache miss。
-   - 备注：若要推进 “16 canonical + factor”，需要配合 **int8 LUT + `vqtbl` 查表/整数累加** 的整体重构；单纯在当前 float 累加框架里增加 canonical 变换通常会带来额外 shuffle/分支而变慢。
+   - 下一步（更激进）：在不破坏 `w * conj(x)` 语义的前提下，进一步减少 per-group 的指令数（例如把 3 次 position 查表的开销通过 unroll/流水化隐藏，或探索更“共享 LUT”的 canonical 方案）。
 
 3) **索引生命周期/缓存策略升级（工程化与复用）**  
    - 已完成：`ggml_ifairy_lut_transform_tensor()` 把索引缓冲改为使用 `ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), ...)` 分配，并缓存到全局 map（key: `{data ptr, nbytes, k, rows}`），同一份权重 data（含 view/复用场景）只生成一次索引。
@@ -182,7 +206,7 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 
 ## 5. 进一步性能提升路线图（参考 `BitNet/docs/lut-arm.md`）
 
-`BitNet/docs/lut-arm.md` 的 ARM LUT 实现有几个很“工程化”的性能关键点：**int8 QLUT + `vqtbl` 查表**、**int32 累加**、**更少的 scale/元数据**、以及（在它的约束下）**对固定形状做专用内核**。iFairy 这条 3-weight LUT 路径虽然语义/布局不同，但可以借鉴同样的方向来继续提速。
+`BitNet/docs/lut-arm.md` 的 ARM LUT 实现有几个很“工程化”的性能关键点：**int8 QLUT + `vqtbl` 查表**、**int32 累加**、**更少的 scale/元数据**、以及（在它的约束下）**对固定形状做专用内核**。（iFairy 的 `compact` 布局当前用 32-bit load 查表；`vqtbl` 版本曾尝试但在 M4 上更慢。）iFairy 这条 3-weight LUT 路径虽然语义/布局不同，但可以借鉴同样的方向来继续提速。
 
 ### 5.1 BitNet ARM LUT 的关键做法（可借鉴的点）
 
@@ -194,9 +218,9 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 
 ### 5.2 映射到 iFairy：优先级最高的提升方向
 
-1) **把“64-pattern × 4ch × int16” LUT 进一步压缩到“int8 + `vqtbl` 可查”的形态**  
-   - 当前瓶颈本质上是：每个 group 都要从较大的 `4×64×int16` 表里做多次 load（属于“cache/bandwidth + load-use latency”型）。  
-   - 下一步可以把现有的 “`16 canonical + factor`” 思路工程化：让运行时查表落在 `16-entry`（或 `2×16`/`4×16`）的 byte LUT 上，然后用 `vqtbl` 做向量化查表 + `vdot`/整数 MAC（取决于具体拆分方式）。这基本是 BitNet TL1 的核心吞吐来源。
+1) **已完成：把“64-pattern × 4ch × int16” LUT 压缩到 `compact int8` 的形态（`48B/group`）**  
+   - 通过“3 个 position 的可加性分解”（每个 code 只对 `{ac,ad}` 或 `{bc,bd}` 贡献 ±x），把 per-group LUT 从 `512B` 降到 `48B`。
+   - `compact` 的 NEON 热路径当前用 32-bit load（4B）做 position 查表 + `int32` 累加；`vqtbl` 版本曾尝试但在 M4 上不占优。
 
 2) **进一步降低 `preprocess` 的开销与同步频率（让 tiling 更稳定地赢）**  
    - 继续沿着当前 `FULLACC` 的方向，把 “一份 LUT / 多次消费” 做到更彻底：减少 barrier 次数、减少重复构表、把构表做成对 `K-tile` 的 pipeline（例如线程 0 预取/构表下一 tile，其余线程消费上一 tile）。
@@ -212,6 +236,6 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 
 ### 5.3 建议的推进顺序（避免做无用功）
 
-1) 先把 **“int8 + vqtbl” 可行的 LUT 压缩方案**做出一个 correctness 版本（严格对照 + 单测覆盖），明确误差与内存/速度收益。  
+1) 先把 **`compact int8` LUT 压缩方案**做出一个 correctness 版本（严格对照 + 单测覆盖），明确误差与内存/速度收益。  
 2) 再把它接入现有 `BK/BM/FULLACC` 框架，跑 sweep 找稳定配置，并用 `llama-cli` 固定 prompt/seed 记录 tok/s。  
 3) 最后再决定是否要走 BitNet 那种“形状专用内核”的路线（收益高，但维护成本也高）。

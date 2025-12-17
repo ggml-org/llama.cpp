@@ -33,16 +33,15 @@ extract_tok_s() {
       if (match($0, /[0-9.]+[[:space:]]+tokens per second/)) {
         s = substr($0, RSTART, RLENGTH)
         gsub(/[[:space:]]+tokens per second/, "", s)
-        print s
-        exit
+        val = s
       }
       if (match($0, /[0-9.]+[[:space:]]+tok\/s/)) {
         s = substr($0, RSTART, RLENGTH)
         gsub(/[[:space:]]+tok\/s/, "", s)
-        print s
-        exit
+        val = s
       }
     }
+    END { if (val != "") print val }
   '
 }
 

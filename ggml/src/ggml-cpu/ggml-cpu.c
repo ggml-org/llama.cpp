@@ -1297,7 +1297,12 @@ void ggml_compute_forward_mul_mat(
         const int64_t groups_tile = blocks_tile * groups_per_block;
 
         const size_t quant_bytes = src1->type == GGML_TYPE_F32 ? GGML_PAD((size_t) N * (size_t) blocks_per_col * sizeof(block_ifairy_q16), 64) : 0;
-        const size_t lut_bytes   = (size_t) N * (size_t) groups_tile * (size_t) (4 * 64) * sizeof(int16_t);
+        const char * layout_env = getenv("GGML_IFAIRY_LUT_LAYOUT");
+        const bool lut_legacy = !(layout_env && strcmp(layout_env, "compact") == 0);
+
+        const size_t lut_bytes = lut_legacy
+                ? (size_t) N * (size_t) groups_tile * (size_t) (4 * 64) * sizeof(int16_t)
+                : (size_t) N * (size_t) groups_tile * (size_t) (3 * 4 * 4) * sizeof(int8_t);
         // activation scales are per-block (shared by all groups in the block)
         const size_t scale_bytes = (size_t) N * (size_t) blocks_tile * 2 * sizeof(float);
         const size_t shared_lut_bytes = GGML_PAD(lut_bytes + scale_bytes, 64);
@@ -1334,7 +1339,7 @@ void ggml_compute_forward_mul_mat(
             block_ifairy_q16 * act_q = src1->type == GGML_TYPE_F32 ? (block_ifairy_q16 *) work : NULL;
 
             uint8_t * shared = work + quant_bytes;
-            int8_t * lut = (int8_t *) shared;
+            void * lut = (void *) shared;
             float * scales = (float *) (shared + lut_bytes);
 
             float * acc_all = acc_bytes > 0 ? (float *) (shared + shared_lut_bytes) : NULL;
