@@ -10,7 +10,7 @@
 	import type { Root as HastRoot, RootContent as HastRootContent } from 'hast';
 	import type { Root as MdastRoot } from 'mdast';
 	import { browser } from '$app/environment';
-	import { onDestroy } from 'svelte';
+	import { onDestroy, tick } from 'svelte';
 	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
 	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 	import { copyCodeToClipboard, preprocessLaTeX } from '$lib/utils';
@@ -407,6 +407,7 @@
 		}
 
 		renderedBlocks = nextBlocks;
+		await tick(); // Force DOM sync before updating unstable HTML block
 		unstableBlockHtml = unstableHtml;
 	}
 
