@@ -995,11 +995,10 @@ class ChatStore {
 				);
 				await conversationsStore.updateCurrentNode(newMessage.id);
 			} else {
-				await DatabaseService.updateMessage(msg.id, { content: newContent, timestamp: Date.now() });
+				await DatabaseService.updateMessage(msg.id, { content: newContent });
 				await conversationsStore.updateCurrentNode(msg.id);
 				conversationsStore.updateMessageAtIndex(idx, {
-					content: newContent,
-					timestamp: Date.now()
+					content: newContent
 				});
 			}
 			conversationsStore.updateConversationTimestamp();
@@ -1009,7 +1008,11 @@ class ChatStore {
 		}
 	}
 
-	async editUserMessagePreserveResponses(messageId: string, newContent: string): Promise<void> {
+	async editUserMessagePreserveResponses(
+		messageId: string,
+		newContent: string,
+		newExtras?: DatabaseMessageExtra[]
+	): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv) return;
 
@@ -1018,11 +1021,18 @@ class ChatStore {
 		const { message: msg, index: idx } = result;
 
 		try {
-			await DatabaseService.updateMessage(messageId, {
-				content: newContent,
-				timestamp: Date.now()
-			});
-			conversationsStore.updateMessageAtIndex(idx, { content: newContent, timestamp: Date.now() });
+			const updateData: Partial<DatabaseMessage> = {
+				content: newContent
+			};
+
+			// Update extras if provided (including empty array to clear attachments)
+			// Deep clone to avoid Proxy objects from Svelte reactivity
+			if (newExtras !== undefined) {
+				updateData.extra = JSON.parse(JSON.stringify(newExtras));
+			}
+
+			await DatabaseService.updateMessage(messageId, updateData);
+			conversationsStore.updateMessageAtIndex(idx, updateData);
 
 			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
@@ -1040,7 +1050,11 @@ class ChatStore {
 		}
 	}
 
-	async editMessageWithBranching(messageId: string, newContent: string): Promise<void> {
+	async editMessageWithBranching(
+		messageId: string,
+		newContent: string,
+		newExtras?: DatabaseMessageExtra[]
+	): Promise<void> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv || this.isLoading) return;
 
@@ -1062,6 +1076,15 @@ class ChatStore {
 			const parentId = msg.parent || rootMessage?.id;
 			if (!parentId) return;
 
+			// Use newExtras if provided, otherwise copy existing extras
+			// Deep clone to avoid Proxy objects from Svelte reactivity
+			const extrasToUse =
+				newExtras !== undefined
+					? JSON.parse(JSON.stringify(newExtras))
+					: msg.extra
+						? JSON.parse(JSON.stringify(msg.extra))
+						: undefined;
+
 			const newMessage = await DatabaseService.createMessageBranch(
 				{
 					convId: msg.convId,
@@ -1072,7 +1095,7 @@ class ChatStore {
 					thinking: msg.thinking || '',
 					toolCalls: msg.toolCalls || '',
 					children: [],
-					extra: msg.extra ? JSON.parse(JSON.stringify(msg.extra)) : undefined,
+					extra: extrasToUse,
 					model: msg.model
 				},
 				parentId
