@@ -14,6 +14,12 @@ struct ifairy_lut_extra {
     ggml_backend_buffer_t index_buffer;
 };
 
+// Compact LUT layout details.
+//
+// One (col, group) stores 3 positions × 4 codes × 4 channels × int8 = 48 bytes.
+#define GGML_IFAIRY_LUT_COMPACT_GROUP_PAYLOAD_BYTES ((size_t) 48)
+#define GGML_IFAIRY_LUT_COMPACT_GROUP_BYTES         ((size_t) 48)
+
 // iFairy 3-weight LUT API
 //
 // Current state:
@@ -22,7 +28,8 @@ struct ifairy_lut_extra {
 // - Index encoding is direct 6-bit pattern per 3 weights: pat = c0 | (c1<<2) | (c2<<4).
 // - Two LUT layouts are supported (selected by env `GGML_IFAIRY_LUT_LAYOUT=auto|legacy|compact`):
 //   - legacy : 4x64 int16 tables per group (fast for small N, larger workspace)
-//   - compact: int8 "3 positions × 4 codes × 4 channels" tables per group (48 B / group), NEON uses 32-bit loads + widen
+//   - compact: int8 "3 positions × 4 codes × 4 channels" tables per group (48 B / group),
+//              NEON uses 32-bit loads + widen
 
 void   ggml_ifairy_lut_init(void);
 void   ggml_ifairy_lut_free(void);

@@ -87,7 +87,9 @@ static const int k_ifairy_lut_codes     = 4;
 static const int k_ifairy_lut_channels  = 4;
 
 static const size_t k_ifairy_lut_pos_bytes   = (size_t) k_ifairy_lut_codes    * (size_t) k_ifairy_lut_channels;  // 16
-static const size_t k_ifairy_lut_group_bytes = 3 * k_ifairy_lut_pos_bytes; // 48
+// Compact layout per-group payload is 3 * 16B = 48B.
+static const size_t k_ifairy_lut_group_bytes = GGML_IFAIRY_LUT_COMPACT_GROUP_BYTES;
+static_assert(k_ifairy_lut_group_bytes >= 3 * k_ifairy_lut_pos_bytes, "compact LUT group size must fit 3 position tables");
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
 // wr(code) / wi(code) coefficients for all 64 3-weight patterns (direct 6-bit encoding).
@@ -1576,7 +1578,6 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
         for (int col = 0; col < n; ++col) {
             const int8_t * lut_base = (const int8_t *) ((const uint8_t *) lut + (size_t) col * (size_t) groups * k_ifairy_lut_group_bytes);
             const float * scales = (const float *) lut_scales + (size_t) col * (size_t) blocks * 2;
-            const block_ifairy_q16 * act_blocks = act ? (const block_ifairy_q16 *) ((const uint8_t *) act + (size_t) col * act_stride) : NULL;
 
             float acc_ac_xr = 0.0f;
             float acc_ad_xi = 0.0f;
@@ -1803,7 +1804,8 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
             }
 
             if (strict) {
-                GGML_ASSERT(act_blocks != NULL);
+                GGML_ASSERT(act != NULL);
+                const block_ifairy_q16 * act_blocks = (const block_ifairy_q16 *) ((const uint8_t *) act + (size_t) col * act_stride);
                 double ref_ac_xr = 0.0;
                 double ref_ad_xi = 0.0;
                 double ref_bc_xr = 0.0;

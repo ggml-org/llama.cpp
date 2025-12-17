@@ -63,6 +63,8 @@
 | 2025-12-17T14:20:20Z | `0aeaa6c9` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 4.75 |
 | 2025-12-17T14:57:00Z | `0aeaa6c9+dirty` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 4.13 |
 | 2025-12-17T14:58:30Z | `0aeaa6c9+dirty` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 3.17 |
+| 2025-12-17T17:50:33Z | `a785693e+dirty` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 8.21 |
+| 2025-12-17T17:50:33Z | `a785693e+dirty` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 7.10 |
 
 ## 0.2 Xcode Profile（以 decode 场景为准）
 
@@ -262,6 +264,8 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 
 - 修复 strict 验证误报：legacy `qgemm_ex` 的 strict reference 之前用错了 `ifairy` 权重 bit-pack 解码（导致 `GGML_IFAIRY_LUT_VALIDATE_STRICT=1` 直接断言失败）；已修正为与 `ggml-quants.c`/单测一致的 `chunk/lane/part` 解码。
 - compact decode 优化尝试：为 `GGML_IFAIRY_LUT_LAYOUT=compact` 增加 `N==1` fast-path，并把 group 循环改为 4-way unroll（交错 `isum0/isum1`）。当前 sanity 输出正常、单测与 strict 全通过；但 tok/s 仍未回升到预期（见 0.1 最新两条记录）。
+- 工程健壮性：把 `compact` 的 group bytes 统一为头文件常量 `GGML_IFAIRY_LUT_COMPACT_GROUP_BYTES`，并在 `ggml-cpu.c` 加入 `GGML_ASSERT(need == ggml_ifairy_lut_get_wsize(...))`，避免工作区切分公式漂移导致的 silent memory corruption。
+- 小幅 hot-path 清理：`ggml_ifairy_lut_qgemm_ex` 的非 strict 路径不再计算 `act_blocks` 指针（strict 才需要 reference 对照）。
 
 2) **降低 `ggml_graph_compute_thread` 的框架开销（24%）**  
    - 目标：减少同步与小 kernel 调度开销，让更多时间落在“有效算术”上

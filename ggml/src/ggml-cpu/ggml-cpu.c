@@ -1302,7 +1302,7 @@ void ggml_compute_forward_mul_mat(
 
         const size_t lut_bytes = lut_legacy
                 ? (size_t) N * (size_t) groups_tile * (size_t) (4 * 64) * sizeof(int16_t)
-                : (size_t) N * (size_t) groups_tile * (size_t) (3 * 4 * 4) * sizeof(int8_t);
+                : (size_t) N * (size_t) groups_tile * (size_t) GGML_IFAIRY_LUT_COMPACT_GROUP_BYTES;
         // activation scales are per-block (shared by all groups in the block)
         const size_t scale_bytes = (size_t) N * (size_t) blocks_tile * 2 * sizeof(float);
         const size_t shared_lut_bytes = GGML_PAD(lut_bytes + scale_bytes, 64);
@@ -1330,6 +1330,10 @@ void ggml_compute_forward_mul_mat(
         const size_t shared_bytes = shared_lut_bytes + acc_bytes;
         const size_t tmp_bytes = GGML_PAD((size_t) (tile_blocks == 0 ? N : (fullacc ? 16 : (bm * 4 * N))) * sizeof(float), 64);
         const size_t need = quant_bytes + shared_bytes + tmp_bytes * (size_t) nth;
+
+        // Keep the workspace layout calculation consistent with the helper used by higher-level allocators.
+        // Any drift here risks silent memory corruption.
+        GGML_ASSERT(need == ggml_ifairy_lut_get_wsize(src0, src1, dst, nth));
 
         if (have_index && params->wdata && params->wsize >= need && shared_bytes > 0 && tmp_bytes > 0) {
             const struct ifairy_lut_extra * extra = (const struct ifairy_lut_extra *) src0->extra;

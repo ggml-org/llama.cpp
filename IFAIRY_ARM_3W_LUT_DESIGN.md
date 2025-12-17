@@ -119,7 +119,7 @@ groups_per_row = (K / 256) * 86
 grp[pos][code][ch]  // pos ∈ {0,1,2}, code ∈ [0,3], ch ∈ [0,3]
 ```
 
-总大小：`3 * 4 * 4 = 48 bytes / group / col`。
+总大小：`3 * 4 * 4 = 48 bytes / group / col`（实现中用头文件常量 `GGML_IFAIRY_LUT_COMPACT_GROUP_BYTES` 统一该字节数，避免工作区切分与内核实现漂移）。
 
 NEON 内核里对每个 group 只需要：
 
@@ -213,4 +213,3 @@ P2（持续）：
 
 - `scripts/ifairy_3w_lut_enum.py`
 - 该脚本应与运行时一致地使用 `pat = c0 | (c1 << 2) | (c2 << 4)` 的 bit 顺序。
-
