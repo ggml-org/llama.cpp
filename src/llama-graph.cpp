@@ -2195,7 +2195,7 @@ void llm_graph_context::build_sampling() const {
     for (const auto & [seq_id, sampler] : samplers) {
         const auto it = seq_to_logit_row.find(seq_id);
 
-        // inactive samplers alawys work on the first row
+        // inactive samplers always work on the first row
         const auto row_idx = seq_to_logit_row.find(seq_id) != seq_to_logit_row.end() ? it->second : 0;
 
         ggml_tensor * logits_seq = ggml_view_1d(ctx0, logits_t, logits_t->ne[0], row_idx * logits_t->nb[1]);
