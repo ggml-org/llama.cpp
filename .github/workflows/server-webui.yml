@@ -57,48 +57,48 @@ jobs:
         working-directory: tools/server/webui
 
       - name: Run type checking
-        if: ${{ steps.setup.conclusion == 'success' }}
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run check
         working-directory: tools/server/webui
 
       - name: Run linting
-        if: ${{ steps.setup.conclusion == 'success' }}
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run lint
         working-directory: tools/server/webui
 
       - name: Build application
-        if: ${{ steps.setup.conclusion == 'success' }}
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run build
         working-directory: tools/server/webui
 
       - name: Install Playwright browsers
         id: playwright
-        if: ${{ steps.setup.conclusion == 'success' }}
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npx playwright install --with-deps
         working-directory: tools/server/webui
 
       - name: Build Storybook
-        if: ${{ steps.playwright.conclusion == 'success' }}
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run build-storybook
         working-directory: tools/server/webui
 
       - name: Run Client tests
-        if: ${{ steps.playwright.conclusion == 'success' }}
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:client
         working-directory: tools/server/webui
 
       - name: Run Unit tests
-        if: ${{ steps.playwright.conclusion == 'success' }}
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:unit
         working-directory: tools/server/webui
 
       - name: Run UI tests
-        if: ${{ steps.playwright.conclusion == 'success' }}
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:ui -- --testTimeout=60000
         working-directory: tools/server/webui
 
       - name: Run E2E tests
-        if: ${{ steps.playwright.conclusion == 'success' }}
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:e2e
         working-directory: tools/server/webui
 
