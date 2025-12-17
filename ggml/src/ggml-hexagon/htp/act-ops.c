@@ -286,60 +286,20 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
         return;
     }
 
-    int is_aligned = 1;
-    int opt_path   = 0;
-    if (!htp_is_aligned((void *) src0->data, VLEN) || !htp_is_aligned((void *) dst->data, VLEN)) {
-        is_aligned = 0;
-        FARF(HIGH, "silu-f32: unaligned addresses in elementwise op, possibly slower execution\n");
-    }
-    if ((1 == is_aligned) && !(nb01 & (VLEN - 1))) {
-        opt_path = 1;
-    }
 
     const uint8_t *  data_src0 = (const uint8_t *) src0->data;
     uint8_t *  data_dst        = (uint8_t *) dst->data;
 
 
 
-
-
-
-
     // While given src0_spad->size_per_thread, divide it to  two ping-pong buffer for src0
     size_t src0_size_per_pingpong = src0_spad->size_per_thread / 2;
+    size_t dst_size_per_pingpong  = dst_spad->size_per_thread / 2;
 
     uint8_t *  src0_spad_data_ping = src0_spad->data + (ith * (src0_spad->size_per_thread)); 
     uint8_t *  src0_spad_data_pong = src0_spad_data_ping  + src0_size_per_pingpong;
-    uint8_t *  dst_spad_data  = dst_spad->data + (ith * dst_spad->size_per_thread);
-
-    // const int BLOCK = 8;
-    // for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
-    //     const uint32_t block_end = MIN(ir + BLOCK, src0_end_row);
-
-    //     // Prefetch next block
-    //     if (block_end < src0_end_row) {
-    //         const float * restrict prefetch_ptr = (float *) (data_src0 + (block_end * src0_row_size));
-    //         htp_l2fetch(prefetch_ptr, 1, block_end * src0_row_size, src0_row_size);
-    //     }
-
-    //     // Process rows in current block
-    //     for (uint32_t ib = ir; ib < block_end; ib++) {
-    //         const float * restrict src0 = (float *) (data_src0 + (ib * src0_row_size));
-    //         float * restrict dst        = (float *) (data_dst + (ib * dst_row_size));
-
-    //         // gelu = x * sigmoid(1.702 * x) // current implementation
-    //         if (1 == opt_path) {
-    //             hvx_mul_scalar_f32((const uint8_t *) src0, (float) 1.702, (uint8_t *) src0_spad_data, ne0);
-    //             hvx_fast_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
-    //             hvx_mul_f32_opt((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
-    //         } else {
-    //             hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) src0_spad_data, ne0);
-    //             hvx_sigmoid_f32((const uint8_t *) src0_spad_data, (uint8_t *) src0_spad_data, ne0);
-    //             hvx_mul_f32((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
-    //         }
-    //     }
-    // }
-    
+    uint8_t *  dst_spad_data_ping  = dst_spad->data + (ith * dst_spad->size_per_thread);
+    uint8_t *  dst_spad_data_pong  = dst_spad_data_ping  + dst_size_per_pingpong;
 
     // Maybe should always go to the optimal path?
     // In gelu = x*sigmoid(x*1.702)
@@ -362,10 +322,8 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
         MIN(BLOCK, src0_end_row - src0_start_row)
         
     );
-    bool ping_pong_flag = true; // true means the program use ping data to compute, false means use pong data to compute
-
-
-
+    bool src0_ping_pong_flag = true; // true means the program use ping data to compute, false means use pong data to compute
+    bool dst_ping_pong_flag = true; // true means the program use ping data to compute, false means use pong data to compute
 
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
         const uint32_t block_end = MIN(ir + BLOCK, src0_end_row); // The start index of next block
@@ -373,10 +331,32 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
 
         const uint32_t next_block_size = MIN(BLOCK, src0_end_row - block_end);
 
+
+        float* cur_dst_spad_ptr;
+        const float * src0;
+        if(dst_ping_pong_flag){
+            cur_dst_spad_ptr = (float*)dst_spad_data_ping;
+        }else{
+            cur_dst_spad_ptr = (float*)dst_spad_data_pong;
+        }
+
+        if(src0_ping_pong_flag){
+            src0 = (float*)src0_spad_data_ping;
+        }else{
+            src0 = (float*)src0_spad_data_pong;
+        }
+
+        dma_queue_pop(dma_queue); // wait for dma done for the previous src0 fetch
+
+        // Wait for the previous dst push to complete before we can reuse the dst buffer
+        if(ir != src0_start_row){
+            dma_queue_pop(dma_queue); // wait for dma done for the previous dst push
+        }
+
         // prefetch next loop iteration if any
         
         if (next_block_size > 0) {
-            if(ping_pong_flag == false){
+            if(src0_ping_pong_flag == false){
 
                 dma_queue_push(dma_queue,   
                     src0_spad_data_ping, 
@@ -396,28 +376,53 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
                     next_block_size
                 );
             }
-            ping_pong_flag=!ping_pong_flag;
+            src0_ping_pong_flag=!src0_ping_pong_flag;
         }
-        const float * src0 = (float*)dma_queue_pop(dma_queue); 
+        
         for (uint32_t ib = ir; ib < block_end; ib++) {
-
-
-            float * restrict dst        = (float *) (data_dst + (ib * dst_row_size));
-
-            // // gelu = x * sigmoid(1.702 * x) // current implementation
-            // if (1 == opt_path) {
-            //     hvx_mul_scalar_f32((const uint8_t *) src0, (float) 1.702, (uint8_t *) dst_spad_data, ne0);
-            //     hvx_fast_sigmoid_f32((const uint8_t *) dst_spad_data, (uint8_t *) dst_spad_data, ne0);
-            //     hvx_mul_f32_opt((const uint8_t *) src0, dst_spad_data, (uint8_t *) dst, ne0);  //TODO: can dma push dst_spad_data back?
-            // } else {
-                hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) dst_spad_data, ne0);
-                hvx_sigmoid_f32((const uint8_t *) dst_spad_data, (uint8_t *) dst_spad_data, ne0);
-                hvx_mul_f32((const uint8_t *) src0, dst_spad_data, (uint8_t *) dst, ne0);
-            //}
+            // gelu = x * sigmoid(1.702 * x) // current implementation
+            hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) cur_dst_spad_ptr, ne0);
+            hvx_fast_sigmoid_f32((const uint8_t *) cur_dst_spad_ptr, (uint8_t *) cur_dst_spad_ptr, ne0);
+            hvx_mul_f32_opt((const uint8_t *) src0, (uint8_t *) cur_dst_spad_ptr, (uint8_t *) cur_dst_spad_ptr, ne0);
+    
 
             src0 +=  src0_row_size_aligned/sizeof(float); // Move to next row
+            cur_dst_spad_ptr+= dst_row_size_aligned/sizeof(float);
         }
+
+
+        float * restrict out_dst  = (float *) (data_dst + (ir * dst_row_size));
+
+        if(dst_ping_pong_flag){
+            dma_queue_push_width(dma_queue,   
+                out_dst,
+                dst_spad_data_ping,
+                dst_row_size,         // dst stride in DDR (actual row size)
+                dst_row_size_aligned, // src stride in VTCM (aligned)
+                dst_row_size,         // width
+                (block_end - ir)
+            );
+        }else{
+            dma_queue_push_width(dma_queue,   
+                out_dst,
+                dst_spad_data_pong,
+                dst_row_size,         // dst stride in DDR (actual row size)
+                dst_row_size_aligned, // src stride in VTCM (aligned)
+                dst_row_size,         // width
+                (block_end - ir)
+            );
+        }
+
+
+        if(ir != src0_start_row){
+            dma_queue_pop(dma_queue); // wait for dma done for the previous dst push
+        }
+        // else is the first block,nothing to wait for dst push 
+
+        dst_ping_pong_flag = !dst_ping_pong_flag;
     }
+
+    dma_queue_pop(dma_queue); // wait for dma done for the last dst push
 
     t2 = HAP_perf_get_qtimer_count();
 
@@ -562,7 +567,7 @@ static int execute_op_activations_fp32(struct htp_ops_context * octx) {
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
 
     const size_t src0_row_size = src0->nb[1];
-    const size_t src1_row_size = src1->ne[0] ? src1->nb[1] : 0; // zero bytes if src1 is not used
+    const size_t src1_row_size = src1->ne[0] > 0 ? src1->nb[1] : 0; // zero bytes if src1 is not used
     const size_t dst_row_size  = dst->nb[1];
 
 

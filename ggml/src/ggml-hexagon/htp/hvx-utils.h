@@ -980,7 +980,7 @@ static inline void hvx_fast_sigmoid_f32(const uint8_t * restrict src, uint8_t * 
     int step_of_1 = num_elems >> 5;
     int remaining = num_elems - step_of_1 * VLEN_FP32;
 
-    assert(remaining == 0);
+ 
 
     const HVX_Vector * restrict v_src = (HVX_Vector *) src;
     HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
@@ -995,6 +995,15 @@ static inline void hvx_fast_sigmoid_f32(const uint8_t * restrict src, uint8_t * 
     #pragma unroll(4)
     for (int i = 0; i < step_of_1; i++) {
         v_dst[i] = hvx_vec_fast_sigmoid_fp32_guard(v_src[i], one, max_exp, min_exp);
+    }
+
+    if(remaining > 0) {
+        const float * srcf = ((const float *) src) + step_of_1* VLEN_FP32;
+        float *       dstf = (float *) dst + step_of_1*VLEN_FP32;
+
+        HVX_Vector in = *(HVX_UVector *) srcf;
+        HVX_Vector out =hvx_vec_fast_sigmoid_fp32_guard(in, one, max_exp, min_exp);
+        hvx_vec_store_u((void *) dstf, remaining * SIZEOF_FP32, out);
     }
 }
 

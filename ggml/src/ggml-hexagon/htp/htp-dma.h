@@ -49,11 +49,12 @@ static inline unsigned int dmwait(void) {
     return ret;
 }
 
-static inline bool dma_queue_push(dma_queue *  q,
+static inline bool dma_queue_push_width(dma_queue *  q,
                                   void *       dst,
                                   const void * src,
                                   size_t       dst_row_size,
                                   size_t       src_row_size,
+                                  size_t       width,
                                   size_t       nrows) {
     if (((q->push_idx + 1) & q->idx_mask) == q->pop_idx) {
         return false;
@@ -79,7 +80,7 @@ static inline bool dma_queue_push(dma_queue *  q,
     desc->dst            = (void *) dst;
     desc->allocation     = 0;
     desc->padding        = 0;
-    desc->roiwidth       = src_row_size;
+    desc->roiwidth       = width;
     desc->roiheight      = nrows;
     desc->srcstride      = src_row_size;
     desc->dststride      = dst_row_size;
@@ -94,6 +95,15 @@ static inline bool dma_queue_push(dma_queue *  q,
     // FARF(ERROR, "dma-push: i %u len %u dst %p src %p\n", q->push_idx, len, dst, src);
     q->push_idx = (q->push_idx + 1) & q->idx_mask;
     return true;
+}
+
+static inline bool dma_queue_push(dma_queue *  q,
+                                  void *       dst,
+                                  const void * src,
+                                  size_t       dst_row_size,
+                                  size_t       src_row_size,
+                                  size_t       nrows) {
+    return dma_queue_push_width(q, dst, src, dst_row_size, src_row_size, src_row_size, nrows);
 }
 
 static inline uint8_t * dma_queue_pop(dma_queue * q) {
