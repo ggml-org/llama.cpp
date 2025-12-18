@@ -1,12 +1,12 @@
 // Benchmark quantization specific functions on synthetic data
 
 #include "ggml.h"
+#include "ggml-cpu.h"
 
 #undef NDEBUG
 #include <algorithm>
 #include <assert.h>
 #include <functional>
-#include <inttypes.h>
 #include <math.h>
 #include <memory>
 #include <stdio.h>
@@ -122,9 +122,10 @@ static void usage(char * argv[]) {
     printf("  --type TYPE           set test type as");
     for (int i = 0; i < GGML_TYPE_COUNT; i++) {
         ggml_type type = (ggml_type) i;
-        ggml_type_traits_t qfns = ggml_internal_get_type_traits(type);
+        const auto * qfns     = ggml_get_type_traits(type);
+        const auto * qfns_cpu = ggml_get_type_traits_cpu(type);
         if (ggml_type_name(type) != NULL) {
-            if (qfns.from_float && qfns.to_float) {
+            if (qfns_cpu->from_float && qfns->to_float) {
                 printf(" %s", ggml_type_name(type));
             }
         }
@@ -259,31 +260,27 @@ int main(int argc, char * argv[]) {
 
     int64_t iterations = params.iterations;
 
-
-    // Initialize GGML, ensures float conversion tables are initialized
-    struct ggml_init_params ggml_params = {
-        /* .mem_size   = */ 1*1024,
-        /* .mem_buffer = */ NULL,
-        /* .no_alloc   = */ true,
-    };
-    struct ggml_context * ctx = ggml_init(ggml_params);
+    ggml_cpu_init();
 
     for (int i = 0; i < GGML_TYPE_COUNT; i++) {
         ggml_type type = (ggml_type) i;
-        ggml_type_traits_t qfns = ggml_internal_get_type_traits(type);
+        const auto * qfns = ggml_get_type_traits(type);
+        const auto * qfns_cpu = ggml_get_type_traits_cpu(type);
         if (!params.include_types.empty() && ggml_type_name(type) && std::find(params.include_types.begin(), params.include_types.end(), ggml_type_name(type)) == params.include_types.end()) {
             continue;
         }
 
-        if (qfns.from_float && qfns.to_float) {
+        if (qfns_cpu->from_float && qfns->to_float) {
             printf("%s\n", ggml_type_name(type));
+
+            ggml_quantize_init(type);
 
             if (params.op_quantize_row_q_reference) {
                 printf("  quantize_row_q_reference\n");
                 for (size_t size : params.test_sizes) {
                     printf("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
                     auto quantize_fn = [&](void) -> float {
-                        qfns.from_float_reference(test_data1, test_q1, size);
+                        qfns->from_float_ref(test_data1, test_q1, size);
                         return test_q1[0];
                     };
                     size_t quantized_size = ggml_row_size(type, size);
@@ -297,7 +294,7 @@ int main(int argc, char * argv[]) {
                 for (size_t size : params.test_sizes) {
                     printf("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
                     auto quantize_fn = [&](void) -> float {
-                        qfns.from_float(test_data1, test_q1, size);
+                        qfns_cpu->from_float(test_data1, test_q1, size);
                         return test_q1[0];
                     };
                     size_t quantized_size = ggml_row_size(type, size);
@@ -308,11 +305,11 @@ int main(int argc, char * argv[]) {
 
             if (params.op_dequantize_row_q) {
                 printf("  dequantize_row_q\n");
-                qfns.from_float(test_data1, test_q1, largest);
+                qfns_cpu->from_float(test_data1, test_q1, largest);
                 for (size_t size : params.test_sizes) {
                     printf("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
                     auto quantize_fn = [&](void) -> float {
-                        qfns.to_float(test_q1, test_out, size);
+                        qfns->to_float(test_q1, test_out, size);
                         return test_out[0];
                     };
                     size_t quantized_size = ggml_row_size(type, size);
@@ -326,8 +323,8 @@ int main(int argc, char * argv[]) {
                 for (size_t size : params.test_sizes) {
                     printf("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
                     auto quantize_fn = [&](void) -> float {
-                        auto vdot = ggml_internal_get_type_traits(qfns.vec_dot_type);
-                        vdot.from_float(test_data1, test_q1, size);
+                        const auto * vdot = ggml_get_type_traits_cpu(qfns_cpu->vec_dot_type);
+                        vdot->from_float(test_data1, test_q1, size);
                         return test_q1[0];
                     };
                     size_t quantized_size = ggml_row_size(type, size);
@@ -338,13 +335,13 @@ int main(int argc, char * argv[]) {
 
             if (params.op_vec_dot_q) {
                 printf("  vec_dot_q\n");
-                qfns.from_float(test_data1, test_q1, largest);
-                qfns.from_float(test_data2, test_q2, largest);
+                qfns_cpu->from_float(test_data1, test_q1, largest);
+                qfns_cpu->from_float(test_data2, test_q2, largest);
                 for (size_t size : params.test_sizes) {
                     printf("    %zu values (%.2f MB)\n", size, 4*size/(float)(1024*1024));
                     auto quantize_fn = [&](void) -> float {
                         float result;
-                        qfns.vec_dot(size, &result, test_q1, test_q2);
+                        qfns_cpu->vec_dot(size, &result, 0, test_q1, 0, test_q2, 0, 1);
                         return result;
                     };
                     size_t quantized_size = ggml_row_size(type, size);
@@ -354,8 +351,6 @@ int main(int argc, char * argv[]) {
             }
         }
     }
-
-    ggml_free(ctx);
 
     return 0;
 }

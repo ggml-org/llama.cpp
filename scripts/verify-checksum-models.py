@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 
+import logging
 import os
 import hashlib
+
+logger = logging.getLogger("verify-checksum-models")
 
 
 def sha256sum(file):
@@ -27,7 +30,7 @@ hash_list_file = os.path.join(llama_path, "SHA256SUMS")
 
 # Check if the hash list file exists
 if not os.path.exists(hash_list_file):
-    print(f"Hash list file not found: {hash_list_file}")
+    logger.error(f"Hash list file not found: {hash_list_file}")
     exit(1)
 
 # Read the hash file content and split it into an array of lines
@@ -46,7 +49,7 @@ for line in hash_list:
     file_path = os.path.join(llama_path, filename)
 
     # Informing user of the progress of the integrity check
-    print(f"Verifying the checksum of {file_path}")
+    logger.info(f"Verifying the checksum of {file_path}")
 
     # Check if the file exists
     if os.path.exists(file_path):
@@ -73,9 +76,9 @@ for line in hash_list:
 
 
 # Print column headers for results table
-print("\n" + "filename".ljust(40) + "valid checksum".center(20) + "file missing".center(20))
-print("-" * 80)
+print("filename".ljust(40) + "valid checksum".center(20) + "file missing".center(20)) # noqa: NP100
+print("-" * 80) # noqa: NP100
 
 # Output the results as a table
 for r in results:
-    print(f"{r['filename']:40} {r['valid checksum']:^20} {r['file missing']:^20}")
+    print(f"{r['filename']:40} {r['valid checksum']:^20} {r['file missing']:^20}") # noqa: NP100

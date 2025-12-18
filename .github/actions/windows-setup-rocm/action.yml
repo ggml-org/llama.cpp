@@ -1,0 +1,15 @@
+name: "Windows - Setup ROCm"
+description: "Setup ROCm for Windows"
+inputs:
+  version:
+    description: "ROCm version"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup ROCm
+      uses: ./.github/actions/install-exe
+      with:
+        url: https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-${{ inputs.version }}-WinSvr2022-For-HIP.exe
+        args: -install

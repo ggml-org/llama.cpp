@@ -1,0 +1,51 @@
+name: Build relocatable cmake package
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential tcl
+
+      - name: Build
+        run: |
+          PREFIX="$(pwd)"/inst
+          cmake -S . -B build -DCMAKE_PREFIX_PATH="$PREFIX" \
+                -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF \
+                -DLLAMA_BUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+          cmake --install build --prefix "$PREFIX" --config Release
+
+          export LLAMA_CONFIG="$PREFIX"/lib/cmake/llama/llama-config.cmake
+          tclsh <<'EOF'
+          set build(commit)  [string trim [exec git rev-parse --short HEAD]]
+          set build(number)  [string trim [exec git rev-list  --count HEAD]]
+          set build(version) "0.0.$build(number)"
+
+          set llamaconfig [read [open "$env(LLAMA_CONFIG)" r]]
+          set checks [list "set\\(LLAMA_VERSION     \\s+$build(version)\\)" \
+                           "set\\(LLAMA_BUILD_COMMIT\\s+$build(commit)\\)" \
+                           "set\\(LLAMA_BUILD_NUMBER\\s+$build(number)\\)"]
+
+          puts -nonewline "Checking llama-config.cmake version... "
+          foreach check $checks {
+              if {![regexp -expanded -- $check $llamaconfig]} {
+                  puts "\"$check\" failed!"
+                  exit 1
+              }
+          }
+          puts "success."
+          EOF
+
+          cd examples/simple-cmake-pkg
+          cmake -S . -B build -DCMAKE_PREFIX_PATH="$PREFIX"/lib/cmake
+          cmake --build build

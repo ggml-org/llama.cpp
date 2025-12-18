@@ -1,0 +1,13 @@
+{
+  "name": "rotate-bits",
+  "version": "0.1.1",
+  "repo": "jb55/rotate-bits.h",
+  "description": "rotate bits",
+  "keywords": ["rotl", "rotr"],
+  "src": ["rotate-bits.h"],
+  "license": "Public Domain",
+  "development": {
+    "thlorenz/tap.c": "*"
+  }
+}
+

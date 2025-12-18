@@ -1,0 +1,216 @@
+/* Author: Yazan Agha-Schrader */
+/* Inspiration from llama.cpp logo/banner https://github.com/ggerganov/llama.cpp#readme */
+
+.theme-mangotango {
+
+--primary-color-1:      hsl(192, 8.5%, 11.6%);
+--primary-color-2:      hsl(192, 8.5%, 21%);
+--primary-color-3:      hsl(192, 8.5%, 30%);
+--primary-color-4:      hsl(192, 8.5%, 40%);
+
+--secondary-color-1:    hsl(192, 8.5%, 80%);
+--secondary-color-2:    hsl(192, 8.5%, 73%);
+--secondary-color-3:    hsl(192, 8.5%, 66%);
+--secondary-color-4:    hsl(192, 8.5%, 60%);
+
+--theme-nuance-color-1: hsl(23.1, 100%, 60.2%);
+--theme-nuance-color-2: hsl(23.1, 100%, 60.2%);
+--theme-nuance-color-3: hsl(23.1, 100%, 60.2%);
+--theme-nuance-color-4: hsl(23.1, 100%, 60.2%);
+
+
+
+/* ---------- PRIMARY COLORS ----------------- */
+--primary-color-1: hsl(192, 8.5%, 11.6%);
+    --primary-color-1-saturation: 8.5%;
+    --primary-color-1-lightness: 11.6%;
+
+--primary-color-2: hsl(192, 8.5%, 21%);
+    --primary-color-2-saturation: 8.5%;
+    --primary-color-2-lightness: 21%;
+
+--primary-color-3: hsl(192, 8.5%, 30%);
+    --primary-color-3-saturation: 8.5%;
+    --primary-color-3-lightness: 30%;
+
+--primary-color-4: hsl(192, 8.5%, 40%);
+    --primary-color-4-saturation: 8.5%;
+    --primary-color-4-lightness: 40%;
+
+
+
+/* ---------- SECONDARY COLORS --------------- */
+--secondary-color-1: hsl(192, 8.5%, 80%);
+    --secondary-color-1-saturation: 8.5%;
+    --secondary-color-1-lightness: 80%;
+
+--secondary-color-2: hsl(192, 8.5%, 73%);
+    --secondary-color-2-saturation: 8.5%;
+    --secondary-color-2-lightness: 73%;
+
+--secondary-color-3: hsl(192, 8.5%, 66%);
+    --secondary-color-3-saturation: 8.5%;
+    --secondary-color-3-lightness: 66%;
+
+--secondary-color-4: hsl(192, 8.5%, 60%);
+    --secondary-color-4-saturation: 8.5%;
+    --secondary-color-4-lightness: 60%;
+
+
+
+/* ----------- NUANCES COLORS ---------------- */
+--theme-nuance-color-1: hsl(23.1, 100%, 60.2%);
+    --theme-nuance-color-1-saturation: 100%;
+    --theme-nuance-color-1-lightness: 60.2%;
+
+--theme-nuance-color-2: hsl(23.1, 100%, 60.2%);
+    --theme-nuance-color-2-saturation: 100%;
+    --theme-nuance-color-2-lightness: 60.2%;
+
+--theme-nuance-color-3: hsl(23.1, 100%, 60.2%);
+    --theme-nuance-color-3-saturation: 100%;
+    --theme-nuance-color-3-lightness: 60.2%;
+
+--theme-nuance-color-4: hsl(23.1, 100%, 60.2%);
+    --theme-nuance-color-4-saturation: 100%;
+    --theme-nuance-color-4-lightness: 60.2%;
+
+
+
+/* ----------- ROYGP COLORS ------------------ */
+    --theme-red-color:     hsl(325, 60%, 50%);
+    --theme-orange-color:  #e76f51;
+    --theme-yellow-color:  #ffd95f;
+    --theme-green-color:   #A3BE8C;
+    --theme-blue-color:    hsl(192, 95%, 40%);
+    --theme-purple-color:  hsl(192, 80%, 35%);
+
+
+
+/* ------------------------------------------- */
+--background-color-1:    var(--primary-color-1);
+--background-color-2:    var(--primary-color-2);
+--background-color-3:    var(--primary-color-3);
+--background-color-4:    var(--primary-color-4);
+
+--border-color-1:        var(--primary-color-2);
+--border-color-2:        var(--primary-color-3);
+--border-color-3:        var(--primary-color-4);
+
+--border-focus-color:    var(--theme-nuance-color-2);
+--border-focus-shadow:   var(--theme-nuance-color-1);
+
+--text-color-plain:      var(--secondary-color-1);
+--text-color-subtile-1:  var(--secondary-color-2);
+--text-color-subtile-2:  var(--secondary-color-3);
+
+--code-background-color: var(--secondary-color-2);
+--code-text-color:       var(--primary-color-2);
+
+--ui-range-thumb-color:  var(--theme-nuance-color-3);
+--ui-range-thumb-border: var(--ui-ranger-thumb-color);
+
+--textarea-border-color: var(--secondary-color-4);
+
+--chat-id-color:         var(--theme-nuance-color-4);
+
+
+
+/* ------------------------------------------- */
+--button-alert-text-hover:       var(--secondary-color-1);
+--button-alert-color-hover:      var(--theme-purple-color);
+--button-alert-border-hover:     var(--theme-purple-color);
+
+--button-alert-text-active:      var(--secondary-color-1);
+--button-alert-color-active:     var(--theme-blue-color);
+--button-alert-border-active:    var(--theme-blue-color);
+
+
+
+/* ----------- PRIMARY BUTTONS --------------- */
+/* - button should immediately catch the eye - */
+--button-primary-text: var(--primary-color-1);
+--button-primary-color:  var(--theme-nuance-color-3);
+--button-primary-border: var(--theme-nuance-color-3);
+
+
+/* ---------hover---------- */
+--button-primary-text-hover:
+    hsl(192,
+    calc(var(--primary-color-1-saturation) - 100%),
+    calc(var(--primary-color-1-lightness)  + 100%));
+
+--button-primary-color-hover:
+    hsl(23.1,
+    calc(var(--theme-nuance-color-3-saturation) - 2%),
+    calc(var(--theme-nuance-color-3-lightness)  - 10%));
+
+--button-primary-border-hover:
+    hsl(23.1,
+    calc(var(--theme-nuance-color-3-saturation) - 2%),
+    calc(var(--theme-nuance-color-3-lightness)  - 10%));
+
+
+/* ---------active--------- */
+--button-primary-text-active:
+    hsl(23.1,
+    calc(var(--theme-nuance-color-3-saturation) - 100%),
+    calc(var(--theme-nuance-color-3-lightness)  + 100%));
+
+--button-primary-color-active:
+    hsl(23.1,
+    calc(var(--theme-nuance-color-3-saturation) - 10%),
+    calc(var(--theme-nuance-color-3-lightness)  - 15%));
+
+--button-primary-border-active:
+    hsl(23.1,
+    calc(var(--theme-nuance-color-3-saturation) - 2%),
+    calc(var(--theme-nuance-color-3-lightness)  + 10%));
+
+
+
+/* ---------- SECONDARY BUTTONS -------------- */
+/* these should NOT immediately catch the eye  */
+--button-secondary-text:   var(--secondary-color-1);
+--button-secondary-color:  var(--primary-color-3);
+--button-secondary-border: var(--primary-color-3);
+
+
+/* ---------hover---------- */
+--button-secondary-text-hover:
+    hsl(23.1,
+    calc(var(--theme-nuance-color-3-saturation) - 20%),
+    calc(var(--theme-nuance-color-3-lightness)  - 80%));
+
+--button-secondary-color-hover:  var(--primary-color-4);
+--button-secondary-border-hover: var(--primary-color-4);
+
+
+/* ---------active--------- */
+--button-secondary-text-active: var(--secondary-color-1);
+
+--button-secondary-color-active:
+    hsl(192,
+    calc(var(--primary-color-4-saturation) - 30%),
+    calc(var(--primary-color-4-lightness)  - 15%));
+
+--button-secondary-border-active:
+    hsl(192,
+    calc(var(--primary-color-4-saturation) - 30%),
+    calc(var(--primary-color-4-lightness)  - 15%));
+
+
+
+/* ---------- TERTIARY BUTTONS --------------- */
+/* ---------- disabled buttons --------------- */
+--button-tertiary-text:   var(--primary-color-4);
+--button-tertiary-color:  var(--primary-color-2);
+--button-tertiary-border: var(--primary-color-2);
+
+
+/* ---------hover---------- */
+--button-tertiary-text:   var(--primary-color-4);
+--button-tertiary-color:  var(--primary-color-2);
+--button-tertiary-border: var(--primary-color-2);
+
+}

@@ -1,0 +1,49 @@
+﻿{
+  "version": 4,
+  "configurePresets": [
+    {
+        "name": "arm64-android-snapdragon",
+        "hidden": true,
+        "architecture": { "value": "arm64",       "strategy": "external" },
+        "toolset":      { "value": "host=x86_64", "strategy": "external" },
+        "cacheVariables": {
+            "ANDROID_ABI":      "arm64-v8a",
+            "ANDROID_PLATFORM": "android-31",
+            "CMAKE_TOOLCHAIN_FILE": "$env{ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake",
+            "CMAKE_C_FLAGS":   "-march=armv8.7a+fp16 -fvectorize -ffp-model=fast -fno-finite-math-only -flto -D_GNU_SOURCE",
+            "CMAKE_CXX_FLAGS": "-march=armv8.7a+fp16 -fvectorize -ffp-model=fast -fno-finite-math-only -flto -D_GNU_SOURCE",
+            "CMAKE_C_FLAGS_RELEASE":          "-O3 -DNDEBUG",
+            "CMAKE_CXX_FLAGS_RELEASE":        "-O3 -DNDEBUG",
+            "CMAKE_C_FLAGS_RELWITHDEBINFO":   "-O3 -DNDEBUG -g",
+            "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O3 -DNDEBUG -g",
+            "HEXAGON_SDK_ROOT": "$env{HEXAGON_SDK_ROOT}",
+            "PREBUILT_LIB_DIR": "android_aarch64",
+            "GGML_OPENMP":      "OFF",
+            "GGML_LLAMAFILE":   "OFF",
+            "GGML_OPENCL":      "ON",
+            "GGML_HEXAGON":     "ON",
+            "LLAMA_CURL":       "OFF"
+        }
+    },
+
+    {
+        "name": "arm64-windows-snapdragon",
+        "inherits": [ "base", "arm64-windows-llvm" ],
+        "cacheVariables": {
+            "HEXAGON_SDK_ROOT": "$env{HEXAGON_SDK_ROOT}",
+            "PREBUILT_LIB_DIR": "windows_aarch64",
+            "GGML_OPENMP":      "OFF",
+            "GGML_LLAMAFILE":   "OFF",
+            "GGML_OPENCL":      "ON",
+            "GGML_HEXAGON":     "ON",
+            "LLAMA_CURL":       "OFF"
+        }
+    },
+
+    { "name": "arm64-android-snapdragon-debug"  , "inherits": [ "base", "arm64-android-snapdragon", "debug" ] },
+    { "name": "arm64-android-snapdragon-release", "inherits": [ "base", "arm64-android-snapdragon", "release" ] },
+
+    { "name": "arm64-windows-snapdragon-debug"  , "inherits": [ "base", "arm64-windows-snapdragon", "debug" ] },
+    { "name": "arm64-windows-snapdragon-release", "inherits": [ "base", "arm64-windows-snapdragon", "release" ] }
+  ]
+}

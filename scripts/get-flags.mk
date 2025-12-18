@@ -1,6 +1,6 @@
 ifeq '' '$(findstring clang,$(shell $(GF_CC) --version))'
 	GF_CC_IS_GCC = 1
-	GF_CC_VER := $(shell { $(GF_CC) -dumpfullversion 2>/dev/null || $(GF_CC) -dumpversion; } | awk -F. '{ printf("%02d%02d%02d", $$1, $$2, $$3) }')
+	GF_CC_VER := $(shell { $(GF_CC) -dumpfullversion 2>/dev/null; echo; $(GF_CC) -dumpversion; } | awk -F. '/./ { printf("%02d%02d%02d", $$1, $$2, $$3); exit }')
 else
 	GF_CC_IS_CLANG = 1
 	ifeq '' '$(findstring Apple,$(shell $(GF_CC) --version))'

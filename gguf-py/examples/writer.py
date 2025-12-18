@@ -15,7 +15,6 @@ def writer_example() -> None:
     # Example usage with a file
     gguf_writer = GGUFWriter("example.gguf", "llama")
 
-    gguf_writer.add_architecture()
     gguf_writer.add_block_count(12)
     gguf_writer.add_uint32("answer", 42)  # Write a 32-bit integer
     gguf_writer.add_float32("answer_in_float", 42.0)  # Write a 32-bit float

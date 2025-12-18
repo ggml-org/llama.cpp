@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
 
 # Read the first argument into a variable
@@ -8,36 +8,44 @@ arg1="$1"
 shift
 
 if [[ "$arg1" == '--convert' || "$arg1" == '-c' ]]; then
-    python3 ./convert.py "$@"
+    exec python3 ./convert_hf_to_gguf.py "$@"
 elif [[ "$arg1" == '--quantize' || "$arg1" == '-q' ]]; then
-    ./quantize "$@"
+    exec ./llama-quantize "$@"
 elif [[ "$arg1" == '--run' || "$arg1" == '-r' ]]; then
-    ./main "$@"
-elif [[ "$arg1" == '--finetune' || "$arg1" == '-f' ]]; then
-    ./finetune "$@"
+    exec ./llama-cli "$@"
+elif [[ "$arg1" == '--run-legacy' || "$arg1" == '-l' ]]; then
+    exec ./llama-completion "$@"
+elif [[ "$arg1" == '--bench' || "$arg1" == '-b' ]]; then
+    exec ./llama-bench "$@"
+elif [[ "$arg1" == '--perplexity' || "$arg1" == '-p' ]]; then
+    exec ./llama-perplexity "$@"
 elif [[ "$arg1" == '--all-in-one' || "$arg1" == '-a' ]]; then
     echo "Converting PTH to GGML..."
-    for i in `ls $1/$2/ggml-model-f16.bin*`; do
+    for i in $(ls $1/$2/ggml-model-f16.bin*); do
         if [ -f "${i/f16/q4_0}" ]; then
             echo "Skip model quantization, it already exists: ${i/f16/q4_0}"
         else
             echo "Converting PTH to GGML: $i into ${i/f16/q4_0}..."
-            ./quantize "$i" "${i/f16/q4_0}" q4_0
+            exec ./llama-quantize "$i" "${i/f16/q4_0}" q4_0
         fi
     done
 elif [[ "$arg1" == '--server' || "$arg1" == '-s' ]]; then
-    ./server "$@"
+    exec ./llama-server "$@"
 else
     echo "Unknown command: $arg1"
     echo "Available commands: "
-    echo "  --run (-r): Run a model previously converted into ggml"
-    echo "              ex: -m /models/7B/ggml-model-q4_0.bin -p \"Building a website can be done in 10 simple steps:\" -n 512"
+    echo "  --run (-r): Run a model (chat) previously converted into ggml"
+    echo "              ex: -m /models/7B/ggml-model-q4_0.bin"
+    echo "  --run-legacy (-l): Run a model (legacy completion) previously converted into ggml"
+    echo "              ex: -m /models/7B/ggml-model-q4_0.bin -no-cnv -p \"Building a website can be done in 10 simple steps:\" -n 512"
+    echo "  --bench (-b): Benchmark the performance of the inference for various parameters."
+    echo "              ex: -m model.gguf"
+    echo "  --perplexity (-p): Measure the perplexity of a model over a given text."
+    echo "              ex: -m model.gguf -f file.txt"
     echo "  --convert (-c): Convert a llama model into ggml"
     echo "              ex: --outtype f16 \"/models/7B/\" "
     echo "  --quantize (-q): Optimize with quantization process ggml"
     echo "              ex: \"/models/7B/ggml-model-f16.bin\" \"/models/7B/ggml-model-q4_0.bin\" 2"
-    echo "  --finetune (-f): Run finetune command to create a lora finetune of the model"
-    echo "              See documentation for finetune for command-line parameters"
     echo "  --all-in-one (-a): Execute --convert & --quantize"
     echo "              ex: \"/models/\" 7B"
     echo "  --server (-s): Run a model on the server"

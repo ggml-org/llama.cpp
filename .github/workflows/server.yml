@@ -1,0 +1,121 @@
+# Server build and tests
+name: Server
+
+on:
+  workflow_dispatch: # allows manual triggering
+    inputs:
+      sha:
+        description: 'Commit SHA1 to build'
+        required: false
+        type: string
+      slow_tests:
+        description: 'Run slow tests'
+        required: true
+        type: boolean
+  push:
+    branches:
+      - master
+    paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'tools/server/**.*']
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'tools/server/**.*']
+
+env:
+  LLAMA_LOG_COLORS: 1
+  LLAMA_LOG_PREFIX: 1
+  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_LOG_VERBOSITY: 10
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        sanitizer: [ADDRESS, UNDEFINED] # THREAD is broken
+        build_type: [RelWithDebInfo]
+        include:
+          - build_type: Release
+            sanitizer: ""
+      fail-fast: false # While -DLLAMA_SANITIZE_THREAD=ON is broken
+
+    steps:
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install \
+            build-essential \
+            xxd \
+            git \
+            cmake \
+            curl \
+            wget \
+            language-pack-en \
+            libssl-dev
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Python setup
+        id: setup_python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Tests dependencies
+        id: test_dependencies
+        run: |
+          pip install -r tools/server/tests/requirements.txt
+
+  server-windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build -DLLAMA_CURL=OFF -DLLAMA_BUILD_BORINGSSL=ON
+          cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
+
+      - name: Python setup
+        id: setup_python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Tests dependencies
+        id: test_dependencies
+        run: |
+          pip install -r tools/server/tests/requirements.txt
+
+      - name: Tests
+        id: server_integration_tests
+        if: ${{ !matrix.disabled_on_pr || !github.event.pull_request }}
+        run: |
+          cd tools/server/tests
+          $env:PYTHONIOENCODING = ":replace"
+          pytest -v -x -m "not slow"
+
+      - name: Slow tests
+        id: server_integration_tests_slow
+        if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
+        run: |
+          cd tools/server/tests
+          $env:SLOW_TESTS = "1"
+          pytest -v -x

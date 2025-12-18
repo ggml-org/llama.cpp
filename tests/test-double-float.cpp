@@ -14,7 +14,7 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdouble-promotion"
 
-// ggml.c::quantize_row_q4_0_reference
+// ggml.c::quantize_row_q4_0_ref
 inline static uint8_t round_orig(float v0) { return ((int8_t) (round(v0))) + 8; }
 
 // ggml.c::ggml_silu_f32
@@ -24,7 +24,7 @@ inline static float silu_orig(float x) {
 
 #pragma GCC diagnostic pop
 
-// ggml.c::quantize_row_q4_0_reference
+// ggml.c::quantize_row_q4_0_ref
 inline static uint8_t round_float(float v0) { return (int8_t)roundf(v0) + 8; }
 
 // ggml.c::ggml_silu_f32

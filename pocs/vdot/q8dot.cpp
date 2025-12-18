@@ -11,6 +11,7 @@
 #include <type_traits>
 
 #include <ggml.h>
+#include <ggml-cpu.h>
 
 constexpr int kVecSize = 1 << 16;
 
@@ -136,7 +137,7 @@ int main(int argc, char** argv) {
 
     auto ggml_type = type == 0 ? GGML_TYPE_Q4_0 : GGML_TYPE_Q4_1;
 
-    auto funcs = ggml_internal_get_type_traits(ggml_type);
+    const auto * funcs = ggml_get_type_traits_cpu(ggml_type);
 
     Stat simple, ggml;
 
@@ -156,8 +157,8 @@ int main(int argc, char** argv) {
 
         t1 = std::chrono::high_resolution_clock::now();
         float fs;
-        if (type == 0) funcs.vec_dot(kVecSize * QK4_1, &fs, x40.data(), y.data());
-        else funcs.vec_dot(kVecSize * QK4_1, &fs, x41.data(), y.data());
+        if (type == 0) funcs->vec_dot(kVecSize * QK4_1, &fs, 0, x40.data(), 0, y.data(), 0, 1);
+        else funcs->vec_dot(kVecSize * QK4_1, &fs, 0, x41.data(), 0, y.data(), 0, 1);
         t2 = std::chrono::high_resolution_clock::now();
         t = 1e-3*std::chrono::duration_cast<std::chrono::nanoseconds>(t2-t1).count();
         if (iloop > 3) ggml.addResult(fs, t);

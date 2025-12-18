@@ -1,5 +1,5 @@
 # SRPM for building from source and packaging an RPM for RPM-based distros.
-# https://fedoraproject.org/wiki/How_to_create_an_RPM_package
+# https://docs.fedoraproject.org/en-US/quick-docs/creating-rpm-packages
 # Built and maintained by John Boero - boeroboy@gmail.com
 # In honor of Seth Vidal https://www.redhat.com/it/blog/thank-you-seth-vidal
 
@@ -18,10 +18,10 @@ Version:        %( date "+%%Y%%m%%d" )
 Release:        1%{?dist}
 Summary:        CPU Inference of LLaMA model in pure C/C++ (no CUDA/OpenCL)
 License:        MIT
-Source0:        https://github.com/ggerganov/llama.cpp/archive/refs/heads/master.tar.gz
+Source0:        https://github.com/ggml-org/llama.cpp/archive/refs/heads/master.tar.gz
 BuildRequires:  coreutils make gcc-c++ git libstdc++-devel
 Requires:       libstdc++
-URL:            https://github.com/ggerganov/llama.cpp
+URL:            https://github.com/ggml-org/llama.cpp
 
 %define debug_package %{nil}
 %define source_date_epoch_from_changelog 0
@@ -38,9 +38,10 @@ make -j
 
 %install
 mkdir -p %{buildroot}%{_bindir}/
-cp -p main %{buildroot}%{_bindir}/llama
-cp -p server %{buildroot}%{_bindir}/llamaserver
-cp -p simple %{buildroot}%{_bindir}/llamasimple
+cp -p llama-cli %{buildroot}%{_bindir}/llama-cli
+cp -p llama-completion %{buildroot}%{_bindir}/llama-completion
+cp -p llama-server %{buildroot}%{_bindir}/llama-server
+cp -p llama-simple %{buildroot}%{_bindir}/llama-simple
 
 mkdir -p %{buildroot}/usr/lib/systemd/system
 %{__cat} <<EOF  > %{buildroot}/usr/lib/systemd/system/llama.service
@@ -51,7 +52,7 @@ After=syslog.target network.target local-fs.target remote-fs.target nss-lookup.t
 [Service]
 Type=simple
 EnvironmentFile=/etc/sysconfig/llama
-ExecStart=/usr/bin/llamaserver $LLAMA_ARGS
+ExecStart=/usr/bin/llama-server $LLAMA_ARGS
 ExecReload=/bin/kill -s HUP $MAINPID
 Restart=never
 
@@ -69,9 +70,10 @@ rm -rf %{buildroot}
 rm -rf %{_builddir}/*
 
 %files
-%{_bindir}/llama
-%{_bindir}/llamaserver
-%{_bindir}/llamasimple
+%{_bindir}/llama-cli
+%{_bindir}/llama-completion
+%{_bindir}/llama-server
+%{_bindir}/llama-simple
 /usr/lib/systemd/system/llama.service
 %config /etc/sysconfig/llama
 

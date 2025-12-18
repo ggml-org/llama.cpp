@@ -1,106 +1,139 @@
-*.o
+# Extensions
+
 *.a
-*.so
-*.gguf
-*.bin
-*.exe
-*.dll
-*.log
-*.gcov
-*.gcno
-*.gcda
-*.dot
 *.bat
+*.bin
+*.d
+*.dll
+*.dot
+*.etag
+*.exe
+*.gcda
+*.gcno
+*.gcov
+*.gguf
+*.gguf.json
+*.lastModified
+*.log
 *.metallib
-.DS_Store
-.build/
-.cache/
-.ccls-cache/
-.direnv/
-.envrc
-.swiftpm
-.venv
-.clang-tidy
-.vs/
-.vscode/
+*.o
+*.so
+*.swp
+*.tmp
+*.DS_Store
 
-lcov-report/
-gcovr-report/
+# IDE / OS
 
-build*/
-out/
-tmp/
+/.cache/
+/.ccls-cache/
+/.direnv/
+/.envrc
+/.idea/
+/.swiftpm
+/.vs/
+/.vscode/
+/nppBackup
 
-models/*
-models-mnt
 
-/Pipfile
-/baby-llama
-/beam-search
-/benchmark-matmult
-/convert-llama2c-to-ggml
-/embd-input-test
-/embedding
-/gguf
-/gguf-llama-simple
-/infill
+# Coverage
+
+/gcovr-report/
+/lcov-report/
+
+# Build Artifacts
+
+/tags
+/.build/
+/build*
+/release
+/debug
 /libllama.so
-/llama-bench
-/llava-cli
-/lookahead
-/lookup
-/main
-/metal
-/passkey
-/perplexity
-/q8dot
-/quantize
-/quantize-stats
-/result
-/save-load-state
-/server
-/simple
-/batched
-/batched-bench
-/export-lora
-/finetune
-/speculative
-/parallel
-/train-text-from-scratch
-/tokenize
-/vdot
+/llama-*
+/vulkan-shaders-gen
+/rpc-server
+/out/
+/tmp/
+/autogen-*.md
 /common/build-info.cpp
-arm_neon.h
-compile_commands.json
-CMakeSettings.json
 
-__pycache__
-dist
+# Deprecated
 
-zig-out/
-zig-cache/
+/main
+/server
 
-ppl-*.txt
-qnt-*.txt
-perf-*.txt
+# CI
 
-examples/jeopardy/results.txt
+!/.github/workflows/*.yml
 
-poetry.lock
+# Models
+
+/models/*
+/models-mnt
+!/models/.editorconfig
+!/models/ggml-vocab-*.gguf*
+!/models/templates
+
+# Zig
+/zig-out/
+/zig-cache/
+
+# Examples
+
+/examples/jeopardy/results.txt
+/tools/server/*.css.hpp
+/tools/server/*.html.hpp
+/tools/server/*.js.hpp
+/tools/server/*.mjs.hpp
+/tools/server/*.gz.hpp
+!/build_64.sh
+!/examples/*.bat
+!/examples/*/*.kts
+!/examples/*/*/*.kts
+!/examples/sycl/*.bat
+!/examples/sycl/*.sh
+
+# Server Web UI temporary files
+/tools/server/webui/node_modules
+/tools/server/webui/dist
+
+# Python
+
+/.venv
+__pycache__/
+*/poetry.lock
 poetry.toml
 
+# Nix
+/result
+
 # Test binaries
-/tests/test-grammar-parser
-/tests/test-llama-grammar
+/tests/test-backend-ops
 /tests/test-double-float
 /tests/test-grad0
+/tests/test-grammar-parser
+/tests/test-llama-grammar
 /tests/test-opt
 /tests/test-quantize-fns
 /tests/test-quantize-perf
-/tests/test-sampling
-/tests/test-tokenizer-0-llama
-/tests/test-tokenizer-0-falcon
-/tests/test-tokenizer-1-llama
-/tests/test-tokenizer-1-bpe
 /tests/test-rope
-/tests/test-backend-ops
+/tests/test-sampling
+/tests/test-tokenizer-0
+/tests/test-tokenizer-1-bpe
+/tests/test-tokenizer-1-spm
+
+# Scripts
+!/scripts/install-oneapi.bat
+
+# Test models for lora adapters
+/lora-tests
+
+# Local scripts
+/run-vim.sh
+/run-chat.sh
+/.ccache/
+
+# IDE
+/*.code-workspace
+/.windsurf/
+# emscripten
+a.out.*

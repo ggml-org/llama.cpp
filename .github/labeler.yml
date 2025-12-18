@@ -1,0 +1,103 @@
+# https://github.com/actions/labeler
+Apple Metal:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-metal.h
+            - ggml/src/ggml-metal/**
+            - README-metal.md
+SYCL:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-sycl.h
+            - ggml/src/ggml-sycl/**
+            - docs/backend/SYCL.md
+            - examples/sycl/**
+Nvidia GPU:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-cuda.h
+            - ggml/src/ggml-cuda/**
+Vulkan:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-vulkan.h
+            - ggml/src/ggml-vulkan/**
+IBM zDNN:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-zdnn.h
+            - ggml/src/ggml-zdnn/**
+documentation:
+    - changed-files:
+        - any-glob-to-any-file:
+            - docs/**
+            - media/**
+testing:
+    - changed-files:
+        - any-glob-to-any-file:
+            - tests/**
+build:
+    - changed-files:
+        - any-glob-to-any-file:
+            - cmake/**
+            - CMakeLists.txt
+            - CMakePresets.json
+examples:
+    - changed-files:
+        - any-glob-to-any-file:
+            - examples/**
+            - tools/**
+devops:
+    - changed-files:
+        - any-glob-to-any-file:
+            - .devops/**
+            - .github/**
+            - ci/**
+python:
+    - changed-files:
+        - any-glob-to-any-file:
+            - "**/*.py"
+            - requirements/**
+            - gguf-py/**
+            - .flake8
+script:
+    - changed-files:
+        - any-glob-to-any-file:
+            - scripts/**
+android:
+    - changed-files:
+        - any-glob-to-any-file:
+            - examples/llama.android/**
+server:
+    - changed-files:
+        - any-glob-to-any-file:
+            - tools/server/**
+ggml:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/**
+model:
+    - changed-files:
+        - any-glob-to-any-file:
+            - src/models/**
+nix:
+    - changed-files:
+        - any-glob-to-any-file:
+            - "**/*.nix"
+            - .github/workflows/nix-*.yml
+            - .devops/nix/nixpkgs-instances.nix
+embedding:
+    - changed-files:
+        - any-glob-to-any-file: examples/embedding/
+
+Ascend NPU:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-cann.h
+            - ggml/src/ggml-cann/**
+            - docs/backend/CANN.md
+OpenCL:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-opencl.h
+            - ggml/src/ggml-opencl/**

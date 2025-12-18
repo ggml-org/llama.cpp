@@ -1,0 +1,228 @@
+/* Author: Yazan Agha-Schrader */
+/* Inspiration was a batman wallpaper that i have on my phone */
+
+.theme-beeninorder {
+
+--primary-color-1:      hsl(202, 11%, 19%);
+--primary-color-2:      hsl(202, 11%, 23%);
+--primary-color-3:      hsl(201, 11%, 28%);
+--primary-color-4:      hsl(201, 11%, 40%);
+
+--secondary-color-1:    hsl(201, 11%, 80%);
+--secondary-color-2:    hsl(201, 11%, 74%);
+--secondary-color-3:    hsl(201, 11%, 67%);
+--secondary-color-4:    hsl(201, 11%, 60%);
+
+
+--theme-nuance-color-1: hsl(44.5, 96.7%, 52.9%);
+--theme-nuance-color-2: hsl(44.5, 96.7%, 52.9%);
+--theme-nuance-color-3: hsl(44.5, 96.7%, 52.9%);
+--theme-nuance-color-4: hsl(44.5, 96.7%, 52.9%);
+
+
+
+/* ---------- PRIMARY COLORS ----------------- */
+--primary-color-1: hsl(201, 11%, 19%);
+    --primary-color-1-hue: 201;
+    --primary-color-1-saturation: 11%;
+    --primary-color-1-lightness: 19%;
+
+--primary-color-2: hsl(201, 11%, 23%);
+    --primary-color-2-hue: 201;
+    --primary-color-2-saturation: 11%;
+    --primary-color-2-lightness: 23%;
+
+--primary-color-3: hsl(201, 11%, 28%);
+    --primary-color-3-hue: 201;
+    --primary-color-3-saturation: 11%;
+    --primary-color-3-lightness: 28%;
+
+--primary-color-4: hsl(201, 11%, 40%);
+    --primary-color-4-hue: 201;
+    --primary-color-4-saturation: 11%;
+    --primary-color-4-lightness: 40%;
+
+
+
+/* ---------- SECONDARY COLORS --------------- */
+--secondary-color-1: hsl(201, 11%, 80%);
+--secondary-color-1-hue: 201;
+--secondary-color-1-saturation: 11%;
+--secondary-color-1-lightness: 80%;
+
+--secondary-color-2: hsl(201, 11%, 74%);
+--secondary-color-2-hue: 201;
+--secondary-color-2-saturation: 11%;
+--secondary-color-2-lightness: 74%;
+
+--secondary-color-3: hsl(201, 11%, 67%);
+--secondary-color-3-hue: 201;
+--secondary-color-3-saturation: 11%;
+--secondary-color-3-lightness: 67%;
+
+--secondary-color-4: hsl(201, 11%, 60%);
+--secondary-color-4-hue: 201;
+--secondary-color-4-saturation: 11%;
+--secondary-color-4-lightness: 60%;
+
+
+
+/* ----------- NUANCES COLORS ---------------- */
+--theme-nuance-color-1: hsl(44.5, 96.7%,  52.9%);
+    --theme-nuance-color-1-hue:             44.5;
+    --theme-nuance-color-1-saturation:      96.7%;
+    --theme-nuance-color-1-lightness:       52.9%;
+
+--theme-nuance-color-2: hsl(44.5, 96.7%,  52.9%);
+    --theme-nuance-color-2-hue:             44.5;
+    --theme-nuance-color-2-saturation:      96.7%;
+    --theme-nuance-color-2-lightness:       52.9%;
+
+--theme-nuance-color-2: hsl(44.5, 96.7%,  52.9%);
+    --theme-nuance-color-3-hue:             44.5;
+    --theme-nuance-color-3-saturation:      96.7%;
+    --theme-nuance-color-3-lightness:       52.9%;
+
+--theme-nuance-color-2: hsl(44.5, 96.7%,  52.9%);
+    --theme-nuance-color-4-hue:             44.5;
+    --theme-nuance-color-4-saturation:      96.7%;
+    --theme-nuance-color-4-lightness:       52.9%;
+
+
+
+/* ----------- ROYGP COLORS ------------------ */
+    --theme-red-color:     hsl(232, 40%, 45%);
+    --theme-orange-color:  #e76f51;
+    --theme-yellow-color:  #ffd95f;
+    --theme-green-color:   #A3BE8C;
+    --theme-purple-color:  hsl(232, 30%, 40%);
+
+
+
+/* ------------------------------------------- */
+--background-color-1:    var(--primary-color-1);
+--background-color-2:    var(--primary-color-2);
+--background-color-3:    var(--primary-color-3);
+--background-color-4:    var(--primary-color-4);
+
+--border-color-1:        var(--primary-color-2);
+--border-color-2:        var(--primary-color-3);
+--border-color-3:        var(--primary-color-4);
+
+--border-focus-color:    var(--theme-nuance-color-2);
+--border-focus-shadow:   var(--theme-nuance-color-1);
+
+--text-color-plain:      var(--secondary-color-1);
+--text-color-subtile-1:  var(--secondary-color-2);
+--text-color-subtile-2:  var(--secondary-color-3);
+
+--code-background-color: var(--secondary-color-2);
+--code-text-color:       var(--primary-color-2);
+
+--ui-range-thumb-color:  var(--theme-nuance-color-3);
+--ui-range-thumb-border: var(--ui-ranger-thumb-color);
+
+--textarea-border-color: var(--secondary-color-4);
+
+--chat-id-color:         var(--theme-nuance-color-4);
+
+
+
+/* ------------------------------------------- */
+--button-alert-text-hover:       var(--secondary-color-1);
+--button-alert-color-hover:      var(--theme-purple-color);
+--button-alert-border-hover:     var(--theme-purple-color);
+
+--button-alert-text-active:      var(--secondary-color-1);
+--button-alert-color-active:     var(--theme-red-color);
+--button-alert-border-active:    var(--theme-red-color);
+
+
+
+/* ----------- PRIMARY BUTTONS --------------- */
+/* - button should immediately catch the eye - */
+--button-primary-text:   var(--primary-color-1);
+--button-primary-color:  var(--theme-nuance-color-3);
+--button-primary-border: var(--theme-nuance-color-3);
+
+
+/* ---------hover---------- */
+--button-primary-text-hover:
+    hsl(201,
+    calc(var(--primary-color-1-saturation) - 100%),
+    calc(var(--primary-color-1-lightness)  + 100%));
+
+--button-primary-color-hover:
+    hsl(44.5,
+    calc(var(--theme-nuance-color-3-saturation) - 2%),
+    calc(var(--theme-nuance-color-3-lightness)  - 10%));
+
+--button-primary-border-hover:
+    hsl(44.5,
+    calc(var(--theme-nuance-color-3-saturation) - 2%),
+    calc(var(--theme-nuance-color-3-lightness)  - 10%));
+
+
+/* ---------active--------- */
+--button-primary-text-active:
+    hsl(44.5,
+    calc(var(--theme-nuance-color-3-saturation) - 100%),
+    calc(var(--theme-nuance-color-3-lightness)  + 100%));
+
+--button-primary-color-active:
+    hsl(44.5,
+    calc(var(--theme-nuance-color-3-saturation) - 10%),
+    calc(var(--theme-nuance-color-3-lightness)  - 15%));
+
+--button-primary-border-active:
+    hsl(44.5,
+    calc(var(--theme-nuance-color-3-saturation) - 2%),
+    calc(var(--theme-nuance-color-3-lightness)  + 10%));
+
+
+
+/* ---------- SECONDARY BUTTONS -------------- */
+/* these should NOT immediately catch the eye  */
+--button-secondary-text:   var(--secondary-color-1);
+--button-secondary-color:  var(--primary-color-3);
+--button-secondary-border: var(--primary-color-3);
+
+
+/* ---------hover---------- */
+--button-secondary-text-hover:
+    hsl(44.5,
+    calc(var(--theme-nuance-color-3-saturation) - 20%),
+    calc(var(--theme-nuance-color-3-lightness)  - 80%));
+
+--button-secondary-color-hover:  var(--primary-color-4);
+--button-secondary-border-hover: var(--primary-color-4);
+
+
+/* ---------active--------- */
+--button-secondary-text-active: var(--secondary-color-1);
+
+--button-secondary-color-active:
+    hsl(201,
+    calc(var(--primary-color-4-saturation) - 30%),
+    calc(var(--primary-color-4-lightness)  - 15%));
+
+--button-secondary-border-active:
+    hsl(201,
+    calc(var(--primary-color-4-saturation) - 30%),
+    calc(var(--primary-color-4-lightness)  - 15%));
+
+
+
+/* ---------- TERTIARY BUTTONS --------------- */
+/* ---------- disabled buttons --------------- */
+--button-tertiary-text:   var(--primary-color-4);
+--button-tertiary-color:  var(--primary-color-2);
+--button-tertiary-border: var(--primary-color-2);
+
+
+/* ---------hover---------- */
+--button-tertiary-text:   var(--primary-color-4);
+--button-tertiary-color:  var(--primary-color-2);
+--button-tertiary-border: var(--primary-color-2);
+
+}

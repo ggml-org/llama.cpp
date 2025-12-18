@@ -1,0 +1,87 @@
+name: Bug (compilation)
+description: Something goes wrong when trying to compile llama.cpp.
+title: "Compile bug: "
+labels: ["bug-unconfirmed", "compilation"]
+body:
+  - type: markdown
+    attributes:
+      value: >
+        Thanks for taking the time to fill out this bug report!
+        This issue template is intended for bug reports where the compilation of llama.cpp fails.
+        Before opening an issue, please confirm that the compilation still fails with `-DGGML_CCACHE=OFF`.
+        If the compilation succeeds with ccache disabled you should be able to permanently fix the issue
+        by clearing `~/.cache/ccache` (on Linux).
+  - type: textarea
+    id: commit
+    attributes:
+      label: Git commit
+      description: Which commit are you trying to compile?
+      placeholder: |
+        $git rev-parse HEAD
+        84a07a17b1b08cf2b9747c633a2372782848a27f
+    validations:
+      required: true
+  - type: dropdown
+    id: operating-system
+    attributes:
+      label: Operating systems
+      description: Which operating systems do you know to be affected?
+      multiple: true
+      options:
+        - Linux
+        - Mac
+        - Windows
+        - BSD
+        - Other? (Please let us know in description)
+    validations:
+      required: true
+  - type: dropdown
+    id: backends
+    attributes:
+        label: GGML backends
+        description: Which GGML backends do you know to be affected?
+        options: [AMX, BLAS, CPU, CUDA, HIP, Metal, Musa, RPC, SYCL, Vulkan, OpenCL, zDNN]
+        multiple: true
+    validations:
+      required: true
+  - type: textarea
+    id: info
+    attributes:
+      label: Problem description & steps to reproduce
+      description: >
+        Please give us a summary of the problem and tell us how to reproduce it.
+        If you can narrow down the bug to specific compile flags, that information would be very much appreciated by us.
+      placeholder: >
+        I'm trying to compile llama.cpp with CUDA support on a fresh install of Ubuntu and get error XY.
+        Here are the exact commands that I used: ...
+    validations:
+      required: true
+  - type: textarea
+    id: first_bad_commit
+    attributes:
+      label: First Bad Commit
+      description: >
+        If the bug was not present on an earlier version: when did it start appearing?
+        If possible, please do a git bisect and identify the exact commit that introduced the bug.
+    validations:
+      required: false
+  - type: textarea
+    id: command
+    attributes:
+      label: Compile command
+      description: >
+        Please provide the exact command you used to compile llama.cpp. For example: `cmake -B ...`.
+        This will be automatically formatted into code, so no need for backticks.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: >
+          Please copy and paste any relevant log output, including any generated text.
+          This will be automatically formatted into code, so no need for backticks.
+      render: shell
+    validations:
+      required: true

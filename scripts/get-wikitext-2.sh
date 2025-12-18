@@ -1,3 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-wget https://s3.amazonaws.com/research.metamind.io/wikitext/wikitext-2-raw-v1.zip
+wget https://huggingface.co/datasets/ggml-org/ci/resolve/main/wikitext-2-raw-v1.zip
+unzip wikitext-2-raw-v1.zip
+
+echo "Usage:"
+echo ""
+echo "  ./llama-perplexity -m model.gguf -f wikitext-2-raw/wiki.test.raw [other params]"
+echo ""
+
+exit 0

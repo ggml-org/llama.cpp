@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <title>SimpleChat LlamaCppEtal </title>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="message" content="Save Nature Save Earth" />
+        <meta name="description" content="SimpleChat: trigger LLM web service endpoints /chat/completions and /completions, single/multi chat sessions" />
+        <meta name="author" content="by Humans for All" />
+        <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+        <script type="importmap">
+            {
+                "imports": {
+                    "datautils": "./datautils.mjs",
+                    "ui": "./ui.mjs"
+                }
+            }
+        </script>
+        <script src="simplechat.js" type="module" defer></script>
+        <link rel="stylesheet" href="simplechat.css" />
+    </head>
+    <body>
+        <div class="samecolumn" id="fullbody">
+
+            <div class="sameline" id="heading">
+                <p class="heading flex-grow" > <b> SimpleChat </b> </p>
+                <button id="settings">Settings</button>
+            </div>
+
+            <div id="sessions-div" class="sameline"></div>
+
+            <hr>
+            <div class="sameline">
+                <label for="system-in">System</label>
+                <textarea name="system" id="system-in" rows="2" placeholder="e.g. you are a helpful ai assistant, who provides concise answers" class="flex-grow"></textarea>
+            </div>
+
+            <hr>
+            <div id="chat-div">
+                <p> You need to have javascript enabled.</p>
+            </div>
+
+            <hr>
+            <div class="sameline">
+                <textarea id="user-in" class="flex-grow" rows="2" placeholder="enter your query to the ai model here" ></textarea>
+                <button id="user-btn">submit</button>
+            </div>
+
+        </div>
+    </body>
+</html>

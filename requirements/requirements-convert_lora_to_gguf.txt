@@ -1,0 +1,4 @@
+-r ./requirements-convert_hf_to_gguf.txt
+--extra-index-url https://download.pytorch.org/whl/cpu
+# torch s390x packages can only be found from nightly builds
+--extra-index-url https://download.pytorch.org/whl/nightly

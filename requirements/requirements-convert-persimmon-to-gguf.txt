@@ -1,2 +1,0 @@
--r ./requirements-convert.txt
-torch~=2.1.1

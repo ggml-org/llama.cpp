@@ -1,11 +1,11 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Synchronize ggml changes to llama.cpp
 #
 # Usage:
 #
 #   $ cd /path/to/llama.cpp
-#   $ ./scripts/sync-ggml-am.sh
+#   $ ./scripts/sync-ggml-am.sh -skip hash0,hash1,hash2... -C 3
 #
 
 set -e
@@ -24,6 +24,25 @@ fi
 lc=$(cat $SRC_LLAMA/scripts/sync-ggml.last)
 echo "Syncing ggml changes since commit $lc"
 
+to_skip=""
+
+# context for git patches in number of lines
+ctx="8"
+
+while [ "$1" != "" ]; do
+    case $1 in
+        -skip )
+            shift
+            to_skip=$1
+            ;;
+        -C )
+            shift
+            ctx=$1
+            ;;
+    esac
+    shift
+done
+
 cd $SRC_GGML
 
 git log --oneline $lc..HEAD
@@ -40,19 +59,30 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
 fi
 
 while read c; do
-    git format-patch -k $c~1..$c --stdout -- \
-        include/ggml/ggml*.h \
-        src/ggml*.h \
-        src/ggml*.c \
-        src/ggml*.cpp \
-        src/ggml*.m \
-        src/ggml*.metal \
-        src/ggml*.cu \
+    if [ -n "$to_skip" ]; then
+        if [[ $to_skip == *"$c"* ]]; then
+            echo "Skipping $c"
+            continue
+        fi
+    fi
+
+    git format-patch -U${ctx} -k $c~1..$c --stdout -- \
+        CMakeLists.txt \
+        src/CMakeLists.txt \
+        cmake/BuildTypes.cmake \
+        cmake/GitVars.cmake \
+        cmake/common.cmake \
+        cmake/ggml-config.cmake.in \
+        src/ggml-cpu/cmake/FindSIMD.cmake \
+        src/ggml* \
+        include/ggml*.h \
+        include/gguf*.h \
         tests/test-opt.cpp \
-        tests/test-grad0.cpp \
         tests/test-quantize-fns.cpp \
         tests/test-quantize-perf.cpp \
         tests/test-backend-ops.cpp \
+        LICENSE \
+        scripts/gen-authors.sh \
         >> $SRC_LLAMA/ggml-src.patch
 done < $SRC_LLAMA/ggml-commits
 
@@ -78,59 +108,43 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
 
     # replace filenames:
     #
-    # src/ggml.c                  -> ggml.c
-    # src/ggml-alloc.c            -> ggml-alloc.c
-    # src/ggml-backend-impl.h     -> ggml-backend-impl.h
-    # src/ggml-backend.c          -> ggml-backend.c
-    # src/ggml-cuda.cu            -> ggml-cuda.cu
-    # src/ggml-cuda.h             -> ggml-cuda.h
-    # src/ggml-impl.h             -> ggml-impl.h
-    # src/ggml-metal.h            -> ggml-metal.h
-    # src/ggml-metal.m            -> ggml-metal.m
-    # src/ggml-mpi.h              -> ggml-mpi.h
-    # src/ggml-mpi.c              -> ggml-mpi.c
-    # src/ggml-opencl.cpp         -> ggml-opencl.cpp
-    # src/ggml-opencl.h           -> ggml-opencl.h
-    # src/ggml-quants.c           -> ggml-quants.c
-    # src/ggml-quants.h           -> ggml-quants.h
-    # include/ggml/ggml.h         -> ggml.h
-    # include/ggml/ggml-alloc.h   -> ggml-alloc.h
-    # include/ggml/ggml-backend.h -> ggml-backend.h
-    #
-    # tests/test-opt.cpp           -> tests/test-opt.cpp
-    # tests/test-grad0.cpp         -> tests/test-grad0.cpp
-    # tests/test-quantize-fns.cpp  -> tests/test-quantize-fns.cpp
-    # tests/test-quantize-perf.cpp -> tests/test-quantize-perf.cpp
-    # tests/test-backend-ops.cpp   -> tests/test-backend-ops.cpp
+    # CMakelists.txt       -> ggml/CMakeLists.txt
+    # src/CMakeLists.txt   -> ggml/src/CMakeLists.txt
 
-    cat ggml-src.patch | sed \
-        -e 's/src\/ggml\.c/ggml.c/g' \
-        -e 's/src\/ggml-alloc\.c/ggml-alloc.c/g' \
-        -e 's/src\/ggml-backend-impl\.h/ggml-backend-impl.h/g' \
-        -e 's/src\/ggml-backend\.c/ggml-backend.c/g' \
-        -e 's/src\/ggml-cuda\.cu/ggml-cuda.cu/g' \
-        -e 's/src\/ggml-cuda\.h/ggml-cuda.h/g' \
-        -e 's/src\/ggml-impl\.h/ggml-impl.h/g' \
-        -e 's/src\/ggml-metal\.h/ggml-metal.h/g' \
-        -e 's/src\/ggml-metal\.m/ggml-metal.m/g' \
-        -e 's/src\/ggml-mpi\.h/ggml-mpi.h/g' \
-        -e 's/src\/ggml-mpi\.c/ggml-mpi.c/g' \
-        -e 's/src\/ggml-opencl\.cpp/ggml-opencl.cpp/g' \
-        -e 's/src\/ggml-opencl\.h/ggml-opencl.h/g' \
-        -e 's/src\/ggml-quants\.c/ggml-quants.c/g' \
-        -e 's/src\/ggml-quants\.h/ggml-quants.h/g' \
-        -e 's/include\/ggml\/ggml\.h/ggml.h/g' \
-        -e 's/include\/ggml\/ggml-alloc\.h/ggml-alloc.h/g' \
-        -e 's/include\/ggml\/ggml-backend\.h/ggml-backend.h/g' \
-        -e 's/tests\/test-opt\.cpp/tests\/test-opt.cpp/g' \
-        -e 's/tests\/test-grad0\.cpp/tests\/test-grad0.cpp/g' \
-        -e 's/tests\/test-quantize-fns\.cpp/tests\/test-quantize-fns.cpp/g' \
-        -e 's/tests\/test-quantize-perf\.cpp/tests\/test-quantize-perf.cpp/g' \
-        -e 's/tests\/test-backend-ops\.cpp/tests\/test-backend-ops.cpp/g' \
+    # cmake/BuildTypes.cmake            -> ggml/cmake/BuildTypes.cmake
+    # cmake/GitVars.cmake               -> ggml/cmake/GitVars.cmake
+    # cmake/common.cmake                -> ggml/cmake/common.cmake
+    # cmake/ggml-config.cmake.in        -> ggml/cmake/ggml-config.cmake.in
+    # src/ggml-cpu/cmake/FindSIMD.cmake -> ggml/src/ggml-cpu/cmake/FindSIMD.cmake
+    #
+    # src/ggml* -> ggml/src/ggml*
+    #
+    # include/ggml*.h -> ggml/include/ggml*.h
+    # include/gguf*.h -> ggml/include/gguf*.h
+    #
+    # tests/test*.cpp -> tests/
+    #
+    # LICENSE                -> LICENSE
+    # scripts/gen-authors.sh -> scripts/gen-authors.sh
+
+    cat ggml-src.patch | sed -E \
+        -e 's/([[:space:]]| [ab]\/)CMakeLists.txt/\1ggml\/CMakeLists.txt/g' \
+        -e 's/([[:space:]]| [ab]\/)src\/CMakeLists.txt/\1ggml\/src\/CMakeLists.txt/g' \
+        -e 's/([[:space:]]| [ab]\/)cmake\/BuildTypes.cmake/\1ggml\/cmake\/BuildTypes.cmake/g' \
+        -e 's/([[:space:]]| [ab]\/)cmake\/GitVars.cmake/\1ggml\/cmake\/GitVars.cmake/g' \
+        -e 's/([[:space:]]| [ab]\/)cmake\/common.cmake/\1ggml\/cmake\/common.cmake/g' \
+        -e 's/([[:space:]]| [ab]\/)cmake\/ggml-config.cmake.in/\1ggml\/cmake\/ggml-config.cmake.in/g' \
+        -e 's/([[:space:]]| [ab]\/)src\/ggml-cpu\/cmake\/FindSIMD.cmake/\1ggml\/src\/ggml-cpu\/cmake\/FindSIMD.cmake/g' \
+        -e 's/([[:space:]]| [ab]\/)src\/ggml(.*)/\1ggml\/src\/ggml\2/g' \
+        -e 's/([[:space:]]| [ab]\/)include\/ggml(.*)\.h/\1ggml\/include\/ggml\2.h/g' \
+        -e 's/([[:space:]]| [ab]\/)include\/gguf(.*)\.h/\1ggml\/include\/gguf\2.h/g' \
+        -e 's/([[:space:]]| [ab]\/)tests\/(.*)\.cpp/\1tests\/\2.cpp/g' \
+        -e 's/([[:space:]]| [ab]\/)LICENSE/\1LICENSE/g' \
+        -e 's/([[:space:]]| [ab]\/)scripts\/gen-authors\.sh/\1scripts\/gen-authors.sh/g' \
         > ggml-src.patch.tmp
     mv ggml-src.patch.tmp ggml-src.patch
 
-    git am ggml-src.patch
+    git am -C${ctx} ggml-src.patch
 
     rm -v $SRC_LLAMA/ggml-src.patch
 fi
