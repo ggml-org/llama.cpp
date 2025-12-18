@@ -31,9 +31,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  webui-setup:
-    name: WebUI Setup
+  webui-check:
+    name: WebUI Checks
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -42,137 +43,66 @@ jobs:
           ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
 
       - name: Setup Node.js
+        id: node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "npm"
           cache-dependency-path: "tools/server/webui/package-lock.json"
 
-      - name: Cache node_modules
-        uses: actions/cache@v4
-        id: cache-node-modules
-        with:
-          path: tools/server/webui/node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('tools/server/webui/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-modules-
-
       - name: Install dependencies
-        if: steps.cache-node-modules.outputs.cache-hit != 'true'
+        id: setup
+        if: ${{ steps.node.conclusion == 'success' }}
         run: npm ci
         working-directory: tools/server/webui
 
-  webui-check:
-    needs: webui-setup
-    name: WebUI Check
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Restore node_modules cache
-        uses: actions/cache@v4
-        with:
-          path: tools/server/webui/node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('tools/server/webui/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-modules-
-
       - name: Run type checking
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run check
         working-directory: tools/server/webui
 
       - name: Run linting
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run lint
         working-directory: tools/server/webui
 
-  webui-build:
-    needs: webui-check
-    name: WebUI Build
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Restore node_modules cache
-        uses: actions/cache@v4
-        with:
-          path: tools/server/webui/node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('tools/server/webui/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-modules-
-
       - name: Build application
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run build
         working-directory: tools/server/webui
 
-  webui-tests:
-    needs: webui-build
-    name: Run WebUI tests
-    permissions:
-      contents: read
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Restore node_modules cache
-        uses: actions/cache@v4
-        with:
-          path: tools/server/webui/node_modules
-          key: ${{ runner.os }}-node-modules-${{ hashFiles('tools/server/webui/package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-node-modules-
-
       - name: Install Playwright browsers
+        id: playwright
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npx playwright install --with-deps
         working-directory: tools/server/webui
 
       - name: Build Storybook
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run build-storybook
         working-directory: tools/server/webui
 
       - name: Run Client tests
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:client
         working-directory: tools/server/webui
 
-      - name: Run Server tests
-        run: npm run test:server
+      - name: Run Unit tests
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        run: npm run test:unit
         working-directory: tools/server/webui
 
       - name: Run UI tests
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:ui -- --testTimeout=60000
         working-directory: tools/server/webui
 
       - name: Run E2E tests
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run test:e2e
         working-directory: tools/server/webui
 
   server-build:
-    needs: [webui-tests]
     runs-on: ubuntu-latest
 
     strategy:

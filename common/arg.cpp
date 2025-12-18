@@ -420,6 +420,8 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         }
     };
 
+    std::set<std::string> seen_args;
+
     for (int i = 1; i < argc; i++) {
         const std::string arg_prefix = "--";
 
@@ -429,6 +431,9 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         }
         if (arg_to_options.find(arg) == arg_to_options.end()) {
             throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
+        }
+        if (!seen_args.insert(arg).second) {
+            LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
         }
         auto & tmp = arg_to_options[arg];
         auto opt = *tmp.first;
@@ -750,6 +755,8 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
         }
     };
 
+    std::set<std::string> seen_args;
+
     for (int i = 1; i < argc; i++) {
         const std::string arg_prefix = "--";
 
@@ -759,6 +766,9 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
         }
         if (arg_to_options.find(arg) == arg_to_options.end()) {
             throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
+        }
+        if (!seen_args.insert(arg).second) {
+            LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
         }
         auto opt = *arg_to_options[arg];
         std::string val;
@@ -1140,7 +1150,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.kv_unified = true;
         }
-    ).set_env("LLAMA_ARG_KV_UNIFIED").set_examples({LLAMA_EXAMPLE_SERVER}));
+    ).set_env("LLAMA_ARG_KV_UNIFIED").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
         {"--context-shift"},
         {"--no-context-shift"},
@@ -1226,13 +1236,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_DIFFUSION}));
     add_opt(common_arg(
         {"--in-file"}, "FNAME",
-        "an input file (repeat to specify multiple files)",
+        "an input file (use comma-separated values to specify multiple files)",
         [](common_params & params, const std::string & value) {
-            std::ifstream file(value);
-            if (!file) {
-                throw std::runtime_error(string_format("error: failed to open file '%s'\n", value.c_str()));
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                std::ifstream file(item);
+                if (!file) {
+                    throw std::runtime_error(string_format("error: failed to open file '%s'\n", item.c_str()));
+                }
+                params.in_files.push_back(item);
             }
-            params.in_files.push_back(value);
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
@@ -1987,9 +1999,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_OFFLOAD"));
     add_opt(common_arg(
         {"--image", "--audio"}, "FILE",
-        "path to an image or audio file. use with multimodal models, can be repeated if you have multiple files\n",
+        "path to an image or audio file. use with multimodal models, use comma-separated values for multiple files\n",
         [](common_params & params, const std::string & value) {
-            params.image.emplace_back(value);
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                params.image.emplace_back(item);
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
@@ -2236,12 +2250,39 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
-        {"--override-kv"}, "KEY=TYPE:VALUE",
-        "advanced option to override model metadata by key. may be specified multiple times.\n"
-        "types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false",
+        {"--override-kv"}, "KEY=TYPE:VALUE,...",
+        "advanced option to override model metadata by key. to specify multiple overrides, either use comma-separated or repeat this argument.\n"
+        "types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false,tokenizer.ggml.add_eos_token=bool:false",
         [](common_params & params, const std::string & value) {
-            if (!string_parse_kv_override(value.c_str(), params.kv_overrides)) {
-                throw std::runtime_error(string_format("error: Invalid type for KV override: %s\n", value.c_str()));
+            std::vector<std::string> kv_overrides;
+
+            std::string current;
+            bool escaping = false;
+
+            for (const char c : value) {
+                if (escaping) {
+                    current.push_back(c);
+                    escaping = false;
+                } else if (c == '\\') {
+                    escaping = true;
+                } else if (c == ',') {
+                    kv_overrides.push_back(current);
+                    current.clear();
+                } else {
+                    current.push_back(c);
+                }
+            }
+
+            if (escaping) {
+                current.push_back('\\');
+            }
+
+            kv_overrides.push_back(current);
+
+            for (const auto & kv_override : kv_overrides) {
+                if (!string_parse_kv_override(kv_override.c_str(), params.kv_overrides)) {
+                    throw std::runtime_error(string_format("error: Invalid type for KV override: %s\n", kv_override.c_str()));
+                }
             }
         }
     ));
@@ -2255,33 +2296,50 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"--lora"}, "FNAME",
-        "path to LoRA adapter (can be repeated to use multiple adapters)",
+        "path to LoRA adapter (use comma-separated values to load multiple adapters)",
         [](common_params & params, const std::string & value) {
-            params.lora_adapters.push_back({ std::string(value), 1.0, "", "", nullptr });
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                params.lora_adapters.push_back({ item, 1.0, "", "", nullptr });
+            }
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}));
     add_opt(common_arg(
-        {"--lora-scaled"}, "FNAME", "SCALE",
-        "path to LoRA adapter with user defined scaling (can be repeated to use multiple adapters)",
-        [](common_params & params, const std::string & fname, const std::string & scale) {
-            params.lora_adapters.push_back({ fname, std::stof(scale), "", "", nullptr });
+        {"--lora-scaled"}, "FNAME:SCALE,...",
+        "path to LoRA adapter with user defined scaling (format: FNAME:SCALE,...)\n"
+        "note: use comma-separated values",
+        [](common_params & params, const std::string & value) {
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                auto parts = string_split<std::string>(item, ':');
+                if (parts.size() != 2) {
+                    throw std::invalid_argument("lora-scaled format: FNAME:SCALE");
+                }
+                params.lora_adapters.push_back({ parts[0], std::stof(parts[1]), "", "", nullptr });
+            }
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}));
     add_opt(common_arg(
         {"--control-vector"}, "FNAME",
-        "add a control vector\nnote: this argument can be repeated to add multiple control vectors",
+        "add a control vector\nnote: use comma-separated values to add multiple control vectors",
         [](common_params & params, const std::string & value) {
-            params.control_vectors.push_back({ 1.0f, value, });
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                params.control_vectors.push_back({ 1.0f, item, });
+            }
         }
     ));
     add_opt(common_arg(
-        {"--control-vector-scaled"}, "FNAME", "SCALE",
+        {"--control-vector-scaled"}, "FNAME:SCALE,...",
         "add a control vector with user defined scaling SCALE\n"
-        "note: this argument can be repeated to add multiple scaled control vectors",
-        [](common_params & params, const std::string & fname, const std::string & scale) {
-            params.control_vectors.push_back({ std::stof(scale), fname });
+        "note: use comma-separated values (format: FNAME:SCALE,...)",
+        [](common_params & params, const std::string & value) {
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                auto parts = string_split<std::string>(item, ':');
+                if (parts.size() != 2) {
+                    throw std::invalid_argument("control-vector-scaled format: FNAME:SCALE");
+                }
+                params.control_vectors.push_back({ std::stof(parts[1]), parts[0] });
+            }
         }
     ));
     add_opt(common_arg(
@@ -2371,13 +2429,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("HF_TOKEN"));
     add_opt(common_arg(
         {"--context-file"}, "FNAME",
-        "file to load context from (repeat to specify multiple files)",
+        "file to load context from (use comma-separated values to specify multiple files)",
         [](common_params & params, const std::string & value) {
-            std::ifstream file(value, std::ios::binary);
-            if (!file) {
-                throw std::runtime_error(string_format("error: failed to open file '%s'\n", value.c_str()));
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                std::ifstream file(item, std::ios::binary);
+                if (!file) {
+                    throw std::runtime_error(string_format("error: failed to open file '%s'\n", item.c_str()));
+                }
+                params.context_files.push_back(item);
             }
-            params.context_files.push_back(value);
         }
     ).set_examples({LLAMA_EXAMPLE_RETRIEVAL}));
     add_opt(common_arg(
@@ -2568,6 +2628,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.api_prefix = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_API_PREFIX"));
+    add_opt(common_arg(
+        {"--webui-config"}, "JSON",
+        "JSON that provides default WebUI settings (overrides WebUI defaults)",
+        [](common_params & params, const std::string & value) {
+            params.webui_config_json = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_CONFIG"));
+    add_opt(common_arg(
+        {"--webui-config-file"}, "PATH",
+        "JSON file that provides default WebUI settings (overrides WebUI defaults)",
+        [](common_params & params, const std::string & value) {
+            params.webui_config_json = read_file(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_WEBUI_CONFIG_FILE"));
     add_opt(common_arg(
         {"--webui"},
         {"--no-webui"},
