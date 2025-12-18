@@ -3,9 +3,49 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 
+#include <errno.h>
+#include <limits.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// Common env helpers shared by ggml-cpu.c and ggml-ifairy-lut.cpp.
+// "enabled" means: env is set and not equal to "0".
+static inline bool ggml_ifairy_env_enabled(const char * name) {
+    const char * env = getenv(name);
+    return env && strcmp(env, "0") != 0;
+}
+
+// Parse an integer env var if it is set and not equal to "0", otherwise return default_value.
+// If parsing fails, also returns default_value.
+static inline int ggml_ifairy_env_get_int_nonzero(const char * name, int default_value) {
+    const char * env = getenv(name);
+    if (!env || strcmp(env, "0") == 0) {
+        return default_value;
+    }
+
+    errno = 0;
+    char * end = NULL;
+    const long v = strtol(env, &end, 10);
+    if (end == env) {
+        return default_value;
+    }
+
+    if (v > (long) INT_MAX) {
+        return INT_MAX;
+    }
+    if (v < (long) INT_MIN) {
+        return INT_MIN;
+    }
+    if (errno == ERANGE) {
+        return v < 0 ? INT_MIN : INT_MAX;
+    }
+    return (int) v;
+}
 
 struct ifairy_lut_extra {
     uint8_t * indexes;

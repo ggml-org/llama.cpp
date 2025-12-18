@@ -1268,14 +1268,11 @@ void ggml_compute_forward_mul_mat(
         const int64_t blocks_per_col = K / QK_K;
         const int64_t groups = blocks_per_col * ((QK_K + 2) / 3);
 
-        const bool strict = getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT") && strcmp(getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT"), "0") != 0;
+        const bool strict = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_VALIDATE_STRICT");
 
         int tile_blocks = 0;
         if (!strict) {
-            const char * env = getenv("GGML_IFAIRY_LUT_BK_BLOCKS");
-            if (env && strcmp(env, "0") != 0) {
-                tile_blocks = (int) strtol(env, NULL, 10);
-            }
+            tile_blocks = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BK_BLOCKS", 0);
         }
         if (tile_blocks < 0) {
             tile_blocks = 0;
@@ -1283,10 +1280,7 @@ void ggml_compute_forward_mul_mat(
 
         int bm = 64;
         if (tile_blocks > 0) {
-            const char * env = getenv("GGML_IFAIRY_LUT_BM");
-            if (env && strcmp(env, "0") != 0) {
-                bm = (int) strtol(env, NULL, 10);
-            }
+            bm = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BM", 64);
             if (bm < 1) {
                 bm = 1;
             }

@@ -185,6 +185,7 @@ P1：
 - 可维护性重构：拆分 `ggml/src/ggml-ifairy-lut.cpp`（preprocess/qgemm/transform/common），减少 legacy/compact 重复代码。
 - 错误处理一致性：统一 `return false`/`GGML_ASSERT`/日志策略；把“可恢复失败”和“不可恢复错误”分开。
 - 路由健壮性：在支持平台上做更明确的 CPU feature 判定（NEON/dotprod），并在不满足时可控回退。
+- ✅ P1 小步：将 LUT 相关 env 解析 helper 集中到 `ggml/src/ggml-ifairy-lut.h`，并在 `ggml-cpu.c`/`ggml-ifairy-lut.cpp` 复用，减少重复与语义漂移。
 
 P2：
 

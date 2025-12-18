@@ -54,11 +54,6 @@ struct ifairy_lut_index_cache_entry {
 
 static std::unordered_map<ifairy_lut_index_cache_key, ifairy_lut_index_cache_entry, ifairy_lut_index_cache_key_hash> g_ifairy_lut_index_cache;
 
-static inline bool ggml_ifairy_env_enabled(const char * name) {
-    const char * env = getenv(name);
-    return env && strcmp(env, "0") != 0;
-}
-
 // Prefetch is enabled by default; set GGML_IFAIRY_LUT_PREFETCH=0 to disable for tuning.
 static inline bool ggml_ifairy_lut_prefetch_enabled(void) {
     const char * env = getenv("GGML_IFAIRY_LUT_PREFETCH");
@@ -220,18 +215,15 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
     // Disabled under strict validation (strict currently assumes full-K single-pass).
     int tile_blocks = 0;
     if (!strict) {
-        const char * env = getenv("GGML_IFAIRY_LUT_BK_BLOCKS");
-        if (env && strcmp(env, "0") != 0) {
-            tile_blocks = (int) strtol(env, NULL, 10);
-        }
+        tile_blocks = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BK_BLOCKS", 0);
+    }
+    if (tile_blocks < 0) {
+        tile_blocks = 0;
     }
 
     int bm = 64;
     if (tile_blocks > 0) {
-        const char * env = getenv("GGML_IFAIRY_LUT_BM");
-        if (env && strcmp(env, "0") != 0) {
-            bm = (int) strtol(env, NULL, 10);
-        }
+        bm = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BM", 64);
         if (bm < 1) {
             bm = 1;
         }
@@ -2236,7 +2228,7 @@ static void ggml_ifairy_lut_mul_mat_scalar_internal(int m, int k, int n, const v
         return;
     }
 
-    const bool strict = getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT") && strcmp(getenv("GGML_IFAIRY_LUT_VALIDATE_STRICT"), "0") != 0;
+    const bool strict = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_VALIDATE_STRICT");
 
     // preprocess activations -> LUT per column
     ggml_ifairy_lut_preprocess(m, k, n, act, act_stride, scales, lut);

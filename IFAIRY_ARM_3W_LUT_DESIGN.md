@@ -180,6 +180,7 @@ P1（近期做）：
 - 可维护性重构：拆分 `ggml/src/ggml-ifairy-lut.cpp`，减少 legacy/compact 重复代码。
 - 错误处理一致性：统一 `return false`/`GGML_ASSERT`/日志策略。
 - 路由健壮性：补齐更明确的 CPU feature 判定（NEON/dotprod）与可控回退。
+- ✅ P1 小步：将 LUT 相关 env 解析 helper 集中到 `ggml/src/ggml-ifairy-lut.h`，并在 `ggml-cpu.c`/`ggml-ifairy-lut.cpp` 复用，减少重复与语义漂移。
 
 P2（持续）：
 
