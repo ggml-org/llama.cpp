@@ -3,6 +3,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "ggml-openvino-extra.h"
+#include "ggml-openvino.h"
 #include "ggml-quants.hpp"
 
 #include <ggml-impl.h>
@@ -471,9 +472,7 @@ const ggml_tensor * GgmlOvDecoder::get_tensor_from_name(const std::string & name
 //     return kv_param_res_names;
 // }
 
-std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_nodes(
-    ggml_cgraph * cgraph,
-    std::map<ggml_type, ExtraQuantType> types_to_requantize) {
+std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_nodes(ggml_cgraph * cgraph) {
     std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
     static std::mutex weights_mutex;
     auto * nodes = cgraph->nodes;
@@ -498,10 +497,7 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
                         }
                     }
                     if (should_create) {
-                        auto requant_type = types_to_requantize.count(src->type) ?
-                                                std::optional<ExtraQuantType>(types_to_requantize.at(src->type)) :
-                                                std::nullopt;
-                        auto weight_node = create_weight_node(src, requant_type);
+                        auto weight_node = create_weight_node(src);
                         weight_node->set_friendly_name(src_name);
                         {
                             std::lock_guard<std::mutex> lock(weights_mutex);
@@ -520,11 +516,14 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
 static std::unordered_map<const void *, std::shared_ptr<ov::Node>> s_quantized_weight_cache;
 static std::mutex s_quantized_weight_cache_mutex;
 
-std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor,
-                                                            std::optional<ExtraQuantType> requant_type) {
+std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor) {
     // Check if we have a pre-built constant from the OpenVINO backend buffer
     // This is set during ggml_backend_openvino_buffer_set_tensor
-    if (tensor->extra != nullptr && !requant_type.has_value()) {
+    if (tensor->extra) {
+        if (!ggml_backend_buffer_is_openvino(tensor->buffer)) {
+            OPENVINO_ASSERT(false, "Unsupported weight tensor: " + std::string(tensor->name) +
+                                       " Possibly this is a cpu backend repacked quantized weights");
+        }
         // Cast to our extra base type and check the type
         auto * extra_base = static_cast<ggml_openvino_extra_base *>(tensor->extra);
 
@@ -547,7 +546,7 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
 
     // Fallback: Check static cache for quantized weights (keyed by data pointer)
     // This handles cases where tensors weren't loaded through OpenVINO buffer
-    if (ggml_is_quantized(tensor->type) && !requant_type.has_value()) {
+    if (ggml_is_quantized(tensor->type)) {
         std::lock_guard<std::mutex> lock(s_quantized_weight_cache_mutex);
         auto it = s_quantized_weight_cache.find(tensor->data);
         if (it != s_quantized_weight_cache.end()) {
@@ -565,64 +564,11 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor * tensor
                                  ggml_type_name(tensor->type));
     }
 
-    auto node_type = get_ov_type(tensor);
-    auto node_shape = get_shape(tensor);
-    auto ne_total = ggml_nelements(tensor);
-
-    OPENVINO_ASSERT(node_shape[0] == 1, "Got 4D weights, expect all weights to be 2D: ", tensor->name);
-    node_shape.erase(node_shape.begin());
-    OPENVINO_ASSERT(node_shape[0] == 1, "Got 3D weights, expect all weights to be 2D: ", tensor->name);
-    node_shape.erase(node_shape.begin());
-
-    // F16 and F32 case
-    if (node_type != ov::element::dynamic) {
-        ov::Tensor weights(node_type, node_shape);
-        memcpy(weights.data(), tensor->data, ne_total * node_type.size());
-        std::shared_ptr<ov::Node> weight_node = std::make_shared<ov::op::v0::Constant>(weights);
-        // Disabled because it triggers a bug in NPUW, no performance impact on CPU GPU
-        // if (node_type == ov::element::f16) {
-        //     weight_node = std::make_shared<ov::op::v0::Convert>(weight_node, ov::element::f32);
-        // }
-        weight_node->set_friendly_name(tensor->name);
-        return weight_node;
-    }
-
-    // Quantized case - extra should be nullptr (not our type)
-    // Our ggml_openvino_weight_extra is only set for F16/F32 weights
-    if (tensor->extra != nullptr) {
-        // Check if it's our type - if so, something is wrong
-        auto * extra_base = static_cast<ggml_openvino_extra_base *>(tensor->extra);
-        if (extra_base->type == ggml_openvino_extra_base::Type::WEIGHT ||
-            extra_base->type == ggml_openvino_extra_base::Type::TENSOR) {
-            OPENVINO_ASSERT(false, "Quantized weight tensor has unexpected extra type: " + std::string(tensor->name));
-        }
-        // Otherwise it might be repacked quantized weights from another backend
-        OPENVINO_ASSERT(false, "Unsupported weight tensor: " + std::string(tensor->name) +
-                                   " Possibly this is a repacked quantized weights");
-    }
-
-    if (requant_type.has_value()) {
-        return requantize(tensor, requant_type.value());
-    }
-
-    // Extract quantized weights using the shared function
-    auto layout = ggml_openvino_get_extracted_layout(tensor);
-    if (layout.total_size == 0) {
-        OPENVINO_THROW("Unsupported quantized type for ", tensor->name, " type=", ggml_type_name(tensor->type));
-    }
-
-    ov::element::Type weight_type = layout.is_u4 ? ov::element::u4 : ov::element::u8;
-    ov::Shape scale_shape = {node_shape[0], node_shape[1] / layout.weights_per_block};
-
-    ov::Tensor weights(weight_type, node_shape);
-    ov::Tensor scales(ov::element::f16, scale_shape);
-    ov::Tensor biases(ov::element::f16, scale_shape);
-
-    auto result = extract_quantized_weights(tensor, tensor->data, weights, scales, biases);
+    std::shared_ptr<ov::Node> result = process_weight_tensor(tensor, tensor->data, nullptr);
     result->set_friendly_name(tensor->name);
 
     // Cache the quantized weight node for future reuse
-    if (ggml_is_quantized(tensor->type) && !requant_type.has_value()) {
+    if (ggml_is_quantized(tensor->type)) {
         std::lock_guard<std::mutex> lock(s_quantized_weight_cache_mutex);
         s_quantized_weight_cache[tensor->data] = result;
         GGML_LOG_DEBUG("%s: cached quantized constant for %s\n", __func__, tensor->name);

@@ -12,7 +12,11 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <openvino/core/type/element_type.hpp>
 #include <openvino/openvino.hpp>
+#include <openvino/runtime/allocator.hpp>
+#include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
+#include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
 #include <openvino/runtime/tensor.hpp>
 #include <set>
 #include <string>
@@ -48,7 +52,8 @@ struct ggml_backend_openvino_buffer_context {
     // For non-weight buffers (KV cache, compute), we still use contiguous allocation
     void * data;
     size_t size;
-    bool is_weight_buffer;  // Set when buffer usage is set to WEIGHTS
+
+    std::shared_ptr<ov::Tensor> ov_tensor;
 
     // Track all extras for cleanup
     std::vector<ggml_openvino_extra_base *> tensor_extras;
@@ -57,18 +62,42 @@ struct ggml_backend_openvino_buffer_context {
         device(device),
         name(std::string(GGML_OPENVINO_NAME) + std::to_string(device)),
         data(nullptr),
-        size(size),
-        is_weight_buffer(false) {
-        // Allocate aligned contiguous memory
-        if (size > 0) {
+        size(size) {
+        if (size == 0) {
+            return;
+        }
+
+        const auto & device_name = ggml_openvino_get_device_name();
+        auto & core = ov_singleton_core();
+
+        if (device_name == "CPU") {
 #ifdef _WIN32
-            data = _aligned_malloc(size, GGML_OPENVINO_BUFFER_ALIGNMENT);
+            data = _aligned_malloc(alloc_size, GGML_OPENVINO_BUFFER_ALIGNMENT);
 #else
             data = aligned_alloc(GGML_OPENVINO_BUFFER_ALIGNMENT, size);
 #endif
-            if (data == nullptr) {
-                GGML_LOG_ERROR("%s: failed to allocate %zu bytes\n", __func__, size);
-            }
+            ov_tensor = std::make_shared<ov::Tensor>(ov::element::u8, ov::Shape{size}, data);
+        } else if (device_name == "GPU") {
+            auto gpu_context = core.get_default_context("GPU").as<ov::intel_gpu::ocl::ClContext>();
+            auto usm_tensor = gpu_context.create_usm_host_tensor(ov::element::u8, ov::Shape{size});
+            data = usm_tensor.get();
+            ov_tensor = std::make_shared<ov::intel_gpu::ocl::USMTensor>(std::move(usm_tensor));
+        } else {
+            auto npu_context = core.get_default_context("NPU").as<ov::intel_npu::level_zero::ZeroContext>();
+            auto l0_tensor = npu_context.create_l0_host_tensor(ov::element::u8, ov::Shape{size});
+            data = l0_tensor.get();
+            ov_tensor = std::make_shared<ov::intel_npu::level_zero::ZeroBufferTensor>(std::move(l0_tensor));
+        }
+
+        if (data == nullptr) {
+            GGML_LOG_ERROR("%s: failed to allocate %zu bytes\n", __func__, size);
+            return;
+        }
+
+        if (reinterpret_cast<uintptr_t>(data) % GGML_OPENVINO_BUFFER_ALIGNMENT != 0) {
+            GGML_LOG_ERROR("%s: %s buffer is not aligned to %d bytes\n", __func__, device_name.c_str(),
+                           GGML_OPENVINO_BUFFER_ALIGNMENT);
+            GGML_ABORT("fatal error");
         }
     }
 
@@ -78,15 +107,12 @@ struct ggml_backend_openvino_buffer_context {
             delete extra;
         }
         tensor_extras.clear();
-
-        // Free contiguous memory
-        if (data != nullptr) {
+        if (data && ggml_openvino_get_device_name() == "CPU") {
 #ifdef _WIN32
             _aligned_free(data);
 #else
             free(data);
 #endif
-            data = nullptr;
         }
     }
 };
@@ -156,57 +182,26 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
     }
 
     if (layout.total_size > 0) {
+        // Quantized weight tensor with extraction/requantization
         uint8_t * buf_base = (uint8_t *) tensor->data;
 
-        // 2D shape for weights [rows, cols]
-        ov::Shape weight_shape = {static_cast<size_t>(tensor->ne[1]), static_cast<size_t>(tensor->ne[0])};
-
         try {
-            std::shared_ptr<ov::Node> constant;
+            std::shared_ptr<ov::Node> constant = process_weight_tensor(tensor, data, buf_base);
+            constant->set_friendly_name(tensor->name);
 
-            if (layout.is_requant && layout.requant_type.has_value()) {
-                // Requantization path
-                if (layout.requant_type.value() == ExtraQuantType::F16) {
-                    // Requant to F16: create F16 tensor with external memory, requantize fills it
-                    ov::Tensor weights(ov::element::f16, weight_shape, buf_base);
-                    ov::Tensor dummy_scales, dummy_biases;  // Not used for F16
-                    // requantize_to_buffers fills weights and returns a Constant wrapping it
-                    constant = requantize_to_buffers(tensor, data, ExtraQuantType::F16, 0, weights, dummy_scales,
-                                                     dummy_biases);
-
-                    // Store in tensor->extra (use weight_extra since it's F16)
-                    auto * extra = new ggml_openvino_weight_extra(constant);
-                    ctx->tensor_extras.push_back(extra);
-                    tensor->extra = extra;
-
-                    GGML_LOG_DEBUG("%s: requantized %s to F16\n", __func__, tensor->name);
-                } else {
-                    // Requant to quantized format (Q4_0_128, Q8_0_32, etc.)
-                    ov::element::Type weight_type = layout.is_u4 ? ov::element::u4 : ov::element::u8;
-                    ov::Shape scale_shape = {static_cast<size_t>(tensor->ne[1]),
-                                             static_cast<size_t>(tensor->ne[0] / layout.weights_per_block)};
-
-                    ov::Tensor weights(weight_type, weight_shape, buf_base + layout.weights_offset);
-                    ov::Tensor scales(ov::element::f16, scale_shape, buf_base + layout.scales_offset);
-                    ov::Tensor biases(ov::element::f16, scale_shape, buf_base + layout.biases_offset);
-
-                    constant = requantize_to_buffers(tensor, data, layout.requant_type.value(),
-                                                     layout.weights_per_block, weights, scales, biases);
-
-                    // Store in tensor->extra
-                    auto * extra = new ggml_openvino_quantized_weight_extra(std::move(weights), std::move(scales),
-                                                                            std::move(biases), constant);
-                    ctx->tensor_extras.push_back(extra);
-                    tensor->extra = extra;
-
-                    GGML_LOG_DEBUG("%s: requantized %s to %s (u%d, block_size=%ld)\n", __func__, tensor->name,
-                                   layout.requant_type.value() == ExtraQuantType::Q4_0_128 ? "Q4_0_128" : "Q8_0_32",
-                                   layout.is_u4 ? 4 : 8, layout.weights_per_block);
-                }
+            // Store in tensor->extra
+            if (layout.is_requant && layout.requant_type.has_value() &&
+                layout.requant_type.value() == ExtraQuantType::F16) {
+                // F16 requant case - use weight_extra
+                auto * extra = new ggml_openvino_weight_extra(constant);
+                ctx->tensor_extras.push_back(extra);
+                tensor->extra = extra;
+                GGML_LOG_DEBUG("%s: requantized %s to F16\n", __func__, tensor->name);
             } else {
-                // Normal extraction path (no requant)
+                // Quantized case - use quantized_weight_extra
+                // Create tensors with external memory (already filled by process_weight_tensor)
                 ov::element::Type weight_type = layout.is_u4 ? ov::element::u4 : ov::element::u8;
-                int64_t n_blocks = ggml_nelements(tensor) / layout.weights_per_block;
+                ov::Shape weight_shape = {static_cast<size_t>(tensor->ne[1]), static_cast<size_t>(tensor->ne[0])};
                 ov::Shape scale_shape = {static_cast<size_t>(tensor->ne[1]),
                                          static_cast<size_t>(tensor->ne[0] / layout.weights_per_block)};
 
@@ -214,16 +209,20 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
                 ov::Tensor scales(ov::element::f16, scale_shape, buf_base + layout.scales_offset);
                 ov::Tensor biases(ov::element::f16, scale_shape, buf_base + layout.biases_offset);
 
-                constant = extract_quantized_weights(tensor, data, weights, scales, biases);
-
-                // Store in tensor->extra
                 auto * extra = new ggml_openvino_quantized_weight_extra(std::move(weights), std::move(scales),
                                                                         std::move(biases), constant);
                 ctx->tensor_extras.push_back(extra);
                 tensor->extra = extra;
 
-                GGML_LOG_DEBUG("%s: extracted quantized constant for %s (u%d, %zu weights, %ld blocks)\n", __func__,
-                               tensor->name, layout.is_u4 ? 4 : 8, layout.weights_size, n_blocks);
+                if (layout.is_requant) {
+                    GGML_LOG_DEBUG("%s: requantized %s to %s (u%d, block_size=%ld)\n", __func__, tensor->name,
+                                   layout.requant_type.value() == ExtraQuantType::Q4_0_128 ? "Q4_0_128" : "Q8_0_32",
+                                   layout.is_u4 ? 4 : 8, layout.weights_per_block);
+                } else {
+                    int64_t n_blocks = ggml_nelements(tensor) / layout.weights_per_block;
+                    GGML_LOG_DEBUG("%s: extracted quantized constant for %s (u%d, %zu weights, %ld blocks)\n", __func__,
+                                   tensor->name, layout.is_u4 ? 4 : 8, layout.weights_size, n_blocks);
+                }
             }
 
         } catch (const std::exception & e) {
@@ -233,32 +232,9 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
         }
     } else if (is_weight_buffer && is_full_tensor_set && is_2d &&
                (tensor->type == GGML_TYPE_F32 || tensor->type == GGML_TYPE_F16 || tensor->type == GGML_TYPE_BF16)) {
-        // F16/F32/BF16 weight tensor - copy data and create shared-memory constant
-        memcpy((char *) tensor->data + offset, data, size);
-
+        // F16/F32/BF16 weight tensor
         try {
-            // Get OpenVINO element type
-            ov::element::Type element_type;
-            switch (tensor->type) {
-            case GGML_TYPE_F32:
-                element_type = ov::element::f32;
-                break;
-            case GGML_TYPE_F16:
-                element_type = ov::element::f16;
-                break;
-            case GGML_TYPE_BF16:
-                element_type = ov::element::bf16;
-                break;
-            default:
-                return;  // Should not happen
-            }
-
-            // Create 2D shape (OpenVINO expects [rows, cols])
-            ov::Shape shape = {static_cast<size_t>(tensor->ne[1]), static_cast<size_t>(tensor->ne[0])};
-
-            // Create ov::Tensor with external memory, then wrap with Constant
-            ov::Tensor ov_tensor(element_type, shape, tensor->data);
-            auto constant = std::make_shared<ov::op::v0::Constant>(ov_tensor);
+            std::shared_ptr<ov::Node> constant = process_weight_tensor(tensor, data, tensor->data);
             constant->set_friendly_name(tensor->name);
 
             // Store in tensor->extra
@@ -418,7 +394,7 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_buffer_type(in
 }
 
 // Check if a buffer is an OpenVINO buffer
-static bool ggml_backend_buffer_is_openvino(ggml_backend_buffer_t buffer) {
+bool ggml_backend_buffer_is_openvino(ggml_backend_buffer_t buffer) {
     return buffer->iface.free_buffer == ggml_backend_openvino_buffer_free_buffer;
 }
 

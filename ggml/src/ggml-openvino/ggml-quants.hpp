@@ -78,6 +78,16 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
                                                 ov::Tensor & scales,
                                                 ov::Tensor & biases);
 
+// Process weight tensor and create an OpenVINO constant node
+// Handles F16/F32/BF16 and quantized weights, with optional requantization
+// If output_base_ptr is nullptr, allocates internal buffers (for decoder use)
+// If output_base_ptr is provided, uses pre-allocated buffers at specified offsets (for backend buffer use)
+// Returns the weight constant node
+std::shared_ptr<ov::Node> process_weight_tensor(
+    const ggml_tensor * tensor,
+    const void * data,                  // Source data pointer (may differ from tensor->data)
+    void * output_base_ptr = nullptr);  // Base pointer for output buffers (or nullptr for internal allocation)
+
 void quantize_q4_0(const float* x, ov::Tensor& weights_arr, ov::Tensor& scales_arr, ov::Tensor& biases_arr, int64_t k,
                    int64_t qk);
 void quantize_q8_1(const float* x, ov::Tensor& weights_arr, ov::Tensor& scales_arr, ov::Tensor& biases_arr, int64_t k,

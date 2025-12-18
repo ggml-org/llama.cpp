@@ -179,12 +179,9 @@ public:
 
     static void dump_cgraph(const ggml_cgraph * cgraph, std::string & filename);
 
-    static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor * tensor,
-                                                        std::optional<ExtraQuantType> requant_type = std::nullopt);
+    static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor * tensor);
 
-    static std::map<std::string, std::shared_ptr<ov::Node>> create_weight_nodes(
-        ggml_cgraph * cgraph,
-        std::map<ggml_type, ExtraQuantType> types_to_requantize = {});
+    static std::map<std::string, std::shared_ptr<ov::Node>> create_weight_nodes(ggml_cgraph * cgraph);
 
     const ggml_tensor * get_tensor_used_op(const ggml_tensor * tensor) const;
 

@@ -107,7 +107,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
             infer_request_cache.erase(key);
 
             std::shared_ptr<ov::Model> model;
-            auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph, get_types_to_requant(device));
+            auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
 
             ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static);
             decoder_end_time = ggml_time_us();
@@ -255,7 +255,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph) {
             infer_request_cache_prefill.erase(key);
 
             std::shared_ptr<ov::Model> model;
-            auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph, get_types_to_requant(device));
+            auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
 
             auto ggml_decoder_prefill = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights,
                                                                         is_static, true, prefill_chunk_size);
@@ -402,21 +402,6 @@ ov::AnyMap get_ov_compile_config(const std::string & device) {
         core.set_property(ov::cache_dir(cache_dir));
     }
     return config;
-}
-
-std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string & device) {
-    // Use singleton to check if NPU (device param kept for API compatibility)
-    if (ggml_openvino_is_npu()) {
-        return {
-            {GGML_TYPE_Q4_0, ExtraQuantType::Q4_0_128},
-            {GGML_TYPE_Q4_1, ExtraQuantType::Q4_0_128},
-            {GGML_TYPE_Q4_K, ExtraQuantType::Q4_0_128},
-            {GGML_TYPE_Q6_K, ExtraQuantType::F16     },
-            {GGML_TYPE_Q5_K, ExtraQuantType::F16     },
-        };
-    }
-    return {};
-    GGML_UNUSED(device);
 }
 
 bool is_naive(ggml_cgraph * cgraph) {

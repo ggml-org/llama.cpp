@@ -73,8 +73,6 @@ graph_key compute_graph_key(struct ggml_cgraph * cgraph);
 
 ov::AnyMap get_ov_compile_config(const std::string & device);
 
-std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string & device);
-
 ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & param_name);
 ov::Tensor get_ov_input_tensor_static_decode(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
                                              const std::string & param_name);
