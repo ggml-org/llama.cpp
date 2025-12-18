@@ -1596,7 +1596,6 @@ static void matmul_f16_f32(struct htp_tensor * restrict src0,
 }
 
 // *** dynamic quant
-typedef void (*quantize_block_fp32_q8_func_t)(float * restrict x, uint8_t * restrict y_q, uint8_t * restrict y_d);
 
 static inline void quantize_block_fp32_q8x1(float * restrict x, uint8_t * restrict y_q, uint8_t * restrict y_d) {
     assert((unsigned long) x % 128 == 0);
@@ -1754,7 +1753,7 @@ static inline void quantize_block_fp32_q8x4(float * restrict x, uint8_t * restri
 }
 
 // Overrides input x
-static void quantize_row_fp32_q8x4x2(float * restrict x, uint8_t * restrict y, uint32_t k, quantize_block_fp32_q8_func_t quantize_row_func) {
+static void quantize_row_fp32_q8x4x2(float * restrict x, uint8_t * restrict y, uint32_t k) {
     assert(k % 32 == 0);
     const uint32_t qk = QK_Q8_0x4x2;
     const uint32_t nb = (k + qk - 1) / qk;
@@ -1771,10 +1770,24 @@ static void quantize_row_fp32_q8x4x2(float * restrict x, uint8_t * restrict y, u
     uint8_t * restrict t_d = (uint8_t *) x;
 
     for (uint32_t i = 0; i < nb; i++) {
-        quantize_row_func(x + (i * 2 + 0) * qk / 2, y_q + (i * 2 + 0) * qblk_size / 2,
+#if FP32_QUANTIZE_GROUP_SIZE == 32
+        quantize_block_fp32_q8x1(x + (i * 2 + 0) * qk / 2, y_q + (i * 2 + 0) * qblk_size / 2,
                                  t_d + (i * 2 + 0) * dblk_size / 2);
-        quantize_row_func(x + (i * 2 + 1) * qk / 2, y_q + (i * 2 + 1) * qblk_size / 2,
+        quantize_block_fp32_q8x1(x + (i * 2 + 1) * qk / 2, y_q + (i * 2 + 1) * qblk_size / 2,
                                  t_d + (i * 2 + 1) * dblk_size / 2);
+#elif FP32_QUANTIZE_GROUP_SIZE == 64
+        quantize_block_fp32_q8x2(x + (i * 2 + 0) * qk / 2, y_q + (i * 2 + 0) * qblk_size / 2,
+                                 t_d + (i * 2 + 0) * dblk_size / 2);
+        quantize_block_fp32_q8x2(x + (i * 2 + 1) * qk / 2, y_q + (i * 2 + 1) * qblk_size / 2,
+                                 t_d + (i * 2 + 1) * dblk_size / 2);
+#elif FP32_QUANTIZE_GROUP_SIZE == 128
+        quantize_block_fp32_q8x4(x + (i * 2 + 0) * qk / 2, y_q + (i * 2 + 0) * qblk_size / 2,
+                                 t_d + (i * 2 + 0) * dblk_size / 2);
+        quantize_block_fp32_q8x4(x + (i * 2 + 1) * qk / 2, y_q + (i * 2 + 1) * qblk_size / 2,
+                                 t_d + (i * 2 + 1) * dblk_size / 2);
+#else
+#error "FP32_QUANTIZE_GROUP_SIZE must be 32, 64, or 128"
+#endif
     }
 
     // now copy the scales into final location
@@ -1786,8 +1799,7 @@ static void quantize_fp32_q8x4x2(const struct htp_tensor * src,
                                  struct htp_spad * spad,
                                  uint32_t          nth,
                                  uint32_t          ith,
-                                 uint32_t          nrows_per_thread
-                                , quantize_block_fp32_q8_func_t quantize_row_func) {
+                                 uint32_t          nrows_per_thread) {
 
     uint64_t t1 = HAP_perf_get_qtimer_count();
 
@@ -1816,7 +1828,7 @@ static void quantize_fp32_q8x4x2(const struct htp_tensor * src,
         hvx_copy_fp32_aa(tmp_data, src_data, ne0);
 
         // FARF(HIGH, "quantize-q8x4-row: %u\n", i);
-        quantize_row_fp32_q8x4x2((float *) tmp_data, dst_data, ne0, quantize_row_func);
+        quantize_row_fp32_q8x4x2((float *) tmp_data, dst_data, ne0);
         dst_data += dst_row_size;
         src_data += src_row_size;
     }
@@ -1829,11 +1841,7 @@ static void quantize_fp32_q8x4x2(const struct htp_tensor * src,
 
 static void htp_quantize_fp32_q8x4x2(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = data;
-    // quantize_block_fp32_q8x4: use group size 128: tested on Qwen3:0.6B k proj layer 0 on 256 tokens, Relative L2 1.7%
-    // quantize_block_fp32_q8x2: use group size 64 : Relative L2 1.3%
-    // quantize_block_fp32_q8x1: use group size 32 : Relative L2 1.1%
-    quantize_block_fp32_q8_func_t quantize_row_func = quantize_block_fp32_q8x1;
-    quantize_fp32_q8x4x2(&octx->src1, octx->src1_spad.data, &octx->src0_spad, n, i, octx->src1_nrows_per_thread, quantize_row_func);
+    quantize_fp32_q8x4x2(&octx->src1, octx->src1_spad.data, &octx->src0_spad, n, i, octx->src1_nrows_per_thread);
 }
 
 // ** matmul callbacks for worker_pool
