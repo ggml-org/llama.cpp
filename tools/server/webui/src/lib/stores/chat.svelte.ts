@@ -171,6 +171,7 @@ class ChatStore {
 	updateProcessingStateFromTimings(
 		timingData: {
 			prompt_n: number;
+			prompt_ms?: number;
 			predicted_n: number;
 			predicted_per_second: number;
 			cache_n: number;
@@ -212,6 +213,7 @@ class ChatStore {
 			if (message.role === 'assistant' && message.timings) {
 				const restoredState = this.parseTimingData({
 					prompt_n: message.timings.prompt_n || 0,
+					prompt_ms: message.timings.prompt_ms,
 					predicted_n: message.timings.predicted_n || 0,
 					predicted_per_second:
 						message.timings.predicted_n && message.timings.predicted_ms
@@ -282,6 +284,7 @@ class ChatStore {
 
 	private parseTimingData(timingData: Record<string, unknown>): ApiProcessingState | null {
 		const promptTokens = (timingData.prompt_n as number) || 0;
+		const promptMs = (timingData.prompt_ms as number) || undefined;
 		const predictedTokens = (timingData.predicted_n as number) || 0;
 		const tokensPerSecond = (timingData.predicted_per_second as number) || 0;
 		const cacheTokens = (timingData.cache_n as number) || 0;
@@ -320,6 +323,7 @@ class ChatStore {
 			speculative: false,
 			progressPercent,
 			promptTokens,
+			promptMs,
 			cacheTokens
 		};
 	}
@@ -536,6 +540,7 @@ class ChatStore {
 					this.updateProcessingStateFromTimings(
 						{
 							prompt_n: timings?.prompt_n || 0,
+							prompt_ms: timings?.prompt_ms,
 							predicted_n: timings?.predicted_n || 0,
 							predicted_per_second: tokensPerSecond,
 							cache_n: timings?.cache_n || 0,
@@ -768,10 +773,11 @@ class ChatStore {
 					content: streamingState.response
 				};
 				if (lastMessage.thinking?.trim()) updateData.thinking = lastMessage.thinking;
-				const lastKnownState = this.getCurrentProcessingStateSync();
+				const lastKnownState = this.getProcessingState(conversationId);
 				if (lastKnownState) {
 					updateData.timings = {
 						prompt_n: lastKnownState.promptTokens || 0,
+						prompt_ms: lastKnownState.promptMs,
 						predicted_n: lastKnownState.tokensDecoded || 0,
 						cache_n: lastKnownState.cacheTokens || 0,
 						predicted_ms:
@@ -1253,6 +1259,7 @@ class ChatStore {
 						this.updateProcessingStateFromTimings(
 							{
 								prompt_n: timings?.prompt_n || 0,
+								prompt_ms: timings?.prompt_ms,
 								predicted_n: timings?.predicted_n || 0,
 								predicted_per_second: tokensPerSecond,
 								cache_n: timings?.cache_n || 0,
