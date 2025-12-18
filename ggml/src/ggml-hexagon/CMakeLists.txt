@@ -2,7 +2,7 @@ include(${HEXAGON_SDK_ROOT}/build/cmake/hexagon_fun.cmake)
 include(ExternalProject)
 
 option(GGML_HEXAGON_HTP_DEBUG "ggml-hexagon: enable HTP debug output" OFF)
-option(GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE "ggml-hexagon: quantize group size (32, 64, or 128)" 128)
+set(GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE 128 CACHE STRING "ggml-hexagon: quantize group size (32, 64, or 128)")
 
 add_library(htp_iface OBJECT
     ${CMAKE_CURRENT_BINARY_DIR}/htp_iface_stub.c)
