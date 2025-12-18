@@ -583,11 +583,20 @@ static void ggml_sycl_flash_attn_ext_dispatch_ncols(
     sycl::device dev = stream->get_device();
     const bool use_xmx = gpu_has_xmx(dev);
 
-    // ESIMD kernel for decode (single query per head)
-    // ESIMD uses explicit SIMD operations which can be faster than XMX for decode
-    if (g_sycl_fa_esimd_enabled && ne01 <= 1 && fattn_esimd_f16_available()) {
-        fattn_esimd_f16<D, Q_type>(params, *stream);
-        return;
+    // ESIMD kernel dispatch (uses explicit SIMD operations)
+    // - Single query (ne01 <= 1): +7% speedup for decode on Mistral 7B
+    // - Batched queries (ne01 <= 8): Only for D=64 due to SLM constraints
+    if (g_sycl_fa_esimd_enabled && fattn_esimd_f16_available()) {
+        if (ne01 <= 1) {
+            // Partitioned kernel: each thread processes disjoint KV ranges
+            fattn_esimd_f16<D, Q_type>(params, *stream);
+            return;
+        } else if (false && D == 64 && ne01 <= 8 && fattn_esimd_batched_fits_slm<D>()) {
+            // DISABLED: Batched ESIMD is 20% slower than XMX for pp
+            // Keep single-query ESIMD for tg (ne01 <= 1) which has +7% speedup
+            fattn_esimd_f16_batched<D, Q_type>(params, *stream);
+            return;
+        }
     }
 
     // Helper macro to dispatch based on softcap
@@ -834,9 +843,9 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             tl_alloc_queue = stream;
 
             // Copy from host (USM) to device using the correct host pointers
+            // Note: In-order queue ensures memcpy completes before subsequent kernel launch
             stream->memcpy(tl_q_seq_ids_dev, host_q_ptr, q_size);
             stream->memcpy(tl_kv_seq_ids_dev, host_kv_ptr, kv_size);
-            stream->wait(); // Ensure copy completes before kernel launch
 
             params.q_seq_ids  = tl_q_seq_ids_dev;
             params.kv_seq_ids = tl_kv_seq_ids_dev;
@@ -871,9 +880,9 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
                 }
 
                 // Copy offsets to device
+                // Note: In-order queue ensures memcpy completes before subsequent kernel launch
                 stream->memcpy(tl_seq_q_offsets_dev, tl_seq_q_offsets.data(), offsets_size);
                 stream->memcpy(tl_seq_kv_offsets_dev, tl_seq_kv_offsets.data(), offsets_size);
-                stream->wait();  // Ensure copy completes before kernel launch
 
                 // Set params for kernel to use sequence boundary optimization
                 params.n_seqs = n_seqs;
@@ -1070,9 +1079,7 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
                     seq_lens_ptr[idx] = ctx_len;
                 });
 
-            // Ensure block_table and seq_lens fills complete before V2 kernel uses them
-            // (In-order queue should handle this, but be explicit for safety)
-            ctx.stream()->wait();
+            // Note: In-order queue ensures parallel_for fills complete before V2 kernel
 
             v2_block_table = g_v2_auto.block_table;
             v2_seq_lens = g_v2_auto.seq_lens;

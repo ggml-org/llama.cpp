@@ -2584,7 +2584,7 @@ int ggml_backend_sycl_verify_speculative_with_tokens(
         return 0;
     }
 
-    // Get the backend context from the tensor's buffer for proper synchronization
+    // Get the backend context from the tensor's buffer - this is where the data actually lives
     ggml_backend_buffer_t buffer = all_logits->buffer;
     if (!buffer) {
         GGML_LOG_ERROR("SYCL verify_speculative_with_tokens: tensor has no buffer\n");
@@ -2596,22 +2596,25 @@ int ggml_backend_sycl_verify_speculative_with_tokens(
         return 0;
     }
 
-    // Get the context from the buffer's backend (the one that computed the logits)
+    // Get the buffer's SYCL context - this is the actual device where data resides
     ggml_backend_sycl_buffer_context * buf_ctx =
         (ggml_backend_sycl_buffer_context *)buffer->context;
-    if (!buf_ctx) {
-        GGML_LOG_ERROR("SYCL verify_speculative_with_tokens: buffer has no context\n");
+    if (!buf_ctx || !buf_ctx->stream) {
+        GGML_LOG_ERROR("SYCL verify_speculative_with_tokens: buffer has no valid context\n");
         return 0;
     }
 
-    // Sync the buffer's queue to ensure logits computation is complete
-    // This is needed because the sampler might have a different queue
-    sycl::queue& buf_queue = *buf_ctx->stream;
-    buf_queue.wait();
+    // Sync ALL possible queues to ensure data is visible:
+    // 1. Buffer's stream (where buffer was created)
+    // 2. Sampler's stream (our verification context)
+    // 3. Device's default queue (catch-all)
+    buf_ctx->stream->wait();
+    sampler->sycl_ctx->stream()->wait();
 
-    // Also sync the device's default queue (used by some copy operations)
+    // Also sync the device's default queue
     ggml_sycl_set_device(buf_ctx->device);
-    dpct::dev_mgr::instance().get_device(buf_ctx->device).default_queue().wait();
+    sycl::queue& default_q = dpct::dev_mgr::instance().get_device(buf_ctx->device).default_queue();
+    default_q.wait();
 
     // Get logits data pointer from tensor
     const float * logits_data = (const float *)all_logits->data;
@@ -2622,24 +2625,6 @@ int ggml_backend_sycl_verify_speculative_with_tokens(
 
     const int n_vocab = sampler->state.n_vocab;
     const int n_outputs = all_logits->ne[1];  // Number of output positions in batch
-    const int tensor_vocab = all_logits->ne[0];  // Vocabulary size from tensor
-
-    // Debug: show actual values
-    GGML_LOG_INFO("SYCL verify: n_vocab=%d, tensor_ne0=%d, n_outputs=%d, n_draft=%d\n",
-                   n_vocab, tensor_vocab, n_outputs, n_draft);
-    GGML_LOG_INFO("SYCL verify: sampler device=%d, buffer device=%d, logits_data=%p, nbytes=%zu\n",
-                   sampler->sycl_ctx->device, buf_ctx->device, (void*)logits_data, all_logits->nb[1] * n_outputs);
-
-    // Debug: Check buffer base vs tensor data - they might be different!
-    void * buffer_base = ggml_backend_buffer_get_base(buffer);
-    size_t buffer_size = ggml_backend_buffer_get_size(buffer);
-    GGML_LOG_INFO("SYCL verify: buffer_base=%p, buffer_size=%zu, tensor_data=%p\n",
-                   buffer_base, buffer_size, (void*)logits_data);
-
-    // Check if data pointer is within buffer range
-    ptrdiff_t offset = (const char*)logits_data - (const char*)buffer_base;
-    GGML_LOG_INFO("SYCL verify: data offset from buffer_base=%td (should be positive and < %zu)\n",
-                   offset, buffer_size);
 
     // Validate that we have enough logits for the verification
     if (logits_offset + n_draft > n_outputs) {
@@ -2651,12 +2636,6 @@ int ggml_backend_sycl_verify_speculative_with_tokens(
     // Offset the logits pointer to start from the correct position
     const float * logits_at_offset = logits_data + (size_t)logits_offset * n_vocab;
 
-    // Debug: verify data is accessible via buffer's queue
-    float debug_logits[5];
-    buf_queue.memcpy(debug_logits, logits_at_offset, 5 * sizeof(float)).wait();
-    GGML_LOG_INFO("SYCL verify via buf_queue: first 5 logits = [%.2f, %.2f, %.2f, %.2f, %.2f]\n",
-                   debug_logits[0], debug_logits[1], debug_logits[2], debug_logits[3], debug_logits[4]);
-
     // Use the extended function that also returns sampled tokens
     return ggml_sycl_verify_speculative_with_tokens(
         *sampler->sycl_ctx, sampler->state, logits_at_offset, draft_tokens,
@@ -2664,6 +2643,100 @@ int ggml_backend_sycl_verify_speculative_with_tokens(
 }
 catch (sycl::exception const &exc) {
     GGML_LOG_ERROR("SYCL error verifying speculative with tokens: %s\n", exc.what());
+    return 0;
+}
+
+int ggml_backend_sycl_verify_speculative_from_ptr(
+    ggml_sycl_sampler_t sampler,
+    const float * gpu_logits,
+    int n_vocab,
+    int n_outputs,
+    const int32_t * draft_tokens,
+    int32_t * sampled_tokens_out,
+    int n_draft,
+    int logits_offset
+) try {
+    if (sampler == nullptr || gpu_logits == nullptr || draft_tokens == nullptr) {
+        GGML_LOG_ERROR("SYCL verify_speculative_from_ptr: null argument\n");
+        return 0;
+    }
+
+    if (n_draft <= 0 || n_vocab <= 0) {
+        GGML_LOG_ERROR("SYCL verify_speculative_from_ptr: invalid dimensions\n");
+        return 0;
+    }
+
+    if (logits_offset + n_draft > n_outputs) {
+        GGML_LOG_ERROR("SYCL verify_speculative_from_ptr: logits_offset (%d) + n_draft (%d) > n_outputs (%d)\n",
+            logits_offset, n_draft, n_outputs);
+        return 0;
+    }
+
+    // Offset into the logits buffer
+    const float* logits_at_offset = gpu_logits + logits_offset * n_vocab;
+
+    // Use the internal function directly with GPU pointer
+    return ggml_sycl_verify_speculative_with_tokens(
+        *sampler->sycl_ctx, sampler->state, logits_at_offset, draft_tokens,
+        sampled_tokens_out, n_draft, n_vocab);
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error verifying speculative from ptr: %s\n", exc.what());
+    return 0;
+}
+
+int ggml_backend_sycl_verify_speculative_from_host(
+    ggml_sycl_sampler_t sampler,
+    const float * host_logits,
+    int n_vocab,
+    int n_outputs,
+    const int32_t * draft_tokens,
+    int32_t * sampled_tokens_out,
+    int n_draft,
+    int logits_offset
+) try {
+    if (sampler == nullptr || host_logits == nullptr || draft_tokens == nullptr) {
+        GGML_LOG_ERROR("SYCL verify_speculative_from_host: null argument\n");
+        return 0;
+    }
+
+    if (n_draft <= 0 || n_vocab <= 0) {
+        GGML_LOG_ERROR("SYCL verify_speculative_from_host: invalid dimensions\n");
+        return 0;
+    }
+
+    if (logits_offset + n_draft > n_outputs) {
+        GGML_LOG_ERROR("SYCL verify_speculative_from_host: logits_offset (%d) + n_draft (%d) > n_outputs (%d)\n",
+            logits_offset, n_draft, n_outputs);
+        return 0;
+    }
+
+    // Copy logits from host to device
+    sycl::queue& q = *sampler->sycl_ctx->stream();
+    size_t logits_size = (size_t)n_outputs * n_vocab * sizeof(float);
+    float* gpu_logits = sycl::malloc_device<float>(n_outputs * n_vocab, q);
+    if (!gpu_logits) {
+        GGML_LOG_ERROR("SYCL verify_speculative_from_host: failed to allocate device memory\n");
+        return 0;
+    }
+
+    q.memcpy(gpu_logits, host_logits, logits_size).wait();
+
+    // Offset into the logits buffer
+    const float* logits_at_offset = gpu_logits + logits_offset * n_vocab;
+
+    // Use the internal function
+    int result = ggml_sycl_verify_speculative_with_tokens(
+        *sampler->sycl_ctx, sampler->state, logits_at_offset, draft_tokens,
+        sampled_tokens_out, n_draft, n_vocab);
+
+    // Cleanup
+    sycl::free(gpu_logits, q);
+
+    return result;
+}
+catch (sycl::exception const &exc) {
+    GGML_LOG_ERROR("SYCL error verifying speculative from host: %s\n", exc.what());
     return 0;
 }
 
@@ -3186,9 +3259,11 @@ void ggml_backend_sycl_copy_tensor_to_buffer(
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
     int device = sycl_ctx->device;
 
-    // Set device and get queue
+    // Set device and get the CONTEXT's stream (same as compute graph)
+    // CRITICAL: Must use context stream, not default_queue, to ensure synchronization
+    // with the compute graph that filled the source tensor
     ggml_sycl_set_device(device);
-    auto stream = dpct::dev_mgr::instance().get_device(device).default_queue();
+    sycl::queue& stream = *sycl_ctx->stream(device, 0);
 
     // Get source pointer from tensor
     void * src = src_tensor->data;
@@ -3197,7 +3272,8 @@ void ggml_backend_sycl_copy_tensor_to_buffer(
     void * dst_base = ggml_backend_buffer_get_base(dst_buffer);
     char * dst = (char *)dst_base + dst_offset;
 
-    // Device-to-device copy
+    // Device-to-device copy on the SAME queue as compute
+    // The .wait() ensures this copy completes before we return
     stream.memcpy(dst, src, size).wait();
 }
 catch (sycl::exception const &exc) {

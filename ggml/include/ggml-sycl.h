@@ -233,6 +233,34 @@ GGML_BACKEND_API int ggml_backend_sycl_verify_speculative_with_tokens(
     int n_draft,
     int logits_offset);
 
+// Version that takes raw GPU pointer - for use with persistent GPU logits buffer
+// gpu_logits: GPU pointer to logits data [n_outputs, n_vocab] in row-major order
+// n_vocab: vocabulary size (inner dimension)
+// n_outputs: number of output positions (outer dimension)
+GGML_BACKEND_API int ggml_backend_sycl_verify_speculative_from_ptr(
+    ggml_sycl_sampler_t sampler,
+    const float * gpu_logits,
+    int n_vocab,
+    int n_outputs,
+    const int32_t * draft_tokens,
+    int32_t * sampled_tokens_out,
+    int n_draft,
+    int logits_offset);
+
+// Version that takes HOST logits - copies to GPU internally (safest API)
+// host_logits: HOST pointer to logits data [n_outputs, n_vocab] in row-major order
+// draft_tokens: HOST pointer to draft token IDs [n_draft]
+// sampled_tokens_out: HOST pointer to receive sampled tokens [n_draft]
+GGML_BACKEND_API int ggml_backend_sycl_verify_speculative_from_host(
+    ggml_sycl_sampler_t sampler,
+    const float * host_logits,
+    int n_vocab,
+    int n_outputs,
+    const int32_t * draft_tokens,
+    int32_t * sampled_tokens_out,
+    int n_draft,
+    int logits_offset);
+
 // ===========================================================================
 // Device Memory Utilities
 // ===========================================================================
@@ -258,6 +286,15 @@ GGML_BACKEND_API void ggml_backend_sycl_copy_device_to_tensor(
 // dst_offset: byte offset into dst_buffer
 // size: number of bytes to copy
 GGML_BACKEND_API void ggml_backend_sycl_copy_tensor_to_buffer(
+    ggml_backend_t backend,
+    ggml_tensor * src_tensor,
+    ggml_backend_buffer_t dst_buffer,
+    size_t dst_offset,
+    size_t size);
+
+// Synced version: synchronizes compute before copying
+// Use this when the tensor data may still be computing asynchronously
+GGML_BACKEND_API void ggml_backend_sycl_copy_tensor_to_buffer_sync(
     ggml_backend_t backend,
     ggml_tensor * src_tensor,
     ggml_backend_buffer_t dst_buffer,

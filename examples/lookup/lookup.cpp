@@ -110,7 +110,8 @@ int main(int argc, char ** argv){
 
     std::vector<llama_token> draft;
 
-    llama_batch batch_tgt = llama_batch_init(params.n_ctx, 0, 1);
+    // Use actual context size, not params.n_ctx which may be 0 (auto-detect)
+    llama_batch batch_tgt = llama_batch_init(max_context_size, 0, 1);
 
 #ifdef GGML_USE_SYCL
     // GPU verification setup (only for SYCL backends with --gpu-sampling)
@@ -146,31 +147,34 @@ int main(int argc, char ** argv){
 #ifdef GGML_USE_SYCL
         if (gpu_verify_enabled && !draft.empty()) {
             // GPU verification path - verify all draft tokens on GPU
-            // IMPORTANT: Synchronize to ensure decode is complete before reading logits
+            // IMPORTANT: Synchronize to ensure decode is complete and logits are in accumulated buffer
             llama_synchronize(ctx);
 
+            // Get the accumulated GPU logits buffer (NOT the scratch tensor!)
+            // The scratch tensor may be recycled, but the accumulated buffer persists
+            float * gpu_logits = llama_get_gpu_logits_buffer(ctx);
+            const int n_vocab = llama_vocab_n_tokens(vocab);
 
-            ggml_tensor * logits_tensor = llama_get_logits_tensor(ctx);
-
-            if (logits_tensor && draft.size() > 0) {
+            if (gpu_logits && draft.size() > 0) {
                 // Allocate buffer for sampled tokens
                 std::vector<int32_t> sampled_tokens(draft.size());
 
                 // Verify draft tokens against model logits on GPU
                 // Returns number of consecutive matching tokens from the start
-                int n_verified = ggml_backend_sycl_verify_speculative_with_tokens(
+                int n_verified = ggml_backend_sycl_verify_speculative_from_ptr(
                     gpu_sampler,
-                    logits_tensor,
+                    gpu_logits,
+                    n_vocab,
+                    (int)draft.size(),  // n_outputs in the buffer
                     draft.data(),
                     sampled_tokens.data(),
                     (int)draft.size(),
                     0  // logits_offset - start from position 0
                 );
 
-                // Debug: show tensor dimensions and verification results
-                LOG_DBG("[GPU VERIFY] logits ne[0]=%lld (vocab), ne[1]=%lld (positions), draft.size()=%zu\n",
-                        (long long)logits_tensor->ne[0], (long long)logits_tensor->ne[1], draft.size());
-                LOG_DBG("[GPU VERIFY] n_verified=%d\n", n_verified);
+                // Debug: show verification results
+                LOG_DBG("[GPU VERIFY] gpu_logits=%p, draft.size()=%zu, n_verified=%d\n",
+                        (void*)gpu_logits, draft.size(), n_verified);
                 for (size_t d = 0; d < draft.size(); d++) {
                     LOG_DBG("[GPU VERIFY] pos %zu: draft=%d ('%s'), sampled=%d ('%s'), match=%d\n",
                             d, draft[d], common_token_to_piece(ctx, draft[d]).c_str(),

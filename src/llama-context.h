@@ -349,9 +349,17 @@ public:
     // Check if last decode had multiple ubatches (logits are in accumulated GPU buffer)
     bool had_multi_ubatch() const { return multi_ubatch_decode; }
 
-    // Get the accumulated GPU logits buffer (for multi-ubatch case)
-    // Returns pointer to GPU memory containing all logits in output_ids order
-    float * get_gpu_logits_buffer() const { return gpu_logits_accumulated; }
+    // Get the GPU logits buffer pointer
+    // For multi-ubatch: returns pointer to accumulated GPU buffer
+    // For single-ubatch: returns pointer to the logits tensor data directly
+    float * get_gpu_logits_buffer() const {
+        if (multi_ubatch_decode) {
+            return gpu_logits_accumulated;
+        } else if (t_logits_last) {
+            return (float *)t_logits_last->data;
+        }
+        return nullptr;
+    }
 
     // Get the GPU logits buffer handle (for SYCL operations)
     ggml_backend_buffer_t get_gpu_logits_buffer_handle() const { return buf_logits_gpu.get(); }

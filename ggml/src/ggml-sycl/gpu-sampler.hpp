@@ -1348,10 +1348,6 @@ void gpu_verify_speculative_with_tokens_kernel(
         int32_t draft_token = draft_tokens[pos];
         matches[pos] = (argmax_token == draft_token) ? 1 : 0;
         sampled_tokens[pos] = argmax_token;  // Also output the sampled token
-
-        // Debug: print kernel results
-        // printf("[GPU KERNEL] pos=%d: argmax=%d (val=%.3f), draft=%d, match=%d\n",
-        //        pos, argmax_token, argmax_val, draft_token, matches[pos]);
     }
 }
 
@@ -2068,6 +2064,13 @@ inline int ggml_sycl_verify_speculative_with_tokens(
     // Copy draft tokens to device
     q.memcpy(draft_tokens_dev, draft_tokens_host, n_draft * sizeof(int32_t)).wait();
 
+    // Debug: Print draft tokens
+    GGML_LOG_DEBUG("[GPU VERIFY] n_draft=%d, draft_tokens:", n_draft);
+    for (int i = 0; i < n_draft && i < 10; i++) {
+        GGML_LOG_DEBUG(" [%d]=%d", i, draft_tokens_host[i]);
+    }
+    GGML_LOG_DEBUG("\n");
+
     // Debug: Read first few logits values to verify data is valid
     float debug_logits[5];
     q.memcpy(debug_logits, all_logits, 5 * sizeof(float)).wait();
@@ -2104,6 +2107,13 @@ inline int ggml_sycl_verify_speculative_with_tokens(
     int32_t n_accepted;
     q.memcpy(&n_accepted, n_accepted_dev, sizeof(int32_t));
     q.memcpy(sampled_tokens_out, sampled_tokens_dev, n_draft * sizeof(int32_t)).wait();
+
+    // Debug: Print sampled tokens for analysis
+    GGML_LOG_DEBUG("[GPU VERIFY] n_accepted=%d, sampled_tokens:", n_accepted);
+    for (int i = 0; i < n_draft && i < 10; i++) {
+        GGML_LOG_DEBUG(" [%d]=%d", i, sampled_tokens_out[i]);
+    }
+    GGML_LOG_DEBUG("\n");
 
     // Cleanup
     sycl::free(draft_tokens_dev, q);

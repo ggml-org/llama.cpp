@@ -1450,15 +1450,14 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 }
 
 #ifdef GGML_USE_SYCL
-                // For multi-ubatch batches, accumulate logits on GPU for GPU sampling
-                // This is needed regardless of skip_logits_host_copy because GPU sampling
-                // reads from GPU memory (t_logits_last or gpu_logits_accumulated)
-                if (n_ubatches > 0) {
-                    // Multiple ubatches: accumulate on GPU
+                // For multi-ubatch: accumulate logits in persistent GPU buffer
+                // The compute graph tensor (t_logits) is a scratch buffer that gets reused between ubatches,
+                // so for multi-ubatch we need a dedicated buffer that persists.
+                // For single-ubatch: t_logits_last remains valid, no accumulation needed.
+                if (n_ubatches > 0 && ggml_backend_is_sycl(backend_res)) {
                     // Allocate/resize GPU buffer if needed
                     size_t required_capacity = (size_t)n_outputs_all * n_vocab;
                     if (gpu_logits_capacity < required_capacity) {
-                        // Get buffer type for the GPU backend
                         auto * buft = ggml_backend_get_default_buffer_type(backend_res);
                         size_t new_size = required_capacity * sizeof(float);
 
@@ -1474,23 +1473,35 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         }
                     }
 
+                    // Copy current ubatch's logits to persistent buffer
                     if (gpu_logits_accumulated && buf_logits_gpu) {
-                        // If this is the second ubatch, first copy the first ubatch's logits
-                        if (n_ubatches == 1 && t_logits_last && ggml_backend_is_sycl(backend_logits_last)) {
+                        // CRITICAL: Synchronize backend before reading tensor data!
+                        // process_ubatch() uses async compute, so t_logits may not be ready yet.
+                        // Without this sync, we read zeros/garbage from the tensor.
+                        ggml_backend_synchronize(backend_res);
+
+                        // When entering 2nd ubatch (n_ubatches==1), first copy the 1st ubatch's logits
+                        // that were saved in t_logits_last (they weren't copied yet)
+                        if (n_ubatches == 1 && t_logits_last && backend_logits_last) {
+                            // Also sync the first ubatch's backend (may be different from current)
+                            if (backend_logits_last != backend_res) {
+                                ggml_backend_synchronize(backend_logits_last);
+                            }
+                            int64_t n_outputs_first = n_outputs_prev; // outputs from first ubatch
+                            size_t first_copy_size = n_outputs_first * n_vocab * sizeof(float);
                             ggml_backend_sycl_copy_tensor_to_buffer(
                                 backend_logits_last, t_logits_last,
                                 buf_logits_gpu.get(), 0,
-                                n_outputs_prev * n_vocab * sizeof(float));
+                                first_copy_size);
                         }
 
-                        // Copy current ubatch's logits at correct offset
-                        if (ggml_backend_is_sycl(backend_res)) {
-                            size_t offset = n_outputs_prev * n_vocab * sizeof(float);
-                            ggml_backend_sycl_copy_tensor_to_buffer(
-                                backend_res, t_logits,
-                                buf_logits_gpu.get(), offset,
-                                n_outputs * n_vocab * sizeof(float));
-                        }
+                        // Now copy current ubatch's logits
+                        size_t offset = n_outputs_prev * n_vocab * sizeof(float);
+                        size_t copy_size = n_outputs * n_vocab * sizeof(float);
+                        ggml_backend_sycl_copy_tensor_to_buffer(
+                            backend_res, t_logits,
+                            buf_logits_gpu.get(), offset,
+                            copy_size);
                     }
                     backend_logits_last = backend_res;
                 }
