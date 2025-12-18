@@ -202,7 +202,7 @@ struct llama_file::impl {
     }
 
     size_t tell() const {
-        if (fd == -1) {
+        if (!has_direct_io()) {
             long ret = std::ftell(fp);
             if (ret == -1) {
                 throw std::runtime_error(format("ftell error: %s", strerror(errno)));
@@ -220,7 +220,7 @@ struct llama_file::impl {
 
     void seek(size_t offset, int whence) const {
         off_t ret = 0;
-        if (fd == -1) {
+        if (!has_direct_io()) {
             ret = std::fseek(fp, (long) offset, whence);
         } else {
             ret = lseek(fd, offset, whence);
@@ -245,6 +245,7 @@ struct llama_file::impl {
             }
         } else {
             bool successful = false;
+            GGML_ASSERT(len % alignment == 0 && (uintptr_t) ptr % alignment == 0);
             while (!successful) {
                 off_t ret = read(fd, ptr, len);
 
@@ -288,7 +289,7 @@ struct llama_file::impl {
 
     uint32_t read_u32() const {
         uint32_t ret;
-        read_raw(&ret, sizeof(ret));
+        read_raw_at(&ret, sizeof(ret), tell());
         return ret;
     }
 
@@ -308,7 +309,7 @@ struct llama_file::impl {
     }
 
     bool has_direct_io() const {
-        return alignment != 1;
+        return fd != -1;
     }
 
     ~impl() {
@@ -322,7 +323,7 @@ struct llama_file::impl {
 #endif
 
     void read_raw_at(void * ptr, size_t len, size_t offset) const {
-        if (alignment != 1) {
+        if (has_direct_io()) {
             read_aligned_chunk(offset, ptr, len);
         } else {
             seek(offset, SEEK_SET);

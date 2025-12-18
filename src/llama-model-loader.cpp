@@ -918,8 +918,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
         GGML_ASSERT(cur->data != nullptr);
         GGML_ASSERT(w.idx < files.size());
         const auto & file = files.at(w.idx);
-        file->seek(w.offs, SEEK_SET);
-        file->read_raw(cur->data, ggml_nbytes(cur));
+        file->read_raw_at(cur->data, ggml_nbytes(cur), w.offs);
     }
 
     if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
