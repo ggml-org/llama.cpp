@@ -1462,20 +1462,17 @@ class ChatStore {
 
 export const chatStore = new ChatStore();
 
-export const isLoading = () => chatStore.isLoading;
+export const activeProcessingState = () => chatStore.activeProcessingState;
+export const clearEditMode = () => chatStore.clearEditMode();
 export const currentResponse = () => chatStore.currentResponse;
 export const errorDialog = () => chatStore.errorDialogState;
-export const activeProcessingState = () => chatStore.activeProcessingState;
-export const isChatStreaming = () => chatStore.isStreaming();
-
-export const isChatLoading = (convId: string) => chatStore.isChatLoadingPublic(convId);
-export const getChatStreaming = (convId: string) => chatStore.getChatStreamingPublic(convId);
+export const getAddFilesHandler = () => chatStore.getAddFilesHandler();
 export const getAllLoadingChats = () => chatStore.getAllLoadingChats();
 export const getAllStreamingChats = () => chatStore.getAllStreamingChats();
-
-// Edit mode exports
+export const getChatStreaming = (convId: string) => chatStore.getChatStreamingPublic(convId);
+export const isChatLoading = (convId: string) => chatStore.isChatLoadingPublic(convId);
+export const isChatStreaming = () => chatStore.isStreaming();
 export const isEditModeActive = () => chatStore.isEditModeActive();
-export const getAddFilesHandler = () => chatStore.getAddFilesHandler();
+export const isLoading = () => chatStore.isLoading;
 export const setEditModeActive = (handler: (files: File[]) => void) =>
 	chatStore.setEditModeActive(handler);
-export const clearEditMode = () => chatStore.clearEditMode();
