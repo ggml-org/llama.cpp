@@ -160,6 +160,7 @@ struct ifairy_lut_extra {
 
 - **unroll + 多累加器**：对 group 循环做 2/4-way unroll，采用 `isum0/isum1` 交错累加，减少 load-use 依赖链。
   - 经验：在 Apple M4 上尝试把 `compact` 的 `N==1` fast-path 从 4-way 收敛到 2-way 会明显变慢（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 的失败案例记录）；不要在没有 A/B 的情况下改 unroll。
+  - 建议：保留 perf-safe A/B 开关 `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`（默认 `4`），避免为了试 unroll 反复改代码并引入回归点。
 - **减少地址计算**：把每个 position 的 16B 表当作 `4×int32`，用 `t0[c0]` 方式索引（减少 `*4`/LEA）。
 - **prefetch 策略**：对 `grp + k_ifairy_lut_group_bytes` 与 `idx_g + ...` 做可控预取（以 Xcode Profile 的 L1 miss 变化为准，避免“盲目 prefetch”）。
 - **N==1 快路**：在 `qgemm_ex` 内增加运行时分支，消掉 col 循环与部分指针运算（仍属 LUT 通用内核，不做形状模板爆炸）。

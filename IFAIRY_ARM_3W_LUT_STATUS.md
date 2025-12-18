@@ -23,6 +23,7 @@
 - `GGML_IFAIRY_LUT_DEBUG=0/1`：路由/形状诊断（默认关闭；跑分时不要开）
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 路径内的 prefetch（默认启用；设为 `0` 用于 profile/sweep 对照；覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`）
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` fast-path（默认启用；设为 `0` 强制走通用路径，用于回归/调优 A/B）
+- `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` fast-path 里 group-loop 的 4-way unroll（默认 `4`；设为 `2` 用于 A/B，对照“2-way 是否反而更快”）
 
 ## 0.0 当前共识（按优先级）
 
@@ -85,10 +86,17 @@
 
 解读：上述两组 A/B 都存在较强重叠（尤其 `N1_FASTPATH` 的方差较大），暂不据此修改默认策略；若要据此做决策，需要在冷却后重跑短测，并用长测 3-run 做最终确认。
 
+**短测 ABABAB（unroll knob sanity，`8b5452b1+dirty`，`compact`，`-n 64`）**
+
+- `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=4`：mean `17.45`，min `15.37`，max `18.63`
+- `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2`：mean `15.19`，min `14.45`，max `15.66`
+- 结论：在该次复跑下 `unroll=2` 未显示优势；默认仍保持 `4`。后续如要据此做默认策略调整，必须在冷却后复跑并用长测 3-run 确认（避免热/负载噪声）。
+
 **短测尝试（失败案例：避免重复踩坑）**
 
 - 尝试：在 `compact` 的 `N==1` fast-path 中删除 4-way unroll，仅保留 2-way unroll（意图降低寄存器压力）。
 - 结果：短测（`-n 64`，`GGML_IFAIRY_LUT_LAYOUT=compact`，`N1_FASTPATH=1`，`PREFETCH=1`）6 次复跑 `mean 20.12 -> 14.20`（约 `-29%`），且方差变大；已回退该方向，后续不要轻易将 4-way unroll 收敛为 2-way（至少在 Apple M4 上不成立）。
+- 备注：已补充 `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4` 作为 perf-safe A/B 开关，后续复跑该方向不需要改代码。
 
 ## 0.2 Xcode Profile（以 decode 场景为准）
 

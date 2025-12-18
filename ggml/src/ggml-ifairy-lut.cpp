@@ -84,6 +84,20 @@ static inline bool ggml_ifairy_lut_n1_fastpath_enabled(void) {
     return v != 0;
 }
 
+// Unroll factor for the compact N==1 fast-path (decode tuning). Default is 4; set to 2 for A/B experiments.
+// Note: env is read once per process (cached) to avoid per-token getenv overhead.
+static inline int ggml_ifairy_lut_compact_n1_unroll(void) {
+    static std::atomic<int> cached(-1); // -1=unset, else the unroll factor
+    int v = cached.load(std::memory_order_relaxed);
+    if (v >= 0) {
+        return v;
+    }
+    const char * env = getenv("GGML_IFAIRY_LUT_COMPACT_N1_UNROLL");
+    v = (env && strcmp(env, "2") == 0) ? 2 : 4;
+    cached.store(v, std::memory_order_relaxed);
+    return v;
+}
+
 static inline size_t ggml_ifairy_checked_mul_size(size_t a, size_t b) {
     GGML_ASSERT(a == 0 || b <= SIZE_MAX / a);
     return a * b;
@@ -1428,7 +1442,8 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                 const int8_t * grp   = lut_base + (size_t) blk * (size_t) groups_per_block * k_ifairy_lut_group_bytes;
 
                 int64_t gi = 0;
-                for (; gi + 3 < groups_per_block; gi += 4) {
+                const int unroll = ggml_ifairy_lut_compact_n1_unroll();
+                for (; unroll >= 4 && gi + 3 < groups_per_block; gi += 4) {
                     const uint8_t pat0 = (uint8_t) (idx_g[0] & 0x3f);
                     const uint8_t pat1 = (uint8_t) (idx_g[1] & 0x3f);
                     const uint8_t pat2 = (uint8_t) (idx_g[2] & 0x3f);
