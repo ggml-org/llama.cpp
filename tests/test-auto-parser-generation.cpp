@@ -274,8 +274,7 @@ static void test_templates_auto(const TemplatePattern &               pattern,
                                 const std::vector<common_chat_tool> & tools                    = {},
                                 const std::string &                   expected_delta           = "",
                                 bool                                  enable_thinking          = true,
-                                bool                                  expect_grammar_triggered = true,
-                                bool                                  ignore_whitespace        = false) {
+                                bool                                  expect_grammar_triggered = true) {
     auto data = init_delta_auto(pattern, tmpl, end_tokens, message_user, test_message, tools, enable_thinking);
 
     if (!expected_delta.empty()) {
@@ -430,8 +429,7 @@ static void test_qwen3_coder_template(testing & t) {
         test_msg                 = simple_assist_msg("", "", "special_function", "{\"arg1\": \"1\"}");
 
         std::vector<std::string> end_tokens = { "<|im_end|>" };
-        test_templates_auto(pattern, chat_template, end_tokens, test_msg, { special_function_tool }, "", false, true,
-                            false);
+        test_templates_auto(pattern, chat_template, end_tokens, test_msg, { special_function_tool }, "", false, true);
 
         t.log("Qwen3-Coder parser generation successful");
     } catch (const std::exception & e) {
@@ -513,8 +511,7 @@ static void test_bytedance_seed_oss_template(testing & t) {
         common_chat_msg test_msg =
             simple_assist_msg("I am thinking\n", "Reasoning content", "special_function", "{\"arg1\": \"1\"}");
         std::vector<std::string> end_tokens = { "<seed:eos>" };
-        test_templates_auto(pattern, chat_template, end_tokens, test_msg, { special_function_tool }, "", true, true,
-                            true);
+        test_templates_auto(pattern, chat_template, end_tokens, test_msg, { special_function_tool }, "", true, true);
 
         t.log("ByteDance-Seed-OSS parser generation successful");
     } catch (const std::exception & e) {
@@ -592,8 +589,7 @@ static void test_nvidia_nemotron_nano_v2_template(testing & t) {
         common_chat_msg          test_msg   = simple_assist_msg("", "", "special_function", "{\"arg1\": 1}");
         // Nemotron uses JSON arguments, so integer 1 is preserved as 1.
         std::vector<std::string> end_tokens = { "<SPECIAL_12>" };  // Assuming this is end token based on template
-        test_templates_auto(pattern, chat_template, end_tokens, test_msg, { special_function_tool }, "", false, true,
-                            true);
+        test_templates_auto(pattern, chat_template, end_tokens, test_msg, { special_function_tool }, "", false, true);
 
         t.log("NVIDIA-Nemotron-Nano-v2 parser generation successful");
     } catch (const std::exception & e) {
@@ -771,7 +767,7 @@ static void test_minimax_m2_template(testing & t) {
 
         printf("DEBUG: Running MiniMax generation test\n");
         test_templates_auto(pattern, chat_template, end_tokens, test_msg, { special_function_tool }, expected_delta,
-                            true, true, true);
+                            true, true);
         t.log("MiniMax-M2 generation test passed");
 
     } catch (const std::exception & e) {

@@ -45,6 +45,12 @@ class common_chat_peg_native_builder : public common_chat_peg_builder {
     common_peg_parser tool_id(const common_peg_parser & p) { return atomic(tag(TOOL_ID, p)); }
     common_peg_parser tool_name(const common_peg_parser & p) { return atomic(tag(TOOL_NAME, p)); }
     common_peg_parser tool_args(const common_peg_parser & p) { return tag(TOOL_ARGS, p); }
+
+    common_peg_parser standard_json_tools(const std::string &    open_tag,
+                                          const std::string &    close_tag,
+                                          const nlohmann::json & tool_defs,
+                                          bool                   parallel_tool_calls,
+                                          bool                   force_tool_calls);
 };
 
 class common_chat_peg_native_mapper : public common_chat_peg_mapper {
@@ -52,7 +58,6 @@ class common_chat_peg_native_mapper : public common_chat_peg_mapper {
 
   public:
     common_chat_peg_native_mapper(common_chat_msg & msg) : common_chat_peg_mapper(msg) {}
-
     void map(const common_peg_ast_node & node) override;
 };
 
