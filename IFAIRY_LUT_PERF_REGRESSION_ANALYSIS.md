@@ -421,4 +421,6 @@ Total estimated regression sources account for ~70-115% (overlapping effects).
 
 - **3-run rule**: for any performance claim, run the exact baseline command 3 times back-to-back for both `legacy` and `compact`, then record `min/max/mean` (not just the best run).
 - **Thermal/noise awareness**: if the 3 runs show a large monotonic drop (typical on laptops/Apple Silicon), cool down and rerun; otherwise “A/B” conclusions are unreliable.
+- **Cooldown discipline**: long runs (`-n 256`) can trigger aggressive downclocking; if `min/max` differs by > ~20% or an obvious outlier appears, increase the interval (e.g. `sleep 60`+) and rerun until the 3-run range is stable enough to support a conclusion.
 - **A/B without code churn**: prefer env-gated switches for risky fast-paths (e.g. `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`), so we can do ABABAB runs and revert immediately if it does not win.
+- **Short A/B, long confirm**: use a shorter run (e.g. `-n 64`) for ABABAB tuning, then confirm with the canonical long run (e.g. `-n 256`) before claiming a win.

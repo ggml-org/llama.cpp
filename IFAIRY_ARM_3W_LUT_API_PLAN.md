@@ -114,6 +114,9 @@ struct ifairy_lut_extra {
 
 - **构建**：使用 Release，并确保你跑的就是你编译的二进制（优先 `build-rel`）。
 - **推荐基准命令**：以 `IFAIRY_ARM_3W_LUT_STATUS.md` 的 `0.1 tok/s 记录`表头命令为准（固定 `--seed/-t/-b/-c/-p/-n` 与 LUT env 组合）。
+- **短测 vs 长测**：
+  - A/B 调优：优先用短测 `-n 64` 做 `ABABAB` 交替跑，减少热漂移偏置；
+  - 最终记录：用长测 `-n 256` 对每个 layout 连续跑 3 次，记录 `min/max/mean` 后再下结论（长测之间要给足冷却；若出现明显 outlier/单调下降，先冷却后重测，否则结论无效）。
 - **正确性门槛**：
   - `./build-rel/bin/test-ifairy` 必须通过；
   - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_VALIDATE_STRICT=1 ./build-rel/bin/test-ifairy` 必须通过（验证用，不跑分）。
