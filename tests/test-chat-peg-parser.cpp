@@ -174,31 +174,8 @@ static void test_example_native(testing & t) {
 
             // tool calling parser
             if (tc.tools.is_array() && !tc.tools.empty()) {
-                auto tools = p.choice();
-                for (const auto & tool : tc.tools) {
-                    const auto & function = tool.at("function");
-                    std::string name = function.at("name");
-                    const auto & schema = function.at("parameters");
-
-                    auto tool_name = p.json_member("name", "\"" + p.tool_name(p.literal(name)) + "\"");
-                    auto tool_args = p.json_member("arguments", p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)));
-
-                    tools |= p.rule("tool-" + name, p.tool_open(p.literal("{")) << tool_name << "," << tool_args << "}");
-                };
-
-                auto parallel_calls = p.eps();
-                if (tc.parallel_tool_calls) {
-                    parallel_calls = p.zero_or_more("," << tools);
-                }
-
-                auto tool_call = p.trigger_rule("tool-call",
-                    p.sequence({
-                        p.literal("<tool_call>["),
-                        tools,
-                        parallel_calls,
-                        p.literal("]</tool_call>")
-                    })
-                );
+                auto tool_call = p.standard_json_tools("<tool_call>[", 
+                    "]</tool_call>", tc.tools, tc.parallel_tool_calls, tc.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED);
 
                 return p.sequence({
                     (reasoning_in_content ? p.eps() : reasoning),

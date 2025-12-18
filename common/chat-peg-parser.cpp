@@ -1,5 +1,6 @@
 #include "chat-peg-parser.h"
 
+#include <cstdint>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -121,4 +122,36 @@ void common_chat_peg_constructed_mapper::map(const common_peg_ast_node & node) {
         }
         current_tool->arguments += "}";
     }
+}
+
+common_peg_parser common_chat_peg_native_builder::standard_json_tools(const std::string &    open_tag,
+                                                                      const std::string &    close_tag,
+                                                                      const nlohmann::json & tool_defs,
+                                                                      bool                   parallel_tool_calls,
+                                                                      bool                   force_tool_calls
+                                                                    ) {
+    auto tools = choice();
+    for (const auto & tool : tool_defs) {
+        const auto & function = tool.at("function");
+        std::string  name     = function.at("name");
+        const auto & schema_  = function.at("parameters");
+
+        auto tool_name_ = json_member("name", "\"" + tool_name(literal(name)) + "\"");
+        auto tool_args_ = json_member("arguments", tool_args(schema(json(), "tool-" + name + "-schema", schema_)));
+
+        tools |= rule("tool-" + name, tool_open(literal("{")) << tool_name_ << "," << tool_args_ << "}");
+    };
+
+    auto parallel_calls = eps();
+    if (parallel_tool_calls) {
+        parallel_calls = zero_or_more("," << tools);
+    }
+    
+    auto tool_call =
+        trigger_rule("tool-call", sequence({ literal(open_tag), tools, parallel_calls, literal(close_tag) }));
+
+    if (!force_tool_calls) {
+        tool_call = optional(tool_call);
+    }
+    return tool_call;
 }
