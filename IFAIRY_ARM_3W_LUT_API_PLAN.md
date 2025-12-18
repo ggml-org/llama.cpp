@@ -144,6 +144,11 @@ struct ifairy_lut_extra {
 - Apple Silicon / 4 threads / 固定命令下：`legacy` ≥ `15 tok/s` 且 `compact` ≥ `17 tok/s`（以 `STATUS.md` 记录为准）
 - `GGML_IFAIRY_LUT_VALIDATE_STRICT=1` 下对照全通过（允许变慢，但必须正确）
 
+当前结论（2025-12-18）：
+
+- ✅ R0 已完成（`79c915e5`）：`preprocess_ex(compact)` 回退为 `memset + direct stores` 后，`legacy/compact` tok/s 已恢复并超过 `0ec52a5a` 档位（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 最新记录）。
+- 建议先“冻结 R1/R2/R3”，把当前状态稳定住：避免在已经达标时继续改动热路径扩面导致新的不可控回归；后续若 tok/s 再次回落或确有上限诉求，再按 R1→R2→R3 做 A/B。
+
 ### 6.1（恢复后）继续压 `ggml_ifairy_lut_qgemm_ex` 热点（`compact` 优先）
 
 目标：把 decode 常见的 `N≈1` 进一步提速，并让 `compact` 在 Apple Silicon 上稳定胜出。
