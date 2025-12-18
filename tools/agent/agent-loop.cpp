@@ -45,7 +45,6 @@ agent_loop::agent_loop(server_context & server_ctx,
                        const agent_config & config,
                        std::atomic<bool> & is_interrupted)
     : server_ctx_(server_ctx)
-    , params_(params)
     , config_(config)
     , is_interrupted_(is_interrupted)
     , messages_(json::array())

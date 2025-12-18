@@ -69,7 +69,6 @@ private:
                                   const tool_result & result);
 
     server_context & server_ctx_;
-    const common_params & params_;
     agent_config config_;
     std::atomic<bool> & is_interrupted_;
 
