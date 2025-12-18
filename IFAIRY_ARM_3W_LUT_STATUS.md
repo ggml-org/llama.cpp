@@ -103,6 +103,10 @@
 - 尝试：在 `compact` 的 `N==1` fast-path 中删除 4-way unroll，仅保留 2-way unroll（意图降低寄存器压力）。
 - 结果：短测（`-n 64`，`GGML_IFAIRY_LUT_LAYOUT=compact`，`N1_FASTPATH=1`，`PREFETCH=1`）6 次复跑 `mean 20.12 -> 14.20`（约 `-29%`），且方差变大；已回退该方向，后续不要轻易将 4-way unroll 收敛为 2-way（至少在 Apple M4 上不成立）。
 - 备注：已补充 `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4` 作为 perf-safe A/B 开关，后续复跑该方向不需要改代码。
+- 尝试：在 `compact` 的 `N==1` fast-path 中，把每个 group 的 3 个 position 表（每个 16B）按 `int32_t[4]` 视角做“基址 + stride”访问（减少指针加法/地址计算）。
+  - 对照：旧/新二进制交替跑两轮（`A=../llama_cpp_perfbase_406715f2/build-rel/bin/llama-cli`，`B=./build-rel/bin/llama-cli`），均为 `-n 64`，对比指标取 `llama_perf_context_print: eval time ... tokens per second`。
+  - 结果：`ABABAB` 显示微弱正向（A mean `5.6467`，B mean `5.6667`；原始 TSV：`/tmp/ifairy_lut_abab_compact_addrchain_20251218T150914Z.tsv`），但 `BABABA` 反向后结论翻转（A mean `5.7667`，B mean `5.7367`；原始 TSV：`/tmp/ifairy_lut_bababa_compact_addrchain_20251218T151445Z.tsv`）。
+  - 结论：该点在当前机器/条件下 **无稳定提升**（更像噪声/热漂移），已回退；后续不要在没有更强证据（profile 指令计数/IPC 或更大样本）前继续堆叠这类“微弱地址计算”改动。
 
 ## 0.2 Xcode Profile（以 decode 场景为准）
 
