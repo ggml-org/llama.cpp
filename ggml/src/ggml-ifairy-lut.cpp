@@ -161,6 +161,11 @@ bool ggml_ifairy_lut_can_mul_mat(const struct ggml_tensor * src0, const struct g
         return false;
     }
 
+#if !defined(__ARM_NEON)
+    if (dbg) { GGML_LOG_WARN("ifairy_lut: disabled (build without ARM NEON)\n"); }
+    return false;
+#endif
+
     if (src0->type != GGML_TYPE_IFAIRY || (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_IFAIRY_Q16)) {
         if (dbg) {
             GGML_LOG_WARN("ifairy_lut: type mismatch src0=%s src1=%s dst=%s\n",
@@ -292,6 +297,8 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
         return false;
     }
 
+    const bool dbg = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG");
+
     ifairy_lut_extra * extra = (ifairy_lut_extra *) tensor->extra;
     if (extra && extra->indexes) {
         if (index_tensor_out) {
@@ -303,11 +310,19 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
     const int64_t k = tensor->ne[0];
     const int64_t rows = tensor->ne[1];
     if (k % QK_K != 0 || rows <= 0) {
+        if (dbg) {
+            GGML_LOG_WARN("ifairy_lut: transform_tensor: invalid shape k=%lld rows=%lld QK_K=%d\n",
+                          (long long) k, (long long) rows, QK_K);
+        }
         return false;
     }
 
     const struct ggml_ifairy_3w_index_info info = ggml_ifairy_3w_get_index_info(k);
     const size_t index_bytes = ggml_ifairy_3w_index_buffer_size(&info, rows);
+    if (index_bytes == 0) {
+        if (dbg) { GGML_LOG_WARN("ifairy_lut: transform_tensor: index_bytes==0 (k=%lld rows=%lld)\n", (long long) k, (long long) rows); }
+        return false;
+    }
 
     const ifairy_lut_index_cache_key key = {
         /* .data   = */ tensor->data,
@@ -356,12 +371,14 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
         }
         buf = (uint8_t *) ggml_aligned_malloc(index_bytes);
         if (!buf) {
+            if (dbg) { GGML_LOG_WARN("ifairy_lut: transform_tensor: allocation failed (bytes=%zu)\n", index_bytes); }
             return false;
         }
     }
 
     const bool ok = ggml_ifairy_3w_encode((const block_ifairy *) tensor->data, k, rows, buf, index_bytes);
     if (!ok) {
+        if (dbg) { GGML_LOG_WARN("ifairy_lut: transform_tensor: ggml_ifairy_3w_encode failed (bytes=%zu)\n", index_bytes); }
         if (index_buffer) {
             ggml_backend_buffer_free(index_buffer);
         } else {
