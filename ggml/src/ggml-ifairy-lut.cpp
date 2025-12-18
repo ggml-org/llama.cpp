@@ -819,19 +819,19 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qw
 
                     const uint8_t c00 = (uint8_t) (pat0 & 3);
                     const uint8_t c01 = (uint8_t) ((pat0 >> 2) & 3);
-                    const uint8_t c02 = (uint8_t) ((pat0 >> 4) & 3);
+                    const uint8_t c02 = (uint8_t) (pat0 >> 4);
 
                     const uint8_t c10 = (uint8_t) (pat1 & 3);
                     const uint8_t c11 = (uint8_t) ((pat1 >> 2) & 3);
-                    const uint8_t c12 = (uint8_t) ((pat1 >> 4) & 3);
+                    const uint8_t c12 = (uint8_t) (pat1 >> 4);
 
                     const uint8_t c20 = (uint8_t) (pat2 & 3);
                     const uint8_t c21 = (uint8_t) ((pat2 >> 2) & 3);
-                    const uint8_t c22 = (uint8_t) ((pat2 >> 4) & 3);
+                    const uint8_t c22 = (uint8_t) (pat2 >> 4);
 
                     const uint8_t c30 = (uint8_t) (pat3 & 3);
                     const uint8_t c31 = (uint8_t) ((pat3 >> 2) & 3);
-                    const uint8_t c32 = (uint8_t) ((pat3 >> 4) & 3);
+                    const uint8_t c32 = (uint8_t) (pat3 >> 4);
 
                     const int8_t * grp0 = grp + 0 * k_ifairy_lut_group_bytes;
                     const int8_t * grp1 = grp + 1 * k_ifairy_lut_group_bytes;
@@ -901,7 +901,7 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qw
                     const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
                     const uint8_t c0 = (uint8_t) (pat & 3);
                     const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
-                    const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
+                    const uint8_t c2 = (uint8_t) (pat >> 4);
 
                     if (prefetch) {
                         __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
@@ -945,7 +945,7 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qw
                     const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
                     const uint8_t c0 = (uint8_t) (pat & 3);
                     const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
-                    const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
+                    const uint8_t c2 = (uint8_t) (pat >> 4);
 
                     const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
@@ -1451,19 +1451,19 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
 
                     const uint8_t c00 = (uint8_t) (pat0 & 3);
                     const uint8_t c01 = (uint8_t) ((pat0 >> 2) & 3);
-                    const uint8_t c02 = (uint8_t) ((pat0 >> 4) & 3);
+                    const uint8_t c02 = (uint8_t) (pat0 >> 4);
 
                     const uint8_t c10 = (uint8_t) (pat1 & 3);
                     const uint8_t c11 = (uint8_t) ((pat1 >> 2) & 3);
-                    const uint8_t c12 = (uint8_t) ((pat1 >> 4) & 3);
+                    const uint8_t c12 = (uint8_t) (pat1 >> 4);
 
                     const uint8_t c20 = (uint8_t) (pat2 & 3);
                     const uint8_t c21 = (uint8_t) ((pat2 >> 2) & 3);
-                    const uint8_t c22 = (uint8_t) ((pat2 >> 4) & 3);
+                    const uint8_t c22 = (uint8_t) (pat2 >> 4);
 
                     const uint8_t c30 = (uint8_t) (pat3 & 3);
                     const uint8_t c31 = (uint8_t) ((pat3 >> 2) & 3);
-                    const uint8_t c32 = (uint8_t) ((pat3 >> 4) & 3);
+                    const uint8_t c32 = (uint8_t) (pat3 >> 4);
 
                     const int8_t * grp0 = grp + 0 * k_ifairy_lut_group_bytes;
                     const int8_t * grp1 = grp + 1 * k_ifairy_lut_group_bytes;
@@ -1535,11 +1535,11 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
 
                     const uint8_t c00 = (uint8_t) (pat0 & 3);
                     const uint8_t c01 = (uint8_t) ((pat0 >> 2) & 3);
-                    const uint8_t c02 = (uint8_t) ((pat0 >> 4) & 3);
+                    const uint8_t c02 = (uint8_t) (pat0 >> 4);
 
                     const uint8_t c10 = (uint8_t) (pat1 & 3);
                     const uint8_t c11 = (uint8_t) ((pat1 >> 2) & 3);
-                    const uint8_t c12 = (uint8_t) ((pat1 >> 4) & 3);
+                    const uint8_t c12 = (uint8_t) (pat1 >> 4);
 
                     const int8_t * grp0 = grp;
                     const int8_t * grp1 = grp + k_ifairy_lut_group_bytes;
@@ -1581,7 +1581,7 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                     const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
                     const uint8_t c0 = (uint8_t) (pat & 3);
                     const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
-                    const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
+                    const uint8_t c2 = (uint8_t) (pat >> 4);
 
                     if (prefetch) {
                         __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
@@ -1625,7 +1625,7 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                     const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
                     const uint8_t c0 = (uint8_t) (pat & 3);
                     const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
-                    const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
+                    const uint8_t c2 = (uint8_t) (pat >> 4);
 
                     const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);

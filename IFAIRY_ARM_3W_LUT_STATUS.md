@@ -86,11 +86,17 @@
 
 解读：上述两组 A/B 都存在较强重叠（尤其 `N1_FASTPATH` 的方差较大），暂不据此修改默认策略；若要据此做决策，需要在冷却后重跑短测，并用长测 3-run 做最终确认。
 
-**短测 ABABAB（unroll knob sanity，`8b5452b1+dirty`，`compact`，`-n 64`）**
+**短测 ABABAB（历史样本：unroll knob sanity，`8b5452b1+dirty`，`compact`，`-n 64`）**
 
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=4`：mean `17.45`，min `15.37`，max `18.63`
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2`：mean `15.19`，min `14.45`，max `15.66`
 - 结论：在该次复跑下 `unroll=2` 未显示优势；默认仍保持 `4`。后续如要据此做默认策略调整，必须在冷却后复跑并用长测 3-run 确认（避免热/负载噪声）。
+
+**短测 ABABAB（减少冗余 mask：`c2 = pat >> 4`，`67e7c7e8+dirty`，`compact`，`-n 64`）**
+
+- A（before）：`build-rel-a/bin/llama-cli` mean `23.08`，min `21.57`，max `24.71`
+- B（after）：`build-rel/bin/llama-cli` mean `23.79`，min `21.33`，max `24.69`
+- 备注：该次复跑中出现明显 “频率/调度 ramp”（前两次 ~21 tok/s，后两次 ~24 tok/s），因此目前只认为 **无明显回归**；若要据此做方向判断，需要在更稳定的热/负载状态下复跑并做长测 3-run 确认。原始日志：`/tmp/ifairy_lut_abab_compact_drop_and3_20251218T101156Z.tsv`。
 
 **短测尝试（失败案例：避免重复踩坑）**
 
@@ -114,15 +120,11 @@
 - `ggml_compute_forward_mul_mat`：6%
 - 其他：< 2.5%
 
-**更新（你最新的采样结果）**
+**近期复采样（波动示例）**
 
-- `ggml_ifairy_lut_qgemm_ex`：52%
-- `ggml_graph_compute_thread`：30%
-
-**更新（你最新的采样结果 v2）**
-
-- `ggml_ifairy_lut_qgemm_ex`：69%
-- `ggml_graph_compute_thread`：12%
+- sample 1：`ggml_ifairy_lut_qgemm_ex` 52%，`ggml_graph_compute_thread` 30%
+- sample 2：`ggml_ifairy_lut_qgemm_ex` 69%，`ggml_graph_compute_thread` 12%
+- 备注：profile 占比会随温度/调度/输入分布波动；用它做“定位主矛盾”，不要把单次占比当作精确 KPI。
 
 **解读**
 
