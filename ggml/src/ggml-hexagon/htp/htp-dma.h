@@ -57,6 +57,7 @@ static inline bool dma_queue_push(dma_queue *  q,
                                   size_t       width, // width in bytes. number of bytes to transfer per row
                                   size_t       nrows) {
     if (((q->push_idx + 1) & q->idx_mask) == q->pop_idx) {
+        FARF(ERROR, "dma-push: queue full\n");
         return false;
     }
 
