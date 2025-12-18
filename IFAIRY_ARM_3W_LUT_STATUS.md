@@ -72,6 +72,8 @@
 
 更新（长测 3-run，冷却后可复现，作为当前 baseline 参考）：在 `12c83d14` 下用 `legacy/compact` 交替跑，`initial sleep 120 + 每次 sleep 75`，得到 `legacy mean=19.47 min=18.39 max=20.43`；`compact mean=17.02 min=16.12 max=18.24`。结论：当前 `compact` 仍未稳定胜出，下一步应按 `API_PLAN.md:6.1` 继续压 `qgemm_ex(compact)`。
 
+更新（长测 3-run，冷却后可复现，作为当前 baseline 参考）：在 `8b02f3b4+dirty`（本地 `GGML_IFAIRY_LUT_PREFETCH` env cache 变更）下用 `legacy/compact` 交替跑，`initial sleep 180 + 每次 sleep 90`，得到 `legacy mean=19.45 min=18.99 max=20.23`；`compact mean=16.80 min=15.35 max=18.47`。说明：`compact` 波动仍偏大且均值仍落后，继续按 `6.1` 聚焦压 `qgemm_ex(compact)`。
+
 （说明）`N==1` fast-path / unroll / prefetch 等 A/B 调优建议使用上面的短测命令做 `ABABAB` 交替跑；短测结果仅用于判断方向，最终结论仍以长测 3-run 为准（并在表中记录）。
 
 **短测 ABABAB 汇总（`de40a2fb`，`compact`，`-n 64`）**
@@ -82,6 +84,11 @@
 - `GGML_IFAIRY_LUT_PREFETCH=0`：mean `20.94`，min `19.99`，max `21.43`
 
 解读：上述两组 A/B 都存在较强重叠（尤其 `N1_FASTPATH` 的方差较大），暂不据此修改默认策略；若要据此做决策，需要在冷却后重跑短测，并用长测 3-run 做最终确认。
+
+**短测尝试（失败案例：避免重复踩坑）**
+
+- 尝试：在 `compact` 的 `N==1` fast-path 中删除 4-way unroll，仅保留 2-way unroll（意图降低寄存器压力）。
+- 结果：短测（`-n 64`，`GGML_IFAIRY_LUT_LAYOUT=compact`，`N1_FASTPATH=1`，`PREFETCH=1`）6 次复跑 `mean 20.12 -> 14.20`（约 `-29%`），且方差变大；已回退该方向，后续不要轻易将 4-way unroll 收敛为 2-way（至少在 Apple M4 上不成立）。
 
 ## 0.2 Xcode Profile（以 decode 场景为准）
 

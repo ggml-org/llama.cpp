@@ -57,9 +57,17 @@ struct ifairy_lut_index_cache_entry {
 static std::unordered_map<ifairy_lut_index_cache_key, ifairy_lut_index_cache_entry, ifairy_lut_index_cache_key_hash> g_ifairy_lut_index_cache;
 
 // Prefetch is enabled by default; set GGML_IFAIRY_LUT_PREFETCH=0 to disable for tuning.
+// Note: env is read once per process (cached) to avoid per-op getenv overhead.
 static inline bool ggml_ifairy_lut_prefetch_enabled(void) {
+    static std::atomic<int> cached(-1); // -1=unset, 0=disabled, 1=enabled
+    int v = cached.load(std::memory_order_relaxed);
+    if (v >= 0) {
+        return v != 0;
+    }
     const char * env = getenv("GGML_IFAIRY_LUT_PREFETCH");
-    return !(env && strcmp(env, "0") == 0);
+    v = (env && strcmp(env, "0") == 0) ? 0 : 1;
+    cached.store(v, std::memory_order_relaxed);
+    return v != 0;
 }
 
 // N==1 fast-path is enabled by default; set GGML_IFAIRY_LUT_N1_FASTPATH=0 to force the generic path (for tuning/regression checks).

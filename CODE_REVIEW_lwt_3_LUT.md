@@ -752,3 +752,10 @@ void ggml_ifairy_lut_qgemm_ex() {
 **Estimated Time to Address All Issues**: 1-2 weeks
 
 **Reviewer Confidence**: High (based on comprehensive analysis of code, docs, and performance data)
+
+---
+
+## Updates (2025-12-18)
+
+- **Tuning result**: For `compact` decode (`N==1`) on Apple M4, trying to drop the 4-way unroll in the fast-path and keep only 2-way unroll caused a large tok/s regression (recorded in `IFAIRY_ARM_3W_LUT_STATUS.md`); treat the current 4-way unroll as “must A/B before touching”.
+- **Engineering**: Cache `GGML_IFAIRY_LUT_PREFETCH` once per process to avoid repeated `getenv()` overhead in the matmul hot path (see `ggml/src/ggml-ifairy-lut.cpp`).

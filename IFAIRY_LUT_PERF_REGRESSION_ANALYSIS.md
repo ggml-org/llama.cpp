@@ -416,6 +416,7 @@ Total estimated regression sources account for ~70-115% (overlapping effects).
 - **Prefer simple codegen in hot loops**: fewer temporaries, fewer helpers, avoid “clever” packing unless assembly inspection shows a win.
 - **Always keep a stable benchmark contract**: fixed command/seed/ctx/threads, record tok/s in `IFAIRY_ARM_3W_LUT_STATUS.md`, and rerun at least twice if the delta is within noise.
 - **Keep a “perf-safe mode”**: when introducing optional fast-paths (e.g. `N==1`), gate them behind an env/compile flag until proven stable.
+- **Cache env reads (when practical)**: avoid repeating `getenv()` in perf-sensitive paths; prefer “read once per process” semantics for toggles like `PREFETCH/N1_FASTPATH` to reduce overhead and noise.
 
 ### Practical reproducibility rules (what we actually do)
 
