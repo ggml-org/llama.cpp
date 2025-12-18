@@ -586,7 +586,7 @@ tool_result agent_loop::execute_tool_call(const common_chat_tool_call & call) {
     // Display elapsed time
     console::set_display(DISPLAY_TYPE_INFO);
     if (elapsed_ms < 1000) {
-        console::log("└─ %lldms\n", elapsed_ms);
+        console::log("└─ %lldms\n", (long long)elapsed_ms);
     } else {
         console::log("└─ %.1fs\n", elapsed_ms / 1000.0);
     }
