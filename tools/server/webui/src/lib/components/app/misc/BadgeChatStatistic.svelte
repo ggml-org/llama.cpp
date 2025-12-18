@@ -8,17 +8,17 @@
 		class?: string;
 		icon: Component;
 		value: string | number;
-		tooltip?: string;
+		tooltipLabel?: string;
 	}
 
-	let { class: className = '', icon: Icon, value, tooltip }: Props = $props();
+	let { class: className = '', icon: Icon, value, tooltipLabel }: Props = $props();
 
 	function handleClick() {
 		void copyToClipboard(String(value));
 	}
 </script>
 
-{#if tooltip}
+{#if tooltipLabel}
 	<Tooltip.Root>
 		<Tooltip.Trigger>
 			<BadgeInfo class={className} onclick={handleClick}>
@@ -30,7 +30,7 @@
 			</BadgeInfo>
 		</Tooltip.Trigger>
 		<Tooltip.Content>
-			<p>{tooltip}</p>
+			<p>{tooltipLabel}</p>
 		</Tooltip.Content>
 	</Tooltip.Root>
 {:else}
