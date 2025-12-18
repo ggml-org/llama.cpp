@@ -2,6 +2,7 @@
 
 #include "common.h"
 #include "preset.h"
+#include "server-common.h"
 #include "server-http.h"
 
 #include <mutex>
@@ -144,14 +145,23 @@ public:
 
     // notify the router server that a model instance is ready
     // return the monitoring thread (to be joined by the caller)
-    static std::thread setup_child_server(const common_params & base_params, int router_port, const std::string & name, std::function<void(int)> & shutdown_handler);
+    static std::thread setup_child_server(const std::function<void(int)> & shutdown_handler);
 };
 
 struct server_models_routes {
     common_params params;
+    json webui_settings = json::object();
     server_models models;
     server_models_routes(const common_params & params, int argc, char ** argv, char ** envp)
             : params(params), models(params, argc, argv, envp) {
+        if (!this->params.webui_config_json.empty()) {
+            try {
+                webui_settings = json::parse(this->params.webui_config_json);
+            } catch (const std::exception & e) {
+                LOG_ERR("%s: failed to parse webui config: %s\n", __func__, e.what());
+                throw;
+            }
+        }
         init_routes();
     }
 
@@ -162,7 +172,6 @@ struct server_models_routes {
     server_http_context::handler_t proxy_post;
     server_http_context::handler_t get_router_models;
     server_http_context::handler_t post_router_models_load;
-    server_http_context::handler_t post_router_models_status;
     server_http_context::handler_t post_router_models_unload;
 };
 

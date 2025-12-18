@@ -2674,6 +2674,8 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
             case GGML_OP_UNARY:
                 if (ggml_get_unary_op(node) == GGML_UNARY_OP_SILU) {
                     ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(node, flags);
+                } else if (ggml_get_unary_op(node) == GGML_UNARY_OP_GELU) {
+                    ggml_hexagon_unary(node, flags);
                 }
                 break;
             case GGML_OP_GLU:
@@ -3020,10 +3022,13 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
             if (ggml_get_unary_op(op) == GGML_UNARY_OP_SILU) {
                 supp = ggml_hexagon_supported_activations(sess, op);
             }
+            else if (ggml_get_unary_op(op) == GGML_UNARY_OP_GELU){
+                supp = ggml_hexagon_supported_activations(sess, op);
+            }
             break;
 
         case GGML_OP_GLU:
-            if ((ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU) /* || (ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU_OAI) */) {
+            if ((ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU) || (ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU_OAI) ) {
                 supp = ggml_hexagon_supported_activations(sess, op);
             }
             break;
