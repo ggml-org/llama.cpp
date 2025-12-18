@@ -103,12 +103,12 @@ struct ifairy_lut_extra {
 - `GGML_IFAIRY_LUT_VALIDATE_STRICT=0/1`：严格对照（验证用）。
 - `GGML_IFAIRY_LUT_DEBUG=0/1`：打印少量路由诊断（默认关闭）。
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 热路径中的 prefetch（默认启用；设为 `0` 方便 profile/sweep 对照；覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`）。
+- `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` decode 快路（默认启用；设为 `0` 强制走通用路径做 A/B）。
+- `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` 快路 group-loop 的 unroll（默认 `4`；设为 `2` 用于 A/B）。
 
 ## 6. 性能提升规划（主线，必须把 tok/s 拉上去）
 
-> 本节以 `IFAIRY_ARM_3W_LUT_STATUS.md` 的 “## 4. 后续工作（按优先级）” 为准，把“能稳定提升 tok/s 的工程动作”落成可执行计划。
->
-> 总原则：任何性能改动必须满足 `w * conj(x)` 语义不变，并且能复现（可跑命令 + 可对照数字）。
+> 2025-12-18 更新：基于《IFAIRY_LUT_PERF_ANALYSIS_20251218.md》的复盘，decode 场景热点大致为 `ggml_ifairy_lut_qgemm_ex ≈ 53~55%` + `ggml_graph_compute_thread ≈ 30%`。因此主线需要同时推进：压 `qgemm_ex` 单位成本 + 处理同步/调度开销（否则上限会被框架吞掉）。
 
 ### 6.0 复现与验收口径（统一）
 
@@ -117,16 +117,18 @@ struct ifairy_lut_extra {
 - **短测 vs 长测**：
   - A/B 调优：优先用短测 `-n 64` 做 `ABABAB` 交替跑，减少热漂移偏置；
   - 最终记录：用长测 `-n 256` 对每个 layout 连续跑 3 次，记录 `min/max/mean` 后再下结论（长测之间要给足冷却；若出现明显 outlier/单调下降，先冷却后重测，否则结论无效）。
+- **双 build A/B（强烈建议）**：保留一个“上一个稳定基线”的 build 目录（例如 `build-rel-a`），用“旧 bin vs 新 bin”做 `ABABAB`，避免跨时段热漂移导致误判。
 - **正确性门槛**：
   - `./build-rel/bin/test-ifairy` 必须通过；
   - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_VALIDATE_STRICT=1 ./build-rel/bin/test-ifairy` 必须通过（验证用，不跑分）。
 - **性能门槛**：
   - 每次性能相关改动，都在 `IFAIRY_ARM_3W_LUT_STATUS.md` 的 `0.1 tok/s 记录`追加一条可复现记录（固定 seed/prompt/thread/token/env）。
+  - A/B 的原始日志（建议 TSV）落到 `/tmp/` 并在 `STATUS.md` 引用路径（避免只剩结论没证据）。
   - 主观体验（输出可读/不卡）不作为性能结论，必须以 `eval tok/s` 为准。
 
-### 6.0.1 回归恢复（最高优先级：先回到 `0ec52a5a` 的 tok/s 档位）
+### 6.0.1 回归恢复（仅在 tok/s 明显回落时启用）
 
-> 现状：在 `0ec52a5a` 之后出现大幅性能回归（详见 `IFAIRY_LUT_PERF_REGRESSION_ANALYSIS.md`）。在恢复到“已验证过的高 tok/s 档位”之前，先暂停引入更多新优化点（避免把排查范围越做越大）。
+> 背景：在 `0ec52a5a` 之后出现过大幅性能回归（详见 `IFAIRY_LUT_PERF_REGRESSION_ANALYSIS.md`）。当前（2025-12-18）已恢复到并超过该档位，因此恢复步骤保留为“回退手册”，但默认冻结（避免在达标后继续扩大热路径改动面）。
 
 恢复顺序（每一步都必须：Release rebuild + `test-ifairy` + strict + 追加 tok/s 记录）：
 
@@ -151,6 +153,7 @@ struct ifairy_lut_extra {
 
 - ✅ R0 已完成（`79c915e5`）：`preprocess_ex(compact)` 回退为 `memset + direct stores` 后，`legacy/compact` tok/s 已恢复并超过 `0ec52a5a` 档位（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 最新记录）。
 - 建议先“冻结 R1/R2/R3”，把当前状态稳定住：避免在已经达标时继续改动热路径扩面导致新的不可控回归；后续若 tok/s 再次回落或确有上限诉求，再按 R1→R2→R3 做 A/B。
+- 复盘与后续方向以《IFAIRY_LUT_PERF_ANALYSIS_20251218.md》为准：继续压 `qgemm_ex`，并正面处理 `ggml_graph_compute_thread`（同步/调度）占比偏高的问题。
 
 ### 6.1（恢复后）继续压 `ggml_ifairy_lut_qgemm_ex` 热点（`compact` 优先）
 
@@ -158,6 +161,9 @@ struct ifairy_lut_extra {
 
 任务清单（按收益预期排序）：
 
+- **减少 3 次 position 查表的结构性开销（P0，优先探索）**：当前 `compact` 每 group 必做 3 次 position 查表 + widen + add，指令密度高且依赖链长；若能把 “3 次” 减到 “2 次”，通常比微调 unroll/prefetch 更可能拉开稳定差距。
+  - 方向 A：`(c0,c1)` 预合并表（16 组合）+ `pos2`（4 组合），将每 group 查表从 3 次降到 2 次（注意 preprocess 成本与 cache footprint 平衡）。
+  - 方向 B：小型 64-pattern 表（int8/小 int16），把查表变回“一次读 4ch”的形态，同时尽量保持比 legacy 更小的工作集。
 - **unroll + 多累加器**：对 group 循环做 2/4-way unroll，采用 `isum0/isum1` 交错累加，减少 load-use 依赖链。
   - 经验：在 Apple M4 上尝试把 `compact` 的 `N==1` fast-path 从 4-way 收敛到 2-way 会明显变慢（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 的失败案例记录）；不要在没有 A/B 的情况下改 unroll。
   - 建议：保留 perf-safe A/B 开关 `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`（默认 `4`），避免为了试 unroll 反复改代码并引入回归点。
@@ -179,6 +185,9 @@ struct ifairy_lut_extra {
 
 建议动作：
 
+- **优先：减少“缓存命中时仍然同步”的开销**：例如 `transform_tensor` 若命中缓存（indexes 已存在且不会再变），应避免每次 mul_mat 都做一次全线程 barrier（只在首次生成/真正做了 transform 时 barrier）。
+- **decode 线程策略复评（用数据说话）**：`N==1` 时 threads 未必越多越快；允许用 env 加开关做实验，避免把策略写死。
+  - 建议优先做一个低风险试验：为 `N==1` 增加“单线程/少线程”可控开关（例如 `GGML_IFAIRY_LUT_DECODE_NTH=1/2/4`），严格 A/B 验证是否能降低 `ggml_graph_compute_thread` 占比并抬升 tok/s。
 - 继续减少 LUT 路径里的 barrier 次数（尤其 tiled/BK 版本），能用 `FULLACC` 解决的重复构表/重复同步尽量消掉。
 - 检查是否存在“很小但很频繁”的额外拷贝/转换可在 LUT 路径合并或延后。
 - 对 decode 场景（`N≈1`）重新评估线程数与切分策略，避免线程空转/争用（以 profile 里线程等待为准）。
@@ -210,23 +219,22 @@ struct ifairy_lut_extra {
 
 > 性能冲刺不等于忽略地基；这些问题一旦踩中，会直接把 tok/s 或可复现性拉垮。
 
-P0：
+### 7.0 P0：可复现性与回归门槛（必须落地为“流程”）
 
-- 内存/生命周期：减少 `new/delete` + 全局容器；补齐 size/overflow/bounds 检查，避免 silent failure。
-- 线程安全：明确并发模型；缩小锁粒度，避免持锁做重活；补充并发/压力测试。
-- 工作区一致性：把 `compact` 的 “group bytes” 统一为 `GGML_IFAIRY_LUT_COMPACT_GROUP_BYTES`（头文件常量），并在 `ggml-cpu.c` 中用断言保证 `need == ggml_ifairy_lut_get_wsize(...)`，避免 `wsize/offset` 漂移导致的 silent memory corruption。
+- **双 build A/B**：保留一个“上一个稳定基线”的 build 目录（例如 `build-rel-a`），每次改动用 “旧 bin vs 新 bin” 做 `ABABAB` 交替跑，避免跨时段热漂移导致误判。
+- **原始日志留档**：A/B 的 raw 日志或 TSV 存 `/tmp/`，并在 `IFAIRY_ARM_3W_LUT_STATUS.md` 引用路径（防止只剩结论没证据）。
+- **env cache 规则**：只缓存“不会被测试用例在进程内动态修改”的 env；若某 env 在 `test-ifairy` 用 `scoped_env_var` 修改，则该 env 不应做进程级 cache（否则测试与复现会失真）。
+- **profile 使用规范**：profile 用于“定位主矛盾”，不要用单次采样占比当 KPI；需要记录至少 2~3 次采样的波动范围。
+
+### 7.1 P1：健壮性与一致性（不影响热路径的硬化优先）
+
 - ✅ size/overflow：为 `ggml_ifairy_lut_get_wsize` 与 `ggml-cpu.c` 的 LUT 工作区切分加入 overflow 断言，避免 size_t wrap 后的越界访问（`2a39f249`）。
+- ✅ prefetch 可控：`GGML_IFAIRY_LUT_PREFETCH=0/1` 可覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`，方便 profile/sweep 对照。
+- ✅ env 解析收敛：将 LUT 相关 env 解析 helper 集中复用，减少重复与语义漂移。
+- ✅ 路由/配置健壮性：无效 layout/BK/BM 在 debug 下 warn/clamp，减少 silent fallback。
+- ✅ 工作区一致性：`compact` group bytes 常量化，并在 `ggml-cpu.c` 断言 `need == get_wsize(...)`，避免切分公式漂移导致的 silent memory corruption。
 
-P1：
+### 7.2 P2：可维护性（在性能稳定后再推进）
 
-- 可维护性重构：拆分 `ggml/src/ggml-ifairy-lut.cpp`（preprocess/qgemm/transform/common），减少 legacy/compact 重复代码。
-- 错误处理一致性：统一 `return false`/`GGML_ASSERT`/日志策略；把“可恢复失败”和“不可恢复错误”分开。
-- 路由健壮性：在支持平台上做更明确的 CPU feature 判定（NEON/dotprod），并在不满足时可控回退。
-- ✅ P1 小步：将 LUT 相关 env 解析 helper 集中到 `ggml/src/ggml-ifairy-lut.h`，并在 `ggml-cpu.c`/`ggml-ifairy-lut.cpp` 复用，减少重复与语义漂移。
-- ✅ P1 小步：错误可观测性与回退一致性：`transform_tensor` 失败在 debug 下输出原因（shape/alloc/encode），并在路由阶段明确要求 `__aarch64__ + __ARM_NEON`（否则回退）。
-- ✅ P1 小步：配置健壮性：`GGML_IFAIRY_LUT_LAYOUT` 无效值在 debug 下 warn（仅一次）并回退默认；`BK_BLOCKS/BM` 的非法值在 debug 下提示并 clamp。
-
-P2：
-
-- 测试补齐：对齐/小维度/大维度、分配失败、misaligned buffer、并发 transform 等 edge case。
-- 性能回归：把常见 decode（`N≈1`）与 prefill 形状的 tok/s 作为可复现基线（见 `IFAIRY_ARM_3W_LUT_STATUS.md`）。
+- 代码拆分：把 `ggml/src/ggml-ifairy-lut.cpp` 按 preprocess/qgemm/transform/common 拆分，减少 legacy/compact 重复代码。
+- 测试补齐：对齐/小维度/大维度、分配失败、misaligned buffer、并发 transform 等 edge case；为关键 env 语义补回归覆盖。
