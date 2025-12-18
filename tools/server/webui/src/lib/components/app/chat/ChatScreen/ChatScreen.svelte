@@ -587,7 +587,7 @@
 
 		&::after {
 			content: '';
-			position: fixed;
+			position: absolute;
 			bottom: 0;
 			z-index: -1;
 			left: 0;

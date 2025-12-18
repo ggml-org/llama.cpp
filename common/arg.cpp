@@ -873,7 +873,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         sampler_type_chars += common_sampler_type_to_chr(sampler);
         sampler_type_names += common_sampler_type_to_str(sampler) + ";";
     }
-    sampler_type_names.pop_back();
+    if (!sampler_type_names.empty()) {
+        sampler_type_names.pop_back(); // remove last semicolon
+    }
 
 
     /**
