@@ -154,6 +154,11 @@ struct llama_file::impl {
         write_raw(&val, sizeof(val));
     }
 
+    void read_raw_at(void * ptr, size_t len, size_t offset) const {
+        seek(offset, SEEK_SET);
+        read_raw(ptr, len);
+    }
+
     void read_aligned_chunk(size_t offset, void * dest, size_t size) const {
         throw std::runtime_error("DirectIO is not implemented on Windows.");
     }
@@ -264,6 +269,15 @@ struct llama_file::impl {
         }
     }
 
+    void read_raw_at(void * ptr, size_t len, size_t offset) const {
+        if (has_direct_io()) {
+            read_aligned_chunk(offset, ptr, len);
+        } else {
+            seek(offset, SEEK_SET);
+            read_raw(ptr, len);
+        }
+    }
+
     void read_aligned_chunk(size_t offset, void * dest, size_t size) const {
         off_t aligned_offset = offset & ~(alignment - 1);
         off_t offset_from_alignment = offset - aligned_offset;
@@ -321,15 +335,6 @@ struct llama_file::impl {
     }
     int fd = -1;
 #endif
-
-    void read_raw_at(void * ptr, size_t len, size_t offset) const {
-        if (has_direct_io()) {
-            read_aligned_chunk(offset, ptr, len);
-        } else {
-            seek(offset, SEEK_SET);
-            read_raw(ptr, len);
-        }
-    }
 
     size_t read_alignment() const {
         return alignment;
