@@ -233,9 +233,7 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
         std::string tool2_diff = find_string_difference(base_output, tool2_output);
         std::string tool3_diff = find_string_difference(base_output, tool3_output);
 
-        LOG_DBG("Tool1 diff: '%s'", tool1_diff.c_str());
-        LOG_DBG("Tool2 diff: '%s'", tool2_diff.c_str());
-        LOG_DBG("Tool3 diff: '%s'", tool3_diff.c_str());
+        // Special handling for templates that require generation prompt (Nemotron)
         LOG_DBG("Tool1 diff length: %zu", tool1_diff.length());
         LOG_DBG("Tool2 diff length: %zu", tool2_diff.length());
         LOG_DBG("Tool3 diff length: %zu", tool3_diff.length());
@@ -1445,38 +1443,63 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplatePattern 
                 if (!inputs.enable_thinking) {
                     data.prompt += local_pattern.special_markers.at("reasoning_end_marker");
                 } else {
+                    fprintf(stderr, "Thinking forced open via start marker match\n");
                     thinking_forced_open = true;
                 }
             }
         } else if (prompt_trimmed.length() > 2 && prompt_trimmed.back() == '>' && inputs.enable_thinking) {
+            fprintf(stderr, "Checking inference for prompt ending with >\n");
             // ... generic inference ...
             size_t open = prompt_trimmed.rfind('<');
             if (open != std::string::npos) {
                 std::string tag = prompt_trimmed.substr(open);
-                LOG_DBG("Inferred reasoning tag from prompt: '%s'", tag.c_str());
-                local_pattern.special_markers["reasoning_start_marker"] = tag;
-                start_marker                                            = tag;
 
-                // Infer end marker
-                std::string end_marker;
-                std::string name  = tag.substr(1, tag.length() - 2);
-                size_t      space = name.find(' ');
-                if (space != std::string::npos) {
-                    name = name.substr(0, space);
-                }
-                end_marker = "</" + name + ">";
-                if (tag[0] == '[') {  // Fix: check tag type for end marker inference
-                    std::string name_sq = tag.substr(1, tag.length() - 2);
-                    end_marker          = "[/" + name_sq + "]";
+                // Check if this looks like a reasoning tag (not just any tag)
+                // Reasoning tags typically contain words like "think", "reason", "thought", etc.
+                std::string tag_name  = tag.substr(1, tag.length() - 2);
+                size_t      space_pos = tag_name.find(' ');
+                if (space_pos != std::string::npos) {
+                    tag_name = tag_name.substr(0, space_pos);
                 }
 
-                local_pattern.special_markers["reasoning_end_marker"] = end_marker;
-                thinking_forced_open                                  = true;
+                // Only infer reasoning if the tag name suggests reasoning
+                std::string lower_tag_name = tag_name;
+                std::transform(lower_tag_name.begin(), lower_tag_name.end(), lower_tag_name.begin(), ::tolower);
+
+                if (lower_tag_name.find("think") != std::string::npos ||
+                    lower_tag_name.find("reason") != std::string::npos ||
+                    lower_tag_name.find("thought") != std::string::npos ||
+                    lower_tag_name.find("reflect") != std::string::npos) {
+                    LOG_DBG("Inferred reasoning tag from prompt: '%s'", tag.c_str());
+                    local_pattern.special_markers["reasoning_start_marker"] = tag;
+                    start_marker                                            = tag;
+
+                    // Infer end marker
+                    std::string end_marker;
+                    std::string name  = tag.substr(1, tag.length() - 2);
+                    size_t      space = name.find(' ');
+                    if (space != std::string::npos) {
+                        name = name.substr(0, space);
+                    }
+                    end_marker = "</" + name + ">";
+                    if (tag[0] == '[') {  // Fix: check tag type for end marker inference
+                        std::string name_sq = tag.substr(1, tag.length() - 2);
+                        end_marker          = "[/" + name_sq + "]";
+                    }
+
+                    local_pattern.special_markers["reasoning_end_marker"] = end_marker;
+                    fprintf(stderr, "Thinking forced open via inference\n");
+                    thinking_forced_open = true;
+                } else {
+                    LOG_DBG("Tag '%s' does not appear to be a reasoning tag, skipping inference", tag.c_str());
+                }
             }
         }
 
         data.thinking_forced_open = thinking_forced_open;
-        LOG_DBG("Thinking forced open: %d", thinking_forced_open);
+        fprintf(stderr, "Detailed thinking forced open: %d (marker=%s, prompt_end=%c, enable=%d)\n",
+                thinking_forced_open, start_marker.c_str(), prompt_trimmed.empty() ? '?' : prompt_trimmed.back(),
+                static_cast<int>(inputs.enable_thinking));
 
         // ... validation ...
         if (local_pattern.format == TemplatePattern::JSON_NATIVE) {
@@ -1583,7 +1606,7 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(const TemplatePatter
     (void) inputs;  // Suppress unused parameter warning
 
     auto parser = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
-        // Reasoning parser
+        // Reasoning parser - only include if we have valid reasoning markers
         auto reasoning = p.eps();
         if ((inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE || thinking_forced_open) &&
             !pattern.special_markers.at("reasoning_start_marker").empty() &&
@@ -1607,34 +1630,66 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(const TemplatePatter
             }
         }
 
-        bool has_tools = inputs.tools.is_array() && !inputs.tools.empty();
+        bool        is_array = false;
+        std::string array_open, array_close;
+        std::string start_marker = pattern.special_markers.count("tool_call_start_marker") ?
+                                       pattern.special_markers.at("tool_call_start_marker") :
+                                       "";
+        std::string end_marker   = pattern.special_markers.count("tool_call_end_marker") ?
+                                       pattern.special_markers.at("tool_call_end_marker") :
+                                       "";
 
-        // Handle tool choice modes properly according to ministral_3 pattern
+        if (!start_marker.empty()) {
+            if (start_marker.back() == '[') {
+                is_array    = true;
+                array_open  = start_marker;
+                array_close = end_marker;
+            } else if (start_marker == "<TOOLCALL>") {
+                is_array    = true;
+                array_open  = start_marker + "[";
+                array_close = "]";  // Default close for array
+                if (!end_marker.empty()) {
+                    array_close += end_marker;
+                }
+            }
+
+            // Check if we need to add a closing bracket
+            if (is_array && (array_close.empty() || array_close.front() != ']')) {
+                array_close = "]" + array_close;
+            }
+        }
+
+        bool has_tools = inputs.tools.is_array() && !inputs.tools.empty();
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             auto tool_choice = p.choice();
+            for (const auto & tool : inputs.tools) {
+                std::string name = tool.at("function").at("name");
+                std::string description =
+                    tool.at("function").contains("description") ? tool.at("function").at("description") : "";
+                json parameters = tool.at("function").at("parameters");
 
-            // Build individual tool parsers - each tool gets its own named rule
-            foreach_function(inputs.tools, [&](const json & tool) {
-                const auto & function   = tool.at("function");
-                std::string  name       = function.at("name");
-                const auto & parameters = function.at("parameters");
+                if (pattern.format == TemplatePattern::JSON_NATIVE) {
+                    std::string tool_open_marker  = start_marker;
+                    std::string tool_close_marker = end_marker;
 
-                // JSON_NATIVE format with specific markers
-                if (pattern.format == TemplatePattern::JSON_NATIVE &&
-                    !pattern.special_markers.at("tool_call_start_marker").empty() &&
-                    !pattern.special_markers.at("tool_call_end_marker").empty()) {
-                    std::string marker            = pattern.special_markers.at("tool_call_start_marker");
-                    std::string tool_open_marker  = marker;
-                    std::string tool_close_marker = pattern.special_markers.at("tool_call_end_marker");
-
-                    if (!tool_open_marker.empty()) {
+                    if (is_array) {
+                        // For array formats, individual tools don't have wrappers (except separators handled by array rule)
+                        tool_open_marker  = "";
+                        tool_close_marker = "";
+                    } else if (!tool_open_marker.empty()) {
+                        // Original logic for per-call wrappers with stripping
                         char last = tool_open_marker.back();
                         if (last == '[') {
+                            // This path is now covered by is_array logic above, but kept for safety if logic diverges
                             tool_open_marker.pop_back();
                             if (!tool_close_marker.empty() && tool_close_marker.front() == ']') {
                                 tool_close_marker.erase(0, 1);
                             }
                         } else if (last == '{') {
+                            // Keep { stripping logic for non-array cases if needed?
+                            // Usually { implies object start, which is handled by p.json() schema?
+                            // Logic below adds p.literal("{").
+                            // If marker already has {, strip it to avoid double {{.
                             tool_open_marker.pop_back();
                             if (!tool_close_marker.empty() && tool_close_marker.front() == '}') {
                                 tool_close_marker.erase(0, 1);
@@ -1655,15 +1710,6 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(const TemplatePatter
                                             p.tool_close(p.literal(tool_close_marker)));
 
                     tool_choice |= specific_tool;
-                } else if (pattern.format == TemplatePattern::JSON_NATIVE) {
-                    // JSON_NATIVE without specific markers - fallback structure
-                    auto specific_tool = p.rule(
-                        "tool-" + name, p.tool(p.tool_open(p.literal("{")) +
-                                               p.tool_name(p.literal("\"" + name + "\"")) + p.literal(":") +
-                                               p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", parameters)) +
-                                               p.tool_close(p.literal("}"))));
-
-                    tool_choice |= specific_tool;
                 } else {
                     // Generic fallback for other formats
                     std::string marker = pattern.special_markers.at("tool_call_start_marker");
@@ -1674,7 +1720,7 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(const TemplatePatter
                         tool_choice |= specific_tool;
                     }
                 }
-            });
+            }
 
             // Determine min_calls and max_calls based on tool_choice
             int min_calls = 0;
@@ -1684,7 +1730,7 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(const TemplatePatter
                 min_calls = 1;
                 max_calls = 1;
             } else if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO) {
-                min_calls = 0;
+                min_calls = 1;
                 max_calls = inputs.parallel_tool_calls ? -1 : 1;  // -1 for unlimited, 1 for single
             }
 
@@ -1692,11 +1738,25 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(const TemplatePatter
                     max_calls, inputs.parallel_tool_calls);
 
             // Create trigger rule with proper repetition following ministral_3 pattern
-            auto tool_calls = p.trigger_rule("tool_call", p.repeat(tool_choice, min_calls, max_calls));
+            auto tool_calls_seq = p.repeat(tool_choice, min_calls, max_calls);
+
+            // If array format, we need to handle comma separation and wrapping
+            // p.repeat does not handle separators, so we construct the list rule manually for arrays
+            if (is_array) {
+                // List of tools with comma separator: tool ("," tool)*
+                // Use a separate rule for the list content
+                auto tool_list = tool_choice + p.zero_or_more(p.literal(",") + p.space() + tool_choice);
+                tool_calls_seq = p.literal(array_open) + p.space() + tool_list + p.space() + p.literal(array_close);
+            }
+
+            auto tool_calls = p.trigger_rule("tool_call", tool_calls_seq);
 
             // Content parser that stops at tool call markers
-            std::string stop_marker  = pattern.special_markers.at("tool_call_start_marker");
-            auto        safe_content = p.rule("content", p.content(p.until(stop_marker.empty() ? "" : stop_marker)));
+            std::string stop_marker = pattern.special_markers.at("tool_call_start_marker");
+            if (stop_marker.empty() && pattern.format == TemplatePattern::JSON_NATIVE) {
+                stop_marker = "{";
+            }
+            auto safe_content = p.rule("content", p.content(p.until(stop_marker.empty() ? "" : stop_marker)));
 
             return reasoning + p.zero_or_more(p.choice({ tool_calls, safe_content }));
         }
@@ -1716,19 +1776,24 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(const TemplateP
     (void) inputs;  // Suppress unused parameter warning
 
     auto parser = build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
-        // Reasoning parser
+        // Reasoning parser - only include if we have valid reasoning markers
         auto reasoning = p.eps();
         if ((inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE || thinking_forced_open) &&
             !pattern.special_markers.at("reasoning_start_marker").empty() &&
             !pattern.special_markers.at("reasoning_end_marker").empty()) {
             if (thinking_forced_open) {
-                reasoning = p.reasoning_block(p.reasoning(p.until(pattern.special_markers.at("reasoning_end_marker"))) +
-                                              p.literal(pattern.special_markers.at("reasoning_end_marker")));
+                LOG_DBG("Building mandatory reasoning block for constructed parser");
+                reasoning =
+                    p.rule("reasoning",
+                           p.reasoning_block(p.reasoning(p.until(pattern.special_markers.at("reasoning_end_marker"))) +
+                                             p.literal(pattern.special_markers.at("reasoning_end_marker"))));
             } else {
+                LOG_DBG("Building optional reasoning block for constructed parser");
                 reasoning = p.optional(
-                    p.reasoning_block(p.literal(pattern.special_markers.at("reasoning_start_marker")) +
-                                      p.reasoning(p.until(pattern.special_markers.at("reasoning_end_marker"))) +
-                                      p.literal(pattern.special_markers.at("reasoning_end_marker"))));
+                    p.rule("reasoning",
+                           p.reasoning_block(p.literal(pattern.special_markers.at("reasoning_start_marker")) +
+                                             p.reasoning(p.until(pattern.special_markers.at("reasoning_end_marker"))) +
+                                             p.literal(pattern.special_markers.at("reasoning_end_marker")))));
             }
         }
 
@@ -1784,7 +1849,7 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(const TemplateP
                                          p.optional(p.literal(pattern.special_markers.at("argument_separator")))));
                                 arg_choice |= arg_rule;
                             }
-                            args_parser = p.zero_or_more(arg_choice);
+                            args_parser = p.zero_or_more(arg_choice + p.space());
                         } else {
                             // If properties is empty or missing, assume no args or generic fallback?
                             // Strict mode: if parameters object exists but has no properties, expect no args.
@@ -1846,7 +1911,7 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(const TemplateP
                         min_calls = 1;
                         max_calls = 1;
                     } else if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO) {
-                        min_calls = 0;
+                        min_calls = 1;
                         max_calls = inputs.parallel_tool_calls ? -1 : 1;  // -1 for unlimited, 1 for single
                     }
 
@@ -1896,7 +1961,7 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(const TemplateP
                                p.eps() :
                                p.optional(p.literal(pattern.special_markers.at("argument_separator")))));
 
-                    args_parser = p.zero_or_more(arg);
+                    args_parser = p.zero_or_more(arg + p.space());
                 } else {
                     // Fallback to content if no parameter structure detected
                     args_parser = p.content(p.until(pattern.special_markers.at("tool_call_end_marker")));
