@@ -416,3 +416,8 @@ Total estimated regression sources account for ~70-115% (overlapping effects).
 - **Prefer simple codegen in hot loops**: fewer temporaries, fewer helpers, avoid “clever” packing unless assembly inspection shows a win.
 - **Always keep a stable benchmark contract**: fixed command/seed/ctx/threads, record tok/s in `IFAIRY_ARM_3W_LUT_STATUS.md`, and rerun at least twice if the delta is within noise.
 - **Keep a “perf-safe mode”**: when introducing optional fast-paths (e.g. `N==1`), gate them behind an env/compile flag until proven stable.
+
+### Practical reproducibility rules (what we actually do)
+
+- **3-run rule**: for any performance claim, run the exact baseline command 3 times back-to-back for both `legacy` and `compact`, then record `min/max/mean` (not just the best run).
+- **Thermal/noise awareness**: if the 3 runs show a large monotonic drop (typical on laptops/Apple Silicon), cool down and rerun; otherwise “A/B” conclusions are unreliable.
