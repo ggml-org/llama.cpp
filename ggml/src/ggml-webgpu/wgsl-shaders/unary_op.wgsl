@@ -18,7 +18,8 @@
     "GELU_QUICK_FUNC": "{{MUTATE}}[dst_i] = src[src_i] * 0.5 * (1.0 + tanh(clamp(0.79788456 * (src[src_i] + 0.044715 * src[src_i] * src[src_i] * src[src_i]), -9.010913, 9.010913))); // Regarding tanh() domain restrictions in wgsl https://github.com/gpuweb/gpuweb/issues/4458",
     "GELU_ERF_FUNC": "{{MUTATE}}[dst_i] = 0.5 * src[src_i] * (1.0 + tanh(clamp(0.79788456 * (src[src_i] + 0.044715 * src[src_i] * src[src_i] * src[src_i]), -9.010913, 9.010913))); // Regarding tanh() domain restrictions in wgsl https://github.com/gpuweb/gpuweb/issues/4458",
     "SOFTPLUS_FUNC": "{ let src_f32 = f32(src[src_i]); {{MUTATE}}[dst_i] = {{TYPE}}(select(log(1.0 + exp(src_f32)), src_f32, src_f32 > 20.0)); } // Cast to f32 to prevent exp() overflow with f16 (exp(x) overflows f16 for x > ~11)",
-    "EXPM1_FUNC": "{{MUTATE}}[dst_i] = exp(src[src_i]) - 1.0;"
+    "EXPM1_FUNC": "{{MUTATE}}[dst_i] = exp(src[src_i]) - 1.0;",
+    "FLOOR_FUNC": "{{MUTATE}}[dst_i] = floor(src[src_i]);"
 }
 
 #end(REPL_TEMPLATES)
@@ -398,6 +399,26 @@
     {
         "SHADER_NAME": "expm1_inplace_f16",
         "REPLS": { "TYPE": "f16", "FUNC": "EXPM1_FUNC", "EXT_PARAMS": "", "MUTATE": "src" },
+        "DECLS": ["INPLACE"]
+    },
+    {
+        "SHADER_NAME": "floor_f32",
+        "REPLS": { "TYPE": "f32", "FUNC": "FLOOR_FUNC", "EXT_PARAMS": "", "MUTATE": "dst" },
+        "DECLS": ["NOT_INPLACE"]
+    },
+    {
+        "SHADER_NAME": "floor_f16",
+        "REPLS": { "TYPE": "f16", "FUNC": "FLOOR_FUNC", "EXT_PARAMS": "", "MUTATE": "dst" },
+        "DECLS": ["NOT_INPLACE"]
+    },
+    {
+        "SHADER_NAME": "floor_inplace_f32",
+        "REPLS": { "TYPE": "f32", "FUNC": "FLOOR_FUNC", "EXT_PARAMS": "", "MUTATE": "src" },
+        "DECLS": ["INPLACE"]
+    },
+    {
+        "SHADER_NAME": "floor_inplace_f16",
+        "REPLS": { "TYPE": "f16", "FUNC": "FLOOR_FUNC", "EXT_PARAMS": "", "MUTATE": "src" },
         "DECLS": ["INPLACE"]
     },
 ]
