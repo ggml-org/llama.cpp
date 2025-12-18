@@ -4,7 +4,9 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { ChatAttachmentsList, DialogConfirmation, ModelsSelector } from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
-	import { AttachmentType, FileTypeCategory } from '$lib/enums';
+	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
+	import { AttachmentType, FileTypeCategory, MimeTypeText } from '$lib/enums';
+	import { config } from '$lib/stores/settings.svelte';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { setEditModeActive, clearEditMode } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
@@ -13,7 +15,8 @@
 	import {
 		autoResizeTextarea,
 		getFileTypeCategory,
-		getFileTypeCategoryByExtension
+		getFileTypeCategoryByExtension,
+		parseClipboardContent
 	} from '$lib/utils';
 
 	interface Props {
@@ -56,6 +59,11 @@
 	let saveWithoutRegenerate = $state(false);
 	let showDiscardDialog = $state(false);
 	let isRouter = $derived(isRouterMode());
+	let currentConfig = $derived(config());
+	let pasteLongTextToFileLength = $derived.by(() => {
+		const n = Number(currentConfig.pasteLongTextToFileLen);
+		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
+	});
 
 	let hasUnsavedChanges = $derived.by(() => {
 		if (editedContent !== originalContent) return true;
@@ -185,6 +193,62 @@
 		onEditedUploadedFilesChange([...editedUploadedFiles, ...processed]);
 	}
 
+	function handlePaste(event: ClipboardEvent) {
+		if (!event.clipboardData) return;
+
+		const files = Array.from(event.clipboardData.items)
+			.filter((item) => item.kind === 'file')
+			.map((item) => item.getAsFile())
+			.filter((file): file is File => file !== null);
+
+		if (files.length > 0) {
+			event.preventDefault();
+			processNewFiles(files);
+
+			return;
+		}
+
+		const text = event.clipboardData.getData(MimeTypeText.PLAIN);
+
+		if (text.startsWith('"')) {
+			const parsed = parseClipboardContent(text);
+
+			if (parsed.textAttachments.length > 0) {
+				event.preventDefault();
+				onEditedContentChange(parsed.message);
+
+				const attachmentFiles = parsed.textAttachments.map(
+					(att) =>
+						new File([att.content], att.name, {
+							type: MimeTypeText.PLAIN
+						})
+				);
+
+				processNewFiles(attachmentFiles);
+
+				setTimeout(() => {
+					textareaElement?.focus();
+				}, 10);
+
+				return;
+			}
+		}
+
+		if (
+			text.length > 0 &&
+			pasteLongTextToFileLength > 0 &&
+			text.length > pasteLongTextToFileLength
+		) {
+			event.preventDefault();
+
+			const textFile = new File([text], 'Pasted', {
+				type: MimeTypeText.PLAIN
+			});
+
+			processNewFiles([textFile]);
+		}
+	}
+
 	$effect(() => {
 		if (textareaElement) {
 			autoResizeTextarea(textareaElement);
@@ -243,6 +307,7 @@
 				autoResizeTextarea(e.currentTarget);
 				onEditedContentChange(e.currentTarget.value);
 			}}
+			onpaste={handlePaste}
 			placeholder="Edit your message..."
 		></textarea>
 
