@@ -2368,7 +2368,7 @@ static inline void ggml_hexagon_dispatch_op(const struct ggml_tensor * op, uint3
     }
 }
 
-template <bool _IsSrc0Constant>
+template <bool _is_src0_constant>
 static inline size_t init_binary_req_and_bufs(htp_general_req * req,
                                               dspqueue_buffer (&bufs)[4],
                                               const ggml_tensor * op) {
@@ -2404,7 +2404,7 @@ static inline size_t init_binary_req_and_bufs(htp_general_req * req,
     // Otherwise (CPU writes, DSP reads), we flush CPU caches and invalidate DSP caches.
     // Note: On platforms with I/O coherency, the framework skips cache ops automatically.
     size_t n_bufs = dspqueue_buffers_init(
-        bufs, src0, _IsSrc0Constant ? DSP_BUFFER_TYPE_CONSTANT : DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
+        bufs, src0, _is_src0_constant ? DSP_BUFFER_TYPE_CONSTANT : DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
 
     // Buffer 1 (src1): Input Activations (mulmat) or Second Operand (binary op).
     // CPU writes, DSP reads: flush CPU caches and invalidate DSP caches.
@@ -2419,7 +2419,7 @@ static inline size_t init_binary_req_and_bufs(htp_general_req * req,
     return n_bufs;
 }
 
-template <bool _IsSrc0Constant>
+template <bool _is_src0_constant>
 static inline size_t init_binary_id_req_and_bufs(htp_general_req * req,
                                                  dspqueue_buffer (&bufs)[4],
                                                  const ggml_tensor * op) {
@@ -2449,7 +2449,7 @@ static inline size_t init_binary_id_req_and_bufs(htp_general_req * req,
     // If constant, no cache management is needed.
     // Otherwise (CPU writes, DSP reads), we flush CPU caches and invalidate DSP caches.
     size_t n_bufs = dspqueue_buffers_init(
-        bufs, src0, _IsSrc0Constant ? DSP_BUFFER_TYPE_CONSTANT : DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
+        bufs, src0, _is_src0_constant ? DSP_BUFFER_TYPE_CONSTANT : DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
 
     // Buffer 1 (src1): Input Activations (mulmat) or Experts Bias (other op).
     // CPU writes, DSP reads: flush CPU caches and invalidate DSP caches.
