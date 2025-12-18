@@ -4,7 +4,7 @@
 ## Build GUI binding using Android Studio
 
 Import the `examples/llama.android` directory into Android Studio, then perform a Gradle sync and build the project.
-![Project imported into Android Studio](./android/imported-into-android-studio.png)
+![Project imported into Android Studio](./android/imported-into-android-studio.jpg)
 
 This Android binding supports hardware acceleration up to `SME2` for **Arm** and `AMX` for **x86-64** CPUs on Android and ChromeOS devices.
 It automatically detects the host's hardware to load compatible kernels. As a result, it runs seamlessly on both the latest premium devices and older devices that may lack modern CPU features or have limited RAM, without requiring any manual configuration.
@@ -17,7 +17,7 @@ A minimal Android app frontend is included to showcase the binding’s core func
 For a production-ready experience that leverages advanced features such as system prompts and benchmarks, plus friendly UI features such as model management and Arm feature visualizer, check out [Arm AI Chat](https://play.google.com/store/apps/details?id=com.arm.aichat) on Google Play.
 This project is made possible through a collaborative effort by Arm's **CT-ML**, **CE-ML** and **STE** groups:
 
-| ![Home screen](./android/arm-ai-chat-home-screen.png)  | ![System prompt](./android/system-prompt-setup.png)  | !["Haiku"](./android/chat-with-system-prompt-haiku.png)  |
+| ![Home screen](https://naco-siren.github.io/ai-chat/policy/index/1-llm-starter-pack.png)  | ![System prompt](https://naco-siren.github.io/ai-chat/policy/index/5-system-prompt.png)  | !["Haiku"](https://naco-siren.github.io/ai-chat/policy/index/4-metrics.png)  |
 |:------------------------------------------------------:|:----------------------------------------------------:|:--------------------------------------------------------:|
 |                      Home screen                       |                    System prompt                     |                         "Haiku"                          |
 
