@@ -176,7 +176,7 @@ std::string common_params_sampling::print() const {
     return std::string(result);
 }
 
-struct common_sampler * common_sampler_init(const struct llama_model * model, const struct common_params_sampling & params) {
+struct common_sampler * common_sampler_init(const struct llama_model * model, struct common_params_sampling & params) {
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
     llama_sampler_chain_params lparams = llama_sampler_chain_default_params();
@@ -313,6 +313,12 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
         llama_sampler_chain_add(chain, smpl);
     }
 
+    if (grmr && params.backend_sampling) {
+        LOG_WRN("%s: backend sampling is not compatible with grammar, disabling\n", __func__);
+
+        params.backend_sampling = false;
+    }
+
     auto * result = new common_sampler {
         /* .params  = */ params,
         /* .grmr    = */ grmr,
@@ -429,6 +435,8 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
         if (id != LLAMA_TOKEN_NULL) {
             LOG_DBG("%s: Backend sampler selected token: '%d'. Will not run any CPU samplers\n", __func__, id);
+
+            GGML_ASSERT(!gsmpl->grmr && "using grammar in combination with backend sampling is not supported");
 
             // TODO: simplify
             gsmpl->cur.resize(1);

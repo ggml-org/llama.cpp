@@ -1571,7 +1571,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         // extract logits
-        // For multipsequence batches that mix backend samplers and CPU sampler
+        // For multi-sequence batches that mix backend samplers and CPU sampler
         // this is currently inefficient as we copy all logits even for the
         // backend sampled tokens.
         if (logits && t_logits && n_outputs > 0) {
