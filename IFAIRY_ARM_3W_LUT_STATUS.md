@@ -107,6 +107,9 @@
   - 对照：旧/新二进制交替跑两轮（`A=../llama_cpp_perfbase_406715f2/build-rel/bin/llama-cli`，`B=./build-rel/bin/llama-cli`），均为 `-n 64`，对比指标取 `llama_perf_context_print: eval time ... tokens per second`。
   - 结果：`ABABAB` 显示微弱正向（A mean `5.6467`，B mean `5.6667`；原始 TSV：`/tmp/ifairy_lut_abab_compact_addrchain_20251218T150914Z.tsv`），但 `BABABA` 反向后结论翻转（A mean `5.7667`，B mean `5.7367`；原始 TSV：`/tmp/ifairy_lut_bababa_compact_addrchain_20251218T151445Z.tsv`）。
   - 结论：该点在当前机器/条件下 **无稳定提升**（更像噪声/热漂移），已回退；后续不要在没有更强证据（profile 指令计数/IPC 或更大样本）前继续堆叠这类“微弱地址计算”改动。
+- 尝试：`GGML_IFAIRY_LUT_LAYOUT=compact2`（实验性 2-lookups）：把 `pos0+pos1` 预合并成 16-way `int16` 表（`idx01 = pat & 0x0f`），`pos2` 仍为 16B `int8` 表（`c2 = pat >> 4`），希望把每 group 的查表从 3 次降到 2 次。
+  - 结果：短测（`-n 64`）出现大幅回退：`compact mean=5.477` vs `compact2 mean=3.473`（原始 TSV：`/tmp/ifairy_lut_abab_compact_vs_compact2_20251218T153800Z.tsv`）；对 preprocess 做 NEON 向量化后仍显著落后：`compact mean=5.953` vs `compact2 mean=4.623`（原始 TSV：`/tmp/ifairy_lut_abab_compact_vs_compact2_v2_20251218T154608Z.tsv`）。
+  - 结论：该方向在当前实现/机器上属于 **明确负收益**；已停止推进（不合入默认路径），后续只在“preprocess 不变或更便宜 + profile 明确显示 qgemm 指令瓶颈且缓存足够”时再考虑重启。
 
 ## 0.2 Xcode Profile（以 decode 场景为准）
 

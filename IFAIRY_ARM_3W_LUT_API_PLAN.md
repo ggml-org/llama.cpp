@@ -163,6 +163,7 @@ struct ifairy_lut_extra {
 
 - **减少 3 次 position 查表的结构性开销（P0，优先探索）**：当前 `compact` 每 group 必做 3 次 position 查表 + widen + add，指令密度高且依赖链长；若能把 “3 次” 减到 “2 次”，通常比微调 unroll/prefetch 更可能拉开稳定差距。
   - 方向 A：`(c0,c1)` 预合并表（16 组合）+ `pos2`（4 组合），将每 group 查表从 3 次降到 2 次（注意 preprocess 成本与 cache footprint 平衡）。
+    - 进展：已尝试 `GGML_IFAIRY_LUT_LAYOUT=compact2`（pos0+pos1 合并为 16-way int16 表），在当前实现与机器上出现明显 tok/s 回退（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 失败案例），暂不继续扩面；后续只在 preprocess 能做到“更便宜/不增加写带宽”时再考虑重启。
   - 方向 B：小型 64-pattern 表（int8/小 int16），把查表变回“一次读 4ch”的形态，同时尽量保持比 legacy 更小的工作集。
 - **unroll + 多累加器**：对 group 循环做 2/4-way unroll，采用 `isum0/isum1` 交错累加，减少 load-use 依赖链。
   - 经验：在 Apple M4 上尝试把 `compact` 的 `N==1` fast-path 从 4-way 收敛到 2-way 会明显变慢（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 的失败案例记录）；不要在没有 A/B 的情况下改 unroll。
