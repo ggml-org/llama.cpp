@@ -168,8 +168,8 @@ bool ggml_ifairy_lut_can_mul_mat(const struct ggml_tensor * src0, const struct g
         return false;
     }
 
-#if !defined(__ARM_NEON)
-    if (dbg) { GGML_LOG_WARN("ifairy_lut: disabled (build without ARM NEON)\n"); }
+#if !defined(__ARM_NEON) || !defined(__aarch64__)
+    if (dbg) { GGML_LOG_WARN("ifairy_lut: disabled (requires __aarch64__ + __ARM_NEON)\n"); }
     return false;
 #endif
 
