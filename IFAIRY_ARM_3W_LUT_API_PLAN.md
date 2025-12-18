@@ -121,7 +121,30 @@ struct ifairy_lut_extra {
   - 每次性能相关改动，都在 `IFAIRY_ARM_3W_LUT_STATUS.md` 的 `0.1 tok/s 记录`追加一条可复现记录（固定 seed/prompt/thread/token/env）。
   - 主观体验（输出可读/不卡）不作为性能结论，必须以 `eval tok/s` 为准。
 
-### 6.1 优先级 1：继续压 `ggml_ifairy_lut_qgemm_ex` 热点（`compact` 优先）
+### 6.0.1 回归恢复（最高优先级：先回到 `0ec52a5a` 的 tok/s 档位）
+
+> 现状：在 `0ec52a5a` 之后出现大幅性能回归（详见 `IFAIRY_LUT_PERF_REGRESSION_ANALYSIS.md`）。在恢复到“已验证过的高 tok/s 档位”之前，先暂停引入更多新优化点（避免把排查范围越做越大）。
+
+恢复顺序（每一步都必须：Release rebuild + `test-ifairy` + strict + 追加 tok/s 记录）：
+
+1) **优先恢复 `ggml_ifairy_lut_preprocess_ex` 的构表热路径**  
+   - 目标：把 `compact` 的构表回到“最少临时变量 + 最少指令 + 顺序写入”的版本（倾向 `0ec52a5a` 风格的 direct store），避免 `pack`/`vcreate`/`vcombine` 等额外开销主导。
+
+2) **回退/对照 `qgemm_ex` 的 unroll 与 prefetch 策略**  
+   - 原则：先做 A/B（2-way vs 4-way，prefetch unconditional vs conditional），以 tok/s 与 profile 结果为准。
+
+3) **暂时禁用 `N==1` fast-path（直到明确在目标机器上稳定赢）**  
+   - decode 的快路要么“显著更快”，要么就先关掉，避免“引入分支 + 代码体积 + 寄存器压力”但收益不确定。
+
+4) **回退/简化 `src1=F32` 的激活量化并行切分（以 decode 为准）**  
+   - 原则：decode (`N≈1`) 更怕额外的调度/分片/算术开销；优先选简单路径，先把 tok/s 拉回去，再讨论更细的并行化。
+
+验收：
+
+- Apple Silicon / 4 threads / 固定命令下：`legacy` ≥ `15 tok/s` 且 `compact` ≥ `17 tok/s`（以 `STATUS.md` 记录为准）
+- `GGML_IFAIRY_LUT_VALIDATE_STRICT=1` 下对照全通过（允许变慢，但必须正确）
+
+### 6.1（恢复后）继续压 `ggml_ifairy_lut_qgemm_ex` 热点（`compact` 优先）
 
 目标：把 decode 常见的 `N≈1` 进一步提速，并让 `compact` 在 Apple Silicon 上稳定胜出。
 
@@ -163,6 +186,8 @@ struct ifairy_lut_extra {
 ### 6.4 可选：形状专用 fast-path（谨慎引入）
 
 > BitNet TL1 通过“少量固定形状专用内核”换取吞吐上限。iFairy 若要走这条路，必须先用 profile/日志确认最热 `(M,K,N)`，再只为 1~2 个形状提供 fast-path，避免维护成本失控。
+
+> 当前约定：本阶段先不考虑 6.4（除非回归恢复完成且 profile 明确显示收益空间）。
 
 可选落地方向：
 

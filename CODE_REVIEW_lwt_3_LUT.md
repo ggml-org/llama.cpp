@@ -13,6 +13,8 @@
 
 This code review covers a major feature implementation for iFairy 2-bit complex weight quantization with 3-weight Look-Up Table (LUT) acceleration on ARM NEON platforms. The implementation demonstrates **significant performance improvements** (from ~2 tok/s to ~21 tok/s in optimal configurations) while maintaining numerical correctness with the baseline implementation.
 
+> Update (2025-12-18): A large tok/s regression was observed after `0ec52a5a` on this branch. Current work should prioritize regression recovery before additional micro-optimizations; see `IFAIRY_LUT_PERF_REGRESSION_ANALYSIS.md` and the updated priorities in `IFAIRY_ARM_3W_LUT_STATUS.md`.
+
 ### Overall Assessment: ✅ **APPROVED with Recommendations**
 
 **Strengths:**

@@ -4,6 +4,7 @@
 >
 > - API/路由与线程模型见 `IFAIRY_ARM_3W_LUT_API_PLAN.md`
 > - 性能记录与复现命令见 `IFAIRY_ARM_3W_LUT_STATUS.md`
+> - 性能回归分析与恢复建议见 `IFAIRY_LUT_PERF_REGRESSION_ANALYSIS.md`
 
 ---
 
@@ -18,6 +19,7 @@
 ### 1.2 约束（当前实现）
 
 - 编译期开关：`GGML_IFAIRY_ARM_LUT`（开启时 CMake 强制关闭各类加速后端以保证 CPU-only）。
+- 平台约束：当前 LUT 路由要求 `__aarch64__ + __ARM_NEON`；不满足时回退到非 LUT 路径（不会走 ARM32 标量 LUT）。
 - 形状约束：`K % QK_K == 0`（当前 `QK_K=256`），否则 LUT 路由不生效。
 - 激活输入支持两种形式：
   - `GGML_TYPE_F32`：复数 bf16-pair 容器（每个 complex 占 4B：`[bf16 real][bf16 imag]`），推理中常见；
@@ -169,7 +171,11 @@ NEON 内核里对每个 group 只需要：
 
 ## 7. 当前主任务（与代码审查结论对齐）
 
-P0（必须尽快做）：
+P0（最高优先级：先恢复 tok/s 回归）：
+
+- `0ec52a5a` 之后出现大幅 tok/s 回归：优先按 `IFAIRY_LUT_PERF_REGRESSION_ANALYSIS.md` 的建议逐项回退/对照，先把 tok/s 拉回“已验证过的高档位”，再继续引入新优化点。
+
+P0（并行推进：但尽量不扩面热路径）：
 
 - 内存/生命周期：减少 `new/delete` + 全局容器；补齐 size/overflow/bounds 检查，避免 silent failure。
 - 线程安全：明确并发模型；缩小锁粒度，避免持锁做重活；补充并发/压力测试。

@@ -5,6 +5,7 @@
 ## 0. 快速使用（建议默认）
 
 - 前提：构建时启用了 `GGML_IFAIRY_ARM_LUT`（`ggml/CMakeLists.txt` 会在 configure 阶段强制关闭 Metal/CUDA/HIP/MUSA/Vulkan/OpenCL/SYCL/WebGPU/zDNN 等加速后端，以保证 CPU-only）。
+- 平台约束：当前 LUT 路由要求 `__aarch64__ + __ARM_NEON`；不满足时会回退（ARM32/无 NEON 不走 LUT）。
 - 推荐二进制：`./build-rel/bin/llama-cli`（避免误用旧的 `./build/bin/llama-cli` 导致输出异常，见 3.1）
 - 推荐扫参脚本：`bash scripts/ifairy_lut_sweep.sh`（固定 seed/prompt，输出按 tok/s 排序）
 - LUT 表布局默认走 `legacy`（更稳；`compact` 在部分设备/形状上更快），如需测试紧凑表：`GGML_IFAIRY_LUT_LAYOUT=compact`（见 1.1 / 0.1 记录）
@@ -24,19 +25,20 @@
 
 ## 0.0 当前共识（按优先级）
 
-> 基于 `CODE_REVIEW_lwt_3_LUT.md` 的结论：性能收益已证明，但接下来优先把可维护性与健壮性补齐，避免后续优化建立在不稳的地基上。
+> 更新：`0ec52a5a` 之后出现大幅 tok/s 回归（见 `IFAIRY_LUT_PERF_REGRESSION_ANALYSIS.md`）。因此当前优先级以“先恢复到已验证过的高 tok/s 档位”为最高主线；地基工作并行推进，但不再驱动新的热路径改动扩面。
 
-- P0：内存/生命周期（减少 `new/delete` + 全局容器；补齐 size/overflow/bounds 检查，避免 silent failure）
-- P0：线程安全（明确并发模型，缩小锁粒度，补并发/压力测试）
-- P1：可维护性重构（拆分 `ggml/src/ggml-ifairy-lut.cpp`，减少 legacy/compact 重复代码）
-- P1：错误处理一致性（统一 `return false`/`GGML_ASSERT`/日志策略）
-- P2：测试与回归（维度边界、分配失败、misaligned buffer、并发 transform；以及 decode/prefill 形状的性能基线）
+- P0（主线）：回归恢复 —— 先把 tok/s 拉回 `0ec52a5a` 档位（按 `## 4` 的 recovery steps 逐个回退/对照）。
+- P0（并行）：可复现性与回归门槛 —— 固定命令/固定 seed/固定 build 目录；`test-ifairy + strict` 必跑，tok/s 必记录。
+- P1：错误处理/路由健壮性 —— 只做“不影响热路径”的硬化与可观测性（现阶段已补齐一部分，见 `## 2` 摘要）。
+- P2：可维护性重构/线程安全/生命周期 —— 在回归恢复完成后再推进（避免重构掩盖性能回归点）。
 
 ## 0.1 tok/s 记录（更新本文档时必填）
 
 > 约定：每次修改/更新本文件（`IFAIRY_ARM_3W_LUT_STATUS.md`）都在这里追加一条 tok/s 记录，避免“写了很多优化但没有可复现数字”。
 >
 > 注：当要求“代码+文档同一 commit”时，`git` 列可填写 `HEAD` 表示“本文件所在的那次提交”。
+>
+> 注：tok/s 会受温度/后台负载/系统调度影响，短时间内出现 `±20~30%` 波动并不罕见；判断“回归/恢复”时以多次复现与趋势为准，并优先对照 `0ec52a5a` / `0aeaa6c9` 的已知节点（见 `IFAIRY_LUT_PERF_REGRESSION_ANALYSIS.md`）。
 
 **基准命令（固定 prompt/seed/thread）**
 
@@ -155,32 +157,15 @@
 - **scale/系数无法在 LUT 阶段完全合并**：激活块有 `d_real/d_imag` 两套 scale，权重行还有 `d_real/d_imag` 两个系数；其中权重系数是 **per-row** 的，LUT 预处理是 **per-column** 的，不能把权重系数 bake 进 LUT，否则会退化成“每行一份 LUT”，内存/构表成本不可接受。
 - **累加阶段不可消除**：点积跨 `K` 的求和必须在 qgemm 里做，因为每个 group 查哪个 `pat` 是由权重索引决定的；能做的优化是把乘法移出 inner-loop（当前四通道设计已经把权重系数的浮点乘法移到每个输出一次）。
 
-## 2. 本次清理/整理做了什么（NEON 版本落地前的清理）
+## 2. 近期地基工作（摘要：不影响热路径的健壮性/一致性）
 
-### 2.1 移除 debug 导致的“非必要改动”
+> 说明：本节只保留“对可复现与稳定性有直接帮助”的摘要；历史细节/大段公式/临时脚本不再堆在本文档中。
 
-- 删除/收敛了运行时大量 `fprintf`/对照打印，避免多线程下的噪声与非确定性输出。
-- 清理了 `todo_*`/注释掉的断言等临时代码残留。
-
-### 2.2 严格校验语义改为“验证 LUT 输出”
-
-- `GGML_IFAIRY_LUT_VALIDATE_STRICT=1` 现在用于 **对 LUT 输出做 reference 对照并断言**（而不是直接走 reference 旁路输出）。
-- 位置：`ggml/src/ggml-ifairy-lut.cpp::ggml_ifairy_lut_qgemm()`。
-
-### 2.3 工作区布局整理：LUT/scale 线程共享
-
-- `ggml_ifairy_lut_get_wsize()` 与 `ggml_compute_forward_mul_mat()` 对齐为：
-  - `quant_bytes`（仅当 `src1=F32` 时需要）
-  - `shared_bytes = pad(lut_bytes + scale_bytes)`（**一次构表，所有线程共享**）
-  - `tmp_bytes * nth`（每线程一行的临时输出缓冲）
-- 位置：
-  - `ggml/src/ggml-ifairy-lut.cpp::ggml_ifairy_lut_get_wsize()`
-  - `ggml/src/ggml-cpu/ggml-cpu.c` 的 LUT 分支
-
-### 2.4 量化相关的清理与健壮性修复
-
-- `ggml/src/ggml-cpu/quants.c::quantize_row_ifairy()` 去掉了对整行 `malloc/free` 的临时缓冲，改为两遍扫描直接量化，保持与 `quantize_row_ifairy_ref()` 语义一致。
-- `ggml/src/ggml-quants.c::quantize_row_ifairy_q16_ref()` 补齐了 `int8` 饱和到 `[-127, 127]` 的 clamp，避免极端情况下的溢出风险。
+- 工作区 size/overflow 断言：为 `ggml_ifairy_lut_get_wsize()` 与 `ggml-cpu.c` 的 LUT 工作区切分补齐 overflow 断言，避免 size_t wrap 导致 silent 越界（`2a39f249`）。
+- prefetch 可控：新增并打通 `GGML_IFAIRY_LUT_PREFETCH=0/1`，确保 legacy/compact 的 `qgemm_ex/accum4_ex` 所有 prefetch 点位都可完全关闭以便 profile 对照（`627dea55` / `46dcb0cb`）。
+- env 解析收敛：将 LUT 相关 env 解析 helper 集中到 `ggml/src/ggml-ifairy-lut.h` 并复用，减少重复与语义漂移（`62a4ad8f`）。
+- 错误可观测性：`transform_tensor` 在 debug 下对 shape/alloc/encode 失败输出原因，减少 silent fallback（`0f1af549`）。
+- 路由边界更明确：LUT 路由要求 `__aarch64__ + __ARM_NEON`；并对无效 `GGML_IFAIRY_LUT_LAYOUT`、非法 `BK_BLOCKS/BM` 在 debug 下 warn/clamp（`34d8df05` / `10c98502`）。
 
 ## 3. 推荐验证方式（本地）
 
@@ -203,34 +188,9 @@
 6) 回归（decode/布局/tiling 一致性）  
 `./build-rel/bin/test-ifairy` 内置 `Test 5: iFairy LUT backend tiling regression`（会在测试内部设置 `GGML_IFAIRY_LUT=1`：先对比 `BK/BM` tiling 与非 tiling 的输出 bitwise 一致性；再对比 `N==1`（decode-like）下 `GGML_IFAIRY_LUT_LAYOUT=legacy` vs `compact` 的输出 bitwise 一致性；若 `GGML_IFAIRY_ARM_LUT` 未启用则自动跳过）。
 
-7) 性能测试复现脚本（tok/s，对比 LUT=0/1 与不同开关）  
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BIN="${ROOT}/build-rel/bin/llama-cli"
-MODEL="${ROOT}/models/Fairy-plus-minus-i-700M/ifairy.gguf"
-
-COMMON=( -m "${MODEL}" --gpu-layers 0 -t 4 -b 1 --seed 1 -p "I believe life is" -n 512 -no-cnv )
-
-run_case() {
-  local name="$1"
-  shift
-  echo
-  echo "==== ${name} ===="
-  "$@" "${COMMON[@]}" 2>&1 | tee "/tmp/ifairy_lut_${name}.log" | grep -E "tok/s|eval time|prompt eval time|sampling time" || true
-}
-
-run_case "lut0" env GGML_IFAIRY_LUT=0 "${BIN}"
-run_case "lut1" env GGML_IFAIRY_LUT=1 "${BIN}"
-run_case "lut1_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_FULLACC=1 "${BIN}"
-run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GGML_IFAIRY_LUT_FULLACC=1 "${BIN}"
-```
-备注：如需验证输出一致性，先跑 `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_VALIDATE_STRICT=1 ./build-rel/bin/test-ifairy`；性能脚本不建议开 strict（会强制一些路径禁用/变慢）。
-
-> 备注（脚本输出 `tok/s=nan` 的常见原因）：`llama-cli` 的性能日志字段在不同版本里可能是 `X tokens per second`（当前默认）而不是 `X tok/s`。  
-> 若你本地脚本仍在按 `tok/s` 解析，会导致抓不到数值而写入 `nan`；已在 `scripts/ifairy_lut_sweep.sh` 里同时兼容两种格式，并只从 `eval time` 行提取（排除 `prompt eval time` / `sampling time`）。
+7) 性能跑分/扫参（推荐）  
+优先使用仓库脚本：`bash scripts/ifairy_lut_sweep.sh`（固定 seed/prompt，输出按 tok/s 排序，兼容 `tokens per second`/`tok/s` 两种日志格式）。  
+如只复现单点（与 `0.1` 对齐）：直接使用 `0.1 tok/s 记录` 的基准命令即可。
 
 ### 3.1 常见问题：`llama-cli` 输出 gibberish（例如 `I believe life isDocuments CeUNTares cred`）
 
@@ -265,6 +225,26 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 
 ## 4. 后续工作（按优先级）
 
+> 更新：`0ec52a5a` 之后出现大幅 tok/s 回归，当前先以“回归恢复”为主线（详见 `IFAIRY_LUT_PERF_REGRESSION_ANALYSIS.md`）。本节先列 recovery steps，再列“恢复后继续优化”的原计划。
+
+### 4.0 回归恢复（最高优先级：先回到 `0ec52a5a` 的 tok/s 档位）
+
+每一步都必须：Release rebuild + `./build-rel/bin/test-ifairy` + `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_VALIDATE_STRICT=1 ./build-rel/bin/test-ifairy` + 在 `0.1 tok/s 记录` 追加一条记录。
+
+1) **R0：恢复 `ggml_ifairy_lut_preprocess_ex` 的构表热路径（优先 `compact`）**  
+   - 按 `0ec52a5a` 的 direct store 形态回退/重写构表实现，避免 `pack`/临时变量/`vcreate+vcombine` 的额外开销。
+
+2) **R1：回退/对照 `qgemm_ex` 的 unroll 与 prefetch 策略**  
+   - 先做 A/B：2-way vs 4-way unroll；prefetch unconditional vs conditional；以 tok/s 与 profile 为准。
+
+3) **R2：暂时关闭 `N==1` fast-path（直到明确稳定增益）**  
+   - decode 的快路要么“显著更快”，要么就先关掉，避免复杂度上升但吞吐下降。
+
+4) **R3：回退/简化 decode 场景下的激活量化并行切分**  
+   - decode (`N≈1`) 更怕调度/分片开销；先用更简单策略恢复基线，再讨论更细的并行化。
+
+### 4.1（恢复后）继续优化（原计划）
+
 > 目标：优先提升 Apple Silicon（ARM64 + NEON）的 tok/s，且不破坏 `w * conj(x)` 语义与现有输出一致性。
 
 （优先级依据：见 0.2 的 Xcode Profile，`ggml_ifairy_lut_qgemm_ex` 占比 63%）
@@ -281,7 +261,7 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
      - `./build-rel/bin/test-ifairy` 全通过
      - 在 0.2 的 decode 配置下，`ggml_ifairy_lut_qgemm_ex` 占比下降（目标 < 55%），同时 eval tok/s 上升（目标 +10%）
 
-### 4.1 近期进展（与本次改动相关）
+### 4.2 近期进展（历史/与原计划相关）
 
 - 修复 strict 验证误报：legacy `qgemm_ex` 的 strict reference 之前用错了 `ifairy` 权重 bit-pack 解码（导致 `GGML_IFAIRY_LUT_VALIDATE_STRICT=1` 直接断言失败）；已修正为与 `ggml-quants.c`/单测一致的 `chunk/lane/part` 解码。
 - compact decode 优化尝试：为 `GGML_IFAIRY_LUT_LAYOUT=compact` 增加 `N==1` fast-path，并把 group 循环改为 4-way unroll（交错 `isum0/isum1`）。当前 sanity 输出正常、单测与 strict 全通过；但 tok/s 仍未回升到预期（见 0.1 最新两条记录）。
@@ -335,6 +315,8 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
    - 继续补充 “LUT vs reference” 单测形状覆盖，并固定 `llama-cli` 命令/seed 记录 LUT=0 vs LUT=1 tok/s；必要时用 `llama-bench`/`llama-perplexity` 做对照。
 
 ## 5. 进一步性能提升路线图（参考 `BitNet/docs/lut-arm.md`）
+
+> 注：本节属于“回归恢复完成后的长期路线图”。在 tok/s 未恢复前，先不要以此为导向继续扩展热路径复杂度。
 
 `BitNet/docs/lut-arm.md` 的 ARM LUT 实现有几个很“工程化”的性能关键点：**int8 QLUT + `vqtbl` 查表**、**int32 累加**、**更少的 scale/元数据**、以及（在它的约束下）**对固定形状做专用内核**。（iFairy 的 `compact` 布局当前用 32-bit load 查表；`vqtbl` 版本曾尝试但在 M4 上更慢。）iFairy 这条 3-weight LUT 路径虽然语义/布局不同，但可以借鉴同样的方向来继续提速。
 
