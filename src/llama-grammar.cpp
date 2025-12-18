@@ -1293,6 +1293,7 @@ void llama_grammar_apply_impl(const struct llama_grammar & grammar, llama_token_
     for (const auto & reject : rejects) {
         cur_p->data[reject.index].logit = -INFINITY;
     }
+    cur_p->normalized = false;
 }
 
 void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token) {
