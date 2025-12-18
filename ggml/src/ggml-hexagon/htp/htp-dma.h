@@ -49,12 +49,12 @@ static inline unsigned int dmwait(void) {
     return ret;
 }
 
-static inline bool dma_queue_push_width(dma_queue *  q,
+static inline bool dma_queue_push(dma_queue *  q,
                                   void *       dst,
                                   const void * src,
                                   size_t       dst_row_size,
                                   size_t       src_row_size,
-                                  size_t       width,
+                                  size_t       width, // width in bytes. number of bytes to transfer per row
                                   size_t       nrows) {
     if (((q->push_idx + 1) & q->idx_mask) == q->pop_idx) {
         return false;
@@ -97,13 +97,23 @@ static inline bool dma_queue_push_width(dma_queue *  q,
     return true;
 }
 
-static inline bool dma_queue_push(dma_queue *  q,
+static inline bool dma_queue_push_ddr_to_vtcm(dma_queue *  q,
                                   void *       dst,
                                   const void * src,
                                   size_t       dst_row_size,
                                   size_t       src_row_size,
                                   size_t       nrows) {
-    return dma_queue_push_width(q, dst, src, dst_row_size, src_row_size, src_row_size, nrows);
+    return dma_queue_push(q, dst, src, dst_row_size, src_row_size, src_row_size, nrows);
+}
+
+
+static inline bool dma_queue_push_vtcm_to_ddr(dma_queue *  q,
+                                  void *       dst,
+                                  const void * src,
+                                  size_t       dst_row_size,
+                                  size_t       src_row_size,
+                                  size_t       nrows) {
+    return dma_queue_push(q, dst, src, dst_row_size, src_row_size, dst_row_size, nrows);
 }
 
 static inline uint8_t * dma_queue_pop(dma_queue * q) {

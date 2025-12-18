@@ -314,7 +314,7 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
     }
     // Do the inital dma fecth
     // fetch src0
-    dma_queue_push(dma_queue,   
+    dma_queue_push_ddr_to_vtcm(dma_queue,   
         src0_spad_data_ping, 
         data_src0 + (src0_start_row * src0_row_size),
         src0_row_size_aligned,
@@ -358,7 +358,7 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
         if (next_block_size > 0) {
             if(src0_ping_pong_flag == false){
 
-                dma_queue_push(dma_queue,   
+                dma_queue_push_ddr_to_vtcm(dma_queue,   
                     src0_spad_data_ping, 
                     data_src0 + (block_end * src0_row_size),
                     src0_row_size_aligned,
@@ -368,7 +368,7 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
 
 
             }else{
-                dma_queue_push(dma_queue,   
+                dma_queue_push_ddr_to_vtcm(dma_queue,   
                     src0_spad_data_pong, 
                     data_src0 + (block_end * src0_row_size),
                     src0_row_size_aligned,
@@ -394,21 +394,19 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
         float * restrict out_dst  = (float *) (data_dst + (ir * dst_row_size));
 
         if(dst_ping_pong_flag){
-            dma_queue_push_width(dma_queue,   
+            dma_queue_push_vtcm_to_ddr(dma_queue,   
                 out_dst,
                 dst_spad_data_ping,
                 dst_row_size,         // dst stride in DDR (actual row size)
                 dst_row_size_aligned, // src stride in VTCM (aligned)
-                dst_row_size,         // width
                 (block_end - ir)
             );
         }else{
-            dma_queue_push_width(dma_queue,   
+            dma_queue_push_vtcm_to_ddr(dma_queue,   
                 out_dst,
                 dst_spad_data_pong,
                 dst_row_size,         // dst stride in DDR (actual row size)
                 dst_row_size_aligned, // src stride in VTCM (aligned)
-                dst_row_size,         // width
                 (block_end - ir)
             );
         }

@@ -1127,7 +1127,7 @@ static void matmul(struct htp_matmul_type * mt,
         if (is0 >= HTP_SPAD_SRC0_NROWS) {
             break;
         }
-        dma_queue_push(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
+        dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
                        src0_row_size_padded, src0_row_size, 2);
     }
 
@@ -1146,7 +1146,7 @@ static void matmul(struct htp_matmul_type * mt,
         const int pr0 = (ir0 + HTP_SPAD_SRC0_NROWS);
         const int is0 = (pr0 - src0_start_row) % HTP_SPAD_SRC0_NROWS;
         if (pr0 < src0_end_row_x2) {
-            dma_queue_push(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + pr0 * src0_row_size,
+            dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + pr0 * src0_row_size,
                            src0_row_size_padded, src0_row_size, 2);
         }
     }
@@ -1155,7 +1155,7 @@ static void matmul(struct htp_matmul_type * mt,
     if (src0_end_row != src0_end_row_x2) {
         uint32_t  ir0 = src0_end_row_x2;
         const int is0 = (ir0 - src0_start_row);
-        dma_queue_push(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
+        dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
                        src0_row_size_padded, src0_row_size, 1);
         const uint8_t * ss0 = dma_queue_pop(dma_queue);
 
@@ -1229,7 +1229,7 @@ static void matvec(struct htp_matmul_type * mt,
         if (is0 >= HTP_SPAD_SRC0_NROWS) {
             break;
         }
-        dma_queue_push(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
+        dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
                        src0_row_size_padded, src0_row_size, 2);
     }
 
@@ -1242,7 +1242,7 @@ static void matvec(struct htp_matmul_type * mt,
         const uint32_t pr0 = (ir0 + HTP_SPAD_SRC0_NROWS);
         const uint32_t is0 = (pr0 - src0_start_row) % HTP_SPAD_SRC0_NROWS;
         if (pr0 < src0_end_row_x2) {
-            dma_queue_push(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + pr0 * src0_row_size,
+            dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + pr0 * src0_row_size,
                            src0_row_size_padded, src0_row_size, 2);
         }
     }
@@ -1251,7 +1251,7 @@ static void matvec(struct htp_matmul_type * mt,
     if (src0_end_row != src0_end_row_x2) {
         const uint32_t ir0 = src0_end_row_x2;
         const uint32_t is0 = (ir0 - src0_start_row);
-        dma_queue_push(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
+        dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
                        src0_row_size_padded, src0_row_size, 1);
         const uint8_t * ss0 = dma_queue_pop(dma_queue);
         mt->vec_dot(ne00, &tmp[ir0 - src0_start_row], ss0, src1_col);
@@ -1343,7 +1343,7 @@ static void matmul_id(struct htp_matmul_type * mt,
             if (is0 >= HTP_SPAD_SRC0_NROWS) {
                 break;
             }
-            dma_queue_push(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
+            dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
                            src0_row_size_padded, src0_row_size, 2);
         }
 
@@ -1368,7 +1368,7 @@ static void matmul_id(struct htp_matmul_type * mt,
             const int pr0 = (ir0 + HTP_SPAD_SRC0_NROWS);
             const int is0 = (pr0 - src0_start_row) % HTP_SPAD_SRC0_NROWS;
             if (pr0 < src0_end_row_x2) {
-                dma_queue_push(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + pr0 * src0_row_size,
+                dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + pr0 * src0_row_size,
                                src0_row_size_padded, src0_row_size, 2);
             }
         }
@@ -1377,7 +1377,7 @@ static void matmul_id(struct htp_matmul_type * mt,
         if (src0_end_row != src0_end_row_x2) {
             uint32_t       ir0 = src0_end_row_x2;
             const uint32_t is0 = (ir0 - src0_start_row);
-            dma_queue_push(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
+            dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
                            src0_row_size_padded, src0_row_size, 1);
             const uint8_t * ss0 = dma_queue_pop(dma_queue);
 
@@ -1467,7 +1467,7 @@ static void matvec_id(struct htp_matmul_type * mt,
             if (is0 >= HTP_SPAD_SRC0_NROWS) {
                 break;
             }
-            dma_queue_push(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
+            dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
                            src0_row_size_padded, src0_row_size, 2);
         }
 
@@ -1480,7 +1480,7 @@ static void matvec_id(struct htp_matmul_type * mt,
             const int pr0 = (ir0 + HTP_SPAD_SRC0_NROWS);
             const int is0 = (pr0 - src0_start_row) % HTP_SPAD_SRC0_NROWS;
             if (pr0 < src0_end_row_x2) {
-                dma_queue_push(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + pr0 * src0_row_size,
+                dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + pr0 * src0_row_size,
                                src0_row_size_padded, src0_row_size, 2);
             }
         }
@@ -1489,7 +1489,7 @@ static void matvec_id(struct htp_matmul_type * mt,
         if (src0_end_row != src0_end_row_x2) {
             uint32_t       ir0 = src0_end_row_x2;
             const uint32_t is0 = (ir0 - src0_start_row);
-            dma_queue_push(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
+            dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
                            src0_row_size_padded, src0_row_size, 1);
             const uint8_t * ss0 = dma_queue_pop(dma_queue);
             mt->vec_dot(ne00, &dst_row[ir0], ss0, src1_col);
