@@ -20,7 +20,7 @@ enum class agent_stop_reason {
     COMPLETED,        // Model finished without tool calls
     MAX_ITERATIONS,   // Hit iteration limit
     USER_CANCELLED,   // User interrupted
-    ERROR,            // Error occurred
+    AGENT_ERROR,      // Error occurred (not ERROR due to Windows macro conflict)
 };
 
 // Configuration for the agent

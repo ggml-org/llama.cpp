@@ -7,6 +7,13 @@
 #include <map>
 #include <atomic>
 
+#ifdef _WIN32
+#include <windows.h>
+typedef DWORD pid_t;
+#else
+#include <sys/types.h>
+#endif
+
 using json = nlohmann::ordered_json;
 
 // MCP tool definition from server

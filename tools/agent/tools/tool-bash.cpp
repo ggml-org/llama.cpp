@@ -59,7 +59,7 @@ static tool_result bash_execute(const json & args, const tool_context & ctx) {
     SECURITY_ATTRIBUTES sa;
     sa.nLength = sizeof(SECURITY_ATTRIBUTES);
     sa.bInheritHandle = TRUE;
-    sa.lpSecurityAttributes = NULL;
+    sa.lpSecurityDescriptor = NULL;
 
     HANDLE hReadPipe, hWritePipe;
     if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0)) {

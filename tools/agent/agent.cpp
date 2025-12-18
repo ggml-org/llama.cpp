@@ -269,7 +269,7 @@ int main(int argc, char ** argv) {
                 console::log("[Cancelled by user]\n");
                 g_is_interrupted.store(false);
                 break;
-            case agent_stop_reason::ERROR:
+            case agent_stop_reason::AGENT_ERROR:
                 console::error("[Error occurred]\n");
                 break;
         }
