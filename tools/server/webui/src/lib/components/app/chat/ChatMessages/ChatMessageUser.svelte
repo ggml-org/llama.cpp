@@ -103,6 +103,8 @@
 			{editedContent}
 			{editedExtras}
 			{editedUploadedFiles}
+			originalContent={message.content}
+			originalExtras={message.extra}
 			showSaveOnlyOption={!!onSaveEditOnly}
 			{onCancelEdit}
 			{onSaveEdit}

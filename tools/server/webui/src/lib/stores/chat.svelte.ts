@@ -74,6 +74,8 @@ class ChatStore {
 	private processingStates = new SvelteMap<string, ApiProcessingState | null>();
 	private activeConversationId = $state<string | null>(null);
 	private isStreamingActive = $state(false);
+	private _isEditModeActive = $state(false);
+	private _addFilesHandler: ((files: File[]) => void) | null = $state(null);
 
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Loading State
@@ -965,6 +967,160 @@ class ChatStore {
 	// Editing
 	// ─────────────────────────────────────────────────────────────────────────────
 
+	clearEditMode(): void {
+		this._isEditModeActive = false;
+		this._addFilesHandler = null;
+	}
+
+	async continueAssistantMessage(messageId: string): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+		if (!activeConv || this.isLoading) return;
+
+		const result = this.getMessageByIdWithRole(messageId, 'assistant');
+		if (!result) return;
+		const { message: msg, index: idx } = result;
+
+		if (this.isChatLoading(activeConv.id)) return;
+
+		try {
+			this.errorDialogState = null;
+			this.setChatLoading(activeConv.id, true);
+			this.clearChatStreaming(activeConv.id);
+
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const dbMessage = allMessages.find((m) => m.id === messageId);
+
+			if (!dbMessage) {
+				this.setChatLoading(activeConv.id, false);
+
+				return;
+			}
+
+			const originalContent = dbMessage.content;
+			const originalThinking = dbMessage.thinking || '';
+
+			const conversationContext = conversationsStore.activeMessages.slice(0, idx);
+			const contextWithContinue = [
+				...conversationContext,
+				{ role: 'assistant' as const, content: originalContent }
+			];
+
+			let appendedContent = '',
+				appendedThinking = '',
+				hasReceivedContent = false;
+
+			const abortController = this.getOrCreateAbortController(msg.convId);
+
+			await ChatService.sendMessage(
+				contextWithContinue,
+				{
+					...this.getApiOptions(),
+
+					onChunk: (chunk: string) => {
+						hasReceivedContent = true;
+						appendedContent += chunk;
+						const fullContent = originalContent + appendedContent;
+						this.setChatStreaming(msg.convId, fullContent, msg.id);
+						conversationsStore.updateMessageAtIndex(idx, { content: fullContent });
+					},
+
+					onReasoningChunk: (reasoningChunk: string) => {
+						hasReceivedContent = true;
+						appendedThinking += reasoningChunk;
+						conversationsStore.updateMessageAtIndex(idx, {
+							thinking: originalThinking + appendedThinking
+						});
+					},
+
+					onTimings: (timings: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
+						const tokensPerSecond =
+							timings?.predicted_ms && timings?.predicted_n
+								? (timings.predicted_n / timings.predicted_ms) * 1000
+								: 0;
+						this.updateProcessingStateFromTimings(
+							{
+								prompt_n: timings?.prompt_n || 0,
+								prompt_ms: timings?.prompt_ms,
+								predicted_n: timings?.predicted_n || 0,
+								predicted_per_second: tokensPerSecond,
+								cache_n: timings?.cache_n || 0,
+								prompt_progress: promptProgress
+							},
+							msg.convId
+						);
+					},
+
+					onComplete: async (
+						finalContent?: string,
+						reasoningContent?: string,
+						timings?: ChatMessageTimings
+					) => {
+						const fullContent = originalContent + (finalContent || appendedContent);
+						const fullThinking = originalThinking + (reasoningContent || appendedThinking);
+						await DatabaseService.updateMessage(msg.id, {
+							content: fullContent,
+							thinking: fullThinking,
+							timestamp: Date.now(),
+							timings
+						});
+						conversationsStore.updateMessageAtIndex(idx, {
+							content: fullContent,
+							thinking: fullThinking,
+							timestamp: Date.now(),
+							timings
+						});
+						conversationsStore.updateConversationTimestamp();
+						this.setChatLoading(msg.convId, false);
+						this.clearChatStreaming(msg.convId);
+						this.clearProcessingState(msg.convId);
+					},
+
+					onError: async (error: Error) => {
+						if (this.isAbortError(error)) {
+							if (hasReceivedContent && appendedContent) {
+								await DatabaseService.updateMessage(msg.id, {
+									content: originalContent + appendedContent,
+									thinking: originalThinking + appendedThinking,
+									timestamp: Date.now()
+								});
+								conversationsStore.updateMessageAtIndex(idx, {
+									content: originalContent + appendedContent,
+									thinking: originalThinking + appendedThinking,
+									timestamp: Date.now()
+								});
+							}
+							this.setChatLoading(msg.convId, false);
+							this.clearChatStreaming(msg.convId);
+							this.clearProcessingState(msg.convId);
+							return;
+						}
+						console.error('Continue generation error:', error);
+						conversationsStore.updateMessageAtIndex(idx, {
+							content: originalContent,
+							thinking: originalThinking
+						});
+						await DatabaseService.updateMessage(msg.id, {
+							content: originalContent,
+							thinking: originalThinking
+						});
+						this.setChatLoading(msg.convId, false);
+						this.clearChatStreaming(msg.convId);
+						this.clearProcessingState(msg.convId);
+						this.showErrorDialog(
+							error.name === 'TimeoutError' ? 'timeout' : 'server',
+							error.message
+						);
+					}
+				},
+				msg.convId,
+				abortController.signal
+			);
+		} catch (error) {
+			if (!this.isAbortError(error)) console.error('Failed to continue message:', error);
+			if (activeConv) this.setChatLoading(activeConv.id, false);
+		}
+	}
+
 	async editAssistantMessage(
 		messageId: string,
 		newContent: string,
@@ -1214,168 +1370,35 @@ class ChatStore {
 		}
 	}
 
-	async continueAssistantMessage(messageId: string): Promise<void> {
-		const activeConv = conversationsStore.activeConversation;
-		if (!activeConv || this.isLoading) return;
-
-		const result = this.getMessageByIdWithRole(messageId, 'assistant');
-		if (!result) return;
-		const { message: msg, index: idx } = result;
-
-		if (this.isChatLoading(activeConv.id)) return;
-
-		try {
-			this.errorDialogState = null;
-			this.setChatLoading(activeConv.id, true);
-			this.clearChatStreaming(activeConv.id);
-
-			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-			const dbMessage = allMessages.find((m) => m.id === messageId);
-
-			if (!dbMessage) {
-				this.setChatLoading(activeConv.id, false);
-
-				return;
-			}
-
-			const originalContent = dbMessage.content;
-			const originalThinking = dbMessage.thinking || '';
-
-			const conversationContext = conversationsStore.activeMessages.slice(0, idx);
-			const contextWithContinue = [
-				...conversationContext,
-				{ role: 'assistant' as const, content: originalContent }
-			];
-
-			let appendedContent = '',
-				appendedThinking = '',
-				hasReceivedContent = false;
-
-			const abortController = this.getOrCreateAbortController(msg.convId);
-
-			await ChatService.sendMessage(
-				contextWithContinue,
-				{
-					...this.getApiOptions(),
-
-					onChunk: (chunk: string) => {
-						hasReceivedContent = true;
-						appendedContent += chunk;
-						const fullContent = originalContent + appendedContent;
-						this.setChatStreaming(msg.convId, fullContent, msg.id);
-						conversationsStore.updateMessageAtIndex(idx, { content: fullContent });
-					},
-
-					onReasoningChunk: (reasoningChunk: string) => {
-						hasReceivedContent = true;
-						appendedThinking += reasoningChunk;
-						conversationsStore.updateMessageAtIndex(idx, {
-							thinking: originalThinking + appendedThinking
-						});
-					},
-
-					onTimings: (timings: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
-						const tokensPerSecond =
-							timings?.predicted_ms && timings?.predicted_n
-								? (timings.predicted_n / timings.predicted_ms) * 1000
-								: 0;
-						this.updateProcessingStateFromTimings(
-							{
-								prompt_n: timings?.prompt_n || 0,
-								prompt_ms: timings?.prompt_ms,
-								predicted_n: timings?.predicted_n || 0,
-								predicted_per_second: tokensPerSecond,
-								cache_n: timings?.cache_n || 0,
-								prompt_progress: promptProgress
-							},
-							msg.convId
-						);
-					},
-
-					onComplete: async (
-						finalContent?: string,
-						reasoningContent?: string,
-						timings?: ChatMessageTimings
-					) => {
-						const fullContent = originalContent + (finalContent || appendedContent);
-						const fullThinking = originalThinking + (reasoningContent || appendedThinking);
-						await DatabaseService.updateMessage(msg.id, {
-							content: fullContent,
-							thinking: fullThinking,
-							timestamp: Date.now(),
-							timings
-						});
-						conversationsStore.updateMessageAtIndex(idx, {
-							content: fullContent,
-							thinking: fullThinking,
-							timestamp: Date.now(),
-							timings
-						});
-						conversationsStore.updateConversationTimestamp();
-						this.setChatLoading(msg.convId, false);
-						this.clearChatStreaming(msg.convId);
-						this.clearProcessingState(msg.convId);
-					},
-
-					onError: async (error: Error) => {
-						if (this.isAbortError(error)) {
-							if (hasReceivedContent && appendedContent) {
-								await DatabaseService.updateMessage(msg.id, {
-									content: originalContent + appendedContent,
-									thinking: originalThinking + appendedThinking,
-									timestamp: Date.now()
-								});
-								conversationsStore.updateMessageAtIndex(idx, {
-									content: originalContent + appendedContent,
-									thinking: originalThinking + appendedThinking,
-									timestamp: Date.now()
-								});
-							}
-							this.setChatLoading(msg.convId, false);
-							this.clearChatStreaming(msg.convId);
-							this.clearProcessingState(msg.convId);
-							return;
-						}
-						console.error('Continue generation error:', error);
-						conversationsStore.updateMessageAtIndex(idx, {
-							content: originalContent,
-							thinking: originalThinking
-						});
-						await DatabaseService.updateMessage(msg.id, {
-							content: originalContent,
-							thinking: originalThinking
-						});
-						this.setChatLoading(msg.convId, false);
-						this.clearChatStreaming(msg.convId);
-						this.clearProcessingState(msg.convId);
-						this.showErrorDialog(
-							error.name === 'TimeoutError' ? 'timeout' : 'server',
-							error.message
-						);
-					}
-				},
-				msg.convId,
-				abortController.signal
-			);
-		} catch (error) {
-			if (!this.isAbortError(error)) console.error('Failed to continue message:', error);
-			if (activeConv) this.setChatLoading(activeConv.id, false);
-		}
+	getAddFilesHandler(): ((files: File[]) => void) | null {
+		return this._addFilesHandler;
 	}
 
-	public isChatLoadingPublic(convId: string): boolean {
-		return this.isChatLoading(convId);
+	public getAllLoadingChats(): string[] {
+		return Array.from(this.chatLoadingStates.keys());
 	}
+
+	public getAllStreamingChats(): string[] {
+		return Array.from(this.chatStreamingStates.keys());
+	}
+
 	public getChatStreamingPublic(
 		convId: string
 	): { response: string; messageId: string } | undefined {
 		return this.getChatStreaming(convId);
 	}
-	public getAllLoadingChats(): string[] {
-		return Array.from(this.chatLoadingStates.keys());
+
+	public isChatLoadingPublic(convId: string): boolean {
+		return this.isChatLoading(convId);
 	}
-	public getAllStreamingChats(): string[] {
-		return Array.from(this.chatStreamingStates.keys());
+
+	isEditModeActive(): boolean {
+		return this._isEditModeActive;
+	}
+
+	setEditModeActive(handler: (files: File[]) => void): void {
+		this._isEditModeActive = true;
+		this._addFilesHandler = handler;
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────────
@@ -1449,3 +1472,10 @@ export const isChatLoading = (convId: string) => chatStore.isChatLoadingPublic(c
 export const getChatStreaming = (convId: string) => chatStore.getChatStreamingPublic(convId);
 export const getAllLoadingChats = () => chatStore.getAllLoadingChats();
 export const getAllStreamingChats = () => chatStore.getAllStreamingChats();
+
+// Edit mode exports
+export const isEditModeActive = () => chatStore.isEditModeActive();
+export const getAddFilesHandler = () => chatStore.getAddFilesHandler();
+export const setEditModeActive = (handler: (files: File[]) => void) =>
+	chatStore.setEditModeActive(handler);
+export const clearEditMode = () => chatStore.clearEditMode();

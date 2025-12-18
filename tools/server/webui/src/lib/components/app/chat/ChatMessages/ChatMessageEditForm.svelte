@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { X, ArrowUp, Paperclip } from '@lucide/svelte';
+	import { X, ArrowUp, Paperclip, AlertTriangle } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { Label } from '$lib/components/ui/label';
-	import { ChatAttachmentsList, ModelsSelector } from '$lib/components/app';
+	import { Switch } from '$lib/components/ui/switch';
+	import { ChatAttachmentsList, DialogConfirmation, ModelsSelector } from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import { AttachmentType, FileTypeCategory } from '$lib/enums';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
+	import { setEditModeActive, clearEditMode } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -21,6 +21,8 @@
 		editedContent: string;
 		editedExtras?: DatabaseMessageExtra[];
 		editedUploadedFiles?: ChatUploadedFile[];
+		originalContent: string;
+		originalExtras?: DatabaseMessageExtra[];
 		showSaveOnlyOption?: boolean;
 		onCancelEdit: () => void;
 		onSaveEdit: () => void;
@@ -37,6 +39,8 @@
 		editedContent,
 		editedExtras = [],
 		editedUploadedFiles = [],
+		originalContent,
+		originalExtras = [],
 		showSaveOnlyOption = false,
 		onCancelEdit,
 		onSaveEdit,
@@ -50,7 +54,21 @@
 
 	let fileInputElement: HTMLInputElement | undefined = $state();
 	let saveWithoutRegenerate = $state(false);
+	let showDiscardDialog = $state(false);
 	let isRouter = $derived(isRouterMode());
+
+	let hasUnsavedChanges = $derived.by(() => {
+		if (editedContent !== originalContent) return true;
+		if (editedUploadedFiles.length > 0) return true;
+
+		const extrasChanged =
+			editedExtras.length !== originalExtras.length ||
+			editedExtras.some((extra, i) => extra !== originalExtras[i]);
+
+		if (extrasChanged) return true;
+
+		return false;
+	});
 
 	let hasAttachments = $derived(
 		(editedExtras && editedExtras.length > 0) ||
@@ -110,15 +128,29 @@
 		}
 	});
 
-	function handleSubmit() {
-		if (!canSubmit) return;
+	function handleFileInputChange(event: Event) {
+		const input = event.target as HTMLInputElement;
+		if (!input.files || input.files.length === 0) return;
 
-		if (saveWithoutRegenerate && onSaveEditOnly) {
-			onSaveEditOnly();
-		} else {
-			onSaveEdit();
+		const files = Array.from(input.files);
+
+		processNewFiles(files);
+		input.value = '';
+	}
+
+	function handleGlobalKeydown(event: KeyboardEvent) {
+		if (event.key === 'Escape') {
+			event.preventDefault();
+			attemptCancel();
 		}
-		saveWithoutRegenerate = false;
+	}
+
+	function attemptCancel() {
+		if (hasUnsavedChanges) {
+			showDiscardDialog = true;
+		} else {
+			onCancelEdit();
+		}
 	}
 
 	function handleRemoveExistingAttachment(index: number) {
@@ -134,13 +166,15 @@
 		onEditedUploadedFilesChange(newFiles);
 	}
 
-	function handleFileInputChange(event: Event) {
-		const input = event.target as HTMLInputElement;
-		if (!input.files || input.files.length === 0) return;
+	function handleSubmit() {
+		if (!canSubmit) return;
 
-		const files = Array.from(input.files);
-		processNewFiles(files);
-		input.value = '';
+		if (saveWithoutRegenerate && onSaveEditOnly) {
+			onSaveEditOnly();
+		} else {
+			onSaveEdit();
+		}
+		saveWithoutRegenerate = false;
 	}
 
 	async function processNewFiles(files: File[]) {
@@ -156,7 +190,17 @@
 			autoResizeTextarea(textareaElement);
 		}
 	});
+
+	$effect(() => {
+		setEditModeActive(processNewFiles);
+
+		return () => {
+			clearEditMode();
+		};
+	});
 </script>
+
+<svelte:window onkeydown={handleGlobalKeydown} />
 
 <input
 	bind:this={fileInputElement}
@@ -242,19 +286,31 @@
 <div class="mt-2 flex w-full max-w-[80%] items-center justify-between">
 	{#if showSaveOnlyOption && onSaveEditOnly}
 		<div class="flex items-center gap-2">
-			<Checkbox id="save-without-regenerate" bind:checked={saveWithoutRegenerate} class="h-4 w-4" />
-			1
-			<Label for="save-without-regenerate" class="cursor-pointer text-xs text-muted-foreground">
-				Save only
-			</Label>
+			<Switch id="save-only-switch" bind:checked={saveWithoutRegenerate} class="scale-75" />
+
+			<label for="save-only-switch" class="cursor-pointer text-xs text-muted-foreground">
+				Update without re-sending
+			</label>
 		</div>
 	{:else}
 		<div></div>
 	{/if}
 
-	<Button class="h-7 px-3 text-xs" onclick={onCancelEdit} size="sm" variant="ghost">
+	<Button class="h-7 px-3 text-xs" onclick={attemptCancel} size="sm" variant="ghost">
 		<X class="mr-1 h-3 w-3" />
 
 		Cancel
 	</Button>
 </div>
+
+<DialogConfirmation
+	bind:open={showDiscardDialog}
+	title="Discard changes?"
+	description="You have unsaved changes. Are you sure you want to discard them?"
+	confirmText="Discard"
+	cancelText="Keep editing"
+	variant="destructive"
+	icon={AlertTriangle}
+	onConfirm={onCancelEdit}
+	onCancel={() => (showDiscardDialog = false)}
+/>
