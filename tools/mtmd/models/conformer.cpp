@@ -158,9 +158,7 @@ ggml_cgraph * clip_graph_conformer::build() {
         // conv
         {
             auto * x = cur;
-            auto * conv_pw1_w =
-                ggml_reshape_2d(ctx0, layer.conv_pw1_w, layer.conv_pw1_w->ne[1], layer.conv_pw1_w->ne[2]);
-            x = ggml_mul_mat(ctx0, conv_pw1_w, x);
+            x = ggml_mul_mat(ctx0, layer.conv_pw1_w, x);
             x = ggml_add(ctx0, x, layer.conv_pw1_b);
             cb(x, "conformer.layers.{}.conv.pointwise_conv1", il);
 
@@ -174,20 +172,17 @@ ggml_cgraph * clip_graph_conformer::build() {
             }
 
             // use ggml_ssm_conv for f32 precision
-            x                = ggml_pad(ctx0, x, 4, 0, 0, 0);
-            x                = ggml_roll(ctx0, x, 4, 0, 0, 0);
-            x                = ggml_pad(ctx0, x, 4, 0, 0, 0);
-            auto * conv_dw_w = ggml_reshape_2d(ctx0, layer.conv_dw_w, layer.conv_dw_w->ne[0], layer.conv_dw_w->ne[2]);
-            x                = ggml_ssm_conv(ctx0, x, conv_dw_w);
-            x                = ggml_add(ctx0, x, ggml_reshape_1d(ctx0, layer.conv_dw_b, layer.conv_dw_b->ne[0]));
+            x = ggml_pad(ctx0, x, 4, 0, 0, 0);
+            x = ggml_roll(ctx0, x, 4, 0, 0, 0);
+            x = ggml_pad(ctx0, x, 4, 0, 0, 0);
+            x = ggml_ssm_conv(ctx0, x, layer.conv_dw_w);
+            x = ggml_add(ctx0, x, layer.conv_dw_b);
 
             x = ggml_add(ctx0, ggml_mul(ctx0, x, layer.conv_norm_w), layer.conv_norm_b);
             x = ggml_silu(ctx0, x);
 
             // pointwise_conv2
-            auto * conv_pw2_w =
-                ggml_reshape_2d(ctx0, layer.conv_pw2_w, layer.conv_pw2_w->ne[1], layer.conv_pw2_w->ne[2]);
-            x = ggml_mul_mat(ctx0, conv_pw2_w, x);
+            x = ggml_mul_mat(ctx0, layer.conv_pw2_w, x);
             x = ggml_add(ctx0, x, layer.conv_pw2_b);
 
             cur = x;

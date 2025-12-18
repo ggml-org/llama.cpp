@@ -9904,6 +9904,12 @@ class LFM2AudioModel(MmprojModel):
         # reshape conv weights
         if name.startswith("conformer.pre_encode.conv.") and name.endswith(".bias"):
             data_torch = data_torch[:, None, None]
+        if "conv.depthwise_conv" in name and name.endswith(".weight"):
+            assert data_torch.shape[1] == 1
+            data_torch = data_torch.reshape(data_torch.shape[0], data_torch.shape[2])
+        if "conv.pointwise_conv" in name and name.endswith(".weight"):
+            assert data_torch.shape[2] == 1
+            data_torch = data_torch.reshape(data_torch.shape[0], data_torch.shape[1])
 
         return [(self.map_tensor_name(name), data_torch)]
 
