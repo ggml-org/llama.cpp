@@ -4,6 +4,7 @@
 #include "speculative.h"
 #include "log.h"
 #include "llama.h"
+#include "chat.h"
 
 #include <cstdio>
 #include <cstring>
@@ -34,16 +35,42 @@ int main(int argc, char ** argv) {
     llama_numa_init(params.numa);
 
     llama_model * model_tgt = NULL;
-    //llama_model * model_dft = NULL;
+    llama_model * model_dft = NULL;
 
     llama_context * ctx_tgt = NULL;
     llama_context * ctx_dft = NULL;
 
-    // load the target model
-    auto llama_init_tgt = common_init_from_params(params);
+    // EAGLE3 specific contexts
+    llama_context * ctx_encoder = NULL;
+    llama_context * ctx_decoder = NULL;
 
-    model_tgt = llama_init_tgt->model();
-    ctx_tgt   = llama_init_tgt->context();
+    // For EAGLE3: load both draft model and target model
+    if (params.speculative.eagle3) {
+        llama_model_params dft_mp = llama_model_default_params();
+        dft_mp.n_gpu_layers = params.speculative.n_gpu_layers;
+        model_dft = llama_model_load_from_file(params.speculative.model.path.c_str(), dft_mp);
+        if (!model_dft) {
+            LOG_ERR("failed to load EAGLE3 draft model\n");
+            return 1;
+        }
+
+        llama_model_params tgt_mp = llama_model_default_params();
+        tgt_mp.n_gpu_layers = params.n_gpu_layers;
+        model_tgt = llama_model_load_from_file(params.model.path.c_str(), tgt_mp);
+        if (!model_tgt) {
+            LOG_ERR("failed to load target model\n");
+            return 1;
+        }
+
+        llama_context_params tcp = common_context_params_to_llama(params);
+        tcp.eagle3_model = model_dft;  // Enable feature extraction
+        ctx_tgt = llama_init_from_model(model_tgt, tcp);
+    } else {
+        // Standard load the target model
+        auto llama_init_tgt = common_init_from_params(params);
+        model_tgt = llama_init_tgt->model();
+        ctx_tgt   = llama_init_tgt->context();
+    }
 
     const llama_vocab * vocab = llama_model_get_vocab(model_tgt);
 
@@ -61,18 +88,57 @@ int main(int argc, char ** argv) {
     params.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
     params.tensor_buft_overrides     = params.speculative.tensor_buft_overrides;
 
-    auto llama_init_dft = common_init_from_params(params);
+    if (params.speculative.eagle3) {
+        // EAGLE3: create encoder and decoder contexts
+        llama_context_params enc_params = common_context_params_to_llama(params);
+        enc_params.embeddings = true;
+        ctx_encoder = llama_init_from_model(model_dft, enc_params);
+        if (!ctx_encoder) {
+            LOG_ERR("failed to create EAGLE3 encoder context\n");
+            return 1;
+        }
 
-    //model_dft = llama_init_dft->model();
-    ctx_dft   = llama_init_dft->context();
+        llama_context_params dec_params = common_context_params_to_llama(params);
+        dec_params.target_model = model_tgt;
+        dec_params.embeddings = true;
+        ctx_decoder = llama_init_from_model(model_dft, dec_params);
+        if (!ctx_decoder) {
+            LOG_ERR("failed to create EAGLE3 decoder context\n");
+            return 1;
+        }
+    } else {
+        // Standard: load draft model context
+        auto llama_init_dft = common_init_from_params(params);
+        model_dft = llama_init_dft->model();
+        ctx_dft   = llama_init_dft->context();
 
-    if (!common_speculative_are_compatible(ctx_tgt, ctx_dft)) {
-        LOG_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params.speculative.model.path.c_str(), params.model.path.c_str());
+        if (!common_speculative_are_compatible(ctx_tgt, ctx_dft)) {
+            LOG_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params.speculative.model.path.c_str(), params.model.path.c_str());
+        }
+    }
+
+    // Apply chat template for EAGLE3 if available which can increase the acceptance rate
+    std::string prompt = params.prompt;
+    if (params.speculative.eagle3) {
+        auto chat_templates = common_chat_templates_init(model_tgt, params.chat_template);
+        if (common_chat_templates_was_explicit(chat_templates.get())) {
+            std::vector<common_chat_msg> chat_msgs;
+            common_chat_msg user_msg;
+            user_msg.role = "user";
+            user_msg.content = params.prompt;
+            chat_msgs.push_back(user_msg);
+
+            common_chat_templates_inputs inputs;
+            inputs.messages = chat_msgs;
+            inputs.add_generation_prompt = true;
+            prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
+            LOG_INF("%s: EAGLE3 chat template applied\n", __func__);
+        }
     }
 
     // Tokenize the prompt
     std::vector<llama_token> inp;
-    inp = common_tokenize(ctx_tgt, params.prompt, true, true);
+    inp = common_tokenize(ctx_tgt, prompt, true, true);
 
     if (llama_n_ctx(ctx_tgt) < (uint32_t) inp.size()) {
         LOG_ERR("%s: the prompt exceeds the context size (%d tokens, ctx %d)\n", __func__, (int) inp.size(), llama_n_ctx(ctx_tgt));
@@ -115,26 +181,52 @@ int main(int argc, char ** argv) {
     struct common_sampler * smpl = common_sampler_init(model_tgt, params.sampling);
 
     // eval the prompt
-    llama_decode(ctx_tgt, llama_batch_get_one(inp.data(), inp.size() - 1));
+    llama_token id_last;
+    llama_tokens prompt_tgt;
+    int n_past;
 
-    // note: keep the last token separate!
-    llama_token id_last = inp.back();
+    if (params.speculative.eagle3) {
+        // Target model decodes full prompt and sample first token and intermediate features are extracted
+        llama_decode(ctx_tgt, llama_batch_get_one(inp.data(), inp.size()));
 
-    // all tokens currently in the target context
-    llama_tokens prompt_tgt(inp.begin(), inp.end() - 1);
-    prompt_tgt.reserve(llama_n_ctx(ctx_tgt));
+        id_last = common_sampler_sample(smpl, ctx_tgt, -1);
+        common_sampler_accept(smpl, id_last, true);
+        LOG("%s", common_token_to_piece(ctx_tgt, id_last).c_str());
+        n_predict++;
 
-    int n_past = inp.size() - 1;
+        // all tokens currently in the target context
+        prompt_tgt.assign(inp.begin(), inp.end());
+        prompt_tgt.reserve(llama_n_ctx(ctx_tgt));
+
+        n_past = inp.size();
+    } else {
+        llama_decode(ctx_tgt, llama_batch_get_one(inp.data(), inp.size() - 1));
+
+        // note: keep the last token separate!
+        id_last = inp.back();
+
+        // all tokens currently in the target context
+        prompt_tgt.assign(inp.begin(), inp.end() - 1);
+        prompt_tgt.reserve(llama_n_ctx(ctx_tgt));
+
+        n_past = inp.size() - 1;
+    }
 
     // init the speculator
     struct common_speculative_params params_spec;
     params_spec.n_draft = n_draft;
-    params_spec.n_reuse = llama_n_ctx(ctx_dft) - n_draft;
     params_spec.p_min   = p_min;
 
-    struct common_speculative * spec = common_speculative_init(ctx_tgt, ctx_dft);
-    for (auto &pair : params.speculative.replacements) {
-        common_speculative_add_replacement_tgt_dft(spec, pair.first.c_str(), pair.second.c_str());
+    struct common_speculative * spec = NULL;
+
+    if (params.speculative.eagle3) {
+        spec = common_speculative_init_eagle3(ctx_tgt, ctx_encoder, ctx_decoder);
+    } else {
+        params_spec.n_reuse = llama_n_ctx(ctx_dft) - n_draft;
+        spec = common_speculative_init(ctx_tgt, ctx_dft);
+        for (auto &pair : params.speculative.replacements) {
+            common_speculative_add_replacement_tgt_dft(spec, pair.first.c_str(), pair.second.c_str());
+        }
     }
 
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
@@ -249,7 +341,14 @@ int main(int argc, char ** argv) {
     LOG_INF("\n");
     LOG_INF("draft:\n\n");
 
-    llama_perf_context_print(ctx_dft);
+    if (ctx_dft) {
+        llama_perf_context_print(ctx_dft);
+    } else if (ctx_encoder && ctx_decoder) {
+        LOG_INF(" Eagle3 Draft encoder:\n");
+        llama_perf_context_print(ctx_encoder);
+        LOG_INF("\nEagle3 Draft decoder:\n");
+        llama_perf_context_print(ctx_decoder);
+    }
 
     LOG_INF("\n");
     LOG_INF("target:\n\n");
