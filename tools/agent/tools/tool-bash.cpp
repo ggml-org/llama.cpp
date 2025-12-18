@@ -1,6 +1,7 @@
 #include "../tool-registry.h"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <memory>
