@@ -3032,11 +3032,13 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
                 break;
             }
         case GGML_OP_GLU:
-            if ((ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU) || (ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU_OAI)) {
-                supp = ggml_hexagon_supported_activations(sess, op);
+            {
+                const auto glu_op = ggml_get_glu_op(op);
+                if ((glu_op == GGML_GLU_OP_SWIGLU) || (glu_op == GGML_GLU_OP_SWIGLU_OAI)) {
+                    supp = ggml_hexagon_supported_activations(sess, op);
+                }
+                break;
             }
-            break;
-
         case GGML_OP_ROPE:
             supp = ggml_hexagon_supported_rope(sess, op);
             break;
