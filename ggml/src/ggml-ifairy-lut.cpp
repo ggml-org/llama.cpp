@@ -62,6 +62,20 @@ static inline bool ggml_ifairy_lut_prefetch_enabled(void) {
     return !(env && strcmp(env, "0") == 0);
 }
 
+// N==1 fast-path is enabled by default; set GGML_IFAIRY_LUT_N1_FASTPATH=0 to force the generic path (for tuning/regression checks).
+// Note: env is read once per process (cached) to avoid per-token getenv overhead.
+static inline bool ggml_ifairy_lut_n1_fastpath_enabled(void) {
+    static std::atomic<int> cached(-1); // -1=unset, 0=disabled, 1=enabled
+    int v = cached.load(std::memory_order_relaxed);
+    if (v >= 0) {
+        return v != 0;
+    }
+    const char * env = getenv("GGML_IFAIRY_LUT_N1_FASTPATH");
+    v = (env && strcmp(env, "0") == 0) ? 0 : 1;
+    cached.store(v, std::memory_order_relaxed);
+    return v != 0;
+}
+
 static inline size_t ggml_ifairy_checked_mul_size(size_t a, size_t b) {
     GGML_ASSERT(a == 0 || b <= SIZE_MAX / a);
     return a * b;
@@ -1379,7 +1393,7 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
 
     // Fast-path for decode: N == 1 avoids the col loop and some pointer arithmetic.
     // Keep strict mode on the generic path (strict validation assumes the generic structure).
-    if (n == 1 && !strict) {
+    if (n == 1 && !strict && ggml_ifairy_lut_n1_fastpath_enabled()) {
         const int8_t * lut_base = (const int8_t *) lut;
         const float * scales = (const float *) lut_scales;
         (void) act;

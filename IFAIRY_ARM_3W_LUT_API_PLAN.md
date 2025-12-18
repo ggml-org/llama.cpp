@@ -159,6 +159,7 @@ struct ifairy_lut_extra {
 - **减少地址计算**：把每个 position 的 16B 表当作 `4×int32`，用 `t0[c0]` 方式索引（减少 `*4`/LEA）。
 - **prefetch 策略**：对 `grp + k_ifairy_lut_group_bytes` 与 `idx_g + ...` 做可控预取（以 Xcode Profile 的 L1 miss 变化为准，避免“盲目 prefetch”）。
 - **N==1 快路**：在 `qgemm_ex` 内增加运行时分支，消掉 col 循环与部分指针运算（仍属 LUT 通用内核，不做形状模板爆炸）。
+  - 建议保留一个“perf-safe”开关：`GGML_IFAIRY_LUT_N1_FASTPATH=0` 可强制走通用路径，用于回归/调优 A/B（避免“更复杂但更慢”的快路悄悄常驻）。
 - **减少 call/拷贝开销**：非 tiling 情况下尽量避免“每 row 调一次 qgemm + memcpy”，让每线程处理连续 row-block 并直接写回 `dst`。
 
 验收（至少满足其一，并记录到 `STATUS.md`）：

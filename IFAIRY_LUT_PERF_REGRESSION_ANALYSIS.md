@@ -421,3 +421,4 @@ Total estimated regression sources account for ~70-115% (overlapping effects).
 
 - **3-run rule**: for any performance claim, run the exact baseline command 3 times back-to-back for both `legacy` and `compact`, then record `min/max/mean` (not just the best run).
 - **Thermal/noise awareness**: if the 3 runs show a large monotonic drop (typical on laptops/Apple Silicon), cool down and rerun; otherwise “A/B” conclusions are unreliable.
+- **A/B without code churn**: prefer env-gated switches for risky fast-paths (e.g. `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`), so we can do ABABAB runs and revert immediately if it does not win.
