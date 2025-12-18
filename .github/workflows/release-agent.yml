@@ -56,7 +56,7 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DGGML_RPC=ON \
             ${{ env.CMAKE_ARGS }}
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) --target llama-agent
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Determine tag name
         id: tag
@@ -65,16 +65,9 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          mkdir -p pack
-          cp build/bin/llama-agent pack/
-          cp build/bin/libggml*.dylib pack/ 2>/dev/null || true
-          cp build/bin/libllama*.dylib pack/ 2>/dev/null || true
-          cp build/lib/libggml*.dylib pack/ 2>/dev/null || true
-          cp build/lib/libllama*.dylib pack/ 2>/dev/null || true
-          cp LICENSE pack/
-          cd pack
-          zip -y -r ../llama-agent-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip ./*
-          tar -czvf ../llama-agent-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz -s ",./,llama-agent-${{ steps.tag.outputs.name }}/," .
+          cp LICENSE ./build/bin/
+          zip -y -r llama-agent-${{ steps.tag.outputs.name }}-bin-macos-arm64.zip ./build/bin/*
+          tar -czvf llama-agent-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz -s ",./,llama-agent-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts (zip)
         uses: actions/upload-artifact@v4
@@ -124,7 +117,7 @@ jobs:
             -DGGML_METAL=OFF \
             -DGGML_RPC=ON \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) --target llama-agent
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Determine tag name
         id: tag
@@ -133,16 +126,9 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          mkdir -p pack
-          cp build/bin/llama-agent pack/
-          cp build/bin/libggml*.dylib pack/ 2>/dev/null || true
-          cp build/bin/libllama*.dylib pack/ 2>/dev/null || true
-          cp build/lib/libggml*.dylib pack/ 2>/dev/null || true
-          cp build/lib/libllama*.dylib pack/ 2>/dev/null || true
-          cp LICENSE pack/
-          cd pack
-          zip -y -r ../llama-agent-${{ steps.tag.outputs.name }}-bin-macos-x64.zip ./*
-          tar -czvf ../llama-agent-${{ steps.tag.outputs.name }}-bin-macos-x64.tar.gz -s ",./,llama-agent-${{ steps.tag.outputs.name }}/," .
+          cp LICENSE ./build/bin/
+          zip -y -r llama-agent-${{ steps.tag.outputs.name }}-bin-macos-x64.zip ./build/bin/*
+          tar -czvf llama-agent-${{ steps.tag.outputs.name }}-bin-macos-x64.tar.gz -s ",./,llama-agent-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts (zip)
         uses: actions/upload-artifact@v4
@@ -200,7 +186,7 @@ jobs:
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             ${{ env.CMAKE_ARGS }}
-          cmake --build build --config Release -j $(nproc) --target llama-agent
+          cmake --build build --config Release -j $(nproc)
 
       - name: Determine tag name
         id: tag
@@ -209,18 +195,9 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          mkdir -p pack
-          cp build/bin/llama-agent pack/
-          cp build/bin/libggml*.so* pack/ 2>/dev/null || true
-          cp build/bin/libllama*.so* pack/ 2>/dev/null || true
-          cp build/lib/libggml*.so* pack/ 2>/dev/null || true
-          cp build/lib/libllama*.so* pack/ 2>/dev/null || true
-          # Copy CPU variant backends
-          cp build/bin/ggml-cpu*.so pack/ 2>/dev/null || true
-          cp LICENSE pack/
-          cd pack
-          zip -y -r ../llama-agent-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.zip ./*
-          tar -czvf ../llama-agent-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar.gz --transform "s,./,llama-agent-${{ steps.tag.outputs.name }}/," .
+          cp LICENSE ./build/bin/
+          zip -y -r llama-agent-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.zip ./build/bin/*
+          tar -czvf llama-agent-${{ steps.tag.outputs.name }}-bin-ubuntu-${{ matrix.build }}.tar.gz --transform "s,./,llama-agent-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts (zip)
         uses: actions/upload-artifact@v4
@@ -269,7 +246,7 @@ jobs:
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_VULKAN=ON \
             ${{ env.CMAKE_ARGS }}
-          cmake --build build --config Release -j $(nproc) --target llama-agent
+          cmake --build build --config Release -j $(nproc)
 
       - name: Determine tag name
         id: tag
@@ -278,19 +255,9 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          mkdir -p pack
-          cp build/bin/llama-agent pack/
-          cp build/bin/libggml*.so* pack/ 2>/dev/null || true
-          cp build/bin/libllama*.so* pack/ 2>/dev/null || true
-          cp build/lib/libggml*.so* pack/ 2>/dev/null || true
-          cp build/lib/libllama*.so* pack/ 2>/dev/null || true
-          # Copy CPU variant backends and Vulkan backend
-          cp build/bin/ggml-cpu*.so pack/ 2>/dev/null || true
-          cp build/bin/ggml-vulkan.so pack/ 2>/dev/null || true
-          cp LICENSE pack/
-          cd pack
-          zip -y -r ../llama-agent-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip ./*
-          tar -czvf ../llama-agent-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz --transform "s,./,llama-agent-${{ steps.tag.outputs.name }}/," .
+          cp LICENSE ./build/bin/
+          zip -y -r llama-agent-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip ./build/bin/*
+          tar -czvf llama-agent-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.tar.gz --transform "s,./,llama-agent-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts (zip)
         uses: actions/upload-artifact@v4
@@ -350,7 +317,7 @@ jobs:
             -DGGML_OPENMP=ON ^
             -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" ^
             ${{ env.CMAKE_ARGS }}
-          cmake --build build --config Release --target llama-agent
+          cmake --build build --config Release
 
       - name: Determine tag name
         id: tag
@@ -361,14 +328,9 @@ jobs:
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          New-Item -ItemType Directory -Force -Path pack
-          Copy-Item .\build\bin\Release\llama-agent.exe pack\
-          Copy-Item .\build\bin\Release\ggml*.dll pack\ -ErrorAction SilentlyContinue
-          Copy-Item .\build\bin\Release\llama*.dll pack\ -ErrorAction SilentlyContinue
-          Copy-Item $env:CURL_PATH\bin\libcurl-${{ matrix.arch }}.dll pack\
-          Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\${{ matrix.arch }}\Microsoft.VC143.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" pack\
-          Copy-Item LICENSE pack\
-          7z a -snl llama-agent-bin-win-cpu-${{ matrix.arch }}.zip .\pack\*
+          Copy-Item $env:CURL_PATH\bin\libcurl-${{ matrix.arch }}.dll .\build\bin\Release\
+          Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\${{ matrix.arch }}\Microsoft.VC143.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
+          7z a -snl llama-agent-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -764,7 +726,7 @@ jobs:
                   -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
                   -DGGML_CANN=on \
                   -DSOC_TYPE=${SOC_TYPE}
-              cmake --build build -j $(nproc) --target llama-agent
+              cmake --build build -j $(nproc)
 
               chown -R '"${HOST_UID}"':'"${HOST_GID}"' /workspace/build
             '
@@ -775,15 +737,8 @@ jobs:
 
       - name: Pack artifacts
         run: |
-          mkdir -p pack
-          cp build/bin/llama-agent pack/
-          cp build/bin/libggml*.so* pack/ 2>/dev/null || true
-          cp build/bin/libllama*.so* pack/ 2>/dev/null || true
-          cp build/lib/libggml*.so* pack/ 2>/dev/null || true
-          cp build/lib/libllama*.so* pack/ 2>/dev/null || true
-          cp LICENSE pack/
-          cd pack
-          tar -czvf ../llama-agent-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.tar.gz --transform "s,./,llama-agent-${{ steps.tag.outputs.name }}/," .
+          cp LICENSE ./build/bin/
+          tar -czvf llama-agent-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}.tar.gz --transform "s,./,llama-agent-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts (tar)
         uses: actions/upload-artifact@v4
