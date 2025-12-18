@@ -1,6 +1,7 @@
 #include "chat-auto-parser.h"
 #include "chat.h"
 #include "common.h"
+#include "../src/llama-grammar.h"
 
 #include <minja/chat-template.hpp>
 #include <minja/minja.hpp>
@@ -107,6 +108,13 @@ int main(int argc, char ** argv) {
         std::cout << "\n=== Generated Grammar Triggers ===" << '\n';
         for (common_grammar_trigger cgt : parser_data.grammar_triggers) {
             std::cout << "Token: " << cgt.token << " | Type: " << cgt.type << " | Value: " << cgt.value << "\n";
+        }
+
+        std::cout << "\n=== Verifying created grammar ===" << '\n';
+        auto * grammar = llama_grammar_init_impl(nullptr, parser_data.grammar.c_str(), "root", parser_data.grammar_lazy,
+                                               nullptr, 0, nullptr, 0);
+        if (grammar != nullptr) {
+            std::cout << "\n=== Grammar successfully created ===" << '\n';
         }
     } catch (const std::exception & e) {
         std::cerr << "Analysis failed: " << e.what() << '\n';
