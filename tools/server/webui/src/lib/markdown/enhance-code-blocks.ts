@@ -13,7 +13,6 @@
 import type { Plugin } from 'unified';
 import type { Root, Element, ElementContent } from 'hast';
 import { visit } from 'unist-util-visit';
-import { toText } from 'hast-util-to-text';
 
 declare global {
 	interface Window {
@@ -146,13 +145,11 @@ export const rehypeEnhanceCodeBlocks: Plugin<[], Root> = () => {
 			if (!codeElement) return;
 
 			const language = extractLanguage(codeElement);
-			const rawCode = toText(codeElement);
 			const codeId = generateCodeId();
 
 			codeElement.properties = {
 				...codeElement.properties,
-				'data-code-id': codeId,
-				'data-raw-code': rawCode
+				'data-code-id': codeId
 			};
 
 			const header = createHeader(language, codeId);

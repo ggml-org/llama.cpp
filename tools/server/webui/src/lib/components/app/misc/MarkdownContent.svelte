@@ -129,12 +129,7 @@
 			return null;
 		}
 
-		const rawCode = codeElement.getAttribute('data-raw-code');
-
-		if (rawCode === null) {
-			console.error('No raw code found');
-			return null;
-		}
+		const rawCode = codeElement.textContent ?? '';
 
 		const languageLabel = wrapper.querySelector<HTMLElement>('.code-language');
 		const language = languageLabel?.textContent?.trim() || 'text';
