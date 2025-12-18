@@ -2028,6 +2028,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MMAP"));
     add_opt(common_arg(
+        {"-dio", "--direct-io"},
+        {"-ndio", "--no-direct-io"},
+        string_format("Use DirectIO if available. Takes precedence over --mmap (default: %s)", params.use_direct_io ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.use_direct_io = value;
+        }
+    ).set_env("LLAMA_ARG_DIO"));
+    add_opt(common_arg(
         {"--numa"}, "TYPE",
         "attempt optimizations that help on some NUMA systems\n"
         "- distribute: spread execution evenly over all nodes\n"

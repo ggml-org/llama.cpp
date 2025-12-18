@@ -33,6 +33,7 @@ struct llama_file {
     void write_u32(uint32_t val) const;
 
     size_t read_alignment() const;
+    bool has_direct_io() const;
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;

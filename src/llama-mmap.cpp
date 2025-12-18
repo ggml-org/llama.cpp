@@ -158,6 +158,10 @@ struct llama_file::impl {
         throw std::runtime_error("DirectIO is not implemented on Windows.");
     }
 
+    bool has_direct_io() const {
+        return true;
+    }
+
     ~impl() {
         if (fp) {
             std::fclose(fp);
@@ -303,6 +307,10 @@ struct llama_file::impl {
         write_raw(&val, sizeof(val));
     }
 
+    bool has_direct_io() const {
+        return alignment != 1;
+    }
+
     ~impl() {
         if (fd != -1) {
             close(fd);
@@ -340,6 +348,7 @@ size_t llama_file::tell() const { return pimpl->tell(); }
 size_t llama_file::size() const { return pimpl->size; }
 
 size_t llama_file::read_alignment() const { return pimpl->read_alignment(); }
+bool llama_file::has_direct_io() const { return pimpl->has_direct_io(); }
 
 int llama_file::file_id() const {
 #ifdef _WIN32
