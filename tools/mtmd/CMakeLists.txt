@@ -15,6 +15,7 @@ add_library(mtmd
             clip-graph.h
             models/models.h
             models/cogvlm.cpp
+            models/glm4v.cpp
             models/internvl.cpp
             models/kimivl.cpp
             models/llama4.cpp

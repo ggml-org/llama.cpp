@@ -1212,6 +1212,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_MMPROJ_FC: (
             "model.connector.modality_projection.proj", # SmolVLM
             "model.vision.linear_proj.linear_proj", # cogvlm
+            "visual.merger.proj", # glm4v
         ),
 
         MODEL_TENSOR.V_MMPROJ_MLP: (
@@ -1245,6 +1246,10 @@ class TensorNameMap:
             "model.vision.patch_embedding.proj", # cogvlm
         ),
 
+        MODEL_TENSOR.V_ENC_EMBD_NORM: (
+            "visual.post_conv_layernorm", # glm4v
+        ),
+
         MODEL_TENSOR.V_ENC_EMBD_POS: (
             "vision_tower.vision_model.embeddings.position_embedding",
             "model.vision_tower.embeddings.position_embeddings", # Intern-S1
@@ -1254,6 +1259,7 @@ class TensorNameMap:
             "vision_tower.patch_embed.pos_emb", # kimi-vl
             "visual.pos_embed", # qwen3vl
             "model.vision.patch_embedding.position_embedding", # cogvlm
+            "visual.embeddings.position_embedding", # glm4v
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_QKV: (
@@ -1409,6 +1415,11 @@ class TensorNameMap:
             "vision_model.layernorm_post", # llama4
             "visual.merger.ln_q", # qwen2vl
             "vision_tower.encoder.final_layernorm", # kimi-vl
+            "visual.post_layernorm", # glm4v
+        ),
+
+        MODEL_TENSOR.V_MM_POST_NORM: (
+            "visual.merger.post_projection_norm", # glm4v
         ),
 
         MODEL_TENSOR.V_MM_INP_PROJ: (
@@ -1478,6 +1489,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_MM_PATCH_MERGER: (
             "multi_modal_projector.patch_merger.merging_layer", # mistral small 3.1 - hf
             "patch_merger.merging_layer", # mistral
+            "visual.downsample", # glm4v
         ),
 
         MODEL_TENSOR.V_DS_NORM: (
@@ -1498,14 +1510,17 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MM_UP: (
             "model.vision.linear_proj.dense_h_to_4h", # cogvlm
+            "visual.merger.up_proj", # glm4v
         ),
 
         MODEL_TENSOR.V_MM_DOWN: (
             "model.vision.linear_proj.dense_4h_to_h", # cogvlm
+            "visual.merger.down_proj", # glm4v
         ),
 
         MODEL_TENSOR.V_MM_GATE: (
             "model.vision.linear_proj.gate_proj", # cogvlm
+            "visual.merger.gate_proj", # glm4v
         ),
 
         MODEL_TENSOR.V_TOK_BOI: (
