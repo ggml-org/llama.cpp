@@ -71,7 +71,7 @@ agent_loop::agent_loop(server_context & server_ctx,
     permission_mgr_.set_yolo_mode(config.yolo_mode);
 
     // Add system prompt for tool usage
-    std::string system_prompt = R"(You are llama.agent, a powerful local AI coding assistant running on llama.cpp.
+    std::string system_prompt = R"(You are llama-agent, a powerful local AI coding assistant running on llama.cpp.
 
 You help users with software engineering tasks by reading files, writing code, running commands, and navigating codebases. You run entirely on the user's machine - no data leaves their system.
 

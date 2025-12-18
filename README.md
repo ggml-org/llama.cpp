@@ -1,4 +1,4 @@
-# llama.agent
+# llama-agent
 
 An agentic coding assistant built on [llama.cpp](https://github.com/ggml-org/llama.cpp).
 
@@ -6,7 +6,7 @@ An agentic coding assistant built on [llama.cpp](https://github.com/ggml-org/lla
 
 ## What is it?
 
-`llama.agent` transforms a local LLM into a coding assistant that can autonomously complete programming tasks. It uses tool calling to read files, write code, run commands, and navigate codebases.
+`llama-agent` transforms a local LLM into a coding assistant that can autonomously complete programming tasks. It uses tool calling to read files, write code, run commands, and navigate codebases.
 
 ## Quick Start
 
