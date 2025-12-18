@@ -1878,8 +1878,7 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(const TemplateP
 
                                (pattern.special_markers.at("parameter_key_prefix").empty() ?
                                     p.until(pattern.special_markers.at("tool_call_end_marker")) :
-                                    p.until_one_of({ pattern.special_markers.at("parameter_key_prefix"),
-                                                     pattern.special_markers.at("tool_call_end_marker") })) +
+                                    p.space()) +
 
                                args_parser +
 
@@ -1974,15 +1973,7 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(const TemplateP
                            (pattern.special_markers.at("function_opener").empty() ?
                                 p.eps() :
                                 p.literal(pattern.special_markers.at("function_opener"))) +
-                           p.tool_name(p.until(!pattern.special_markers.at("function_name_suffix").empty() ?
-                                                   pattern.special_markers.at("function_name_suffix") :
-                                                   (!pattern.special_markers.at("function_closer").empty() ?
-                                                        pattern.special_markers.at("function_closer") :
-                                                        (pattern.special_markers.at("parameter_key_prefix").empty() ?
-                                                             (pattern.special_markers.at("parameter_opener").empty() ?
-                                                                  ">" :
-                                                                  pattern.special_markers.at("parameter_opener")) :
-                                                             pattern.special_markers.at("parameter_key_prefix"))))) +
+                           p.tool_name(p.chars("a-zA-Z0-9_\\-\\.:", 1)) +
                            (!pattern.special_markers.at("function_name_suffix").empty() ?
                                 p.literal(pattern.special_markers.at("function_name_suffix")) :
                                 p.eps()) +

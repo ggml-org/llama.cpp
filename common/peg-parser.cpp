@@ -1322,7 +1322,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 } else if constexpr (std::is_same_v<T, common_peg_space_parser>) {
                     return "space";
                 } else if constexpr (std::is_same_v<T, common_peg_chars_parser>) {
-                    std::string result = p.pattern;
+                    std::string result = "[" + p.pattern + "]";
                     if (p.min_count == 0 && p.max_count == 1) {
                         return result + "?";
                     }
