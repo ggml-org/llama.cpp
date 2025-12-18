@@ -1698,8 +1698,8 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
         }
 
         // Save the IDs
-        this->session_id = n.session_id;
-        this->domain_id  = n.effective_domain_id;
+        this->session_id    = n.session_id;
+        this->domain_id     = n.effective_domain_id;
         this->valid_session = true;
     }
 
@@ -1752,7 +1752,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     this->valid_handle = true;
 
     GGML_LOG_INFO("ggml-hex: new session: %s : session-id %d domain-id %d uri %s handle 0x%lx\n", this->name.c_str(),
-            this->session_id, this->domain_id, session_uri, (unsigned long) this->handle);
+                  this->session_id, this->domain_id, session_uri, (unsigned long) this->handle);
 
     // Enable FastRPC QoS mode
     {
@@ -1859,8 +1859,8 @@ ggml_hexagon_session::ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) n
 ggml_hexagon_session::~ggml_hexagon_session() noexcept(true) {
     release();
 
-    delete static_cast<ggml_backend_hexagon_buffer_type_context*>(buffer_type.context);
-    delete static_cast<ggml_backend_hexagon_buffer_type_context*>(repack_buffer_type.context);
+    delete static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type.context);
+    delete static_cast<ggml_backend_hexagon_buffer_type_context *>(repack_buffer_type.context);
 }
 
 // ** backend interface
@@ -2489,6 +2489,9 @@ static inline size_t init_unary_req_and_bufs(htp_general_req * req,
             if (ggml_get_unary_op(dst) == GGML_UNARY_OP_SILU) {
                 req->op   = HTP_OP_UNARY_SILU;
                 supported = true;
+            } else if (ggml_get_unary_op(dst) == GGML_UNARY_OP_GELU) {
+                req->op   = HTP_OP_UNARY_GELU;
+                supported = true;
             }
             break;
 
@@ -2505,6 +2508,7 @@ static inline size_t init_unary_req_and_bufs(htp_general_req * req,
         case GGML_OP_SOFT_MAX:
             req->op   = HTP_OP_SOFTMAX;
             supported = true;
+            break;
 
         default:
             break;
@@ -2551,7 +2555,7 @@ static inline size_t init_rope_req_and_bufs(htp_general_req * req, dspqueue_buff
     const struct ggml_tensor * dst  = op;
 
     memcpy(&req->op_params, &op->op_params, sizeof(op->op_params));
-    req->op    = HTP_OP_ROPE;
+    req->op = HTP_OP_ROPE;
 
     init_htp_tensor(&req->dst, dst);
     init_htp_tensor(&req->src0, src0);
@@ -2672,12 +2676,13 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(node, flags);
                 break;
             case GGML_OP_UNARY:
-                if (ggml_get_unary_op(node) == GGML_UNARY_OP_SILU) {
-                    ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(node, flags);
-                } else if (ggml_get_unary_op(node) == GGML_UNARY_OP_GELU) {
-                    ggml_hexagon_unary(node, flags);
+                {
+                    const auto unary_op = ggml_get_unary_op(node);
+                    if (unary_op == GGML_UNARY_OP_SILU || unary_op == GGML_UNARY_OP_GELU) {
+                        ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(node, flags);
+                    }
+                    break;
                 }
-                break;
             case GGML_OP_GLU:
                 if ((ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU) ||
                     (ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU_OAI)) {
@@ -2818,8 +2823,8 @@ static void ggml_backend_hexagon_graph_optimize(ggml_backend_t backend, ggml_cgr
     //   and perform the reorder over the fused nodes. after the reorder is done, we unfuse
     for (int i = 0; i < n; i++) {
         node_info node = {
-            /*.node =*/ gf->nodes[i],
-            /*.fused =*/ {},
+            /*.node =*/gf->nodes[i],
+            /*.fused =*/{},
         };
 
         // fuse only ops that start with these operations
@@ -3019,16 +3024,15 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
             break;
 
         case GGML_OP_UNARY:
-            if (ggml_get_unary_op(op) == GGML_UNARY_OP_SILU) {
-                supp = ggml_hexagon_supported_activations(sess, op);
+            {
+                const auto unary_op = ggml_get_unary_op(op);
+                if (unary_op == GGML_UNARY_OP_SILU || unary_op == GGML_UNARY_OP_GELU) {
+                    supp = ggml_hexagon_supported_activations(sess, op);
+                }
+                break;
             }
-            else if (ggml_get_unary_op(op) == GGML_UNARY_OP_GELU){
-                supp = ggml_hexagon_supported_activations(sess, op);
-            }
-            break;
-
         case GGML_OP_GLU:
-            if ((ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU) || (ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU_OAI) ) {
+            if ((ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU) || (ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU_OAI)) {
                 supp = ggml_hexagon_supported_activations(sess, op);
             }
             break;
@@ -3138,8 +3142,8 @@ ggml_hexagon_registry::ggml_hexagon_registry(ggml_backend_reg_t reg) {
 
     // Create devices / sessions
     for (size_t i = 0; i < opt_ndev; i++) {
-        devices[i].iface   = ggml_backend_hexagon_device_i;
-        devices[i].reg     = reg;
+        devices[i].iface = ggml_backend_hexagon_device_i;
+        devices[i].reg   = reg;
         try {
             devices[i].context = new ggml_hexagon_session(i, &devices[i]);
         } catch (const std::exception & exc) {
