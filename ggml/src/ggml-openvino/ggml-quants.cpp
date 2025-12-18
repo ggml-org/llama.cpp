@@ -418,11 +418,124 @@ ov::Output<ov::Node> make_int4_weights(ov::Tensor & weight,
     return std::make_shared<ov::op::v0::Convert>(w_zp_s, ov::element::f32);
 }
 
-std::shared_ptr<ov::Node> requantize(const ggml_tensor * tensor, ExtraQuantType requant_type) {
-    std::vector<float> weights_f32(tensor->ne[0] * tensor->ne[1]);
-    ggml_get_type_traits(tensor->type)->to_float(tensor->data, weights_f32.data(), ggml_nelements(tensor));
+// Extract quantized weights from tensor and create weight subgraph
+std::shared_ptr<ov::Node> extract_quantized_weights(const ggml_tensor * tensor,
+                                                    const void * data,
+                                                    ov::Tensor & weights,
+                                                    ov::Tensor & scales,
+                                                    ov::Tensor & biases) {
+    // Create a temporary tensor for extraction functions that read from tensor->data
+    ggml_tensor temp_tensor = *tensor;
+    temp_tensor.data = const_cast<void *>(data);
 
-    std::shared_ptr<ov::Node> weight_node;
+    // Determine block size based on tensor type
+    int64_t weights_per_block;
+    bool is_u4;
+    switch (tensor->type) {
+    case GGML_TYPE_Q4_0:
+    case GGML_TYPE_Q4_1:
+    case GGML_TYPE_Q4_K:
+        is_u4 = true;
+        weights_per_block = 32;
+        break;
+    case GGML_TYPE_Q8_0:
+    case GGML_TYPE_Q5_K:
+        is_u4 = false;
+        weights_per_block = 32;
+        break;
+    case GGML_TYPE_Q6_K:
+        is_u4 = false;
+        weights_per_block = 16;
+        break;
+    default:
+        throw std::runtime_error("Unsupported quantized type for extraction: " +
+                                 std::string(ggml_type_name(tensor->type)));
+    }
+
+    // Extract quantized data
+    switch (tensor->type) {
+    case GGML_TYPE_Q4_0:
+        extract_q4_0_data(&temp_tensor, weights, scales, biases);
+        break;
+    case GGML_TYPE_Q4_1:
+        extract_q4_1_data(&temp_tensor, weights, scales, biases);
+        break;
+    case GGML_TYPE_Q4_K:
+        extract_q4_k_data(&temp_tensor, weights, scales, biases);
+        break;
+    case GGML_TYPE_Q8_0:
+        extract_q8_0_data(&temp_tensor, weights, scales, biases);
+        break;
+    case GGML_TYPE_Q6_K:
+        extract_q6_k_data(&temp_tensor, weights, scales, biases);
+        break;
+    case GGML_TYPE_Q5_K:
+        extract_q5_k_data(&temp_tensor, weights, scales, biases);
+        break;
+    default:
+        throw std::runtime_error("Unsupported quantized type: " + std::string(ggml_type_name(tensor->type)));
+    }
+
+    // Create the OpenVINO weight subgraph
+    ov::Output<ov::Node> weight_node;
+    if (is_u4) {
+        weight_node = make_int4_weights(weights, scales, biases, weights_per_block);
+    } else {
+        weight_node = make_int8_weights(weights, scales, biases, weights_per_block);
+    }
+
+    auto result = weight_node.get_node_shared_ptr();
+    result->set_friendly_name(tensor->name);
+    return result;
+}
+
+// Requantize weights to target format, writing to provided buffers
+std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
+                                                const void * data,
+                                                ExtraQuantType requant_type,
+                                                int64_t block_size,
+                                                ov::Tensor & weights,
+                                                ov::Tensor & scales,
+                                                ov::Tensor & biases) {
+    int64_t n_elements = ggml_nelements(tensor);
+
+    // First dequantize to F32
+    std::vector<float> weights_f32(n_elements);
+    ggml_get_type_traits(tensor->type)->to_float(data, weights_f32.data(), n_elements);
+
+    // Handle F16 case - just convert and create constant
+    if (requant_type == ExtraQuantType::F16) {
+        ggml_get_type_traits(GGML_TYPE_F16)->from_float_ref(weights_f32.data(), weights.data(), n_elements);
+        auto result = std::make_shared<ov::op::v0::Constant>(weights);
+        result->set_friendly_name(tensor->name);
+        return result;
+    }
+
+    // Requantize to target quantized format
+    bool is_u4 = (requant_type == ExtraQuantType::Q4_0_C || requant_type == ExtraQuantType::Q4_0_128);
+
+    if (is_u4) {
+        quantize_q4_0(weights_f32.data(), weights, scales, biases, n_elements, block_size);
+    } else if (requant_type == ExtraQuantType::Q8_1_C) {
+        quantize_q8_1(weights_f32.data(), weights, scales, biases, n_elements, block_size);
+    } else {
+        quantize_q8_0(weights_f32.data(), weights, scales, biases, n_elements, block_size);
+    }
+
+    // Create the OpenVINO weight subgraph
+    ov::Output<ov::Node> weight_node;
+    if (is_u4) {
+        weight_node = make_int4_weights(weights, scales, biases, block_size);
+    } else {
+        weight_node = make_int8_weights(weights, scales, biases, block_size);
+    }
+
+    auto result = weight_node.get_node_shared_ptr();
+    result->set_friendly_name(tensor->name);
+    return result;
+}
+
+std::shared_ptr<ov::Node> requantize(const ggml_tensor * tensor, ExtraQuantType requant_type) {
     ov::Shape node_shape = {(uint64_t) (tensor->ne[1]), (uint64_t) (tensor->ne[0])};
 
     // FIXME hardcoded workaround to fix the case where token_emb.weight is q4_0 (instead of q6_k)
@@ -432,42 +545,28 @@ std::shared_ptr<ov::Node> requantize(const ggml_tensor * tensor, ExtraQuantType 
         requant_type = ExtraQuantType::F16;
     }
 
-    if (requant_type == ExtraQuantType::F16) {
-        ov::Tensor weights(ov::element::f16, node_shape);
-        ggml_get_type_traits(GGML_TYPE_F16)->from_float_ref(weights_f32.data(), weights.data(), ggml_nelements(tensor));
-        std::shared_ptr<ov::Node> weight_node = std::make_shared<ov::op::v0::Constant>(weights);
-        weight_node->set_friendly_name(tensor->name);
-        return weight_node;
-    }
-
+    // Determine block size
     int64_t block_size = node_shape[1];
     if (requant_type == ExtraQuantType::Q4_0_128) {
         block_size = 128;
     } else if (requant_type == ExtraQuantType::Q8_0_32) {
         block_size = 32;
     }
-    auto scales_shape = ov::Shape{node_shape[0], node_shape[1] / block_size};
 
-    ov::Tensor weights;
-    ov::Tensor scales(ov::element::f16, scales_shape);
-    ov::Tensor bias(ov::element::f16, scales_shape);
-
-    if (requant_type == ExtraQuantType::Q4_0_C || requant_type == ExtraQuantType::Q4_0_128) {
-        weights = ov::Tensor(ov::element::u4, node_shape);
-        quantize_q4_0(weights_f32.data(), weights, scales, bias, weights.get_size(), block_size);
-        weight_node = make_int4_weights(weights, scales, bias, block_size).get_node_shared_ptr();
-    } else if (requant_type == ExtraQuantType::Q8_1_C) {
-        weights = ov::Tensor(ov::element::u8, node_shape);
-        quantize_q8_1(weights_f32.data(), weights, scales, bias, weights.get_size(), block_size);
-        weight_node = make_int8_weights(weights, scales, bias, block_size).get_node_shared_ptr();
-    } else if (requant_type == ExtraQuantType::Q8_0_C || requant_type == ExtraQuantType::Q8_0_32) {
-        weights = ov::Tensor(ov::element::u8, node_shape);
-        quantize_q8_0(weights_f32.data(), weights, scales, bias, weights.get_size(), block_size);
-        weight_node = make_int8_weights(weights, scales, bias, block_size).get_node_shared_ptr();
+    // Allocate tensors
+    ov::Tensor weights, scales, biases;
+    if (requant_type == ExtraQuantType::F16) {
+        weights = ov::Tensor(ov::element::f16, node_shape);
+    } else {
+        bool is_u4 = (requant_type == ExtraQuantType::Q4_0_C || requant_type == ExtraQuantType::Q4_0_128);
+        ov::element::Type weight_type = is_u4 ? ov::element::u4 : ov::element::u8;
+        ov::Shape scales_shape = {node_shape[0], node_shape[1] / block_size};
+        weights = ov::Tensor(weight_type, node_shape);
+        scales = ov::Tensor(ov::element::f16, scales_shape);
+        biases = ov::Tensor(ov::element::f16, scales_shape);
     }
 
-    weight_node->set_friendly_name(tensor->name);
-    return weight_node;
+    return requantize_to_buffers(tensor, tensor->data, requant_type, block_size, weights, scales, biases);
 }
 
 void quantize_q4_0(const float * x,

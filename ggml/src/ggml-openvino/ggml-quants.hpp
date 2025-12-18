@@ -1,9 +1,10 @@
 #pragma once
+#include "ggml-openvino-extra.h"  // For ExtraQuantType
+#include "ggml.h"
+
 #include <cstdint>
 #include <openvino/op/constant.hpp>
 #include <openvino/runtime/tensor.hpp>
-
-#include "ggml.h"
 
 void unpack_32_4(const uint8_t* data, uint8_t* dst);
 
@@ -51,9 +52,31 @@ ov::Output<ov::Node> make_int4_weights(ov::Tensor& weight,
                                        ov::Tensor& biases,
                                        size_t group_size = GGML_QUANTIZATION_GROUP_SIZE);
 
-enum class ExtraQuantType { F16, Q4_0_C, Q8_1_C, Q4_0_128, Q8_0_C, Q8_0_32 };
+// ExtraQuantType is defined in ggml-openvino-extra.h
 
 std::shared_ptr<ov::Node> requantize(const ggml_tensor* tensor, ExtraQuantType requant_type);
+
+// Extract quantized weights from tensor and create weight subgraph
+// If weights/scales/biases are provided (non-empty), uses them as output buffers
+// Otherwise allocates new ov::Tensors internally
+// Returns the weight node (make_int4_weights or make_int8_weights result)
+std::shared_ptr<ov::Node> extract_quantized_weights(
+    const ggml_tensor * tensor,
+    const void * data,  // Source data pointer (may differ from tensor->data)
+    ov::Tensor & weights,
+    ov::Tensor & scales,
+    ov::Tensor & biases);
+
+// Requantize weights from tensor to target format, writing to provided buffers
+// For F16 target, only weights buffer is used (scales/biases ignored)
+// Returns the weight node
+std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
+                                                const void * data,  // Source data pointer
+                                                ExtraQuantType requant_type,
+                                                int64_t block_size,
+                                                ov::Tensor & weights,
+                                                ov::Tensor & scales,
+                                                ov::Tensor & biases);
 
 void quantize_q4_0(const float* x, ov::Tensor& weights_arr, ov::Tensor& scales_arr, ov::Tensor& biases_arr, int64_t k,
                    int64_t qk);

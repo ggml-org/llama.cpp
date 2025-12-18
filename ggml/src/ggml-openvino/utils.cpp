@@ -1,6 +1,7 @@
 #include "utils.h"
 
 #include "ggml-impl.h"
+#include "ggml-openvino-extra.h"
 #include "ggml-openvino/ggml-decoder.h"
 #include "ggml.h"
 #include "openvino/frontend.hpp"
@@ -39,23 +40,14 @@
 static ov::Core core;
 
 enum ggml_status ov_graph_compute(ggml_cgraph * cgraph) {
-    auto get_device = [&] {
-        std::string device = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "CPU";
-        auto available_devices = core.get_available_devices();
-        if (std::find(available_devices.begin(), available_devices.end(), device) == available_devices.end()) {
-            GGML_LOG_WARN("GGML OpenVINO Backend: device %s is not available, fallback to CPU\n", device.c_str());
-            device = "CPU";
-        }
-        return device;
-    };
-
     if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
         std::string filename = "cgraph.txt";
         GgmlOvDecoder::dump_cgraph(cgraph, filename);
     }
 
-    static const auto device = get_device();
-    static const auto is_static = device == "NPU" ? true : false;
+    // Use device from singleton (initialized during backend init)
+    const auto & device = ggml_openvino_get_device_name();
+    const auto is_static = ggml_openvino_is_npu();
     return is_static ? ov_graph_compute_static(cgraph) : ov_graph_compute_dynamic(cgraph, device);
 }
 
@@ -413,7 +405,8 @@ ov::AnyMap get_ov_compile_config(const std::string & device) {
 }
 
 std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string & device) {
-    if (device == "NPU") {
+    // Use singleton to check if NPU (device param kept for API compatibility)
+    if (ggml_openvino_is_npu()) {
         return {
             {GGML_TYPE_Q4_0, ExtraQuantType::Q4_0_128},
             {GGML_TYPE_Q4_1, ExtraQuantType::Q4_0_128},
@@ -423,6 +416,7 @@ std::map<ggml_type, ExtraQuantType> get_types_to_requant(const std::string & dev
         };
     }
     return {};
+    GGML_UNUSED(device);
 }
 
 bool is_naive(ggml_cgraph * cgraph) {
