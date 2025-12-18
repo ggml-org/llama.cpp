@@ -1131,26 +1131,18 @@ class TensorNameMap:
 
         MODEL_TENSOR.CONVNEXT_DW: (
             "backbone.convnext.{bid}.dwconv", # wavtokenizer
-            "conformer.layers.{bid}.conv.depthwise_conv", # lfm2
         ),
 
         MODEL_TENSOR.CONVNEXT_NORM: (
             "backbone.convnext.{bid}.norm", # wavtokenizer
-            "conformer.layers.{bid}.conv.batch_norm", # lfm2
         ),
 
         MODEL_TENSOR.CONVNEXT_PW1: (
             "backbone.convnext.{bid}.pwconv1", # wavtokenizer
-            "conformer.layers.{bid}.conv.pointwise_conv1", # lfm2
         ),
 
         MODEL_TENSOR.CONVNEXT_PW2: (
             "backbone.convnext.{bid}.pwconv2", # wavtokenizer
-            "conformer.layers.{bid}.conv.pointwise_conv2", # lfm2
-        ),
-
-        MODEL_TENSOR.A_ENC_NORM_CONV: (
-            "conformer.layers.{bid}.norm_conv", # lfm2
         ),
 
         MODEL_TENSOR.CONVNEXT_GAMMA: (
@@ -1659,6 +1651,26 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_MM_NORM_MID: (
             "audio.multi_modal_projector.ln_mid", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_CONV_DW: (
+            "conformer.layers.{bid}.conv.depthwise_conv", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_CONV_NORM: (
+            "conformer.layers.{bid}.conv.batch_norm", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_CONV_PW1: (
+            "conformer.layers.{bid}.conv.pointwise_conv1", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_CONV_PW2: (
+            "conformer.layers.{bid}.conv.pointwise_conv2", # lfm2
+        ),
+
+        MODEL_TENSOR.A_ENC_NORM_CONV: (
+            "conformer.layers.{bid}.norm_conv", # lfm2
         ),
 
         # NextN/MTP tensors for GLM4_MOE

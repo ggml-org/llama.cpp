@@ -1660,14 +1660,14 @@ struct clip_model_loader {
 
                         layer.linear_pos_w = get_tensor(string_format(TN_LINEAR_POS, prefix, il, "weight"));
 
-                        layer.conv_norm_w  = get_tensor(string_format("convnext.%d.norm.%s", il, "weight"));
-                        layer.conv_norm_b  = get_tensor(string_format("convnext.%d.norm.%s", il, "bias"));
-                        layer.conv_dw_w    = get_tensor(string_format("convnext.%d.dw.%s",   il, "weight"));
-                        layer.conv_dw_b    = get_tensor(string_format("convnext.%d.dw.%s",   il, "bias"));
-                        layer.conv_pw1_w   = get_tensor(string_format("convnext.%d.pw1.%s",  il, "weight"));
-                        layer.conv_pw1_b   = get_tensor(string_format("convnext.%d.pw1.%s",  il, "bias"));
-                        layer.conv_pw2_w   = get_tensor(string_format("convnext.%d.pw2.%s",  il, "weight"));
-                        layer.conv_pw2_b   = get_tensor(string_format("convnext.%d.pw2.%s",  il, "bias"));
+                        layer.conv_norm_w  = get_tensor(string_format(TN_CONV_NORM, prefix, il, "weight"));
+                        layer.conv_norm_b  = get_tensor(string_format(TN_CONV_NORM, prefix, il, "bias"));
+                        layer.conv_dw_w    = get_tensor(string_format(TN_CONV_DW,   prefix, il, "weight"));
+                        layer.conv_dw_b    = get_tensor(string_format(TN_CONV_DW,   prefix, il, "bias"));
+                        layer.conv_pw1_w   = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "weight"));
+                        layer.conv_pw1_b   = get_tensor(string_format(TN_CONV_PW1,  prefix, il, "bias"));
+                        layer.conv_pw2_w   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "weight"));
+                        layer.conv_pw2_b   = get_tensor(string_format(TN_CONV_PW2,  prefix, il, "bias"));
                     }
                 } break;
             default:

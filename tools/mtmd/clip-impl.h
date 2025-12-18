@@ -148,6 +148,10 @@
 #define TN_POS_BIAS_V      "%s.blk.%d.pos_bias_v"
 #define TN_NORM_CONV       "%s.blk.%d.norm_conv.%s"
 #define TN_LINEAR_POS      "%s.blk.%d.linear_pos.%s"
+#define TN_CONV_DW         "%s.blk.%d.conv_dw.%s"
+#define TN_CONV_NORM       "%s.blk.%d.conv_norm.%s"
+#define TN_CONV_PW1        "%s.blk.%d.conv_pw1.%s"
+#define TN_CONV_PW2        "%s.blk.%d.conv_pw2.%s"
 
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
