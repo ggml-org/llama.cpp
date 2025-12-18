@@ -67,6 +67,8 @@ vst1q_u8((uint8_t *) tbl0, v0);
 
 **Estimated Impact**: HIGH (30-40% of regression)
 
+**Validation (worktree)**: Switching `compact` preprocess back to a simple “memset + direct byte stores” implementation immediately recovered to ~`18-19 tok/s` on Apple M4 (see latest entries in `IFAIRY_ARM_3W_LUT_STATUS.md`). This supports the hypothesis that the pack/NEON-setup-heavy rewrite was a primary regression source.
+
 ---
 
 ### 2. Loop Unroll Strategy Changes (MEDIUM IMPACT)
@@ -397,3 +399,20 @@ The performance regression is primarily caused by:
 Total estimated regression sources account for ~70-115% (overlapping effects).
 
 **Recommended Action**: Apply fixes in priority order, measuring performance after each change. Target is to recover to `0ec52a5a` baseline (~17 tok/s compact, ~15 tok/s legacy).
+
+---
+
+## Why This Happened (and How to Avoid It)
+
+### Why performance dropped
+
+- **Hot path got more complex, not simpler**: replacing straightforward byte stores with “packing + vector construction + stores” increased instruction count, register pressure, and dependency chains in a function that runs for every `(col, group)` during decode.
+- **Optimization direction mismatch**: optimizing for “fewer stores” can backfire when the platform/compiler already turns `memset + a few stores` into efficient store-pairs, while manual packing introduces extra ops.
+- **Regression masked by noise**: tok/s is noisy on desktop systems (thermals/background load); without a strict A/B workflow, it is easy to misattribute changes.
+
+### How to prevent similar regressions
+
+- **Treat preprocess/qgemm as perf-critical APIs**: any change in these should be isolated (one knob at a time), benchmarked, and reverted quickly if it does not win.
+- **Prefer simple codegen in hot loops**: fewer temporaries, fewer helpers, avoid “clever” packing unless assembly inspection shows a win.
+- **Always keep a stable benchmark contract**: fixed command/seed/ctx/threads, record tok/s in `IFAIRY_ARM_3W_LUT_STATUS.md`, and rerun at least twice if the delta is within noise.
+- **Keep a “perf-safe mode”**: when introducing optional fast-paths (e.g. `N==1`), gate them behind an env/compile flag until proven stable.

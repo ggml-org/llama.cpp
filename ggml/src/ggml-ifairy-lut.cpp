@@ -689,46 +689,41 @@ void ggml_ifairy_lut_preprocess_ex(int m, int k, int n, const void * act, size_t
             // code 1: ( 1,0) -> {  xr,  xi, 0, 0 }
             // code 2: (0,-1) -> { 0, 0, -xr, -xi }
             // code 3: (0, 1) -> { 0, 0,  xr,  xi }
-            const uint8_t xr0_p = (uint8_t) xr0;
-            const uint8_t xi0_p = (uint8_t) xi0;
-            const uint8_t xr1_p = (uint8_t) xr1;
-            const uint8_t xi1_p = (uint8_t) xi1;
-            const uint8_t xr2_p = (uint8_t) xr2;
-            const uint8_t xi2_p = (uint8_t) xi2;
-
-            const uint8_t xr0_n = (uint8_t) (int8_t) -xr0;
-            const uint8_t xi0_n = (uint8_t) (int8_t) -xi0;
-            const uint8_t xr1_n = (uint8_t) (int8_t) -xr1;
-            const uint8_t xi1_n = (uint8_t) (int8_t) -xi1;
-            const uint8_t xr2_n = (uint8_t) (int8_t) -xr2;
-            const uint8_t xi2_n = (uint8_t) (int8_t) -xi2;
-
+            //
             // Position table layout (16B):
             //   [-xr,-xi,0,0,  xr,xi,0,0,  0,0,-xr,-xi,  0,0,xr,xi]
-            const uint64_t tbl0_lo = ggml_ifairy_pack_u8_8(xr0_n, xi0_n, 0, 0, xr0_p, xi0_p, 0, 0);
-            const uint64_t tbl0_hi = ggml_ifairy_pack_u8_8(0, 0, xr0_n, xi0_n, 0, 0, xr0_p, xi0_p);
+            //
+            // Note: this is a hot path; keep it simple (direct stores) to avoid extra packing/NEON-setup overhead.
+            memset(tbl0, 0, k_ifairy_lut_pos_bytes);
+            memset(tbl1, 0, k_ifairy_lut_pos_bytes);
+            memset(tbl2, 0, k_ifairy_lut_pos_bytes);
 
-            const uint64_t tbl1_lo = ggml_ifairy_pack_u8_8(xr1_n, xi1_n, 0, 0, xr1_p, xi1_p, 0, 0);
-            const uint64_t tbl1_hi = ggml_ifairy_pack_u8_8(0, 0, xr1_n, xi1_n, 0, 0, xr1_p, xi1_p);
+            tbl0[0]  = (int8_t) -xr0;
+            tbl0[1]  = (int8_t) -xi0;
+            tbl0[4]  = (int8_t)  xr0;
+            tbl0[5]  = (int8_t)  xi0;
+            tbl0[10] = (int8_t) -xr0;
+            tbl0[11] = (int8_t) -xi0;
+            tbl0[14] = (int8_t)  xr0;
+            tbl0[15] = (int8_t)  xi0;
 
-            const uint64_t tbl2_lo = ggml_ifairy_pack_u8_8(xr2_n, xi2_n, 0, 0, xr2_p, xi2_p, 0, 0);
-            const uint64_t tbl2_hi = ggml_ifairy_pack_u8_8(0, 0, xr2_n, xi2_n, 0, 0, xr2_p, xi2_p);
+            tbl1[0]  = (int8_t) -xr1;
+            tbl1[1]  = (int8_t) -xi1;
+            tbl1[4]  = (int8_t)  xr1;
+            tbl1[5]  = (int8_t)  xi1;
+            tbl1[10] = (int8_t) -xr1;
+            tbl1[11] = (int8_t) -xi1;
+            tbl1[14] = (int8_t)  xr1;
+            tbl1[15] = (int8_t)  xi1;
 
-#if defined(__ARM_NEON) && defined(__aarch64__)
-            const uint8x16_t v0 = vcombine_u8(vcreate_u8(tbl0_lo), vcreate_u8(tbl0_hi));
-            const uint8x16_t v1 = vcombine_u8(vcreate_u8(tbl1_lo), vcreate_u8(tbl1_hi));
-            const uint8x16_t v2 = vcombine_u8(vcreate_u8(tbl2_lo), vcreate_u8(tbl2_hi));
-            vst1q_u8((uint8_t *) tbl0, v0);
-            vst1q_u8((uint8_t *) tbl1, v1);
-            vst1q_u8((uint8_t *) tbl2, v2);
-#else
-            memcpy(tbl0 + 0, &tbl0_lo, sizeof(tbl0_lo));
-            memcpy(tbl0 + 8, &tbl0_hi, sizeof(tbl0_hi));
-            memcpy(tbl1 + 0, &tbl1_lo, sizeof(tbl1_lo));
-            memcpy(tbl1 + 8, &tbl1_hi, sizeof(tbl1_hi));
-            memcpy(tbl2 + 0, &tbl2_lo, sizeof(tbl2_lo));
-            memcpy(tbl2 + 8, &tbl2_hi, sizeof(tbl2_hi));
-#endif
+            tbl2[0]  = (int8_t) -xr2;
+            tbl2[1]  = (int8_t) -xi2;
+            tbl2[4]  = (int8_t)  xr2;
+            tbl2[5]  = (int8_t)  xi2;
+            tbl2[10] = (int8_t) -xr2;
+            tbl2[11] = (int8_t) -xi2;
+            tbl2[14] = (int8_t)  xr2;
+            tbl2[15] = (int8_t)  xi2;
         }
     }
 }

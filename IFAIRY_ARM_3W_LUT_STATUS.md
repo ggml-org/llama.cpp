@@ -88,6 +88,8 @@
 | 2025-12-18T03:59:58Z | `HEAD` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 5.79 |
 | 2025-12-18T04:04:30Z | `HEAD` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 5.01 |
 | 2025-12-18T04:04:30Z | `HEAD` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 4.98 |
+| 2025-12-18T05:31:30Z | `HEAD` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 18.33 |
+| 2025-12-18T05:31:30Z | `HEAD` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 19.47 |
 
 ## 0.2 Xcode Profile（以 decode 场景为准）
 
@@ -233,6 +235,7 @@
 
 1) **R0：恢复 `ggml_ifairy_lut_preprocess_ex` 的构表热路径（优先 `compact`）**  
    - 按 `0ec52a5a` 的 direct store 形态回退/重写构表实现，避免 `pack`/临时变量/`vcreate+vcombine` 的额外开销。
+   - 验收：见 `0.1 tok/s 记录` 最新两条（legacy/compact 已回到 `18~19 tok/s` 档位）。
 
 2) **R1：回退/对照 `qgemm_ex` 的 unroll 与 prefetch 策略**  
    - 先做 A/B：2-way vs 4-way unroll；prefetch unconditional vs conditional；以 tok/s 与 profile 为准。
