@@ -565,7 +565,7 @@ bool mtmd_audio_preprocessor_conformer::preprocess(
     params.hop_length       = hparams.audio_hop_len;
     params.sample_rate      = hparams.audio_sample_rate;
     params.center_padding   = true;
-    params.preemph          = 0.97f; // disabled
+    params.preemph          = 0.97f;
     params.use_natural_log  = true;
     params.norm_per_feature = true;
 

@@ -323,7 +323,9 @@ int main(int argc, char ** argv) {
     LOG_WRN("WARN: This is an experimental CLI for testing multimodal capability.\n");
     LOG_WRN("      For normal use cases, please use the standard llama-cli\n");
 
-    eval_system_prompt_if_present();
+    if (eval_system_prompt_if_present()) {
+        return 1;
+    }
 
     if (is_single_turn) {
         g_is_generating = true;
@@ -383,8 +385,10 @@ int main(int argc, char ** argv) {
                 ctx.n_past = 0;
                 ctx.chat_history.clear();
                 llama_memory_clear(llama_get_memory(ctx.lctx), true);
+                if (eval_system_prompt_if_present()) {
+                    return 1;
+                }
                 LOG("Chat history cleared\n\n");
-                eval_system_prompt_if_present();
                 continue;
             }
             g_is_generating = true;

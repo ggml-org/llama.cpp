@@ -311,11 +311,11 @@ struct clip_model {
     ggml_tensor * mm_boi = nullptr;
     ggml_tensor * mm_eoi = nullptr;
 
-    // lfm2
+    // lfm2 audio
     std::array<ggml_tensor *, 7> pre_encode_conv_X_w = {nullptr};
     std::array<ggml_tensor *, 7> pre_encode_conv_X_b = {nullptr};
-    ggml_tensor * pre_encode_out_w     = nullptr;
-    ggml_tensor * pre_encode_out_b     = nullptr;
+    ggml_tensor * pre_encode_out_w = nullptr;
+    ggml_tensor * pre_encode_out_b = nullptr;
 
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A
