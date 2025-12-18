@@ -82,6 +82,8 @@
 | 2025-12-18T03:40:16Z | `HEAD` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 5.38 |
 | 2025-12-18T03:55:08Z | `HEAD` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 7.01 |
 | 2025-12-18T03:55:08Z | `HEAD` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 6.43 |
+| 2025-12-18T03:59:58Z | `HEAD` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 6.23 |
+| 2025-12-18T03:59:58Z | `HEAD` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 5.79 |
 
 ## 0.2 Xcode Profile（以 decode 场景为准）
 
@@ -289,6 +291,7 @@ run_case "lut1_bk2_fullacc" env GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=2 GG
 - overflow 断言：为 `ggml_ifairy_lut_get_wsize` 与 `ggml-cpu.c` 的 LUT 工作区切分补齐 size_t overflow 断言，避免 size wrap 导致的 silent 越界（`2a39f249`）。
 - P1 小步：将 LUT 相关 env 解析 helper 集中到 `ggml/src/ggml-ifairy-lut.h`，并在 `ggml-cpu.c`/`ggml-ifairy-lut.cpp` 复用，减少重复与语义漂移（`HEAD`）。
 - 错误可观测性：`transform_tensor` 在 debug 下对 shape/alloc/encode 失败给出明确日志，避免 silent fallback；并在路由时明确要求 `__ARM_NEON`（无 NEON 直接回退）（`HEAD`）。
+- 配置健壮性：`GGML_IFAIRY_LUT_LAYOUT` 无效值在 debug 下只 warn 一次并回退默认；`BK_BLOCKS/BM` 的非法值在 debug 下提示并 clamp（`HEAD`）。
 
 2) **降低 `ggml_graph_compute_thread` 的框架开销（24%）**  
    - 目标：减少同步与小 kernel 调度开销，让更多时间落在“有效算术”上

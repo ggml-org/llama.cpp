@@ -1269,12 +1269,16 @@ void ggml_compute_forward_mul_mat(
         const int64_t groups = blocks_per_col * ((QK_K + 2) / 3);
 
         const bool strict = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_VALIDATE_STRICT");
+        const bool dbg = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG");
 
         int tile_blocks = 0;
         if (!strict) {
             tile_blocks = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BK_BLOCKS", 0);
         }
         if (tile_blocks < 0) {
+            if (dbg && ith == 0) {
+                GGML_LOG_WARN("ifairy_lut: GGML_IFAIRY_LUT_BK_BLOCKS < 0, clamping to 0\n");
+            }
             tile_blocks = 0;
         }
 
@@ -1282,6 +1286,9 @@ void ggml_compute_forward_mul_mat(
         if (tile_blocks > 0) {
             bm = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BM", 64);
             if (bm < 1) {
+                if (dbg && ith == 0) {
+                    GGML_LOG_WARN("ifairy_lut: GGML_IFAIRY_LUT_BM < 1, clamping to 1\n");
+                }
                 bm = 1;
             }
         }

@@ -187,6 +187,7 @@ P1：
 - 路由健壮性：在支持平台上做更明确的 CPU feature 判定（NEON/dotprod），并在不满足时可控回退。
 - ✅ P1 小步：将 LUT 相关 env 解析 helper 集中到 `ggml/src/ggml-ifairy-lut.h`，并在 `ggml-cpu.c`/`ggml-ifairy-lut.cpp` 复用，减少重复与语义漂移。
 - ✅ P1 小步：错误可观测性与回退一致性：`transform_tensor` 失败在 debug 下输出原因（shape/alloc/encode），并在路由阶段明确要求 `__ARM_NEON`（否则回退）。
+- ✅ P1 小步：配置健壮性：`GGML_IFAIRY_LUT_LAYOUT` 无效值在 debug 下 warn（仅一次）并回退默认；`BK_BLOCKS/BM` 的非法值在 debug 下提示并 clamp。
 
 P2：
 

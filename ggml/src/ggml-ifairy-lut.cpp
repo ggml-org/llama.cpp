@@ -14,6 +14,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdlib.h>
+#include <atomic>
 #include <vector>
 #include <unordered_map>
 #include <mutex>
@@ -24,6 +25,7 @@
 
 static std::vector<ifairy_lut_extra *> g_ifairy_lut_extras;
 static std::mutex g_ifairy_lut_mutex;
+static std::atomic<bool> g_ifairy_lut_warned_bad_layout(false);
 
 struct ifairy_lut_index_cache_key {
     const void * data;
@@ -83,6 +85,11 @@ static ggml_ifairy_lut_layout ggml_ifairy_lut_layout_from_env(int n) {
         }
         if (strcmp(env, "compact") == 0) {
             return GGML_IFAIRY_LUT_LAYOUT_COMPACT;
+        }
+        if (strcmp(env, "auto") != 0) {
+            if (ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG") && !g_ifairy_lut_warned_bad_layout.exchange(true)) {
+                GGML_LOG_WARN("ifairy_lut: unknown GGML_IFAIRY_LUT_LAYOUT='%s' (expected: legacy|compact|auto), using default\n", env);
+            }
         }
         // "auto" or unknown -> default policy below
     }
@@ -223,6 +230,9 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
         tile_blocks = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BK_BLOCKS", 0);
     }
     if (tile_blocks < 0) {
+        if (ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG")) {
+            GGML_LOG_WARN("ifairy_lut: GGML_IFAIRY_LUT_BK_BLOCKS < 0, clamping to 0\n");
+        }
         tile_blocks = 0;
     }
 
@@ -230,6 +240,9 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0, const struct g
     if (tile_blocks > 0) {
         bm = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BM", 64);
         if (bm < 1) {
+            if (ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG")) {
+                GGML_LOG_WARN("ifairy_lut: GGML_IFAIRY_LUT_BM < 1, clamping to 1\n");
+            }
             bm = 1;
         }
     }
