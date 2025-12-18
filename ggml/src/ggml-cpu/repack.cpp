@@ -176,9 +176,10 @@ void ggml_quantize_mat_q8_K_4x4_generic(const float * GGML_RESTRICT x, void * GG
     }
 }
 
-void ggml_quantize_mat_q8_K_4x8_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+void ggml_quantize_mat_q8_K_4x8_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k, int64_t nc) {
     assert(QK_K == 256);
     assert(k % QK_K == 0);
+    UNUSED(nc);
     const int nb = k / QK_K;
 
     block_q8_Kx4 * GGML_RESTRICT y = (block_q8_Kx4 *) vy;
@@ -230,30 +231,33 @@ void ggml_quantize_mat_q8_K_4x8_generic(const float * GGML_RESTRICT x, void * GG
 } // extern "C"
 
 template <int64_t INTER_SIZE, ggml_type PARAM_TYPE>
-void ggml_quantize_mat_t(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row);
+void ggml_quantize_mat_t(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row, int64_t ncols);
 
-template <> void ggml_quantize_mat_t<4, GGML_TYPE_Q8_0>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
+template <> void ggml_quantize_mat_t<4, GGML_TYPE_Q8_0>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row, int64_t ncols) {
     assert(nrow == 4);
     UNUSED(nrow);
+    UNUSED(ncols);
     ggml_quantize_mat_q8_0_4x4(x, vy, n_per_row);
 }
 
-template <> void ggml_quantize_mat_t<8, GGML_TYPE_Q8_0>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
+template <> void ggml_quantize_mat_t<8, GGML_TYPE_Q8_0>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row, int64_t ncols) {
     assert(nrow == 4);
     UNUSED(nrow);
+    UNUSED(ncols);
     ggml_quantize_mat_q8_0_4x8(x, vy, n_per_row);
 }
 
-template <> void ggml_quantize_mat_t<4, GGML_TYPE_Q8_K>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
+template <> void ggml_quantize_mat_t<4, GGML_TYPE_Q8_K>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row, int64_t ncols) {
     assert(nrow == 4);
     UNUSED(nrow);
+    UNUSED(ncols);
     ggml_quantize_mat_q8_K_4x4(x, vy, n_per_row);
 }
 
-template <> void ggml_quantize_mat_t<8, GGML_TYPE_Q8_K>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
+template <> void ggml_quantize_mat_t<8, GGML_TYPE_Q8_K>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row, int64_t ncols) {
     assert(nrow == 4);
     UNUSED(nrow);
-    ggml_quantize_mat_q8_K_4x8(x, vy, n_per_row);
+    ggml_quantize_mat_q8_K_4x8(x, vy, n_per_row, ncols);
 }
 
 extern "C" {
@@ -2502,7 +2506,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
             for (int64_t i11 = ith * 4; i11 < ne11 - ne11 % 4; i11 += nth * 4) {
                 ggml_quantize_mat_t<INTER_SIZE, PARAM_TYPE>((float *) (data_ptr + i11 * nb11),
-                                                            (void *) (wdata_ptr + i11 * nbw1), 4, ne10);
+                                                            (void *) (wdata_ptr + i11 * nbw1), 4, ne10, ne01);
             }
 
             const int64_t i11_processed = ne11 - ne11 % 4;
@@ -2775,14 +2779,12 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
                 return &q4_K_8x8_q8_K;
             }
         }
-        if (ggml_cpu_has_neon() && ggml_cpu_has_matmul_int8()) { // new for ARM N2
-            if (cur->ne[1] % 4 == 0) {
-                return &q4_K_4x8_q8_K;
-            }
-        }
         if (ggml_cpu_has_neon() && ggml_cpu_has_matmul_int8()) {
             if (cur->ne[1] % 8 == 0) {
                 return &q4_K_8x8_q8_K;
+            }
+            if (cur->ne[1] % 4 == 0) {
+                return &q4_K_4x8_q8_K;
             }
         }
         if (ggml_cpu_has_neon() && ggml_cpu_has_dotprod()) {
