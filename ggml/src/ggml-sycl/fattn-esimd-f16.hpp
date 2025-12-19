@@ -264,36 +264,34 @@ void launch_fattn_esimd_f16_optimized(
                     slm_scalar_store<float>(slm_sum_offset + partition_id * sizeof(float), 0.0f);
                 } else {
                     // =============================================================================
-                    // Main partition processing with double-buffered K loading
+                    // Main partition processing with double-buffered K and V loading
+                    // Prefetch next K and V while computing current score and accumulator update
                     // =============================================================================
 
-                    // Prefetch variable for double-buffering (native D-element vector)
+                    // Prefetch variables for double-buffering (native D-element vectors)
                     simd<sycl::half, D> k_prefetch;
+                    simd<sycl::half, D> v_prefetch;
 
-                    // Prefetch first K row
+                    // Prefetch first K and V rows
                     const sycl::half* K_first = nullptr;
                     const sycl::half* V_first = nullptr;
                     COMPUTE_KV_PTRS(kv_start, K_first, V_first);
-                    (void)V_first;  // Not used here
                     k_prefetch = block_load<sycl::half, D>(K_first);
+                    v_prefetch = block_load<sycl::half, D>(V_first);
 
-                    // Process this partition's KV positions with double-buffered K loading
+                    // Process this partition's KV positions with double-buffered K and V loading
                     for (int kv_pos = kv_start; kv_pos < kv_end; ++kv_pos) {
-                        const sycl::half* K_row = nullptr;
-                        const sycl::half* V_row = nullptr;
-                        COMPUTE_KV_PTRS(kv_pos, K_row, V_row);
-
-                        // Use prefetched K (already loaded)
-                        // Compute dot product with Q while prefetching next K
+                        // Use prefetched K and V (already loaded from previous iteration)
                         simd<float, D> k_row = convert<float>(k_prefetch);
+                        simd<sycl::half, D> v_row_h = v_prefetch;
 
-                        // Prefetch next K while we compute (if there is a next position)
+                        // Prefetch next K and V while we compute (if there is a next position)
                         if (kv_pos + 1 < kv_end) {
                             const sycl::half* K_next = nullptr;
                             const sycl::half* V_next = nullptr;
                             COMPUTE_KV_PTRS(kv_pos + 1, K_next, V_next);
-                            (void)V_next;
                             k_prefetch = block_load<sycl::half, D>(K_next);
+                            v_prefetch = block_load<sycl::half, D>(V_next);
                         }
 
                         // Compute dot product
@@ -325,8 +323,7 @@ void launch_fattn_esimd_f16_optimized(
                             }
                         }
 
-                        // Online softmax update with native D-element V vectors
-                        simd<sycl::half, D> v_row_h = block_load<sycl::half, D>(V_row);
+                        // Online softmax update - V was prefetched above
                         simd<float, D> v_row = convert<float>(v_row_h);
 
                         if (score <= max_score) {
