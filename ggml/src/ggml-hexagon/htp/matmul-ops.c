@@ -924,8 +924,8 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
     const HVX_UVector * restrict vx     = (const HVX_UVector * restrict) x;
     const HVX_UVectorPair * restrict vy = (const HVX_UVectorPair * restrict) y;
 
-    uint32_t nv0 = n / 64;  // num full fp16 hvx vectors
-    uint32_t nv1 = n % 64;  // leftover elements
+    uint32_t nv0 = n / VLEN_FP16;  // num full fp16 hvx vectors
+    uint32_t nv1 = n % VLEN_FP16;  // leftover elements
 
     // for some reason we need volatile here so that the compiler doesn't try anything funky
     volatile HVX_Vector rsum = Q6_V_vsplat_R(0);
