@@ -60,8 +60,10 @@
 	let showDiscardDialog = $state(false);
 	let isRouter = $derived(isRouterMode());
 	let currentConfig = $derived(config());
+
 	let pasteLongTextToFileLength = $derived.by(() => {
 		const n = Number(currentConfig.pasteLongTextToFileLen);
+
 		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
 	});
 
@@ -92,6 +94,7 @@
 			if (extra.type === AttachmentType.IMAGE) {
 				modalities.vision = true;
 			}
+
 			if (
 				extra.type === AttachmentType.PDF &&
 				'processedAsImages' in extra &&
@@ -99,6 +102,7 @@
 			) {
 				modalities.vision = true;
 			}
+
 			if (extra.type === AttachmentType.AUDIO) {
 				modalities.audio = true;
 			}
@@ -163,14 +167,18 @@
 
 	function handleRemoveExistingAttachment(index: number) {
 		if (!onEditedExtrasChange) return;
+
 		const newExtras = [...editedExtras];
+
 		newExtras.splice(index, 1);
 		onEditedExtrasChange(newExtras);
 	}
 
 	function handleRemoveUploadedFile(fileId: string) {
 		if (!onEditedUploadedFilesChange) return;
+
 		const newFiles = editedUploadedFiles.filter((f) => f.id !== fileId);
+
 		onEditedUploadedFilesChange(newFiles);
 	}
 
@@ -182,6 +190,7 @@
 		} else {
 			onSaveEdit();
 		}
+
 		saveWithoutRegenerate = false;
 	}
 
@@ -190,6 +199,7 @@
 
 		const { processFilesToChatUploaded } = await import('$lib/utils/browser-only');
 		const processed = await processFilesToChatUploaded(files);
+
 		onEditedUploadedFilesChange([...editedUploadedFiles, ...processed]);
 	}
 

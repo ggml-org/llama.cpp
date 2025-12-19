@@ -74,8 +74,8 @@ class ChatStore {
 	private processingStates = new SvelteMap<string, ApiProcessingState | null>();
 	private activeConversationId = $state<string | null>(null);
 	private isStreamingActive = $state(false);
-	private _isEditModeActive = $state(false);
-	private _addFilesHandler: ((files: File[]) => void) | null = $state(null);
+	private isEditModeActive = $state(false);
+	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
 
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Loading State
@@ -968,8 +968,8 @@ class ChatStore {
 	// ─────────────────────────────────────────────────────────────────────────────
 
 	clearEditMode(): void {
-		this._isEditModeActive = false;
-		this._addFilesHandler = null;
+		this.isEditModeActive = false;
+		this.addFilesHandler = null;
 	}
 
 	async continueAssistantMessage(messageId: string): Promise<void> {
@@ -1371,7 +1371,7 @@ class ChatStore {
 	}
 
 	getAddFilesHandler(): ((files: File[]) => void) | null {
-		return this._addFilesHandler;
+		return this.addFilesHandler;
 	}
 
 	public getAllLoadingChats(): string[] {
@@ -1392,13 +1392,13 @@ class ChatStore {
 		return this.isChatLoading(convId);
 	}
 
-	isEditModeActive(): boolean {
-		return this._isEditModeActive;
+	isEditing(): boolean {
+		return this.isEditModeActive;
 	}
 
 	setEditModeActive(handler: (files: File[]) => void): void {
-		this._isEditModeActive = true;
-		this._addFilesHandler = handler;
+		this.isEditModeActive = true;
+		this.addFilesHandler = handler;
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────────
@@ -1472,7 +1472,7 @@ export const getAllStreamingChats = () => chatStore.getAllStreamingChats();
 export const getChatStreaming = (convId: string) => chatStore.getChatStreamingPublic(convId);
 export const isChatLoading = (convId: string) => chatStore.isChatLoadingPublic(convId);
 export const isChatStreaming = () => chatStore.isStreaming();
-export const isEditModeActive = () => chatStore.isEditModeActive();
+export const isEditing = () => chatStore.isEditing();
 export const isLoading = () => chatStore.isLoading;
 export const setEditModeActive = (handler: (files: File[]) => void) =>
 	chatStore.setEditModeActive(handler);

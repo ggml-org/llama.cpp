@@ -21,7 +21,7 @@
 		chatStore,
 		errorDialog,
 		isLoading,
-		isEditModeActive,
+		isEditing,
 		getAddFilesHandler
 	} from '$lib/stores/chat.svelte';
 	import {
@@ -189,7 +189,7 @@
 		if (event.dataTransfer?.files) {
 			const files = Array.from(event.dataTransfer.files);
 
-			if (isEditModeActive()) {
+			if (isEditing()) {
 				const handler = getAddFilesHandler();
 
 				if (handler) {
@@ -427,7 +427,7 @@
 
 			<div class="conversation-chat-form pointer-events-auto rounded-t-3xl pb-4">
 				<ChatForm
-					disabled={hasPropsError || isEditModeActive()}
+					disabled={hasPropsError || isEditing()}
 					isLoading={isCurrentConversationLoading}
 					onFileRemove={handleFileRemove}
 					onFileUpload={handleFileUpload}
