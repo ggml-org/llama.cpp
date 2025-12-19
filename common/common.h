@@ -690,7 +690,9 @@ struct common_init_result {
 
     llama_model * model();
     llama_context * context();
+
     common_sampler * sampler(llama_seq_id seq_id);
+    void             reset_samplers();
 
     std::vector<llama_adapter_lora_ptr> & lora();
 

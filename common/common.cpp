@@ -1178,6 +1178,12 @@ common_sampler * common_init_result::sampler(llama_seq_id seq_id) {
     return pimpl->samplers[seq_id].get();
 }
 
+void common_init_result::reset_samplers() {
+    for (int i = 0; i < (int) pimpl->samplers.size(); ++i) {
+        llama_sampler_reset(common_sampler_get(pimpl->samplers[i].get()));
+    }
+}
+
 std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
     return pimpl->lora;
 }
@@ -1311,6 +1317,8 @@ common_init_result_ptr common_init_from_params(common_params & params) {
         llama_synchronize(lctx);
         llama_perf_context_reset(lctx);
         llama_set_warmup(lctx, false);
+        // reset samplers to reset RNG state after warmup to the seeded state
+        res->reset_samplers();
     }
 
     return res;
