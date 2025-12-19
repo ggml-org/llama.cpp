@@ -22,6 +22,19 @@ cmake --build build --target llama-agent
 ./build/bin/llama-agent -m model.gguf
 ```
 
+## Installation
+
+To use `llama-agent` from any directory, add it to your PATH:
+
+```bash
+# Run from the llama.cpp directory after building
+echo "export PATH=\"\$PATH:$(pwd)/build/bin\"" >> ~/.zshrc
+
+# Open a new terminal, then run from anywhere
+cd /path/to/your/project
+llama-agent -hf unsloth/Nemotron-3-Nano-30B-A3B-GGUF:Q5_K_M
+```
+
 ## Recommended Model
 
 | Model | Command |
