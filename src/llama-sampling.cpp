@@ -1214,8 +1214,13 @@ static void llama_sampler_dist_backend_set_input(struct llama_sampler * smpl) {
     auto * sctx = (llama_sampler_dist *) smpl->ctx;
     GGML_ASSERT(sctx->inp_uniform != nullptr);
 
-    std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-    const float rnd = dist(sctx->rng);
+    // We sample in double precision and cast to float to match rnd numbers of
+    // llama_dampler_dist which uses double precision (sampling from
+    // std::uniform_real_distribution<double> and
+    // std::uniform_real_distribution<float> with same rng will produce
+    // different sequences).
+    std::uniform_real_distribution<double> dist(0.0f, 1.0f);
+    const float                            rnd = dist(sctx->rng);
     ggml_backend_tensor_set(sctx->inp_uniform, &rnd, 0, sizeof(float));
 }
 
