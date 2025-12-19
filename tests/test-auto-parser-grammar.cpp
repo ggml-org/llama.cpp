@@ -1,9 +1,9 @@
 #include "../src/llama-grammar.h"
 #include "chat-auto-parser.h"
-#include "chat-parser.h"
+// #include "chat-parser.h"
 #include "common.h"
-#include "json-schema-to-grammar.h"
-#include "peg-parser.h"
+// #include "json-schema-to-grammar.h"
+// #include "peg-parser.h"
 #include "peg-parser/testing.h"
 
 #include <iostream>
@@ -47,7 +47,7 @@ static bool match_string(const std::string & input, const std::string & grammar_
     }
 
     try {
-        llama_grammar_accept_str(*grammar, input.c_str());
+        llama_grammar_accept_str(*grammar, input);
         bool valid = !grammar->stacks.empty();
         llama_grammar_free_impl(grammar);
         return valid;

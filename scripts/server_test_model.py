@@ -18,7 +18,10 @@ def run_query(url, messages, tools=None, stream=False, tool_choice=None):
         response = requests.post(url, json=payload, stream=stream)
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
-        print(f"Error connecting to server: {e}")
+        if e.response is not None:
+            print(f"Response error: {e} for {e.response.content}")
+        else:
+            print(f"Error connecting to server: {e}")
         return None
 
     full_content = ""
@@ -89,7 +92,7 @@ def run_query(url, messages, tools=None, stream=False, tool_choice=None):
 
 def test_chat(url, stream):
     print(f"\n=== Testing Chat (Stream={stream}) ===")
-    messages = [{"role": "user", "content": "Hello, how are you? If you can reason, please show me your thinking process."}]
+    messages = [{"role": "user", "content": "What is the capital of France?"}]
     result = run_query(url, messages, stream=stream)
     
     if result:

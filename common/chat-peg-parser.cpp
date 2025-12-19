@@ -1,6 +1,6 @@
 #include "chat-peg-parser.h"
 
-#include <cstdint>
+// #include <cstdint>
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -18,14 +18,12 @@ static std::string_view trim_trailing_space(std::string_view sv, int max = -1) {
 }
 
 void common_chat_peg_mapper::from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result) {
-    arena.visit(result, [this](const common_peg_ast_node & node) {
-        map(node);
-    });
+    arena.visit(result, [this](const common_peg_ast_node & node) { map(node); });
 }
 
 void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     bool is_reasoning = node.tag == common_chat_peg_builder::REASONING;
-    bool is_content = node.tag == common_chat_peg_builder::CONTENT;
+    bool is_content   = node.tag == common_chat_peg_builder::CONTENT;
 
     if (is_reasoning) {
         result.reasoning_content = std::string(trim_trailing_space(node.text));
@@ -41,7 +39,7 @@ void common_chat_peg_native_mapper::map(const common_peg_ast_node & node) {
 
     bool is_tool_open = node.tag == common_chat_peg_native_builder::TOOL_OPEN;
     bool is_tool_name = node.tag == common_chat_peg_native_builder::TOOL_NAME;
-    bool is_tool_id = node.tag == common_chat_peg_native_builder::TOOL_ID;
+    bool is_tool_id   = node.tag == common_chat_peg_native_builder::TOOL_ID;
     bool is_tool_args = node.tag == common_chat_peg_native_builder::TOOL_ARGS;
 
     if (is_tool_open) {
@@ -65,23 +63,23 @@ void common_chat_peg_native_mapper::map(const common_peg_ast_node & node) {
 void common_chat_peg_constructed_mapper::map(const common_peg_ast_node & node) {
     common_chat_peg_mapper::map(node);
 
-    bool is_tool_open = node.tag == common_chat_peg_constructed_builder::TOOL_OPEN;
-    bool is_tool_name = node.tag == common_chat_peg_constructed_builder::TOOL_NAME;
+    bool is_tool_open  = node.tag == common_chat_peg_constructed_builder::TOOL_OPEN;
+    bool is_tool_name  = node.tag == common_chat_peg_constructed_builder::TOOL_NAME;
     bool is_tool_close = node.tag == common_chat_peg_constructed_builder::TOOL_CLOSE;
-    bool is_arg_open = node.tag == common_chat_peg_constructed_builder::TOOL_ARG_OPEN;
-    bool is_arg_close = node.tag == common_chat_peg_constructed_builder::TOOL_ARG_CLOSE;
-    bool is_arg_name = node.tag == common_chat_peg_constructed_builder::TOOL_ARG_NAME;
+    bool is_arg_open   = node.tag == common_chat_peg_constructed_builder::TOOL_ARG_OPEN;
+    bool is_arg_close  = node.tag == common_chat_peg_constructed_builder::TOOL_ARG_CLOSE;
+    bool is_arg_name   = node.tag == common_chat_peg_constructed_builder::TOOL_ARG_NAME;
     bool is_arg_string = node.tag == common_chat_peg_constructed_builder::TOOL_ARG_STRING_VALUE;
-    bool is_arg_json = node.tag == common_chat_peg_constructed_builder::TOOL_ARG_JSON_VALUE;
+    bool is_arg_json   = node.tag == common_chat_peg_constructed_builder::TOOL_ARG_JSON_VALUE;
 
     if (is_tool_open) {
         result.tool_calls.emplace_back();
         current_tool = &result.tool_calls.back();
-        arg_count = 0;
+        arg_count    = 0;
     }
 
     if (is_tool_name) {
-        current_tool->name = std::string(node.text);
+        current_tool->name      = std::string(node.text);
         current_tool->arguments = "{";
     }
 
@@ -128,8 +126,7 @@ common_peg_parser common_chat_peg_native_builder::standard_json_tools(const std:
                                                                       const std::string &    close_tag,
                                                                       const nlohmann::json & tool_defs,
                                                                       bool                   parallel_tool_calls,
-                                                                      bool                   force_tool_calls
-                                                                    ) {
+                                                                      bool                   force_tool_calls) {
     auto tools = choice();
     for (const auto & tool : tool_defs) {
         const auto & function = tool.at("function");
@@ -139,14 +136,15 @@ common_peg_parser common_chat_peg_native_builder::standard_json_tools(const std:
         auto tool_name_ = json_member("name", "\"" + tool_name(literal(name)) + "\"");
         auto tool_args_ = json_member("arguments", tool_args(schema(json(), "tool-" + name + "-schema", schema_)));
 
-        tools |= rule("tool-" + name, tool_open(literal("{")) << tool_name_ << "," << tool_args_ << "}");
+        tools |= rule("tool-" + name, tool_open(literal("{")) << space() << tool_name_ << space() << "," << space()
+                                                              << tool_args_ << space() << "}");
     };
 
     auto parallel_calls = eps();
     if (parallel_tool_calls) {
-        parallel_calls = zero_or_more("," << tools);
+        parallel_calls = zero_or_more(space() << "," << space() << tools);
     }
-    
+
     auto tool_call =
         trigger_rule("tool-call", sequence({ literal(open_tag), tools, parallel_calls, literal(close_tag) }));
 
@@ -154,4 +152,107 @@ common_peg_parser common_chat_peg_native_builder::standard_json_tools(const std:
         tool_call = optional(tool_call);
     }
     return tool_call;
+}
+
+common_peg_parser common_chat_peg_builder::tag_with_safe_content(const std::string &       tag_name,
+                                                                 const std::string &       marker,
+                                                                 const common_peg_parser & p) {
+    if (marker.empty()) {
+        return zero_or_more(choice({ p, rule(tag_name, content(any())) }));
+    }
+    auto content_chunk = rule(tag_name, content(negate(literal(marker)) + any() + until(marker)));
+    return zero_or_more(choice({ p, content_chunk }));
+}
+
+common_peg_parser common_chat_peg_constructed_builder::standard_constructed_tools(
+    const std::map<std::string, std::string> & markers,
+    const nlohmann::json &                     tool_defs,
+    bool                                       parallel_tool_calls,
+    bool                                       force_tool_calls) {
+    (void) force_tool_calls;
+    auto marker_at = [&](const std::string & key) -> std::string {
+        auto it = markers.find(key);
+        return it != markers.end() ? it->second : "";
+    };
+
+    std::string tool_call_start  = marker_at("tool_call_start_marker");
+    std::string tool_call_end    = marker_at("tool_call_end_marker");
+    std::string func_opener      = marker_at("function_opener");
+    std::string func_closer      = marker_at("function_closer");
+    std::string func_name_suffix = marker_at("function_name_suffix");
+    std::string param_key_prefix = marker_at("parameter_key_prefix");
+    std::string param_key_suffix = marker_at("parameter_key_suffix");
+    std::string param_closer     = marker_at("parameter_closer");
+    std::string arg_separator    = marker_at("argument_separator");
+
+    if (tool_call_start.empty() || tool_call_end.empty()) {
+        // Fallback for models that might use function openers without global tool markers
+        if (!func_opener.empty() && !func_closer.empty()) {
+            return tool(tool_open(literal(func_opener)) + space() + tool_name(until(">")) +
+                        content(until(func_closer)) + tool_close(literal(func_closer)));
+        }
+        return negate(eps());
+    }
+
+    auto build_args = [&](const nlohmann::json & parameters) -> common_peg_parser {
+        if (param_key_prefix.empty()) {
+            return content(until(tool_call_end));
+        }
+        if (parameters.contains("properties") && !parameters.at("properties").empty()) {
+            auto arg_choice = choice();
+            for (const auto & el : parameters.at("properties").items()) {
+                const std::string & prop_name = el.key();
+                auto                arg_name_parser =
+                    choice({ literal(prop_name), literal("\"" + prop_name + "\""), literal("'" + prop_name + "'") });
+
+                auto arg_rule = tool_arg(tool_arg_open(literal(param_key_prefix)) + tool_arg_name(arg_name_parser) +
+                                         (param_key_suffix.empty() ? literal(">") : literal(param_key_suffix)) +
+                                         tool_arg_string_value(until(param_closer.empty() ? "</" : param_closer)) +
+                                         (param_closer.empty() ? eps() : tool_arg_close(literal(param_closer))) +
+                                         (arg_separator.empty() ? eps() : optional(literal(arg_separator))));
+                arg_choice |= arg_rule;
+            }
+            return zero_or_more(arg_choice + space());
+        }
+        return eps();
+    };
+
+    auto build_tool_rule = [&](const std::string & name, const common_peg_parser & args) {
+        return tool(tool_open(literal(tool_call_start)) + space() +
+                    (!func_opener.empty() ? literal(func_opener) : eps()) + tool_name(literal(name)) +
+                    (!func_name_suffix.empty() ? literal(func_name_suffix) : eps()) +
+                    (func_name_suffix.empty() && !func_closer.empty() ? literal(func_closer) : eps()) +
+                    (param_key_prefix.empty() ? until(tool_call_end) : space()) + args + space() +
+                    (!func_name_suffix.empty() && !func_closer.empty() && func_closer != func_name_suffix ?
+                         literal(func_closer) :
+                         eps()) +
+                    until(tool_call_end) + tool_close(literal(tool_call_end)));
+    };
+
+    auto tool_choices      = choice();
+    bool has_defined_tools = false;
+
+    if (tool_defs.is_array() && !tool_defs.empty()) {
+        for (const auto & tool : tool_defs) {
+            if (!tool.contains("function")) {
+                continue;
+            }
+            has_defined_tools      = true;
+            std::string name       = tool.at("function").at("name");
+            auto        parameters = tool.at("function").contains("parameters") ? tool.at("function").at("parameters") :
+                                                                                  nlohmann::json::object();
+            tool_choices |= rule("tool-" + name, build_tool_rule(name, build_args(parameters)));
+        }
+    }
+
+    if (!has_defined_tools) {
+        return rule("tool_call", negate(eps()));
+    }
+
+    auto tool_call = tool_choices;
+    if (parallel_tool_calls) {
+        tool_call = one_or_more(tool_call + space());
+    }
+
+    return trigger_rule("tool_call", tool_call);
 }

@@ -778,7 +778,7 @@ static void test_template_output_parsers() {
     {
         // Not supported yet
         auto tmpls = read_templates("models/templates/CohereForAI-c4ai-command-r-plus-tool_use.jinja");
-        assert_equals(COMMON_CHAT_FORMAT_CONTENT_ONLY, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
         assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
     }
     {
@@ -787,7 +787,7 @@ static void test_template_output_parsers() {
 
         for (const auto & inputs : { inputs_no_tools, inputs_tools }) {
             auto params = common_chat_templates_apply(tmpls.get(), inputs);
-            assert_equals(COMMON_CHAT_FORMAT_COMMAND_R7B, params.format);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_CONSTRUCTED, params.format);
             assert_equals(false, params.thinking_forced_open);
         }
 
@@ -795,19 +795,19 @@ static void test_template_output_parsers() {
             common_chat_parse(
                 "Hello, world!\nWhat's up?",
                 /* is_partial= */ false,
-                {COMMON_CHAT_FORMAT_COMMAND_R7B}));
+                {COMMON_CHAT_FORMAT_PEG_CONSTRUCTED}));
         assert_msg_equals(message_assist,
             common_chat_parse(
                 "<|START_RESPONSE|>Hello, world!\nWhat's up?<|END_RESPONSE|>",
                 /* is_partial= */ false,
-                {COMMON_CHAT_FORMAT_COMMAND_R7B}));
+                {COMMON_CHAT_FORMAT_PEG_CONSTRUCTED}));
         assert_msg_equals(message_assist_thoughts,
             common_chat_parse(
                 "<|START_THINKING|>I'm\nthinking<|END_THINKING|>"
                 "<|START_RESPONSE|>Hello, world!\nWhat's up?<|END_RESPONSE|>",
                 /* is_partial= */ false,
                 {
-                    /* .format = */ COMMON_CHAT_FORMAT_COMMAND_R7B,
+                    /* .format = */ COMMON_CHAT_FORMAT_PEG_CONSTRUCTED,
                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                 }));
         assert_msg_equals(message_assist_thoughts_unparsed_deepseek,
@@ -816,7 +816,7 @@ static void test_template_output_parsers() {
                 "<|START_RESPONSE|>Hello, world!\nWhat's up?<|END_RESPONSE|>",
                 /* is_partial= */ false,
                 {
-                    /* .format = */ COMMON_CHAT_FORMAT_COMMAND_R7B,
+                    /* .format = */ COMMON_CHAT_FORMAT_PEG_CONSTRUCTED,
                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                     /* .reasoning_in_content = */ true,
                     /* .thinking_forced_open = */ false,
@@ -826,14 +826,14 @@ static void test_template_output_parsers() {
                 "<|START_THINKING|>I'm\nthinking<|END_THINKING|>"
                 "<|START_RESPONSE|>Hello, world!\nWhat's up?<|END_RESPONSE|>",
                 /* is_partial= */ false,
-                {COMMON_CHAT_FORMAT_COMMAND_R7B}));
+                {COMMON_CHAT_FORMAT_PEG_CONSTRUCTED}));
         assert_msg_equals(message_assist_thoughts,
             common_chat_parse(
                 "<|START_THINKING|>I'm\nthinking<|END_THINKING|>"
                 "<|START_RESPONSE|>Hello, world!\nWhat's up?<|END_RESPONSE|>",
                 /* is_partial= */ false,
                 {
-                    /* .format = */ COMMON_CHAT_FORMAT_COMMAND_R7B,
+                    /* .format = */ COMMON_CHAT_FORMAT_PEG_CONSTRUCTED,
                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                 }));
         assert_msg_equals(message_assist_thoughts_call_idx,
@@ -844,7 +844,7 @@ static void test_template_output_parsers() {
                 "]<|END_ACTION|>",
                 /* is_partial= */ false,
                 {
-                    /* .format = */ COMMON_CHAT_FORMAT_COMMAND_R7B,
+                    /* .format = */ COMMON_CHAT_FORMAT_PEG_CONSTRUCTED,
                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                 }));
         assert_msg_equals(message_assist_thoughts_no_content,
@@ -854,7 +854,7 @@ static void test_template_output_parsers() {
                 "    {\"tool_call_id\": \"0\", \"tool_name\": \"special",
                 /* is_partial= */ true,
                 {
-                    /* .format = */ COMMON_CHAT_FORMAT_COMMAND_R7B,
+                    /* .format = */ COMMON_CHAT_FORMAT_PEG_CONSTRUCTED,
                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                 }));
 
