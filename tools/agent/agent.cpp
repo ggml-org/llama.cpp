@@ -5,8 +5,11 @@
 #include "agent-loop.h"
 #include "tool-registry.h"
 #include "permission.h"
+
+#ifndef _WIN32
 #include "mcp/mcp-server-manager.h"
 #include "mcp/mcp-tool-wrapper.h"
+#endif
 
 #include <atomic>
 #include <fstream>
@@ -150,7 +153,8 @@ int main(int argc, char ** argv) {
     // Get working directory
     std::string working_dir = fs::current_path().string();
 
-    // Load MCP servers
+#ifndef _WIN32
+    // Load MCP servers (Unix only - requires fork/pipe)
     mcp_server_manager mcp_mgr;
     int mcp_tools_count = 0;
     std::string mcp_config = find_mcp_config(working_dir);
@@ -163,6 +167,9 @@ int main(int argc, char ** argv) {
             }
         }
     }
+#else
+    int mcp_tools_count = 0;
+#endif
 
     // Configure agent
     agent_config config;
@@ -282,8 +289,10 @@ int main(int argc, char ** argv) {
     console::set_display(DISPLAY_TYPE_RESET);
     console::log("\nExiting...\n");
 
+#ifndef _WIN32
     // Shutdown MCP servers
     mcp_mgr.shutdown_all();
+#endif
 
     ctx_server.terminate();
     inference_thread.join();

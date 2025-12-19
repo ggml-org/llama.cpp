@@ -10,10 +10,16 @@ set(AGENT_SOURCES
     tools/tool-write.cpp
     tools/tool-edit.cpp
     tools/tool-glob.cpp
-    mcp/mcp-client.cpp
-    mcp/mcp-server-manager.cpp
-    mcp/mcp-tool-wrapper.cpp
 )
+
+# MCP support only available on Unix (uses fork, pipe, poll)
+if(NOT WIN32)
+    list(APPEND AGENT_SOURCES
+        mcp/mcp-client.cpp
+        mcp/mcp-server-manager.cpp
+        mcp/mcp-tool-wrapper.cpp
+    )
+endif()
 
 add_executable(${TARGET} ${AGENT_SOURCES})
 target_link_libraries(${TARGET} PRIVATE server-context PUBLIC common ${CMAKE_THREAD_LIBS_INIT})
