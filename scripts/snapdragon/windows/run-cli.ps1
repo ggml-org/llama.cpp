@@ -46,7 +46,7 @@ if ($null -ne $env:NDEV) {
 
 $env:ADSP_LIBRARY_PATH="$basedir\lib"
 
-& "$basedir\bin\llama-cli.exe" `
+& "$basedir\bin\llama-completion.exe" `
     --no-mmap -no-cnv -m $basedir\..\..\gguf\$model `
     --poll 1000 -t 6 --cpu-mask 0xfc --cpu-strict 1 `
     --ctx-size 8192 --batch-size 128 -ctk q8_0 -ctv q8_0 -fa on `
