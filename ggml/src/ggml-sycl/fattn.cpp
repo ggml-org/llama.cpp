@@ -14,11 +14,17 @@
 #include "fattn-v2-partition.hpp"
 #include "fattn-v2-esimd.hpp"
 #include "kv-cache-quant.hpp"
+#include "sycl-profiling.hpp"
 
 #include <vector>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+
+// Kernel names for VTune profiling
+class fattn_v2_fill_block_table_kernel;
+class fattn_v2_fill_block_table_runtime_kernel;
+class fattn_v2_fill_seq_lens_kernel;
 
 // =============================================================================
 // V2 Partitioned Attention Compile-Time Switch
@@ -202,7 +208,7 @@ void ggml_sycl_v2_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cgr
 
     // Pre-fill identity block table (needed for graph recording)
     // This is a kernel launch, which is fine during graph recording prep
-    ctx.stream()->parallel_for(sycl::range<1>(block_table_size),
+    ctx.stream()->parallel_for<class fattn_v2_fill_block_table_kernel>(sycl::range<1>(block_table_size),
         [block_table_ptr = g_v2_auto.block_table](sycl::id<1> idx) {
             block_table_ptr[idx] = static_cast<int32_t>(idx[0]);
         });
@@ -640,6 +646,7 @@ static void ggml_sycl_flash_attn_ext_dispatch_ncols(
 
 // Main flash attention entry point
 void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    GGML_SYCL_PROFILE_SCOPE_FA("flash_attn");
     // Initialize configuration on first call
 #if GGML_SYCL_FA_V2_ENABLED
     init_paged_v2_config();
@@ -1068,13 +1075,13 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
             // Fill identity block table: block_table[i] = i
             // Use a kernel for efficiency (parallel fill)
-            ctx.stream()->parallel_for(sycl::range<1>(block_table_size),
+            ctx.stream()->parallel_for<class fattn_v2_fill_block_table_runtime_kernel>(sycl::range<1>(block_table_size),
                 [block_table_ptr = g_v2_auto.block_table](sycl::id<1> idx) {
                     block_table_ptr[idx] = static_cast<int32_t>(idx[0]);
                 });
 
             // Fill seq_lens: all sequences have the same context length
-            ctx.stream()->parallel_for(sycl::range<1>(seq_lens_size),
+            ctx.stream()->parallel_for<class fattn_v2_fill_seq_lens_kernel>(sycl::range<1>(seq_lens_size),
                 [seq_lens_ptr = g_v2_auto.seq_lens, ctx_len = max_context_len](sycl::id<1> idx) {
                     seq_lens_ptr[idx] = ctx_len;
                 });

@@ -67,6 +67,7 @@
 #include "ggml-sycl/gpu-sampler.hpp"
 #include "ggml-sycl/cont-batching.hpp"
 #include "ggml-sycl/quantized-comm.hpp"
+#include "ggml-sycl/sycl-profiling.hpp"
 #include "ggml.h"
 
 static bool g_sycl_loaded = false;
@@ -8640,6 +8641,7 @@ static bool can_use_mul_mat_vec_q(const ggml_tensor * src0, const ggml_tensor * 
 }
 
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_SYCL_PROFILE_SCOPE_GEMM("mul_mat");
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
 
     // DEBUG: Check if TP sharded weights have correct dimensions
@@ -10690,6 +10692,7 @@ static void execute_ffn_fusion(
 }
 
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
+    GGML_SYCL_PROFILE_SCOPE_GRAPH("graph_compute");
     // Debug: trace graph compute entry
     if (g_sycl_tp_config.is_multiprocess && g_ggml_sycl_tp_debug) {
         fprintf(stderr, "[RANK %d] GRAPH_COMPUTE_IMPL: n_nodes=%d, device=%d\n",

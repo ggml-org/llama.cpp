@@ -1159,6 +1159,10 @@ static void flash_attn_xmx_f16_kernel(
 // Launch function for XMX-based flash attention
 // =============================================================================
 
+// Kernel name class for VTune/profiler visibility
+template <int D, int ncols, bool use_logit_softcap, typename Q_type>
+class fattn_xmx_f16_kernel_name;
+
 template <int D, int ncols, bool use_logit_softcap, typename Q_type>
 void launch_fattn_xmx_f16(
     const fattn_params & params,
@@ -1245,7 +1249,7 @@ void launch_fattn_xmx_f16(
         // Capture kv_is_fp8 flag for runtime dispatch
         const bool kv_fp8 = params.kv_is_fp8;
 
-        cgh.parallel_for(
+        cgh.parallel_for<fattn_xmx_f16_kernel_name<D, ncols, use_logit_softcap, Q_type>>(
             sycl::nd_range<3>(grid * block, block),
             [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(XMX_SG)]] {
                 sycl::half * shared = shared_acc.get_multi_ptr<sycl::access::decorated::no>().get();

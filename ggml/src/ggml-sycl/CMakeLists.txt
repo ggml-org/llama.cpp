@@ -57,9 +57,12 @@ else()
     target_link_options(ggml-sycl PRIVATE "-fsycl")
 endif()
 
-# Add -fsycl-instrument-device-code for VTune kernel name visibility
-# This enables profiling tools to map GPU activities to kernel function names
-target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing" "-fsycl-instrument-device-code")
+# Add profiling-friendly compiler flags for VTune kernel name visibility
+# -fsycl-instrument-device-code: enables profiling tools to map GPU activities to kernel function names
+# -fdebug-info-for-profiling: generates debug info optimized for profilers (line tables, etc.)
+# -gline-tables-only: required for accurate source attribution in VTune
+target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing" "-fsycl-instrument-device-code" "-fdebug-info-for-profiling" "-gline-tables-only")
+target_link_options(ggml-sycl PRIVATE "-fsycl-instrument-device-code")
 
 # Link against oneDNN (primary math backend for Intel targets)
 set(GGML_SYCL_DNNL 0)
@@ -150,8 +153,13 @@ if (GGML_SYCL_F16)
 endif()
 
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
+    # Enable AOT for Battlemage (B580/G21) and JIT fallback (spir64)
+    # This prevents runtime JIT compilation overhead
+    target_compile_options(ggml-sycl PRIVATE "-fsycl-targets=intel_gpu_bmg_g21,spir64")
+    target_link_options(ggml-sycl PRIVATE "-fsycl-targets=intel_gpu_bmg_g21,spir64")
+
     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
-    target_link_options(ggml-sycl PRIVATE  -Xs   -ze-intel-greater-than-4GB-buffer-required)
+    # target_link_options(ggml-sycl PRIVATE  -Xs   -ze-intel-greater-than-4GB-buffer-required)
 elseif (GGML_SYCL_TARGET STREQUAL "NVIDIA")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=32)
 elseif (GGML_SYCL_TARGET STREQUAL "AMD")
@@ -167,6 +175,36 @@ endif()
 
 if (GGML_SYCL_GRAPH)
     target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_GRAPH)
+endif()
+
+# Optional VTune ITT API profiling support
+option(GGML_SYCL_PROFILE "Enable VTune ITT API profiling instrumentation" OFF)
+if (GGML_SYCL_PROFILE)
+    # Find ITT library from oneAPI installation
+    if (DEFINED ENV{ONEAPI_ROOT})
+        set(ITT_ROOT "$ENV{ONEAPI_ROOT}/vtune/latest" CACHE PATH "Path to VTune installation")
+    else()
+        set(ITT_ROOT "/opt/intel/oneapi/vtune/latest" CACHE PATH "Path to VTune installation")
+    endif()
+
+    find_path(ITT_INCLUDE_DIR ittnotify.h
+        PATHS ${ITT_ROOT}/sdk/include ${ITT_ROOT}/include
+        NO_DEFAULT_PATH)
+    find_library(ITT_LIBRARY NAMES ittnotify
+        PATHS ${ITT_ROOT}/sdk/lib64 ${ITT_ROOT}/lib64
+        NO_DEFAULT_PATH)
+
+    if (ITT_INCLUDE_DIR AND ITT_LIBRARY)
+        target_include_directories(ggml-sycl PRIVATE ${ITT_INCLUDE_DIR})
+        target_link_libraries(ggml-sycl PRIVATE ${ITT_LIBRARY})
+        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_PROFILE)
+        message(STATUS "VTune ITT profiling enabled: ${ITT_LIBRARY}")
+    else()
+        message(WARNING "VTune ITT library not found. Profiling disabled.
+            ITT_INCLUDE_DIR=${ITT_INCLUDE_DIR}
+            ITT_LIBRARY=${ITT_LIBRARY}
+            Set ITT_ROOT to your VTune installation path.")
+    endif()
 endif()
 
 # Link against oneMath for NVIDIA/AMD (Intel uses oneDNN as primary)

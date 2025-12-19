@@ -13,6 +13,18 @@
 #include "mmq.hpp"
 #include "vecdotq.hpp"
 
+// Kernel names for VTune profiling
+template<bool check> class mmq_q4_0_kernel;
+template<bool check> class mmq_q4_1_kernel;
+template<bool check> class mmq_q5_0_kernel;
+template<bool check> class mmq_q5_1_kernel;
+template<bool check> class mmq_q8_0_kernel;
+template<bool check> class mmq_q2_K_kernel;
+template<bool check> class mmq_q3_K_kernel;
+template<bool check> class mmq_q4_K_kernel;
+template<bool check> class mmq_q5_K_kernel;
+template<bool check> class mmq_q6_K_kernel;
+
 // MMQ tile size in K dimension, decoupled from WARP_SIZE for portability.
 // The K dimension of the tiles has either 1*MMQ_TILE_NE_K==32 or 2*MMQ_TILE_NE_K==64.
 // This must be 32 because the quantization block sizes (QI4_K=32, QI5_K=32, QI6_K=32)
@@ -1880,7 +1892,7 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q4_0_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q4_0<need_check>(
@@ -1917,7 +1929,7 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * MMQ_TILE_NE_K / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q4_0_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q4_0<need_check>(
@@ -1997,7 +2009,7 @@ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q4_1_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q4_1<need_check>(
@@ -2032,7 +2044,7 @@ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q4_1_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q4_1<need_check>(
@@ -2112,7 +2124,7 @@ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q5_0_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q5_0<need_check>(
@@ -2147,7 +2159,7 @@ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q5_0_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q5_0<need_check>(
@@ -2227,7 +2239,7 @@ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q5_1_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q5_1<need_check>(
@@ -2262,7 +2274,7 @@ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q5_1_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q5_1<need_check>(
@@ -2342,7 +2354,7 @@ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q8_0_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q8_0<need_check>(
@@ -2377,7 +2389,7 @@ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q8_0_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q8_0<need_check>(
@@ -2459,7 +2471,7 @@ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q2_K_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q2_K<need_check>(
@@ -2497,7 +2509,7 @@ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q2_K_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q2_K<need_check>(
@@ -2584,7 +2596,7 @@ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q3_K_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q3_K<need_check>(
@@ -2625,7 +2637,7 @@ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q3_K_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q3_K<need_check>(
@@ -2710,7 +2722,7 @@ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q4_K_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q4_K<need_check>(
@@ -2748,7 +2760,7 @@ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q4_K_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q4_K<need_check>(
@@ -2831,7 +2843,7 @@ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q5_K_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q5_K<need_check>(
@@ -2869,7 +2881,7 @@ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q5_K_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q5_K<need_check>(
@@ -2956,7 +2968,7 @@ static void ggml_mul_mat_q6_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * QI6_K / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q6_K_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q6_K<need_check>(
@@ -2998,7 +3010,7 @@ static void ggml_mul_mat_q6_K_q8_1_sycl(const void *vx, const void *vy,
                 sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
                     sycl::range<1>(mmq_x * QI6_K / QI8_1), cgh);
 
-                cgh.parallel_for(
+                cgh.parallel_for<mmq_q6_K_kernel<need_check>>(
                     sycl::nd_range<3>(block_nums * block_dims, block_dims),
                     [=](sycl::nd_item<3> item_ct1) {
                         mul_mat_q6_K<need_check>(

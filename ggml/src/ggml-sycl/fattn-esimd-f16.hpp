@@ -76,6 +76,16 @@ constexpr int ESIMD_KV_BATCH = 8;
 // Benchmarked: 32 partitions is optimal (8=44.3, 16=45.2, 32=45.5, 64=44.5)
 constexpr int ESIMD_PARTITIONS = 32;
 
+// Kernel name classes for VTune/profiler visibility
+template <int D, bool use_logit_softcap, typename Q_type>
+class fattn_esimd_f16_kernel_name;
+
+template <int D, bool use_logit_softcap, typename Q_type>
+class fattn_esimd_f16_fp8_kernel_name;
+
+template <int D, int ncols, bool use_logit_softcap, typename Q_type>
+class fattn_esimd_f16_batched_kernel_name;
+
 template <int D, bool use_logit_softcap, typename Q_type>
 void launch_fattn_esimd_f16_optimized(
     const fattn_params & params,
@@ -145,7 +155,7 @@ void launch_fattn_esimd_f16_optimized(
     constexpr size_t slm_size = slm_sum_offset + ESIMD_PARTITIONS * sizeof(float);
 
     stream.submit([&](sycl::handler & cgh) {
-        cgh.parallel_for(
+        cgh.parallel_for<fattn_esimd_f16_kernel_name<D, use_logit_softcap, Q_type>>(
             sycl::nd_range<3>(grid * block, block),
             [=](sycl::nd_item<3> item) SYCL_ESIMD_KERNEL {
                 using namespace esimd;
@@ -495,7 +505,7 @@ void launch_fattn_esimd_f16(
     constexpr size_t value_slm_offset = ESIMD_GS * D * sizeof(sycl::half);
 
     stream.submit([&](sycl::handler & cgh) {
-        cgh.parallel_for(
+        cgh.parallel_for<fattn_esimd_f16_fp8_kernel_name<D, use_logit_softcap, Q_type>>(
             sycl::nd_range<3>(grid * block, block),
             [=](sycl::nd_item<3> item) SYCL_ESIMD_KERNEL {
                 using namespace esimd;
@@ -865,7 +875,7 @@ void launch_fattn_esimd_f16_batched(
     constexpr size_t slm_size = slm_sum_offset + ESIMD_BATCHED_PARTITIONS * ncols * sizeof(float);
 
     stream.submit([&](sycl::handler & cgh) {
-        cgh.parallel_for(
+        cgh.parallel_for<fattn_esimd_f16_batched_kernel_name<D, ncols, use_logit_softcap, Q_type>>(
             sycl::nd_range<3>(grid * block, block),
             [=](sycl::nd_item<3> item) SYCL_ESIMD_KERNEL {
                 using namespace esimd;

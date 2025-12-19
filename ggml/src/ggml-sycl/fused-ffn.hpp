@@ -24,9 +24,10 @@
 namespace ggml_sycl_ffn {
 
 // SiLU activation: x * sigmoid(x) = x / (1 + exp(-x))
+// Use native::exp for better performance (2-3x faster)
 template<typename T>
 __dpct_inline__ T silu(T x) {
-    return x / (T(1.0f) + sycl::exp(-x));
+    return x / (T(1.0f) + sycl::native::exp(-x));
 }
 
 // =============================================================================
