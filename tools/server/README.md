@@ -1443,6 +1443,12 @@ Example:
 ```ini
 version = 1
 
+; (Optional) This section provides global settings shared across all presets.
+; If the same key is defined in a specific preset, it will override the value in this global section.
+[*]
+c = 8192
+n-gpu-layer = 8
+
 ; If the key corresponds to an existing model on the server,
 ; this will be used as the default config for that model
 [ggml-org/MY-MODEL-GGUF:Q8_0]
@@ -1462,12 +1468,17 @@ model-draft = ./my-models/draft.gguf
 model-draft = /Users/abc/my-models/draft.gguf
 
 ; If the key does NOT correspond to an existing model,
-; you need to specify at least the model path
+; you need to specify at least the model path or HF repo
 [custom_model]
 model = /Users/abc/my-awesome-model-Q4_K_M.gguf
 ```
 
-Note: some arguments are controlled by router (e.g., host, port, API key, HF repo, model alias). They will be removed or overwritten upload loading.
+Note: some arguments are controlled by router (e.g., host, port, API key, HF repo, model alias). They will be removed or overwritten upon loading.
+
+The precedence rule for preset options is as follows:
+1. **Command-line arguments** passed to `llama-server` (highest priority)
+2. **Model-specific options** defined in the preset file (e.g. `[ggml-org/MY-MODEL...]`)
+3. **Global options** defined in the preset file (`[*]`)
 
 ### Routing requests
 

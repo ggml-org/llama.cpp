@@ -82,154 +82,30 @@ static std::filesystem::path get_server_exec_path() {
 #endif
 }
 
-struct local_model {
-    std::string name;
-    std::string path;
-    std::string path_mmproj;
-};
-
-static std::vector<local_model> list_local_models(const std::string & dir) {
-    if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
-        throw std::runtime_error(string_format("error: '%s' does not exist or is not a directory\n", dir.c_str()));
-    }
-
-    std::vector<local_model> models;
-    auto scan_subdir = [&models](const std::string & subdir_path, const std::string & name) {
-        auto files = fs_list(subdir_path, false);
-        common_file_info model_file;
-        common_file_info first_shard_file;
-        common_file_info mmproj_file;
-        for (const auto & file : files) {
-            if (string_ends_with(file.name, ".gguf")) {
-                if (file.name.find("mmproj") != std::string::npos) {
-                    mmproj_file = file;
-                } else if (file.name.find("-00001-of-") != std::string::npos) {
-                    first_shard_file = file;
-                } else {
-                    model_file = file;
-                }
-            }
-        }
-        // single file model
-        local_model model{
-            /* name        */ name,
-            /* path        */ first_shard_file.path.empty() ? model_file.path : first_shard_file.path,
-            /* path_mmproj */ mmproj_file.path // can be empty
-        };
-        if (!model.path.empty()) {
-            models.push_back(model);
-        }
-    };
-
-    auto files = fs_list(dir, true);
-    for (const auto & file : files) {
-        if (file.is_dir) {
-            scan_subdir(file.path, file.name);
-        } else if (string_ends_with(file.name, ".gguf")) {
-            // single file model
-            std::string name = file.name;
-            string_replace_all(name, ".gguf", "");
-            local_model model{
-                /* name        */ name,
-                /* path        */ file.path,
-                /* path_mmproj */ ""
-            };
-            models.push_back(model);
-        }
-    }
-    return models;
-}
-
-//
-// server_presets
-//
-
-
-server_presets::server_presets(int argc, char ** argv, common_params & base_params, const std::string & presets_path)
-        : ctx_params(common_params_parser_init(base_params, LLAMA_EXAMPLE_SERVER)) {
-    if (!presets_path.empty()) {
-        presets = common_presets_load(presets_path, ctx_params);
-        SRV_INF("Loaded %zu presets from %s\n", presets.size(), presets_path.c_str());
-    }
-
-    // populate reserved args (will be appended by the router)
-    for (auto & opt : ctx_params.options) {
-        if (opt.env == nullptr) {
-            continue;
-        }
-        std::string env = opt.env;
-        if (env == "LLAMA_ARG_PORT" ||
-            env == "LLAMA_ARG_HOST" ||
-            env == "LLAMA_ARG_ALIAS" ||
-            env == "LLAMA_ARG_API_KEY" ||
-            env == "LLAMA_ARG_MODELS_DIR" ||
-            env == "LLAMA_ARG_MODELS_MAX" ||
-            env == "LLAMA_ARG_MODELS_PRESET" ||
-            env == "LLAMA_ARG_MODEL" ||
-            env == "LLAMA_ARG_MMPROJ" ||
-            env == "LLAMA_ARG_HF_REPO" ||
-            env == "LLAMA_ARG_NO_MODELS_AUTOLOAD" ||
-            env == "LLAMA_ARG_SSL_KEY_FILE" ||
-            env == "LLAMA_ARG_SSL_CERT_FILE") {
-            control_args[env] = opt;
-        }
-    }
-
-    // read base args from router's argv
-    common_params_to_map(argc, argv, LLAMA_EXAMPLE_SERVER, base_args);
-
-    // remove any router-controlled args from base_args
-    for (const auto & cargs : control_args) {
-        auto it = base_args.find(cargs.second);
-        if (it != base_args.end()) {
-            base_args.erase(it);
-        }
+static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
+    preset.unset_option("LLAMA_ARG_SSL_KEY_FILE");
+    preset.unset_option("LLAMA_ARG_SSL_CERT_FILE");
+    preset.unset_option("LLAMA_API_KEY");
+    preset.unset_option("LLAMA_ARG_MODELS_DIR");
+    preset.unset_option("LLAMA_ARG_MODELS_MAX");
+    preset.unset_option("LLAMA_ARG_MODELS_PRESET");
+    preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
+    if (unset_model_args) {
+        preset.unset_option("LLAMA_ARG_MODEL");
+        preset.unset_option("LLAMA_ARG_MMPROJ");
+        preset.unset_option("LLAMA_ARG_HF_REPO");
     }
 }
 
-common_preset server_presets::get_preset(const std::string & name) {
-    auto it = presets.find(name);
-    if (it != presets.end()) {
-        return it->second;
-    }
-    return common_preset();
-}
-
-void server_presets::render_args(server_model_meta & meta) {
-    common_preset preset = meta.preset; // copy
-    // merging 3 kinds of args:
-    // 1. model-specific args (from preset)
-    // force removing control args if any
-    for (auto & cargs : control_args) {
-        if (preset.options.find(cargs.second) != preset.options.end()) {
-            SRV_WRN("Preset '%s' contains reserved arg '%s', removing it\n", preset.name.c_str(), cargs.second.args[0]);
-            preset.options.erase(cargs.second);
-        }
-    }
-    // 2. base args (from router)
-    // inherit from base args
-    for (const auto & [arg, value] : base_args) {
-        preset.options[arg] = value;
-    }
-    // 3. control args (from router)
-    // set control values
-    preset.options[control_args["LLAMA_ARG_HOST"]] = CHILD_ADDR;
-    preset.options[control_args["LLAMA_ARG_PORT"]] = std::to_string(meta.port);
-    preset.options[control_args["LLAMA_ARG_ALIAS"]] = meta.name;
-    if (meta.in_cache) {
-        preset.options[control_args["LLAMA_ARG_HF_REPO"]] = meta.name;
-    } else {
-        preset.options[control_args["LLAMA_ARG_MODEL"]] = meta.path;
-        if (!meta.path_mmproj.empty()) {
-            preset.options[control_args["LLAMA_ARG_MMPROJ"]] = meta.path_mmproj;
-        }
-    }
-    // disable SSL for child processes (HTTPS already handled by router)
-    preset.options[control_args["LLAMA_ARG_SSL_KEY_FILE"]] = "";
-    preset.options[control_args["LLAMA_ARG_SSL_CERT_FILE"]] = "";
-    meta.args = preset.to_args();
-    // add back the binary path at the front
-    meta.args.insert(meta.args.begin(), get_server_exec_path().string());
+void server_model_meta::update_args(common_preset_context & ctx_preset, std::string bin_path) {
+    // update params
+    unset_reserved_args(preset, false);
+    preset.set_option(ctx_preset, "LLAMA_ARG_HOST",  CHILD_ADDR);
+    preset.set_option(ctx_preset, "LLAMA_ARG_PORT",  std::to_string(port));
+    preset.set_option(ctx_preset, "LLAMA_ARG_ALIAS", name);
+    // TODO: maybe validate preset before rendering ?
+    // render args
+    args = preset.to_args(bin_path);
 }
 
 //
@@ -240,20 +116,22 @@ server_models::server_models(
         const common_params & params,
         int argc,
         char ** argv,
-        char ** envp) : base_params(params), presets(argc, argv, base_params, params.models_preset) {
-    for (int i = 0; i < argc; i++) {
-        base_args.push_back(std::string(argv[i]));
-    }
+        char ** envp)
+            : ctx_preset(LLAMA_EXAMPLE_SERVER),
+              base_params(params),
+              base_preset(ctx_preset.load_from_args(argc, argv)) {
     for (char ** env = envp; *env != nullptr; env++) {
         base_env.push_back(std::string(*env));
     }
-    GGML_ASSERT(!base_args.empty());
+    // clean up base preset
+    unset_reserved_args(base_preset, true);
     // set binary path
     try {
-        base_args[0] = get_server_exec_path().string();
+        bin_path = get_server_exec_path().string();
     } catch (const std::exception & e) {
+        bin_path = argv[0];
         LOG_WRN("failed to get server executable path: %s\n", e.what());
-        LOG_WRN("using original argv[0] as fallback: %s\n", base_args[0].c_str());
+        LOG_WRN("using original argv[0] as fallback: %s\n", argv[0]);
     }
     load_models();
 }
@@ -262,7 +140,7 @@ void server_models::add_model(server_model_meta && meta) {
     if (mapping.find(meta.name) != mapping.end()) {
         throw std::runtime_error(string_format("model '%s' appears multiple times", meta.name.c_str()));
     }
-    presets.render_args(meta); // populate meta.args
+    meta.update_args(ctx_preset, bin_path); // render args
     std::string name = meta.name;
     mapping[name] = instance_t{
         /* subproc */ std::make_shared<subprocess_s>(),
@@ -271,86 +149,62 @@ void server_models::add_model(server_model_meta && meta) {
     };
 }
 
-static std::vector<local_model> list_custom_path_models(server_presets & presets) {
-    // detect any custom-path models in presets
-    std::vector<local_model> custom_models;
-    for (auto & [model_name, preset] : presets.presets) {
-        local_model model;
-        model.name = model_name;
-        std::vector<common_arg> to_erase;
-        for (auto & [arg, value] : preset.options) {
-            std::string env(arg.env ? arg.env : "");
-            if (env == "LLAMA_ARG_MODEL") {
-                model.path = value;
-                to_erase.push_back(arg);
-            }
-            if (env == "LLAMA_ARG_MMPROJ") {
-                model.path_mmproj = value;
-                to_erase.push_back(arg);
-            }
-        }
-        for (auto & arg : to_erase) {
-            preset.options.erase(arg);
-        }
-        if (!model.name.empty() && !model.path.empty()) {
-            custom_models.push_back(model);
-        }
-    }
-    return custom_models;
-}
-
 // TODO: allow refreshing cached model list
 void server_models::load_models() {
     // loading models from 3 sources:
     // 1. cached models
-    auto cached_models = common_list_cached_models();
-    for (const auto & model : cached_models) {
-        server_model_meta meta{
-            /* preset      */ presets.get_preset(model.to_string()),
-            /* name        */ model.to_string(),
-            /* path        */ model.manifest_path,
-            /* path_mmproj */ "", // auto-detected when loading
-            /* in_cache    */ true,
-            /* port        */ 0,
-            /* status      */ SERVER_MODEL_STATUS_UNLOADED,
-            /* last_used   */ 0,
-            /* args        */ std::vector<std::string>(),
-            /* exit_code   */ 0
-        };
-        add_model(std::move(meta));
-    }
-    // 2. local models specificed via --models-dir
+    common_presets cached_models = ctx_preset.load_from_cache();
+    SRV_INF("Loaded %zu cached model presets\n", cached_models.size());
+    // 2. local models from --models-dir
+    common_presets local_models;
     if (!base_params.models_dir.empty()) {
-        auto local_models = list_local_models(base_params.models_dir);
-        for (const auto & model : local_models) {
-            if (mapping.find(model.name) != mapping.end()) {
-                // already exists in cached models, skip
-                continue;
-            }
-            server_model_meta meta{
-                /* preset      */ presets.get_preset(model.name),
-                /* name        */ model.name,
-                /* path        */ model.path,
-                /* path_mmproj */ model.path_mmproj,
-                /* in_cache    */ false,
-                /* port        */ 0,
-                /* status      */ SERVER_MODEL_STATUS_UNLOADED,
-                /* last_used   */ 0,
-                /* args        */ std::vector<std::string>(),
-                /* exit_code   */ 0
-            };
-            add_model(std::move(meta));
+        local_models = ctx_preset.load_from_models_dir(base_params.models_dir);
+        SRV_INF("Loaded %zu local model presets from %s\n", local_models.size(), base_params.models_dir.c_str());
+    }
+    // 3. custom-path models from presets
+    common_preset global = {};
+    common_presets custom_presets = {};
+    if (!base_params.models_preset.empty()) {
+        custom_presets = ctx_preset.load_from_ini(base_params.models_preset, global);
+        SRV_INF("Loaded %zu custom model presets from %s\n", custom_presets.size(), base_params.models_preset.c_str());
+    }
+
+    // cascade, apply global preset first
+    cached_models  = ctx_preset.cascade(global, cached_models);
+    local_models   = ctx_preset.cascade(global, local_models);
+    custom_presets = ctx_preset.cascade(global, custom_presets);
+
+    // note: if a model exists in both cached and local, local takes precedence
+    common_presets final_presets;
+    for (const auto & [name, preset] : cached_models) {
+        final_presets[name] = preset;
+    }
+    for (const auto & [name, preset] : local_models) {
+        final_presets[name] = preset;
+    }
+
+    // process custom presets from INI
+    for (const auto & [name, custom] : custom_presets) {
+        if (final_presets.find(name) != final_presets.end()) {
+            // apply custom config if exists
+            common_preset & target = final_presets[name];
+            target.merge(custom);
+        } else {
+            // otherwise add directly
+            final_presets[name] = custom;
         }
     }
-    // 3. custom-path models specified in presets
-    auto custom_models = list_custom_path_models(presets);
-    for (const auto & model : custom_models) {
+
+    // server base preset from CLI args take highest precedence
+    for (auto & [name, preset] : final_presets) {
+        preset.merge(base_preset);
+    }
+
+    // convert presets to server_model_meta and add to mapping
+    for (const auto & preset : final_presets) {
         server_model_meta meta{
-            /* preset      */ presets.get_preset(model.name),
-            /* name        */ model.name,
-            /* path        */ model.path,
-            /* path_mmproj */ model.path_mmproj,
-            /* in_cache    */ false,
+            /* preset      */ preset.second,
+            /* name        */ preset.first,
             /* port        */ 0,
             /* status      */ SERVER_MODEL_STATUS_UNLOADED,
             /* last_used   */ 0,
@@ -359,10 +213,18 @@ void server_models::load_models() {
         };
         add_model(std::move(meta));
     }
+
     // log available models
-    SRV_INF("Available models (%zu) (*: custom preset)\n", mapping.size());
-    for (const auto & [name, inst] : mapping) {
-        SRV_INF("  %c %s\n", inst.meta.preset.name.empty() ? ' ' : '*', name.c_str());
+    {
+        std::unordered_set<std::string> custom_names;
+        for (const auto & [name, preset] : custom_presets) {
+            custom_names.insert(name);
+        }
+        SRV_INF("Available models (%zu) (*: custom preset)\n", mapping.size());
+        for (const auto & [name, inst] : mapping) {
+            bool has_custom = custom_names.find(name) != custom_names.end();
+            SRV_INF("  %c %s\n", has_custom ? '*' : ' ', name.c_str());
+        }
     }
 }
 
@@ -526,7 +388,7 @@ void server_models::load(const std::string & name) {
     {
         SRV_INF("spawning server instance with name=%s on port %d\n", inst.meta.name.c_str(), inst.meta.port);
 
-        presets.render_args(inst.meta); // update meta.args
+        inst.meta.update_args(ctx_preset, bin_path); // render args
 
         std::vector<std::string> child_args = inst.meta.args; // copy
         std::vector<std::string> child_env  = base_env; // copy
@@ -877,7 +739,12 @@ void server_models_routes::init_routes() {
                 {"args",   meta.args},
             };
             if (!meta.preset.name.empty()) {
-                status["preset"] = meta.preset.to_ini();
+                common_preset preset_copy = meta.preset;
+                unset_reserved_args(preset_copy, false);
+                preset_copy.unset_option("LLAMA_ARG_HOST");
+                preset_copy.unset_option("LLAMA_ARG_PORT");
+                preset_copy.unset_option("LLAMA_ARG_ALIAS");
+                status["preset"] = preset_copy.to_ini();
             }
             if (meta.is_failed()) {
                 status["exit_code"] = meta.exit_code;
@@ -888,8 +755,6 @@ void server_models_routes::init_routes() {
                 {"object",   "model"},    // for OAI-compat
                 {"owned_by", "llamacpp"}, // for OAI-compat
                 {"created",  t},          // for OAI-compat
-                {"in_cache", meta.in_cache},
-                {"path",     meta.path},
                 {"status",   status},
                 // TODO: add other fields, may require reading GGUF metadata
             });

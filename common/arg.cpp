@@ -772,6 +772,11 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
         }
         auto opt = *arg_to_options[arg];
         std::string val;
+        if (opt.value_hint == nullptr && opt.value_hint_2 == nullptr) {
+            // bool arg (need to reverse the meaning for negative args)
+            bool is_neg = std::find(opt.args_neg.begin(), opt.args_neg.end(), arg) != opt.args_neg.end();
+            val = is_neg ? "0" : "1";
+        }
         if (opt.value_hint != nullptr) {
             // arg with single value
             check_arg(i);
