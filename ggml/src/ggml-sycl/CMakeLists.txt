@@ -57,43 +57,73 @@ else()
     target_link_options(ggml-sycl PRIVATE "-fsycl")
 endif()
 
-target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
+# Add -fsycl-instrument-device-code for VTune kernel name visibility
+# This enables profiling tools to map GPU activities to kernel function names
+target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing" "-fsycl-instrument-device-code")
 
-# Link against oneDNN
+# Link against oneDNN (primary math backend for Intel targets)
 set(GGML_SYCL_DNNL 0)
-if(GGML_SYCL_DNN)
-    find_package(DNNL)
+set(GGML_SYCL_MKL_FALLBACK_ENABLED 0)
+
+# Deprecation warning for old GGML_SYCL_DNN flag
+if(DEFINED GGML_SYCL_DNN)
+    message(DEPRECATION "GGML_SYCL_DNN is deprecated. oneDNN is now the primary backend for Intel targets.")
+endif()
+
+# New option for MKL fallback
+option(GGML_SYCL_USE_MKL_FALLBACK "Enable oneMKL as optional fallback math backend" OFF)
+
+if (GGML_SYCL_TARGET STREQUAL "INTEL")
+    # oneDNN is REQUIRED for Intel targets (primary math backend)
+    find_package(DNNL REQUIRED)
     if(DNNL_FOUND)
         if (NOT DEFINED DNNL_GPU_VENDOR)
-            # default to intel target
             set(DNNL_GPU_VENDOR "INTEL")
-            if(NOT "${GGML_SYCL_TARGET}" STREQUAL "INTEL")
-                message(WARNING "oneDNN builds bundled with oneapi release only support INTEL target")
-            endif()
         endif()
 
-        # Verify oneDNN was compiled for the same target as llama
         if("${GGML_SYCL_TARGET}" STREQUAL "${DNNL_GPU_VENDOR}")
             target_link_libraries(ggml-sycl PRIVATE DNNL::dnnl)
             set(GGML_SYCL_DNNL 1)
             get_target_property(CONFIGS DNNL::dnnl IMPORTED_CONFIGURATIONS)
             foreach(CONFIG ${CONFIGS})
                 get_target_property(DNNL_LIB DNNL::dnnl IMPORTED_LOCATION_${CONFIG})
-                message(STATUS "Found oneDNN: ${DNNL_LIB}")
+                message(STATUS "Found oneDNN (primary): ${DNNL_LIB}")
             endforeach()
         else()
-            message(WARNING
-                "oneDNN must be compiled for the same target as llama.cpp.
-                 llama.cpp: ${GGML_SYCL_TARGET}, oneDNN: ${DNNL_GPU_VENDOR}.
-                 Disabling oneDNN support.")
+            message(FATAL_ERROR
+                "oneDNN must be compiled for INTEL target.
+                 llama.cpp: ${GGML_SYCL_TARGET}, oneDNN: ${DNNL_GPU_VENDOR}")
         endif()
-    else()
-        message(STATUS "oneDNN not found, disabling oneDNN support")
+    endif()
+
+    # Optional MKL fallback for Intel targets
+    if(GGML_SYCL_USE_MKL_FALLBACK)
+        find_package(MKL QUIET)
+        if(MKL_FOUND)
+            target_link_libraries(ggml-sycl PRIVATE MKL::MKL_SYCL::BLAS)
+            set(GGML_SYCL_MKL_FALLBACK_ENABLED 1)
+            message(STATUS "Found oneMKL: enabled as optional fallback")
+        else()
+            message(WARNING "MKL fallback requested but MKL not found - using oneDNN only")
+        endif()
     endif()
 else()
-    message(STATUS "oneDNN support disabled by the user")
+    # For NVIDIA/AMD: oneDNN is optional (they use oneMath with cuBLAS/rocBLAS)
+    find_package(DNNL QUIET)
+    if(DNNL_FOUND)
+        if (NOT DEFINED DNNL_GPU_VENDOR)
+            set(DNNL_GPU_VENDOR "INTEL")
+        endif()
+        if("${GGML_SYCL_TARGET}" STREQUAL "${DNNL_GPU_VENDOR}")
+            target_link_libraries(ggml-sycl PRIVATE DNNL::dnnl)
+            set(GGML_SYCL_DNNL 1)
+            message(STATUS "Found oneDNN for ${GGML_SYCL_TARGET}")
+        endif()
+    endif()
 endif()
+
 target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_DNNL=${GGML_SYCL_DNNL})
+target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_MKL_FALLBACK=${GGML_SYCL_MKL_FALLBACK_ENABLED})
 
 # Link against oneCCL for tensor parallelism collective operations
 set(GGML_SYCL_CCL 0)
@@ -139,16 +169,17 @@ if (GGML_SYCL_GRAPH)
     target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_GRAPH)
 endif()
 
-# Link against Intel oneMKL or oneMath
+# Link against oneMath for NVIDIA/AMD (Intel uses oneDNN as primary)
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
-    # Intel devices use Intel oneMKL directly instead of oneMath to avoid the limitation of linking Intel oneMKL statically
-    # See https://github.com/uxlfoundation/oneMath/issues/654
+    # Intel uses oneDNN as primary math backend (configured above)
+    # MKL is only used if GGML_SYCL_USE_MKL_FALLBACK=ON
     if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         set(SYCL_COMPILER ON)
     endif()
-    find_package(MKL REQUIRED)
-    target_link_libraries(ggml-sycl PRIVATE MKL::MKL_SYCL::BLAS)
-    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_USE_INTEL_ONEMKL)
+    if(GGML_SYCL_MKL_FALLBACK_ENABLED)
+        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_USE_INTEL_ONEMKL)
+    endif()
+    message(STATUS "Intel SYCL backend: oneDNN primary, MKL fallback=${GGML_SYCL_MKL_FALLBACK_ENABLED}")
 
 else()
     find_package(oneMath QUIET)

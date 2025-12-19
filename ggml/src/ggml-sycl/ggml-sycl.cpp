@@ -63,6 +63,7 @@
 #include "ggml-sycl/mmvq.hpp"
 #include "ggml-sycl/fused-norm-gemm.hpp"
 #include "ggml-sycl/fused-moe-esimd.hpp"
+#include "ggml-sycl/fused-ffn.hpp"
 #include "ggml-sycl/gpu-sampler.hpp"
 #include "ggml-sycl/cont-batching.hpp"
 #include "ggml-sycl/quantized-comm.hpp"
@@ -1658,6 +1659,39 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(
         // So we duplicate non-sharded weights (layer norms, etc.) on each device
         extra->tp_sharded = false;
         extra->tp_usm_host = false;
+
+        // MULTI-PROCESS TP FIX: Even though local allocation isn't sharded (each process
+        // has only 1 device), we need to track the TP type for TP layer tensors. This tells
+        // MUL_MAT kernels that this weight produces partial results requiring ALL_REDUCE.
+        // The tensor was created with sharded dimensions by the model loader based on
+        // ggml_backend_sycl_get_tp_world_size() which returns the MPI world size.
+        if (is_multiprocess_tp && tp_type != tp_layer_type::TP_NONE) {
+            extra->tp_type = tp_type;
+            extra->tp_world_size = g_sycl_tp_config.world_size;
+            extra->tp_original_ne[0] = tensor->ne[0];
+            extra->tp_original_ne[1] = tensor->ne[1];
+            extra->tp_original_ne[2] = tensor->ne[2];
+            extra->tp_original_ne[3] = tensor->ne[3];
+
+            // Compute full (unsharded) dimensions for the original tensor
+            if (tp_type == tp_layer_type::TP_COLUMN_PARALLEL) {
+                extra->tp_original_ne[1] = tensor->ne[1] * g_sycl_tp_config.world_size;
+            } else if (tp_type == tp_layer_type::TP_ROW_PARALLEL) {
+                extra->tp_original_ne[0] = tensor->ne[0] * g_sycl_tp_config.world_size;
+            }
+
+            if (g_ggml_sycl_tp_debug) {
+                static int mp_dbg = 0;
+                if (mp_dbg++ < 10) {
+                    fprintf(stderr, "TP DEBUG MULTIPROCESS %s: tp_type=%d, world_size=%d, ne=[%lld,%lld], orig=[%lld,%lld]\n",
+                            tensor->name ? tensor->name : "(null)",
+                            (int)tp_type, g_sycl_tp_config.world_size,
+                            (long long)tensor->ne[0], (long long)tensor->ne[1],
+                            (long long)extra->tp_original_ne[0], (long long)extra->tp_original_ne[1]);
+                }
+            }
+        }
+
         size_t alloc_size = ggml_nbytes(tensor);
 
         // Pad for alignment
@@ -1961,14 +1995,21 @@ static ggml_backend_buffer_type_t get_tp_buffer_type_for_device(int main_device)
     }
 
     // Get all TP devices from the global config
+    // NOTE: ggml_sycl_tp_world_size() returns 1 in multi-process mode (for graph building),
+    // but ctx->world_size should reflect the actual MPI world size for TP tracking
     int world_size = ggml_sycl_tp_world_size();
     std::vector<int> devices;
 
-    if (g_sycl_tp_config.enabled && world_size > 1) {
+    // Check if TP should be active: either multiple local devices OR multi-process mode
+    bool tp_active = g_sycl_tp_config.enabled &&
+                     (world_size > 1 || g_sycl_tp_config.is_multiprocess);
+
+    if (tp_active) {
         if (g_sycl_tp_config.is_multiprocess) {
             // Multi-process mode: each process has only ONE device (device 0)
-            // world_size reflects MPI processes, but we only allocate on our device
+            // Use MPI world size for TP tracking, but only one local device
             devices.push_back(0);  // Always device 0 (restricted by ONEAPI_DEVICE_SELECTOR)
+            world_size = g_sycl_tp_config.world_size;  // Use actual MPI world size
         } else {
             // Single-process multi-device mode: allocate on all devices
             for (int i = 0; i < world_size; i++) {
@@ -4361,13 +4402,10 @@ inline void ggml_sycl_op_mul_mat_sycl(
                                          : src1_as_f16.get();
 
 #if GGML_SYCL_DNNL
-        if (!g_ggml_sycl_disable_dnn) {
-                DnnlGemmWrapper::row_gemm(ctx,row_diff, src1_ncols , ne10, src0_ptr,
-                                     DnnlGemmWrapper::to_dt<sycl::half>(), src1_ptr, DnnlGemmWrapper::to_dt<sycl::half>(),
-                                      dst_dd_i, DnnlGemmWrapper::to_dt<float>(), stream);
-        }
-        else
-#endif
+        DnnlGemmWrapper::row_gemm(ctx,row_diff, src1_ncols , ne10, src0_ptr,
+                                  DnnlGemmWrapper::to_dt<sycl::half>(), src1_ptr, DnnlGemmWrapper::to_dt<sycl::half>(),
+                                  dst_dd_i, DnnlGemmWrapper::to_dt<float>(), stream);
+#elif GGML_SYCL_HAS_ONEAPI_MATH
         {
             ggml_sycl_pool_alloc<sycl::half> dst_f16(ctx.pool(), row_diff * src1_ncols);
 
@@ -4385,6 +4423,9 @@ inline void ggml_sycl_op_mul_mat_sycl(
             const to_fp32_sycl_t to_fp32_sycl = ggml_get_to_fp32_sycl(GGML_TYPE_F16, dst);
             to_fp32_sycl(dst_f16.get(), dst_dd_i, row_diff*src1_ncols, stream);
         }
+#else
+        static_assert(false, "Either GGML_SYCL_DNNL or GGML_SYCL_HAS_ONEAPI_MATH must be defined");
+#endif
     } else {
         ggml_sycl_pool_alloc<float> src0_ddq_as_f32(ctx.pool());
         ggml_sycl_pool_alloc<float> src1_ddq_as_f32(ctx.pool());
@@ -4408,13 +4449,10 @@ inline void ggml_sycl_op_mul_mat_sycl(
         const float * src1_ddf1_i = src1->type == GGML_TYPE_F32 ? (const float *) src1_ddf_i : src1_ddq_as_f32.get();
 
 #if GGML_SYCL_DNNL
-        if (!g_ggml_sycl_disable_dnn) {
-            DnnlGemmWrapper::row_gemm(ctx, row_diff, src1_ncols, ne10, src0_ddf_i,
-                                      DnnlGemmWrapper::to_dt<float>(), src1_ddf1_i, DnnlGemmWrapper::to_dt<float>(),
-                                      dst_dd_i, DnnlGemmWrapper::to_dt<float>(), stream);
-        }
-        else
-#endif
+        DnnlGemmWrapper::row_gemm(ctx, row_diff, src1_ncols, ne10, src0_ddf_i,
+                                  DnnlGemmWrapper::to_dt<float>(), src1_ddf1_i, DnnlGemmWrapper::to_dt<float>(),
+                                  dst_dd_i, DnnlGemmWrapper::to_dt<float>(), stream);
+#elif GGML_SYCL_HAS_ONEAPI_MATH
         {
             const float alpha = 1.0f;
             const float beta  = 0.0f;
@@ -4423,6 +4461,9 @@ inline void ggml_sycl_op_mul_mat_sycl(
                 src1_ncols, ne10, dpct::get_value(&alpha, *stream), src0_ddf_i, ne00, src1_ddf1_i, ne10,
                 dpct::get_value(&beta, *stream), dst_dd_i, ldc)));
         }
+#else
+        static_assert(false, "Either GGML_SYCL_DNNL or GGML_SYCL_HAS_ONEAPI_MATH must be defined");
+#endif
     }
     GGML_UNUSED(dst);
     GGML_UNUSED(src1_ddq_i);
@@ -7986,105 +8027,105 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
     const int64_t r3 = ne13 / ne03;
 
 #if GGML_SYCL_DNNL
-    if (!g_ggml_sycl_disable_dnn) {
-            int64_t str_a0 = nb00 / type_size_src0;
-            int64_t str_a1 = nb01 / type_size_src0;
-            int64_t str_a2 = nb02 / type_size_src0;
+    // Use oneDNN for batch GEMM operations (primary path for Intel)
+    {
+        int64_t str_a0 = nb00 / type_size_src0;
+        int64_t str_a1 = nb01 / type_size_src0;
+        int64_t str_a2 = nb02 / type_size_src0;
 
-            int64_t str_b0 = nb10 / type_size_src1;
-            int64_t str_b1 = nb11 / type_size_src1;
-            int64_t str_b2 = nb12 / type_size_src1;
+        int64_t str_b0 = nb10 / type_size_src1;
+        int64_t str_b1 = nb11 / type_size_src1;
+        int64_t str_b2 = nb12 / type_size_src1;
 
-            auto launch_gemm_for_batches = [&ctx, queue](const sycl::half *src0,
-                                                const sycl::half *src1, float *dst,
-                                                int64_t a0, int64_t a1, int64_t batcha,
-                                                int64_t /*b0*/, int64_t b1, int64_t batchb,
-                                                int64_t sa0, int64_t sa1, int64_t sa2,
-                                                int64_t sb0, int64_t sb1, int64_t sb2,
-                                                int64_t sd2) {
-                bool supported_broadcast = batchb == batcha ? true
-                        : batchb == 1 || batcha == 1        ? true
-                                                            : false;
-                if (supported_broadcast) {
-                    DnnlGemmWrapper::gemm(ctx, a1, b1, a0, src0,
-                            DnnlGemmWrapper::to_dt<sycl::half>(), sa0, sa1, sa2, src1,
-                            DnnlGemmWrapper::to_dt<sycl::half>(), sb0, sb1, sb2, dst,
-                            DnnlGemmWrapper::to_dt<float>(), queue, batcha, batchb);
+        auto launch_gemm_for_batches = [&ctx, queue](const sycl::half *src0,
+                                            const sycl::half *src1, float *dst,
+                                            int64_t a0, int64_t a1, int64_t batcha,
+                                            int64_t /*b0*/, int64_t b1, int64_t batchb,
+                                            int64_t sa0, int64_t sa1, int64_t sa2,
+                                            int64_t sb0, int64_t sb1, int64_t sb2,
+                                            int64_t sd2) {
+            bool supported_broadcast = batchb == batcha ? true
+                    : batchb == 1 || batcha == 1        ? true
+                                                        : false;
+            if (supported_broadcast) {
+                DnnlGemmWrapper::gemm(ctx, a1, b1, a0, src0,
+                        DnnlGemmWrapper::to_dt<sycl::half>(), sa0, sa1, sa2, src1,
+                        DnnlGemmWrapper::to_dt<sycl::half>(), sb0, sb1, sb2, dst,
+                        DnnlGemmWrapper::to_dt<float>(), queue, batcha, batchb);
+            } else {
+                // iterate over batches from smaller set of matrices (matrix 0)
+                int64_t batches0 = batcha;
+                int64_t batches1 = batchb;
+
+                if (batches0 > batches1) {
+                    int64_t num_mul_mats = batches1;
+                    int64_t sub_batch = batches0 / num_mul_mats;
+                    // src0 is batched and bigger, shift and multiply with src1
+                    for (int64_t i0 = 0; i0 < num_mul_mats; i0++) {
+                        const sycl::half *src0_shifted = src0 + (sa2 * i0 * sub_batch);
+                        const sycl::half *src1_shifted = src1 + (sb2 * i0);
+                        float *dst_shifted = dst + (sd2 * i0 * sub_batch);
+                        DnnlGemmWrapper::gemm(ctx, a1, b1, a0, src0_shifted,
+                                DnnlGemmWrapper::to_dt<sycl::half>(), sa0, sa1, sa2,
+                                src1_shifted, DnnlGemmWrapper::to_dt<sycl::half>(), sb0,
+                                sb1, sb2, dst_shifted, DnnlGemmWrapper::to_dt<float>(),
+                                queue, sub_batch, 1);
+                    }
                 } else {
-                    // iterate over batches from smaller set of matrices (matrix 0)
-                    int64_t batches0 = batcha;
-                    int64_t batches1 = batchb;
-
-                    if (batches0 > batches1) {
-                        int64_t num_mul_mats = batches1;
-                        int64_t sub_batch = batches0 / num_mul_mats;
-                        // src0 is batched and bigger, shift and multiply with src1
-                        for (int64_t i0 = 0; i0 < num_mul_mats; i0++) {
-                            const sycl::half *src0_shifted = src0 + (sa2 * i0 * sub_batch);
-                            const sycl::half *src1_shifted = src1 + (sb2 * i0);
-                            float *dst_shifted = dst + (sd2 * i0 * sub_batch);
-                            DnnlGemmWrapper::gemm(ctx, a1, b1, a0, src0_shifted,
-                                    DnnlGemmWrapper::to_dt<sycl::half>(), sa0, sa1, sa2,
-                                    src1_shifted, DnnlGemmWrapper::to_dt<sycl::half>(), sb0,
-                                    sb1, sb2, dst_shifted, DnnlGemmWrapper::to_dt<float>(),
-                                    queue, sub_batch, 1);
-                        }
-                    } else {
-                        int64_t num_mul_mats = batches0;
-                        int64_t sub_batch = batches1 / num_mul_mats;
-                        // src1 is batched and bigger, shift and multiply with src0
-                        for (int64_t i1 = 0; i1 < num_mul_mats; i1++) {
-                            const sycl::half *src0_shifted = src0 + (sa2 * i1);
-                            const sycl::half *src1_shifted = src1 + (sb2 * i1 * sub_batch);
-                            float *dst_shifted = dst + (sd2 * i1 * sub_batch);
-                            DnnlGemmWrapper::gemm(ctx, a1, b1, a0, src0_shifted,
-                                    DnnlGemmWrapper::to_dt<sycl::half>(), sa0, sa1, sa2,
-                                    src1_shifted, DnnlGemmWrapper::to_dt<sycl::half>(), sb0,
-                                    sb1, sb2, dst_shifted, DnnlGemmWrapper::to_dt<float>(),
-                                    queue, 1, sub_batch);
-                        }
+                    int64_t num_mul_mats = batches0;
+                    int64_t sub_batch = batches1 / num_mul_mats;
+                    // src1 is batched and bigger, shift and multiply with src0
+                    for (int64_t i1 = 0; i1 < num_mul_mats; i1++) {
+                        const sycl::half *src0_shifted = src0 + (sa2 * i1);
+                        const sycl::half *src1_shifted = src1 + (sb2 * i1 * sub_batch);
+                        float *dst_shifted = dst + (sd2 * i1 * sub_batch);
+                        DnnlGemmWrapper::gemm(ctx, a1, b1, a0, src0_shifted,
+                                DnnlGemmWrapper::to_dt<sycl::half>(), sa0, sa1, sa2,
+                                src1_shifted, DnnlGemmWrapper::to_dt<sycl::half>(), sb0,
+                                sb1, sb2, dst_shifted, DnnlGemmWrapper::to_dt<float>(),
+                                queue, 1, sub_batch);
                     }
                 }
-            };
-
-            const bool cont_batches_dim2_a = nb02 * ne02 == nb03;
-            const bool cont_batches_dim2_b = nb12 * ne12 == nb13;
-            const bool cont_batches_dim3_a = ne02 == 1 && nb02 * ne01 == nb03;
-            const bool cont_batches_dim3_b = ne12 == 1 && nb12 * ne11 == nb13;
-            if (cont_batches_dim2_a && cont_batches_dim2_b) {
-                // A batch is considered contiguous if the dimension 2 is not strided
-                int64_t batches0 = ne02 * ne03;
-                int64_t batches1 = ne12 * ne13;
-                launch_gemm_for_batches(src0_f16, src1_f16, dst_ddf, ne00, ne01, batches0,
-                        ne10, ne11, batches1, str_a0, str_a1, str_a2, str_b0, str_b1,
-                        str_b2, nb2 / sizeof(float));
-            } else if (cont_batches_dim3_a && cont_batches_dim3_b) {
-                // This case is similar to the one above with the difference that only the batch in dimension 3 is used and the dimension 2 is of size 1.
-                int64_t batches0 = ne02 * ne03;
-                int64_t batches1 = ne12 * ne13;
-                int64_t str_a3 = nb03 / type_size_src0;
-                int64_t str_b3 = nb13 / type_size_src1;
-                launch_gemm_for_batches(src0_f16, src1_f16, dst_ddf, ne00, ne01, batches0,
-                        ne10, ne11, batches1, str_a0, str_a1, str_a3, str_b0, str_b1,
-                        str_b3, nb2 / sizeof(float));
-            } else {
-                for (int64_t b_a = 0; b_a < ne03; b_a++) {
-                    const sycl::half *src0_f16_shifted
-                            = src0_f16 + (nb03 * b_a / type_size_src0);
-                    const sycl::half *src1_f16_shifted
-                            = src1_f16 + (nb13 * b_a / type_size_src1);
-                    float *dst_shifted = dst_ddf + (nb3 * b_a / sizeof(float));
-                    int64_t batches0 = ne02;
-                    int64_t batches1 = ne12;
-                    launch_gemm_for_batches(src0_f16_shifted, src1_f16_shifted, dst_shifted,
-                            ne00, ne01, batches0, ne10, ne11, batches1, str_a0, str_a1,
-                            str_a2, str_b0, str_b1, str_b2, nb2 / sizeof(float));
-                }
             }
+        };
 
+        const bool cont_batches_dim2_a = nb02 * ne02 == nb03;
+        const bool cont_batches_dim2_b = nb12 * ne12 == nb13;
+        const bool cont_batches_dim3_a = ne02 == 1 && nb02 * ne01 == nb03;
+        const bool cont_batches_dim3_b = ne12 == 1 && nb12 * ne11 == nb13;
+        if (cont_batches_dim2_a && cont_batches_dim2_b) {
+            // A batch is considered contiguous if the dimension 2 is not strided
+            int64_t batches0 = ne02 * ne03;
+            int64_t batches1 = ne12 * ne13;
+            launch_gemm_for_batches(src0_f16, src1_f16, dst_ddf, ne00, ne01, batches0,
+                    ne10, ne11, batches1, str_a0, str_a1, str_a2, str_b0, str_b1,
+                    str_b2, nb2 / sizeof(float));
+        } else if (cont_batches_dim3_a && cont_batches_dim3_b) {
+            // This case is similar to the one above with the difference that only the batch in dimension 3 is used and the dimension 2 is of size 1.
+            int64_t batches0 = ne02 * ne03;
+            int64_t batches1 = ne12 * ne13;
+            int64_t str_a3 = nb03 / type_size_src0;
+            int64_t str_b3 = nb13 / type_size_src1;
+            launch_gemm_for_batches(src0_f16, src1_f16, dst_ddf, ne00, ne01, batches0,
+                    ne10, ne11, batches1, str_a0, str_a1, str_a3, str_b0, str_b1,
+                    str_b3, nb2 / sizeof(float));
+        } else {
+            for (int64_t b_a = 0; b_a < ne03; b_a++) {
+                const sycl::half *src0_f16_shifted
+                        = src0_f16 + (nb03 * b_a / type_size_src0);
+                const sycl::half *src1_f16_shifted
+                        = src1_f16 + (nb13 * b_a / type_size_src1);
+                float *dst_shifted = dst_ddf + (nb3 * b_a / sizeof(float));
+                int64_t batches0 = ne02;
+                int64_t batches1 = ne12;
+                launch_gemm_for_batches(src0_f16_shifted, src1_f16_shifted, dst_shifted,
+                        ne00, ne01, batches0, ne10, ne11, batches1, str_a0, str_a1,
+                        str_a2, str_b0, str_b1, str_b2, nb2 / sizeof(float));
+            }
+        }
     }
-    else
-#endif
+#elif GGML_SYCL_HAS_ONEAPI_MATH
+    // Fallback to oneAPI Math (MKL/oneMath) for batch GEMM
     {
         if (r2 == 1 && r3 == 1 && is_src0_cont_2 && is_src1_cont_2) {
             // with a [0, 2, 1, 3] perm. and ne02==1 the matrix strides need to be determined from dim 3:
@@ -8123,6 +8164,9 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
                 (void **) (ptrs_dst.get() + 0 * ne23), mkl_data_type, ne0, ne23, mkl_compute_type, matrix_info.get())));
         }
     }
+#else
+    static_assert(false, "Either GGML_SYCL_DNNL or GGML_SYCL_HAS_ONEAPI_MATH must be defined for batch GEMM operations");
+#endif
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
     std::exit(1);
@@ -10391,6 +10435,260 @@ static void execute_per_projection_fusion(
     }
 }
 
+// =============================================================================
+// FFN Fusion (gate_proj + up_proj + GLU) helper functions
+// Detects pattern: MUL_MAT(gate) + MUL_MAT(up) -> GLU
+// =============================================================================
+
+// Find GLU node that consumes the given tensor as either src[0] (gate) or src[1] (up)
+// Returns {glu_index, glu_node, is_gate} where is_gate=true if tensor is src[0]
+struct glu_consumer_info {
+    int idx;
+    ggml_tensor * glu;
+    bool is_gate;  // true if tensor is src[0] (gate), false if src[1] (up)
+};
+
+static glu_consumer_info find_glu_consumer(
+    const ggml_cgraph * cgraph,
+    const ggml_tensor * tensor,
+    int start_idx
+) {
+    for (int j = start_idx; j < cgraph->n_nodes; j++) {
+        ggml_tensor * node = cgraph->nodes[j];
+        if (node->op == GGML_OP_GLU) {
+            // For split GLU: src[0] = gate, src[1] = up
+            if (node->src[0] == tensor) {
+                return {j, node, true};  // tensor is gate
+            }
+            if (node->src[1] == tensor) {
+                return {j, node, false}; // tensor is up
+            }
+        }
+    }
+    return {-1, nullptr, false};
+}
+
+// Find another MUL_MAT that shares the same input (src[1]) and feeds into the same GLU
+static std::pair<int, ggml_tensor*> find_paired_mulmat(
+    const ggml_cgraph * cgraph,
+    const ggml_tensor * mulmat,
+    const ggml_tensor * shared_input,
+    int start_idx,
+    int end_idx
+) {
+    for (int j = start_idx; j < end_idx && j < cgraph->n_nodes; j++) {
+        ggml_tensor * node = cgraph->nodes[j];
+        if (node->op == GGML_OP_MUL_MAT && node != mulmat) {
+            // Check if this MUL_MAT shares the same input activation
+            if (node->src[1] == shared_input) {
+                return {j, node};
+            }
+        }
+    }
+    return {-1, nullptr};
+}
+
+// Check if FFN fusion can be applied for these two MUL_MATs
+// Conditions:
+// 1. Both are Q4_0 weights (for now)
+// 2. Same input tensor (src[1])
+// 3. Same weight dimensions
+// 4. Small batch size (token generation, not prompt)
+static bool can_fuse_ffn(
+    const ggml_tensor * gate_mulmat,
+    const ggml_tensor * up_mulmat
+) {
+    static int can_fuse_debug = 0;
+    bool debug_this = (can_fuse_debug++ < 5);
+
+    // Check weight types - only Q4_0 supported for now
+    if (gate_mulmat->src[0]->type != GGML_TYPE_Q4_0 ||
+        up_mulmat->src[0]->type != GGML_TYPE_Q4_0) {
+        if (debug_this) fprintf(stderr, "[FFN TRACE] can_fuse_ffn: FAIL type check (gate=%d, up=%d)\n",
+                               (int)gate_mulmat->src[0]->type, (int)up_mulmat->src[0]->type);
+        return false;
+    }
+
+    // Check same input
+    if (gate_mulmat->src[1] != up_mulmat->src[1]) {
+        if (debug_this) fprintf(stderr, "[FFN TRACE] can_fuse_ffn: FAIL same input check\n");
+        return false;
+    }
+
+    // Check weight dimensions match
+    const ggml_tensor * W_gate = gate_mulmat->src[0];
+    const ggml_tensor * W_up = up_mulmat->src[0];
+    if (W_gate->ne[0] != W_up->ne[0] || W_gate->ne[1] != W_up->ne[1]) {
+        if (debug_this) fprintf(stderr, "[FFN TRACE] can_fuse_ffn: FAIL dim check\n");
+        return false;
+    }
+
+    // Only fuse for small batches (token generation)
+    // For large batches, separate kernels with better occupancy may be faster
+    const ggml_tensor * input = gate_mulmat->src[1];
+    int batch_size = input->ne[1];
+    if (batch_size > 8) {
+        if (debug_this) fprintf(stderr, "[FFN TRACE] can_fuse_ffn: FAIL batch size (%d > 8)\n", batch_size);
+        return false;
+    }
+
+    if (debug_this) fprintf(stderr, "[FFN TRACE] can_fuse_ffn: PASS! batch=%d\n", batch_size);
+    return true;
+}
+
+// Enable to debug FFN fusion path vs baseline path
+// #define GGML_SYCL_FFN_PATH_DEBUG
+
+// Execute FFN fusion: gate_proj + up_proj + SwiGLU in single kernel
+// This eliminates intermediate gate/up tensors and reduces kernel launches
+static void execute_ffn_fusion(
+    ggml_backend_sycl_context & ctx,
+    const ggml_tensor * gate_mulmat,
+    const ggml_tensor * up_mulmat,
+    ggml_tensor * glu_dst
+) {
+    // Get tensors
+    const ggml_tensor * W_gate = gate_mulmat->src[0];  // Gate weights [K, N]
+    const ggml_tensor * W_up = up_mulmat->src[0];      // Up weights [K, N]
+    const ggml_tensor * input = gate_mulmat->src[1];   // Input [batch, K]
+
+    // Dimensions
+    const int64_t K = W_gate->ne[0];           // Hidden size (e.g., 4096)
+    const int64_t N = W_gate->ne[1];           // Intermediate size (e.g., 14336)
+    const int64_t batch = input->ne[1];        // Batch size (typically 1 for token gen)
+
+    // Debug output with full tensor shapes
+    GGML_SYCL_DEBUG("[FFN FUSION] K=%lld N=%lld batch=%lld gate_type=%d up_type=%d\n",
+                   (long long)K, (long long)N, (long long)batch,
+                   (int)W_gate->type, (int)W_up->type);
+
+    // Always print shapes when debugging FFN fusion issues
+    static int ffn_debug_count = 0;
+    if (ffn_debug_count++ < 3) {
+        fprintf(stderr, "[FFN DEBUG] input ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] type=%d\n",
+               (long long)input->ne[0], (long long)input->ne[1],
+               (long long)input->ne[2], (long long)input->ne[3],
+               input->nb[0], input->nb[1], input->nb[2], input->nb[3],
+               (int)input->type);
+        fprintf(stderr, "[FFN DEBUG] dst ne=[%lld,%lld,%lld,%lld] nb=[%zu,%zu,%zu,%zu] type=%d\n",
+               (long long)glu_dst->ne[0], (long long)glu_dst->ne[1],
+               (long long)glu_dst->ne[2], (long long)glu_dst->ne[3],
+               glu_dst->nb[0], glu_dst->nb[1], glu_dst->nb[2], glu_dst->nb[3],
+               (int)glu_dst->type);
+        fflush(stderr);
+    }
+
+    // Get stream and device
+    int device = ctx.device;
+    dpct::queue_ptr stream = ctx.stream(device, 0);
+
+    // Calculate padded size for Q8_1 alignment
+    const int64_t K_padded = (K + QK8_1 - 1) / QK8_1 * QK8_1;
+    const size_t q8_size = batch * K_padded * sizeof(block_q8_1) / QK8_1;
+
+    // Allocate temporary buffer for quantized input
+    ggml_sycl_pool_alloc<char> input_q8_alloc(ctx.pool(device), q8_size);
+    void * input_q8 = input_q8_alloc.get();
+
+    // Zero padding if needed
+    if (K != K_padded) {
+        stream->memset(input_q8, 0, q8_size);
+    }
+
+    // Quantize input to Q8_1
+    const float * input_f32 = (const float *)input->data;
+
+#if GGML_SYCL_FFN_PATH_DEBUG
+    // DEBUG: Check input f32 values BEFORE quantization
+    static int input_debug = 0;
+    if (input_debug++ < 5) {
+        // Wait for any prior operations on this input to complete
+        stream->wait();
+        float input_vals[8];
+        stream->memcpy(input_vals, input_f32, 8 * sizeof(float)).wait();
+        fprintf(stderr, "[FFN FUSION] input_f32 BEFORE quant [0:7]=%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
+                input_vals[0], input_vals[1], input_vals[2], input_vals[3],
+                input_vals[4], input_vals[5], input_vals[6], input_vals[7]);
+        fprintf(stderr, "[FFN FUSION] input name=%s op=%s computed=%d\n",
+                input->name ? input->name : "(null)",
+                ggml_op_name(input->op),
+                input->data != nullptr);
+        fflush(stderr);
+    }
+#endif
+
+    quantize_row_q8_1_sycl<quantize_q8_1>(input_f32, input_q8, K, batch, K_padded, stream);
+
+    // Get weight and output pointers
+    const void * W_gate_data = W_gate->data;
+    const void * W_up_data = W_up->data;
+    float * dst_data = (float *)glu_dst->data;
+
+#if GGML_SYCL_FFN_PATH_DEBUG
+    static int addr_debug = 0;
+    if (addr_debug++ < 5) {
+        fprintf(stderr, "[FFN ADDR] glu_dst=%p glu_dst->data=%p dst_data=%p name=%s\n",
+                (void*)glu_dst, (void*)glu_dst->data, (void*)dst_data,
+                glu_dst->name ? glu_dst->name : "(null)");
+        fflush(stderr);
+    }
+#endif
+
+    // Select kernel variant based on environment variable
+    // Multi-row kernel (default): 256 threads/WG, SLM caching, 64 rows/WG
+    // Single-row kernel (fallback): 16 threads/WG, no SLM, 1 row/WG
+    static bool use_single_row = (getenv("GGML_SYCL_FFN_SINGLE_ROW") != nullptr);
+
+    if (use_single_row) {
+        GGML_SYCL_DEBUG("[FFN FUSION] Using single-row kernel (16 threads/WG)\n");
+        ggml_sycl_ffn::fused_ffn_gate_up_swiglu_sycl<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, vec_dot_q4_0_q8_1>(
+            W_gate_data,
+            W_up_data,
+            input_q8,
+            dst_data,
+            K,          // ncols_in
+            N,          // nrows_out
+            batch,      // batch_size
+            stream
+        );
+    } else {
+        GGML_SYCL_DEBUG("[FFN FUSION] Using multi-row kernel (256 threads/WG, SLM caching)\n");
+        ggml_sycl_ffn::fused_ffn_multirow_sycl<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, vec_dot_q4_0_q8_1>(
+            W_gate_data,
+            W_up_data,
+            input_q8,
+            dst_data,
+            K,          // ncols_in
+            N,          // nrows_out
+            batch,      // batch_size
+            stream
+        );
+    }
+
+#if GGML_SYCL_FFN_PATH_DEBUG
+    // DEBUG: Print fusion output after kernel completes
+    static int fusion_debug_count = 0;
+    if (fusion_debug_count++ < 5) {
+        stream->wait();
+        float dst_vals[8];
+        stream->memcpy(dst_vals, dst_data, 8 * sizeof(float)).wait();
+        fprintf(stderr, "[FFN FUSION] call %d: dst ne=[%lld,%lld] dst[0:7]=%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
+                fusion_debug_count, (long long)N, (long long)batch,
+                dst_vals[0], dst_vals[1], dst_vals[2], dst_vals[3], dst_vals[4], dst_vals[5], dst_vals[6], dst_vals[7]);
+
+        // Also print some input values for comparison
+        float input_vals[8];
+        stream->memcpy(input_vals, input_f32, 8 * sizeof(float)).wait();
+        fprintf(stderr, "[FFN FUSION] call %d: input[0:7]=%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
+                fusion_debug_count, input_vals[0], input_vals[1], input_vals[2], input_vals[3],
+                input_vals[4], input_vals[5], input_vals[6], input_vals[7]);
+        fflush(stderr);
+    }
+#endif
+
+    GGML_SYCL_DEBUG("[FFN FUSION] Kernel launched successfully\n");
+}
+
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
     // Debug: trace graph compute entry
     if (g_sycl_tp_config.is_multiprocess && g_ggml_sycl_tp_debug) {
@@ -10444,6 +10742,14 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
 
         // Skip nodes already executed via fusion - no kernel work needed
         if (fused_nodes.count(node)) {
+#if GGML_SYCL_FFN_PATH_DEBUG
+            static int skip_debug = 0;
+            if (skip_debug++ < 20) {
+                fprintf(stderr, "[FFN SKIP] Skipping fused node %d: op=%s name=%s\n",
+                        i, ggml_op_name(node->op), node->name ? node->name : "(null)");
+                fflush(stderr);
+            }
+#endif
             continue;
         }
 
@@ -10592,6 +10898,111 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
                 }
             }
         }
+
+        // Try FFN fusion: MUL_MAT(gate) + MUL_MAT(up) + GLU
+        // Pattern: Two MUL_MATs sharing same input, both feeding into same GLU node
+        // Fuses gate_proj + up_proj + SwiGLU into single kernel pass
+        // Control via GGML_SYCL_FFN_FUSION=1 environment variable (default: OFF)
+        // Set GGML_SYCL_FFN_FUSION=1 to enable, =0 or unset to disable
+        // NOTE: FFN fusion is incompatible with SYCL graphs because the fusion
+        // executes outside the graph recording and doesn't replay during graph execution.
+        // To use FFN fusion, also set GGML_SYCL_DISABLE_GRAPH=1
+        static const char* ffn_env = getenv("GGML_SYCL_FFN_FUSION");
+        static bool ffn_fusion_requested = (ffn_env != nullptr && atoi(ffn_env) != 0);
+#ifdef GGML_SYCL_GRAPH
+        // FFN fusion requires graphs to be disabled (otherwise fusion doesn't replay)
+        static bool ffn_fusion_enabled = ffn_fusion_requested && g_ggml_sycl_disable_graph;
+        static bool ffn_graph_warning_shown = false;
+        if (ffn_fusion_requested && !g_ggml_sycl_disable_graph && !ffn_graph_warning_shown) {
+            fprintf(stderr, "[FFN FUSION] Warning: FFN fusion disabled because SYCL graphs are enabled.\n");
+            fprintf(stderr, "[FFN FUSION] Set GGML_SYCL_DISABLE_GRAPH=1 to enable FFN fusion.\n");
+            ffn_graph_warning_shown = true;
+        }
+#else
+        static bool ffn_fusion_enabled = ffn_fusion_requested;
+#endif
+        static int ffn_debug_trace = 0;
+        if (!disable_fusion && ffn_fusion_enabled && node->op == GGML_OP_MUL_MAT) {
+            // Check if this MUL_MAT feeds into a GLU
+            auto glu_info = find_glu_consumer(cgraph, node, i + 1);
+            if (ffn_debug_trace++ < 5) {
+                fprintf(stderr, "[FFN TRACE] MUL_MAT node %d (%s): glu_info.glu=%p\n",
+                        i, node->name, (void*)glu_info.glu);
+            }
+            if (glu_info.glu != nullptr) {
+                // Found GLU consumer, now find the paired MUL_MAT
+                ggml_tensor * glu = glu_info.glu;
+                const ggml_tensor * other_src = glu_info.is_gate ? glu->src[1] : glu->src[0];
+
+                if (ffn_debug_trace < 10) {
+                    fprintf(stderr, "[FFN TRACE] Found GLU idx=%d, is_gate=%d, other_src=%p (%s, op=%d)\n",
+                            glu_info.idx, glu_info.is_gate, (void*)other_src,
+                            other_src ? other_src->name : "null",
+                            other_src ? (int)other_src->op : -1);
+                }
+
+                // Check if other_src is from a MUL_MAT
+                ggml_tensor * other_mulmat = nullptr;
+                int other_idx = -1;
+                for (int j = i + 1; j < glu_info.idx; j++) {
+                    ggml_tensor * check = cgraph->nodes[j];
+                    if (check == other_src && check->op == GGML_OP_MUL_MAT) {
+                        other_mulmat = check;
+                        other_idx = j;
+                        break;
+                    }
+                }
+
+                if (ffn_debug_trace < 10) {
+                    fprintf(stderr, "[FFN TRACE] Paired MUL_MAT search: other_mulmat=%p, other_idx=%d\n",
+                            (void*)other_mulmat, other_idx);
+                }
+
+                // If we found a paired MUL_MAT, check if fusion is possible
+                if (other_mulmat != nullptr) {
+                    const ggml_tensor * gate_mm = glu_info.is_gate ? node : other_mulmat;
+                    const ggml_tensor * up_mm = glu_info.is_gate ? other_mulmat : node;
+
+                    if (can_fuse_ffn(gate_mm, up_mm)) {
+                        GGML_SYCL_DEBUG("[FFN FUSION] Detected pattern at node %d: gate_mm=%d, up_mm=%d, glu=%d\n",
+                                       i, glu_info.is_gate ? i : other_idx,
+                                       glu_info.is_gate ? other_idx : i, glu_info.idx);
+
+                        // Execute fused FFN kernel
+                        execute_ffn_fusion(*sycl_ctx, gate_mm, up_mm, glu);
+
+                        // Mark up MUL_MAT and GLU as fused (to skip later)
+                        fused_nodes.insert(other_mulmat);
+                        fused_nodes.insert(glu);
+
+                        // Skip this gate MUL_MAT (already computed in fusion)
+                        continue;
+                    }
+                }
+            }
+        }
+
+#if GGML_SYCL_FFN_PATH_DEBUG
+        // Debug: check MUL_MAT operations after GLU (potential down_proj)
+        static int mulmat_debug = 0;
+        if (node->op == GGML_OP_MUL_MAT && node->src[1] && mulmat_debug++ < 40) {
+            ggml_tensor * input = node->src[1];
+            fprintf(stderr, "[MUL_MAT EXEC] node %d: %s src[1]=%s (op=%s) data=%p\n",
+                    i, node->name ? node->name : "(null)",
+                    input->name ? input->name : "(null)",
+                    ggml_op_name(input->op), (void*)input->data);
+            // If input is a GLU (ffn_swiglu), print its values
+            if (input->op == GGML_OP_GLU || (input->name && strstr(input->name, "swiglu"))) {
+                dpct::queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
+                stream->wait();
+                float vals[8];
+                stream->memcpy(vals, input->data, 8 * sizeof(float)).wait();
+                fprintf(stderr, "[MUL_MAT EXEC] GLU input[0:7]=%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
+                        vals[0], vals[1], vals[2], vals[3], vals[4], vals[5], vals[6], vals[7]);
+            }
+            fflush(stderr);
+        }
+#endif
 
         bool ok = ggml_sycl_compute_forward(*sycl_ctx, node);
         if (!ok) {

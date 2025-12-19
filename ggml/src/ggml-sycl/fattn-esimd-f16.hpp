@@ -182,10 +182,11 @@ void launch_fattn_esimd_f16_optimized(
                 const sycl::half * mask_base = mask_ptr ? mask_ptr + query_idx * stride_mask : nullptr;
 
                 // ALiBi slope computation
-                // For single-query mode (ne01 <= 1) and non-unified KV (ne13 != 1): use ALiBi slope
+                // For single-query mode (ne01 == 1) and non-unified KV (ne13 != 1): use ALiBi slope
                 // Otherwise: slope = 1.0f (mask already contains proper values)
+                // This matches the XMX kernel condition to avoid incorrectly applying ALiBi during prompt processing
                 float slope = 1.0f;
-                if (ne13 != 1) {
+                if (ne01 == 1 && ne13 != 1) {
                     slope = esimd_get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
                 }
 
@@ -213,27 +214,18 @@ void launch_fattn_esimd_f16_optimized(
                 const int kv_end = std::min(kv_start + kv_per_partition, kv_len);
 
                 // Load query vector once and apply scale
-                // For D=64, we load and process in two 32-element halves to work around block_load issues
-                simd<float, 32> query_row_1, query_row_2;  // For D=64 split case
-                simd<float, D> query_row;  // For D!=64 case
-                if constexpr (D == 64 && std::is_same_v<Q_type, sycl::half>) {
-                    simd<sycl::half, 32> q_row_h1 = block_load<sycl::half, 32>(Q_base);
-                    simd<sycl::half, 32> q_row_h2 = block_load<sycl::half, 32>(Q_base + 32);
-                    query_row_1 = convert<float>(q_row_h1) * scale_val;
-                    query_row_2 = convert<float>(q_row_h2) * scale_val;
-                } else if constexpr (D == 64) {
-                    // Q is float, also split load (float is 4 bytes so 32 floats = 128 bytes)
-                    query_row_1 = block_load<float, 32>(Q_base) * scale_val;
-                    query_row_2 = block_load<float, 32>(Q_base + 32) * scale_val;
-                } else {
-                    simd<Q_type, D> query_row_raw = block_load<Q_type, D>(Q_base);
+                // Native D-element vectors for all head dimensions (including D=64)
+                simd<float, D> query_row;
+                if constexpr (std::is_same_v<Q_type, sycl::half>) {
+                    simd<sycl::half, D> query_row_raw = block_load<sycl::half, D>(Q_base);
                     query_row = convert<float>(query_row_raw) * scale_val;
+                } else {
+                    simd<float, D> query_row_raw = block_load<float, D>(Q_base);
+                    query_row = query_row_raw * scale_val;
                 }
 
-                // Initialize accumulators for this partition
-                // For D=64, we use two 32-element halves for the accumulator
-                simd<float, 32> acc_v_1 = 0.0f, acc_v_2 = 0.0f;  // For D=64
-                simd<float, D> acc_v = 0.0f;  // For D!=64
+                // Initialize accumulator for this partition
+                simd<float, D> acc_v = 0.0f;
                 float softmax_sum = 0.0f;
                 float max_score = -FLT_MAX;
 
@@ -266,14 +258,8 @@ void launch_fattn_esimd_f16_optimized(
                 // Handle empty partition vs main computation
                 if (kv_start >= kv_end) {
                     // Empty partition - store zeros
-                    if constexpr (D == 64) {
-                        simd<float, 32> zeros = 0.0f;
-                        slm_block_store<float, 32>(slm_acc_offset + partition_id * D * sizeof(float), zeros);
-                        slm_block_store<float, 32>(slm_acc_offset + partition_id * D * sizeof(float) + 32 * sizeof(float), zeros);
-                    } else {
-                        simd<float, D> zeros = 0.0f;
-                        slm_block_store(slm_acc_offset + partition_id * D * sizeof(float), zeros);
-                    }
+                    simd<float, D> zeros = 0.0f;
+                    slm_block_store(slm_acc_offset + partition_id * D * sizeof(float), zeros);
                     slm_scalar_store<float>(slm_max_offset + partition_id * sizeof(float), -FLT_MAX);
                     slm_scalar_store<float>(slm_sum_offset + partition_id * sizeof(float), 0.0f);
                 } else {
@@ -281,21 +267,15 @@ void launch_fattn_esimd_f16_optimized(
                     // Main partition processing with double-buffered K loading
                     // =============================================================================
 
-                    // Prefetch variables for double-buffering
-                    simd<sycl::half, 32> k_prefetch_1, k_prefetch_2;  // For D=64
-                    simd<sycl::half, D> k_prefetch;  // For D!=64
+                    // Prefetch variable for double-buffering (native D-element vector)
+                    simd<sycl::half, D> k_prefetch;
 
                     // Prefetch first K row
                     const sycl::half* K_first = nullptr;
                     const sycl::half* V_first = nullptr;
                     COMPUTE_KV_PTRS(kv_start, K_first, V_first);
                     (void)V_first;  // Not used here
-                    if constexpr (D == 64) {
-                        k_prefetch_1 = block_load<sycl::half, 32>(K_first);
-                        k_prefetch_2 = block_load<sycl::half, 32>(K_first + 32);
-                    } else {
-                        k_prefetch = block_load<sycl::half, D>(K_first);
-                    }
+                    k_prefetch = block_load<sycl::half, D>(K_first);
 
                     // Process this partition's KV positions with double-buffered K loading
                     for (int kv_pos = kv_start; kv_pos < kv_end; ++kv_pos) {
@@ -305,45 +285,20 @@ void launch_fattn_esimd_f16_optimized(
 
                         // Use prefetched K (already loaded)
                         // Compute dot product with Q while prefetching next K
-                        float score;
-                        if constexpr (D == 64) {
-                            // Convert prefetched K to float
-                            simd<float, 32> k1 = convert<float>(k_prefetch_1);
-                            simd<float, 32> k2 = convert<float>(k_prefetch_2);
+                        simd<float, D> k_row = convert<float>(k_prefetch);
 
-                            // Prefetch next K while we compute (if there is a next position)
-                            if (kv_pos + 1 < kv_end) {
-                                const sycl::half* K_next = nullptr;
-                                const sycl::half* V_next = nullptr;
-                                COMPUTE_KV_PTRS(kv_pos + 1, K_next, V_next);
-                                (void)V_next;
-                                k_prefetch_1 = block_load<sycl::half, 32>(K_next);
-                                k_prefetch_2 = block_load<sycl::half, 32>(K_next + 32);
-                            }
-
-                            // Compute dot product in halves and sum
-                            simd<float, 32> prod1 = query_row_1 * k1;
-                            simd<float, 32> prod2 = query_row_2 * k2;
-                            float sum1 = esimd::detail::sum<float, float, 32>(prod1);
-                            float sum2 = esimd::detail::sum<float, float, 32>(prod2);
-                            score = sum1 + sum2;
-                        } else {
-                            // Convert prefetched K to float
-                            simd<float, D> k_row = convert<float>(k_prefetch);
-
-                            // Prefetch next K while we compute (if there is a next position)
-                            if (kv_pos + 1 < kv_end) {
-                                const sycl::half* K_next = nullptr;
-                                const sycl::half* V_next = nullptr;
-                                COMPUTE_KV_PTRS(kv_pos + 1, K_next, V_next);
-                                (void)V_next;
-                                k_prefetch = block_load<sycl::half, D>(K_next);
-                            }
-
-                            // Compute dot product
-                            simd<float, D> prod = query_row * k_row;
-                            score = esimd::detail::sum<float, float, D>(prod);
+                        // Prefetch next K while we compute (if there is a next position)
+                        if (kv_pos + 1 < kv_end) {
+                            const sycl::half* K_next = nullptr;
+                            const sycl::half* V_next = nullptr;
+                            COMPUTE_KV_PTRS(kv_pos + 1, K_next, V_next);
+                            (void)V_next;
+                            k_prefetch = block_load<sycl::half, D>(K_next);
                         }
+
+                        // Compute dot product
+                        simd<float, D> prod = query_row * k_row;
+                        float score = esimd::detail::sum<float, float, D>(prod);
 
                         // Apply logit softcap if enabled
                         if constexpr (use_logit_softcap) {
@@ -370,165 +325,77 @@ void launch_fattn_esimd_f16_optimized(
                             }
                         }
 
-                        // Online softmax update
-                        // For D=64, we process V in two 32-element halves to avoid block_load<64> issues
-                        if constexpr (D == 64) {
-                            // Load V in two halves
-                            simd<sycl::half, 32> v_row_h1 = block_load<sycl::half, 32>(V_row);
-                            simd<sycl::half, 32> v_row_h2 = block_load<sycl::half, 32>(V_row + 32);
-                            simd<float, 32> v1 = convert<float>(v_row_h1);
-                            simd<float, 32> v2 = convert<float>(v_row_h2);
+                        // Online softmax update with native D-element V vectors
+                        simd<sycl::half, D> v_row_h = block_load<sycl::half, D>(V_row);
+                        simd<float, D> v_row = convert<float>(v_row_h);
 
-                            if (score <= max_score) {
-                                // Use FTZ threshold to avoid numerical issues
-                                float diff = score - max_score;
-                                float exp_score = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                                acc_v_1 = acc_v_1 + v1 * exp_score;
-                                acc_v_2 = acc_v_2 + v2 * exp_score;
-                                softmax_sum += exp_score;
-                            } else {
-                                // Use FTZ threshold to avoid numerical issues
-                                float diff = max_score - score;
-                                float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                                acc_v_1 = acc_v_1 * exp_factor + v1;
-                                acc_v_2 = acc_v_2 * exp_factor + v2;
-                                softmax_sum = softmax_sum * exp_factor + 1.0f;
-                                max_score = score;
-                            }
+                        if (score <= max_score) {
+                            // Use FTZ threshold to avoid numerical issues
+                            float diff = score - max_score;
+                            float exp_score = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
+                            acc_v = acc_v + v_row * exp_score;
+                            softmax_sum += exp_score;
                         } else {
-                            // D != 64: use single D-element vectors
-                            simd<sycl::half, D> v_row_h = block_load<sycl::half, D>(V_row);
-                            simd<float, D> v_row = convert<float>(v_row_h);
-
-                            if (score <= max_score) {
-                                // Use FTZ threshold to avoid numerical issues
-                                float diff = score - max_score;
-                                float exp_score = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                                acc_v = acc_v + v_row * exp_score;
-                                softmax_sum += exp_score;
-                            } else {
-                                // Use FTZ threshold to avoid numerical issues
-                                float diff = max_score - score;
-                                float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                                acc_v = acc_v * exp_factor + v_row;
-                                softmax_sum = softmax_sum * exp_factor + 1.0f;
-                                max_score = score;
-                            }
+                            // Use FTZ threshold to avoid numerical issues
+                            float diff = max_score - score;
+                            float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
+                            acc_v = acc_v * exp_factor + v_row;
+                            softmax_sum = softmax_sum * exp_factor + 1.0f;
+                            max_score = score;
                         }
                     }
 
-                    // Store partial results to SLM
-                    // For D=64, store in two halves
-                    if constexpr (D == 64) {
-                        slm_block_store<float, 32>(slm_acc_offset + partition_id * D * sizeof(float), acc_v_1);
-                        slm_block_store<float, 32>(slm_acc_offset + partition_id * D * sizeof(float) + 32 * sizeof(float), acc_v_2);
-                    } else {
-                        slm_block_store(slm_acc_offset + partition_id * D * sizeof(float), acc_v);
-                    }
+                    // Store partial results to SLM (native D-element store)
+                    slm_block_store(slm_acc_offset + partition_id * D * sizeof(float), acc_v);
                     slm_scalar_store<float>(slm_max_offset + partition_id * sizeof(float), max_score);
                     slm_scalar_store<float>(slm_sum_offset + partition_id * sizeof(float), softmax_sum);
                 } // end if (kv_start >= kv_end) else
                 barrier();
 
-                // Thread 0 performs final reduction
+                // Thread 0 performs final reduction (native D-element vectors for all dimensions)
                 if (partition_id == 0) {
-                    // For D=64, use two halves throughout the reduction
-                    if constexpr (D == 64) {
-                        // Load first partition's results
-                        simd<float, 32> final_acc_1 = slm_block_load<float, 32>(slm_acc_offset);
-                        simd<float, 32> final_acc_2 = slm_block_load<float, 32>(slm_acc_offset + 32 * sizeof(float));
-                        float final_max = slm_scalar_load<float>(slm_max_offset);
-                        float final_sum = slm_scalar_load<float>(slm_sum_offset);
+                    // Load first partition's results
+                    simd<float, D> final_acc = slm_block_load<float, D>(slm_acc_offset);
+                    float final_max = slm_scalar_load<float>(slm_max_offset);
+                    float final_sum = slm_scalar_load<float>(slm_sum_offset);
 
-                        // Merge remaining partitions using online softmax
-                        for (int p = 1; p < ESIMD_PARTITIONS; ++p) {
-                            simd<float, 32> p_acc_1 = slm_block_load<float, 32>(slm_acc_offset + p * D * sizeof(float));
-                            simd<float, 32> p_acc_2 = slm_block_load<float, 32>(slm_acc_offset + p * D * sizeof(float) + 32 * sizeof(float));
-                            float p_max = slm_scalar_load<float>(slm_max_offset + p * sizeof(float));
-                            float p_sum = slm_scalar_load<float>(slm_sum_offset + p * sizeof(float));
+                    // Merge remaining partitions using online softmax
+                    for (int p = 1; p < ESIMD_PARTITIONS; ++p) {
+                        simd<float, D> p_acc = slm_block_load<float, D>(slm_acc_offset + p * D * sizeof(float));
+                        float p_max = slm_scalar_load<float>(slm_max_offset + p * sizeof(float));
+                        float p_sum = slm_scalar_load<float>(slm_sum_offset + p * sizeof(float));
 
-                            // Online softmax merge with FTZ threshold
-                            if (p_max <= final_max) {
-                                float diff = p_max - final_max;
-                                float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                                final_acc_1 = final_acc_1 + p_acc_1 * exp_factor;
-                                final_acc_2 = final_acc_2 + p_acc_2 * exp_factor;
-                                final_sum += p_sum * exp_factor;
-                            } else {
-                                float diff = final_max - p_max;
-                                float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                                final_acc_1 = final_acc_1 * exp_factor + p_acc_1;
-                                final_acc_2 = final_acc_2 * exp_factor + p_acc_2;
-                                final_sum = final_sum * exp_factor + p_sum;
-                                final_max = p_max;
-                            }
+                        // Online softmax merge with FTZ threshold
+                        if (p_max <= final_max) {
+                            float diff = p_max - final_max;
+                            float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
+                            final_acc = final_acc + p_acc * exp_factor;
+                            final_sum += p_sum * exp_factor;
+                        } else {
+                            float diff = final_max - p_max;
+                            float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
+                            final_acc = final_acc * exp_factor + p_acc;
+                            final_sum = final_sum * exp_factor + p_sum;
+                            final_max = p_max;
                         }
+                    }
 
-                        // Apply attention sinks if present
-                        if (sinks_ptr) {
-                            const float sink = sinks_ptr[head];
-                            const float new_max = std::max(sink, final_max);
-                            float diff = final_max - new_max;
-                            float max_scale = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                            float sink_softmax = esimd::exp(sink - new_max);
-                            final_acc_1 = final_acc_1 * max_scale;
-                            final_acc_2 = final_acc_2 * max_scale;
-                            final_sum = final_sum * max_scale + sink_softmax;
-                            final_max = new_max;
-                        }
+                    // Apply attention sinks if present
+                    if (sinks_ptr) {
+                        const float sink = sinks_ptr[head];
+                        const float new_max = std::max(sink, final_max);
+                        float diff = final_max - new_max;
+                        float max_scale = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
+                        float sink_softmax = esimd::exp(sink - new_max);
+                        final_acc = final_acc * max_scale;
+                        final_sum = final_sum * max_scale + sink_softmax;
+                        final_max = new_max;
+                    }
 
-                        // Final normalization and output
-                        if (final_sum > 0.0f) {
-                            simd<float, 32> result_1 = final_acc_1 / final_sum;
-                            simd<float, 32> result_2 = final_acc_2 / final_sum;
-                            block_store<float, 32>(out_base, result_1);
-                            block_store<float, 32>(out_base + 32, result_2);
-                        }
-                    } else {
-                        // D != 64: use single D-element vectors
-                        // Load first partition's results
-                        simd<float, D> final_acc = slm_block_load<float, D>(slm_acc_offset);
-                        float final_max = slm_scalar_load<float>(slm_max_offset);
-                        float final_sum = slm_scalar_load<float>(slm_sum_offset);
-
-                        // Merge remaining partitions using online softmax
-                        for (int p = 1; p < ESIMD_PARTITIONS; ++p) {
-                            simd<float, D> p_acc = slm_block_load<float, D>(slm_acc_offset + p * D * sizeof(float));
-                            float p_max = slm_scalar_load<float>(slm_max_offset + p * sizeof(float));
-                            float p_sum = slm_scalar_load<float>(slm_sum_offset + p * sizeof(float));
-
-                            // Online softmax merge with FTZ threshold
-                            if (p_max <= final_max) {
-                                float diff = p_max - final_max;
-                                float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                                final_acc = final_acc + p_acc * exp_factor;
-                                final_sum += p_sum * exp_factor;
-                            } else {
-                                float diff = final_max - p_max;
-                                float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                                final_acc = final_acc * exp_factor + p_acc;
-                                final_sum = final_sum * exp_factor + p_sum;
-                                final_max = p_max;
-                            }
-                        }
-
-                        // Apply attention sinks if present
-                        if (sinks_ptr) {
-                            const float sink = sinks_ptr[head];
-                            const float new_max = std::max(sink, final_max);
-                            float diff = final_max - new_max;
-                            float max_scale = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                            float sink_softmax = esimd::exp(sink - new_max);
-                            final_acc = final_acc * max_scale;
-                            final_sum = final_sum * max_scale + sink_softmax;
-                            final_max = new_max;
-                        }
-
-                        // Final normalization and output
-                        if (final_sum > 0.0f) {
-                            simd<float, D> result = final_acc / final_sum;
-                            block_store(out_base, result);
-                        }
+                    // Final normalization and output
+                    if (final_sum > 0.0f) {
+                        simd<float, D> result = final_acc / final_sum;
+                        block_store(out_base, result);
                     }
                 }
 
@@ -645,10 +512,11 @@ void launch_fattn_esimd_f16(
                 const sycl::half * mask_base = mask_ptr ? mask_ptr + query_idx * stride_mask : nullptr;
 
                 // ALiBi slope computation
-                // For single-query mode (ne01 <= 1) and non-unified KV (ne13 != 1): use ALiBi slope
+                // For single-query mode (ne01 == 1) and non-unified KV (ne13 != 1): use ALiBi slope
                 // Otherwise: slope = 1.0f (mask already contains proper values)
+                // This matches the XMX kernel condition to avoid incorrectly applying ALiBi during prompt processing
                 float slope = 1.0f;
-                if (ne13 != 1) {
+                if (ne01 == 1 && ne13 != 1) {
                     slope = esimd_get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
                 }
 
@@ -672,22 +540,14 @@ void launch_fattn_esimd_f16(
                 }
 
                 // Load query vector and apply scale
-                // Load Q as Q_type, then convert to float for computation
-                // For D=64, block_load may not work correctly, so load in halves
+                // Native D-element vectors work for all head dimensions (including D=64)
                 simd<float, D> query_row;
-                if constexpr (D == 64 && std::is_same_v<Q_type, sycl::half>) {
-                    simd<sycl::half, 32> q_row_h1 = block_load<sycl::half, 32>(Q_base);
-                    simd<sycl::half, 32> q_row_h2 = block_load<sycl::half, 32>(Q_base + 32);
-                    simd<float, 32> q1 = convert<float>(q_row_h1) * scale_val;
-                    simd<float, 32> q2 = convert<float>(q_row_h2) * scale_val;
-                    query_row = simd<float, D>(q1, q2);
-                } else if constexpr (D == 64) {
-                    simd<float, 32> q_row_1 = block_load<float, 32>(Q_base) * scale_val;
-                    simd<float, 32> q_row_2 = block_load<float, 32>(Q_base + 32) * scale_val;
-                    query_row = simd<float, D>(q_row_1, q_row_2);
-                } else {
-                    simd<Q_type, D> query_row_raw = block_load<Q_type, D>(Q_base);
+                if constexpr (std::is_same_v<Q_type, sycl::half>) {
+                    simd<sycl::half, D> query_row_raw = block_load<sycl::half, D>(Q_base);
                     query_row = convert<float>(query_row_raw) * scale_val;
+                } else {
+                    simd<float, D> query_row_raw = block_load<float, D>(Q_base);
+                    query_row = query_row_raw * scale_val;
                 }
 
                 // Initialize accumulators for online softmax
@@ -721,24 +581,11 @@ void launch_fattn_esimd_f16(
                         V_row = V_base + (nb21 / sizeof(sycl::half)) * kv_pos;
                     }
 
-                    // Load K and V rows to SLM
-                    // For D=64, block_load may not work correctly, so load in halves
-                    // and store each half separately to SLM
-                    if constexpr (D == 64) {
-                        simd<sycl::half, 32> k_h1 = block_load<sycl::half, 32>(K_row);
-                        simd<sycl::half, 32> k_h2 = block_load<sycl::half, 32>(K_row + 32);
-                        slm_block_store(key_slm_offset + tid * D * sizeof(sycl::half), k_h1);
-                        slm_block_store(key_slm_offset + tid * D * sizeof(sycl::half) + 32 * sizeof(sycl::half), k_h2);
-                        simd<sycl::half, 32> v_h1 = block_load<sycl::half, 32>(V_row);
-                        simd<sycl::half, 32> v_h2 = block_load<sycl::half, 32>(V_row + 32);
-                        slm_block_store(value_slm_offset + tid * D * sizeof(sycl::half), v_h1);
-                        slm_block_store(value_slm_offset + tid * D * sizeof(sycl::half) + 32 * sizeof(sycl::half), v_h2);
-                    } else {
-                        simd<sycl::half, D> key_row = block_load<sycl::half, D>(K_row);
-                        simd<sycl::half, D> value_row = block_load<sycl::half, D>(V_row);
-                        slm_block_store(key_slm_offset + tid * D * sizeof(sycl::half), key_row);
-                        slm_block_store(value_slm_offset + tid * D * sizeof(sycl::half), value_row);
-                    }
+                    // Load K and V rows to SLM (native D-element vectors for all dimensions)
+                    simd<sycl::half, D> key_row = block_load<sycl::half, D>(K_row);
+                    simd<sycl::half, D> value_row = block_load<sycl::half, D>(V_row);
+                    slm_block_store(key_slm_offset + tid * D * sizeof(sycl::half), key_row);
+                    slm_block_store(value_slm_offset + tid * D * sizeof(sycl::half), value_row);
 
                     barrier();
 
@@ -839,23 +686,11 @@ void launch_fattn_esimd_f16(
                             V_row = V_base + (nb21 / sizeof(sycl::half)) * kv_pos;
                         }
 
-                        // For D=64, block_load may not work correctly, so load in halves
-                        // and store each half separately to SLM
-                        if constexpr (D == 64) {
-                            simd<sycl::half, 32> k_h1 = block_load<sycl::half, 32>(K_row);
-                            simd<sycl::half, 32> k_h2 = block_load<sycl::half, 32>(K_row + 32);
-                            slm_block_store(key_slm_offset + tid * D * sizeof(sycl::half), k_h1);
-                            slm_block_store(key_slm_offset + tid * D * sizeof(sycl::half) + 32 * sizeof(sycl::half), k_h2);
-                            simd<sycl::half, 32> v_h1 = block_load<sycl::half, 32>(V_row);
-                            simd<sycl::half, 32> v_h2 = block_load<sycl::half, 32>(V_row + 32);
-                            slm_block_store(value_slm_offset + tid * D * sizeof(sycl::half), v_h1);
-                            slm_block_store(value_slm_offset + tid * D * sizeof(sycl::half) + 32 * sizeof(sycl::half), v_h2);
-                        } else {
-                            simd<sycl::half, D> key_row = block_load<sycl::half, D>(K_row);
-                            simd<sycl::half, D> value_row = block_load<sycl::half, D>(V_row);
-                            slm_block_store(key_slm_offset + tid * D * sizeof(sycl::half), key_row);
-                            slm_block_store(value_slm_offset + tid * D * sizeof(sycl::half), value_row);
-                        }
+                        // Load K and V rows to SLM (native D-element vectors for all dimensions)
+                        simd<sycl::half, D> key_row = block_load<sycl::half, D>(K_row);
+                        simd<sycl::half, D> value_row = block_load<sycl::half, D>(V_row);
+                        slm_block_store(key_slm_offset + tid * D * sizeof(sycl::half), key_row);
+                        slm_block_store(value_slm_offset + tid * D * sizeof(sycl::half), value_row);
                     }
 
                     barrier();
@@ -1063,12 +898,10 @@ void launch_fattn_esimd_f16_batched(
 
                 // Load all query vectors for this work-group
                 // Each thread loads the same queries (redundant but avoids SLM for Q)
-                // For D=64/128, use separate halves to avoid select() assignment issues
-                simd<float, 32> query_rows_1[ncols];  // First half (or full for D<=32)
-                simd<float, 32> query_rows_2[ncols];  // Second half for D=64
+                // D=128 uses separate halves (64+64), D=64 and other D use native vectors
                 simd<float, 64> query_rows_h1[ncols]; // First 64 for D=128
                 simd<float, 64> query_rows_h2[ncols]; // Second 64 for D=128
-                simd<float, D> query_rows[ncols];     // Full for D not 64 or 128
+                simd<float, D> query_rows[ncols];     // Full for D != 128
 
                 #pragma unroll
                 for (int j = 0; j < ncols; ++j) {
@@ -1077,16 +910,7 @@ void launch_fattn_esimd_f16_batched(
                         const Q_type * Q_base = Q_ptr + (nb03 / sizeof(Q_type)) * sequence
                                                       + (nb02 / sizeof(Q_type)) * head
                                                       + (nb01 / sizeof(Q_type)) * q_idx;
-                        if constexpr (D == 64 && std::is_same_v<Q_type, sycl::half>) {
-                            simd<sycl::half, 32> q_h1 = block_load<sycl::half, 32>(Q_base);
-                            simd<sycl::half, 32> q_h2 = block_load<sycl::half, 32>(Q_base + 32);
-                            query_rows_1[j] = convert<float>(q_h1) * scale_val;
-                            query_rows_2[j] = convert<float>(q_h2) * scale_val;
-                        } else if constexpr (D == 64) {
-                            // Q is float for D=64
-                            query_rows_1[j] = block_load<float, 32>(Q_base) * scale_val;
-                            query_rows_2[j] = block_load<float, 32>(Q_base + 32) * scale_val;
-                        } else if constexpr (D == 128 && std::is_same_v<Q_type, sycl::half>) {
+                        if constexpr (D == 128 && std::is_same_v<Q_type, sycl::half>) {
                             simd<sycl::half, 64> q_h1 = block_load<sycl::half, 64>(Q_base);
                             simd<sycl::half, 64> q_h2 = block_load<sycl::half, 64>(Q_base + 64);
                             query_rows_h1[j] = convert<float>(q_h1) * scale_val;
@@ -1095,15 +919,16 @@ void launch_fattn_esimd_f16_batched(
                             // Q is float for D=128
                             query_rows_h1[j] = block_load<float, 64>(Q_base) * scale_val;
                             query_rows_h2[j] = block_load<float, 64>(Q_base + 64) * scale_val;
-                        } else {
-                            simd<Q_type, D> q_raw = block_load<Q_type, D>(Q_base);
+                        } else if constexpr (std::is_same_v<Q_type, sycl::half>) {
+                            // Native D-element vector for D=64 and all other D
+                            simd<sycl::half, D> q_raw = block_load<sycl::half, D>(Q_base);
                             query_rows[j] = convert<float>(q_raw) * scale_val;
+                        } else {
+                            simd<float, D> q_raw = block_load<float, D>(Q_base);
+                            query_rows[j] = q_raw * scale_val;
                         }
                     } else {
-                        if constexpr (D == 64) {
-                            query_rows_1[j] = 0.0f;
-                            query_rows_2[j] = 0.0f;
-                        } else if constexpr (D == 128) {
+                        if constexpr (D == 128) {
                             query_rows_h1[j] = 0.0f;
                             query_rows_h2[j] = 0.0f;
                         } else {
@@ -1112,18 +937,15 @@ void launch_fattn_esimd_f16_batched(
                     }
                 }
 
-                // Initialize per-query accumulators (separate halves for D=64/128)
-                simd<float, 32> acc_v_1[ncols], acc_v_2[ncols];  // For D=64
+                // Initialize per-query accumulators
+                // D=128 uses separate halves (64+64), D=64 and other D use native vectors
                 simd<float, 64> acc_v_h1[ncols], acc_v_h2[ncols]; // For D=128
-                simd<float, D> acc_v[ncols];  // For other D
+                simd<float, D> acc_v[ncols];  // For D != 128
                 float softmax_sum[ncols];
                 float max_score[ncols];
                 #pragma unroll
                 for (int j = 0; j < ncols; ++j) {
-                    if constexpr (D == 64) {
-                        acc_v_1[j] = 0.0f;
-                        acc_v_2[j] = 0.0f;
-                    } else if constexpr (D == 128) {
+                    if constexpr (D == 128) {
                         acc_v_h1[j] = 0.0f;
                         acc_v_h2[j] = 0.0f;
                     } else {
@@ -1155,21 +977,11 @@ void launch_fattn_esimd_f16_batched(
                     }
 
                     // Load K and V vectors once, use for all queries
-                    // Use separate halves for D=64/128
-                    simd<float, 32> k_vec_1, k_vec_2, v_vec_1, v_vec_2;  // For D=64
+                    // D=128 uses separate halves (64+64), D=64 and other D use native vectors
                     simd<float, 64> k_vec_h1, k_vec_h2, v_vec_h1, v_vec_h2;  // For D=128
-                    simd<float, D> k_vec, v_vec;  // For other D
+                    simd<float, D> k_vec, v_vec;  // For D != 128
 
-                    if constexpr (D == 64) {
-                        simd<sycl::half, 32> k_h1 = block_load<sycl::half, 32>(K_row);
-                        simd<sycl::half, 32> k_h2 = block_load<sycl::half, 32>(K_row + 32);
-                        simd<sycl::half, 32> v_h1 = block_load<sycl::half, 32>(V_row);
-                        simd<sycl::half, 32> v_h2 = block_load<sycl::half, 32>(V_row + 32);
-                        k_vec_1 = convert<float>(k_h1);
-                        k_vec_2 = convert<float>(k_h2);
-                        v_vec_1 = convert<float>(v_h1);
-                        v_vec_2 = convert<float>(v_h2);
-                    } else if constexpr (D == 128) {
+                    if constexpr (D == 128) {
                         simd<sycl::half, 64> k_h1 = block_load<sycl::half, 64>(K_row);
                         simd<sycl::half, 64> k_h2 = block_load<sycl::half, 64>(K_row + 64);
                         simd<sycl::half, 64> v_h1 = block_load<sycl::half, 64>(V_row);
@@ -1179,6 +991,7 @@ void launch_fattn_esimd_f16_batched(
                         v_vec_h1 = convert<float>(v_h1);
                         v_vec_h2 = convert<float>(v_h2);
                     } else {
+                        // Native D-element vectors for D=64 and all other D
                         simd<sycl::half, D> k_h = block_load<sycl::half, D>(K_row);
                         simd<sycl::half, D> v_h = block_load<sycl::half, D>(V_row);
                         k_vec = convert<float>(k_h);
@@ -1193,19 +1006,14 @@ void launch_fattn_esimd_f16_batched(
 
                         // Compute Q @ K dot product
                         float score;
-                        if constexpr (D == 64) {
-                            simd<float, 32> prod1 = query_rows_1[j] * k_vec_1;
-                            simd<float, 32> prod2 = query_rows_2[j] * k_vec_2;
-                            float sum1 = esimd::detail::sum<float, float, 32>(prod1);
-                            float sum2 = esimd::detail::sum<float, float, 32>(prod2);
-                            score = sum1 + sum2;
-                        } else if constexpr (D == 128) {
+                        if constexpr (D == 128) {
                             simd<float, 64> prod1 = query_rows_h1[j] * k_vec_h1;
                             simd<float, 64> prod2 = query_rows_h2[j] * k_vec_h2;
                             float sum1 = esimd::detail::sum<float, float, 64>(prod1);
                             float sum2 = esimd::detail::sum<float, float, 64>(prod2);
                             score = sum1 + sum2;
                         } else {
+                            // Native D-element dot product for D=64 and all other D
                             simd<float, D> prod = query_rows[j] * k_vec;
                             score = esimd::detail::sum<float, float, D>(prod);
                         }
@@ -1223,22 +1031,7 @@ void launch_fattn_esimd_f16_batched(
                         }
 
                         // Online softmax update
-                        if constexpr (D == 64) {
-                            if (score <= max_score[j]) {
-                                float diff = score - max_score[j];
-                                float exp_score = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                                acc_v_1[j] = acc_v_1[j] + v_vec_1 * exp_score;
-                                acc_v_2[j] = acc_v_2[j] + v_vec_2 * exp_score;
-                                softmax_sum[j] += exp_score;
-                            } else {
-                                float diff = max_score[j] - score;
-                                float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                                acc_v_1[j] = acc_v_1[j] * exp_factor + v_vec_1;
-                                acc_v_2[j] = acc_v_2[j] * exp_factor + v_vec_2;
-                                softmax_sum[j] = softmax_sum[j] * exp_factor + 1.0f;
-                                max_score[j] = score;
-                            }
-                        } else if constexpr (D == 128) {
+                        if constexpr (D == 128) {
                             if (score <= max_score[j]) {
                                 float diff = score - max_score[j];
                                 float exp_score = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
@@ -1283,13 +1076,11 @@ void launch_fattn_esimd_f16_batched(
                 #pragma unroll
                 for (int j = 0; j < ncols; ++j) {
                     const size_t acc_base = slm_acc_offset + (partition_id * ncols + j) * D * sizeof(float);
-                    if constexpr (D == 64) {
-                        slm_block_store<float, 32>(acc_base, acc_v_1[j]);
-                        slm_block_store<float, 32>(acc_base + 32 * sizeof(float), acc_v_2[j]);
-                    } else if constexpr (D == 128) {
+                    if constexpr (D == 128) {
                         slm_block_store<float, 64>(acc_base, acc_v_h1[j]);
                         slm_block_store<float, 64>(acc_base + 64 * sizeof(float), acc_v_h2[j]);
                     } else {
+                        // Native D-element store for D=64 and all other D
                         slm_block_store(acc_base, acc_v[j]);
                     }
                     slm_scalar_store<float>(slm_max_offset + (partition_id * ncols + j) * sizeof(float), max_score[j]);
@@ -1304,18 +1095,14 @@ void launch_fattn_esimd_f16_batched(
                         const int q_idx = ic0 + j;
                         if (q_idx >= ne01) break;
 
-                        // Load first partition's results using separate variables (not select() assignments)
+                        // Load first partition's results
+                        // D=128 uses split 64+64, D=64 and other D use native vectors
                         const size_t acc_base_0 = slm_acc_offset + j * D * sizeof(float);
 
-                        // Use split accumulators for D=64/128 to avoid simd::select() assignment issues
-                        simd<float, 32> final_acc_1, final_acc_2;      // For D=64
                         simd<float, 64> final_acc_h1, final_acc_h2;    // For D=128
-                        simd<float, D> final_acc;                       // For other D
+                        simd<float, D> final_acc;                       // For D != 128
 
-                        if constexpr (D == 64) {
-                            final_acc_1 = slm_block_load<float, 32>(acc_base_0);
-                            final_acc_2 = slm_block_load<float, 32>(acc_base_0 + 32 * sizeof(float));
-                        } else if constexpr (D == 128) {
+                        if constexpr (D == 128) {
                             final_acc_h1 = slm_block_load<float, 64>(acc_base_0);
                             final_acc_h2 = slm_block_load<float, 64>(acc_base_0 + 64 * sizeof(float));
                         } else {
@@ -1328,15 +1115,10 @@ void launch_fattn_esimd_f16_batched(
                         for (int p = 1; p < ESIMD_BATCHED_PARTITIONS; ++p) {
                             const size_t acc_base_p = slm_acc_offset + (p * ncols + j) * D * sizeof(float);
 
-                            // Load partition results into split variables
-                            simd<float, 32> p_acc_1, p_acc_2;      // For D=64
                             simd<float, 64> p_acc_h1, p_acc_h2;    // For D=128
-                            simd<float, D> p_acc;                   // For other D
+                            simd<float, D> p_acc;                   // For D != 128
 
-                            if constexpr (D == 64) {
-                                p_acc_1 = slm_block_load<float, 32>(acc_base_p);
-                                p_acc_2 = slm_block_load<float, 32>(acc_base_p + 32 * sizeof(float));
-                            } else if constexpr (D == 128) {
+                            if constexpr (D == 128) {
                                 p_acc_h1 = slm_block_load<float, 64>(acc_base_p);
                                 p_acc_h2 = slm_block_load<float, 64>(acc_base_p + 64 * sizeof(float));
                             } else {
@@ -1345,23 +1127,8 @@ void launch_fattn_esimd_f16_batched(
                             float p_max = slm_scalar_load<float>(slm_max_offset + (p * ncols + j) * sizeof(float));
                             float p_sum = slm_scalar_load<float>(slm_sum_offset + (p * ncols + j) * sizeof(float));
 
-                            // Online softmax merge with split accumulators
-                            if constexpr (D == 64) {
-                                if (p_max <= final_max) {
-                                    float diff = p_max - final_max;
-                                    float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                                    final_acc_1 = final_acc_1 + p_acc_1 * exp_factor;
-                                    final_acc_2 = final_acc_2 + p_acc_2 * exp_factor;
-                                    final_sum += p_sum * exp_factor;
-                                } else {
-                                    float diff = final_max - p_max;
-                                    float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                                    final_acc_1 = final_acc_1 * exp_factor + p_acc_1;
-                                    final_acc_2 = final_acc_2 * exp_factor + p_acc_2;
-                                    final_sum = final_sum * exp_factor + p_sum;
-                                    final_max = p_max;
-                                }
-                            } else if constexpr (D == 128) {
+                            // Online softmax merge
+                            if constexpr (D == 128) {
                                 if (p_max <= final_max) {
                                     float diff = p_max - final_max;
                                     float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
@@ -1377,6 +1144,7 @@ void launch_fattn_esimd_f16_batched(
                                     final_max = p_max;
                                 }
                             } else {
+                                // Native D-element merge for D=64 and all other D
                                 if (p_max <= final_max) {
                                     float diff = p_max - final_max;
                                     float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
@@ -1399,7 +1167,12 @@ void launch_fattn_esimd_f16_batched(
                             float diff = final_max - new_max;
                             float max_scale = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
                             float sink_softmax = esimd::exp(sink - new_max);
-                            final_acc = final_acc * max_scale;
+                            if constexpr (D == 128) {
+                                final_acc_h1 = final_acc_h1 * max_scale;
+                                final_acc_h2 = final_acc_h2 * max_scale;
+                            } else {
+                                final_acc = final_acc * max_scale;
+                            }
                             final_sum = final_sum * max_scale + sink_softmax;
                             final_max = new_max;
                         }
@@ -1420,24 +1193,20 @@ void launch_fattn_esimd_f16_batched(
 #endif
 
                         if (final_sum > 0.0f) {
-                            if constexpr (D == 64) {
-                                simd<float, 32> result_1 = final_acc_1 / final_sum;
-                                simd<float, 32> result_2 = final_acc_2 / final_sum;
-                                block_store<float, 32>(out_ptr, result_1);
-                                block_store<float, 32>(out_ptr + 32, result_2);
-#if ESIMD_BATCHED_DEBUG
-                                if (head == 0 && sequence == 0) {
-                                    sycl::ext::oneapi::experimental::printf("[STORE_DONE] q_idx=%d\n", q_idx);
-                                }
-#endif
-                            } else if constexpr (D == 128) {
+                            if constexpr (D == 128) {
                                 simd<float, 64> result_h1 = final_acc_h1 / final_sum;
                                 simd<float, 64> result_h2 = final_acc_h2 / final_sum;
                                 block_store<float, 64>(out_ptr, result_h1);
                                 block_store<float, 64>(out_ptr + 64, result_h2);
                             } else {
+                                // Native D-element store for D=64 and all other D
                                 simd<float, D> result = final_acc / final_sum;
                                 block_store(out_ptr, result);
+#if ESIMD_BATCHED_DEBUG
+                                if (head == 0 && sequence == 0) {
+                                    sycl::ext::oneapi::experimental::printf("[STORE_DONE] q_idx=%d\n", q_idx);
+                                }
+#endif
                             }
                         }
                     }

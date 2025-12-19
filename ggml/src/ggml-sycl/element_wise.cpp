@@ -3,6 +3,10 @@
 #include "ggml.h"
 #include "element_wise.hpp"
 
+#if GGML_SYCL_DNNL
+#include "dnnl-ops.hpp"
+#endif
+
 #define SYCL_GLOBAL_ID_LOOP(K, ITEM) \
     for (auto i = ITEM.get_global_id(0); i < (size_t)K; i += ITEM.get_global_range(0))
 
@@ -632,12 +636,61 @@ static inline void ggml_sycl_op_elu(ggml_backend_sycl_context & ctx, ggml_tensor
     });
 }
 static inline void ggml_sycl_op_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if GGML_SYCL_DNNL
+    // Use oneDNN for contiguous F32 tensors (SILU = swish with beta=1)
+    ggml_tensor * src0 = dst->src[0];
+    const int64_t nelements = ggml_nelements(src0);
+
+    // Only use oneDNN for contiguous F32 tensors with sufficient size
+    // Threshold chosen based on primitive creation overhead vs kernel efficiency
+    if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+        ggml_is_contiguous(src0) && ggml_is_contiguous(dst) &&
+        nelements >= 4096) {
+
+        dpct::queue_ptr stream = ctx.stream();
+        SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+
+        DnnlEltwiseWrapper::eltwise(
+            ctx,
+            DnnlEltwiseWrapper::op::SILU,
+            src0->data,
+            dst->data,
+            nelements,
+            DnnlEltwiseWrapper::to_dt<float>(),
+            stream);
+        return;
+    }
+#endif
+    // Fallback to SYCL kernel for non-contiguous or small tensors
     ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
         return op_silu(x);
     });
 }
 
 static inline void ggml_sycl_op_gelu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if GGML_SYCL_DNNL
+    // Use oneDNN for contiguous F32 tensors (GELU with tanh approximation)
+    ggml_tensor * src0 = dst->src[0];
+    const int64_t nelements = ggml_nelements(src0);
+
+    if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+        ggml_is_contiguous(src0) && ggml_is_contiguous(dst) &&
+        nelements >= 4096) {
+
+        dpct::queue_ptr stream = ctx.stream();
+        SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+
+        DnnlEltwiseWrapper::eltwise(
+            ctx,
+            DnnlEltwiseWrapper::op::GELU,
+            src0->data,
+            dst->data,
+            nelements,
+            DnnlEltwiseWrapper::to_dt<float>(),
+            stream);
+        return;
+    }
+#endif
     ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
         return op_gelu(x);
     });
@@ -650,6 +703,29 @@ static inline void ggml_sycl_op_gelu_quick(ggml_backend_sycl_context & ctx, ggml
 }
 
 static inline void ggml_sycl_op_gelu_erf(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+#if GGML_SYCL_DNNL
+    // Use oneDNN for contiguous F32 tensors (GELU with erf)
+    ggml_tensor * src0 = dst->src[0];
+    const int64_t nelements = ggml_nelements(src0);
+
+    if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+        ggml_is_contiguous(src0) && ggml_is_contiguous(dst) &&
+        nelements >= 4096) {
+
+        dpct::queue_ptr stream = ctx.stream();
+        SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+
+        DnnlEltwiseWrapper::eltwise(
+            ctx,
+            DnnlEltwiseWrapper::op::GELU_ERF,
+            src0->data,
+            dst->data,
+            nelements,
+            DnnlEltwiseWrapper::to_dt<float>(),
+            stream);
+        return;
+    }
+#endif
     ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
         return op_gelu_erf(x);
     });
@@ -1160,8 +1236,40 @@ void ggml_sycl_reglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_op_reglu(ctx, dst);
 }
 
+// Enable FFN debug output to compare working path vs fusion path
+// #define GGML_SYCL_FFN_PATH_DEBUG
+
 void ggml_sycl_swiglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+
+#ifdef GGML_SYCL_FFN_PATH_DEBUG
+    // DEBUG: Print first few gate/up values before SwiGLU
+    static int swiglu_debug_count = 0;
+    if (swiglu_debug_count++ < 5) {
+        const ggml_tensor * gate = dst->src[0];
+        const ggml_tensor * up = dst->src[1];
+
+        // Sync and read a few values from gate and up
+        ctx.stream()->wait();
+
+        float gate_vals[8], up_vals[8];
+        ctx.stream()->memcpy(gate_vals, gate->data, 8 * sizeof(float)).wait();
+        if (up) {
+            ctx.stream()->memcpy(up_vals, up->data, 8 * sizeof(float)).wait();
+        }
+
+        fprintf(stderr, "[SWIGLU BASELINE] call %d: gate ne=[%lld,%lld] gate[0:7]=%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
+                swiglu_debug_count, (long long)gate->ne[0], (long long)gate->ne[1],
+                gate_vals[0], gate_vals[1], gate_vals[2], gate_vals[3], gate_vals[4], gate_vals[5], gate_vals[6], gate_vals[7]);
+        if (up) {
+            fprintf(stderr, "[SWIGLU BASELINE] call %d: up ne=[%lld,%lld] up[0:7]=%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
+                    swiglu_debug_count, (long long)up->ne[0], (long long)up->ne[1],
+                    up_vals[0], up_vals[1], up_vals[2], up_vals[3], up_vals[4], up_vals[5], up_vals[6], up_vals[7]);
+        }
+        fflush(stderr);
+    }
+#endif
+
     ggml_sycl_op_swiglu(ctx, dst);
 }
 

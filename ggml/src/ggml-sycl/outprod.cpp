@@ -1,4 +1,5 @@
 #include "outprod.hpp"
+#include "gemm.hpp"
 
 void ggml_sycl_op_out_prod(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
@@ -26,19 +27,51 @@ void ggml_sycl_op_out_prod(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     const float* src1_d = (const float*)src1->data;
     float* dst_d = (float*)dst->data;
 
-    // GEMM parameters
-    const float alpha = 1.0f;
-    const float beta = 0.0f;
-
     // Handle transposition of src1
     const bool src1_T = ggml_is_transposed(src1);
-    const oneapi::math::transpose src1_op = src1_T ? oneapi::math::transpose::nontrans : oneapi::math::transpose::trans;
     const int64_t ldb = (src1_T ? nb10 : nb11) / sizeof(float);
 
     try {
-        // Perform matrix multiplication using oneMath GEMM
+#if GGML_SYCL_DNNL
+        // Use oneDNN for outer product (GEMM: C = A * B^T)
+        // For outer product: A is (ne00, ne01), B is (ne10, ne11)
+        // Result C is (ne00, ne10) = (ne0, ne1)
+
+        // oneDNN row_gemm expects: C = A * B where A is (M, K) and B is (K, N)
+        // For outer product with B transpose:
+        //   C (ne0 x ne1) = A (ne0 x ne01) * B^T (ne01 x ne1)
+        // This requires: M = ne0, N = ne1, K = ne01
+
+        // Set up strides for the matrices
+        // src0: (ne00, ne01) row-major, stride = ne00 (or from nb01/sizeof(float))
+        // src1: if transposed (ne11, ne10), else (ne10, ne11)
+        // dst: (ne0, ne1) row-major, stride = ne0
+
+        int64_t str_a0 = 1;                         // column stride for A
+        int64_t str_a1 = nb01 / sizeof(float);      // row stride for A
+        int64_t str_a2 = nb02 / sizeof(float);      // batch stride for A
+
+        int64_t str_b0 = 1;
+        int64_t str_b1 = ldb;
+        int64_t str_b2 = (src1_T ? nb12 : nb12) / sizeof(float);
+
+        // Use DnnlGemmWrapper::gemm for the outer product
+        // C = A * B^T when src1 is not transposed, C = A * B when src1 is transposed
+        DnnlGemmWrapper::gemm(ctx, ne0, ne1, ne01, src0_d,
+                              DnnlGemmWrapper::to_dt<float>(), str_a0, str_a1, str_a2,
+                              src1_d, DnnlGemmWrapper::to_dt<float>(), str_b0, str_b1, str_b2,
+                              dst_d, DnnlGemmWrapper::to_dt<float>(), stream, 1, 1);
+#elif GGML_SYCL_HAS_ONEAPI_MATH
+        // Fallback to oneAPI Math (MKL/oneMath) for GEMM
+        const float alpha = 1.0f;
+        const float beta = 0.0f;
+        const oneapi::math::transpose src1_op = src1_T ? oneapi::math::transpose::nontrans : oneapi::math::transpose::trans;
+
         oneapi::math::blas::column_major::gemm(get_onemath_backend(*stream), oneapi::math::transpose::nontrans, src1_op,
                                                ne0, ne1, ne01, alpha, src0_d, ne00, src1_d, ldb, beta, dst_d, ne0);
+#else
+        static_assert(false, "Either GGML_SYCL_DNNL or GGML_SYCL_HAS_ONEAPI_MATH must be defined for out_prod operation");
+#endif
     }
     catch (sycl::exception const& exc) {
         std::cerr << exc.what() << std::endl;

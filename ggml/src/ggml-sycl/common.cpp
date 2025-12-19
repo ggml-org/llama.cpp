@@ -593,8 +593,17 @@ void ggml_sycl_tp_init(const int* device_ids, int num_devices) {
         g_sycl_tp_config.mpi_world_size = std::atoi(pmi_size);
         g_sycl_tp_config.rank = g_sycl_tp_config.mpi_rank;
         g_sycl_tp_config.world_size = g_sycl_tp_config.mpi_world_size;
-        GGML_SYCL_DEBUG("SYCL TP: Multi-process mode enabled, rank=%d/%d\n",
+        GGML_LOG_INFO("SYCL TP: Multi-process mode enabled, rank=%d/%d\n",
                        g_sycl_tp_config.mpi_rank, g_sycl_tp_config.mpi_world_size);
+
+        // Initialize oneCCL for multi-process communication
+        // In multi-process mode, each process has only ONE device visible (level_zero:$RANK)
+        // Get the queue for device 0 (the only locally visible device)
+        int local_device = device_ids[0];
+        queue_ptr local_queue = &(dpct::dev_mgr::instance().get_device(local_device).default_queue());
+        ggml_sycl_ccl_init_multiprocess(g_sycl_tp_config.mpi_rank,
+                                        g_sycl_tp_config.mpi_world_size,
+                                        local_queue);
     }
 
     GGML_SYCL_DEBUG("SYCL TP: Initialized with %d devices\n", num_devices);
@@ -900,6 +909,13 @@ void ggml_sycl_tp_free_quant_comm_buffers() {
 }
 
 void ggml_sycl_tp_free() {
+    // NOTE: Do NOT call ggml_sycl_ccl_free() here!
+    // CCL resources must persist across backend lifetimes, similar to TP config.
+    // The "fitting params to device memory" step creates temporary backends that
+    // get freed before model loading. If we free CCL here, it won't be available
+    // for the actual inference. CCL cleanup is handled via atexit() registration
+    // in ggml_sycl_ccl_init_multiprocess().
+
     // Free persistent FFN buffers first (uses its own mutex)
     ggml_sycl_tp_free_ffn_buffers();
     ggml_sycl_tp_free_host_staging();
@@ -922,7 +938,14 @@ void ggml_sycl_tp_free() {
     }
     g_tp_host_buf_size = 0;
 
-    g_sycl_tp_config = {};
+    // NOTE: Do NOT reset g_sycl_tp_config here!
+    // The TP configuration (enabled, world_size, devices) must persist across
+    // backend creations/destructions. The "fitting params to device memory" step
+    // creates temporary backends that get freed before model loading, and if we
+    // reset the config here, model loading will see world_size=1 instead of the
+    // correct value, causing weight sharding to fail.
+    // The TP config is set once during initialization and should remain valid
+    // for the entire process lifetime.
 }
 
 int ggml_sycl_tp_world_size() {
@@ -1316,9 +1339,21 @@ void ggml_sycl_all_reduce_sum(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
     // Multi-process mode: use CCL (ccl-comm.hpp provides stubs when CCL not available)
     if (g_sycl_tp_config.is_multiprocess && ggml_sycl_ccl_is_initialized()) {
+        // The MUL_MAT result (partial sum) is in src[0], not dst
+        // We need to allreduce src[0]->data and store result in dst->data
+        ggml_tensor * src = dst->src[0];
+        if (src == nullptr) {
+            GGML_LOG_ERROR("SYCL CCL ALL_REDUCE: src[0] is null!\n");
+            return;
+        }
+
+        float* src_data = static_cast<float*>(src->data);
         float* dst_data = static_cast<float*>(dst->data);
         size_t count = ggml_nelements(dst);
-        ggml_sycl_ccl_allreduce_sum_f32(dst_data, count, ctx.device);
+
+        // CCL allreduce: src_data -> dst_data with sum
+        // Use the two-buffer overload: (send_buf, recv_buf, count, device)
+        ggml_sycl_ccl_allreduce_sum_f32(src_data, dst_data, count, ctx.device);
         return;
     }
 

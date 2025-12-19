@@ -18,6 +18,11 @@
 #include <syclcompat/math.hpp>
 #include <map>
 
+// Math library includes for BLAS operations
+// Intel: Uses oneDNN as primary, MKL optional fallback via GGML_SYCL_USE_INTEL_ONEMKL
+// NVIDIA/AMD: Uses oneMath with cuBLAS/rocBLAS backend
+#if defined(GGML_SYCL_USE_INTEL_ONEMKL) || defined(GGML_SYCL_NVIDIA) || defined(GGML_SYCL_AMD) || defined(GGML_SYCL_GENERIC)
+#define GGML_SYCL_HAS_ONEAPI_MATH 1
 #ifdef GGML_SYCL_USE_INTEL_ONEMKL
 #include <oneapi/mkl.hpp>
 // Allow to use the same namespace for Intel oneMKL and oneMath
@@ -27,6 +32,7 @@ namespace oneapi {
 #else
 #include <oneapi/math.hpp>
 #endif
+#endif // GGML_SYCL_HAS_ONEAPI_MATH
 
 #include "ggml.h"
 
@@ -91,6 +97,7 @@ inline std::string get_device_backend_and_type(const sycl::device &device) {
     return device_type.str();
 }
 
+#if GGML_SYCL_HAS_ONEAPI_MATH
 template <typename Ts> struct matrix_info_t {
     oneapi::math::transpose transpose_info[2];
     Ts                     value_info[2];
@@ -117,6 +124,7 @@ inline auto get_onemath_backend(sycl::queue& queue)
     static_assert(false, "Unsupported backend");
 #endif
 }
+#endif // GGML_SYCL_HAS_ONEAPI_MATH
 
 namespace dpct
 {
@@ -1742,6 +1750,7 @@ namespace dpct
 
     namespace detail
     {
+#if GGML_SYCL_HAS_ONEAPI_MATH
     template <class Ta, class Tb, class Tc, class Ts>
     inline void gemm_impl(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans, int m,
                           int n, int k, const void * alpha, const void * a, int lda, const void * b, int ldb,
@@ -1754,6 +1763,7 @@ namespace dpct
         oneapi::math::blas::column_major::gemm(get_onemath_backend(q), a_trans, b_trans, m, n, k, alpha_value, data_a,
                                                lda, data_b, ldb, beta_value, data_c, ldc);
     }
+#endif // GGML_SYCL_HAS_ONEAPI_MATH
 
         template <typename VecT, class BinaryOperation, class = void>
         class vectorized_binary
@@ -1782,6 +1792,7 @@ namespace dpct
             }
         };
 
+#if GGML_SYCL_HAS_ONEAPI_MATH
         template <class Ta, class Tb, class Tc, class Ts>
         inline void gemm_batch_impl(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans,
                                     int m, int n, int k, const void * alpha, const void ** a, int lda, const void ** b,
@@ -1825,6 +1836,7 @@ namespace dpct
                                                          data_a, lda, stride_a, data_b, ldb, stride_b, beta_value,
                                                          data_c, ldc, stride_c, batch_size);
         }
+#endif // GGML_SYCL_HAS_ONEAPI_MATH
 
     } // namespace detail
 
@@ -2308,6 +2320,7 @@ namespace dpct
                            sycl::range<3>(x, y, 1), direction);
     }
 
+#if GGML_SYCL_HAS_ONEAPI_MATH
     inline void gemm(sycl::queue & q, oneapi::math::transpose a_trans, oneapi::math::transpose b_trans, int m, int n,
                      int k, const void * alpha, const void * a, library_data_t a_type, int lda, const void * b,
                      library_data_t b_type, int ldb, const void * beta, void * c, library_data_t c_type, int ldc,
@@ -2713,6 +2726,7 @@ namespace dpct
             throw std::runtime_error("the combination of data type is unsupported");
         }
     }
+#endif // GGML_SYCL_HAS_ONEAPI_MATH
 
     static inline void
     async_dpct_memcpy(void *to_ptr, size_t to_pitch, const void *from_ptr,

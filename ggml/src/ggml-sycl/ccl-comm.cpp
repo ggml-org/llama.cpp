@@ -244,6 +244,15 @@ void ggml_sycl_ccl_init_multiprocess(int rank, int world_size, queue_ptr queue) 
         g_ccl_ctx.rank = rank;
         g_ccl_ctx.initialized = true;
 
+        // Register atexit handler to ensure CCL resources are freed before MPI finalization
+        // This is crucial because CCL resources must persist across backend lifetimes
+        // (the "fit params" step creates/destroys temporary backends)
+        static bool atexit_registered = false;
+        if (!atexit_registered) {
+            std::atexit(ggml_sycl_ccl_free);
+            atexit_registered = true;
+        }
+
         if (ccl_debug_enabled()) {
             fprintf(stderr, "SYCL CCL: Multi-process initialized - rank %d/%d ready\n",
                     rank, world_size);
@@ -329,6 +338,15 @@ void ggml_sycl_ccl_allreduce_sum_f32(const float* send_buf, float* recv_buf, siz
             // Copy input to staging buffer
             q.memcpy(staging, send_buf, buf_size).wait();
 
+            // Debug: show values before allreduce
+            if (ccl_debug_enabled()) {
+                static int val_dbg = 0;
+                if (val_dbg++ < 5) {
+                    fprintf(stderr, "SYCL CCL: rank=%d BEFORE allreduce: [%.4f,%.4f,%.4f,%.4f]\n",
+                            g_ccl_ctx.rank, staging[0], staging[1], staging[2], staging[3]);
+                }
+            }
+
             // Perform in-place allreduce on staging buffer
             ccl::allreduce(
                 staging,
@@ -339,6 +357,15 @@ void ggml_sycl_ccl_allreduce_sum_f32(const float* send_buf, float* recv_buf, siz
                 comm,
                 stream
             ).wait();
+
+            // Debug: show values after allreduce
+            if (ccl_debug_enabled()) {
+                static int val_dbg2 = 0;
+                if (val_dbg2++ < 5) {
+                    fprintf(stderr, "SYCL CCL: rank=%d AFTER allreduce: [%.4f,%.4f,%.4f,%.4f]\n",
+                            g_ccl_ctx.rank, staging[0], staging[1], staging[2], staging[3]);
+                }
+            }
 
             // Copy result back to recv buffer
             q.memcpy(recv_buf, staging, buf_size).wait();
