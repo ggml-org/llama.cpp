@@ -349,33 +349,56 @@ void launch_fattn_esimd_f16_optimized(
                 } // end if (kv_start >= kv_end) else
                 barrier();
 
-                // Thread 0 performs final reduction (native D-element vectors for all dimensions)
+                // =============================================================================
+                // Hierarchical tree-based reduction
+                // Reduces O(ESIMD_PARTITIONS) sequential ops to O(log2(ESIMD_PARTITIONS)) parallel rounds
+                // Each round: half the active threads merge pairs of partial results
+                // Round 1: 16 threads merge (0,16), (1,17), ..., (15,31) -> 16 results
+                // Round 2: 8 threads merge (0,8), (1,9), ..., (7,15) -> 8 results
+                // Round 3: 4 threads merge (0,4), (1,5), (2,6), (3,7) -> 4 results
+                // Round 4: 2 threads merge (0,2), (1,3) -> 2 results
+                // Round 5: 1 thread merges (0,1) -> final result in slot 0
+                // =============================================================================
+                for (int stride = ESIMD_PARTITIONS / 2; stride > 0; stride /= 2) {
+                    if (partition_id < stride) {
+                        // Load my partition's partial results
+                        simd<float, D> my_acc = slm_block_load<float, D>(slm_acc_offset + partition_id * D * sizeof(float));
+                        float my_max = slm_scalar_load<float>(slm_max_offset + partition_id * sizeof(float));
+                        float my_sum = slm_scalar_load<float>(slm_sum_offset + partition_id * sizeof(float));
+
+                        // Load partner partition's partial results
+                        int partner = partition_id + stride;
+                        simd<float, D> p_acc = slm_block_load<float, D>(slm_acc_offset + partner * D * sizeof(float));
+                        float p_max = slm_scalar_load<float>(slm_max_offset + partner * sizeof(float));
+                        float p_sum = slm_scalar_load<float>(slm_sum_offset + partner * sizeof(float));
+
+                        // Online softmax merge with FTZ threshold
+                        if (p_max <= my_max) {
+                            float diff = p_max - my_max;
+                            float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
+                            my_acc = my_acc + p_acc * exp_factor;
+                            my_sum += p_sum * exp_factor;
+                        } else {
+                            float diff = my_max - p_max;
+                            float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
+                            my_acc = my_acc * exp_factor + p_acc;
+                            my_sum = my_sum * exp_factor + p_sum;
+                            my_max = p_max;
+                        }
+
+                        // Store merged result back to my slot
+                        slm_block_store(slm_acc_offset + partition_id * D * sizeof(float), my_acc);
+                        slm_scalar_store<float>(slm_max_offset + partition_id * sizeof(float), my_max);
+                        slm_scalar_store<float>(slm_sum_offset + partition_id * sizeof(float), my_sum);
+                    }
+                    barrier();
+                }
+
+                // After hierarchical reduction, partition 0 has the final merged result
                 if (partition_id == 0) {
-                    // Load first partition's results
                     simd<float, D> final_acc = slm_block_load<float, D>(slm_acc_offset);
                     float final_max = slm_scalar_load<float>(slm_max_offset);
                     float final_sum = slm_scalar_load<float>(slm_sum_offset);
-
-                    // Merge remaining partitions using online softmax
-                    for (int p = 1; p < ESIMD_PARTITIONS; ++p) {
-                        simd<float, D> p_acc = slm_block_load<float, D>(slm_acc_offset + p * D * sizeof(float));
-                        float p_max = slm_scalar_load<float>(slm_max_offset + p * sizeof(float));
-                        float p_sum = slm_scalar_load<float>(slm_sum_offset + p * sizeof(float));
-
-                        // Online softmax merge with FTZ threshold
-                        if (p_max <= final_max) {
-                            float diff = p_max - final_max;
-                            float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                            final_acc = final_acc + p_acc * exp_factor;
-                            final_sum += p_sum * exp_factor;
-                        } else {
-                            float diff = final_max - p_max;
-                            float exp_factor = diff >= SOFTMAX_FTZ_THRESHOLD ? esimd::exp(diff) : 0.0f;
-                            final_acc = final_acc * exp_factor + p_acc;
-                            final_sum = final_sum * exp_factor + p_sum;
-                            final_max = p_max;
-                        }
-                    }
 
                     // Apply attention sinks if present
                     if (sinks_ptr) {
