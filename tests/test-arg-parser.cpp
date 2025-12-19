@@ -38,18 +38,13 @@ int main(void) {
                     }
                 }
 
-                // ensure short argument precedes long argument
+                // ensure shorter argument precedes longer argument
                 if (opt.args.size() > 1) {
                     const std::string first(opt.args.front());
                     const std::string last(opt.args.back());
 
-                    // only check if we have a mix of short (-x) and long (--xxx) forms
-                    bool first_is_short = (first.size() >= 2 && first[0] == '-' && first[1] != '-');
-                    bool last_is_short = (last.size() >= 2 && last[0] == '-' && last[1] != '-');
-
-                    // if at least one is short, verify order
-                    if ((first_is_short || last_is_short) && first.length() > last.length()) {
-                        fprintf(stderr, "test-arg-parser: short form should come before long form: %s, %s\n",
+                    if (first.length() > last.length()) {
+                        fprintf(stderr, "test-arg-parser: shorter argument should come before longer one: %s, %s\n",
                                 first.c_str(), last.c_str());
                         assert(false);
                     }
@@ -60,11 +55,8 @@ int main(void) {
                     const std::string first(opt.args_neg.front());
                     const std::string last(opt.args_neg.back());
 
-                    bool first_is_short = (first.size() >= 2 && first[0] == '-' && first[1] != '-');
-                    bool last_is_short = (last.size() >= 2 && last[0] == '-' && last[1] != '-');
-
-                    if ((first_is_short || last_is_short) && first.length() > last.length()) {
-                        fprintf(stderr, "test-arg-parser: short negated form should come before long form: %s, %s\n",
+                    if (first.length() > last.length()) {
+                        fprintf(stderr, "test-arg-parser: shorter negated argument should come before longer one: %s, %s\n",
                                 first.c_str(), last.c_str());
                         assert(false);
                     }

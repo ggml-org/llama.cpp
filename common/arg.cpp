@@ -1415,7 +1415,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--sampling-seq", "--sampler-seq"}, "SEQUENCE",
+        {"--sampler-seq", "--sampling-seq"}, "SEQUENCE",
         string_format("simplified sequence for samplers that will be used (default: %s)", sampler_type_chars.c_str()),
         [](common_params & params, const std::string & value) {
             params.sampling.samplers = common_sampler_types_from_chars(value);
@@ -2642,7 +2642,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_EMBEDDINGS"));
     add_opt(common_arg(
-        {"--reranking", "--rerank"},
+        {"--rerank", "--reranking"},
         string_format("enable reranking endpoint on server (default: %s)", "disabled"),
         [](common_params & params) {
             params.embedding = true;
@@ -3113,7 +3113,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
-        {"--draft-max", "--draft", "--draft-n"}, "N",
+        {"--draft", "--draft-n", "--draft-max"}, "N",
         string_format("number of tokens to draft for speculative decoding (default: %d)", params.speculative.n_max),
         [](common_params & params, int value) {
             params.speculative.n_max = value;
