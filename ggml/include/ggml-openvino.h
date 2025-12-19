@@ -18,8 +18,16 @@ GGML_BACKEND_API ggml_backend_t ggml_backend_openvino_init(int device);
 
 GGML_BACKEND_API bool ggml_backend_is_openvino(ggml_backend_t backend);
 
+GGML_BACKEND_API bool ggml_backend_buffer_is_openvino(ggml_backend_buffer_t buffer);
+
+GGML_BACKEND_API bool ggml_backend_buft_is_openvino(ggml_backend_buffer_type_t buft);
+
+GGML_BACKEND_API bool ggml_backend_buft_is_openvino_host(ggml_backend_buffer_type_t buft);
+
 // device buffer
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_buffer_type(int device);
+
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_host_buffer_type(int device);
 
 GGML_BACKEND_API int ggml_backend_openvino_get_device_count(void);
 

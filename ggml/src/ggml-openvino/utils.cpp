@@ -37,11 +37,9 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
-static ov::Core core;
-
 enum ggml_status ov_graph_compute(ggml_cgraph * cgraph) {
     if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
-        std::string filename = "cgraph.txt";
+        std::string filename = "cgraph_ov.txt";
         GgmlOvDecoder::dump_cgraph(cgraph, filename);
     }
 
@@ -52,8 +50,9 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph) {
 }
 
 enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::string & device) {
+    auto & core = ov_singleton_core();
+    const auto & config = ggml_openvino_get_compile_config();
     static auto is_static = false;
-    static auto config = get_ov_compile_config(device);
 
     // if (is_naive(cgraph)) {
     //     return naive_compute(cgraph, core, device, config);
@@ -124,7 +123,13 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
                 ov::serialize(model, timestamped_filename);
             }
 
-            auto compiled_model = core.compile_model(model, device, config);
+            ov::CompiledModel compiled_model;
+            auto remote_context = ggml_openvino_get_remote_context();
+            if (remote_context.has_value()) {
+                compiled_model = core.compile_model(model, remote_context.value(), config);
+            } else {
+                compiled_model = core.compile_model(model, device, config);
+            }
             compile_end_time = ggml_time_us();
             infer_request = std::make_shared<ov::InferRequest>(compiled_model.create_infer_request());
             infer_request_cache[key] = infer_request;
@@ -173,18 +178,20 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
 
     if (getenv("GGML_OPENVINO_PROFILING")) {
         GGML_LOG_INFO("\nGGML OpenVINO Backend: \n");
-        GGML_LOG_INFO("  - Graph decoder Time: %ld ms \n", (decoder_end_time - start_time) / 1000);
+        GGML_LOG_INFO("  - Graph decoder time: %ld ms \n", (decoder_end_time - start_time) / 1000);
         if (!cache_hit) {
-            GGML_LOG_INFO("  - Graph conversion Time: %ld ms \n", (conversion_end_time - decoder_end_time) / 1000);
-            GGML_LOG_INFO("  - Graph compile Time: %ld ms \n", (compile_end_time - conversion_end_time) / 1000);
+            GGML_LOG_INFO("  - Graph conversion time: %ld ms \n", (conversion_end_time - decoder_end_time) / 1000);
+            GGML_LOG_INFO("  - Graph compile time: %ld ms \n", (compile_end_time - conversion_end_time) / 1000);
         }
-        GGML_LOG_INFO("  - Graph Inference Time: %ld ms \n", (infer_end_time - compile_end_time) / 1000);
+        GGML_LOG_INFO("  - Graph inference time: %ld ms \n", (infer_end_time - compile_end_time) / 1000);
     }
 
     return GGML_STATUS_SUCCESS;
 }
 
 enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph) {
+    auto & core = ov_singleton_core();
+
     auto get_prefill_chunk_size = [] {
         const char * chunk_size_str = getenv("GGML_OPENVINO_PREFILL_CHUNK_SIZE");
         if (chunk_size_str && atoi(chunk_size_str) > 0) {
@@ -196,7 +203,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph) {
     static std::string device = "NPU";
     static auto is_static = true;
     static auto prefill_chunk_size = get_prefill_chunk_size();
-    static auto config = get_ov_compile_config(device);
+    const auto & config = ggml_openvino_get_compile_config();
 
     if (is_naive(cgraph)) {
         return naive_compute(cgraph, core, device, config);
@@ -281,8 +288,16 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph) {
                 ov::serialize(model_decode, timestamped_filename);
             }
 
-            auto compiled_model_prefill = core.compile_model(model_prefill, device, get_ov_compile_config(device));
-            auto compiled_model_decode = core.compile_model(model_decode, device, get_ov_compile_config(device));
+            ov::CompiledModel compiled_model_prefill;
+            ov::CompiledModel compiled_model_decode;
+            auto remote_context = ggml_openvino_get_remote_context();
+            if (remote_context.has_value()) {
+                compiled_model_prefill = core.compile_model(model_prefill, remote_context.value(), config);
+                compiled_model_decode = core.compile_model(model_decode, remote_context.value(), config);
+            } else {
+                compiled_model_prefill = core.compile_model(model_prefill, device, config);
+                compiled_model_decode = core.compile_model(model_decode, device, config);
+            }
 
             infer_request_cache_prefill[key] =
                 std::make_shared<ov::InferRequest>(compiled_model_prefill.create_infer_request());
@@ -369,39 +384,15 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph) {
 
     if (getenv("GGML_OPENVINO_PROFILING")) {
         GGML_LOG_INFO("\nGGML OpenVINO Backend: \n");
-        GGML_LOG_INFO("  - Graph decoder Time: %ld ms \n", (decoder_end_time - start_time) / 1000);
+        GGML_LOG_INFO("  - Graph decoder time: %ld ms \n", (decoder_end_time - start_time) / 1000);
         if (!cache_hit) {
-            GGML_LOG_INFO("  - Graph conversion Time: %ld ms \n", (conversion_end_time - decoder_end_time) / 1000);
-            GGML_LOG_INFO("  - Graph compile Time: %ld ms \n", (compile_end_time - conversion_end_time) / 1000);
+            GGML_LOG_INFO("  - Graph conversion time: %ld ms \n", (conversion_end_time - decoder_end_time) / 1000);
+            GGML_LOG_INFO("  - Graph compile time: %ld ms \n", (compile_end_time - conversion_end_time) / 1000);
         }
-        GGML_LOG_INFO("  - Graph Inference Time: %ld ms \n", (infer_end_time - compile_end_time) / 1000);
+        GGML_LOG_INFO("  - Graph inference time: %ld ms \n", (infer_end_time - compile_end_time) / 1000);
     }
 
     return GGML_STATUS_SUCCESS;
-}
-
-ov::AnyMap get_ov_compile_config(const std::string & device) {
-    ov::AnyMap config;
-    auto * cache_dir = getenv("GGML_OPENVINO_CACHE_DIR");
-    if (device == "NPU") {
-        config = {
-            {"NPU_COMPILER_DYNAMIC_QUANTIZATION", "YES"   },
-            {"NPU_USE_NPUW",                      "YES"   },
-            {"NPUW_DEVICES",                      "NPU"   },
-            {"NPUW_FOLD",                         "YES"   },
-            {"NPUW_WEIGHTS_BANK",                 "shared"},
-            {"NPUW_FUNCALL_FOR_ALL",              "YES"   },
-            {"NPUW_FUNCALL_ASYNC",                "YES"   },
-            {"NPUW_DQ",                           "YES"   },
-            {"NPUW_DQ_FULL",                      "NO"    },
-        };
-        if (cache_dir) {
-            config["NPUW_CACHE_DIR"] = cache_dir;
-        }
-    } else if (cache_dir) {
-        core.set_property(ov::cache_dir(cache_dir));
-    }
-    return config;
 }
 
 bool is_naive(ggml_cgraph * cgraph) {
@@ -428,7 +419,14 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
     if (getenv("GGML_OPENVINO_DUMP_IR")) {
         ov::serialize(model, "IR_naive.xml");
     }
-    auto infer_request = core.compile_model(model, device, config).create_infer_request();
+
+    ov::InferRequest infer_request;
+    auto remote_context = ggml_openvino_get_remote_context();
+    if (remote_context.has_value()) {
+        infer_request = core.compile_model(model, remote_context.value(), config).create_infer_request();
+    } else {
+        infer_request = core.compile_model(model, device, config).create_infer_request();
+    }
 
     auto ov_params = model->get_parameters();
     for (size_t i = 0; i < ov_params.size(); i++) {
@@ -451,6 +449,18 @@ enum ggml_status naive_compute(ggml_cgraph * cgraph,
 namespace {
 ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string & name) {
     const auto * ggml_tensor = ggml_decoder->get_input_ggml_tensor(name);
+
+    if (ggml_tensor->extra != nullptr) {
+        // GGML_LOG_DEBUG("Using ggml_tensor->extra as ov::Tensor for input: %s\n", name.c_str());
+        auto * extra_base = static_cast<ggml_openvino_extra_base *>(ggml_tensor->extra);
+        if (extra_base->type != ggml_openvino_extra_base::Type::TENSOR) {
+            throw std::runtime_error("ggml tensor extra is not of type TENSOR for input: " + name);
+        }
+        auto * tensor_extra = static_cast<ggml_openvino_tensor_extra *>(extra_base);
+        return *tensor_extra->tensor;
+    }
+
+    // GGML_LOG_DEBUG("Converting ggml tensor to ov::Tensor for input: %s\n", name.c_str());
     auto * input_data = ggml_tensor->data;
     ov::Shape input_shape;
     if (ggml_tensor->op == GGML_OP_VIEW) {

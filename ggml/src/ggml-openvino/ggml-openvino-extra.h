@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <memory>
 #include <openvino/core/node.hpp>
+#include <openvino/runtime/remote_context.hpp>
 #include <openvino/runtime/tensor.hpp>
 #include <optional>
 #include <string>
@@ -14,6 +15,12 @@
 enum class ExtraQuantType { F16, Q4_0_C, Q8_1_C, Q4_0_128, Q8_0_C, Q8_0_32 };
 
 ov::Core & ov_singleton_core();
+
+// Get the remote context for the current device (returns empty optional for CPU)
+std::optional<ov::RemoteContext> ggml_openvino_get_remote_context();
+
+// Get the compile config for the current device
+const ov::AnyMap & ggml_openvino_get_compile_config();
 
 // =====================================================
 // Global Device Configuration (singleton)
@@ -24,6 +31,8 @@ struct ggml_openvino_device_config {
     std::string device_name = "CPU";
     bool is_npu = false;
     bool initialized = false;
+    std::optional<ov::RemoteContext> remote_context;
+    ov::AnyMap compile_config;
 
     void init();
 };
@@ -112,3 +121,5 @@ struct ggml_openvino_extracted_layout {
 
 // Calculate the buffer layout for extracted quantized data
 ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_tensor * tensor);
+
+ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor);

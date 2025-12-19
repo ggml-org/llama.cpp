@@ -593,10 +593,18 @@ void GgmlOvDecoder::dump_cgraph(const ggml_cgraph * cgraph, std::string & filena
                 << std::setw(20) << "op"
                 << std::setw(20) << "name"
                 << std::setw(3) << "    "
-                << std::setw(50) << "stride"
+                << std::setw(62) << "stride"
+                << std::setw(20) << "buffer_type"
                 << "\n";
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
+
+        // Get buffer type name
+        const char * buf_name = "none";
+        ggml_backend_buffer_t buf = node->view_src ? node->view_src->buffer : node->buffer;
+        if (buf) {
+            buf_name = ggml_backend_buffer_name(buf);
+        }
 
         file << " - " << std::setw(3) << i << ": [ "
              << std::setw(5) << node->ne[0] << ", "
@@ -610,10 +618,18 @@ void GgmlOvDecoder::dump_cgraph(const ggml_cgraph * cgraph, std::string & filena
              << std::setw(5) << node->nb[1] << ", "
              << std::setw(5) << node->nb[2] << ", "
              << std::setw(5) << node->nb[3] << "] "
+             << std::right << std::setw(15) << buf_name << std::right
              << "\n";
 
         for (int i = 0; i < GGML_MAX_SRC; i++) {
             if (auto* src = node->src[i]) {
+                // Get buffer type name for source
+                const char * src_buf_name = "none";
+                ggml_backend_buffer_t src_buf = src->view_src ? src->view_src->buffer : src->buffer;
+                if (src_buf) {
+                    src_buf_name = ggml_backend_buffer_name(src_buf);
+                }
+
                 file << std::setw(10) << " [ "
                 << std::setw(5) << src->ne[0] << ", "
                 << std::setw(5) << src->ne[1] << ", "
@@ -627,6 +643,7 @@ void GgmlOvDecoder::dump_cgraph(const ggml_cgraph * cgraph, std::string & filena
                 << std::setw(5) << src->nb[1] << ", "
                 << std::setw(5) << src->nb[2] << ", "
                 << std::setw(5) << src->nb[3] << "] "
+                << std::right << std::setw(15) << src_buf_name << std::right
                 << "\n";
             }
         }
@@ -636,11 +653,19 @@ void GgmlOvDecoder::dump_cgraph(const ggml_cgraph * cgraph, std::string & filena
     for (int i = 0; i < cgraph->n_leafs; i++) {
         ggml_tensor * node = cgraph->leafs[i];
 
+        // Get buffer type name for leaf
+        const char * leaf_buf_name = "none";
+        ggml_backend_buffer_t leaf_buf = node->view_src ? node->view_src->buffer : node->buffer;
+        if (leaf_buf) {
+            leaf_buf_name = ggml_backend_buffer_name(leaf_buf);
+        }
+
         file << " - " << std::setw(3) << i << ": [ "
              << std::setw(5) << node->ne[0] << ", "
              << std::setw(5) << node->ne[1] << "] "
              << std::setw(8) << ggml_op_name(node->op) << " "
-             << std::setw(16) << ggml_get_name(node) << "\n";
+             << std::setw(16) << ggml_get_name(node)
+             << std::setw(20) << leaf_buf_name << "\n";
     }
     // clang-format on
     file << "========================================\n";

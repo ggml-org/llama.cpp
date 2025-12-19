@@ -56,7 +56,7 @@ struct ggml_backend_openvino_buffer_context {
     std::shared_ptr<ov::Tensor> ov_tensor;
 
     // Track all extras for cleanup
-    std::vector<ggml_openvino_extra_base *> tensor_extras;
+    std::map<ggml_tensor *, ggml_openvino_extra_base *> tensor_extras;
 
     ggml_backend_openvino_buffer_context(int device, size_t size) :
         device(device),
@@ -103,8 +103,8 @@ struct ggml_backend_openvino_buffer_context {
 
     ~ggml_backend_openvino_buffer_context() {
         // Clean up all tensor extras
-        for (auto * extra : tensor_extras) {
-            delete extra;
+        for (auto & pair : tensor_extras) {
+            delete pair.second;
         }
         tensor_extras.clear();
         if (data && ggml_openvino_get_device_name() == "CPU") {
@@ -144,9 +144,20 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
         return GGML_STATUS_SUCCESS;
     }
 
-    // For non-view tensors, tensor->extra will be set in set_tensor
-    // when the actual weight data is loaded
-    GGML_UNUSED(buffer);
+    ggml_backend_openvino_buffer_context * ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
+
+    if (tensor->data != nullptr) {
+        ggml_openvino_tensor_extra * extra = ggml_openvino_create_tensor_extra(tensor);
+        if (extra != nullptr) {
+            auto it = ctx->tensor_extras.find(tensor);
+            if (it != ctx->tensor_extras.end()) {
+                delete it->second;
+            }
+            ctx->tensor_extras[tensor] = extra;
+            tensor->extra = extra;
+        }
+    }
+
     return GGML_STATUS_SUCCESS;
 }
 
@@ -194,7 +205,7 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
                 layout.requant_type.value() == ExtraQuantType::F16) {
                 // F16 requant case - use weight_extra
                 auto * extra = new ggml_openvino_weight_extra(constant);
-                ctx->tensor_extras.push_back(extra);
+                ctx->tensor_extras[tensor] = extra;
                 tensor->extra = extra;
                 GGML_LOG_DEBUG("%s: requantized %s to F16\n", __func__, tensor->name);
             } else {
@@ -211,7 +222,7 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
 
                 auto * extra = new ggml_openvino_quantized_weight_extra(std::move(weights), std::move(scales),
                                                                         std::move(biases), constant);
-                ctx->tensor_extras.push_back(extra);
+                ctx->tensor_extras[tensor] = extra;
                 tensor->extra = extra;
 
                 if (layout.is_requant) {
@@ -239,7 +250,7 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
 
             // Store in tensor->extra
             ggml_openvino_weight_extra * extra = new ggml_openvino_weight_extra(constant);
-            ctx->tensor_extras.push_back(extra);
+            ctx->tensor_extras[tensor] = extra;
             tensor->extra = extra;
 
             GGML_LOG_DEBUG("%s: created shared-memory constant for %s\n", __func__, tensor->name);
@@ -251,6 +262,19 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
     } else {
         // Non-weight tensor (KV cache, activations, etc.) - just copy data
         memcpy((char *) tensor->data + offset, data, size);
+
+        ggml_openvino_tensor_extra * extra = ggml_openvino_create_tensor_extra(tensor);
+        if (extra == nullptr) {
+            GGML_LOG_ERROR("%s: failed to create tensor extra for %s\n", __func__, tensor->name);
+            return;
+        }
+
+        auto it = ctx->tensor_extras.find(tensor);
+        if (it != ctx->tensor_extras.end()) {
+            delete it->second;
+        }
+        ctx->tensor_extras[tensor] = extra;
+        tensor->extra = extra;
     }
 }
 
@@ -393,9 +417,65 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_buffer_type(in
     return &buffer_types[device];
 }
 
-// Check if a buffer is an OpenVINO buffer
+// =====================================================
+// OpenVINO Host Buffer Implementation
+// =====================================================
+
+static const char * ggml_backend_openvino_host_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
+    ggml_backend_openvino_buffer_type_context * ctx = (ggml_backend_openvino_buffer_type_context *) buft->context;
+    static std::string name;
+    name = ctx->name + "_HOST";
+    return name.c_str();
+}
+
+static const ggml_backend_buffer_type_i ggml_backend_openvino_host_buffer_type_interface = {
+    /* .get_name         = */ ggml_backend_openvino_host_buffer_type_get_name,
+    /* .alloc_buffer     = */ ggml_backend_openvino_buffer_type_alloc_buffer,
+    /* .get_alignment    = */ ggml_backend_openvino_buffer_type_get_alignment,
+    /* .get_max_size     = */ ggml_backend_openvino_buffer_type_get_max_size,
+    /* .get_alloc_size   = */ ggml_backend_openvino_buffer_type_get_alloc_size,
+    /* .is_host          = */ ggml_backend_openvino_buffer_type_is_host,
+};
+
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_openvino_host_buffer_type(int device) {
+    GGML_ASSERT(device >= 0 && device < ggml_backend_openvino_get_device_count());
+
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
+
+    static std::vector<ggml_backend_buffer_type> buffer_types;
+    static std::vector<ggml_backend_openvino_buffer_type_context> buffer_type_contexts;
+
+    if (buffer_types.empty()) {
+        int device_count = ggml_backend_openvino_get_device_count();
+        buffer_types.resize(device_count);
+        buffer_type_contexts.resize(device_count);
+
+        for (int i = 0; i < device_count; i++) {
+            buffer_type_contexts[i].device = i;
+            buffer_type_contexts[i].name = std::string(GGML_OPENVINO_NAME) + std::to_string(i);
+
+            buffer_types[i] = ggml_backend_buffer_type{
+                /* .iface   = */ ggml_backend_openvino_host_buffer_type_interface,
+                /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_openvino_reg(), i),
+                /* .context = */ &buffer_type_contexts[i],
+            };
+        }
+    }
+
+    return &buffer_types[device];
+}
+
 bool ggml_backend_buffer_is_openvino(ggml_backend_buffer_t buffer) {
     return buffer->iface.free_buffer == ggml_backend_openvino_buffer_free_buffer;
+}
+
+bool ggml_backend_buft_is_openvino(ggml_backend_buffer_type_t buft) {
+    return buft->iface.get_name == ggml_backend_openvino_buffer_type_get_name;
+}
+
+bool ggml_backend_buft_is_openvino_host(ggml_backend_buffer_type_t buft) {
+    return buft->iface.get_name == ggml_backend_openvino_host_buffer_type_get_name;
 }
 
 // =====================================================
@@ -550,6 +630,11 @@ static ggml_backend_t ggml_backend_openvino_device_init(ggml_backend_dev_t dev, 
 static ggml_backend_buffer_type_t ggml_backend_openvino_device_get_buffer_type(ggml_backend_dev_t dev) {
     ggml_backend_openvino_device_context * ctx = (ggml_backend_openvino_device_context *) dev->context;
     return ggml_backend_openvino_buffer_type(ctx->device);
+}
+
+static ggml_backend_buffer_type_t ggml_backend_openvino_device_get_host_buffer_type(ggml_backend_dev_t dev) {
+    ggml_backend_openvino_device_context * ctx = (ggml_backend_openvino_device_context *) dev->context;
+    return ggml_backend_openvino_host_buffer_type(ctx->device);
 }
 
 static bool is_op_unsupported_case(const ggml_tensor * op) {
@@ -731,7 +816,8 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
 
 static bool ggml_backend_openvino_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
     // Support our own buffer type and any host buffer (for mmap'd files, etc.)
-    return buft->iface.get_name == ggml_backend_openvino_buffer_type_get_name || ggml_backend_buft_is_host(buft);
+    return ggml_backend_buft_is_openvino(buft) || ggml_backend_buft_is_host(buft);
+    // return ggml_backend_buft_is_openvino(buft) || ggml_backend_buft_is_openvino_host(buft);
     GGML_UNUSED(dev);
 }
 
@@ -743,7 +829,8 @@ static const struct ggml_backend_device_i ggml_backend_openvino_device_interface
     /* .get_props            = */ ggml_backend_openvino_device_get_props,
     /* .init_backend         = */ ggml_backend_openvino_device_init,
     /* .get_buffer_type      = */ ggml_backend_openvino_device_get_buffer_type,
-    /* .get_host_buffer_type = */ NULL,
+    // /* .get_host_buffer_type = */ NULL,
+    /* .get_host_buffer_type = */ ggml_backend_openvino_device_get_host_buffer_type,
     /* .buffer_from_host_ptr = */ NULL,
     /* .supports_op          = */ ggml_backend_openvino_device_supports_op,
     /* .supports_buft        = */ ggml_backend_openvino_device_supports_buft,

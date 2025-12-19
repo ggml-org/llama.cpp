@@ -2,6 +2,9 @@
 
 #include "ggml-impl.h"
 
+#include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
+#include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
+
 ov::Core & ov_singleton_core() {
     static ov::Core core;
     return core;
@@ -22,6 +25,31 @@ void ggml_openvino_device_config::init() {
         device_name = "CPU";
     }
     is_npu = (device_name == "NPU");
+
+    auto * cache_dir = getenv("GGML_OPENVINO_CACHE_DIR");
+    if (device_name == "NPU") {
+        compile_config = {
+            {"NPU_COMPILER_DYNAMIC_QUANTIZATION", "YES"   },
+            {"NPU_USE_NPUW",                      "YES"   },
+            {"NPUW_DEVICES",                      "NPU"   },
+            {"NPUW_FOLD",                         "YES"   },
+            {"NPUW_WEIGHTS_BANK",                 "shared"},
+            {"NPUW_FUNCALL_FOR_ALL",              "YES"   },
+            {"NPUW_FUNCALL_ASYNC",                "YES"   },
+            {"NPUW_DQ",                           "YES"   },
+            {"NPUW_DQ_FULL",                      "NO"    },
+        };
+        if (cache_dir) {
+            compile_config["NPUW_CACHE_DIR"] = cache_dir;
+        }
+    } else if (cache_dir) {
+        ov_singleton_core().set_property(ov::cache_dir(cache_dir));
+    }
+
+    if (device_name != "CPU") {
+        remote_context = ov_singleton_core().get_default_context(device_name);
+    }
+
     initialized = true;
 }
 
@@ -44,6 +72,16 @@ const std::string & ggml_openvino_get_device_name() {
 // Check if running on NPU
 bool ggml_openvino_is_npu() {
     return ggml_openvino_get_device_config().is_npu;
+}
+
+// Get the remote context for the current device (returns empty optional for CPU)
+std::optional<ov::RemoteContext> ggml_openvino_get_remote_context() {
+    return ggml_openvino_get_device_config().remote_context;
+}
+
+// Get the compile config for the current device
+const ov::AnyMap & ggml_openvino_get_compile_config() {
+    return ggml_openvino_get_device_config().compile_config;
 }
 
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
@@ -174,4 +212,51 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     layout.total_size = layout.biases_offset + layout.biases_size;
 
     return layout;
+}
+
+ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor) {
+    ov::Shape shape;
+    for (int i = GGML_MAX_DIMS - 1; i >= 0; --i) {
+        shape.push_back(static_cast<size_t>(tensor->ne[i]));
+    }
+
+    ov::element::Type element_type;
+    switch (tensor->type) {
+    case GGML_TYPE_F32:
+        element_type = ov::element::f32;
+        break;
+    case GGML_TYPE_F16:
+        element_type = ov::element::f16;
+        break;
+    case GGML_TYPE_BF16:
+        element_type = ov::element::bf16;
+        break;
+    case GGML_TYPE_I32:
+        element_type = ov::element::i32;
+        break;
+    case GGML_TYPE_I64:
+        element_type = ov::element::i64;
+        break;
+    default:
+        GGML_LOG_ERROR("%s: unsupported tensor type for ov::Tensor: %s\n", __func__, ggml_type_name(tensor->type));
+        return nullptr;
+    }
+
+    const auto & device_name = ggml_openvino_get_device_name();
+    auto remote_context = ggml_openvino_get_remote_context();
+
+    std::shared_ptr<ov::Tensor> ov_tensor;
+    if (device_name == "CPU") {
+        ov_tensor = std::make_shared<ov::Tensor>(element_type, shape, tensor->data);
+    } else if (device_name == "GPU") {
+        auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
+        auto usm_tensor = gpu_context.create_tensor(element_type, shape, tensor->data);
+        ov_tensor = std::make_shared<ov::intel_gpu::ocl::USMTensor>(std::move(usm_tensor));
+    } else {
+        auto npu_context = remote_context->as<ov::intel_npu::level_zero::ZeroContext>();
+        auto l0_tensor = npu_context.create_tensor(element_type, shape, tensor->data);
+        ov_tensor = std::make_shared<ov::intel_npu::level_zero::ZeroBufferTensor>(std::move(l0_tensor));
+    }
+
+    return new ggml_openvino_tensor_extra(ov_tensor);
 }
