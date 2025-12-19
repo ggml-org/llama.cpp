@@ -1,16 +1,12 @@
 name: Release llama-agent
 
 on:
-  workflow_dispatch: # allows manual triggering
+  workflow_dispatch: # manual trigger only
     inputs:
       create_release:
         description: 'Create new release'
         required: true
         type: boolean
-  push:
-    branches:
-      - master
-    paths: ['.github/workflows/release-agent.yml', 'tools/agent/**', '**/CMakeLists.txt', '**/.cmake', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal', '**/*.comp']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
