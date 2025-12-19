@@ -916,13 +916,14 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
     uint32_t nv1 = n % VLEN_FP16;  // leftover elements
 
     // for some reason we need volatile here so that the compiler doesn't try anything funky
+    const HVX_Vector    zero = Q6_Vh_vsplat_R(0x3C00);  // 1.0 in fp16
     volatile HVX_Vector rsum = Q6_V_vsplat_R(0);
     uint32_t            i    = 0;
 
     for (i = 0; i < nv0; i++) {
         HVX_VectorPair yp = vy[i];
         HVX_Vector     x  = vx[i];
-        HVX_VectorPair xp = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x), Q6_Vh_vsplat_R(0x3C00));  // mul by 1.0
+        HVX_VectorPair xp = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x), zero);  // mul by 1.0
 
         //NOTE: need volatile here to prevent compiler optimization
         // Seem compiler cannot guarantee read-after-write??
@@ -936,7 +937,7 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
     if (nv1) {
         HVX_VectorPair yp = vy[i];
         HVX_Vector     x  = vx[i];
-        HVX_VectorPair xp = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x), Q6_Vh_vsplat_R(0x3C00));  // mul by 1.0
+        HVX_VectorPair xp = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x), zero);  // mul by 1.0
 
         HVX_Vector l_x;
         HVX_Vector l_y;
