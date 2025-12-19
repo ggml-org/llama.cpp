@@ -31,9 +31,8 @@ struct server_context {
     // get the underlaying llama_context
     llama_context * get_llama_context() const;
 
-    // get the underlaying queue_tasks and queue_results
-    // used by CLI application
-    std::pair<server_queue &, server_response &> get_queues();
+    // get a new response reader, used by CLI application
+    server_response_reader get_response_reader();
 };
 
 

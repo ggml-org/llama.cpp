@@ -12,6 +12,10 @@
 #include <vector>
 #include <map>
 
+#if defined(_WIN32) && !defined(_WIN32_WINNT)
+#define _WIN32_WINNT 0x0A00
+#endif
+
 #ifdef _WIN32
 #define DIRECTORY_SEPARATOR '\\'
 #else
@@ -650,6 +654,13 @@ struct common_file_info {
     bool        is_dir = false;
 };
 std::vector<common_file_info> fs_list(const std::string & path, bool include_directories);
+
+//
+// TTY utils
+//
+
+// Auto-detect if colors can be enabled based on terminal and environment
+bool tty_can_use_colors();
 
 //
 // Model utils
