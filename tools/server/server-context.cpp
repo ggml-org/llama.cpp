@@ -1985,7 +1985,7 @@ struct server_context_impl {
                         } else {
                             if (slot.task->n_tokens() >= slot.n_ctx) {
                                 send_error(slot,
-                                           string_format("request (%d tokens) exceeds available context size (%d "
+                                           string_format("request (%d tokens) exceeds the available context size (%d "
                                                          "tokens), try increasing it",
                                                          slot.task->n_tokens(), slot.n_ctx),
                                            ERROR_TYPE_EXCEED_CONTEXT_SIZE);
