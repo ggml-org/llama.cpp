@@ -123,7 +123,7 @@ struct llama_hparams {
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
     // the size of the sliding window (0 - no SWA)
     uint32_t n_swa = 0;
-    uint32_t n_swa_pattern = 1;
+    uint32_t swa_period = 1;
     // if swa_layers[il] == true, then layer il is SWA
     // if swa_layers[il] == false, then layer il is dense (i.e. non-SWA)
     // by default, all layers are dense

@@ -6,7 +6,7 @@ llm_build_modern_bert<iswa>::llm_build_modern_bert(const llama_model & model, co
     const int64_t n_embd_gqa      = hparams.n_embd_v_gqa();
     const float rope_theta_global = hparams.rope_freq_base_train;
     const float rope_theta_local  = hparams.rope_freq_base_train_swa;
-    const uint32_t n_swa_pattern  = hparams.n_swa_pattern;
+    const uint32_t swa_period  = hparams.swa_period;
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
 
@@ -33,7 +33,7 @@ llm_build_modern_bert<iswa>::llm_build_modern_bert(const llama_model & model, co
         ggml_tensor * Kcur = nullptr;
         ggml_tensor * Vcur = nullptr;
 
-        const float rope_theta = (il % n_swa_pattern == 0) ? rope_theta_global : rope_theta_local;
+        const float rope_theta = (il % swa_period == 0) ? rope_theta_global : rope_theta_local;
 
         // attention layer norm
         if (model.layers[il].attn_norm) {

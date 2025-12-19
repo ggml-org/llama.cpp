@@ -882,12 +882,12 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,             hparams.rope_freq_base_train_swa);
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,       hparams.n_swa);
-                ml.get_key(LLM_KV_ATTENTION_DENSE_EVERY_N_LAYERS, hparams.n_swa_pattern);
+                ml.get_key(LLM_KV_ATTENTION_DENSE_EVERY_N_LAYERS, hparams.swa_period);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,        hparams.f_norm_eps);
                 ml.get_key(LLM_KV_ATTENTION_CAUSAL,               hparams.causal_attn);
                 ml.get_key(LLM_KV_POOLING_TYPE,                   hparams.pooling_type, false);
 
-                hparams.set_swa_pattern(hparams.n_swa_pattern);
+                hparams.set_swa_pattern(hparams.swa_period);
 
                 switch (hparams.n_layer) {
                     case 12:
