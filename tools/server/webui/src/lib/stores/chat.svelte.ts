@@ -74,6 +74,8 @@ class ChatStore {
 	private processingStates = new SvelteMap<string, ApiProcessingState | null>();
 	private activeConversationId = $state<string | null>(null);
 	private isStreamingActive = $state(false);
+	private isEditModeActive = $state(false);
+	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
 
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Loading State
@@ -965,230 +967,9 @@ class ChatStore {
 	// Editing
 	// ─────────────────────────────────────────────────────────────────────────────
 
-	async editAssistantMessage(
-		messageId: string,
-		newContent: string,
-		shouldBranch: boolean
-	): Promise<void> {
-		const activeConv = conversationsStore.activeConversation;
-		if (!activeConv || this.isLoading) return;
-
-		const result = this.getMessageByIdWithRole(messageId, 'assistant');
-		if (!result) return;
-		const { message: msg, index: idx } = result;
-
-		try {
-			if (shouldBranch) {
-				const newMessage = await DatabaseService.createMessageBranch(
-					{
-						convId: msg.convId,
-						type: msg.type,
-						timestamp: Date.now(),
-						role: msg.role,
-						content: newContent,
-						thinking: msg.thinking || '',
-						toolCalls: msg.toolCalls || '',
-						children: [],
-						model: msg.model
-					},
-					msg.parent!
-				);
-				await conversationsStore.updateCurrentNode(newMessage.id);
-			} else {
-				await DatabaseService.updateMessage(msg.id, { content: newContent, timestamp: Date.now() });
-				await conversationsStore.updateCurrentNode(msg.id);
-				conversationsStore.updateMessageAtIndex(idx, {
-					content: newContent,
-					timestamp: Date.now()
-				});
-			}
-			conversationsStore.updateConversationTimestamp();
-			await conversationsStore.refreshActiveMessages();
-		} catch (error) {
-			console.error('Failed to edit assistant message:', error);
-		}
-	}
-
-	async editUserMessagePreserveResponses(messageId: string, newContent: string): Promise<void> {
-		const activeConv = conversationsStore.activeConversation;
-		if (!activeConv) return;
-
-		const result = this.getMessageByIdWithRole(messageId, 'user');
-		if (!result) return;
-		const { message: msg, index: idx } = result;
-
-		try {
-			await DatabaseService.updateMessage(messageId, {
-				content: newContent,
-				timestamp: Date.now()
-			});
-			conversationsStore.updateMessageAtIndex(idx, { content: newContent, timestamp: Date.now() });
-
-			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
-
-			if (rootMessage && msg.parent === rootMessage.id && newContent.trim()) {
-				await conversationsStore.updateConversationTitleWithConfirmation(
-					activeConv.id,
-					newContent.trim(),
-					conversationsStore.titleUpdateConfirmationCallback
-				);
-			}
-			conversationsStore.updateConversationTimestamp();
-		} catch (error) {
-			console.error('Failed to edit user message:', error);
-		}
-	}
-
-	async editMessageWithBranching(messageId: string, newContent: string): Promise<void> {
-		const activeConv = conversationsStore.activeConversation;
-		if (!activeConv || this.isLoading) return;
-
-		let result = this.getMessageByIdWithRole(messageId, 'user');
-
-		if (!result) {
-			result = this.getMessageByIdWithRole(messageId, 'system');
-		}
-
-		if (!result) return;
-		const { message: msg } = result;
-
-		try {
-			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
-			const isFirstUserMessage =
-				msg.role === 'user' && rootMessage && msg.parent === rootMessage.id;
-
-			const parentId = msg.parent || rootMessage?.id;
-			if (!parentId) return;
-
-			const newMessage = await DatabaseService.createMessageBranch(
-				{
-					convId: msg.convId,
-					type: msg.type,
-					timestamp: Date.now(),
-					role: msg.role,
-					content: newContent,
-					thinking: msg.thinking || '',
-					toolCalls: msg.toolCalls || '',
-					children: [],
-					extra: msg.extra ? JSON.parse(JSON.stringify(msg.extra)) : undefined,
-					model: msg.model
-				},
-				parentId
-			);
-			await conversationsStore.updateCurrentNode(newMessage.id);
-			conversationsStore.updateConversationTimestamp();
-
-			if (isFirstUserMessage && newContent.trim()) {
-				await conversationsStore.updateConversationTitleWithConfirmation(
-					activeConv.id,
-					newContent.trim(),
-					conversationsStore.titleUpdateConfirmationCallback
-				);
-			}
-			await conversationsStore.refreshActiveMessages();
-
-			if (msg.role === 'user') {
-				await this.generateResponseForMessage(newMessage.id);
-			}
-		} catch (error) {
-			console.error('Failed to edit message with branching:', error);
-		}
-	}
-
-	async regenerateMessageWithBranching(messageId: string, modelOverride?: string): Promise<void> {
-		const activeConv = conversationsStore.activeConversation;
-		if (!activeConv || this.isLoading) return;
-		try {
-			const idx = conversationsStore.findMessageIndex(messageId);
-			if (idx === -1) return;
-			const msg = conversationsStore.activeMessages[idx];
-			if (msg.role !== 'assistant') return;
-
-			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-			const parentMessage = allMessages.find((m) => m.id === msg.parent);
-			if (!parentMessage) return;
-
-			this.setChatLoading(activeConv.id, true);
-			this.clearChatStreaming(activeConv.id);
-
-			const newAssistantMessage = await DatabaseService.createMessageBranch(
-				{
-					convId: activeConv.id,
-					type: 'text',
-					timestamp: Date.now(),
-					role: 'assistant',
-					content: '',
-					thinking: '',
-					toolCalls: '',
-					children: [],
-					model: null
-				},
-				parentMessage.id
-			);
-			await conversationsStore.updateCurrentNode(newAssistantMessage.id);
-			conversationsStore.updateConversationTimestamp();
-			await conversationsStore.refreshActiveMessages();
-
-			const conversationPath = filterByLeafNodeId(
-				allMessages,
-				parentMessage.id,
-				false
-			) as DatabaseMessage[];
-			// Use modelOverride if provided, otherwise use the original message's model
-			// If neither is available, don't pass model (will use global selection)
-			const modelToUse = modelOverride || msg.model || undefined;
-			await this.streamChatCompletion(
-				conversationPath,
-				newAssistantMessage,
-				undefined,
-				undefined,
-				modelToUse
-			);
-		} catch (error) {
-			if (!this.isAbortError(error))
-				console.error('Failed to regenerate message with branching:', error);
-			this.setChatLoading(activeConv?.id || '', false);
-		}
-	}
-
-	private async generateResponseForMessage(userMessageId: string): Promise<void> {
-		const activeConv = conversationsStore.activeConversation;
-
-		if (!activeConv) return;
-
-		this.errorDialogState = null;
-		this.setChatLoading(activeConv.id, true);
-		this.clearChatStreaming(activeConv.id);
-
-		try {
-			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
-			const conversationPath = filterByLeafNodeId(
-				allMessages,
-				userMessageId,
-				false
-			) as DatabaseMessage[];
-			const assistantMessage = await DatabaseService.createMessageBranch(
-				{
-					convId: activeConv.id,
-					type: 'text',
-					timestamp: Date.now(),
-					role: 'assistant',
-					content: '',
-					thinking: '',
-					toolCalls: '',
-					children: [],
-					model: null
-				},
-				userMessageId
-			);
-			conversationsStore.addMessageToActive(assistantMessage);
-			await this.streamChatCompletion(conversationPath, assistantMessage);
-		} catch (error) {
-			console.error('Failed to generate response:', error);
-			this.setChatLoading(activeConv.id, false);
-		}
+	clearEditMode(): void {
+		this.isEditModeActive = false;
+		this.addFilesHandler = null;
 	}
 
 	async continueAssistantMessage(messageId: string): Promise<void> {
@@ -1340,19 +1121,284 @@ class ChatStore {
 		}
 	}
 
-	public isChatLoadingPublic(convId: string): boolean {
-		return this.isChatLoading(convId);
+	async editAssistantMessage(
+		messageId: string,
+		newContent: string,
+		shouldBranch: boolean
+	): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+		if (!activeConv || this.isLoading) return;
+
+		const result = this.getMessageByIdWithRole(messageId, 'assistant');
+		if (!result) return;
+		const { message: msg, index: idx } = result;
+
+		try {
+			if (shouldBranch) {
+				const newMessage = await DatabaseService.createMessageBranch(
+					{
+						convId: msg.convId,
+						type: msg.type,
+						timestamp: Date.now(),
+						role: msg.role,
+						content: newContent,
+						thinking: msg.thinking || '',
+						toolCalls: msg.toolCalls || '',
+						children: [],
+						model: msg.model
+					},
+					msg.parent!
+				);
+				await conversationsStore.updateCurrentNode(newMessage.id);
+			} else {
+				await DatabaseService.updateMessage(msg.id, { content: newContent });
+				await conversationsStore.updateCurrentNode(msg.id);
+				conversationsStore.updateMessageAtIndex(idx, {
+					content: newContent
+				});
+			}
+			conversationsStore.updateConversationTimestamp();
+			await conversationsStore.refreshActiveMessages();
+		} catch (error) {
+			console.error('Failed to edit assistant message:', error);
+		}
 	}
+
+	async editUserMessagePreserveResponses(
+		messageId: string,
+		newContent: string,
+		newExtras?: DatabaseMessageExtra[]
+	): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+		if (!activeConv) return;
+
+		const result = this.getMessageByIdWithRole(messageId, 'user');
+		if (!result) return;
+		const { message: msg, index: idx } = result;
+
+		try {
+			const updateData: Partial<DatabaseMessage> = {
+				content: newContent
+			};
+
+			// Update extras if provided (including empty array to clear attachments)
+			// Deep clone to avoid Proxy objects from Svelte reactivity
+			if (newExtras !== undefined) {
+				updateData.extra = JSON.parse(JSON.stringify(newExtras));
+			}
+
+			await DatabaseService.updateMessage(messageId, updateData);
+			conversationsStore.updateMessageAtIndex(idx, updateData);
+
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+
+			if (rootMessage && msg.parent === rootMessage.id && newContent.trim()) {
+				await conversationsStore.updateConversationTitleWithConfirmation(
+					activeConv.id,
+					newContent.trim(),
+					conversationsStore.titleUpdateConfirmationCallback
+				);
+			}
+			conversationsStore.updateConversationTimestamp();
+		} catch (error) {
+			console.error('Failed to edit user message:', error);
+		}
+	}
+
+	async editMessageWithBranching(
+		messageId: string,
+		newContent: string,
+		newExtras?: DatabaseMessageExtra[]
+	): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+		if (!activeConv || this.isLoading) return;
+
+		let result = this.getMessageByIdWithRole(messageId, 'user');
+
+		if (!result) {
+			result = this.getMessageByIdWithRole(messageId, 'system');
+		}
+
+		if (!result) return;
+		const { message: msg } = result;
+
+		try {
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
+			const isFirstUserMessage =
+				msg.role === 'user' && rootMessage && msg.parent === rootMessage.id;
+
+			const parentId = msg.parent || rootMessage?.id;
+			if (!parentId) return;
+
+			// Use newExtras if provided, otherwise copy existing extras
+			// Deep clone to avoid Proxy objects from Svelte reactivity
+			const extrasToUse =
+				newExtras !== undefined
+					? JSON.parse(JSON.stringify(newExtras))
+					: msg.extra
+						? JSON.parse(JSON.stringify(msg.extra))
+						: undefined;
+
+			const newMessage = await DatabaseService.createMessageBranch(
+				{
+					convId: msg.convId,
+					type: msg.type,
+					timestamp: Date.now(),
+					role: msg.role,
+					content: newContent,
+					thinking: msg.thinking || '',
+					toolCalls: msg.toolCalls || '',
+					children: [],
+					extra: extrasToUse,
+					model: msg.model
+				},
+				parentId
+			);
+			await conversationsStore.updateCurrentNode(newMessage.id);
+			conversationsStore.updateConversationTimestamp();
+
+			if (isFirstUserMessage && newContent.trim()) {
+				await conversationsStore.updateConversationTitleWithConfirmation(
+					activeConv.id,
+					newContent.trim(),
+					conversationsStore.titleUpdateConfirmationCallback
+				);
+			}
+			await conversationsStore.refreshActiveMessages();
+
+			if (msg.role === 'user') {
+				await this.generateResponseForMessage(newMessage.id);
+			}
+		} catch (error) {
+			console.error('Failed to edit message with branching:', error);
+		}
+	}
+
+	async regenerateMessageWithBranching(messageId: string, modelOverride?: string): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+		if (!activeConv || this.isLoading) return;
+		try {
+			const idx = conversationsStore.findMessageIndex(messageId);
+			if (idx === -1) return;
+			const msg = conversationsStore.activeMessages[idx];
+			if (msg.role !== 'assistant') return;
+
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const parentMessage = allMessages.find((m) => m.id === msg.parent);
+			if (!parentMessage) return;
+
+			this.setChatLoading(activeConv.id, true);
+			this.clearChatStreaming(activeConv.id);
+
+			const newAssistantMessage = await DatabaseService.createMessageBranch(
+				{
+					convId: activeConv.id,
+					type: 'text',
+					timestamp: Date.now(),
+					role: 'assistant',
+					content: '',
+					thinking: '',
+					toolCalls: '',
+					children: [],
+					model: null
+				},
+				parentMessage.id
+			);
+			await conversationsStore.updateCurrentNode(newAssistantMessage.id);
+			conversationsStore.updateConversationTimestamp();
+			await conversationsStore.refreshActiveMessages();
+
+			const conversationPath = filterByLeafNodeId(
+				allMessages,
+				parentMessage.id,
+				false
+			) as DatabaseMessage[];
+			// Use modelOverride if provided, otherwise use the original message's model
+			// If neither is available, don't pass model (will use global selection)
+			const modelToUse = modelOverride || msg.model || undefined;
+			await this.streamChatCompletion(
+				conversationPath,
+				newAssistantMessage,
+				undefined,
+				undefined,
+				modelToUse
+			);
+		} catch (error) {
+			if (!this.isAbortError(error))
+				console.error('Failed to regenerate message with branching:', error);
+			this.setChatLoading(activeConv?.id || '', false);
+		}
+	}
+
+	private async generateResponseForMessage(userMessageId: string): Promise<void> {
+		const activeConv = conversationsStore.activeConversation;
+
+		if (!activeConv) return;
+
+		this.errorDialogState = null;
+		this.setChatLoading(activeConv.id, true);
+		this.clearChatStreaming(activeConv.id);
+
+		try {
+			const allMessages = await conversationsStore.getConversationMessages(activeConv.id);
+			const conversationPath = filterByLeafNodeId(
+				allMessages,
+				userMessageId,
+				false
+			) as DatabaseMessage[];
+			const assistantMessage = await DatabaseService.createMessageBranch(
+				{
+					convId: activeConv.id,
+					type: 'text',
+					timestamp: Date.now(),
+					role: 'assistant',
+					content: '',
+					thinking: '',
+					toolCalls: '',
+					children: [],
+					model: null
+				},
+				userMessageId
+			);
+			conversationsStore.addMessageToActive(assistantMessage);
+			await this.streamChatCompletion(conversationPath, assistantMessage);
+		} catch (error) {
+			console.error('Failed to generate response:', error);
+			this.setChatLoading(activeConv.id, false);
+		}
+	}
+
+	getAddFilesHandler(): ((files: File[]) => void) | null {
+		return this.addFilesHandler;
+	}
+
+	public getAllLoadingChats(): string[] {
+		return Array.from(this.chatLoadingStates.keys());
+	}
+
+	public getAllStreamingChats(): string[] {
+		return Array.from(this.chatStreamingStates.keys());
+	}
+
 	public getChatStreamingPublic(
 		convId: string
 	): { response: string; messageId: string } | undefined {
 		return this.getChatStreaming(convId);
 	}
-	public getAllLoadingChats(): string[] {
-		return Array.from(this.chatLoadingStates.keys());
+
+	public isChatLoadingPublic(convId: string): boolean {
+		return this.isChatLoading(convId);
 	}
-	public getAllStreamingChats(): string[] {
-		return Array.from(this.chatStreamingStates.keys());
+
+	isEditing(): boolean {
+		return this.isEditModeActive;
+	}
+
+	setEditModeActive(handler: (files: File[]) => void): void {
+		this.isEditModeActive = true;
+		this.addFilesHandler = handler;
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────────
@@ -1416,13 +1462,17 @@ class ChatStore {
 
 export const chatStore = new ChatStore();
 
-export const isLoading = () => chatStore.isLoading;
+export const activeProcessingState = () => chatStore.activeProcessingState;
+export const clearEditMode = () => chatStore.clearEditMode();
 export const currentResponse = () => chatStore.currentResponse;
 export const errorDialog = () => chatStore.errorDialogState;
-export const activeProcessingState = () => chatStore.activeProcessingState;
-export const isChatStreaming = () => chatStore.isStreaming();
-
-export const isChatLoading = (convId: string) => chatStore.isChatLoadingPublic(convId);
-export const getChatStreaming = (convId: string) => chatStore.getChatStreamingPublic(convId);
+export const getAddFilesHandler = () => chatStore.getAddFilesHandler();
 export const getAllLoadingChats = () => chatStore.getAllLoadingChats();
 export const getAllStreamingChats = () => chatStore.getAllStreamingChats();
+export const getChatStreaming = (convId: string) => chatStore.getChatStreamingPublic(convId);
+export const isChatLoading = (convId: string) => chatStore.isChatLoadingPublic(convId);
+export const isChatStreaming = () => chatStore.isStreaming();
+export const isEditing = () => chatStore.isEditing();
+export const isLoading = () => chatStore.isLoading;
+export const setEditModeActive = (handler: (files: File[]) => void) =>
+	chatStore.setEditModeActive(handler);
