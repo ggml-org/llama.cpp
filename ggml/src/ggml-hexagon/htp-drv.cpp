@@ -243,7 +243,6 @@ typedef int (*remote_handle64_close_pfn_t)(remote_handle h);
 typedef int (*remote_handle_control_pfn_t)(uint32_t req, void* data, uint32_t datalen);
 typedef int (*remote_handle64_control_pfn_t)(remote_handle64 h, uint32_t req, void* data, uint32_t datalen);
 typedef int (*remote_session_control_pfn_t)(uint32_t req, void *data, uint32_t datalen);
-typedef int (*remote_system_request_pfn_t)(system_req_payload *req);
 
 rpcmem_alloc_pfn_t  rpcmem_alloc_pfn  = nullptr;
 rpcmem_alloc2_pfn_t rpcmem_alloc2_pfn = nullptr;
@@ -265,7 +264,6 @@ remote_handle64_close_pfn_t remote_handle64_close_pfn = nullptr;
 remote_handle_control_pfn_t remote_handle_control_pfn = nullptr;
 remote_handle64_control_pfn_t remote_handle64_control_pfn = nullptr;
 remote_session_control_pfn_t remote_session_control_pfn = nullptr;
-remote_system_request_pfn_t remote_system_request_pfn = nullptr;
 
 void * rpcmem_alloc(int heapid, uint32_t flags, int size)
 {
@@ -371,37 +369,41 @@ int remote_session_control(uint32_t req, void *data, uint32_t datalen)
     return remote_session_control_pfn(req, data, datalen);
 }
 
-int remote_system_request(system_req_payload *req)
-{
-    return remote_system_request_pfn(req);
-}
-
 using dl_handle_ptr = std::unique_ptr<dl_handle, dl_handle_deleter>;
 
 static dl_handle_ptr lib_cdsp_rpc_handle = nullptr;
 
-#define DLSYM(DRV, TYPE, PTR, SYM)                                      \
-    do {                                                                \
-        PTR = (TYPE) dl_get_sym(DRV, #SYM);                             \
-        if (nullptr == PTR) {                                           \
-            GGML_LOG_ERROR("%s: failed to dlsym %s\n", __func__, #SYM); \
-        }                                                               \
-    } while (0)
-
-int htpdrv_initialize() {
+int htpdrv_init() {
+    static bool initialized = false;
+    int nErr = AEE_SUCCESS;
 #ifdef _WIN32
     std::string drv_path = get_dsp_driver_path() + "\\" + "libcdsprpc.dll";
 #else
     std::string drv_path = "libcdsprpc.so";
 #endif
+    if (initialized) {
+        GGML_LOG_INFO("%s: HTP driver already loaded\n", __func__);
+        goto bail;
+    }
     GGML_LOG_INFO("%s: Loading driver %s\n", __func__, drv_path.c_str());
 
     fs::path path{ drv_path.c_str() };
     dl_handle_ptr handle { dl_load_library(path) };
     if (!handle) {
+        nErr = AEE_EUNABLETOLOAD;
         GGML_LOG_ERROR("%s: failed to load %s: %s\n", __func__, path_str(path).c_str(), dl_error());
-        return -1;
+        goto bail;
     }
+
+#define DLSYM(DRV, TYPE, PTR, SYM)                                      \
+    do {                                                                \
+        PTR = (TYPE) dl_get_sym(DRV, #SYM);                             \
+        if (nullptr == PTR) {                                           \
+            nErr = AEE_EUNABLETOLOAD;                                   \
+            GGML_LOG_ERROR("%s: failed to dlsym %s\n", __func__, #SYM); \
+            goto bail;                                                  \
+        }                                                               \
+    } while (0)
 
     DLSYM(handle.get(), rpcmem_alloc_pfn_t, rpcmem_alloc_pfn, rpcmem_alloc);
     DLSYM(handle.get(), rpcmem_alloc2_pfn_t, rpcmem_alloc2_pfn, rpcmem_alloc2);
@@ -420,9 +422,10 @@ int htpdrv_initialize() {
     DLSYM(handle.get(), remote_handle64_control_pfn_t, remote_handle64_control_pfn, remote_handle64_control);
     DLSYM(handle.get(), remote_session_control_pfn_t, remote_session_control_pfn, remote_session_control);
     DLSYM(handle.get(), remote_handle64_close_pfn_t, remote_handle64_close_pfn, remote_handle64_close);
-    DLSYM(handle.get(), remote_system_request_pfn_t, remote_system_request_pfn, remote_system_request);
 
     lib_cdsp_rpc_handle = std::move(handle);
+    initialized = true;
 
-    return 0;
+bail:
+    return nErr;
 }

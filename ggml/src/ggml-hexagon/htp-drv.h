@@ -76,8 +76,8 @@ extern int remote_handle64_control(remote_handle64 h, uint32_t req, void * data,
 extern int remote_session_control(uint32_t req, void * data, uint32_t datalen);
 extern int remote_system_request(system_req_payload * req);
 
-// CDSPRPC Driver entry point
-int htpdrv_initialize(void);
+// Driver interface entry point
+int htpdrv_init(void);
 
 #ifdef __cplusplus
 }

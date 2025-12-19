@@ -3156,8 +3156,6 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
 
     opt_hostbuf = str_hostbuf ? atoi(str_hostbuf) : 1;
 
-    htpdrv_initialize();
-
     reg->context = new ggml_hexagon_registry(reg);
 
     HEX_VERBOSE("ggml-hex: size-of-general-req %zu size-of-general-rsp %zu\n", sizeof(struct htp_general_req),
@@ -3182,6 +3180,11 @@ ggml_backend_reg_t ggml_backend_hexagon_reg(void) {
         static std::mutex           mutex;
         std::lock_guard<std::mutex> lock(mutex);
         if (!initialized) {
+            auto nErr = htpdrv_init();
+            if (nErr != AEE_SUCCESS) {
+                return NULL;
+            }
+
             ggml_hexagon_init(&reg);
         }
 
