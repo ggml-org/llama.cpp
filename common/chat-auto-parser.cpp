@@ -45,7 +45,23 @@ struct templates_params {
     bool                                  add_bos;
     bool                                  add_eos;
     bool                                  is_inference;
+    bool                                  add_inference;
 };
+
+const char * TemplatePattern::format_to_str(TemplatePattern::ToolCallFormat format) {
+    switch (format) {
+        case JSON_NATIVE:
+            return "JSON_NATIVE";
+        case XML_CONSTRUCTED:
+            return "XML_CONSTRUCTED";
+        case CONTENT_ONLY:
+            return "CONTENT_ONLY";
+        case UNKNOWN:
+            return "UNKNOWN";
+        default:
+            return "(unknown)";
+    }
+}
 
 // Implementation of the apply function to get prompt from template
 static std::string apply(const minja::chat_template &    tmpl,
@@ -151,6 +167,99 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
 
     try {
         LOG_DBG("=== STARTING TEMPLATE DIFFERENTIAL ANALYSIS ===");
+
+        // Helper to refine patterns for JSON Native (e.g. models with custom tags like Nemotron)
+        auto refine_json_native = [&](DiscoveredPattern & p, TemplatePattern::ToolCallFormat & fmt,
+                                      const std::string & b_out, const std::string & t_out,
+                                      const std::string & t_diff) {
+            if (t_diff.empty()) {
+                return;
+            }
+            size_t f1 = t_diff.find("test_function_name");
+            if (f1 == std::string::npos) {
+                return;
+            }
+            size_t br = t_diff.rfind('{', f1);
+            if (br == std::string::npos) {
+                return;
+            }
+
+            std::string mid = t_diff.substr(br + 1, f1 - (br + 1));
+            if (mid.find("\"name\"") != std::string::npos || mid.find("'name'") != std::string::npos ||
+                mid.find("name") != std::string::npos) {
+                if (fmt != TemplatePattern::JSON_NATIVE) {
+                    LOG_DBG("Heuristic: Overriding format to JSON_NATIVE due to JSON signature");
+                    fmt = TemplatePattern::JSON_NATIVE;
+                }
+
+                // Refine markers from full output to include swallowed symbols like <
+                // Refine markers from full output to include swallowed symbols like <
+                // Use rfind to avoid matching example tools in system prompt
+                size_t ff1 = t_out.rfind("test_function_name");
+                size_t fbr = (ff1 != std::string::npos) ? t_out.rfind('{', ff1) : std::string::npos;
+
+                // Try to find turn boundary
+                size_t                   turn_start   = std::string::npos;
+                std::vector<std::string> turn_headers = { "<SPECIAL_11>Assistant\n", "<|im_start|>assistant\n",
+                                                          "Assistant\n", "assistant\n", "Assistant: " };
+                for (const auto & header : turn_headers) {
+                    size_t p_header = t_out.rfind(header, fbr);
+                    if (p_header != std::string::npos) {
+                        if (turn_start == std::string::npos || p_header > turn_start) {
+                            turn_start = p_header + header.length();
+                        }
+                    }
+                }
+
+                if (turn_start != std::string::npos) {
+                    p.tool_call_start_marker = t_out.substr(turn_start, fbr - turn_start);
+                } else {
+                    // Fallback to divergence point
+                    size_t d_pos = 0;
+                    while (d_pos < b_out.length() && d_pos < t_out.length() && b_out[d_pos] == t_out[d_pos]) {
+                        d_pos++;
+                    }
+                    size_t s_pos = d_pos;
+                    if (s_pos > 0 && t_out[s_pos - 1] == '<') {
+                        s_pos--;
+                    }
+                    if (fbr >= s_pos) {
+                        p.tool_call_start_marker = t_out.substr(s_pos, fbr - s_pos);
+                    }
+                }
+
+                size_t last_brace = t_diff.rfind('}');
+                if (last_brace != std::string::npos && last_brace > f1) {
+                    std::string after   = t_diff.substr(last_brace + 1);
+                    size_t      tag_end = after.find('>');
+                    if (tag_end != std::string::npos) {
+                        p.tool_call_end_marker = after.substr(0, tag_end + 1);
+                    } else {
+                        size_t sym_end = after.find_first_not_of("]>} \n\t\r");
+                        if (sym_end != std::string::npos) {
+                            p.tool_call_end_marker = after.substr(0, sym_end);
+                        } else {
+                            p.tool_call_end_marker = after;
+                        }
+                    }
+                }
+
+                auto trim = [](std::string & str) {
+                    size_t f = str.find_first_not_of(" \n\t\r");
+                    if (f == std::string::npos) {
+                        str.clear();
+                        return;
+                    }
+                    size_t l = str.find_last_not_of(" \n\t\r");
+                    str      = str.substr(f, (l - f + 1));
+                };
+                trim(p.tool_call_start_marker);
+                trim(p.tool_call_end_marker);
+
+                LOG_DBG("Heuristic markers refined: start='%s', end='%s'", p.tool_call_start_marker.c_str(),
+                        p.tool_call_end_marker.c_str());
+            }
+        };
 
         // Test messages for differential analysis
         json base_msg = {
@@ -259,66 +368,59 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
             };
 
             // Create outputs with add_generation_prompt: false (default)
-            minja::chat_template_inputs base_inputs_false;
-            base_inputs_false.tools                 = inputs.tools;
-            base_inputs_false.messages              = { nemotron_base_msg };
-            base_inputs_false.add_generation_prompt = false;
-            auto nemotron_base_output_false         = tmpl.apply(base_inputs_false);
-            LOG_DBG("Nemotron base output (MARKER, gen_prompt=false): %s", nemotron_base_output_false.c_str());
+            auto get_nemotron_diffs = [&](bool gen_prompt, std::string & b_out, std::string & t1_out,
+                                          std::string & t1_diff, std::string & t2_diff, std::string & t3_diff) {
+                minja::chat_template_inputs b_inputs;
+                b_inputs.tools                 = inputs.tools;
+                b_inputs.messages              = { nemotron_base_msg };
+                b_inputs.add_generation_prompt = gen_prompt;
+                b_out                          = tmpl.apply(b_inputs);
 
-            minja::chat_template_inputs tool_inputs_false;
-            tool_inputs_false.tools                 = inputs.tools;
-            tool_inputs_false.messages              = { nemotron_tool_msg };
-            tool_inputs_false.add_generation_prompt = false;
-            auto nemotron_tool_output_false         = tmpl.apply(tool_inputs_false);
-            LOG_DBG("Nemotron tool output (with tool calls, gen_prompt=false): %s", nemotron_tool_output_false.c_str());
+                auto get_diff = [&](const json & msg, std::string & out) {
+                    minja::chat_template_inputs t_inputs;
+                    t_inputs.tools                 = inputs.tools;
+                    t_inputs.messages              = { msg };
+                    t_inputs.add_generation_prompt = gen_prompt;
+                    out                            = tmpl.apply(t_inputs);
+                    return find_string_difference(b_out, out);
+                };
 
-            std::string nemotron_diff_false =
-                find_string_difference(nemotron_base_output_false, nemotron_tool_output_false);
-            LOG_DBG("Nemotron diff (MARKER vs tool, gen_prompt=false): '%s'", nemotron_diff_false.c_str());
-            LOG_DBG("Nemotron diff length: %zu", nemotron_diff_false.length());
+                t1_diff = get_diff(tool_msg1, t1_out);
+                t2_diff = get_diff(tool_msg2, t1_out);  // We only need one t_out for refinement
+                t3_diff = get_diff(tool_msg3, t1_out);
 
-            // Create outputs with add_generation_prompt: true
-            minja::chat_template_inputs base_inputs_true;
-            base_inputs_true.tools                 = inputs.tools;
-            base_inputs_true.messages              = { nemotron_base_msg };
-            base_inputs_true.add_generation_prompt = true;
-            auto nemotron_base_output_true         = tmpl.apply(base_inputs_true);
-            LOG_DBG("Nemotron base output (MARKER, gen_prompt=true): %s", nemotron_base_output_true.c_str());
+                return !t1_diff.empty() || !t2_diff.empty() || !t3_diff.empty();
+            };
 
-            minja::chat_template_inputs tool_inputs_true;
-            tool_inputs_true.tools                 = inputs.tools;
-            tool_inputs_true.messages              = { nemotron_tool_msg };
-            tool_inputs_true.add_generation_prompt = true;
-            auto nemotron_tool_output_true         = tmpl.apply(tool_inputs_true);
-            LOG_DBG("Nemotron tool output (with tool calls, gen_prompt=true): %s", nemotron_tool_output_true.c_str());
+            std::string n_base_false, n_t1_out_false, n_t1_diff_false, n_t2_diff_false, n_t3_diff_false;
+            std::string n_base_true, n_t1_out_true, n_t1_diff_true, n_t2_diff_true, n_t3_diff_true;
 
-            std::string nemotron_diff_true =
-                find_string_difference(nemotron_base_output_true, nemotron_tool_output_true);
-            LOG_DBG("Nemotron diff (MARKER vs tool, gen_prompt=true): '%s'", nemotron_diff_true.c_str());
-            LOG_DBG("Nemotron diff length: %zu", nemotron_diff_true.length());
+            bool false_ok = get_nemotron_diffs(false, n_base_false, n_t1_out_false, n_t1_diff_false, n_t2_diff_false,
+                                               n_t3_diff_false);
+            bool true_ok =
+                get_nemotron_diffs(true, n_base_true, n_t1_out_true, n_t1_diff_true, n_t2_diff_true, n_t3_diff_true);
 
-            // Try with false first
-            if (!nemotron_diff_false.empty()) {
-                tool1_diff = nemotron_diff_false;
-                tool2_diff = nemotron_diff_false;  // Use same for all to avoid empty diffs
-                tool3_diff = nemotron_diff_false;
-            } else if (!nemotron_diff_true.empty()) {
-                // Try with true if false didn't work
-                tool1_diff = nemotron_diff_true;
-                tool2_diff = nemotron_diff_true;
-                tool3_diff = nemotron_diff_true;
+            if (false_ok) {
+                tool1_diff   = n_t1_diff_false;
+                tool2_diff   = n_t2_diff_false;
+                tool3_diff   = n_t3_diff_false;
+                base_output  = n_base_false;
+                tool1_output = n_t1_out_false;
+            } else if (true_ok) {
+                tool1_diff   = n_t1_diff_true;
+                tool2_diff   = n_t2_diff_true;
+                tool3_diff   = n_t3_diff_true;
+                base_output  = n_base_true;
+                tool1_output = n_t1_out_true;
             } else {
-                // If neither worked, try comparing between gen_prompt false and true for the same message
-                std::string nemotron_diff_cross =
-                    find_string_difference(nemotron_base_output_false, nemotron_base_output_true);
-                LOG_ERR("Nemotron cross diff (gen_prompt=false vs gen_prompt=true, base): %s",
-                        nemotron_diff_cross.c_str());
-
-                if (!nemotron_diff_cross.empty()) {
-                    tool1_diff = nemotron_diff_cross;
-                    tool2_diff = nemotron_diff_cross;
-                    tool3_diff = nemotron_diff_cross;
+                // Fallback to cross diff if needed...
+                std::string cross = find_string_difference(n_base_false, n_base_true);
+                if (!cross.empty()) {
+                    tool1_diff   = cross;
+                    tool2_diff   = cross;
+                    tool3_diff   = cross;
+                    base_output  = n_base_false;
+                    tool1_output = n_base_true;
                 }
             }
         }
@@ -343,8 +445,11 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
 
         // Detect the format
         auto detected_format = determine_format_from_patterns(patterns);
+
+        refine_json_native(patterns, detected_format, base_output, tool1_output, tool1_diff);
+
         LOG_DBG("=== DETECTED FORMAT ===");
-        LOG_DBG("Format: %d", detected_format);
+        LOG_DBG("Format: %s", TemplatePattern::format_to_str(detected_format));
 
         // Additional validation: if we detected a format but have no meaningful markers,
         // we should be conservative and fall back to generic parser
@@ -373,29 +478,15 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
             }
 
             if (!has_meaningful_markers) {
-                LOG_DBG("Detected format %d but no meaningful tool call markers found - falling back to generic parser",
-                        detected_format);
+                LOG_DBG("Detected format %s but no meaningful tool call markers found - falling back to generic parser",
+                        TemplatePattern::format_to_str(detected_format));
                 detected_format = TemplatePattern::UNKNOWN;
             }
         }
 
-        // Final validation: if format is still UNKNOWN, check if we should try to detect JSON patterns
         if (detected_format == TemplatePattern::UNKNOWN) {
             if (!tool1_diff.empty()) {
-                LOG_DBG("Format is UNKNOWN but we have diffs, checking for JSON patterns...");
-                // Check if the diff contains actual JSON tool call structures (not just definitions)
-                if (tool1_diff.find("{\"tool_calls\"") != std::string::npos ||
-                    tool1_diff.find("{\"name\":") != std::string::npos ||
-                    tool1_diff.find("{\"function\"") != std::string::npos) {
-                    LOG_DBG("Detected JSON tool call patterns in diff, setting JSON_NATIVE format");
-                    detected_format                 = TemplatePattern::JSON_NATIVE;
-                    patterns.tool_call_start_marker = "{";
-                    patterns.tool_call_end_marker   = "}";
-                } else {
-                    // We have diffs but they don't represent actual tool call formats
-                    LOG_DBG("Found diffs but they don't represent tool call formats - assuming content only");
-                    // We don't change patterns, determine_format_from_patterns will return UNKNOWN or we can set it explicitly in TemplatePattern later
-                }
+                LOG_DBG("Format is still UNKNOWN but we have diffs - assuming content only");
             } else {
                 // No diffs found - this template doesn't support tool calls
                 LOG_DBG("No tool call patterns detected - assuming content only");
@@ -739,23 +830,6 @@ DiscoveredPattern TemplateAnalyzer::extract_patterns_from_differences(const std:
             patterns.tool_call_start_marker = find_tool_call_start(tool1_diff);
         }
 
-        // Heuristic: if start marker looks like a tag but missing <, prepend it
-        // e.g. "TOOLCALL>[" -> "<TOOLCALL>["
-        if (!patterns.tool_call_start_marker.empty() && patterns.tool_call_start_marker[0] != '<' &&
-            patterns.tool_call_start_marker[0] != '[' && patterns.tool_call_start_marker[0] != '{') {
-            if (patterns.tool_call_start_marker.find("TOOL") == 0 ||
-                patterns.tool_call_start_marker.find("tool") == 0 ||
-                patterns.tool_call_start_marker.find("FUNC") == 0 ||
-                patterns.tool_call_start_marker.find("func") == 0) {
-                // Check if it ends with > or >[
-                if (patterns.tool_call_start_marker.find('>') != std::string::npos) {
-                    patterns.tool_call_start_marker = "<" + patterns.tool_call_start_marker;
-                    LOG_DBG("Heuristic: prepended < to tool_call_start_marker: '%s'",
-                            patterns.tool_call_start_marker.c_str());
-                }
-            }
-        }
-
         patterns.tool_call_end_marker = find_tool_call_end(func_context, func1_pos);
 
         // Trim tool_call_end_marker
@@ -907,12 +981,6 @@ std::string TemplateAnalyzer::find_tool_call_end(const std::string & diff, size_
                 start_tag_name = diff.substr(tag_start + 1, tag_end - tag_start - 1);
             }
         }
-    }
-
-    // Special case for Nemotron-style TOOLCALL>[ ... ]</TOOLCALL>
-    if (diff.find("TOOLCALL>[") != std::string::npos) {
-        opener_char    = '[';
-        start_tag_name = "TOOLCALL";
     }
 
     // If we found a start tag name, prioritize finding its closer
@@ -1150,6 +1218,18 @@ TemplatePattern::ToolCallFormat TemplateAnalyzer::determine_format_from_patterns
         patterns.tool_call_end_marker.empty()) {
         LOG_DBG("All patterns are empty - template doesn't support tool calls");
         return TemplatePattern::UNKNOWN;
+    }
+
+    // Early check for JSON patterns in tool_call_opener that should override XML patterns
+    // This handles cases like Qwen3Next where function_opener is XML but tool_call_opener contains JSON
+    if (!patterns.tool_call_opener.empty()) {
+        // Check for explicit JSON tool call structure like {"name":
+        if (patterns.tool_call_opener.find("{\"name\":") != std::string::npos ||
+            patterns.tool_call_opener.find("{\"name\":") != std::string::npos ||
+            patterns.tool_call_opener.find("{&quot;name&quot;:") != std::string::npos) {
+            LOG_DBG("Detected JSON_NATIVE format from tool_call_opener JSON structure");
+            return TemplatePattern::JSON_NATIVE;
+        }
     }
 
     // Look for XML-like patterns in function opener
@@ -1414,14 +1494,14 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplatePattern 
     TemplatePattern    local_pattern = pattern;
 
     try {
-        LOG_DBG("=== GENERATING PEG PARSER ===");
-        LOG_DBG("Pattern format: %d", local_pattern.format);
-        LOG_DBG("Markers:");
-        LOG_DBG("  tool_call_start: '%s'", local_pattern.special_markers.at("tool_call_start_marker").c_str());
-        LOG_DBG("  tool_call_end:   '%s'", local_pattern.special_markers.at("tool_call_end_marker").c_str());
-        LOG_DBG("  function_opener: '%s'", local_pattern.special_markers.at("function_opener").c_str());
-        LOG_DBG("  reasoning_start: '%s'", local_pattern.special_markers.at("reasoning_start_marker").c_str());
-        LOG_DBG("  reasoning_end:   '%s'", local_pattern.special_markers.at("reasoning_end_marker").c_str());
+        LOG_DBG("=== GENERATING PEG PARSER ===\n");
+        LOG_DBG("Pattern format: %d\n", local_pattern.format);
+        LOG_DBG("Markers:\n");
+        LOG_DBG("  tool_call_start: '%s'\n", local_pattern.special_markers.at("tool_call_start_marker").c_str());
+        LOG_DBG("  tool_call_end:   '%s'\n", local_pattern.special_markers.at("tool_call_end_marker").c_str());
+        LOG_DBG("  function_opener: '%s'\n", local_pattern.special_markers.at("function_opener").c_str());
+        LOG_DBG("  reasoning_start: '%s'\n", local_pattern.special_markers.at("reasoning_start_marker").c_str());
+        LOG_DBG("  reasoning_end:   '%s'\n", local_pattern.special_markers.at("reasoning_end_marker").c_str());
 
         // Calculate prompt first to detect forced thinking
         data.prompt = apply(tmpl, inputs);
@@ -1584,8 +1664,32 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplatePattern 
             arena.build_grammar(builder, data.grammar_lazy);
         });
 
-        // Set preserved tokens
-        data.preserved_tokens = local_pattern.preserved_tokens;
+        // Set preserved tokens - include all discovered markers plus trigger words
+        std::vector<std::string> preserved;
+        
+        // Add trigger word if present
+        if (!trigger_word.empty()) {
+            preserved.push_back(trigger_word);
+        }
+        
+        // Add all non-empty special markers
+        for (const auto & [key, value] : local_pattern.special_markers) {
+            if (!value.empty()) {
+                // Avoid duplicates
+                if (std::find(preserved.begin(), preserved.end(), value) == preserved.end()) {
+                    preserved.push_back(value);
+                }
+            }
+        }
+        
+        // Add any from the original pattern
+        for (const auto & token : local_pattern.preserved_tokens) {
+            if (!token.empty() && std::find(preserved.begin(), preserved.end(), token) == preserved.end()) {
+                preserved.push_back(token);
+            }
+        }
+        
+        data.preserved_tokens = preserved;
 
         // data.prompt was already set
 
@@ -1604,24 +1708,24 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(const TemplatePatter
                                                             const struct templates_params & inputs,
                                                             bool                            thinking_forced_open) {
     GGML_UNUSED(tmpl);
-    
+
     auto has_tools = inputs.tools.is_array() && !inputs.tools.empty();
 
     auto parser = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
         // Reasoning parser - only include if we have valid reasoning markers
-        auto reasoning = p.eps();
+        auto reasoning       = p.eps();
         auto reasoning_start = pattern.special_markers.at("reasoning_start_marker");
-        auto reasoning_end = pattern.special_markers.at("reasoning_end_marker");
+        auto reasoning_end   = pattern.special_markers.at("reasoning_end_marker");
         auto tool_call_start = pattern.special_markers.at("tool_call_start_marker");
-        auto tool_call_end = pattern.special_markers.at("tool_call_end_marker");
+        auto tool_call_end   = pattern.special_markers.at("tool_call_end_marker");
         if ((inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE || thinking_forced_open) &&
-            !reasoning_start.empty() && reasoning_end.empty()) {
+            !reasoning_start.empty() && !reasoning_end.empty()) {
             if (thinking_forced_open) {
                 LOG_DBG("Building mandatory reasoning block with end marker '%s'", reasoning_start.c_str());
                 reasoning = p.reasoning(p.until(reasoning_end)) + reasoning_end;
             } else {
                 LOG_DBG("Building optional reasoning block with start '%s' and end '%s'", reasoning_start.c_str(),
-                    reasoning_end.c_str());
+                        reasoning_end.c_str());
                 reasoning = p.optional(reasoning_start + p.reasoning(p.until(reasoning_end)) + reasoning_end);
             }
         }
@@ -1629,18 +1733,17 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(const TemplatePatter
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             if (pattern.format == TemplatePattern::JSON_NATIVE) {
                 bool force_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
-                auto tool_calls = p.trigger_rule("tool-call", 
-                    p.standard_json_tools(tool_call_start, tool_call_end, 
-                        inputs.tools, inputs.parallel_tool_calls, force_calls
-                    ));
-                return p.sequence({
-                    reasoning, p.content(p.until(tool_call_start)), p.space(), tool_calls, p.space(), p.end()
-                });
-            } 
+                auto tool_calls  = p.standard_json_tools(tool_call_start, tool_call_end, inputs.tools,
+                                                         inputs.parallel_tool_calls, force_calls);
+
+                auto content_before_tools = tool_call_start.empty() ? p.eps() : p.content(p.until(tool_call_start));
+
+                return p.sequence({ reasoning, content_before_tools, p.space(), tool_calls, p.space(), p.end() });
+            }
             throw std::runtime_error("Native parser requires JSON tool format");
         }
 
-        return p.sequence({ reasoning, p.content(p.rest()), p.end() });
+        return p.sequence({ reasoning, p.rule("content", p.content(p.rest())), p.end() });
     });
 
     return parser;
@@ -1654,303 +1757,36 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(const TemplateP
     (void) inputs;  // Suppress unused parameter warning
 
     auto parser = build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
-        // Reasoning parser - only include if we have valid reasoning markers
+        auto reasoning_start = pattern.special_markers.at("reasoning_start_marker");
+        auto reasoning_end   = pattern.special_markers.at("reasoning_end_marker");
+        auto tool_call_start = pattern.special_markers.at("tool_call_start_marker");
+
+        // Reasoning parser
         auto reasoning = p.eps();
         if ((inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE || thinking_forced_open) &&
-            !pattern.special_markers.at("reasoning_start_marker").empty() &&
-            !pattern.special_markers.at("reasoning_end_marker").empty()) {
+            !reasoning_start.empty() && !reasoning_end.empty()) {
             if (thinking_forced_open) {
                 LOG_DBG("Building mandatory reasoning block for constructed parser");
-                reasoning =
-                    p.rule("reasoning",
-                           p.reasoning_block(p.reasoning(p.until(pattern.special_markers.at("reasoning_end_marker"))) +
-                                             p.literal(pattern.special_markers.at("reasoning_end_marker"))));
+                reasoning = p.rule("reasoning",
+                                   p.reasoning_block(p.reasoning(p.until(reasoning_end)) + p.literal(reasoning_end)));
             } else {
                 LOG_DBG("Building optional reasoning block for constructed parser");
-                reasoning = p.optional(
-                    p.rule("reasoning",
-                           p.reasoning_block(p.literal(pattern.special_markers.at("reasoning_start_marker")) +
-                                             p.reasoning(p.until(pattern.special_markers.at("reasoning_end_marker"))) +
-                                             p.literal(pattern.special_markers.at("reasoning_end_marker")))));
+                reasoning = p.optional(p.rule(
+                    "reasoning", p.reasoning_block(p.literal(reasoning_start) + p.reasoning(p.until(reasoning_end)) +
+                                                   p.literal(reasoning_end))));
             }
         }
 
-        // Handle tool choice modes properly according to ministral_3 pattern
-        bool has_tools = inputs.tools.is_array() && !inputs.tools.empty();
-        if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE &&
-            pattern.format == TemplatePattern::XML_CONSTRUCTED) {
-            std::string marker = pattern.special_markers.at("tool_call_start_marker");
-            if (!marker.empty() && !pattern.special_markers.at("tool_call_end_marker").empty()) {
-                auto tool_choice       = p.choice();
-                bool has_defined_tools = false;
+        bool force_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        auto tool_calls  = p.standard_constructed_tools(pattern.special_markers, inputs.tools,
+                                                        inputs.parallel_tool_calls, force_calls);
 
-                // Build individual tool parsers - each tool gets its own named rule
-                foreach_function(inputs.tools, [&](const json & tool) {
-                    has_defined_tools         = true;
-                    std::string function_name = tool.at("function").at("name");
-                    auto        parameters    = tool.at("function").contains("parameters") ?
-                                                    tool.at("function").at("parameters") :
-                                                    json::object();
-
-                    common_peg_parser args_parser = p.eps();
-
-                    // If we have parameter markers and schema has properties
-                    if (!pattern.special_markers.at("parameter_key_prefix").empty()) {
-                        if (parameters.contains("properties")) {
-                            auto arg_choice = p.choice();
-                            for (auto & el : parameters.at("properties").items()) {
-                                std::string prop_name = el.key();
-
-                                // Allow unquoted or quoted property names to handle variations (like MiniMax)
-                                auto arg_name_parser =
-                                    p.choice({ p.literal(prop_name), p.literal("\"" + prop_name + "\""),
-                                               p.literal("'" + prop_name + "'") });
-
-                                // Construct rule for this specific argument
-                                auto arg_rule = p.tool_arg(
-                                    p.tool_arg_open(p.literal(pattern.special_markers.at("parameter_key_prefix"))) +
-                                    p.tool_arg_name(arg_name_parser) +
-                                    (pattern.special_markers.at("parameter_key_suffix").empty() ?
-                                         p.literal(">") :
-                                         p.literal(pattern.special_markers.at("parameter_key_suffix"))) +
-                                    // Value parser - still generic string until closer
-                                    p.tool_arg_string_value(
-                                        p.until(pattern.special_markers.at("parameter_closer").empty() ?
-                                                    "</" :
-                                                    pattern.special_markers.at("parameter_closer"))) +
-                                    (pattern.special_markers.at("parameter_closer").empty() ?
-                                         p.eps() :
-                                         p.tool_arg_close(p.literal(pattern.special_markers.at("parameter_closer")))) +
-                                    // Separator
-                                    (pattern.special_markers.at("argument_separator").empty() ?
-                                         p.eps() :
-                                         p.optional(p.literal(pattern.special_markers.at("argument_separator")))));
-                                arg_choice |= arg_rule;
-                            }
-                            args_parser = p.zero_or_more(arg_choice + p.space());
-                        } else {
-                            // If properties is empty or missing, assume no args or generic fallback?
-                            // Strict mode: if parameters object exists but has no properties, expect no args.
-                            args_parser = p.eps();
-                        }
-                    } else {
-                        // Fallback if no parameter structure detected
-                        args_parser = p.content(p.until(pattern.special_markers.at("tool_call_end_marker")));
-                    }
-
-                    // Build the tool rule with specific tool name (following ministral_3 pattern)
-                    auto specific_tool =
-                        p.tool(p.tool_open(p.literal(marker)) + p.space() +
-                               (!pattern.special_markers.at("function_opener").empty() ?
-                                    p.literal(pattern.special_markers.at("function_opener")) :
-                                    p.eps()) +
-                               p.tool_name(p.literal(function_name)) +
-                               (!pattern.special_markers.at("function_name_suffix").empty() ?
-                                    p.literal(pattern.special_markers.at("function_name_suffix")) :
-                                    p.eps()) +
-
-                               (pattern.special_markers.at("function_name_suffix").empty() &&
-                                        !pattern.special_markers.at("function_closer").empty() ?
-                                    p.literal(pattern.special_markers.at("function_closer")) :
-                                    p.eps()) +
-
-                               (pattern.special_markers.at("parameter_key_prefix").empty() ?
-                                    p.until(pattern.special_markers.at("tool_call_end_marker")) :
-                                    p.space()) +
-
-                               args_parser +
-
-                               // Consume optional whitespace/newlines after args before closer
-                               p.space() +
-
-                               (!pattern.special_markers.at("function_name_suffix").empty() &&
-                                        !pattern.special_markers.at("function_closer").empty() &&
-                                        pattern.special_markers.at("function_closer") !=
-                                            pattern.special_markers.at("function_name_suffix") ?
-                                    p.literal(pattern.special_markers.at("function_closer")) :
-                                    p.eps()) +
-
-                               p.until(pattern.special_markers.at("tool_call_end_marker")) +
-
-                               p.tool_close(p.literal(pattern.special_markers.at("tool_call_end_marker"))));
-
-                    // Create named rule for this specific tool (tool-name pattern)
-                    auto named_tool = p.rule("tool-" + function_name, specific_tool);
-                    tool_choice |= named_tool;
-                });
-
-                if (has_defined_tools) {
-                    // Determine min_calls and max_calls based on tool_choice
-                    int min_calls = 0;
-                    int max_calls = 1;  // Default to single call
-
-                    if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
-                        min_calls = 1;
-                        max_calls = 1;
-                    } else if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO) {
-                        min_calls = 1;
-                        max_calls = inputs.parallel_tool_calls ? -1 : 1;  // -1 for unlimited, 1 for single
-                    }
-
-                    LOG_DBG("Tool choice: %d, min_calls: %d, max_calls: %d, parallel: %d", inputs.tool_choice,
-                            min_calls, max_calls, inputs.parallel_tool_calls);
-
-                    // Create trigger rule with proper repetition following ministral_3 pattern
-                    auto tool_calls = p.trigger_rule("tool_call", p.repeat(tool_choice, min_calls, max_calls));
-
-                    auto safe_content = p.rule(
-                        "content",
-                        p.content(p.choice({ p.sequence({ p.peek(p.literal(marker)), p.any(), p.until(marker) }),
-                                             p.sequence({ p.negate(p.literal(marker)), p.any(), p.until(marker) }) })));
-
-                    // Allow mix of content and tool calls
-                    return reasoning + p.zero_or_more(p.choice({ tool_calls, safe_content }));
-                }
-            }
+        if (!tool_call_start.empty()) {
+            return reasoning + p.space() + p.tag_with_safe_content("content", tool_call_start, tool_calls) +
+                   p.optional(p.rule("content", p.content(p.rest())));
         }
 
-        // Fallback: handle other XML_CONSTRUCTED cases without tool choice logic
-        if (pattern.format == TemplatePattern::XML_CONSTRUCTED) {
-            // XML-style parser (like Qwen3/Seed-OSS)
-            std::string marker = pattern.special_markers.at("tool_call_start_marker");
-            if (!marker.empty() && !pattern.special_markers.at("tool_call_end_marker").empty()) {
-                // Generic fallback without specific tool definitions
-                common_peg_parser args_parser = p.eps();
-
-                // If we detected parameter structure, use it
-                if (!pattern.special_markers.at("parameter_key_prefix").empty()) {
-                    auto arg = p.tool_arg(
-                        p.tool_arg_open(p.literal(pattern.special_markers.at("parameter_key_prefix"))) +
-                        p.tool_arg_name(p.until(pattern.special_markers.at("parameter_key_suffix").empty() ?
-                                                    ">" :
-                                                    pattern.special_markers.at("parameter_key_suffix"))) +
-                        (pattern.special_markers.at("parameter_key_suffix").empty() ?
-                             p.eps() :
-                             p.literal(pattern.special_markers.at("parameter_key_suffix"))) +
-                        p.tool_arg_string_value(p.until(pattern.special_markers.at("parameter_closer").empty() ?
-                                                            "</" :
-                                                            pattern.special_markers.at("parameter_closer"))) +
-                        (pattern.special_markers.at("parameter_closer").empty() ?
-                             p.eps() :
-                             p.tool_arg_close(p.literal(pattern.special_markers.at("parameter_closer"))))
-                        // Also consume separator if present
-                        + (pattern.special_markers.at("argument_separator").empty() ?
-                               p.eps() :
-                               p.optional(p.literal(pattern.special_markers.at("argument_separator")))));
-
-                    args_parser = p.zero_or_more(arg + p.space());
-                } else {
-                    // Fallback to content if no parameter structure detected
-                    args_parser = p.content(p.until(pattern.special_markers.at("tool_call_end_marker")));
-                }
-
-                auto function_call_def =
-                    p.tool(p.tool_open(p.literal(marker)) + p.space() +
-
-                           // Improved TOOL_NAME parsing
-                           (pattern.special_markers.at("function_opener").empty() ?
-                                p.eps() :
-                                p.literal(pattern.special_markers.at("function_opener"))) +
-                           p.tool_name(p.chars("a-zA-Z0-9_\\-\\.:", 1)) +
-                           (!pattern.special_markers.at("function_name_suffix").empty() ?
-                                p.literal(pattern.special_markers.at("function_name_suffix")) :
-                                p.eps()) +
-
-                           // If suffix is NOT empty, function_closer is likely the block closer -> handled AFTER args
-                           // If suffix IS empty, function_closer is the name closer -> handled here
-                           (pattern.special_markers.at("function_name_suffix").empty() &&
-                                    !pattern.special_markers.at("function_closer").empty() ?
-                                p.literal(pattern.special_markers.at("function_closer")) :
-                                p.eps()) +
-
-                           // Consume everything else until parameter starts (e.g. newline) OR tool call ends
-                           (pattern.special_markers.at("parameter_key_prefix").empty() ?
-                                p.until(pattern.special_markers.at("tool_call_end_marker")) :
-                                p.until_one_of({ pattern.special_markers.at("parameter_key_prefix"),
-                                                 pattern.special_markers.at("tool_call_end_marker") })) +
-
-                           args_parser +
-
-                           // Block closer (if suffix was present and closer is not same as suffix)
-                           (!pattern.special_markers.at("function_name_suffix").empty() &&
-                                    !pattern.special_markers.at("function_closer").empty() &&
-                                    pattern.special_markers.at("function_closer") !=
-                                        pattern.special_markers.at("function_name_suffix") ?
-                                p.literal(pattern.special_markers.at("function_closer")) :
-                                p.eps()) +
-
-                           // Consume gap between function closer and tool closer
-                           p.until(pattern.special_markers.at("tool_call_end_marker")) +
-
-                           p.tool_close(p.literal(pattern.special_markers.at("tool_call_end_marker"))));
-                auto function_call = p.trigger_rule("tool_call", function_call_def);
-
-                auto safe_content = p.rule(
-                    "content",
-                    p.content(p.choice({ p.sequence({ p.peek(p.literal(marker)), p.any(), p.until(marker) }),
-                                         p.sequence({ p.negate(p.literal(marker)), p.any(), p.until(marker) }) })));
-
-                // Allow mix of content and tool calls
-                return reasoning + p.zero_or_more(p.choice({ function_call, safe_content }));
-            }
-            if (!pattern.special_markers.at("function_opener").empty() &&
-                !pattern.special_markers.at("function_closer").empty()) {
-                // Fallback: try to detect XML-style tags
-                std::string opener = pattern.special_markers.at("function_opener");
-                std::string closer = pattern.special_markers.at("function_closer");
-                if (!opener.empty() && !closer.empty()) {
-                    auto function_call = p.tool(p.tool_open(p.literal(opener)) + p.space() + p.tool_name(p.until(">")) +
-                                                p.content(p.until(closer)) + p.tool_close(p.literal(closer)));
-
-                    auto safe_content =
-                        p.content(p.choice({ p.sequence({ p.peek(p.literal(opener)), p.any(), p.until(opener) }),
-                                             p.sequence({ p.negate(p.literal(opener)), p.any(), p.until(opener) }) }));
-
-                    return reasoning + p.zero_or_more(p.choice({ function_call, safe_content }));
-                }
-            } else if (!pattern.special_markers.at("tool_call_start_marker").empty()) {
-                std::string marker = pattern.special_markers.at("tool_call_start_marker");
-                // If we have start marker but no specific XML structure, try to build a generic tool parser
-                auto        function_call_def =
-                    p.tool(p.tool_open(p.literal(marker)) +
-                           p.content(p.until(pattern.special_markers.at("tool_call_end_marker").empty() ?
-                                                 "\n" :
-                                                 pattern.special_markers.at("tool_call_end_marker"))) +
-                           (pattern.special_markers.at("tool_call_end_marker").empty() ?
-                                p.eps() :
-                                p.tool_close(p.literal(pattern.special_markers.at("tool_call_end_marker")))));
-                auto function_call = p.trigger_rule("tool_call", function_call_def);
-
-                auto safe_content = p.rule(
-                    "content",
-                    p.content(p.choice({ p.sequence({ p.peek(p.literal(marker)), p.any(), p.until(marker) }),
-                                         p.sequence({ p.negate(p.literal(marker)), p.any(), p.until(marker) }) })));
-
-                return reasoning + p.zero_or_more(p.choice({ function_call, safe_content }));
-            }
-        }
-
-        if (!pattern.special_markers.at("tool_call_start_marker").empty()) {
-            std::string marker = pattern.special_markers.at("tool_call_start_marker");
-            // If format is not XML_CONSTRUCTED but we have start marker, try to use it
-            auto        function_call =
-                p.tool(p.tool_open(p.literal(marker)) +
-                       p.content(p.until(pattern.special_markers.at("tool_call_end_marker").empty() ?
-                                             "\n" :
-                                             pattern.special_markers.at("tool_call_end_marker"))) +
-                       (pattern.special_markers.at("tool_call_end_marker").empty() ?
-                            p.eps() :
-                            p.tool_close(p.literal(pattern.special_markers.at("tool_call_end_marker")))));
-
-            auto safe_content =
-                p.content(p.choice({ p.sequence({ p.peek(p.literal(marker)), p.any(), p.until(marker) }),
-                                     p.sequence({ p.negate(p.literal(marker)), p.until(marker) }) }));
-
-            return reasoning + p.zero_or_more(p.choice({ function_call, safe_content }));
-        }
-
-        // Fallback to content-only parsing
-        return reasoning + p.content(p.rest());
+        return reasoning + p.rule("content", p.content(p.rest()));
     });
 
     return parser;

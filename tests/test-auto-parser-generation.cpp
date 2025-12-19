@@ -589,6 +589,8 @@ static void test_nvidia_nemotron_nano_v2_template(testing & t) {
         common_chat_msg          test_msg   = simple_assist_msg("", "", "special_function", "{\"arg1\": 1}");
         // Nemotron uses JSON arguments, so integer 1 is preserved as 1.
         std::vector<std::string> end_tokens = { "<SPECIAL_12>" };  // Assuming this is end token based on template
+        auto                     data = init_delta_auto(pattern, chat_template, end_tokens, message_user, test_msg,
+                                                        { special_function_tool }, false);
         test_templates_auto(pattern, chat_template, end_tokens, test_msg, { special_function_tool }, "", false, true);
 
         t.log("NVIDIA-Nemotron-Nano-v2 parser generation successful");

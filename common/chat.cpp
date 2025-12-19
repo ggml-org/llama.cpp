@@ -110,14 +110,15 @@ std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const comm
         const auto idx = msg_prv.tool_calls.size() - 1;
         const auto & pref = msg_prv.tool_calls[idx];
         const auto & newf = msg_new.tool_calls[idx];
-        if (pref.name != newf.name) {
+        // Allow tool name to change from empty to non-empty during incremental parsing
+        if (pref.name != newf.name && !pref.name.empty()) {
             throw std::runtime_error("Invalid diff: tool call mismatch!");
         }
         const auto args_diff = string_diff(pref.arguments, newf.arguments);
-        if (!args_diff.empty() || pref.id != newf.id) {
+        if (!args_diff.empty() || pref.id != newf.id || pref.name != newf.name) {
             auto & diff = diffs.emplace_back();
             diff.tool_call_index = idx;
-            if (pref.id != newf.id) {
+            if (pref.id != newf.id || pref.name != newf.name) {
                 diff.tool_call_delta.id = newf.id;
                 diff.tool_call_delta.name = newf.name;
             }
