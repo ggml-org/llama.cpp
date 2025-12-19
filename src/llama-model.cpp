@@ -1720,8 +1720,14 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 // NextN/MTP parameters
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,        hparams.nextn_predict_layers, false);
 
-                hparams.n_layer_kv_from_start = hparams.n_layer;
-
+                if (params.mtp) {
+                    // Include MTP layers in KV cache if MTP is enabled
+                    hparams.n_layer_kv_from_start = hparams.n_layer;
+                }
+                else {
+                    // Otherwise exclude to save memory
+                    hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
+                }
                 switch (hparams.n_layer) {
                     case 47: type = LLM_TYPE_106B_A12B; break; // GLM-4.5-Air (46 layers + 1 NextN layer)
                     case 93: type = LLM_TYPE_355B_A32B; break; // GLM-4.5 (92 layers + 1 NextN layer)
@@ -5050,9 +5056,15 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     }
 
                     // Load ALL tensors including NextN layer to satisfy total tensor count
-                    // but only PROCESS up to last layer (skipping final NextN layer) in forward pass
+                    // but skip loading data for NextN layers if MTP is disabled to save VRAM
                     for (int i = 0; i < n_layer; ++i) {
                         int flags = 0;
+                        // Skip loading MTP layers if the feature is disabled
+                        if (!params.mtp) {
+                            if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+                                flags |= TENSOR_SKIP;
+                            }
+                        }
 
                         auto & layer = layers[i];
 
@@ -7673,6 +7685,7 @@ llama_model_params llama_model_default_params() {
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
+        /*.mtp                         =*/ false,
     };
 
     return result;
