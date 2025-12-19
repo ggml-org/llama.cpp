@@ -2274,23 +2274,18 @@ void ggml_vec_dot_iq2_xxs_q8_K_vl256(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = 0.125f * sumf;
 }
 
-static void (*resolve_ggml_vec_dot_iq2_xxs_q8_K(void))(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc){
+void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
 #if defined __riscv_v_intrinsic
-    size_t vlen = __riscv_vlenb() * 8;
-    switch (vlen) {
+    switch (__riscv_vlenb() * 8) {
         case 128:
-            return ggml_vec_dot_iq2_xxs_q8_K_vl128;
-        case 256:
-            return ggml_vec_dot_iq2_xxs_q8_K_vl256;
+            return ggml_vec_dot_iq2_xxs_q8_K_vl128(n, s, bs, vx, bx, vy, by, nrc);
         default:
-            return ggml_vec_dot_iq2_xxs_q8_K_vl256;
+            return ggml_vec_dot_iq2_xxs_q8_K_vl256(n, s, bs, vx, bx, vy, by, nrc);
     }
+#else
+    return ggml_vec_dot_iq2_xxs_q8_K(n, s, bs, vx, bx, vy, by, nrc);
 #endif
-    return ggml_vec_dot_iq2_xxs_q8_K_generic;
 }
-
-// Declare "ggml_vec_dot_iq2_xxs_q8_K" as an ifunc.
-void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) __attribute__((ifunc("resolve_ggml_vec_dot_iq2_xxs_q8_K")));
 
 void ggml_vec_dot_iq4_nl_q8_0_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
@@ -2402,21 +2397,18 @@ void ggml_vec_dot_iq4_nl_q8_0_vl256(int n, float * GGML_RESTRICT s, size_t bs, c
     *s = sumf;
 }
 
-static void (*resolve_ggml_vec_dot_iq4_nl_q8_0(void))(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
 #if defined __riscv_v_intrinsic
-    size_t vlen = __riscv_vlenb() * 8;
-    switch (vlen) {
+    switch (__riscv_vlenb() * 8) {
         case 128:
-            return ggml_vec_dot_iq4_nl_q8_0_vl128;
+            return ggml_vec_dot_iq4_nl_q8_0_vl128(n, s, bs, vx, bx, vy, by, nrc);
         default:
-            return ggml_vec_dot_iq4_nl_q8_0_vl256;
+            return ggml_vec_dot_iq4_nl_q8_0_vl256(n, s, bs, vx, bx, vy, by, nrc);
     }
+#else
+    return ggml_vec_dot_iq4_nl_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
-    return ggml_vec_dot_iq4_nl_q8_0_generic;
 }
-
-// Declare "ggml_vec_dot_iq4_nl_q8_0" as an ifunc.
-void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) __attribute__((ifunc("resolve_ggml_vec_dot_iq4_nl_q8_0")));
 
 void ggml_vec_dot_mxfp4_q8_0_vl128(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
@@ -2528,21 +2520,18 @@ void ggml_vec_dot_mxfp4_q8_0_vl256(int n, float * GGML_RESTRICT s, size_t bs, co
     *s = sumf;
 }
 
-static void (*resolve_ggml_vec_dot_mxfp4_q8_0(void))(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
 #if defined __riscv_v_intrinsic
-    size_t vlen = __riscv_vlenb() * 8;
-    switch (vlen) {
+    switch (__riscv_vlenb() * 8) {
         case 128:
-            return ggml_vec_dot_mxfp4_q8_0_vl128;
+            return ggml_vec_dot_mxfp4_q8_0_vl128(n, s, bs, vx, bx, vy, by, nrc);
         default:
-            return ggml_vec_dot_mxfp4_q8_0_vl256;
+            return ggml_vec_dot_mxfp4_q8_0_vl256(n, s, bs, vx, bx, vy, by, nrc);
     }
+#else
+    return ggml_vec_dot_mxfp4_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
-    return ggml_vec_dot_mxfp4_q8_0_generic;
 }
-
-// Declare "ggml_vec_dot_mxfp4_q8_0" as an ifunc.
-void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) __attribute__((ifunc("resolve_ggml_vec_dot_mxfp4_q8_0")));
 
 void ggml_vec_dot_iq4_xs_q8_K_vl256(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
@@ -2628,16 +2617,15 @@ void ggml_vec_dot_iq4_xs_q8_K_vl256(int n, float * GGML_RESTRICT s, size_t bs, c
 #endif
 }
 
-static void (*resolve_ggml_vec_dot_iq4_xs_q8_K(void))(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc){
+void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
 #if defined __riscv_v_intrinsic
-    size_t vlen = __riscv_vlenb() * 8;
-    switch (vlen) {
+    switch (__riscv_vlenb() * 8) {
         case 256:
-            return ggml_vec_dot_iq4_xs_q8_K_vl256;
+            return ggml_vec_dot_iq4_xs_q8_K_vl256(n, s, bs, vx, bx, vy, by, nrc);
+        default:
+            return ggml_vec_dot_iq4_xs_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
     }
+#else
+    return ggml_vec_dot_iq4_xs_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
-    return ggml_vec_dot_iq4_xs_q8_K_generic;
 }
-
-// Declare "ggml_vec_dot_iq4_xs_q8_K" as an ifunc.
-void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) __attribute__((ifunc("resolve_ggml_vec_dot_iq4_xs_q8_K")));
