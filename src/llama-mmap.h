@@ -25,8 +25,8 @@ struct llama_file {
     void seek(size_t offset, int whence) const;
 
     void read_raw(void * ptr, size_t len) const;
-    void read_raw_at(void * ptr, size_t len, size_t offset) const;
-    void read_aligned_chunk(size_t offset, void * dest, size_t size) const;
+    void read_raw_unsafe(void * ptr, size_t len) const;
+    void read_aligned_chunk(void * dest, size_t size) const;
     uint32_t read_u32() const;
 
     void write_raw(const void * ptr, size_t len) const;

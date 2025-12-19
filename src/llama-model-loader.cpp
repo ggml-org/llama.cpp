@@ -508,9 +508,12 @@ llama_model_loader::llama_model_loader(
     files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io));
     contexts.emplace_back(ctx);
 
+    use_direct_io = use_direct_io && files.back()->has_direct_io();
+
     // Disable mmap in case Direct I/O is enabled and available
-    if (use_direct_io && files.at(0)->has_direct_io()) {
+    if (use_direct_io && use_mmap) {
         use_mmap = false;
+        LLAMA_LOG_WARN("%s: direct I/O is enabled, disabling mmap\n", __func__);
     }
 
     // Save tensors data offset of the main file.
@@ -722,6 +725,7 @@ llama_model_loader::llama_model_loader(
     }
 
     this->use_mmap = use_mmap;
+    this->use_direct_io = use_direct_io;
     this->check_tensors = check_tensors;
     this->no_alloc = no_alloc;
 }
@@ -918,7 +922,8 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
         GGML_ASSERT(cur->data != nullptr);
         GGML_ASSERT(w.idx < files.size());
         const auto & file = files.at(w.idx);
-        file->read_raw_at(cur->data, ggml_nbytes(cur), w.offs);
+        file->seek(w.offs, SEEK_SET);
+        file->read_raw(cur->data, ggml_nbytes(cur));
     }
 
     if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
@@ -1082,7 +1087,8 @@ bool llama_model_loader::load_all_data(
             const auto & file = files.at(weight->idx);
 
             if (ggml_backend_buffer_is_host(cur->buffer)) {
-                file->read_raw_at(cur->data, n_size, weight->offs);
+                file->seek(weight->offs, SEEK_SET);
+                file->read_raw(cur->data, n_size);
                 if (check_tensors) {
                     validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
                         return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));
@@ -1091,10 +1097,10 @@ bool llama_model_loader::load_all_data(
             } else {
                 // If upload_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
                 if (upload_backend) {
-                    auto offset = (off_t) weight->offs;
+                    size_t offset = weight->offs;
                     alignment = file->read_alignment();
-                    off_t aligned_offset = offset & ~(alignment - 1);
-                    off_t offset_from_alignment = offset - aligned_offset;
+                    size_t aligned_offset = offset & ~(alignment - 1);
+                    size_t offset_from_alignment = offset - aligned_offset;
                     file->seek(aligned_offset, SEEK_SET);
 
                     // Calculate aligned read boundaries
@@ -1144,7 +1150,8 @@ bool llama_model_loader::load_all_data(
                     }
                 } else {
                     read_buf.resize(n_size);
-                    file->read_raw_at(read_buf.data(), n_size, weight->offs);
+                    file->seek(weight->offs, SEEK_SET);
+                    file->read_raw(read_buf.data(), n_size);
                     ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
                     if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
                         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
