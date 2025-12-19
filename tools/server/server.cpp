@@ -8,6 +8,7 @@
 #include "log.h"
 
 #include <atomic>
+#include <exception>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
 
@@ -124,7 +125,12 @@ int main(int argc, char ** argv, char ** envp) {
     std::optional<server_models_routes> models_routes{};
     if (is_router_server) {
         // setup server instances manager
-        models_routes.emplace(params, argc, argv, envp);
+        try {
+            models_routes.emplace(params, argc, argv, envp);
+        } catch (const std::exception & e) {
+            LOG_ERR("%s: failed to initialize router models: %s\n", __func__, e.what());
+            return 1;
+        }
 
         // proxy handlers
         // note: routes.get_health stays the same
@@ -153,7 +159,6 @@ int main(int argc, char ** argv, char ** envp) {
         routes.get_models = models_routes->get_router_models;
         ctx_http.post("/models/load",   ex_wrapper(models_routes->post_router_models_load));
         ctx_http.post("/models/unload", ex_wrapper(models_routes->post_router_models_unload));
-        ctx_http.post("/models/status", ex_wrapper(models_routes->post_router_models_status));
     }
 
     ctx_http.get ("/health",              ex_wrapper(routes.get_health)); // public endpoint (no API key check)
@@ -291,7 +296,7 @@ int main(int argc, char ** argv, char ** envp) {
         const char * router_port = std::getenv("LLAMA_SERVER_ROUTER_PORT");
         std::thread monitor_thread;
         if (router_port != nullptr) {
-            monitor_thread = server_models::setup_child_server(params, std::atoi(router_port), params.model_alias, shutdown_handler);
+            monitor_thread = server_models::setup_child_server(shutdown_handler);
         }
 
         // this call blocks the main thread until queue_tasks.terminate() is called
