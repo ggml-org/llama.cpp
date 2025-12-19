@@ -111,8 +111,8 @@
 
 // Flash Attention parameters
 #define WEBGPU_FLASH_ATTN_WG_SIZE 32
-#define WEBGPU_FLASH_ATTN_Q_TILE  8
-#define WEBGPU_FLASH_ATTN_KV_TILE 16
+#define WEBGPU_FLASH_ATTN_Q_TILE  16
+#define WEBGPU_FLASH_ATTN_KV_TILE 8
 
 /* End Constants */
 
