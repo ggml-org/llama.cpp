@@ -1584,12 +1584,13 @@ constexpr int Q8_LT_WG_SIZE = Q8_LT_SG_COUNT * XMX_SG_SIZE;    // 512 threads pe
 constexpr int Q8_LT_OUTPUT_ROWS = Q8_LT_TILES_M * XMX_M;       // 64 rows per work-group
 constexpr int Q8_LT_OUTPUT_COLS = Q8_LT_TILES_N * XMX_N;       // 64 cols per work-group
 
-// Large-tile SLM sizes for Q8_0 (C accumulated in registers, not SLM)
+// Large-tile SLM sizes for Q8_0
 constexpr int Q8_LT_SLM_A_SIZE = XMX_M * XMX_K * Q8_LT_TILES_M;     // 8×32×8 = 2048 bytes
 constexpr int Q8_LT_SLM_B_SIZE = XMX_K * XMX_N * Q8_LT_TILES_N;     // 32×16×4 = 2048 bytes
 constexpr int Q8_LT_SLM_SCALES_A_SIZE = XMX_M * Q8_LT_TILES_M;      // 8×8 = 64 floats = 256 bytes
 constexpr int Q8_LT_SLM_SCALES_B_SIZE = XMX_N * Q8_LT_TILES_N;      // 16×4 = 64 floats = 256 bytes
-// Total SLM: ~5KB (no slm_C needed)
+constexpr int Q8_LT_SLM_C_SIZE = XMX_M * XMX_N * Q8_LT_SG_COUNT;    // 8×16×32 = 4096 int32 = 16384 bytes
+// Total SLM: ~21KB
 
 void mul_mat_q8_0_q8_1_xmx_largetile_kernel(
     const void* __restrict__ vx,      // Q8_0 weights
@@ -1601,6 +1602,7 @@ void mul_mat_q8_0_q8_1_xmx_largetile_kernel(
     const int nrows_dst,              // Output row stride
     int8_t* __restrict__ slm_A,       // SLM for A tiles [8 × 8 × 32]
     int8_t* __restrict__ slm_B,       // SLM for B tiles [4 × 32 × 16]
+    int32_t* __restrict__ slm_C,      // SLM for C tiles [32 × 8 × 16]
     float* __restrict__ slm_scales_A, // SLM for A scales [8 × 8]
     float* __restrict__ slm_scales_B, // SLM for B scales [4 × 16]
     sycl::nd_item<2> item
@@ -1630,9 +1632,10 @@ void mul_mat_q8_0_q8_1_xmx_largetile_kernel(
     constexpr int Q8_0_BLOCK_SIZE = 34;  // sizeof(block_q8_0) = 2 + 32
     constexpr int Q8_1_BLOCK_SIZE = 36;  // sizeof(block_q8_1) = 2 + 2 + 32
 
-    // Pointers to this sub-group's A and B tiles in SLM
+    // Pointers to this sub-group's tiles in SLM
     int8_t* my_slm_A = slm_A + sg_row * (XMX_M * XMX_K);
     int8_t* my_slm_B = slm_B + sg_col * (XMX_K * XMX_N);
+    int32_t* my_slm_C = slm_C + sg_id * (XMX_M * XMX_N);  // Each sub-group has its own 8×16 C tile
     float* my_slm_scales_A = slm_scales_A + sg_row * XMX_M;
     float* my_slm_scales_B = slm_scales_B + sg_col * XMX_N;
 
@@ -1704,23 +1707,22 @@ void mul_mat_q8_0_q8_1_xmx_largetile_kernel(
 
         auto A_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(my_slm_A);
         auto B_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(my_slm_B);
+        auto C_ptr = sycl::address_space_cast<sycl::access::address_space::local_space, sycl::access::decorated::no>(my_slm_C);
 
         sycl_xmx::joint_matrix_load(sg, matA, A_ptr, XMX_K);
         sycl_xmx::joint_matrix_load(sg, matB, B_ptr, XMX_K);
         sycl_xmx::joint_matrix_fill(sg, matC, 0);
         sycl_xmx::joint_matrix_mad(sg, matC, matA, matB, matC);
+        sycl_xmx::joint_matrix_store(sg, matC, C_ptr, XMX_N, sycl_xmx::layout::row_major);
 
-        // ============== Phase 4: Apply scales using register accumulation ==============
-        auto wi_data = sycl::ext::oneapi::detail::get_wi_data(sg, matC);
-
-        float d_B = my_slm_scales_B[lane_id];
-
+        // ============== Phase 4: Apply scales and accumulate ==============
+        // Use correct indexed pattern matching single-tile kernel
         #pragma unroll
-        for (int row = 0; row < XMX_M; row++) {
-            int32_t C_val = wi_data[row];
-            float d_A = my_slm_scales_A[row];
+        for (int idx = lane_id, acc_idx = 0; idx < XMX_M * XMX_N; idx += XMX_SG_SIZE, acc_idx++) {
+            int i = idx / XMX_N;  // row within tile
+            int j = idx % XMX_N;  // col within tile
             // Q8_0 x Q8_1: just multiply scales (no zero-point offset like Q4_0)
-            acc[row] += d_A * d_B * float(C_val);
+            acc[acc_idx] += my_slm_scales_A[i] * my_slm_scales_B[j] * float(my_slm_C[idx]);
         }
 
         // Barrier before next K block
@@ -1728,14 +1730,14 @@ void mul_mat_q8_0_q8_1_xmx_largetile_kernel(
     }
 
     // ============== Write output ==============
-    int col = col_base + lane_id;
-    if (col < ncols_y) {
-        #pragma unroll
-        for (int row_offset = 0; row_offset < XMX_M; row_offset++) {
-            int row = row_base + row_offset;
-            if (row < nrows_x) {
-                dst[col * nrows_dst + row] = acc[row_offset];
-            }
+    #pragma unroll
+    for (int idx = lane_id, acc_idx = 0; idx < XMX_M * XMX_N; idx += XMX_SG_SIZE, acc_idx++) {
+        int i = idx / XMX_N;
+        int j = idx % XMX_N;
+        int row = row_base + i;
+        int col = col_base + j;
+        if (row < nrows_x && col < ncols_y) {
+            dst[col * nrows_dst + row] = acc[acc_idx];
         }
     }
 }
@@ -3512,16 +3514,18 @@ static void ggml_mul_mat_q8_0_q8_1_xmx_largetile_sycl(
     GGML_SYCL_DEBUG("[XMX-Q8-LT] Launching Q8_0 large-tile kernel: grid=(%d,%d), block=(%d,%d), M=%d, N=%d, K=%d\n",
                     num_row_groups, num_col_groups, Q8_LT_SG_COUNT, XMX_SG_SIZE, nrows_x, ncols_y, ncols_x);
 
-    // SLM layout for Q8_0 large-tile (C accumulated in registers, not SLM):
+    // SLM layout for Q8_0 large-tile:
     // - A tiles: 8 row tiles × 8×32 int8 = 2048 bytes
     // - B tiles: 4 col tiles × 32×16 int8 = 2048 bytes
+    // - C tiles: 32 sub-groups × 8×16 int32 = 16384 bytes
     // - A scales: 8 row tiles × 8 floats = 256 bytes
     // - B scales: 4 col tiles × 16 floats = 256 bytes
     constexpr int Q8_LT_TOTAL_SLM_SIZE = Q8_LT_SLM_A_SIZE +           // 2048
                                           Q8_LT_SLM_B_SIZE +           // 2048
+                                          Q8_LT_SLM_C_SIZE * 4 +       // 16384
                                           Q8_LT_SLM_SCALES_A_SIZE * 4 + // 256
                                           Q8_LT_SLM_SCALES_B_SIZE * 4;  // 256
-                                          // Total: ~5KB
+                                          // Total: ~21KB
 
     stream->submit([&](sycl::handler& h) {
         sycl::local_accessor<char, 1> shared_acc(sycl::range<1>(Q8_LT_TOTAL_SLM_SIZE), h);
@@ -3536,13 +3540,15 @@ static void ggml_mul_mat_q8_0_q8_1_xmx_largetile_sycl(
                 offset += Q8_LT_SLM_A_SIZE;
                 int8_t* slm_B = reinterpret_cast<int8_t*>(shared + offset);
                 offset += Q8_LT_SLM_B_SIZE;
+                int32_t* slm_C = reinterpret_cast<int32_t*>(shared + offset);
+                offset += Q8_LT_SLM_C_SIZE * 4;
                 float* slm_scales_A = reinterpret_cast<float*>(shared + offset);
                 offset += Q8_LT_SLM_SCALES_A_SIZE * 4;
                 float* slm_scales_B = reinterpret_cast<float*>(shared + offset);
 
                 mul_mat_q8_0_q8_1_xmx_largetile_kernel(
                     vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_dst,
-                    slm_A, slm_B, slm_scales_A, slm_scales_B, item);
+                    slm_A, slm_B, slm_C, slm_scales_A, slm_scales_B, item);
             });
     });
 }

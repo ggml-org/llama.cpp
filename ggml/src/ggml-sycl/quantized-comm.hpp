@@ -285,9 +285,8 @@ inline void quantized_allreduce(
         bufs->host_q0, &params0, n_elements, debug
     );
 
-    // Wait for both copies
-    ev0.wait();
-    ev1.wait();
+    // Wait for both copies in parallel
+    sycl::event::wait({ev0, ev1});
 
     if (debug) {
         fprintf(stderr, "QUANT_ALLREDUCE (INT16): params0(scale=%.9f, zero=%.6f) params1(scale=%.9f, zero=%.6f)\n",

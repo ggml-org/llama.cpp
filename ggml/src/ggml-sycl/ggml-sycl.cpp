@@ -8750,6 +8750,12 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         use_xmx_gemm = ggml_sycl_xmx_available() && ggml_sycl_xmx_supports_type(src0->type);
     }
     if (use_xmx_gemm) {
+        // XMX requires K dimension to be divisible by XMX_K (32)
+        const int64_t ncols_x = src0->ne[0];  // K dimension
+        constexpr int XMX_K = 32;
+        use_xmx_gemm = (ncols_x % XMX_K) == 0;
+    }
+    if (use_xmx_gemm) {
         int64_t batch = src1->ne[1];
         // XMX is beneficial for batch >= 1 and < threshold (DEBUG)
         use_xmx_gemm = batch >= 1 && batch < g_ggml_sycl_xmx_threshold;
