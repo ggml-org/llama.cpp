@@ -2850,7 +2850,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
             m_warptile_mmq = m_warptile_mmq_int = { 256, 64, 64, 32, 16, 16, 2, 2, 2, 1, 16 };
             m_warptile_mmqid = m_warptile_mmqid_int = { 256, 64, 64, 32, 16, 16, 2, 2, 2, 1, 16 };
         }
-        else if ((device->vendor_id == VK_VENDOR_ID_INTEL) && (device->driver_id == vk::DriverId::eIntelProprietaryWindows)) {
+        else if ((device->vendor_id == VK_VENDOR_ID_INTEL)) {
             if (device->coopmat_support && device->architecture == INTEL_XE2) {
                 // Xe2/Xe3 with coopmat enabled - warptile performance tuning
                 m_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
