@@ -74,7 +74,7 @@ int get_domains_info(char * domain_type, int * num_domains, fastrpc_domain ** do
 #ifdef _WIN32
     nErr = AEE_EUNSUPPORTED;
     goto bail;
-#endif
+#else
     if (remote_system_request) {
         nErr = remote_system_request(&req);
         if (nErr != AEE_SUCCESS) {
@@ -110,6 +110,7 @@ int get_domains_info(char * domain_type, int * num_domains, fastrpc_domain ** do
         nErr = AEE_EUNSUPPORTED;
         goto bail;
     }
+#endif
 bail:
     if (nErr && !req.sys.domains) {
         free(req.sys.domains);

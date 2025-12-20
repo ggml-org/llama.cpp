@@ -20,6 +20,7 @@
 #include "ggml-impl.h"
 
 #include "htp-drv.h"
+#include "htp-dl.h"
 
 namespace fs = std::filesystem;
 
@@ -142,66 +143,6 @@ static std::string get_service_binary_path(std::wstring const& serviceName) {
 
 static std::string get_dsp_driver_path() {
     return get_service_binary_path(L"qcnspmcdm");
-}
-
-using dl_handle = std::remove_pointer_t<HMODULE>;
-
-struct dl_handle_deleter {
-    void operator()(HMODULE handle) {
-        FreeLibrary(handle);
-    }
-};
-
-static dl_handle * dl_load_library(const fs::path & path) {
-    // suppress error dialogs for missing DLLs
-    DWORD old_mode = SetErrorMode(SEM_FAILCRITICALERRORS);
-    SetErrorMode(old_mode | SEM_FAILCRITICALERRORS);
-
-    HMODULE handle = LoadLibraryW(path.wstring().c_str());
-
-    SetErrorMode(old_mode);
-
-    return handle;
-}
-
-static void * dl_get_sym(dl_handle * handle, const char * name) {
-    DWORD old_mode = SetErrorMode(SEM_FAILCRITICALERRORS);
-    SetErrorMode(old_mode | SEM_FAILCRITICALERRORS);
-
-    void * p = (void *) GetProcAddress(handle, name);
-
-    SetErrorMode(old_mode);
-
-    return p;
-}
-
-static const char * dl_error() {
-    return "";
-}
-
-#else
-
-using dl_handle = void;
-
-struct dl_handle_deleter {
-    void operator()(void * handle) {
-        dlclose(handle);
-    }
-};
-
-static void * dl_load_library(const fs::path & path) {
-    dl_handle * handle = dlopen(path.string().c_str(), RTLD_NOW | RTLD_LOCAL);
-
-    return handle;
-}
-
-static void * dl_get_sym(dl_handle * handle, const char * name) {
-    return dlsym(handle, name);
-}
-
-static const char * dl_error() {
-    const char *rslt = dlerror();
-    return rslt != nullptr ? rslt : "";
 }
 
 #endif
@@ -382,7 +323,7 @@ int htpdrv_init() {
     std::string drv_path = "libcdsprpc.so";
 #endif
     if (initialized) {
-        GGML_LOG_INFO("%s: HTP driver already loaded\n", __func__);
+        GGML_LOG_INFO("%s: Driver already loaded\n", __func__);
         goto bail;
     }
     GGML_LOG_INFO("%s: Loading driver %s\n", __func__, drv_path.c_str());
@@ -391,7 +332,7 @@ int htpdrv_init() {
     dl_handle_ptr handle { dl_load_library(path) };
     if (!handle) {
         nErr = AEE_EUNABLETOLOAD;
-        GGML_LOG_ERROR("%s: failed to load %s: %s\n", __func__, path_str(path).c_str(), dl_error());
+        GGML_LOG_ERROR("%s: failed to load %s: %s\n", __func__, path.u8string().c_str(), dl_error());
         goto bail;
     }
 
