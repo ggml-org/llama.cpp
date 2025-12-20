@@ -1,5 +1,6 @@
-// DRY - This is a temp workaround to reuse GGML's DL functionality which is
-//  static. Temporarely adding here 
+// DRY - This is a temp workaround to reuse of GGML's DL functionality which is
+//  static. Temporarely adding here until GGML core is refactored to allow
+// reuse of dl_load_library and friends in backeds as well.
 
 #pragma once
 
@@ -37,6 +38,12 @@ const char * dl_error() ;
 #else
 
 using dl_handle = void;
+
+struct dl_handle_deleter {
+    void operator()(void * handle) {
+        dlclose(handle);
+    }
+};
 
 void * dl_load_library(const fs::path & path);
 

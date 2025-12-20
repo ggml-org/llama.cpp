@@ -6,12 +6,6 @@ namespace fs = std::filesystem;
 
 using dl_handle = std::remove_pointer_t<HMODULE>;
 
-//struct dl_handle_deleter {
-//    void operator()(HMODULE handle) {
-//        FreeLibrary(handle);
-//    }
-//};
-
 dl_handle * dl_load_library(const fs::path & path) {
     // suppress error dialogs for missing DLLs
     DWORD old_mode = SetErrorMode(SEM_FAILCRITICALERRORS);
@@ -42,12 +36,6 @@ const char * dl_error() {
 #else
 
 using dl_handle = void;
-
-struct dl_handle_deleter {
-    void operator()(void * handle) {
-        dlclose(handle);
-    }
-};
 
 void * dl_load_library(const fs::path & path) {
     dl_handle * handle = dlopen(path.string().c_str(), RTLD_NOW | RTLD_LOCAL);
