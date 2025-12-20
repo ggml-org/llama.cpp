@@ -379,7 +379,7 @@ void server_models::unload_lru() {
     }
 }
 
-void server_models::load(const std::string & name) {
+void server_models::load(const std::string & name, const std::vector<std::string> & extra_args) {
     if (!has_model(name)) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
@@ -411,6 +411,10 @@ void server_models::load(const std::string & name) {
         inst.meta.update_args(ctx_preset, bin_path); // render args
 
         std::vector<std::string> child_args = inst.meta.args; // copy
+        // append extra_args if provided (requires --models-allow-extra-args)
+        if (!extra_args.empty()) {
+            child_args.insert(child_args.end(), extra_args.begin(), extra_args.end());
+        }
         std::vector<std::string> child_env  = base_env; // copy
         child_env.push_back("LLAMA_SERVER_ROUTER_PORT=" + std::to_string(base_params.port));
 
@@ -743,7 +747,22 @@ void server_models_routes::init_routes() {
             res_err(res, format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        models.load(name);
+        // parse extra_args if provided and allowed
+        std::vector<std::string> extra_args;
+        if (body.contains("extra_args") && body["extra_args"].is_array()) {
+            if (!params.models_allow_extra_args) {
+                res_err(res, format_error_response(
+                    "extra_args not allowed; start server with --models-allow-extra-args to enable",
+                    ERROR_TYPE_INVALID_REQUEST));
+                return res;
+            }
+            for (const auto & arg : body["extra_args"]) {
+                if (arg.is_string()) {
+                    extra_args.push_back(arg.get<std::string>());
+                }
+            }
+        }
+        models.load(name, extra_args);
         res_ok(res, {{"success", true}});
         return res;
     };

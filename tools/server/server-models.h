@@ -114,7 +114,7 @@ public:
 
     // load and unload model instances
     // these functions are thread-safe
-    void load(const std::string & name);
+    void load(const std::string & name, const std::vector<std::string> & extra_args = {});
     void unload(const std::string & name);
     void unload_all();
 

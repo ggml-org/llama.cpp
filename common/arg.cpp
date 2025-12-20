@@ -2812,6 +2812,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_AUTOLOAD"));
     add_opt(common_arg(
+        {"--models-allow-extra-args"},
+        {"--no-models-allow-extra-args"},
+        string_format("for router server, whether to allow extra_args in /models/load endpoint (default: %s)", params.models_allow_extra_args ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.models_allow_extra_args = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODELS_ALLOW_EXTRA_ARGS"));
+    add_opt(common_arg(
         {"--jinja"},
         {"--no-jinja"},
         string_format("whether to use jinja template engine for chat (default: %s)", params.use_jinja ? "enabled" : "disabled"),
