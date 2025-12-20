@@ -110,7 +110,13 @@ void common_chat_peg_constructed_mapper::map(const common_peg_ast_node & node) {
     }
 
     if (is_arg_json && current_tool) {
-        current_tool->arguments += std::string(trim_trailing_space(node.text));
+        // When handling JSON args, only add to output when there's actual content
+        // This prevents empty arguments from being output as "" which won't diff correctly
+        // against primitive values like 1, true, null, etc.
+        std::string content = std::string(trim_trailing_space(node.text));
+        if (!content.empty()) {
+            current_tool->arguments += content;
+        }
     }
 
     if (is_tool_close && current_tool) {
@@ -201,15 +207,32 @@ common_peg_parser common_chat_peg_constructed_builder::standard_constructed_tool
         if (parameters.contains("properties") && !parameters.at("properties").empty()) {
             auto arg_choice = choice();
             for (const auto & el : parameters.at("properties").items()) {
-                const std::string & prop_name = el.key();
-                auto                arg_name_parser =
+                const std::string & prop_name   = el.key();
+                const auto &        prop_schema = el.value();
+
+                auto arg_name_parser =
                     choice({ literal(prop_name), literal("\"" + prop_name + "\""), literal("'" + prop_name + "'") });
 
-                auto arg_rule = tool_arg(tool_arg_open(literal(param_key_prefix)) + tool_arg_name(arg_name_parser) +
-                                         (param_key_suffix.empty() ? literal(">") : literal(param_key_suffix)) +
-                                         tool_arg_string_value(until(param_closer.empty() ? "</" : param_closer)) +
-                                         (param_closer.empty() ? eps() : tool_arg_close(literal(param_closer))) +
-                                         (arg_separator.empty() ? eps() : optional(literal(arg_separator))));
+                // During differential analysis, determine if primitives are accepted as JSON args
+                bool accepts_primitives = false;
+                if (prop_schema.contains("type")) {
+                    const std::string & type = prop_schema.at("type");
+                    if (type == "number" || type == "integer" || type == "boolean" || type == "array" ||
+                        type == "object") {
+                        accepts_primitives = true;
+                    }
+                }
+
+                // Build parser based on whether primitives are accepted
+                common_peg_parser value_parser =
+                    accepts_primitives ? tool_arg_json_value(until(param_closer.empty() ? "</" : param_closer)) :
+                                         tool_arg_string_value(until(param_closer.empty() ? "</" : param_closer));
+
+                auto arg_rule =
+                    tool_arg(tool_arg_open(literal(param_key_prefix)) + tool_arg_name(arg_name_parser) +
+                             (param_key_suffix.empty() ? literal(">") : literal(param_key_suffix)) + value_parser +
+                             (param_closer.empty() ? eps() : tool_arg_close(literal(param_closer))) +
+                             (arg_separator.empty() ? eps() : optional(literal(arg_separator))));
                 arg_choice |= arg_rule;
             }
             return zero_or_more(arg_choice + space());
