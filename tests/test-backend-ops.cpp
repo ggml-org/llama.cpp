@@ -5344,6 +5344,13 @@ struct test_sum : public test_case {
     float grad_eps() override {
         return 0.1f * sqrtf(ne[0]*ne[1]*ne[2]*ne[3]);
     }
+
+    // Don't center the distribution around zero. Helps to avoid catastrophic cancellation.
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -0.9f, 1.1f);
+        }
+    }
 };
 
 // GGML_OP_SUM_ROWS
@@ -5409,6 +5416,13 @@ struct test_mean : public test_case {
 
     float grad_eps() override {
         return 0.1f * ne[0]*ne[1]*ne[2]*ne[3];
+    }
+
+    // Don't center the distribution around zero. Helps to avoid catastrophic cancellation.
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -0.9f, 1.1f);
+        }
     }
 };
 
