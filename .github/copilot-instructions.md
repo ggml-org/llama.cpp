@@ -183,7 +183,8 @@ Add `ggml-ci` to commit message to trigger heavy CI workloads on the custom CI i
 
 ### Built Executables (in `build/bin/`)
 Primary tools:
-- **`llama-cli`**: Main inference tool
+- **`llama-cli`**: Main CLI tool
+- **`llama-completion`**: Text completion tool
 - **`llama-server`**: OpenAI-compatible HTTP server
 - **`llama-quantize`**: Model quantization utility
 - **`llama-perplexity`**: Model evaluation tool

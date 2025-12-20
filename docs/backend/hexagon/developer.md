@@ -53,7 +53,7 @@ M=gpt-oss-20b-Q4_0.gguf NDEV=4 D=HTP0,HTP1,HTP2,HTP3 P=surfing.txt scripts/snapd
 ...
 LD_LIBRARY_PATH=/data/local/tmp/llama.cpp/lib
 ADSP_LIBRARY_PATH=/data/local/tmp/llama.cpp/lib
-GGML_HEXAGON_NDEV=4 ./bin/llama-cli --no-mmap -m /data/local/tmp/llama.cpp/../gguf/gpt-oss-20b-Q4_0.gguf
+GGML_HEXAGON_NDEV=4 ./bin/llama-completion --no-mmap -m /data/local/tmp/llama.cpp/../gguf/gpt-oss-20b-Q4_0.gguf
       -t 4 --ctx-size 8192 --batch-size 128 -ctk q8_0 -ctv q8_0 -fa on -ngl 99 --device HTP0,HTP1,HTP2,HTP3 -no-cnv -f surfing.txt
 ...
 llama_model_loader: - type  f32:  289 tensors

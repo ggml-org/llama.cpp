@@ -74,11 +74,11 @@ if __name__ == '__main__':
     for m in models:
         logging.info(f'  - {m.hf_repo} / {m.hf_file}')
 
-    cli_path = os.environ.get(
+    completion_path = os.environ.get(
         'LLAMA_CLI_BIN_PATH',
         os.path.join(
             os.path.dirname(__file__),
-            '../build/bin/Release/llama-cli.exe' if os.name == 'nt' else '../build/bin/llama-cli'))
+            '../build/bin/Release/llama-completion.exe' if os.name == 'nt' else '../build/bin/llama-completion'))
 
     for m in models:
         if '<' in m.hf_repo or (m.hf_file is not None and '<' in m.hf_file):
@@ -86,9 +86,9 @@ if __name__ == '__main__':
         if m.hf_file is not None and '-of-' in m.hf_file:
             logging.warning(f'Skipping model at {m.hf_repo} / {m.hf_file} because it is a split file')
             continue
-        logging.info(f'Using llama-cli to ensure model {m.hf_repo}/{m.hf_file} was fetched')
+        logging.info(f'Using llama-completion to ensure model {m.hf_repo}/{m.hf_file} was fetched')
         cmd = [
-            cli_path,
+            completion_path,
             '-hfr', m.hf_repo,
             *([] if m.hf_file is None else ['-hff', m.hf_file]),
             '-n', '1',
