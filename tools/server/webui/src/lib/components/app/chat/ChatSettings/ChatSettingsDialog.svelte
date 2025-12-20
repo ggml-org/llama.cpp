@@ -53,9 +53,14 @@
 					]
 				},
 				{
-					key: 'responsiveChatWidth',
-					label: 'Responsive chat width',
+					key: 'autoChatWidth',
+					label: 'Automatic width',
 					type: 'checkbox'
+				},
+				{
+					key: 'customChatWidth',
+					label: 'Custom width',
+					type: 'combobox'
 				},
 				{
 					key: 'showMessageStats',

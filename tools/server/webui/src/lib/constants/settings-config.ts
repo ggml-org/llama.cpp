@@ -9,8 +9,8 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	showToolCalls: false,
 	disableReasoningFormat: false,
 	keepStatsVisible: false,
-	responsiveChatWidth: false,
-	chatScreenWidth: '',
+	autoChatWidth: false,
+	customChatWidth: '',
 	showMessageStats: true,
 	askForTitleConfirmation: false,
 	pasteLongTextToFileLen: 2500,
@@ -88,10 +88,10 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	disableReasoningFormat:
 		'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
-	responsiveChatWidth:
-		'Enable responsive chat width that automatically adapts to your screen size using breakpoints. When enabled, overrides the custom width setting below.',
-	chatScreenWidth:
-		'Set a fixed chat screen width. Choose from predefined sizes (xs to 7xl) or enter a custom pixel value. Only applies when responsive width is disabled.',
+	autoChatWidth:
+		'Automatically adapt the chat width to your screen size. If enabled, this ignores the custom width setting.',
+	customChatWidth:
+		'Set a specific width for the chat. You can use presets (xs to 7xl) or type a pixel value (e.g. 800).',
 	showMessageStats:
 		'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
 	askForTitleConfirmation:
