@@ -13,6 +13,7 @@
 
 #include <atomic>
 #include <fstream>
+#include <iostream>
 #include <thread>
 #include <signal.h>
 #include <filesystem>
@@ -23,6 +24,9 @@
 #   define NOMINMAX
 #endif
 #include <windows.h>
+#include <io.h>
+#else
+#include <unistd.h>
 #endif
 
 namespace fs = std::filesystem;
@@ -40,6 +44,26 @@ static std::atomic<bool> g_is_interrupted = false;
 
 static bool should_stop() {
     return g_is_interrupted.load();
+}
+
+static bool is_stdin_terminal() {
+#ifdef _WIN32
+    return _isatty(_fileno(stdin));
+#else
+    return isatty(fileno(stdin));
+#endif
+}
+
+static std::string read_stdin_prompt() {
+    std::string result;
+    std::string line;
+    while (std::getline(std::cin, line)) {
+        if (!result.empty()) {
+            result += "\n";
+        }
+        result += line;
+    }
+    return result;
 }
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__)) || defined (_WIN32)
@@ -198,59 +222,92 @@ int main(int argc, char ** argv) {
     }
     console::log("\n");
 
-    console::log("commands:\n");
-    console::log("  /exit       exit the agent\n");
-    console::log("  /clear      clear conversation history\n");
-    console::log("  /tools      list available tools\n");
-    console::log("  ESC/Ctrl+C  abort generation\n");
-    console::log("\n");
+    // Resolve initial prompt from -p/--prompt flag or stdin
+    std::string initial_prompt;
+    if (!params.prompt.empty()) {
+        initial_prompt = params.prompt;
+        params.prompt.clear();  // Only use once
+    } else if (!is_stdin_terminal()) {
+        initial_prompt = read_stdin_prompt();
+        // Trim trailing whitespace
+        while (!initial_prompt.empty() && (initial_prompt.back() == '\n' || initial_prompt.back() == '\r')) {
+            initial_prompt.pop_back();
+        }
+        // When reading from stdin pipe, always use single-turn mode
+        // (stdin is at EOF, so interactive input would spin forever)
+        params.single_turn = true;
+    }
 
-    // Interactive loop
+    // Non-interactive mode: if we have a prompt and single_turn, skip the help text
+    if (initial_prompt.empty() || !params.single_turn) {
+        console::log("commands:\n");
+        console::log("  /exit       exit the agent\n");
+        console::log("  /clear      clear conversation history\n");
+        console::log("  /tools      list available tools\n");
+        console::log("  ESC/Ctrl+C  abort generation\n");
+        console::log("\n");
+    }
+
+    // Track if we have an initial prompt to process
+    bool first_turn = !initial_prompt.empty();
+
+    // Main loop
     while (true) {
-        console::set_display(DISPLAY_TYPE_USER_INPUT);
-        console::log("\n› ");
-
         std::string buffer;
-        std::string line;
-        bool another_line = true;
-        do {
-            another_line = console::readline(line, params.multiline_input);
-            buffer += line;
-        } while (another_line);
 
-        console::set_display(DISPLAY_TYPE_RESET);
+        if (first_turn) {
+            // Use the initial prompt
+            buffer = initial_prompt;
+            first_turn = false;
+            console::set_display(DISPLAY_TYPE_USER_INPUT);
+            console::log("\n› %s\n", buffer.c_str());
+            console::set_display(DISPLAY_TYPE_RESET);
+        } else {
+            // Interactive input
+            console::set_display(DISPLAY_TYPE_USER_INPUT);
+            console::log("\n› ");
 
-        if (should_stop()) {
-            g_is_interrupted.store(false);
-            break;
-        }
+            std::string line;
+            bool another_line = true;
+            do {
+                another_line = console::readline(line, params.multiline_input);
+                buffer += line;
+            } while (another_line);
 
-        // Remove trailing newline
-        if (!buffer.empty() && buffer.back() == '\n') {
-            buffer.pop_back();
-        }
+            console::set_display(DISPLAY_TYPE_RESET);
 
-        // Skip empty input
-        if (buffer.empty()) {
-            continue;
-        }
-
-        // Process commands
-        if (buffer == "/exit" || buffer == "/quit") {
-            break;
-        }
-        if (buffer == "/clear") {
-            agent.clear();
-            console::log("Conversation cleared.\n");
-            continue;
-        }
-        if (buffer == "/tools") {
-            console::log("\nAvailable tools:\n");
-            for (const auto * tool : tool_registry::instance().get_all_tools()) {
-                console::log("  %s:\n", tool->name.c_str());
-                console::log("    %s\n", tool->description.c_str());
+            if (should_stop()) {
+                g_is_interrupted.store(false);
+                break;
             }
-            continue;
+
+            // Remove trailing newline
+            if (!buffer.empty() && buffer.back() == '\n') {
+                buffer.pop_back();
+            }
+
+            // Skip empty input
+            if (buffer.empty()) {
+                continue;
+            }
+
+            // Process commands
+            if (buffer == "/exit" || buffer == "/quit") {
+                break;
+            }
+            if (buffer == "/clear") {
+                agent.clear();
+                console::log("Conversation cleared.\n");
+                continue;
+            }
+            if (buffer == "/tools") {
+                console::log("\nAvailable tools:\n");
+                for (const auto * tool : tool_registry::instance().get_all_tools()) {
+                    console::log("  %s:\n", tool->name.c_str());
+                    console::log("    %s\n", tool->description.c_str());
+                }
+                continue;
+            }
         }
 
         console::log("\n");
