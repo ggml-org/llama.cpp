@@ -153,7 +153,7 @@ static void ggml_ifairy_lut_preprocess_legacy(int m, int k, int n, const void * 
             for (int pat = 0; pat < 64; ++pat) {
                 const uint8_t c0 = (uint8_t) (pat & 3);
                 const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
-                const uint8_t c2 = (uint8_t) ((pat >> 4) & 3);
+                const uint8_t c2 = (uint8_t) (pat >> 4);
 
                 int wr0 = 0, wi0 = 0;
                 int wr1 = 0, wi1 = 0;
