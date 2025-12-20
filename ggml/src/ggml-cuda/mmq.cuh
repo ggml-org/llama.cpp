@@ -807,7 +807,7 @@ static __device__ __forceinline__ void load_tiles_mxfp4_fp4(const char * __restr
     for (int i0 = 0; i0 < mmq_y; i0 += rows_per_warp * nwarps) {
         int i = i0 + threadIdx.y * rows_per_warp + row_in_warp;
 
-        if (need_check) {
+        if constexpr (need_check) {
             i = min(i, i_max);
         }
 

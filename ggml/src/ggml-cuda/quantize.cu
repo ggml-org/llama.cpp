@@ -47,16 +47,31 @@ static __global__ void quantize_q8_1(
     y[ib].ds = make_half2(d, sum);
 }
 
-// Helper to compute E8M0 scale from amax using fast math
 __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
-    if (amax == 0.0f) {
-        return 127;
+    if (!(amax > 0.0f)) {
+        return 0;
     }
-    // log2(amax / 6.0) = log2(amax) - log2(6) ≈ log2(amax) - 2.585
-    // Use __log2f for fast approximate log2
-    const float log2_amax = __log2f(amax) - 2.5849625007211563f;  // log2(6)
-    const int e_int = __float2int_rd(log2_amax) + 127;  // floor + bias
-    return static_cast<uint8_t>(max(1, min(254, e_int)));
+
+    // FP4 E2M1: max exponent (unbiased) is 2.
+    constexpr int FP4_E2M1_EMAX = 2;
+
+    float e = __log2f(amax);
+
+    // "even" -> round-to-nearest integer, ties-to-even
+    int e_int = __float2int_rn(e);
+
+    int shared_exp = e_int - FP4_E2M1_EMAX;
+
+    int biased = shared_exp + 127;
+
+    if (biased < 0) {
+        biased = 0;
+    }
+    if (biased > 254) {
+        biased = 254;
+    }
+
+    return static_cast<uint8_t>(biased);
 }
 
 // quantize values in the format mxfp4 is stored which is interleaved nibbles
@@ -124,7 +139,7 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
         scales[b] = e;
         const float inv_s = (amax == 0.0f) ? 0.0f : __frcp_rn(ggml_cuda_e8m0_to_fp32(e));
 
-#if CUDART_VERSION >= 12040
+#if CUDART_VERSION >= 12080
         const float scaled_val = xi * inv_s;
 
         const float val0 = __shfl_sync(0xFFFFFFFF, scaled_val, base, WARP_SIZE);

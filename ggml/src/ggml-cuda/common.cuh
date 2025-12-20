@@ -50,7 +50,11 @@
 #define GGML_CUDA_CC_TURING          750
 #define GGML_CUDA_CC_AMPERE          800
 #define GGML_CUDA_CC_ADA_LOVELACE    890
+// While BW spans CC 1000, 1100 & 1200, we are integrating Tensor Core instructions available to 1200 family, see
+// https://docs.nvidia.com/cutlass/media/docs/cpp/blackwell_functionality.html#blackwell-sm120-gemms
 #define GGML_CUDA_CC_BLACKWELL       1200
+// Future versions may or may not support the same PTX instructions
+#define GGML_CUDA_CC_BLACKWELL_END   1299
 #define GGML_CUDA_CC_OFFSET_AMD      0x1000000
 #define GGML_CUDA_CC_OFFSET_MTHREADS 0x0100000
 #define GGML_CUDA_CC_IS_NVIDIA(cc)   (cc < GGML_CUDA_CC_OFFSET_MTHREADS)
@@ -322,7 +326,8 @@ static bool cp_async_available(const int cc) {
 }
 
 static bool blackwell_mma_available(const int cc) {
-    return GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_BLACKWELL;
+    return GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_BLACKWELL &&
+           ggml_cuda_highest_compiled_arch(cc) <= GGML_CUDA_CC_BLACKWELL_END;
 }
 
 static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
@@ -711,12 +716,11 @@ static __device__ __forceinline__ float ggml_cuda_e8m0_to_fp32(uint8_t x) {
 }
 
 __device__ __forceinline__ uint8_t ggml_cuda_float_to_fp4_e2m1(float x, float e) {
-    // Handle exact zero early
     if (x == 0.0f) {
         return 0;
     }
 
-    const uint8_t sign_bit = x < 0.0f ? 0x8 : 0;
+    const uint8_t sign_bit = (x < 0.0f) << 3;
     float         ax       = fabsf(x) * e;
 
     // Positive LUT
