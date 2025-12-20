@@ -1,3 +1,7 @@
 <resources>
     <string name="app_name">Local AI</string>
+    <string name="action_button">User Action</string>
+    <string name="gguf_meta_placeholder">Please first pick a GGUF model file to import</string>
+    <string name="test_model_bt">Test Model</string>
+    <string name="debug_model_bt">Debug Model</string>
 </resources>

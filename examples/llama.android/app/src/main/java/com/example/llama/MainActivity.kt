@@ -3,6 +3,7 @@ package com.example.llama
 import android.net.Uri
 import android.os.Bundle
 import android.util.Log
+import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
@@ -33,6 +34,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var messagesRv: RecyclerView
     private lateinit var userInputEt: EditText
     private lateinit var userActionFab: FloatingActionButton
+    private lateinit var testModelBt: Button
 
     // Arm AI Chat inference engine
     private lateinit var engine: InferenceEngine
@@ -42,6 +44,8 @@ class MainActivity : AppCompatActivity() {
     private val messages = mutableListOf<Message>()
     private val lastAssistantMsg = StringBuilder()
     private val messageAdapter = MessageAdapter(messages)
+
+    private var modelName = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -56,6 +60,8 @@ class MainActivity : AppCompatActivity() {
         userInputEt = findViewById(R.id.user_input)
         userActionFab = findViewById(R.id.fab)
 
+        testModelBt = findViewById(R.id.test_model_button)
+
         // Arm AI Chat initialization
         lifecycleScope.launch(Dispatchers.Default) {
             engine = AiChat.getInferenceEngine(applicationContext)
@@ -69,6 +75,17 @@ class MainActivity : AppCompatActivity() {
             } else {
                 // Otherwise, prompt user to select a GGUF metadata on the device
                 getContent.launch(arrayOf("*/*"))
+            }
+        }
+
+        testModelBt.setOnClickListener {
+            if (isModelReady) {
+                Log.d(TAG, "Benchmarking");
+                lifecycleScope.launch(Dispatchers.IO) {
+                    runBenchmark(modelName)
+                }
+            } else {
+                Log.w(TAG, "Model needs to be loaded!");
             }
         }
     }
@@ -98,11 +115,23 @@ class MainActivity : AppCompatActivity() {
                 // Update UI to show GGUF metadata to user
                 Log.i(TAG, "GGUF parsed: \n$metadata")
                 withContext(Dispatchers.Main) {
-                    ggufTv.text = metadata.toString()
+
+//                    ggufTv.text = metadata.toString()
+                    ggufTv.text = """
+                        ${metadata.filename()}
+
+                        ${metadata.basic}
+                        ${metadata.architecture}
+                        ${metadata.additional}
+
+                        ${metadata.version}
+                        ${metadata.tensorCount}
+                        ${metadata.tokenizer}
+                    """.trimIndent()
                 }
 
                 // Ensure the model file is available
-                val modelName = metadata.filename() + FILE_EXTENSION_GGUF
+                modelName = metadata.filename() + FILE_EXTENSION_GGUF
                 contentResolver.openInputStream(uri)?.use { input ->
                     ensureModelFile(modelName, input)
                 }?.let { modelFile ->
@@ -195,7 +224,7 @@ class MainActivity : AppCompatActivity() {
     /**
      * Run a benchmark with the model file
      */
-    private suspend fun runBenchmark(modelName: String, modelFile: File) =
+    private suspend fun runBenchmark(modelName: String) =
         withContext(Dispatchers.Default) {
             Log.i(TAG, "Starts benchmarking $modelName")
             withContext(Dispatchers.Main) {
