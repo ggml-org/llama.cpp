@@ -133,7 +133,7 @@ export class ParameterSyncService {
 					const value = (serverParams as unknown as Record<string, ParameterValue>)[
 						param.serverKey
 					];
-					if (value !== undefined) {
+					if (value !== undefined && value !== null) {
 						// Apply precision rounding to avoid JavaScript floating-point issues
 						extracted[param.key] = this.roundFloatingPoint(value);
 					}
