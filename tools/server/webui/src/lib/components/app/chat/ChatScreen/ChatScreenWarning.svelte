@@ -5,7 +5,7 @@
 
 	interface Props {
 		class?: string;
-        style?: string;
+		style?: string;
 	}
 
 	let { class: className = '', style = '' }: Props = $props();
@@ -15,7 +15,7 @@
 	}
 </script>
 
-<div class="mb-3 {className}" style={style} in:fly={{ y: 10, duration: 250 }}>
+<div class="mb-3 {className}" {style} in:fly={{ y: 10, duration: 250 }}>
 	<div
 		class="rounded-md border border-yellow-200 bg-yellow-50 px-3 py-2 dark:border-yellow-800 dark:bg-yellow-950"
 	>
