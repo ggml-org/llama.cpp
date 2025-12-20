@@ -240,5 +240,12 @@ struct ifairy_lut_extra {
 
 ### 7.2 P2：可维护性（在性能稳定后再推进）
 
-- 代码拆分：把 `ggml/src/ggml-ifairy-lut.cpp` 按 preprocess/qgemm/transform/common 拆分，减少 legacy/compact 重复代码。
-- 测试补齐：对齐/小维度/大维度、分配失败、misaligned buffer、并发 transform 等 edge case；为关键 env 语义补回归覆盖。
+- ✅ 代码拆分：`ggml/src/ggml-ifairy-lut.cpp` 已按 preprocess/qgemm/transform/common 拆分（`ggml-ifairy-lut-{preprocess,qgemm,transform}.cpp` + `ggml-ifairy-lut-impl.h`），减少 legacy/compact 重复代码。
+- ✅ 测试补齐（`tests/test-ifairy.cpp`）：
+  - 对齐与误对齐：`test_ifairy_lut_index_alignment()` 覆盖 64B 对齐尺寸与 misaligned index buffer 编码。
+  - 小维度：`test_ifairy_lut_scalar_small_dims()`（`M=N=1,K=QK_K`）。
+  - 大维度：`test_ifairy_lut_backend_large_dims()`（tiling vs non-tiling）。
+  - 分配失败/缓冲不足：`test_ifairy_lut_index_encode_failure()`（短 buffer 返回 false）。
+  - 并发 transform：`test_ifairy_lut_transform_cache()`。
+  - 形状对齐/路由：`test_ifairy_lut_transform_invalid_shape()`（`K % QK_K != 0`）。
+  - 关键 env 语义：`test_ifairy_lut_env_semantics()` + `test_ifairy_lut_layout_auto_policy()`。

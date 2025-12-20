@@ -82,6 +82,7 @@ This repo includes an iFairy 2-bit complex LUT path. When touching it:
 - Correctness gate: `./build-rel/bin/test-ifairy` + strict mode must pass:
   - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_VALIDATE_STRICT=1 ./build-rel/bin/test-ifairy`
 - Performance claims must include reproducible commands + raw `eval tok/s` logs
+- Edge-case coverage lives in `tests/test-ifairy.cpp` (alignment, small/large dims, env semantics); keep docs in sync.
 
 Detailed iFairy rules live in:
 - `ggml/src/ggml-cpu/AGENTS.md`

@@ -36,3 +36,4 @@ Avoid searching `build*`, `models`, `tmp` unless you are explicitly debugging th
 - Do not silently “accept and reinterpret” incompatible GGUF layouts; prefer a clear error + fallback instructions.
 - Avoid cross-arch semantic changes unless explicitly intended; keep the default path stable for existing models.
 - If you need new GGUF keys/tensors, also update conversion tooling (`gguf-py/`, scripts) or document required keys.
+- If changes touch iFairy LUT behavior, follow `ggml/src/ggml-cpu/AGENTS.md` and update `IFAIRY_ARM_3W_LUT_API_PLAN.md`.

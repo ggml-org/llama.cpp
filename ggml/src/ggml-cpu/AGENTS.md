@@ -48,6 +48,8 @@ If adding a new knob, document it in `IFAIRY_ARM_3W_LUT_STATUS.md` and keep a sa
 4) CLI sanity (quick smoke + tok/s baseline):
 - `GGML_IFAIRY_LUT=1 ./build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 16 -no-cnv`
 
+Edge-case regression coverage is in `tests/test-ifairy.cpp` (alignment, small/large dims, env semantics, transform concurrency).
+
 ## Performance claims
 
 - Use `eval tok/s` only, and always include the full command + env.

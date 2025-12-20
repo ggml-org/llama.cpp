@@ -194,7 +194,7 @@ P1（近期做）：
 
 P2（持续）：
 
-- 测试补齐：对齐/极小维度/大维度、分配失败、misaligned buffer、并发 transform 等 edge case。
+- ✅ 测试补齐：`tests/test-ifairy.cpp` 覆盖对齐/误对齐、极小/大维度、分配失败（短 buffer）、并发 transform、关键 env 语义与 K 对齐 gate。
 - 性能回归：把 decode（`N≈1`）与 prefill 形状的 tok/s 作为可复现基线（见 `IFAIRY_ARM_3W_LUT_STATUS.md`）。
 
 ---
