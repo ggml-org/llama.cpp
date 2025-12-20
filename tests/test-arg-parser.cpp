@@ -37,6 +37,30 @@ int main(void) {
                         exit(1);
                     }
                 }
+
+                // ensure shorter argument precedes longer argument
+                if (opt.args.size() > 1) {
+                    const std::string first(opt.args.front());
+                    const std::string last(opt.args.back());
+
+                    if (first.length() > last.length()) {
+                        fprintf(stderr, "test-arg-parser: shorter argument should come before longer one: %s, %s\n",
+                                first.c_str(), last.c_str());
+                        assert(false);
+                    }
+                }
+
+                // same check for negated arguments
+                if (opt.args_neg.size() > 1) {
+                    const std::string first(opt.args_neg.front());
+                    const std::string last(opt.args_neg.back());
+
+                    if (first.length() > last.length()) {
+                        fprintf(stderr, "test-arg-parser: shorter negated argument should come before longer one: %s, %s\n",
+                                first.c_str(), last.c_str());
+                        assert(false);
+                    }
+                }
             }
         } catch (std::exception & e) {
             printf("%s\n", e.what());
