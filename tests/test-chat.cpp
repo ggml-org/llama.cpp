@@ -975,15 +975,7 @@ static void test_template_output_parsers() {
                       "{\"arg1\": 1}");
     }
     {
-        auto tmpls = read_templates("models/templates/fireworks-ai-llama-3-firefunction-v2.jinja");
-        std::vector<std::string>   end_tokens{ "<|eot_id|>" };
-
-        assert_equals(COMMON_CHAT_FORMAT_CONTENT_ONLY, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-        assert_equals(COMMON_CHAT_FORMAT_FIREFUNCTION_V2, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
-
-        test_templates(tmpls.get(), end_tokens, message_assist, tools, "Hello, world!\nWhat's up?", /* expect_grammar_triggered= */ false);
-        test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
-                      " functools[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]");
+        // Firefunction-v2 migrated to PEG format
     }
     {
         // Original DeepSeek R1 template. Leaves <｜tool▁calls▁begin｜> and others unclosed. Our logic fixes the prompt.
@@ -3522,6 +3514,24 @@ static void test_template_output_peg_parsers() {
         // Test partial tool call
         test_peg_parser(tmpls.get(), [&](auto & t) {
             t.input = "<function=special_function>{\"arg1\": 1}<";
+            t.params.tools = {special_function_tool};
+            t.expect = message_assist_call;
+        });
+
+        // Test content without tools
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "Hello, world!\nWhat's up?";
+            t.expect = message_assist;
+        });
+    }
+
+    {
+        // Firefunction v2 (tool calling model)
+        auto tmpls = read_templates("models/templates/fireworks-ai-llama-3-firefunction-v2.jinja");
+
+        // Test basic tool call
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = " functools[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]";
             t.params.tools = {special_function_tool};
             t.expect = message_assist_call;
         });
