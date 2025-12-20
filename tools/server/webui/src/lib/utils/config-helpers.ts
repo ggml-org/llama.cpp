@@ -25,9 +25,9 @@ export function setConfigValue<T extends SettingsConfigType>(
 export function getConfigValue<T extends SettingsConfigType>(
 	config: T,
 	key: string
-): string | number | boolean | undefined {
+): string | number | boolean | null | undefined {
 	const value = (config as Record<string, unknown>)[key];
-	return value as string | number | boolean | undefined;
+	return value as string | number | boolean | null | undefined;
 }
 
 /**
@@ -42,7 +42,7 @@ export function configToParameterRecord<T extends SettingsConfigType>(
 
 	for (const key of keys) {
 		const value = getConfigValue(config, key);
-		if (value !== undefined) {
+		if (value !== undefined && value !== null) {
 			record[key] = value;
 		}
 	}

@@ -127,31 +127,42 @@ export class ChatService {
 
 		requestBody.reasoning_format = disableReasoningFormat ? 'none' : 'auto';
 
-		if (temperature !== undefined) requestBody.temperature = temperature;
-		if (max_tokens !== undefined) {
-			// Set max_tokens to -1 (infinite) when explicitly configured as 0 or null
-			requestBody.max_tokens = max_tokens !== null && max_tokens !== 0 ? max_tokens : -1;
+		if (temperature !== undefined && temperature !== null) requestBody.temperature = temperature;
+		if (max_tokens !== undefined && max_tokens !== null) {
+			// Set max_tokens to -1 (infinite) when explicitly configured as 0
+			requestBody.max_tokens = max_tokens !== 0 ? max_tokens : -1;
 		}
 
-		if (dynatemp_range !== undefined) requestBody.dynatemp_range = dynatemp_range;
-		if (dynatemp_exponent !== undefined) requestBody.dynatemp_exponent = dynatemp_exponent;
-		if (top_k !== undefined) requestBody.top_k = top_k;
-		if (top_p !== undefined) requestBody.top_p = top_p;
-		if (min_p !== undefined) requestBody.min_p = min_p;
-		if (xtc_probability !== undefined) requestBody.xtc_probability = xtc_probability;
-		if (xtc_threshold !== undefined) requestBody.xtc_threshold = xtc_threshold;
-		if (typ_p !== undefined) requestBody.typ_p = typ_p;
+		if (dynatemp_range !== undefined && dynatemp_range !== null)
+			requestBody.dynatemp_range = dynatemp_range;
+		if (dynatemp_exponent !== undefined && dynatemp_exponent !== null)
+			requestBody.dynatemp_exponent = dynatemp_exponent;
+		if (top_k !== undefined && top_k !== null) requestBody.top_k = top_k;
+		if (top_p !== undefined && top_p !== null) requestBody.top_p = top_p;
+		if (min_p !== undefined && min_p !== null) requestBody.min_p = min_p;
+		if (xtc_probability !== undefined && xtc_probability !== null)
+			requestBody.xtc_probability = xtc_probability;
+		if (xtc_threshold !== undefined && xtc_threshold !== null)
+			requestBody.xtc_threshold = xtc_threshold;
+		if (typ_p !== undefined && typ_p !== null) requestBody.typ_p = typ_p;
 
-		if (repeat_last_n !== undefined) requestBody.repeat_last_n = repeat_last_n;
-		if (repeat_penalty !== undefined) requestBody.repeat_penalty = repeat_penalty;
-		if (presence_penalty !== undefined) requestBody.presence_penalty = presence_penalty;
-		if (frequency_penalty !== undefined) requestBody.frequency_penalty = frequency_penalty;
-		if (dry_multiplier !== undefined) requestBody.dry_multiplier = dry_multiplier;
-		if (dry_base !== undefined) requestBody.dry_base = dry_base;
-		if (dry_allowed_length !== undefined) requestBody.dry_allowed_length = dry_allowed_length;
-		if (dry_penalty_last_n !== undefined) requestBody.dry_penalty_last_n = dry_penalty_last_n;
+		if (repeat_last_n !== undefined && repeat_last_n !== null)
+			requestBody.repeat_last_n = repeat_last_n;
+		if (repeat_penalty !== undefined && repeat_penalty !== null)
+			requestBody.repeat_penalty = repeat_penalty;
+		if (presence_penalty !== undefined && presence_penalty !== null)
+			requestBody.presence_penalty = presence_penalty;
+		if (frequency_penalty !== undefined && frequency_penalty !== null)
+			requestBody.frequency_penalty = frequency_penalty;
+		if (dry_multiplier !== undefined && dry_multiplier !== null)
+			requestBody.dry_multiplier = dry_multiplier;
+		if (dry_base !== undefined && dry_base !== null) requestBody.dry_base = dry_base;
+		if (dry_allowed_length !== undefined && dry_allowed_length !== null)
+			requestBody.dry_allowed_length = dry_allowed_length;
+		if (dry_penalty_last_n !== undefined && dry_penalty_last_n !== null)
+			requestBody.dry_penalty_last_n = dry_penalty_last_n;
 
-		if (samplers !== undefined) {
+		if (samplers !== undefined && samplers !== null) {
 			requestBody.samplers =
 				typeof samplers === 'string'
 					? samplers.split(';').filter((s: string) => s.trim())

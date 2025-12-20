@@ -1,7 +1,7 @@
 import type { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 import type { ChatMessageTimings } from './chat';
 
-export type SettingsConfigValue = string | number | boolean;
+export type SettingsConfigValue = string | number | boolean | null;
 
 export interface SettingsFieldConfig {
 	key: string;
@@ -21,28 +21,28 @@ export interface SettingsChatServiceOptions {
 	// Disable reasoning format (use 'none' instead of 'auto')
 	disableReasoningFormat?: boolean;
 	// Generation parameters
-	temperature?: number;
-	max_tokens?: number;
+	temperature?: number | null;
+	max_tokens?: number | null;
 	// Sampling parameters
-	dynatemp_range?: number;
-	dynatemp_exponent?: number;
-	top_k?: number;
-	top_p?: number;
-	min_p?: number;
-	xtc_probability?: number;
-	xtc_threshold?: number;
-	typ_p?: number;
+	dynatemp_range?: number | null;
+	dynatemp_exponent?: number | null;
+	top_k?: number | null;
+	top_p?: number | null;
+	min_p?: number | null;
+	xtc_probability?: number | null;
+	xtc_threshold?: number | null;
+	typ_p?: number | null;
 	// Penalty parameters
-	repeat_last_n?: number;
-	repeat_penalty?: number;
-	presence_penalty?: number;
-	frequency_penalty?: number;
-	dry_multiplier?: number;
-	dry_base?: number;
-	dry_allowed_length?: number;
-	dry_penalty_last_n?: number;
+	repeat_last_n?: number | null;
+	repeat_penalty?: number | null;
+	presence_penalty?: number | null;
+	frequency_penalty?: number | null;
+	dry_multiplier?: number | null;
+	dry_base?: number | null;
+	dry_allowed_length?: number | null;
+	dry_penalty_last_n?: number | null;
 	// Sampler configuration
-	samplers?: string | string[];
+	samplers?: string | string[] | null;
 	// Custom parameters
 	custom?: string;
 	timings_per_token?: boolean;
