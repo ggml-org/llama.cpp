@@ -114,7 +114,7 @@ struct ifairy_lut_extra {
 ### 6.0 复现与验收口径（统一）
 
 - **构建**：使用 Release，并确保你跑的就是你编译的二进制（优先 `build-rel`）。
-- **推荐基准命令**：以 `IFAIRY_ARM_3W_LUT_STATUS.md` 的 `0.1 tok/s 记录`表头命令为准（固定 `--seed/-t/-b/-c/-p/-n` 与 LUT env 组合）。
+- **推荐基准命令**：以 `IFAIRY_ARM_3W_LUT_STATUS.md` 的 `0.1 tok/s 记录`表头命令为准（固定 `--threads/--n-prompt/--n-gen/--n-depth` 与 LUT env 组合）。
 - **tok/s 口径切换计划（llama-bench，CPU only）**：
   - A/B 与最终 tok/s 记录将统一改用 `llama-bench`（避免输出长度波动）；`llama-cli` 仅保留 sanity-check。
   - 参考命令（CPU-only，不走 offload）：`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
@@ -127,11 +127,11 @@ struct ifairy_lut_extra {
   - `./build-rel/bin/test-ifairy` 必须通过；
   - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_VALIDATE_STRICT=1 ./build-rel/bin/test-ifairy` 必须通过（验证用，不跑分）。
 - **性能门槛**：
-  - 每次性能相关改动，都在 `IFAIRY_ARM_3W_LUT_STATUS.md` 的 `0.1 tok/s 记录`追加一条可复现记录（固定 seed/prompt/thread/token/env）。
+  - 每次性能相关改动，都在 `IFAIRY_ARM_3W_LUT_STATUS.md` 的 `0.1 tok/s 记录`追加一条可复现记录（固定 threads/n_prompt/n_gen/env）。
   - A/B 的原始日志（建议 TSV）落到 `/tmp/` 并在 `STATUS.md` 引用路径（避免只剩结论没证据）。
   - 主观体验（输出可读/不卡）不作为性能结论，必须以 `eval tok/s` 为准。
 - **文档更新**：功能落地后同步更新 `IFAIRY_ARM_3W_LUT_STATUS.md`（tok/s 记录）、`IFAIRY_ARM_3W_LUT_API_PLAN.md`、`IFAIRY_ARM_3W_LUT_DESIGN.md` 与相关 `AGENTS.md`，确保无过时信息。
-- **llama-bench 口径落地后的整理**：等 `llama-bench` 方案完整实现并验证后，再统一更新表头/脚本/示例命令，清理旧的 `llama-cli` 性能口径，并在清理完成后提交一笔 commit。
+- **llama-bench 口径落地（已完成）**：已统一更新表头/脚本/示例命令并清理旧的 `llama-cli` 性能口径；后续只需持续维护 `STATUS.md` 的 bench 记录。
 
 ### 6.0.1 回归恢复（仅在 tok/s 明显回落时启用）
 
