@@ -22,7 +22,7 @@
 #include <string>
 #include <vector>
 
-#include <nlohmann/json.hpp>
+#include "../vendor/nlohmann/json.hpp"
 
 using json = nlohmann::ordered_json;
 

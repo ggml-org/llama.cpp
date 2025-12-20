@@ -7,7 +7,7 @@
 #include "mtmd.h"
 
 #define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
+#include "../vendor/nlohmann/json.hpp"
 
 #include <string>
 #include <vector>

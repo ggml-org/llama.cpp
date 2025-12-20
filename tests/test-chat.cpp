@@ -12,7 +12,7 @@
 #include "../src/unicode.h"
 #include "../src/llama-grammar.h"
 
-#include <nlohmann/json.hpp>
+#include "../vendor/nlohmann/json.hpp"
 
 #include <fstream>
 #include <iostream>

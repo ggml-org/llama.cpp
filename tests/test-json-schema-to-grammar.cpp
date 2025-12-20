@@ -6,7 +6,7 @@
 
 #include "../src/llama-grammar.h"
 
-#include <nlohmann/json.hpp>
+#include "../vendor/nlohmann/json.hpp"
 
 #include <cassert>
 #include <fstream>

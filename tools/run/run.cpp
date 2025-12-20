@@ -6,7 +6,7 @@
 #include "linenoise.cpp/linenoise.h"
 
 #define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
+#include "../vendor/nlohmann/json.hpp"
 
 #if defined(_WIN32)
 #    define WIN32_LEAN_AND_MEAN

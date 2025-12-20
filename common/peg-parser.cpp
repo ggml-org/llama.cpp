@@ -3,7 +3,7 @@
 #include "json-schema-to-grammar.h"
 #include "unicode.h"
 
-#include <nlohmann/json.hpp>
+#include "../vendor/nlohmann/json.hpp"
 
 #include <algorithm>
 #include <initializer_list>

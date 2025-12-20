@@ -2,7 +2,7 @@
 
 #include "log.h"
 
-#include <nlohmann/json.hpp>
+#include "../vendor/nlohmann/json.hpp"
 
 #include <string>
 #include <regex>

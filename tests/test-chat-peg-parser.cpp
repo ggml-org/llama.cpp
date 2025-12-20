@@ -10,7 +10,7 @@
 #include "peg-parser.h"
 #include "peg-parser/testing.h"
 #include "peg-parser/simple-tokenize.h"
-#include "nlohmann/json.hpp"
+#include "../vendor/nlohmann/json.hpp"
 
 using json = nlohmann::ordered_json;
 

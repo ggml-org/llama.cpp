@@ -1,7 +1,7 @@
 #pragma once
 
 // Common includes for all test files
-#include <nlohmann/json.hpp>
+#include "../vendor/nlohmann/json.hpp"
 #include <string>
 #include <vector>
 

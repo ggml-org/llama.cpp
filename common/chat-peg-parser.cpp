@@ -1,6 +1,6 @@
 #include "chat-peg-parser.h"
 
-#include <nlohmann/json.hpp>
+#include "../vendor/nlohmann/json.hpp"
 
 using json = nlohmann::json;
 

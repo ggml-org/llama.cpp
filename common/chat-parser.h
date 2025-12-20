@@ -5,7 +5,7 @@
 #include "json-partial.h"
 #include "regex-partial.h"
 
-#include <nlohmann/json.hpp>
+#include "../vendor/nlohmann/json.hpp"
 
 #include <optional>
 #include <string>
