@@ -1974,6 +1974,10 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
             break;
 
         case GGML_TYPE_F16:
+            if (src0->nb[1] < src0->nb[0]) {
+                GGML_LOG_DEBUG("ggml_hexagon_supported_mul_mat: permuted F16 src0 not supported\n");
+                return false;
+            }
             break;
 
         default:
@@ -2607,7 +2611,7 @@ static void ggml_backend_hexagon_free(ggml_backend_t backend) {
 }
 
 static inline bool op_reuse_src1(const ggml_tensor * op1, const ggml_tensor * op0) {
-    return (op0 && op0->src[1] == op1->src[1]);
+    return (op0 && op0->src[1] == op1->src[1] && ggml_is_quantized(op0->src[0]->type) && ggml_is_quantized(op1->src[1]->type));
 }
 
 static inline bool is_compute_op(ggml_tensor *node)
@@ -2657,11 +2661,19 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
         switch (node->op) {
             case GGML_OP_MUL_MAT:
-                ggml_hexagon_dispatch_op<init_binary_req_and_bufs<true>>(node, flags);
+                if (ggml_is_quantized(node->src[0]->type)) {
+                    ggml_hexagon_dispatch_op<init_binary_req_and_bufs<true>>(node, flags);
+                } else {
+                    ggml_hexagon_dispatch_op<init_binary_req_and_bufs<false>>(node, flags);
+                }
                 prev_quant_op = node;
                 break;
             case GGML_OP_MUL_MAT_ID:
-                ggml_hexagon_dispatch_op<init_binary_id_req_and_bufs<true>>(node, flags);
+                if (ggml_is_quantized(node->src[0]->type)) {
+                    ggml_hexagon_dispatch_op<init_binary_id_req_and_bufs<true>>(node, flags);
+                } else {
+                    ggml_hexagon_dispatch_op<init_binary_id_req_and_bufs<false>>(node, flags);
+                }
                 prev_quant_op = node;
                 break;
             case GGML_OP_MUL:
