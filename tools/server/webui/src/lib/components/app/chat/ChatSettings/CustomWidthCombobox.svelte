@@ -6,7 +6,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { cn } from '$lib/components/ui/utils';
 	import { tick } from 'svelte';
-	import { CUSTOM_WIDTH_PRESETS } from '$lib/utils/chat-width';
+	import { CUSTOM_WIDTH_PRESETS, MIN_CUSTOM_WIDTH, MAX_CUSTOM_WIDTH } from '$lib/utils/chat-width';
 
 	interface Props {
 		value: string;
@@ -15,95 +15,85 @@
 	}
 
 	let { value = $bindable(''), onChange, disabled = false }: Props = $props();
-	console.log('Rendering CustomWidthCombobox with value:', value);
 
 	let open = $state(false);
-	let showCustomPixelInput = $state(false);
-	let customPixelValue = $state('');
-	let invalidCustomPixel = $state(false);
+	let isEditing = $state(false);
+	let inputValue = $state('');
+	let isError = $state(false);
 
 	let triggerRef = $state<HTMLButtonElement>(null!);
-	let customPixelInputRef = $state<HTMLInputElement>(null!);
+	let inputRef = $state<HTMLInputElement>(null!);
 
-	const widthPresets = Object.entries(CUSTOM_WIDTH_PRESETS).map(([key, pixelValue]) => ({
+	const presets = Object.entries(CUSTOM_WIDTH_PRESETS).map(([key, pixelValue]) => ({
 		value: key,
 		label: `${key} (${pixelValue}px)`
 	}));
 
-	const isValueANumber = $derived.by(() => {
-		const numValue = Number(value);
-		if (!isNaN(numValue) && numValue > 0) {
-			return true;
-		}
-		return false;
-	});
+	const displayLabel = $derived.by(() => {
+		if (isEditing) return 'Set pixel value';
 
-	const displayValue = $derived.by(() => {
-		if (showCustomPixelInput) {
-			return 'Set pixel value';
-		}
+		const foundPreset = presets.find((p) => p.value === value);
+		if (foundPreset) return foundPreset.label;
 
-		const selectedWidthPreset = widthPresets.find((preset) => preset.value === value);
-		if (selectedWidthPreset) return selectedWidthPreset.label;
-
-		if (isValueANumber) {
-			return `Custom (${Number(value)}px)`;
+		const number = Number(value);
+		if (!isNaN(number) && number > 0) {
+			return `Custom (${number}px)`;
 		}
 
 		return 'Select width...';
 	});
 
-	function closeAndFocusTrigger() {
+	function closePopover() {
 		open = false;
-		tick().then(() => {
-			triggerRef.focus();
-		});
+		tick().then(() => triggerRef?.focus());
 	}
 
-	function handleSelectPreset(newValue: string) {
+	function selectPreset(newValue: string) {
 		value = newValue;
-		showCustomPixelInput = false;
+		isEditing = false;
+		isError = false;
 		onChange(newValue);
-		closeAndFocusTrigger();
+		closePopover();
 	}
 
-	function handleShowCustomPixelInput() {
+	function startEditing() {
 		open = false;
-		showCustomPixelInput = true;
+		isEditing = true;
+		inputValue = '';
+		isError = false;
 
-		tick().then(() => {
-			if (customPixelInputRef) customPixelInputRef.focus();
-		});
+		tick().then(() => inputRef?.focus());
 	}
 
-	function handleCancelCustomPixelInput() {
-		showCustomPixelInput = false;
-		customPixelValue = '';
+	function cancelEditing() {
+		isEditing = false;
+		inputValue = '';
+		isError = false;
+	}
+
+	function submitCustomValue() {
+		if (!inputValue) {
+			isError = true;
+			return;
+		}
+
+		const number = Number(inputValue);
+		const isValid = !isNaN(number) && number >= MIN_CUSTOM_WIDTH && number <= MAX_CUSTOM_WIDTH;
+
+		if (isValid) {
+			value = String(number);
+			onChange(String(number));
+			isEditing = false;
+			isError = false;
+		} else {
+			isError = true;
+		}
 	}
 
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Enter') {
 			e.preventDefault();
-			handleSaveCustomPixelInput();
-		}
-	}
-
-	function handleSaveCustomPixelInput() {
-		if (!customPixelValue) {
-			invalidCustomPixel = true;
-			return;
-		}
-
-		const number = Number(customPixelValue);
-		const isValid = !isNaN(number) && number >= 300 && number <= 10000;
-
-		if (isValid) {
-			value = String(number);
-			onChange(String(number));
-			invalidCustomPixel = false;
-			showCustomPixelInput = false;
-		} else {
-			invalidCustomPixel = true;
+			submitCustomValue();
 		}
 	}
 </script>
@@ -120,7 +110,7 @@
 					aria-expanded={open}
 					{disabled}
 				>
-					{displayValue}
+					{displayLabel}
 					<ChevronsUpDown class="ml-2 h-4 w-4 shrink-0 opacity-50" />
 				</Button>
 			{/snippet}
@@ -132,25 +122,20 @@
 				<Command.List>
 					<Command.Empty>No presets found.</Command.Empty>
 
-					<Command.Group value="width-presets">
-						<Command.Item value="set-custom-pixel-value" onSelect={handleShowCustomPixelInput}>
-							<Check
-								class={cn(
-									'mr-2 h-4 w-4',
-									showCustomPixelInput || isValueANumber ? 'opacity-100' : 'opacity-0'
-								)}
-							/>
+					<Command.Group>
+						<Command.Item value="custom-input-trigger" onSelect={startEditing}>
+							<Check class={cn('mr-2 h-4 w-4', isEditing ? 'opacity-100' : 'opacity-0')} />
 							Set pixel value
 						</Command.Item>
 
 						<Command.Separator class="my-1" />
 
-						{#each widthPresets as preset (preset.value)}
-							<Command.Item value={preset.value} onSelect={() => handleSelectPreset(preset.value)}>
+						{#each presets as preset (preset.value)}
+							<Command.Item value={preset.value} onSelect={() => selectPreset(preset.value)}>
 								<Check
 									class={cn(
 										'mr-2 h-4 w-4',
-										value === preset.value && !showCustomPixelInput ? 'opacity-100' : 'opacity-0'
+										value === preset.value && !isEditing ? 'opacity-100' : 'opacity-0'
 									)}
 								/>
 								{preset.label}
@@ -162,32 +147,28 @@
 		</Popover.Content>
 	</Popover.Root>
 
-	{#if showCustomPixelInput}
-		<div class="flex animate-in items-center gap-2 duration-200 fade-in slide-in-from-top-1">
-			<Input
-				bind:ref={customPixelInputRef}
-				bind:value={customPixelValue}
-				onkeydown={handleKeydown}
-				type="number"
-				placeholder="e.g. 800"
-				class={cn(
-					'flex-1',
-					invalidCustomPixel && 'border-destructive focus-visible:ring-destructive'
-				)}
-				step="1"
-				min="300"
-				max="10000"
-			/>
-			<Button onclick={handleSaveCustomPixelInput}>Save</Button>
-			<Button variant="outline" onclick={handleCancelCustomPixelInput}>Cancel</Button>
+	{#if isEditing}
+		<div class="animate-in fade-in slide-in-from-top-1 flex items-start gap-2 duration-200">
+			<div class="flex-1 space-y-1">
+				<Input
+					bind:ref={inputRef}
+					bind:value={inputValue}
+					onkeydown={handleKeydown}
+					type="number"
+					placeholder="e.g. 800"
+					class={cn(isError && 'border-destructive focus-visible:ring-destructive')}
+					min={MIN_CUSTOM_WIDTH}
+					max={MAX_CUSTOM_WIDTH}
+				/>
+				<p class={cn('text-[0.8rem]', isError ? 'text-destructive' : 'text-muted-foreground')}>
+					Enter a value between {MIN_CUSTOM_WIDTH} and {MAX_CUSTOM_WIDTH}.
+				</p>
+			</div>
+
+			<div class="flex gap-2">
+				<Button size="sm" onclick={submitCustomValue}>Save</Button>
+				<Button size="sm" variant="outline" onclick={cancelEditing}>Cancel</Button>
+			</div>
 		</div>
-		<p
-			class={cn(
-				'ml-1 text-[0.8rem]',
-				invalidCustomPixel ? 'text-destructive' : 'text-muted-foreground'
-			)}
-		>
-			Enter a value between 300 and 10000 pixels.
-		</p>
 	{/if}
 </div>

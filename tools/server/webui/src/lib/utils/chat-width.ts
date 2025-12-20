@@ -1,5 +1,8 @@
 export const DEFAULT_WIDTH = 'max-w-[48rem]';
 
+export const MIN_CUSTOM_WIDTH = 300;
+export const MAX_CUSTOM_WIDTH = 10000;
+
 export const AUTO_WIDTH_CLASSES = `
   max-w-[48rem] 
   md:max-w-[60rem] 
