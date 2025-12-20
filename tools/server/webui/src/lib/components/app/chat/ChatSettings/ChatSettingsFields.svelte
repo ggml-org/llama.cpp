@@ -10,6 +10,7 @@
 	import { getParameterInfo, resetParameterToServerDefault } from '$lib/stores/settings.svelte';
 	import { ParameterSyncService } from '$lib/services/parameter-sync';
 	import ParameterSourceIndicator from './ParameterSourceIndicator.svelte';
+	import CustomWidthCombobox from './CustomWidthCombobox.svelte';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -196,6 +197,35 @@
 				<p class="mt-1 text-xs text-muted-foreground">
 					{field.help || SETTING_CONFIG_INFO[field.key]}
 				</p>
+			{/if}
+		{:else if field.type === 'combobox'}
+			{#if field.key === 'customChatWidth'}
+				{@const isDisabled = localConfig.autoChatWidth}
+
+				<div class="space-y-2">
+					<Label
+						for={field.key}
+						class="text-sm font-medium {isDisabled ? 'text-muted-foreground' : ''}"
+					>
+						{field.label}
+					</Label>
+
+					<div class="w-full md:max-w-md">
+						<CustomWidthCombobox
+							bind:value={localConfig[field.key]}
+							onChange={(value) => onConfigChange(field.key, value)}
+							disabled={isDisabled}
+						/>
+					</div>
+
+					{#if isDisabled}
+						<p class="text-xs text-muted-foreground">Disabled when responsive width is enabled.</p>
+					{:else if field.help || SETTING_CONFIG_INFO[field.key]}
+						<p class="text-xs text-muted-foreground">
+							{field.help || SETTING_CONFIG_INFO[field.key]}
+						</p>
+					{/if}
+				</div>
 			{/if}
 		{:else if field.type === 'checkbox'}
 			{@const isDisabled = field.key === 'pdfAsImage' && !supportsVision()}
