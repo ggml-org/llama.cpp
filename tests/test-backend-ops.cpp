@@ -6710,6 +6710,11 @@ static const ggml_type other_types[] = {
     GGML_TYPE_BF16,
 };
 
+#ifdef _MSC_VER
+// Workaround long compile time with msvc
+#pragma optimize("", off)
+#endif
+
 // Test cases for evaluation: should try to cover edge cases while using small input sizes to keep the runtime low
 static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
@@ -7996,6 +8001,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     return test_cases;
 }
+#ifdef _MSC_VER
+#pragma optimize("", on)
+#endif
 
 // Test cases for performance evaluation: should be representative of real-world use cases
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
