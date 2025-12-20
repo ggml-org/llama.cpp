@@ -2912,7 +2912,9 @@ static common_chat_params common_chat_templates_apply_jinja(
     }
 
     try {
-        TemplatePattern pattern = TemplateAnalyzer::analyze_template(tmpl);
+        // Pass whether tools are provided to the autoparser
+        bool has_tools = params.tools.is_array() && !params.tools.empty();
+        TemplatePattern pattern = TemplateAnalyzer::analyze_template(tmpl, has_tools);
         if (pattern.format != TemplatePattern::UNKNOWN) {
             auto auto_params = UniversalPEGGenerator::generate_parser(pattern, tmpl, params);
             // Only use the auto-generated parser if it's different from the default format

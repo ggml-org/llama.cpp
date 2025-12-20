@@ -74,7 +74,7 @@ struct DiscoveredPattern {
 // Template analyzer that uses differential analysis of OpenAI-compatible messages
 class TemplateAnalyzer {
   public:
-    static TemplatePattern analyze_template(const minja::chat_template & tmpl);
+    static TemplatePattern analyze_template(const minja::chat_template & tmpl, bool has_tools = true);
 
   private:
     static TemplatePattern::ToolCallFormat    detect_format_by_differential(const minja::chat_template & tmpl);
@@ -88,7 +88,7 @@ class TemplateAnalyzer {
     static std::string analyze_content_differences(const minja::chat_template & tmpl);
 
     // New pure differential analysis methods
-    static DiscoveredPattern analyze_by_differential(const minja::chat_template & tmpl);
+    static DiscoveredPattern analyze_by_differential(const minja::chat_template & tmpl, bool has_tools = true);
     static void analyze_reasoning(const minja::chat_template & tmpl, DiscoveredPattern & patterns);  // New method
     static DiscoveredPattern               extract_patterns_from_differences(const std::string & tool1_diff,
                                                                              const std::string & tool2_diff,
