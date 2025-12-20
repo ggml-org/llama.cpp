@@ -163,7 +163,7 @@
 	</Popover.Root>
 
 	{#if showCustomPixelInput}
-		<div class="animate-in fade-in slide-in-from-top-1 flex items-center gap-2 duration-200">
+		<div class="flex animate-in items-center gap-2 duration-200 fade-in slide-in-from-top-1">
 			<Input
 				bind:ref={customPixelInputRef}
 				bind:value={customPixelValue}
