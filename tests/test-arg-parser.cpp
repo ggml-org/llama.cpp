@@ -16,6 +16,7 @@ int main(void) {
     for (int ex = 0; ex < LLAMA_EXAMPLE_COUNT; ex++) {
         try {
             auto ctx_arg = common_params_parser_init(params, (enum llama_example)ex);
+            common_params_add_preset_options(ctx_arg.options);
             std::unordered_set<std::string> seen_args;
             std::unordered_set<std::string> seen_env_vars;
             for (const auto & opt : ctx_arg.options) {

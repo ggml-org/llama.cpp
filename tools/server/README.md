@@ -1480,6 +1480,9 @@ The precedence rule for preset options is as follows:
 2. **Model-specific options** defined in the preset file (e.g. `[ggml-org/MY-MODEL...]`)
 3. **Global options** defined in the preset file (`[*]`)
 
+We also offer additional options that are exclusive to presets (these aren't treated as command-line arguments):
+- `load-on-startup` (boolean): Controls whether the model loads automatically when the server starts
+
 ### Routing requests
 
 Requests are routed according to the requested model name.
