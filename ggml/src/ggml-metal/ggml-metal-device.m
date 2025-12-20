@@ -1526,7 +1526,7 @@ void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor
             id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
             [encoder fillBuffer:bid_dst.metal
-                          range:NSMakeRange(bid_dst.offs, bid_dst.offs + size)
+                          range:NSMakeRange(bid_dst.offs, size)
                           value:value];
 
             [encoder endEncoding];
@@ -1587,6 +1587,8 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * 
         dispatch_semaphore_wait(completion_semaphore, DISPATCH_TIME_FOREVER);
         dispatch_release(completion_semaphore);
 
+        [buf_src release];
+
         //[cmd_buf waitUntilCompleted];
     }
 }
@@ -1626,6 +1628,8 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
 
         [cmd_buf commit];
         [cmd_buf waitUntilCompleted];
+
+        [buf_dst release];
     }
 }
 
