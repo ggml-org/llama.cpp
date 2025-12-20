@@ -7,7 +7,7 @@
 		ChatFormHelperText,
 		ChatFormTextarea
 	} from '$lib/components/app';
-	import { MAX_WIDTH_CLASSES, DEFAULT_MAX_WIDTH_CLASS } from '$lib/constants/width-classes';
+	import { getChatWidth } from '$lib/utils/chat-width';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import { config } from '$lib/stores/settings.svelte';
 	import { FileTypeCategory, MimeTypeApplication } from '$lib/enums/files';
@@ -63,8 +63,8 @@
 	let previousIsLoading = $state(isLoading);
 	let recordingSupported = $state(false);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
-	let maxWidthClass = $derived(
-		currentConfig.responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
+	let widthConfig = $derived(
+		getChatWidth(currentConfig.autoChatWidth, currentConfig.customChatWidth)
 	);
 
 	function getAcceptStringForFileType(fileType: FileTypeCategory): string {
@@ -234,7 +234,8 @@
 
 <form
 	onsubmit={handleSubmit}
-	class="{INPUT_CLASSES} border-radius-bottom-none mx-auto {maxWidthClass} overflow-hidden rounded-3xl backdrop-blur-md {className}"
+	class="{INPUT_CLASSES} border-radius-bottom-none mx-auto {widthConfig.class} overflow-hidden rounded-3xl backdrop-blur-md {className}"
+	style={widthConfig.style}
 >
 	<ChatAttachmentsList
 		bind:uploadedFiles
