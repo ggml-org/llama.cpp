@@ -552,7 +552,7 @@ inline void ggml_sycl_multi_seq_sample(
                     [=](sycl::nd_item<2> item) {
                         multi_seq_argmax_block_kernel(batched_logits, bmax, bidx,
                             active, n_seqs, n_vocab, n_blocks, item,
-                            slm_max.get_pointer(), slm_idx.get_pointer());
+                            SYCL_LOCAL_ACC_PTR(slm_max), SYCL_LOCAL_ACC_PTR(slm_idx));
                     });
             });
         }
@@ -575,7 +575,7 @@ inline void ggml_sycl_multi_seq_sample(
                     [=](sycl::nd_item<2> item) {
                         multi_seq_argmax_final_kernel(bmax, bidx, result,
                             active, n_seqs, n_blocks, item,
-                            slm_max.get_pointer(), slm_idx.get_pointer());
+                            SYCL_LOCAL_ACC_PTR(slm_max), SYCL_LOCAL_ACC_PTR(slm_idx));
                     });
             });
         }
@@ -598,7 +598,7 @@ inline void ggml_sycl_multi_seq_sample(
                     [=](sycl::nd_item<2> item) {
                         multi_seq_softmax_block_kernel(batched_logits, bmax, bsum,
                             active, n_seqs, n_vocab, n_blocks, item,
-                            slm.get_pointer());
+                            SYCL_LOCAL_ACC_PTR(slm));
                     });
             });
         }
@@ -621,7 +621,7 @@ inline void ggml_sycl_multi_seq_sample(
                     [=](sycl::nd_item<2> item) {
                         multi_seq_softmax_sample_kernel(batched_logits, bmax, bsum,
                             result, rng, active, n_seqs, n_vocab, n_blocks, item,
-                            slm.get_pointer());
+                            SYCL_LOCAL_ACC_PTR(slm));
                     });
             });
         }
@@ -1072,7 +1072,7 @@ inline void ggml_sycl_multi_seq_sample_indexed(
                     [=](sycl::nd_item<2> item) {
                         indexed_argmax_block_kernel(logits_base, d_batch_indices,
                             bmax, bidx, n_seqs, n_vocab, n_blocks, item,
-                            slm_max.get_pointer(), slm_idx.get_pointer());
+                            SYCL_LOCAL_ACC_PTR(slm_max), SYCL_LOCAL_ACC_PTR(slm_idx));
                     });
             });
         }
@@ -1094,7 +1094,7 @@ inline void ggml_sycl_multi_seq_sample_indexed(
                     [=](sycl::nd_item<2> item) {
                         indexed_argmax_final_kernel(bmax, bidx, d_seq_ids, result,
                             n_seqs, n_blocks, item,
-                            slm_max.get_pointer(), slm_idx.get_pointer());
+                            SYCL_LOCAL_ACC_PTR(slm_max), SYCL_LOCAL_ACC_PTR(slm_idx));
                     });
             });
         }
@@ -1130,7 +1130,7 @@ inline void ggml_sycl_multi_seq_sample_indexed(
                     [=](sycl::nd_item<2> item) {
                         indexed_softmax_block_kernel(logits_base, d_batch_indices,
                             bmax, bsum, n_seqs, n_vocab, n_blocks, item,
-                            slm.get_pointer());
+                            SYCL_LOCAL_ACC_PTR(slm));
                     });
             });
         }
@@ -1152,7 +1152,7 @@ inline void ggml_sycl_multi_seq_sample_indexed(
                     [=](sycl::nd_item<2> item) {
                         indexed_softmax_sample_kernel(logits_base, d_batch_indices,
                             d_seq_ids, bmax, bsum, result, rng, n_seqs, n_vocab, n_blocks, item,
-                            slm.get_pointer());
+                            SYCL_LOCAL_ACC_PTR(slm));
                     });
             });
         }

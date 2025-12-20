@@ -197,7 +197,7 @@ public:
         int m, int n, int k,
         const void * a, dt at, int64_t stride_a,
         const void * b, dt bt, int64_t stride_b,
-        void * c, dt ct, int64_t stride_c,
+        void * c, dt ct, [[maybe_unused]] int64_t stride_c,
         int batch_size,
         const queue_ptr & q)
     {

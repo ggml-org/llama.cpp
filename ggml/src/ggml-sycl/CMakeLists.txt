@@ -1,8 +1,8 @@
-message(STATUS  "GGML_SYCL_TARGET=${GGML_SYCL_TARGET}")
-
-if (NOT GGML_SYCL_TARGET MATCHES "^(INTEL|NVIDIA|AMD)$")
-    message(FATAL_ERROR "Invalid backend chosen, supported options are INTEL, NVIDIA, or AMD")
+if (NOT DEFINED GGML_SYCL_TARGET)
+    set(GGML_SYCL_TARGET "INTEL")
 endif()
+
+message(STATUS  "GGML_SYCL_TARGET=${GGML_SYCL_TARGET}")
 
 check_cxx_compiler_flag("-fsycl" SUPPORTS_SYCL)
 
@@ -158,7 +158,9 @@ if (GGML_SYCL_TARGET STREQUAL "INTEL")
     target_compile_options(ggml-sycl PRIVATE "-fsycl-targets=intel_gpu_bmg_g21,spir64")
     target_link_options(ggml-sycl PRIVATE "-fsycl-targets=intel_gpu_bmg_g21,spir64")
 
-    add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
+    # Force WARP_SIZE=32 for Intel to match MMQ tile sizes (32) and fix division-by-zero
+    # issues in load_tiles_q4_0. Intel hardware supports subgroup size 32.
+    add_compile_definitions(GGML_SYCL_WARP_SIZE=32)
     # target_link_options(ggml-sycl PRIVATE  -Xs   -ze-intel-greater-than-4GB-buffer-required)
 elseif (GGML_SYCL_TARGET STREQUAL "NVIDIA")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=32)

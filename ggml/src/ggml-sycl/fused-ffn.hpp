@@ -186,7 +186,7 @@ static void fused_ffn_multirow_sycl(
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                 fused_ffn_multirow_kernel<qk, qi, block_q_t, vdr, vec_dot_q_sycl>(
                     vx_gate, vx_up, vy, dst, ncols_in, nrows_out, batch_size,
-                    item_ct1, slm_x.get_pointer());
+                    item_ct1, SYCL_LOCAL_ACC_PTR(slm_x));
             });
     });
 }
@@ -311,7 +311,7 @@ static void fused_ffn_gate_up_swiglu_sycl(
 // Try to use fused FFN kernel if conditions are met
 // Returns true if fusion was applied, false to fall back to separate kernels
 static bool try_fused_ffn_gate_up_swiglu(
-    ggml_backend_sycl_context & ctx,
+    [[maybe_unused]] ggml_backend_sycl_context & ctx,
     const ggml_tensor * gate_weight,   // W_gate [nrows_out, ncols_in]
     const ggml_tensor * up_weight,     // W_up [nrows_out, ncols_in]
     const void * input_q8,             // x quantized to Q8_1 [batch_size, ncols_in]

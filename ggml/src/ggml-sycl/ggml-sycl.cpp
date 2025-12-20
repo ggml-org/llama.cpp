@@ -1454,11 +1454,11 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(
 
     // DEBUG: Track which tensors enter init_tensor
     static int init_dbg = 0;
-    bool is_embd = tensor->name && strstr(tensor->name, "token_embd");
+    bool is_embd = tensor->name[0] && strstr(tensor->name, "token_embd");
     if (g_ggml_sycl_tp_debug && (is_embd || (init_dbg++ < 5))) {
         fprintf(stderr, "TP DEBUG init_tensor ENTRY: tensor=%s, view_src=%s, buffer=%p\n",
-                tensor->name ? tensor->name : "(null)",
-                tensor->view_src ? (tensor->view_src->name ? tensor->view_src->name : "(view)") : "(none)",
+                tensor->name,
+                tensor->view_src ? tensor->view_src->name : "(none)",
                 (void*)buffer);
     }
 
@@ -1497,8 +1497,8 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(
             tensor->extra = extra;
 
             GGML_SYCL_DEBUG("SYCL TP: view tensor %s uses parent %s + offset %zu\n",
-                           tensor->name ? tensor->name : "(null)",
-                           tensor->view_src->name ? tensor->view_src->name : "(null)",
+                           tensor->name,
+                           tensor->view_src->name,
                            view_offset);
 
             return GGML_STATUS_SUCCESS;
@@ -1520,7 +1520,7 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(
 
     // DEBUG: Check why sharding might not happen
     static int shard_dbg = 0;
-    if (g_ggml_sycl_tp_debug && shard_dbg++ < 20 && tensor->name && (strstr(tensor->name, "ffn_gate") || strstr(tensor->name, "attn_q"))) {
+    if (g_ggml_sycl_tp_debug && shard_dbg++ < 20 && tensor->name[0] && (strstr(tensor->name, "ffn_gate") || strstr(tensor->name, "attn_q"))) {
         fprintf(stderr, "TP DEBUG init_tensor %s: enabled=%d, world_size=%d, tp_type=%d (COL=%d,ROW=%d)\n",
                 tensor->name, g_sycl_tp_config.enabled, world_size, (int)tp_type,
                 (int)tp_layer_type::TP_COLUMN_PARALLEL, (int)tp_layer_type::TP_ROW_PARALLEL);
@@ -1614,7 +1614,7 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(
             char* buf = static_cast<char*>(sycl::malloc_device(padded_size, *stream));
             if (!buf) {
                 fprintf(stderr, "SYCL TP: Failed to allocate %zu bytes on device %d for tensor %s\n",
-                        padded_size, device, tensor->name ? tensor->name : "(null)");
+                        padded_size, device, tensor->name);
                 return GGML_STATUS_ALLOC_FAILED;
             }
 
@@ -1643,7 +1643,7 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(
 
         // DEBUG: Verify sharding happened
         static int shard_verify_dbg = 0;
-        if (g_ggml_sycl_tp_debug && shard_verify_dbg++ < 10 && tensor->name) {
+        if (g_ggml_sycl_tp_debug && shard_verify_dbg++ < 10 && tensor->name[0]) {
             fprintf(stderr, "TP DEBUG SHARD %s: orig=[%lld,%lld] -> shard=[%lld,%lld] (multiprocess=%d)\n",
                     tensor->name,
                     (long long)extra->tp_original_ne[0], (long long)extra->tp_original_ne[1],
@@ -1685,7 +1685,7 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(
                 static int mp_dbg = 0;
                 if (mp_dbg++ < 10) {
                     fprintf(stderr, "TP DEBUG MULTIPROCESS %s: tp_type=%d, world_size=%d, ne=[%lld,%lld], orig=[%lld,%lld]\n",
-                            tensor->name ? tensor->name : "(null)",
+                            tensor->name,
                             (int)tp_type, g_sycl_tp_config.world_size,
                             (long long)tensor->ne[0], (long long)tensor->ne[1],
                             (long long)extra->tp_original_ne[0], (long long)extra->tp_original_ne[1]);
@@ -1703,7 +1703,7 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(
 
         // Allocate device memory on TP devices using shared-context queue
         // In multi-process mode: ctx->devices.size() == 1, world_size is MPI world size
-        bool is_tok_embd = tensor->name && strstr(tensor->name, "token_embd");
+        bool is_tok_embd = tensor->name[0] && strstr(tensor->name, "token_embd");
         for (int rank = 0; rank < (int)ctx->devices.size(); rank++) {
             int device = ctx->devices[rank];
             ggml_sycl_set_device(device);
@@ -1714,7 +1714,7 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(
             char* buf = static_cast<char*>(sycl::malloc_device(padded_size, *stream));
             if (!buf) {
                 fprintf(stderr, "SYCL TP: Failed to allocate %zu bytes on device %d for tensor %s\n",
-                        padded_size, device, tensor->name ? tensor->name : "(null)");
+                        padded_size, device, tensor->name);
                 return GGML_STATUS_ALLOC_FAILED;
             }
 
@@ -1722,10 +1722,10 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(
             stream->memset(buf, 0, padded_size).wait();
 
             // DEBUG: Track tensor allocation
-            if (g_ggml_sycl_tp_debug && (is_tok_embd || (tensor->name && strstr(tensor->name, "output_norm")))) {
+            if (g_ggml_sycl_tp_debug && (is_tok_embd || (tensor->name[0] && strstr(tensor->name, "output_norm")))) {
                 sycl::device q_dev = stream->get_device();
                 fprintf(stderr, "TP DEBUG ALLOC %s: rank=%d, device=%d, queue_device='%s', buf=%p, size=%zu\n",
-                        tensor->name ? tensor->name : "(null)", rank, device,
+                        tensor->name, rank, device,
                         q_dev.get_info<sycl::info::device::name>().c_str(), (void*)buf, padded_size);
             }
 
@@ -1781,7 +1781,7 @@ static void ggml_backend_sycl_tp_buffer_set_tensor(
             stream->memcpy(extra->data_device[device], data, size).wait();
 
             // DEBUG: Print first bytes of column-parallel weights to verify correct loading
-            if (tensor->name && strstr(tensor->name, "blk.0.attn_q.weight")) {
+            if (tensor->name[0] && strstr(tensor->name, "blk.0.attn_q.weight")) {
                 const uint8_t* src = static_cast<const uint8_t*>(data);
                 fprintf(stderr, "[TP LOAD MP] tensor='%s' rank=%d size=%zu first_bytes=[%02x,%02x,%02x,%02x,%02x,%02x,%02x,%02x]\n",
                         tensor->name, g_sycl_tp_config.rank, size,
@@ -1789,7 +1789,7 @@ static void ggml_backend_sycl_tp_buffer_set_tensor(
             }
 
             GGML_SYCL_DEBUG("SYCL TP MP: Direct copy %zu bytes to device %d for tensor %s\n",
-                            size, device, tensor->name ? tensor->name : "(null)");
+                            size, device, tensor->name);
         } else {
             // Single-process multi-device mode: iterate all devices
             for (int rank = 0; rank < world_size; rank++) {
@@ -1815,7 +1815,7 @@ static void ggml_backend_sycl_tp_buffer_set_tensor(
         // Non-sharded: DUPLICATE to local TP devices for fast kernel access
         // Copy same data to each device since we can't use P2P or host memory
         // In multi-process mode: ctx->devices.size() == 1, world_size is MPI world size
-        bool is_tok_embd = tensor->name && strstr(tensor->name, "token_embd");
+        bool is_tok_embd = tensor->name[0] && strstr(tensor->name, "token_embd");
         for (int rank = 0; rank < (int)ctx->devices.size(); rank++) {
             int device = ctx->devices[rank];
             ggml_sycl_set_device(device);
@@ -1828,9 +1828,9 @@ static void ggml_backend_sycl_tp_buffer_set_tensor(
                 // Check SOURCE data before copy (mmapped file)
                 struct { uint16_t d_bits; uint8_t qs[16]; } src_blk1, src_blk38, src_blk100;
                 size_t blk_row_size = (4096/32) * 18;
-                memcpy(&src_blk1, (char*)data + 1 * blk_row_size, sizeof(src_blk1));
-                memcpy(&src_blk38, (char*)data + 38 * blk_row_size, sizeof(src_blk38));
-                memcpy(&src_blk100, (char*)data + 100 * blk_row_size, sizeof(src_blk100));
+                memcpy(&src_blk1, static_cast<const char*>(data) + 1 * blk_row_size, sizeof(src_blk1));
+                memcpy(&src_blk38, static_cast<const char*>(data) + 38 * blk_row_size, sizeof(src_blk38));
+                memcpy(&src_blk100, static_cast<const char*>(data) + 100 * blk_row_size, sizeof(src_blk100));
                 sycl::half src1_d, src38_d, src100_d;
                 memcpy(&src1_d, &src_blk1.d_bits, sizeof(sycl::half));
                 memcpy(&src38_d, &src_blk38.d_bits, sizeof(sycl::half));
@@ -4362,10 +4362,10 @@ inline void ggml_sycl_op_mul_mat_sycl(
     SYCL_CHECK(
         CHECK_TRY_ERROR(id = get_current_device_id()));
 
-    const int64_t ne0 = dst->ne[0]; // used by MKL only
+    [[maybe_unused]] const int64_t ne0 = dst->ne[0]; // used by MKL only
     // the main device has a larger memory buffer to hold the results from all GPUs
     // ldc == nrows of the matrix that cuBLAS writes into
-    int ldc = id == ctx.device ? ne0 : row_diff; // used by MKL only
+    [[maybe_unused]] int ldc = id == ctx.device ? ne0 : row_diff; // used by MKL only
 
 #ifdef GGML_SYCL_F16
     bool use_fp16 = true;  // TODO(Yu) SYCL capability check
@@ -5200,8 +5200,8 @@ static void tp_device1_worker_thread_func() {
         // Wait for work or shutdown
         {
             std::unique_lock<std::mutex> lock(w.work_mutex);
-            w.work_cv.wait(lock, [&w] {
-                return w.shutdown.load() || !w.work_queue.empty();
+            w.work_cv.wait(lock, [] {
+                return g_tp_device1_worker.shutdown.load() || !g_tp_device1_worker.work_queue.empty();
             });
 
             if (w.shutdown.load() && w.work_queue.empty()) {
@@ -5497,8 +5497,8 @@ tp_ffn_result * ggml_sycl_tp_get_ffn_result(int layer, bool wait) {
 
     if (wait) {
         // Wait until result is available or we detect it won't come
-        w.result_cv.wait_for(lock, std::chrono::milliseconds(5000), [&w, layer] {
-            return w.results.find(layer) != w.results.end() && w.results[layer].valid;
+        w.result_cv.wait_for(lock, std::chrono::milliseconds(5000), [layer] {
+            return g_tp_device1_worker.results.find(layer) != g_tp_device1_worker.results.end() && g_tp_device1_worker.results[layer].valid;
         });
     }
 
@@ -5536,7 +5536,6 @@ struct dev1_kv_cache_entry {
 };
 std::unordered_map<int, dev1_kv_cache_entry> g_tp_dev1_kv_cache;  // Key: layer number
 std::mutex g_tp_dev1_kv_cache_mutex;
-static bool g_tp_dev1_kv_cache_initialized = false;
 
 // Initialize or resize the KV cache for a given layer on device 1
 // Called during prompt processing to set up cache with proper dimensions
@@ -5683,7 +5682,7 @@ static void free_dev1_kv_cache() {
 
 // Store FFN and attention weight references (called during tensor loading)
 static void store_ffn_weight_ref(const ggml_tensor * tensor) {
-    if (!tensor || !tensor->name) return;
+    if (!tensor || !tensor->name[0]) return;
 
     int layer = extract_layer_number(tensor->name);
     if (layer < 0) return;
@@ -5756,7 +5755,7 @@ static void * ggml_sycl_tp_get_column_parallel_output(const ggml_tensor * tensor
 static void ggml_sycl_mul_mat_tp_column_parallel_post(ggml_backend_sycl_context & ctx,
                                                         const ggml_tensor * src0,
                                                         const ggml_tensor * src1,
-                                                        ggml_tensor * dst) {
+                                                        [[maybe_unused]] ggml_tensor * dst) {
     // Multi-GPU column-parallel: store input for row-parallel computation on device 1
     // This copies the input (src1) to device 1 for later use by row-parallel ops
 
@@ -7236,11 +7235,10 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                             fake_dst_v.ne[0] = n_embd_v_shard;  // V output dimension
 
                             // Step 2: Q projection - input @ W_q1 -> q_out
-                            stream->memset(q_out, 0, q_out_size).wait();
+                            stream->memset(q_out, 0, q_out_size);
                             ggml_sycl_op_mul_mat_vec_q(ctx, attn_weights.q, &fake_src1, &fake_dst_q,
                                 (const char *)q_weight_1, nullptr, input_q8_dev,
                                 q_out, 0, n_embd_q_shard, batch, n_embd_padded, stream);
-                            stream->wait();
 
                             // DEBUG: Capture Q values before RoPE for comparison with multi-process
                             static int q_before_rope_dbg = 0;
@@ -7255,18 +7253,16 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                             }
 
                             // Step 3: K projection - input @ W_k1 -> k_out
-                            stream->memset(k_out, 0, k_out_size).wait();
+                            stream->memset(k_out, 0, k_out_size);
                             ggml_sycl_op_mul_mat_vec_q(ctx, attn_weights.k, &fake_src1, &fake_dst_k,
                                 (const char *)k_weight_1, nullptr, input_q8_dev,
                                 k_out, 0, n_embd_k_shard, batch, n_embd_padded, stream);
-                            stream->wait();
 
                             // Step 4: V projection - input @ W_v1 -> v_out
-                            stream->memset(v_out, 0, v_out_size).wait();
+                            stream->memset(v_out, 0, v_out_size);
                             ggml_sycl_op_mul_mat_vec_q(ctx, attn_weights.v, &fake_src1, &fake_dst_v,
                                 (const char *)v_weight_1, nullptr, input_q8_dev,
                                 v_out, 0, n_embd_v_shard, batch, n_embd_padded, stream);
-                            stream->wait();
 
                             // Step 4.5: Apply RoPE to Q and K
                             // Mistral uses NeoX-style RoPE with freq_base=10000.0, head_dim=128
@@ -7302,7 +7298,7 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
 
                                     q_out[base_idx + i0 * 2] = x0 * cos_theta - x1 * sin_theta;
                                     q_out[base_idx + i0 * 2 + 1] = x0 * sin_theta + x1 * cos_theta;
-                                }).wait();
+                                });
 
                             // DEBUG: Capture Q values AFTER manual RoPE for single-process comparison
                             static int sp_post_rope_dbg = 0;
@@ -7489,11 +7485,10 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                             stream->wait();
 
                             // Step 7: O projection - attn_out @ W_o1 -> partial_out
-                            stream->memset(partial_out, 0, dst_size).wait();
+                            stream->memset(partial_out, 0, dst_size);
                             ggml_sycl_op_mul_mat_vec_q(ctx, src0, src1, dst,
                                 (const char *)o_weight_1, nullptr, attn_q8_dev,
                                 partial_out, 0, N_out, batch, n_embd_q_shard_padded, stream);
-                            stream->wait();
 
                             // Step 8: ALL_REDUCE - add partial_out to dst on main device
                             // OPTIMIZED: Use malloc_shared buffer + GPU addition kernel
@@ -7576,7 +7571,7 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                                         float total_sample[4];
                                         main_stream->memcpy(total_sample, dst_ptr, 4*sizeof(float)).wait();
                                         fprintf(stderr, "TP DEBUG ATTN (QUANT) layer %d: dst_tensor=%p dst='%s' dst_data=%p dst_ptr=%p dst[0..3]=[%.6f,%.6f,%.6f,%.6f]\n",
-                                                layer, (void*)dst, dst->name ? dst->name : "(null)", dst->data, (void*)dst_ptr, total_sample[0], total_sample[1], total_sample[2], total_sample[3]);
+                                                layer, (void*)dst, dst->name, dst->data, (void*)dst_ptr, total_sample[0], total_sample[1], total_sample[2], total_sample[3]);
                                         // Also check tensor->data
                                         if (dst->data != dst_ptr) {
                                             float tensor_sample[4];
@@ -7630,7 +7625,7 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                                         float total_sample[4];
                                         main_stream->memcpy(total_sample, dst_ptr, 4*sizeof(float)).wait();
                                         fprintf(stderr, "TP DEBUG ATTN (NON-QUANT) layer %d: dst_tensor=%p dst='%s' dst_data=%p dst_ptr=%p dst[0..3]=[%.6f,%.6f,%.6f,%.6f]\n",
-                                                layer, (void*)dst, dst->name ? dst->name : "(null)", dst->data, (void*)dst_ptr, total_sample[0], total_sample[1], total_sample[2], total_sample[3]);
+                                                layer, (void*)dst, dst->name, dst->data, (void*)dst_ptr, total_sample[0], total_sample[1], total_sample[2], total_sample[3]);
                                     }
                                 }
                             }
@@ -7776,7 +7771,7 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
             stream = ctx.stream(device, 0);
 
             // Zero output first
-            stream->memset(partial_out, 0, dst_size).wait();
+            stream->memset(partial_out, 0, dst_size);
 
             // Call MMVQ kernel
             ggml_sycl_op_mul_mat_vec_q(ctx, src0, src1, dst,
@@ -7789,7 +7784,6 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                                         ne11,                         // src1_ncols
                                         K_shard_padded,               // src1_padded_row_size
                                         stream);
-            stream->wait();
         }
 
         // Copy partial result back to main device and add - OPTIMIZED: use persistent staging buffer
@@ -7947,13 +7941,13 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
     const size_t       type_size_src0 = ggml_type_size(src0->type);
     const size_t       type_size_src1 = ggml_type_size(src1->type);
 
-    bool is_src0_cont_2 = ggml_is_contiguous_2(src0);
-    bool is_src1_cont_2 = ggml_is_contiguous_2(src1);
+    [[maybe_unused]] bool is_src0_cont_2 = ggml_is_contiguous_2(src0);
+    [[maybe_unused]] bool is_src1_cont_2 = ggml_is_contiguous_2(src1);
 
     // SRC1 strides
-    int64_t                          s11 = nb11 / type_size_src1;
-    int64_t                          s12 = nb12 / type_size_src1;
-    int64_t                          s13 = nb13 / type_size_src1;
+    [[maybe_unused]] int64_t         s11 = nb11 / type_size_src1;
+    [[maybe_unused]] int64_t         s12 = nb12 / type_size_src1;
+    [[maybe_unused]] int64_t         s13 = nb13 / type_size_src1;
     ggml_sycl_pool_alloc<sycl::half> src1_f16_alloc(ctx.pool());
 
     // convert src1 to fp16
@@ -8005,18 +7999,18 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
 
     ggml_sycl_pool_alloc<sycl::half> dst_f16(ctx.pool());
 
-    dpct::library_data_t mkl_compute_type = dpct::library_data_t::real_float;
-    dpct::library_data_t mkl_data_type    = dpct::library_data_t::real_float;
+    [[maybe_unused]] dpct::library_data_t mkl_compute_type = dpct::library_data_t::real_float;
+    [[maybe_unused]] dpct::library_data_t mkl_data_type    = dpct::library_data_t::real_float;
 
     // dst strides
-    size_t nbd2 = dst->nb[2];
-    size_t nbd3 = dst->nb[3];
+    [[maybe_unused]] size_t nbd2 = dst->nb[2];
+    [[maybe_unused]] size_t nbd3 = dst->nb[3];
 
     const float alpha_f32 = 1.0f;
     const float beta_f32  = 0.0f;
 
-    const void * alpha = &alpha_f32;
-    const void * beta  = &beta_f32;
+    [[maybe_unused]] const void * alpha = &alpha_f32;
+    [[maybe_unused]] const void * beta  = &beta_f32;
 
     GGML_ASSERT(ne12 % ne02 == 0);
     GGML_ASSERT(ne13 % ne03 == 0);
@@ -8024,8 +8018,8 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
     GGML_ASSERT(ne10 == ne00);
 
     // broadcast factors
-    const int64_t r2 = ne12 / ne02;
-    const int64_t r3 = ne13 / ne03;
+    [[maybe_unused]] const int64_t r2 = ne12 / ne02;
+    [[maybe_unused]] const int64_t r3 = ne13 / ne03;
 
 #if GGML_SYCL_DNNL
     // Use oneDNN for batch GEMM operations (primary path for Intel)
@@ -8475,8 +8469,8 @@ static bool graph_needs_reorder(ggml_backend_sycl_context& ctx, ggml_cgraph * cg
              ggml_sycl_supports_reorder_mul_mat_sycl(src0->type))) {
             if (g_ggml_sycl_debug) {
                 fprintf(stderr, "[SYCL-GRAPH] needs_reorder: node %d '%s' src0='%s' type=%s\n",
-                        i, node->name ? node->name : "?",
-                        src0->name ? src0->name : "?",
+                        i, node->name,
+                        src0->name,
                         ggml_type_name(src0->type));
             }
             return true;
@@ -8548,7 +8542,7 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
         static int tp_skip_log = 0;
         if (g_ggml_sycl_tp_debug && tp_skip_log++ < 5) {
             fprintf(stderr, "TP DEBUG: Skipping reorder for TP-sharded tensor %s (tp_type=%d)\n",
-                    src0->name ? src0->name : "?", (int)extra->tp_type);
+                    src0->name, (int)extra->tp_type);
         }
         return;  // Skip reorder for TP tensors
     }
@@ -8649,7 +8643,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         static int tp_mm_dbg = 0;
         if (g_ggml_sycl_tp_debug && tp_mm_dbg++ < 10) {
             const auto * extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
-            const char * name = src0->name ? src0->name : "?";
+            const char * name = src0->name;
             bool is_attn_out = strstr(name, "attn_output") != nullptr;
             fprintf(stderr, "TP DEBUG MUL_MAT %s: src0->ne=[%lld,%lld], tp_local_ne=[%lld,%lld], src1->ne=[%lld,%lld,%lld,%lld], dst->ne=[%lld,%lld], device=%d\n",
                     name,
@@ -8672,12 +8666,12 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     // DEBUG: Check output.weight (lm_head) computation specifically
     // Make sure we match "output.weight" but NOT "attn_output.weight"
     // Debug controlled by GGML_SYCL_TP_DEBUG environment variable
-    bool is_output_weight = src0->name &&
+    bool is_output_weight = src0->name[0] &&
                             strstr(src0->name, "output.weight") != nullptr &&
                             strstr(src0->name, "attn_output") == nullptr;
     static int output_dbg = 0;
     if (g_ggml_sycl_tp_debug && is_output_weight && output_dbg++ < 3) {
-        const char * name = src0->name ? src0->name : "?";
+        const char * name = src0->name;
         queue_ptr stream = ctx.stream();
         int64_t batch = src1->ne[1];
         fprintf(stderr, "TP DEBUG LM_HEAD %s: src0->ne=[%lld,%lld], src1->ne=[%lld,%lld], dst->ne=[%lld,%lld], batch=%lld, device=%d\n",
@@ -8757,8 +8751,8 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     }
     if (use_xmx_gemm) {
         int64_t batch = src1->ne[1];
-        // XMX is beneficial for batch >= 8 and < threshold
-        use_xmx_gemm = batch >= 8 && batch < g_ggml_sycl_xmx_threshold;
+        // XMX is beneficial for batch >= 1 and < threshold (DEBUG)
+        use_xmx_gemm = batch >= 1 && batch < g_ggml_sycl_xmx_threshold;
     }
 
 
@@ -8782,7 +8776,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     // Controlled by GGML_SYCL_TP_DEBUG environment variable
     static int path_dbg[32] = {0};
     static int weight_check_dbg = 0;
-    const char * mm_name = src0->name ? src0->name : "?";
+    const char * mm_name = src0->name;
     // Skip this debug block in multi-process mode (only one device per process)
     if (g_ggml_sycl_tp_debug && g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1 &&
         !g_sycl_tp_config.is_multiprocess) {
@@ -8856,7 +8850,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     }
 
     // DEBUG: Check FFN gate/up output for NaN (layers 0, 30, 31)
-    const char * weight_name = src0->name ? src0->name : "?";
+    const char * weight_name = src0->name;
     static int gate_dbg[32] = {0};
     static int call_seq = 0;
 
@@ -9657,7 +9651,7 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
         if (op_trace++ < 100) {
             fprintf(stderr, "[RANK %d] COMPUTE: op=%s tensor=%s ne=[%lld,%lld,%lld,%lld]\n",
                     g_sycl_tp_config.mpi_rank, ggml_op_name(dst->op),
-                    dst->name ? dst->name : "(null)",
+                    dst->name,
                     (long long)dst->ne[0], (long long)dst->ne[1],
                     (long long)dst->ne[2], (long long)dst->ne[3]);
             fflush(stderr);
@@ -10738,7 +10732,7 @@ static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * syc
             if (node_trace++ < 30) {
                 fprintf(stderr, "[RANK %d] NODE %d: op=%s name=%s\n",
                         g_sycl_tp_config.mpi_rank, i, ggml_op_name(node->op),
-                        node->name ? node->name : "(null)");
+                        node->name);
                 fflush(stderr);
             }
         }

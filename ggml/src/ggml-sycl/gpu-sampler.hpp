@@ -252,7 +252,7 @@ void gpu_softmax_sample_kernel(
     const int n_vocab,
     const int n_blocks,
     const float random_val,     // Uniform random in [0, 1)
-    const bool greedy,          // If true, return argmax instead
+    [[maybe_unused]] const bool greedy,          // If true, return argmax instead
     const sycl::nd_item<1>& item,
     float* slm                  // SLM [block_size]
 ) {
@@ -323,7 +323,7 @@ void gpu_softmax_sample_kernel(
 // =============================================================================
 
 void gpu_argmax_sample_kernel(
-    const float* logits,
+    [[maybe_unused]] const float* logits,
     const float* block_max,     // [n_blocks] input
     const int32_t* block_idx,   // [n_blocks] input
     int32_t* result,            // [1] output
@@ -390,7 +390,6 @@ void gpu_topk_count_kernel(
 ) {
     const int tid = item.get_local_id(0);
     const int block_id = item.get_group(0);
-    const int block_size = item.get_local_range(0);
     const int gid = item.get_global_id(0);
 
     // Each thread counts elements >= threshold
@@ -500,7 +499,7 @@ inline float gpu_topk_find_threshold(
             h.parallel_for(sycl::nd_range<1>(n_blocks * block_size, block_size),
                 [=](sycl::nd_item<1> item) {
                     gpu_topk_count_kernel(logits, block_counts, n_vocab, mid, item,
-                                         slm_count.get_pointer());
+                                         SYCL_LOCAL_ACC_PTR(slm_count));
                 });
         });
 
@@ -510,7 +509,7 @@ inline float gpu_topk_find_threshold(
             h.parallel_for(sycl::nd_range<1>(block_size, block_size),
                 [=](sycl::nd_item<1> item) {
                     gpu_topk_sum_counts_kernel(block_counts, total_count_buf, n_blocks, item,
-                                              slm.get_pointer());
+                                              SYCL_LOCAL_ACC_PTR(slm));
                 });
         });
 
@@ -566,8 +565,8 @@ void gpu_softmax_probs_kernel(
 void gpu_topp_filter_kernel(
     float* logits,
     const float* probs,        // [n_vocab] input (already computed softmax)
-    const float* sorted_probs, // [n_vocab] sorted descending (not used in simple version)
-    const int32_t* sorted_idx, // [n_vocab] indices of sorted probs (not used in simple version)
+    [[maybe_unused]] const float* sorted_probs, // [n_vocab] sorted descending (not used in simple version)
+    [[maybe_unused]] const int32_t* sorted_idx, // [n_vocab] indices of sorted probs (not used in simple version)
     const int n_vocab,
     const float top_p,
     const sycl::nd_item<1>& item
@@ -580,7 +579,6 @@ void gpu_topp_filter_kernel(
 
     // First pass: find the probability threshold
     float prob_threshold = 0.0f;
-    float cumsum = 0.0f;
 
     // Count tokens above each probability level
     // This is O(n^2) but simple and works for any n_vocab
@@ -613,7 +611,7 @@ void gpu_topp_filter_kernel(
 void gpu_topp_filter_simple_kernel(
     float* logits,
     const float* probs,        // [n_vocab] softmax probabilities
-    int32_t* mask,             // [n_vocab] work buffer (1 = keep, 0 = filter)
+    [[maybe_unused]] int32_t* mask,             // [n_vocab] work buffer (1 = keep, 0 = filter)
     const int n_vocab,
     const float top_p,
     const sycl::nd_item<1>& item
@@ -726,7 +724,7 @@ inline int32_t ggml_sycl_sample_token(
             h.parallel_for(sycl::nd_range<1>(n_blocks * block_size, block_size),
                 [=](sycl::nd_item<1> item) {
                     gpu_argmax_block_kernel(logits, bmax, bidx, n_vocab, item,
-                                           slm_max.get_pointer(), slm_idx.get_pointer());
+                                           SYCL_LOCAL_ACC_PTR(slm_max), SYCL_LOCAL_ACC_PTR(slm_idx));
                 });
         });
         q.wait();
@@ -774,7 +772,7 @@ inline int32_t ggml_sycl_sample_token(
             h.parallel_for(sycl::nd_range<1>(n_blocks * block_size, block_size),
                 [=](sycl::nd_item<1> item) {
                     gpu_softmax_block_kernel(logits, bmax, bsum, n_vocab, item,
-                                            slm.get_pointer());
+                                            SYCL_LOCAL_ACC_PTR(slm));
                 });
         });
 
@@ -824,7 +822,7 @@ inline int32_t ggml_sycl_sample_token(
             h.parallel_for(sycl::nd_range<1>(n_blocks * block_size, block_size),
                 [=](sycl::nd_item<1> item) {
                     gpu_argmax_block_kernel(logits, bmax, bidx, n_vocab, item,
-                                           slm_max.get_pointer(), slm_idx.get_pointer());
+                                           SYCL_LOCAL_ACC_PTR(slm_max), SYCL_LOCAL_ACC_PTR(slm_idx));
                 });
         });
 
@@ -840,7 +838,7 @@ inline int32_t ggml_sycl_sample_token(
             h.parallel_for(sycl::nd_range<1>(block_size, block_size),
                 [=](sycl::nd_item<1> item) {
                     gpu_argmax_sample_kernel(logits, bmax, bidx, result, n_blocks, item,
-                                            slm_max.get_pointer(), slm_idx.get_pointer());
+                                            SYCL_LOCAL_ACC_PTR(slm_max), SYCL_LOCAL_ACC_PTR(slm_idx));
                 });
         });
 
@@ -864,7 +862,7 @@ inline int32_t ggml_sycl_sample_token(
         h.parallel_for(sycl::nd_range<1>(n_blocks * block_size, block_size),
             [=](sycl::nd_item<1> item) {
                 gpu_softmax_block_kernel(logits, bmax, bsum, n_vocab, item,
-                                        slm.get_pointer());
+                                        SYCL_LOCAL_ACC_PTR(slm));
             });
     });
 
@@ -879,7 +877,7 @@ inline int32_t ggml_sycl_sample_token(
         h.parallel_for(sycl::nd_range<1>(block_size, block_size),
             [=](sycl::nd_item<1> item) {
                 gpu_softmax_sample_kernel(logits, bmax, bsum, result, n_vocab, n_blocks,
-                                         random_val, false, item, slm.get_pointer());
+                                         random_val, false, item, SYCL_LOCAL_ACC_PTR(slm));
             });
     });
 
@@ -980,7 +978,7 @@ inline void ggml_sycl_sample_token_async(
             h.parallel_for(sycl::nd_range<1>(n_blocks * block_size, block_size),
                 [=](sycl::nd_item<1> item) {
                     gpu_argmax_block_kernel(logits, bmax, bidx, n_vocab, item,
-                                           slm_max.get_pointer(), slm_idx.get_pointer());
+                                           SYCL_LOCAL_ACC_PTR(slm_max), SYCL_LOCAL_ACC_PTR(slm_idx));
                 });
         });
 
@@ -995,7 +993,7 @@ inline void ggml_sycl_sample_token_async(
             h.parallel_for(sycl::nd_range<1>(block_size, block_size),
                 [=](sycl::nd_item<1> item) {
                     gpu_argmax_sample_kernel(logits, bmax, bidx, result, n_blocks, item,
-                                            slm_max.get_pointer(), slm_idx.get_pointer());
+                                            SYCL_LOCAL_ACC_PTR(slm_max), SYCL_LOCAL_ACC_PTR(slm_idx));
                 });
         });
     } else {
@@ -1011,7 +1009,7 @@ inline void ggml_sycl_sample_token_async(
             h.parallel_for(sycl::nd_range<1>(n_blocks * block_size, block_size),
                 [=](sycl::nd_item<1> item) {
                     gpu_softmax_block_kernel(logits, bmax, bsum, n_vocab, item,
-                                            slm.get_pointer());
+                                            SYCL_LOCAL_ACC_PTR(slm));
                 });
         });
 
@@ -1025,7 +1023,7 @@ inline void ggml_sycl_sample_token_async(
             h.parallel_for(sycl::nd_range<1>(block_size, block_size),
                 [=](sycl::nd_item<1> item) {
                     gpu_softmax_sample_kernel(logits, bmax, bsum, result, n_vocab, n_blocks,
-                                             random_val, false, item, slm.get_pointer());
+                                             random_val, false, item, SYCL_LOCAL_ACC_PTR(slm));
                 });
         });
     }
@@ -1344,7 +1342,6 @@ void gpu_verify_speculative_with_tokens_kernel(
     // Thread 0 writes result
     if (tid == 0) {
         int32_t argmax_token = slm_idx[0];
-        float argmax_val = slm_max[0];
         int32_t draft_token = draft_tokens[pos];
         matches[pos] = (argmax_token == draft_token) ? 1 : 0;
         sampled_tokens[pos] = argmax_token;  // Also output the sampled token
@@ -1419,7 +1416,7 @@ inline int ggml_sycl_verify_speculative(
             [=](sycl::nd_item<2> item) {
                 gpu_verify_speculative_kernel(
                     all_logits, draft_tokens, matches, n_vocab, n_draft, item,
-                    slm_max.get_pointer(), slm_idx.get_pointer());
+                    SYCL_LOCAL_ACC_PTR(slm_max), SYCL_LOCAL_ACC_PTR(slm_idx));
             });
     });
 
@@ -1990,7 +1987,7 @@ inline void ggml_sycl_sample_multi_sequence(
                 [=](sycl::nd_item<2> item) {
                     gpu_multi_seq_softmax_block_kernel(
                         all_logits, bmax, bsum, n_vocab, n_seqs, n_blocks, item,
-                        slm.get_pointer());
+                        SYCL_LOCAL_ACC_PTR(slm));
                 });
         });
     }
@@ -2011,7 +2008,7 @@ inline void ggml_sycl_sample_multi_sequence(
                 [=](sycl::nd_item<2> item) {
                     gpu_multi_seq_softmax_sample_kernel(
                         all_logits, bmax, bsum, results, rng, greedy,
-                        n_vocab, n_seqs, n_blocks, item, slm.get_pointer());
+                        n_vocab, n_seqs, n_blocks, item, SYCL_LOCAL_ACC_PTR(slm));
                 });
         });
     }
@@ -2046,7 +2043,7 @@ inline void ggml_sycl_multi_seq_sampler_get_tokens(
 // sampled_tokens_out: [n_draft] host array to receive argmax tokens
 inline int ggml_sycl_verify_speculative_with_tokens(
     ggml_backend_sycl_context& ctx,
-    ggml_sycl_sampler_state& state,
+    [[maybe_unused]] ggml_sycl_sampler_state& state,
     const float* all_logits,           // [n_draft, n_vocab] on device
     const int32_t* draft_tokens_host,  // [n_draft] on host
     int32_t* sampled_tokens_out,       // [n_draft] on host - output sampled tokens
@@ -2091,7 +2088,7 @@ inline int ggml_sycl_verify_speculative_with_tokens(
                 gpu_verify_speculative_with_tokens_kernel(
                     all_logits, draft_tokens_dev, matches, sampled_tokens_dev,
                     n_vocab, n_draft, item,
-                    slm_max.get_pointer(), slm_idx.get_pointer());
+                    SYCL_LOCAL_ACC_PTR(slm_max), SYCL_LOCAL_ACC_PTR(slm_idx));
             });
     });
 

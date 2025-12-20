@@ -1375,7 +1375,7 @@ bool ggml_sycl_mul_mat_id_vec_q(
                     for (int i = 0; i < 16; i++) {
                         fprintf(stderr, "%02x ", host_mxfp4.qs[i]);
                     }
-                    fprintf(stderr, "\n[MXFP4 DEBUG] Q8_1 d=%f, qs: ", host_q8_1.ds[0]);
+                    fprintf(stderr, "\n[MXFP4 DEBUG] Q8_1 d=%f, qs: ", static_cast<float>(host_q8_1.ds[0]));
                     for (int i = 0; i < 32; i++) {
                         fprintf(stderr, "%d ", host_q8_1.qs[i]);
                     }

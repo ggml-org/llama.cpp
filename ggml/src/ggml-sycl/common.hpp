@@ -38,6 +38,10 @@
 #include "dnnl_sycl.hpp"
 #endif
 
+// Helper macro for deprecated get_pointer() -> get_multi_ptr() migration
+// SYCL 2020 deprecates local_accessor::get_pointer() in favor of get_multi_ptr()
+#define SYCL_LOCAL_ACC_PTR(acc) ((acc).template get_multi_ptr<sycl::access::decorated::no>().get())
+
 #define GGML_COMMON_DECL_SYCL
 #define GGML_COMMON_IMPL_SYCL
 /* suppress warning spam */

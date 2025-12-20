@@ -57,7 +57,7 @@ void fused_moe_q8_0_kernel(
     const int32_t * __restrict__ expert_ids,   // [num_tokens, n_ids] expert indices
     float * __restrict__ output,               // [num_tokens, n_ids, nrows] F32
     const int64_t stride_expert,               // Bytes between experts in weights
-    const int64_t ncols,                       // Hidden size (input dimension)
+    [[maybe_unused]] const int64_t ncols,       // Hidden size (input dimension)
     const int64_t nrows,                       // Output size per expert
     const int64_t n_ids,                       // Number of expert selections per token
     const int64_t num_tokens,                  // Total number of tokens
@@ -154,7 +154,7 @@ void fused_moe_mxfp4_kernel(
     const int32_t * __restrict__ expert_ids,
     float * __restrict__ output,
     const int64_t stride_expert,
-    const int64_t ncols,
+    [[maybe_unused]] const int64_t ncols,
     const int64_t nrows,
     const int64_t n_ids,
     const int64_t num_tokens,
@@ -240,8 +240,6 @@ void fused_moe_mxfp4_kernel(
     // Work-group level reduction using SLM
     // Sub-group reduction alone won't work if work-group > sub-group
     auto sg = item.get_sub_group();
-    const int sg_id = sg.get_group_id()[0];
-    const int sg_lid = sg.get_local_id()[0];
     const int sg_size = sg.get_max_local_range()[0];
 
     // First reduce within each sub-group

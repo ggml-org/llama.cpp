@@ -43,7 +43,7 @@ struct quant_params_t {
 template<int BLOCK_SIZE = 256>
 inline void quantize_fp32_to_int16_kernel(
     const float* __restrict__ src,
-    int16_t* __restrict__ dst,
+    [[maybe_unused]] int16_t* __restrict__ dst,  // Actual quantization done in apply_quantize_kernel
     float* __restrict__ minmax,  // [min, max] - initialized to [FLT_MAX, -FLT_MAX]
     size_t n,
     sycl::nd_item<1> item,
