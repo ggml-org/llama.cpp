@@ -126,6 +126,7 @@ struct ifairy_lut_extra {
   - 每次性能相关改动，都在 `IFAIRY_ARM_3W_LUT_STATUS.md` 的 `0.1 tok/s 记录`追加一条可复现记录（固定 seed/prompt/thread/token/env）。
   - A/B 的原始日志（建议 TSV）落到 `/tmp/` 并在 `STATUS.md` 引用路径（避免只剩结论没证据）。
   - 主观体验（输出可读/不卡）不作为性能结论，必须以 `eval tok/s` 为准。
+- **文档更新**：功能落地后同步更新 `IFAIRY_ARM_3W_LUT_STATUS.md`（tok/s 记录）、`IFAIRY_ARM_3W_LUT_API_PLAN.md`、`IFAIRY_ARM_3W_LUT_DESIGN.md` 与相关 `AGENTS.md`，确保无过时信息。
 
 ### 6.0.1 回归恢复（仅在 tok/s 明显回落时启用）
 
@@ -160,6 +161,8 @@ struct ifairy_lut_extra {
 
 目标：把 decode 常见的 `N≈1` 进一步提速，并让 `compact` 在 Apple Silicon 上稳定胜出。
 
+> 性能分析（见 `IFAIRY_LUT_PERF_ANALYSIS_20251218.md`）：`qgemm_ex` 约 53.5% + `ggml_graph_compute_thread` 约 30.5%，因此“算子优化 + 框架开销”要并行推进。
+
 任务清单（按收益预期排序）：
 
 - **减少 3 次 position 查表的结构性开销（P0，优先探索）**：当前 `compact` 每 group 必做 3 次 position 查表 + widen + add，指令密度高且依赖链长；若能把 “3 次” 减到 “2 次”，通常比微调 unroll/prefetch 更可能拉开稳定差距。
@@ -186,6 +189,8 @@ struct ifairy_lut_extra {
 
 目标：减少 barrier 与小 kernel 调度开销，让更多时间落在“有效算术”。
 
+分析结论（2025-12-18）：`ggml_graph_compute_thread` 占比约 30.5%，decode 场景更容易被同步/调度吞没。
+
 建议动作：
 
 - **优先：减少“缓存命中时仍然同步”的开销**：例如 `transform_tensor` 若命中缓存（indexes 已存在且不会再变），应避免每次 mul_mat 都做一次全线程 barrier（只在首次生成/真正做了 transform 时 barrier）。
@@ -207,11 +212,31 @@ struct ifairy_lut_extra {
 - 把 `preprocess_ex` 的切分策略固定为“对 N 或 group 做分片”，避免 false sharing 与 “线程 0 构表、其余等待”。
 - 调参只用 sweep 驱动（避免“凭直觉写死 BK/BM”）：优先用 `scripts/ifairy_lut_sweep.sh` 固定 seed/prompt 跑完再决定默认策略。
 
-### 6.4 可选：形状专用 fast-path（谨慎引入）
+### 6.4 降低 LUT 工作区与带宽（提高上限）
+
+目标：在不破坏 `w * conj(x)` 语义的前提下，继续降低 per-group 指令数与工作区读写。
+
+- 固定 `compact` 的带宽优势：保持 `48B/group`，避免“表变大但算力没下降”的回退。
+- 优先把 `qgemm_ex` 内部累加保持在 `int32`，只在 block/row 级做一次 `float` 缩放与写回。
+- 谨慎探索更激进的 LUT 合并方案（例如减少 position 查表次数），必须有 profile 证据 + A/B 记录支撑。
+
+### 6.5 索引生命周期/缓存策略升级（工程化）
+
+目标：减少重复索引构建与全局状态副作用，确保复用清晰、释放可控。
+
+- 维持 “相同权重 data 只生成一次 index” 的缓存策略，并确保 `ggml_ifairy_lut_free()` 能完全回收。
+- 如需更精细的生命周期管理，优先考虑按 ctx/graph 绑定或 refcount，避免引入难以追踪的全局泄漏。
+
+### 6.6 再做 BM/BK 调参（放在结构优化之后）
+
+- 在 6.1/6.2/6.3 有明确进展前，不建议依赖 `BK/BM` 调参提升吞吐。
+- 统一用 `scripts/ifairy_lut_sweep.sh` 做 sweep，固定 seed/prompt/token 并保留日志。
+
+### 6.7 可选：形状专用 fast-path（谨慎引入）
 
 > BitNet TL1 通过“少量固定形状专用内核”换取吞吐上限。iFairy 若要走这条路，必须先用 profile/日志确认最热 `(M,K,N)`，再只为 1~2 个形状提供 fast-path，避免维护成本失控。
 
-> 当前约定：本阶段先不考虑 6.4（除非回归恢复完成且 profile 明确显示收益空间）。
+> 当前约定：本阶段先不考虑 6.7（除非回归恢复完成且 profile 明确显示收益空间）。
 
 可选落地方向：
 
