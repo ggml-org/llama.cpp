@@ -31,7 +31,7 @@ export type CustomWidthPreset = keyof typeof CUSTOM_WIDTH_PRESETS;
  * @param autoChatWidth - Whether automatic responsive width is enabled
  * @param customChatWidth - Custom width setting (preset key or pixel value)
  */
-export function getChatWidthClass(
+export function getChatWidth(
 	autoChatWidth: boolean,
 	customChatWidth: string
 ): { class: string; style?: string } {
