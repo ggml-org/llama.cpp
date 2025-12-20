@@ -1082,6 +1082,43 @@ json oaicompat_chat_params_parse(
     return llama_params;
 }
 
+json convert_responses_to_chatcmpl(const json & body) {
+    if (!body.contains("input")) {
+        throw std::invalid_argument("'input' is required");
+    }
+    if (!json_value(body, "previous_response_id", std::string{}).empty()) {
+        throw std::invalid_argument("llama.cpp does not support 'previous_response_id'.");
+    }
+
+    const json input_value = body.at("input");
+    json chatcmpl_messages = json::array();
+
+    if (input_value.is_array()) {
+        chatcmpl_messages = input_value;
+    } else if (input_value.is_string()) {
+        chatcmpl_messages.push_back({
+            {"role",    "user"},
+            {"content", input_value},
+        });
+    } else {
+        std::invalid_argument("'input' must be a string or array of objects");
+    }
+
+    const std::string instructions = json_value(body, "instructions", std::string{});
+    if (instructions != "") {
+        chatcmpl_messages.push_back({
+            {"role",    "system"},
+            {"content", instructions},
+        });
+    }
+
+    json chatcmpl_body = body;
+    chatcmpl_body.erase("input");
+    chatcmpl_body["messages"] = chatcmpl_messages;
+
+    return chatcmpl_body;
+}
+
 json convert_anthropic_to_oai(const json & body) {
     json oai_body;
 
@@ -1472,6 +1509,24 @@ std::string format_oai_sse(const json & data) {
         ss << "data: " <<
             safe_json_to_str(data) <<
             "\n\n"; // required by RFC 8895 - A message is terminated by a blank line (two line terminators in a row).
+    };
+
+    if (data.is_array()) {
+        for (const auto & item : data) {
+            send_single(item);
+        }
+    } else {
+        send_single(data);
+    }
+
+    return ss.str();
+}
+
+std::string format_oai_resp_sse(const json & data) {
+    std::ostringstream ss;
+    auto send_single = [&ss](const json & event_obj) {
+        ss << "event: " << event_obj.at("event").get<std::string>() << "\n";
+        ss << "data: " << safe_json_to_str(event_obj.at("data")) << "\n\n";
     };
 
     if (data.is_array()) {
