@@ -258,6 +258,7 @@ struct cmd_params {
     std::vector<bool>                flash_attn;
     std::vector<std::vector<float>>  tensor_split;
     std::vector<std::vector<llama_model_tensor_buft_override>> tensor_buft_overrides;
+    std::vector<ggml_backend_dev_t>  devices;
     std::vector<bool>                use_mmap;
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
@@ -295,6 +296,7 @@ static const cmd_params cmd_params_defaults = {
     /* flash_attn           */ { false },
     /* tensor_split         */ { std::vector<float>(llama_max_devices(), 0.0f) },
     /* tensor_buft_overrides*/ { std::vector<llama_model_tensor_buft_override>{ { nullptr, nullptr } } },
+    /* devices              */ { std::vector<ggml_backend_dev_t>() },
     /* use_mmap             */ { true },
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
@@ -376,6 +378,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ts, --tensor-split <ts0/ts1/..>          (default: 0)\n");
     printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
     printf("                                            (default: disabled)\n");
+    printf("  -dev, --device <dev1,dev2,..>             (default: auto, none = disable offload)\n");
     printf("  -nopo, --no-op-offload <0|1>              (default: 0)\n");
     printf("\n");
     printf(
@@ -411,6 +414,27 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     }
 
     return GGML_TYPE_COUNT;
+}
+
+static std::vector<ggml_backend_dev_t> parse_device_list(const std::string & value) {
+    std::vector<ggml_backend_dev_t> devices;
+    auto dev_names = string_split<std::string>(value, ',');
+    if (dev_names.empty()) {
+        throw std::invalid_argument("no devices specified");
+    }
+    if (dev_names.size() == 1 && dev_names[0] == "none") {
+        devices.push_back(nullptr);
+        return devices;
+    }
+    for (const auto & device : dev_names) {
+        auto * dev = ggml_backend_dev_by_name(device.c_str());
+        if (!dev || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+            throw std::invalid_argument("invalid device: " + device);
+        }
+        devices.push_back(dev);
+    }
+    devices.push_back(nullptr);
+    return devices;
 }
 
 static cmd_params parse_cmd_params(int argc, char ** argv) {
@@ -686,6 +710,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     }
                     params.tensor_split.push_back(tensor_split);
                 }
+            } else if (arg == "-dev" || arg == "--device") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.devices = parse_device_list(argv[i]);
             } else if (arg == "-ot" || arg == "--override-tensor") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -876,6 +906,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.tensor_buft_overrides.empty()) {
         params.tensor_buft_overrides = cmd_params_defaults.tensor_buft_overrides;
     }
+    if (params.devices.empty()) {
+        params.devices = cmd_params_defaults.devices;
+    }
     if (params.use_mmap.empty()) {
         params.use_mmap = cmd_params_defaults.use_mmap;
     }
@@ -923,6 +956,7 @@ struct cmd_params_instance {
     bool               flash_attn;
     std::vector<float> tensor_split;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
+    std::vector<ggml_backend_dev_t> devices;
     bool               use_mmap;
     bool               embeddings;
     bool               no_op_offload;
@@ -983,6 +1017,9 @@ struct cmd_params_instance {
                 mparams.devices = devices.data();
             }
         }
+        if (!devices.empty()) {
+            mparams.devices = const_cast<ggml_backend_dev_t *>(devices.data());
+        }
         mparams.split_mode   = split_mode;
         mparams.main_gpu     = main_gpu;
         mparams.tensor_split = tensor_split.data();
@@ -1031,6 +1068,7 @@ struct cmd_params_instance {
         return model == other.model && n_gpu_layers == other.n_gpu_layers && n_cpu_moe == other.n_cpu_moe &&
                rpc_servers_str == other.rpc_servers_str && split_mode == other.split_mode &&
                main_gpu == other.main_gpu && use_mmap == other.use_mmap && tensor_split == other.tensor_split &&
+               devices == other.devices &&
                vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
     }
 
@@ -1105,6 +1143,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .flash_attn   = */ fa,
                 /* .tensor_split = */ ts,
                 /* .tensor_buft_overrides = */ ot,
+                /* .devices      = */ params.devices,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
@@ -1138,6 +1177,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .flash_attn   = */ fa,
                 /* .tensor_split = */ ts,
                 /* .tensor_buft_overrides = */ ot,
+                /* .devices      = */ params.devices,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
@@ -1171,6 +1211,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .flash_attn   = */ fa,
                 /* .tensor_split = */ ts,
                 /* .tensor_buft_overrides = */ ot,
+                /* .devices      = */ params.devices,
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,

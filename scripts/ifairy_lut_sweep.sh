@@ -2,21 +2,23 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${BIN:-${ROOT}/build-rel/bin/llama-cli}"
+BIN="${BIN:-${ROOT}/build-rel/bin/llama-bench}"
 MODEL="${MODEL:-${ROOT}/models/Fairy-plus-minus-i-700M/ifairy.gguf}"
+
 THREADS="${THREADS:-4}"
-TOKENS="${TOKENS:-256}"
-PROMPT="${PROMPT:-I believe life is}"
-GPU_LAYERS="${GPU_LAYERS:-0}"
+N_PROMPT="${N_PROMPT:-8}"
+N_GEN="${N_GEN:-8}"
+TEST_MODE="${TEST_MODE:-gen}"
+REPS="${REPS:-1}"
+NO_WARMUP="${NO_WARMUP:-1}"
+DEVICE="${DEVICE:-none}"
 
 BK_LIST="${BK_LIST:-0 2}"
 BM_LIST="${BM_LIST:-64}"
 FULLACC_LIST="${FULLACC_LIST:-0 1}"
 
-COMMON=( -m "${MODEL}" --gpu-layers "${GPU_LAYERS}" -t "${THREADS}" -b 1 --seed 1 -p "${PROMPT}" -n "${TOKENS}" -no-cnv )
-
 if [[ ! -x "${BIN}" ]]; then
-  echo "missing BIN=${BIN} (build first: cmake --build build-rel --config Release ...)" >&2
+  echo "missing BIN=${BIN} (build first: cmake --build build-rel --target llama-bench ...)" >&2
   exit 1
 fi
 if [[ ! -f "${MODEL}" ]]; then
@@ -24,25 +26,59 @@ if [[ ! -f "${MODEL}" ]]; then
   exit 1
 fi
 
+case "${TEST_MODE}" in
+  gen)
+    TEST_PROMPT=0
+    TEST_GEN="${N_GEN}"
+    TEST_ARGS=( --n-prompt 0 --n-gen "${N_GEN}" )
+    ;;
+  prompt)
+    TEST_PROMPT="${N_PROMPT}"
+    TEST_GEN=0
+    TEST_ARGS=( --n-prompt "${N_PROMPT}" --n-gen 0 )
+    ;;
+  pg)
+    TEST_PROMPT="${N_PROMPT}"
+    TEST_GEN="${N_GEN}"
+    TEST_ARGS=( -pg "${N_PROMPT},${N_GEN}" )
+    ;;
+  *)
+    echo "invalid TEST_MODE=${TEST_MODE} (expected: gen|prompt|pg)" >&2
+    exit 1
+    ;;
+ esac
+
+COMMON=( -m "${MODEL}" --threads "${THREADS}" -ngl 0 --device "${DEVICE}" --repetitions "${REPS}" -o jsonl )
+if [[ "${NO_WARMUP}" == "1" ]]; then
+  COMMON+=( --no-warmup )
+fi
+
 TMP="${TMPDIR:-/tmp}/ifairy_lut_sweep.$(date +%s).csv"
 echo "bk_blocks,bm,fullacc,tok_per_s" > "${TMP}"
 
 extract_tok_s() {
-  awk '
-    /eval time/ && !/prompt eval time/ {
-      if (match($0, /[0-9.]+[[:space:]]+tokens per second/)) {
-        s = substr($0, RSTART, RLENGTH)
-        gsub(/[[:space:]]+tokens per second/, "", s)
-        val = s
-      }
-      if (match($0, /[0-9.]+[[:space:]]+tok\/s/)) {
-        s = substr($0, RSTART, RLENGTH)
-        gsub(/[[:space:]]+tok\/s/, "", s)
-        val = s
-      }
-    }
-    END { if (val != "") print val }
-  '
+  python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+target_prompt = int(sys.argv[1])
+target_gen = int(sys.argv[2])
+val = None
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        data = json.loads(line)
+    except Exception:
+        continue
+    if data.get("n_prompt") == target_prompt and data.get("n_gen") == target_gen:
+        val = data.get("avg_ts")
+        break
+if val is None:
+    sys.exit(1)
+print(val)
+PY
 }
 
 run_case() {
@@ -56,7 +92,7 @@ run_case() {
   fi
 
   local tok_s
-  tok_s="$(env "${envs[@]}" "${BIN}" "${COMMON[@]}" 2>&1 | extract_tok_s || true)"
+  tok_s="$(env "${envs[@]}" "${BIN}" "${COMMON[@]}" "${TEST_ARGS[@]}" 2>/dev/null | extract_tok_s "${TEST_PROMPT}" "${TEST_GEN}" || true)"
   if [[ -z "${tok_s}" ]]; then
     tok_s="nan"
   fi
@@ -79,7 +115,10 @@ echo
 echo "results: ${TMP}"
 echo
 python3 - <<'PY' "${TMP}"
-import csv, math, sys
+import csv
+import math
+import sys
+
 path = sys.argv[1]
 rows = []
 with open(path, newline="") as f:

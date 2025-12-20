@@ -6,8 +6,8 @@
 
 - 前提：构建时启用了 `GGML_IFAIRY_ARM_LUT`（`ggml/CMakeLists.txt` 会在 configure 阶段强制关闭 Metal/CUDA/HIP/MUSA/Vulkan/OpenCL/SYCL/WebGPU/zDNN 等加速后端，以保证 CPU-only）。
 - 平台约束：当前 LUT 路由要求 `__aarch64__ + __ARM_NEON`；不满足时会回退（ARM32/无 NEON 不走 LUT）。
-- 推荐二进制：`./build-rel/bin/llama-cli`（避免误用旧的 `./build/bin/llama-cli` 导致输出异常，见 3.1）
-- 推荐扫参脚本：`bash scripts/ifairy_lut_sweep.sh`（固定 seed/prompt，输出按 tok/s 排序）
+- 推荐性能基准：`./build-rel/bin/llama-bench`（tok/s 记录统一走 bench；`llama-cli` 仅用于 sanity-check）
+- 推荐扫参脚本：`bash scripts/ifairy_lut_sweep.sh`（llama-bench 版；见脚本内 `TEST_MODE/N_PROMPT/N_GEN`）
 - LUT 表布局默认走 `legacy`（更稳；`compact` 在部分设备/形状上更快），如需测试紧凑表：`GGML_IFAIRY_LUT_LAYOUT=compact`（见 1.1 / 0.1 记录）
 - `BK/BM/FULLACC` 调参在不同形状/版本上波动较大：以 sweep 输出为准，不建议凭经验固定写死
 - 每次修改 LUT 相关代码后，先做一次 `llama-cli` sanity check（固定 seed/prompt）确认不输出 gibberish（见 3.1）
@@ -41,21 +41,36 @@
 > 记录口径（强制）：
 >
 > - `git` 列优先写 **真实 commit hash**（`git rev-parse --short HEAD`），避免使用 `HEAD`（否则历史不可追溯）。
-> - A/B 调优先用短测 `-n 64` 做 `ABABAB` 交替跑，减少热漂移偏置；若短测明确更快，再用长测 `-n 256` 做 3-run 记录。
+> - A/B 调优先用短测 `llama-bench --n-prompt 8 --n-gen 8` 做 `ABABAB` 交替跑，减少热漂移偏置；若短测明确更快，再用长测 `--n-prompt 128 --n-gen 256` 做 3-run 记录。
 > - tok/s 会受温度/后台负载/系统调度影响，短时间内出现 `±20~30%` 甚至更大波动并不罕见；若 3 次连续跑出现明显“单调下降”，先冷却/关后台后重测，否则 A/B 结论无效。
-> - **长测 3-run 必须给足冷却**：`-n 256` 往往会快速触发热降频；若看到 `min/max` 差距过大（经验上 > 20%）或出现明显 outlier，先延长间隔（例如 `sleep 60` 以上）再重测，否则“快/慢”结论很容易被热漂移污染。
+> - **长测 3-run 必须给足冷却**：`--n-prompt 128 --n-gen 256` 往往会快速触发热降频；若看到 `min/max` 差距过大（经验上 > 20%）或出现明显 outlier，先延长间隔（例如 `sleep 60` 以上）再重测，否则“快/慢”结论很容易被热漂移污染。
+> - A/B 原始日志建议用 `-o jsonl` 输出到 `/tmp/` 并在本文引用路径（避免只剩结论没证据）。
+> - 性能结论以 `llama-bench` 的 `avg_ts`（tokens/s）为准。
 >
 > 回归/恢复判断优先对照 `0ec52a5a` / `0aeaa6c9` 节点（见 `IFAIRY_LUT_PERF_REGRESSION_ANALYSIS.md`）。
 
-**基准命令（固定 prompt/seed/thread）**
+### 0.1.0 llama-bench 记录（当前口径）
 
-> 注：为避免 `n_ctx` 默认值变动带来的不可比波动，后续记录统一显式固定 `-c 2048`（与模型训练 ctx 对齐）。
+**基准命令（CPU-only，固定 threads / n_prompt / n_gen）**
 
-`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -c 2048 --seed 1 -p "I believe life is" -n 256 -no-cnv`
+> 注：`llama-bench` 的 `n_ctx = n_prompt + n_gen + n_depth`；为避免口径漂移，固定 `--n-prompt/--n-gen`。
+
+`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup -o jsonl`
 
 **短测（A/B 调优，降低热漂移影响）**
 
-`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -c 2048 --seed 1 -p "I believe life is" -n 64 -no-cnv`
+`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 8 --n-gen 8 -ngl 0 --device none --repetitions 1 --no-warmup -o jsonl`
+
+| time (UTC) | git | machine | threads | test | env | avg tok/s | log |
+|---|---|---|---:|---|---|---:|---|
+| 2025-12-20T08:00:08Z | `b9f0a57f+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=legacy` | 3.00 | `/tmp/ifairy_bench_legacy_1766217492.jsonl` |
+| 2025-12-20T08:00:08Z | `b9f0a57f+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=legacy` | 14.72 | `/tmp/ifairy_bench_legacy_1766217492.jsonl` |
+| 2025-12-20T08:00:08Z | `b9f0a57f+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact` | 15.15 | `/tmp/ifairy_bench_compact_1766217565.jsonl` |
+| 2025-12-20T08:00:08Z | `b9f0a57f+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact` | 12.38 | `/tmp/ifairy_bench_compact_1766217565.jsonl` |
+
+### 0.1.1 legacy（llama-cli，已停更）
+
+> 说明：以下 `llama-cli` 口径的记录/ABABAB 仅作历史参考；当前 tok/s 以 `0.1.0 llama-bench` 为准。
 
 | time (UTC) | git | machine | threads | tokens | env | eval tok/s |
 |---|---|---|---:|---:|---|---:|
@@ -326,14 +341,14 @@
 
 6) **再做 BM/BK 调参（把调参放在结构优化之后）**  
    - 在 1/2 完成前，单纯调 `GGML_IFAIRY_LUT_BK_BLOCKS / GGML_IFAIRY_LUT_BM` 往往波动大且不可复现；结构性开销下降后再调参更稳定。
-   - 推荐方法：用脚本扫参，固定 seed/prompt/token，直接输出按 tok/s 排序的结果：  
+   - 推荐方法：用脚本扫参，固定 threads/n_prompt/n_gen，直接输出按 tok/s 排序的结果：  
      `bash scripts/ifairy_lut_sweep.sh`  
-     可通过环境变量覆盖：`THREADS=4 TOKENS=512 BK_LIST="0 1 2 4" BM_LIST="32 64 128" FULLACC_LIST="0 1" bash scripts/ifairy_lut_sweep.sh`
-   - 备注：扫参会多次启动 `llama-cli`（每次都会加载模型），所以默认只扫少量组合；确认方向后再扩大 `BK_LIST/BM_LIST` 范围。
+     可通过环境变量覆盖：`THREADS=4 N_PROMPT=128 N_GEN=256 TEST_MODE=pg BK_LIST="0 1 2 4" BM_LIST="32 64 128" FULLACC_LIST="0 1" bash scripts/ifairy_lut_sweep.sh`
+   - 备注：扫参会多次启动 `llama-bench`（每次都会加载模型），所以默认只扫少量组合；确认方向后再扩大 `BK_LIST/BM_LIST` 范围。
 
 （贯穿）**测试与性能记录**  
    - 已补充 `tests/test-ifairy.cpp` 的 **CPU backend tiling 回归**：固定小形状（`K=512` 强制多 tile），对比 tiling 与非 tiling 输出 **bitwise 一致**。  
-   - 继续补充 “LUT vs reference” 单测形状覆盖，并固定 `llama-cli` 命令/seed 记录 LUT=0 vs LUT=1 tok/s；必要时用 `llama-bench`/`llama-perplexity` 做对照。
+   - 继续补充 “LUT vs reference” 单测形状覆盖，并固定 `llama-bench` 命令/seed 记录 LUT=0 vs LUT=1 tok/s；必要时用 `llama-perplexity` 做对照。
 
 ## 5. 进一步性能提升路线图（参考 `BitNet/docs/lut-arm.md`）
 
@@ -370,5 +385,5 @@
 ### 5.3 建议的推进顺序（避免做无用功）
 
 1) 先把 **`compact int8` LUT 压缩方案**做出一个 correctness 版本（严格对照 + 单测覆盖），明确误差与内存/速度收益。  
-2) 再把它接入现有 `BK/BM/FULLACC` 框架，跑 sweep 找稳定配置，并用 `llama-cli` 固定 prompt/seed 记录 tok/s。  
+2) 再把它接入现有 `BK/BM/FULLACC` 框架，跑 sweep 找稳定配置，并用 `llama-bench` 固定 prompt/seed 记录 tok/s。  
 3) 最后再决定是否要走 BitNet 那种“形状专用内核”的路线（收益高，但维护成本也高）。

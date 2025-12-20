@@ -70,10 +70,12 @@ void ggml_ifairy_lut_free(void) {
             if (e->indexes && e->index_tensor == NULL && e->index_buffer == NULL) {
                 ggml_aligned_free(e->indexes, e->size);
             }
-            delete e;
+            e->indexes = NULL;
+            e->size = 0;
+            e->index_tensor = NULL;
+            e->index_buffer = NULL;
         }
     }
-    g_ifairy_lut_extras.clear();
 }
 
 bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_tensor ** index_tensor_out) {

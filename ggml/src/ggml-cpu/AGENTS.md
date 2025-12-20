@@ -45,8 +45,9 @@ If adding a new knob, document it in `IFAIRY_ARM_3W_LUT_STATUS.md` and keep a sa
 3) Strict validation (slow but required):
 - `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_VALIDATE_STRICT=1 ./build-rel/bin/test-ifairy`
 
-4) CLI sanity (quick smoke + tok/s baseline):
+4) CLI sanity (quick smoke) + bench tok/s baseline:
 - `GGML_IFAIRY_LUT=1 ./build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 16 -no-cnv`
+- `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
 
 Edge-case regression coverage is in `tests/test-ifairy.cpp` (alignment, small/large dims, env semantics, transform concurrency).
 
