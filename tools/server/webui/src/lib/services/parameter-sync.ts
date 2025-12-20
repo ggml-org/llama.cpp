@@ -15,14 +15,14 @@
 import { normalizeFloatingPoint } from '$lib/utils';
 
 export type ParameterSource = 'default' | 'custom';
-export type ParameterValue = string | number | boolean;
-export type ParameterRecord = Record<string, ParameterValue>;
+export type ParameterValue = string | number | boolean | null;
+export type ParameterRecord = Record<string, Exclude<ParameterValue, null>>;
 
 export interface ParameterInfo {
-	value: string | number | boolean;
+	value: ParameterValue;
 	source: ParameterSource;
-	serverDefault?: string | number | boolean;
-	userOverride?: string | number | boolean;
+	serverDefault?: ParameterRecord[string];
+	userOverride?: ParameterValue;
 }
 
 export interface SyncableParameter {
@@ -114,8 +114,8 @@ export class ParameterSyncService {
 	/**
 	 * Round floating-point numbers to avoid JavaScript precision issues
 	 */
-	private static roundFloatingPoint(value: ParameterValue): ParameterValue {
-		return normalizeFloatingPoint(value) as ParameterValue;
+	private static roundFloatingPoint<T extends Exclude<ParameterValue, null>>(value: T): T {
+		return normalizeFloatingPoint(value) as T;
 	}
 
 	/**
@@ -229,7 +229,10 @@ export class ParameterSyncService {
 	/**
 	 * Validate server parameter value
 	 */
-	static validateServerParameter(key: string, value: ParameterValue): boolean {
+	static validateServerParameter(
+		key: string,
+		value: ParameterValue
+	): value is ParameterRecord[string] {
 		const param = SYNCABLE_PARAMETERS.find((p) => p.key === key);
 		if (!param) return false;
 

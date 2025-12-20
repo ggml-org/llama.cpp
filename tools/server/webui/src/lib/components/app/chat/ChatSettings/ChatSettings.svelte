@@ -337,7 +337,11 @@
 		];
 
 		for (const field of numericFields) {
-			if (processedConfig[field] !== undefined && processedConfig[field] !== '') {
+			if (
+				processedConfig[field] !== undefined &&
+				processedConfig[field] !== '' &&
+				processedConfig[field] !== null
+			) {
 				const numValue = Number(processedConfig[field]);
 				if (!isNaN(numValue)) {
 					processedConfig[field] = numValue;

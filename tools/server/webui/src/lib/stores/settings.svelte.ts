@@ -34,6 +34,7 @@
 import { browser } from '$app/environment';
 import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 import { ParameterSyncService } from '$lib/services/parameter-sync';
+import { modelsStore } from '$lib/stores/models.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import {
 	configToParameterRecord,
@@ -55,6 +56,14 @@ class SettingsStore {
 	theme = $state<string>('auto');
 	isInitialized = $state(false);
 	userOverrides = $state<Set<string>>(new Set());
+
+	get currentModelPresets(): Record<string, string | number | boolean> | null {
+		const modelId = modelsStore.selectedModelName ?? modelsStore.singleModelName;
+		if (!modelId) return null;
+
+		const props = modelsStore.getModelProps(modelId);
+		return props?.default_generation_settings?.params ?? null;
+	}
 
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Utilities (private helpers)
@@ -146,7 +155,15 @@ class SettingsStore {
 			const propsDefaults = this.getServerDefaults();
 			const propsDefault = propsDefaults[key as string];
 
+			const isUnset = value === null || value === '';
+
 			if (propsDefault !== undefined) {
+				if (isUnset) {
+					this.userOverrides.delete(key as string);
+					this.saveConfig();
+					return;
+				}
+
 				const normalizedValue = normalizeFloatingPoint(value);
 				const normalizedDefault = normalizeFloatingPoint(propsDefault);
 
@@ -174,7 +191,14 @@ class SettingsStore {
 			if (ParameterSyncService.canSyncParameter(key)) {
 				const propsDefault = propsDefaults[key];
 
+				const isUnset = value === null || value === '';
+
 				if (propsDefault !== undefined) {
+					if (isUnset) {
+						this.userOverrides.delete(key);
+						continue;
+					}
+
 					const normalizedValue = normalizeFloatingPoint(value);
 					const normalizedDefault = normalizeFloatingPoint(propsDefault);
 
@@ -305,6 +329,13 @@ class SettingsStore {
 		for (const [key, propsValue] of Object.entries(propsDefaults)) {
 			const currentValue = getConfigValue(this.config, key);
 
+			const isUnset = currentValue === null || currentValue === undefined || currentValue === '';
+
+			if (isUnset) {
+				this.userOverrides.delete(key);
+				continue;
+			}
+
 			const normalizedCurrent = normalizeFloatingPoint(currentValue);
 			const normalizedDefault = normalizeFloatingPoint(propsValue);
 
@@ -387,6 +418,29 @@ class SettingsStore {
 			propsDefaults,
 			this.userOverrides
 		);
+	}
+
+	/**
+	 * Get placeholder value for a given parameter, prioritizing model presets
+	 */
+	getParameterPlaceholder(key: string): string {
+		const modelPreset = this.currentModelPresets?.[key];
+		if (modelPreset !== undefined && modelPreset !== null) {
+			return String(modelPreset);
+		}
+
+		const serverDefaults = this.getServerDefaults();
+		const serverDefault = serverDefaults[key];
+		if (serverDefault !== undefined) {
+			return String(serverDefault);
+		}
+
+		const defaultValue = getConfigValue(SETTING_CONFIG_DEFAULT as SettingsConfigType, key);
+		if (defaultValue !== undefined && defaultValue !== null) {
+			return String(defaultValue);
+		}
+
+		return 'none';
 	}
 
 	/**

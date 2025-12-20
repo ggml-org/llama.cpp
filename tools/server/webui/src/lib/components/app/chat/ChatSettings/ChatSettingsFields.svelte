@@ -35,6 +35,7 @@
 			{@const paramInfo = getParameterSourceInfo(field.key)}
 			{@const currentValue = String(localConfig[field.key] ?? '')}
 			{@const propsDefault = paramInfo?.serverDefault}
+			{@const placeholder = settingsStore.getParameterPlaceholder(field.key)}
 			{@const isCustomRealTime = (() => {
 				if (!paramInfo || propsDefault === undefined) return false;
 
@@ -73,7 +74,7 @@
 						// Update local config immediately for real-time badge feedback
 						onConfigChange(field.key, e.currentTarget.value);
 					}}
-					placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] ?? 'none'}`}
+					placeholder={`Default: ${placeholder}`}
 					class="w-full {isCustomRealTime ? 'pr-8' : ''}"
 				/>
 				{#if isCustomRealTime}
@@ -111,7 +112,7 @@
 				id={field.key}
 				value={String(localConfig[field.key] ?? '')}
 				onchange={(e) => onConfigChange(field.key, e.currentTarget.value)}
-				placeholder={`Default: ${SETTING_CONFIG_DEFAULT[field.key] ?? 'none'}`}
+				placeholder={`Default: ${settingsStore.getParameterPlaceholder(field.key)}`}
 				class="min-h-[10rem] w-full md:max-w-2xl"
 			/>
 
