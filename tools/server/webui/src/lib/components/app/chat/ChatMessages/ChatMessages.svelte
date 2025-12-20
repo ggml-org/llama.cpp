@@ -11,7 +11,7 @@
 	} from '$lib/stores/chat.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { getMessageSiblings } from '$lib/utils/branching';
-	import { MAX_WIDTH_CLASSES, DEFAULT_MAX_WIDTH_CLASS } from '$lib/constants/width-classes';
+	import { getChatWidth } from '$lib/utils/chat-width';
 
 	interface Props {
 		class?: string;
@@ -23,9 +23,7 @@
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 
-	let maxWidthClass = $derived(
-		config().responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
-	);
+	let widthConfig = $derived(getChatWidth(config().autoChatWidth, config().customChatWidth));
 
 	function refreshAllMessages() {
 		const conversation = activeConversation();
@@ -109,7 +107,8 @@
 <div class="flex h-full flex-col space-y-10 pt-16 md:pt-24 {className}" style="height: auto; ">
 	{#each displayMessages as { message, siblingInfo } (message.id)}
 		<ChatMessage
-			class="mx-auto w-full {maxWidthClass}"
+			class="mx-auto w-full {widthConfig.class}"
+			style={widthConfig.style}
 			{message}
 			{siblingInfo}
 			onDelete={handleDeleteMessage}

@@ -9,6 +9,7 @@
 
 	interface Props {
 		class?: string;
+		style?: string;
 		message: DatabaseMessage;
 		isEditing: boolean;
 		editedContent: string;
@@ -35,6 +36,7 @@
 
 	let {
 		class: className = '',
+		style,
 		message,
 		isEditing,
 		editedContent,
@@ -86,6 +88,7 @@
 <div
 	aria-label="User message with actions"
 	class="group flex flex-col items-end gap-3 md:gap-2 {className}"
+	{style}
 	role="group"
 >
 	{#if isEditing}

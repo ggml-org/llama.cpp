@@ -23,10 +23,10 @@
 	import { modelName as serverModelName } from '$lib/stores/server.svelte';
 	import { copyToClipboard } from '$lib/utils/copy';
 	import type { ApiChatCompletionToolCall } from '$lib/types/api';
-	import { MAX_WIDTH_CLASSES, DEFAULT_MAX_WIDTH_CLASS } from '$lib/constants/width-classes';
 
 	interface Props {
 		class?: string;
+		style?: string;
 		deletionInfo: {
 			totalCount: number;
 			userMessages: number;
@@ -59,6 +59,7 @@
 
 	let {
 		class: className = '',
+		style,
 		deletionInfo,
 		editedContent = '',
 		isEditing = false,
@@ -101,10 +102,6 @@
 
 		return serverModel;
 	});
-
-	let maxWidthClass = $derived(
-		config().responsiveChatWidth ? MAX_WIDTH_CLASSES : DEFAULT_MAX_WIDTH_CLASS
-	);
 
 	function handleCopyModel() {
 		const model = displayedModel();
@@ -167,6 +164,7 @@
 
 <div
 	class="text-md group w-full leading-7.5 {className}"
+	{style}
 	role="group"
 	aria-label="Assistant message with actions"
 >
@@ -179,7 +177,7 @@
 	{/if}
 
 	{#if message?.role === 'assistant' && isLoading() && !message?.content?.trim()}
-		<div class="mt-6 w-full {maxWidthClass}" in:fade>
+		<div class="mt-6 w-full {className}" {style} in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
 					{processingState.getProcessingMessage()}
@@ -225,7 +223,7 @@
 		</div>
 	{:else if message.role === 'assistant'}
 		{#if config().disableReasoningFormat}
-			<pre class="raw-output {maxWidthClass}">{messageContent || ''}</pre>
+			<pre class="raw-output">{messageContent || ''}</pre>
 		{:else}
 			<MarkdownContent content={messageContent || ''} />
 		{/if}
