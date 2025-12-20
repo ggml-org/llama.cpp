@@ -938,10 +938,10 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
 
         HVX_Vector l_x;
         HVX_Vector l_y;
-        if (nv1 >= 32) {
+        if (nv1 >= VLEN_FP32) {
             HVX_Vector hi = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(xp)), Q6_V_lo_W(yp));
             rsum          = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, hi);
-            nv1 -= 32;
+            nv1 -= VLEN_FP32;
             l_x = Q6_V_hi_W(xp);
             l_y = Q6_V_hi_W(yp);
         } else {
