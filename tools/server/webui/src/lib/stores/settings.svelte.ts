@@ -426,18 +426,18 @@ class SettingsStore {
 	getParameterPlaceholder(key: string): string {
 		const modelPreset = this.currentModelPresets?.[key];
 		if (modelPreset !== undefined && modelPreset !== null) {
-			return String(modelPreset);
+			return String(normalizeFloatingPoint(modelPreset));
 		}
 
 		const serverDefaults = this.getServerDefaults();
 		const serverDefault = serverDefaults[key];
 		if (serverDefault !== undefined) {
-			return String(serverDefault);
+			return String(normalizeFloatingPoint(serverDefault));
 		}
 
 		const defaultValue = getConfigValue(SETTING_CONFIG_DEFAULT as SettingsConfigType, key);
 		if (defaultValue !== undefined && defaultValue !== null) {
-			return String(defaultValue);
+			return String(normalizeFloatingPoint(defaultValue));
 		}
 
 		return 'none';
