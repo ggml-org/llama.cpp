@@ -115,9 +115,13 @@ struct ifairy_lut_extra {
 
 - **构建**：使用 Release，并确保你跑的就是你编译的二进制（优先 `build-rel`）。
 - **推荐基准命令**：以 `IFAIRY_ARM_3W_LUT_STATUS.md` 的 `0.1 tok/s 记录`表头命令为准（固定 `--seed/-t/-b/-c/-p/-n` 与 LUT env 组合）。
+- **tok/s 口径切换计划（llama-bench，CPU only）**：
+  - A/B 与最终 tok/s 记录将统一改用 `llama-bench`（避免输出长度波动）；`llama-cli` 仅保留 sanity-check。
+  - 参考命令（CPU-only，不走 offload）：`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
+  - 注意：`llama-bench` 的 `backend` 列显示的是“已注册后端”，并不代表 offload；`-ngl 0 --device none` 即 CPU-only。
 - **短测 vs 长测**：
-  - A/B 调优：优先用短测 `-n 64` 做 `ABABAB` 交替跑，减少热漂移偏置；
-  - 最终记录：用长测 `-n 256` 对每个 layout 连续跑 3 次，记录 `min/max/mean` 后再下结论（长测之间要给足冷却；若出现明显 outlier/单调下降，先冷却后重测，否则结论无效）。
+  - A/B 调优：优先用 `llama-bench` 的短测（例如 `--n-prompt 8 --n-gen 8`）做 `ABABAB` 交替跑，减少热漂移偏置；
+  - 最终记录：用 `llama-bench` 的长测（例如 `--n-prompt 128 --n-gen 256`）对每个 layout 连续跑 3 次，记录 `min/max/mean` 后再下结论（长测之间要给足冷却；若出现明显 outlier/单调下降，先冷却后重测，否则结论无效）。
 - **双 build A/B（强烈建议）**：保留一个“上一个稳定基线”的 build 目录（例如 `build-rel-a`），用“旧 bin vs 新 bin”做 `ABABAB`，避免跨时段热漂移导致误判。
 - **正确性门槛**：
   - `./build-rel/bin/test-ifairy` 必须通过；
@@ -127,6 +131,7 @@ struct ifairy_lut_extra {
   - A/B 的原始日志（建议 TSV）落到 `/tmp/` 并在 `STATUS.md` 引用路径（避免只剩结论没证据）。
   - 主观体验（输出可读/不卡）不作为性能结论，必须以 `eval tok/s` 为准。
 - **文档更新**：功能落地后同步更新 `IFAIRY_ARM_3W_LUT_STATUS.md`（tok/s 记录）、`IFAIRY_ARM_3W_LUT_API_PLAN.md`、`IFAIRY_ARM_3W_LUT_DESIGN.md` 与相关 `AGENTS.md`，确保无过时信息。
+- **llama-bench 口径落地后的整理**：等 `llama-bench` 方案完整实现并验证后，再统一更新表头/脚本/示例命令，清理旧的 `llama-cli` 性能口径，并在清理完成后提交一笔 commit。
 
 ### 6.0.1 回归恢复（仅在 tok/s 明显回落时启用）
 
