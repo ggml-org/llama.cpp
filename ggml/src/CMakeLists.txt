@@ -207,6 +207,10 @@ add_library(ggml-base
             ggml-quants.c
             ggml-quants.h
             ggml-ifairy-lut.cpp
+            ggml-ifairy-lut-impl.h
+            ggml-ifairy-lut-preprocess.cpp
+            ggml-ifairy-lut-qgemm.cpp
+            ggml-ifairy-lut-transform.cpp
             gguf.cpp)
 
 target_include_directories(ggml-base PRIVATE .)

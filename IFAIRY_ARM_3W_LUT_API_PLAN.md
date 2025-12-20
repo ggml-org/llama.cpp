@@ -30,7 +30,7 @@
 
 ### 2.2 LUT 工作区（activations → lut + scales）
 
-当前实现支持两种 LUT 布局（由 `GGML_IFAIRY_LUT_LAYOUT` 选择）：
+当前实现支持两种 LUT 布局（由 `GGML_IFAIRY_LUT_LAYOUT` 选择；`auto` 走默认策略）：
 
 - `legacy`：每组 `4 ch × 64 pat × int16`（`512 B / group / col`）。
 - `compact`：每组 `3 pos × 4 codes × 4 ch × int8`（`48 B / group / col`），NEON 内核用 32-bit load + widen + add 的方式累加。
@@ -59,6 +59,7 @@ struct ifairy_lut_extra {
 ## 3. API（以头文件为准）
 
 头文件：`ggml/src/ggml-ifairy-lut.h`
+实现：`ggml/src/ggml-ifairy-lut.cpp` + `ggml/src/ggml-ifairy-lut-{transform,preprocess,qgemm}.cpp`
 
 - 初始化/释放：`ggml_ifairy_lut_init()`, `ggml_ifairy_lut_free()`
 - 路由与工作区：`ggml_ifairy_lut_can_mul_mat()`, `ggml_ifairy_lut_get_wsize()`
@@ -96,7 +97,7 @@ struct ifairy_lut_extra {
 ## 5. 运行时开关（当前实现）
 
 - `GGML_IFAIRY_LUT=0/1`：禁用/启用 LUT（默认启用）。
-- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact`：选择 LUT 布局（默认 `legacy`）。
+- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|auto`：选择 LUT 布局（默认 `legacy`；`auto` 走默认策略）。
 - `GGML_IFAIRY_LUT_BK_BLOCKS=<int>`：K 维按 256-block 做 tiling（`0` 禁用；strict 下强制禁用）。
 - `GGML_IFAIRY_LUT_BM=<int>`：BM 行块大小（仅 tiling 生效）。
 - `GGML_IFAIRY_LUT_FULLACC=0/1`：tiling 下共享 accumulator（未设置时可能按 `(N,acc_bytes)` 自动启用）。
@@ -226,6 +227,7 @@ struct ifairy_lut_extra {
 - **双 build A/B**：保留一个“上一个稳定基线”的 build 目录（例如 `build-rel-a`），每次改动用 “旧 bin vs 新 bin” 做 `ABABAB` 交替跑，避免跨时段热漂移导致误判。
 - **原始日志留档**：A/B 的 raw 日志或 TSV 存 `/tmp/`，并在 `IFAIRY_ARM_3W_LUT_STATUS.md` 引用路径（防止只剩结论没证据）。
 - **env cache 规则**：只缓存“不会被测试用例在进程内动态修改”的 env；若某 env 在 `test-ifairy` 用 `scoped_env_var` 修改，则该 env 不应做进程级 cache（否则测试与复现会失真）。
+  - 当前已缓存：`GGML_IFAIRY_LUT_PREFETCH`、`GGML_IFAIRY_LUT_N1_FASTPATH`、`GGML_IFAIRY_LUT_COMPACT_N1_UNROLL`（进程内不会动态变化）。
 - **profile 使用规范**：profile 用于“定位主矛盾”，不要用单次采样占比当 KPI；需要记录至少 2~3 次采样的波动范围。
 
 ### 7.1 P1：健壮性与一致性（不影响热路径的硬化优先）

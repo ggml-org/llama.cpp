@@ -34,6 +34,7 @@ extern "C" {
 #include <cstring>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -322,6 +323,98 @@ bool test_ifairy_lut_index() {
     }
 
     return pass;
+}
+
+// ============================================================================
+// 测试 2.1: LUT transform 缓存/并发基础覆盖
+// ============================================================================
+
+bool test_ifairy_lut_transform_cache() {
+    printf("\n=== Test 2.1: iFairy LUT transform cache ===\n");
+
+    struct ggml_init_params params = {
+        /*.mem_size   =*/ 4 * 1024 * 1024,
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ false,
+    };
+    struct ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        fprintf(stderr, "Failed to init ggml context\n");
+        return false;
+    }
+
+    const int64_t k = QK_K;
+    const int64_t rows = 4;
+    const int n_tensors = 4;
+
+    std::vector<ggml_tensor *> weights;
+    weights.reserve(n_tensors);
+    for (int i = 0; i < n_tensors; ++i) {
+        ggml_tensor * w = ggml_new_tensor_2d(ctx, GGML_TYPE_IFAIRY, k, rows);
+        if (!w || !w->data) {
+            fprintf(stderr, "Failed to allocate ifairy tensor\n");
+            ggml_free(ctx);
+            return false;
+        }
+        memset(w->data, 0, ggml_nbytes(w));
+        weights.push_back(w);
+    }
+
+    const ggml_ifairy_3w_index_info info = ggml_ifairy_3w_get_index_info(k);
+    const size_t expected = ggml_ifairy_3w_index_buffer_size(&info, rows);
+
+    if (!ggml_ifairy_lut_transform_tensor(weights[0], NULL)) {
+        fprintf(stderr, "transform_tensor failed on primary weight\n");
+        ggml_free(ctx);
+        return false;
+    }
+
+    const ifairy_lut_extra * extra = (const ifairy_lut_extra *) weights[0]->extra;
+    if (!extra || !extra->indexes || extra->size != expected) {
+        fprintf(stderr, "transform_tensor produced invalid extra (size=%zu expected=%zu)\n",
+                extra ? extra->size : 0, expected);
+        ggml_free(ctx);
+        return false;
+    }
+
+    const uint8_t * base = extra->indexes;
+    if (!ggml_ifairy_lut_transform_tensor(weights[0], NULL)) {
+        fprintf(stderr, "transform_tensor failed on cached weight\n");
+        ggml_free(ctx);
+        return false;
+    }
+
+    extra = (const ifairy_lut_extra *) weights[0]->extra;
+    if (!extra || extra->indexes != base) {
+        fprintf(stderr, "transform_tensor cache did not reuse indexes\n");
+        ggml_free(ctx);
+        return false;
+    }
+
+    std::vector<std::thread> threads;
+    threads.reserve((size_t) (n_tensors - 1));
+    for (int i = 1; i < n_tensors; ++i) {
+        threads.emplace_back([w = weights[i]]() {
+            ggml_ifairy_lut_transform_tensor(w, NULL);
+        });
+    }
+    for (auto & t : threads) {
+        t.join();
+    }
+
+    for (int i = 1; i < n_tensors; ++i) {
+        extra = (const ifairy_lut_extra *) weights[i]->extra;
+        if (!extra || !extra->indexes || extra->size != expected) {
+            fprintf(stderr, "transform_tensor failed in threaded run (idx=%d)\n", i);
+            ggml_free(ctx);
+            return false;
+        }
+    }
+
+    ggml_free(ctx);
+    ggml_ifairy_lut_free();
+    printf("  transform cache/concurrency - PASS\n");
+    return true;
 }
 
 // ============================================================================
@@ -832,6 +925,11 @@ int main(int argc, char** argv) {
 
     if (!test_ifairy_lut_index()) {
         fprintf(stderr, "Test 2 FAILED\n");
+        num_failed++;
+    }
+
+    if (!test_ifairy_lut_transform_cache()) {
+        fprintf(stderr, "Test 2.1 FAILED\n");
         num_failed++;
     }
 

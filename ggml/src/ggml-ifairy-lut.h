@@ -13,7 +13,7 @@
 extern "C" {
 #endif
 
-// Common env helpers shared by ggml-cpu.c and ggml-ifairy-lut.cpp.
+// Common env helpers shared by ggml-cpu.c and ggml-ifairy-lut*.cpp.
 // "enabled" means: env is set and not equal to "0".
 static inline bool ggml_ifairy_env_enabled(const char * name) {
     const char * env = getenv(name);

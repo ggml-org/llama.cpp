@@ -159,13 +159,15 @@ NEON 内核里对每个 group 只需要：
 ## 6. 运行时开关（当前实现）
 
 - `GGML_IFAIRY_LUT=0/1`：禁用/启用 LUT（默认启用）。
-- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact`：选择 LUT 布局（默认 `legacy`）。
+- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|auto`：选择 LUT 布局（默认 `legacy`；`auto` 走默认策略）。
 - `GGML_IFAIRY_LUT_BK_BLOCKS=<int>`：K 维按 256-block 做 tiling（`0` 禁用；strict 下强制禁用）。
 - `GGML_IFAIRY_LUT_BM=<int>`：BM 行块大小（仅 tiling 生效）。
 - `GGML_IFAIRY_LUT_FULLACC=0/1`：tiling 下共享 accumulator（未设置时可能按 `(N,acc_bytes)` 自动启用）。
 - `GGML_IFAIRY_LUT_VALIDATE_STRICT=0/1`：严格对照（验证用）。
 - `GGML_IFAIRY_LUT_DEBUG=0/1`：路由诊断（默认关闭）。
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 热路径中的 prefetch（默认启用；设为 `0` 方便 profile/sweep 对照；覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`）。
+- `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` decode 快路（默认启用；设为 `0` 强制走通用路径做 A/B）。
+- `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` 快路 group-loop 的 unroll（默认 `4`；设为 `2` 用于 A/B）。
 
 ---
 
@@ -183,7 +185,7 @@ P0（并行推进：但尽量不扩面热路径）：
 
 P1（近期做）：
 
-- 可维护性重构：拆分 `ggml/src/ggml-ifairy-lut.cpp`，减少 legacy/compact 重复代码。
+- ✅ 可维护性重构：拆分 `ggml/src/ggml-ifairy-lut.cpp` 为 `ggml-ifairy-lut-{transform,preprocess,qgemm}.cpp` + `ggml-ifairy-lut-impl.h`，减少 legacy/compact 重复代码。
 - 错误处理一致性：统一 `return false`/`GGML_ASSERT`/日志策略。
 - 路由健壮性：补齐更明确的 CPU feature 判定（NEON/dotprod）与可控回退。
 - ✅ P1 小步：将 LUT 相关 env 解析 helper 集中到 `ggml/src/ggml-ifairy-lut.h`，并在 `ggml-cpu.c`/`ggml-ifairy-lut.cpp` 复用，减少重复与语义漂移。

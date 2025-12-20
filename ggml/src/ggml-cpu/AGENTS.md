@@ -16,13 +16,13 @@ Must match the ggml baseline exactly: compute `w * conj(x)` (NOT `w * x`). See `
 
 Primary integration points:
 - `ggml/src/ggml-cpu/ggml-cpu.c::ggml_compute_forward_mul_mat()`
-- LUT implementation: `ggml/src/ggml-ifairy-lut.cpp`, `ggml/src/ggml-ifairy-lut.h`
+- LUT implementation: `ggml/src/ggml-ifairy-lut.h`, `ggml/src/ggml-ifairy-lut.cpp`, `ggml/src/ggml-ifairy-lut-{transform,preprocess,qgemm}.cpp`
 - Index encoding: `ggml/src/ggml-quants.c` (3W 6-bit pattern)
 
 ## Runtime toggles (must preserve)
 
 - `GGML_IFAIRY_LUT=0/1`
-- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact`
+- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|auto`
 - `GGML_IFAIRY_LUT_BK_BLOCKS=<int>`
 - `GGML_IFAIRY_LUT_BM=<int>`
 - `GGML_IFAIRY_LUT_FULLACC=0/1`
