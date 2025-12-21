@@ -2886,14 +2886,14 @@ static std::unique_ptr<server_res_generator> handle_completions_impl(
                 }}
             };
 
-            std::string res_data;
-            res_data += format_oai_resp_sse(created);
-            res_data += format_oai_resp_sse(in_progress);
-            res_data += format_oai_resp_sse(output_item_added);
-            res_data += format_oai_resp_sse(content_part_added);
-            res_data += format_oai_resp_sse(first_result_json);
+            const json initial_events = json::array({
+                created,
+                in_progress,
+                output_item_added,
+                content_part_added
+            });
 
-            res->data = res_data;
+            res->data = format_oai_resp_sse(initial_events) + format_oai_resp_sse(first_result_json);
         } else {
             res->data = format_oai_sse(first_result_json);
         }
