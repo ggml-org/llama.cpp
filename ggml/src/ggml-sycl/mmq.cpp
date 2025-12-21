@@ -12,6 +12,7 @@
 
 #include "mmq.hpp"
 #include "vecdotq.hpp"
+#include "mmq-esimd.hpp"
 
 // Kernel names for VTune profiling
 template<bool check> class mmq_q4_0_kernel;
@@ -3056,6 +3057,24 @@ void ggml_sycl_op_mul_mat_q(
     // the main device has a larger memory buffer to hold the results from all GPUs
     // nrows_dst == nrows of the matrix that the dequantize_mul_mat kernel writes into
     const int64_t nrows_dst = device_id == ctx.device ? ne0 : row_diff;
+
+    // ESIMD path for Q4_0 - reduces L3 cache misses via unified block loading
+    // Returns false for edge cases (small K, large grids) to fall back to standard MMQ
+    if (src0->type == GGML_TYPE_Q4_0 && mmq_esimd_enabled() && mmq_esimd_available()) {
+        bool esimd_launched = launch_mmq_q4_0_esimd(
+            reinterpret_cast<const block_q4_0*>(src0_dd_i),
+            reinterpret_cast<const block_q8_1*>(src1_ddq_i),
+            dst_dd_i,
+            row_diff,      // nrows
+            src1_ncols,    // ncols
+            ne00,          // k (inner dimension)
+            nrows_dst,     // output stride
+            *stream);
+        if (esimd_launched) {
+            return;
+        }
+        // Fall through to standard MMQ for edge cases
+    }
 
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
