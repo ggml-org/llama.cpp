@@ -372,6 +372,95 @@ void ggml_sycl_repeat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_op_repeat(ctx, dst);
 }
 
+// Specialized ADD1 kernel: dst[i] = src0[i] + scalar
+// Much more efficient than generic broadcast for single-scalar addition
+template<typename T>
+static void k_add1(
+    const T * __restrict__ src0,
+    const T scalar,
+    T * __restrict__ dst,
+    const int64_t n,
+    const sycl::nd_item<3> & item) {
+
+    const int64_t i = item.get_global_id(2);
+    if (i >= n) return;
+
+    dst[i] = src0[i] + scalar;
+}
+
+// ADD1 operation: add a single scalar to all elements
+// Optimized path when src1 has exactly 1 element
+void ggml_sycl_add1(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    GGML_ASSERT(ggml_nelements(src1) == 1);
+
+    const int device = ctx.device;
+    dpct::queue_ptr stream = ctx.stream();
+
+    const int64_t n = ggml_nelements(src0);
+
+    if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+        const float * src0_d = (const float *) ggml_sycl_get_data_ptr(src0, device);
+        float * dst_d = (float *) ggml_sycl_get_data_ptr(dst, device);
+
+        // Load scalar from device memory
+        float scalar;
+        stream->memcpy(&scalar, ggml_sycl_get_data_ptr(src1, device), sizeof(float)).wait();
+
+        const int block_size = 256;
+        const int num_blocks = (n + block_size - 1) / block_size;
+
+        stream->parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks * block_size),
+                              sycl::range<3>(1, 1, block_size)),
+            [=](sycl::nd_item<3> item) {
+                k_add1(src0_d, scalar, dst_d, n, item);
+            });
+    } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F16) {
+        const sycl::half * src0_d = (const sycl::half *) ggml_sycl_get_data_ptr(src0, device);
+        sycl::half * dst_d = (sycl::half *) ggml_sycl_get_data_ptr(dst, device);
+
+        // Load scalar from device memory (src1 is F32)
+        float scalar_f32;
+        stream->memcpy(&scalar_f32, ggml_sycl_get_data_ptr(src1, device), sizeof(float)).wait();
+        sycl::half scalar = sycl::half(scalar_f32);
+
+        const int block_size = 256;
+        const int num_blocks = (n + block_size - 1) / block_size;
+
+        stream->parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks * block_size),
+                              sycl::range<3>(1, 1, block_size)),
+            [=](sycl::nd_item<3> item) {
+                k_add1(src0_d, scalar, dst_d, n, item);
+            });
+    } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
+        const sycl::half * src0_d = (const sycl::half *) ggml_sycl_get_data_ptr(src0, device);
+        sycl::half * dst_d = (sycl::half *) ggml_sycl_get_data_ptr(dst, device);
+
+        // Load scalar from device memory
+        sycl::half scalar;
+        stream->memcpy(&scalar, ggml_sycl_get_data_ptr(src1, device), sizeof(sycl::half)).wait();
+
+        const int block_size = 256;
+        const int num_blocks = (n + block_size - 1) / block_size;
+
+        stream->parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks * block_size),
+                              sycl::range<3>(1, 1, block_size)),
+            [=](sycl::nd_item<3> item) {
+                k_add1(src0_d, scalar, dst_d, n, item);
+            });
+    } else {
+        // Fallback to generic broadcast for unsupported types
+        ggml_sycl_op_add(ctx, dst);
+    }
+}
+
 // Fused MUL + ADD kernel: dst = x * scale + bias
 // Optimized for the common scale+bias pattern in normalization
 template<typename T>

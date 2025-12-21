@@ -26,6 +26,9 @@ static __dpct_inline__ float op_div(const float a, const float b) {
 
 void ggml_sycl_add(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
+// Specialized ADD1: add single scalar to all elements (more efficient than broadcast)
+void ggml_sycl_add1(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
 void ggml_sycl_sub(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
