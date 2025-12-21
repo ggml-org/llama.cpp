@@ -78,32 +78,63 @@ static void mul_mat_vec_q(const void * __restrict__ vx, const void * __restrict_
 
     assert(blocks_per_warp > 0);
 
-    // partial sum for each thread
-    float tmp = 0.0f;
-
     const block_q_t *  x = (const block_q_t *) vx;
     const block_q8_1 * y = (const block_q8_1 *) vy;
 
-    for (int i = item_ct1.get_local_id(2) / (qi / vdr); i < blocks_per_row; i += blocks_per_warp) {
-        const int ibx = row * blocks_per_row + i;  // x block index
+    // Hoist invariant iqs calculation outside the loop
+    constexpr int qi_div_vdr = qi / vdr;
+    const int lane_id = item_ct1.get_local_id(2);
+    const int base_iqs = vdr * (lane_id % qi_div_vdr);
+    const int row_offset = row * blocks_per_row;
 
-        const int iby = i * (qk / QK8_1);          // y block index that aligns with ibx
+    // 4-way accumulator for better ILP (matches Xe2 4-cycle FMA latency)
+    float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
 
-        for (size_t elem = 0; elem < qi / vdr; elem += WARP_SIZE) {
-            const int iqs = elem + vdr * (item_ct1.get_local_id(2) %
-                                          (qi / vdr));  // x block quant index when casting the quants to int
+    int i = lane_id / qi_div_vdr;
+    const int stride = blocks_per_warp;
+    const int stride4 = 4 * stride;
 
-            tmp += vec_dot_q_sycl(&x[ibx], &y[iby], iqs);
+    // Main loop: 4x unrolled for ILP
+    for (; i + 3 * stride < blocks_per_row; i += stride4) {
+        const int ibx0 = row_offset + i;
+        const int ibx1 = row_offset + i + stride;
+        const int ibx2 = row_offset + i + 2 * stride;
+        const int ibx3 = row_offset + i + 3 * stride;
+
+        const int iby0 = i * (qk / QK8_1);
+        const int iby1 = (i + stride) * (qk / QK8_1);
+        const int iby2 = (i + 2 * stride) * (qk / QK8_1);
+        const int iby3 = (i + 3 * stride) * (qk / QK8_1);
+
+#pragma unroll
+        for (size_t elem = 0; elem < qi_div_vdr; elem += WARP_SIZE) {
+            const int iqs = elem + base_iqs;
+            acc0 += vec_dot_q_sycl(&x[ibx0], &y[iby0], iqs);
+            acc1 += vec_dot_q_sycl(&x[ibx1], &y[iby1], iqs);
+            acc2 += vec_dot_q_sycl(&x[ibx2], &y[iby2], iqs);
+            acc3 += vec_dot_q_sycl(&x[ibx3], &y[iby3], iqs);
         }
     }
 
-    // sum up partial sums and write back result
+    // Handle remainder
+    for (; i < blocks_per_row; i += stride) {
+        const int ibx = row_offset + i;
+        const int iby = i * (qk / QK8_1);
+
 #pragma unroll
-    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+        for (size_t elem = 0; elem < qi_div_vdr; elem += WARP_SIZE) {
+            const int iqs = elem + base_iqs;
+            acc0 += vec_dot_q_sycl(&x[ibx], &y[iby], iqs);
+        }
     }
 
-    if (item_ct1.get_local_id(2) == 0) {
+    // Combine accumulators (tree reduction for fewer dependencies)
+    float tmp = (acc0 + acc1) + (acc2 + acc3);
+
+    // Use subgroup reduce for final reduction (more efficient than manual XOR)
+    tmp = sycl::reduce_over_group(item_ct1.get_sub_group(), tmp, sycl::plus<float>());
+
+    if (lane_id == 0) {
         dst[row] = tmp;
     }
 }
@@ -148,29 +179,65 @@ static void mul_mat_vec_q_id(const void * __restrict__ vx, const void * __restri
 
     assert(blocks_per_warp > 0);
 
-    float tmp = 0.0f;
-
     // Expert weights: offset by expert_id * stride_expert_x
     const block_q_t *  x = (const block_q_t *) ((const char*)vx + expert_id * stride_expert_x);
     // Input: offset using proper 2D indexing
     const block_q8_1 * y = (const block_q8_1 *) ((const char*)vy + i11 * nb11 + i12 * nb12);
 
-    for (int i = item_ct1.get_local_id(2) / (qi / vdr); i < blocks_per_row; i += blocks_per_warp) {
-        const int ibx = row * blocks_per_row + i;
-        const int iby = i * (qk / QK8_1);
+    // Hoist invariant calculations outside the loop
+    constexpr int qi_div_vdr = qi / vdr;
+    const int lane_id = item_ct1.get_local_id(2);
+    const int base_iqs = vdr * (lane_id % qi_div_vdr);
+    const int row_offset = row * blocks_per_row;
 
-        for (size_t elem = 0; elem < qi / vdr; elem += WARP_SIZE) {
-            const int iqs = elem + vdr * (item_ct1.get_local_id(2) % (qi / vdr));
-            tmp += vec_dot_q_sycl(&x[ibx], &y[iby], iqs);
+    // 4-way accumulator for better ILP (matches Xe2 4-cycle FMA latency)
+    float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
+
+    int i = lane_id / qi_div_vdr;
+    const int stride = blocks_per_warp;
+    const int stride4 = 4 * stride;
+
+    // Main loop: 4x unrolled for ILP
+    for (; i + 3 * stride < blocks_per_row; i += stride4) {
+        const int ibx0 = row_offset + i;
+        const int ibx1 = row_offset + i + stride;
+        const int ibx2 = row_offset + i + 2 * stride;
+        const int ibx3 = row_offset + i + 3 * stride;
+
+        const int iby0 = i * (qk / QK8_1);
+        const int iby1 = (i + stride) * (qk / QK8_1);
+        const int iby2 = (i + 2 * stride) * (qk / QK8_1);
+        const int iby3 = (i + 3 * stride) * (qk / QK8_1);
+
+#pragma unroll
+        for (size_t elem = 0; elem < qi_div_vdr; elem += WARP_SIZE) {
+            const int iqs = elem + base_iqs;
+            acc0 += vec_dot_q_sycl(&x[ibx0], &y[iby0], iqs);
+            acc1 += vec_dot_q_sycl(&x[ibx1], &y[iby1], iqs);
+            acc2 += vec_dot_q_sycl(&x[ibx2], &y[iby2], iqs);
+            acc3 += vec_dot_q_sycl(&x[ibx3], &y[iby3], iqs);
         }
     }
 
+    // Handle remainder
+    for (; i < blocks_per_row; i += stride) {
+        const int ibx = row_offset + i;
+        const int iby = i * (qk / QK8_1);
+
 #pragma unroll
-    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+        for (size_t elem = 0; elem < qi_div_vdr; elem += WARP_SIZE) {
+            const int iqs = elem + base_iqs;
+            acc0 += vec_dot_q_sycl(&x[ibx], &y[iby], iqs);
+        }
     }
 
-    if (item_ct1.get_local_id(2) == 0) {
+    // Combine accumulators (tree reduction for fewer dependencies)
+    float tmp = (acc0 + acc1) + (acc2 + acc3);
+
+    // Use subgroup reduce for final reduction (more efficient than manual XOR)
+    tmp = sycl::reduce_over_group(item_ct1.get_sub_group(), tmp, sycl::plus<float>());
+
+    if (lane_id == 0) {
         // Output: offset using proper 2D indexing
         float * dst_out = (float*)((char*)dst + i1 * nb1 + i2 * nb2);
         dst_out[row] = tmp;
