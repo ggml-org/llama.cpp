@@ -856,6 +856,15 @@ struct vk_subbuffer {
     }
 };
 
+// vk_event is used for the event-related backend interfaces. It uses 'event' for
+// event_wait and 'fence' for event_synchronize. Polling on an event for
+// event_synchronize wouldn't be sufficient to wait for command buffers to complete,
+// and would lead to validation errors.
+struct vk_event {
+    vk::Event event;
+    vk::Fence fence;
+};
+
 struct vk_semaphore {
     vk::Semaphore s;
     uint64_t value;
@@ -2541,6 +2550,15 @@ static void ggml_vk_sync_buffers(ggml_backend_vk_context* ctx, vk_context& subct
         } },
         {},
         {}
+    );
+}
+
+static void ggml_vk_set_event(vk_context& ctx, vk::Event& event) {
+    VK_LOG_DEBUG("ggml_vk_set_event()");
+
+    ctx->s->buffer.setEvent(
+        event,
+        ctx->p->q->stage_flags
     );
 }
 
@@ -6089,13 +6107,8 @@ static void ggml_vk_buffer_write_nc_async(ggml_backend_vk_context * ctx, vk_cont
     }
 }
 
-static void ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, size_t offset, const void * src, size_t spitch, size_t width, size_t height, bool sync_staging = false) {
+static bool ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, size_t offset, const void * src, size_t spitch, size_t width, size_t height, bool sync_staging = false) {
     VK_LOG_DEBUG("ggml_vk_buffer_write_2d_async(" << width << ", " << height << ")");
-    // Buffer is already mapped
-    if(dst->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible) {
-        std::cerr << "ggml_vulkan: buffer_write_async dst buffer is host_visible. Use synchronous write." << std::endl;
-        GGML_ABORT("fatal error");
-    }
     // Check if src is pinned memory
     vk_buffer buf = nullptr;
     size_t buf_offset = 0;
@@ -6120,12 +6133,13 @@ static void ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, siz
 
         ggml_vk_sync_buffers(nullptr, subctx);
         subctx->s->buffer.copyBuffer(buf->buffer, dst->buffer, slices);
-        return;
+        return true;
     }
     VK_LOG_DEBUG("STAGING");
 
     if (!sync_staging) {
-        GGML_ABORT("Asynchronous write to non-pinned memory not supported");
+        // copy was not handled caller needs to fall back
+        return false;
     }
 
     // Staging buffer required
@@ -6149,9 +6163,10 @@ static void ggml_vk_buffer_write_2d_async(vk_context subctx, vk_buffer& dst, siz
             deferred_memcpy((uint8_t *)staging_buffer->ptr + i * width, (const uint8_t *) src + i * spitch, width, &subctx->in_memcpys);
         }
     }
+    return true;
 }
 
-static void ggml_vk_buffer_write_async(vk_context subctx, vk_buffer& dst, size_t offset, const void * src, size_t size, bool sync_staging = false) {
+static bool ggml_vk_buffer_write_async(vk_context subctx, vk_buffer& dst, size_t offset, const void * src, size_t size, bool sync_staging = false) {
     VK_LOG_DEBUG("ggml_vk_buffer_write_async(" << size << ")");
     return ggml_vk_buffer_write_2d_async(subctx, dst, offset, src, size, size, 1, sync_staging);
 }
@@ -6170,7 +6185,8 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * 
 
         vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue.cmd_pool);
         ggml_vk_ctx_begin(dst->device, subctx);
-        ggml_vk_buffer_write_2d_async(subctx, dst, offset, src, spitch, width, height, true);
+        bool ret = ggml_vk_buffer_write_2d_async(subctx, dst, offset, src, spitch, width, height, true);
+        GGML_ASSERT(ret);
         ggml_vk_ctx_end(subctx);
 
         for (auto& cpy : subctx->in_memcpys) {
@@ -12671,7 +12687,23 @@ static void ggml_backend_vk_set_tensor_async(ggml_backend_t backend, ggml_tensor
 
     vk_buffer buf = buf_ctx->dev_buffer;
 
-    ggml_vk_buffer_write_async(transfer_ctx, buf, vk_tensor_offset(tensor) + tensor->view_offs + offset, data, size);
+    auto dst_offset = vk_tensor_offset(tensor) + tensor->view_offs + offset;
+
+    bool ret = ggml_vk_buffer_write_async(transfer_ctx, buf, dst_offset, data, size);
+
+    if (!ret) {
+        ggml_vk_ensure_sync_staging_buffer(ctx, size);
+        ggml_vk_sync_buffers(nullptr, transfer_ctx);
+
+        vk::BufferCopy buffer_cpy;
+        buffer_cpy.srcOffset = 0;
+        buffer_cpy.dstOffset = dst_offset;
+        buffer_cpy.size = size;
+
+        transfer_ctx->s->buffer.copyBuffer(ctx->sync_staging->buffer, buf->buffer, { buffer_cpy });
+        deferred_memcpy(ctx->sync_staging->ptr, data, size, &transfer_ctx->in_memcpys);
+        ggml_vk_synchronize(ctx);
+    }
 }
 
 static void ggml_backend_vk_get_tensor_async(ggml_backend_t backend, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
@@ -13678,11 +13710,58 @@ static void ggml_vk_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * 
     }
 }
 
+static void ggml_backend_vk_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
+    ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+    vk_event *vkev = (vk_event *)event->context;
+
+    vk_context transfer_ctx;
+
+    if (ctx->transfer_ctx.expired()) {
+        // Initialize new transfer context
+        transfer_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+        ctx->transfer_ctx = transfer_ctx;
+        ggml_vk_ctx_begin(ctx->device, transfer_ctx);
+    } else {
+        transfer_ctx = ctx->transfer_ctx.lock();
+    }
+
+    // the backend interface doesn't have an explicit reset, so reset it here
+    // before we record the command to set it
+    ctx->device->device.resetEvent(vkev->event);
+    ctx->device->device.resetFences({ vkev->fence });
+
+    ggml_vk_set_event(transfer_ctx, vkev->event);
+
+    ggml_vk_ctx_end(transfer_ctx);
+
+    ggml_vk_submit(transfer_ctx, {vkev->fence});
+    ctx->submit_pending = true;
+    ctx->transfer_ctx.reset();
+}
+
+static void ggml_backend_vk_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
+    ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+    vk_event *vkev = (vk_event *)event->context;
+
+    vk_context transfer_ctx;
+
+    if (ctx->transfer_ctx.expired()) {
+        // Initialize new transfer context
+        transfer_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
+        ctx->transfer_ctx = transfer_ctx;
+        ggml_vk_ctx_begin(ctx->device, transfer_ctx);
+    } else {
+        transfer_ctx = ctx->transfer_ctx.lock();
+    }
+
+    ggml_vk_wait_events(transfer_ctx, {vkev->event});
+}
+
 // TODO: enable async and synchronize
 static ggml_backend_i ggml_backend_vk_interface = {
     /* .get_name                = */ ggml_backend_vk_name,
     /* .free                    = */ ggml_backend_vk_free,
-    /* .set_tensor_async        = */ NULL,  // ggml_backend_vk_set_tensor_async,
+    /* .set_tensor_async        = */ ggml_backend_vk_set_tensor_async,
     /* .get_tensor_async        = */ ggml_backend_vk_get_tensor_async,
     /* .cpy_tensor_async        = */ NULL,  // ggml_backend_vk_cpy_tensor_async,
     /* .synchronize             = */ ggml_backend_vk_synchronize,
@@ -13691,8 +13770,8 @@ static ggml_backend_i ggml_backend_vk_interface = {
     /* .graph_plan_update       = */ NULL,
     /* .graph_plan_compute      = */ NULL,
     /* .graph_compute           = */ ggml_backend_vk_graph_compute,
-    /* .event_record            = */ NULL,
-    /* .event_wait              = */ NULL,
+    /* .event_record            = */ ggml_backend_vk_event_record,
+    /* .event_wait              = */ ggml_backend_vk_event_wait,
     /* .graph_optimize          = */ ggml_vk_graph_optimize,
 };
 
@@ -13867,10 +13946,10 @@ static void ggml_backend_vk_device_get_props(ggml_backend_dev_t dev, struct ggml
     props->device_id   = ctx->pci_bus_id.empty() ? nullptr : ctx->pci_bus_id.c_str();
     ggml_backend_vk_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->caps = {
-        /* .async                 = */ false,
+        /* .async                 = */ true,
         /* .host_buffer           = */ true,
         /* .buffer_from_host_ptr  = */ false,
-        /* .events                = */ false,
+        /* .events                = */ true,
     };
 }
 
@@ -14402,6 +14481,46 @@ static bool ggml_backend_vk_device_offload_op(ggml_backend_dev_t dev, const ggml
     UNUSED(dev);
 }
 
+static ggml_backend_event_t ggml_backend_vk_device_event_new(ggml_backend_dev_t dev) {
+    ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+    auto device = ggml_vk_get_device(ctx->device);
+
+    vk_event *vkev = new vk_event;
+    if (!vkev) {
+        return nullptr;
+    }
+
+    // The event/fence is expected to initially be in the signaled state.
+    vkev->event = device->device.createEvent({});
+    vkev->fence = device->device.createFence({vk::FenceCreateFlagBits::eSignaled});
+    device->device.setEvent(vkev->event);
+
+    return new ggml_backend_event {
+        /* .device  = */ dev,
+        /* .context = */ vkev,
+    };
+}
+
+static void ggml_backend_vk_device_event_free(ggml_backend_dev_t dev, ggml_backend_event_t event) {
+    ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+    auto device = ggml_vk_get_device(ctx->device);
+
+    vk_event *vkev = (vk_event *)event->context;
+
+    device->device.destroyFence(vkev->fence);
+    device->device.destroyEvent(vkev->event);
+    delete vkev;
+    delete event;
+}
+
+static void ggml_backend_vk_device_event_synchronize(ggml_backend_dev_t dev, ggml_backend_event_t event) {
+    ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+    auto device = ggml_vk_get_device(ctx->device);
+    vk_event *vkev = (vk_event *)event->context;
+
+    VK_CHECK(device->device.waitForFences({ vkev->fence }, true, UINT64_MAX), "event_synchronize");
+}
+
 static const struct ggml_backend_device_i ggml_backend_vk_device_i = {
     /* .get_name             = */ ggml_backend_vk_device_get_name,
     /* .get_description      = */ ggml_backend_vk_device_get_description,
@@ -14415,9 +14534,9 @@ static const struct ggml_backend_device_i ggml_backend_vk_device_i = {
     /* .supports_op          = */ ggml_backend_vk_device_supports_op,
     /* .supports_buft        = */ ggml_backend_vk_device_supports_buft,
     /* .offload_op           = */ ggml_backend_vk_device_offload_op,
-    /* .event_new            = */ NULL,
-    /* .event_free           = */ NULL,
-    /* .event_synchronize    = */ NULL,
+    /* .event_new            = */ ggml_backend_vk_device_event_new,
+    /* .event_free           = */ ggml_backend_vk_device_event_free,
+    /* .event_synchronize    = */ ggml_backend_vk_device_event_synchronize,
 };
 
 static const char * ggml_backend_vk_reg_get_name(ggml_backend_reg_t reg) {
