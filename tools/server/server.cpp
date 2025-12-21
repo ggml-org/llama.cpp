@@ -140,6 +140,7 @@ int main(int argc, char ** argv, char ** envp) {
         routes.post_completions            = models_routes->proxy_post;
         routes.post_completions_oai        = models_routes->proxy_post;
         routes.post_chat_completions       = models_routes->proxy_post;
+        routes.post_responses_oai          = models_routes->proxy_post;
         routes.post_anthropic_messages     = models_routes->proxy_post;
         routes.post_anthropic_count_tokens = models_routes->proxy_post;
         routes.post_infill                 = models_routes->proxy_post;
