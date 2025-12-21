@@ -79,6 +79,81 @@ Replaced "old code" with "fixed code"
 | `/exit` | Exit the agent |
 | `/clear` | Clear conversation history |
 | `/tools` | List available tools |
+| `/skills` | List available skills |
+
+## Skills
+
+Skills are reusable prompt modules that extend the agent's capabilities. They follow the [agentskills.io](https://agentskills.io) specification.
+
+### Creating a Skill
+
+Skills are directories containing a `SKILL.md` file with YAML frontmatter:
+
+```bash
+mkdir -p ~/.config/llama-agent/skills/code-review
+cat > ~/.config/llama-agent/skills/code-review/SKILL.md << 'EOF'
+---
+name: code-review
+description: Review code for bugs, security issues, and improvements. Use when asked to review code or a PR.
+---
+
+# Code Review Instructions
+
+When reviewing code:
+1. Run `git diff` to see changes
+2. Read modified files for context
+3. Check for bugs, security issues, style problems
+4. Provide specific feedback with file:line references
+EOF
+```
+
+### Skill Structure
+
+```
+skill-name/
+├── SKILL.md          # Required - YAML frontmatter + instructions
+├── scripts/          # Optional - executable scripts
+├── references/       # Optional - additional documentation
+└── assets/           # Optional - templates, data files
+```
+
+### SKILL.md Format
+
+```yaml
+---
+name: skill-name          # Required: 1-64 chars, lowercase+numbers+hyphens
+description: What and when # Required: 1-1024 chars, triggers activation
+license: MIT              # Optional
+compatibility: python3    # Optional: environment requirements
+metadata:                 # Optional: custom key-value pairs
+  author: someone
+---
+
+Markdown instructions for the agent...
+```
+
+### Search Paths
+
+Skills are discovered from (in priority order):
+
+1. `./.llama-agent/skills/` - Project-local skills
+2. `~/.config/llama-agent/skills/` - User-global skills
+3. Custom paths via `--skills-path`
+
+### CLI Options
+
+| Flag | Description |
+|------|-------------|
+| `--no-skills` | Disable skill discovery |
+| `--skills-path PATH` | Add custom skills directory |
+
+### How Skills Work
+
+1. **Discovery**: At startup, the agent scans skill directories and loads metadata (name/description)
+2. **Activation**: When your request matches a skill's description, the agent reads the full `SKILL.md`
+3. **Execution**: The agent follows the skill's instructions, optionally running scripts from `scripts/`
+
+This "progressive disclosure" keeps context lean - only activated skills consume tokens.
 
 ## MCP Server Support
 
@@ -151,6 +226,8 @@ When prompted: `y` (yes), `n` (no), `a` (always allow), `d` (deny always)
 |------|-------------|
 | `--yolo` | Skip all permission prompts (dangerous!) |
 | `--max-iterations N` | Max agent iterations (default: 50, max: 1000) |
+| `--no-skills` | Disable skill discovery |
+| `--skills-path PATH` | Add custom skills search path |
 
 ### YOLO Mode
 

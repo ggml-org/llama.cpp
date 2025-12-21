@@ -169,6 +169,20 @@ All tests passing now.
 
 When the task is complete, provide a brief summary of what you did.)";
 
+    // Append skills section if available (agentskills.io spec)
+    if (!config.skills_prompt_section.empty()) {
+        system_prompt += R"(
+
+# Available Skills
+
+Skills are specialized capabilities you can use for specific tasks.
+When a user's request matches a skill description, read the skill file to get detailed instructions.
+Use the `read` tool with the skill's location path to load the full instructions.
+
+)";
+        system_prompt += config.skills_prompt_section;
+    }
+
     messages_.push_back({
         {"role", "system"},
         {"content", system_prompt}
