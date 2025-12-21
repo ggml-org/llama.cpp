@@ -35,111 +35,52 @@ class tensor_traits : public ggml::cpu::tensor_traits {
     }
 };
 
-static ggml::cpu::tensor_traits * get_tensor_traits(ggml_backend_buffer_t, struct ggml_tensor *) {
+static ggml::cpu::tensor_traits * get_tensor_traits(struct ggml_tensor *) {
     static tensor_traits traits;
     return &traits;
 }
 }  // namespace ggml::cpu::amx
 
-// AMX buffer interface
-static void ggml_backend_amx_buffer_free_buffer(ggml_backend_buffer_t buffer) {
-    free(buffer->context);
-}
+namespace ggml::cpu::amx {
 
-static void * ggml_backend_amx_buffer_get_base(ggml_backend_buffer_t buffer) {
-    return (void *) (buffer->context);
-}
+// AMX buffer
+class buffer : public ggml::cpu::buffer {
+public:
+    buffer(std::size_t size) : ggml::cpu::buffer(size) { }
 
-static enum ggml_status ggml_backend_amx_buffer_init_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor) {
-    tensor->extra = (void *) ggml::cpu::amx::get_tensor_traits(buffer, tensor);
+    virtual ~buffer() { }
 
-    GGML_UNUSED(buffer);
-    return GGML_STATUS_SUCCESS;
-}
-
-static void ggml_backend_amx_buffer_memset_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor,
-                                                  uint8_t value, size_t offset, size_t size) {
-    memset((char *) tensor->data + offset, value, size);
-
-    GGML_UNUSED(buffer);
-}
-
-static void ggml_backend_amx_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor,
-                                               const void * data, size_t offset, size_t size) {
-    if (qtype_has_amx_kernels(tensor->type)) {
-        GGML_LOG_DEBUG("%s: amx repack tensor %s of type %s\n", __func__, tensor->name, ggml_type_name(tensor->type));
-        ggml_backend_amx_convert_weight(tensor, data, offset, size);
-    } else {
-        memcpy((char *) tensor->data + offset, data, size);
+    ggml_status init_tensor(ggml_tensor& tensor) override {
+        tensor->extra = (void *) ggml::cpu::amx::get_tensor_traits(&tensor);
+        return GGML_STATUS_SUCCESS;
     }
 
-    GGML_UNUSED(buffer);
-}
-
-/*
-// need to figure what we need to do with buffer->extra.
-static void ggml_backend_amx_buffer_get_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-    GGML_ASSERT(!qtype_has_amx_kernels(tensor->type));
-    memcpy(data, (const char *)tensor->data + offset, size);
-
-    GGML_UNUSED(buffer);
-}
-
-static bool ggml_backend_amx_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * src, struct ggml_tensor * dst) {
-    if (ggml_backend_buffer_is_host(src->buffer)) {
-        if (qtype_has_amx_kernels(src->type)) {
-            ggml_backend_amx_convert_weight(dst, src->data, 0, ggml_nbytes(dst));
+    void set_tensor(ggml_tensor & tensor, const void * data, std::size_t offset, std::size_t size) override {
+        if (qtype_has_amx_kernels(tensor.type)) {
+            GGML_LOG_DEBUG("%s: amx repack tensor %s of type %s\n", __func__, tensor.name, ggml_type_name(tensor.type));
+            ggml_backend_amx_convert_weight(&tensor, data, offset, size);
         } else {
-            memcpy(dst->data, src->data, ggml_nbytes(src));
+            memcpy((char *) tensor.data + offset, data, size);
         }
-        return true;
     }
-    return false;
 
-    GGML_UNUSED(buffer);
-}
-*/
-
-static void ggml_backend_amx_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
-    memset(buffer->context, value, buffer->size);
-}
-
-static ggml_backend_buffer_i ggml_backend_amx_buffer_interface = {
-    /* .free_buffer     = */ ggml_backend_amx_buffer_free_buffer,
-    /* .get_base        = */ ggml_backend_amx_buffer_get_base,
-    /* .init_tensor     = */ ggml_backend_amx_buffer_init_tensor,
-    /* .memset_tensor   = */ ggml_backend_amx_buffer_memset_tensor,
-    /* .set_tensor      = */ ggml_backend_amx_buffer_set_tensor,
-    /* .get_tensor      = */ nullptr,
-    /* .cpy_tensor      = */ nullptr,
-    /* .clear           = */ ggml_backend_amx_buffer_clear,
-    /* .reset           = */ nullptr,
 };
 
-static const char * ggml_backend_amx_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
-    return "AMX";
+class extra_buffer_type : ggml::cpu::extra_buffer_type {
 
-    GGML_UNUSED(buft);
-}
-
-static ggml_backend_buffer_t ggml_backend_amx_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
-    void * data = ggml_aligned_malloc(size);
-    if (data == NULL) {
-        fprintf(stderr, "%s: failed to allocate buffer of size %zu\n", __func__, size);
-        return NULL;
+    const std::string& get_name() override {
+        static const std::string name {"AMX"};
+        return name;
     }
 
-    return ggml_backend_buffer_init(buft, ggml_backend_amx_buffer_interface, data, size);
-}
+    ggml::cpp::backend::buffer* alloc_buffer(std::size_t size) override {
+        return new buffer(size);
+    }
 
-static size_t ggml_backend_amx_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
-    return TENSOR_ALIGNMENT;
+    std::size_t get_alloc_size(const ggml_tensor& tensor) override {
+        return ggml_backend_amx_get_alloc_size(&tensor);
+    }
 
-    GGML_UNUSED(buft);
-}
-
-namespace ggml::cpu::amx {
-class extra_buffer_type : ggml::cpu::extra_buffer_type {
     bool supports_op(ggml_backend_dev_t, const struct ggml_tensor * op) override {
         if (op->op != GGML_OP_MUL_MAT) {
             return false;
@@ -198,12 +139,6 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
 };
 }  // namespace ggml::cpu::amx
 
-static size_t ggml_backend_amx_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
-    return ggml_backend_amx_get_alloc_size(tensor);
-
-    GGML_UNUSED(buft);
-}
-
 #define ARCH_GET_XCOMP_PERM     0x1022
 #define ARCH_REQ_XCOMP_PERM     0x1023
 #define XFEATURE_XTILECFG       17
@@ -224,24 +159,11 @@ static bool ggml_amx_init() {
 }
 
 ggml_backend_buffer_type_t ggml_backend_amx_buffer_type() {
-    static struct ggml_backend_buffer_type ggml_backend_buffer_type_amx = {
-        /* .iface = */ {
-                        /* .get_name         = */ ggml_backend_amx_buffer_type_get_name,
-                        /* .alloc_buffer     = */ ggml_backend_amx_buffer_type_alloc_buffer,
-                        /* .get_alignment    = */ ggml_backend_amx_buffer_type_get_alignment,
-                        /* .get_max_size     = */ nullptr,  // defaults to SIZE_MAX
-                        /* .get_alloc_size   = */ ggml_backend_amx_buffer_type_get_alloc_size,
-                        /* .is_host          = */ nullptr,
-                        },
-        /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
-        /* .context = */ new ggml::cpu::amx::extra_buffer_type(),
-    };
-
+    static auto* buffer_type = ggml::cpu::c_wrapper(new ggml::cpu::amx::extra_buffer_type());
     if (!ggml_amx_init()) {
         return nullptr;
     }
-
-    return &ggml_backend_buffer_type_amx;
+    return buffer_type;
 }
 
 #endif  // defined(__AMX_INT8__) && defined(__AVX512VNNI__)
