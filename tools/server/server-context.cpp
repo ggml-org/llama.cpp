@@ -2001,7 +2001,7 @@ struct server_context_impl {
                     llama_set_draft_input_hidden_state(ctx, llama_get_embeddings_ith(ctx, -1));
 
                     draft = mtp_speculative_gen_draft(
-                        slot.smpl, 
+                        slot.smpl.get(), 
                         ctx,
                         params_spec,
                         slot.sampled, 

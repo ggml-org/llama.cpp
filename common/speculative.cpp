@@ -361,8 +361,8 @@ llama_tokens common_speculative_gen_draft(
 }
 
 llama_tokens mtp_speculative_gen_draft(
-    struct common_sampler* smpl,
-    struct llama_context* ctx,
+    struct common_sampler * smpl,
+    struct llama_context * ctx,
     struct common_speculative_params params,
     llama_token id_last,
     int32_t n_past,
