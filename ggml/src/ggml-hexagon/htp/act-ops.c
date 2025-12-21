@@ -301,19 +301,18 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
     uint8_t *  dst_spad_data_ping  = dst_spad->data + (ith * dst_spad->size_per_thread);
     uint8_t *  dst_spad_data_pong  = dst_spad_data_ping  + dst_size_per_pingpong;
 
-    // Maybe should always go to the optimal path?
+
     // In gelu = x*sigmoid(x*1.702)
-    // Although we have src0_size_per_pingpong
     const int BLOCK = src0_size_per_pingpong / src0_row_size_aligned; // How many rows can we process in one block
 
-    // TODO:
     if(BLOCK == 0){
         FARF(ERROR, "gelu-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n", src0_spad->size_per_thread,
              src0_row_size_aligned );
         return;
     }
+    // See discussion: https://github.com/ggml-org/llama.cpp/pull/18151#issuecomment-3678235379
     // Do the inital dma fecth
-    // fetch src0
+    // fetch src0 
     dma_queue_push_ddr_to_vtcm(dma_queue,   
         src0_spad_data_ping, 
         data_src0 + (src0_start_row * src0_row_size),
@@ -322,105 +321,90 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
         MIN(BLOCK, src0_end_row - src0_start_row)
         
     );
-    bool src0_ping_pong_flag = true; // true means the program use ping data to compute, false means use pong data to compute
-    bool dst_ping_pong_flag = true; // true means the program use ping data to compute, false means use pong data to compute
+    //empty dst push to keep the dma queue logic consistent
+    dma_queue_push_vtcm_to_ddr(dma_queue,   
+        data_dst,// dummy dst pointer
+        dst_spad_data_ping,
+        dst_row_size,         // dst stride in DDR (actual row size)
+        dst_row_size_aligned, // src stride in VTCM (aligned)
+        0
+    );
+
+    // dummy fetch for pong buffer
+    dma_queue_push_ddr_to_vtcm(dma_queue,   
+        src0_spad_data_pong, 
+        data_src0 + (src0_start_row * src0_row_size),
+        src0_row_size_aligned,
+        src0_row_size,
+        0
+        
+    );
+    //empty dst push to keep the dma queue logic consistent
+    dma_queue_push_vtcm_to_ddr(dma_queue,   
+        data_dst,// dummy dst pointer
+        dst_spad_data_pong,
+        dst_row_size,         // dst stride in DDR (actual row size)
+        dst_row_size_aligned, // src stride in VTCM (aligned)
+        0
+    );
+
+
+
 
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
         const uint32_t block_end = MIN(ir + BLOCK, src0_end_row); // The start index of next block
-        
-
         const uint32_t next_block_size = MIN(BLOCK, src0_end_row - block_end);
-
-
-        float* cur_dst_spad_ptr;
-        const float * src0;
-        if(dst_ping_pong_flag){
-            cur_dst_spad_ptr = (float*)dst_spad_data_ping;
-        }else{
-            cur_dst_spad_ptr = (float*)dst_spad_data_pong;
-        }
-
-        if(src0_ping_pong_flag){
-            src0 = (float*)src0_spad_data_ping;
-        }else{
-            src0 = (float*)src0_spad_data_pong;
-        }
-
-        dma_queue_pop(dma_queue); // wait for dma done for the previous src0 fetch
-
-        // Wait for the previous dst push to complete before we can reuse the dst buffer
-        if(ir != src0_start_row){
-            dma_queue_pop(dma_queue); // wait for dma done for the previous dst push
-        }
+        float * src0_spad = (float*)dma_queue_pop_dst(dma_queue); // wait for dma done for the previous src0 fetch
+        float* dst_spad = (float*)dma_queue_pop_src(dma_queue); // wait for dma done for the previous dst push
+        
 
         // prefetch next loop iteration if any
-        
         if (next_block_size > 0) {
-            if(src0_ping_pong_flag == false){
 
-                dma_queue_push_ddr_to_vtcm(dma_queue,   
-                    src0_spad_data_ping, 
-                    data_src0 + (block_end * src0_row_size),
-                    src0_row_size_aligned,
-                    src0_row_size,
-                    next_block_size
-                );
-
-
-            }else{
-                dma_queue_push_ddr_to_vtcm(dma_queue,   
-                    src0_spad_data_pong, 
-                    data_src0 + (block_end * src0_row_size),
-                    src0_row_size_aligned,
-                    src0_row_size,
-                    next_block_size
-                );
-            }
-            src0_ping_pong_flag=!src0_ping_pong_flag;
+            dma_queue_push_ddr_to_vtcm(dma_queue,   
+                //src0_spad_data_ping, 
+                dma_queue->dst[dma_queue->pop_idx],
+                data_src0 + (block_end * src0_row_size),
+                src0_row_size_aligned,
+                src0_row_size,
+                next_block_size
+            );
+    
         }
         
+        float * cur_dst_spad_ptr = dst_spad;
         for (uint32_t ib = ir; ib < block_end; ib++) {
             // gelu = x * sigmoid(1.702 * x) // current implementation
-            hvx_mul_scalar_f32( (const uint8_t *) src0, (float)1.702, (uint8_t *) cur_dst_spad_ptr, ne0);
+            hvx_mul_scalar_f32( (const uint8_t *) src0_spad, (float)1.702, (uint8_t *) cur_dst_spad_ptr, ne0);
             hvx_fast_sigmoid_f32((const uint8_t *) cur_dst_spad_ptr, (uint8_t *) cur_dst_spad_ptr, ne0);
-            hvx_mul_f32_opt((const uint8_t *) src0, (uint8_t *) cur_dst_spad_ptr, (uint8_t *) cur_dst_spad_ptr, ne0);
+            hvx_mul_f32_opt((const uint8_t *) src0_spad, (uint8_t *) cur_dst_spad_ptr, (uint8_t *) cur_dst_spad_ptr, ne0);
     
 
-            src0 +=  src0_row_size_aligned/sizeof(float); // Move to next row
+            src0_spad +=  src0_row_size_aligned/sizeof(float); // Move to next row
             cur_dst_spad_ptr+= dst_row_size_aligned/sizeof(float);
         }
 
 
         float * restrict out_dst  = (float *) (data_dst + (ir * dst_row_size));
 
-        if(dst_ping_pong_flag){
-            dma_queue_push_vtcm_to_ddr(dma_queue,   
-                out_dst,
-                dst_spad_data_ping,
-                dst_row_size,         // dst stride in DDR (actual row size)
-                dst_row_size_aligned, // src stride in VTCM (aligned)
-                (block_end - ir)
-            );
-        }else{
-            dma_queue_push_vtcm_to_ddr(dma_queue,   
-                out_dst,
-                dst_spad_data_pong,
-                dst_row_size,         // dst stride in DDR (actual row size)
-                dst_row_size_aligned, // src stride in VTCM (aligned)
-                (block_end - ir)
-            );
-        }
 
+        dma_queue_push_vtcm_to_ddr(dma_queue,   
+            out_dst,
+            dst_spad,
+            dst_row_size,         // dst stride in DDR (actual row size)
+            dst_row_size_aligned, // src stride in VTCM (aligned)
+            (block_end - ir)
+        );
 
-        if(ir != src0_start_row){
-            dma_queue_pop(dma_queue); // wait for dma done for the previous dst push
-        }
-        // else is the first block,nothing to wait for dst push 
-
-        dst_ping_pong_flag = !dst_ping_pong_flag;
     }
 
-    dma_queue_pop(dma_queue); // wait for dma done for the last dst push
+    // now, wait for all ping-pong dma to complete
+    // do a mamual loop unroll, since we know there are total 4 dma operations in the queue 
+    dma_queue_pop_dst(dma_queue); 
+    dma_queue_pop_dst(dma_queue); 
+    dma_queue_pop_dst(dma_queue); 
+    dma_queue_pop_dst(dma_queue); 
+
 
     t2 = HAP_perf_get_qtimer_count();
 
