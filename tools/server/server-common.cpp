@@ -1116,6 +1116,11 @@ json convert_responses_to_chatcmpl(const json & body) {
     chatcmpl_body.erase("input");
     chatcmpl_body["messages"] = chatcmpl_messages;
 
+    if (body.contains("max_output_tokens")) {
+        chatcmpl_body.erase("max_output_tokens");
+        chatcmpl_body["max_tokens"] = body["max_output_tokens"];
+    }
+
     return chatcmpl_body;
 }
 
