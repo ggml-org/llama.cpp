@@ -1,6 +1,5 @@
 import pytest
 from openai import OpenAI
-import openai
 from utils import *
 
 server: ServerProcess
