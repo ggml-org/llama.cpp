@@ -920,6 +920,7 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
     HVX_Vector       rsum = Q6_V_vsplat_R(0);
     uint32_t         i    = 0;
 
+#pragma unroll(2)
     for (i = 0; i < nv0; i++) {
         HVX_VectorPair yp   = vy[i];
         HVX_Vector     x    = vx[i];
