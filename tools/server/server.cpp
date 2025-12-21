@@ -252,7 +252,6 @@ int main(int argc, char ** argv, char ** envp) {
             return 1;
         }
 
-        ctx_server.init();
         ctx_http.is_ready.store(true);
 
         LOG_INF("%s: model loaded\n", __func__);
@@ -309,7 +308,11 @@ int main(int argc, char ** argv, char ** envp) {
         if (monitor_thread.joinable()) {
             monitor_thread.join();
         }
-        llama_memory_breakdown_print(ctx_server.get_llama_context());
+
+        auto * ll_ctx = ctx_server.get_llama_context();
+        if (ll_ctx != nullptr) {
+            llama_memory_breakdown_print(ll_ctx);
+        }
     }
 
     return 0;
