@@ -5344,6 +5344,13 @@ struct test_sum : public test_case {
     float grad_eps() override {
         return 0.1f * sqrtf(ne[0]*ne[1]*ne[2]*ne[3]);
     }
+
+    // Don't center the distribution around zero. Helps to avoid catastrophic cancellation.
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -0.9f, 1.1f);
+        }
+    }
 };
 
 // GGML_OP_SUM_ROWS
@@ -5409,6 +5416,13 @@ struct test_mean : public test_case {
 
     float grad_eps() override {
         return 0.1f * ne[0]*ne[1]*ne[2]*ne[3];
+    }
+
+    // Don't center the distribution around zero. Helps to avoid catastrophic cancellation.
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -0.9f, 1.1f);
+        }
     }
 };
 
@@ -6710,6 +6724,11 @@ static const ggml_type other_types[] = {
     GGML_TYPE_BF16,
 };
 
+#ifdef _MSC_VER
+// Workaround long compile time with msvc
+#pragma optimize("", off)
+#endif
+
 // Test cases for evaluation: should try to cover edge cases while using small input sizes to keep the runtime low
 static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
@@ -7996,6 +8015,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     return test_cases;
 }
+#ifdef _MSC_VER
+#pragma optimize("", on)
+#endif
 
 // Test cases for performance evaluation: should be representative of real-world use cases
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
