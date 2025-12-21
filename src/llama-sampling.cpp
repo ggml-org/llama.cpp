@@ -362,23 +362,39 @@ const char * llama_sampler_name(const struct llama_sampler * smpl) {
 }
 
 void llama_sampler_accept(struct llama_sampler * smpl, llama_token token) {
+    if (!smpl) {
+        return;
+    }
+
     if (smpl->iface->accept) {
         smpl->iface->accept(smpl, token);
     }
 }
 
 void llama_sampler_apply(struct llama_sampler * smpl, struct llama_token_data_array * cur_p) {
+    if (!smpl) {
+        return;
+    }
+
     GGML_ASSERT(smpl->iface->apply);
     smpl->iface->apply(smpl, cur_p);
 }
 
 void llama_sampler_reset(struct llama_sampler * smpl) {
+    if (!smpl) {
+        return;
+    }
+
     if (smpl->iface->reset) {
         smpl->iface->reset(smpl);
     }
 }
 
 struct llama_sampler * llama_sampler_clone(const struct llama_sampler * smpl) {
+    if (!smpl) {
+        return nullptr;
+    }
+
     if (smpl->iface->clone) {
         return smpl->iface->clone(smpl);
     }
@@ -472,9 +488,6 @@ static void llama_sampler_chain_reset(struct llama_sampler * smpl) {
     for (auto * smpl : chain->samplers) {
         llama_sampler_reset(smpl);
     }
-
-    chain->t_sample_us = 0;
-    chain->n_sample    = 0;
 }
 
 static struct llama_sampler * llama_sampler_chain_clone(const struct llama_sampler * smpl) {
@@ -2670,8 +2683,7 @@ struct llama_perf_sampler_data llama_perf_sampler(const struct llama_sampler * c
 void llama_perf_sampler_print(const struct llama_sampler * chain) {
     const auto data = llama_perf_sampler(chain);
 
-    LLAMA_LOG_INFO("%s:    sampling time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
-            __func__, data.t_sample_ms, data.n_sample, data.t_sample_ms / data.n_sample, 1e3 / data.t_sample_ms * data.n_sample);
+    LLAMA_LOG_INFO("%s:    samplers time = %10.2f ms / %5d runs\n", __func__, data.t_sample_ms, data.n_sample);
 }
 
 void llama_perf_sampler_reset(struct llama_sampler * chain) {
@@ -2681,5 +2693,6 @@ void llama_perf_sampler_reset(struct llama_sampler * chain) {
 
     auto * ctx = (struct llama_sampler_chain *) chain->ctx;
 
-    ctx->t_sample_us = ctx->n_sample = 0;
+    ctx->t_sample_us = 0;
+    ctx->n_sample    = 0;
 }
