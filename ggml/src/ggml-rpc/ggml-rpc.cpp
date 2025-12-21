@@ -583,7 +583,7 @@ static rpc_tensor serialize_tensor(const ggml_tensor * tensor) {
     if (tensor->buffer) {
         ggml_backend_buffer_t buffer = tensor->buffer;
         ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
-        result.buffer = ctx->remote_ptr;
+        result.buffer = ctx != nullptr ? ctx->remote_ptr : 0;
     } else {
         result.buffer = 0;
     }
