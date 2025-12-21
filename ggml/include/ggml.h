@@ -705,7 +705,7 @@ extern "C" {
     typedef uint8_t ggml_guid[16];
     typedef ggml_guid * ggml_guid_t;
 
-    GGML_API bool ggml_guid_matches(ggml_guid_t guid_a, ggml_guid_t guid_b);
+    GGML_API bool ggml_guid_matches(const ggml_guid * guid_a, const ggml_guid * guid_b);
 
     // misc
 
