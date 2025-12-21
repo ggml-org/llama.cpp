@@ -564,9 +564,15 @@ static int execute_op_activations_fp32(struct htp_ops_context * octx) {
     const uint32_t n_threads  = octx->n_threads;
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
 
-    const size_t src0_row_size = src0->nb[1];
-    const size_t src1_row_size = src1->ne[0] > 0 ? src1->nb[1] : 0; // zero bytes if src1 is not used
-    const size_t dst_row_size  = dst->nb[1];
+    size_t src0_row_size = src0->nb[1];
+    size_t src1_row_size = src1->nb[1]; // zero bytes if src1 is not used
+    size_t dst_row_size  = dst->nb[1];
+
+    const bool src1_valid = src1->ne[0];
+    if (!src1_valid) {
+        src1_row_size         = src0_row_size;
+    }
+
 
 
     const size_t src0_row_size_aligned = htp_round_up(src0_row_size, VLEN);
