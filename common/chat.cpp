@@ -110,9 +110,16 @@ std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const comm
         const auto idx = msg_prv.tool_calls.size() - 1;
         const auto & pref = msg_prv.tool_calls[idx];
         const auto & newf = msg_new.tool_calls[idx];
-        // Allow tool name to change from empty to non-empty during incremental parsing
-        if (pref.name != newf.name && !pref.name.empty()) {
-            throw std::runtime_error("Invalid diff: tool call mismatch!");
+        // Allow tool name to change during incremental parsing:
+        // - empty -> non-empty (initial discovery)
+        // - prefix -> longer string (name grows as more input is parsed)
+        if (pref.name != newf.name && !pref.name.empty() && !newf.name.empty()) {
+            // Check if one is a prefix of the other (for incremental parsing where names grow or shrink)
+            bool is_prefix = (newf.name.rfind(pref.name, 0) == 0);
+            if (!is_prefix) {
+                fprintf(stderr, "Tool call mismatch: prev='%s' new='%s'\n", pref.name.c_str(), newf.name.c_str());
+                throw std::runtime_error("Invalid diff: tool call mismatch!");
+            }
         }
         const auto args_diff = string_diff(pref.arguments, newf.arguments);
         if (!args_diff.empty() || pref.id != newf.id || pref.name != newf.name) {
@@ -2654,6 +2661,14 @@ static common_chat_params common_chat_templates_apply_jinja(
         }
     }
 
+    // Ministral/Mistral Large 3 - uses special reasoning structure fixes, can't use autoparser
+    if (src.find("[SYSTEM_PROMPT]") != std::string::npos &&
+        src.find("[TOOL_CALLS]") != std::string::npos &&
+        src.find("[ARGS]") != std::string::npos) {
+        return common_chat_params_init_ministral_3(tmpl, params);
+    }
+
+
     try {
         // Pass whether tools are provided to the autoparser
         bool has_tools = params.tools.is_array() && !params.tools.empty();
@@ -2804,13 +2819,6 @@ static common_chat_params common_chat_templates_apply_jinja(
     if (src.find("<|start_header_id|>ipython<|end_header_id|>") != std::string::npos) {
         auto allow_python_tag_builtin_tools = src.find("<|python_tag|>") != std::string::npos;
         return common_chat_params_init_llama_3_x(tmpl, params, allow_python_tag_builtin_tools);
-    }
-
-    // Ministral/Mistral Large 3
-    if (src.find("[SYSTEM_PROMPT]") != std::string::npos &&
-        src.find("[TOOL_CALLS]") != std::string::npos &&
-        src.find("[ARGS]") != std::string::npos) {
-        return common_chat_params_init_ministral_3(tmpl, params);
     }
 
     if (src.find("[THINK]") != std::string::npos && src.find("[/THINK]") != std::string::npos) {

@@ -1441,6 +1441,7 @@ void TemplateAnalyzer::analyze_reasoning(const minja::chat_template & tmpl, Disc
             std::string diff = find_string_difference(prompt_no_think, prompt_think);
             if (!diff.empty()) {
                 patterns.reasoning_start_marker = diff;
+                LOG_DBG("Detected reasoning marker by add_generation_prompt: %s\n", diff.c_str());
 
                 // Infer end marker
                 if (patterns.reasoning_start_marker[0] == '<') {
