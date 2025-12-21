@@ -6911,9 +6911,9 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                                         fprintf(stderr, "TP DEBUG FFN layer %d: TOTAL[0..3]=[%.6f,%.6f,%.6f,%.6f]\n",
                                                 layer, total_sample[0], total_sample[1], total_sample[2], total_sample[3]);
                                     }
-                                } else if (ggml_sycl_quant_allreduce_enabled()) {
-                                    // QUANTIZED ALL_REDUCE: 50% bandwidth reduction
-                                    // Uses GPU-side INT8 quantization to reduce transfer size
+                                } else if (ggml_sycl_should_use_quant_allreduce(dst_elements)) {
+                                    // QUANTIZED ALL_REDUCE: 33% bandwidth reduction (INT16)
+                                    // Only used for large tensors where bandwidth savings outweigh kernel overhead
                                     ggml_sycl_set_device(main_device);
                                     queue_ptr main_stream = ctx.stream();
                                     float * dst_ptr = (float *)ggml_sycl_get_data_ptr(dst, main_device);
@@ -7551,8 +7551,9 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                                         fprintf(stderr, "TP DEBUG ATTN after add: dst[0..3]=[%f,%f,%f,%f]\n",
                                                 total_sample[0], total_sample[1], total_sample[2], total_sample[3]);
                                     }
-                                } else if (ggml_sycl_quant_allreduce_enabled()) {
-                                    // QUANTIZED ALL_REDUCE: 50% bandwidth reduction
+                                } else if (ggml_sycl_should_use_quant_allreduce(dst_elements)) {
+                                    // QUANTIZED ALL_REDUCE: 33% bandwidth reduction (INT16)
+                                    // Only used for large tensors where bandwidth savings outweigh kernel overhead
                                     ggml_sycl_set_device(main_device);
                                     queue_ptr main_stream = ctx.stream();
                                     float * dst_ptr = (float *)ggml_sycl_get_data_ptr(dst, main_device);
@@ -9729,8 +9730,10 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             ggml_sycl_dup(ctx, dst);
             break;
         case GGML_OP_ADD:
-        case GGML_OP_ADD1: // TODO: more efficient implementation
             ggml_sycl_add(ctx, dst);
+            break;
+        case GGML_OP_ADD1:
+            ggml_sycl_add1(ctx, dst);
             break;
         case GGML_OP_ADD_ID:
             ggml_sycl_add_id(ctx, dst);

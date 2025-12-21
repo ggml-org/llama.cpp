@@ -785,14 +785,46 @@ bool ggml_sycl_quant_allreduce_enabled() {
     static int enabled = -1;
     if (enabled < 0) {
         const char* env = getenv("GGML_SYCL_QUANT_ALLREDUCE");
-        enabled = (env != nullptr) ? atoi(env) : 0;  // Disabled by default
+        // Enable by default for TP mode (33% bandwidth reduction)
+        // Disable with GGML_SYCL_QUANT_ALLREDUCE=0
+        enabled = (env != nullptr) ? atoi(env) : 1;
 
         if (enabled) {
             GGML_LOG_INFO("SYCL TP: INT16 Quantized AllReduce enabled (33%% bandwidth reduction)\n");
-            GGML_LOG_INFO("SYCL TP: INT16 has 65536 levels (0.0015%% max error) vs INT8's 256 levels (0.4%% error)\n");
         }
     }
     return enabled != 0;
+}
+
+// Get the minimum tensor size threshold for quantized allreduce
+// Returns threshold from GGML_SYCL_QUANT_THRESHOLD env var, or default
+static size_t get_quant_allreduce_threshold() {
+    static size_t threshold = 0;
+    static bool initialized = false;
+    if (!initialized) {
+        const char* env = getenv("GGML_SYCL_QUANT_THRESHOLD");
+        // Default: 65536 elements (256KB FP32)
+        // Benchmarks show quant overhead hurts small tensors (tg128: 8.1 -> 6.3 t/s)
+        // but helps or is neutral for larger tensors (pp512: ~same performance)
+        // Crossover is around 32K-64K elements
+        threshold = (env != nullptr) ? (size_t)atol(env) : 65536;
+        initialized = true;
+        if (ggml_sycl_quant_allreduce_enabled()) {
+            GGML_LOG_INFO("SYCL TP: Quant AllReduce threshold = %zu elements (%.1f KB FP32)\n",
+                          threshold, (float)(threshold * sizeof(float)) / 1024.0f);
+        }
+    }
+    return threshold;
+}
+
+bool ggml_sycl_should_use_quant_allreduce(size_t n_elements) {
+    // Must be enabled globally
+    if (!ggml_sycl_quant_allreduce_enabled()) {
+        return false;
+    }
+    // Use FP32 for small tensors (lower overhead beats bandwidth savings)
+    // Use INT16 quant for large tensors (bandwidth savings outweigh overhead)
+    return n_elements >= get_quant_allreduce_threshold();
 }
 
 void ggml_sycl_tp_init_quant_comm_buffers(size_t initial_size) {
@@ -909,17 +941,19 @@ void ggml_sycl_tp_free_quant_comm_buffers() {
 }
 
 void ggml_sycl_tp_free() {
-    // NOTE: Do NOT call ggml_sycl_ccl_free() here!
-    // CCL resources must persist across backend lifetimes, similar to TP config.
+    // NOTE: Do NOT free resources that need to persist across backend lifetimes!
     // The "fitting params to device memory" step creates temporary backends that
-    // get freed before model loading. If we free CCL here, it won't be available
-    // for the actual inference. CCL cleanup is handled via atexit() registration
-    // in ggml_sycl_ccl_init_multiprocess().
+    // get freed before model loading. Resources like CCL and quant comm buffers
+    // must persist for actual inference.
+    //
+    // NOT freed here (persist across backends):
+    // - CCL resources (cleanup via atexit in ggml_sycl_ccl_init_multiprocess)
+    // - Quant comm buffers (pre-allocated for TP allreduce performance)
 
     // Free persistent FFN buffers first (uses its own mutex)
     ggml_sycl_tp_free_ffn_buffers();
     ggml_sycl_tp_free_host_staging();
-    ggml_sycl_tp_free_quant_comm_buffers();
+    // NOTE: Do NOT free quant comm buffers - they persist across backend lifetimes
 
     std::lock_guard<std::mutex> lock(g_tp_shared_reduce_mutex);
     if (g_tp_shared_reduce_buf != nullptr) {
