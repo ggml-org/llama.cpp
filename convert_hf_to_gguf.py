@@ -3940,28 +3940,30 @@ class Eagle2VLVisionModel(MmprojModel):
                         vit_hidden = (self.hparams_vision or {}).get("hidden_size")
                         expected_in = vit_hidden * 4 if isinstance(vit_hidden, int) and vit_hidden > 0 else None
                         expected_out = getattr(self, "n_embd_text", None)
-                        # Strong orientation rule: if [out, in] = [n_embd_text, 4*hidden] -> transpose
-                        if isinstance(expected_in, int) and isinstance(expected_out, int) and expected_in > 0 and expected_out > 0:
-                            if d0 == expected_out and d1 == expected_in:
-                                data_torch = data_torch.transpose(-1, -2)
-                            elif d0 == expected_in and d1 == expected_out:
-                                pass  # already [n_in, n_out]
-                            else:
-                                # fall through to heuristic rules below
-                                pass
-                        if isinstance(expected_in, int) and expected_in > 0:
-                            if d0 == expected_in:
-                                pass  # already canonical [n_in, n_out]
-                            elif d1 == expected_in:
-                                data_torch = data_torch.transpose(-1, -2)
-                            else:
-                                # Fallback: choose orientation that puts larger dim on axis 0
-                                if d0 < d1:
-                                    data_torch = data_torch.transpose(-1, -2)
-                        else:
-                            # Fallback when vit_hidden is unknown: assume PyTorch [out, in] and transpose if in > out
-                            if d0 < d1:
-                                data_torch = data_torch.transpose(-1, -2)
+
+                        def _should_transpose_weight(d0, d1, expected_in, expected_out):
+                            # Both expected_in and expected_out are known
+                            if isinstance(expected_in, int) and expected_in > 0 and isinstance(expected_out, int) and expected_out > 0:
+                                # If shape matches [out, in], transpose to [in, out]
+                                if d0 == expected_out and d1 == expected_in:
+                                    return True
+                                # If already [in, out], no transpose
+                                if d0 == expected_in and d1 == expected_out:
+                                    return False
+                                # Otherwise, fall through to heuristics
+                            # Only expected_in is known
+                            if isinstance(expected_in, int) and expected_in > 0:
+                                if d0 == expected_in:
+                                    return False
+                                if d1 == expected_in:
+                                    return True
+                                # Otherwise, fall through to fallback
+                            # Fallback: choose orientation that puts larger dim on axis 0
+                            # or, if dims are equal, assume already canonical
+                            return d0 < d1
+
+                        if _should_transpose_weight(d0, d1, expected_in, expected_out):
+                            data_torch = data_torch.transpose(-1, -2)
                     return [(new_name, data_torch)]
                 return [(new_name, data_torch)]
             # Map second Linear (mlp1.3.*) -> mm.2.*
