@@ -3974,7 +3974,7 @@ class Eagle2VLVisionModel(MmprojModel):
                 new_name = "mm.2." + mlp_suffix[2:]
                 if new_name.endswith(".weight"):
                     # Canonicalize to [n_in, n_out] for the second layer.
-                    # Here expected_in == expected_out == text emb dim; if ambiguous, leave as-is (often square).
+                    # For mm.2, the output dimension should match the text embedding dimension (expected), while the input dimension should match mm.0's output (the intermediate dimension). If ambiguous (often square), leave as-is.
                     if data_torch.ndim == 2:
                         d0, d1 = int(data_torch.shape[0]), int(data_torch.shape[1])
                         expected = getattr(self, "n_embd_text", None)
