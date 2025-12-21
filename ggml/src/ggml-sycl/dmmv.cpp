@@ -2,6 +2,7 @@
 #include "dmmv.hpp"
 #include "dequantize.hpp"
 #include "presets.hpp"
+#include "dmmv-esimd.hpp"
 
 static void convert_f16(const void * vx, const int64_t ib, const int iqs, dfloat2 & v){
     const sycl::half *x = (const sycl::half *)vx;
@@ -1103,13 +1104,38 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
     const dfloat * src1_dfloat = (const dfloat *) src1_ddf_i; // dfloat == float, no conversion
 #endif // GGML_SYCL_F16
 
+    // Debug: DMMV function is being called
+    static int dmmv_call_count = 0;
+    if (dmmv_call_count < 5 && std::getenv("GGML_SYCL_MMQ_DEBUG")) {
+        fprintf(stderr, "[DMMV] Called for type=%d ncols=%ld nrows=%ld\n",
+                (int)src0->type, (long)ne00, (long)row_diff);
+        dmmv_call_count++;
+    }
+
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
-            if ((ggml_tensor_extra_gpu*)dst->src[0]->extra &&
-                ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {
-                dequantize_mul_mat_vec_q4_0_sycl_reorder(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
-            } else {
-                dequantize_mul_mat_vec_q4_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            {
+                bool has_reorder = (ggml_tensor_extra_gpu*)dst->src[0]->extra &&
+                    ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder;
+                bool esimd_enabled = dmmv_esimd_enabled();
+
+                static int q4_debug_count = 0;
+                if (q4_debug_count < 3 && std::getenv("GGML_SYCL_MMQ_DEBUG")) {
+                    fprintf(stderr, "[DMMV Q4_0] reorder=%d esimd_enabled=%d\n", has_reorder, esimd_enabled);
+                    q4_debug_count++;
+                }
+
+                if (has_reorder) {
+                    dequantize_mul_mat_vec_q4_0_sycl_reorder(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+                } else if (esimd_enabled) {
+                    bool launched = launch_dmmv_q4_0_esimd(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, *stream);
+                    if (!launched) {
+                        // ESIMD kernel couldn't launch, fallback
+                        dequantize_mul_mat_vec_q4_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+                    }
+                } else {
+                    dequantize_mul_mat_vec_q4_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+                }
             }
             break;
         case GGML_TYPE_Q4_1:

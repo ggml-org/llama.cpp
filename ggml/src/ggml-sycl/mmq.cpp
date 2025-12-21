@@ -3059,21 +3059,68 @@ void ggml_sycl_op_mul_mat_q(
     const int64_t nrows_dst = device_id == ctx.device ? ne0 : row_diff;
 
     // ESIMD path for Q4_0 - reduces L3 cache misses via unified block loading
-    // Returns false for edge cases (small K, large grids) to fall back to standard MMQ
+    // V1 uses single work-item per output, V2 is disabled (needs WARP_SIZE=32 redesign)
+    static int esimd_call_count = 0;
+    bool esimd_debug = std::getenv("GGML_SYCL_MMQ_DEBUG") != nullptr;
+    if (esimd_debug && esimd_call_count < 50) {
+        fprintf(stderr, "[MMQ call#%d] Q4_0=%d enabled=%d available=%d row_diff=%ld ncols=%ld\n",
+                esimd_call_count, src0->type == GGML_TYPE_Q4_0, mmq_esimd_enabled(), mmq_esimd_available(),
+                (long)row_diff, (long)src1_ncols);
+        fflush(stderr);
+        esimd_call_count++;
+    }
     if (src0->type == GGML_TYPE_Q4_0 && mmq_esimd_enabled() && mmq_esimd_available()) {
-        bool esimd_launched = launch_mmq_q4_0_esimd(
-            reinterpret_cast<const block_q4_0*>(src0_dd_i),
-            reinterpret_cast<const block_q8_1*>(src1_ddq_i),
-            dst_dd_i,
-            row_diff,      // nrows
-            src1_ncols,    // ncols
-            ne00,          // k (inner dimension)
-            nrows_dst,     // output stride
-            *stream);
-        if (esimd_launched) {
-            return;
+        esimd_call_count++;
+
+        // Check for kernel version via GGML_SYCL_MMQ_ESIMD=1,2,3
+        const int esimd_ver = mmq_esimd_version();
+
+        if (esimd_ver == 3) {
+            // V3 kernel - ESIMD-native with better memory access patterns
+            bool esimd_launched = launch_mmq_q4_0_esimd_v3(
+                reinterpret_cast<const block_q4_0*>(src0_dd_i),
+                reinterpret_cast<const block_q8_1*>(src1_ddq_i),
+                dst_dd_i,
+                row_diff,      // nrows
+                src1_ncols,    // ncols
+                ne00,          // k (inner dimension)
+                nrows_dst,     // output stride
+                *stream);
+            if (esimd_launched) {
+                return;
+            }
+            // V3 rejected - fall through to standard MMQ
+        } else if (esimd_ver == 2) {
+            // V2 kernel - tiled with SLM caching (redesigned for WARP_SIZE=32)
+            bool esimd_launched = launch_mmq_q4_0_esimd_v2(
+                reinterpret_cast<const block_q4_0*>(src0_dd_i),
+                reinterpret_cast<const block_q8_1*>(src1_ddq_i),
+                dst_dd_i,
+                row_diff,      // nrows
+                src1_ncols,    // ncols
+                ne00,          // k (inner dimension)
+                nrows_dst,     // output stride
+                *stream);
+            if (esimd_launched) {
+                return;
+            }
+            // V2 rejected - fall through to standard MMQ
+        } else {
+            // V1 kernel (single work-item per output) - only when ESIMD=1
+            bool esimd_launched = launch_mmq_q4_0_esimd(
+                reinterpret_cast<const block_q4_0*>(src0_dd_i),
+                reinterpret_cast<const block_q8_1*>(src1_ddq_i),
+                dst_dd_i,
+                row_diff,      // nrows
+                src1_ncols,    // ncols
+                ne00,          // k (inner dimension)
+                nrows_dst,     // output stride
+                *stream);
+            if (esimd_launched) {
+                return;
+            }
         }
-        // Fall through to standard MMQ for edge cases
+        // Fall through to standard MMQ
     }
 
     switch (src0->type) {

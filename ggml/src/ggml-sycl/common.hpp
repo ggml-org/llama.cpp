@@ -131,6 +131,7 @@ extern thread_local bool g_ggml_sycl_graph_recording;
 #endif
 
 // max batch size to use MMQ kernels when tensor cores are available
+// MMQ ESIMD is optimal for small batches. Dequantize path is 2-3x faster for large batches.
 #define MMQ_MAX_BATCH_SIZE 32
 
 // dmmv = dequantize_mul_mat_vec

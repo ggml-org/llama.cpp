@@ -8766,9 +8766,27 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     // mmvq and mmq need the __dp4a instruction which is available for gen12+
     // Workaround in https://github.com/ggerganov/llama.cpp/commit/95f84d5ce8b449a9b16009434aca800df504a02e
     use_mul_mat_q = use_mul_mat_q && (src0->type != GGML_TYPE_IQ2_XXS);
+
 #ifdef SYCL_USE_XMX
     use_mul_mat_q = use_mul_mat_q && (src1->ne[1] <= MMQ_MAX_BATCH_SIZE);
 #endif // SYCL_USE_XMX
+
+    // DEBUG: Print path selection for Q4_0 (AFTER all checks)
+    static int path_debug_count = 0;
+    static int batch1_debug_count = 0;
+    if (src0->type == GGML_TYPE_Q4_0 && std::getenv("GGML_SYCL_MMQ_DEBUG")) {
+        if (src1->ne[1] == 1 && batch1_debug_count < 5) {
+            fprintf(stderr, "[MUL_MAT PATH] Q4_0 batch=1: dmmv=%d mmvq=%d mmq=%d xmx=%d\n",
+                    use_dequantize_mul_mat_vec, use_mul_mat_vec_q, use_mul_mat_q, use_xmx_gemm);
+            fflush(stderr);
+            batch1_debug_count++;
+        } else if (src1->ne[1] > 1 && path_debug_count < 5) {
+            fprintf(stderr, "[MUL_MAT PATH] Q4_0: dmmv=%d mmvq=%d mmq=%d xmx=%d batch=%ld MAX_BATCH=%d\n",
+                    use_dequantize_mul_mat_vec, use_mul_mat_vec_q, use_mul_mat_q, use_xmx_gemm, (long)src1->ne[1], MMQ_MAX_BATCH_SIZE);
+            fflush(stderr);
+            path_debug_count++;
+        }
+    }
 
     // mmvq path is faster in the CUDA backend.
     if (!g_ggml_sycl_prioritize_dmmv && (ctx.stream()->get_backend() == sycl::backend::ext_oneapi_cuda
@@ -8850,7 +8868,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         // XMX-accelerated quantized GEMM
         ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q_xmx);
     } else if (use_mul_mat_q) {
-        // Standard MMQ path
+        // Standard MMQ path (with optional ESIMD acceleration for Q4_0)
         ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q);
     } else {
         ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl);
@@ -10696,6 +10714,7 @@ static void execute_ffn_fusion(
 
 static void ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
     GGML_SYCL_PROFILE_SCOPE_GRAPH("graph_compute");
+
     // Debug: trace graph compute entry
     if (g_sycl_tp_config.is_multiprocess && g_ggml_sycl_tp_debug) {
         fprintf(stderr, "[RANK %d] GRAPH_COMPUTE_IMPL: n_nodes=%d, device=%d\n",
