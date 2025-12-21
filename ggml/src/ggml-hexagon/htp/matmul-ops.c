@@ -1133,7 +1133,7 @@ static void matmul(struct htp_matmul_type * mt,
 
     // Process src0 rows
     for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
-        const uint8_t * ss0 = dma_queue_pop(dma_queue);
+        const uint8_t * ss0 = dma_queue_pop_dst(dma_queue);
 
         #pragma unroll(2)
         for (uint32_t ir1 = 0; ir1 < src1_nrows; ++ir1) {
@@ -1157,7 +1157,7 @@ static void matmul(struct htp_matmul_type * mt,
         const int is0 = (ir0 - src0_start_row);
         dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
                        src0_row_size_padded, src0_row_size, 1);
-        const uint8_t * ss0 = dma_queue_pop(dma_queue);
+        const uint8_t * ss0 = dma_queue_pop_dst(dma_queue);
 
         #pragma unroll(2)
         for (uint32_t ir1 = 0; ir1 < src1_nrows; ++ir1) {
@@ -1235,7 +1235,7 @@ static void matvec(struct htp_matmul_type * mt,
 
     // Process src0 rows
     for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
-        const uint8_t * ss0 = dma_queue_pop(dma_queue);
+        const uint8_t * ss0 = dma_queue_pop_dst(dma_queue);
         mt->vec_dot_rx2(ne00, &tmp[ir0 - src0_start_row], ss0, src0_row_size_padded, src1_col);
 
         // Prefetch next (n + spad_nrows) row
@@ -1253,7 +1253,7 @@ static void matvec(struct htp_matmul_type * mt,
         const uint32_t is0 = (ir0 - src0_start_row);
         dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
                        src0_row_size_padded, src0_row_size, 1);
-        const uint8_t * ss0 = dma_queue_pop(dma_queue);
+        const uint8_t * ss0 = dma_queue_pop_dst(dma_queue);
         mt->vec_dot(ne00, &tmp[ir0 - src0_start_row], ss0, src1_col);
     }
 
@@ -1349,7 +1349,7 @@ static void matmul_id(struct htp_matmul_type * mt,
 
         // Process src0 rows
         for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
-            const uint8_t * ss0 = dma_queue_pop(dma_queue);
+            const uint8_t * ss0 = dma_queue_pop_dst(dma_queue);
 
             for (uint32_t cid = 0; cid < cne1; ++cid) {
                 struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, cid);
@@ -1379,7 +1379,7 @@ static void matmul_id(struct htp_matmul_type * mt,
             const uint32_t is0 = (ir0 - src0_start_row);
             dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
                            src0_row_size_padded, src0_row_size, 1);
-            const uint8_t * ss0 = dma_queue_pop(dma_queue);
+            const uint8_t * ss0 = dma_queue_pop_dst(dma_queue);
 
             for (uint32_t cid = 0; cid < cne1; ++cid) {
                 struct mmid_row_mapping row_mapping = MMID_MATRIX_ROW(cur_a, cid);
@@ -1473,7 +1473,7 @@ static void matvec_id(struct htp_matmul_type * mt,
 
         // Process src0 rows
         for (uint32_t ir0 = src0_start_row; ir0 < src0_end_row_x2; ir0 += 2) {
-            const uint8_t * ss0 = dma_queue_pop(dma_queue);
+            const uint8_t * ss0 = dma_queue_pop_dst(dma_queue);
             mt->vec_dot_rx2(ne00, &dst_row[ir0], ss0, src0_row_size_padded, src1_col);
 
             // Prefetch next (n + spad_nrows) row
@@ -1491,7 +1491,7 @@ static void matvec_id(struct htp_matmul_type * mt,
             const uint32_t is0 = (ir0 - src0_start_row);
             dma_queue_push_ddr_to_vtcm(dma_queue, spad_src0 + is0 * src0_row_size_padded, src0_row + ir0 * src0_row_size,
                            src0_row_size_padded, src0_row_size, 1);
-            const uint8_t * ss0 = dma_queue_pop(dma_queue);
+            const uint8_t * ss0 = dma_queue_pop_dst(dma_queue);
             mt->vec_dot(ne00, &dst_row[ir0], ss0, src1_col);
         }
     }

@@ -37,6 +37,10 @@ dma_queue * dma_queue_create(size_t capacity) {
     q->dst = (void **) memalign(4, capacity * sizeof(void *));
     memset(q->dst, 0, capacity * sizeof(void *));
 
+    q->src = (void **) memalign(4, capacity * sizeof(void *));
+    memset(q->src, 0, capacity * sizeof(void *));
+
+
     q->tail = &q->desc[capacity - 1];
 
     if (!q->desc && !q->dst) {

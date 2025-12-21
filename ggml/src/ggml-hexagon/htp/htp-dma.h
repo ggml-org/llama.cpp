@@ -15,6 +15,7 @@ typedef struct {
     hexagon_udma_descriptor_type1_t * desc;  // descriptor pointers
     hexagon_udma_descriptor_type1_t * tail;  // tail pointer
     void **                           dst;   // dst pointers
+    void **                           src;   // src pointers
     uint32_t                          push_idx;
     uint32_t                          pop_idx;
     uint32_t                          capacity;
@@ -89,6 +90,7 @@ static inline bool dma_queue_push(dma_queue *  q,
     desc->dstwidthoffset = 0;
 
     q->dst[q->push_idx] = dst;
+    q->src[q->push_idx] = (void *)src;
 
     dmlink(q->tail, desc);
     q->tail = desc;
@@ -117,7 +119,11 @@ static inline bool dma_queue_push_vtcm_to_ddr(dma_queue *  q,
     return dma_queue_push(q, dst, src, dst_row_size, src_row_size, dst_row_size, nrows);
 }
 
-static inline uint8_t * dma_queue_pop(dma_queue * q) {
+static inline uint32_t get_dma_next_pop_idx(dma_queue * q){
+    return (q->pop_idx + 1) & q->idx_mask;
+}
+
+static inline uint8_t * dma_queue_pop_dst(dma_queue * q) {
     if (q->push_idx == q->pop_idx) {
         return NULL;
     }
@@ -136,9 +142,35 @@ static inline uint8_t * dma_queue_pop(dma_queue * q) {
     uint8_t * dst = (uint8_t *) q->dst[q->pop_idx];
 
     // FARF(ERROR, "dma-pop: i %u dst %p\n", q->pop_idx, dst);
-    q->pop_idx = (q->pop_idx + 1) & q->idx_mask;
+    q->pop_idx = get_dma_next_pop_idx(q);
     return dst;
 }
+
+
+
+static inline uint8_t * dma_queue_pop_src(dma_queue * q) {
+    if (q->push_idx == q->pop_idx) {
+        return NULL;
+    }
+
+    hexagon_udma_descriptor_type1_t * desc = &q->desc[q->pop_idx];
+
+    // Wait for desc to complete
+    while (1) {
+        dmpoll();
+        if (desc->dstate == HEXAGON_UDMA_DESC_DSTATE_COMPLETE) {
+            break;
+        }
+        // FARF(ERROR, "dma-pop: waiting for DMA : %u\n", q->pop_idx);
+    }
+
+    uint8_t * src = (uint8_t *) q->src[q->pop_idx];
+
+    // FARF(ERROR, "dma-pop: i %u dst %p\n", q->pop_idx, dst);
+    q->pop_idx = get_dma_next_pop_idx(q);
+    return src;
+}
+
 
 #ifdef __cplusplus
 }  // extern "C"
