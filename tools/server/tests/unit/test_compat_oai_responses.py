@@ -42,8 +42,8 @@ def test_responses_stream_with_openai_library():
 
     gathered_text = ''
     for r in stream:
-        if type(r) == openai.types.responses.response_text_delta_event.ResponseTextDeltaEvent:
+        if r.type == "response.output_text.delta":
             gathered_text += r.delta
-        if type(r) == openai.types.responses.response_completed_event.ResponseCompletedEvent:
+        if r.type == "response.completed":
             assert gathered_text == r.response.output_text
             assert match_regex("(Suddenly)+", r.response.output_text)
