@@ -407,6 +407,12 @@ struct ggml_sycl_tp_quant_comm_buffers {
 // Check if quantized AllReduce is enabled via GGML_SYCL_QUANT_ALLREDUCE env var
 bool ggml_sycl_quant_allreduce_enabled();
 
+// Check if quantized AllReduce should be used for a given tensor size
+// Returns true if enabled AND tensor is large enough to benefit from bandwidth reduction
+// Uses GGML_SYCL_QUANT_THRESHOLD env var (default 65536 elements = 256KB FP32)
+// Below threshold, FP32 allreduce is faster due to lower kernel overhead
+bool ggml_sycl_should_use_quant_allreduce(size_t n_elements);
+
 // Pre-allocate quantized comm buffers (called from ggml_sycl_tp_init)
 void ggml_sycl_tp_init_quant_comm_buffers(size_t initial_size);
 
@@ -1076,12 +1082,19 @@ static __dpct_inline__ int warp_reduce_sum(int x) {
 
 template <int width = WARP_SIZE>
 static __dpct_inline__ float warp_reduce_sum(float x) {
+  // Use optimized subgroup reduce for full WARP_SIZE (common case)
+  if constexpr (width == WARP_SIZE) {
+    return sycl::reduce_over_group(
+        sycl::ext::oneapi::this_work_item::get_sub_group(), x, sycl::plus<float>());
+  } else {
+    // Fallback for partial subgroup reductions
 #pragma unroll
-  for (int offset = width / 2; offset > 0; offset >>= 1) {
-    x += dpct::permute_sub_group_by_xor(
-        sycl::ext::oneapi::this_work_item::get_sub_group(), x, offset, width);
+    for (int offset = width / 2; offset > 0; offset >>= 1) {
+      x += dpct::permute_sub_group_by_xor(
+          sycl::ext::oneapi::this_work_item::get_sub_group(), x, offset, width);
+    }
+    return x;
   }
-  return x;
 }
 
 template <int width = WARP_SIZE>
@@ -1116,23 +1129,26 @@ static constexpr int ggml_sycl_get_physical_warp_size() {
 
 template <int width = WARP_SIZE>
 static __dpct_inline__ float warp_reduce_max(float x) {
+  // Use optimized subgroup reduce for full WARP_SIZE (common case)
+  if constexpr (width == WARP_SIZE) {
+    return sycl::reduce_over_group(
+        sycl::ext::oneapi::this_work_item::get_sub_group(), x, sycl::maximum<float>());
+  } else {
+    // Fallback for partial subgroup reductions
 #pragma unroll
-  for (int offset = width / 2; offset > 0; offset >>= 1) {
-    x = sycl::fmax(x, dpct::permute_sub_group_by_xor(
-                          sycl::ext::oneapi::this_work_item::get_sub_group(), x,
-                          offset, width));
+    for (int offset = width / 2; offset > 0; offset >>= 1) {
+      x = sycl::fmax(x, dpct::permute_sub_group_by_xor(
+                            sycl::ext::oneapi::this_work_item::get_sub_group(), x,
+                            offset, width));
+    }
+    return x;
   }
-  return x;
 }
 
 static __dpct_inline__ float warp_reduce_max(float x,
     const sycl::nd_item<3>& item_ct1) {
-#pragma unroll
-    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
-        x = sycl::fmax(x, dpct::permute_sub_group_by_xor(
-            item_ct1.get_sub_group(), x, mask));
-    }
-    return x;
+    // Use optimized subgroup reduce
+    return sycl::reduce_over_group(item_ct1.get_sub_group(), x, sycl::maximum<float>());
 }
 
 /* Helper for Computing the linear offset of a ggml_tensor given

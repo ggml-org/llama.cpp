@@ -56,7 +56,6 @@ static void soft_max_f32(const float *         x,
                                : block_size_template;
     const int nthreads = block_size;
     const int nwarps = nthreads / WARP_SIZE;
-    size_t nreduce = nwarps / WARP_SIZE;
 
     const int tid = item_ct1.get_local_id(2);
 
@@ -77,9 +76,6 @@ static void soft_max_f32(const float *         x,
     x    += int64_t(rowx)*ncols;
     mask += (i11*p.nb11 + i12*p.nb12 + i13*p.nb13) / sizeof(T) * (mask != nullptr);
     dst  += int64_t(rowx)*ncols;
-
-    const int warp_id = item_ct1.get_local_id(2) / WARP_SIZE;
-    const int lane_id = item_ct1.get_local_id(2) % WARP_SIZE;
 
     const float slope = get_alibi_slope(p.max_bias, i02, p.n_head_log2, p.m0, p.m1);
 
@@ -103,23 +99,9 @@ static void soft_max_f32(const float *         x,
         max_val   = sycl::max(max_val, val);
     }
 
-    // find the max value in the block
-    max_val = warp_reduce_max(max_val);
-
-    if (block_size > WARP_SIZE) {
-        if (warp_id == 0) {
-            buf_iw[lane_id] = -INFINITY;
-        }
-        item_ct1.barrier();
-
-        if (lane_id == 0) {
-            buf_iw[warp_id] = max_val;
-        }
-        item_ct1.barrier();
-
-        max_val = buf_iw[lane_id];
-        max_val = warp_reduce_max(max_val);
-    }
+    // find the max value in the block using work-group reduce
+    // This replaces the barrier-based SLM pattern with a single efficient operation
+    max_val = sycl::reduce_over_group(item_ct1.get_group(), max_val, sycl::maximum<float>());
     float tmp = 0.0f; // partial sum
 
 #pragma unroll
@@ -135,29 +117,9 @@ static void soft_max_f32(const float *         x,
         tmp += val;
         vals[col] = val;
     }
-    // find the sum of exps in the block
-    tmp = warp_reduce_sum(tmp);
-    if (block_size > WARP_SIZE) {
-        item_ct1.barrier();
-        if (warp_id == 0) {
-            buf_iw[lane_id] = 0.0f;
-            for (size_t i = 1; i < nreduce; i += 1) {
-                buf_iw[lane_id + i * WARP_SIZE] = 0.f;
-            }
-        }
-        item_ct1.barrier();
-
-        if (lane_id == 0) {
-            buf_iw[warp_id] = tmp;
-        }
-        item_ct1.barrier();
-
-        tmp = buf_iw[lane_id];
-        for (size_t i = 1; i < nreduce; i += 1) {
-            tmp += buf_iw[lane_id + i * WARP_SIZE];
-        }
-        tmp = warp_reduce_sum(tmp);
-    }
+    // find the sum of exps in the block using work-group reduce
+    // This replaces the barrier-based SLM pattern with a single efficient operation
+    tmp = sycl::reduce_over_group(item_ct1.get_group(), tmp, sycl::plus<float>());
     if (sinks) {
         // Use IEEE-compliant exp instead of native::exp for determinism
         tmp += sycl::exp(sinks[i02] - max_val);
