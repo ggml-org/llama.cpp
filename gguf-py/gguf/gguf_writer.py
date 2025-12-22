@@ -774,7 +774,7 @@ class GGUFWriter:
     def add_shared_kv_layers(self, value: int) -> None:
         self.add_uint32(Keys.Attention.SHARED_KV_LAYERS.format(arch=self.arch), value)
 
-    def add_sliding_window_pattern(self, value: Union[int, Sequence[bool]]) -> None:
+    def add_sliding_window_pattern(self, value: int | Sequence[bool]) -> None:
         key = Keys.Attention.SLIDING_WINDOW_PATTERN.format(arch=self.arch)
         if isinstance(value, int):
             self.add_uint32(key, value)
