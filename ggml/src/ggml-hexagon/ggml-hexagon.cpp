@@ -2497,10 +2497,6 @@ static inline size_t init_unary_req_and_bufs(htp_general_req * req,
                 req->op   = HTP_OP_UNARY_GELU;
                 supported = true;
             }
-            else if (ggml_get_unary_op(dst) == GGML_UNARY_OP_GELU) {
-                req.op    = HTP_OP_UNARY_GELU;
-                supported = true;
-            }
             break;
 
         case GGML_OP_GLU:
@@ -2692,14 +2688,14 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(node, flags);
                 break;
             case GGML_OP_UNARY:
-                if ((ggml_get_unary_op(node) == GGML_UNARY_OP_SILU)) ||
-                    (ggml_get_unary_op(node) == GGML_UNARY_OP_GELU)) {
+                if ((ggml_get_unary_op(node) == GGML_UNARY_OP_SILU) ||
+                        (ggml_get_unary_op(node) == GGML_UNARY_OP_GELU)) {
                     ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(node, flags);
                 }
                 break;
             case GGML_OP_GLU:
                 if ((ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU) ||
-                    (ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU_OAI)) {
+                        (ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU_OAI)) {
                     ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(node, flags);
                 }
                 break;
