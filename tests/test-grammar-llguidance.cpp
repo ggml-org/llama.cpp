@@ -1196,6 +1196,9 @@ int main(int argc, const char ** argv) {
 
     test_sampler_chain();
 
+    llama_free(ctx);
+    llama_model_free(model);
+
     fprintf(stdout, "All tests passed.\n");
     return 0;
 }
