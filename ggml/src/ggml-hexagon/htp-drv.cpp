@@ -15,9 +15,9 @@
 #    include <dlfcn.h>
 #    include <unistd.h>
 #endif
+#include "ggml-backend-dl.h"
 #include "ggml-impl.h"
 #include "htp-drv.h"
-#include "htp-dl.h"
 
 //
 // Driver API types

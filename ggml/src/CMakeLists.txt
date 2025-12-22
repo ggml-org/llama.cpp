@@ -222,6 +222,7 @@ if (GGML_SCHED_NO_REALLOC)
 endif()
 
 add_library(ggml
+            ggml-backend-dl.cpp
             ggml-backend-reg.cpp)
 add_library(ggml::ggml ALIAS ggml)
 

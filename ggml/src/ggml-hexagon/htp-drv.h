@@ -1,6 +1,10 @@
 
 #pragma once
 
+#ifdef _WIN32
+#    pragma clang diagnostic ignored "-Wignored-attributes"
+#endif
+
 #include <AEEStdErr.h>
 #include <rpcmem.h>
 #include <remote.h>
@@ -14,10 +18,6 @@
 #    endif
 #else
 #    define HTPDRV_API __attribute__ ((visibility ("default"))) extern
-#endif
-
-#ifdef _WIN32
-#   pragma clang diagnostic ignored "-Wdeprecated-declaration"
 #endif
 
 #ifdef __cplusplus

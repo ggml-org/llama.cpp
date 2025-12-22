@@ -5,6 +5,10 @@
 extern "C" {
 #endif
 
+#ifdef _WIN32
+#  pragma clang diagnostic ignored "-Wignored-attributes"
+#endif
+
 #include <AEEStdErr.h>
 #include <inttypes.h>
 #include <remote.h>

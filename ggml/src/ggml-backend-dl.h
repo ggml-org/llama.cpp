@@ -1,7 +1,3 @@
-// DRY - This is a temp workaround to reuse of GGML's DL functionality which is
-//  static. Temporarely adding here until GGML core is refactored to allow
-// reuse of dl_load_library and friends in backeds as well.
-
 #pragma once
 
 #ifdef _WIN32
@@ -29,12 +25,6 @@ struct dl_handle_deleter {
     }
 };
 
-dl_handle * dl_load_library(const fs::path & path);
-
-void * dl_get_sym(dl_handle * handle, const char * name);
-
-const char * dl_error() ;
-
 #else
 
 using dl_handle = void;
@@ -45,10 +35,11 @@ struct dl_handle_deleter {
     }
 };
 
-void * dl_load_library(const fs::path & path);
+#endif
 
+using dl_handle_ptr = std::unique_ptr<dl_handle, dl_handle_deleter>;
+
+dl_handle * dl_load_library(const fs::path & path);
 void * dl_get_sym(dl_handle * handle, const char * name);
-
 const char * dl_error();
 
-#endif

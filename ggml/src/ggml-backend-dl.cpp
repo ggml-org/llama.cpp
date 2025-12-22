@@ -1,10 +1,6 @@
-#include "htp-dl.h"
-
-namespace fs = std::filesystem;
+#include "ggml-backend-dl.h"
 
 #ifdef _WIN32
-
-using dl_handle = std::remove_pointer_t<HMODULE>;
 
 dl_handle * dl_load_library(const fs::path & path) {
     // suppress error dialogs for missing DLLs
@@ -35,11 +31,8 @@ const char * dl_error() {
 
 #else
 
-using dl_handle = void;
-
-void * dl_load_library(const fs::path & path) {
+dl_handle * dl_load_library(const fs::path & path) {
     dl_handle * handle = dlopen(path.string().c_str(), RTLD_NOW | RTLD_LOCAL);
-
     return handle;
 }
 
