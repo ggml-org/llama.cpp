@@ -103,27 +103,29 @@ public:
 
     void load_models();
 
-    // check if a model instance exists
+    // check if a model instance exists (thread-safe)
     bool has_model(const std::string & name);
 
-    // return a copy of model metadata
+    // return a copy of model metadata (thread-safe)
     std::optional<server_model_meta> get_meta(const std::string & name);
 
-    // return a copy of all model metadata
+    // return a copy of all model metadata (thread-safe)
     std::vector<server_model_meta> get_all_meta();
 
+    // load and unload model instances
+    // these functions are thread-safe
     void load(const std::string & name);
     void unload(const std::string & name);
     void unload_all();
 
-    // update the status of a model instance
+    // update the status of a model instance (thread-safe)
     void update_status(const std::string & name, server_model_status status);
 
-    // wait until the model instance is fully loaded
+    // wait until the model instance is fully loaded (thread-safe)
     // return when the model is loaded or failed to load
     void wait_until_loaded(const std::string & name);
 
-    // load the model if not loaded, otherwise do nothing
+    // load the model if not loaded, otherwise do nothing (thread-safe)
     // return false if model is already loaded; return true otherwise (meta may need to be refreshed)
     bool ensure_model_loaded(const std::string & name);
 
