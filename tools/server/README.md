@@ -1567,7 +1567,6 @@ Load a model
 
 Payload:
 - `model`: name of the model to be loaded.
-- `extra_args`: (optional) an array of additional arguments to be passed to the model instance. Note: you must start the server with `--models-allow-extra-args` to enable this feature.
 
 ```json
 {
