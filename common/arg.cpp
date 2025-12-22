@@ -2733,6 +2733,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CACHE_REUSE"));
     add_opt(common_arg(
+        {"--stream-prompt-progress"},
+        string_format("stream prompt progress updates while evaluating (default: %s)",
+            params.stream_prompt_progress ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.stream_prompt_progress = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_STREAM_PROMPT_PROGRESS"));
+    add_opt(common_arg(
         {"--metrics"},
         string_format("enable prometheus compatible metrics endpoint (default: %s)", params.endpoint_metrics ? "enabled" : "disabled"),
         [](common_params & params) {

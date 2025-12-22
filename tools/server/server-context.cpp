@@ -545,7 +545,7 @@ private:
     // use server_context methods instead
 
     void emit_prompt_progress_for_current_batch() {
-        if (prompt_slots_current_batch.empty()) {
+        if (!params_base.stream_prompt_progress || prompt_slots_current_batch.empty()) {
             return;
         }
 
