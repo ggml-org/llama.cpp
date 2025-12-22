@@ -31,12 +31,14 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_17M:           return "17M";
         case LLM_TYPE_22M:           return "22M";
         case LLM_TYPE_33M:           return "33M";
+        case LLM_TYPE_47M:           return "47M";
         case LLM_TYPE_60M:           return "60M";
         case LLM_TYPE_70M:           return "70M";
         case LLM_TYPE_80M:           return "80M";
         case LLM_TYPE_109M:          return "109M";
         case LLM_TYPE_137M:          return "137M";
         case LLM_TYPE_140M:          return "140M";
+        case LLM_TYPE_149M:          return "149M";
         case LLM_TYPE_160M:          return "160M";
         case LLM_TYPE_190M:          return "190M";
         case LLM_TYPE_220M:          return "220M";
