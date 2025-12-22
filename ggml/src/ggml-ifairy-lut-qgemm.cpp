@@ -63,7 +63,12 @@ static inline int ggml_ifairy_lut_compact_n1_unroll(void) {
     return v;
 }
 
-#if !defined(__ARM_FEATURE_DOTPROD)
+static inline int ggml_ifairy_lut_u8_to_s8(uint8_t v) {
+    // Sign-extend stored 8-bit value without relying on signed-char promotion.
+    return (int) (v ^ 0x80u) - 0x80;
+}
+
+#ifndef __ARM_FEATURE_DOTPROD
 static std::atomic<bool> g_ifairy_lut_warned_kernel_unavailable(false);
 #endif
 static std::atomic<bool> g_ifairy_lut_warned_kernel_unsupported(false);
@@ -374,8 +379,8 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int             m,
 
                 for (int blk = 0; blk < (int) blocks; ++blk) {
                     const uint8_t * GGML_RESTRICT w_ptr   = w_row[blk].qs;
-                    const int8_t  * GGML_RESTRICT x_r_ptr = (const int8_t *) act_blocks[blk].x_real;
-                    const int8_t  * GGML_RESTRICT x_i_ptr = (const int8_t *) act_blocks[blk].x_imag;
+                    const uint8_t * GGML_RESTRICT x_r_ptr = act_blocks[blk].x_real;
+                    const uint8_t * GGML_RESTRICT x_i_ptr = act_blocks[blk].x_imag;
 
                     int32_t sum_ac = 0;
                     int32_t sum_ad = 0;
@@ -399,10 +404,13 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int             m,
                             case 1: wr =  1; wi =  0; break;
                             case 2: wr =  0; wi = -1; break;
                             case 3: wr =  0; wi =  1; break;
+                            default:
+                                GGML_ASSERT(false);
+                                break;
                         }
 
-                        const int xr = (int) x_r_ptr[j];
-                        const int xi = (int) x_i_ptr[j];
+                        const int xr = ggml_ifairy_lut_u8_to_s8(x_r_ptr[j]);
+                        const int xi = ggml_ifairy_lut_u8_to_s8(x_i_ptr[j]);
 
                         sum_ac += xr * wr;
                         sum_ad += xi * wr;
@@ -718,8 +726,8 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int             m,
                     int32_t sum_bd = 0;
 
                     const uint8_t * w_ptr   = w_row[blk].qs;
-                    const int8_t *  x_r_ptr = (const int8_t *) act_blocks[blk].x_real;
-                    const int8_t *  x_i_ptr = (const int8_t *) act_blocks[blk].x_imag;
+                    const uint8_t * x_r_ptr = act_blocks[blk].x_real;
+                    const uint8_t * x_i_ptr = act_blocks[blk].x_imag;
 
                     for (int j = 0; j < QK_K; ++j) {
                         const int chunk    = j >> 6;
@@ -731,7 +739,8 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int             m,
                         const uint8_t packed = w_ptr[byte_idx];
                         const uint8_t code   = (packed >> bit_off) & 0x3;
 
-                        int wr = 0, wi = 0;
+                        int wr = 0;
+                        int wi = 0;
                         switch (code) {
                             case 0:
                                 wr = -1;
@@ -749,10 +758,12 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int             m,
                                 wr = 0;
                                 wi = 1;
                                 break;
+                            default:
+                                GGML_UNREACHABLE();
                         }
 
-                        const int xr = (int) x_r_ptr[j];
-                        const int xi = (int) x_i_ptr[j];
+                        const int xr = ggml_ifairy_lut_u8_to_s8(x_r_ptr[j]);
+                        const int xi = ggml_ifairy_lut_u8_to_s8(x_i_ptr[j]);
 
                         sum_ac += xr * wr;
                         sum_ad += xi * wr;
@@ -863,7 +874,7 @@ void ggml_ifairy_lut_qgemm_ex(int             m,
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
             const bool want_dotprod = kernel == GGML_IFAIRY_LUT_KERNEL_SDOT;
-#    if defined(__ARM_FEATURE_DOTPROD)
+#    ifdef __ARM_FEATURE_DOTPROD
             const bool      use_dotprod = want_dotprod;
             const int8x16_t dot_mask    = vld1q_s8(k_ifairy_lut_dot_mask_bytes);
 #    else
@@ -883,7 +894,7 @@ void ggml_ifairy_lut_qgemm_ex(int             m,
 
                 int64_t   gi     = 0;
                 const int unroll = ggml_ifairy_lut_compact_n1_unroll();
-#    if defined(__ARM_FEATURE_DOTPROD)
+#    ifdef __ARM_FEATURE_DOTPROD
                 if (use_dotprod) {
                     for (; unroll >= 4 && gi + 3 < groups_per_block; gi += 4) {
                         const uint8_t pat0 = (uint8_t) (idx_g[0] & 0x3f);
@@ -1486,8 +1497,8 @@ void ggml_ifairy_lut_qgemm_ex(int             m,
 
                 for (int blk = 0; blk < (int) blocks; ++blk) {
                     const uint8_t * GGML_RESTRICT w_ptr   = w_row[blk].qs;
-                    const int8_t * GGML_RESTRICT  x_r_ptr = (const int8_t *) act_blocks[blk].x_real;
-                    const int8_t * GGML_RESTRICT  x_i_ptr = (const int8_t *) act_blocks[blk].x_imag;
+                    const uint8_t * GGML_RESTRICT x_r_ptr = act_blocks[blk].x_real;
+                    const uint8_t * GGML_RESTRICT x_i_ptr = act_blocks[blk].x_imag;
 
                     int32_t sum_ac = 0;
                     int32_t sum_ad = 0;
@@ -1523,10 +1534,12 @@ void ggml_ifairy_lut_qgemm_ex(int             m,
                                 wr = 0;
                                 wi = 1;
                                 break;
+                            default:
+                                GGML_UNREACHABLE();
                         }
 
-                        const int xr = (int) x_r_ptr[j];
-                        const int xi = (int) x_i_ptr[j];
+                        const int xr = ggml_ifairy_lut_u8_to_s8(x_r_ptr[j]);
+                        const int xi = ggml_ifairy_lut_u8_to_s8(x_i_ptr[j]);
 
                         sum_ac += xr * wr;
                         sum_ad += xi * wr;

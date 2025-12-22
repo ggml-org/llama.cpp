@@ -239,10 +239,14 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
     // - non-tiled: N floats (bf16-pair packed into F32)
     // - tiled+BM:  BM*(4*N) floats accumulator (ac/ad/bc/bd), then combined and packed
     // - tiled+fullacc: minimal per-thread scratch
-    const size_t tmp_elems =
-        tile_blocks == 0 ?
-            (size_t) N :
-            (fullacc ? 16u : ggml_ifairy_checked_mul_size((size_t) bm, ggml_ifairy_checked_mul_size(4u, (size_t) N)));
+    size_t tmp_elems = 0;
+    if (tile_blocks == 0) {
+        tmp_elems = (size_t) N;
+    } else if (fullacc) {
+        tmp_elems = 16u;
+    } else {
+        tmp_elems = ggml_ifairy_checked_mul_size((size_t) bm, ggml_ifairy_checked_mul_size(4u, (size_t) N));
+    }
     const size_t tmp_bytes = GGML_PAD(ggml_ifairy_checked_mul_size(tmp_elems, sizeof(float)), 64);
 
     return ggml_ifairy_checked_add_size(ggml_ifairy_checked_add_size(quant_bytes, shared_bytes),

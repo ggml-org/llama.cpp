@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <algorithm>
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
 #    include <arm_neon.h>
@@ -95,9 +96,12 @@ static void ggml_ifairy_lut_preprocess_legacy(int          m,
             const int off1 = (int) (base_off + 1);
             const int off2 = (int) (base_off + 2);
 
-            int xr0 = 0, xi0 = 0;
-            int xr1 = 0, xi1 = 0;
-            int xr2 = 0, xi2 = 0;
+            int8_t xr0 = 0;
+            int8_t xi0 = 0;
+            int8_t xr1 = 0;
+            int8_t xi1 = 0;
+            int8_t xr2 = 0;
+            int8_t xi2 = 0;
 
             if (idx0 < K) {
                 xr0 = (int8_t) act_blocks[blk0].x_real[off0];
@@ -113,12 +117,12 @@ static void ggml_ifairy_lut_preprocess_legacy(int          m,
             int16_t * tbl = lut_out + (size_t) g * (size_t) (k_ifairy_lut_patterns * k_ifairy_lut_channels);
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
-            const int8_t xr0_s8 = (int8_t) xr0;
-            const int8_t xr1_s8 = (int8_t) xr1;
-            const int8_t xr2_s8 = (int8_t) xr2;
-            const int8_t xi0_s8 = (int8_t) xi0;
-            const int8_t xi1_s8 = (int8_t) xi1;
-            const int8_t xi2_s8 = (int8_t) xi2;
+            const int8_t xr0_s8 = xr0;
+            const int8_t xr1_s8 = xr1;
+            const int8_t xr2_s8 = xr2;
+            const int8_t xi0_s8 = xi0;
+            const int8_t xi1_s8 = xi1;
+            const int8_t xi2_s8 = xi2;
 
             for (int pat = 0; pat < 64; pat += 16) {
                 const int8x16_t wr0 = vld1q_s8(k_ifairy_wr0 + pat);
@@ -274,9 +278,7 @@ void ggml_ifairy_lut_preprocess_ex(int          m,
         return;
     }
 
-    if (nth < 1) {
-        nth = 1;
-    }
+    nth = std::max(nth, 1);
     if (ith < 0 || ith >= nth) {
         return;
     }
@@ -332,9 +334,12 @@ void ggml_ifairy_lut_preprocess_ex(int          m,
             const int off1 = (int) (base_off + 1);
             const int off2 = (int) (base_off + 2);
 
-            int8_t xr0 = 0, xi0 = 0;
-            int8_t xr1 = 0, xi1 = 0;
-            int8_t xr2 = 0, xi2 = 0;
+            int8_t xr0 = 0;
+            int8_t xi0 = 0;
+            int8_t xr1 = 0;
+            int8_t xi1 = 0;
+            int8_t xr2 = 0;
+            int8_t xi2 = 0;
 
             if (idx0 < K) {
                 xr0 = (int8_t) act_blocks[blk0].x_real[off0];
@@ -367,30 +372,30 @@ void ggml_ifairy_lut_preprocess_ex(int          m,
 
             tbl0[0]  = (int8_t) -xr0;
             tbl0[1]  = (int8_t) -xi0;
-            tbl0[4]  = (int8_t) xr0;
-            tbl0[5]  = (int8_t) xi0;
+            tbl0[4]  = xr0;
+            tbl0[5]  = xi0;
             tbl0[10] = (int8_t) -xr0;
             tbl0[11] = (int8_t) -xi0;
-            tbl0[14] = (int8_t) xr0;
-            tbl0[15] = (int8_t) xi0;
+            tbl0[14] = xr0;
+            tbl0[15] = xi0;
 
             tbl1[0]  = (int8_t) -xr1;
             tbl1[1]  = (int8_t) -xi1;
-            tbl1[4]  = (int8_t) xr1;
-            tbl1[5]  = (int8_t) xi1;
+            tbl1[4]  = xr1;
+            tbl1[5]  = xi1;
             tbl1[10] = (int8_t) -xr1;
             tbl1[11] = (int8_t) -xi1;
-            tbl1[14] = (int8_t) xr1;
-            tbl1[15] = (int8_t) xi1;
+            tbl1[14] = xr1;
+            tbl1[15] = xi1;
 
             tbl2[0]  = (int8_t) -xr2;
             tbl2[1]  = (int8_t) -xi2;
-            tbl2[4]  = (int8_t) xr2;
-            tbl2[5]  = (int8_t) xi2;
+            tbl2[4]  = xr2;
+            tbl2[5]  = xi2;
             tbl2[10] = (int8_t) -xr2;
             tbl2[11] = (int8_t) -xi2;
-            tbl2[14] = (int8_t) xr2;
-            tbl2[15] = (int8_t) xi2;
+            tbl2[14] = xr2;
+            tbl2[15] = xi2;
         }
     }
 }
