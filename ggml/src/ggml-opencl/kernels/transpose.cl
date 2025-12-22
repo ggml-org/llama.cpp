@@ -44,6 +44,19 @@ kernel void kernel_transpose_16_4x1(
     write_imageh(output, i * rows + j, (half4)(temp0, temp1, temp2, temp3));
 }
 
+// Transpose treating each element as 16-bit using buffer
+kernel void kernel_transpose_16_buf(
+    global const ushort * input,
+    global ushort * output,
+    const int ldi,
+    const int ldo
+) {
+    const int x = get_global_id(0);
+    const int y = get_global_id(1);
+
+    output[x*ldo + y] = input[y*ldi + x];
+}
+
 // 32-bit transpose, loading/storing a 4x4 tile of elements
 kernel void kernel_transpose_32(
     __read_only image1d_buffer_t input,
