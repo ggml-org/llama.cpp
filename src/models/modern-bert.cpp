@@ -30,8 +30,6 @@ llm_build_modern_bert<iswa>::llm_build_modern_bert(const llama_model & model, co
         ggml_tensor * Kcur = nullptr;
         ggml_tensor * Vcur = nullptr;
 
-        const float rope_theta = (il % swa_period == 0) ? rope_theta_global : rope_theta_local;
-
         // attention layer norm
         if (model.layers[il].attn_norm) {
             cur = build_norm(inpL,
