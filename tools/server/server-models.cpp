@@ -895,6 +895,7 @@ server_http_proxy::server_http_proxy(
 
     // setup Client
     cli->set_connection_timeout(0, 200000); // 200 milliseconds
+    cli->set_read_timeout(3600 * 24 * 90, 0); // Prevent crash if TTFT >300sec, boosted to 90 days
     this->status = 500; // to be overwritten upon response
     this->cleanup = [pipe]() {
         pipe->close_read();
