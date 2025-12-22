@@ -270,7 +270,7 @@ struct ifairy_lut_extra {
 - **SDOT 内核试验（`compact`）**：在 `ggml/src/ggml-ifairy-lut-qgemm.cpp` 增加 `__ARM_FEATURE_DOTPROD` 路径（仅 `N==1`），把 “widen+add” 改为 “dot accumulate”。  
   - 已引入实验开关：`GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`，默认 auto；strict 下仍走通用路径。  
   - 若需要新布局（例如 code-major 或更易对齐的 12B/pos 打包），在 `ggml/src/ggml-ifairy-lut-preprocess.cpp` 以 **新 layout** 实现，避免修改现有 `compact`。
-  - 现状：M4 上 `sdot` 相比 `auto` 仍偏慢（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 0.1 记录）；TODO 包括“拆分专用 loop 去分支”和“为 `vdotq_s32` 调整为 16B 对齐的 group 布局”。
+  - 现状：已把 `sdot` 分支外提到 group-loop 外以减少 per-group 分支，但 M4 上 `sdot` 仍偏慢（`tg32` 10.61 vs `auto` 12.77；见 `IFAIRY_ARM_3W_LUT_STATUS.md` 0.1 记录）；TODO 继续“为 `vdotq_s32` 调整为 16B 对齐的 group 布局”。
 - **预取优化**：在 `ggml/src/ggml-ifairy-lut-qgemm.cpp` 同时预取 LUT 与 indexes，预取距离改为可配置常量（计划新增 `GGML_IFAIRY_LUT_PREFETCH_DIST`，默认 2~3）。  
   - 移除热循环内的运行时分支（保留编译期/一次性开关），减少分支开销。
 - **减少 barrier（tiling）**：在 `ggml/src/ggml-cpu/ggml-cpu.c` 的 BK 路径引入 “双缓冲 + 单 barrier” 流程：thread0 预处理下一 tile，其它线程处理当前 tile，保证每 tile 只同步一次。

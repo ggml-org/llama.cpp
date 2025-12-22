@@ -68,6 +68,8 @@
 
 `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 8 --n-gen 8 -ngl 0 --device none --repetitions 1 --no-warmup -o jsonl`
 
+注：本阶段新增 `--n-gen 32` 记录，表中以 `tg32` 标注。
+
 | time (UTC) | git | machine | threads | test | env | avg tok/s | log |
 |---|---|---|---:|---|---|---:|---|
 | 2025-12-20T08:00:08Z | `b9f0a57f+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=legacy` | 3.00 | `/tmp/ifairy_bench_legacy_1766217492.jsonl` |
@@ -78,6 +80,10 @@
 | 2025-12-22T02:48:53Z | `fe740e0a` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_KERNEL=auto` | 20.85 | `/var/folders/mf/jqbwxvls37d2lhmhhvht2_pm0000gn/T//ifairy_bench.20251222T104846.jsonl` |
 | 2025-12-22T02:49:14Z | `fe740e0a` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_KERNEL=sdot` | 18.43 | `/var/folders/mf/jqbwxvls37d2lhmhhvht2_pm0000gn/T//ifairy_bench.20251222T104914.jsonl` |
 | 2025-12-22T02:49:21Z | `fe740e0a` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_KERNEL=sdot` | 15.08 | `/var/folders/mf/jqbwxvls37d2lhmhhvht2_pm0000gn/T//ifairy_bench.20251222T104914.jsonl` |
+| 2025-12-22T03:34:07Z | `9de72065` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_KERNEL=auto` | 17.11 | `/var/folders/mf/jqbwxvls37d2lhmhhvht2_pm0000gn/T//ifairy_bench.20251222T113407.jsonl` |
+| 2025-12-22T03:34:15Z | `9de72065` | Apple M4 | 4 | tg32 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_KERNEL=auto` | 12.77 | `/var/folders/mf/jqbwxvls37d2lhmhhvht2_pm0000gn/T//ifairy_bench.20251222T113407.jsonl` |
+| 2025-12-22T03:34:29Z | `9de72065` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_KERNEL=sdot` | 17.08 | `/var/folders/mf/jqbwxvls37d2lhmhhvht2_pm0000gn/T//ifairy_bench.20251222T113429.jsonl` |
+| 2025-12-22T03:34:36Z | `9de72065` | Apple M4 | 4 | tg32 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_KERNEL=sdot` | 10.61 | `/var/folders/mf/jqbwxvls37d2lhmhhvht2_pm0000gn/T//ifairy_bench.20251222T113429.jsonl` |
 
 ### 0.1.1 legacy（llama-cli，已停更）
 
@@ -325,7 +331,7 @@
 - P1 小步：将 LUT 相关 env 解析 helper 集中到 `ggml/src/ggml-ifairy-lut.h`，并在 `ggml-cpu.c`/`ggml-ifairy-lut.cpp` 复用，减少重复与语义漂移（`HEAD`）。
 - 错误可观测性：`transform_tensor` 在 debug 下对 shape/alloc/encode 失败给出明确日志，避免 silent fallback；并在路由时明确要求 `__aarch64__ + __ARM_NEON`（否则回退）（`HEAD`）。
 - 配置健壮性：`GGML_IFAIRY_LUT_LAYOUT` 无效值在 debug 下只 warn 一次并回退默认；`BK_BLOCKS/BM` 的非法值在 debug 下提示并 clamp（`HEAD`）。
-- SDOT 快路：新增 `GGML_IFAIRY_LUT_KERNEL=sdot`；当前在 M4 + `compact` 上 `llama-bench` 低于 `auto`（见 0.1 表），保持实验态。
+- SDOT 快路：新增 `GGML_IFAIRY_LUT_KERNEL=sdot`；已把 `N==1` 的 `sdot` 分支外提到 group-loop 外减少分支，但在 M4 + `compact` 上 `llama-bench` 仍低于 `auto`（见 0.1 表，`tg32` 10.61 vs 12.77），保持实验态。
 
 2) **降低 `ggml_graph_compute_thread` 的框架开销（24%）**  
    - 目标：减少同步与小 kernel 调度开销，让更多时间落在“有效算术”上

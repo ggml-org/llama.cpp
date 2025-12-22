@@ -833,47 +833,154 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
 
                 int64_t gi = 0;
                 const int unroll = ggml_ifairy_lut_compact_n1_unroll();
-                for (; unroll >= 4 && gi + 3 < groups_per_block; gi += 4) {
-                    const uint8_t pat0 = (uint8_t) (idx_g[0] & 0x3f);
-                    const uint8_t pat1 = (uint8_t) (idx_g[1] & 0x3f);
-                    const uint8_t pat2 = (uint8_t) (idx_g[2] & 0x3f);
-                    const uint8_t pat3 = (uint8_t) (idx_g[3] & 0x3f);
-
-                    const uint8_t c00 = (uint8_t) (pat0 & 3);
-                    const uint8_t c01 = (uint8_t) ((pat0 >> 2) & 3);
-                    const uint8_t c02 = (uint8_t) (pat0 >> 4);
-
-                    const uint8_t c10 = (uint8_t) (pat1 & 3);
-                    const uint8_t c11 = (uint8_t) ((pat1 >> 2) & 3);
-                    const uint8_t c12 = (uint8_t) (pat1 >> 4);
-
-                    const uint8_t c20 = (uint8_t) (pat2 & 3);
-                    const uint8_t c21 = (uint8_t) ((pat2 >> 2) & 3);
-                    const uint8_t c22 = (uint8_t) (pat2 >> 4);
-
-                    const uint8_t c30 = (uint8_t) (pat3 & 3);
-                    const uint8_t c31 = (uint8_t) ((pat3 >> 2) & 3);
-                    const uint8_t c32 = (uint8_t) (pat3 >> 4);
-
-                    const int8_t * grp0 = grp + 0 * k_ifairy_lut_group_bytes;
-                    const int8_t * grp1 = grp + 1 * k_ifairy_lut_group_bytes;
-                    const int8_t * grp2 = grp + 2 * k_ifairy_lut_group_bytes;
-                    const int8_t * grp3 = grp + 3 * k_ifairy_lut_group_bytes;
-
-                    if (prefetch) {
-                        __builtin_prefetch(grp0 + 4 * k_ifairy_lut_group_bytes, 0, 1);
-                    }
-
-                    const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
-                    const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
-                    const int32_t * t02 = (const int32_t *) (grp0 + 2 * k_ifairy_lut_pos_bytes);
-
 #if defined(__ARM_FEATURE_DOTPROD)
-                    if (use_dotprod) {
+                if (use_dotprod) {
+                    for (; unroll >= 4 && gi + 3 < groups_per_block; gi += 4) {
+                        const uint8_t pat0 = (uint8_t) (idx_g[0] & 0x3f);
+                        const uint8_t pat1 = (uint8_t) (idx_g[1] & 0x3f);
+                        const uint8_t pat2 = (uint8_t) (idx_g[2] & 0x3f);
+                        const uint8_t pat3 = (uint8_t) (idx_g[3] & 0x3f);
+
+                        const uint8_t c00 = (uint8_t) (pat0 & 3);
+                        const uint8_t c01 = (uint8_t) ((pat0 >> 2) & 3);
+                        const uint8_t c02 = (uint8_t) (pat0 >> 4);
+
+                        const uint8_t c10 = (uint8_t) (pat1 & 3);
+                        const uint8_t c11 = (uint8_t) ((pat1 >> 2) & 3);
+                        const uint8_t c12 = (uint8_t) (pat1 >> 4);
+
+                        const uint8_t c20 = (uint8_t) (pat2 & 3);
+                        const uint8_t c21 = (uint8_t) ((pat2 >> 2) & 3);
+                        const uint8_t c22 = (uint8_t) (pat2 >> 4);
+
+                        const uint8_t c30 = (uint8_t) (pat3 & 3);
+                        const uint8_t c31 = (uint8_t) ((pat3 >> 2) & 3);
+                        const uint8_t c32 = (uint8_t) (pat3 >> 4);
+
+                        const int8_t * grp0 = grp + 0 * k_ifairy_lut_group_bytes;
+                        const int8_t * grp1 = grp + 1 * k_ifairy_lut_group_bytes;
+                        const int8_t * grp2 = grp + 2 * k_ifairy_lut_group_bytes;
+                        const int8_t * grp3 = grp + 3 * k_ifairy_lut_group_bytes;
+
+                        if (prefetch) {
+                            __builtin_prefetch(grp0 + 4 * k_ifairy_lut_group_bytes, 0, 1);
+                        }
+
+                        const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t02 = (const int32_t *) (grp0 + 2 * k_ifairy_lut_pos_bytes);
+
                         isum0 = ggml_ifairy_lut_accum_dot(isum0, t00, c00, t01, c01, t02, c02, dot_mask);
-                    } else
+
+                        const int32_t * t10 = (const int32_t *) (grp1 + 0 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t11 = (const int32_t *) (grp1 + 1 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t12 = (const int32_t *) (grp1 + 2 * k_ifairy_lut_pos_bytes);
+
+                        isum1 = ggml_ifairy_lut_accum_dot(isum1, t10, c10, t11, c11, t12, c12, dot_mask);
+
+                        const int32_t * t20 = (const int32_t *) (grp2 + 0 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t21 = (const int32_t *) (grp2 + 1 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t22 = (const int32_t *) (grp2 + 2 * k_ifairy_lut_pos_bytes);
+
+                        isum0 = ggml_ifairy_lut_accum_dot(isum0, t20, c20, t21, c21, t22, c22, dot_mask);
+
+                        const int32_t * t30 = (const int32_t *) (grp3 + 0 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t31 = (const int32_t *) (grp3 + 1 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t32 = (const int32_t *) (grp3 + 2 * k_ifairy_lut_pos_bytes);
+
+                        isum1 = ggml_ifairy_lut_accum_dot(isum1, t30, c30, t31, c31, t32, c32, dot_mask);
+
+                        idx_g += 4;
+                        grp   += 4 * k_ifairy_lut_group_bytes;
+                    }
+                    for (; gi + 1 < groups_per_block; gi += 2) {
+                        const uint8_t pat0 = (uint8_t) (idx_g[0] & 0x3f);
+                        const uint8_t pat1 = (uint8_t) (idx_g[1] & 0x3f);
+
+                        const uint8_t c00 = (uint8_t) (pat0 & 3);
+                        const uint8_t c01 = (uint8_t) ((pat0 >> 2) & 3);
+                        const uint8_t c02 = (uint8_t) (pat0 >> 4);
+
+                        const uint8_t c10 = (uint8_t) (pat1 & 3);
+                        const uint8_t c11 = (uint8_t) ((pat1 >> 2) & 3);
+                        const uint8_t c12 = (uint8_t) (pat1 >> 4);
+
+                        const int8_t * grp0 = grp;
+                        const int8_t * grp1 = grp + k_ifairy_lut_group_bytes;
+
+                        if (prefetch) {
+                            __builtin_prefetch(grp0 + 2 * k_ifairy_lut_group_bytes, 0, 1);
+                        }
+
+                        const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t02 = (const int32_t *) (grp0 + 2 * k_ifairy_lut_pos_bytes);
+
+                        isum0 = ggml_ifairy_lut_accum_dot(isum0, t00, c00, t01, c01, t02, c02, dot_mask);
+
+                        const int32_t * t10 = (const int32_t *) (grp1 + 0 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t11 = (const int32_t *) (grp1 + 1 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t12 = (const int32_t *) (grp1 + 2 * k_ifairy_lut_pos_bytes);
+
+                        isum1 = ggml_ifairy_lut_accum_dot(isum1, t10, c10, t11, c11, t12, c12, dot_mask);
+
+                        idx_g += 2;
+                        grp   += 2 * k_ifairy_lut_group_bytes;
+                    }
+                    for (; gi < groups_per_block; ++gi, ++idx_g, grp += k_ifairy_lut_group_bytes) {
+                        const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
+                        const uint8_t c0 = (uint8_t) (pat & 3);
+                        const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
+                        const uint8_t c2 = (uint8_t) (pat >> 4);
+
+                        if (prefetch) {
+                            __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
+                        }
+
+                        const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t2 = (const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes);
+
+                        isum0 = ggml_ifairy_lut_accum_dot(isum0, t0, c0, t1, c1, t2, c2, dot_mask);
+                    }
+                } else
 #endif
-                    {
+                {
+                    for (; unroll >= 4 && gi + 3 < groups_per_block; gi += 4) {
+                        const uint8_t pat0 = (uint8_t) (idx_g[0] & 0x3f);
+                        const uint8_t pat1 = (uint8_t) (idx_g[1] & 0x3f);
+                        const uint8_t pat2 = (uint8_t) (idx_g[2] & 0x3f);
+                        const uint8_t pat3 = (uint8_t) (idx_g[3] & 0x3f);
+
+                        const uint8_t c00 = (uint8_t) (pat0 & 3);
+                        const uint8_t c01 = (uint8_t) ((pat0 >> 2) & 3);
+                        const uint8_t c02 = (uint8_t) (pat0 >> 4);
+
+                        const uint8_t c10 = (uint8_t) (pat1 & 3);
+                        const uint8_t c11 = (uint8_t) ((pat1 >> 2) & 3);
+                        const uint8_t c12 = (uint8_t) (pat1 >> 4);
+
+                        const uint8_t c20 = (uint8_t) (pat2 & 3);
+                        const uint8_t c21 = (uint8_t) ((pat2 >> 2) & 3);
+                        const uint8_t c22 = (uint8_t) (pat2 >> 4);
+
+                        const uint8_t c30 = (uint8_t) (pat3 & 3);
+                        const uint8_t c31 = (uint8_t) ((pat3 >> 2) & 3);
+                        const uint8_t c32 = (uint8_t) (pat3 >> 4);
+
+                        const int8_t * grp0 = grp + 0 * k_ifairy_lut_group_bytes;
+                        const int8_t * grp1 = grp + 1 * k_ifairy_lut_group_bytes;
+                        const int8_t * grp2 = grp + 2 * k_ifairy_lut_group_bytes;
+                        const int8_t * grp3 = grp + 3 * k_ifairy_lut_group_bytes;
+
+                        if (prefetch) {
+                            __builtin_prefetch(grp0 + 4 * k_ifairy_lut_group_bytes, 0, 1);
+                        }
+
+                        const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t02 = (const int32_t *) (grp0 + 2 * k_ifairy_lut_pos_bytes);
+
                         const int32x2_t p00 = vld1_dup_s32(t00 + c00);
                         const int32x2_t p01 = vld1_dup_s32(t01 + c01);
                         const int32x2_t p02 = vld1_dup_s32(t02 + c02);
@@ -882,18 +989,11 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                         s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p01)));
                         s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p02)));
                         isum0 = vaddw_s16(isum0, vget_low_s16(s160));
-                    }
 
-                    const int32_t * t10 = (const int32_t *) (grp1 + 0 * k_ifairy_lut_pos_bytes);
-                    const int32_t * t11 = (const int32_t *) (grp1 + 1 * k_ifairy_lut_pos_bytes);
-                    const int32_t * t12 = (const int32_t *) (grp1 + 2 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t10 = (const int32_t *) (grp1 + 0 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t11 = (const int32_t *) (grp1 + 1 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t12 = (const int32_t *) (grp1 + 2 * k_ifairy_lut_pos_bytes);
 
-#if defined(__ARM_FEATURE_DOTPROD)
-                    if (use_dotprod) {
-                        isum1 = ggml_ifairy_lut_accum_dot(isum1, t10, c10, t11, c11, t12, c12, dot_mask);
-                    } else
-#endif
-                    {
                         const int32x2_t p10 = vld1_dup_s32(t10 + c10);
                         const int32x2_t p11 = vld1_dup_s32(t11 + c11);
                         const int32x2_t p12 = vld1_dup_s32(t12 + c12);
@@ -902,18 +1002,11 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                         s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p11)));
                         s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p12)));
                         isum1 = vaddw_s16(isum1, vget_low_s16(s161));
-                    }
 
-                    const int32_t * t20 = (const int32_t *) (grp2 + 0 * k_ifairy_lut_pos_bytes);
-                    const int32_t * t21 = (const int32_t *) (grp2 + 1 * k_ifairy_lut_pos_bytes);
-                    const int32_t * t22 = (const int32_t *) (grp2 + 2 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t20 = (const int32_t *) (grp2 + 0 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t21 = (const int32_t *) (grp2 + 1 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t22 = (const int32_t *) (grp2 + 2 * k_ifairy_lut_pos_bytes);
 
-#if defined(__ARM_FEATURE_DOTPROD)
-                    if (use_dotprod) {
-                        isum0 = ggml_ifairy_lut_accum_dot(isum0, t20, c20, t21, c21, t22, c22, dot_mask);
-                    } else
-#endif
-                    {
                         const int32x2_t p20 = vld1_dup_s32(t20 + c20);
                         const int32x2_t p21 = vld1_dup_s32(t21 + c21);
                         const int32x2_t p22 = vld1_dup_s32(t22 + c22);
@@ -922,18 +1015,11 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                         s162 = vaddq_s16(s162, vmovl_s8(vreinterpret_s8_s32(p21)));
                         s162 = vaddq_s16(s162, vmovl_s8(vreinterpret_s8_s32(p22)));
                         isum0 = vaddw_s16(isum0, vget_low_s16(s162));
-                    }
 
-                    const int32_t * t30 = (const int32_t *) (grp3 + 0 * k_ifairy_lut_pos_bytes);
-                    const int32_t * t31 = (const int32_t *) (grp3 + 1 * k_ifairy_lut_pos_bytes);
-                    const int32_t * t32 = (const int32_t *) (grp3 + 2 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t30 = (const int32_t *) (grp3 + 0 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t31 = (const int32_t *) (grp3 + 1 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t32 = (const int32_t *) (grp3 + 2 * k_ifairy_lut_pos_bytes);
 
-#if defined(__ARM_FEATURE_DOTPROD)
-                    if (use_dotprod) {
-                        isum1 = ggml_ifairy_lut_accum_dot(isum1, t30, c30, t31, c31, t32, c32, dot_mask);
-                    } else
-#endif
-                    {
                         const int32x2_t p30 = vld1_dup_s32(t30 + c30);
                         const int32x2_t p31 = vld1_dup_s32(t31 + c31);
                         const int32x2_t p32 = vld1_dup_s32(t32 + c32);
@@ -942,40 +1028,33 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                         s163 = vaddq_s16(s163, vmovl_s8(vreinterpret_s8_s32(p31)));
                         s163 = vaddq_s16(s163, vmovl_s8(vreinterpret_s8_s32(p32)));
                         isum1 = vaddw_s16(isum1, vget_low_s16(s163));
+
+                        idx_g += 4;
+                        grp   += 4 * k_ifairy_lut_group_bytes;
                     }
+                    for (; gi + 1 < groups_per_block; gi += 2) {
+                        const uint8_t pat0 = (uint8_t) (idx_g[0] & 0x3f);
+                        const uint8_t pat1 = (uint8_t) (idx_g[1] & 0x3f);
 
-                    idx_g += 4;
-                    grp   += 4 * k_ifairy_lut_group_bytes;
-                }
-                for (; gi + 1 < groups_per_block; gi += 2) {
-                    const uint8_t pat0 = (uint8_t) (idx_g[0] & 0x3f);
-                    const uint8_t pat1 = (uint8_t) (idx_g[1] & 0x3f);
+                        const uint8_t c00 = (uint8_t) (pat0 & 3);
+                        const uint8_t c01 = (uint8_t) ((pat0 >> 2) & 3);
+                        const uint8_t c02 = (uint8_t) (pat0 >> 4);
 
-                    const uint8_t c00 = (uint8_t) (pat0 & 3);
-                    const uint8_t c01 = (uint8_t) ((pat0 >> 2) & 3);
-                    const uint8_t c02 = (uint8_t) (pat0 >> 4);
+                        const uint8_t c10 = (uint8_t) (pat1 & 3);
+                        const uint8_t c11 = (uint8_t) ((pat1 >> 2) & 3);
+                        const uint8_t c12 = (uint8_t) (pat1 >> 4);
 
-                    const uint8_t c10 = (uint8_t) (pat1 & 3);
-                    const uint8_t c11 = (uint8_t) ((pat1 >> 2) & 3);
-                    const uint8_t c12 = (uint8_t) (pat1 >> 4);
+                        const int8_t * grp0 = grp;
+                        const int8_t * grp1 = grp + k_ifairy_lut_group_bytes;
 
-                    const int8_t * grp0 = grp;
-                    const int8_t * grp1 = grp + k_ifairy_lut_group_bytes;
+                        if (prefetch) {
+                            __builtin_prefetch(grp0 + 2 * k_ifairy_lut_group_bytes, 0, 1);
+                        }
 
-                    if (prefetch) {
-                        __builtin_prefetch(grp0 + 2 * k_ifairy_lut_group_bytes, 0, 1);
-                    }
+                        const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t02 = (const int32_t *) (grp0 + 2 * k_ifairy_lut_pos_bytes);
 
-                    const int32_t * t00 = (const int32_t *) (grp0 + 0 * k_ifairy_lut_pos_bytes);
-                    const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
-                    const int32_t * t02 = (const int32_t *) (grp0 + 2 * k_ifairy_lut_pos_bytes);
-
-#if defined(__ARM_FEATURE_DOTPROD)
-                    if (use_dotprod) {
-                        isum0 = ggml_ifairy_lut_accum_dot(isum0, t00, c00, t01, c01, t02, c02, dot_mask);
-                    } else
-#endif
-                    {
                         const int32x2_t p00 = vld1_dup_s32(t00 + c00);
                         const int32x2_t p01 = vld1_dup_s32(t01 + c01);
                         const int32x2_t p02 = vld1_dup_s32(t02 + c02);
@@ -984,18 +1063,11 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                         s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p01)));
                         s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p02)));
                         isum0 = vaddw_s16(isum0, vget_low_s16(s160));
-                    }
 
-                    const int32_t * t10 = (const int32_t *) (grp1 + 0 * k_ifairy_lut_pos_bytes);
-                    const int32_t * t11 = (const int32_t *) (grp1 + 1 * k_ifairy_lut_pos_bytes);
-                    const int32_t * t12 = (const int32_t *) (grp1 + 2 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t10 = (const int32_t *) (grp1 + 0 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t11 = (const int32_t *) (grp1 + 1 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t12 = (const int32_t *) (grp1 + 2 * k_ifairy_lut_pos_bytes);
 
-#if defined(__ARM_FEATURE_DOTPROD)
-                    if (use_dotprod) {
-                        isum1 = ggml_ifairy_lut_accum_dot(isum1, t10, c10, t11, c11, t12, c12, dot_mask);
-                    } else
-#endif
-                    {
                         const int32x2_t p10 = vld1_dup_s32(t10 + c10);
                         const int32x2_t p11 = vld1_dup_s32(t11 + c11);
                         const int32x2_t p12 = vld1_dup_s32(t12 + c12);
@@ -1004,31 +1076,24 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                         s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p11)));
                         s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p12)));
                         isum1 = vaddw_s16(isum1, vget_low_s16(s161));
+
+                        idx_g += 2;
+                        grp   += 2 * k_ifairy_lut_group_bytes;
                     }
+                    for (; gi < groups_per_block; ++gi, ++idx_g, grp += k_ifairy_lut_group_bytes) {
+                        const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
+                        const uint8_t c0 = (uint8_t) (pat & 3);
+                        const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
+                        const uint8_t c2 = (uint8_t) (pat >> 4);
 
-                    idx_g += 2;
-                    grp   += 2 * k_ifairy_lut_group_bytes;
-                }
-                for (; gi < groups_per_block; ++gi, ++idx_g, grp += k_ifairy_lut_group_bytes) {
-                    const uint8_t pat = (uint8_t) (*idx_g & 0x3f);
-                    const uint8_t c0 = (uint8_t) (pat & 3);
-                    const uint8_t c1 = (uint8_t) ((pat >> 2) & 3);
-                    const uint8_t c2 = (uint8_t) (pat >> 4);
+                        if (prefetch) {
+                            __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
+                        }
 
-                    if (prefetch) {
-                        __builtin_prefetch(grp + k_ifairy_lut_group_bytes, 0, 1);
-                    }
+                        const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
+                        const int32_t * t2 = (const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes);
 
-                    const int32_t * t0 = (const int32_t *) (grp + 0 * k_ifairy_lut_pos_bytes);
-                    const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
-                    const int32_t * t2 = (const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes);
-
-#if defined(__ARM_FEATURE_DOTPROD)
-                    if (use_dotprod) {
-                        isum0 = ggml_ifairy_lut_accum_dot(isum0, t0, c0, t1, c1, t2, c2, dot_mask);
-                    } else
-#endif
-                    {
                         const int32x2_t p0 = vld1_dup_s32(t0 + c0);
                         const int32x2_t p1 = vld1_dup_s32(t1 + c1);
                         const int32x2_t p2 = vld1_dup_s32(t2 + c2);
