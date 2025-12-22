@@ -2668,7 +2668,7 @@ static void ggml_hexagon_unary(const struct ggml_tensor * op, uint32_t flags) {
                 req.op    = HTP_OP_UNARY_SILU;
                 supported = true;
             }
-            else if (ggml_get_unary_op(dst) == GGML_UNARY_OP_GELU){
+            else if (ggml_get_unary_op(dst) == GGML_UNARY_OP_GELU) {
                 req.op    = HTP_OP_UNARY_GELU;
                 supported = true;
             }
