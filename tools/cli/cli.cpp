@@ -209,8 +209,6 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    ctx_cli.ctx_server.init();
-
     console::spinner::stop();
     console::log("\n");
 
