@@ -4,6 +4,7 @@
 #include "gguf.h" // for reading GGUF splits
 #include "log.h"
 #include "download.h"
+#include "tty-utils.h"
 
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
@@ -41,13 +42,6 @@
 #endif
 
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
-
-// isatty
-#if defined(_WIN32)
-#include <io.h>
-#else
-#include <unistd.h>
-#endif
 
 using json = nlohmann::ordered_json;
 
@@ -486,14 +480,6 @@ class ProgressBar {
         }
     }
 
-    static bool is_output_a_tty() {
-#if defined(_WIN32)
-        return _isatty(_fileno(stdout));
-#else
-        return isatty(1);
-#endif
-    }
-
 public:
     ProgressBar() = default;
 
@@ -503,7 +489,7 @@ public:
     }
 
     void update(size_t current, size_t total) {
-        if (!is_output_a_tty()) {
+        if (!common_tty_utils::is_stdout_a_terminal()) {
             return;
         }
 

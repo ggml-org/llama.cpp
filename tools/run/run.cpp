@@ -2,6 +2,7 @@
 #include "common.h"
 #include "llama-cpp.h"
 #include "log.h"
+#include "tty-utils.h"
 
 #include "linenoise.cpp/linenoise.h"
 
@@ -1243,26 +1244,6 @@ static int handle_user_input(std::string & user_input, const std::string & user)
     return read_user_input(user_input);  // Returns true if input ends the loop
 }
 
-static bool is_stdin_a_terminal() {
-#if defined(_WIN32)
-    HANDLE hStdin = GetStdHandle(STD_INPUT_HANDLE);
-    DWORD  mode;
-    return GetConsoleMode(hStdin, &mode);
-#else
-    return isatty(STDIN_FILENO);
-#endif
-}
-
-static bool is_stdout_a_terminal() {
-#if defined(_WIN32)
-    HANDLE hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
-    DWORD  mode;
-    return GetConsoleMode(hStdout, &mode);
-#else
-    return isatty(STDOUT_FILENO);
-#endif
-}
-
 // Function to handle user input
 static int get_user_input(std::string & user_input, const std::string & user) {
     while (true) {
@@ -1328,8 +1309,8 @@ static int chat_loop(LlamaData & llama_data, const Opt & opt) {
         chat_template = read_chat_template_file(opt.chat_template_file);
     }
 
-    common_chat_templates_ptr chat_templates    = common_chat_templates_init(llama_data.model.get(), chat_template);
-    static const bool stdout_a_terminal = is_stdout_a_terminal();
+    common_chat_templates_ptr chat_templates = common_chat_templates_init(llama_data.model.get(), chat_template);
+    static const bool stdout_a_terminal = common_tty_utils::is_stdout_a_terminal();
     while (true) {
         // Get user input
         std::string user_input;
@@ -1386,7 +1367,7 @@ int main(int argc, const char ** argv) {
         return 1;
     }
 
-    if (!is_stdin_a_terminal()) {
+    if (!common_tty_utils::is_stdin_a_terminal()) {
         if (!opt.user.empty()) {
             opt.user += "\n\n";
         }

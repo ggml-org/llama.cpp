@@ -81,6 +81,8 @@ add_library(${TARGET} STATIC
     sampling.h
     speculative.cpp
     speculative.h
+    tty-utils.cpp
+    tty-utils.h
     unicode.cpp
     unicode.h
     )
