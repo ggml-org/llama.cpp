@@ -789,7 +789,6 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_ATTN_NORM,
                 LLM_TENSOR_ATTN_OUT,
                 LLM_TENSOR_ATTN_QKV,
-                LLM_TENSOR_ATTN_ROT_EMBD,
                 LLM_TENSOR_FFN_DOWN,
                 LLM_TENSOR_FFN_UP,
                 LLM_TENSOR_FFN_NORM,
