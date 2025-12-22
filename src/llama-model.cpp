@@ -48,6 +48,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_335M:          return "335M";
         case LLM_TYPE_350M:          return "350M";
         case LLM_TYPE_360M:          return "360M";
+        case LLM_TYPE_395M:          return "395M";
         case LLM_TYPE_410M:          return "410M";
         case LLM_TYPE_450M:          return "450M";
         case LLM_TYPE_475M:          return "475M";
