@@ -16,6 +16,8 @@ end
             C_Form["ChatForm"]
             C_Messages["ChatMessages"]
             C_Message["ChatMessage"]
+            C_MessageUser["ChatMessageUser"]
+            C_MessageEditForm["ChatMessageEditForm"]
             C_Attach["ChatAttachments"]
             C_ModelsSelector["ModelsSelector"]
             C_Settings["ChatSettings"]
@@ -38,7 +40,7 @@ end
             S1Error["<b>Error Handling:</b><br/>showErrorDialog()<br/>dismissErrorDialog()<br/>isAbortError()"]
             S1Msg["<b>Message Operations:</b><br/>addMessage()<br/>sendMessage()<br/>updateMessage()<br/>deleteMessage()<br/>getDeletionInfo()"]
             S1Regen["<b>Regeneration:</b><br/>regenerateMessage()<br/>regenerateMessageWithBranching()<br/>continueAssistantMessage()"]
-            S1Edit["<b>Editing:</b><br/>editAssistantMessage()<br/>editUserMessagePreserveResponses()<br/>editMessageWithBranching()"]
+            S1Edit["<b>Editing:</b><br/>editAssistantMessage()<br/>editUserMessagePreserveResponses()<br/>editMessageWithBranching()<br/>clearEditMode()<br/>isEditModeActive()<br/>getAddFilesHandler()<br/>setEditModeActive()"]
             S1Utils["<b>Utilities:</b><br/>getApiOptions()<br/>parseTimingData()<br/>getOrCreateAbortController()<br/>getConversationModel()"]
         end
         subgraph S2["conversationsStore"]
@@ -88,6 +90,10 @@ end
                 RE7["getChatStreaming()"]
                 RE8["getAllLoadingChats()"]
                 RE9["getAllStreamingChats()"]
+                RE9a["isEditModeActive()"]
+                RE9b["getAddFilesHandler()"]
+                RE9c["setEditModeActive()"]
+                RE9d["clearEditMode()"]
             end
             subgraph ConvExports["conversationsStore"]
                 RE10["conversations()"]
@@ -182,7 +188,10 @@ end
     %% Component hierarchy
     C_Screen --> C_Form & C_Messages & C_Settings
     C_Messages --> C_Message
-    C_Message --> C_ModelsSelector
+    C_Message --> C_MessageUser
+    C_MessageUser --> C_MessageEditForm
+    C_MessageEditForm --> C_ModelsSelector
+    C_MessageEditForm --> C_Attach
     C_Form --> C_ModelsSelector
     C_Form --> C_Attach
     C_Message --> C_Attach
@@ -190,6 +199,7 @@ end
     %% Components use Hooks
     C_Form --> H1
     C_Message --> H1 & H2
+    C_MessageEditForm --> H1
     C_Screen --> H2
 
     %% Hooks use Stores
@@ -244,7 +254,7 @@ end
     classDef apiStyle fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
 
     class R1,R2,RL routeStyle
-    class C_Sidebar,C_Screen,C_Form,C_Messages,C_Message componentStyle
+    class C_Sidebar,C_Screen,C_Form,C_Messages,C_Message,C_MessageUser,C_MessageEditForm componentStyle
     class C_ModelsSelector,C_Settings componentStyle
     class C_Attach componentStyle
     class H1,H2,H3 methodStyle

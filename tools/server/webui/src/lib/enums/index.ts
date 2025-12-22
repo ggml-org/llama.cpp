@@ -1,5 +1,7 @@
 export { AttachmentType } from './attachment';
 
+export { ChatMessageStatsView } from './chat';
+
 export {
 	FileTypeCategory,
 	FileTypeImage,

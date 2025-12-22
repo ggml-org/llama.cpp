@@ -342,6 +342,7 @@ export interface ApiProcessingState {
 	// Progress information from prompt_progress
 	progressPercent?: number;
 	promptTokens?: number;
+	promptMs?: number;
 	cacheTokens?: number;
 }
 
