@@ -24,7 +24,14 @@ std::vector<std::string> common_preset::to_args(const std::string & bin_path) co
     }
 
     for (const auto & [opt, value] : options) {
-        args.push_back(opt.args.back()); // use the last arg as the main arg
+        if (opt.is_preset_only) {
+            continue; // skip preset-only options (they are not CLI args)
+        }
+
+        // use the last arg as the main arg (i.e. --long-form)
+        args.push_back(opt.args.back());
+
+        // handle value(s)
         if (opt.value_hint == nullptr && opt.value_hint_2 == nullptr) {
             // flag option, no value
             if (common_arg_utils::is_falsey(value)) {
@@ -224,8 +231,10 @@ static std::string parse_bool_arg(const common_arg & arg, const std::string & ke
 }
 
 common_preset_context::common_preset_context(llama_example ex)
-    : ctx_params(common_params_parser_init(default_params, ex)),
-      key_to_opt(get_map_key_opt(ctx_params)) {}
+        : ctx_params(common_params_parser_init(default_params, ex)) {
+    common_params_add_preset_options(ctx_params.options);
+    key_to_opt = get_map_key_opt(ctx_params);
+}
 
 common_presets common_preset_context::load_from_ini(const std::string & path, common_preset & global) const {
     common_presets out;

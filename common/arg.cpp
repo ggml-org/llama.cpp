@@ -96,6 +96,11 @@ common_arg & common_arg::set_sparam() {
     return *this;
 }
 
+common_arg & common_arg::set_preset_only() {
+    is_preset_only = true;
+    return *this;
+}
+
 bool common_arg::in_example(enum llama_example ex) {
     return examples.find(ex) != examples.end();
 }
@@ -2883,6 +2888,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--sleep-idle-seconds"}, "SECONDS",
+        string_format("number of seconds of idleness after which the server will sleep (default: %d; -1 = disabled)", params.sleep_idle_seconds),
+        [](common_params & params, int value) {
+            if (value == 0 || value < -1) {
+                throw std::invalid_argument("invalid value: cannot be 0 or less than -1");
+            }
+            params.sleep_idle_seconds = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--simple-io"},
         "use basic IO for better compatibility in subprocesses and limited consoles",
         [](common_params & params) {
@@ -3493,4 +3508,25 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
     return ctx_arg;
+}
+
+void common_params_add_preset_options(std::vector<common_arg> & args) {
+    // arguments below won't be treated as CLI args, only preset options
+    args.push_back(common_arg(
+        {"load-on-startup"}, "NAME",
+        "in server router mode, autoload this model on startup",
+        [](common_params &, const std::string &) { /* unused */ }
+    ).set_env(COMMON_ARG_PRESET_LOAD_ON_STARTUP).set_preset_only());
+
+    // args.push_back(common_arg(
+    //     {"pin"},
+    //     "in server router mode, do not unload this model if models_max is exceeded",
+    //     [](common_params &) { /* unused */ }
+    // ).set_preset_only());
+
+    // args.push_back(common_arg(
+    //     {"unload-idle-seconds"}, "SECONDS",
+    //     "in server router mode, unload models idle for more than this many seconds",
+    //     [](common_params &, int) { /* unused */ }
+    // ).set_preset_only());
 }
