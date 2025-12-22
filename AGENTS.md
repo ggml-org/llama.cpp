@@ -16,6 +16,13 @@ Exclude bulky dirs in searches: `.git`, `build*`, `models`, `tmp`, `node_modules
 
 Optional (recommended for C/C++ hot-path edits): generate `compile_commands.json` and run `clang-tidy` on the files you touched (avoid full-repo tidy runs).
 
+Required after code changes (fast, targeted only):
+- `clang-format` check: use `git clang-format` against the merge-base of your target branch, scoped to C/C++ paths.
+  - Example (check only): `BASE=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD origin/main); git clang-format --style=file --diff "$BASE" -- '*.c' '*.cc' '*.cpp' '*.cxx' '*.h' '*.hh' '*.hpp'`
+  - To apply formatting: drop `--diff`.
+- `clang-tidy` check: run on the C/C++ source files you touched using `build-rel/compile_commands.json` (avoid headers and full-repo tidy runs).
+  - Example (macOS): `BASE=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD origin/main); FILES=$(git diff --name-only "$BASE" -- '*.c' '*.cc' '*.cpp' '*.cxx'); [ -n "$FILES" ] && clang-tidy -p build-rel --extra-arg="-isysroot$(xcrun --show-sdk-path)" --checks="-misc-include-cleaner" $FILES`
+
 ## 1) Project Structure & Ownership Map
 
 - `src/`: model loading, GGUF KV parsing, tensor mapping, graph building, decode/prefill logic.

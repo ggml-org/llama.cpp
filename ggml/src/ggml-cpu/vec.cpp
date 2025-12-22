@@ -328,7 +328,7 @@ void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * G
         if (isnan(sumf) || isinf(sumf)) {
             ggml_abort(__FILE__, __LINE__, "ggml_vec_dot_f16: invalid accumulation (n=%d)", n);
         }
-#endif
+#    endif
 #else
     for (int i = 0; i < n; ++i) {
         sumf += (ggml_float)(GGML_CPU_FP16_TO_FP32(x[i])*GGML_CPU_FP16_TO_FP32(y[i]));

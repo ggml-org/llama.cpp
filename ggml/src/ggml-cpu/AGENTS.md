@@ -34,6 +34,14 @@ Primary integration points:
 
 If adding a new knob, document it in `IFAIRY_ARM_3W_LUT_STATUS.md` and keep a safe default.
 
+## Formatting & Static Analysis (required)
+
+- `clang-format` check: use `git clang-format` against the merge-base of your target branch, scoped to C/C++ paths.
+  - Example (check only): `BASE=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD origin/main); git clang-format --style=file --diff "$BASE" -- '*.c' '*.cc' '*.cpp' '*.cxx' '*.h' '*.hh' '*.hpp'`
+  - To apply formatting: drop `--diff`.
+- `clang-tidy` check: run on the C/C++ source files you touched via `build-rel/compile_commands.json`.
+  - Example (macOS): `BASE=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD origin/main); FILES=$(git diff --name-only "$BASE" -- '*.c' '*.cc' '*.cpp' '*.cxx'); [ -n "$FILES" ] && clang-tidy -p build-rel --extra-arg="-isysroot$(xcrun --show-sdk-path)" --checks="-misc-include-cleaner" $FILES`
+
 ## Validation gates (required for any LUT change)
 
 1) Release build:

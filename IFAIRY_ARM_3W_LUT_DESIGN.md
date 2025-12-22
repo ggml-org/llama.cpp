@@ -198,6 +198,16 @@ P1（近期做）：
 - ✅ 可维护性重构：拆分 `ggml/src/ggml-ifairy-lut.cpp` 为 `ggml-ifairy-lut-{transform,preprocess,qgemm}.cpp` + `ggml-ifairy-lut-impl.h`，减少 legacy/compact 重复代码。
 - 错误处理一致性：统一 `return false`/`GGML_ASSERT`/日志策略。
 - 路由健壮性：补齐更明确的 CPU feature 判定（NEON/dotprod）与可控回退。
+
+---
+
+## 8. 开发检查（clang-format / clang-tidy）
+
+- `clang-format` 检查：优先用 `git clang-format` 对目标分支的 merge-base 做差量检查，并限定 C/C++ 路径，避免全仓格式化。
+  - 示例（仅检查）：`BASE=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD origin/main); git clang-format --style=file --diff "$BASE" -- '*.c' '*.cc' '*.cpp' '*.cxx' '*.h' '*.hh' '*.hpp'`
+  - 要应用格式化：去掉 `--diff`。
+- `clang-tidy` 检查：每次改动后对触及的 C/C++ 源文件做定向检查，使用 `build-rel/compile_commands.json`。
+  - 示例（macOS）：`BASE=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD origin/main); FILES=$(git diff --name-only "$BASE" -- '*.c' '*.cc' '*.cpp' '*.cxx'); [ -n "$FILES" ] && clang-tidy -p build-rel --extra-arg="-isysroot$(xcrun --show-sdk-path)" --checks="-misc-include-cleaner" $FILES`
 - ✅ P1 小步：将 LUT 相关 env 解析 helper 集中到 `ggml/src/ggml-ifairy-lut.h`，并在 `ggml-cpu.c`/`ggml-ifairy-lut.cpp` 复用，减少重复与语义漂移。
 - ✅ P1 小步：错误可观测性与回退一致性：`transform_tensor` 失败在 debug 下输出原因（shape/alloc/encode），并在路由阶段明确要求 `__aarch64__ + __ARM_NEON`（否则回退）。
 - ✅ P1 小步：配置健壮性：`GGML_IFAIRY_LUT_LAYOUT` 无效值在 debug 下 warn（仅一次）并回退默认；`BK_BLOCKS/BM` 的非法值在 debug 下提示并 clamp。
