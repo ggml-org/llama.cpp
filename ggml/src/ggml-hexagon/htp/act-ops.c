@@ -319,31 +319,32 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
     }
 
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
-        const uint32_t block_end = MIN(ir + BLOCK, src0_end_row); // The start index of next block
+        const uint32_t block_size = MIN(BLOCK, src0_end_row - ir);
 
         float* dst_spad  = (float *) dma_queue_pop(dma_queue).src;
         float* src0_spad = (float *) dma_queue_pop(dma_queue).dst;
 
-        for (uint32_t ib = ir; ib < block_end; ib++) {
-            const float* src0_spad_ptr = src0_spad + (ib - ir) * (src0_row_size_aligned / sizeof(float));
-            float* dst_spad_ptr        = dst_spad  + (ib - ir) * (dst_row_size_aligned  / sizeof(float));
+        for (uint32_t ib = 0; ib < block_size; ib++) {
+            const float* src0_spad_ptr = src0_spad + ib * (src0_row_size_aligned / sizeof(float));
+            float* dst_spad_ptr        = dst_spad  + ib * (dst_row_size_aligned  / sizeof(float));
 
             // gelu = x * sigmoid(1.702 * x) // current implementation
-            hvx_mul_scalar_f32( (const uint8_t *) src0_spad_ptr, (float) 1.702, (uint8_t *) dst_spad_ptr, ne0);
+            hvx_mul_scalar_f32((const uint8_t *) src0_spad_ptr, (float) 1.702, (uint8_t *) dst_spad_ptr, ne0);
             hvx_fast_sigmoid_f32((const uint8_t *) dst_spad_ptr, (uint8_t *) dst_spad_ptr, ne0);
             hvx_mul_f32_opt((const uint8_t *) src0_spad_ptr, (uint8_t *) dst_spad_ptr, (uint8_t *) dst_spad_ptr, ne0);
         }
 
         dma_queue_push_vtcm_to_ddr(dma_queue,
             dma_make_ptr(data_dst + (ir * dst_row_size), dst_spad),
-            dst_row_size, dst_row_size_aligned, (block_end - ir));
+            dst_row_size, dst_row_size_aligned, block_size);
 
-        // prefetch next loop iteration if any
-        const uint32_t next_block_size = MIN(BLOCK, src0_end_row - block_end);
-        if (next_block_size > 0) {
+        // prefetch N+2 loop iteration if any
+        const uint32_t pref_block = (ir + BLOCK * 2);
+        if (pref_block < src0_end_row) {
+            const uint32_t pref_block_size = MIN(BLOCK, src0_end_row - pref_block);
             dma_queue_push_ddr_to_vtcm(dma_queue,
-                dma_make_ptr(src0_spad, data_src0 + (block_end * src0_row_size)),
-                src0_row_size_aligned, src0_row_size, next_block_size);
+                dma_make_ptr(src0_spad, data_src0 + (pref_block * src0_row_size)),
+                src0_row_size_aligned, src0_row_size, pref_block_size);
         }
     }
 
