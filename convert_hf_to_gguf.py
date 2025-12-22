@@ -8684,7 +8684,6 @@ class NemotronHModel(GraniteHybridModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-
 @ModelBase.register("LlamaBidirectionalModel")
 class LlamaEmbedNemotronModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.LLAMA_EMBED
