@@ -468,7 +468,7 @@ namespace GGUFMeta {
 
         const int id = gguf_find_key(meta.get(), key.c_str());
 
-        if (id == -1) {
+        if (id < 0) {
             if (required) {
                 throw std::runtime_error(format("key not found in model: %s", key.c_str()));
             }
