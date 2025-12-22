@@ -1212,6 +1212,9 @@ class TextModel(ModelBase):
         if chkhsh == "a1e163ecab2e718a4c829d1148b6e86824ec36163bb71941c3dca9cd5ac25756":
             # ref: https://huggingface.co/JetBrains/Mellum-4b-base
             res = "mellum"
+        if chkhsh == "a0b64b4385f123663873756336c085744376d015ff328bb1d901598f63c44152":
+            # ref: https://huggingface.co/answerdotai/ModernBERT-base
+            res = "modern-bert"
         if chkhsh == "49fc0303c9e0d2c2c565c510f64b2d9b271276acdcdadff733249eda9f7d59df":
             # ref: https://huggingface.co/arcee-ai/Trinity-Tokenizer
             res = "afmoe"
@@ -9997,6 +10000,36 @@ class SmallThinkerModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("ModernBertModel", "ModernBertForMaskedLM", "ModernBertForSequenceClassification")
+class ModernBertModel(BertModel):
+    model_arch = gguf.MODEL_ARCH.MODERN_BERT
+
+    def set_vocab(self):
+        self.gguf_writer.add_add_bos_token(True)
+        self.gguf_writer.add_add_eos_token(True)
+        self.gguf_writer.add_add_sep_token(True)
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_sliding_window(self.hparams["local_attention"])
+        if (sliding_window_pattern := self.hparams.get("global_attn_every_n_layers")) is not None:
+            self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
+        self.gguf_writer.add_rope_freq_base_swa(self.rope_parameters.get("sliding_attention", {"rope_theta": self.hparams.get("local_rope_theta")})["rope_theta"])
+        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # these layers act as MLM head, so we don't need them
+        if name.startswith("decoder."):
+            return []
+
+        if name.startswith("model."):
+            name = name[6:]
+
+        return super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("ApertusForCausalLM")
