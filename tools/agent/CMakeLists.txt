@@ -6,6 +6,7 @@ set(AGENT_SOURCES
     tool-registry.cpp
     permission.cpp
     skills/skills-manager.cpp
+    agents-md/agents-md-manager.cpp
     tools/tool-bash.cpp
     tools/tool-read.cpp
     tools/tool-write.cpp

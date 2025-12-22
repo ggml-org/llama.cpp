@@ -6,6 +6,7 @@
 #include "tool-registry.h"
 #include "permission.h"
 #include "skills/skills-manager.h"
+#include "agents-md/agents-md-manager.h"
 
 #ifndef _WIN32
 #include "mcp/mcp-server-manager.h"
@@ -108,6 +109,7 @@ int main(int argc, char ** argv) {
     bool yolo_mode = false;
     int max_iterations = 50;  // Default value
     bool enable_skills = true;
+    bool enable_agents_md = true;
     std::vector<std::string> extra_skills_paths;
 
     for (int i = 1; i < argc; i++) {
@@ -122,6 +124,14 @@ int main(int argc, char ** argv) {
             i--;  // Re-check this position
         } else if (arg == "--no-skills") {
             enable_skills = false;
+            // Remove from argv
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;  // Re-check this position
+        } else if (arg == "--no-agents-md") {
+            enable_agents_md = false;
             // Remove from argv
             for (int j = i; j < argc - 1; j++) {
                 argv[j] = argv[j + 1];
@@ -262,6 +272,22 @@ int main(int argc, char ** argv) {
         skills_count = skills_mgr.discover(skill_paths);
     }
 
+    // Discover AGENTS.md files (agents.md spec)
+    agents_md_manager agents_md_mgr;
+    int agents_md_count = 0;
+    if (enable_agents_md) {
+        // Pass config_dir for global AGENTS.md support (~/.config/llama-agent/AGENTS.md)
+        std::string agents_config_dir = get_config_dir();
+        agents_md_count = agents_md_mgr.discover(working_dir, agents_config_dir);
+
+        // Warn if content is very large
+        size_t total_size = agents_md_mgr.total_content_size();
+        if (total_size > 50 * 1024) {
+            console::log("Warning: AGENTS.md content is large (%zu bytes). "
+                        "Consider reducing size for better performance.\n", total_size);
+        }
+    }
+
     // Configure agent
     agent_config config;
     config.working_dir = working_dir;
@@ -272,6 +298,8 @@ int main(int argc, char ** argv) {
     config.enable_skills = enable_skills;
     config.skills_search_paths = extra_skills_paths;
     config.skills_prompt_section = skills_mgr.generate_prompt_section();
+    config.enable_agents_md = enable_agents_md;
+    config.agents_md_prompt_section = agents_md_mgr.generate_prompt_section();
 
     // Create agent loop
     agent_loop agent(ctx_server, params, config, g_is_interrupted);
@@ -292,6 +320,9 @@ int main(int argc, char ** argv) {
     }
     if (skills_count > 0) {
         console::log("skills     : %d\n", skills_count);
+    }
+    if (agents_md_count > 0) {
+        console::log("agents.md  : %d file(s)\n", agents_md_count);
     }
     console::log("\n");
 
@@ -318,6 +349,7 @@ int main(int argc, char ** argv) {
         console::log("  /clear      clear conversation history\n");
         console::log("  /tools      list available tools\n");
         console::log("  /skills     list available skills\n");
+        console::log("  /agents     list discovered AGENTS.md files\n");
         console::log("  ESC/Ctrl+C  abort generation\n");
         console::log("\n");
     }
@@ -395,6 +427,25 @@ int main(int argc, char ** argv) {
                         console::log("  %s:\n", skill.name.c_str());
                         console::log("    %s\n", skill.description.c_str());
                         console::log("    Path: %s\n", skill.path.c_str());
+                    }
+                }
+                continue;
+            }
+            if (buffer == "/agents") {
+                const auto & files = agents_md_mgr.get_files();
+                if (files.empty()) {
+                    console::log("\nNo AGENTS.md files discovered.\n");
+                    console::log("AGENTS.md files are searched from:\n");
+                    console::log("  ./AGENTS.md to git root  (project-specific)\n");
+                    console::log("  ~/.config/llama-agent/AGENTS.md  (global)\n");
+                } else {
+                    console::log("\nDiscovered AGENTS.md files (closest first):\n");
+                    for (const auto & file : files) {
+                        console::log("  %s", file.relative_path.c_str());
+                        if (file.depth == 0) {
+                            console::log(" (highest precedence)");
+                        }
+                        console::log("\n    %zu bytes\n", file.content.size());
                     }
                 }
                 continue;

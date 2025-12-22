@@ -80,6 +80,7 @@ Replaced "old code" with "fixed code"
 | `/clear` | Clear conversation history |
 | `/tools` | List available tools |
 | `/skills` | List available skills |
+| `/agents` | List discovered AGENTS.md files |
 
 ## Skills
 
@@ -155,6 +156,64 @@ Skills are discovered from (in priority order):
 
 This "progressive disclosure" keeps context lean - only activated skills consume tokens.
 
+## AGENTS.md Support
+
+The agent automatically discovers and loads [AGENTS.md](https://agents.md) files, which provide project-specific guidance for AI coding assistants.
+
+### How It Works
+
+1. **Discovery**: At startup, the agent searches from the working directory up to the git root for `AGENTS.md` files, plus a global file
+2. **Precedence**: Files closer to the working directory take precedence (useful for monorepos). Global file has lowest precedence.
+3. **Injection**: Content is loaded into the system prompt, giving the agent project-specific context
+
+### Search Locations (in precedence order)
+
+1. `./AGENTS.md` - Current working directory (highest precedence)
+2. `../AGENTS.md`, `../../AGENTS.md`, ... - Parent directories up to git root
+3. `~/.config/llama-agent/AGENTS.md` - Global user preferences (lowest precedence)
+
+### Creating an AGENTS.md File
+
+Create an `AGENTS.md` file in your repository root:
+
+```markdown
+# Project Guidelines
+
+## Build & Test
+- Build: `cmake -B build && cmake --build build`
+- Test: `ctest --test-dir build`
+
+## Code Style
+- Use 4-space indentation
+- Follow Google C++ style guide
+
+## PR Guidelines
+- Include tests for new features
+- Update documentation
+```
+
+### Monorepo Support
+
+In monorepos, you can have nested `AGENTS.md` files:
+
+```
+repo/
+├── AGENTS.md           # General project guidance
+├── packages/
+│   ├── frontend/
+│   │   └── AGENTS.md   # Frontend-specific guidance (takes precedence)
+│   └── backend/
+│       └── AGENTS.md   # Backend-specific guidance
+```
+
+When working in `packages/frontend/`, both `AGENTS.md` files are loaded, with the frontend one taking precedence.
+
+### CLI Options
+
+| Flag | Description |
+|------|-------------|
+| `--no-agents-md` | Disable AGENTS.md discovery |
+
 ## MCP Server Support
 
 The agent supports [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers, allowing you to extend its capabilities with external tools.
@@ -228,6 +287,7 @@ When prompted: `y` (yes), `n` (no), `a` (always allow), `d` (deny always)
 | `--max-iterations N` | Max agent iterations (default: 50, max: 1000) |
 | `--no-skills` | Disable skill discovery |
 | `--skills-path PATH` | Add custom skills search path |
+| `--no-agents-md` | Disable AGENTS.md discovery |
 
 ### YOLO Mode
 

@@ -169,6 +169,25 @@ All tests passing now.
 
 When the task is complete, provide a brief summary of what you did.)";
 
+    // Append AGENTS.md section if available (agents.md spec)
+    if (!config.agents_md_prompt_section.empty()) {
+        system_prompt += R"(
+
+# Project Context
+
+This project has AGENTS.md files with specific guidance for this codebase.
+Follow these project-specific instructions, especially for:
+- Build and test commands
+- Code style preferences
+- File organization conventions
+- PR and commit guidelines
+
+When project instructions conflict with general guidelines, prefer project-specific guidance.
+
+)";
+        system_prompt += config.agents_md_prompt_section;
+    }
+
     // Append skills section if available (agentskills.io spec)
     if (!config.skills_prompt_section.empty()) {
         system_prompt += R"(
