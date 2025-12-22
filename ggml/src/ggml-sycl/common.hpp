@@ -1005,6 +1005,26 @@ struct ggml_backend_sycl_context {
         void * mem_ptr = pool->get();
         return dnnl::memory(scratchpad_md, eng, mem_ptr);
     }
+
+    // Pre-allocate scratchpad pool to a given size
+    // Used before graph recording to avoid realloc during recording
+    void pre_allocate_scratchpad(size_t size, const queue_ptr q) {
+        if (size == 0) return;
+
+        ggml_sycl_pool_alloc<uint8_t> * pool;
+        auto it = scratchpad_map.find(q);
+        if (it == scratchpad_map.end()) {
+            scratchpad_map[q] = std::make_unique<ggml_sycl_pool_alloc<uint8_t>>(this->pool());
+            pool = scratchpad_map[q].get();
+        } else {
+            pool = it->second.get();
+        }
+
+        if (size > pool->actual_size) {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] Pre-allocating scratchpad pool: %zu bytes\n", size);
+            pool->realloc(size);
+        }
+    }
 #endif
 
     // pool
@@ -1030,7 +1050,10 @@ struct ggml_backend_sycl_context {
 
 #ifdef GGML_SYCL_GRAPH
     std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
-    int exec_graph_n_nodes = 0;  // Track graph size for cache invalidation
+    int exec_graph_n_nodes = 0;      // Track graph size for cache invalidation
+    bool exec_graph_is_decode = false;  // Track which phase the cached graph was recorded for
+    int warmup_decode_n_nodes = 0;   // Track which decode graph has been warmed up
+    int warmup_prompt_n_nodes = 0;   // Track which prompt graph has been warmed up
 
     // Pre-allocated buffers for MoE graph recording
     // MUL_MAT_ID needs Q8_1 quantization buffers which cannot be allocated during graph recording

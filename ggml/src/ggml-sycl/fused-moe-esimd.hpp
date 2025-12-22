@@ -257,6 +257,108 @@ void fused_moe_mxfp4_kernel(
 }
 
 // =============================================================================
+// Fused MoE Kernel - MXFP4 SoA Layout (Reordered Weights)
+// =============================================================================
+// After reorder_qw_mxfp4(), weights are stored as:
+//   [all qs for all experts] [all scales for all experts]
+// This is a flat SoA layout where expert boundaries are implicit.
+//
+// Expert `e`, row `r`, block `b` access:
+//   block_index = e * nrows_per_expert * blocks_per_row + r * blocks_per_row + b
+//   qs_offset = block_index * 16 (16 packed bytes per block)
+//   scale_offset = total_qs_size + block_index
+
+template <int HIDDEN_DIM_BLOCKS>  // ncols / MOE_QK_MXFP4
+void fused_moe_mxfp4_soa_kernel(
+    sycl::nd_item<3> item,
+    const uint8_t * __restrict__ weights_qs,      // Pointer to qs region start
+    const uint8_t * __restrict__ weights_scales,  // Pointer to scales region start
+    const float * __restrict__ input,
+    const int32_t * __restrict__ expert_ids,
+    float * __restrict__ output,
+    const int64_t nrows_per_expert,   // Rows per expert
+    const int64_t ncols,              // Hidden dimension
+    const int64_t n_ids,
+    const int64_t num_tokens,
+    const int64_t ne11,
+    const int64_t ids_nb0,
+    const int64_t ids_nb1,
+    const int64_t in_nb11,
+    const int64_t in_nb12,
+    const int64_t out_nb1,
+    const int64_t out_nb2
+) {
+    const int batch_idx = item.get_group(0);
+    const int row = item.get_group(2);
+    const int tid = item.get_local_id(2);
+
+    if (row >= nrows_per_expert) return;
+
+    const int token_idx = batch_idx / n_ids;
+    const int id_idx = batch_idx % n_ids;
+
+    if (token_idx >= num_tokens) return;
+
+    // Get expert ID for this token
+    const int32_t expert_id = *(const int32_t *)((const char*)expert_ids +
+                                                  token_idx * ids_nb1 + id_idx * ids_nb0);
+
+    if (expert_id < 0 || expert_id >= 64) return;  // Validate (up to 64 experts)
+
+    // Compute number of blocks per row
+    const int hidden_dim_blocks = (HIDDEN_DIM_BLOCKS > 0) ? HIDDEN_DIM_BLOCKS : (ncols / MOE_QK_MXFP4);
+
+    // SoA layout: compute absolute block offset for this expert's row
+    // block_offset = expert_id * nrows_per_expert * hidden_dim_blocks + row * hidden_dim_blocks
+    const int64_t row_block_offset = (expert_id * nrows_per_expert + row) * hidden_dim_blocks;
+
+    // qs region: each block contributes 16 bytes (32 4-bit values packed into 16 bytes)
+    const uint8_t * qs_row = weights_qs + row_block_offset * (MOE_QK_MXFP4 / 2);
+    // scales region: each block contributes 1 byte (E8M0 scale)
+    const uint8_t * scale_row = weights_scales + row_block_offset;
+
+    // Input row with proper 2D indexing
+    const int64_t i11 = id_idx % ne11;
+    const float * input_row = (const float *)((const char*)input + i11 * in_nb11 + token_idx * in_nb12);
+
+    float partial_sum = 0.0f;
+
+    for (int b = tid; b < hidden_dim_blocks; b += MOE_WG_SIZE) {
+        // Load scale from SoA scales region
+        const float scale = sycl_e8m0_to_fp32_half(scale_row[b]);
+
+        float block_sum = 0.0f;
+
+        #pragma unroll
+        for (int i = 0; i < MOE_QK_MXFP4 / 2; i++) {
+            uint8_t packed = qs_row[b * (MOE_QK_MXFP4 / 2) + i];
+
+            float w_lo = scale * kvalues_mxfp4[packed & 0xF];
+            float w_hi = scale * kvalues_mxfp4[packed >> 4];
+
+            float x_lo = input_row[b * MOE_QK_MXFP4 + i];
+            float x_hi = input_row[b * MOE_QK_MXFP4 + i + 16];
+
+            block_sum += w_lo * x_lo + w_hi * x_hi;
+        }
+
+        partial_sum += block_sum;
+    }
+
+    // Subgroup reduction
+    auto sg = item.get_sub_group();
+    #pragma unroll
+    for (int offset = sg.get_max_local_range()[0] / 2; offset > 0; offset /= 2) {
+        partial_sum += sycl::shift_group_left(sg, partial_sum, offset);
+    }
+
+    if (tid == 0) {
+        float * out_ptr = (float *)((char*)output + token_idx * out_nb2 + id_idx * out_nb1);
+        out_ptr[row] = partial_sum;
+    }
+}
+
+// =============================================================================
 // Optimized Persistent MoE Kernel with ESIMD and SLM
 // =============================================================================
 // Key optimizations:
@@ -701,6 +803,75 @@ static void launch_fused_moe_mxfp4(
     }
 }
 
+// Launch fused MoE kernel for MXFP4 weights in SoA (reordered) layout
+// After reorder_qw_mxfp4: [all qs for all experts][all scales for all experts]
+static void launch_fused_moe_mxfp4_soa(
+    const void * expert_weights,      // Base pointer to reordered tensor
+    const float * input,
+    const int32_t * expert_ids,
+    float * output,
+    int64_t total_qs_size,            // Size of qs region = (ncols / 2) * total_rows
+    int64_t ncols,                    // Hidden dimension
+    int64_t nrows_per_expert,         // Rows per expert (not total rows)
+    int64_t n_ids,
+    int64_t num_tokens,
+    int64_t ne11,
+    int64_t ids_nb0,
+    int64_t ids_nb1,
+    int64_t in_nb11,
+    int64_t in_nb12,
+    int64_t out_nb1,
+    int64_t out_nb2,
+    sycl::queue & stream
+) {
+    const int hidden_dim_blocks = ncols / MOE_QK_MXFP4;
+    const int64_t total_batches = num_tokens * n_ids;
+
+    // SoA layout: [all qs] [all scales]
+    const uint8_t * weights_qs = (const uint8_t *)expert_weights;
+    const uint8_t * weights_scales = weights_qs + total_qs_size;
+
+    sycl::range<3> block(1, 1, MOE_WG_SIZE);
+    sycl::range<3> grid(total_batches, 1, nrows_per_expert);
+
+    // Dispatch based on hidden_dim_blocks (compile-time optimization)
+    if (hidden_dim_blocks == 90) {  // 2880 / 32
+        stream.submit([&](sycl::handler & cgh) {
+            cgh.parallel_for(
+                sycl::nd_range<3>(grid * block, block),
+                [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(32)]] {
+                    fused_moe_mxfp4_soa_kernel<90>(
+                        item, weights_qs, weights_scales, input, expert_ids, output,
+                        nrows_per_expert, ncols, n_ids, num_tokens, ne11,
+                        ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2);
+                });
+        });
+    } else if (hidden_dim_blocks == 128) {  // 4096 / 32
+        stream.submit([&](sycl::handler & cgh) {
+            cgh.parallel_for(
+                sycl::nd_range<3>(grid * block, block),
+                [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(32)]] {
+                    fused_moe_mxfp4_soa_kernel<128>(
+                        item, weights_qs, weights_scales, input, expert_ids, output,
+                        nrows_per_expert, ncols, n_ids, num_tokens, ne11,
+                        ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2);
+                });
+        });
+    } else {
+        // Fallback for other hidden dimensions - use runtime parameter
+        stream.submit([&](sycl::handler & cgh) {
+            cgh.parallel_for(
+                sycl::nd_range<3>(grid * block, block),
+                [=, hdb=hidden_dim_blocks](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(32)]] {
+                    fused_moe_mxfp4_soa_kernel<0>(
+                        item, weights_qs, weights_scales, input, expert_ids, output,
+                        nrows_per_expert, ncols, n_ids, num_tokens, ne11,
+                        ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2);
+                });
+        });
+    }
+}
+
 #else  // !SYCL_ESIMD_MOE_AVAILABLE
 
 inline bool fused_moe_esimd_available() {
@@ -721,6 +892,14 @@ static void launch_fused_moe_mxfp4(
     int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, sycl::queue &
 ) {
     GGML_ASSERT(false && "ESIMD MoE not available");
+}
+
+static void launch_fused_moe_mxfp4_soa(
+    const void *, const float *, const int32_t *, float *,
+    int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
+    int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, sycl::queue &
+) {
+    GGML_ASSERT(false && "ESIMD MoE SoA not available");
 }
 
 #endif  // SYCL_ESIMD_MOE_AVAILABLE

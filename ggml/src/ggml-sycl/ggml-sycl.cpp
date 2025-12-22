@@ -8692,6 +8692,7 @@ static bool graph_needs_reorder(ggml_backend_sycl_context& ctx, ggml_cgraph * cg
             (ggml_sycl_supports_reorder_mmvq(src0->type) ||
              ggml_sycl_supports_reorder_dmmv(src0->type) ||
              ggml_sycl_supports_reorder_mul_mat_sycl(src0->type))) {
+            // Note: MXFP4 MoE weights are also reordered now - fused kernel supports SoA layout
             if (g_ggml_sycl_debug) {
                 fprintf(stderr, "[SYCL-GRAPH] needs_reorder: node %d '%s' src0='%s' type=%s\n",
                         i, node->name,
@@ -8793,17 +8794,9 @@ static void graph_pre_reorder_all(ggml_backend_sycl_context& ctx, ggml_cgraph * 
             }
             continue;
         }
-        // Skip MXFP4 tensors for MUL_MAT_ID - fused MoE kernel uses original block_mxfp4 layout,
-        // not the reordered SoA format. Reordering would corrupt the data.
-        if (node->op == GGML_OP_MUL_MAT_ID && src0->type == GGML_TYPE_MXFP4) {
-            if (g_ggml_sycl_debug) {
-                fprintf(stderr, "[SYCL-GRAPH] MUL_MAT_ID src0='%s' - skipping MXFP4 reorder (fused kernel uses AoS)\n",
-                        src0->name);
-            }
-            continue;
-        }
         if (g_ggml_sycl_debug >= 2 && node->op == GGML_OP_MUL_MAT_ID && moe_tensor_count <= 3) {
-            fprintf(stderr, "[SYCL-GRAPH] MUL_MAT_ID src0='%s' - will reorder\n", src0->name);
+            fprintf(stderr, "[SYCL-GRAPH] MUL_MAT_ID src0='%s' type=%s - will reorder\n",
+                    src0->name, ggml_type_name(src0->type));
         }
         // Perform reorder
         reorder_qw(src0, ctx.stream());
@@ -9427,20 +9420,32 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
         GGML_SYCL_DEBUG("[MoE FUSED] Q8_0 kernel launched\n");
         return true;
     } else if (src0->type == GGML_TYPE_MXFP4) {
-        // Use persistent kernel only for small batches (tg) where SLM caching helps
-        // For large batches (pp), each token has different input so SLM caching doesn't help
-        // Threshold: use persistent for num_tokens <= 8, otherwise use parallel kernel
-        const bool use_persistent = use_persistent_moe_kernel() && (num_tokens <= 8);
+        // Check if weights are reordered to SoA layout
+        auto * src0_extra = (ggml_tensor_extra_gpu *) src0->extra;
+        const bool use_soa = src0_extra && src0_extra->optimized_feature.reorder;
 
-        if (use_persistent) {
-            launch_persistent_moe_mxfp4(
+        // Debug: understand why use_soa might be false
+        if (g_ggml_sycl_debug) {
+            fprintf(stderr, "[MoE FUSED] MXFP4 check: src0='%s' extra=%p use_soa=%d reorder=%d\n",
+                    src0->name, (void*)src0_extra,
+                    use_soa,
+                    src0_extra ? src0_extra->optimized_feature.reorder : -1);
+        }
+
+        if (use_soa) {
+            // SoA layout: total_qs_size = (ncols / 2) * total_rows
+            // From reorder_qw_mxfp4: scale_ptr = qs_ptr + (ncols / 2) * nrows
+            const int64_t total_rows = nrows * num_experts;
+            const int64_t total_qs_size = (ncols / 2) * total_rows;
+
+            launch_fused_moe_mxfp4_soa(
                 src0->data,
                 (const float *)src1->data,
                 (const int32_t *)ids->data,
                 (float *)dst->data,
-                stride_expert,
+                total_qs_size,
                 ncols,
-                nrows,
+                nrows,                  // nrows_per_expert
                 n_ids,
                 num_tokens,
                 ne11,
@@ -9452,28 +9457,57 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
                 nb2,
                 *stream
             );
-            GGML_SYCL_DEBUG("[MoE FUSED] MXFP4 persistent kernel launched (tokens=%ld)\n", (long)num_tokens);
+            GGML_SYCL_DEBUG("[MoE FUSED] MXFP4 SoA kernel launched (tokens=%ld)\n", (long)num_tokens);
         } else {
-            launch_fused_moe_mxfp4(
-                src0->data,
-                (const float *)src1->data,
-                (const int32_t *)ids->data,
-                (float *)dst->data,
-                stride_expert,
-                ncols,
-                nrows,
-                n_ids,
-                num_tokens,
-                ne11,
-                ids->nb[0],
-                ids->nb[1],
-                nb11,
-                nb12,
-                nb1,
-                nb2,
-                *stream
-            );
-            GGML_SYCL_DEBUG("[MoE FUSED] MXFP4 parallel kernel launched (tokens=%ld)\n", (long)num_tokens);
+            // Original AoS path - use persistent or parallel kernel
+            // Use persistent kernel only for small batches (tg) where SLM caching helps
+            // For large batches (pp), each token has different input so SLM caching doesn't help
+            // Threshold: use persistent for num_tokens <= 8, otherwise use parallel kernel
+            const bool use_persistent = use_persistent_moe_kernel() && (num_tokens <= 8);
+
+            if (use_persistent) {
+                launch_persistent_moe_mxfp4(
+                    src0->data,
+                    (const float *)src1->data,
+                    (const int32_t *)ids->data,
+                    (float *)dst->data,
+                    stride_expert,
+                    ncols,
+                    nrows,
+                    n_ids,
+                    num_tokens,
+                    ne11,
+                    ids->nb[0],
+                    ids->nb[1],
+                    nb11,
+                    nb12,
+                    nb1,
+                    nb2,
+                    *stream
+                );
+                GGML_SYCL_DEBUG("[MoE FUSED] MXFP4 persistent kernel launched (tokens=%ld)\n", (long)num_tokens);
+            } else {
+                launch_fused_moe_mxfp4(
+                    src0->data,
+                    (const float *)src1->data,
+                    (const int32_t *)ids->data,
+                    (float *)dst->data,
+                    stride_expert,
+                    ncols,
+                    nrows,
+                    n_ids,
+                    num_tokens,
+                    ne11,
+                    ids->nb[0],
+                    ids->nb[1],
+                    nb11,
+                    nb12,
+                    nb1,
+                    nb2,
+                    *stream
+                );
+                GGML_SYCL_DEBUG("[MoE FUSED] MXFP4 parallel kernel launched (tokens=%ld)\n", (long)num_tokens);
+            }
         }
         return true;
     }
@@ -11416,50 +11450,51 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
                 return false;
             case GGML_OP_MUL_MAT_ID:
                 {
-                    // MoE models with MUL_MAT_ID are not fully compatible with SYCL graphs
-                    // due to issues with graph recording and execution for ne12 > 1 (batched prefill)
-                    // Disable graphs for MoE models until the issue is resolved
+                    // MoE MUL_MAT_ID graph compatibility:
+                    // - ne12 > 1 (batched prefill): fused MoE kernel (Q8_0, MXFP4) - no allocations
+                    // - ne12 == 1 (decode): MMVQ kernel (Q4_0, Q8_0, MXFP4) - pre-allocated buffers
                     const ggml_tensor * node = cgraph->nodes[i];
+                    const ggml_tensor * src0 = node->src[0];
                     const ggml_tensor * src1 = node->src[1];
                     const int64_t ne12 = src1 ? src1->ne[2] : 1;
 
-                    if (ne12 > 1) {
-                        // Batched prefill - graphs have issues with MoE
-                        static bool logged_once = false;
-                        if (!logged_once) {
-                            GGML_LOG_INFO("%s: disabling SYCL graphs for MUL_MAT_ID (ne12=%ld > 1)\n",
-                                          __func__, (long)ne12);
-                            logged_once = true;
-                        }
-                        return false;
-                    }
-
-                    // For decode (ne12 == 1), check if GPU-side dispatch is available
-                    const ggml_tensor * src0 = node->src[0];
-                    bool gpu_dispatch_available = false;
+                    bool graph_compatible = false;
                     if (ggml_is_quantized(src0->type)) {
-                        switch (src0->type) {
-                            case GGML_TYPE_Q4_0:
-                            case GGML_TYPE_Q8_0:
-                            case GGML_TYPE_MXFP4:
-                                gpu_dispatch_available = true;
-                                break;
-                            default:
-                                break;
+                        if (ne12 > 1) {
+                            // Batched prefill - fused MoE kernel supports Q8_0 and MXFP4
+                            // These kernels don't do dynamic allocations
+                            switch (src0->type) {
+                                case GGML_TYPE_Q8_0:
+                                case GGML_TYPE_MXFP4:
+                                    graph_compatible = true;
+                                    break;
+                                default:
+                                    break;
+                            }
+                        } else {
+                            // Decode (ne12 == 1) - MMVQ kernel with pre-allocated Q8_1 buffers
+                            switch (src0->type) {
+                                case GGML_TYPE_Q4_0:
+                                case GGML_TYPE_Q8_0:
+                                case GGML_TYPE_MXFP4:
+                                    graph_compatible = true;
+                                    break;
+                                default:
+                                    break;
+                            }
                         }
                     }
 
-                    if (!gpu_dispatch_available) {
-                        // Fall back to host dispatch for unsupported types
+                    if (!graph_compatible) {
                         static bool logged_once = false;
                         if (!logged_once) {
-                            GGML_LOG_INFO("%s: disabling SYCL graphs for MUL_MAT_ID (unsupported type %s)\n",
-                                          __func__, ggml_type_name(src0->type));
+                            GGML_LOG_INFO("%s: disabling SYCL graphs for MUL_MAT_ID (type=%s, ne12=%ld)\n",
+                                          __func__, ggml_type_name(src0->type), (long)ne12);
                             logged_once = true;
                         }
                         return false;
                     }
-                    // GPU dispatch available for decode - MUL_MAT_ID is graph-compatible
+                    // Graph-compatible path available
                 }
                 break;
             case GGML_OP_MUL_MAT:
@@ -11544,16 +11579,52 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         //     }
         // }
 
-        // Skip SYCL graphs during prompt phase - use non-graph compute
-        if (is_prompt_phase) {
-            GGML_SYCL_DEBUG("[SYCL-GRAPH] skipping graph - prompt phase (ne[1]>1)\n");
+        // Note: Prompt phase graph recording is now supported.
+        // oneDNN primitives are cached during warmup (first inference) via DnnlPrimitiveCache
+        // in gemm.hpp. During graph recording, cached primitives are reused (no JIT compilation),
+        // making the execute() calls graph-compatible.
+        //
+        // Coalesced memory access optimization for MoE is applied during decode phase warm-up
+        // via graph_convert_to_coalesced() below, not during prompt phase.
+
+        // Minimum nodes to benefit from graph batching - skip tiny graphs
+        constexpr int MIN_GRAPH_NODES = 10;
+        if (cgraph->n_nodes < MIN_GRAPH_NODES) {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] skipping - graph too small (%d < %d nodes)\n",
+                           cgraph->n_nodes, MIN_GRAPH_NODES);
             ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
             return GGML_STATUS_SUCCESS;
         }
 
-        // Pre-reorder ALL tensors before decode graph recording.
+        // Check if cached graph matches current graph structure and phase.
+        // Different n_nodes or different phase means we need to re-record.
+        // Prompt and decode phases have same n_nodes but different matrix dimensions.
+        // IMPORTANT: This must run BEFORE ALL pre-allocation checks below, because
+        // pre-allocation checks use !exec_graph to determine if buffers are needed.
+        if (sycl_ctx->exec_graph) {
+            bool invalidate = false;
+            if (sycl_ctx->exec_graph_n_nodes != cgraph->n_nodes) {
+                GGML_SYCL_DEBUG("[SYCL-GRAPH] invalidating cache - n_nodes changed (%d -> %d)\n",
+                               sycl_ctx->exec_graph_n_nodes, cgraph->n_nodes);
+                invalidate = true;
+                sycl_ctx->warmup_decode_n_nodes = 0;  // Force re-warmup for new topology
+                sycl_ctx->warmup_prompt_n_nodes = 0;
+            } else if (sycl_ctx->exec_graph_is_decode != is_decode_phase) {
+                GGML_SYCL_DEBUG("[SYCL-GRAPH] invalidating cache - phase changed (%s -> %s)\n",
+                               sycl_ctx->exec_graph_is_decode ? "decode" : "prompt",
+                               is_decode_phase ? "decode" : "prompt");
+                invalidate = true;
+            }
+            if (invalidate) {
+                sycl_ctx->exec_graph.reset();
+                sycl_ctx->exec_graph_n_nodes = 0;
+            }
+        }
+
+        // Pre-reorder ALL tensors before decode graph recording (first time only).
         // This ensures we don't have incremental reordering blocking graph reuse.
-        if (is_decode_phase && graph_needs_reorder(*sycl_ctx, cgraph)) {
+        // Only run when exec_graph is null (before graph recording or after invalidation).
+        if (is_decode_phase && !sycl_ctx->exec_graph && graph_needs_reorder(*sycl_ctx, cgraph)) {
             GGML_SYCL_DEBUG("[SYCL-GRAPH] pre-reordering all tensors before graph recording (decode phase)\n");
             graph_pre_reorder_all(*sycl_ctx, cgraph);
         }
@@ -11587,22 +11658,21 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         // Same src1 pointer may hold different data in a new forward pass.
         sycl_ctx->moe_q8_cache.invalidate();
 
-        // Minimum nodes to benefit from graph batching - skip tiny graphs
-        constexpr int MIN_GRAPH_NODES = 10;
-        if (cgraph->n_nodes < MIN_GRAPH_NODES) {
-            GGML_SYCL_DEBUG("[SYCL-GRAPH] skipping - graph too small (%d < %d nodes)\n",
-                           cgraph->n_nodes, MIN_GRAPH_NODES);
+        // Warmup pass: If this phase hasn't been warmed up, run without graph recording
+        // to populate the oneDNN primitive cache. This avoids JIT compilation during
+        // graph recording which is incompatible with SYCL command graphs.
+        // Note: Prompt and decode phases have same n_nodes but different matrix dimensions,
+        // so we track warmup per-phase to ensure primitives are cached for both.
+        int & warmup_n_nodes = is_decode_phase ? sycl_ctx->warmup_decode_n_nodes
+                                               : sycl_ctx->warmup_prompt_n_nodes;
+        if (warmup_n_nodes != cgraph->n_nodes) {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] warmup pass for %s phase (n_nodes=%d, warmed=%d)\n",
+                           is_decode_phase ? "decode" : "prompt", cgraph->n_nodes, warmup_n_nodes);
             ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+            warmup_n_nodes = cgraph->n_nodes;
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] warmup complete for %s phase\n",
+                           is_decode_phase ? "decode" : "prompt");
             return GGML_STATUS_SUCCESS;
-        }
-
-        // Check if cached graph matches current graph structure.
-        // Different n_nodes means different graph topology - must re-record.
-        if (sycl_ctx->exec_graph && sycl_ctx->exec_graph_n_nodes != cgraph->n_nodes) {
-            GGML_SYCL_DEBUG("[SYCL-GRAPH] invalidating cache - n_nodes changed (%d -> %d)\n",
-                           sycl_ctx->exec_graph_n_nodes, cgraph->n_nodes);
-            sycl_ctx->exec_graph.reset();
-            sycl_ctx->exec_graph_n_nodes = 0;
         }
 
         // If we already have an executable graph with matching structure, just execute it.
@@ -11616,6 +11686,16 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             // First time - record and finalize the graph
             GGML_SYCL_DEBUG("[SYCL-GRAPH-DEBUG] Creating command_graph for %d nodes...\n", cgraph->n_nodes);
             sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()), {sycl_ex::property::graph::assume_buffer_outlives_graph{}});
+
+#if GGML_SYCL_DNNL
+            // Pre-allocate oneDNN scratchpad pool before graph recording
+            // This avoids memory allocation during recording which is incompatible with SYCL graphs
+            size_t max_scratchpad = get_dnnl_primitive_cache().get_max_scratchpad_size();
+            if (max_scratchpad > 0) {
+                GGML_SYCL_DEBUG("[SYCL-GRAPH] Pre-allocating scratchpad: %zu bytes\n", max_scratchpad);
+                sycl_ctx->pre_allocate_scratchpad(max_scratchpad, sycl_ctx->stream());
+            }
+#endif
 
             GGML_SYCL_DEBUG("[SYCL-GRAPH-DEBUG] begin_recording...\n");
             g_ggml_sycl_graph_recording = true;  // Mark recording state
@@ -11632,7 +11712,9 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             sycl_ctx->exec_graph = std::make_unique<
                 sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
             sycl_ctx->exec_graph_n_nodes = cgraph->n_nodes;  // Track for cache validation
-            GGML_SYCL_DEBUG("[SYCL-GRAPH] unique_ptr created, cached n_nodes=%d\n", cgraph->n_nodes);
+            sycl_ctx->exec_graph_is_decode = is_decode_phase;  // Track which phase this graph is for
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] unique_ptr created, cached n_nodes=%d, phase=%s\n",
+                           cgraph->n_nodes, is_decode_phase ? "decode" : "prompt");
 
             GGML_SYCL_DEBUG("[SYCL-GRAPH] execute new graph...\n");
             sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
