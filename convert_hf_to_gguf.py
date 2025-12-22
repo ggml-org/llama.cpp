@@ -141,16 +141,24 @@ class ModelBase:
         self.model_name = model_name
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
 
-        # Apply heuristics to figure out typical tensor encoding based on first layer tensor encoding type
+        # Apply heuristics to figure out typical tensor encoding based on first tensor's dtype
+        # NOTE: can't use field "torch_dtype" in config.json, because some finetunes lie.
         if self.ftype == gguf.LlamaFileType.GUESSED:
-            # NOTE: can't use field "torch_dtype" in config.json, because some finetunes lie.
-            _, first_tensor = next(self.get_tensors())
-            if first_tensor.dtype == torch.float16:
-                logger.info(f"choosing --outtype f16 from first tensor type ({first_tensor.dtype})")
-                self.ftype = gguf.LlamaFileType.MOSTLY_F16
+            for _, tensor in self.get_tensors():
+                if tensor.dim() < 2:
+                    continue
+
+                if tensor.dtype == torch.bfloat16:
+                    self.ftype = gguf.LlamaFileType.MOSTLY_BF16
+                    logger.info("heuristics detected bfloat16 tensor dtype, setting --outtype bf16")
+                    break
+                elif tensor.dtype == torch.float16:
+                    self.ftype = gguf.LlamaFileType.MOSTLY_F16
+                    logger.info("heuristics detected float16 tensor dtype, setting --outtype f16")
+                    break
             else:
-                logger.info(f"choosing --outtype bf16 from first tensor type ({first_tensor.dtype})")
-                self.ftype = gguf.LlamaFileType.MOSTLY_BF16
+                self.ftype = gguf.LlamaFileType.MOSTLY_F16
+                logger.info("heuristics unable to detect tensor dtype, defaulting to --outtype f16")
 
         self.dequant_model()
 
@@ -10557,8 +10565,8 @@ def parse_args() -> argparse.Namespace:
         help="path to write to; default: based on input. {ftype} will be replaced by the outtype.",
     )
     parser.add_argument(
-        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "tq1_0", "tq2_0", "auto"], default="f16",
-        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, tq1_0 or tq2_0 for ternary, and auto for the highest-fidelity 16-bit float type depending on the first loaded tensor type",
+        "--outtype", type=str, choices=["f32", "f16", "bf16", "q8_0", "tq1_0", "tq2_0", "auto"], default="auto",
+        help="output format - use f32 for float32, f16 for float16, bf16 for bfloat16, q8_0 for Q8_0, tq1_0 or tq2_0 for ternary, and auto for the highest-fidelity 16-bit float type",
     )
     parser.add_argument(
         "--bigendian", action="store_true",
