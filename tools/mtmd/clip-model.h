@@ -4,6 +4,7 @@
 #include "clip.h"
 #include "clip-impl.h"
 
+#include <array>
 #include <vector>
 #include <unordered_set>
 #include <cstdint>
@@ -142,6 +143,30 @@ struct clip_layer {
     ggml_tensor * deepstack_fc2_w = nullptr;
     ggml_tensor * deepstack_fc2_b = nullptr;
 
+    // lfm2
+    ggml_tensor * ff_norm_w     = nullptr;
+    ggml_tensor * ff_norm_b     = nullptr;
+    ggml_tensor * ff_norm_1_w   = nullptr;
+    ggml_tensor * ff_norm_1_b   = nullptr;
+    ggml_tensor * ff_up_1_w     = nullptr;
+    ggml_tensor * ff_up_1_b     = nullptr;
+    ggml_tensor * ff_down_1_w   = nullptr;
+    ggml_tensor * ff_down_1_b   = nullptr;
+    ggml_tensor * pos_bias_u    = nullptr;
+    ggml_tensor * pos_bias_v    = nullptr;
+    ggml_tensor * norm_conv_w   = nullptr;
+    ggml_tensor * norm_conv_b   = nullptr;
+    ggml_tensor * linear_pos_w  = nullptr;
+
+    ggml_tensor * conv_norm_w   = nullptr;
+    ggml_tensor * conv_norm_b   = nullptr;
+    ggml_tensor * conv_dw_w     = nullptr;
+    ggml_tensor * conv_dw_b     = nullptr;
+    ggml_tensor * conv_pw1_w    = nullptr;
+    ggml_tensor * conv_pw1_b    = nullptr;
+    ggml_tensor * conv_pw2_w    = nullptr;
+    ggml_tensor * conv_pw2_b    = nullptr;
+
     bool has_deepstack() const {
         return deepstack_fc1_w != nullptr;
     }
@@ -158,6 +183,8 @@ struct clip_model {
     ggml_tensor * patch_embeddings_1 = nullptr;  // second Conv2D kernel when we decouple Conv3D along temproal dimension (Qwen2VL)
     ggml_tensor * patch_bias = nullptr;
     ggml_tensor * position_embeddings = nullptr;
+    ggml_tensor * norm_embd_w = nullptr;
+    ggml_tensor * norm_embd_b = nullptr;
 
     ggml_tensor * pre_ln_w = nullptr;
     ggml_tensor * pre_ln_b = nullptr;
@@ -172,6 +199,14 @@ struct clip_model {
     ggml_tensor * projection; // TODO: rename it to fc (fully connected layer)
     ggml_tensor * mm_fc_w;
     ggml_tensor * mm_fc_b;
+    ggml_tensor * mm_ffn_up_w = nullptr;
+    ggml_tensor * mm_ffn_up_b = nullptr;
+    ggml_tensor * mm_ffn_gate_w = nullptr;
+    ggml_tensor * mm_ffn_gate_b = nullptr;
+    ggml_tensor * mm_ffn_down_w = nullptr;
+    ggml_tensor * mm_ffn_down_b = nullptr;
+    ggml_tensor * mm_post_norm_w = nullptr;
+    ggml_tensor * mm_post_norm_b = nullptr;
 
     // LLaVA projection
     ggml_tensor * mm_input_norm_w = nullptr;
@@ -253,9 +288,10 @@ struct clip_model {
     ggml_tensor * mm_input_proj_w = nullptr;
     ggml_tensor * mm_soft_emb_norm_w = nullptr;
 
-    // pixtral
+    // pixtral, glm4v
     ggml_tensor * token_embd_img_break = nullptr;
     ggml_tensor * mm_patch_merger_w = nullptr;
+    ggml_tensor * mm_patch_merger_b = nullptr;
 
     // ultravox / whisper encoder
     ggml_tensor * conv1d_1_w = nullptr;
@@ -274,6 +310,12 @@ struct clip_model {
     ggml_tensor * mm_4h_to_h_w = nullptr;
     ggml_tensor * mm_boi = nullptr;
     ggml_tensor * mm_eoi = nullptr;
+
+    // lfm2 audio
+    std::array<ggml_tensor *, 7> pre_encode_conv_X_w = {nullptr};
+    std::array<ggml_tensor *, 7> pre_encode_conv_X_b = {nullptr};
+    ggml_tensor * pre_encode_out_w = nullptr;
+    ggml_tensor * pre_encode_out_b = nullptr;
 
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A
