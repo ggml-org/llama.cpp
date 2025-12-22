@@ -30,6 +30,11 @@ struct agent_config {
     std::string working_dir;
     bool verbose = false;
     bool yolo_mode = false;  // Skip all permission prompts
+
+    // Skills configuration (agentskills.io spec)
+    bool enable_skills = true;
+    std::vector<std::string> skills_search_paths;  // Additional search paths
+    std::string skills_prompt_section;             // Pre-generated XML for prompt injection
 };
 
 // Result from running the agent loop

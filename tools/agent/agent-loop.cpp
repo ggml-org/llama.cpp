@@ -169,6 +169,30 @@ All tests passing now.
 
 When the task is complete, provide a brief summary of what you did.)";
 
+    // Append skills section if available (agentskills.io spec)
+    if (!config.skills_prompt_section.empty()) {
+        system_prompt += R"(
+
+# Available Skills
+
+Skills are specialized capabilities you can use for specific tasks.
+When a user's request matches a skill description, read the skill file to get detailed instructions.
+Use the `read` tool with the skill's location path to load the full instructions.
+
+## Running Skill Scripts
+
+Some skills include executable scripts in their `<scripts>` section. To run a skill script:
+
+1. Use the `bash` tool with the full path: `<skill_dir>/<script>`
+2. Example: `python /path/to/skill/scripts/analyze.py --file code.py`
+3. Only script output is returned - source code stays out of context
+
+If a skill has `<allowed_tools>`, it declares which tools it needs. This helps you understand the skill's scope.
+
+)";
+        system_prompt += config.skills_prompt_section;
+    }
+
     messages_.push_back({
         {"role", "system"},
         {"content", system_prompt}

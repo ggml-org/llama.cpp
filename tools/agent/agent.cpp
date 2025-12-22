@@ -5,6 +5,7 @@
 #include "agent-loop.h"
 #include "tool-registry.h"
 #include "permission.h"
+#include "skills/skills-manager.h"
 
 #ifndef _WIN32
 #include "mcp/mcp-server-manager.h"
@@ -30,6 +31,27 @@
 #endif
 
 namespace fs = std::filesystem;
+
+// Get the user config directory for llama-agent
+static std::string get_config_dir() {
+#ifdef _WIN32
+    const char * appdata = std::getenv("APPDATA");
+    if (appdata) {
+        return std::string(appdata) + "\\llama-agent";
+    }
+    return "";
+#else
+    const char * xdg_config = std::getenv("XDG_CONFIG_HOME");
+    if (xdg_config) {
+        return std::string(xdg_config) + "/llama-agent";
+    }
+    const char * home = std::getenv("HOME");
+    if (home) {
+        return std::string(home) + "/.config/llama-agent";
+    }
+    return "";
+#endif
+}
 
 const char * LLAMA_AGENT_LOGO = R"(
       _ _                                                  _
@@ -85,6 +107,8 @@ int main(int argc, char ** argv) {
     // Check for custom flags before common_params_parse
     bool yolo_mode = false;
     int max_iterations = 50;  // Default value
+    bool enable_skills = true;
+    std::vector<std::string> extra_skills_paths;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -96,6 +120,27 @@ int main(int argc, char ** argv) {
             }
             argc--;
             i--;  // Re-check this position
+        } else if (arg == "--no-skills") {
+            enable_skills = false;
+            // Remove from argv
+            for (int j = i; j < argc - 1; j++) {
+                argv[j] = argv[j + 1];
+            }
+            argc--;
+            i--;  // Re-check this position
+        } else if (arg == "--skills-path") {
+            if (i + 1 < argc) {
+                extra_skills_paths.push_back(argv[i + 1]);
+                // Remove both the flag and its value
+                for (int j = i; j < argc - 2; j++) {
+                    argv[j] = argv[j + 2];
+                }
+                argc -= 2;
+                i--;  // Re-check this position
+            } else {
+                fprintf(stderr, "--skills-path requires a value\n");
+                return 1;
+            }
         } else if (arg == "--max-iterations" || arg == "-mi") {
             if (i + 1 < argc) {
                 try {
@@ -195,6 +240,28 @@ int main(int argc, char ** argv) {
     int mcp_tools_count = 0;
 #endif
 
+    // Discover skills (agentskills.io spec)
+    skills_manager skills_mgr;
+    int skills_count = 0;
+    if (enable_skills) {
+        std::vector<std::string> skill_paths;
+
+        // Project-local skills (highest priority)
+        skill_paths.push_back(working_dir + "/.llama-agent/skills");
+
+        // User-global skills
+        std::string config_dir = get_config_dir();
+        if (!config_dir.empty()) {
+            skill_paths.push_back(config_dir + "/skills");
+        }
+
+        // Extra paths from --skills-path flags
+        skill_paths.insert(skill_paths.end(),
+            extra_skills_paths.begin(), extra_skills_paths.end());
+
+        skills_count = skills_mgr.discover(skill_paths);
+    }
+
     // Configure agent
     agent_config config;
     config.working_dir = working_dir;
@@ -202,6 +269,9 @@ int main(int argc, char ** argv) {
     config.tool_timeout_ms = 120000;
     config.verbose = (params.verbosity >= LOG_LEVEL_INFO);
     config.yolo_mode = yolo_mode;
+    config.enable_skills = enable_skills;
+    config.skills_search_paths = extra_skills_paths;
+    config.skills_prompt_section = skills_mgr.generate_prompt_section();
 
     // Create agent loop
     agent_loop agent(ctx_server, params, config, g_is_interrupted);
@@ -219,6 +289,9 @@ int main(int argc, char ** argv) {
     }
     if (mcp_tools_count > 0) {
         console::log("mcp tools  : %d\n", mcp_tools_count);
+    }
+    if (skills_count > 0) {
+        console::log("skills     : %d\n", skills_count);
     }
     console::log("\n");
 
@@ -244,6 +317,7 @@ int main(int argc, char ** argv) {
         console::log("  /exit       exit the agent\n");
         console::log("  /clear      clear conversation history\n");
         console::log("  /tools      list available tools\n");
+        console::log("  /skills     list available skills\n");
         console::log("  ESC/Ctrl+C  abort generation\n");
         console::log("\n");
     }
@@ -305,6 +379,23 @@ int main(int argc, char ** argv) {
                 for (const auto * tool : tool_registry::instance().get_all_tools()) {
                     console::log("  %s:\n", tool->name.c_str());
                     console::log("    %s\n", tool->description.c_str());
+                }
+                continue;
+            }
+            if (buffer == "/skills") {
+                const auto & skills = skills_mgr.get_skills();
+                if (skills.empty()) {
+                    console::log("\nNo skills discovered.\n");
+                    console::log("Skills are loaded from:\n");
+                    console::log("  ./.llama-agent/skills/  (project-local)\n");
+                    console::log("  ~/.config/llama-agent/skills/  (user-global)\n");
+                } else {
+                    console::log("\nAvailable skills:\n");
+                    for (const auto & skill : skills) {
+                        console::log("  %s:\n", skill.name.c_str());
+                        console::log("    %s\n", skill.description.c_str());
+                        console::log("    Path: %s\n", skill.path.c_str());
+                    }
                 }
                 continue;
             }

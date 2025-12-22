@@ -88,7 +88,15 @@ bool permission_manager::is_path_in_project(const std::string & path) const {
 
     try {
         std::string abs_path = fs::absolute(path).string();
-        return abs_path.find(project_root_) == 0;
+        // Exact match is always in project
+        if (abs_path == project_root_) return true;
+        // Check that path is within project_root directory (not just a prefix match)
+        // e.g., /repo/file.txt is in /repo, but /repo_evil/file.txt is NOT
+        std::string prefix = project_root_;
+        if (prefix.back() != '/' && prefix.back() != '\\') {
+            prefix += '/';
+        }
+        return abs_path.find(prefix) == 0;
     } catch (...) {
         return false;
     }
