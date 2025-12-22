@@ -10014,17 +10014,7 @@ class ModernBertModel(BertModel):
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # rename custom "head" layers to standard bert "cls.predictions" names for compatibility
-        if name == "head.norm.weight":
-            name = "cls.predictions.transform.LayerNorm.weight"
-        elif name == "head.norm.bias":
-            name = "cls.predictions.transform.LayerNorm.bias"
-        elif name == "head.dense.weight":
-            name = "cls.predictions.transform.dense.weight"
-        elif name == "head.dense.bias":
-            name = "cls.predictions.transform.dense.bias"
-
-        # These layers act as MLM head, so we don't need them
+        # these layers act as MLM head, so we don't need them
         if name.startswith("decoder."):
             return []
 

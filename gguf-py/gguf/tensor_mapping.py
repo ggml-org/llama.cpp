@@ -77,6 +77,7 @@ class TensorNameMap:
             "head.out",                  # wavtokenizer
             "lm_head",                   # llama4
             "model.transformer.ff_out",  # llada
+            "head.decoder",              # modern-bert
         ),
         MODEL_TENSOR.DENSE_2_OUT: (
             "dense_2_out",  # embeddinggemma
@@ -1131,6 +1132,7 @@ class TensorNameMap:
             "classifier.dense", # roberta
             "pre_classifier",   # distillbert
             "dense",            # neobert
+            "head.dense",       # modern-bert
         ),
 
         MODEL_TENSOR.CLS_OUT: (
