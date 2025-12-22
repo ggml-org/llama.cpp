@@ -59,7 +59,7 @@ llm_build_modern_bert<iswa>::llm_build_modern_bert(const llama_model & model, co
         // RoPE
         Qcur = ggml_rope_ext(
                 ctx0, Qcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, rope_theta, freq_scale,
+                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale,
                 ext_factor, attn_factor, beta_fast, beta_slow
                 );
 
