@@ -1,5 +1,5 @@
 #include "common.h"
-//#include "log.h" // TODO: start using log.h
+#include "log.h"
 #include "llama.h"
 
 #include <cstdio>
