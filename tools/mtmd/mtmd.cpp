@@ -217,7 +217,7 @@ struct mtmd_context {
 
     void init_vision() {
         GGML_ASSERT(ctx_v != nullptr);
-        use_mrope = clip_is_qwen2vl(ctx_v);
+        use_mrope = clip_is_mrope(ctx_v);
 
         projector_type proj = clip_get_projector_type(ctx_v);
         int minicpmv_version = clip_is_minicpmv(ctx_v);
@@ -309,6 +309,10 @@ struct mtmd_context {
             img_beg = "<|image_start|>";
             img_end = "<|image_end|>";
 
+        } else if (proj == PROJECTOR_TYPE_GLM4V) {
+            img_beg = "<|begin_of_image|>";
+            img_end = "<|end_of_image|>";
+
         }
     }
 
@@ -325,7 +329,11 @@ struct mtmd_context {
             case PROJECTOR_TYPE_QWEN25O:
             case PROJECTOR_TYPE_ULTRAVOX:
             case PROJECTOR_TYPE_VOXTRAL:
+            case PROJECTOR_TYPE_GLMA:
                 audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
+                break;
+            case PROJECTOR_TYPE_LFM2A:
+                audio_preproc = std::make_unique<mtmd_audio_preprocessor_conformer>(ctx_a);
                 break;
             default:
                 GGML_ABORT("unsupported audio projector type");
