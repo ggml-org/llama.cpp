@@ -55,21 +55,17 @@ __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
     // FP4 E2M1: max exponent (unbiased) is 2.
     constexpr int FP4_E2M1_EMAX = 2;
 
-    float e = __log2f(amax);
+    const float e = __log2f(amax);
 
     // "even" -> round-to-nearest integer, ties-to-even
-    int e_int = __float2int_rn(e);
+    const int e_int = __float2int_rn(e);
 
-    int shared_exp = e_int - FP4_E2M1_EMAX;
+    const int shared_exp = e_int - FP4_E2M1_EMAX;
 
     int biased = shared_exp + 127;
 
-    if (biased < 0) {
-        biased = 0;
-    }
-    if (biased > 254) {
-        biased = 254;
-    }
+    biased = max(biased, 0);
+    biased = min(biased, 254);
 
     return static_cast<uint8_t>(biased);
 }

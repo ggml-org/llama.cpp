@@ -1017,6 +1017,7 @@ static __device__ __forceinline__ void vec_dot_mxfp4_mxfp4_mma(const int * __res
     const int *      y_qs = (const int *) y + 4;
     const uint32_t * y_sc = (const uint32_t *) y;
 
+    // tile_A has a length of 64 logical values vs. 32 values in block_mxfp4
     tile_A   A[ntx][MMQ_TILE_NE_K / (2 * QI_MXFP4)];
     uint32_t scaleA[ntx][MMQ_TILE_NE_K / (2 * QI_MXFP4)];
 
