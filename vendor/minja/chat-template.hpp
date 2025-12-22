@@ -172,7 +172,7 @@ class chat_template {
         auto out_empty = render_with_content("");
         auto out_null = render_with_content(json());
         caps_.requires_non_null_content = contains(out_empty, user_needle) && !contains(out_null, user_needle);
-
+        
         json j_null;
         auto make_tool_calls_msg = [&](const json & tool_calls) {
             return json {
@@ -194,10 +194,9 @@ class chat_template {
         const json dummy_args_obj {{"argument_needle", "print('Hello, World!')"}};
         const auto contains_arg_needle = [&](const std::string & out_str) {
             return contains(out_str, "<parameter=argument_needle>")
-                || contains(out_str, "\"argument_needle\":")
+                || contains(out_str, "\"argument_needle\"")
                 || contains(out_str, "'argument_needle':")
-                || contains(out_str, ">argument_needle<")
-                || contains(out_str, "=\"argument_needle\"");
+                || contains(out_str, ">argument_needle<");
         };
 
         // Note: the arguments are rendered in both cases, but may be double-escaped, which we don't want.
