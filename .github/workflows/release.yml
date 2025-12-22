@@ -688,6 +688,8 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
+          # Zip file is required for Swift Package Manager, which does not support tar.gz for binary targets.
+          # For more details, see https://developer.apple.com/documentation/xcode/distributing-binary-frameworks-as-swift-packages
           cd build-apple && zip -r -y ../llama-${{ steps.tag.outputs.name }}-xcframework.zip llama.xcframework
 
       - name: Upload artifacts
