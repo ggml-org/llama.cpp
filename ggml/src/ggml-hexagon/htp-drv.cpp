@@ -95,7 +95,12 @@ void * rpcmem_alloc(int heapid, uint32_t flags, int size) {
 }
 
 void * rpcmem_alloc2(int heapid, uint32_t flags, size_t size) {
-    return rpcmem_alloc2_pfn(heapid, flags, size);
+    // fall back to rpcmem_alloc if v2 not supported
+    if (rpcmem_alloc2) {
+        return rpcmem_alloc2_pfn(heapid, flags, size);
+    } else {
+        return rpcmem_alloc_pfn(heapid, flags, size);
+    }
 }
 
 void rpcmem_free(void * po) {
@@ -311,36 +316,37 @@ int htpdrv_init() {
     fs::path path{ drv_path.c_str() };
     dl_handle_ptr handle { dl_load_library(path) };
     if (!handle) {
-        GGML_LOG_ERROR("%s: failed to load %s: %s\n", __func__, path.u8string().c_str(), dl_error());
+        GGML_LOG_ERROR("%s: failed to load %s: %s\n",
+                       __func__, path.u8string().c_str(), dl_error());
         return AEE_EUNABLETOLOAD;
     }
 
-#define DLSYM(DRV, TYPE, PTR, SYM)                                      \
-    do {                                                                \
-        PTR = (TYPE) dl_get_sym(DRV, #SYM);                             \
-        if (nullptr == PTR) {                                           \
-            GGML_LOG_ERROR("%s: failed to dlsym %s\n", __func__, #SYM); \
-            return AEE_EUNABLETOLOAD;                                   \
-        }                                                               \
+#define dlsym(drv, type, pfn, symbol, ignore)                               \
+    do {                                                                    \
+        pfn = (type) dl_get_sym(drv, #symbol);                              \
+        if (!ignore && nullptr == pfn) {                                               \
+            GGML_LOG_ERROR("%s: failed to dlsym %s\n", __func__, #symbol);  \
+            return AEE_EUNABLETOLOAD;                                       \
+        }                                                                   \
     } while (0)
 
-    DLSYM(handle.get(), rpcmem_alloc_pfn_t, rpcmem_alloc_pfn, rpcmem_alloc);
-    DLSYM(handle.get(), rpcmem_alloc2_pfn_t, rpcmem_alloc2_pfn, rpcmem_alloc2);
-    DLSYM(handle.get(), rpcmem_free_pfn_t, rpcmem_free_pfn, rpcmem_free);
-    DLSYM(handle.get(), rpcmem_to_fd_pfn_t, rpcmem_to_fd_pfn, rpcmem_to_fd);
-    DLSYM(handle.get(), fastrpc_mmap_pfn_t, fastrpc_mmap_pfn, fastrpc_mmap);
-    DLSYM(handle.get(), fastrpc_munmap_pfn_t, fastrpc_munmap_pfn, fastrpc_munmap);
-    DLSYM(handle.get(), dspqueue_create_pfn_t, dspqueue_create_pfn, dspqueue_create);
-    DLSYM(handle.get(), dspqueue_close_pfn_t, dspqueue_close_pfn, dspqueue_close);
-    DLSYM(handle.get(), dspqueue_export_pfn_t, dspqueue_export_pfn, dspqueue_export);
-    DLSYM(handle.get(), dspqueue_write_pfn_t, dspqueue_write_pfn, dspqueue_write);
-    DLSYM(handle.get(), dspqueue_read_pfn_t, dspqueue_read_pfn, dspqueue_read);
-    DLSYM(handle.get(), remote_handle64_open_pfn_t, remote_handle64_open_pfn, remote_handle64_open);
-    DLSYM(handle.get(), remote_handle64_invoke_pfn_t, remote_handle64_invoke_pfn, remote_handle64_invoke);
-    DLSYM(handle.get(), remote_handle_control_pfn_t, remote_handle_control_pfn, remote_handle_control);
-    DLSYM(handle.get(), remote_handle64_control_pfn_t, remote_handle64_control_pfn, remote_handle64_control);
-    DLSYM(handle.get(), remote_session_control_pfn_t, remote_session_control_pfn, remote_session_control);
-    DLSYM(handle.get(), remote_handle64_close_pfn_t, remote_handle64_close_pfn, remote_handle64_close);
+    dlsym(handle.get(), rpcmem_alloc_pfn_t, rpcmem_alloc_pfn, rpcmem_alloc, false);
+    dlsym(handle.get(), rpcmem_alloc2_pfn_t, rpcmem_alloc2_pfn, rpcmem_alloc2, true);
+    dlsym(handle.get(), rpcmem_free_pfn_t, rpcmem_free_pfn, rpcmem_free, false);
+    dlsym(handle.get(), rpcmem_to_fd_pfn_t, rpcmem_to_fd_pfn, rpcmem_to_fd, false);
+    dlsym(handle.get(), fastrpc_mmap_pfn_t, fastrpc_mmap_pfn, fastrpc_mmap, false);
+    dlsym(handle.get(), fastrpc_munmap_pfn_t, fastrpc_munmap_pfn, fastrpc_munmap, false);
+    dlsym(handle.get(), dspqueue_create_pfn_t, dspqueue_create_pfn, dspqueue_create, false);
+    dlsym(handle.get(), dspqueue_close_pfn_t, dspqueue_close_pfn, dspqueue_close, false);
+    dlsym(handle.get(), dspqueue_export_pfn_t, dspqueue_export_pfn, dspqueue_export, false);
+    dlsym(handle.get(), dspqueue_write_pfn_t, dspqueue_write_pfn, dspqueue_write, false);
+    dlsym(handle.get(), dspqueue_read_pfn_t, dspqueue_read_pfn, dspqueue_read, false);
+    dlsym(handle.get(), remote_handle64_open_pfn_t, remote_handle64_open_pfn, remote_handle64_open, false);
+    dlsym(handle.get(), remote_handle64_invoke_pfn_t, remote_handle64_invoke_pfn, remote_handle64_invoke, false);
+    dlsym(handle.get(), remote_handle_control_pfn_t, remote_handle_control_pfn, remote_handle_control, false);
+    dlsym(handle.get(), remote_handle64_control_pfn_t, remote_handle64_control_pfn, remote_handle64_control, false);
+    dlsym(handle.get(), remote_session_control_pfn_t, remote_session_control_pfn, remote_session_control, false);
+    dlsym(handle.get(), remote_handle64_close_pfn_t, remote_handle64_close_pfn, remote_handle64_close, false);
 
     lib_cdsp_rpc_handle = std::move(handle);
     initialized         = true;
