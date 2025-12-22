@@ -12,9 +12,14 @@ extern "C" {
 #endif
 
 typedef struct {
+    void *dst;
+    const void *src;
+} dma_ptr;
+
+typedef struct {
     hexagon_udma_descriptor_type1_t * desc;  // descriptor pointers
     hexagon_udma_descriptor_type1_t * tail;  // tail pointer
-    void **                           dst;   // dst pointers
+    dma_ptr                         * dptr;  // dst/src pointers
     uint32_t                          push_idx;
     uint32_t                          pop_idx;
     uint32_t                          capacity;
@@ -49,13 +54,20 @@ static inline unsigned int dmwait(void) {
     return ret;
 }
 
-static inline bool dma_queue_push(dma_queue *  q,
-                                  void *       dst,
-                                  const void * src,
-                                  size_t       dst_row_size,
-                                  size_t       src_row_size,
-                                  size_t       nrows) {
+static inline dma_ptr dma_make_ptr(void *dst, const void *src)
+{
+    dma_ptr p = { dst, src };
+    return p;
+}
+
+static inline bool dma_queue_push(dma_queue * q,
+                                  dma_ptr     dptr,
+                                  size_t      dst_row_size,
+                                  size_t      src_row_size,
+                                  size_t      width, // width in bytes. number of bytes to transfer per row
+                                  size_t      nrows) {
     if (((q->push_idx + 1) & q->idx_mask) == q->pop_idx) {
+        FARF(ERROR, "dma-push: queue full\n");
         return false;
     }
 
@@ -75,18 +87,18 @@ static inline bool dma_queue_push(dma_queue *  q,
 #endif
     desc->order          = 0;
     desc->dstate         = HEXAGON_UDMA_DESC_DSTATE_INCOMPLETE;
-    desc->src            = (void *) src;
-    desc->dst            = (void *) dst;
+    desc->src            = (void *) dptr.src;
+    desc->dst            = (void *) dptr.dst;
     desc->allocation     = 0;
     desc->padding        = 0;
-    desc->roiwidth       = src_row_size;
+    desc->roiwidth       = width;
     desc->roiheight      = nrows;
     desc->srcstride      = src_row_size;
     desc->dststride      = dst_row_size;
     desc->srcwidthoffset = 0;
     desc->dstwidthoffset = 0;
 
-    q->dst[q->push_idx] = dst;
+    q->dptr[q->push_idx] = dptr;
 
     dmlink(q->tail, desc);
     q->tail = desc;
@@ -96,9 +108,28 @@ static inline bool dma_queue_push(dma_queue *  q,
     return true;
 }
 
-static inline uint8_t * dma_queue_pop(dma_queue * q) {
+static inline bool dma_queue_push_ddr_to_vtcm(dma_queue * q,
+                                              dma_ptr     dptr,
+                                              size_t      dst_row_size,
+                                              size_t      src_row_size,
+                                              size_t      nrows) {
+    return dma_queue_push(q, dptr, dst_row_size, src_row_size, src_row_size, nrows);
+}
+
+
+static inline bool dma_queue_push_vtcm_to_ddr(dma_queue * q,
+                                              dma_ptr     dptr,
+                                              size_t      dst_row_size,
+                                              size_t      src_row_size,
+                                              size_t      nrows) {
+    return dma_queue_push(q, dptr, dst_row_size, src_row_size, dst_row_size, nrows);
+}
+
+static inline dma_ptr dma_queue_pop(dma_queue * q) {
+    dma_ptr dptr  = { NULL };
+
     if (q->push_idx == q->pop_idx) {
-        return NULL;
+        return dptr;
     }
 
     hexagon_udma_descriptor_type1_t * desc = &q->desc[q->pop_idx];
@@ -112,11 +143,11 @@ static inline uint8_t * dma_queue_pop(dma_queue * q) {
         // FARF(ERROR, "dma-pop: waiting for DMA : %u\n", q->pop_idx);
     }
 
-    uint8_t * dst = (uint8_t *) q->dst[q->pop_idx];
+    dptr = q->dptr[q->pop_idx];
 
     // FARF(ERROR, "dma-pop: i %u dst %p\n", q->pop_idx, dst);
     q->pop_idx = (q->pop_idx + 1) & q->idx_mask;
-    return dst;
+    return dptr;
 }
 
 #ifdef __cplusplus
