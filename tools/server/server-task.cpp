@@ -1153,7 +1153,7 @@ json server_task_result_rerank::to_json() {
 json server_task_result_cmpl_partial::to_json_anthropic() {
     json events = json::array();
     bool first = (n_decoded == 1);
-    static bool text_block_started = false;
+    bool text_block_started = false;
 
     if (first) {
         text_block_started = false;
