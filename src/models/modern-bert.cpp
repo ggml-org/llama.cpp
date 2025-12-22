@@ -24,6 +24,14 @@ llm_build_modern_bert<iswa>::llm_build_modern_bert(const llama_model & model, co
     auto * inp_attn = build_attn_inp_no_cache();
 
     for (int il = 0; il < n_layer; ++il) {
+        float freq_base_l  = 0.0f;
+
+        if constexpr (iswa) {
+            freq_base_l = model.get_rope_freq_base(cparams, il);
+        } else {
+            freq_base_l = freq_base;
+        }
+
         ggml_tensor * cur = inpL;
 
         ggml_tensor * Qcur = nullptr;
