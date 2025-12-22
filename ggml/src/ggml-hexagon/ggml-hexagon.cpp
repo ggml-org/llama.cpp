@@ -1928,15 +1928,6 @@ static bool hex_supported_dims(const struct ggml_tensor * x, const struct ggml_t
     return true;
 }
 
-template <typename... _TTensor>
-static inline bool hex_supported_buffer(const struct ggml_hexagon_session * sess, _TTensor... tensors) {
-    return ([&]() -> bool {
-        return !tensors || !tensors->buffer ||
-               (ggml_backend_buffer_is_hexagon(tensors->buffer) &&
-                ggml_backend_hexagon_buffer_get_sess(tensors->buffer) == sess);
-    }() && ...);
-}
-
 static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * sess, const struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -2353,18 +2344,14 @@ static inline void ggml_hexagon_dispatch_op(const struct ggml_tensor * op, uint3
     t2 = ggml_time_us();
 
     if (src1) {
-        HEX_PROFILE(
-            "ggml-hex: %s %s %s %u:%u:%u:%u x %s %u:%u:%u:%u -> %s %u:%u:%u:%u : op-usec %u op-cycles %u op-pkts %u "
-            "(%f) call-usec %llu\n",
+        HEX_PROFILE("ggml-hex: %s %s %s %u:%u:%u:%u x %s %u:%u:%u:%u -> %s %u:%u:%u:%u : op-usec %u op-cycles %u op-pkts %u (%f) call-usec %llu\n",
             sess->name.c_str(), ggml_op_name(op->op), src0->name, (uint32_t) src0->ne[0], (uint32_t) src0->ne[1],
             (uint32_t) src0->ne[2], (uint32_t) src0->ne[3], src1->name, (uint32_t) src1->ne[0], (uint32_t) src1->ne[1],
             (uint32_t) src1->ne[2], (uint32_t) src1->ne[3], dst->name, (uint32_t) dst->ne[0], (uint32_t) dst->ne[1],
             (uint32_t) dst->ne[2], (uint32_t) dst->ne[3], sess->prof_usecs, sess->prof_cycles, sess->prof_pkts,
             (float) sess->prof_cycles / sess->prof_pkts, (unsigned long long) t2 - t1);
     } else {
-        HEX_PROFILE(
-            "ggml-hex: %s %s %s %u:%u:%u:%u -> %s %u:%u:%u:%u : op-usec %u op-cycles %u op-pkts %u (%f) call-usec "
-            "%llu\n",
+        HEX_PROFILE("ggml-hex: %s %s %s %u:%u:%u:%u -> %s %u:%u:%u:%u : op-usec %u op-cycles %u op-pkts %u (%f) call-usec %llu\n",
             sess->name.c_str(), ggml_op_name(op->op), src0->name, (uint32_t) src0->ne[0], (uint32_t) src0->ne[1],
             (uint32_t) src0->ne[2], (uint32_t) src0->ne[3], dst->name, (uint32_t) dst->ne[0], (uint32_t) dst->ne[1],
             (uint32_t) dst->ne[2], (uint32_t) dst->ne[3], sess->prof_usecs, sess->prof_cycles, sess->prof_pkts,
@@ -2985,17 +2972,47 @@ static ggml_backend_buffer_type_t ggml_backend_hexagon_device_get_repack_buffer_
     return &sess->repack_buffer_type;
 }
 
+static void ggml_hexagon_dump_op(ggml_hexagon_session *sess, const struct ggml_tensor * op, bool supp) {
+    if (!opt_verbose) return;
+
+    char dims[64 * GGML_MAX_SRC];
+    char strides[64 * GGML_MAX_SRC];
+    char types[16 * GGML_MAX_SRC];
+    char buffs[64 * GGML_MAX_SRC];
+    char names[64 * GGML_MAX_SRC];
+
+    hex_format_op_dims(dims, op);
+    hex_format_op_strides(strides, op);
+    hex_format_op_types(types, op);
+    hex_format_op_buffs(buffs, op);
+    hex_format_op_names(names, op);
+
+    HEX_VERBOSE("ggml-hex: %s device-supports-op %s : %s : %s : %s : %s : %s : (%d)\n", sess->name.c_str(),
+                ggml_op_name(op->op), names, dims, types, strides, buffs, (int) supp);
+}
+
+static bool ggml_hexagon_supported_buffer(ggml_hexagon_session *sess, const struct ggml_tensor * t) {
+    if (t && t->buffer) {
+        if (ggml_backend_buffer_is_hexagon(t->buffer)      == false) return false; // not our buffer
+        if (ggml_backend_hexagon_buffer_get_sess(t->buffer) != sess) return false; // wrong session
+    }
+    return true;
+}
+
 static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     auto sess = static_cast<ggml_hexagon_session *>(dev->context);
 
-    // src0, src1, src2 & dst must be mapped to the same session
-    if (!hex_supported_buffer(sess, op->src[0], op->src[1], op->src[2], op)) {
-        if (opt_verbose) {
-            HEX_VERBOSE("ggml-hex: %s device-unsupports-op %s : unsupported buffer types\n", sess->name.c_str(),
-                        ggml_op_name(op->op));
-        }
+    // all srcs & dsts must be mapped to the same session
+    if (!ggml_hexagon_supported_buffer(sess, op)) {
+        ggml_hexagon_dump_op(sess, op, false);
         return false;
-    };
+    }
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        if (!ggml_hexagon_supported_buffer(sess, op->src[i])) {
+            ggml_hexagon_dump_op(sess, op, false);
+            return false;
+        }
+    }
 
     bool supp = false;
     switch (op->op) {
@@ -3057,26 +3074,8 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
             break;
     }
 
-    if (opt_verbose) {
-        char dims[64 * GGML_MAX_SRC];
-        char strides[64 * GGML_MAX_SRC];
-        char types[16 * GGML_MAX_SRC];
-        char buffs[64 * GGML_MAX_SRC];
-        char names[64 * GGML_MAX_SRC];
-
-        hex_format_op_dims(dims, op);
-        hex_format_op_strides(strides, op);
-        hex_format_op_types(types, op);
-        hex_format_op_buffs(buffs, op);
-        hex_format_op_names(names, op);
-
-        HEX_VERBOSE("ggml-hex: %s device-supports-op %s : %s : %s : %s : %s : %s : (%d)\n", sess->name.c_str(),
-                    ggml_op_name(op->op), names, dims, types, strides, buffs, (int) supp);
-    }
-
+    ggml_hexagon_dump_op(sess, op, supp);
     return supp;
-
-    GGML_UNUSED(dev);
 }
 
 static bool ggml_backend_hexagon_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
