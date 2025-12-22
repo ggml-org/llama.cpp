@@ -125,6 +125,7 @@ struct common_log {
         file = nullptr;
         prefix = false;
         timestamps = false;
+        buffering = false;
         running = false;
         t_start = t_us();
 
@@ -156,6 +157,7 @@ private:
 
     bool prefix;
     bool timestamps;
+    bool buffering;
     bool running;
 
     int64_t t_start;
@@ -172,7 +174,7 @@ public:
     void add(enum ggml_log_level level, const char * fmt, va_list args) {
         std::lock_guard<std::mutex> lock(mtx);
 
-        if (!running) {
+        if (!running && !buffering) {
             // discard messages while the worker thread is paused
             return;
         }
@@ -250,7 +252,7 @@ public:
     void resume() {
         std::lock_guard<std::mutex> lock(mtx);
 
-        if (running) {
+        if (running || buffering) {
             return;
         }
 
@@ -353,6 +355,26 @@ public:
 
         this->timestamps = timestamps;
     }
+
+    void set_buffering(bool buffering) {
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+
+            this->buffering = buffering;
+        }
+        if (buffering) {
+            pause();
+        } else {
+            resume();
+        }
+    }
+
+    void drop() {
+        std::lock_guard<std::mutex> lock(mtx);
+
+        head = tail;
+        cv.notify_one();
+    }
 };
 
 //
@@ -410,6 +432,14 @@ void common_log_set_colors(struct common_log * log, log_colors colors) {
 
     GGML_ASSERT(colors == LOG_COLORS_ENABLED);
     log->set_colors(true);
+}
+
+void common_log_buffering(struct common_log * log, bool buffering) {
+    log->set_buffering(buffering);
+}
+
+void common_log_drop(struct common_log * log) {
+    log->drop();
 }
 
 void common_log_set_prefix(struct common_log * log, bool prefix) {

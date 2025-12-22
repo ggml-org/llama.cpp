@@ -86,6 +86,22 @@ void common_log_set_prefix    (struct common_log * log, bool prefix);       // w
 void common_log_set_timestamps(struct common_log * log, bool timestamps);   // whether to output timestamps in the prefix
 void common_log_flush         (struct common_log * log);                    // flush all pending log messages
 
+// Buffering log messages allows to only write log if we encouter an error later on
+// This is useful for libraries where we want to avoid spamming the user with
+// debug/info messages unless something goes wrong.
+//
+// example:
+//  common_log_buffering(log, true);
+//  ... do stuff ...
+//  if (error) {
+//      common_log_buffering(log, false); // also flushes the log
+//  }
+//  common_log_drop(log);
+//  common_log_buffering(log, false);
+
+void common_log_buffering(struct common_log * log, bool buffering); // not thread-safe
+void common_log_drop     (struct common_log * log);
+
 // helper macros for logging
 // use these to avoid computing log arguments if the verbosity of the log is higher than the threshold
 //
