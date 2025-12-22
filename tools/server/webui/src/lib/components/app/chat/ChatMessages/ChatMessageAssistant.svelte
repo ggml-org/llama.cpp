@@ -89,6 +89,13 @@
 	const fallbackToolCalls = $derived(typeof toolCallContent === 'string' ? toolCallContent : null);
 
 	const processingState = useProcessingState();
+	const promptProgressValue = $derived(processingState.processingState?.promptProgress);
+	const promptProgressText = $derived(() => {
+		if (!promptProgressValue) return null;
+		const { processed, total, time_ms } = promptProgressValue;
+		return `Processing (${processed.toLocaleString()} / ${total.toLocaleString()} tokens ${Math.round(time_ms / 1000)}s)`;
+	});
+
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 	let displayedModel = $derived((): string | null => {
@@ -113,6 +120,12 @@
 	$effect(() => {
 		if (isEditing && textareaElement) {
 			autoResizeTextarea(textareaElement);
+		}
+	});
+
+	$effect(() => {
+		if (isLoading() && !message?.content?.trim()) {
+			processingState.startMonitoring();
 		}
 	});
 
@@ -186,7 +199,7 @@
 		<div class="mt-6 w-full max-w-[48rem]" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
-					{processingState.getProcessingMessage()}
+					{promptProgressText() ?? processingState.getProcessingMessage()}
 				</span>
 			</div>
 		</div>
