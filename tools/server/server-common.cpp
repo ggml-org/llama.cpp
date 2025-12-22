@@ -115,26 +115,14 @@ bool lora_should_clear_cache(
         !lora_all_alora(next));
 }
 
-std::vector<common_adapter_lora_info> parse_lora_request(
-        const std::vector<common_adapter_lora_info> & lora_base,
-        const json & data) {
-    std::vector<common_adapter_lora_info> lora(lora_base);
-    int max_idx = lora.size();
-
-    // clear existing value
-    for (auto & entry : lora) {
-        entry.scale = 0.0f;
-    }
+std::map<int, float> parse_lora_request(const json & data) {
+    std::map<int, float> lora;
 
     // set value
     for (const auto & entry : data) {
         int id      = json_value(entry, "id", -1);
         float scale = json_value(entry, "scale", 0.0f);
-        if (0 <= id && id < max_idx) {
-            lora[id].scale = scale;
-        } else {
-            throw std::runtime_error("invalid adapter id");
-        }
+        lora[id] = scale;
     }
 
     return lora;
@@ -1435,7 +1423,7 @@ std::string safe_json_to_str(const json & data) {
 
 // TODO: reuse llama_detokenize
 template <class Iter>
-static std::string tokens_to_str(llama_context * ctx, Iter begin, Iter end) {
+static std::string tokens_to_str(const llama_vocab * ctx, Iter begin, Iter end) {
     std::string ret;
     for (; begin != end; ++begin) {
         ret += common_token_to_piece(ctx, *begin);
@@ -1445,7 +1433,12 @@ static std::string tokens_to_str(llama_context * ctx, Iter begin, Iter end) {
 }
 
 std::string tokens_to_str(llama_context * ctx, const llama_tokens & tokens) {
-    return tokens_to_str(ctx, tokens.begin(), tokens.end());
+    auto model = llama_get_model(ctx);
+    return tokens_to_str(llama_model_get_vocab(model), tokens.begin(), tokens.end());
+}
+
+std::string tokens_to_str(const llama_vocab * vocab, const llama_tokens & tokens) {
+    return tokens_to_str(vocab, tokens.begin(), tokens.end());
 }
 
 // format incomplete utf-8 multibyte character for output

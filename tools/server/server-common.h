@@ -107,9 +107,7 @@ bool lora_should_clear_cache(
         const std::vector<common_adapter_lora_info> & current,
         const std::vector<common_adapter_lora_info> & next);
 
-std::vector<common_adapter_lora_info> parse_lora_request(
-        const std::vector<common_adapter_lora_info> & lora_base,
-        const json & data);
+std::map<int, float> parse_lora_request(const json & data);
 
 bool are_lora_equal(
         const std::vector<common_adapter_lora_info> & l1,
@@ -325,6 +323,7 @@ std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int i
 std::string safe_json_to_str(const json & data);
 
 std::string tokens_to_str(llama_context * ctx, const llama_tokens & tokens);
+std::string tokens_to_str(const llama_vocab * vocab, const llama_tokens & tokens);
 
 // format incomplete utf-8 multibyte character for output
 std::string tokens_to_output_formatted_string(const llama_context * ctx, const llama_token token);

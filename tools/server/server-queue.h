@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <vector>
 #include <unordered_set>
 
 // struct for managing server tasks
@@ -173,8 +174,10 @@ struct server_response_reader {
     int get_new_id() {
         return queue_tasks.get_new_id();
     }
-    void post_task(server_task && task);
-    void post_tasks(std::vector<server_task> && tasks);
+
+    // if front = true, the task will be posted to the front of the queue (high priority)
+    void post_task(server_task && task, bool front = false);
+    void post_tasks(std::vector<server_task> && tasks, bool front = false);
     bool has_next() const;
 
     // return nullptr if should_stop() is true before receiving a result
