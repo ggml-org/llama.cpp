@@ -182,7 +182,6 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_KV_LORA_RANK,            hparams.n_lora_kv);
     add_kv(LLM_KV_ATTENTION_RELATIVE_BUCKETS_COUNT,  hparams.n_rel_attn_bkts);
     add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa);
-    add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN,  hparams.swa_period);
     add_kv(LLM_KV_ATTENTION_SCALE,                   hparams.f_attention_scale);
 
     const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;
