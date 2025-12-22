@@ -1073,6 +1073,30 @@ struct ggml_backend_sycl_context {
             max_src1_rows = 0;
         }
     } moe_buffers;
+
+    // Q8_1 quantization cache for MoE: avoids re-quantizing same input across gate/up/down
+    // In MoE layers, the same input is used for all projections - caching saves 3x quantization
+    struct moe_quant_cache {
+        void* cached_q8_1 = nullptr;       // Cached Q8_1 quantized data
+        const void* cached_src = nullptr;  // Key: source pointer that was quantized
+        int64_t cached_ne10 = 0;           // Input row width
+        int64_t cached_rows = 0;           // Number of rows quantized
+        size_t cached_size = 0;            // Buffer size
+        bool valid = false;                // Cache entry is valid
+
+        void invalidate() {
+            cached_src = nullptr;
+            cached_ne10 = 0;
+            cached_rows = 0;
+            valid = false;
+            // Note: don't free cached_q8_1 - it's pool memory that gets reused
+        }
+
+        // Check if cache matches current request
+        bool matches(const void* src, int64_t ne10, int64_t rows) const {
+            return valid && cached_src == src && cached_ne10 == ne10 && cached_rows == rows;
+        }
+    } moe_q8_cache;
 #endif
 
     // Barrier event for cross-ubatch synchronization

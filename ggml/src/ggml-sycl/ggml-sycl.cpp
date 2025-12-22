@@ -11583,6 +11583,10 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             sycl_ctx->moe_buffers.reset_usage();
         }
 
+        // Invalidate Q8_1 quantization cache at start of each graph execution.
+        // Same src1 pointer may hold different data in a new forward pass.
+        sycl_ctx->moe_q8_cache.invalidate();
+
         // Minimum nodes to benefit from graph batching - skip tiny graphs
         constexpr int MIN_GRAPH_NODES = 10;
         if (cgraph->n_nodes < MIN_GRAPH_NODES) {

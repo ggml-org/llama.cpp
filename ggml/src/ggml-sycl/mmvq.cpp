@@ -2470,37 +2470,66 @@ bool ggml_sycl_mul_mat_id_vec_q(
     const int64_t total_src1_rows = ne11 * ne12;
     const size_t required_size = total_src1_rows * q8_1_row_size;
 
-    // Try to use pre-allocated buffer (for graph recording)
-    void* q8_1_buffer = nullptr;
-    bool using_preallocated = false;
-
-#ifdef GGML_SYCL_GRAPH
-    if (g_ggml_sycl_graph_recording && ctx.moe_buffers.initialized) {
-        q8_1_buffer = ctx.moe_buffers.get_next_buffer(required_size);
-        if (q8_1_buffer) {
-            using_preallocated = true;
-            GGML_SYCL_DEBUG("[MOE-GRAPH] Using pre-allocated buffer %d\n",
-                           ctx.moe_buffers.current_buffer_idx - 1);
-        }
-    }
-#endif
-
-    // Fall back to pool allocation if no pre-allocated buffer available
-    ggml_sycl_pool_alloc<int8_t> src1_q8_1_pool(ctx.pool());
-    if (!using_preallocated) {
-        src1_q8_1_pool.alloc(required_size);
-        q8_1_buffer = src1_q8_1_pool.get();
-    }
-
-    // Get pointers
+    // Get pointers early for cache check
     const void * src0_d = src0->data;
     const float * src1_d = (const float *)src1->data;
     const int32_t * ids_d = (const int32_t *)ids->data;
     float * dst_d = (float *)dst->data;
 
-    // Quantize all rows to Q8_1
-    // The quantize function handles multiple rows when nrows > 1
-    quantize_row_q8_1_sycl<quantize_q8_1>(src1_d, (char*)q8_1_buffer, ne10, total_src1_rows, ne10_padded, stream);
+    // Check Q8_1 quantization cache - MoE uses same input for gate/up/down projections
+    void* q8_1_buffer = nullptr;
+    bool using_cached = false;
+    bool using_preallocated = false;
+
+#ifdef GGML_SYCL_GRAPH
+    // Check cache first - avoids re-quantizing same input across MoE projections
+    if (ctx.moe_q8_cache.matches(src1_d, ne10, total_src1_rows)) {
+        q8_1_buffer = ctx.moe_q8_cache.cached_q8_1;
+        using_cached = true;
+        GGML_SYCL_DEBUG("[MOE-CACHE] Cache HIT: src1=%p, ne10=%lld, rows=%lld\n",
+                       src1_d, (long long)ne10, (long long)total_src1_rows);
+    }
+#endif
+
+    // Fall back to allocation + quantization if cache miss
+    ggml_sycl_pool_alloc<int8_t> src1_q8_1_pool(ctx.pool());
+    if (!using_cached) {
+#ifdef GGML_SYCL_GRAPH
+        // Try pre-allocated buffer for graph recording
+        if (g_ggml_sycl_graph_recording && ctx.moe_buffers.initialized) {
+            q8_1_buffer = ctx.moe_buffers.get_next_buffer(required_size);
+            if (q8_1_buffer) {
+                using_preallocated = true;
+                GGML_SYCL_DEBUG("[MOE-GRAPH] Using pre-allocated buffer %d\n",
+                               ctx.moe_buffers.current_buffer_idx - 1);
+            }
+        }
+#endif
+
+        // Fall back to pool allocation if no pre-allocated buffer available
+        if (!using_preallocated) {
+            src1_q8_1_pool.alloc(required_size);
+            q8_1_buffer = src1_q8_1_pool.get();
+        }
+
+        // Quantize all rows to Q8_1
+        quantize_row_q8_1_sycl<quantize_q8_1>(src1_d, (char*)q8_1_buffer, ne10, total_src1_rows, ne10_padded, stream);
+
+#ifdef GGML_SYCL_GRAPH
+        // Cache the quantized result for subsequent gate/up/down calls
+        // Only cache if using pre-allocated buffer (pool buffers get freed)
+        if (using_preallocated) {
+            ctx.moe_q8_cache.cached_q8_1 = q8_1_buffer;
+            ctx.moe_q8_cache.cached_src = src1_d;
+            ctx.moe_q8_cache.cached_ne10 = ne10;
+            ctx.moe_q8_cache.cached_rows = total_src1_rows;
+            ctx.moe_q8_cache.cached_size = required_size;
+            ctx.moe_q8_cache.valid = true;
+            GGML_SYCL_DEBUG("[MOE-CACHE] Cache STORE: src1=%p, ne10=%lld, rows=%lld, buffer=%p\n",
+                           src1_d, (long long)ne10, (long long)total_src1_rows, q8_1_buffer);
+        }
+#endif
+    }
 
     // Calculate strides from tensors (matching host-side logic)
     const int64_t n_ids = ids->ne[0];  // Number of expert selections per token
