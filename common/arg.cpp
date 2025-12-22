@@ -96,6 +96,11 @@ common_arg & common_arg::set_sparam() {
     return *this;
 }
 
+common_arg & common_arg::set_preset_only() {
+    is_preset_only = true;
+    return *this;
+}
+
 bool common_arg::in_example(enum llama_example ex) {
     return examples.find(ex) != examples.end();
 }
@@ -772,6 +777,11 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
         }
         auto opt = *arg_to_options[arg];
         std::string val;
+        if (opt.value_hint == nullptr && opt.value_hint_2 == nullptr) {
+            // bool arg (need to reverse the meaning for negative args)
+            bool is_neg = std::find(opt.args_neg.begin(), opt.args_neg.end(), arg) != opt.args_neg.end();
+            val = is_neg ? "0" : "1";
+        }
         if (opt.value_hint != nullptr) {
             // arg with single value
             check_arg(i);
@@ -1139,7 +1149,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CTX_CHECKPOINTS").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--cache-ram", "-cram"}, "N",
+        {"-cram", "--cache-ram"}, "N",
         string_format("set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)"
             "[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)", params.cache_ram_mib),
         [](common_params & params, int value) {
@@ -1147,7 +1157,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_RAM").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--kv-unified", "-kvu"},
+        {"-kvu", "--kv-unified"},
         "use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)",
         [](common_params & params) {
             params.kv_unified = true;
@@ -1415,7 +1425,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--sampling-seq", "--sampler-seq"}, "SEQUENCE",
+        {"--sampler-seq", "--sampling-seq"}, "SEQUENCE",
         string_format("simplified sequence for samplers that will be used (default: %s)", sampler_type_chars.c_str()),
         [](common_params & params, const std::string & value) {
             params.sampling.samplers = common_sampler_types_from_chars(value);
@@ -2080,26 +2090,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
-        {"--override-tensor", "-ot"}, "<tensor name pattern>=<buffer type>,...",
+        {"-ot", "--override-tensor"}, "<tensor name pattern>=<buffer type>,...",
         "override tensor buffer type", [](common_params & params, const std::string & value) {
             parse_tensor_buffer_overrides(value, params.tensor_buft_overrides);
         }
     ));
     add_opt(common_arg(
-        {"--override-tensor-draft", "-otd"}, "<tensor name pattern>=<buffer type>,...",
+        {"-otd", "--override-tensor-draft"}, "<tensor name pattern>=<buffer type>,...",
         "override tensor buffer type for draft model", [](common_params & params, const std::string & value) {
             parse_tensor_buffer_overrides(value, params.speculative.tensor_buft_overrides);
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--cpu-moe", "-cmoe"},
+        {"-cmoe", "--cpu-moe"},
         "keep all Mixture of Experts (MoE) weights in the CPU",
         [](common_params & params) {
             params.tensor_buft_overrides.push_back(llm_ffn_exps_cpu_override());
         }
     ).set_env("LLAMA_ARG_CPU_MOE"));
     add_opt(common_arg(
-        {"--n-cpu-moe", "-ncmoe"}, "N",
+        {"-ncmoe", "--n-cpu-moe"}, "N",
         "keep the Mixture of Experts (MoE) weights of the first N layers in the CPU",
         [](common_params & params, int value) {
             if (value < 0) {
@@ -2114,14 +2124,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
     add_opt(common_arg(
-        {"--cpu-moe-draft", "-cmoed"},
+        {"-cmoed", "--cpu-moe-draft"},
         "keep all Mixture of Experts (MoE) weights in the CPU for the draft model",
         [](common_params & params) {
             params.speculative.tensor_buft_overrides.push_back(llm_ffn_exps_cpu_override());
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_CPU_MOE_DRAFT"));
     add_opt(common_arg(
-        {"--n-cpu-moe-draft", "-ncmoed"}, "N",
+        {"-ncmoed", "--n-cpu-moe-draft"}, "N",
         "keep the Mixture of Experts (MoE) weights of the first N layers in the CPU for the draft model",
         [](common_params & params, int value) {
             if (value < 0) {
@@ -2649,7 +2659,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_EMBEDDINGS"));
     add_opt(common_arg(
-        {"--reranking", "--rerank"},
+        {"--rerank", "--reranking"},
         string_format("enable reranking endpoint on server (default: %s)", "disabled"),
         [](common_params & params) {
             params.embedding = true;
@@ -2882,6 +2892,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: %s)", params.lora_init_without_apply ? "enabled" : "disabled"),
         [](common_params & params) {
             params.lora_init_without_apply = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--sleep-idle-seconds"}, "SECONDS",
+        string_format("number of seconds of idleness after which the server will sleep (default: %d; -1 = disabled)", params.sleep_idle_seconds),
+        [](common_params & params, int value) {
+            if (value == 0 || value < -1) {
+                throw std::invalid_argument("invalid value: cannot be 0 or less than -1");
+            }
+            params.sleep_idle_seconds = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
@@ -3120,7 +3140,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE}));
     add_opt(common_arg(
-        {"--draft-max", "--draft", "--draft-n"}, "N",
+        {"--draft", "--draft-n", "--draft-max"}, "N",
         string_format("number of tokens to draft for speculative decoding (default: %d)", params.speculative.n_max),
         [](common_params & params, int value) {
             params.speculative.n_max = value;
@@ -3495,4 +3515,25 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
     return ctx_arg;
+}
+
+void common_params_add_preset_options(std::vector<common_arg> & args) {
+    // arguments below won't be treated as CLI args, only preset options
+    args.push_back(common_arg(
+        {"load-on-startup"}, "NAME",
+        "in server router mode, autoload this model on startup",
+        [](common_params &, const std::string &) { /* unused */ }
+    ).set_env(COMMON_ARG_PRESET_LOAD_ON_STARTUP).set_preset_only());
+
+    // args.push_back(common_arg(
+    //     {"pin"},
+    //     "in server router mode, do not unload this model if models_max is exceeded",
+    //     [](common_params &) { /* unused */ }
+    // ).set_preset_only());
+
+    // args.push_back(common_arg(
+    //     {"unload-idle-seconds"}, "SECONDS",
+    //     "in server router mode, unload models idle for more than this many seconds",
+    //     [](common_params &, int) { /* unused */ }
+    // ).set_preset_only());
 }
