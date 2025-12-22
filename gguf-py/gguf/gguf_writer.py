@@ -11,7 +11,7 @@ from enum import Enum, auto
 from math import prod
 from pathlib import Path
 from io import BufferedWriter
-from typing import IO, Any, Sequence, Mapping, Union
+from typing import IO, Any, Sequence, Mapping
 from string import ascii_letters, digits
 
 import numpy as np
