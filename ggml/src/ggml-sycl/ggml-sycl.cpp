@@ -8801,6 +8801,10 @@ static void graph_pre_reorder_all(ggml_backend_sycl_context& ctx, ggml_cgraph * 
         // Perform reorder
         reorder_qw(src0, ctx.stream());
         extra->optimized_feature.reorder = true;
+        if (g_ggml_sycl_debug && node->op == GGML_OP_MUL_MAT_ID) {
+            fprintf(stderr, "[SYCL-GRAPH] SET reorder=true: src0='%s' extra=%p reorder_after=%d\n",
+                    src0->name, (void*)extra, extra->optimized_feature.reorder);
+        }
         reorder_count++;
     }
     if (reorder_count > 0) {
@@ -11621,11 +11625,13 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             }
         }
 
-        // Pre-reorder ALL tensors before decode graph recording (first time only).
+        // Pre-reorder ALL tensors before graph recording (first time only).
         // This ensures we don't have incremental reordering blocking graph reuse.
+        // Run for BOTH prompt and decode phases to enable SoA optimization for all MoE operations.
         // Only run when exec_graph is null (before graph recording or after invalidation).
-        if (is_decode_phase && !sycl_ctx->exec_graph && graph_needs_reorder(*sycl_ctx, cgraph)) {
-            GGML_SYCL_DEBUG("[SYCL-GRAPH] pre-reordering all tensors before graph recording (decode phase)\n");
+        if (!sycl_ctx->exec_graph && graph_needs_reorder(*sycl_ctx, cgraph)) {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] pre-reordering all tensors before graph recording (%s phase)\n",
+                           is_decode_phase ? "decode" : "prompt");
             graph_pre_reorder_all(*sycl_ctx, cgraph);
         }
 
