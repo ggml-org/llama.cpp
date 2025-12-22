@@ -13,9 +13,14 @@ struct skill_metadata {
     std::string name;           // Required: 1-64 chars, lowercase+numbers+hyphens
     std::string description;    // Required: 1-1024 chars
     std::string path;           // Absolute path to SKILL.md
+    std::string skill_dir;      // Directory containing SKILL.md
     std::string license;        // Optional
     std::string compatibility;  // Optional: environment requirements
     json metadata;              // Optional: additional key-value pairs
+
+    // Script execution support
+    std::vector<std::string> scripts;       // Relative paths like "scripts/analyze.py"
+    std::vector<std::string> allowed_tools; // Experimental: tools this skill can use
 };
 
 // Manages skill discovery and prompt generation

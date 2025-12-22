@@ -142,6 +142,13 @@ std::optional<skill_metadata> skills_manager::parse_frontmatter(const std::strin
             skill.license = value;
         } else if (key == "compatibility") {
             skill.compatibility = value;
+        } else if (key == "allowed-tools") {
+            // Parse space-delimited tool list (experimental per spec)
+            std::istringstream tools_stream(value);
+            std::string tool;
+            while (tools_stream >> tool) {
+                skill.allowed_tools.push_back(tool);
+            }
         }
     }
 
@@ -194,6 +201,28 @@ std::optional<skill_metadata> skills_manager::parse_skill(const std::string & sk
     std::string dir_name = fs::path(skill_dir).filename().string();
     if (skill->name != dir_name) {
         return std::nullopt;
+    }
+
+    // Store skill directory for script execution
+    skill->skill_dir = fs::absolute(skill_dir).string();
+
+    // Discover scripts in scripts/ subdirectory
+    fs::path scripts_dir = fs::path(skill_dir) / "scripts";
+    if (fs::exists(scripts_dir) && fs::is_directory(scripts_dir)) {
+        try {
+            for (const auto & entry : fs::directory_iterator(scripts_dir)) {
+                if (entry.is_regular_file()) {
+                    std::string script_name = entry.path().filename().string();
+                    // Skip hidden files
+                    if (!script_name.empty() && script_name[0] != '.') {
+                        skill->scripts.push_back("scripts/" + script_name);
+                    }
+                }
+            }
+            std::sort(skill->scripts.begin(), skill->scripts.end());
+        } catch (const fs::filesystem_error &) {
+            // Skip inaccessible scripts directory
+        }
     }
 
     return skill;
@@ -265,6 +294,27 @@ std::string skills_manager::generate_prompt_section() const {
         xml << "  <name>" << escape_xml(skill.name) << "</name>\n";
         xml << "  <description>" << escape_xml(skill.description) << "</description>\n";
         xml << "  <location>" << escape_xml(skill.path) << "</location>\n";
+        xml << "  <skill_dir>" << escape_xml(skill.skill_dir) << "</skill_dir>\n";
+
+        // Include scripts if present
+        if (!skill.scripts.empty()) {
+            xml << "  <scripts>\n";
+            for (const auto & script : skill.scripts) {
+                xml << "    <script>" << escape_xml(script) << "</script>\n";
+            }
+            xml << "  </scripts>\n";
+        }
+
+        // Include allowed-tools if specified (experimental)
+        if (!skill.allowed_tools.empty()) {
+            xml << "  <allowed_tools>";
+            for (size_t i = 0; i < skill.allowed_tools.size(); i++) {
+                if (i > 0) xml << " ";
+                xml << escape_xml(skill.allowed_tools[i]);
+            }
+            xml << "</allowed_tools>\n";
+        }
+
         xml << "</skill>\n";
     }
 
