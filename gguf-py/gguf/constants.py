@@ -842,7 +842,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.RND1:             "rnd1",
     MODEL_ARCH.PANGU_EMBED:      "pangu-embedded",
     MODEL_ARCH.MISTRAL3:         "mistral3",
-    MODEL_ARCH.LLAMA_EMBED:      "llama-embed-nemotron",
+    MODEL_ARCH.LLAMA_EMBED:      "llama-embed",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
