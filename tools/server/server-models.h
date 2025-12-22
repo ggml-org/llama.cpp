@@ -177,7 +177,8 @@ public:
                       const std::string & path,
                       const std::map<std::string, std::string> & headers,
                       const std::string & body,
-                      const std::function<bool()> should_stop);
+                      const std::function<bool()> should_stop,
+		      const common_params & base_params);
     ~server_http_proxy() {
         if (cleanup) {
             cleanup();

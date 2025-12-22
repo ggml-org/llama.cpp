@@ -600,7 +600,8 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
             req.path,
             req.headers,
             req.body,
-            req.should_stop);
+            req.should_stop,
+	    base_params);
     return proxy;
 }
 
@@ -888,14 +889,16 @@ server_http_proxy::server_http_proxy(
         const std::string & path,
         const std::map<std::string, std::string> & headers,
         const std::string & body,
-        const std::function<bool()> should_stop) {
+        const std::function<bool()> should_stop,
+	const common_params & params) {
     // shared between reader and writer threads
     auto cli  = std::make_shared<httplib::Client>(host, port);
     auto pipe = std::make_shared<pipe_t<msg_t>>();
 
     // setup Client
     cli->set_connection_timeout(0, 200000); // 200 milliseconds
-    cli->set_read_timeout(3600 * 24 * 90, 0); // Prevent crash if TTFT >300sec, boosted to 90 days
+    cli->set_write_timeout(params.timeout_read, 0); // reversed for cli
+    cli->set_read_timeout(params.timeout_write, 0);
     this->status = 500; // to be overwritten upon response
     this->cleanup = [pipe]() {
         pipe->close_read();
