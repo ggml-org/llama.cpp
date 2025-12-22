@@ -3,6 +3,9 @@
 #include "ggml.h"
 #include "openvino/runtime/core.hpp"
 
+#define CL_TARGET_OPENCL_VERSION 300
+#include <CL/cl.h>
+
 #include <cstdlib>
 #include <memory>
 #include <openvino/core/node.hpp>
@@ -22,6 +25,34 @@ std::optional<ov::RemoteContext> ggml_openvino_get_remote_context();
 // Get the compile config for the current device
 const ov::AnyMap & ggml_openvino_get_compile_config();
 
+// Get the OpenCL command queue for GPU operations (returns nullptr for CPU/NPU)
+cl_command_queue ggml_openvino_get_cl_queue();
+
+// Intel USM extension function type
+typedef cl_int(CL_API_CALL * clEnqueueMemFillINTEL_fn)(cl_command_queue queue,
+                                                       void * dst_ptr,
+                                                       const void * pattern,
+                                                       size_t pattern_size,
+                                                       size_t size,
+                                                       cl_uint num_events_in_wait_list,
+                                                       const cl_event * event_wait_list,
+                                                       cl_event * event);
+
+typedef cl_int(CL_API_CALL * clEnqueueMemcpyINTEL_fn)(cl_command_queue queue,
+                                                      cl_bool blocking,
+                                                      void * dst_ptr,
+                                                      const void * src_ptr,
+                                                      size_t size,
+                                                      cl_uint num_events_in_wait_list,
+                                                      const cl_event * event_wait_list,
+                                                      cl_event * event);
+
+// Get the clEnqueueMemFillINTEL function pointer (returns nullptr if not available)
+clEnqueueMemFillINTEL_fn ggml_openvino_get_clEnqueueMemFillINTEL();
+
+// Get the clEnqueueMemcpyINTEL function pointer (returns nullptr if not available)
+clEnqueueMemcpyINTEL_fn ggml_openvino_get_clEnqueueMemcpyINTEL();
+
 // =====================================================
 // Global Device Configuration (singleton)
 // =====================================================
@@ -33,8 +64,10 @@ struct ggml_openvino_device_config {
     bool initialized = false;
     std::optional<ov::RemoteContext> remote_context;
     ov::AnyMap compile_config;
+    cl_command_queue cl_queue = nullptr;
 
     void init();
+    ~ggml_openvino_device_config();
 };
 
 // Get the global device config singleton
