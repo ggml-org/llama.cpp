@@ -168,11 +168,15 @@ NEON 内核里对每个 group 只需要：
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 热路径中的 prefetch（默认启用；设为 `0` 方便 profile/sweep 对照；覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`）。
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` decode 快路（默认启用；设为 `0` 强制走通用路径做 A/B）。
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` 快路 group-loop 的 unroll（默认 `4`；设为 `2` 用于 A/B）。
+- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`）；当前仅 `sdot` 在 `N==1` 快路上可用，`tbl/merged64` 为预留。
+
+复现脚本：
+
+- `scripts/ifairy_lut_repro.sh`（包含 `test-ifairy`、strict、`llama-cli` sanity 与 `llama-bench`）。
 
 计划新增（未实现，先做文档约定）：
 
 - `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64`：新增 LUT 布局（配合 TBL / merged64 方案），默认仍由 `auto` 策略决定。
-- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`），用于 A/B 与回退。
 - `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 2~3，需结合 profile 调整）。
 
 ---
@@ -197,6 +201,7 @@ P1（近期做）：
 - ✅ P1 小步：将 LUT 相关 env 解析 helper 集中到 `ggml/src/ggml-ifairy-lut.h`，并在 `ggml-cpu.c`/`ggml-ifairy-lut.cpp` 复用，减少重复与语义漂移。
 - ✅ P1 小步：错误可观测性与回退一致性：`transform_tensor` 失败在 debug 下输出原因（shape/alloc/encode），并在路由阶段明确要求 `__aarch64__ + __ARM_NEON`（否则回退）。
 - ✅ P1 小步：配置健壮性：`GGML_IFAIRY_LUT_LAYOUT` 无效值在 debug 下 warn（仅一次）并回退默认；`BK_BLOCKS/BM` 的非法值在 debug 下提示并 clamp。
+- SDOT 快路（实验）：当前在 M4 + `compact` 上慢于 `auto`；后续优先验证“拆分专用 loop 去分支”与“16B 对齐的 group 布局”是否能弥补（详见 `IFAIRY_ARM_3W_LUT_STATUS.md` 0.1 记录）。
 
 P2（持续）：
 

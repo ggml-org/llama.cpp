@@ -106,11 +106,11 @@ struct ifairy_lut_extra {
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 热路径中的 prefetch（默认启用；设为 `0` 方便 profile/sweep 对照；覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`）。
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` decode 快路（默认启用；设为 `0` 强制走通用路径做 A/B）。
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` 快路 group-loop 的 unroll（默认 `4`；设为 `2` 用于 A/B）。
+- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`）；当前仅 `sdot` 在 `N==1` 快路上可用，`tbl/merged64` 为预留。
 
 计划新增（未实现，先做文档约定）：
 
 - `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64`：新增 LUT 布局（配合 6.8 的 TBL / merged64 方案），默认仍由 `auto` 策略决定。
-- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`），用于 A/B 与回退。
 - `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 2~3，需结合 profile 调整）。
 
 ## 6. 性能提升规划（主线，必须把 tok/s 拉上去）
@@ -121,6 +121,7 @@ struct ifairy_lut_extra {
 
 - **构建**：使用 Release，并确保你跑的就是你编译的二进制（优先 `build-rel`）。
 - **推荐基准命令**：以 `IFAIRY_ARM_3W_LUT_STATUS.md` 的 `0.1 tok/s 记录`表头命令为准（固定 `--threads/--n-prompt/--n-gen/--n-depth` 与 LUT env 组合）。
+- **一键复现脚本**：`scripts/ifairy_lut_repro.sh`（包含 `test-ifairy`、strict、`llama-cli` sanity、`llama-bench`）。
 - **tok/s 口径切换计划（llama-bench，CPU only）**：
   - A/B 与最终 tok/s 记录将统一改用 `llama-bench`（避免输出长度波动）；`llama-cli` 仅保留 sanity-check。
   - 参考命令（CPU-only，不走 offload）：`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
@@ -267,8 +268,9 @@ struct ifairy_lut_extra {
 #### 6.8.2 阶段 1（P0，目标 30~35 tok/s）
 
 - **SDOT 内核试验（`compact`）**：在 `ggml/src/ggml-ifairy-lut-qgemm.cpp` 增加 `__ARM_FEATURE_DOTPROD` 路径（仅 `N==1`），把 “widen+add” 改为 “dot accumulate”。  
-  - 计划引入实验开关：`GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`，默认 auto；strict 下仍走通用路径。  
+  - 已引入实验开关：`GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`，默认 auto；strict 下仍走通用路径。  
   - 若需要新布局（例如 code-major 或更易对齐的 12B/pos 打包），在 `ggml/src/ggml-ifairy-lut-preprocess.cpp` 以 **新 layout** 实现，避免修改现有 `compact`。
+  - 现状：M4 上 `sdot` 相比 `auto` 仍偏慢（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 0.1 记录）；TODO 包括“拆分专用 loop 去分支”和“为 `vdotq_s32` 调整为 16B 对齐的 group 布局”。
 - **预取优化**：在 `ggml/src/ggml-ifairy-lut-qgemm.cpp` 同时预取 LUT 与 indexes，预取距离改为可配置常量（计划新增 `GGML_IFAIRY_LUT_PREFETCH_DIST`，默认 2~3）。  
   - 移除热循环内的运行时分支（保留编译期/一次性开关），减少分支开销。
 - **减少 barrier（tiling）**：在 `ggml/src/ggml-cpu/ggml-cpu.c` 的 BK 路径引入 “双缓冲 + 单 barrier” 流程：thread0 预处理下一 tile，其它线程处理当前 tile，保证每 tile 只同步一次。

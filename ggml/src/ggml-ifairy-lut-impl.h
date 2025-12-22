@@ -9,6 +9,15 @@ enum ggml_ifairy_lut_layout {
 
 ggml_ifairy_lut_layout ggml_ifairy_lut_layout_from_env(int n);
 
+enum ggml_ifairy_lut_kernel {
+    GGML_IFAIRY_LUT_KERNEL_AUTO     = 0,
+    GGML_IFAIRY_LUT_KERNEL_SDOT     = 1,
+    GGML_IFAIRY_LUT_KERNEL_TBL      = 2,
+    GGML_IFAIRY_LUT_KERNEL_MERGED64 = 3,
+};
+
+ggml_ifairy_lut_kernel ggml_ifairy_lut_kernel_from_env(void);
+
 static const int k_ifairy_lut_patterns = 64; // legacy table size
 static const int k_ifairy_lut_codes     = 4;
 static const int k_ifairy_lut_channels  = 4;

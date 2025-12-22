@@ -11,6 +11,7 @@
 - LUT 表布局默认走 `legacy`（更稳；`compact` 在部分设备/形状上更快），如需测试紧凑表：`GGML_IFAIRY_LUT_LAYOUT=compact`（见 1.1 / 0.1 记录）
 - `BK/BM/FULLACC` 调参在不同形状/版本上波动较大：以 sweep 输出为准，不建议凭经验固定写死
 - 每次修改 LUT 相关代码后，先做一次 `llama-cli` sanity check（固定 seed/prompt）确认不输出 gibberish（见 3.1）
+- 一键复现（含 `test-ifairy`/strict/`llama-cli`/`llama-bench`）：`scripts/ifairy_lut_repro.sh`
 
 **常用环境变量（LUT 路径）**
 
@@ -24,11 +25,11 @@
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 路径内的 prefetch（默认启用；设为 `0` 用于 profile/sweep 对照；覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`）
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` fast-path（默认启用；设为 `0` 强制走通用路径，用于回归/调优 A/B）
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` fast-path 里 group-loop 的 4-way unroll（默认 `4`；设为 `2` 用于 A/B，对照“2-way 是否反而更快”）
+- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`）；当前仅 `sdot` 在 `N==1` 快路上可用，`tbl/merged64` 为预留。
 
 计划新增（未实现，先做文档约定）：
 
 - `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64`：新增 LUT 布局（配合 TBL / merged64 方案），默认仍由 `auto` 策略决定。
-- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`），用于 A/B 与回退。
 - `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 2~3，需结合 profile 调整）。
 
 ## 0.0 当前共识（按优先级）
@@ -73,6 +74,10 @@
 | 2025-12-20T08:00:08Z | `b9f0a57f+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=legacy` | 14.72 | `/tmp/ifairy_bench_legacy_1766217492.jsonl` |
 | 2025-12-20T08:00:08Z | `b9f0a57f+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact` | 15.15 | `/tmp/ifairy_bench_compact_1766217565.jsonl` |
 | 2025-12-20T08:00:08Z | `b9f0a57f+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact` | 12.38 | `/tmp/ifairy_bench_compact_1766217565.jsonl` |
+| 2025-12-22T02:48:46Z | `fe740e0a` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_KERNEL=auto` | 19.20 | `/var/folders/mf/jqbwxvls37d2lhmhhvht2_pm0000gn/T//ifairy_bench.20251222T104846.jsonl` |
+| 2025-12-22T02:48:53Z | `fe740e0a` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_KERNEL=auto` | 20.85 | `/var/folders/mf/jqbwxvls37d2lhmhhvht2_pm0000gn/T//ifairy_bench.20251222T104846.jsonl` |
+| 2025-12-22T02:49:14Z | `fe740e0a` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_KERNEL=sdot` | 18.43 | `/var/folders/mf/jqbwxvls37d2lhmhhvht2_pm0000gn/T//ifairy_bench.20251222T104914.jsonl` |
+| 2025-12-22T02:49:21Z | `fe740e0a` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_KERNEL=sdot` | 15.08 | `/var/folders/mf/jqbwxvls37d2lhmhhvht2_pm0000gn/T//ifairy_bench.20251222T104914.jsonl` |
 
 ### 0.1.1 legacy（llama-cli，已停更）
 
@@ -299,6 +304,10 @@
      - **prefetch 策略**：prefetch `grp + k_ifairy_lut_group_bytes` 与 `idx_g + k`；对比“prefetch 太早/太晚/无效”的差异（Xcode 可直接看到 L1 miss）
      - **N==1 快路（仍属于 LUT，不是形状模板）**：为 decode 常见 `N==1` 在 `qgemm_ex` 内加一个 runtime 分支，消掉 col 循环与部分指针运算
      - **减少 call/拷贝开销（仍属于 LUT）**：非 tiling 情况下避免“每 row 调一次 qgemm + memcpy”，改为每线程处理连续 row-block 并直接写回 `dst`
+     - **SDOT 快路优化（实验）**：当前 `sdot` 慢于 `auto`，优先做“去分支 + 专用循环”与“布局对齐”验证：
+       - 把 `sdot` 分支移出 inner-loop（拆成两套 loop，避免每 group 分支）。
+       - 评估 `compact` 的 LUT layout：改为“4 groups × 16B”连续布局，以匹配 `vdotq_s32` 的 16-byte 向量宽度（减少 `vdupq_n_s32`/mask 开销）。
+       - 仅保留 `sdot` 在 `N==1` 场景，并与 `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL` 组合做 A/B。
    - 交付/验收：
      - `./build-rel/bin/test-ifairy` 全通过
      - 在 0.2 的 decode 配置下，`ggml_ifairy_lut_qgemm_ex` 占比下降（目标 < 55%），同时 eval tok/s 上升（目标 +10%）
@@ -316,6 +325,7 @@
 - P1 小步：将 LUT 相关 env 解析 helper 集中到 `ggml/src/ggml-ifairy-lut.h`，并在 `ggml-cpu.c`/`ggml-ifairy-lut.cpp` 复用，减少重复与语义漂移（`HEAD`）。
 - 错误可观测性：`transform_tensor` 在 debug 下对 shape/alloc/encode 失败给出明确日志，避免 silent fallback；并在路由时明确要求 `__aarch64__ + __ARM_NEON`（否则回退）（`HEAD`）。
 - 配置健壮性：`GGML_IFAIRY_LUT_LAYOUT` 无效值在 debug 下只 warn 一次并回退默认；`BK_BLOCKS/BM` 的非法值在 debug 下提示并 clamp（`HEAD`）。
+- SDOT 快路：新增 `GGML_IFAIRY_LUT_KERNEL=sdot`；当前在 M4 + `compact` 上 `llama-bench` 低于 `auto`（见 0.1 表），保持实验态。
 
 2) **降低 `ggml_graph_compute_thread` 的框架开销（24%）**  
    - 目标：减少同步与小 kernel 调度开销，让更多时间落在“有效算术”上

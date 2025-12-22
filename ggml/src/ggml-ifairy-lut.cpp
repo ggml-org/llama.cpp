@@ -17,6 +17,7 @@
 #include <atomic>
 
 static std::atomic<bool> g_ifairy_lut_warned_bad_layout(false);
+static std::atomic<bool> g_ifairy_lut_warned_bad_kernel(false);
 
 static inline size_t ggml_ifairy_checked_mul_size(size_t a, size_t b) {
     GGML_ASSERT(a == 0 || b <= SIZE_MAX / a);
@@ -49,6 +50,37 @@ ggml_ifairy_lut_layout ggml_ifairy_lut_layout_from_env(int n) {
     // The compact layout can be enabled explicitly via GGML_IFAIRY_LUT_LAYOUT=compact.
     (void) n;
     return GGML_IFAIRY_LUT_LAYOUT_LEGACY;
+}
+
+ggml_ifairy_lut_kernel ggml_ifairy_lut_kernel_from_env(void) {
+    static std::atomic<int> cached(-1); // -1=unset, else ggml_ifairy_lut_kernel
+    int v = cached.load(std::memory_order_relaxed);
+    if (v >= 0) {
+        return (ggml_ifairy_lut_kernel) v;
+    }
+
+    const char * env = getenv("GGML_IFAIRY_LUT_KERNEL");
+    if (env) {
+        if (strcmp(env, "auto") == 0) {
+            v = GGML_IFAIRY_LUT_KERNEL_AUTO;
+        } else if (strcmp(env, "sdot") == 0) {
+            v = GGML_IFAIRY_LUT_KERNEL_SDOT;
+        } else if (strcmp(env, "tbl") == 0) {
+            v = GGML_IFAIRY_LUT_KERNEL_TBL;
+        } else if (strcmp(env, "merged64") == 0) {
+            v = GGML_IFAIRY_LUT_KERNEL_MERGED64;
+        } else {
+            v = GGML_IFAIRY_LUT_KERNEL_AUTO;
+            if (ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG") && !g_ifairy_lut_warned_bad_kernel.exchange(true)) {
+                GGML_LOG_WARN("ifairy_lut: unknown GGML_IFAIRY_LUT_KERNEL='%s' (expected: auto|sdot|tbl|merged64), using default\n", env);
+            }
+        }
+    } else {
+        v = GGML_IFAIRY_LUT_KERNEL_AUTO;
+    }
+
+    cached.store(v, std::memory_order_relaxed);
+    return (ggml_ifairy_lut_kernel) v;
 }
 
 static inline uint64_t ggml_ifairy_pack_u8_8(

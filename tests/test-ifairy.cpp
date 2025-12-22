@@ -148,6 +148,35 @@ std::string read_file(const std::string& filename) {
     return content;
 }
 
+static bool file_exists(const std::string & filename) {
+    std::ifstream file(filename);
+    return file.good();
+}
+
+static std::string ifairy_test_data_path(const char * filename) {
+    const char * env = getenv("GGML_IFAIRY_TEST_DATA_DIR");
+    if (env && env[0] != '\0') {
+        return std::string(env) + "/" + filename;
+    }
+
+    const std::string rel_path = std::string("tests/ifairy-test-data/") + filename;
+    if (file_exists(rel_path)) {
+        return rel_path;
+    }
+
+    const std::string src_path = __FILE__;
+    const size_t pos = src_path.find_last_of("/\\");
+    if (pos != std::string::npos) {
+        return src_path.substr(0, pos) + "/ifairy-test-data/" + filename;
+    }
+
+    return rel_path;
+}
+
+static std::string read_ifairy_test_file(const char * filename) {
+    return read_file(ifairy_test_data_path(filename));
+}
+
 // ============================================================================
 // 测试辅助函数
 // ============================================================================
@@ -644,7 +673,7 @@ bool test_quantization() {
     printf("\n=== Test 1: Quantization/Dequantization ===\n");
 
     // 读取测试数据
-    std::string json_data = read_file("tests/ifairy-test-data/quant_test.json");
+    std::string json_data = read_ifairy_test_file("quant_test.json");
     if (json_data.empty()) {
         fprintf(stderr, "Failed to read test data\n");
         return false;
@@ -695,7 +724,7 @@ bool test_rope() {
     printf("\n=== Test 3: iFairy ROPE ===\n");
 
     // 读取测试数据
-    std::string json_data = read_file("tests/ifairy-test-data/rope_test.json");
+    std::string json_data = read_ifairy_test_file("rope_test.json");
     if (json_data.empty()) {
         fprintf(stderr, "Failed to read test data\n");
         return false;
@@ -909,13 +938,14 @@ bool test_ifairy_lut_scalar_small_dims() {
 // 测试 5: CPU backend LUT tiling 回归（非 tiling vs BK/BM tiling）
 // ============================================================================
 
-static bool run_ifairy_backend_mul_mat_shape(std::vector<uint32_t> & packed_out, bool tiling, int64_t M, int64_t N, int64_t K, const char * layout) {
+static bool run_ifairy_backend_mul_mat_shape(std::vector<uint32_t> & packed_out, bool tiling, int64_t M, int64_t N, int64_t K, const char * layout, const char * kernel) {
     // Keep other tests isolated.
     scoped_env_var env_lut("GGML_IFAIRY_LUT");
     scoped_env_var env_strict("GGML_IFAIRY_LUT_VALIDATE_STRICT");
     scoped_env_var env_bk("GGML_IFAIRY_LUT_BK_BLOCKS");
     scoped_env_var env_bm("GGML_IFAIRY_LUT_BM");
     scoped_env_var env_layout("GGML_IFAIRY_LUT_LAYOUT");
+    scoped_env_var env_kernel("GGML_IFAIRY_LUT_KERNEL");
 
     env_lut.set("1");
     env_strict.unset();
@@ -923,6 +953,11 @@ static bool run_ifairy_backend_mul_mat_shape(std::vector<uint32_t> & packed_out,
         env_layout.set(layout);
     } else {
         env_layout.unset();
+    }
+    if (kernel) {
+        env_kernel.set(kernel);
+    } else {
+        env_kernel.unset();
     }
 
     if (tiling) {
@@ -1029,8 +1064,8 @@ static bool run_ifairy_backend_mul_mat_shape(std::vector<uint32_t> & packed_out,
     return true;
 }
 
-static bool run_ifairy_backend_mul_mat(std::vector<uint32_t> & packed_out, bool tiling, int64_t n_cols, const char * layout) {
-    return run_ifairy_backend_mul_mat_shape(packed_out, tiling, 8, n_cols, 2 * QK_K, layout);
+static bool run_ifairy_backend_mul_mat(std::vector<uint32_t> & packed_out, bool tiling, int64_t n_cols, const char * layout, const char * kernel) {
+    return run_ifairy_backend_mul_mat_shape(packed_out, tiling, 8, n_cols, 2 * QK_K, layout, kernel);
 }
 
 bool test_ifairy_lut_backend_tiling_regression() {
@@ -1042,10 +1077,10 @@ bool test_ifairy_lut_backend_tiling_regression() {
 
     std::vector<uint32_t> out_no_tile;
     std::vector<uint32_t> out_tile;
-    if (!run_ifairy_backend_mul_mat(out_no_tile, false, 2, NULL)) {
+    if (!run_ifairy_backend_mul_mat(out_no_tile, false, 2, NULL, NULL)) {
         return false;
     }
-    if (!run_ifairy_backend_mul_mat(out_tile, true, 2, NULL)) {
+    if (!run_ifairy_backend_mul_mat(out_tile, true, 2, NULL, NULL)) {
         return false;
     }
 
@@ -1061,10 +1096,10 @@ bool test_ifairy_lut_backend_tiling_regression() {
     // Decode-like regression: N == 1, plus layout equivalence (legacy vs compact) for the same backend graph.
     std::vector<uint32_t> out_legacy;
     std::vector<uint32_t> out_compact;
-    if (!run_ifairy_backend_mul_mat(out_legacy, false, 1, "legacy")) {
+    if (!run_ifairy_backend_mul_mat(out_legacy, false, 1, "legacy", NULL)) {
         return false;
     }
-    if (!run_ifairy_backend_mul_mat(out_compact, false, 1, "compact")) {
+    if (!run_ifairy_backend_mul_mat(out_compact, false, 1, "compact", NULL)) {
         return false;
     }
     if (out_legacy.size() != out_compact.size()) {
@@ -1092,10 +1127,10 @@ bool test_ifairy_lut_backend_large_dims() {
 
     std::vector<uint32_t> out_no_tile;
     std::vector<uint32_t> out_tile;
-    if (!run_ifairy_backend_mul_mat_shape(out_no_tile, false, M, N, K, NULL)) {
+    if (!run_ifairy_backend_mul_mat_shape(out_no_tile, false, M, N, K, NULL, NULL)) {
         return false;
     }
-    if (!run_ifairy_backend_mul_mat_shape(out_tile, true, M, N, K, NULL)) {
+    if (!run_ifairy_backend_mul_mat_shape(out_tile, true, M, N, K, NULL, NULL)) {
         return false;
     }
 
@@ -1109,6 +1144,34 @@ bool test_ifairy_lut_backend_large_dims() {
 }
 
 // ============================================================================
+// 测试 5.2: CPU backend LUT kernel 选择一致性（auto vs sdot）
+// ============================================================================
+
+bool test_ifairy_lut_kernel_sdot_consistency() {
+#if !defined(GGML_IFAIRY_ARM_LUT) || !defined(__ARM_NEON) || !defined(__aarch64__)
+    printf("\n=== Test 5.2: iFairy LUT kernel sdot consistency (SKIP) ===\n");
+    return true;
+#else
+    printf("\n=== Test 5.2: iFairy LUT kernel sdot consistency ===\n");
+
+    std::vector<uint32_t> out_auto;
+    std::vector<uint32_t> out_sdot;
+    if (!run_ifairy_backend_mul_mat(out_auto, false, 1, "compact", "auto")) {
+        return false;
+    }
+    if (!run_ifairy_backend_mul_mat(out_sdot, false, 1, "compact", "sdot")) {
+        return false;
+    }
+
+    if (out_auto.size() != out_sdot.size()) {
+        fprintf(stderr, "Size mismatch (kernel): %zu vs %zu\n", out_auto.size(), out_sdot.size());
+        return false;
+    }
+    return compare_u32_arrays(out_sdot.data(), out_auto.data(), out_auto.size());
+#endif
+}
+
+// ============================================================================
 // 测试 5: 复数矩阵乘法
 // ============================================================================
 
@@ -1116,7 +1179,7 @@ bool test_complex_matmul() {
     printf("\n=== Test 6: Complex Matrix Multiplication ===\n");
 
     // 读取测试数据
-    std::string json_data = read_file("tests/ifairy-test-data/matmul_test.json");
+    std::string json_data = read_ifairy_test_file("matmul_test.json");
     if (json_data.empty()) {
         fprintf(stderr, "Failed to read test data\n");
         return false;
@@ -1251,6 +1314,11 @@ int main(int argc, char** argv) {
 
     if (!test_ifairy_lut_backend_large_dims()) {
         fprintf(stderr, "Test 5.1 FAILED\n");
+        num_failed++;
+    }
+
+    if (!test_ifairy_lut_kernel_sdot_consistency()) {
+        fprintf(stderr, "Test 5.2 FAILED\n");
         num_failed++;
     }
 

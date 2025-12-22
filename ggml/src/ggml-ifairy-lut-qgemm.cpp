@@ -61,6 +61,36 @@ static inline int ggml_ifairy_lut_compact_n1_unroll(void) {
     cached.store(v, std::memory_order_relaxed);
     return v;
 }
+
+#if !defined(__ARM_FEATURE_DOTPROD)
+static std::atomic<bool> g_ifairy_lut_warned_kernel_unavailable(false);
+#endif
+static std::atomic<bool> g_ifairy_lut_warned_kernel_unsupported(false);
+
+#if defined(__ARM_NEON) && defined(__aarch64__) && defined(__ARM_FEATURE_DOTPROD)
+static const int8_t k_ifairy_lut_dot_mask_bytes[16] = {
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1,
+};
+
+static inline int32x4_t ggml_ifairy_lut_accum_dot(
+        int32x4_t acc,
+        const int32_t * t0, uint8_t c0,
+        const int32_t * t1, uint8_t c1,
+        const int32_t * t2, uint8_t c2,
+        const int8x16_t dot_mask) {
+    const int32x4_t p0 = vdupq_n_s32(t0[c0]);
+    const int32x4_t p1 = vdupq_n_s32(t1[c1]);
+    const int32x4_t p2 = vdupq_n_s32(t2[c2]);
+
+    acc = vdotq_s32(acc, vreinterpretq_s8_s32(p0), dot_mask);
+    acc = vdotq_s32(acc, vreinterpretq_s8_s32(p1), dot_mask);
+    acc = vdotq_s32(acc, vreinterpretq_s8_s32(p2), dot_mask);
+    return acc;
+}
+#endif
 static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qweights, const uint8_t * indexes, const void * lut, const void * lut_scales, const void * act, size_t act_stride, float * dst, size_t dst_col_stride, size_t dst_row_stride, bool pack_bf16, bool strict, bool add) {
     if (!indexes || !dst || !qweights || !lut || !lut_scales) {
         return;
@@ -99,6 +129,17 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qw
             float acc_bd_xi = 0.0f;
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
+            const bool want_dotprod = kernel == GGML_IFAIRY_LUT_KERNEL_SDOT;
+#if defined(__ARM_FEATURE_DOTPROD)
+            const bool use_dotprod = want_dotprod;
+            const int8x16_t dot_mask = vld1q_s8(k_ifairy_lut_dot_mask_bytes);
+#else
+            const bool use_dotprod = false;
+            if (want_dotprod && ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG") &&
+                !g_ifairy_lut_warned_kernel_unavailable.exchange(true)) {
+                GGML_LOG_WARN("ifairy_lut: GGML_IFAIRY_LUT_KERNEL=sdot requires __ARM_FEATURE_DOTPROD, using default kernel\n");
+            }
+#endif
             float32x4_t accv = vdupq_n_f32(0.0f); // {ac, ad, bc, bd}
             for (int64_t blk = 0; blk < blocks; ++blk) {
                 int32x4_t isum0 = vdupq_n_s32(0);
@@ -143,53 +184,81 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qw
                     const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
                     const int32_t * t02 = (const int32_t *) (grp0 + 2 * k_ifairy_lut_pos_bytes);
 
-                    const int32x2_t p00 = vld1_dup_s32(t00 + c00);
-                    const int32x2_t p01 = vld1_dup_s32(t01 + c01);
-                    const int32x2_t p02 = vld1_dup_s32(t02 + c02);
+#if defined(__ARM_FEATURE_DOTPROD)
+                    if (use_dotprod) {
+                        isum0 = ggml_ifairy_lut_accum_dot(isum0, t00, c00, t01, c01, t02, c02, dot_mask);
+                    } else
+#endif
+                    {
+                        const int32x2_t p00 = vld1_dup_s32(t00 + c00);
+                        const int32x2_t p01 = vld1_dup_s32(t01 + c01);
+                        const int32x2_t p02 = vld1_dup_s32(t02 + c02);
 
-                    int16x8_t s160 = vmovl_s8(vreinterpret_s8_s32(p00));
-                    s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p01)));
-                    s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p02)));
-                    isum0 = vaddw_s16(isum0, vget_low_s16(s160));
+                        int16x8_t s160 = vmovl_s8(vreinterpret_s8_s32(p00));
+                        s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p01)));
+                        s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p02)));
+                        isum0 = vaddw_s16(isum0, vget_low_s16(s160));
+                    }
 
                     const int32_t * t10 = (const int32_t *) (grp1 + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t11 = (const int32_t *) (grp1 + 1 * k_ifairy_lut_pos_bytes);
                     const int32_t * t12 = (const int32_t *) (grp1 + 2 * k_ifairy_lut_pos_bytes);
 
-                    const int32x2_t p10 = vld1_dup_s32(t10 + c10);
-                    const int32x2_t p11 = vld1_dup_s32(t11 + c11);
-                    const int32x2_t p12 = vld1_dup_s32(t12 + c12);
+#if defined(__ARM_FEATURE_DOTPROD)
+                    if (use_dotprod) {
+                        isum1 = ggml_ifairy_lut_accum_dot(isum1, t10, c10, t11, c11, t12, c12, dot_mask);
+                    } else
+#endif
+                    {
+                        const int32x2_t p10 = vld1_dup_s32(t10 + c10);
+                        const int32x2_t p11 = vld1_dup_s32(t11 + c11);
+                        const int32x2_t p12 = vld1_dup_s32(t12 + c12);
 
-                    int16x8_t s161 = vmovl_s8(vreinterpret_s8_s32(p10));
-                    s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p11)));
-                    s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p12)));
-                    isum1 = vaddw_s16(isum1, vget_low_s16(s161));
+                        int16x8_t s161 = vmovl_s8(vreinterpret_s8_s32(p10));
+                        s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p11)));
+                        s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p12)));
+                        isum1 = vaddw_s16(isum1, vget_low_s16(s161));
+                    }
 
                     const int32_t * t20 = (const int32_t *) (grp2 + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t21 = (const int32_t *) (grp2 + 1 * k_ifairy_lut_pos_bytes);
                     const int32_t * t22 = (const int32_t *) (grp2 + 2 * k_ifairy_lut_pos_bytes);
 
-                    const int32x2_t p20 = vld1_dup_s32(t20 + c20);
-                    const int32x2_t p21 = vld1_dup_s32(t21 + c21);
-                    const int32x2_t p22 = vld1_dup_s32(t22 + c22);
+#if defined(__ARM_FEATURE_DOTPROD)
+                    if (use_dotprod) {
+                        isum0 = ggml_ifairy_lut_accum_dot(isum0, t20, c20, t21, c21, t22, c22, dot_mask);
+                    } else
+#endif
+                    {
+                        const int32x2_t p20 = vld1_dup_s32(t20 + c20);
+                        const int32x2_t p21 = vld1_dup_s32(t21 + c21);
+                        const int32x2_t p22 = vld1_dup_s32(t22 + c22);
 
-                    int16x8_t s162 = vmovl_s8(vreinterpret_s8_s32(p20));
-                    s162 = vaddq_s16(s162, vmovl_s8(vreinterpret_s8_s32(p21)));
-                    s162 = vaddq_s16(s162, vmovl_s8(vreinterpret_s8_s32(p22)));
-                    isum0 = vaddw_s16(isum0, vget_low_s16(s162));
+                        int16x8_t s162 = vmovl_s8(vreinterpret_s8_s32(p20));
+                        s162 = vaddq_s16(s162, vmovl_s8(vreinterpret_s8_s32(p21)));
+                        s162 = vaddq_s16(s162, vmovl_s8(vreinterpret_s8_s32(p22)));
+                        isum0 = vaddw_s16(isum0, vget_low_s16(s162));
+                    }
 
                     const int32_t * t30 = (const int32_t *) (grp3 + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t31 = (const int32_t *) (grp3 + 1 * k_ifairy_lut_pos_bytes);
                     const int32_t * t32 = (const int32_t *) (grp3 + 2 * k_ifairy_lut_pos_bytes);
 
-                    const int32x2_t p30 = vld1_dup_s32(t30 + c30);
-                    const int32x2_t p31 = vld1_dup_s32(t31 + c31);
-                    const int32x2_t p32 = vld1_dup_s32(t32 + c32);
+#if defined(__ARM_FEATURE_DOTPROD)
+                    if (use_dotprod) {
+                        isum1 = ggml_ifairy_lut_accum_dot(isum1, t30, c30, t31, c31, t32, c32, dot_mask);
+                    } else
+#endif
+                    {
+                        const int32x2_t p30 = vld1_dup_s32(t30 + c30);
+                        const int32x2_t p31 = vld1_dup_s32(t31 + c31);
+                        const int32x2_t p32 = vld1_dup_s32(t32 + c32);
 
-                    int16x8_t s163 = vmovl_s8(vreinterpret_s8_s32(p30));
-                    s163 = vaddq_s16(s163, vmovl_s8(vreinterpret_s8_s32(p31)));
-                    s163 = vaddq_s16(s163, vmovl_s8(vreinterpret_s8_s32(p32)));
-                    isum1 = vaddw_s16(isum1, vget_low_s16(s163));
+                        int16x8_t s163 = vmovl_s8(vreinterpret_s8_s32(p30));
+                        s163 = vaddq_s16(s163, vmovl_s8(vreinterpret_s8_s32(p31)));
+                        s163 = vaddq_s16(s163, vmovl_s8(vreinterpret_s8_s32(p32)));
+                        isum1 = vaddw_s16(isum1, vget_low_s16(s163));
+                    }
 
                     idx_g += 4;
                     grp   += 4 * k_ifairy_lut_group_bytes;
@@ -208,14 +277,21 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int m, int k, int n, const void * qw
                     const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
                     const int32_t * t2 = (const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes);
 
-                    const int32x2_t p0 = vld1_dup_s32(t0 + c0);
-                    const int32x2_t p1 = vld1_dup_s32(t1 + c1);
-                    const int32x2_t p2 = vld1_dup_s32(t2 + c2);
+#if defined(__ARM_FEATURE_DOTPROD)
+                    if (use_dotprod) {
+                        isum0 = ggml_ifairy_lut_accum_dot(isum0, t0, c0, t1, c1, t2, c2, dot_mask);
+                    } else
+#endif
+                    {
+                        const int32x2_t p0 = vld1_dup_s32(t0 + c0);
+                        const int32x2_t p1 = vld1_dup_s32(t1 + c1);
+                        const int32x2_t p2 = vld1_dup_s32(t2 + c2);
 
-                    int16x8_t s16 = vmovl_s8(vreinterpret_s8_s32(p0));
-                    s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p1)));
-                    s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p2)));
-                    isum0 = vaddw_s16(isum0, vget_low_s16(s16));
+                        int16x8_t s16 = vmovl_s8(vreinterpret_s8_s32(p0));
+                        s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p1)));
+                        s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p2)));
+                        isum0 = vaddw_s16(isum0, vget_low_s16(s16));
+                    }
                 }
 
                 const float32x2_t srsi = vld1_f32(scales + (size_t) blk * 2);
@@ -709,6 +785,13 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
     const block_ifairy * w_blocks = (const block_ifairy *) qweights;
     const bool prefetch = ggml_ifairy_lut_prefetch_enabled();
     (void) prefetch;
+    const ggml_ifairy_lut_kernel kernel = ggml_ifairy_lut_kernel_from_env();
+
+    if ((kernel == GGML_IFAIRY_LUT_KERNEL_TBL || kernel == GGML_IFAIRY_LUT_KERNEL_MERGED64) &&
+        ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG") && !g_ifairy_lut_warned_kernel_unsupported.exchange(true)) {
+        const char * kernel_name = kernel == GGML_IFAIRY_LUT_KERNEL_TBL ? "tbl" : "merged64";
+        GGML_LOG_WARN("ifairy_lut: GGML_IFAIRY_LUT_KERNEL=%s not implemented yet, using default kernel\n", kernel_name);
+    }
 
     // Fast-path for decode: N == 1 avoids the col loop and some pointer arithmetic.
     // Keep strict mode on the generic path (strict validation assumes the generic structure).
@@ -730,6 +813,16 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
             float acc_bd_xi = 0.0f;
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
+            const bool want_dotprod = kernel == GGML_IFAIRY_LUT_KERNEL_SDOT;
+#if defined(__ARM_FEATURE_DOTPROD)
+            const bool use_dotprod = want_dotprod;
+            const int8x16_t dot_mask = vld1q_s8(k_ifairy_lut_dot_mask_bytes);
+#else
+            if (want_dotprod && ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG") &&
+                !g_ifairy_lut_warned_kernel_unavailable.exchange(true)) {
+                GGML_LOG_WARN("ifairy_lut: GGML_IFAIRY_LUT_KERNEL=sdot requires __ARM_FEATURE_DOTPROD, using default kernel\n");
+            }
+#endif
             float32x4_t accv = vdupq_n_f32(0.0f); // {ac, ad, bc, bd}
             for (int64_t blk = 0; blk < blocks; ++blk) {
                 int32x4_t isum0 = vdupq_n_s32(0);
@@ -775,53 +868,81 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                     const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
                     const int32_t * t02 = (const int32_t *) (grp0 + 2 * k_ifairy_lut_pos_bytes);
 
-                    const int32x2_t p00 = vld1_dup_s32(t00 + c00);
-                    const int32x2_t p01 = vld1_dup_s32(t01 + c01);
-                    const int32x2_t p02 = vld1_dup_s32(t02 + c02);
+#if defined(__ARM_FEATURE_DOTPROD)
+                    if (use_dotprod) {
+                        isum0 = ggml_ifairy_lut_accum_dot(isum0, t00, c00, t01, c01, t02, c02, dot_mask);
+                    } else
+#endif
+                    {
+                        const int32x2_t p00 = vld1_dup_s32(t00 + c00);
+                        const int32x2_t p01 = vld1_dup_s32(t01 + c01);
+                        const int32x2_t p02 = vld1_dup_s32(t02 + c02);
 
-                    int16x8_t s160 = vmovl_s8(vreinterpret_s8_s32(p00));
-                    s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p01)));
-                    s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p02)));
-                    isum0 = vaddw_s16(isum0, vget_low_s16(s160));
+                        int16x8_t s160 = vmovl_s8(vreinterpret_s8_s32(p00));
+                        s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p01)));
+                        s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p02)));
+                        isum0 = vaddw_s16(isum0, vget_low_s16(s160));
+                    }
 
                     const int32_t * t10 = (const int32_t *) (grp1 + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t11 = (const int32_t *) (grp1 + 1 * k_ifairy_lut_pos_bytes);
                     const int32_t * t12 = (const int32_t *) (grp1 + 2 * k_ifairy_lut_pos_bytes);
 
-                    const int32x2_t p10 = vld1_dup_s32(t10 + c10);
-                    const int32x2_t p11 = vld1_dup_s32(t11 + c11);
-                    const int32x2_t p12 = vld1_dup_s32(t12 + c12);
+#if defined(__ARM_FEATURE_DOTPROD)
+                    if (use_dotprod) {
+                        isum1 = ggml_ifairy_lut_accum_dot(isum1, t10, c10, t11, c11, t12, c12, dot_mask);
+                    } else
+#endif
+                    {
+                        const int32x2_t p10 = vld1_dup_s32(t10 + c10);
+                        const int32x2_t p11 = vld1_dup_s32(t11 + c11);
+                        const int32x2_t p12 = vld1_dup_s32(t12 + c12);
 
-                    int16x8_t s161 = vmovl_s8(vreinterpret_s8_s32(p10));
-                    s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p11)));
-                    s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p12)));
-                    isum1 = vaddw_s16(isum1, vget_low_s16(s161));
+                        int16x8_t s161 = vmovl_s8(vreinterpret_s8_s32(p10));
+                        s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p11)));
+                        s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p12)));
+                        isum1 = vaddw_s16(isum1, vget_low_s16(s161));
+                    }
 
                     const int32_t * t20 = (const int32_t *) (grp2 + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t21 = (const int32_t *) (grp2 + 1 * k_ifairy_lut_pos_bytes);
                     const int32_t * t22 = (const int32_t *) (grp2 + 2 * k_ifairy_lut_pos_bytes);
 
-                    const int32x2_t p20 = vld1_dup_s32(t20 + c20);
-                    const int32x2_t p21 = vld1_dup_s32(t21 + c21);
-                    const int32x2_t p22 = vld1_dup_s32(t22 + c22);
+#if defined(__ARM_FEATURE_DOTPROD)
+                    if (use_dotprod) {
+                        isum0 = ggml_ifairy_lut_accum_dot(isum0, t20, c20, t21, c21, t22, c22, dot_mask);
+                    } else
+#endif
+                    {
+                        const int32x2_t p20 = vld1_dup_s32(t20 + c20);
+                        const int32x2_t p21 = vld1_dup_s32(t21 + c21);
+                        const int32x2_t p22 = vld1_dup_s32(t22 + c22);
 
-                    int16x8_t s162 = vmovl_s8(vreinterpret_s8_s32(p20));
-                    s162 = vaddq_s16(s162, vmovl_s8(vreinterpret_s8_s32(p21)));
-                    s162 = vaddq_s16(s162, vmovl_s8(vreinterpret_s8_s32(p22)));
-                    isum0 = vaddw_s16(isum0, vget_low_s16(s162));
+                        int16x8_t s162 = vmovl_s8(vreinterpret_s8_s32(p20));
+                        s162 = vaddq_s16(s162, vmovl_s8(vreinterpret_s8_s32(p21)));
+                        s162 = vaddq_s16(s162, vmovl_s8(vreinterpret_s8_s32(p22)));
+                        isum0 = vaddw_s16(isum0, vget_low_s16(s162));
+                    }
 
                     const int32_t * t30 = (const int32_t *) (grp3 + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t31 = (const int32_t *) (grp3 + 1 * k_ifairy_lut_pos_bytes);
                     const int32_t * t32 = (const int32_t *) (grp3 + 2 * k_ifairy_lut_pos_bytes);
 
-                    const int32x2_t p30 = vld1_dup_s32(t30 + c30);
-                    const int32x2_t p31 = vld1_dup_s32(t31 + c31);
-                    const int32x2_t p32 = vld1_dup_s32(t32 + c32);
+#if defined(__ARM_FEATURE_DOTPROD)
+                    if (use_dotprod) {
+                        isum1 = ggml_ifairy_lut_accum_dot(isum1, t30, c30, t31, c31, t32, c32, dot_mask);
+                    } else
+#endif
+                    {
+                        const int32x2_t p30 = vld1_dup_s32(t30 + c30);
+                        const int32x2_t p31 = vld1_dup_s32(t31 + c31);
+                        const int32x2_t p32 = vld1_dup_s32(t32 + c32);
 
-                    int16x8_t s163 = vmovl_s8(vreinterpret_s8_s32(p30));
-                    s163 = vaddq_s16(s163, vmovl_s8(vreinterpret_s8_s32(p31)));
-                    s163 = vaddq_s16(s163, vmovl_s8(vreinterpret_s8_s32(p32)));
-                    isum1 = vaddw_s16(isum1, vget_low_s16(s163));
+                        int16x8_t s163 = vmovl_s8(vreinterpret_s8_s32(p30));
+                        s163 = vaddq_s16(s163, vmovl_s8(vreinterpret_s8_s32(p31)));
+                        s163 = vaddq_s16(s163, vmovl_s8(vreinterpret_s8_s32(p32)));
+                        isum1 = vaddw_s16(isum1, vget_low_s16(s163));
+                    }
 
                     idx_g += 4;
                     grp   += 4 * k_ifairy_lut_group_bytes;
@@ -849,27 +970,41 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                     const int32_t * t01 = (const int32_t *) (grp0 + 1 * k_ifairy_lut_pos_bytes);
                     const int32_t * t02 = (const int32_t *) (grp0 + 2 * k_ifairy_lut_pos_bytes);
 
-                    const int32x2_t p00 = vld1_dup_s32(t00 + c00);
-                    const int32x2_t p01 = vld1_dup_s32(t01 + c01);
-                    const int32x2_t p02 = vld1_dup_s32(t02 + c02);
+#if defined(__ARM_FEATURE_DOTPROD)
+                    if (use_dotprod) {
+                        isum0 = ggml_ifairy_lut_accum_dot(isum0, t00, c00, t01, c01, t02, c02, dot_mask);
+                    } else
+#endif
+                    {
+                        const int32x2_t p00 = vld1_dup_s32(t00 + c00);
+                        const int32x2_t p01 = vld1_dup_s32(t01 + c01);
+                        const int32x2_t p02 = vld1_dup_s32(t02 + c02);
 
-                    int16x8_t s160 = vmovl_s8(vreinterpret_s8_s32(p00));
-                    s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p01)));
-                    s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p02)));
-                    isum0 = vaddw_s16(isum0, vget_low_s16(s160));
+                        int16x8_t s160 = vmovl_s8(vreinterpret_s8_s32(p00));
+                        s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p01)));
+                        s160 = vaddq_s16(s160, vmovl_s8(vreinterpret_s8_s32(p02)));
+                        isum0 = vaddw_s16(isum0, vget_low_s16(s160));
+                    }
 
                     const int32_t * t10 = (const int32_t *) (grp1 + 0 * k_ifairy_lut_pos_bytes);
                     const int32_t * t11 = (const int32_t *) (grp1 + 1 * k_ifairy_lut_pos_bytes);
                     const int32_t * t12 = (const int32_t *) (grp1 + 2 * k_ifairy_lut_pos_bytes);
 
-                    const int32x2_t p10 = vld1_dup_s32(t10 + c10);
-                    const int32x2_t p11 = vld1_dup_s32(t11 + c11);
-                    const int32x2_t p12 = vld1_dup_s32(t12 + c12);
+#if defined(__ARM_FEATURE_DOTPROD)
+                    if (use_dotprod) {
+                        isum1 = ggml_ifairy_lut_accum_dot(isum1, t10, c10, t11, c11, t12, c12, dot_mask);
+                    } else
+#endif
+                    {
+                        const int32x2_t p10 = vld1_dup_s32(t10 + c10);
+                        const int32x2_t p11 = vld1_dup_s32(t11 + c11);
+                        const int32x2_t p12 = vld1_dup_s32(t12 + c12);
 
-                    int16x8_t s161 = vmovl_s8(vreinterpret_s8_s32(p10));
-                    s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p11)));
-                    s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p12)));
-                    isum1 = vaddw_s16(isum1, vget_low_s16(s161));
+                        int16x8_t s161 = vmovl_s8(vreinterpret_s8_s32(p10));
+                        s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p11)));
+                        s161 = vaddq_s16(s161, vmovl_s8(vreinterpret_s8_s32(p12)));
+                        isum1 = vaddw_s16(isum1, vget_low_s16(s161));
+                    }
 
                     idx_g += 2;
                     grp   += 2 * k_ifairy_lut_group_bytes;
@@ -888,14 +1023,21 @@ void ggml_ifairy_lut_qgemm_ex(int m, int k, int n, const void * qweights, const 
                     const int32_t * t1 = (const int32_t *) (grp + 1 * k_ifairy_lut_pos_bytes);
                     const int32_t * t2 = (const int32_t *) (grp + 2 * k_ifairy_lut_pos_bytes);
 
-                    const int32x2_t p0 = vld1_dup_s32(t0 + c0);
-                    const int32x2_t p1 = vld1_dup_s32(t1 + c1);
-                    const int32x2_t p2 = vld1_dup_s32(t2 + c2);
+#if defined(__ARM_FEATURE_DOTPROD)
+                    if (use_dotprod) {
+                        isum0 = ggml_ifairy_lut_accum_dot(isum0, t0, c0, t1, c1, t2, c2, dot_mask);
+                    } else
+#endif
+                    {
+                        const int32x2_t p0 = vld1_dup_s32(t0 + c0);
+                        const int32x2_t p1 = vld1_dup_s32(t1 + c1);
+                        const int32x2_t p2 = vld1_dup_s32(t2 + c2);
 
-                    int16x8_t s16 = vmovl_s8(vreinterpret_s8_s32(p0));
-                    s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p1)));
-                    s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p2)));
-                    isum0 = vaddw_s16(isum0, vget_low_s16(s16));
+                        int16x8_t s16 = vmovl_s8(vreinterpret_s8_s32(p0));
+                        s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p1)));
+                        s16 = vaddq_s16(s16, vmovl_s8(vreinterpret_s8_s32(p2)));
+                        isum0 = vaddw_s16(isum0, vget_low_s16(s16));
+                    }
                 }
 
                 const float32x2_t srsi = vld1_f32(scales + (size_t) blk * 2);
