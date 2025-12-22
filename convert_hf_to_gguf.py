@@ -10006,9 +10006,9 @@ class ModernBertModel(BertModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.hparams["sliding_window_pattern"] = self.hparams.get("global_attn_every_n_layers", 1)
         self.gguf_writer.add_sliding_window(self.hparams["local_attention"])
-        self.gguf_writer.add_sliding_window_pattern(int(self.hparams["sliding_window_pattern"]))
+        if (sliding_window_pattern := self.hparams.get("global_attn_every_n_layers")) is not None:
+            self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
         self.gguf_writer.add_rope_freq_base_swa(self.rope_parameters.get("sliding_attention", {"rope_theta": self.hparams.get("local_rope_theta")})["rope_theta"])
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
