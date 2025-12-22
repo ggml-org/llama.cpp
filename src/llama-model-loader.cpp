@@ -483,7 +483,7 @@ namespace GGUFMeta {
             return false;
         }
 
-        return get_key(kid, result, required);
+        return get_key(key, result, required);
     }
 
     // TODO: this is not very clever - figure out something better
