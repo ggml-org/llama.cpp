@@ -489,12 +489,9 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
     res &= self_kq_mask_swa->ne[0] == mctx->get_swa()->get_n_kv();
     res &= self_kq_mask_swa->ne[1] == params.ubatch.n_tokens;
 
-    // For sliding window attention with flash attention, the mask content changes
-    // for each new token even if dimensions match, so we cannot reuse
-    // TODO: optimize by detecting if mask content actually changed
-    if (cparams.flash_attn && hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-        res = false;
-    }
+    // Note: Mask content changes for each token with SWA, but this is handled by
+    // set_input() which updates the mask data before graph execution. Graph structure
+    // (tensor dimensions and connections) remains constant, so reuse is safe.
 
     return res;
 }

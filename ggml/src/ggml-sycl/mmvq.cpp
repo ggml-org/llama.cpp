@@ -11,6 +11,8 @@
 // Note: Using int instead of ggml_type because SYCL kernel names require fixed underlying types
 template <int qtype> class mmvq_kernel_name;
 template <int qtype> class mmvq_reorder_kernel_name;
+template <int qtype> class mmvq_reorder_slm_kernel_name;
+template <int qtype> class mmvq_coalesced_kernel_name;
 template <int qtype> class mmvq_id_kernel_name;
 
 template <typename reorder_vec_dot_q_sycl>
@@ -58,6 +60,194 @@ static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __r
     }
 
     auto sum = sycl::reduce_over_group(nd_item.get_sub_group(), partial_sum, std::plus<>());
+
+    if (sg.leader()) {
+        dst[row] = sum;
+    }
+}
+
+// Multi-row reordered kernel with SLM Y-vector sharing
+// All subgroups in the work-group share Y-vector cached in SLM
+template <typename reorder_vec_dot_q_sycl>
+static void mul_mat_vec_q_reorder_slm(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
+                                      const int ncols, const int nrows, const sycl::nd_item<3> & nd_item,
+                                      int8_t * __restrict__ slm_y_qs, sycl::half2 * __restrict__ slm_y_ds) {
+    using block_type   = ggml_sycl_reordered::block_q_t<reorder_vec_dot_q_sycl::gtype>;
+    using block_traits = typename block_type::traits;
+
+    const auto sg           = nd_item.get_sub_group();
+    const int  sg_range     = sg.get_group_linear_range();
+    const int  workgroup_id = nd_item.get_group_linear_id();
+    const int  sg_id        = sg.get_group_linear_id();
+    const int  lane_id      = sg.get_local_linear_id();
+    const int  row          = workgroup_id * sg_range + sg_id;
+
+    const int blocks_per_row = ncols / block_traits::qk;
+
+    // Step 1: First subgroup loads Y-vector to SLM cooperatively
+    // Y is in reordered format: quants at vy[0..ncols-1], ds at vy[ncols..]
+    if (sg_id == 0) {
+        // Load Y quants (int8) - ncols bytes total
+        const int8_t * y_qs = (const int8_t *)vy;
+        for (int i = lane_id; i < ncols; i += WARP_SIZE) {
+            slm_y_qs[i] = y_qs[i];
+        }
+
+        // Load Y ds (half2) - blocks_per_row entries
+        const sycl::half2 * y_ds = (const sycl::half2 *)((const char *)vy + ncols);
+        for (int i = lane_id; i < blocks_per_row; i += WARP_SIZE) {
+            slm_y_ds[i] = y_ds[i];
+        }
+    }
+
+    // Barrier: wait for Y to be loaded to SLM
+    nd_item.barrier(sycl::access::fence_space::local_space);
+
+    if (row >= nrows) {
+        return;
+    }
+
+    constexpr int blocks_per_subgroup         = ceil_div(block_traits::vdr_mmvq * WARP_SIZE, block_traits::qi);
+    constexpr int block_elements_per_subgroup = block_traits::qi / block_traits::vdr_mmvq;
+    const int     nblocks                     = nrows * blocks_per_row;
+
+    static_assert(blocks_per_subgroup > 0);
+    static_assert(block_elements_per_subgroup > 0);
+
+    float partial_sum = 0.0f;
+    for (int i = lane_id / block_elements_per_subgroup; i < blocks_per_row; i += blocks_per_subgroup) {
+        const int ibx = row * blocks_per_row + i;  // x block index
+
+        const auto bx_offset = block_type::get_block_offset(ibx, nblocks);
+        const auto d_offset  = block_type::get_d_offset(nrows, ncols, ibx);
+
+        // Y block index that aligns with ibx
+        const int iby = i * block_type::block_to_q8_1_ratio();
+        // Use SLM-cached Y data instead of device memory
+        const int8_t* q8_1_quant_ptr = slm_y_qs + iby * QK8_1;
+        const sycl::half2* q8_1_ds_ptr = slm_y_ds + iby;
+
+#pragma unroll
+        for (int elem = 0; elem < block_elements_per_subgroup; elem += WARP_SIZE) {
+            const int iqs = elem + block_traits::vdr_mmvq * (lane_id % block_elements_per_subgroup);
+
+            partial_sum += reorder_vec_dot_q_sycl()(vx, bx_offset, d_offset, q8_1_quant_ptr, q8_1_ds_ptr, iqs);
+        }
+    }
+
+    auto sum = sycl::reduce_over_group(sg, partial_sum, std::plus<>());
+
+    if (sg.leader()) {
+        dst[row] = sum;
+    }
+}
+
+// Warp-coalesced MMVQ kernel for Q4_0
+// Tensor layout: within each 16-block tile, data is word-major instead of block-major
+// Word w of block b is at: tile_offset + w * 64 + b * 4
+// This achieves 100% cache line utilization (vs 50% with strided access in standard reorder)
+//
+// Thread mapping (32 threads process 16 blocks per iteration):
+// - Threads 0-15:  process blocks 0-15, lower half (X bytes 0-7 = elements 0-7 + 16-23)
+// - Threads 16-31: process blocks 0-15, upper half (X bytes 8-15 = elements 8-15 + 24-31)
+//
+// Memory access pattern for first load:
+// - T0: offset 0, T1: offset 4, T2: offset 8, ... T15: offset 60 (perfect 4-byte coalescing)
+// - T16: offset 128, T17: offset 132, ... T31: offset 188 (another perfect cache line)
+static void mul_mat_vec_q4_0_coalesced(
+    const void * __restrict__ vx,        // Coalesced X weights
+    const void * __restrict__ vy,        // Reordered Y activations
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const sycl::nd_item<3> & nd_item)
+{
+    const auto sg = nd_item.get_sub_group();
+    const int sg_range = sg.get_group_linear_range();
+    const int workgroup_id = nd_item.get_group_linear_id();
+    const int sg_id = sg.get_group_linear_id();
+    const int lane_id = sg.get_local_linear_id();
+    const int row = workgroup_id * sg_range + sg_id;
+
+    if (row >= nrows) {
+        return;
+    }
+
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16 blocks per tile
+    const int blocks_per_row = ncols / QK4_0;
+    const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
+
+    // Thread role: which block in tile and which half (lower=words 0,1 vs upper=words 2,3)
+    const int block_in_tile = lane_id % TILE_BLOCKS;  // 0-15
+    const int is_upper_half = lane_id / TILE_BLOCKS;   // 0 or 1
+
+    // X base pointers (coalesced layout: quants first, then scales)
+    // Quants: tiles_per_row * TILE_BLOCKS * 16 bytes per row = ncols/2 bytes
+    const uint8_t * x_qs = (const uint8_t *)vx;
+    const int x_row_stride = ncols / 2;  // bytes per row of quants
+
+    // Scales are after all quants in the tensor
+    const ggml_half * x_d = (const ggml_half *)((const char *)vx + nrows * x_row_stride);
+
+    // Y base pointers (standard reordered format: quants, then ds)
+    const int8_t * y_qs = (const int8_t *)vy;
+    const sycl::half2 * y_ds = (const sycl::half2 *)((const char *)vy + ncols);
+
+    float partial_sum = 0.0f;
+
+    for (int tile = 0; tile < tiles_per_row; tile++) {
+        // Base offset for this tile's quants (256 bytes per tile)
+        const int tile_base = row * x_row_stride + tile * MMVQ_COALESCED_TILE_BYTES;
+
+        // Coalesced load: word w of block b at offset w*64 + b*4
+        // Thread loads 2 words (8 bytes total) from its assigned block
+        // Lower half (is_upper_half=0): words 0,1 at offsets 0+b*4, 64+b*4
+        // Upper half (is_upper_half=1): words 2,3 at offsets 128+b*4, 192+b*4
+        const int word_base = is_upper_half * 128;  // 0 or 128
+        const int word0_offset = word_base + block_in_tile * 4;       // word 0 or 2
+        const int word1_offset = word_base + 64 + block_in_tile * 4;  // word 1 or 3
+
+        // Perfectly coalesced 4-byte loads
+        const int v0 = *((const int *)(x_qs + tile_base + word0_offset));
+        const int v1 = *((const int *)(x_qs + tile_base + word1_offset));
+
+        // Get scale for this block (scales are NOT coalesced, remain block-sequential)
+        const int block_idx = row * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
+        const float d = x_d[block_idx];
+
+        // Y block index and base offset
+        const int y_block = tile * TILE_BLOCKS + block_in_tile;
+        const int y_base = y_block * QK8_1;
+
+        // Load Y data matching the X half we're processing
+        // For lower half (is_upper_half=0): Y elements 0-3, 16-19, 4-7, 20-23
+        // For upper half (is_upper_half=1): Y elements 8-11, 24-27, 12-15, 28-31
+        const int y_offset = is_upper_half * 8;  // 0 or 8 (in terms of bytes)
+        const int u0 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4);      // Y[0:3] or Y[8:11]
+        const int u1 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 4);  // Y[16:19] or Y[24:27]
+        const int u2 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 1);  // Y[4:7] or Y[12:15]
+        const int u3 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 5);  // Y[20:23] or Y[28:31]
+
+        // Extract nibbles and compute dp4a
+        const int vi0_0 = (v0 >> 0) & 0x0F0F0F0F;  // low nibbles of word 0
+        const int vi1_0 = (v0 >> 4) & 0x0F0F0F0F;  // high nibbles of word 0
+        const int vi0_1 = (v1 >> 0) & 0x0F0F0F0F;  // low nibbles of word 1
+        const int vi1_1 = (v1 >> 4) & 0x0F0F0F0F;  // high nibbles of word 1
+
+        int sumi = 0;
+        sumi = dpct::dp4a(vi0_0, u0, sumi);
+        sumi = dpct::dp4a(vi1_0, u1, sumi);
+        sumi = dpct::dp4a(vi0_1, u2, sumi);
+        sumi = dpct::dp4a(vi1_1, u3, sumi);
+
+        // Apply scales: result = d4 * (sumi * ds8.x - 4 * ds8.y)
+        // The 4 comes from: 8 elements * (subtract 8 offset) / 16 = 4
+        const sycl::half2 ds8 = y_ds[y_block];
+        const sycl::float2 ds8f = ds8.convert<float, sycl::rounding_mode::automatic>();
+        partial_sum += d * (sumi * ds8f.x() - 4.0f * ds8f.y());
+    }
+
+    // Warp reduction using subgroup intrinsic
+    auto sum = sycl::reduce_over_group(sg, partial_sum, std::plus<>());
 
     if (sg.leader()) {
         dst[row] = sum;
@@ -243,6 +433,116 @@ static void mul_mat_vec_q_id(const void * __restrict__ vx, const void * __restri
         dst_out[row] = tmp;
     }
 }
+
+// Multi-row MMVQ kernel: processes multiple output rows per work-group
+// Shares Y-vector in SLM across all rows to reduce memory bandwidth
+// Expected +15-25% improvement for token generation
+template <int qk, int qi, typename block_q_t, int vdr,
+          float (*vec_dot_q_slm)(const void *, const int *, const sycl::half2 *, int, int, const int &),
+          int nrows_per_wg>
+static void mul_mat_vec_q_multirow(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
+                                   const int ncols, const int nrows,
+                                   const sycl::nd_item<3> & item_ct1,
+                                   int * __restrict__ slm_y_qs,
+                                   sycl::half2 * __restrict__ slm_y_ds) {
+    // Work-group layout: (1, nrows_per_wg, WARP_SIZE)
+    // Each warp handles one row, all warps share Y-vector in SLM
+    const int local_row = item_ct1.get_local_id(1);  // Which row within work-group (0 to nrows_per_wg-1)
+    const int lane_id = item_ct1.get_local_id(2);    // Thread within warp (0 to 31)
+    const int wg_idx = item_ct1.get_group(2);        // Work-group index
+    const int row = wg_idx * nrows_per_wg + local_row;  // Global row index
+
+    const int blocks_per_row = ncols / qk;
+
+    // Step 1: First warp (local_row == 0) loads Y-vector to SLM
+    // All threads in the first warp cooperatively load Y data
+    if (local_row == 0) {
+        const block_q8_1 * y = (const block_q8_1 *) vy;
+
+        // Each thread loads its share of blocks
+        for (int blk = lane_id; blk < blocks_per_row; blk += WARP_SIZE) {
+            // Load 8 ints (32 bytes) of quantized data per block
+            const int slm_offset = blk * MMVQ_SLM_Y_QS_STRIDE;
+            #pragma unroll
+            for (int j = 0; j < QI8_1; ++j) {
+                slm_y_qs[slm_offset + j] = get_int_from_int8_aligned(y[blk].qs, j);
+            }
+            // Load ds (scale and sum as half2)
+            slm_y_ds[blk] = *((const sycl::half2 *) &y[blk].ds);
+        }
+    }
+
+    // Barrier: wait for Y-vector to be loaded to SLM
+    item_ct1.barrier(sycl::access::fence_space::local_space);
+
+    // Step 2: Each warp computes its row using Y from SLM
+    if (row >= nrows) {
+        return;
+    }
+
+    const block_q_t * x = (const block_q_t *) vx;
+
+    // Hoist invariant iqs calculation outside the loop
+    constexpr int qi_div_vdr = qi / vdr;
+    constexpr int blocks_per_warp = (vdr * WARP_SIZE + qi - 1) / qi;
+    const int base_iqs = vdr * (lane_id % qi_div_vdr);
+    const int row_offset = row * blocks_per_row;
+
+    // 4-way accumulator for better ILP
+    float acc0 = 0.0f, acc1 = 0.0f, acc2 = 0.0f, acc3 = 0.0f;
+
+    int i = lane_id / qi_div_vdr;
+    const int stride = blocks_per_warp;
+    const int stride4 = 4 * stride;
+
+    // Main loop: 4x unrolled for ILP
+    for (; i + 3 * stride < blocks_per_row; i += stride4) {
+        const int ibx0 = row_offset + i;
+        const int ibx1 = row_offset + i + stride;
+        const int ibx2 = row_offset + i + 2 * stride;
+        const int ibx3 = row_offset + i + 3 * stride;
+
+        // Y block indices (for SLM lookup)
+        const int iby0 = i * (qk / QK8_1);
+        const int iby1 = (i + stride) * (qk / QK8_1);
+        const int iby2 = (i + 2 * stride) * (qk / QK8_1);
+        const int iby3 = (i + 3 * stride) * (qk / QK8_1);
+
+#pragma unroll
+        for (size_t elem = 0; elem < qi_div_vdr; elem += WARP_SIZE) {
+            const int iqs = elem + base_iqs;
+            acc0 += vec_dot_q_slm(&x[ibx0], slm_y_qs, slm_y_ds, iby0, MMVQ_SLM_Y_QS_STRIDE, iqs);
+            acc1 += vec_dot_q_slm(&x[ibx1], slm_y_qs, slm_y_ds, iby1, MMVQ_SLM_Y_QS_STRIDE, iqs);
+            acc2 += vec_dot_q_slm(&x[ibx2], slm_y_qs, slm_y_ds, iby2, MMVQ_SLM_Y_QS_STRIDE, iqs);
+            acc3 += vec_dot_q_slm(&x[ibx3], slm_y_qs, slm_y_ds, iby3, MMVQ_SLM_Y_QS_STRIDE, iqs);
+        }
+    }
+
+    // Handle remainder
+    for (; i < blocks_per_row; i += stride) {
+        const int ibx = row_offset + i;
+        const int iby = i * (qk / QK8_1);
+
+#pragma unroll
+        for (size_t elem = 0; elem < qi_div_vdr; elem += WARP_SIZE) {
+            const int iqs = elem + base_iqs;
+            acc0 += vec_dot_q_slm(&x[ibx], slm_y_qs, slm_y_ds, iby, MMVQ_SLM_Y_QS_STRIDE, iqs);
+        }
+    }
+
+    // Combine accumulators
+    float tmp = (acc0 + acc1) + (acc2 + acc3);
+
+    // Subgroup reduce
+    tmp = sycl::reduce_over_group(item_ct1.get_sub_group(), tmp, sycl::plus<float>());
+
+    if (lane_id == 0) {
+        dst[row] = tmp;
+    }
+}
+
+// Kernel name class for multi-row MMVQ
+template <int qtype> class mmvq_multirow_kernel_name;
 
 template <int qk, int qi, typename block_q_t, int vdr>
 static void mul_mat_vec_q_iq2_xxs_q8_1(const void *__restrict__ vx,
@@ -697,22 +997,724 @@ static void reorder_mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * vy,
     });
 }
 
+// Q8_0 reorder MMVQ dispatch function
+static void reorder_mul_mat_vec_q8_0_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
+                                                const int nrows, dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK8_0 == 0);
+    const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
+    constexpr size_t num_subgroups = 16;
+    GGML_ASSERT(block_num_y % num_subgroups == 0);
+
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y * WARP_SIZE));
+    const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
+
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<mmvq_reorder_kernel_name<GGML_TYPE_Q8_0>>(sycl::nd_range<3>(global_size, workgroup_size),
+                         [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                             mul_mat_vec_q_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_Q8_0>>(vx, vy, dst, ncols, nrows,
+                                                                                           nd_item);
+                         });
+    });
+}
+
+// MXFP4 reorder MMVQ dispatch function
+static void reorder_mul_mat_vec_mxfp4_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
+                                                 const int nrows, dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK_MXFP4 == 0);
+    const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
+    constexpr size_t num_subgroups = 16;
+    GGML_ASSERT(block_num_y % num_subgroups == 0);
+
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y * WARP_SIZE));
+    const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
+
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<mmvq_reorder_kernel_name<GGML_TYPE_MXFP4>>(sycl::nd_range<3>(global_size, workgroup_size),
+                         [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                             mul_mat_vec_q_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_MXFP4>>(vx, vy, dst, ncols, nrows,
+                                                                                            nd_item);
+                         });
+    });
+}
+
+// GPU kernel to convert Q4_0 reordered format to warp-coalesced format
+// Input layout (per 16-block tile):  [B0.qs[0:15]][B1.qs[0:15]]...[B15.qs[0:15]] = block-major
+// Output layout (per 16-block tile): [W0:B0..B15][W1:B0..B15][W2:B0..B15][W3:B0..B15] = word-major
+// Where W0 = bytes 0-3, W1 = bytes 4-7, W2 = bytes 8-11, W3 = bytes 12-15 of each block
+static void convert_q4_0_to_coalesced_kernel(
+    const uint8_t * __restrict__ src,   // Reordered format
+    uint8_t * __restrict__ dst,          // Coalesced format
+    const int ncols, const int nrows,
+    const sycl::nd_item<3> & item)
+{
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16
+    const int blocks_per_row = ncols / QK4_0;
+    const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
+    const int bytes_per_row = ncols / 2;  // 16 bytes per block, 32 elements per block
+
+    // Grid: one work-item per 4-byte word in the tensor
+    // Total words per row = blocks_per_row * 4 = tiles_per_row * 16 * 4
+    const int global_id = item.get_global_linear_id();
+    const int total_words_per_row = blocks_per_row * 4;
+    const int total_words = nrows * total_words_per_row;
+
+    if (global_id >= total_words) {
+        return;
+    }
+
+    // Decompose global_id into (row, word_in_row)
+    const int row = global_id / total_words_per_row;
+    const int word_in_row = global_id % total_words_per_row;
+
+    // Decompose word_in_row into (tile, block_in_tile, word_in_block)
+    const int words_per_tile = TILE_BLOCKS * 4;  // 64 words per tile
+    const int tile = word_in_row / words_per_tile;
+    const int word_in_tile = word_in_row % words_per_tile;
+    const int block_in_tile = word_in_tile / 4;
+    const int word_in_block = word_in_tile % 4;
+
+    // Source offset (block-major): row * bytes_per_row + tile * 256 + block * 16 + word * 4
+    const int src_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 16) + block_in_tile * 16 + word_in_block * 4;
+
+    // Destination offset (word-major): row * bytes_per_row + tile * 256 + word * 64 + block * 4
+    const int dst_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 16) + word_in_block * 64 + block_in_tile * 4;
+
+    // Copy 4 bytes
+    *((int *)(dst + dst_offset)) = *((const int *)(src + src_offset));
+}
+
+// Convert Q4_0 reordered tensor to coalesced layout in-place
+// Note: This modifies the tensor data directly. Only call once per tensor.
+// WARNING: This must be called OUTSIDE of graph recording mode (cannot use wait() during recording)
+static void convert_q4_0_to_coalesced_sycl(void * data, const int ncols, const int nrows, dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK4_0 == 0);
+    GGML_ASSERT((ncols / QK4_0) % MMVQ_COALESCED_TILE_BLOCKS == 0);  // Must be multiple of tile size
+
+    const int blocks_per_row = ncols / QK4_0;
+    const int total_words = nrows * blocks_per_row * 4;  // 4 words per block
+
+    // Allocate temporary buffer for conversion
+    const int bytes_per_row = ncols / 2;
+    const int total_bytes = nrows * bytes_per_row;
+
+    uint8_t * temp = sycl::malloc_device<uint8_t>(total_bytes, *stream);
+
+    // Copy original quants to temp
+    sycl::event copy_event = stream->memcpy(temp, data, total_bytes);
+
+    // Convert from temp to data (now coalesced)
+    const int block_size = 256;
+    const int num_blocks = (total_words + block_size - 1) / block_size;
+
+    sycl::event convert_event = stream->submit([&](sycl::handler & cgh) {
+        // Depend on copy completing before conversion
+        cgh.depends_on(copy_event);
+        cgh.parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks * block_size), sycl::range<3>(1, 1, block_size)),
+            [=](sycl::nd_item<3> item) {
+                convert_q4_0_to_coalesced_kernel(temp, (uint8_t *)data, ncols, nrows, item);
+            });
+    });
+
+    // Free temp buffer after conversion completes using host_task
+    // host_task waits for convert_event then frees, without blocking the host thread
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(convert_event);
+        cgh.host_task([temp, stream]() {
+            sycl::free(temp, *stream);
+        });
+    });
+}
+
+// Public API for coalesced conversion - call at model load time, after reorder
+bool ggml_sycl_convert_to_coalesced_q4_0(const ggml_tensor * tensor, dpct::queue_ptr stream) {
+    // Check if coalesced mode is enabled
+    static bool coalesced_enabled = (std::getenv("GGML_SYCL_MMVQ_COALESCED") != nullptr);
+    if (!coalesced_enabled) {
+        return false;
+    }
+
+    // Only for Q4_0 type
+    if (tensor->type != GGML_TYPE_Q4_0) {
+        return false;
+    }
+
+    // Check if already converted
+    ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *)tensor->extra;
+    if (!extra || extra->optimized_feature.coalesced) {
+        return false;
+    }
+
+    // Must be reordered first
+    if (!extra->optimized_feature.reorder) {
+        return false;
+    }
+
+    // Skip TP-sharded tensors
+    if (extra->tp_sharded) {
+        return false;
+    }
+
+    const int64_t ncols = tensor->ne[0];
+    const int64_t nrows = tensor->ne[1];
+
+    // Check if tensor dimensions are compatible with coalesced kernel
+    if ((ncols / QK4_0) % MMVQ_COALESCED_TILE_BLOCKS != 0) {
+        return false;
+    }
+
+    GGML_SYCL_DEBUG("Converting Q4_0 tensor to coalesced layout at model load: %s\n", tensor->name);
+
+    // Use tensor->data directly (same as reorder_qw does - this is the device pointer at load time)
+    convert_q4_0_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+    extra->optimized_feature.coalesced = true;
+
+    return true;
+}
+
+// Dispatch function for coalesced Q4_0 MMVQ kernel
+static void coalesced_mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
+                                                  const int nrows, dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK4_0 == 0);
+    GGML_ASSERT((ncols / QK4_0) % MMVQ_COALESCED_TILE_BLOCKS == 0);  // Must be multiple of tile size
+
+    const int block_num_y = ceil_div(nrows, GGML_SYCL_MMV_Y);
+    constexpr size_t num_subgroups = 16;
+
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, block_num_y * WARP_SIZE);
+    const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
+
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<mmvq_coalesced_kernel_name<GGML_TYPE_Q4_0>>(
+            sycl::nd_range<3>(global_size, workgroup_size),
+            [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                mul_mat_vec_q4_0_coalesced(vx, vy, dst, ncols, nrows, nd_item);
+            });
+    });
+}
+
+// ============================================================================
+// Q8_0 Warp-Coalesced MMVQ Kernel
+// ============================================================================
+// Q8_0 block: 32 int8 quants (32 bytes) + fp16 scale (2 bytes) = 34 bytes
+// Coalesced layout: group consecutive words (4 bytes) across 16 blocks per tile
+//
+// Memory layout per tile (16 blocks, 512 bytes quants):
+// Source (block-major): [B0.W0-W7][B1.W0-W7]...[B15.W0-W7]
+// Dest (word-major):    [W0:B0-B15][W1:B0-B15]...[W7:B0-B15]
+//
+// Thread mapping (32 threads process 16 blocks per iteration):
+// - Threads 0-15:  process blocks 0-15, lower half (words 0-3 = elements 0-15)
+// - Threads 16-31: process blocks 0-15, upper half (words 4-7 = elements 16-31)
+static void mul_mat_vec_q8_0_coalesced(
+    const void * __restrict__ vx,        // Coalesced X weights
+    const void * __restrict__ vy,        // Reordered Y activations
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const sycl::nd_item<3> & nd_item)
+{
+    const auto sg = nd_item.get_sub_group();
+    const int sg_range = sg.get_group_linear_range();
+    const int workgroup_id = nd_item.get_group_linear_id();
+    const int sg_id = sg.get_group_linear_id();
+    const int lane_id = sg.get_local_linear_id();
+    const int row = workgroup_id * sg_range + sg_id;
+
+    if (row >= nrows) {
+        return;
+    }
+
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16 blocks per tile
+    const int blocks_per_row = ncols / QK8_0;
+    const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
+
+    // Thread role: which block in tile and which half (lower=words 0-3 vs upper=words 4-7)
+    const int block_in_tile = lane_id % TILE_BLOCKS;  // 0-15
+    const int is_upper_half = lane_id / TILE_BLOCKS;  // 0 or 1
+
+    // X base pointers (coalesced layout: quants first, then scales)
+    // Quants: tiles_per_row * TILE_BLOCKS * 32 bytes per row = ncols bytes
+    const uint8_t * x_qs = (const uint8_t *)vx;
+    const int x_row_stride = ncols;  // bytes per row of quants (32 bytes/block * blocks)
+
+    // Scales are after all quants in the tensor
+    const ggml_half * x_d = (const ggml_half *)((const char *)vx + nrows * x_row_stride);
+
+    // Y base pointers (standard reordered format: quants, then ds)
+    const int8_t * y_qs = (const int8_t *)vy;
+    const sycl::half2 * y_ds = (const sycl::half2 *)((const char *)vy + ncols);
+
+    float partial_sum = 0.0f;
+
+    for (int tile = 0; tile < tiles_per_row; tile++) {
+        // Base offset for this tile's quants (512 bytes per tile for Q8_0)
+        const int tile_base = row * x_row_stride + tile * MMVQ_COALESCED_TILE_BYTES_Q8_0;
+
+        // Coalesced load: word w of block b at offset w*64 + b*4
+        // Thread loads 4 words (16 bytes total) from its assigned block
+        // Lower half (is_upper_half=0): words 0-3 at offsets 0+b*4, 64+b*4, 128+b*4, 192+b*4
+        // Upper half (is_upper_half=1): words 4-7 at offsets 256+b*4, 320+b*4, 384+b*4, 448+b*4
+        const int word_base = is_upper_half * 256;  // 0 or 256 (4 words * 64 bytes stride)
+
+        // Perfectly coalesced 4-byte loads
+        const int v0 = *((const int *)(x_qs + tile_base + word_base + 0 * 64 + block_in_tile * 4));
+        const int v1 = *((const int *)(x_qs + tile_base + word_base + 1 * 64 + block_in_tile * 4));
+        const int v2 = *((const int *)(x_qs + tile_base + word_base + 2 * 64 + block_in_tile * 4));
+        const int v3 = *((const int *)(x_qs + tile_base + word_base + 3 * 64 + block_in_tile * 4));
+
+        // Get scale for this block (scales are NOT coalesced, remain block-sequential)
+        const int block_idx = row * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
+        const float d = x_d[block_idx];
+
+        // Y block index and base offset
+        const int y_block = tile * TILE_BLOCKS + block_in_tile;
+        const int y_base = y_block * QK8_1;
+
+        // Load Y data matching the X half we're processing
+        // For lower half (is_upper_half=0): Y elements 0-15
+        // For upper half (is_upper_half=1): Y elements 16-31
+        const int y_offset = is_upper_half * 16;  // 0 or 16 (in bytes)
+        const int u0 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 0);  // Y[0:3] or Y[16:19]
+        const int u1 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 1);  // Y[4:7] or Y[20:23]
+        const int u2 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 2);  // Y[8:11] or Y[24:27]
+        const int u3 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 3);  // Y[12:15] or Y[28:31]
+
+        // dp4a: compute dot product of 4 int8 pairs
+        int sumi = 0;
+        sumi = dpct::dp4a(v0, u0, sumi);
+        sumi = dpct::dp4a(v1, u1, sumi);
+        sumi = dpct::dp4a(v2, u2, sumi);
+        sumi = dpct::dp4a(v3, u3, sumi);
+
+        // Apply scales: Q8_0 × Q8_1 = d8_0 * d8_1 * sumi
+        const sycl::half2 ds8 = y_ds[y_block];
+        const float d8_1 = ds8[0];
+        partial_sum += d * d8_1 * sumi;
+    }
+
+    // Warp reduction using subgroup intrinsic
+    auto sum = sycl::reduce_over_group(sg, partial_sum, std::plus<>());
+
+    if (sg.leader()) {
+        dst[row] = sum;
+    }
+}
+
+// GPU kernel to convert Q8_0 reordered format to warp-coalesced format
+// Input layout (per 16-block tile):  [B0.qs[0:31]][B1.qs[0:31]]...[B15.qs[0:31]] = block-major
+// Output layout (per 16-block tile): [W0:B0..B15][W1:B0..B15]...[W7:B0..B15] = word-major
+// Where W0 = bytes 0-3, W1 = bytes 4-7, ..., W7 = bytes 28-31 of each block
+static void convert_q8_0_to_coalesced_kernel(
+    const uint8_t * __restrict__ src,   // Reordered format
+    uint8_t * __restrict__ dst,          // Coalesced format
+    const int ncols, const int nrows,
+    const sycl::nd_item<3> & item)
+{
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16
+    const int blocks_per_row = ncols / QK8_0;
+    const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
+    const int bytes_per_row = ncols;  // 32 bytes per block, 32 elements per block
+
+    // Grid: one work-item per 4-byte word in the tensor
+    // Total words per row = blocks_per_row * 8 = tiles_per_row * 16 * 8
+    const int global_id = item.get_global_linear_id();
+    const int total_words_per_row = blocks_per_row * 8;  // 8 words per Q8_0 block
+    const int total_words = nrows * total_words_per_row;
+
+    if (global_id >= total_words) {
+        return;
+    }
+
+    // Decompose global_id into (row, word_in_row)
+    const int row = global_id / total_words_per_row;
+    const int word_in_row = global_id % total_words_per_row;
+
+    // Decompose word_in_row into (tile, block_in_tile, word_in_block)
+    const int words_per_tile = TILE_BLOCKS * 8;  // 128 words per tile
+    const int tile = word_in_row / words_per_tile;
+    const int word_in_tile = word_in_row % words_per_tile;
+    const int block_in_tile = word_in_tile / 8;
+    const int word_in_block = word_in_tile % 8;
+
+    // Source offset (block-major): row * bytes_per_row + tile * 512 + block * 32 + word * 4
+    const int src_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 32) + block_in_tile * 32 + word_in_block * 4;
+
+    // Destination offset (word-major): row * bytes_per_row + tile * 512 + word * 64 + block * 4
+    const int dst_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 32) + word_in_block * 64 + block_in_tile * 4;
+
+    // Copy 4 bytes
+    *((int *)(dst + dst_offset)) = *((const int *)(src + src_offset));
+}
+
+// Convert Q8_0 reordered tensor to coalesced layout in-place
+static void convert_q8_0_to_coalesced_sycl(void * data, const int ncols, const int nrows, dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK8_0 == 0);
+    GGML_ASSERT((ncols / QK8_0) % MMVQ_COALESCED_TILE_BLOCKS == 0);  // Must be multiple of tile size
+
+    const int blocks_per_row = ncols / QK8_0;
+    const int total_words = nrows * blocks_per_row * 8;  // 8 words per block
+
+    // Allocate temporary buffer for conversion
+    const int bytes_per_row = ncols;
+    const int total_bytes = nrows * bytes_per_row;
+
+    uint8_t * temp = sycl::malloc_device<uint8_t>(total_bytes, *stream);
+
+    // Copy original quants to temp
+    sycl::event copy_event = stream->memcpy(temp, data, total_bytes);
+
+    // Convert from temp to data (now coalesced)
+    const int block_size = 256;
+    const int num_blocks = (total_words + block_size - 1) / block_size;
+
+    sycl::event convert_event = stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(copy_event);
+        cgh.parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks * block_size), sycl::range<3>(1, 1, block_size)),
+            [=](sycl::nd_item<3> item) {
+                convert_q8_0_to_coalesced_kernel(temp, (uint8_t *)data, ncols, nrows, item);
+            });
+    });
+
+    // Free temp buffer after conversion completes using host_task
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(convert_event);
+        cgh.host_task([temp, stream]() {
+            sycl::free(temp, *stream);
+        });
+    });
+}
+
+// Public API for Q8_0 coalesced conversion - call at model load time, after reorder
+bool ggml_sycl_convert_to_coalesced_q8_0(const ggml_tensor * tensor, dpct::queue_ptr stream) {
+    // Check if coalesced mode is enabled
+    static bool coalesced_enabled = (std::getenv("GGML_SYCL_MMVQ_COALESCED") != nullptr);
+    if (!coalesced_enabled) {
+        return false;
+    }
+
+    // Only for Q8_0 type
+    if (tensor->type != GGML_TYPE_Q8_0) {
+        return false;
+    }
+
+    // Check if already converted
+    ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *)tensor->extra;
+    if (!extra || extra->optimized_feature.coalesced) {
+        return false;
+    }
+
+    // Must be reordered first
+    if (!extra->optimized_feature.reorder) {
+        return false;
+    }
+
+    // Skip TP-sharded tensors
+    if (extra->tp_sharded) {
+        return false;
+    }
+
+    const int64_t ncols = tensor->ne[0];
+    const int64_t nrows = tensor->ne[1];
+
+    // Check if tensor dimensions are compatible with coalesced kernel
+    if ((ncols / QK8_0) % MMVQ_COALESCED_TILE_BLOCKS != 0) {
+        GGML_SYCL_DEBUG("Q8_0 coalesced SKIP %s: ncols=%ld, blocks=%ld, mod=%ld\n",
+                        tensor->name, (long)ncols, (long)(ncols / QK8_0),
+                        (long)((ncols / QK8_0) % MMVQ_COALESCED_TILE_BLOCKS));
+        return false;
+    }
+
+    GGML_SYCL_DEBUG("Converting Q8_0 tensor to coalesced layout at model load: %s (ncols=%ld)\n", tensor->name, (long)ncols);
+
+    convert_q8_0_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+    extra->optimized_feature.coalesced = true;
+
+    return true;
+}
+
+// Dispatch function for coalesced Q8_0 MMVQ kernel
+static void coalesced_mul_mat_vec_q8_0_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
+                                                  const int nrows, dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK8_0 == 0);
+    GGML_ASSERT((ncols / QK8_0) % MMVQ_COALESCED_TILE_BLOCKS == 0);  // Must be multiple of tile size
+
+    const int block_num_y = ceil_div(nrows, GGML_SYCL_MMV_Y);
+    constexpr size_t num_subgroups = 16;
+
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, block_num_y * WARP_SIZE);
+    const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
+
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<mmvq_coalesced_kernel_name<GGML_TYPE_Q8_0>>(
+            sycl::nd_range<3>(global_size, workgroup_size),
+            [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                mul_mat_vec_q8_0_coalesced(vx, vy, dst, ncols, nrows, nd_item);
+            });
+    });
+}
+
+// ============================================================================
+// MXFP4 Warp-Coalesced MMVQ Kernel
+// ============================================================================
+// MXFP4 block: 16 packed bytes (32 4-bit elements) + 1 byte E8M0 exponent = 17 bytes
+// Same coalesced layout as Q4_0 (16 bytes quants per block)
+static void mul_mat_vec_mxfp4_coalesced(
+    const void * __restrict__ vx,        // Coalesced X weights
+    const void * __restrict__ vy,        // Reordered Y activations
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const sycl::nd_item<3> & nd_item)
+{
+    const auto sg = nd_item.get_sub_group();
+    const int sg_range = sg.get_group_linear_range();
+    const int workgroup_id = nd_item.get_group_linear_id();
+    const int sg_id = sg.get_group_linear_id();
+    const int lane_id = sg.get_local_linear_id();
+    const int row = workgroup_id * sg_range + sg_id;
+
+    if (row >= nrows) {
+        return;
+    }
+
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16 blocks per tile
+    const int blocks_per_row = ncols / QK_MXFP4;
+    const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
+
+    // Thread role: which block in tile and which half (lower=words 0,1 vs upper=words 2,3)
+    const int block_in_tile = lane_id % TILE_BLOCKS;  // 0-15
+    const int is_upper_half = lane_id / TILE_BLOCKS;  // 0 or 1
+
+    // X base pointers (coalesced layout: quants first, then scales)
+    const uint8_t * x_qs = (const uint8_t *)vx;
+    const int x_row_stride = ncols / 2;  // bytes per row of quants (16 bytes/block)
+
+    // Scales are after all quants in the tensor (1 byte E8M0 per block)
+    const uint8_t * x_e = (const uint8_t *)vx + nrows * x_row_stride;
+
+    // Y base pointers (standard reordered format: quants, then ds)
+    const int8_t * y_qs = (const int8_t *)vy;
+    const sycl::half2 * y_ds = (const sycl::half2 *)((const char *)vy + ncols);
+
+    float partial_sum = 0.0f;
+
+    for (int tile = 0; tile < tiles_per_row; tile++) {
+        // Base offset for this tile's quants (256 bytes per tile for MXFP4)
+        const int tile_base = row * x_row_stride + tile * MMVQ_COALESCED_TILE_BYTES_MXFP4;
+
+        // Coalesced load: word w of block b at offset w*64 + b*4
+        const int word_base = is_upper_half * 128;  // 0 or 128
+        const int word0_offset = word_base + block_in_tile * 4;       // word 0 or 2
+        const int word1_offset = word_base + 64 + block_in_tile * 4;  // word 1 or 3
+
+        // Perfectly coalesced 4-byte loads
+        const int v0 = *((const int *)(x_qs + tile_base + word0_offset));
+        const int v1 = *((const int *)(x_qs + tile_base + word1_offset));
+
+        // Get E8M0 exponent for this block
+        const int block_idx = row * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
+        const uint8_t e8m0 = x_e[block_idx];
+        const float scale = ggml_sycl_e8m0_to_fp32(e8m0) * 0.5f;
+
+        // Y block index and base offset
+        const int y_block = tile * TILE_BLOCKS + block_in_tile;
+        const int y_base = y_block * QK8_1;
+
+        // Load Y data matching the X half we're processing
+        const int y_offset = is_upper_half * 8;  // 0 or 8 (in terms of bytes)
+
+        // Use MXFP4 lookup table for dequantization
+        // Process 8 elements per load (2 words of 4 nibbles each = 8 FP4 values)
+        const sycl::int2 dq0 = get_int_from_table_16(v0, kvalues_mxfp4);
+        const sycl::int2 dq1 = get_int_from_table_16(v1, kvalues_mxfp4);
+
+        // Load corresponding Y values
+        const int u0 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4);      // Y[0:3] or Y[8:11]
+        const int u1 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 4);  // Y[16:19] or Y[24:27]
+        const int u2 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 1);  // Y[4:7] or Y[12:15]
+        const int u3 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 5);  // Y[20:23] or Y[28:31]
+
+        // dp4a: compute dot product
+        int sumi = 0;
+        sumi = ggml_sycl_dp4a(dq0.x(), u0, sumi);
+        sumi = ggml_sycl_dp4a(dq0.y(), u1, sumi);
+        sumi = ggml_sycl_dp4a(dq1.x(), u2, sumi);
+        sumi = ggml_sycl_dp4a(dq1.y(), u3, sumi);
+
+        // Apply scales
+        const sycl::half2 ds8 = y_ds[y_block];
+        const float d8_1 = ds8[0];
+        partial_sum += scale * d8_1 * sumi;
+    }
+
+    // Warp reduction using subgroup intrinsic
+    auto sum = sycl::reduce_over_group(sg, partial_sum, std::plus<>());
+
+    if (sg.leader()) {
+        dst[row] = sum;
+    }
+}
+
+// GPU kernel to convert MXFP4 reordered format to warp-coalesced format
+// Same layout as Q4_0 (16 bytes quants per block)
+static void convert_mxfp4_to_coalesced_kernel(
+    const uint8_t * __restrict__ src,
+    uint8_t * __restrict__ dst,
+    const int ncols, const int nrows,
+    const sycl::nd_item<3> & item)
+{
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16
+    const int blocks_per_row = ncols / QK_MXFP4;
+    const int bytes_per_row = ncols / 2;  // 16 bytes per block, 32 elements per block
+
+    const int global_id = item.get_global_linear_id();
+    const int total_words_per_row = blocks_per_row * 4;  // 4 words per MXFP4 block
+    const int total_words = nrows * total_words_per_row;
+
+    if (global_id >= total_words) {
+        return;
+    }
+
+    const int row = global_id / total_words_per_row;
+    const int word_in_row = global_id % total_words_per_row;
+
+    const int words_per_tile = TILE_BLOCKS * 4;
+    const int tile = word_in_row / words_per_tile;
+    const int word_in_tile = word_in_row % words_per_tile;
+    const int block_in_tile = word_in_tile / 4;
+    const int word_in_block = word_in_tile % 4;
+
+    const int src_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 16) + block_in_tile * 16 + word_in_block * 4;
+    const int dst_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 16) + word_in_block * 64 + block_in_tile * 4;
+
+    *((int *)(dst + dst_offset)) = *((const int *)(src + src_offset));
+}
+
+static void convert_mxfp4_to_coalesced_sycl(void * data, const int ncols, const int nrows, dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK_MXFP4 == 0);
+    GGML_ASSERT((ncols / QK_MXFP4) % MMVQ_COALESCED_TILE_BLOCKS == 0);
+
+    const int blocks_per_row = ncols / QK_MXFP4;
+    const int total_words = nrows * blocks_per_row * 4;
+
+    const int bytes_per_row = ncols / 2;
+    const int total_bytes = nrows * bytes_per_row;
+
+    uint8_t * temp = sycl::malloc_device<uint8_t>(total_bytes, *stream);
+
+    sycl::event copy_event = stream->memcpy(temp, data, total_bytes);
+
+    const int block_size = 256;
+    const int num_blocks = (total_words + block_size - 1) / block_size;
+
+    sycl::event convert_event = stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(copy_event);
+        cgh.parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks * block_size), sycl::range<3>(1, 1, block_size)),
+            [=](sycl::nd_item<3> item) {
+                convert_mxfp4_to_coalesced_kernel(temp, (uint8_t *)data, ncols, nrows, item);
+            });
+    });
+
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(convert_event);
+        cgh.host_task([temp, stream]() {
+            sycl::free(temp, *stream);
+        });
+    });
+}
+
+// Public API for MXFP4 coalesced conversion
+bool ggml_sycl_convert_to_coalesced_mxfp4(const ggml_tensor * tensor, dpct::queue_ptr stream) {
+    static bool coalesced_enabled = (std::getenv("GGML_SYCL_MMVQ_COALESCED") != nullptr);
+    if (!coalesced_enabled) {
+        return false;
+    }
+
+    if (tensor->type != GGML_TYPE_MXFP4) {
+        return false;
+    }
+
+    ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *)tensor->extra;
+    if (!extra || extra->optimized_feature.coalesced) {
+        return false;
+    }
+
+    if (!extra->optimized_feature.reorder) {
+        return false;
+    }
+
+    if (extra->tp_sharded) {
+        return false;
+    }
+
+    const int64_t ncols = tensor->ne[0];
+    const int64_t nrows = tensor->ne[1];
+
+    if ((ncols / QK_MXFP4) % MMVQ_COALESCED_TILE_BLOCKS != 0) {
+        GGML_SYCL_DEBUG("MXFP4 coalesced SKIP %s: ncols=%ld, blocks=%ld, mod=%ld\n",
+                        tensor->name, (long)ncols, (long)(ncols / QK_MXFP4),
+                        (long)((ncols / QK_MXFP4) % MMVQ_COALESCED_TILE_BLOCKS));
+        return false;
+    }
+
+    GGML_SYCL_DEBUG("Converting MXFP4 tensor to coalesced layout at model load: %s (ncols=%ld)\n", tensor->name, (long)ncols);
+
+    convert_mxfp4_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+    extra->optimized_feature.coalesced = true;
+
+    return true;
+}
+
+// Dispatch function for coalesced MXFP4 MMVQ kernel
+static void coalesced_mul_mat_vec_mxfp4_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
+                                                   const int nrows, dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK_MXFP4 == 0);
+    GGML_ASSERT((ncols / QK_MXFP4) % MMVQ_COALESCED_TILE_BLOCKS == 0);
+
+    const int block_num_y = ceil_div(nrows, GGML_SYCL_MMV_Y);
+    constexpr size_t num_subgroups = 16;
+
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, block_num_y * WARP_SIZE);
+    const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
+
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for<mmvq_coalesced_kernel_name<GGML_TYPE_MXFP4>>(
+            sycl::nd_range<3>(global_size, workgroup_size),
+            [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                mul_mat_vec_mxfp4_coalesced(vx, vy, dst, ncols, nrows, nd_item);
+            });
+    });
+}
+
 static void mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols, const int nrows,
                                        dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK4_0 == 0);
-    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
-    const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
 
-    {
-        stream->submit([&](sycl::handler & cgh) {
-            cgh.parallel_for<mmvq_kernel_name<GGML_TYPE_Q4_0>>(sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                                 mul_mat_vec_q<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, vec_dot_q4_0_q8_1>(
-                                     vx, vy, dst, ncols, nrows, item_ct1);
-                             });
-        });
-    }
+    // Use multi-row kernel with SLM Y-vector sharing for better bandwidth utilization
+    constexpr int NROWS_PER_WG = MMVQ_NROWS_PER_WG;
+    const int block_num_z = (nrows + NROWS_PER_WG - 1) / NROWS_PER_WG;
+    const sycl::range<3> block_nums(1, 1, block_num_z);
+    const sycl::range<3> block_dims(1, NROWS_PER_WG, WARP_SIZE);
+
+    const int blocks_per_row = ncols / QK4_0;
+    const int slm_y_qs_size = blocks_per_row * MMVQ_SLM_Y_QS_STRIDE;
+    const int slm_y_ds_size = blocks_per_row + 1;  // +1 for padding
+
+    stream->submit([&](sycl::handler & cgh) {
+        // Allocate SLM for Y-vector (shared across all rows in work-group)
+        sycl::local_accessor<int, 1> slm_y_qs(slm_y_qs_size, cgh);
+        sycl::local_accessor<sycl::half2, 1> slm_y_ds(slm_y_ds_size, cgh);
+
+        cgh.parallel_for<mmvq_multirow_kernel_name<GGML_TYPE_Q4_0>>(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                mul_mat_vec_q_multirow<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ,
+                                       vec_dot_q4_0_q8_1_slm, NROWS_PER_WG>(
+                    vx, vy, dst, ncols, nrows, item_ct1,
+                    slm_y_qs.get_pointer(), slm_y_ds.get_pointer());
+            });
+    });
 }
 
 // MoE dispatch: Q4_0 with expert routing via ids tensor (GPU-side, no host sync)
@@ -837,23 +1839,31 @@ static void mul_mat_vec_q8_0_q8_1_sycl(const void *vx, const void *vy,
                                        const int nrows,
                                        dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK8_0 == 0);
-    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
-    const sycl::range<3> block_nums(1, 1, block_num_y);
-    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
-    {
 
-        stream->submit([&](sycl::handler &cgh) {
+    // Use multi-row kernel with SLM Y-vector sharing for better bandwidth utilization
+    constexpr int NROWS_PER_WG = MMVQ_NROWS_PER_WG;
+    const int block_num_z = (nrows + NROWS_PER_WG - 1) / NROWS_PER_WG;
+    const sycl::range<3> block_nums(1, 1, block_num_z);
+    const sycl::range<3> block_dims(1, NROWS_PER_WG, WARP_SIZE);
 
-            cgh.parallel_for<mmvq_kernel_name<GGML_TYPE_Q8_0>>(
-                sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                [=](sycl::nd_item<3> item_ct1)
-                    [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                        mul_mat_vec_q<QK8_0, QI8_0, block_q8_0,
-                                      VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1>(
-                            vx, vy, dst, ncols, nrows, item_ct1);
-                    });
-        });
-    }
+    const int blocks_per_row = ncols / QK8_0;
+    const int slm_y_qs_size = blocks_per_row * MMVQ_SLM_Y_QS_STRIDE;
+    const int slm_y_ds_size = blocks_per_row + 1;  // +1 for padding
+
+    stream->submit([&](sycl::handler & cgh) {
+        // Allocate SLM for Y-vector (shared across all rows in work-group)
+        sycl::local_accessor<int, 1> slm_y_qs(slm_y_qs_size, cgh);
+        sycl::local_accessor<sycl::half2, 1> slm_y_ds(slm_y_ds_size, cgh);
+
+        cgh.parallel_for<mmvq_multirow_kernel_name<GGML_TYPE_Q8_0>>(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                mul_mat_vec_q_multirow<QK8_0, QI8_0, block_q8_0, VDR_Q8_0_Q8_1_MMVQ,
+                                       vec_dot_q8_0_q8_1_slm, NROWS_PER_WG>(
+                    vx, vy, dst, ncols, nrows, item_ct1,
+                    slm_y_qs.get_pointer(), slm_y_ds.get_pointer());
+            });
+    });
 }
 
 // MoE dispatch: Q8_0 with expert routing via ids tensor (GPU-side, no host sync)
@@ -1325,6 +2335,104 @@ static void mul_mat_vec_mxfp4_q8_1_id_sycl(const void * vx, const void * vy, flo
     });
 }
 
+#ifdef GGML_SYCL_GRAPH
+// Pre-allocate Q8_1 buffers for all MUL_MAT_ID operations before graph recording.
+// This must be called during decode phase, before graph recording starts.
+// MUL_MAT_ID normally allocates Q8_1 buffers dynamically via ggml_sycl_pool_alloc,
+// which is incompatible with SYCL graph recording.
+void ggml_sycl_moe_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph) {
+    // Skip if already initialized with sufficient buffers
+    if (ctx.moe_buffers.initialized) {
+        ctx.moe_buffers.reset_usage();
+        return;
+    }
+
+    queue_ptr stream = ctx.stream();
+
+    // Count MUL_MAT_ID nodes and find max dimensions
+    int moe_count = 0;
+    int64_t max_ne10 = 0;
+    int64_t max_src1_rows = 0;
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+        if (node->op != GGML_OP_MUL_MAT_ID) {
+            continue;
+        }
+
+        const ggml_tensor * src0 = node->src[0];  // Expert weights
+        const ggml_tensor * src1 = node->src[1];  // Input activations
+
+        // Only count graph-compatible types
+        if (!ggml_is_quantized(src0->type)) continue;
+        switch (src0->type) {
+            case GGML_TYPE_Q4_0:
+            case GGML_TYPE_Q4_K:
+            case GGML_TYPE_Q5_K:
+            case GGML_TYPE_Q6_K:
+            case GGML_TYPE_Q8_0:
+            case GGML_TYPE_MXFP4:
+                break;
+            default:
+                continue;  // Skip unsupported types
+        }
+
+        moe_count++;
+
+        // Track max dimensions
+        const int64_t ne10 = src1->ne[0];
+        const int64_t ne11 = src1->ne[1];
+        const int64_t ne12 = src1->ne[2];
+        const int64_t total_rows = ne11 * ne12;
+
+        if (ne10 > max_ne10) max_ne10 = ne10;
+        if (total_rows > max_src1_rows) max_src1_rows = total_rows;
+    }
+
+    if (moe_count == 0) {
+        return;  // No MoE operations
+    }
+
+    // Calculate buffer size (use max dimensions for all buffers)
+    const int64_t ne10_padded = GGML_PAD(max_ne10, QK8_1);
+    const int64_t q8_1_row_size = ne10_padded * sizeof(block_q8_1) / QK8_1;
+    const size_t buffer_size = max_src1_rows * q8_1_row_size;
+
+    GGML_SYCL_DEBUG("[MOE-GRAPH] Pre-allocating %d Q8_1 buffers, %zu bytes each (ne10=%lld, rows=%lld)\n",
+                   moe_count, buffer_size, (long long)max_ne10, (long long)max_src1_rows);
+
+    // Allocate buffers
+    ctx.moe_buffers.q8_1_buffers.resize(moe_count);
+    ctx.moe_buffers.q8_1_sizes.resize(moe_count);
+
+    for (int i = 0; i < moe_count; i++) {
+        ctx.moe_buffers.q8_1_buffers[i] = sycl::malloc_device(buffer_size, *stream);
+        ctx.moe_buffers.q8_1_sizes[i] = buffer_size;
+
+        if (!ctx.moe_buffers.q8_1_buffers[i]) {
+            GGML_LOG_ERROR("[MOE-GRAPH] Failed to allocate Q8_1 buffer %d\n", i);
+            // Cleanup and abort
+            for (int j = 0; j < i; j++) {
+                sycl::free(ctx.moe_buffers.q8_1_buffers[j], *stream);
+            }
+            ctx.moe_buffers.q8_1_buffers.clear();
+            ctx.moe_buffers.q8_1_sizes.clear();
+            return;
+        }
+    }
+
+    ctx.moe_buffers.max_ne10 = max_ne10;
+    ctx.moe_buffers.max_src1_rows = max_src1_rows;
+    ctx.moe_buffers.initialized = true;
+    ctx.moe_buffers.reset_usage();
+
+    // Wait for allocations to complete
+    stream->wait();
+
+    GGML_SYCL_DEBUG("[MOE-GRAPH] Pre-allocated %d buffers successfully\n", moe_count);
+}
+#endif
+
 // MoE-aware MUL_MAT_ID dispatch: GPU-side expert routing without host sync
 // This allows SYCL graph recording to work with MoE models
 // Returns true if handled, false to fall back to host-side routing
@@ -1360,9 +2468,29 @@ bool ggml_sycl_mul_mat_id_vec_q(
 
     // Total rows = ne11 * ne12 (e.g., 4 expert outputs * 1 token = 4 rows)
     const int64_t total_src1_rows = ne11 * ne12;
+    const size_t required_size = total_src1_rows * q8_1_row_size;
 
-    // Allocate space for all rows
-    ggml_sycl_pool_alloc<int8_t> src1_q8_1(ctx.pool(), total_src1_rows * q8_1_row_size);
+    // Try to use pre-allocated buffer (for graph recording)
+    void* q8_1_buffer = nullptr;
+    bool using_preallocated = false;
+
+#ifdef GGML_SYCL_GRAPH
+    if (g_ggml_sycl_graph_recording && ctx.moe_buffers.initialized) {
+        q8_1_buffer = ctx.moe_buffers.get_next_buffer(required_size);
+        if (q8_1_buffer) {
+            using_preallocated = true;
+            GGML_SYCL_DEBUG("[MOE-GRAPH] Using pre-allocated buffer %d\n",
+                           ctx.moe_buffers.current_buffer_idx - 1);
+        }
+    }
+#endif
+
+    // Fall back to pool allocation if no pre-allocated buffer available
+    ggml_sycl_pool_alloc<int8_t> src1_q8_1_pool(ctx.pool());
+    if (!using_preallocated) {
+        src1_q8_1_pool.alloc(required_size);
+        q8_1_buffer = src1_q8_1_pool.get();
+    }
 
     // Get pointers
     const void * src0_d = src0->data;
@@ -1372,7 +2500,7 @@ bool ggml_sycl_mul_mat_id_vec_q(
 
     // Quantize all rows to Q8_1
     // The quantize function handles multiple rows when nrows > 1
-    quantize_row_q8_1_sycl<quantize_q8_1>(src1_d, src1_q8_1.get(), ne10, total_src1_rows, ne10_padded, stream);
+    quantize_row_q8_1_sycl<quantize_q8_1>(src1_d, (char*)q8_1_buffer, ne10, total_src1_rows, ne10_padded, stream);
 
     // Calculate strides from tensors (matching host-side logic)
     const int64_t n_ids = ids->ne[0];  // Number of expert selections per token
@@ -1395,7 +2523,7 @@ bool ggml_sycl_mul_mat_id_vec_q(
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
             mul_mat_vec_q4_0_q8_1_id_sycl(
-                src0_d, src1_q8_1.get(), dst_d, ids_d,
+                src0_d, q8_1_buffer, dst_d, ids_d,
                 ne00,  // ncols
                 ne01,  // nrows_per_expert
                 total_batches,
@@ -1409,7 +2537,7 @@ bool ggml_sycl_mul_mat_id_vec_q(
             break;
         case GGML_TYPE_Q8_0:
             mul_mat_vec_q8_0_q8_1_id_sycl(
-                src0_d, src1_q8_1.get(), dst_d, ids_d,
+                src0_d, q8_1_buffer, dst_d, ids_d,
                 ne00,  // ncols
                 ne01,  // nrows_per_expert
                 total_batches,
@@ -1433,7 +2561,7 @@ bool ggml_sycl_mul_mat_id_vec_q(
 
                     stream->memcpy(&host_expert_id, ids_d, sizeof(int32_t)).wait();
                     stream->memcpy(&host_mxfp4, (const char*)src0_d + host_expert_id * stride_expert_x, sizeof(block_mxfp4)).wait();
-                    stream->memcpy(&host_q8_1, src1_q8_1.get(), sizeof(block_q8_1)).wait();
+                    stream->memcpy(&host_q8_1, q8_1_buffer, sizeof(block_q8_1)).wait();
 
                     fprintf(stderr, "\n[MXFP4 DEBUG] expert_id=%d, ne00=%lld, ne01=%lld, stride_expert_x=%lld\n",
                             host_expert_id, (long long)ne00, (long long)ne01, (long long)stride_expert_x);
@@ -1464,7 +2592,7 @@ bool ggml_sycl_mul_mat_id_vec_q(
                 }
             }
             mul_mat_vec_mxfp4_q8_1_id_sycl(
-                src0_d, src1_q8_1.get(), dst_d, ids_d,
+                src0_d, q8_1_buffer, dst_d, ids_d,
                 ne00,  // ncols
                 ne01,  // nrows_per_expert
                 total_batches,
@@ -1686,7 +2814,14 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                         use_reorder = false;
                     }
 
-                    if (use_reorder) {
+                    // Check if tensor was converted to coalesced layout at model load time
+                    // (conversion happens in ggml_sycl_reorder_weights when GGML_SYCL_MMVQ_COALESCED is set)
+                    bool use_coalesced = src0_extra && src0_extra->optimized_feature.coalesced;
+
+                    if (use_coalesced) {
+                        GGML_SYCL_DEBUG("Calling coalesced_mul_mat_vec_q4_0_q8_1_sycl\n");
+                        coalesced_mul_mat_vec_q4_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                    } else if (use_reorder) {
                         GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_q4_0_q8_1_sycl\n");
                         reorder_mul_mat_vec_q4_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                     } else {
@@ -1705,10 +2840,50 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                 mul_mat_vec_q5_1_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_Q8_0:
-                mul_mat_vec_q8_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                {
+                    auto * src0_extra = (ggml_tensor_extra_gpu *) src0->extra;
+                    bool use_reorder = src0_extra && src0_extra->optimized_feature.reorder;
+                    bool use_coalesced = src0_extra && src0_extra->optimized_feature.coalesced;
+
+                    // Disable optimized paths for TP-sharded tensors
+                    if (src0_extra && src0_extra->tp_sharded) {
+                        use_reorder = false;
+                        use_coalesced = false;
+                    }
+
+                    if (use_coalesced) {
+                        GGML_SYCL_DEBUG("Calling coalesced_mul_mat_vec_q8_0_q8_1_sycl\n");
+                        coalesced_mul_mat_vec_q8_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                    } else if (use_reorder) {
+                        GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_q8_0_q8_1_sycl\n");
+                        reorder_mul_mat_vec_q8_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                    } else {
+                        mul_mat_vec_q8_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                    }
+                }
                 break;
             case GGML_TYPE_MXFP4:
-                mul_mat_vec_mxfp4_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                {
+                    auto * src0_extra = (ggml_tensor_extra_gpu *) src0->extra;
+                    bool use_reorder = src0_extra && src0_extra->optimized_feature.reorder;
+                    bool use_coalesced = src0_extra && src0_extra->optimized_feature.coalesced;
+
+                    // Disable optimized paths for TP-sharded tensors
+                    if (src0_extra && src0_extra->tp_sharded) {
+                        use_reorder = false;
+                        use_coalesced = false;
+                    }
+
+                    if (use_coalesced) {
+                        GGML_SYCL_DEBUG("Calling coalesced_mul_mat_vec_mxfp4_q8_1_sycl\n");
+                        coalesced_mul_mat_vec_mxfp4_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                    } else if (use_reorder) {
+                        GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_mxfp4_q8_1_sycl\n");
+                        reorder_mul_mat_vec_mxfp4_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                    } else {
+                        mul_mat_vec_mxfp4_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                    }
+                }
                 break;
             case GGML_TYPE_Q2_K:
                 mul_mat_vec_q2_K_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);

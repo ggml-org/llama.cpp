@@ -105,6 +105,52 @@ template <> struct block_q_t<GGML_TYPE_Q6_K> {
     static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
 };
 
+// Q8_0: 32 int8 quants (32 bytes) + fp16 scale (2 bytes) = 34 bytes per block
+// Reordered: [qs0..qsN] [d0..dN] - all quants contiguous, then all scales
+template <> struct block_q_t<GGML_TYPE_Q8_0> {
+    struct traits {
+        static constexpr uint32_t qk       = QK8_0;
+        static constexpr uint32_t qi       = QI8_0;
+        static constexpr uint32_t qr       = QR8_0;
+        static constexpr uint32_t vdr_mmvq = 2;
+    };
+
+    // Block offset: each block contributes QK8_0 bytes of quants
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
+        return { block_index * QK8_0, 0 };
+    }
+
+    // Scale offset: after all quants (ncols bytes per row)
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        return { (ncols * nrows) + block_index * sizeof(ggml_half), 0 };
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
+};
+
+// MXFP4: 32 4-bit elements packed in 16 bytes + 1 byte E8M0 exponent = 17 bytes per block
+// Reordered: [qs0..qsN] [scale0..scaleN] - all quants contiguous, then all scales
+template <> struct block_q_t<GGML_TYPE_MXFP4> {
+    struct traits {
+        static constexpr uint32_t qk       = QK_MXFP4;
+        static constexpr uint32_t qi       = QI_MXFP4;
+        static constexpr uint32_t qr       = QR_MXFP4;
+        static constexpr uint32_t vdr_mmvq = 2;
+    };
+
+    // Block offset: each block contributes QK_MXFP4/2 bytes of quants (4-bit packed)
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
+        return { block_index * (QK_MXFP4 / 2), 0 };
+    }
+
+    // Scale offset: after all quants (ncols/2 bytes per row), scales are 1 byte each
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        return { (ncols / 2 * nrows) + block_index * sizeof(uint8_t), 0 };
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
+};
+
 }  // namespace ggml_sycl_reordered
 
 #endif  // GGML_SYCL_QUANTS_HPP

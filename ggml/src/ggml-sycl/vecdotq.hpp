@@ -486,6 +486,77 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q6_K> {
         return vec_dot_q6_K_q8_1_impl_mmvq(vl, vh, u, scs, *d, d8);
     }
 };
+
+// Q8_0: 32 int8 quants + fp16 scale = 34 bytes per block
+// Reordered layout: [qs0..qsN] [d0..dN] - all quants contiguous, then all scales
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q8_0> {
+    static constexpr ggml_type gtype = GGML_TYPE_Q8_0;
+
+    using q8_0_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_Q8_0>;
+    using q8_0_traits = typename q8_0_block::traits;
+
+    __dpct_inline__ float vec_dot_q8_0_q8_1_impl(const int * v, const int * u, const float & d8_0,
+                                                  const float & d8_1) {
+        int sumi = 0;
+
+#pragma unroll
+        for (size_t i = 0; i < q8_0_traits::vdr_mmvq; ++i) {
+            // SIMD dot product of quantized values
+            sumi = dpct::dp4a(v[i], u[i], sumi);
+        }
+
+        return d8_0 * d8_1 * sumi;
+    }
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        const int8_t * bq8_0 = static_cast<const int8_t *>(vbq) + ibx_offset.first;
+        const ggml_half d = *(reinterpret_cast<const ggml_half *>(static_cast<const uint8_t *>(vbq) + d_offset.first));
+        int             v[q8_0_traits::vdr_mmvq];
+        int             u[q8_0_traits::vdr_mmvq];
+
+#pragma unroll
+        for (size_t i = 0; i < q8_0_traits::vdr_mmvq; ++i) {
+            v[i] = get_int_from_int8(bq8_0, iqs + i);
+            u[i] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i);
+        }
+
+        const sycl::half2 ds8 = *q8_1_ds;
+        return vec_dot_q8_0_q8_1_impl(v, u, d, ds8[0]);
+    };
+};
+
+// MXFP4: 16 packed bytes (32 4-bit elements) + 1 byte E8M0 exponent = 17 bytes per block
+// Reordered layout: [qs0..qsN] [scale0..scaleN]
+template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_MXFP4> {
+    static constexpr ggml_type gtype = GGML_TYPE_MXFP4;
+
+    using mxfp4_block  = ggml_sycl_reordered::block_q_t<GGML_TYPE_MXFP4>;
+    using mxfp4_traits = typename mxfp4_block::traits;
+
+    __dpct_inline__ float operator()(const void * __restrict__ vbq, const std::pair<int, int> ibx_offset,
+                                     const std::pair<int, int> d_offset, const int8_t * q8_1_quant_ptr,
+                                     const sycl::half2 * q8_1_ds, const int & iqs) {
+        const uint8_t * qs = static_cast<const uint8_t *>(vbq) + ibx_offset.first;
+        const uint8_t e8m0 = *(static_cast<const uint8_t *>(vbq) + d_offset.first);
+
+        const int * q8 = (const int *)q8_1_quant_ptr + iqs;
+
+        int sumi = 0;
+#pragma unroll
+        for (int l = 0; l < mxfp4_traits::vdr_mmvq; ++l) {
+            const int aux_q4 = get_int_b1(qs, iqs + l);
+            const sycl::int2 v = get_int_from_table_16(aux_q4, kvalues_mxfp4);
+            sumi = ggml_sycl_dp4a(v.x(), q8[l + 0], sumi);
+            sumi = ggml_sycl_dp4a(v.y(), q8[l + 4], sumi);
+        }
+
+        const float d = ggml_sycl_e8m0_to_fp32(e8m0) * 0.5f * (*q8_1_ds)[0];
+        return d * sumi;
+    };
+};
+
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
 
@@ -1356,6 +1427,76 @@ vec_dot_iq4_xs_q8_1(const void *__restrict__ vbq,
 #else
     assert(false);
 #endif
+}
+
+// =============================================================================
+// SLM-based vec_dot variants for multi-row MMVQ kernel
+// These functions read Y-vector data from SLM instead of device memory
+// Y data is pre-loaded to SLM once and shared across multiple output rows
+// =============================================================================
+
+// Q4_0 vec_dot using pre-loaded Y-vector from SLM
+// slm_y_qs: SLM array of ints containing Q8_1 quants (8 ints per block, stride=MMVQ_SLM_Y_QS_STRIDE)
+// slm_y_ds: SLM array of half2 containing Q8_1 scales/sums
+// y_block_idx: Index into Y-vector blocks for this dot product
+static __dpct_inline__ float
+vec_dot_q4_0_q8_1_slm(const void *__restrict__ vbq,
+                      const int * __restrict__ slm_y_qs,
+                      const sycl::half2 * __restrict__ slm_y_ds,
+                      const int y_block_idx, const int slm_stride, const int &iqs) {
+
+    const block_q4_0 * bq4_0 = (const block_q4_0 *) vbq;
+
+    int v[VDR_Q4_0_Q8_1_MMVQ];
+    int u[2 * VDR_Q4_0_Q8_1_MMVQ];
+
+    // Load X (weight) data from device memory as before
+#pragma unroll
+    for (int i = 0; i < VDR_Q4_0_Q8_1_MMVQ; ++i) {
+        v[i] = get_int_from_uint8(bq4_0->qs, iqs + i);
+    }
+
+    // Load Y data from SLM instead of device memory
+    const int y_slm_offset = y_block_idx * slm_stride;
+#pragma unroll
+    for (int i = 0; i < VDR_Q4_0_Q8_1_MMVQ; ++i) {
+        u[2 * i + 0] = slm_y_qs[y_slm_offset + iqs + i];
+        u[2 * i + 1] = slm_y_qs[y_slm_offset + iqs + i + QI4_0];
+    }
+
+    const sycl::half2 ds8 = slm_y_ds[y_block_idx];
+
+    return vec_dot_q4_0_q8_1_impl<VDR_Q4_0_Q8_1_MMVQ>(v, u, bq4_0->d, ds8);
+}
+
+// Q8_0 vec_dot using pre-loaded Y-vector from SLM
+static __dpct_inline__ float
+vec_dot_q8_0_q8_1_slm(const void *__restrict__ vbq,
+                      const int * __restrict__ slm_y_qs,
+                      const sycl::half2 * __restrict__ slm_y_ds,
+                      const int y_block_idx, const int slm_stride, const int &iqs) {
+
+    const block_q8_0 * bq8_0 = (const block_q8_0 *) vbq;
+
+    int v[VDR_Q8_0_Q8_1_MMVQ];
+    int u[VDR_Q8_0_Q8_1_MMVQ];
+
+    // Load X (weight) data from device memory
+#pragma unroll
+    for (int i = 0; i < VDR_Q8_0_Q8_1_MMVQ; ++i) {
+        v[i] = get_int_from_int8(bq8_0->qs, iqs + i);
+    }
+
+    // Load Y data from SLM
+    const int y_slm_offset = y_block_idx * slm_stride;
+#pragma unroll
+    for (int i = 0; i < VDR_Q8_0_Q8_1_MMVQ; ++i) {
+        u[i] = slm_y_qs[y_slm_offset + iqs + i];
+    }
+
+    const sycl::half2 ds8 = slm_y_ds[y_block_idx];
+
+    return vec_dot_q8_0_q8_1_impl<VDR_Q8_0_Q8_1_MMVQ>(v, u, bq8_0->d, ds8[0]);
 }
 
 #endif // GGML_SYCL_VECDOTQ_HPP

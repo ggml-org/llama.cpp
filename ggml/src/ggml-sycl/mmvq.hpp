@@ -31,4 +31,17 @@ bool ggml_sycl_mul_mat_id_vec_q(
     ggml_backend_sycl_context & ctx,
     const ggml_tensor *src0, const ggml_tensor *src1, const ggml_tensor *ids, ggml_tensor *dst);
 
+#ifdef GGML_SYCL_GRAPH
+// Pre-allocate Q8_1 buffers for MoE graph recording
+// Must be called before graph recording starts (during decode phase)
+void ggml_sycl_moe_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph);
+#endif
+
+// Convert reordered tensor to coalesced layout for better memory bandwidth
+// Call this AFTER reorder_qw and BEFORE graph recording (at model load time)
+// Returns true if conversion was performed, false if not enabled or wrong type
+bool ggml_sycl_convert_to_coalesced_q4_0(const ggml_tensor * tensor, dpct::queue_ptr stream);
+bool ggml_sycl_convert_to_coalesced_q8_0(const ggml_tensor * tensor, dpct::queue_ptr stream);
+bool ggml_sycl_convert_to_coalesced_mxfp4(const ggml_tensor * tensor, dpct::queue_ptr stream);
+
 #endif // GGML_SYCL_MMVQ_HPP

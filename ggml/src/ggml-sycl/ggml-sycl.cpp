@@ -59,7 +59,9 @@
 #include "ggml-sycl/ssm_conv.hpp"
 #include "ggml-sycl/fattn.hpp"
 #include "ggml-sycl/mmq.hpp"
+#ifdef GGML_SYCL_MMQ_XMX
 #include "ggml-sycl/mmq_xmx.hpp"
+#endif
 #include "ggml-sycl/mmvq.hpp"
 #include "ggml-sycl/fused-norm-gemm.hpp"
 #include "ggml-sycl/fused-moe-esimd.hpp"
@@ -79,8 +81,10 @@ int g_ggml_sycl_disable_graph = 0;
 int g_ggml_sycl_disable_dnn = 0;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_use_async_mem_op = 0;
-int g_ggml_sycl_use_xmx_gemm = 0;  // Enable XMX-accelerated GEMM (experimental)
+#ifdef GGML_SYCL_XMX_GEMM
+int g_ggml_sycl_use_xmx_gemm = 0;  // Enable XMX-accelerated GEMM (experimental, 5-11x slower)
 int g_ggml_sycl_xmx_threshold = 1024; // Max batch size for XMX (XMX faster for N < threshold)
+#endif
 thread_local bool g_ggml_sycl_graph_recording = false;  // True when SYCL graph is recording
 
 static ggml_sycl_device_info ggml_sycl_init() {
@@ -232,8 +236,10 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_disable_graph = get_sycl_env("GGML_SYCL_DISABLE_GRAPH", 0);
         g_ggml_sycl_disable_dnn = get_sycl_env("GGML_SYCL_DISABLE_DNN", 0);
         g_ggml_sycl_prioritize_dmmv = get_sycl_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
+#ifdef GGML_SYCL_XMX_GEMM
         g_ggml_sycl_use_xmx_gemm = get_sycl_env("GGML_SYCL_USE_XMX_GEMM", 0);
         g_ggml_sycl_xmx_threshold = get_sycl_env("GGML_SYCL_XMX_THRESHOLD", 64);
+#endif
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
         GGML_LOG_INFO("Running with Environment Variables:\n");
         GGML_LOG_INFO("  GGML_SYCL_DEBUG: %d\n", g_ggml_sycl_debug);
@@ -250,10 +256,12 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: DNN disabled by compile flag\n");
 #endif
         GGML_LOG_INFO("  GGML_SYCL_PRIORITIZE_DMMV: %d\n", g_ggml_sycl_prioritize_dmmv);
-        GGML_LOG_INFO("  GGML_SYCL_USE_XMX_GEMM: %d (experimental)\n", g_ggml_sycl_use_xmx_gemm);
+#ifdef GGML_SYCL_XMX_GEMM
+        GGML_LOG_INFO("  GGML_SYCL_USE_XMX_GEMM: %d (experimental, 5-11x slower)\n", g_ggml_sycl_use_xmx_gemm);
         if (g_ggml_sycl_use_xmx_gemm) {
             GGML_LOG_INFO("  GGML_SYCL_XMX_THRESHOLD: %d (XMX for batch < %d)\n", g_ggml_sycl_xmx_threshold, g_ggml_sycl_xmx_threshold);
         }
+#endif
         GGML_LOG_INFO("Build with Macros:\n");
 #if defined(GGML_SYCL_FORCE_MMQ)
         GGML_LOG_INFO("  GGML_SYCL_FORCE_MMQ: yes\n");
@@ -470,7 +478,8 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
                                 tensor->name, dev_id, offset, extra->data_device[dev_id]);
             }
         }
-    } else if ((tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q6_K) &&
+    } else if ((tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q6_K ||
+                tensor->type == GGML_TYPE_Q8_0 || tensor->type == GGML_TYPE_MXFP4) &&
         !g_ggml_sycl_disable_optimize) {
         ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
         tensor->extra                 = extra;
@@ -505,7 +514,8 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
     ggml_sycl_set_device(ctx->device);
-    auto stream = &(dpct::dev_mgr::instance().get_device(ctx->device).default_queue());
+    // Use the buffer's stream for proper queue synchronization with compute operations
+    auto stream = ctx->stream ? ctx->stream : &(dpct::dev_mgr::instance().get_device(ctx->device).default_queue());
     SYCL_CHECK(CHECK_TRY_ERROR(dpct::dev_mgr::instance().get_device(ctx->device).queues_wait_and_throw()));
 #ifndef _WIN32
     // Note: Use host buffer to save the data from mmap(), then copy to device. It's workaround for mmap() issue on PVC GPU.
@@ -534,7 +544,9 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
     ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
 
     ggml_sycl_set_device(ctx->device);
-    auto stream = dpct::dev_mgr::instance().get_device(ctx->device).default_queue();
+    // Use the buffer's stream for proper queue synchronization with compute operations
+    // This fixes GPU speculative verification failures where tensor reads saw stale data
+    auto& stream = ctx->stream ? *ctx->stream : dpct::dev_mgr::instance().get_device(ctx->device).default_queue();
 
     SYCL_CHECK(CHECK_TRY_ERROR(
         stream.memcpy(data, (const char *)tensor->data + offset, size)
@@ -4230,6 +4242,118 @@ static void argmax_f32_i32_sycl(const float *x, int *dst, const int ncols,
             });
     });
 }
+
+// TOP_K kernel for MoE expert gating
+// For small K (2-8), uses register-based parallel reduction
+#define SYCL_TOPK_BLOCK_SIZE 256
+#define SYCL_TOPK_MAX_K 32
+
+static void topk_f32_i32_sycl(const float *x, int *dst, const int ncols,
+                              const int nrows, const int k, queue_ptr stream) {
+    GGML_ASSERT(k <= SYCL_TOPK_MAX_K);
+
+    const sycl::range<3> block_dims(1, 1, SYCL_TOPK_BLOCK_SIZE);
+    const sycl::range<3> block_nums(1, nrows, 1);
+
+    // Each thread needs to store its local top-K values and indices
+    // Then we reduce in shared memory
+    // Shared memory layout: [BLOCK_SIZE * MAX_K] floats + [BLOCK_SIZE * MAX_K] ints
+    const size_t shared_floats = SYCL_TOPK_BLOCK_SIZE * SYCL_TOPK_MAX_K;
+    const size_t shared_ints = SYCL_TOPK_BLOCK_SIZE * SYCL_TOPK_MAX_K;
+
+    stream->submit([&](sycl::handler &cgh) {
+        sycl::local_accessor<float, 1> shared_vals(sycl::range<1>(shared_floats), cgh);
+        sycl::local_accessor<int, 1> shared_idxs(sycl::range<1>(shared_ints), cgh);
+
+        cgh.parallel_for(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) {
+                const int tid = item_ct1.get_local_id(2);
+                const int row = item_ct1.get_global_id(1);
+                const int block_size = item_ct1.get_local_range(2);
+
+                // Initialize local top-K with -inf
+                float local_vals[SYCL_TOPK_MAX_K];
+                int local_idxs[SYCL_TOPK_MAX_K];
+                for (int i = 0; i < k; i++) {
+                    local_vals[i] = -INFINITY;
+                    local_idxs[i] = -1;
+                }
+
+                // Each thread scans its portion and maintains local top-K
+                // Using insertion sort since K is small
+                for (int col = tid; col < ncols; col += block_size) {
+                    float val = x[row * ncols + col];
+
+                    // Check if this value should be in top-K
+                    if (val > local_vals[k-1]) {
+                        // Find insertion position
+                        int pos = k - 1;
+                        while (pos > 0 && val > local_vals[pos-1]) {
+                            pos--;
+                        }
+                        // Shift elements down
+                        for (int j = k - 1; j > pos; j--) {
+                            local_vals[j] = local_vals[j-1];
+                            local_idxs[j] = local_idxs[j-1];
+                        }
+                        // Insert new value
+                        local_vals[pos] = val;
+                        local_idxs[pos] = col;
+                    }
+                }
+
+                // Store local top-K to shared memory
+                for (int i = 0; i < k; i++) {
+                    shared_vals[tid * SYCL_TOPK_MAX_K + i] = local_vals[i];
+                    shared_idxs[tid * SYCL_TOPK_MAX_K + i] = local_idxs[i];
+                }
+                item_ct1.barrier(sycl::access::fence_space::local_space);
+
+                // Reduce: merge top-K lists from pairs of threads
+                // Each iteration halves the number of active threads
+                for (int stride = block_size / 2; stride > 0; stride >>= 1) {
+                    if (tid < stride) {
+                        // Merge two sorted top-K lists into one
+                        float merged_vals[SYCL_TOPK_MAX_K];
+                        int merged_idxs[SYCL_TOPK_MAX_K];
+
+                        int i = 0, j = 0, m = 0;
+                        while (m < k && (i < k || j < k)) {
+                            float v1 = (i < k) ? shared_vals[tid * SYCL_TOPK_MAX_K + i] : -INFINITY;
+                            float v2 = (j < k) ? shared_vals[(tid + stride) * SYCL_TOPK_MAX_K + j] : -INFINITY;
+
+                            if (v1 >= v2) {
+                                merged_vals[m] = v1;
+                                merged_idxs[m] = shared_idxs[tid * SYCL_TOPK_MAX_K + i];
+                                i++;
+                            } else {
+                                merged_vals[m] = v2;
+                                merged_idxs[m] = shared_idxs[(tid + stride) * SYCL_TOPK_MAX_K + j];
+                                j++;
+                            }
+                            m++;
+                        }
+
+                        // Write merged result back to shared memory
+                        for (int idx = 0; idx < k; idx++) {
+                            shared_vals[tid * SYCL_TOPK_MAX_K + idx] = merged_vals[idx];
+                            shared_idxs[tid * SYCL_TOPK_MAX_K + idx] = merged_idxs[idx];
+                        }
+                    }
+                    item_ct1.barrier(sycl::access::fence_space::local_space);
+                }
+
+                // Thread 0 writes the final top-K indices to output
+                if (tid == 0) {
+                    for (int i = 0; i < k; i++) {
+                        dst[row * k + i] = shared_idxs[i];
+                    }
+                }
+            });
+    });
+}
+
 static void diag_mask_inf_f32_sycl(const float *x, float *dst,
                                    const int ncols_x, const int nrows_x,
                                    const int rows_per_channel, const int n_past,
@@ -4597,6 +4721,22 @@ inline void ggml_sycl_op_argmax(ggml_backend_sycl_context & ctx, ggml_tensor * d
     const int64_t nrows = ggml_nrows(dst->src[0]);
 
     argmax_f32_i32_sycl(src0_dd, dst_dd, ncols, nrows, main_stream);
+}
+
+inline void ggml_sycl_op_top_k(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_I32);
+
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const float * src0_dd = static_cast<const float *>(dst->src[0]->data);
+    int32_t *     dst_dd  = static_cast<int32_t *>(dst->data);
+
+    const int64_t ncols = dst->src[0]->ne[0];
+    const int64_t nrows = ggml_nrows(dst->src[0]);
+    const int64_t k = dst->ne[0];  // Output dimension 0 is K
+
+    topk_f32_i32_sycl(src0_dd, dst_dd, ncols, nrows, k, main_stream);
 }
 
 inline void ggml_sycl_op_diag_mask_inf(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
@@ -8219,6 +8359,8 @@ inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_MXFP4:
             return true;
         default:
             return false;
@@ -8392,10 +8534,85 @@ static void reorder_qw_q6_k(uint8_t * data_device, size_t size, size_t offset, d
     sycl_ext_free(stream, tmp_buf);
 }
 
+// Q8_0: 32 int8 quants + fp16 scale = 34 bytes per block
+// Reordered layout: [qs0..qsN] [d0..dN]
+static void reorder_qw_q8_0(uint8_t * data_device, const int ncols, const int nrows, size_t size, size_t offset,
+                            dpct::queue_ptr stream) {
+    uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size));
+
+    sycl::event copy_event;
+    SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
+    if (!g_ggml_sycl_use_async_mem_op) {
+        copy_event.wait();
+    }
+
+    GGML_ASSERT((size % sizeof(block_q8_0) == 0));
+    GGML_ASSERT((offset % sizeof(block_q8_0) == 0));
+    int offset_blks = offset / sizeof(block_q8_0);
+    auto qs_ptr = data_device + offset_blks * QK8_0;
+    auto d_ptr = (sycl::half*)(qs_ptr + ncols * nrows) + offset_blks;
+
+    auto reorder_event = stream->parallel_for(
+        size / sizeof(block_q8_0),
+            [=](auto i) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+            const block_q8_0* x = (const block_q8_0*)tmp_buf;
+            const int ib = i;
+
+            // Copy 32 int8 quants
+            for (int j = 0; j < QK8_0; j++) {
+                *(qs_ptr + ib * QK8_0 + j) = x[ib].qs[j];
+            }
+            *(d_ptr + ib) = x[ib].d;
+        });
+    if (!g_ggml_sycl_use_async_mem_op) {
+        reorder_event.wait_and_throw();
+    }
+    sycl_ext_free(stream, tmp_buf);
+}
+
+// MXFP4: 16 packed bytes (32 4-bit elements) + 1 byte E8M0 exponent = 17 bytes per block
+// Reordered layout: [qs0..qsN] [scale0..scaleN]
+static void reorder_qw_mxfp4(uint8_t * data_device, const int ncols, const int nrows, size_t size, size_t offset,
+                             dpct::queue_ptr stream) {
+    uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size));
+
+    sycl::event copy_event;
+    SYCL_CHECK(CHECK_TRY_ERROR(copy_event = stream->memcpy(tmp_buf, data_device, size)));
+    if (!g_ggml_sycl_use_async_mem_op) {
+        copy_event.wait();
+    }
+
+    GGML_ASSERT((size % sizeof(block_mxfp4) == 0));
+    GGML_ASSERT((offset % sizeof(block_mxfp4) == 0));
+    int offset_blks = offset / sizeof(block_mxfp4);
+    auto qs_ptr = data_device + offset_blks * (QK_MXFP4 / 2);
+    auto scale_ptr = qs_ptr + (ncols / 2) * nrows + offset_blks;
+
+    auto reorder_event = stream->parallel_for(
+        size / sizeof(block_mxfp4),
+            [=](auto i) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+            const block_mxfp4* x = (const block_mxfp4*)tmp_buf;
+            const int ib = i;
+
+            // Copy 16 packed bytes (32 4-bit elements)
+            for (int j = 0; j < QK_MXFP4 / 2; j++) {
+                *(qs_ptr + ib * (QK_MXFP4 / 2) + j) = x[ib].qs[j];
+            }
+            // Copy 1-byte E8M0 exponent
+            *(scale_ptr + ib) = x[ib].e;
+        });
+    if (!g_ggml_sycl_use_async_mem_op) {
+        reorder_event.wait_and_throw();
+    }
+    sycl_ext_free(stream, tmp_buf);
+}
+
 static void reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
     uint8_t * data_device = (uint8_t *) src0->data;
     size_t ncols = src0->ne[0];
-    size_t nrows = src0->ne[1];
+    // Use ggml_nrows to handle tensors with >2 dimensions (e.g., MoE expert weights)
+    // For 2D: nrows = ne[1], for 3D MoE: nrows = ne[1] * ne[2]
+    size_t nrows = ggml_nrows(src0);
     size_t size = ggml_nbytes(src0);
 
     switch (src0->type) {
@@ -8407,6 +8624,12 @@ static void reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
             break;
         case GGML_TYPE_Q6_K:
             reorder_qw_q6_k(data_device, size, 0, stream);
+            break;
+        case GGML_TYPE_Q8_0:
+            reorder_qw_q8_0(data_device, ncols, nrows, size, 0, stream);
+            break;
+        case GGML_TYPE_MXFP4:
+            reorder_qw_mxfp4(data_device, ncols, nrows, size, 0, stream);
             break;
         default:
             GGML_ABORT("reorder_qw() called with unsupported type");
@@ -8454,7 +8677,8 @@ static bool graph_needs_reorder(ggml_backend_sycl_context& ctx, ggml_cgraph * cg
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
-        if (node->op != GGML_OP_MUL_MAT) {
+        // Handle both MUL_MAT and MUL_MAT_ID (MoE expert weights)
+        if (node->op != GGML_OP_MUL_MAT && node->op != GGML_OP_MUL_MAT_ID) {
             continue;
         }
         const ggml_tensor * src0 = node->src[0];
@@ -8480,6 +8704,38 @@ static bool graph_needs_reorder(ggml_backend_sycl_context& ctx, ggml_cgraph * cg
     return false;
 }
 
+// Convert reordered tensors to coalesced layout for better memory access patterns.
+// Must be called AFTER reorder pass completes. Safe to call even if no tensors need conversion.
+static void graph_convert_to_coalesced(ggml_backend_sycl_context& ctx, ggml_cgraph * cgraph) {
+    // Check if coalesced mode is enabled
+    static bool coalesced_enabled = (std::getenv("GGML_SYCL_MMVQ_COALESCED") != nullptr);
+    if (!coalesced_enabled) {
+        return;
+    }
+
+    int coalesced_count = 0;
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        // Only MUL_MAT - MUL_MAT_ID uses _id kernels which don't support coalesced layout
+        if (node->op != GGML_OP_MUL_MAT) {
+            continue;
+        }
+        const ggml_tensor * src0 = node->src[0];
+        // Try each supported type
+        if (ggml_sycl_convert_to_coalesced_q4_0(src0, ctx.stream())) {
+            coalesced_count++;
+        } else if (ggml_sycl_convert_to_coalesced_q8_0(src0, ctx.stream())) {
+            coalesced_count++;
+        } else if (ggml_sycl_convert_to_coalesced_mxfp4(src0, ctx.stream())) {
+            coalesced_count++;
+        }
+    }
+    if (coalesced_count > 0) {
+        ctx.stream()->wait();
+        GGML_SYCL_DEBUG("[SYCL-GRAPH] converted %d tensors to coalesced layout\n", coalesced_count);
+    }
+}
+
 // Pre-reorder ALL eligible weight tensors in the graph
 // This ensures subsequent graph recordings don't get blocked by incremental reordering
 // NOTE: We don't check should_reorder_tensor() because that requires ne[1]==1 (decode mode).
@@ -8491,28 +8747,63 @@ static void graph_pre_reorder_all(ggml_backend_sycl_context& ctx, ggml_cgraph * 
     }
 
     int reorder_count = 0;
+    int moe_tensor_count = 0;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
-        if (node->op != GGML_OP_MUL_MAT) {
+        // Handle both MUL_MAT and MUL_MAT_ID (MoE expert weights)
+        if (node->op != GGML_OP_MUL_MAT && node->op != GGML_OP_MUL_MAT_ID) {
             continue;
         }
         const ggml_tensor * src0 = node->src[0];
         if (!src0 || !src0->extra) {
+            if (g_ggml_sycl_debug && node->op == GGML_OP_MUL_MAT_ID) {
+                fprintf(stderr, "[SYCL-GRAPH] MUL_MAT_ID node %d: src0=%p, extra=%p\n",
+                        i, (void*)src0, src0 ? src0->extra : nullptr);
+            }
             continue;
+        }
+        if (node->op == GGML_OP_MUL_MAT_ID) {
+            moe_tensor_count++;
+            if (g_ggml_sycl_debug && moe_tensor_count <= 3) {
+                fprintf(stderr, "[SYCL-GRAPH] MUL_MAT_ID node %d: src0='%s' type=%s\n",
+                        i, src0->name, ggml_type_name(src0->type));
+            }
         }
         ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
         if (extra->optimized_feature.reorder) {
+            if (g_ggml_sycl_debug >= 2 && node->op == GGML_OP_MUL_MAT_ID && moe_tensor_count <= 3) {
+                fprintf(stderr, "[SYCL-GRAPH] MUL_MAT_ID src0='%s' - already reordered\n", src0->name);
+            }
             continue;  // Already reordered
         }
         // Skip TP-sharded tensors
         if (extra->tp_type != tp_layer_type::TP_NONE) {
+            if (g_ggml_sycl_debug >= 2 && node->op == GGML_OP_MUL_MAT_ID && moe_tensor_count <= 3) {
+                fprintf(stderr, "[SYCL-GRAPH] MUL_MAT_ID src0='%s' - TP sharded\n", src0->name);
+            }
             continue;
         }
         // Check if type supports reorder
         if (!ggml_sycl_supports_reorder_mmvq(src0->type) &&
             !ggml_sycl_supports_reorder_dmmv(src0->type) &&
             !ggml_sycl_supports_reorder_mul_mat_sycl(src0->type)) {
+            if (g_ggml_sycl_debug && node->op == GGML_OP_MUL_MAT_ID) {
+                fprintf(stderr, "[SYCL-GRAPH] MUL_MAT_ID src0='%s' type=%s - not supported\n",
+                        src0->name, ggml_type_name(src0->type));
+            }
             continue;
+        }
+        // Skip MXFP4 tensors for MUL_MAT_ID - fused MoE kernel uses original block_mxfp4 layout,
+        // not the reordered SoA format. Reordering would corrupt the data.
+        if (node->op == GGML_OP_MUL_MAT_ID && src0->type == GGML_TYPE_MXFP4) {
+            if (g_ggml_sycl_debug) {
+                fprintf(stderr, "[SYCL-GRAPH] MUL_MAT_ID src0='%s' - skipping MXFP4 reorder (fused kernel uses AoS)\n",
+                        src0->name);
+            }
+            continue;
+        }
+        if (g_ggml_sycl_debug >= 2 && node->op == GGML_OP_MUL_MAT_ID && moe_tensor_count <= 3) {
+            fprintf(stderr, "[SYCL-GRAPH] MUL_MAT_ID src0='%s' - will reorder\n", src0->name);
         }
         // Perform reorder
         reorder_qw(src0, ctx.stream());
@@ -8524,6 +8815,8 @@ static void graph_pre_reorder_all(ggml_backend_sycl_context& ctx, ggml_cgraph * 
         ctx.stream()->wait();
         GGML_SYCL_DEBUG("[SYCL-GRAPH] pre-reordered %d tensors\n", reorder_count);
     }
+
+    // Coalesced conversion is now handled separately by graph_convert_to_coalesced()
 }
 
 static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor * src0, const ggml_tensor * /* src1 */,
@@ -8745,7 +9038,8 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     bool use_mul_mat_q =  ggml_sycl_supports_mmq(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 
-    // XMX GEMM path
+#ifdef GGML_SYCL_XMX_GEMM
+    // XMX GEMM path (experimental, known to be 5-11x slower for quantized models)
     bool use_xmx_gemm = g_ggml_sycl_use_xmx_gemm ? true : false;
     if (use_xmx_gemm) {
         use_xmx_gemm = ggml_sycl_xmx_available() && ggml_sycl_xmx_supports_type(src0->type);
@@ -8761,7 +9055,9 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         // XMX is beneficial for batch >= 1 and < threshold (DEBUG)
         use_xmx_gemm = batch >= 1 && batch < g_ggml_sycl_xmx_threshold;
     }
-
+#else
+    bool use_xmx_gemm = false;
+#endif
 
     // mmvq and mmq need the __dp4a instruction which is available for gen12+
     // Workaround in https://github.com/ggerganov/llama.cpp/commit/95f84d5ce8b449a9b16009434aca800df504a02e
@@ -8864,9 +9160,11 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         } else {
             ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q);
         }
+#if defined(GGML_SYCL_XMX_GEMM) && defined(GGML_SYCL_MMQ_XMX)
     } else if (use_xmx_gemm) {
-        // XMX-accelerated quantized GEMM
+        // XMX-accelerated quantized GEMM (experimental, known to be 5-11x slower)
         ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q_xmx);
+#endif
     } else if (use_mul_mat_q) {
         // Standard MMQ path (with optional ESIMD acceleration for Q4_0)
         ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q);
@@ -9072,6 +9370,8 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
     GGML_TENSOR_BINARY_OP_LOCALS
 
     // Only use fused kernel for batched prefill (multiple tokens)
+    // For single-token decode, MMVQ is faster due to higher parallelism
+    // Tested: persistent kernel was 3.6x SLOWER for tg due to reduced parallelism
     if (ne12 <= 1) {
         return false;  // Use MMVQ for single-token decode
     }
@@ -9127,26 +9427,54 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
         GGML_SYCL_DEBUG("[MoE FUSED] Q8_0 kernel launched\n");
         return true;
     } else if (src0->type == GGML_TYPE_MXFP4) {
-        launch_fused_moe_mxfp4(
-            src0->data,
-            (const float *)src1->data,
-            (const int32_t *)ids->data,
-            (float *)dst->data,
-            stride_expert,
-            ncols,
-            nrows,
-            n_ids,
-            num_tokens,
-            ne11,
-            ids->nb[0],
-            ids->nb[1],
-            nb11,
-            nb12,
-            nb1,
-            nb2,
-            *stream
-        );
-        GGML_SYCL_DEBUG("[MoE FUSED] MXFP4 kernel launched\n");
+        // Use persistent kernel only for small batches (tg) where SLM caching helps
+        // For large batches (pp), each token has different input so SLM caching doesn't help
+        // Threshold: use persistent for num_tokens <= 8, otherwise use parallel kernel
+        const bool use_persistent = use_persistent_moe_kernel() && (num_tokens <= 8);
+
+        if (use_persistent) {
+            launch_persistent_moe_mxfp4(
+                src0->data,
+                (const float *)src1->data,
+                (const int32_t *)ids->data,
+                (float *)dst->data,
+                stride_expert,
+                ncols,
+                nrows,
+                n_ids,
+                num_tokens,
+                ne11,
+                ids->nb[0],
+                ids->nb[1],
+                nb11,
+                nb12,
+                nb1,
+                nb2,
+                *stream
+            );
+            GGML_SYCL_DEBUG("[MoE FUSED] MXFP4 persistent kernel launched (tokens=%ld)\n", (long)num_tokens);
+        } else {
+            launch_fused_moe_mxfp4(
+                src0->data,
+                (const float *)src1->data,
+                (const int32_t *)ids->data,
+                (float *)dst->data,
+                stride_expert,
+                ncols,
+                nrows,
+                n_ids,
+                num_tokens,
+                ne11,
+                ids->nb[0],
+                ids->nb[1],
+                nb11,
+                nb12,
+                nb1,
+                nb2,
+                *stream
+            );
+            GGML_SYCL_DEBUG("[MoE FUSED] MXFP4 parallel kernel launched (tokens=%ld)\n", (long)num_tokens);
+        }
         return true;
     }
 #else
@@ -9505,6 +9833,12 @@ static void ggml_sycl_argmax(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     GGML_ASSERT(ggml_is_contiguous(dst->src[0]));
     ggml_sycl_op_argmax(ctx, dst);
+}
+
+static void ggml_sycl_top_k(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    GGML_ASSERT(ggml_is_contiguous(dst->src[0]));
+    ggml_sycl_op_top_k(ctx, dst);
 }
 
 
@@ -9967,6 +10301,9 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
             break;
         case GGML_OP_ARGSORT:
             ggml_sycl_argsort(ctx, dst);
+            break;
+        case GGML_OP_TOP_K:
+            ggml_sycl_top_k(ctx, dst);
             break;
         case GGML_OP_TIMESTEP_EMBEDDING:
             ggml_sycl_op_timestep_embedding(ctx, dst);
@@ -11079,17 +11416,28 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
                 return false;
             case GGML_OP_MUL_MAT_ID:
                 {
-                    // Check if GPU-side dispatch is available (no host sync needed)
-                    // GPU dispatch uses kernel that reads expert IDs directly on GPU
-                    // Note: GPU dispatch supports ne12 > 1, but SYCL graphs only work with ne12 == 1
-                    // because the graph topology changes between prefill and decode
+                    // MoE models with MUL_MAT_ID are not fully compatible with SYCL graphs
+                    // due to issues with graph recording and execution for ne12 > 1 (batched prefill)
+                    // Disable graphs for MoE models until the issue is resolved
                     const ggml_tensor * node = cgraph->nodes[i];
-                    const ggml_tensor * src0 = node->src[0];
                     const ggml_tensor * src1 = node->src[1];
-                    const int64_t ne12 = src1->ne[2];
+                    const int64_t ne12 = src1 ? src1->ne[2] : 1;
 
+                    if (ne12 > 1) {
+                        // Batched prefill - graphs have issues with MoE
+                        static bool logged_once = false;
+                        if (!logged_once) {
+                            GGML_LOG_INFO("%s: disabling SYCL graphs for MUL_MAT_ID (ne12=%ld > 1)\n",
+                                          __func__, (long)ne12);
+                            logged_once = true;
+                        }
+                        return false;
+                    }
+
+                    // For decode (ne12 == 1), check if GPU-side dispatch is available
+                    const ggml_tensor * src0 = node->src[0];
                     bool gpu_dispatch_available = false;
-                    if (ne12 == 1 && ggml_is_quantized(src0->type)) {
+                    if (ggml_is_quantized(src0->type)) {
                         switch (src0->type) {
                             case GGML_TYPE_Q4_0:
                             case GGML_TYPE_Q8_0:
@@ -11102,36 +11450,26 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
                     }
 
                     if (!gpu_dispatch_available) {
-                        // Fall back to host dispatch or GPU dispatch without graph recording
-                        // Only log once to avoid spamming the console
+                        // Fall back to host dispatch for unsupported types
                         static bool logged_once = false;
                         if (!logged_once) {
-                            GGML_LOG_INFO("%s: disabling SYCL graphs for MUL_MAT_ID (type %s, ne12=%" PRId64 ")\n",
-                                          __func__, ggml_type_name(src0->type), ne12);
+                            GGML_LOG_INFO("%s: disabling SYCL graphs for MUL_MAT_ID (unsupported type %s)\n",
+                                          __func__, ggml_type_name(src0->type));
                             logged_once = true;
                         }
                         return false;
                     }
-                    // GPU dispatch available with ne12==1 - MUL_MAT_ID is graph-compatible
+                    // GPU dispatch available for decode - MUL_MAT_ID is graph-compatible
                 }
                 break;
             case GGML_OP_MUL_MAT:
                 // MUL_MAT is graph-compatible because we pre-reorder ALL tensors
                 // before graph recording starts (via graph_pre_reorder_all).
                 // No malloc/free calls happen during recording.
-                // Note: MoE models still can't use graphs because MUL_MAT_ID's GPU dispatch
-                // path (ggml_sycl_mul_mat_id_vec_q) uses ggml_sycl_pool_alloc for Q8_1 quantization
-                // buffers, which is incompatible with SYCL graph recording.
-                // TODO: Pre-allocate Q8_1 buffers for MoE to enable graph support.
-                if (!g_ggml_sycl_use_async_mem_op) {
-                    // Without async mem, only allow graphs for simple (non-MoE) models
-                    // MoE models have pool allocations in MUL_MAT_ID that break graph recording
-                    for (int j = 0; j < cgraph->n_nodes; j++) {
-                        if (cgraph->nodes[j]->op == GGML_OP_MUL_MAT_ID) {
-                            return false;  // MoE model detected - skip graphs
-                        }
-                    }
-                }
+                // Note: MoE models now support graph recording via pre-allocated Q8_1 buffers
+                // (ggml_sycl_moe_pre_allocate_buffers). The MUL_MAT_ID handler checks for
+                // pre-allocated buffers during recording and falls back to pool allocation
+                // when not recording.
                 break;
         }
     }
@@ -11220,10 +11558,29 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             graph_pre_reorder_all(*sycl_ctx, cgraph);
         }
 
+        // Convert reordered tensors to coalesced layout for better memory access patterns.
+        // This must run AFTER reorder (either from prompt phase via opt_for_reorder, or from
+        // graph_pre_reorder_all above). Safe to call even if tensors are already converted.
+        if (is_decode_phase && !sycl_ctx->exec_graph) {
+            graph_convert_to_coalesced(*sycl_ctx, cgraph);
+        }
+
         // Pre-allocate V2 partition attention buffers before graph recording.
         // This ensures V2 dispatch works during graph recording (malloc/free forbidden during recording).
         if (is_decode_phase && !sycl_ctx->exec_graph) {
             ggml_sycl_v2_pre_allocate_buffers(*sycl_ctx, cgraph);
+        }
+
+        // Pre-allocate MoE Q8_1 buffers before graph recording.
+        // MUL_MAT_ID normally allocates these dynamically, which is incompatible with graph recording.
+        if (is_decode_phase && !sycl_ctx->exec_graph) {
+            ggml_sycl_moe_pre_allocate_buffers(*sycl_ctx, cgraph);
+        }
+
+        // Reset MoE buffer usage counter at start of each graph execution.
+        // This ensures buffers are reused in the same order each time.
+        if (sycl_ctx->moe_buffers.initialized) {
+            sycl_ctx->moe_buffers.reset_usage();
         }
 
         // Minimum nodes to benefit from graph batching - skip tiny graphs
@@ -11734,6 +12091,12 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_ARGSORT:
             return op->src[0]->ne[0] * sizeof(int) <=
                    ggml_sycl_info().devices[device].smpbo;
+        case GGML_OP_TOP_K:
+            // TOP_K uses shared memory: BLOCK_SIZE * MAX_K * (sizeof(float) + sizeof(int))
+            // = 256 * 32 * 8 = 64KB (well within typical 128KB SLM limit)
+            return ggml_is_contiguous(op->src[0]) &&
+                   op->src[0]->type == GGML_TYPE_F32 &&
+                   op->ne[0] <= SYCL_TOPK_MAX_K;
         case GGML_OP_POOL_2D:
         case GGML_OP_ACC:
             return true;

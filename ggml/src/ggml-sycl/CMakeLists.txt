@@ -25,6 +25,7 @@ ggml_add_backend_library(ggml-sycl
 
 file(GLOB   GGML_HEADERS_SYCL "*.hpp")
 option(GGML_SYCL_MMQ_XMX "Enable experimental XMX MMQ kernels for SYCL backend" OFF)
+option(GGML_SYCL_XMX_GEMM "Enable experimental XMX GEMM for quantized matmul (known to be slower)" OFF)
 
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
 list(FILTER GGML_SOURCES_SYCL EXCLUDE REGEX "test_joint_matrix.*\\.cpp$")
@@ -127,6 +128,10 @@ endif()
 
 target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_DNNL=${GGML_SYCL_DNNL})
 target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_MKL_FALLBACK=${GGML_SYCL_MKL_FALLBACK_ENABLED})
+if (GGML_SYCL_XMX_GEMM)
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_XMX_GEMM)
+    message(STATUS "XMX GEMM enabled (experimental, known to be 5-11x slower for quantized models)")
+endif()
 
 # Link against oneCCL for tensor parallelism collective operations
 set(GGML_SYCL_CCL 0)

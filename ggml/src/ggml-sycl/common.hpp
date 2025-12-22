@@ -210,6 +210,33 @@ typedef sycl::float2 dfloat2;
 
 #define MMVQ_MAX_BATCH_SIZE  8
 
+// Multi-row MMVQ kernel configuration
+// Processes multiple output rows per work-group, sharing Y-vector in SLM
+// This amortizes Y-vector loading across rows, reducing memory bandwidth
+#define MMVQ_NROWS_PER_WG 4        // Rows per work-group (tune: 4, 8, or 16)
+
+// SLM sizes for Y-vector caching in multi-row MMVQ
+// Q8_1 block: 32 bytes quants (int8[32]) + 4 bytes ds (half2) = 36 bytes
+// For Mistral 7B: ncols=4096, blocks_per_row = 4096/32 = 128 blocks
+// SLM needed: 128 * 36 = 4.5KB per Y-vector (fits easily in 128KB SLM)
+// We store qs as ints for aligned access: 8 ints per block (32 bytes)
+// Plus ds as half2: 4 bytes per block
+// Add +1 padding to avoid bank conflicts on 32-bank SLM
+constexpr int MMVQ_SLM_Y_QS_STRIDE = 9;   // 8 ints + 1 padding to avoid bank conflicts
+constexpr int MMVQ_SLM_MAX_BLOCKS = 256;  // Max blocks per row (ncols=8192, qk=32)
+constexpr int MMVQ_SLM_Y_QS_SIZE = MMVQ_SLM_MAX_BLOCKS * MMVQ_SLM_Y_QS_STRIDE;  // ~9KB ints
+constexpr int MMVQ_SLM_Y_DS_SIZE = MMVQ_SLM_MAX_BLOCKS + 1;  // half2 array + padding
+
+// Warp-coalesced MMVQ configuration
+// Reorganizes weight data so consecutive threads load consecutive bytes
+// This achieves 100% cache line utilization (vs 50% with strided access)
+constexpr int MMVQ_COALESCED_TILE_BLOCKS = 16;  // Blocks per warp tile (must match WARP_SIZE/2)
+constexpr int MMVQ_COALESCED_TILE_BYTES_Q4_0 = MMVQ_COALESCED_TILE_BLOCKS * 16;  // 256 bytes quants per tile (Q4_0: 16 bytes/block)
+constexpr int MMVQ_COALESCED_TILE_BYTES_Q8_0 = MMVQ_COALESCED_TILE_BLOCKS * 32;  // 512 bytes quants per tile (Q8_0: 32 bytes/block)
+constexpr int MMVQ_COALESCED_TILE_BYTES_MXFP4 = MMVQ_COALESCED_TILE_BLOCKS * 16; // 256 bytes quants per tile (MXFP4: 16 bytes/block)
+// Legacy alias for Q4_0
+constexpr int MMVQ_COALESCED_TILE_BYTES = MMVQ_COALESCED_TILE_BYTES_Q4_0;
+
 static int g_all_sycl_device_count = -1;
 static bool g_ggml_backend_sycl_buffer_type_initialized = false;
 
@@ -252,6 +279,7 @@ inline dpct::err0 ggml_sycl_set_device(const int device) try {
 //////////////////////
 struct optimize_feature {
     bool reorder=false;
+    bool coalesced=false;  // Q4_0 weights converted to warp-coalesced layout
 };
 
 struct sycl_device_info {
@@ -1003,6 +1031,48 @@ struct ggml_backend_sycl_context {
 #ifdef GGML_SYCL_GRAPH
     std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
     int exec_graph_n_nodes = 0;  // Track graph size for cache invalidation
+
+    // Pre-allocated buffers for MoE graph recording
+    // MUL_MAT_ID needs Q8_1 quantization buffers which cannot be allocated during graph recording
+    struct moe_graph_buffers {
+        // Q8_1 quantization buffers (one per MUL_MAT_ID in decode phase)
+        std::vector<void*> q8_1_buffers;
+        std::vector<size_t> q8_1_sizes;
+
+        // Buffer usage tracking
+        int current_buffer_idx = 0;
+        bool initialized = false;
+
+        // Max dimensions seen (for reallocation check)
+        int64_t max_ne10 = 0;      // Max input dimension
+        int64_t max_src1_rows = 0; // Max (ne11 × ne12)
+
+        void reset_usage() { current_buffer_idx = 0; }
+
+        void* get_next_buffer(size_t required_size) {
+            if (current_buffer_idx >= (int)q8_1_buffers.size()) {
+                return nullptr;  // Fall back to pool alloc
+            }
+            if (required_size > q8_1_sizes[current_buffer_idx]) {
+                return nullptr;  // Buffer too small
+            }
+            return q8_1_buffers[current_buffer_idx++];
+        }
+
+        void free_buffers(queue_ptr stream) {
+            for (size_t i = 0; i < q8_1_buffers.size(); i++) {
+                if (q8_1_buffers[i]) {
+                    sycl::free(q8_1_buffers[i], *stream);
+                }
+            }
+            q8_1_buffers.clear();
+            q8_1_sizes.clear();
+            initialized = false;
+            current_buffer_idx = 0;
+            max_ne10 = 0;
+            max_src1_rows = 0;
+        }
+    } moe_buffers;
 #endif
 
     // Barrier event for cross-ubatch synchronization
