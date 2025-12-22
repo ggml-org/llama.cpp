@@ -169,6 +169,12 @@ NEON 内核里对每个 group 只需要：
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` decode 快路（默认启用；设为 `0` 强制走通用路径做 A/B）。
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` 快路 group-loop 的 unroll（默认 `4`；设为 `2` 用于 A/B）。
 
+计划新增（未实现，先做文档约定）：
+
+- `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64`：新增 LUT 布局（配合 TBL / merged64 方案），默认仍由 `auto` 策略决定。
+- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`），用于 A/B 与回退。
+- `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 2~3，需结合 profile 调整）。
+
 ---
 
 ## 7. 当前主任务（与代码审查结论对齐）
@@ -196,6 +202,7 @@ P2（持续）：
 
 - ✅ 测试补齐：`tests/test-ifairy.cpp` 覆盖对齐/误对齐、极小/大维度、分配失败（短 buffer）、并发 transform、关键 env 语义与 K 对齐 gate。
 - 性能回归：把 decode（`N≈1`）与 prefill 形状的 tok/s 作为可复现基线（见 `IFAIRY_ARM_3W_LUT_STATUS.md`）。
+ - 80 tok/s 的分阶段路线图与实现方案见 `IFAIRY_ARM_3W_LUT_API_PLAN.md` 的 `6.8`。
 
 ---
 

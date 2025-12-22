@@ -1,6 +1,6 @@
 # iFairy ARM 3‑Weight LUT · 现状与后续工作（NEON 标量混合版）
 
-本文记录当前 `GGML_IFAIRY_ARM_LUT`（CPU-only）下 iFairy 3-weight LUT 的代码现状（含 NEON 加速实现）、可复现的 tok/s 记录、以及下一步工作列表。接口/路由约定见 `IFAIRY_ARM_3W_LUT_API_PLAN.md`，算法与数据结构见 `IFAIRY_ARM_3W_LUT_DESIGN.md`。
+本文记录当前 `GGML_IFAIRY_ARM_LUT`（CPU-only）下 iFairy 3-weight LUT 的代码现状（含 NEON 加速实现）、可复现的 tok/s 记录、以及下一步工作列表。接口/路由约定见 `IFAIRY_ARM_3W_LUT_API_PLAN.md`，算法与数据结构见 `IFAIRY_ARM_3W_LUT_DESIGN.md`；80 tok/s 的分阶段路线图与实现方案统一收敛在 `IFAIRY_ARM_3W_LUT_API_PLAN.md` 的 `6.8`。
 
 ## 0. 快速使用（建议默认）
 
@@ -15,7 +15,7 @@
 **常用环境变量（LUT 路径）**
 
 - `GGML_IFAIRY_LUT=0/1`：禁用/启用 LUT（默认启用）
-- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact`：LUT 表布局选择（默认 `legacy`）
+- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|auto`：LUT 表布局选择（默认 `legacy`；`auto` 走默认策略）
 - `GGML_IFAIRY_LUT_BK_BLOCKS=<int>`：K 维按 `QK_K=256` 的 block 做 tiling（0=禁用）
 - `GGML_IFAIRY_LUT_BM=<int>`：M 维行块大小（仅 tiling 时生效）
 - `GGML_IFAIRY_LUT_FULLACC=0/1`：tiled 下启用共享大累加器，减少重复 `preprocess + barrier`
@@ -24,6 +24,12 @@
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 路径内的 prefetch（默认启用；设为 `0` 用于 profile/sweep 对照；覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`）
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` fast-path（默认启用；设为 `0` 强制走通用路径，用于回归/调优 A/B）
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` fast-path 里 group-loop 的 4-way unroll（默认 `4`；设为 `2` 用于 A/B，对照“2-way 是否反而更快”）
+
+计划新增（未实现，先做文档约定）：
+
+- `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64`：新增 LUT 布局（配合 TBL / merged64 方案），默认仍由 `auto` 策略决定。
+- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`），用于 A/B 与回退。
+- `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 2~3，需结合 profile 调整）。
 
 ## 0.0 当前共识（按优先级）
 

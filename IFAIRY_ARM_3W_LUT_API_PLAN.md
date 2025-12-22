@@ -107,6 +107,12 @@ struct ifairy_lut_extra {
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` decode 快路（默认启用；设为 `0` 强制走通用路径做 A/B）。
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` 快路 group-loop 的 unroll（默认 `4`；设为 `2` 用于 A/B）。
 
+计划新增（未实现，先做文档约定）：
+
+- `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64`：新增 LUT 布局（配合 6.8 的 TBL / merged64 方案），默认仍由 `auto` 策略决定。
+- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`），用于 A/B 与回退。
+- `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 2~3，需结合 profile 调整）。
+
 ## 6. 性能提升规划（主线，必须把 tok/s 拉上去）
 
 > 2025-12-18 更新：基于《IFAIRY_LUT_PERF_ANALYSIS_20251218.md》的复盘，decode 场景热点大致为 `ggml_ifairy_lut_qgemm_ex ≈ 53~55%` + `ggml_graph_compute_thread ≈ 30%`。因此主线需要同时推进：压 `qgemm_ex` 单位成本 + 处理同步/调度开销（否则上限会被框架吞掉）。
@@ -247,6 +253,45 @@ struct ifairy_lut_extra {
 
 - decode 形状 `N==1` 的进一步专用化（例如减少分支、固定 stride、固定 accumulator 布局）。
 - 对最热形状做有限度的模板化（避免在代码库里散落大量形状分支）。
+
+### 6.8 80 tok/s 路线图评估与实现方案（对齐 review#11）
+
+> 来自《CODE_REVIEW_lwt_3_LUT_COMPREHENSIVE.md#11》的方向与 6.1~6.4 基线一致，但为了可回退/可验证，需要拆成可 A/B 的小步，并把“布局变化”与“kernel 变化”解耦。目标仍以 decode（`N==1`）为主，优先提升 `compact`。
+
+#### 6.8.1 评估结论（采纳/调整/暂缓）
+
+- **采纳**：SDOT、TBL 向量查表、循环流水线、预取优化（含 indexes）、减少 barrier、批量索引解码；`64-pattern` 合并在满足工作集与场景前提时尝试。
+- **调整**：`24B/group` 级别的工作集压缩只有在 **qgemm 指令数明显下降** 的前提下才推进；64B 对齐策略需结合 L1/L2 命中率验证，避免“对齐变大反而更慢”。
+- **暂缓**：近似计算（窄累加器/跳过 groups）风险高，必须先给出严格对照与误差证明，否则不纳入 P0-P2。
+
+#### 6.8.2 阶段 1（P0，目标 30~35 tok/s）
+
+- **SDOT 内核试验（`compact`）**：在 `ggml/src/ggml-ifairy-lut-qgemm.cpp` 增加 `__ARM_FEATURE_DOTPROD` 路径（仅 `N==1`），把 “widen+add” 改为 “dot accumulate”。  
+  - 计划引入实验开关：`GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`，默认 auto；strict 下仍走通用路径。  
+  - 若需要新布局（例如 code-major 或更易对齐的 12B/pos 打包），在 `ggml/src/ggml-ifairy-lut-preprocess.cpp` 以 **新 layout** 实现，避免修改现有 `compact`。
+- **预取优化**：在 `ggml/src/ggml-ifairy-lut-qgemm.cpp` 同时预取 LUT 与 indexes，预取距离改为可配置常量（计划新增 `GGML_IFAIRY_LUT_PREFETCH_DIST`，默认 2~3）。  
+  - 移除热循环内的运行时分支（保留编译期/一次性开关），减少分支开销。
+- **减少 barrier（tiling）**：在 `ggml/src/ggml-cpu/ggml-cpu.c` 的 BK 路径引入 “双缓冲 + 单 barrier” 流程：thread0 预处理下一 tile，其它线程处理当前 tile，保证每 tile 只同步一次。
+- **寄存器压力控制**：优先用 `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL` 做 A/B，暂不引入 inline asm；如有明显 spill，再考虑局部手写汇编。
+
+#### 6.8.3 阶段 2（P1，目标 45~55 tok/s）
+
+- **TBL 向量查表（新增 layout）**：在 `ggml/src/ggml-ifairy-lut-preprocess.cpp` 生成 “per-channel, 64-pattern” 表（`int8`/`int16`），并在 `ggml/src/ggml-ifairy-lut-qgemm.cpp` 使用 `vqtbl4q_s8` 批量查表。  
+  - 计划新增 `GGML_IFAIRY_LUT_LAYOUT=tbl64`，并用 `GGML_IFAIRY_LUT_KERNEL=tbl` 强制 A/B；strict 下禁用。
+- **工作集与 L1 适配**：对 `compact`/`tbl64` 增加 K-tile（例如 `blocks_per_tile=14`）以使 LUT 驻留 L1；与 `GGML_IFAIRY_LUT_BK_BLOCKS` 统一策略，保留 env override。
+- **二维分块调度**：在 `ggml-cpu.c` 以 `(row_block, k_tile)` 分块并做蛇形遍历，提高缓存复用并减少跨核争用。
+
+#### 6.8.4 阶段 3（P2，目标 70~80 tok/s）
+
+- **`64-pattern` 合并表（新增 layout）**：在 preprocess 端生成 “pattern → {ac,ad,bc,bd}” 的 64 项表，`qgemm` 端做到 “一次查表 + 累加”。  
+  - 仅在 `M` 足够大或 `BK` tiling 生效时启用（工作集明显变大），计划新增 `GGML_IFAIRY_LUT_LAYOUT=merged64` 并设置 auto 门槛；`GGML_IFAIRY_LUT_KERNEL=merged64` 可强制 A/B。
+- **批量索引解码**：在 `qgemm` 端用 NEON 批量读取 16 个 pattern，结合 TBL 或 merged 表一次处理多 group。
+- **循环流水线**：在 group 循环引入 “load-next / compute-now” 的软件流水线，配合 2-way unroll，避免寄存器溢出。
+
+#### 6.8.5 验收与回退机制（与 6.0 口径一致）
+
+- 每个阶段都必须：`test-ifairy` + strict 通过，且在 `IFAIRY_ARM_3W_LUT_STATUS.md` 追加 tok/s 记录与 raw 日志路径。
+- 新 layout/kernel 全部以 env gating，默认 auto；出现回退时可以一键切回 `compact`/`legacy`。
 
 ## 7. 工程地基（并行推进，避免性能“回归/难复现”）
 
