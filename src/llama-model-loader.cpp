@@ -463,8 +463,7 @@ namespace GGUFMeta {
     }
 
     bool llama_model_loader::get_key_or_arr(enum llm_kv kid, uint32_t & result, bool required) {
-
-        const std::string & key = llm_kv(kid);
+        const std::string key = llm_kv(kid);
 
         const int id = gguf_find_key(meta.get(), key.c_str());
 
