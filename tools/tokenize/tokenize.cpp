@@ -16,25 +16,25 @@
 #endif
 
 static void print_usage_information(const char * argv0) {
-    printf("usage: %s [options]\n\n", argv0);
-    printf("The tokenize program tokenizes a prompt using a given model,\n");
-    printf("and prints the resulting tokens to standard output.\n\n");
-    printf("It needs a model file, a prompt, and optionally other flags\n");
-    printf("to control the behavior of the tokenizer.\n\n");
-    printf("    The possible options are:\n");
-    printf("\n");
-    printf("    -h, --help                           print this help and exit\n");
-    printf("    -m MODEL_PATH, --model MODEL_PATH    path to model.\n");
-    printf("    --ids                                if given, only print numerical token IDs, and not token strings.\n");
-    printf("                                         The output format looks like [1, 2, 3], i.e. parseable by Python.\n");
-    printf("    -f PROMPT_FNAME, --file PROMPT_FNAME read prompt from a file.\n");
-    printf("    -p PROMPT, --prompt PROMPT           read prompt from the argument.\n");
-    printf("    --stdin                              read prompt from standard input.\n");
-    printf("    --no-bos                             do not ever add a BOS token to the prompt, even if normally the model uses a BOS token.\n");
-    printf("    --no-escape                          do not escape input (such as \\n, \\t, etc.).\n");
-    printf("    --no-parse-special                   do not parse control tokens.\n");
-    printf("    --log-disable                        disable logs. Makes stderr quiet when loading the model.\n");
-    printf("    --show-count                         print the total number of tokens.\n");
+    LOG("usage: %s [options]\n\n", argv0);
+    LOG("The tokenize program tokenizes a prompt using a given model,\n");
+    LOG("and prints the resulting tokens to standard output.\n\n");
+    LOG("It needs a model file, a prompt, and optionally other flags\n");
+    LOG("to control the behavior of the tokenizer.\n\n");
+    LOG("    The possible options are:\n");
+    LOG("\n");
+    LOG("    -h, --help                           print this help and exit\n");
+    LOG("    -m MODEL_PATH, --model MODEL_PATH    path to model.\n");
+    LOG("    --ids                                if given, only print numerical token IDs, and not token strings.\n");
+    LOG("                                         The output format looks like [1, 2, 3], i.e. parseable by Python.\n");
+    LOG("    -f PROMPT_FNAME, --file PROMPT_FNAME read prompt from a file.\n");
+    LOG("    -p PROMPT, --prompt PROMPT           read prompt from the argument.\n");
+    LOG("    --stdin                              read prompt from standard input.\n");
+    LOG("    --no-bos                             do not ever add a BOS token to the prompt, even if normally the model uses a BOS token.\n");
+    LOG("    --no-escape                          do not escape input (such as \\n, \\t, etc.).\n");
+    LOG("    --no-parse-special                   do not parse control tokens.\n");
+    LOG("    --log-disable                        disable logs. Makes stderr quiet when loading the model.\n");
+    LOG("    --show-count                         print the total number of tokens.\n");
 }
 
 static void llama_log_callback_null(ggml_log_level level, const char * text, void * user_data) {
