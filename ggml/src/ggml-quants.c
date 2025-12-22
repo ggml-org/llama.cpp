@@ -2282,13 +2282,13 @@ static inline uint8_t ggml_ifairy_pack_triplet_direct(uint8_t c0, uint8_t c1, ui
 }
 
 static inline uint8_t ggml_ifairy_read_code(const block_ifairy * row_blocks, int64_t idx) {
-    const int64_t block_idx      = idx / QK_K;
-    const int64_t idx_in_block   = idx - block_idx * QK_K;
-    const int     chunk          = (int) (idx_in_block >> 6);       // 0..3
-    const int     lane           = (int) (idx_in_block & 0x0f);     // 0..15
-    const int     part           = (int) ((idx_in_block >> 4) & 0x3); // 0..3
-    const uint8_t packed         = row_blocks[block_idx].qs[chunk * 16 + lane];
-    const uint8_t code           = (packed >> (2 * part)) & 0x3;
+    const int64_t block_idx    = idx / QK_K;
+    const int64_t idx_in_block = idx - block_idx * QK_K;
+    const int     chunk        = (int) (idx_in_block >> 6);          // 0..3
+    const int     lane         = (int) (idx_in_block & 0x0f);        // 0..15
+    const int     part         = (int) ((idx_in_block >> 4) & 0x3);  // 0..3
+    const uint8_t packed       = row_blocks[block_idx].qs[chunk * 16 + lane];
+    const uint8_t code         = (packed >> (2 * part)) & 0x3;
 
     return code;
 }
@@ -2297,14 +2297,14 @@ struct ggml_ifairy_3w_index_info ggml_ifairy_3w_get_index_info(int64_t k) {
     GGML_ASSERT(k > 0);
     GGML_ASSERT(k % QK_K == 0);
 
-    const int64_t blocks = k / QK_K;
-    const int64_t groups_per_block = (QK_K + 2) / 3; // 256 -> 85 triplets + 1 tail group (no drop)
-    const int64_t k_padded = k; // tail group uses internal padding; logical K unchanged
+    const int64_t blocks           = k / QK_K;
+    const int64_t groups_per_block = (QK_K + 2) / 3;  // 256 -> 85 triplets + 1 tail group (no drop)
+    const int64_t k_padded         = k;               // tail group uses internal padding; logical K unchanged
 
     struct ggml_ifairy_3w_index_info info = {
-        /*.k              =*/ k,
-        /*.k_padded       =*/ k_padded,
-        /*.groups_per_row =*/ blocks * groups_per_block,
+        /*.k              =*/k,
+        /*.k_padded       =*/k_padded,
+        /*.groups_per_row =*/blocks * groups_per_block,
     };
 
     return info;
@@ -2314,8 +2314,8 @@ size_t ggml_ifairy_3w_index_buffer_size(const struct ggml_ifairy_3w_index_info *
     GGML_ASSERT(info != NULL);
     GGML_ASSERT(rows > 0);
 
-    const size_t groups  = (size_t) info->groups_per_row;
-    const size_t n_rows  = (size_t) rows;
+    const size_t groups = (size_t) info->groups_per_row;
+    const size_t n_rows = (size_t) rows;
 
     GGML_ASSERT(groups <= SIZE_MAX / n_rows);
 
@@ -2327,24 +2327,28 @@ size_t ggml_ifairy_3w_index_buffer_size_aligned64(const struct ggml_ifairy_3w_in
     return GGML_PAD(raw, 64);
 }
 
-bool ggml_ifairy_3w_encode(const block_ifairy * GGML_RESTRICT weights, int64_t k, int64_t rows, uint8_t * GGML_RESTRICT dst, size_t dst_size) {
+bool ggml_ifairy_3w_encode(const block_ifairy * GGML_RESTRICT weights,
+                           int64_t                            k,
+                           int64_t                            rows,
+                           uint8_t * GGML_RESTRICT            dst,
+                           size_t                             dst_size) {
     GGML_ASSERT(weights != NULL);
     GGML_ASSERT(dst != NULL);
     GGML_ASSERT(k > 0);
     GGML_ASSERT(rows > 0);
     GGML_ASSERT(k % QK_K == 0);
 
-    const struct ggml_ifairy_3w_index_info info = ggml_ifairy_3w_get_index_info(k);
-    const size_t required = ggml_ifairy_3w_index_buffer_size(&info, rows);
+    const struct ggml_ifairy_3w_index_info info     = ggml_ifairy_3w_get_index_info(k);
+    const size_t                           required = ggml_ifairy_3w_index_buffer_size(&info, rows);
     if (dst_size < required) {
         return false;
     }
 
-    const int64_t blocks_per_row = k / QK_K;
-    const int64_t groups_per_block = (QK_K + 2) / 3; // 86 groups per 256-block (last is tail)
+    const int64_t blocks_per_row   = k / QK_K;
+    const int64_t groups_per_block = (QK_K + 2) / 3;  // 86 groups per 256-block (last is tail)
     for (int64_t row = 0; row < rows; ++row) {
         const block_ifairy * row_blocks = weights + row * blocks_per_row;
-        uint8_t * row_dst = dst + row * info.groups_per_row;
+        uint8_t *            row_dst    = dst + row * info.groups_per_row;
 
         for (int64_t g = 0; g < info.groups_per_row; ++g) {
             const int64_t blk   = g / groups_per_block;
@@ -2352,8 +2356,8 @@ bool ggml_ifairy_3w_encode(const block_ifairy * GGML_RESTRICT weights, int64_t k
             // keep grouping within each 256-block:
             // - intra=0..84: base = blk*256 + intra*3 (covers 0..254)
             // - intra=85   : tail group: (255, pad, pad) (does NOT cross into next block)
-            const bool tail = intra == groups_per_block - 1;
-            const int64_t base = blk * QK_K + (tail ? (QK_K - 1) : intra * 3);
+            const bool    tail  = intra == groups_per_block - 1;
+            const int64_t base  = blk * QK_K + (tail ? (QK_K - 1) : intra * 3);
 
             const uint8_t c0 = base < k ? ggml_ifairy_read_code(row_blocks, base) : 0;
             const uint8_t c1 = (!tail && base + 1 < k) ? ggml_ifairy_read_code(row_blocks, base + 1) : 0;
@@ -2790,7 +2794,7 @@ void quantize_row_ifairy_q16_ref(const float * GGML_RESTRICT x, block_ifairy_q16
         for (int j = 0; j < QK_K; ++j) {
             const float* x_com = x + j;
 
-            ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t*)(x_com))[0];
+            ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t *) (x_com))[0];
             ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t*)(x_com))[1];
 
             float x_real = GGML_BF16_TO_FP32(x_real_bf16);

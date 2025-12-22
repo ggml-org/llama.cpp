@@ -258,7 +258,7 @@ struct cmd_params {
     std::vector<bool>                flash_attn;
     std::vector<std::vector<float>>  tensor_split;
     std::vector<std::vector<llama_model_tensor_buft_override>> tensor_buft_overrides;
-    std::vector<ggml_backend_dev_t>  devices;
+    std::vector<ggml_backend_dev_t>                            devices;
     std::vector<bool>                use_mmap;
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
@@ -418,7 +418,7 @@ static ggml_type ggml_type_from_name(const std::string & s) {
 
 static std::vector<ggml_backend_dev_t> parse_device_list(const std::string & value) {
     std::vector<ggml_backend_dev_t> devices;
-    auto dev_names = string_split<std::string>(value, ',');
+    auto                            dev_names = string_split<std::string>(value, ',');
     if (dev_names.empty()) {
         throw std::invalid_argument("no devices specified");
     }
@@ -956,7 +956,7 @@ struct cmd_params_instance {
     bool               flash_attn;
     std::vector<float> tensor_split;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
-    std::vector<ggml_backend_dev_t> devices;
+    std::vector<ggml_backend_dev_t>               devices;
     bool               use_mmap;
     bool               embeddings;
     bool               no_op_offload;

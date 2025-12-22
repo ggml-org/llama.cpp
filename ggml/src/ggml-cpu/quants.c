@@ -132,11 +132,11 @@ void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy,
         y[ib].d_imag = GGML_FP32_TO_FP16(d_imag);
 
         for (int chunk = 0; chunk < 4; ++chunk) {
-            uint8_t packed[16] = {0};
+            uint8_t packed[16] = { 0 };
 
             for (int part = 0; part < 4; ++part) {
                 for (int lane = 0; lane < 16; ++lane) {
-                    const int idx = chunk * 64 + part * 16 + lane;
+                    const int     idx   = chunk * 64 + part * 16 + lane;
                     const float * x_com = x + ib * QK_K + idx;
 
                     const ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t *) x_com)[0];

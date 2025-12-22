@@ -7,7 +7,7 @@
 #include "amx/amx.h"
 
 #if defined(GGML_IFAIRY_ARM_LUT)
-#include "ggml-ifairy-lut.h"
+#    include "ggml-ifairy-lut.h"
 #endif
 
 #include <cctype>

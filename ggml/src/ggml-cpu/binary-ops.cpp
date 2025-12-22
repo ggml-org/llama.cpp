@@ -64,11 +64,11 @@ static inline void vec_binary_op_contiguous(const int64_t n, dst_t * z, const sr
     constexpr auto src0_to_f32 = type_conversion_table<src0_t>::to_f32;
     constexpr auto src1_to_f32 = type_conversion_table<src1_t>::to_f32;
     constexpr auto f32_to_dst  = type_conversion_table<dst_t >::from_f32;
-    const bool check_nan = op != op_ifairy_add && op != op_ifairy_mul;
+    const bool     check_nan   = op != op_ifairy_add && op != op_ifairy_mul;
 
     for (int i = 0; i < n; i++) {
         const float tmp = op(src0_to_f32(x[i]), src1_to_f32(y[i]));
-        z[i] = f32_to_dst(tmp);
+        z[i]            = f32_to_dst(tmp);
         if (check_nan && (tmp != tmp)) {
             GGML_ABORT("nan discovered in binary op");
         }
