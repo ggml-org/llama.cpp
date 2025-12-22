@@ -2,13 +2,13 @@
 
 template <bool iswa>
 llm_build_modern_bert<iswa>::llm_build_modern_bert(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
-    const int64_t n_embd_head     = hparams.n_embd_head_v;
-    const int64_t n_embd_gqa      = hparams.n_embd_v_gqa();
+    const int64_t n_embd_head = hparams.n_embd_head_v;
+    const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
 
-    ggml_tensor * cur = nullptr;
-    ggml_tensor * inpL = nullptr;
+    ggml_tensor * cur;
+    ggml_tensor * inpL;
     ggml_tensor * inp_pos = build_inp_pos();
 
     // construct input embeddings (token, type, position)
@@ -32,11 +32,7 @@ llm_build_modern_bert<iswa>::llm_build_modern_bert(const llama_model & model, co
             freq_base_l = freq_base;
         }
 
-        ggml_tensor * cur = inpL;
-
-        ggml_tensor * Qcur = nullptr;
-        ggml_tensor * Kcur = nullptr;
-        ggml_tensor * Vcur = nullptr;
+        cur = inpL;
 
         // attention layer norm
         if (model.layers[il].attn_norm) {
@@ -52,9 +48,9 @@ llm_build_modern_bert<iswa>::llm_build_modern_bert(const llama_model & model, co
 
         const size_t type_size = ggml_type_size(cur->type);
 
-        Qcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head,    n_tokens, n_embd_head*type_size, cur->nb[1], 0*type_size*(n_embd));
-        Kcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head*type_size, cur->nb[1], 1*type_size*(n_embd));
-        Vcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head*type_size, cur->nb[1], 1*type_size*(n_embd + n_embd_gqa));
+        ggml_tensor * Qcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head,    n_tokens, n_embd_head*type_size, cur->nb[1], 0*type_size*(n_embd));
+        ggml_tensor * Kcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head*type_size, cur->nb[1], 1*type_size*(n_embd));
+        ggml_tensor * Vcur = ggml_view_3d(ctx0, cur, n_embd_head, n_head_kv, n_tokens, n_embd_head*type_size, cur->nb[1], 1*type_size*(n_embd + n_embd_gqa));
 
         // RoPE
         Qcur = ggml_rope_ext(
@@ -84,19 +80,20 @@ llm_build_modern_bert<iswa>::llm_build_modern_bert(const llama_model & model, co
         }
 
         // re-add the layer input
-        cur = ggml_add(ctx0, cur, inpL);
-
-        ggml_tensor * ffn_inp = cur;
-        // attention layer norm
-        cur = build_norm(cur, model.layers[il].ffn_norm, nullptr, LLM_NORM, il);
-
+        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
         cb(ffn_inp, "ffn_inp", il);
 
+        // attention layer norm
+        cur = build_norm(ffn_inp,
+                model.layers[il].ffn_norm, NULL,
+                LLM_NORM, il);
+        cb(cur, "ffn_norm", il);
+
         cur = build_ffn(cur,
-                model.layers[il].ffn_up,
-                NULL, NULL, NULL, NULL, NULL,
-                model.layers[il].ffn_down,
-                NULL, NULL, NULL,
+                model.layers[il].ffn_up,   NULL, NULL,
+                NULL,                      NULL, NULL,
+                model.layers[il].ffn_down, NULL, NULL,
+                NULL,
                 LLM_FFN_GEGLU, LLM_FFN_SEQ, il);
 
         // attentions bypass the intermediate layer
