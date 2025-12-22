@@ -212,7 +212,10 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
         ggml_ifairy_checked_mul_size(ggml_ifairy_checked_mul_size((size_t) N, (size_t) blocks_tile), 2u),
         sizeof(float));
 
-    size_t shared_bytes = GGML_PAD(ggml_ifairy_checked_add_size(lut_bytes, scale_bytes), 64);
+    const size_t shared_lut_bytes      = GGML_PAD(ggml_ifairy_checked_add_size(lut_bytes, scale_bytes), 64);
+    const bool   use_lut_double_buffer = tile_blocks > 0 && blocks_tile < blocks_per_col;
+    const size_t lut_buffers           = use_lut_double_buffer ? 2u : 1u;
+    size_t       shared_bytes          = ggml_ifairy_checked_mul_size(shared_lut_bytes, lut_buffers);
 
     // Optional "full accumulator" mode (tiled only):
     // for small N, keep a single shared accumulator of size M*(4*N) floats so we can

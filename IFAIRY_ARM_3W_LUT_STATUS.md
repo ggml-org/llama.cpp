@@ -23,6 +23,7 @@
 - `GGML_IFAIRY_LUT_VALIDATE_STRICT=0/1`：严格对照 reference（用于验证，不用于性能跑分）
 - `GGML_IFAIRY_LUT_DEBUG=0/1`：路由/形状诊断（默认关闭；跑分时不要开）
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 路径内的 prefetch（默认启用；设为 `0` 用于 profile/sweep 对照；覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`）
+- `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：prefetch 距离（默认 `2`；设为 `0` 关闭距离预取；结合 profile 调参）
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` fast-path（默认启用；设为 `0` 强制走通用路径，用于回归/调优 A/B）
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` fast-path 里 group-loop 的 4-way unroll（默认 `4`；设为 `2` 用于 A/B，对照“2-way 是否反而更快”）
 - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`）；当前仅 `sdot` 在 `N==1` 快路上可用，`tbl/merged64` 为预留。
@@ -30,7 +31,6 @@
 计划新增（未实现，先做文档约定）：
 
 - `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64`：新增 LUT 布局（配合 TBL / merged64 方案），默认仍由 `auto` 策略决定。
-- `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 2~3，需结合 profile 调整）。
 
 ## 0.0 当前共识（按优先级）
 
@@ -72,6 +72,8 @@
 
 | time (UTC) | git | machine | threads | test | env | avg tok/s | log |
 |---|---|---|---:|---|---|---:|---|
+| 2025-12-22T16:05:53Z | `2337850b` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 1.41 | `/tmp/ifairy_bench_20251223T000553.jsonl` |
+| 2025-12-22T16:07:24Z | `2337850b` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 6.76 | `/tmp/ifairy_bench_20251223T000553.jsonl` |
 | 2025-12-20T08:00:08Z | `b9f0a57f+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=legacy` | 3.00 | `/tmp/ifairy_bench_legacy_1766217492.jsonl` |
 | 2025-12-20T08:00:08Z | `b9f0a57f+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=legacy` | 14.72 | `/tmp/ifairy_bench_legacy_1766217492.jsonl` |
 | 2025-12-20T08:00:08Z | `b9f0a57f+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact` | 15.15 | `/tmp/ifairy_bench_compact_1766217565.jsonl` |
