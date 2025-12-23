@@ -335,6 +335,7 @@ class SettingsStore {
 
 			if (isUnset) {
 				this.userOverrides.delete(key);
+
 				continue;
 			}
 
