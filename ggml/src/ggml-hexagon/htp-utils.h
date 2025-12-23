@@ -8,6 +8,7 @@ extern "C" {
 #include <AEEStdErr.h>
 #include <inttypes.h>
 #include <remote.h>
+#include <rpcmem.h>
 #include <stdbool.h>
 
 /* Offset to differentiate HLOS and Hexagon error codes.
