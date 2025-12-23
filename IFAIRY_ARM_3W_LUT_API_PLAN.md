@@ -275,6 +275,8 @@ struct ifairy_lut_extra {
   - 移除热循环内的运行时分支（保留编译期/一次性开关），减少分支开销。
 - **减少 barrier（tiling）**：在 `ggml/src/ggml-cpu/ggml-cpu.c` 的 BK 路径引入 “双缓冲 + 单 barrier” 流程：thread0 预处理下一 tile，其它线程处理当前 tile，保证每 tile 只同步一次。
 - **寄存器压力控制**：优先用 `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL` 做 A/B，暂不引入 inline asm；如有明显 spill，再考虑局部手写汇编。
+- **暂停/回归调查（已定位为环境因素）**：近期 bench 的 tok/s 下滑主要来自系统处于低电量模式（`pmset -g` 显示 `lowpowermode 1`），同一 commit（`fe740e0a`）复跑也降至 ~4-6 tok/s，说明非代码回归。  
+  - 处理：关闭低电量模式/降低后台负载后再做 ABABAB + 长测复核；低电量下的 tok/s 记录不作为基线。已在接电状态完成 3-run 长测（pp128 mean 3.296, tg256 mean 17.901，详见 `IFAIRY_ARM_3W_LUT_STATUS.md`）。
 
 #### 6.8.3 阶段 2（P1，目标 45~55 tok/s）
 

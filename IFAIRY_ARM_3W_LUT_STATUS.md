@@ -86,6 +86,14 @@
 | 2025-12-22T03:34:15Z | `9de72065` | Apple M4 | 4 | tg32 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_KERNEL=auto` | 12.77 | `/var/folders/mf/jqbwxvls37d2lhmhhvht2_pm0000gn/T//ifairy_bench.20251222T113407.jsonl` |
 | 2025-12-22T03:34:29Z | `9de72065` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_KERNEL=sdot` | 17.08 | `/var/folders/mf/jqbwxvls37d2lhmhhvht2_pm0000gn/T//ifairy_bench.20251222T113429.jsonl` |
 | 2025-12-22T03:34:36Z | `9de72065` | Apple M4 | 4 | tg32 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_KERNEL=sdot` | 10.61 | `/var/folders/mf/jqbwxvls37d2lhmhhvht2_pm0000gn/T//ifairy_bench.20251222T113429.jsonl` |
+| 2025-12-23T04:26:18Z | `ffa206ea` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 3.29 | `/tmp/ifairy_bench_power_20251223T122617.jsonl` |
+| 2025-12-23T04:26:57Z | `ffa206ea` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 18.90 | `/tmp/ifairy_bench_power_20251223T122617.jsonl` |
+| 2025-12-23T04:45:04Z | `ffa206ea` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 3.29 | `/tmp/ifairy_bench_power_run2_20251223T124504.jsonl` |
+| 2025-12-23T04:45:43Z | `ffa206ea` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 18.05 | `/tmp/ifairy_bench_power_run2_20251223T124504.jsonl` |
+| 2025-12-23T04:46:05Z | `ffa206ea` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 3.30 | `/tmp/ifairy_bench_power_run3_20251223T124605.jsonl` |
+| 2025-12-23T04:46:44Z | `ffa206ea` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 16.75 | `/tmp/ifairy_bench_power_run3_20251223T124605.jsonl` |
+
+Note: 2025-12-22 runs showing a large drop were captured with low power mode enabled (`pmset -g` shows `lowpowermode 1`). Re-running `fe740e0a` under the same mode still yields ~4-6 tok/s, so the drop is environmental. Re-benchmark after disabling low power mode; low-power logs are for reference only (`/tmp/ifairy_fe740e0a_20251223T005155.jsonl`, `/tmp/ifairy_fe740e0a_device_none_20251223T005346.jsonl`). Current power-on retest is logged above (`/tmp/ifairy_bench_power_20251223T122617.jsonl`, `/tmp/ifairy_bench_power_run2_20251223T124504.jsonl`, `/tmp/ifairy_bench_power_run3_20251223T124605.jsonl`). 3-run summary: pp128 min/max/mean = 3.291/3.304/3.296; tg256 min/max/mean = 16.750/18.903/17.901.
 
 ### 0.1.1 legacy（llama-cli，已停更）
 
