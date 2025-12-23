@@ -156,7 +156,8 @@ class SettingsStore {
 			const propsDefaults = this.getServerDefaults();
 			const propsDefault = propsDefaults[key as string];
 
-			const isUnset = value === null || value === '';
+			// Treat only empty-string/undefined as unset for server-synced parameters
+			const isUnset = value === '' || value === undefined;
 
 			if (propsDefault !== undefined) {
 				if (isUnset) {
@@ -193,7 +194,7 @@ class SettingsStore {
 			if (ParameterSyncService.canSyncParameter(key)) {
 				const propsDefault = propsDefaults[key];
 
-				const isUnset = value === null || value === '';
+				const isUnset = value === '' || value === undefined;
 
 				if (propsDefault !== undefined) {
 					if (isUnset) {
@@ -332,7 +333,7 @@ class SettingsStore {
 		for (const [key, propsValue] of Object.entries(propsDefaults)) {
 			const currentValue = getConfigValue(this.config, key);
 
-			const isUnset = currentValue === null || currentValue === undefined || currentValue === '';
+			const isUnset = currentValue === undefined || currentValue === '';
 
 			if (isUnset) {
 				this.userOverrides.delete(key);
@@ -429,7 +430,7 @@ class SettingsStore {
 	 */
 	getParameterPlaceholder(key: string): string {
 		const modelPreset = this.currentModelPresets?.[key];
-		if (modelPreset !== undefined && modelPreset !== null) {
+		if (modelPreset !== undefined) {
 			return String(normalizeFloatingPoint(modelPreset));
 		}
 
@@ -440,7 +441,7 @@ class SettingsStore {
 		}
 
 		const defaultValue = getConfigValue(SETTING_CONFIG_DEFAULT as SettingsConfigType, key);
-		if (defaultValue !== undefined && defaultValue !== null) {
+		if (defaultValue !== undefined) {
 			return String(normalizeFloatingPoint(defaultValue));
 		}
 
