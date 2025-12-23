@@ -9961,9 +9961,8 @@ kernel void kernel_count_equal(
     const uint nsg = (ntg.x + 31) / 32;
 
     if (sgitg == 0) {
-
         float v = 0.0f;
-        if(tpitg.x < nsg) {
+        if (tpitg.x < nsg) {
             v = shmem_i32[tpitg.x];
         }
 
