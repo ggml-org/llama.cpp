@@ -1530,7 +1530,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena & parser, const std
     common_peg_parse_context ctx(input, is_partial);
     auto result = parser.parse(ctx);
     if (result.fail()) {
-        throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end));
+        throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end) + ": " + input.substr(result.end));
     }
 
     common_chat_msg msg;

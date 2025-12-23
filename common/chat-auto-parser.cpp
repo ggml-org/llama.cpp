@@ -110,11 +110,12 @@ static std::string find_string_difference(const std::string & base, const std::s
 }
 
 // TemplatePattern implementation using pure differential analysis
-TemplatePattern TemplateAnalyzer::analyze_template(const minja::chat_template & tmpl, bool has_tools) {
+TemplatePattern TemplateAnalyzer::analyze_template(const minja::chat_template & tmpl) {
     TemplatePattern pattern;
 
-    // Perform differential analysis to discover patterns
-    auto discovered = analyze_by_differential(tmpl, has_tools);
+    // Always perform differential analysis to discover patterns (including reasoning)
+    // The has_tools flag only affects whether we do tool-specific differential analysis
+    auto discovered = analyze_by_differential(tmpl);
 
     // Set format based on discovered patterns
     pattern.format = determine_format_from_patterns(discovered);
@@ -162,20 +163,11 @@ TemplatePattern TemplateAnalyzer::analyze_template(const minja::chat_template & 
 }
 
 // Pure differential analysis - no hardcoded patterns
-DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_template & tmpl, bool has_tools) {
+DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_template & tmpl) {
     DiscoveredPattern patterns;
 
     try {
         LOG_DBG("=== STARTING TEMPLATE DIFFERENTIAL ANALYSIS ===\n");
-
-        // Short-circuit: if no tools provided, skip tool-calling analysis entirely
-        if (!has_tools) {
-            LOG_DBG("No tools provided - skipping tool-calling differential analysis\n");
-            // Only analyze reasoning capability
-            analyze_reasoning(tmpl, patterns);
-            LOG_DBG("=== ENDING TEMPLATE DIFFERENTIAL ANALYSIS (NO TOOLS) ===\n");
-            return patterns;
-        }
 
         // Helper to refine patterns for JSON Native (e.g. models with custom tags like Nemotron)
         auto refine_json_native = [&](DiscoveredPattern & p, TemplatePattern::ToolCallFormat & fmt,
@@ -1784,21 +1776,22 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplatePattern 
 
         if (local_pattern.format == TemplatePattern::JSON_NATIVE) {
             arena       = build_native_parser(local_pattern, tmpl, inputs, thinking_forced_open);
-            // If there are no tools, format should be SIMPLE (content-only)
-            data.format = has_tools ? COMMON_CHAT_FORMAT_PEG_NATIVE : COMMON_CHAT_FORMAT_PEG_SIMPLE;
-            LOG_DBG("Generated JSON_NATIVE parser successfully (actual format: %s)\n",
-                    has_tools ? "PEG_NATIVE" : "PEG_SIMPLE");
+            // Format is based on template structure, not whether tools are provided at runtime
+            data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
+            LOG_DBG("Generated JSON_NATIVE parser successfully (format: PEG_NATIVE)\n");
         } else if (local_pattern.format == TemplatePattern::XML_CONSTRUCTED) {
             arena       = build_constructed_parser(local_pattern, tmpl, inputs, thinking_forced_open);
-            // If there are no tools, format should be SIMPLE (content-only)
-            data.format = has_tools ? COMMON_CHAT_FORMAT_PEG_CONSTRUCTED : COMMON_CHAT_FORMAT_PEG_SIMPLE;
-            LOG_DBG("Generated XML_CONSTRUCTED parser successfully (actual format: %s)\n",
-                    has_tools ? "PEG_CONSTRUCTED" : "PEG_SIMPLE");
+            // Format is based on template structure, not whether tools are provided at runtime
+            data.format = COMMON_CHAT_FORMAT_PEG_CONSTRUCTED;
+            LOG_DBG("Generated XML_CONSTRUCTED parser successfully (format: PEG_CONSTRUCTED)\n");
         } else {
             // Treat as content only
             arena       = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
                 auto content = p.content(p.rest());
-                if (thinking_forced_open && !local_pattern.special_markers.at("reasoning_end_marker").empty()) {
+                // Only parse reasoning when reasoning_format != NONE
+                // When reasoning_format == NONE, all output (including any thinking markers) goes into content
+                if (inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE &&
+                    thinking_forced_open && !local_pattern.special_markers.at("reasoning_end_marker").empty()) {
                     return p.reasoning_block(
                                p.reasoning(p.until(local_pattern.special_markers.at("reasoning_end_marker"))) +
                                p.literal(local_pattern.special_markers.at("reasoning_end_marker"))) +
@@ -1898,21 +1891,32 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(const TemplatePatter
     auto has_tools = inputs.tools.is_array() && !inputs.tools.empty();
 
     auto parser = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
-        // Reasoning parser - only include if we have valid reasoning markers
-        auto reasoning       = p.eps();
-        auto reasoning_start = pattern.special_markers.at("reasoning_start_marker");
-        auto reasoning_end   = pattern.special_markers.at("reasoning_end_marker");
-        auto tool_call_start = pattern.special_markers.at("tool_call_start_marker");
-        auto tool_call_end   = pattern.special_markers.at("tool_call_end_marker");
-        if ((inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE || thinking_forced_open) &&
-            !reasoning_start.empty() && !reasoning_end.empty()) {
-            if (thinking_forced_open) {
-                LOG_DBG("Building mandatory reasoning block with end marker '%s'\n", reasoning_start.c_str());
-                reasoning = p.reasoning(p.until(reasoning_end)) + reasoning_end;
+        // Reasoning/thinking block handling
+        // When reasoning_format != NONE: parse thinking into reasoning_content
+        // When reasoning_format == NONE: include thinking markers in content (don't separate them)
+        auto reasoning               = p.eps();
+        auto thinking_content_prefix = p.eps();  // For NONE format: captures thinking section as content
+        auto reasoning_start         = pattern.special_markers.at("reasoning_start_marker");
+        auto reasoning_end           = pattern.special_markers.at("reasoning_end_marker");
+        auto tool_call_start         = pattern.special_markers.at("tool_call_start_marker");
+        auto tool_call_end           = pattern.special_markers.at("tool_call_end_marker");
+
+        if (!reasoning_start.empty() && !reasoning_end.empty()) {
+            if (inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE) {
+                // Parse thinking into reasoning_content
+                if (thinking_forced_open) {
+                    LOG_DBG("Building mandatory reasoning block with end marker '%s'\n", reasoning_start.c_str());
+                    reasoning = p.reasoning(p.until(reasoning_end)) + reasoning_end;
+                } else {
+                    LOG_DBG("Building optional reasoning block with start '%s' and end '%s'\n", reasoning_start.c_str(),
+                            reasoning_end.c_str());
+                    reasoning = p.optional(reasoning_start + p.reasoning(p.until(reasoning_end)) + reasoning_end);
+                }
             } else {
-                LOG_DBG("Building optional reasoning block with start '%s' and end '%s'\n", reasoning_start.c_str(),
-                        reasoning_end.c_str());
-                reasoning = p.optional(reasoning_start + p.reasoning(p.until(reasoning_end)) + reasoning_end);
+                // reasoning_format == NONE: don't do any special handling for thinking markers
+                // The regular content parser will capture everything including thinking markers
+                LOG_DBG("Skipping thinking section handling (format=NONE) - content parser will capture all\n");
+                // thinking_content_prefix stays as eps()
             }
         }
 
@@ -1924,12 +1928,12 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(const TemplatePatter
 
                 auto content_before_tools = tool_call_start.empty() ? p.eps() : p.content(p.until(tool_call_start));
 
-                return p.sequence({ reasoning, content_before_tools, p.space(), tool_calls, p.space(), p.end() });
+                return p.sequence({ reasoning, thinking_content_prefix, content_before_tools, p.space(), tool_calls, p.space(), p.end() });
             }
             throw std::runtime_error("Native parser requires JSON tool format");
         }
 
-        return p.sequence({ reasoning, p.rule("content", p.content(p.rest())), p.end() });
+        return p.sequence({ reasoning, thinking_content_prefix, p.rule("content", p.content(p.rest())), p.end() });
     });
 
     return parser;
@@ -1940,39 +1944,55 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(const TemplateP
                                                                  const struct templates_params & inputs,
                                                                  bool                            thinking_forced_open) {
     (void) tmpl;    // Suppress unused parameter warning
-    (void) inputs;  // Suppress unused parameter warning
 
     auto parser = build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
         auto reasoning_start = pattern.special_markers.at("reasoning_start_marker");
         auto reasoning_end   = pattern.special_markers.at("reasoning_end_marker");
         auto tool_call_start = pattern.special_markers.at("tool_call_start_marker");
 
-        // Reasoning parser
+        fprintf(stderr, "build_constructed_parser: reasoning_start='%s', reasoning_end='%s', reasoning_format=%d, forced_open=%d\n",
+                reasoning_start.c_str(), reasoning_end.c_str(), static_cast<int>(inputs.reasoning_format), thinking_forced_open);
+
+        // Reasoning/thinking block handling
+        // When reasoning_format != NONE: parse thinking into reasoning_content
+        // When reasoning_format == NONE: include thinking markers in content (don't separate them)
         auto reasoning = p.eps();
-        if ((inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE || thinking_forced_open) &&
-            !reasoning_start.empty() && !reasoning_end.empty()) {
-            if (thinking_forced_open) {
-                LOG_DBG("Building mandatory reasoning block for constructed parser\n");
-                reasoning = p.rule("reasoning",
-                                   p.reasoning_block(p.reasoning(p.until(reasoning_end)) + p.literal(reasoning_end)));
+        auto thinking_content_prefix = p.eps();  // For NONE format: captures thinking section as content
+
+        if (!reasoning_start.empty() && !reasoning_end.empty()) {
+            if (inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE) {
+                // Parse thinking into reasoning_content
+                if (thinking_forced_open) {
+                    LOG_DBG("Building mandatory reasoning block for constructed parser\n");
+                    reasoning = p.rule("reasoning",
+                                       p.reasoning_block(p.reasoning(p.until(reasoning_end)) + p.literal(reasoning_end)));
+                } else {
+                    LOG_DBG("Building optional reasoning block for constructed parser\n");
+                    reasoning = p.optional(p.rule(
+                        "reasoning", p.reasoning_block(p.literal(reasoning_start) + p.reasoning(p.until(reasoning_end)) +
+                                                       p.literal(reasoning_end))));
+                }
             } else {
-                LOG_DBG("Building optional reasoning block for constructed parser\n");
-                reasoning = p.optional(p.rule(
-                    "reasoning", p.reasoning_block(p.literal(reasoning_start) + p.reasoning(p.until(reasoning_end)) +
-                                                   p.literal(reasoning_end))));
+                // reasoning_format == NONE: don't do any special handling for thinking markers
+                // The regular content parser will capture everything including thinking markers
+                fprintf(stderr, ">>> Skipping thinking section handling (format=NONE) - content parser will capture all\n");
+                // thinking_content_prefix stays as eps()
             }
         }
 
+        bool has_tools = inputs.tools.is_array() && !inputs.tools.empty();
         bool force_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         auto tool_calls  = p.standard_constructed_tools(pattern.special_markers, inputs.tools,
                                                         inputs.parallel_tool_calls, force_calls);
 
-        if (!tool_call_start.empty()) {
-            return reasoning + p.space() + p.tag_with_safe_content("content", tool_call_start, tool_calls) +
+        // Only use tag_with_safe_content when tools are actually provided
+        // When no tools, just capture everything as content (avoids issues with < being treated as potential tag)
+        if (has_tools && !tool_call_start.empty()) {
+            return reasoning + thinking_content_prefix + p.space() + p.tag_with_safe_content("content", tool_call_start, tool_calls) +
                    p.optional(p.rule("content", p.content(p.rest())));
         }
 
-        return reasoning + p.rule("content", p.content(p.rest()));
+        return reasoning + thinking_content_prefix + p.rule("content", p.content(p.rest()));
     });
 
     return parser;
