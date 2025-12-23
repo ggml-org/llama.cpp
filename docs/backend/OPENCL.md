@@ -17,7 +17,7 @@ OpenCL (Open Computing Language) is an open, royalty-free standard for cross-pla
 
 ### Llama.cpp + OpenCL
 
-The llama.cpp OpenCL backend is designed to enable llama.cpp on **Qualcomm Adreno GPU** firstly via OpenCL. Thanks to the portabilty of OpenCL, the OpenCL backend can also run on certain Intel GPUs although the performance is not optimal.
+The llama.cpp OpenCL backend is designed to enable llama.cpp on **Qualcomm Adreno GPU** firstly via OpenCL. Thanks to the portabilty of OpenCL, the OpenCL backend can also run on certain Intel GPUs although the performance is not optimal, as well as pre-RDNA AMD GPUs, which do not support HIP with [few exceptions.](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/reference/system-requirements.html)
 
 ## OS
 
