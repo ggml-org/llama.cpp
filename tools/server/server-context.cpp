@@ -2313,6 +2313,12 @@ private:
                         slot.n_prompt_tokens_processed = 0;
 
                         slot.prompt.tokens.keep_first(n_past);
+
+                        // send initial 0% progress update if needed
+                        // this is to signal the client that the request has started processing
+                        if (slot.task->params.stream && slot.task->params.return_progress) {
+                            send_partial_response(slot, {}, true);
+                        }
                     }
 
                     if (!slot.can_split()) {
