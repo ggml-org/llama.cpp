@@ -2936,17 +2936,21 @@ static common_chat_params common_chat_templates_apply_jinja(
 
 
     try {
-        // Pass whether tools are provided to the autoparser
-        bool has_tools = params.tools.is_array() && !params.tools.empty();
-        TemplatePattern pattern = TemplateAnalyzer::analyze_template(tmpl, has_tools);
+        TemplatePattern pattern = TemplateAnalyzer::analyze_template(tmpl);
 
-        // Always attempt to generate parser, even for UNKNOWN templates with no tools
-        // The parser generation will handle content-only parsing appropriately
-        auto auto_params = UniversalPEGGenerator::generate_parser(pattern, tmpl, params);
+        // Only attempt autoparser if we detected tool patterns OR reasoning markers
+        // (UNKNOWN format with reasoning support can still benefit from PEG parser for reasoning handling)
+        if (pattern.format != TemplatePattern::UNKNOWN || pattern.has_reasoning_support) {
+            auto auto_params = UniversalPEGGenerator::generate_parser(pattern, tmpl, params);
 
-        // Only use the auto-generated parser if it's different from CONTENT_ONLY
-        if (auto_params.format != COMMON_CHAT_FORMAT_CONTENT_ONLY) {
-            return auto_params;
+            // Only use the auto-generated parser if it provides more than basic content-only handling.
+            // A PEG_SIMPLE parser with thinking support or a non-empty parser (PEG grammar)
+            // provides specialized handling that the generic handler doesn't.
+            if (auto_params.format != COMMON_CHAT_FORMAT_CONTENT_ONLY ||
+                auto_params.thinking_forced_open ||
+                !auto_params.parser.empty()) {
+                return auto_params;
+            }
         }
     } catch (const std::exception& e) {
         LOG_DBG("Automatic parser generation failed: %s - falling back to generic handler\n", e.what());

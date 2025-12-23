@@ -8,6 +8,7 @@
 #include "chat-auto-parser.h"
 #include "chat.h"
 
+#include "common.h"
 #include "log.h"
 
 #include "../src/unicode.h"
@@ -3173,12 +3174,14 @@ static void test_template_output_peg_parsers() {
         test_peg_parser(tmpls.get(), [&](auto & t) {
             t.input = "Hello, world!\nWhat's up?";
             t.expect = message_assist;
+            t.params.enable_thinking = false;
         });
 
         // Test basic message and reasoning with reasoning_format = none
         test_peg_parser(tmpls.get(), [&](auto & t) {
             t.input = "I'm\nthinking\n</think>\nHello, world!\nWhat's up?";
             t.expect.content = "I'm\nthinking\n</think>\nHello, world!\nWhat's up?";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_NONE;
         });
 
         // Test basic message and reasoning with reasoning_format = auto
@@ -3186,7 +3189,6 @@ static void test_template_output_peg_parsers() {
             t.input = "I'm\nthinking\n</think>\nHello, world!\nWhat's up?";
             t.params.enable_thinking = true;
             t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
-
             t.expect = message_assist_thoughts;
         });
 
