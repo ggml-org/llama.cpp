@@ -2313,6 +2313,12 @@ private:
                         slot.n_prompt_tokens_processed = 0;
 
                         slot.prompt.tokens.keep_first(n_past);
+
+                        // send initial 0% progress update if needed
+                        // this is to signal the client that the request has started processing
+                        if (slot.task->params.stream && slot.task->params.return_progress) {
+                            send_partial_response(slot, {}, true);
+                        }
                     }
 
                     if (!slot.can_split()) {
@@ -2784,6 +2790,12 @@ server_response_reader server_context::get_response_reader() {
 
 server_context_meta server_context::get_meta() const {
     auto tool_use_src = common_chat_templates_source(impl->chat_templates.get(), "tool_use");
+
+    auto bos_id = llama_vocab_bos(impl->vocab);
+    auto eos_id = llama_vocab_eos(impl->vocab);
+    auto bos_token_str = bos_id != LLAMA_TOKEN_NULL ? common_token_to_piece(impl->ctx, bos_id, true) : "";
+    auto eos_token_str = eos_id != LLAMA_TOKEN_NULL ? common_token_to_piece(impl->ctx, eos_id, true) : "";
+
     return server_context_meta {
         /* build_info             */ build_info,
         /* model_name             */ impl->model_name,
@@ -2798,8 +2810,8 @@ server_context_meta server_context::get_meta() const {
         /* chat_template          */ common_chat_templates_source(impl->chat_templates.get()),
         /* chat_template_tool_use */ tool_use_src ? tool_use_src : "",
 
-        /* bos_token_str          */ common_token_to_piece(impl->ctx, llama_vocab_bos(impl->vocab), true),
-        /* eos_token_str          */ common_token_to_piece(impl->ctx, llama_vocab_eos(impl->vocab), true),
+        /* bos_token_str          */ bos_token_str,
+        /* eos_token_str          */ eos_token_str,
         /* fim_pre_token          */ llama_vocab_fim_pre(impl->vocab),
         /* fim_sub_token          */ llama_vocab_fim_suf(impl->vocab),
         /* fim_mid_token          */ llama_vocab_fim_mid(impl->vocab),
