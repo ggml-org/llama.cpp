@@ -112,7 +112,7 @@
 				id={field.key}
 				value={String(localConfig[field.key] ?? '')}
 				onchange={(e) => onConfigChange(field.key, e.currentTarget.value)}
-				placeholder={`Default: ${settingsStore.getParameterPlaceholder(field.key)}`}
+				placeholder="Default: ${settingsStore.getParameterPlaceholder(field.key)}"
 				class="min-h-[10rem] w-full md:max-w-2xl"
 			/>
 
