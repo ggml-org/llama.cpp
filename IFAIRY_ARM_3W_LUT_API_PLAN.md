@@ -54,7 +54,7 @@ struct ifairy_lut_extra {
 ```
 
 - `ggml_ifairy_lut_transform_tensor()` 负责创建/复用索引 buffer，并设置 `tensor->extra`。
-- `ggml_ifairy_lut_free()` 负责释放内部缓存与 `extra`（现状：仍有全局状态；后续会改为更可维护的生命周期绑定，见 7）。
+- `ggml_ifairy_lut_free()` 负责释放内部缓存与 `extra`（现状：仍有全局状态；后续会改为更可维护的生命周期绑定）。
 
 ## 3. API（以头文件为准）
 
@@ -104,14 +104,16 @@ struct ifairy_lut_extra {
 - `GGML_IFAIRY_LUT_VALIDATE_STRICT=0/1`：严格对照（验证用）。
 - `GGML_IFAIRY_LUT_DEBUG=0/1`：打印少量路由诊断（默认关闭）。
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 热路径中的 prefetch（默认启用；设为 `0` 方便 profile/sweep 对照；覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`）。
+- `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 `2`；设为 `0` 关闭距离预取；结合 profile 调参）。
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` decode 快路（默认启用；设为 `0` 强制走通用路径做 A/B）。
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` 快路 group-loop 的 unroll（默认 `4`；设为 `2` 用于 A/B）。
 - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`）；当前仅 `sdot` 在 `N==1` 快路上可用，`tbl/merged64` 为预留。
 
 计划新增（未实现，先做文档约定）：
 
-- `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64`：新增 LUT 布局（配合 6.8 的 TBL / merged64 方案），默认仍由 `auto` 策略决定。
-- `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 2~3，需结合 profile 调整）。
+- `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64`：新增 LUT 布局（候选方案与落地步骤见 `IFAIRY_ARM_3W_LUT_ROADMAP.md`），默认仍由 `auto` 策略决定。
+- `GGML_IFAIRY_LUT_DECODE_NTH=<int>`：decode (`N==1`) 场景强制/上限线程数（用于 A/B；默认仍走现有 `--threads`）。
+- `GGML_IFAIRY_LUT_DECODE_THRESHOLD=<int>`：decode 小工作量阈值（用于 auto-clamp threads；默认先保守，宁可不触发也不误伤）。
 
 ## 6. 性能提升规划（主线，必须把 tok/s 拉上去）
 
@@ -122,10 +124,7 @@ struct ifairy_lut_extra {
 - **构建**：使用 Release，并确保你跑的就是你编译的二进制（优先 `build-rel`）。
 - **推荐基准命令**：以 `IFAIRY_ARM_3W_LUT_STATUS.md` 的 `0.1 tok/s 记录`表头命令为准（固定 `--threads/--n-prompt/--n-gen/--n-depth` 与 LUT env 组合）。
 - **一键复现脚本**：`scripts/ifairy_lut_repro.sh`（包含 `test-ifairy`、strict、`llama-cli` sanity、`llama-bench`）。
-- **tok/s 口径切换计划（llama-bench，CPU only）**：
-  - A/B 与最终 tok/s 记录将统一改用 `llama-bench`（避免输出长度波动）；`llama-cli` 仅保留 sanity-check。
-  - 参考命令（CPU-only，不走 offload）：`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`
-  - 注意：`llama-bench` 的 `backend` 列显示的是“已注册后端”，并不代表 offload；`-ngl 0 --device none` 即 CPU-only。
+- **tok/s 口径（llama-bench，CPU only）**：以 `llama-bench` 为准（避免输出长度波动）；`llama-cli` 仅保留 sanity-check。参考命令：`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`（`-ngl 0 --device none` 即 CPU-only）。
 - **短测 vs 长测**：
   - A/B 调优：优先用 `llama-bench` 的短测（例如 `--n-prompt 8 --n-gen 8`）做 `ABABAB` 交替跑，减少热漂移偏置；
   - 最终记录：用 `llama-bench` 的长测（例如 `--n-prompt 128 --n-gen 256`）对每个 layout 连续跑 3 次，记录 `min/max/mean` 后再下结论（长测之间要给足冷却；若出现明显 outlier/单调下降，先冷却后重测，否则结论无效）。
@@ -138,9 +137,11 @@ struct ifairy_lut_extra {
   - A/B 的原始日志（建议 TSV）落到 `/tmp/` 并在 `STATUS.md` 引用路径（避免只剩结论没证据）。
   - 主观体验（输出可读/不卡）不作为性能结论，必须以 `eval tok/s` 为准。
 - **文档更新**：功能落地后同步更新 `IFAIRY_ARM_3W_LUT_STATUS.md`（tok/s 记录）、`IFAIRY_ARM_3W_LUT_API_PLAN.md`、`IFAIRY_ARM_3W_LUT_DESIGN.md` 与相关 `AGENTS.md`，确保无过时信息。
-- **llama-bench 口径落地（已完成）**：已统一更新表头/脚本/示例命令并清理旧的 `llama-cli` 性能口径；后续只需持续维护 `STATUS.md` 的 bench 记录。
 
 ### 6.0.1 回归恢复（仅在 tok/s 明显回落时启用）
+
+<details>
+<summary>展开：回退手册（归档）</summary>
 
 > 背景：在 `0ec52a5a` 之后出现过大幅性能回归（详见 `IFAIRY_LUT_PERF_REGRESSION_ANALYSIS.md`）。当前（2025-12-18）已恢复到并超过该档位，因此恢复步骤保留为“回退手册”，但默认冻结（避免在达标后继续扩大热路径改动面）。
 
@@ -169,9 +170,58 @@ struct ifairy_lut_extra {
 - 建议先“冻结 R1/R2/R3”，把当前状态稳定住：避免在已经达标时继续改动热路径扩面导致新的不可控回归；后续若 tok/s 再次回落或确有上限诉求，再按 R1→R2→R3 做 A/B。
 - 复盘与后续方向以《IFAIRY_LUT_PERF_ANALYSIS_20251218.md》为准：继续压 `qgemm_ex`，并正面处理 `ggml_graph_compute_thread`（同步/调度）占比偏高的问题。
 
-### 6.1（恢复后）继续压 `ggml_ifairy_lut_qgemm_ex` 热点（`compact` 优先）
+</details>
+
+### 6.1（decode 优先）降低 `ggml_graph_compute_thread` 的框架开销（同步/调度）
+
+目标：减少 barrier 与小 kernel 调度开销，让更多时间落在“有效算术”。
+
+分析结论（2025-12-18）：`ggml_graph_compute_thread` 占比约 30.5%，decode 场景更容易被同步/调度吞没。
+
+建议动作：
+
+- **优先：减少“缓存命中时仍然同步”的开销**：例如 `transform_tensor` 若命中缓存（indexes 已存在且不会再变），应避免每次 mul_mat 都做一次全线程 barrier（只在首次生成/真正做了 transform 时 barrier）。
+- **decode 线程策略复评（用数据说话）**：`N==1` 时 threads 未必越多越快；优先做“可回退的 auto-clamp + env override”，避免把策略写死。
+  - 建议先落地：`N==1` 时按 `M*K*N` 的估算工作量做保守阈值判断，小于阈值则自动 clamp 到 1~2 threads（并保留 `GGML_IFAIRY_LUT_DECODE_NTH` 强制/上限开关用于 A/B）。
+- **env 解析/分发只做一次**：把 LUT 相关 env 读取/解析收敛到 thread0 一次（同一节点内复用同一份 config），避免每线程反复 `getenv + parse` 把开销放大到 decode 热路径。
+- 继续减少 LUT 路径里的 barrier 次数（尤其 tiled/BK 版本），能用 `FULLACC` 解决的重复构表/重复同步尽量消掉。
+- 检查是否存在“很小但很频繁”的额外拷贝/转换可在 LUT 路径合并或延后。
+- 对 decode 场景（`N≈1`）重新评估线程数与切分策略，避免线程空转/争用（以 profile 里线程等待为准）。
+- ✅ 已做（`a3296bec`）：当 `src1=F32` 且 `N < nth`（常见 `N==1`）时，激活量化改为按 `K/QK_K` block 做 range 分片，避免“只有 thread0 量化，其它线程 barrier 等待”。
+
+实现进度（对照代码）：
+
+- ✅ decode-like 量化分片：`src1=F32` 且 `N < nth` 时按 `K/QK_K` block 做 range 分片（`ggml/src/ggml-cpu/ggml-cpu.c`）。
+- TODO indexes cache 命中时仍然 barrier：目前即使 indexes 已存在，也会无条件 `ggml_barrier`（`ggml/src/ggml-cpu/ggml-cpu.c`）。
+- TODO decode 线程数策略开关：尚未实现 `GGML_IFAIRY_LUT_DECODE_NTH`（或类似）来强制 `N==1` 用 1/2/4 threads 做 A/B。
+- TODO auto-clamp threads：尚未实现 `GGML_IFAIRY_LUT_DECODE_THRESHOLD`（或类似）来让 `N==1` 在小工作量下默认收敛到少线程（并保留可关闭的回退路径）。
+
+验收（至少满足其一，并记录到 `STATUS.md`）：
+
+- decode 基准命令下 `eval tok/s` 相对当前基线提升 ≥ 10%（同一机器/同一冷却口径/同一 seed）。
+- profile 中 `ggml_graph_compute_thread` 占比下降至少 5 p.p.（例如从 ~30% → ≤25%），且 `eval tok/s` 不回退。
+
+### 6.2（decode 优先）继续压 `ggml_ifairy_lut_qgemm_ex` 热点（`compact` 优先）
 
 目标：把 decode 常见的 `N≈1` 进一步提速，并让 `compact` 在 Apple Silicon 上稳定胜出。
+
+（精简版）
+
+- 结构性：优先降低 `compact` 每 group 的查表/地址计算/依赖链开销（以 profile 证据驱动）。
+- 调优：`GGML_IFAIRY_LUT_N1_FASTPATH` / `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL` / `GGML_IFAIRY_LUT_PREFETCH(_DIST)` 仅用于 perf-safe A/B（最终以 `STATUS.md:0.1` 的 bench 记录为准）。
+- 历史失败案例/原始日志：统一留在 `IFAIRY_ARM_3W_LUT_STATUS.md`（避免在本文重复维护导致过时）。
+
+实现进度（对照代码）：
+
+- ✅ `N==1` fast-path（非 strict）：`GGML_IFAIRY_LUT_N1_FASTPATH`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
+- ✅ `compact N==1` unroll A/B：`GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
+- ✅ prefetch A/B + 距离：`GGML_IFAIRY_LUT_PREFETCH=0/1`、`GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
+- ✅ `sdot`（dotprod）实验内核（仅 `N==1`）：`GGML_IFAIRY_LUT_KERNEL=sdot`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
+- TODO `GGML_IFAIRY_LUT_KERNEL=tbl|merged64`：实现已占位但会 warn 并回退（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）；落地计划迁移至 `IFAIRY_ARM_3W_LUT_ROADMAP.md`。
+- TODO `compact2`：曾作为 2-lookups 方向尝试，但未合入当前实现（代码中没有该 layout 分支）。
+
+<details>
+<summary>展开：详细任务拆解与历史记录（归档）</summary>
 
 > 性能分析（见 `IFAIRY_LUT_PERF_ANALYSIS_20251218.md`）：`qgemm_ex` 约 53.5% + `ggml_graph_compute_thread` 约 30.5%，因此“算子优化 + 框架开销”要并行推进。
 
@@ -195,25 +245,25 @@ struct ifairy_lut_extra {
 验收（至少满足其一，并记录到 `STATUS.md`）：
 
 - decode 场景下 `eval tok/s` 相对当前基线提升 ≥ 10%；或
-- profile 中 `ggml_ifairy_lut_qgemm_ex` 占比下降到 < 55%。
+- profile 中 `ggml_ifairy_lut_qgemm_ex` 的自耗时（self time）相对基线下降 ≥ 15%（同一命令/同一线程数；避免被“其它开销变化”掩盖结论）。
 
-### 6.2 优先级 2：降低 `ggml_graph_compute_thread` 的框架开销（同步/调度）
+</details>
 
-目标：减少 barrier 与小 kernel 调度开销，让更多时间落在“有效算术”。
+### 6.3 可选：形状专用 fast-path（decode 优先，谨慎引入）
 
-分析结论（2025-12-18）：`ggml_graph_compute_thread` 占比约 30.5%，decode 场景更容易被同步/调度吞没。
+> 原则：只为 1~2 个最热形状提供 fast-path，并且必须有 env gating 与可回退机制；避免维护成本失控。
 
 建议动作：
 
-- **优先：减少“缓存命中时仍然同步”的开销**：例如 `transform_tensor` 若命中缓存（indexes 已存在且不会再变），应避免每次 mul_mat 都做一次全线程 barrier（只在首次生成/真正做了 transform 时 barrier）。
-- **decode 线程策略复评（用数据说话）**：`N==1` 时 threads 未必越多越快；允许用 env 加开关做实验，避免把策略写死。
-  - 建议优先做一个低风险试验：为 `N==1` 增加“单线程/少线程”可控开关（例如 `GGML_IFAIRY_LUT_DECODE_NTH=1/2/4`），严格 A/B 验证是否能降低 `ggml_graph_compute_thread` 占比并抬升 tok/s。
-- 继续减少 LUT 路径里的 barrier 次数（尤其 tiled/BK 版本），能用 `FULLACC` 解决的重复构表/重复同步尽量消掉。
-- 检查是否存在“很小但很频繁”的额外拷贝/转换可在 LUT 路径合并或延后。
-- 对 decode 场景（`N≈1`）重新评估线程数与切分策略，避免线程空转/争用（以 profile 里线程等待为准）。
-- ✅ 已做（`a3296bec`）：当 `src1=F32` 且 `N < nth`（常见 `N==1`）时，激活量化改为按 `K/QK_K` block 做 range 分片，避免“只有 thread0 量化，其它线程 barrier 等待”。
+- 先用 profile/日志收集最热 `(M,K,N)`（至少区分 prefill vs decode），只对 top1~2 形状做专用化；其余仍走通用 LUT。
+- fast-path 必须满足：`strict` 下可回退、可按 env 完全关闭、并且不会把代码拆成“形状模板爆炸”。
 
-### 6.3 优先级 3：让 BK/BM tiling “不再变慢”，并可稳定获益
+实现进度（对照代码）：
+
+- ✅ 已有：`N==1` fast-path（`GGML_IFAIRY_LUT_N1_FASTPATH`）。
+- TODO 更激进专用化：例如进一步减少分支/指针运算、固定 stride/accumulator 布局、或覆盖 `N==2` 等常见 decode 形状（需先用 profile/日志确认收益空间）。
+
+### 6.4（prefill 优先）让 BK/BM tiling “不再变慢”，并可稳定获益
 
 目标：在更大 K/prefill 场景下，BK/BM 不引入额外同步瓶颈；`FULLACC` 能稳定 amortize `preprocess + barrier`。
 
@@ -224,80 +274,52 @@ struct ifairy_lut_extra {
 - 把 `preprocess_ex` 的切分策略固定为“对 N 或 group 做分片”，避免 false sharing 与 “线程 0 构表、其余等待”。
 - 调参只用 sweep 驱动（避免“凭直觉写死 BK/BM”）：优先用 `scripts/ifairy_lut_sweep.sh` 固定 seed/prompt 跑完再决定默认策略。
 
-### 6.4 降低 LUT 工作区与带宽（提高上限）
+实现进度（对照代码）：
+
+- ✅ BK/BM/FULLACC：`GGML_IFAIRY_LUT_BK_BLOCKS` / `GGML_IFAIRY_LUT_BM` / `GGML_IFAIRY_LUT_FULLACC`（`ggml/src/ggml-cpu/ggml-cpu.c` 与 `ggml/src/ggml-ifairy-lut.cpp`）。
+- 部分实现：tiled 下 LUT double buffer（thread0 预处理下一 tile）用于减少等待（`ggml/src/ggml-cpu/ggml-cpu.c`）。
+
+验收（至少满足其一，并记录到 `STATUS.md`）：
+
+- prefill 主导的基准（例如 `--n-prompt` 较大、`--n-gen` 较小或为 0）下：最优 BK/BM/FULLACC 组合的 tok/s 不低于 `BK=0` 基线（同一冷却口径）。
+- 若出现“prefill 变快但 decode 变慢”，必须把默认策略收敛为：decode 不触发 tiling/尽量少同步，仅在 prefill 场景启用 tiling（并保留 env 强制复现）。
+
+### 6.5 降低 LUT 工作区与带宽（提高上限）
 
 目标：在不破坏 `w * conj(x)` 语义的前提下，继续降低 per-group 指令数与工作区读写。
 
 - 固定 `compact` 的带宽优势：保持 `48B/group`，避免“表变大但算力没下降”的回退。
 - 优先把 `qgemm_ex` 内部累加保持在 `int32`，只在 block/row 级做一次 `float` 缩放与写回。
 - 谨慎探索更激进的 LUT 合并方案（例如减少 position 查表次数），必须有 profile 证据 + A/B 记录支撑。
+- 工作区布局与对齐：确保 `lut/indexes/scales/tmp` 访问尽量线性且 64B 对齐，避免因误对齐/跨 cacheline 造成的额外 load/store（先用 profile 验证，再决定是否值得改布局）。
 
-### 6.5 索引生命周期/缓存策略升级（工程化）
+### 6.6 索引生命周期/缓存策略升级（工程化）
 
 目标：减少重复索引构建与全局状态副作用，确保复用清晰、释放可控。
 
 - 维持 “相同权重 data 只生成一次 index” 的缓存策略，并确保 `ggml_ifairy_lut_free()` 能完全回收。
+- cache 命中路径尽量做到“只读 + 低锁/无锁”（避免 decode 热路径每次都碰全局锁）；若必须加锁，优先把锁移到“首次构建”分支，并确保可观测（debug 日志或统计）。
 - 如需更精细的生命周期管理，优先考虑按 ctx/graph 绑定或 refcount，避免引入难以追踪的全局泄漏。
 
-### 6.6 再做 BM/BK 调参（放在结构优化之后）
+### 6.7 再做 BM/BK 调参（放在结构优化之后）
 
-- 在 6.1/6.2/6.3 有明确进展前，不建议依赖 `BK/BM` 调参提升吞吐。
-- 统一用 `scripts/ifairy_lut_sweep.sh` 做 sweep，固定 seed/prompt/token 并保留日志。
+- 在 6.1/6.2/6.4 有明确进展前，不建议依赖 `BK/BM` 调参提升吞吐。
+- 统一用 `scripts/ifairy_lut_sweep.sh` 做 sweep，固定 seed/prompt/token，并区分 decode/prefill 口径输出与留档（避免“只看一个 tok/s 指标”误判）。
 
-### 6.7 可选：形状专用 fast-path（谨慎引入）
+### 6.8 候选布局/内核路线图（TBL / merged64 等）
 
-> BitNet TL1 通过“少量固定形状专用内核”换取吞吐上限。iFairy 若要走这条路，必须先用 profile/日志确认最热 `(M,K,N)`，再只为 1~2 个形状提供 fast-path，避免维护成本失控。
-
-> 当前约定：本阶段先不考虑 6.7（除非回归恢复完成且 profile 明确显示收益空间）。
-
-可选落地方向：
-
-- decode 形状 `N==1` 的进一步专用化（例如减少分支、固定 stride、固定 accumulator 布局）。
-- 对最热形状做有限度的模板化（避免在代码库里散落大量形状分支）。
-
-### 6.8 80 tok/s 路线图评估与实现方案（对齐 review#11）
-
-> 来自《CODE_REVIEW_lwt_3_LUT_COMPREHENSIVE.md#11》的方向与 6.1~6.4 基线一致，但为了可回退/可验证，需要拆成可 A/B 的小步，并把“布局变化”与“kernel 变化”解耦。目标仍以 decode（`N==1`）为主，优先提升 `compact`。
-
-#### 6.8.1 评估结论（采纳/调整/暂缓）
-
-- **采纳**：SDOT、TBL 向量查表、循环流水线、预取优化（含 indexes）、减少 barrier、批量索引解码；`64-pattern` 合并在满足工作集与场景前提时尝试。
-- **调整**：`24B/group` 级别的工作集压缩只有在 **qgemm 指令数明显下降** 的前提下才推进；64B 对齐策略需结合 L1/L2 命中率验证，避免“对齐变大反而更慢”。
-- **暂缓**：近似计算（窄累加器/跳过 groups）风险高，必须先给出严格对照与误差证明，否则不纳入 P0-P2。
-
-#### 6.8.2 阶段 1（P0，目标 30~35 tok/s）
-
-- **SDOT 内核试验（`compact`）**：在 `ggml/src/ggml-ifairy-lut-qgemm.cpp` 增加 `__ARM_FEATURE_DOTPROD` 路径（仅 `N==1`），把 “widen+add” 改为 “dot accumulate”。  
-  - 已引入实验开关：`GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`，默认 auto；strict 下仍走通用路径。  
-  - 若需要新布局（例如 code-major 或更易对齐的 12B/pos 打包），在 `ggml/src/ggml-ifairy-lut-preprocess.cpp` 以 **新 layout** 实现，避免修改现有 `compact`。
-  - 现状：已把 `sdot` 分支外提到 group-loop 外以减少 per-group 分支，但 M4 上 `sdot` 仍偏慢（`tg32` 10.61 vs `auto` 12.77；见 `IFAIRY_ARM_3W_LUT_STATUS.md` 0.1 记录）；TODO 继续“为 `vdotq_s32` 调整为 16B 对齐的 group 布局”。
-- **预取优化**：在 `ggml/src/ggml-ifairy-lut-qgemm.cpp` 同时预取 LUT 与 indexes，预取距离改为可配置常量（计划新增 `GGML_IFAIRY_LUT_PREFETCH_DIST`，默认 2~3）。  
-  - 移除热循环内的运行时分支（保留编译期/一次性开关），减少分支开销。
-- **减少 barrier（tiling）**：在 `ggml/src/ggml-cpu/ggml-cpu.c` 的 BK 路径引入 “双缓冲 + 单 barrier” 流程：thread0 预处理下一 tile，其它线程处理当前 tile，保证每 tile 只同步一次。
-- **寄存器压力控制**：优先用 `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL` 做 A/B，暂不引入 inline asm；如有明显 spill，再考虑局部手写汇编。
-- **暂停/回归调查（已定位为环境因素）**：近期 bench 的 tok/s 下滑主要来自系统处于低电量模式（`pmset -g` 显示 `lowpowermode 1`），同一 commit（`fe740e0a`）复跑也降至 ~4-6 tok/s，说明非代码回归。  
-  - 处理：关闭低电量模式/降低后台负载后再做 ABABAB + 长测复核；低电量下的 tok/s 记录不作为基线。已在接电状态完成 3-run 长测（pp128 mean 3.296, tg256 mean 17.901，详见 `IFAIRY_ARM_3W_LUT_STATUS.md`）。
-
-#### 6.8.3 阶段 2（P1，目标 45~55 tok/s）
-
-- **TBL 向量查表（新增 layout）**：在 `ggml/src/ggml-ifairy-lut-preprocess.cpp` 生成 “per-channel, 64-pattern” 表（`int8`/`int16`），并在 `ggml/src/ggml-ifairy-lut-qgemm.cpp` 使用 `vqtbl4q_s8` 批量查表。  
-  - 计划新增 `GGML_IFAIRY_LUT_LAYOUT=tbl64`，并用 `GGML_IFAIRY_LUT_KERNEL=tbl` 强制 A/B；strict 下禁用。
-- **工作集与 L1 适配**：对 `compact`/`tbl64` 增加 K-tile（例如 `blocks_per_tile=14`）以使 LUT 驻留 L1；与 `GGML_IFAIRY_LUT_BK_BLOCKS` 统一策略，保留 env override。
-- **二维分块调度**：在 `ggml-cpu.c` 以 `(row_block, k_tile)` 分块并做蛇形遍历，提高缓存复用并减少跨核争用。
-
-#### 6.8.4 阶段 3（P2，目标 70~80 tok/s）
-
-- **`64-pattern` 合并表（新增 layout）**：在 preprocess 端生成 “pattern → {ac,ad,bc,bd}” 的 64 项表，`qgemm` 端做到 “一次查表 + 累加”。  
-  - 仅在 `M` 足够大或 `BK` tiling 生效时启用（工作集明显变大），计划新增 `GGML_IFAIRY_LUT_LAYOUT=merged64` 并设置 auto 门槛；`GGML_IFAIRY_LUT_KERNEL=merged64` 可强制 A/B。
-- **批量索引解码**：在 `qgemm` 端用 NEON 批量读取 16 个 pattern，结合 TBL 或 merged 表一次处理多 group。
-- **循环流水线**：在 group 循环引入 “load-next / compute-now” 的软件流水线，配合 2-way unroll，避免寄存器溢出。
-
-#### 6.8.5 验收与回退机制（与 6.0 口径一致）
-
-- 每个阶段都必须：`test-ifairy` + strict 通过，且在 `IFAIRY_ARM_3W_LUT_STATUS.md` 追加 tok/s 记录与 raw 日志路径。
-- 新 layout/kernel 全部以 env gating，默认 auto；出现回退时可以一键切回 `compact`/`legacy`。
+候选方案（`tbl64` / `merged64` / 批量索引解码 / 减少 barrier 等）的落地计划与验收口径已迁移到专门文档：`IFAIRY_ARM_3W_LUT_ROADMAP.md`。
 
 ## 7. 工程地基（并行推进，避免性能“回归/难复现”）
+
+（精简版）
+
+- 跑分口径与原始日志留档：以 `IFAIRY_ARM_3W_LUT_STATUS.md` 为准（`0.1 tok/s 记录` + `/tmp/` raw 日志引用）。
+- correctness gate：`test-ifairy` + `GGML_IFAIRY_LUT_VALIDATE_STRICT=1`。
+- 详细 checklist 归档如下（避免在本文重复维护导致过时）。
+
+<details>
+<summary>展开：详细 checklist（归档）</summary>
 
 > 性能冲刺不等于忽略地基；这些问题一旦踩中，会直接把 tok/s 或可复现性拉垮。
 
@@ -328,3 +350,5 @@ struct ifairy_lut_extra {
   - 并发 transform：`test_ifairy_lut_transform_cache()`。
   - 形状对齐/路由：`test_ifairy_lut_transform_invalid_shape()`（`K % QK_K != 0`）。
   - 关键 env 语义：`test_ifairy_lut_env_semantics()` + `test_ifairy_lut_layout_auto_policy()`。
+
+</details>

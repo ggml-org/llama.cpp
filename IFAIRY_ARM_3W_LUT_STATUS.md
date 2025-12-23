@@ -1,6 +1,10 @@
 # iFairy ARM 3‑Weight LUT · 现状与后续工作（NEON 标量混合版）
 
-本文记录当前 `GGML_IFAIRY_ARM_LUT`（CPU-only）下 iFairy 3-weight LUT 的代码现状（含 NEON 加速实现）、可复现的 tok/s 记录、以及下一步工作列表。接口/路由约定见 `IFAIRY_ARM_3W_LUT_API_PLAN.md`，算法与数据结构见 `IFAIRY_ARM_3W_LUT_DESIGN.md`；80 tok/s 的分阶段路线图与实现方案统一收敛在 `IFAIRY_ARM_3W_LUT_API_PLAN.md` 的 `6.8`。
+本文记录当前 `GGML_IFAIRY_ARM_LUT`（CPU-only）下 iFairy 3-weight LUT 的代码现状（含 NEON 加速实现）、可复现的 tok/s 记录、以及下一步工作列表。接口/路由约定见 `IFAIRY_ARM_3W_LUT_API_PLAN.md`，算法与数据结构见 `IFAIRY_ARM_3W_LUT_DESIGN.md`。
+
+候选布局/内核（例如 `tbl64`）的落地路线图见 `IFAIRY_ARM_3W_LUT_ROADMAP.md`；跑分记录仍统一只写在本文的 `0.1 tok/s 记录`。
+
+性能提升规划（主线，6.1-6.8）已统一维护在 `IFAIRY_ARM_3W_LUT_API_PLAN.md` 的 `## 6`，本文仅保留可复现 tok/s 记录与必要的回归手册。
 
 ## 0. 快速使用（建议默认）
 
@@ -28,18 +32,13 @@
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` fast-path 里 group-loop 的 4-way unroll（默认 `4`；设为 `2` 用于 A/B，对照“2-way 是否反而更快”）
 - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`）；当前仅 `sdot` 在 `N==1` 快路上可用，`tbl/merged64` 为预留。
 
-计划新增（未实现，先做文档约定）：
-
-- `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64`：新增 LUT 布局（配合 TBL / merged64 方案），默认仍由 `auto` 策略决定。
-
 ## 0.0 当前共识（按优先级）
 
-> 更新：`0ec52a5a` 之后出现大幅 tok/s 回归（见 `IFAIRY_LUT_PERF_REGRESSION_ANALYSIS.md`）。因此当前优先级以“先恢复到已验证过的高 tok/s 档位”为最高主线；地基工作并行推进，但不再驱动新的热路径改动扩面。
+> 更新：当前 baseline 以 `0.1.0` 的 `llama-bench` 3-run 记录为准；接下来优先级以“可复现 + 小步 A/B + 可回退”为主，不再以扩展热路径复杂度为驱动。
 
-- P0（主线）：回归恢复 —— 先把 tok/s 拉回 `0ec52a5a` 档位（按 `## 4` 的 recovery steps 逐个回退/对照）。
-- P0（并行）：可复现性与回归门槛 —— 固定命令/固定 seed/固定 build 目录；`test-ifairy + strict` 必跑，tok/s 必记录。
-- P1：错误处理/路由健壮性 —— 只做“不影响热路径”的硬化与可观测性（现阶段已补齐一部分，见 `## 2` 摘要）。
-- P2：可维护性重构/线程安全/生命周期 —— 在回归恢复完成后再推进（避免重构掩盖性能回归点）。
+- P0：可复现性与回归门槛 —— 固定命令/固定 seed/固定 build 目录；`test-ifairy + strict` 必跑，tok/s 必记录并留 raw 日志路径。
+- P1：吞吐提升 —— 优先压 `qgemm_ex`（让 `compact` 更稳），并降低 decode 场景的同步/调度开销（以 profile + bench 记录为准）。
+- P2：可维护性 —— 仅在性能稳定后再做生命周期/线程安全等重构，避免掩盖性能回归点。
 
 ## 0.1 tok/s 记录（更新本文档时必填）
 
@@ -115,7 +114,7 @@ Note: 2025-12-22 runs showing a large drop were captured with low power mode ena
 
 更新（长测 3-run，热漂移/outlier 示范，**不作为结论**）：在 `12c83d14` 下用 `legacy/compact` 交替跑且只 `sleep 8`，得到 `legacy mean=15.55 min=14.06 max=16.76`；`compact mean=13.23 min=9.32 max=16.69`（`compact` 出现明显 outlier）。这类结果应先冷却（加大间隔）后重测再谈 A/B。
 
-更新（长测 3-run，冷却后可复现，作为当前 baseline 参考）：在 `12c83d14` 下用 `legacy/compact` 交替跑，`initial sleep 120 + 每次 sleep 75`，得到 `legacy mean=19.47 min=18.39 max=20.43`；`compact mean=17.02 min=16.12 max=18.24`。结论：当前 `compact` 仍未稳定胜出，下一步应按 `API_PLAN.md:6.1` 继续压 `qgemm_ex(compact)`。
+更新（长测 3-run，冷却后可复现，作为当前 baseline 参考）：在 `12c83d14` 下用 `legacy/compact` 交替跑，`initial sleep 120 + 每次 sleep 75`，得到 `legacy mean=19.47 min=18.39 max=20.43`；`compact mean=17.02 min=16.12 max=18.24`。结论：当前 `compact` 仍未稳定胜出，下一步应按 `API_PLAN.md:6.2` 继续压 `qgemm_ex(compact)`。
 
 更新（长测 3-run，冷却后可复现，作为当前 baseline 参考）：在 `8b02f3b4+dirty`（本地 `GGML_IFAIRY_LUT_PREFETCH` env cache 变更）下用 `legacy/compact` 交替跑，`initial sleep 180 + 每次 sleep 90`，得到 `legacy mean=19.45 min=18.99 max=20.23`；`compact mean=16.80 min=15.35 max=18.47`。说明：`compact` 波动仍偏大且均值仍落后，继续按 `6.1` 聚焦压 `qgemm_ex(compact)`。
 
@@ -287,7 +286,14 @@ Note: 2025-12-22 runs showing a large drop were captured with low power mode ena
 
 ## 4. 后续工作（按优先级）
 
-> 更新：`0ec52a5a` 之后出现大幅 tok/s 回归，当前先以“回归恢复”为主线（详见 `IFAIRY_LUT_PERF_REGRESSION_ANALYSIS.md`）。本节先列 recovery steps，再列“恢复后继续优化”的原计划。
+> 更新：当前 baseline 以 `0.1.0` 的 bench 记录为准；下方详细“计划/路线图/回归手册”主要作为历史备忘，默认不驱动新的扩面改动（以可复现的小步 A/B 为主）。
+
+- P0：正确性与回归门槛 —— `test-ifairy` + `GGML_IFAIRY_LUT_VALIDATE_STRICT=1` 必跑，必要时用 `scripts/ifairy_lut_repro.sh` 一键复现。
+- P1：吞吐提升 —— 优先压 `qgemm_ex`（让 `compact` 更稳），并降低 decode 场景的同步/调度开销（以 profile + `0.1` 的 bench 记录为准）。
+- P2：结构与维护 —— BK/BM/FULLACC 调参、索引生命周期/缓存策略等，放在结构性开销下降后再推进。
+
+<details>
+<summary>展开：历史计划/路线图/回归手册（归档）</summary>
 
 ### 4.0 回归恢复（最高优先级：先回到 `0ec52a5a` 的 tok/s 档位）
 
@@ -382,11 +388,16 @@ Note: 2025-12-22 runs showing a large drop were captured with low power mode ena
    - 已补充 `tests/test-ifairy.cpp` 的 **CPU backend tiling 回归**：固定小形状（`K=512` 强制多 tile），对比 tiling 与非 tiling 输出 **bitwise 一致**。  
    - 继续补充 “LUT vs reference” 单测形状覆盖，并固定 `llama-bench` 命令/seed 记录 LUT=0 vs LUT=1 tok/s；必要时用 `llama-perplexity` 做对照。
 
+</details>
+
 ## 5. 进一步性能提升路线图（参考 `BitNet/docs/lut-arm.md`）
 
-> 注：本节属于“回归恢复完成后的长期路线图”。在 tok/s 未恢复前，先不要以此为导向继续扩展热路径复杂度。
+> 注：本节仅用于借鉴思路；不代表 iFairy 当前实现/约束。结论与计划以 `IFAIRY_ARM_3W_LUT_API_PLAN.md` 与 `0.1 tok/s 记录` 为准。
 
 `BitNet/docs/lut-arm.md` 的 ARM LUT 实现有几个很“工程化”的性能关键点：**int8 QLUT + `vqtbl` 查表**、**int32 累加**、**更少的 scale/元数据**、以及（在它的约束下）**对固定形状做专用内核**。（iFairy 的 `compact` 布局当前用 32-bit load 查表；`vqtbl` 版本曾尝试但在 M4 上更慢。）iFairy 这条 3-weight LUT 路径虽然语义/布局不同，但可以借鉴同样的方向来继续提速。
+
+<details>
+<summary>展开：BitNet 摘要与映射（归档）</summary>
 
 ### 5.1 BitNet ARM LUT 的关键做法（可借鉴的点）
 
@@ -419,3 +430,5 @@ Note: 2025-12-22 runs showing a large drop were captured with low power mode ena
 1) 先把 **`compact int8` LUT 压缩方案**做出一个 correctness 版本（严格对照 + 单测覆盖），明确误差与内存/速度收益。  
 2) 再把它接入现有 `BK/BM/FULLACC` 框架，跑 sweep 找稳定配置，并用 `llama-bench` 固定 prompt/seed 记录 tok/s。  
 3) 最后再决定是否要走 BitNet 那种“形状专用内核”的路线（收益高，但维护成本也高）。
+
+</details>
