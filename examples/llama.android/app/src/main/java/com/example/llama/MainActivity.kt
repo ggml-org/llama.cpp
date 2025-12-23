@@ -157,20 +157,20 @@ class MainActivity : AppCompatActivity() {
      * Validate and send the user message into [InferenceEngine]
      */
     private fun handleUserInput() {
-        userInputEt.text.toString().also { userSsg ->
-            if (userSsg.isEmpty()) {
+        userInputEt.text.toString().also { userMsg ->
+            if (userMsg.isEmpty()) {
                 Toast.makeText(this, "Input message is empty!", Toast.LENGTH_SHORT).show()
             } else {
                 userInputEt.text = null
                 userActionFab.isEnabled = false
 
                 // Update message states
-                messages.add(Message(UUID.randomUUID().toString(), userSsg, true))
+                messages.add(Message(UUID.randomUUID().toString(), userMsg, true))
                 lastAssistantMsg.clear()
                 messages.add(Message(UUID.randomUUID().toString(), lastAssistantMsg.toString(), false))
 
                 lifecycleScope.launch(Dispatchers.Default) {
-                    engine.sendUserPrompt(userSsg)
+                    engine.sendUserPrompt(userMsg)
                         .onCompletion {
                             withContext(Dispatchers.Main) {
                                 userActionFab.isEnabled = true
