@@ -164,6 +164,14 @@ void ggml_quantize_mat_q8_K_4x1_generic(const float * GGML_RESTRICT x, void * GG
         }
     }
 }
+
+void ggml_repack_mat_f16_7x1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    ggml_repack_mat_f16_NxK_generic<7, 1>(x, vy, k);
+}
+
+void ggml_repack_mat_f32_7x1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    ggml_repack_mat_f32_NxK_generic<7, 1>(x, vy, k);
+}
 #endif
 
 void ggml_quantize_mat_q8_0_4x4_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
@@ -344,16 +352,6 @@ void ggml_quantize_mat_q8_K_4x8_generic(const float * GGML_RESTRICT x, void * GG
     }
 }
 
-#if defined __riscv_zvfh
-void ggml_repack_mat_f16_7x1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
-    ggml_repack_mat_f16_NxK_generic<7, 1>(x, vy, k);
-}
-
-void ggml_repack_mat_f32_7x1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
-    ggml_repack_mat_f32_NxK_generic<7, 1>(x, vy, k);
-}
-#endif
-
 } // extern "C"
 
 template <int64_t NB_ROWS, int64_t INTER_SIZE, ggml_type PARAM_TYPE>
@@ -384,20 +382,18 @@ template <> void ggml_repack_mat_t<4, 8, GGML_TYPE_Q8_K>(const float * GGML_REST
 }
 
 #if defined __riscv_zvfh
-template <> void ggml_quantize_mat_t<1, GGML_TYPE_Q8_0>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
+template <> void ggml_repack_mat_t<4, 1, GGML_TYPE_Q8_0>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
     assert(nrow == 4);
     UNUSED(nrow);
     ggml_quantize_mat_q8_0_4x1(x, vy, n_per_row);
 }
 
-template <> void ggml_quantize_mat_t<1, GGML_TYPE_Q8_K>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
+template <> void ggml_repack_mat_t<4, 1, GGML_TYPE_Q8_K>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
     assert(nrow == 4);
     UNUSED(nrow);
     ggml_quantize_mat_q8_K_4x1(x, vy, n_per_row);
 }
-#endif
 
-#if defined __riscv_zvfh
 template <> void ggml_repack_mat_t<7, 1, GGML_TYPE_F16>(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row) {
     assert(nrow == 7);
     UNUSED(nrow);
@@ -1845,9 +1841,7 @@ void ggml_gemv_q2_K_16x1_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
         }
     }
 }
-#endif
 
-#if defined __riscv_zvfh
 void ggml_gemv_f16_1x16_f16_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     ggml_gemv_f16_KxM_f16_generic<1, 16>(n, s, bs, vx, vy, nr, nc);
 }
@@ -2944,9 +2938,7 @@ void ggml_gemm_q2_K_16x1_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
         }
     }
 }
-#endif
 
-#if defined __riscv_zvfh
 void ggml_gemm_f16_7x1x16_f16_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     ggml_gemm_f16_NxKxM_f16_generic<7, 1, 16>(n, s, bs, vx, vy, nr, nc);
 }
@@ -4286,9 +4278,7 @@ template <> int repack<block_q8_0, 1, 16>(struct ggml_tensor * t, const void * d
 template <> int repack<block_q2_K, 1, 16>(struct ggml_tensor * t, const void * data, size_t data_size) {
     return repack_q2_K_to_q2_K_16_bl(t, 1, data, data_size);
 }
-#endif
 
-#if defined __riscv_zvfh
 template <> int repack<ggml_half, 1, 16>(struct ggml_tensor * t, const void * data, size_t data_size) {
     return repack_f16_to_f16_MxK_bl<16, 1>(t, data, data_size);
 }
@@ -4411,9 +4401,7 @@ template <> void gemv<block_q8_0, 1, 16, GGML_TYPE_Q8_0>(int n, float * s, size_
 template <> void gemv<block_q2_K, 1, 16, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemv_q2_K_16x1_q8_K(n, s, bs, vx, vy, nr, nc);
 }
-#endif
 
-#if defined __riscv_zvfh
 template <> void gemv<ggml_half, 1, 16, GGML_TYPE_F16>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemv_f16_1x16_f16(n, s, bs, vx, vy, nr, nc);
 }
@@ -4523,28 +4511,26 @@ template <> void gemm<block_q8_0, 4, 8, 4, GGML_TYPE_Q8_0>(int n, float * s, siz
 }
 
 #if defined __riscv_zvfh
-template <> void gemm<block_q4_0, 1, 16, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_q4_0, 4, 1, 16, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q4_0_16x1_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_q4_K, 1, 16, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_q4_K, 4, 1, 16, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q4_K_16x1_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_iq4_nl, 1, 16, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_iq4_nl, 4, 1, 16, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_iq4_nl_16x1_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_q8_0, 1, 16, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_q8_0, 4, 1, 16, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q8_0_16x1_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_q2_K, 1, 16, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <> void gemm<block_q2_K, 4, 1, 16, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q2_K_16x1_q8_K(n, s, bs, vx, vy, nr, nc);
 }
-#endif
 
-#if defined __riscv_zvfh
 template <> void gemm<ggml_half, 7, 1, 16, GGML_TYPE_F16>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_f16_7x1x16_f16(n, s, bs, vx, vy, nr, nc);
 }
@@ -4991,23 +4977,19 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
     // These implement outer-product style matrix multiplication kernels with
     // an interleave of 1.
 #if defined __riscv_zvfh
-    static const ggml::cpu::repack::tensor_traits<block_q4_0, 1, 16, GGML_TYPE_Q8_0> q4_0_16x1_q8_0;
-    static const ggml::cpu::repack::tensor_traits<block_q4_K, 1, 16, GGML_TYPE_Q8_K> q4_K_16x1_q8_K;
-    static const ggml::cpu::repack::tensor_traits<block_iq4_nl, 1, 16, GGML_TYPE_Q8_0> iq4_nl_16x1_q8_0;
-    static const ggml::cpu::repack::tensor_traits<block_q8_0, 1, 16, GGML_TYPE_Q8_0> q8_0_16x1_q8_0;
-    static const ggml::cpu::repack::tensor_traits<block_q2_K, 1, 16, GGML_TYPE_Q8_K> q2_K_16x1_q8_K;
-#endif
+    static const ggml::cpu::repack::tensor_traits<block_q4_0, 4, 1, 16, GGML_TYPE_Q8_0> q4_0_16x1_q8_0;
+    static const ggml::cpu::repack::tensor_traits<block_q4_K, 4, 1, 16, GGML_TYPE_Q8_K> q4_K_16x1_q8_K;
+    static const ggml::cpu::repack::tensor_traits<block_iq4_nl, 4, 1, 16, GGML_TYPE_Q8_0> iq4_nl_16x1_q8_0;
+    static const ggml::cpu::repack::tensor_traits<block_q8_0, 4, 1, 16, GGML_TYPE_Q8_0> q8_0_16x1_q8_0;
+    static const ggml::cpu::repack::tensor_traits<block_q2_K, 4, 1, 16, GGML_TYPE_Q8_K> q2_K_16x1_q8_K;
 
     // instance for F16
-#if defined __riscv_zvfh
     static const ggml::cpu::repack::tensor_traits<ggml_half, 7, 1, 16, GGML_TYPE_F16>  f16_7x16x1_f16;
     static const ggml::cpu::repack::tensor_traits<ggml_half, 7, 1, 32, GGML_TYPE_F16>  f16_7x32x1_f16;
     static const ggml::cpu::repack::tensor_traits<ggml_half, 7, 1, 64, GGML_TYPE_F16>  f16_7x64x1_f16;
     static const ggml::cpu::repack::tensor_traits<ggml_half, 7, 1, 128, GGML_TYPE_F16> f16_7x128x1_f16;
-#endif
 
     // instance for F32
-#if defined __riscv_zvfh
     static const ggml::cpu::repack::tensor_traits<float, 7, 1, 16, GGML_TYPE_F32> f32_7x16x1_f32;
     static const ggml::cpu::repack::tensor_traits<float, 7, 1, 32, GGML_TYPE_F32> f32_7x32x1_f32;
     static const ggml::cpu::repack::tensor_traits<float, 7, 1, 64, GGML_TYPE_F32> f32_7x64x1_f32;
