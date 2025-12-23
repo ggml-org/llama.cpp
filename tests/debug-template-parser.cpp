@@ -43,11 +43,24 @@ struct templates_params {
 
 int main(int argc, char ** argv) {
     if (argc < 2) {
-        std::cerr << "Usage: " << argv[0] << " <template_path>" << '\n';
+        std::cerr << "Usage: " << argv[0] << " <template_path> [--no-tools]" << '\n';
         return 1;
     }
 
     std::string template_path = argv[1];
+    bool with_tools = true;
+
+    // Parse command-line options
+    for (int i = 2; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "--no-tools") {
+            with_tools = false;
+        } else {
+            std::cerr << "Unknown option: " << arg << '\n';
+            std::cerr << "Usage: " << argv[0] << " <template_path> [--no-tools]" << '\n';
+            return 1;
+        }
+    }
     std::string template_source;
     try {
         template_source = read_file(template_path);
@@ -73,17 +86,32 @@ int main(int argc, char ** argv) {
         // Generate Parser
         templates_params params;
         params.messages = json::array();
-        params.tools    = {
-            { { "type", "function" },
-             { "function",
-                   { { "name", "test_tool" },
-                     { "description", "A test tool" },
-                     { "parameters",
-                       { { "type", "object" },
-                         { "properties", { { "arg1", { "type", "string" } }, { "arg2", { "type", "string" } } } },
-                         { "required", json::array({ "arg1", "arg2" }) } } } } } }
-        };
-        params.tool_choice         = COMMON_CHAT_TOOL_CHOICE_AUTO;
+
+        if (with_tools) {
+            // Create test tool schema properly using json::object()
+            json parameters_schema = json::object();
+            parameters_schema["type"] = "object";
+            parameters_schema["properties"] = json::object();
+            parameters_schema["properties"]["arg1"] = json::object({{"type", "string"}});
+            parameters_schema["properties"]["arg2"] = json::object({{"type", "string"}});
+            parameters_schema["required"] = json::array({"arg1", "arg2"});
+
+            json test_tool = json::array();
+            json tool_def = json::object();
+            tool_def["type"] = "function";
+            tool_def["function"] = json::object({
+                {"name", "test_tool"},
+                {"description", "A test tool"},
+                {"parameters", parameters_schema}
+            });
+            test_tool.push_back(tool_def);
+            params.tools = test_tool;
+            params.tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
+        } else {
+            // No tools - set tools to null
+            params.tools = json();
+            params.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
+        }
         params.parallel_tool_calls = false;
 
         auto parser_data = UniversalPEGGenerator::generate_parser(pattern, chat_template, params);
