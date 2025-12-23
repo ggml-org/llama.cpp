@@ -97,13 +97,20 @@
 		// Subtract cached tokens since they're processed instantly from KV cache
 		const actualProcessed = processed - cache;
 		const actualTotal = total - cache;
-
 		const percent = Math.round((actualProcessed / actualTotal) * 100);
+
+		// First chunk: show progress without ETA
+		if (actualProcessed === 0 || time_ms === 0) {
+			return `Processing (${actualProcessed.toLocaleString()} / ${actualTotal.toLocaleString()} tokens - ${percent}%)`;
+		}
+
+		// Subsequent chunks: calculate and show ETA
 		const tokensPerSec = actualProcessed / (time_ms / 1000);
 		const remaining = actualTotal - actualProcessed;
-		const eta = Math.ceil(remaining / tokensPerSec);
+		const etaSec = Math.ceil(remaining / tokensPerSec);
+		const etaDisplay = etaSec >= 60 ? `${Math.floor(etaSec / 60)}m${etaSec % 60}s` : `${etaSec}s`;
 
-		return `Processing (${actualProcessed.toLocaleString()} / ${actualTotal.toLocaleString()} tokens - ${percent}% - ETA: ${eta}s)`;
+		return `Processing (${actualProcessed.toLocaleString()} / ${actualTotal.toLocaleString()} tokens - ${percent}% - ETA: ${etaDisplay})`;
 	});
 
 	let currentConfig = $derived(config());
