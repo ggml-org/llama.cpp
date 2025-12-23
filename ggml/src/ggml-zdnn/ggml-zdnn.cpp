@@ -107,6 +107,20 @@ static void ggml_zdnn_compute_forward_leaky_relu(
     ggml_zdnn_leaky_relu(ctx, src0, dst, negative_slope);
 }
 
+static void ggml_zdnn_compute_forward_rms_norm(
+    const ggml_backend_zdnn_context * ctx,
+          ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];  // weight (optional)
+
+    // Get epsilon from op_params
+    float eps;
+    memcpy(&eps, dst->op_params, sizeof(float));
+
+    ggml_zdnn_rms_norm(ctx, src0, src1, dst, eps);
+}
+
 static bool ggml_zdnn_compute_forward_unary(
     const ggml_backend_zdnn_context * ctx,
           ggml_tensor * dst) {
@@ -189,6 +203,26 @@ static bool ggml_zdnn_compute_forward(
         case GGML_OP_SOFT_MAX:
             {
                 ggml_zdnn_compute_forward_softmax(ctx, dst);
+            } break;
+
+        case GGML_OP_RMS_NORM:
+            {
+                ggml_zdnn_compute_forward_rms_norm(ctx, dst);
+            } break;
+
+        case GGML_OP_GET_ROWS:
+            {
+                ggml_zdnn_get_rows(ctx, dst->src[0], dst->src[1], dst);
+            } break;
+
+        case GGML_OP_CONT:
+            {
+                ggml_zdnn_cont(ctx, dst->src[0], dst);
+            } break;
+
+        case GGML_OP_CPY:
+            {
+                ggml_zdnn_cpy(ctx, dst->src[0], dst);
             } break;
 
         case GGML_OP_UNARY:
@@ -358,6 +392,60 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                 return ggml_zdnn_is_supported_type(src0->type);
             } break;
 
+        case GGML_OP_RMS_NORM:
+            {
+                const ggml_tensor * src0 = op->src[0];
+
+                // Don't support view tensors (no extra buffer initialized)
+                if (src0->view_src != nullptr || op->view_src != nullptr) {
+                    return false;
+                }
+
+                if (!ggml_is_contiguous(src0)) {
+                    return false;
+                }
+
+                return ggml_zdnn_is_supported_type(src0->type);
+            } break;
+
+        case GGML_OP_GET_ROWS:
+            {
+                const ggml_tensor * src0 = op->src[0];
+                const ggml_tensor * src1 = op->src[1];
+
+                // Only support F32 source and output for now
+                if (src0->type != GGML_TYPE_F32) {
+                    return false;
+                }
+
+                // Indices must be I32
+                if (src1->type != GGML_TYPE_I32) {
+                    return false;
+                }
+
+                // Output must be F32
+                if (op->type != GGML_TYPE_F32) {
+                    return false;
+                }
+
+                // Must be contiguous
+                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+                    return false;
+                }
+
+                // GAP: Only support non-batched GET_ROWS for now
+                // Batched cases (ne[2] > 1 or ne[3] > 1 in indices) not yet implemented
+                if (src1->ne[1] > 1 || src1->ne[2] > 1) {
+                    return false;
+                }
+
+                return true;
+            } break;
+
+        // GAP: CONT and CPY not yet implemented due to buffer initialization issues
+        // case GGML_OP_CONT:
+        // case GGML_OP_CPY:
+
         case GGML_OP_UNARY:
             {
                 const ggml_tensor * src0 = op->src[0];
@@ -444,9 +532,8 @@ static ggml_backend_zdnn_context * ggml_zdnn_init(ggml_backend_dev_t dev) {
     GGML_LOG_INFO("%s: allocating\n", __func__);
     GGML_LOG_INFO("%s: found 1 device\n", __func__);
 
-    #ifdef STATIC_LIB
+    // Initialize zdnn library (checks ZDNN_DEBUG, ZDNN_PROFILE env vars)
     zdnn_init();
-    #endif
 
     ggml_backend_zdnn_context * ctx = new ggml_backend_zdnn_context();
     ggml_backend_zdnn_device_context * ctx_dev = (ggml_backend_zdnn_device_context *)dev->context;
