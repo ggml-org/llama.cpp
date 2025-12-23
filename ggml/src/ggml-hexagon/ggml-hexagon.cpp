@@ -2118,7 +2118,7 @@ enum dspqbuf_type {
 
 static void dspqbuf_dump(dspqueue_buffer * d, const struct ggml_tensor * t, dspqbuf_type type) {
     if (opt_verbose < 2) return;
- 
+
     auto buf  = static_cast<ggml_backend_hexagon_buffer_context *>(t->buffer->context);
     auto sess = buf->sess;
 
