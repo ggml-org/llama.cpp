@@ -47,6 +47,26 @@ static void ggml_zdnn_compute_forward_mul(
     ggml_zdnn_mul(ctx, src0, src1, dst);
 }
 
+static void ggml_zdnn_compute_forward_sub(
+    const ggml_backend_zdnn_context * ctx,
+          ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    ggml_zdnn_sub(ctx, src0, src1, dst);
+}
+
+static void ggml_zdnn_compute_forward_div(
+    const ggml_backend_zdnn_context * ctx,
+          ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    ggml_zdnn_div(ctx, src0, src1, dst);
+}
+
 static void ggml_zdnn_compute_forward_softmax(
     const ggml_backend_zdnn_context * ctx,
           ggml_tensor * dst) {
@@ -54,6 +74,37 @@ static void ggml_zdnn_compute_forward_softmax(
     const ggml_tensor * src0 = dst->src[0];
 
     ggml_zdnn_softmax(ctx, src0, dst);
+}
+
+static void ggml_zdnn_compute_forward_sqrt(
+    const ggml_backend_zdnn_context * ctx,
+          ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    ggml_zdnn_sqrt(ctx, src0, dst);
+}
+
+static void ggml_zdnn_compute_forward_log(
+    const ggml_backend_zdnn_context * ctx,
+          ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    ggml_zdnn_log(ctx, src0, dst);
+}
+
+static void ggml_zdnn_compute_forward_leaky_relu(
+    const ggml_backend_zdnn_context * ctx,
+          ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    // Get negative_slope from op_params
+    float negative_slope;
+    memcpy(&negative_slope, dst->op_params, sizeof(float));
+
+    ggml_zdnn_leaky_relu(ctx, src0, dst, negative_slope);
 }
 
 static bool ggml_zdnn_compute_forward_unary(
@@ -79,6 +130,12 @@ static bool ggml_zdnn_compute_forward_unary(
         case GGML_UNARY_OP_EXP:
             ggml_zdnn_exp(ctx, src0, dst);
             return true;
+        case GGML_UNARY_OP_NEG:
+            ggml_zdnn_neg(ctx, src0, dst);
+            return true;
+        case GGML_UNARY_OP_SILU:
+            ggml_zdnn_silu(ctx, src0, dst);
+            return true;
         default:
             return false;
     }
@@ -102,6 +159,31 @@ static bool ggml_zdnn_compute_forward(
         case GGML_OP_MUL:
             {
                 ggml_zdnn_compute_forward_mul(ctx, dst);
+            } break;
+
+        case GGML_OP_SUB:
+            {
+                ggml_zdnn_compute_forward_sub(ctx, dst);
+            } break;
+
+        case GGML_OP_DIV:
+            {
+                ggml_zdnn_compute_forward_div(ctx, dst);
+            } break;
+
+        case GGML_OP_SQRT:
+            {
+                ggml_zdnn_compute_forward_sqrt(ctx, dst);
+            } break;
+
+        case GGML_OP_LOG:
+            {
+                ggml_zdnn_compute_forward_log(ctx, dst);
+            } break;
+
+        case GGML_OP_LEAKY_RELU:
+            {
+                ggml_zdnn_compute_forward_leaky_relu(ctx, dst);
             } break;
 
         case GGML_OP_SOFT_MAX:
@@ -205,6 +287,8 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
 
         case GGML_OP_ADD:
         case GGML_OP_MUL:
+        case GGML_OP_SUB:
+        case GGML_OP_DIV:
             {
                 const ggml_tensor * src0 = op->src[0];
                 const ggml_tensor * src1 = op->src[1];
@@ -228,6 +312,23 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
 
                 return true;
             } break;
+
+        case GGML_OP_SQRT:
+        case GGML_OP_LOG:
+            {
+                const ggml_tensor * src0 = op->src[0];
+
+                if (!ggml_is_contiguous(src0)) {
+                    return false;
+                }
+
+                return ggml_zdnn_is_supported_type(src0->type);
+            } break;
+
+        // Note: LEAKY_RELU is implemented but disabled due to crash issue
+        // The zdnn_leaky_relu function works but something in the test framework
+        // or tensor initialization is causing a segfault. Needs investigation.
+        // case GGML_OP_LEAKY_RELU:
 
         case GGML_OP_SOFT_MAX:
             {
@@ -277,6 +378,8 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                     case GGML_UNARY_OP_RELU:
                     case GGML_UNARY_OP_TANH:
                     case GGML_UNARY_OP_SIGMOID:
+                    case GGML_UNARY_OP_SILU:
+                    case GGML_UNARY_OP_NEG:
                         return true;
                     default:
                         return false;

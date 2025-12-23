@@ -33,4 +33,35 @@ void ggml_zdnn_exp(
     const ggml_tensor * src0,
           ggml_tensor * dst);
 
+// Neg: dst = -src0
+void ggml_zdnn_neg(
+    const ggml_backend_zdnn_context * ctx,
+    const ggml_tensor * src0,
+          ggml_tensor * dst);
+
+// Sqrt: dst = sqrt(src0)
+void ggml_zdnn_sqrt(
+    const ggml_backend_zdnn_context * ctx,
+    const ggml_tensor * src0,
+          ggml_tensor * dst);
+
+// Log: dst = log(src0)
+void ggml_zdnn_log(
+    const ggml_backend_zdnn_context * ctx,
+    const ggml_tensor * src0,
+          ggml_tensor * dst);
+
+// SILU activation: dst = src0 * sigmoid(src0)
+void ggml_zdnn_silu(
+    const ggml_backend_zdnn_context * ctx,
+    const ggml_tensor * src0,
+          ggml_tensor * dst);
+
+// Leaky ReLU activation: dst = leaky_relu(src0, negative_slope)
+void ggml_zdnn_leaky_relu(
+    const ggml_backend_zdnn_context * ctx,
+    const ggml_tensor * src0,
+          ggml_tensor * dst,
+    float negative_slope);
+
 #endif // GGML_ZDNN_UNARY_HPP

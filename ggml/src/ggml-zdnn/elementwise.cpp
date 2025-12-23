@@ -36,6 +36,40 @@ void ggml_zdnn_mul(
     GGML_UNUSED(ctx);
 }
 
+// Element-wise SUB: dst = src0 - src1
+void ggml_zdnn_sub(
+    const ggml_backend_zdnn_context * ctx,
+    const ggml_tensor * src0,
+    const ggml_tensor * src1,
+          ggml_tensor * dst) {
+
+    ggml_backend_zdnn_buffer * src0_extra = (ggml_backend_zdnn_buffer *)src0->extra;
+    ggml_backend_zdnn_buffer * src1_extra = (ggml_backend_zdnn_buffer *)src1->extra;
+    ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
+
+    ZDNN_CHECK(zdnn_sub(&src0_extra->ztensor, &src1_extra->ztensor, &dst_extra->ztensor));
+    ZDNN_CHECK(zdnn_transform_origtensor(&dst_extra->ztensor, dst->data));
+
+    GGML_UNUSED(ctx);
+}
+
+// Element-wise DIV: dst = src0 / src1
+void ggml_zdnn_div(
+    const ggml_backend_zdnn_context * ctx,
+    const ggml_tensor * src0,
+    const ggml_tensor * src1,
+          ggml_tensor * dst) {
+
+    ggml_backend_zdnn_buffer * src0_extra = (ggml_backend_zdnn_buffer *)src0->extra;
+    ggml_backend_zdnn_buffer * src1_extra = (ggml_backend_zdnn_buffer *)src1->extra;
+    ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
+
+    ZDNN_CHECK(zdnn_div(&src0_extra->ztensor, &src1_extra->ztensor, &dst_extra->ztensor));
+    ZDNN_CHECK(zdnn_transform_origtensor(&dst_extra->ztensor, dst->data));
+
+    GGML_UNUSED(ctx);
+}
+
 // Softmax: dst = softmax(src0)
 // Note: ZDNN softmax operates on the last dimension
 void ggml_zdnn_softmax(
