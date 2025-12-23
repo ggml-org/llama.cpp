@@ -110,9 +110,8 @@ def main():
     args = parse_arguments()
     model_path = os.environ.get("MODEL_PATH", args.model_path)
     if model_path is None:
-        parser.error(
-            "Model path must be specified either via --model-path argument or MODEL_PATH environment variable"
-        )
+        print("Error: Model path must be specified either via --model-path argument or MODEL_PATH environment variable")
+        sys.exit(1)
 
 
     model, tokenizer, config = load_model_and_tokenizer(model_path, args.device)
