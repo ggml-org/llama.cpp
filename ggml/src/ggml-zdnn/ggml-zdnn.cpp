@@ -22,8 +22,7 @@ static void ggml_zdnn_compute_forward_mul_mat(
     const ggml_tensor * src0 = dst->src[0];  // weights
     const ggml_tensor * src1 = dst->src[1];  // inputs
 
-    // TODO: implement support for quantized types
-    // we currently only support f32, f16, and bf16
+    // Supports F32, F16, BF16 and quantized types (dequantized at load time)
     ggml_zdnn_mul_mat_f(ctx, src0, src1, dst);
 }
 
@@ -225,6 +224,11 @@ static bool ggml_zdnn_compute_forward(
                 ggml_zdnn_cpy(ctx, dst->src[0], dst);
             } break;
 
+        case GGML_OP_ROPE:
+            {
+                ggml_zdnn_rope(ctx, dst->src[0], dst->src[1], dst);
+            } break;
+
         case GGML_OP_UNARY:
             {
                 if (!ggml_zdnn_compute_forward_unary(ctx, dst)) {
@@ -309,13 +313,20 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                         return false;
                 }
 
+                // Input must be F32
+                if (inputs->type != GGML_TYPE_F32) {
+                    return false;
+                }
+
+                // Weights can be F32, F16, BF16, or any supported quantized type
                 switch (weights->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
                     case GGML_TYPE_BF16:
                         return true;
                     default:
-                        return false;
+                        // Check if this is a quantized type we can dequantize
+                        return ggml_zdnn_type_needs_dequant(weights->type);
                 }
             } break;
 
@@ -433,18 +444,70 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                     return false;
                 }
 
-                // GAP: Only support non-batched GET_ROWS for now
-                // Batched cases (ne[2] > 1 or ne[3] > 1 in indices) not yet implemented
-                if (src1->ne[1] > 1 || src1->ne[2] > 1) {
+                // Batched GET_ROWS is supported via zdnn_get_rows_batched
+
+                return true;
+            } break;
+
+        case GGML_OP_CONT:
+        case GGML_OP_CPY:
+            {
+                const ggml_tensor * src0 = op->src[0];
+                // Only support F32 for now
+                if (src0->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
+                    return false;
+                }
+                return true;
+            } break;
+
+        case GGML_OP_ROPE:
+            {
+                const ggml_tensor * src0 = op->src[0];
+                const ggml_tensor * src1 = op->src[1];
+                const ggml_tensor * src2 = op->src[2];  // freq_factors (optional)
+
+                // Only support F32 for now
+                if (src0->type != GGML_TYPE_F32) {
+                    return false;
+                }
+
+                // Positions must be I32
+                if (src1->type != GGML_TYPE_I32) {
+                    return false;
+                }
+
+                // Must be contiguous
+                if (!ggml_is_contiguous(src0)) {
+                    return false;
+                }
+
+                // Check mode - only support normal (0) and neox (2)
+                const int mode = ((int32_t *) op->op_params)[2];
+                if (mode != 0 && mode != 2) {
+                    return false;  // MROPE and other modes not supported
+                }
+
+                // GAP: YaRN features not supported
+                // Check ext_factor (should be 0.0) and attn_factor (should be 1.0)
+                float ext_factor, attn_factor;
+                memcpy(&ext_factor,  (int32_t *) op->op_params + 7, sizeof(float));
+                memcpy(&attn_factor, (int32_t *) op->op_params + 8, sizeof(float));
+
+                if (ext_factor != 0.0f) {
+                    return false;  // YaRN extension not supported
+                }
+
+                if (attn_factor != 1.0f) {
+                    return false;  // YaRN attention scaling not supported
+                }
+
+                // GAP: Frequency factors not supported
+                if (src2 != nullptr) {
                     return false;
                 }
 
                 return true;
             } break;
-
-        // GAP: CONT and CPY not yet implemented due to buffer initialization issues
-        // case GGML_OP_CONT:
-        // case GGML_OP_CPY:
 
         case GGML_OP_UNARY:
             {
@@ -568,6 +631,12 @@ static void ggml_backend_zdnn_buffer_free_buffer(ggml_backend_buffer_t buffer) {
 
         // Free any extra buffer allocated for the tensor. E.g., bias for GGML_OP_MUL_MAT
         if (buf->extra != nullptr) free(buf->extra->data);
+        // Free dequantized weight buffer if allocated
+        if (buf->dequant_data != nullptr) {
+            // Size is nelements * sizeof(float), stored in pre_tfm_desc dimensions
+            const size_t dequant_size = buf->pre_tfm_desc.dim1 * buf->pre_tfm_desc.dim2 * sizeof(float);
+            ggml_aligned_free(buf->dequant_data, dequant_size);
+        }
         if (buf->ztensor.buffer_size > 0) ZDNN_CHECK(zdnn_free_ztensor_buffer(&buf->ztensor));
     }
 
@@ -644,12 +713,35 @@ static void ggml_backend_zdnn_buffer_memset_tensor(ggml_backend_buffer_t buffer,
 static void ggml_backend_zdnn_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     memcpy((char *)tensor->data + offset, data, size);
 
+    // View tensors don't have extra set up - they share their source's buffer
+    if (tensor->view_src != nullptr) {
+        return;
+    }
+
     ggml_backend_zdnn_buffer * extra = (ggml_backend_zdnn_buffer *)tensor->extra;
+    if (extra == nullptr) {
+        return;
+    }
 
     // Fixes the LLAMA_SET_ROWS bug
     // see: https://github.com/ggml-org/llama.cpp/issues/15414
     if (tensor->buffer->usage == GGML_BACKEND_BUFFER_USAGE_COMPUTE && extra->ztensor.is_transformed) zdnn_reset_ztensor(&extra->ztensor);
-    if (extra->ztensor.is_transformed == false) ggml_zdnn_load_tensor(extra->ztensor, tensor->data);
+
+    // Skip if no ztensor was created (unsupported type)
+    if (extra->ztensor.buffer_size == 0) {
+        return;
+    }
+
+    if (extra->ztensor.is_transformed == false) {
+        // For quantized weights, dequantize to F32 first
+        if (extra->dequant_data != nullptr) {
+            const int64_t nelements = ggml_nelements(tensor);
+            ggml_zdnn_dequantize(tensor->data, (float *)extra->dequant_data, extra->original_type, nelements);
+            ggml_zdnn_load_tensor(extra->ztensor, extra->dequant_data);
+        } else {
+            ggml_zdnn_load_tensor(extra->ztensor, tensor->data);
+        }
+    }
 
     GGML_UNUSED(buffer);
 }

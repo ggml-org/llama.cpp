@@ -65,4 +65,11 @@ void ggml_zdnn_cpy(
     const ggml_tensor * src0,
           ggml_tensor * dst);
 
+// ROPE: Rotary Position Embedding
+void ggml_zdnn_rope(
+    const ggml_backend_zdnn_context * ctx,
+    const ggml_tensor * src0,  // input tensor
+    const ggml_tensor * src1,  // positions (I32)
+          ggml_tensor * dst);
+
 #endif // GGML_ZDNN_ELEMENTWISE_HPP

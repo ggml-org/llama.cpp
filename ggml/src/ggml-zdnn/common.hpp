@@ -40,6 +40,10 @@ struct ggml_backend_zdnn_buffer {
     ggml_backend_zdnn_buffer * extra;  // for bias, etc.
     size_t size;
 
+    // For quantized weights: stores dequantized F32 data
+    void * dequant_data;
+    ggml_type original_type;  // original type before dequantization
+
     zdnn_tensor_desc pre_tfm_desc;
     zdnn_tensor_desc tfm_desc;
     zdnn_ztensor     ztensor;
