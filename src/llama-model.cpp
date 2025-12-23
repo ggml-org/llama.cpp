@@ -7208,15 +7208,19 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     switch (arch) {
         case LLM_ARCH_LLAMA:
             {
-                llm = std::make_unique<llm_build_llama>(*this, params);
+                llm = std::make_unique<llm_build_llama<false>>(*this, params);
             } break;
         case LLM_ARCH_LLAMA4:
             {
                 if (hparams.swa_type == LLAMA_SWA_TYPE_NONE) {
-                    llm = std::make_unique<llm_build_llama>(*this, params);
+                    llm = std::make_unique<llm_build_llama<false>>(*this, params);
                 } else {
                     llm = std::make_unique<llm_build_llama_iswa>(*this, params);
                 }
+            } break;
+        case LLM_ARCH_LLAMA_EMBED:
+            {
+                llm = std::make_unique<llm_build_llama<true>>(*this, params);
             } break;
         case LLM_ARCH_DECI:
             {
@@ -7638,10 +7642,6 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
         case LLM_ARCH_MISTRAL3:
             {
                 llm = std::make_unique<llm_build_mistral3>(*this, params);
-            } break;
-        case LLM_ARCH_LLAMA_EMBED:
-            {
-                llm = std::make_unique<llm_build_llama_embed>(*this, params);
             } break;
         default:
             GGML_ABORT("fatal error");
