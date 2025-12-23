@@ -9921,11 +9921,12 @@ kernel void kernel_opt_step_sgd_f32(
     x[gid] = x[gid] * (1.0f - pars[0] * pars[1]) - pars[0] * g[gid];
 }
 
-kernel void kernel_count_equal_i32(
+template<typename T>
+kernel void kernel_count_equal(
         constant ggml_metal_kargs_count_equal & args,
         device   const char * src0,
         device   const char * src1,
-        device      int64_t * dst,
+        device   atomic_int * dst,
         threadgroup int32_t * shmem_i32 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort3 tpitg[[thread_position_in_threadgroup]],
@@ -9946,8 +9947,8 @@ kernel void kernel_count_equal_i32(
     device const char * base1 = src1 + i1*args.nb11 + i2*args.nb12 + i3*args.nb13;
 
     for (int64_t i0 = tpitg.x; i0 < args.ne00; i0 += ntg.x) {
-        const int32_t v0 = *(device const int32_t *)(base0 + i0*args.nb00);
-        const int32_t v1 = *(device const int32_t *)(base1 + i0*args.nb10);
+        const T v0 = *(device const T *)(base0 + i0*args.nb00);
+        const T v1 = *(device const T *)(base1 + i0*args.nb10);
         sum += (v0 == v1);
     }
 
@@ -9968,8 +9969,12 @@ kernel void kernel_count_equal_i32(
 
         float total = simd_sum(v);
         if (tpitg.x == 0) {
-            dst[0] = (int64_t) total;
+            atomic_fetch_add_explicit(dst, (int32_t) total, memory_order_relaxed);
         }
     }
 
 }
+
+typedef decltype(kernel_count_equal<int32_t>) kernel_count_equal_t;
+
+template [[host_name("kernel_count_equal_i32")]] kernel kernel_count_equal_t kernel_count_equal<int32_t>;

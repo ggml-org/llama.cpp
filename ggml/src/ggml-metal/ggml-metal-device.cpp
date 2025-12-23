@@ -1685,13 +1685,14 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_opt_step_sgd(ggm
     return res;
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_count_equal(ggml_metal_library_t lib,
-                                                                            const ggml_tensor *  op) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_count_equal(ggml_metal_library_t lib, const ggml_tensor *  op) {
     assert(op->op == GGML_OP_COUNT_EQUAL);
     GGML_ASSERT(op->src[0]->type == op->src[1]->type);
     GGML_ASSERT(op->src[0]->type == GGML_TYPE_I32);
     GGML_ASSERT(op->type == GGML_TYPE_I64);
-
+    // note: the kernel only supports i32 output due to metal atomic add only supporting atomic_int
+    // Check length < 2^31 to avoid overflow
+    GGML_ASSERT(ggml_nelements(op->src[0]) < (1LL << 31));
     char base[256];
     char name[256];
 
