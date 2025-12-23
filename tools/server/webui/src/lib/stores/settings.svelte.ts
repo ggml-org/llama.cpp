@@ -161,6 +161,7 @@ class SettingsStore {
 				if (isUnset) {
 					this.userOverrides.delete(key as string);
 					this.saveConfig();
+
 					return;
 				}
 
