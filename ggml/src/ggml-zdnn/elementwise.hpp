@@ -17,6 +17,20 @@ void ggml_zdnn_mul(
     const ggml_tensor * src1,
           ggml_tensor * dst);
 
+// Element-wise SUB: dst = src0 - src1
+void ggml_zdnn_sub(
+    const ggml_backend_zdnn_context * ctx,
+    const ggml_tensor * src0,
+    const ggml_tensor * src1,
+          ggml_tensor * dst);
+
+// Element-wise DIV: dst = src0 / src1
+void ggml_zdnn_div(
+    const ggml_backend_zdnn_context * ctx,
+    const ggml_tensor * src0,
+    const ggml_tensor * src1,
+          ggml_tensor * dst);
+
 // Softmax: dst = softmax(src0)
 void ggml_zdnn_softmax(
     const ggml_backend_zdnn_context * ctx,
