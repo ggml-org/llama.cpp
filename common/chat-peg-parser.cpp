@@ -240,9 +240,27 @@ common_peg_parser common_chat_peg_constructed_builder::standard_constructed_tool
         return eps();
     };
 
+    // Build a lookahead parser that verifies the tool name is complete.
+    // This prevents "special_function" from matching when input is "special_function_with_opt".
+    auto build_name_terminator_peek = [&]() -> common_peg_parser {
+        if (!func_name_suffix.empty()) {
+            return peek(literal(func_name_suffix));
+        }
+        if (!func_closer.empty()) {
+            return peek(literal(func_closer));
+        }
+        if (param_key_prefix.empty()) {
+            // Tool call end marker or space should follow
+            return peek(literal(tool_call_end) | chars(" \t\n\r"));
+        }
+        // Space should follow before args
+        return peek(chars(" \t\n\r"));
+    };
+
     auto build_tool_rule = [&](const std::string & name, const common_peg_parser & args) {
         return tool(tool_open(literal(tool_call_start)) + space() +
-                    (!func_opener.empty() ? literal(func_opener) : eps()) + tool_name(literal(name)) +
+                    (!func_opener.empty() ? literal(func_opener) : eps()) +
+                    tool_name(literal(name) + build_name_terminator_peek()) +
                     (!func_name_suffix.empty() ? literal(func_name_suffix) : eps()) +
                     (func_name_suffix.empty() && !func_closer.empty() ? literal(func_closer) : eps()) +
                     (param_key_prefix.empty() ? until(tool_call_end) : space()) + args + space() +

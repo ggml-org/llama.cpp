@@ -614,18 +614,6 @@ static void test_peg_parser(common_chat_templates * tmpls, const std::function<v
                 if (!diff.tool_call_delta.arguments.empty()) {
                     msg_accum.tool_calls[diff.tool_call_index].arguments += diff.tool_call_delta.arguments;
                 }
-                // Super annoying case: a tool's name might be a proper prefix of another tool's name
-                // For example, special_function and special_function_with_opt in our tests
-                // In that case, there's a moment where the current parser actually picks up the partial
-                // parse with "special_function" when parsing "special_function_with_opt", causing the diff
-                // to fail
-                for (auto & tool : tc.params.tools) {
-                    if (msg_accum.tool_calls[diff.tool_call_index].name == tool.name && msg_current.tool_calls[diff.tool_call_index].name.empty()) {
-                        msg_accum.tool_calls[diff.tool_call_index].name = "";
-                        msg_accum.tool_calls[diff.tool_call_index].arguments = ""; // an opener JSON tag might be inserted by the tool name matching rule, remove it
-                        msg_accum.tool_calls[diff.tool_call_index].id = "";
-                    }
-                }
             }
         }        
         assert_msg_equals(msg_current, msg_accum, true);
