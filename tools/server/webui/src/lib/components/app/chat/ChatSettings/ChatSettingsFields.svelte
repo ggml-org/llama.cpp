@@ -74,7 +74,7 @@
 						// Update local config immediately for real-time badge feedback
 						onConfigChange(field.key, e.currentTarget.value);
 					}}
-					placeholder={`Default: ${placeholder}`}
+					placeholder="Default: {placeholder}"
 					class="w-full {isCustomRealTime ? 'pr-8' : ''}"
 				/>
 				{#if isCustomRealTime}
