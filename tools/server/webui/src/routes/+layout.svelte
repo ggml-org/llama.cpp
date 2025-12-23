@@ -119,7 +119,7 @@
 	$effect(() => {
 		const serverProps = serverStore.props;
 
-		if (serverProps?.default_generation_settings?.params) {
+		if (serverProps) {
 			settingsStore.syncWithServerDefaults();
 		}
 	});
