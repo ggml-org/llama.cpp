@@ -3709,8 +3709,8 @@ int main(int argc, char ** argv) {
             test_msg_diffs_compute();
             test_msgs_oaicompat_json_conversion();
             test_tools_oaicompat_json_conversion();
-            test_template_output_parsers();
             test_template_output_peg_parsers();
+            test_template_output_parsers();
             std::cout << "\n[chat] All tests passed!" << '\n';
         }
         return 0;
