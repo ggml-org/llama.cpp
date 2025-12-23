@@ -88,7 +88,7 @@ static void ggml_hexagon_dump_op_exec(const std::string &sess_name, const ggml_t
     if (!opt_verbose) return;
 
     op_desc desc(op);
-    GGML_LOG_DEBUG("ggml-hex: execute-op %s %s: %s : %s : %s : %s : %s : flags 0x%x\n", sess_name.c_str(),
+    GGML_LOG_DEBUG("ggml-hex: %s execute-op %s: %s : %s : %s : %s : %s : flags 0x%x\n", sess_name.c_str(),
                 ggml_op_name(op->op), desc.names, desc.dims, desc.types, desc.strides, desc.buffs, req_flags);
 }
 
@@ -105,11 +105,10 @@ static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const ggml_t
     if (!opt_profile) return;
 
     op_desc desc(op);
-    GGML_LOG_DEBUG("ggml-hex: profile-op %s %s: %s : %s : %s : %s : %s : op-usec %u op-cycles %u op-pkts %u (%f) call-usec %llu\n", sess_name.c_str(),
+    GGML_LOG_DEBUG("ggml-hex: %s profile-op %s: %s : %s : %s : %s : %s : op-usec %u op-cycles %u op-pkts %u (%f) call-usec %llu\n", sess_name.c_str(),
                 ggml_op_name(op->op), desc.names, desc.dims, desc.types, desc.strides, desc.buffs,
                 op_usec, op_cycles, op_pkts, (float) op_cycles / op_pkts, (unsigned long long) call_usec);
 }
-
 
 // ** backend sessions
 
@@ -2111,8 +2110,25 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
     return true;
 }
 
+enum dspqbuf_type {
+    DSPQBUF_TYPE_DSP_WRITE_CPU_READ = 0,
+    DSPQBUF_TYPE_CPU_WRITE_DSP_READ,
+    DSPQBUF_TYPE_CONSTANT,
+};
+
+static void dspqbuf_dump(dspqueue_buffer * d, const struct ggml_tensor * t, dspqbuf_type type) {
+    if (opt_verbose < 2) return;
+ 
+    auto buf  = static_cast<ggml_backend_hexagon_buffer_context *>(t->buffer->context);
+    auto sess = buf->sess;
+
+    GGML_LOG_DEBUG("ggml-hex: %s dspqbuf : %s base-addr %p base-size %zu data %p offset %u size %u\n", sess->name.c_str(),
+                t->name, (void *) buf->base, buf->size, (void *) d->ptr, (unsigned int) d->offset,
+                (unsigned int) d->size);
+}
+
 // Init hexagon tensor from GGML tensor and Hexagon buffer
-static void init_htp_tensor(htp_tensor * h, const ggml_tensor * t) {
+static void htp_req_tensor_init(htp_tensor * h, const ggml_tensor * t) {
     h->data  = 0;  // updated by the receiver
     h->type  = t->type;
     h->ne[0] = t->ne[0];
@@ -2125,74 +2141,52 @@ static void init_htp_tensor(htp_tensor * h, const ggml_tensor * t) {
     h->nb[3] = t->nb[3];
 }
 
-enum dsp_buffer_type {
-    DSP_BUFFER_TYPE_DSP_WRITE_CPU_READ = 0,
-    DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ,
-    DSP_BUFFER_TYPE_CONSTANT,
-};
-
-static size_t dspqueue_buffers_init(dspqueue_buffer * buf, const ggml_tensor * t, dsp_buffer_type buff_type) {
+static size_t htp_req_buff_init(htp_tensor *h, dspqueue_buffer * d, const ggml_tensor * t, dspqbuf_type type) {
     if (!t) {
         return 0;
     }
 
-    memset(buf, 0, sizeof(*buf));
-    auto tensor_buf = static_cast<ggml_backend_hexagon_buffer_context *>(t->buffer->context);
-    buf->fd         = tensor_buf->fd;
-    buf->ptr        = t->data;
-    buf->offset     = (uint8_t *) t->data - tensor_buf->base;
-    buf->size       = ggml_nbytes(t);
+    auto buf = static_cast<ggml_backend_hexagon_buffer_context *>(t->buffer->context);
 
-    switch (buff_type) {
-        case DSP_BUFFER_TYPE_DSP_WRITE_CPU_READ:
+    memset(d, 0, sizeof(*d));
+    d->fd     = buf->fd;
+    d->ptr    = t->data;
+    d->offset = (uint8_t *) t->data - buf->base;
+    d->size   = ggml_nbytes(t);
+
+    switch (type) {
+        case DSPQBUF_TYPE_DSP_WRITE_CPU_READ:
             // Flush CPU
-            buf->flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER;
+            d->flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER;
             break;
-        case DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ:
+        case DSPQBUF_TYPE_CPU_WRITE_DSP_READ:
             // Flush CPU, Invalidate DSP
-            buf->flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
+            d->flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
             break;
         default:
             // Constant buffer, no cache maintenance
-            buf->flags = 0;
+            d->flags = 0;
             break;
     }
+
+    htp_req_tensor_init(h, t);
+ 
+    dspqbuf_dump(d, t, type);
+
     return 1;
 }
 
-static void hex_dump_dspbuf(const struct ggml_tensor * t, const dspqueue_buffer * d) {
-    auto buf  = static_cast<ggml_backend_hexagon_buffer_context *>(t->buffer->context);
-    auto sess = buf->sess;
+typedef size_t (*htp_req_init_func_t)(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * op);
 
-    HEX_VERBOSE("ggml-hex: %s dspqbuf : %s base-addr %p base-size %zu data %p offset %u size %u\n", sess->name.c_str(),
-                t->name, (void *) buf->base, buf->size, (void *) d->ptr, (unsigned int) d->offset,
-                (unsigned int) d->size);
-}
-
-static void ggml_hexagon_dump_dspbufs(const std::string &sess_name, const dspqueue_buffer * d, size_t n_bufs) {
-    for (size_t i=0; i < n_bufs; i++) {
-        HEX_VERBOSE("ggml-hex: %s dspqbuf : data %p offset %u size %u\n", sess_name.c_str(),
-                    (void *) d[i].ptr, (unsigned int) d[i].offset, (unsigned int) d[i].size);
-    }
-}
-
-typedef size_t (*init_dsp_req_and_buffer_func_t)(htp_general_req * req,
-                                                 dspqueue_buffer (&bufs)[4],
-                                                 const ggml_tensor * op);
-
-template <init_dsp_req_and_buffer_func_t _init_req_func>
+template <htp_req_init_func_t _init_req_func>
 static inline void ggml_hexagon_dispatch_op(ggml_hexagon_session *sess, const struct ggml_tensor * op, uint32_t flags) {
-    uint64_t t1 = 0;
-    uint64_t t2 = 0;
+    uint64_t t = ggml_time_us();
 
-    t1 = ggml_time_us();
-
-    // Construct HTP message
+    // Construct HTP request
     htp_general_req req;
     memset(&req, 0, sizeof(req));
-    req.flags = flags;
 
-    // Use opmask to override flags
+    req.flags = flags;
     if (!(opt_opmask & HTP_OPMASK_QUANTIZE)) {
         req.flags |= HTP_OPFLAGS_SKIP_QUANTIZE;
     }
@@ -2200,34 +2194,22 @@ static inline void ggml_hexagon_dispatch_op(ggml_hexagon_session *sess, const st
         req.flags |= HTP_OPFLAGS_SKIP_COMPUTE;
     }
 
-    dspqueue_buffer bufs[4];
-    const size_t    n_bufs = _init_req_func(&req, bufs, op);
-
     ggml_hexagon_dump_op_exec(sess->name, op, req.flags);
 
-    if (opt_verbose > 1) {
-        ggml_hexagon_dump_dspbufs(sess->name, bufs, n_bufs);
-    }
-
     if ((opt_opmask & HTP_OPMASK_QUEUE)) {
+        dspqueue_buffer bufs[HTP_MAX_PACKET_BUFFERS];
+        size_t n_bufs = _init_req_func(&req, bufs, op);
         sess->enqueue(req, bufs, n_bufs, opt_opsync);
     }
 
-    t2 = ggml_time_us();
+    t = ggml_time_us() - t;
 
-    ggml_hexagon_dump_op_prof(sess->name, op, sess->prof_usecs, sess->prof_cycles, sess->prof_pkts, t2 - t1);
+    ggml_hexagon_dump_op_prof(sess->name, op, sess->prof_usecs, sess->prof_cycles, sess->prof_pkts, t);
 }
 
 template <bool _is_src0_constant>
-static inline size_t init_binary_req_and_bufs(htp_general_req * req,
-                                              dspqueue_buffer (&bufs)[4],
-                                              const ggml_tensor * op) {
-    const struct ggml_tensor * node = op;
-    const struct ggml_tensor * src0 = node->src[0];
-    const struct ggml_tensor * src1 = node->src[1];
-    const struct ggml_tensor * dst  = node;
-
-    switch (node->op) {
+static inline size_t init_binary_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    switch (t->op) {
         case GGML_OP_MUL_MAT:
             req->op = HTP_OP_MUL_MAT;
             break;
@@ -2241,45 +2223,25 @@ static inline size_t init_binary_req_and_bufs(htp_general_req * req,
             req->op = HTP_OP_SUB;
             break;
         default:
-            GGML_ABORT("ggml-hex: binary : unsupported op:%d\n", node->op);
+            GGML_ABORT("ggml-hex: binary : unsupported op: %d\n", t->op);
             break;
     }
 
-    init_htp_tensor(&req->src0, src0);
-    init_htp_tensor(&req->src1, src1);
-    init_htp_tensor(&req->dst, dst);
-
-    // Buffer 0 (src0): Weights (mulmat) or First Operand (binary op).
+    // src0: Weights (mulmat) or First Operand (binary op).
     // If constant (e.g. weights), no cache management is needed.
-    // Otherwise (CPU writes, DSP reads), we flush CPU caches and invalidate DSP caches.
-    // Note: On platforms with I/O coherency, the framework skips cache ops automatically.
-    size_t n_bufs = dspqueue_buffers_init(
-        bufs, src0, _is_src0_constant ? DSP_BUFFER_TYPE_CONSTANT : DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
+    // src1: Input Activations (mulmat) or Second Operand (binary op).
 
-    // Buffer 1 (src1): Input Activations (mulmat) or Second Operand (binary op).
-    // CPU writes, DSP reads: flush CPU caches and invalidate DSP caches.
-    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], src1, DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
-
-    // Buffer 2 (dst): Output Activations.
-    // DSP writes, CPU reads.
-    // We flush CPU caches to ensure consistency before DSP writes.
-    // DSP cache maintenance is handled in the response message.
-    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], dst, DSP_BUFFER_TYPE_DSP_WRITE_CPU_READ);
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], _is_src0_constant ? DSPQBUF_TYPE_CONSTANT : DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
 
     return n_bufs;
 }
 
 template <bool _is_src0_constant>
-static inline size_t init_binary_id_req_and_bufs(htp_general_req * req,
-                                                 dspqueue_buffer (&bufs)[4],
-                                                 const ggml_tensor * op) {
-    const struct ggml_tensor * node = op;
-    const struct ggml_tensor * src0 = node->src[0];
-    const struct ggml_tensor * src1 = node->src[1];
-    const struct ggml_tensor * src2 = node->src[2];
-    const struct ggml_tensor * dst  = node;
-
-    switch (node->op) {
+static inline size_t init_binary_id_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    switch (t->op) {
         case GGML_OP_MUL_MAT_ID:
             req->op = HTP_OP_MUL_MAT_ID;
             break;
@@ -2287,69 +2249,49 @@ static inline size_t init_binary_id_req_and_bufs(htp_general_req * req,
             req->op = HTP_OP_ADD_ID;
             break;
         default:
-            GGML_ABORT("ggml-hex: unsupported op:%d\n", node->op);
+            GGML_ABORT("ggml-hex: unsupported op: %d\n", t->op);
     }
 
-    init_htp_tensor(&req->src0, src0);
-    init_htp_tensor(&req->src1, src1);
-    init_htp_tensor(&req->src2, src2);
-    init_htp_tensor(&req->dst, dst);
-
-    // Buffer 0 (src0): Weights (mulmat) or Input Activations (other op).
+    // src0: Weights (mulmat) or Input Activations (other op).
     // If constant, no cache management is needed.
-    // Otherwise (CPU writes, DSP reads), we flush CPU caches and invalidate DSP caches.
-    size_t n_bufs = dspqueue_buffers_init(
-        bufs, src0, _is_src0_constant ? DSP_BUFFER_TYPE_CONSTANT : DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
+    // src1: Input Activations (mulmat) or Second Operand (binary op).
+    // src2: Expert IDs (mulmat) or Activated Experts (other op).
 
-    // Buffer 1 (src1): Input Activations (mulmat) or Experts Bias (other op).
-    // CPU writes, DSP reads: flush CPU caches and invalidate DSP caches.
-    n_bufs += dspqueue_buffers_init(&bufs[1], src1, DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
-
-    // Buffer 2 (src2): Expert IDs (mulmat) or Activated Experts (other op).
-    // CPU writes, DSP reads: flush CPU caches and invalidate DSP caches.
-    n_bufs += dspqueue_buffers_init(&bufs[2], src2, DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
-
-    // Buffer 3 (dst): Output Activations.
-    // DSP writes, CPU reads.
-    // We flush CPU caches to ensure consistency before DSP writes.
-    // DSP cache maintenance is handled in the response message.
-    n_bufs += dspqueue_buffers_init(&bufs[3], dst, DSP_BUFFER_TYPE_DSP_WRITE_CPU_READ);
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], _is_src0_constant ? DSPQBUF_TYPE_CONSTANT : DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src2, &bufs[n_bufs], t->src[2], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
 
     return n_bufs;
 }
 
-static inline size_t init_unary_req_and_bufs(htp_general_req * req,
-                                             dspqueue_buffer (&bufs)[4],
-                                             const ggml_tensor * op) {
-    const struct ggml_tensor * src0 = op->src[0];
-    const struct ggml_tensor * src1 = op->src[1];
-    const struct ggml_tensor * dst  = op;
-
-    memcpy(&req->op_params, &op->op_params, sizeof(op->op_params));
+static inline size_t init_unary_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    memcpy(&req->op_params, &t->op_params, sizeof(t->op_params));
 
     bool supported = false;
 
-    switch (op->op) {
+    switch (t->op) {
         case GGML_OP_RMS_NORM:
             req->op   = HTP_OP_RMS_NORM;
             supported = true;
             break;
 
         case GGML_OP_UNARY:
-            if (ggml_get_unary_op(dst) == GGML_UNARY_OP_SILU) {
+            if (ggml_get_unary_op(t) == GGML_UNARY_OP_SILU) {
                 req->op   = HTP_OP_UNARY_SILU;
                 supported = true;
-            } else if (ggml_get_unary_op(dst) == GGML_UNARY_OP_GELU) {
+            } else if (ggml_get_unary_op(t) == GGML_UNARY_OP_GELU) {
                 req->op   = HTP_OP_UNARY_GELU;
                 supported = true;
             }
             break;
 
         case GGML_OP_GLU:
-            if (ggml_get_glu_op(dst) == GGML_GLU_OP_SWIGLU) {
+            if (ggml_get_glu_op(t) == GGML_GLU_OP_SWIGLU) {
                 req->op   = HTP_OP_GLU_SWIGLU;
                 supported = true;
-            } else if (ggml_get_glu_op(dst) == GGML_GLU_OP_SWIGLU_OAI) {
+            } else if (ggml_get_glu_op(t) == GGML_GLU_OP_SWIGLU_OAI) {
                 req->op   = HTP_OP_GLU_SWIGLU_OAI;
                 supported = true;
             }
@@ -2365,82 +2307,26 @@ static inline size_t init_unary_req_and_bufs(htp_general_req * req,
     }
 
     if (!supported) {
-        GGML_ABORT("ggml-hex: unary : unsupported op:%d\n", op->op);
+        GGML_ABORT("ggml-hex: unary : unsupported op: %d\n", t->op);
     }
 
-    init_htp_tensor(&req->dst, dst);
-    init_htp_tensor(&req->src0, src0);
-    if (src1) {
-        init_htp_tensor(&req->src1, src1);
-    }
-
-    // First buffer = Only Operand of Unary op
-    // This is a buffer that the CPU writes and the DSP reads, so we'll
-    // need to flush CPU caches and invalidate DSP ones. On platforms
-    // with I/O coherency support the framework will automatically skip
-    // cache operations where possible.
-    size_t n_bufs = dspqueue_buffers_init(bufs, src0, DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
-
-    // Second buffer(nullable) = Second Operand of Binary op
-    // This is a buffer that the CPU writes and the DSP reads, so we'll
-    // need to flush CPU caches and invalidate DSP ones. On platforms
-    // with I/O coherency support the framework will automatically skip
-    // cache operations where possible.
-    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], src1, DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
-
-    // Second or third buffer = Output Activations. We'll handle DSP
-    // Second buffer = Output Activations. We'll handle DSP
-    // cache maintenance in the response message but need to flush
-    // CPU caches to ensure any previously written dirty lines are
-    // written out before writes from the DSP start.
-    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], dst, DSP_BUFFER_TYPE_DSP_WRITE_CPU_READ);
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
 
     return n_bufs;
 }
 
-static inline size_t init_rope_req_and_bufs(htp_general_req * req, dspqueue_buffer (&bufs)[4], const ggml_tensor * op) {
-    const struct ggml_tensor * src0 = op->src[0];
-    const struct ggml_tensor * src1 = op->src[1];
-    const struct ggml_tensor * src2 = op->src[2];
-    const struct ggml_tensor * dst  = op;
-
-    memcpy(&req->op_params, &op->op_params, sizeof(op->op_params));
+static inline size_t init_rope_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    memcpy(&req->op_params, &t->op_params, sizeof(t->op_params));
     req->op = HTP_OP_ROPE;
-
-    init_htp_tensor(&req->dst, dst);
-    init_htp_tensor(&req->src0, src0);
-    init_htp_tensor(&req->src1, src1);
-    if (src2) {
-        init_htp_tensor(&req->src2, src2);
-    }
-
-    // First buffer
-    // This is a buffer that the CPU writes and the DSP reads, so we'll
-    // need to flush CPU caches and invalidate DSP ones. On platforms
-    // with I/O coherency support the framework will automatically skip
-    // cache operations where possible.
-    size_t n_bufs = dspqueue_buffers_init(bufs, src0, DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
-
-    // Second buffer
-    // This is a buffer that the CPU writes and the DSP reads, so we'll
-    // need to flush CPU caches and invalidate DSP ones. On platforms
-    // with I/O coherency support the framework will automatically skip
-    // cache operations where possible.
-    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], src1, DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
-
-    // Third buffer(nullable)
-    // This is a buffer that the CPU writes and the DSP reads, so we'll
-    // need to flush CPU caches and invalidate DSP ones. On platforms
-    // with I/O coherency support the framework will automatically skip
-    // cache operations where possible.
-    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], src2, DSP_BUFFER_TYPE_CPU_WRITE_DSP_READ);
-
-    // Final buffer = Output Activations. We'll handle DSP
-    // Second buffer = Output Activations. We'll handle DSP
-    // cache maintenance in the response message but need to flush
-    // CPU caches to ensure any previously written dirty lines are
-    // written out before writes from the DSP start.
-    n_bufs += dspqueue_buffers_init(&bufs[n_bufs], dst, DSP_BUFFER_TYPE_DSP_WRITE_CPU_READ);
+ 
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src2, &bufs[n_bufs], t->src[2], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
 
     return n_bufs;
 }
@@ -2508,49 +2394,49 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
         switch (node->op) {
             case GGML_OP_MUL_MAT:
                 if (ggml_is_quantized(node->src[0]->type)) {
-                    ggml_hexagon_dispatch_op<init_binary_req_and_bufs<true>>(sess, node, flags);
+                    ggml_hexagon_dispatch_op<init_binary_req<true>>(sess, node, flags);
                 } else {
-                    ggml_hexagon_dispatch_op<init_binary_req_and_bufs<false>>(sess, node, flags);
+                    ggml_hexagon_dispatch_op<init_binary_req<false>>(sess, node, flags);
                 }
                 prev_quant_op = node;
                 break;
             case GGML_OP_MUL_MAT_ID:
                 if (ggml_is_quantized(node->src[0]->type)) {
-                    ggml_hexagon_dispatch_op<init_binary_id_req_and_bufs<true>>(sess, node, flags);
+                    ggml_hexagon_dispatch_op<init_binary_id_req<true>>(sess, node, flags);
                 } else {
-                    ggml_hexagon_dispatch_op<init_binary_id_req_and_bufs<false>>(sess, node, flags);
+                    ggml_hexagon_dispatch_op<init_binary_id_req<false>>(sess, node, flags);
                 }
                 prev_quant_op = node;
                 break;
             case GGML_OP_MUL:
             case GGML_OP_ADD:
             case GGML_OP_SUB:
-                ggml_hexagon_dispatch_op<init_binary_req_and_bufs<false>>(sess, node, flags);
+                ggml_hexagon_dispatch_op<init_binary_req<false>>(sess, node, flags);
                 break;
             case GGML_OP_ADD_ID:
-                ggml_hexagon_dispatch_op<init_binary_id_req_and_bufs<false>>(sess, node, flags);
+                ggml_hexagon_dispatch_op<init_binary_id_req<false>>(sess, node, flags);
                 break;
             case GGML_OP_RMS_NORM:
-                ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(sess, node, flags);
+                ggml_hexagon_dispatch_op<init_unary_req>(sess, node, flags);
                 break;
             case GGML_OP_UNARY:
                 if ((ggml_get_unary_op(node) == GGML_UNARY_OP_SILU) ||
                         (ggml_get_unary_op(node) == GGML_UNARY_OP_GELU)) {
-                    ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(sess, node, flags);
+                    ggml_hexagon_dispatch_op<init_unary_req>(sess, node, flags);
                 }
                 break;
             case GGML_OP_GLU:
                 if ((ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU) ||
                         (ggml_get_glu_op(node) == GGML_GLU_OP_SWIGLU_OAI)) {
-                    ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(sess, node, flags);
+                    ggml_hexagon_dispatch_op<init_unary_req>(sess, node, flags);
                 }
                 break;
             case GGML_OP_SOFT_MAX:
-                ggml_hexagon_dispatch_op<init_unary_req_and_bufs>(sess, node, flags);
+                ggml_hexagon_dispatch_op<init_unary_req>(sess, node, flags);
                 break;
 
             case GGML_OP_ROPE:
-                ggml_hexagon_dispatch_op<init_rope_req_and_bufs>(sess, node, flags);
+                ggml_hexagon_dispatch_op<init_rope_req>(sess, node, flags);
                 break;
 
             default:
