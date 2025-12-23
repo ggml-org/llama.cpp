@@ -895,6 +895,21 @@ typedef struct {
 } ggml_metal_kargs_arange;
 
 typedef struct {
+    int64_t  ne00;  
+    int64_t  ne01;
+    int64_t  ne02;
+    int64_t  ne03;
+    uint64_t nb00;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
+    uint64_t nb10;
+    uint64_t nb11;
+    uint64_t nb12;
+    uint64_t nb13;
+} ggml_metal_kargs_count_equal;
+
+typedef struct {
     int32_t  k0;
     int32_t  k1;
     int32_t  s0;
