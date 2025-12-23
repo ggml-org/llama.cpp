@@ -5,6 +5,7 @@
 #include "ggml-zdnn/common.hpp"
 #include "ggml-zdnn/mmf.hpp"
 #include "ggml-zdnn/elementwise.hpp"
+#include "ggml-zdnn/unary.hpp"
 #include "ggml-zdnn/utils.hpp"
 #include "ggml.h"
 
@@ -55,6 +56,34 @@ static void ggml_zdnn_compute_forward_softmax(
     ggml_zdnn_softmax(ctx, src0, dst);
 }
 
+static bool ggml_zdnn_compute_forward_unary(
+    const ggml_backend_zdnn_context * ctx,
+          ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const enum ggml_unary_op unary_op = ggml_get_unary_op(dst);
+
+    switch (unary_op) {
+        case GGML_UNARY_OP_GELU:
+            ggml_zdnn_gelu(ctx, src0, dst);
+            return true;
+        case GGML_UNARY_OP_RELU:
+            ggml_zdnn_relu(ctx, src0, dst);
+            return true;
+        case GGML_UNARY_OP_TANH:
+            ggml_zdnn_tanh(ctx, src0, dst);
+            return true;
+        case GGML_UNARY_OP_SIGMOID:
+            ggml_zdnn_sigmoid(ctx, src0, dst);
+            return true;
+        case GGML_UNARY_OP_EXP:
+            ggml_zdnn_exp(ctx, src0, dst);
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool ggml_zdnn_compute_forward(
     ggml_backend_zdnn_context * ctx,
     ggml_tensor * dst) {
@@ -78,6 +107,13 @@ static bool ggml_zdnn_compute_forward(
         case GGML_OP_SOFT_MAX:
             {
                 ggml_zdnn_compute_forward_softmax(ctx, dst);
+            } break;
+
+        case GGML_OP_UNARY:
+            {
+                if (!ggml_zdnn_compute_forward_unary(ctx, dst)) {
+                    return false;
+                }
             } break;
 
         default:
@@ -219,6 +255,32 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                 }
 
                 return ggml_zdnn_is_supported_type(src0->type);
+            } break;
+
+        case GGML_OP_UNARY:
+            {
+                const ggml_tensor * src0 = op->src[0];
+
+                if (!ggml_is_contiguous(src0)) {
+                    return false;
+                }
+
+                if (!ggml_zdnn_is_supported_type(src0->type)) {
+                    return false;
+                }
+
+                // Check which unary ops we support
+                // Note: EXP is not supported due to range violation issues in zdnn_exp
+                const enum ggml_unary_op unary_op = ggml_get_unary_op(op);
+                switch (unary_op) {
+                    case GGML_UNARY_OP_GELU:
+                    case GGML_UNARY_OP_RELU:
+                    case GGML_UNARY_OP_TANH:
+                    case GGML_UNARY_OP_SIGMOID:
+                        return true;
+                    default:
+                        return false;
+                }
             } break;
 
         default:
