@@ -106,7 +106,7 @@ Here are some examples of running various llama.cpp tools via ADB.
 Simple question for Llama-3.2-1B
 
 ```
-~/src/llama.cpp$ M=Llama-3.2-1B-Instruct-Q4_0.gguf D=HTP0 ./scripts/snapdragon/adb/run-cli.sh -no-cnv -p "what is the most popular cookie in the world?"
+~/src/llama.cpp$ M=Llama-3.2-1B-Instruct-Q4_0.gguf D=HTP0 ./scripts/snapdragon/adb/run-completion.sh -p "what is the most popular cookie in the world?"
 ...
 ggml-hex: Hexagon backend (experimental) : allocating new registry : ndev 1
 ggml-hex: Hexagon Arch version v79
@@ -136,7 +136,7 @@ llama_memory_breakdown_print: |   - HTP0-REPACK        |                  504 = 
 Summary request for OLMoE-1B-7B. This is a large model that requires two HTP sessions/devices
 
 ```
-~/src/llama.cpp$ M=OLMoE-1B-7B-0125-Instruct-Q4_0.gguf NDEV=2 D=HTP0,HTP1 ./scripts/snapdragon/adb/run-cli.sh -f surfing.txt -no-cnv
+~/src/llama.cpp$ M=OLMoE-1B-7B-0125-Instruct-Q4_0.gguf NDEV=2 D=HTP0,HTP1 ./scripts/snapdragon/adb/run-completion.sh -f surfing.txt
 ...
 ggml-hex: Hexagon backend (experimental) : allocating new registry : ndev 1
 ggml-hex: Hexagon Arch version v81
@@ -234,6 +234,6 @@ build: 6a8cf8914 (6733)
 
   Examples:
 
-      `GGML_HEXAGON_OPMASK=0x1 llama-cli ...` - Ops are enqueued but NPU-side processing is stubbed out
-      `GGML_HEXAGON_OPMASK=0x3 llama-cli ...` - NPU performs dynamic quantization and skips the rest
-      `GGML_HEXAGON_OPMASK=0x7 llama-cli ...` - Full queuing and processing of Ops (default)
+      `GGML_HEXAGON_OPMASK=0x1 llama-completion ...` - Ops are enqueued but NPU-side processing is stubbed out
+      `GGML_HEXAGON_OPMASK=0x3 llama-completion ...` - NPU performs dynamic quantization and skips the rest
+      `GGML_HEXAGON_OPMASK=0x7 llama-completion ...` - Full queuing and processing of Ops (default)
