@@ -103,7 +103,16 @@ std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const comm
     }
 
     if (msg_new.tool_calls.size() < msg_prv.tool_calls.size()) {
-        throw std::runtime_error("Invalid diff: now finding less tool calls!");
+        std::string err = "Invalid diff: now finding less tool calls!\n";
+        err += "  Previous (" + std::to_string(msg_prv.tool_calls.size()) + "):\n";
+        for (const auto & tc : msg_prv.tool_calls) {
+            err += "    - name: '" + tc.name + "', args: '" + tc.arguments + "'\n";
+        }
+        err += "  Current (" + std::to_string(msg_new.tool_calls.size()) + "):\n";
+        for (const auto & tc : msg_new.tool_calls) {
+            err += "    - name: '" + tc.name + "', args: '" + tc.arguments + "'\n";
+        }
+        throw std::runtime_error(err);
     }
 
     if (!msg_prv.tool_calls.empty()) {
@@ -2674,10 +2683,10 @@ static common_chat_params common_chat_templates_apply_jinja(
         bool has_tools = params.tools.is_array() && !params.tools.empty();
         TemplatePattern pattern = TemplateAnalyzer::analyze_template(tmpl, has_tools);
         if (pattern.format != TemplatePattern::UNKNOWN) {
-            auto auto_params = UniversalPEGGenerator::generate_parser(pattern, tmpl, params);
-            // Only use the auto-generated parser if it's different from the default format
-            if (auto_params.format != COMMON_CHAT_FORMAT_CONTENT_ONLY) {
-                return auto_params;
+        auto auto_params = UniversalPEGGenerator::generate_parser(pattern, tmpl, params);
+        // Only use the auto-generated parser if it's different from the default format
+        if (auto_params.format != COMMON_CHAT_FORMAT_CONTENT_ONLY) {
+            return auto_params;
             }
         }
     } catch (const std::exception& e) {
