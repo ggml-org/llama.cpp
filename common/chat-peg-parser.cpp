@@ -50,7 +50,11 @@ void common_chat_peg_native_mapper::map(const common_peg_ast_node & node) {
     }
 
     if (is_tool_id && current_tool) {
-        current_tool->id = std::string(trim_trailing_space(node.text));
+        auto text = trim_trailing_space(node.text);
+        if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
+            text = text.substr(1, text.size() - 2);
+        }
+        current_tool->id = std::string(text);
     }
 
     if (is_tool_name && current_tool) {
@@ -150,8 +154,12 @@ common_peg_parser common_chat_peg_native_builder::standard_json_tools(const std:
         auto tool_id_ =
             id_field.empty() ? eps() : (json_member(id_field, tool_id(json_string())) << space() << "," << space());
 
-        tools |= rule("tool-" + name, tool_open(literal("{")) << space() << tool_id_ << tool_name_ << space() << ","
-                                                              << space() << tool_args_ << space() << "}");
+        tools |=
+            rule("tool-" + name, tool_open(literal("{"))
+                                     << space() << tool_id_ << tool_name_ << space() << "," << space() << tool_args_
+                                     << zero_or_more(space() << "," << space() << json_string() << space() << ":"
+                                                             << space() << json())
+                                     << space() << "}");
     };
 
     auto parallel_calls = eps();

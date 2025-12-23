@@ -23,24 +23,6 @@ static std::string read_file(const std::string & path) {
     return buf.str();
 }
 
-struct templates_params {
-    json                                  messages;
-    json                                  tools;
-    common_chat_tool_choice               tool_choice;
-    json                                  json_schema;
-    bool                                  parallel_tool_calls;
-    common_reasoning_format               reasoning_format;
-    bool                                  stream;
-    std::string                           grammar;
-    bool                                  add_generation_prompt;
-    bool                                  enable_thinking;
-    std::chrono::system_clock::time_point now;
-    json                                  extra_context;
-    bool                                  add_bos;
-    bool                                  add_eos;
-    bool                                  is_inference;
-};
-
 int main(int argc, char ** argv) {
     if (argc < 2) {
         std::cerr << "Usage: " << argv[0] << " <template_path> [--no-tools]" << '\n';

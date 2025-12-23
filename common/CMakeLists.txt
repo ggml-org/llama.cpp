@@ -52,7 +52,9 @@ add_library(${TARGET} STATIC
     chat-parser.h
     chat-parser-xml-toolcall.h
     chat-parser-xml-toolcall.cpp
-    chat-auto-parser.cpp
+    chat-auto-parser-analyzer.cpp
+    chat-auto-parser-generator.cpp
+    chat-auto-parser-helpers.cpp
     chat-auto-parser.h
     chat-peg-parser.cpp
     chat-peg-parser.h

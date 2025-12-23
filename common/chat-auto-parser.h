@@ -1,10 +1,13 @@
 #pragma once
 
 #include "chat.h"
+#include "chat-auto-parser-helpers.h"
 
+#include <chrono>
 #include <map>
 #include <minja/chat-template.hpp>
 #include <minja/minja.hpp>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -120,29 +123,46 @@ class TemplateAnalyzer {
                                                        const std::string & diff2,
                                                        const std::string & diff3);
     static std::string       find_common_end_pattern(const std::string & diff1,
-                                                     const std::string & diff2,
-                                                     const std::string & diff3);
+                                                       const std::string & diff2,
+                                                       const std::string & diff3);
     static TemplatePattern::ToolCallFormat determine_format_from_patterns(const DiscoveredPattern & patterns);
 };
 
-// Forward declaration of templates_params to match the one in chat.cpp
-struct templates_params;
+// Structure for template parameters
+struct templates_params {
+    json                                  messages;
+    json                                  tools;
+    common_chat_tool_choice               tool_choice;
+    json                                  json_schema;
+    bool                                  parallel_tool_calls;
+    common_reasoning_format               reasoning_format;
+    bool                                  stream;
+    std::string                           grammar;
+    bool                                  add_generation_prompt;
+    bool                                  enable_thinking;
+    std::chrono::system_clock::time_point now;
+    json                                  extra_context;
+    bool                                  add_bos;
+    bool                                  add_eos;
+    bool                                  is_inference;
+    bool                                  add_inference;
+};
 
 // Universal PEG parser generator
 class UniversalPEGGenerator {
   public:
     static common_chat_params generate_parser(const TemplatePattern &         pattern,
-                                              const minja::chat_template &    tmpl,
-                                              const struct templates_params & inputs);
+                                               const minja::chat_template &    tmpl,
+                                               const struct templates_params & inputs);
 
   private:
     static common_peg_arena build_native_parser(const TemplatePattern &         pattern,
-                                                const minja::chat_template &    tmpl,
-                                                const struct templates_params & inputs,
-                                                bool                            thinking_forced_open);
+                                                 const minja::chat_template &    tmpl,
+                                                 const struct templates_params & inputs,
+                                                 bool                            thinking_forced_open);
 
     static common_peg_arena build_constructed_parser(const TemplatePattern &         pattern,
-                                                     const minja::chat_template &    tmpl,
-                                                     const struct templates_params & inputs,
-                                                     bool                            thinking_forced_open);
+                                                      const minja::chat_template &    tmpl,
+                                                      const struct templates_params & inputs,
+                                                      bool                            thinking_forced_open);
 };
