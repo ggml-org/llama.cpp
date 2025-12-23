@@ -197,6 +197,7 @@ class SettingsStore {
 				if (propsDefault !== undefined) {
 					if (isUnset) {
 						this.userOverrides.delete(key);
+
 						continue;
 					}
 
