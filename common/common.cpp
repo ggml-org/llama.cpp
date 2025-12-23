@@ -1093,12 +1093,12 @@ common_init_result::common_init_result(common_params & params) :
 
     if (params.fit_params) {
         LOG_INF("%s: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on\n", __func__);
-        llama_params_fit(params.model.path.c_str(), &mparams, &cparams,
+        llama_params_fit(params.model.path.c_str(), params.model.model_buf, params.model.model_buf_size, &mparams, &cparams,
             params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target, params.fit_params_min_ctx,
             params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
     }
 
-    llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
+    llama_model * model = llama_model_load_from_file(params.model.path.c_str(), params.model.model_buf, params.model.model_buf_size, mparams);
     if (model == NULL) {
         return;
     }
@@ -1665,7 +1665,8 @@ static common_control_vector_data common_control_vector_load_one(const common_co
         /* .no_alloc = */ false,
         /* .ctx      = */ &ctx,
     };
-    struct gguf_context * ctx_gguf = gguf_init_from_file(load_info.fname.c_str(), meta_gguf_params);
+    // TODO: verify
+    struct gguf_context * ctx_gguf = gguf_init_from_file(load_info.fname.c_str(), nullptr, 0, meta_gguf_params);
     if (!ctx_gguf) {
         LOG_ERR("%s: failed to load control vector file from %s\n", __func__, load_info.fname.c_str());
         return result;

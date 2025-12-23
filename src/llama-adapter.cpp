@@ -155,7 +155,7 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
         /* .ctx      = */ &ctx_init,
     };
 
-    gguf_context_ptr ctx_gguf { gguf_init_from_file(path_lora, meta_gguf_params) };
+    gguf_context_ptr ctx_gguf { gguf_init_from_file(path_lora, nullptr, 0,  meta_gguf_params) };
     if (!ctx_gguf) {
         throw std::runtime_error("failed to load lora adapter file from " + std::string(path_lora));
     }
@@ -393,7 +393,7 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
 
     // set tensor data
     {
-        llama_file gguf_file(path_lora, "rb");
+        llama_file gguf_file(path_lora,nullptr, 0, "rb");
         std::vector<uint8_t> read_buf;
         auto set_tensor = [&](ggml_tensor * orig, ggml_tensor * dev) {
             size_t offs = gguf_get_data_offset(ctx_gguf.get()) + gguf_get_tensor_offset(ctx_gguf.get(), gguf_find_tensor(ctx_gguf.get(), orig->name));

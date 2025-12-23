@@ -139,7 +139,7 @@ struct mtmd_cli_context {
         mparams.warmup           = params.warmup;
         mparams.image_min_tokens = params.image_min_tokens;
         mparams.image_max_tokens = params.image_max_tokens;
-        ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
+        ctx_vision.reset(mtmd_init_from_file(clip_path, nullptr, 0, model, mparams));
         if (!ctx_vision.get()) {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);
             exit(1);

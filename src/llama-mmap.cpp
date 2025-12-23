@@ -75,55 +75,90 @@ struct llama_file::impl {
         return ret;
     }
 
-    impl(const char * fname, const char * mode, [[maybe_unused]] const bool use_direct_io = false) {
-        fp = ggml_fopen(fname, mode);
-        if (fp == NULL) {
-            throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
+    impl(const char * fname, const char* _model_buf, size_t _model_buf_size, const char * mode, [[maybe_unused]] const bool use_direct_io = false) {
+        using_file = (_model_buf == nullptr || _model_buf_size == 0);
+        if(using_file){
+            fp = ggml_fopen(fname, mode);
+            if (fp == NULL) {
+                throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
+            }
+            fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
+            seek(0, SEEK_END);
+            size = tell();
+            seek(0, SEEK_SET);
+        } else {
+            model_buf = _model_buf;
+            model_buf_pos = 0;
+            size = _model_buf_size;
         }
-        fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
-        seek(0, SEEK_END);
-        size = tell();
-        seek(0, SEEK_SET);
     }
 
     size_t tell() const {
-        LARGE_INTEGER li;
-        li.QuadPart = 0;
-        BOOL ret = SetFilePointerEx(fp_win32, li, &li, FILE_CURRENT);
-        if (!ret) {
-            throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
-        }
+        if(using_file){
+            LARGE_INTEGER li;
+            li.QuadPart = 0;
+            BOOL ret = SetFilePointerEx(fp_win32, li, &li, FILE_CURRENT);
+            if (!ret) {
+                throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+            }
 
-        return li.QuadPart;
+            return li.QuadPart;
+        }
+        else {
+            return model_buf_pos;
+        }
     }
 
     void seek(size_t offset, int whence) const {
-        static_assert(SEEK_SET == FILE_BEGIN, "SEEK_SET != FILE_BEGIN");
-        static_assert(SEEK_CUR == FILE_CURRENT, "SEEK_CUR != FILE_CURRENT");
-        static_assert(SEEK_END == FILE_END, "SEEK_END != FILE_END");
+        if(using_file){
+            static_assert(SEEK_SET == FILE_BEGIN, "SEEK_SET != FILE_BEGIN");
+            static_assert(SEEK_CUR == FILE_CURRENT, "SEEK_CUR != FILE_CURRENT");
+            static_assert(SEEK_END == FILE_END, "SEEK_END != FILE_END");
 
-        LARGE_INTEGER li;
-        li.QuadPart = offset;
-        BOOL ret = SetFilePointerEx(fp_win32, li, NULL, whence);
-        if (!ret) {
-            throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+            LARGE_INTEGER li;
+            li.QuadPart = offset;
+            BOOL ret = SetFilePointerEx(fp_win32, li, NULL, whence);
+            if (!ret) {
+                throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+            }
+        }
+        else {
+            if(whence == 0){
+                model_buf_pos = offset;
+            } else if(whence == 1){
+                model_buf_pos += offset;
+            } else {
+                // 这种情况应该不会出现，因为传入的offset是非负值
+                model_buf_pos = size + offset;
+            }
         }
     }
 
     void read_raw(void * ptr, size_t len) const {
-        size_t bytes_read = 0;
-        while (bytes_read < len) {
-            size_t chunk_size = std::min<size_t>(len - bytes_read, 64*1024*1024);
-            DWORD chunk_read = 0;
-            BOOL result = ReadFile(fp_win32, reinterpret_cast<char*>(ptr) + bytes_read, chunk_size, &chunk_read, NULL);
-            if (!result) {
-                throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
-            }
-            if (chunk_read < chunk_size || chunk_read == 0) {
-                throw std::runtime_error("unexpectedly reached end of file");
-            }
+        if(using_file){
+            size_t bytes_read = 0;
+            while (bytes_read < len) {
+                size_t chunk_size = std::min<size_t>(len - bytes_read, 64*1024*1024);
+                DWORD chunk_read = 0;
+                BOOL result = ReadFile(fp_win32, reinterpret_cast<char*>(ptr) + bytes_read, chunk_size, &chunk_read, NULL);
+                if (!result) {
+                    throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+                }
+                if (chunk_read < chunk_size || chunk_read == 0) {
+                    throw std::runtime_error("unexpectedly reached end of file");
+                }
 
-            bytes_read += chunk_read;
+                bytes_read += chunk_read;
+            }
+        }
+        else {
+            if(model_buf_pos + len < size){
+                memcpy(ptr, model_buf+model_buf_pos, len);
+                model_buf_pos += len;
+            }else{
+                memcpy(ptr, model_buf + model_buf_pos, size - model_buf_pos);
+                //throw std::runtime_error("Read memory error: not enough data to read.");
+            }
         }
     }
 
@@ -134,19 +169,24 @@ struct llama_file::impl {
     }
 
     void write_raw(const void * ptr, size_t len) const {
-        size_t bytes_written = 0;
-        while (bytes_written < len) {
-            size_t chunk_size = std::min<size_t>(len - bytes_written, 64*1024*1024);
-            DWORD chunk_written = 0;
-            BOOL result = WriteFile(fp_win32, reinterpret_cast<char const*>(ptr) + bytes_written, chunk_size, &chunk_written, NULL);
-            if (!result) {
-                throw std::runtime_error(format("write error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
-            }
-            if (chunk_written < chunk_size || chunk_written == 0) {
-                throw std::runtime_error("unexpectedly failed to write bytes");
-            }
+        if(using_file){
+            size_t bytes_written = 0;
+            while (bytes_written < len) {
+                size_t chunk_size = std::min<size_t>(len - bytes_written, 64*1024*1024);
+                DWORD chunk_written = 0;
+                BOOL result = WriteFile(fp_win32, reinterpret_cast<char const*>(ptr) + bytes_written, chunk_size, &chunk_written, NULL);
+                if (!result) {
+                    throw std::runtime_error(format("write error: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+                }
+                if (chunk_written < chunk_size || chunk_written == 0) {
+                    throw std::runtime_error("unexpectedly failed to write bytes");
+                }
 
-            bytes_written += chunk_written;
+                bytes_written += chunk_written;
+            }
+        }
+        else {
+            throw std::runtime_error("Not allowed to write to memory buffer.");
         }
     }
 
@@ -162,6 +202,7 @@ struct llama_file::impl {
         if (fp) {
             std::fclose(fp);
         }
+        model_buf == nullptr;
     }
 #else
     impl(const char * fname, const char * mode, [[maybe_unused]] const bool use_direct_io = false) {
@@ -329,11 +370,14 @@ struct llama_file::impl {
     size_t alignment = 1;
 
     FILE * fp{};
+    const char* model_buf{nullptr};
+    mutable size_t model_buf_pos;
+    bool using_file{true};
     size_t size{};
 };
 
-llama_file::llama_file(const char * fname, const char * mode, const bool use_direct_io) :
-    pimpl(std::make_unique<impl>(fname, mode, use_direct_io)) {}
+llama_file::llama_file(const char * fname, const char* model_buf, size_t model_buf_size, const char * mode, const bool use_direct_io) :
+    pimpl(std::make_unique<impl>(fname, model_buf, model_buf_size, mode, use_direct_io)) {}
 llama_file::~llama_file() = default;
 
 size_t llama_file::tell() const { return pimpl->tell(); }

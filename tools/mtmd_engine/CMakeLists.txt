@@ -100,4 +100,65 @@ install(TARGETS mtmd_engine RUNTIME)
 
 add_executable(test_mtmd_engine111 test_engine.cpp)
 target_link_libraries(test_mtmd_engine111 PRIVATE mtmd_engine)
-message("===================")
+
+target_include_directories(mtmd_engine PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/srcs>"
+    "$<INSTALL_INTERFACE:include>"
+)
+
+macro(export_lib target_name)
+install(TARGETS ${target_name}
+    EXPORT ${target_name}Targets
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+# install(EXPORT ${target_name}Targets
+#     FILE ${target_name}-config.cmake
+#     DESTINATION lib/cmake/
+# )
+endmacro()
+
+export_lib(mtmd_engine)
+# export_lib(mtmd)
+# export_lib(common)
+# export_lib(build_info)
+# export_lib(cpp-httplib)
+# export_lib(llama)
+# export_lib(ggml)
+# export_lib(ggml-base)
+# export_lib(ggml-cpu)
+# export_lib(ggml-cuda)
+# install(TARGETS mtmd_engine
+#     EXPORT mtmd_engineTargets
+#     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+#     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+#     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+# )
+# install(EXPORT mtmd_engineTargets
+#     FILE mtmd_engine-config.cmake
+#     DESTINATION lib/cmake/
+# )
+
+# install(TARGETS common
+#     EXPORT commonTargets
+#     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+#     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+#     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+# )
+# install(EXPORT commonTargets
+#     FILE common-config.cmake
+#     DESTINATION lib/cmake/
+# )
+
+install(FILES
+    ${CMAKE_CURRENT_LIST_DIR}/mtmd-engine.hpp
+    DESTINATION
+    ${CMAKE_INSTALL_INCLUDEDIR}/
+)
+if(WIN32)
+install(FILES $<TARGET_PDB_FILE:mtmd_engine>
+    DESTINATION "pdb/$<CONFIG>"
+    OPTIONAL
+)
+endif()

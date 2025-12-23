@@ -7,50 +7,50 @@
 #include <io.h>
 #include <chrono>
 
-
-FILE* create_memory_file(const void *data, size_t size) {
-    // 创建内存映射文件
-    HANDLE hMap = CreateFileMapping(
-        INVALID_HANDLE_VALUE,
-        NULL,
-        PAGE_READWRITE,
-        0,
-        size,
-        NULL
-    );
-
-    if (!hMap) return NULL;
-
-    // 映射到内存
-    void* pData = MapViewOfFile(hMap, FILE_MAP_WRITE, 0, 0, size);
-    if (!pData) {
-        CloseHandle(hMap);
-        return NULL;
-    }
-
-    // 复制数据
-    if (data) {
-        memcpy(pData, data, size);
-    }
-
-    // 创建文件描述符
-    int fd = _open_osfhandle((intptr_t)hMap, _O_RDWR | _O_CREAT);
-    if (fd == -1) {
-        UnmapViewOfFile(pData);
-        CloseHandle(hMap);
-        return NULL;
-    }
-
-    // 创建FILE*指针
-    FILE* fp = _fdopen(fd, "rb+");
-    if (!fp) {
-        _close(fd);
-        UnmapViewOfFile(pData);
-        CloseHandle(hMap);
-    }
-
-    return fp;
-}
+//
+//FILE* create_memory_file(const void *data, size_t size) {
+//    // 创建内存映射文件
+//    HANDLE hMap = CreateFileMapping(
+//        INVALID_HANDLE_VALUE,
+//        NULL,
+//        PAGE_READWRITE,
+//        0,
+//        size,
+//        NULL
+//    );
+//
+//    if (!hMap) return NULL;
+//
+//    // 映射到内存
+//    void* pData = MapViewOfFile(hMap, FILE_MAP_WRITE, 0, 0, size);
+//    if (!pData) {
+//        CloseHandle(hMap);
+//        return NULL;
+//    }
+//
+//    // 复制数据
+//    if (data) {
+//        memcpy(pData, data, size);
+//    }
+//
+//    // 创建文件描述符
+//    int fd = _open_osfhandle((intptr_t)hMap, _O_RDWR | _O_CREAT);
+//    if (fd == -1) {
+//        UnmapViewOfFile(pData);
+//        CloseHandle(hMap);
+//        return NULL;
+//    }
+//
+//    // 创建FILE*指针
+//    FILE* fp = _fdopen(fd, "rb+");
+//    if (!fp) {
+//        _close(fd);
+//        UnmapViewOfFile(pData);
+//        CloseHandle(hMap);
+//    }
+//
+//    return fp;
+//}
 
 std::vector<unsigned char> load_img_file(const std::string path) {
     std::ifstream fin(path, std::ios::binary);
@@ -76,7 +76,22 @@ void log_call(int level, const std::string& msg) {
     std::cout<<"log(" << level << "): " << msg << std::endl;
 }
 
+void test_mem_file() {
+    std::vector<unsigned char> data = load_img_file("e:/wafer.jpg");
+    auto mmf = MemoryMappedFile::CreateWithData(data.data(), data.size());
+    FILE* fp = mmf->GetFilePointer();
+    std::vector<unsigned char> new_data;
+    new_data.resize(data.size());
+    fread(new_data.data(), 1, data.size(), fp);
+    std::ofstream new_f("e:/new_wafer.jpg", std::ios::binary);
+    new_f.write((char*)new_data.data(), new_data.size());
+}
+
+
+
+
 int main() {
+    //test_mem_file();
     llama_engine::InferInput input;
     input.img_bufs = load_img_file("e:/wafer.jpg");
 
@@ -90,12 +105,17 @@ int main() {
     llama_engine::InferEngine engine;
     auto status = engine.set_config_param(param);
     auto start = std::chrono::system_clock::now();
-    status = engine.load_model_from_file(
-        //"d:/qwen/Qwen3VL-2B-Instruct-F16.gguf",
-        //"d:/qwen/mmproj-Qwen3VL-2B-Instruct-F16.gguf"
-        "d:/qwen/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
-        "d:/qwen/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
-    );
+    auto model_buf = load_img_file("d:/qwen/Qwen3VL-2B-Instruct-Q4_K_M.gguf");
+    auto mmproj_buf = load_img_file("d:/qwen/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf");
+
+
+    //status = engine.load_model_from_file(
+    //    //"d:/qwen/Qwen3VL-2B-Instruct-F16.gguf",
+    //    //"d:/qwen/mmproj-Qwen3VL-2B-Instruct-F16.gguf"
+    //    "d:/qwen/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+    //    "d:/qwen/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
+    //);
+    status = engine.load_model_from_buffer((char*)model_buf.data(), model_buf.size(), (char*)mmproj_buf.data(), mmproj_buf.size());
     auto start1 = std::chrono::system_clock::now();
     status = engine.infer(input, res);
     std::cout << "============= result =======================" << std::endl;

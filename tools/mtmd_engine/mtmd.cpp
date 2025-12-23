@@ -156,6 +156,7 @@ struct mtmd_context {
     // TODO @ngxson : add timings
 
     mtmd_context(const char * mmproj_fname,
+                    const char* model_buf, size_t model_buf_size,
                    const llama_model * text_model,
                    const mtmd_context_params & ctx_params) :
         text_model   (text_model),
@@ -180,7 +181,7 @@ struct mtmd_context {
             /* warmup            */ ctx_params.warmup,
         };
 
-        auto res = clip_init(mmproj_fname, ctx_clip_params);
+        auto res = clip_init(mmproj_fname, model_buf, model_buf_size, ctx_clip_params);
         ctx_v = res.ctx_v;
         ctx_a = res.ctx_a;
         if (!ctx_v && !ctx_a) {
@@ -406,10 +407,11 @@ private:
 };
 
 mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
+    const char* model_buf, size_t model_buf_size,
         const struct llama_model * text_model,
         const struct mtmd_context_params ctx_params) {
     try {
-        return new mtmd_context(mmproj_fname, text_model, ctx_params);
+        return new mtmd_context(mmproj_fname, model_buf, model_buf_size, text_model, ctx_params);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
         return nullptr;

@@ -50,7 +50,7 @@ struct llama_device_memory_data {
 };
 
 static std::vector<llama_device_memory_data> llama_get_device_memory_data(
-        const char * path_model, const llama_model_params * mparams, const llama_context_params * cparams,
+        const char * path_model, const char* model_buf, size_t model_buf_size, const llama_model_params * mparams, const llama_context_params * cparams,
         std::vector<ggml_backend_dev_t> & devs, uint32_t & hp_ngl, uint32_t & hp_n_ctx_train, uint32_t & hp_n_expert,
         const ggml_log_level log_level) {
     struct user_data_t {
@@ -75,7 +75,7 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
     mparams_copy.use_mmap  = false;
     mparams_copy.use_mlock = false;
 
-    llama_model * model = llama_model_load_from_file(path_model, mparams_copy);
+    llama_model * model = llama_model_load_from_file(path_model, model_buf, model_buf_size, mparams_copy);
     if (model == nullptr) {
         llama_log_set(ud.original_logger.callback, ud.original_logger.user_data);
         throw std::runtime_error("failed to load model");
@@ -141,7 +141,8 @@ enum layer_fraction_t {
 // this enum is only used in llama_params_fit_impl but needs to be defined outside of it to fix a Windows compilation issue
 
 static void llama_params_fit_impl(
-        const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
+        const char * path_model, const char* model_buf, size_t model_buf_size,
+        struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
         size_t margin_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
     constexpr int64_t MiB = 1024*1024;
@@ -157,7 +158,7 @@ static void llama_params_fit_impl(
     // step 1: get data for default parameters and check whether any changes are necessary in the first place
 
     LLAMA_LOG_DEBUG("%s: getting device memory data for initial parameters:\n", __func__);
-    const dmds_t dmds_full = llama_get_device_memory_data(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+    const dmds_t dmds_full = llama_get_device_memory_data(path_model, model_buf, model_buf_size, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
     const size_t nd = devs.size(); // number of devices
     if (nd == 0) {
         LLAMA_LOG_INFO("%s: no devices with dedicated memory found\n", __func__);
@@ -404,7 +405,7 @@ static void llama_params_fit_impl(
         set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, mparams_copy);
 
         const dmds_t dmd_nl = llama_get_device_memory_data(
-            path_model, &mparams_copy, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+            path_model, model_buf, model_buf_size, &mparams_copy, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
 
         LLAMA_LOG_DEBUG("%s: memory for test allocation by device:\n", func_name);
         for (size_t id = 0; id < nd; id++) {
@@ -432,7 +433,7 @@ static void llama_params_fit_impl(
 
         LLAMA_LOG_DEBUG("%s: getting device memory data with all MoE tensors moved to system memory:\n", __func__);
         const dmds_t dmds_cpu_moe = llama_get_device_memory_data(
-            path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
+            path_model, model_buf, model_buf_size, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
 
         for (const llama_device_memory_data & dmd : dmds_cpu_moe) {
             global_surplus_cpu_moe += dmd.free;
@@ -679,13 +680,14 @@ static void llama_params_fit_impl(
 }
 
 bool llama_params_fit(
-        const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
+        const char * path_model, const char* model_buf, size_t model_buf_size,
+        struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
         size_t margin_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
     const int64_t t0_us = llama_time_us();
     bool ok = true;
     try {
-        llama_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margin_s, n_ctx_min, log_level);
+        llama_params_fit_impl(path_model, model_buf, model_buf_size,mparams, cparams, tensor_split, tensor_buft_overrides, margin_s, n_ctx_min, log_level);
         LLAMA_LOG_INFO("%s: successfully fit params to free device memory\n", __func__);
     } catch (const std::runtime_error & e) {
         LLAMA_LOG_WARN("%s: failed to fit params to free device memory: %s\n", __func__, e.what());
@@ -762,7 +764,7 @@ int64_t llama_time_us(void) {
 }
 
 // Returns 0 on success, -1 on error, and -2 on cancellation via llama_progress_callback
-static int llama_model_load(const std::string & fname, std::vector<std::string> & splits, llama_model & model, llama_model_params & params) {
+static int llama_model_load(const std::string & fname, const char* model_buf, size_t model_buf_size, std::vector<std::string> & splits, llama_model & model, llama_model_params & params) {
     // loading time will be recalculated after the first eval, so
     // we take page faults deferred by mmap() into consideration
     model.t_load_us = 0;
@@ -771,7 +773,7 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
     model.t_start_us = tm.t_start_us;
 
     try {
-        llama_model_loader ml(fname, splits, params.use_mmap, params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
+        llama_model_loader ml(fname, model_buf, model_buf_size, splits, params.use_mmap, params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
 
         ml.print_info();
 
@@ -818,6 +820,7 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
 
 static struct llama_model * llama_model_load_from_file_impl(
         const std::string & path_model,
+        const char* model_buf, size_t model_buf_size,
         std::vector<std::string> & splits,
         struct llama_model_params params) {
     ggml_time_init();
@@ -940,7 +943,7 @@ static struct llama_model * llama_model_load_from_file_impl(
                 props.memory_free/1024/1024);
     }
 
-    const int status = llama_model_load(path_model, splits, *model, params);
+    const int status = llama_model_load(path_model, model_buf, model_buf_size, splits, *model, params);
     GGML_ASSERT(status <= 0);
     if (status < 0) {
         if (status == -1) {
@@ -960,14 +963,15 @@ static struct llama_model * llama_model_load_from_file_impl(
 struct llama_model * llama_load_model_from_file(
         const char * path_model,
         struct llama_model_params params) {
-    return llama_model_load_from_file(path_model, params);
+    return llama_model_load_from_file(path_model, nullptr, 0, params);
 }
 
 struct llama_model * llama_model_load_from_file(
         const char * path_model,
+        const char* model_buf, size_t model_buf_size,
         struct llama_model_params params) {
     std::vector<std::string> splits = {};
-    return llama_model_load_from_file_impl(path_model, splits, params);
+    return llama_model_load_from_file_impl(path_model, model_buf, model_buf_size, splits, params);
 }
 
 struct llama_model * llama_model_load_from_splits(
@@ -983,7 +987,7 @@ struct llama_model * llama_model_load_from_splits(
     for (size_t i = 0; i < n_paths; ++i) {
         splits.push_back(paths[i]);
     }
-    return llama_model_load_from_file_impl(splits.front(), splits, params);
+    return llama_model_load_from_file_impl(splits.front(), nullptr, 0, splits, params);
 }
 
 void llama_model_save_to_file(const struct llama_model * model, const char * path_model) {

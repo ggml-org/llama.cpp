@@ -101,6 +101,7 @@ MTMD_API struct mtmd_context_params mtmd_context_params_default(void);
 // initialize the mtmd context
 // return nullptr on failure
 MTMD_API mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
+                                            const char* model_buf, size_t model_buf_size,
                                             const struct llama_model * text_model,
                                             const struct mtmd_context_params ctx_params);
 

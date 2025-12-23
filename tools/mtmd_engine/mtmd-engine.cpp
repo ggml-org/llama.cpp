@@ -204,32 +204,9 @@ struct InferEngine::Impl{
         }
         llama_param.model.path = vlm_model_path;
         llama_param.mmproj.path = mmproj_model_path;
+        llama_param.use_mmap = true;
 
         return load_model_helper(llama_param);
-        //llama_init = common_init_from_params(llama_param);
-        //model = llama_init->model();
-        //lctx = llama_init->context();
-        //vocab = llama_model_get_vocab(model);
-        //smpl = common_sampler_init(model, llama_param.sampling);
-        //n_threads = llama_param.cpuparams.n_threads;
-        //batch = llama_batch_init(1, 0, 1); // batch for next token generation
-        //n_batch = llama_param.n_batch;
-
-        //if (!model || !lctx) {
-        //    return write_log(LogLevel::kLogCritical, __FILE__, __LINE__, "Fail to load model.");
-        //}
-
-        //if (!llama_model_chat_template(model, nullptr) && llama_param.chat_template.empty()) {
-        //    return write_log(LogLevel::kLogCritical,__FILE__, __LINE__, "Model file is in wrong format, please check whether the model path is correct.");
-        //}
-
-        //tmpls = common_chat_templates_init(model, llama_param.chat_template);
-        //use_jinja = llama_param.use_jinja;
-        //chat_history.clear();
-
-        //status = init_vision_context(llama_param);
-
-        //return status;
     }
 
     Status load_model_from_buffer(const char* vlm_model_buf,
@@ -238,7 +215,18 @@ struct InferEngine::Impl{
         size_t mmproj_model_buf_size) {
         // 由于windows需自行包装buffer，或修改llama底层代码，暂无时间。暂定使用写入临时文件再读取的方案
         reset();
+        common_params llama_param;
+        auto status = config_param_to_llama_param(llama_param);
+        if (!status) {
+            return status;
+        }
+        llama_param.model.model_buf = const_cast<char*>(vlm_model_buf);
+        llama_param.model.model_buf_size = vlm_model_buf_size;
+        llama_param.mmproj.model_buf = const_cast<char*>(mmproj_model_buf);
+        llama_param.mmproj.model_buf_size = mmproj_model_buf_size;
+        llama_param.use_mmap = false;
 
+        return load_model_helper(llama_param);
         return { -1, "This function is not yet supported." };
     }
 
@@ -253,7 +241,7 @@ struct InferEngine::Impl{
         mparams.image_max_tokens = params.image_max_tokens;
 
         const char* clip_path = params.mmproj.path.c_str();
-        ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
+        ctx_vision.reset(mtmd_init_from_file(clip_path, params.mmproj.model_buf, params.mmproj.model_buf_size,  model, mparams));
         if (!ctx_vision.get()) {
             return write_log(LogLevel::kLogCritical, __FILE__, __LINE__, "Failed to load vision model.");
         }
@@ -474,6 +462,7 @@ Status InferEngine::load_model_from_file(const std::string &vlm_model_path, cons
 
 Status InferEngine::load_model_from_buffer(const char* vlm_model_buf, size_t vlm_model_buf_size,
                             const char* mmproj_model_buf, size_t mmproj_model_buf_size){
+    return impl_->load_model_from_buffer(vlm_model_buf, vlm_model_buf_size, mmproj_model_buf, mmproj_model_buf_size);
     // 由于windows需自行包装buffer，或修改llama底层代码，暂无时间。暂定使用写入临时文件再读取的方案
     return {-1, "This function is not yet supported."};
 }

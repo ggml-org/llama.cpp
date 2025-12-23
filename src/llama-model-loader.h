@@ -95,6 +95,7 @@ struct llama_model_loader {
 
     llama_model_loader(
         const std::string & fname,
+        const char* model_buf, size_t model_buf_size,
         std::vector<std::string> & splits, // optional, only need if the split does not follow naming scheme
         bool use_mmap,
         bool check_tensors,

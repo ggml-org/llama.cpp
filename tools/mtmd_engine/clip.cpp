@@ -861,6 +861,10 @@ struct clip_model_loader {
     gguf_context_ptr ctx_gguf;
 
     std::string fname;
+    const char* model_buf = {nullptr};
+    size_t model_buf_size{0};
+    size_t model_buf_pos{0};
+    bool using_file{true};
 
     size_t model_size = 0; // in bytes
 
@@ -868,7 +872,8 @@ struct clip_model_loader {
     bool has_audio  = false;
 
     // TODO @ngxson : we should not pass clip_ctx here, it should be clip_model
-    clip_model_loader(const char * fname) : fname(fname) {
+    clip_model_loader(const char * fname, const char* _model_buf, size_t _model_buf_size) : fname(fname), model_buf(_model_buf),model_buf_size(_model_buf_size) {
+        using_file = (_model_buf == nullptr || _model_buf_size == 0);
         struct ggml_context * meta = nullptr;
 
         struct gguf_init_params params = {
@@ -876,7 +881,7 @@ struct clip_model_loader {
             /*.ctx      = */ &meta,
         };
 
-        ctx_gguf = gguf_context_ptr(gguf_init_from_file(fname, params));
+        ctx_gguf = gguf_context_ptr(gguf_init_from_file(fname, model_buf, model_buf_size, params));
         if (!ctx_gguf.get()) {
             throw std::runtime_error(string_format("%s: failed to load CLIP model from %s. Does this file exist?\n", __func__, fname));
         }
@@ -1676,38 +1681,73 @@ struct clip_model_loader {
 
         // load data
         {
-            std::vector<uint8_t> read_buf;
+            if(using_file){
+                std::vector<uint8_t> read_buf;
 
-            auto fin = std::ifstream(fname, std::ios::binary);
-            if (!fin) {
-                throw std::runtime_error(string_format("%s: failed to open %s\n", __func__, fname.c_str()));
-            }
-
-            // alloc memory and offload data
-            ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
-            ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
-            ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-            for (auto & t : tensors_to_load) {
-                ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
-                const size_t offset = tensor_offset[t->name];
-                fin.seekg(offset, std::ios::beg);
+                auto fin = std::ifstream(fname, std::ios::binary);
                 if (!fin) {
-                    throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
+                    throw std::runtime_error(string_format("%s: failed to open %s\n", __func__, fname.c_str()));
                 }
-                size_t num_bytes = ggml_nbytes(cur);
-                if (ggml_backend_buft_is_host(buft)) {
-                    // for the CPU and Metal backend, we can read directly into the tensor
-                    fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
-                } else {
-                    // read into a temporary buffer first, then copy to device memory
-                    read_buf.resize(num_bytes);
-                    fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
-                    ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
-                }
-            }
-            fin.close();
 
-            LOG_DBG("%s: loaded %zu tensors from %s\n", __func__, tensors_to_load.size(), fname.c_str());
+                // alloc memory and offload data
+                ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
+                ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
+                ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                for (auto & t : tensors_to_load) {
+                    ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
+                    const size_t offset = tensor_offset[t->name];
+                    fin.seekg(offset, std::ios::beg);
+                    if (!fin) {
+                        throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
+                    }
+                    size_t num_bytes = ggml_nbytes(cur);
+                    if (ggml_backend_buft_is_host(buft)) {
+                        // for the CPU and Metal backend, we can read directly into the tensor
+                        fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
+                    } else {
+                        // read into a temporary buffer first, then copy to device memory
+                        read_buf.resize(num_bytes);
+                        fin.read(reinterpret_cast<char *>(read_buf.data()), num_bytes);
+                        ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
+                    }
+                }
+                fin.close();
+
+                LOG_DBG("%s: loaded %zu tensors from %s\n", __func__, tensors_to_load.size(), fname.c_str());
+            } else {
+                std::vector<uint8_t> read_buf;
+                size_t tmp_model_buf_pos = 0;
+                // alloc memory and offload data
+                ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
+                ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
+                ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                for (auto& t : tensors_to_load) {
+                    ggml_tensor* cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
+                    const size_t offset = tensor_offset[t->name];
+                    //fin.seekg(offset, std::ios::beg);
+                    if (offset < 0 || offset >= model_buf_size) {
+                        throw std::runtime_error(string_format("%s: failed to seek for tensor %s\n", __func__, t->name));
+                    }
+                    tmp_model_buf_pos = offset;
+                    size_t num_bytes = ggml_nbytes(cur);
+                    if (ggml_backend_buft_is_host(buft)) {
+                        // for the CPU and Metal backend, we can read directly into the tensor
+                        long int len = std::min(model_buf_size - tmp_model_buf_pos, num_bytes);
+                        memcpy(cur->data, model_buf + tmp_model_buf_pos, len);
+                        tmp_model_buf_pos += len;
+                    }
+                    else {
+                        // read into a temporary buffer first, then copy to device memory
+                        read_buf.resize(num_bytes);
+                        long int len = std::min(model_buf_size - tmp_model_buf_pos, num_bytes);
+                        memcpy(read_buf.data(), model_buf + tmp_model_buf_pos, len);
+                        tmp_model_buf_pos += len;
+                        ggml_backend_tensor_set(cur, read_buf.data(), 0, num_bytes);
+                    }
+                }
+
+                LOG_DBG("%s: loaded %zu tensors from %s\n", __func__, tensors_to_load.size(), fname.c_str());
+            }
         }
     }
 
@@ -1942,12 +1982,12 @@ struct clip_model_loader {
     }
 };
 
-struct clip_init_result clip_init(const char * fname, struct clip_context_params ctx_params) {
+struct clip_init_result clip_init(const char * fname, const char* model_buf, size_t model_buf_size, struct clip_context_params ctx_params) {
     clip_ctx * ctx_vision = nullptr;
     clip_ctx * ctx_audio = nullptr;
 
     try {
-        clip_model_loader loader(fname);
+        clip_model_loader loader(fname, model_buf, model_buf_size);
 
         if (loader.has_vision) {
             ctx_vision = new clip_ctx(ctx_params);
