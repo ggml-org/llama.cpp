@@ -37,4 +37,32 @@ void ggml_zdnn_softmax(
     const ggml_tensor * src0,
           ggml_tensor * dst);
 
+// RMS Normalization: dst = src0 / sqrt(mean(src0^2) + eps) * src1
+void ggml_zdnn_rms_norm(
+    const ggml_backend_zdnn_context * ctx,
+    const ggml_tensor * src0,
+    const ggml_tensor * src1,  // weight (optional)
+          ggml_tensor * dst,
+    float eps);
+
+// GET_ROWS: Extract rows from src0 using indices in src1
+// Used for embedding lookups
+void ggml_zdnn_get_rows(
+    const ggml_backend_zdnn_context * ctx,
+    const ggml_tensor * src0,  // embedding table
+    const ggml_tensor * src1,  // indices (I32)
+          ggml_tensor * dst);
+
+// CONT: Make tensor contiguous (copy non-contiguous to contiguous)
+void ggml_zdnn_cont(
+    const ggml_backend_zdnn_context * ctx,
+    const ggml_tensor * src0,
+          ggml_tensor * dst);
+
+// CPY: Copy tensor data (possibly with type conversion)
+void ggml_zdnn_cpy(
+    const ggml_backend_zdnn_context * ctx,
+    const ggml_tensor * src0,
+          ggml_tensor * dst);
+
 #endif // GGML_ZDNN_ELEMENTWISE_HPP
