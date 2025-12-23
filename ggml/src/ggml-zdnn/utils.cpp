@@ -1,6 +1,60 @@
 #include "ggml.h"
 #include "utils.hpp"
 
+// Check if a type requires dequantization for MUL_MAT
+bool ggml_zdnn_type_needs_dequant(ggml_type type) {
+    switch (type) {
+        // K-quants (most common in GGUF models)
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        // Basic quants
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_0:
+        // IQ quants
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+            return true;
+        default:
+            return false;
+    }
+}
+
+// Dequantize data from quantized format to F32
+void ggml_zdnn_dequantize(const void * src, float * dst, ggml_type type, int64_t nelements) {
+    const struct ggml_type_traits * traits = ggml_get_type_traits(type);
+    GGML_ASSERT(traits != nullptr && "Unknown type");
+    GGML_ASSERT(traits->to_float != nullptr && "Type has no dequantization function");
+    traits->to_float(src, dst, nelements);
+}
+
+// Check if a type can be directly mapped to a ZDNN type (without dequantization)
+bool ggml_zdnn_type_is_native(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_F32:
+        case GGML_TYPE_F16:
+        case GGML_TYPE_BF16:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_I8:
+        case GGML_TYPE_I32:
+            return true;
+        default:
+            return false;
+    }
+}
+
 zdnn_data_types ggml_zdnn_type_mapping(ggml_type type) {
     switch (type) {
         case GGML_TYPE_F32:
@@ -16,8 +70,8 @@ zdnn_data_types ggml_zdnn_type_mapping(ggml_type type) {
         case GGML_TYPE_I32:
             return INT32;
         default:
-            GGML_ABORT("%s: fatal: unable to determine zTensor data type",
-                       __func__);
+            GGML_ABORT("%s: fatal: unable to determine zTensor data type for type %d",
+                       __func__, type);
             break;
     }
 }
@@ -44,34 +98,59 @@ void ggml_zdnn_load_tensor(zdnn_ztensor & ztensor, void * buffer) {
 }
 
 void ggml_zdnn_init_tensor(ggml_backend_zdnn_buffer * buffer, const ggml_tensor * tensor) {
-    switch (tensor->op) {
-        case GGML_OP_MUL_MAT:
-            {
-                zdnn_init_pre_transformed_desc(
-                    ZDNN_2D,
-                    ggml_zdnn_type_mapping(tensor->type),
-                    &buffer->pre_tfm_desc,
-                    tensor->ne[1], tensor->ne[0]
-                );
-            } break;
+    // Initialize dequantization fields
+    buffer->dequant_data = nullptr;
+    buffer->original_type = tensor->type;
 
-        default:
-            {
-                // For 4D tensors, GGML uses NCHW layout. However, because zDNN
-                // automatically transforms everything to NHWC, we will use it
-                // directly to avoid the performance penalty changing the
-                // layout and reshaping the tensor.
-                zdnn_init_pre_transformed_desc(
-                    ZDNN_NHWC,
-                    ggml_zdnn_type_mapping(tensor->type),
-                    &buffer->pre_tfm_desc,
-                    tensor->ne[3], tensor->ne[2], tensor->ne[1], tensor->ne[0]
-                );
+    // Determine zdnn type and whether we need dequantization
+    zdnn_data_types zdnn_type;
+    bool needs_dequant = false;
+    bool skip_ztensor = false;
 
-                // TODO: Consider adding a ggml check.
-                // TODO: If tensor = 4D, use ZDNN_NCHW by default.
-                // TODO: If tensor = 2D, use ZDNN_NHWC by default.
-            } break;
+    if (ggml_zdnn_type_is_native(tensor->type)) {
+        // Native type - use directly
+        zdnn_type = ggml_zdnn_type_mapping(tensor->type);
+    } else if (ggml_zdnn_type_needs_dequant(tensor->type)) {
+        // Quantized type we can dequantize - will convert to F32
+        zdnn_type = FP32;
+        needs_dequant = true;
+    } else {
+        // Unsupported type - skip ztensor creation
+        // This tensor will fall back to CPU
+        skip_ztensor = true;
+    }
+
+    if (skip_ztensor) {
+        // Mark as not having a ztensor
+        buffer->ztensor.buffer_size = 0;
+        buffer->ztensor.buffer = nullptr;
+        return;
+    }
+
+    // Allocate dequantization buffer if needed
+    if (needs_dequant) {
+        const int64_t nelements = ggml_nelements(tensor);
+        buffer->dequant_data = ggml_aligned_malloc(nelements * sizeof(float));
+        GGML_ASSERT(buffer->dequant_data != nullptr);
+    }
+
+    // Create the tensor descriptor based on tensor shape
+    if (ggml_is_matrix(tensor)) {
+        // 2D tensor (typical for weights)
+        zdnn_init_pre_transformed_desc(
+            ZDNN_2D,
+            zdnn_type,
+            &buffer->pre_tfm_desc,
+            tensor->ne[1], tensor->ne[0]
+        );
+    } else {
+        // 4D tensor - use NHWC layout
+        zdnn_init_pre_transformed_desc(
+            ZDNN_NHWC,
+            zdnn_type,
+            &buffer->pre_tfm_desc,
+            tensor->ne[3], tensor->ne[2], tensor->ne[1], tensor->ne[0]
+        );
     }
 
     ZDNN_CHECK(zdnn_generate_transformed_desc(&buffer->pre_tfm_desc, &buffer->tfm_desc));
