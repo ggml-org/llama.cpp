@@ -688,12 +688,11 @@ DiscoveredPattern TemplateAnalyzer::extract_patterns_from_differences(const std:
             if (value1_pos > key_end) {
                 patterns.parameter_key_suffix = tool2_diff.substr(key_end, value1_pos - key_end);
 
-                // Trim suffix
+                // Trim leading whitespace only (preserve trailing newlines as they're significant)
                 if (!patterns.parameter_key_suffix.empty()) {
-                    size_t first = patterns.parameter_key_suffix.find_first_not_of(" \n\t");
-                    size_t last  = patterns.parameter_key_suffix.find_last_not_of(" \n\t");
-                    if (first != std::string::npos && last != std::string::npos) {
-                        patterns.parameter_key_suffix = patterns.parameter_key_suffix.substr(first, (last - first + 1));
+                    size_t first = patterns.parameter_key_suffix.find_first_not_of(" \t");
+                    if (first != std::string::npos && first > 0) {
+                        patterns.parameter_key_suffix = patterns.parameter_key_suffix.substr(first);
                     }
                 }
             }

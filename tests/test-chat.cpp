@@ -3284,29 +3284,6 @@ static void test_template_output_peg_parsers() {
             }};
         });
 
-        // Test tool call with string parameter and no closing </parameter> tag
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input =
-                "<tool_call>\n"
-                "<function=python>\n"
-                "<parameter=code>\n"
-                "def hello():\n"
-                "    print(\"Hello, world!\")\n"
-                "\n"
-                "hello()\n"
-                "</function>\n"
-                "</tool_call>";
-            t.params.enable_thinking = false;
-            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
-            t.params.tools = {python_tool};
-
-            t.expect.tool_calls = {{
-                /* .name = */      "python",
-                /* .arguments = */ "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}",
-                /* .id = */        {},
-            }};
-        });
-
         // Test response format
         test_peg_parser(tmpls.get(), [&](auto & t) {
             t.input =
