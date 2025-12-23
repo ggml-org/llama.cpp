@@ -2170,7 +2170,7 @@ static size_t htp_req_buff_init(htp_tensor *h, dspqueue_buffer * d, const ggml_t
     }
 
     htp_req_tensor_init(h, t);
- 
+
     dspqbuf_dump(d, t, type);
 
     return 1;
@@ -2321,7 +2321,7 @@ static inline size_t init_unary_req(htp_general_req * req, dspqueue_buffer * buf
 static inline size_t init_rope_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
     memcpy(&req->op_params, &t->op_params, sizeof(t->op_params));
     req->op = HTP_OP_ROPE;
- 
+
     size_t n_bufs = 0;
     n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
     n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
