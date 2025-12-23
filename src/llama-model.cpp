@@ -3212,9 +3212,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
                     }
 
-                    cls       = create_tensor(tn(LLM_TENSOR_CLS,     "weight"), {n_embd, n_embd}, TENSOR_NOT_REQUIRED);
-                    cls_out   = create_tensor(tn(LLM_TENSOR_CLS_OUT, "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
-                    cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT, "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
+                    cls       = create_tensor(tn(LLM_TENSOR_CLS,      "weight"), {n_embd, n_embd},            TENSOR_NOT_REQUIRED);
+                    cls_out   = create_tensor(tn(LLM_TENSOR_CLS_OUT,  "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
+                    cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT,  "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
+                    cls_norm  = create_tensor(tn(LLM_TENSOR_CLS_NORM, "weight"), {n_embd},                    TENSOR_NOT_REQUIRED);
 
                 } break;
             case LLM_ARCH_NEO_BERT:
@@ -7709,7 +7710,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     }
 
     // add on pooling layer
-    llm->build_pooling(cls, cls_b, cls_out, cls_out_b);
+    llm->build_pooling(cls, cls_b, cls_out, cls_out_b, cls_norm);
 
     // if the gguf model was converted with --sentence-transformers-dense-modules
     // there will be two additional dense projection layers

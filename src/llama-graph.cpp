@@ -2006,7 +2006,8 @@ void llm_graph_context::build_pooling(
         ggml_tensor * cls,
         ggml_tensor * cls_b,
         ggml_tensor * cls_out,
-        ggml_tensor * cls_out_b) const {
+        ggml_tensor * cls_out_b,
+        ggml_tensor * cls_norm) const {
     if (!cparams.embeddings) {
         return;
     }
@@ -2056,6 +2057,10 @@ void llm_graph_context::build_pooling(
                         cur = ggml_add(ctx0, cur, cls_b);
                     }
                     cur = ggml_tanh(ctx0, cur);
+                    if (cls_norm) {
+                        // head norm
+                        cur = build_norm(cur, cls_norm, NULL, LLM_NORM, -1);
+                    }
                 }
 
                 // some models don't have `cls_out`, for example: https://huggingface.co/jinaai/jina-reranker-v1-tiny-en
