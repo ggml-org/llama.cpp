@@ -895,6 +895,10 @@ typedef struct {
 } ggml_metal_kargs_arange;
 
 typedef struct {
+    int64_t val;
+} ggml_metal_kargs_memset;
+
+typedef struct {
     int32_t  ne00;
     int32_t  ne01;
     int32_t  ne02;

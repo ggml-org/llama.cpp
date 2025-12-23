@@ -9922,6 +9922,19 @@ kernel void kernel_opt_step_sgd_f32(
 }
 
 template<typename T>
+kernel void kernel_memset(
+        constant ggml_metal_kargs_fill & args,
+        device       T * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = args.val;
+}
+
+typedef decltype(kernel_memset<int64_t>) kernel_memset_t;
+
+template [[host_name("kernel_memset_i64")]] kernel kernel_memset_t kernel_memset<int64_t>;
+
+
+template<typename T>
 kernel void kernel_count_equal(
         constant ggml_metal_kargs_count_equal & args,
         device   const char * src0,

@@ -4105,46 +4105,61 @@ int ggml_metal_op_count_equal(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS(int32_t, ne0, op->src[0], ne);
     GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
     GGML_TENSOR_LOCALS(uint64_t, nb1, op->src[1], nb);
+    {
+        ggml_metal_kargs_memset args = { /*.val =*/ 0 };
 
-    ggml_metal_kargs_count_equal args = {
-        /*.ne00 =*/ ne00,
-        /*.ne01 =*/ ne01,
-        /*.ne02 =*/ ne02,
-        /*.ne03 =*/ ne03,
-        /*.nb00 =*/ nb00,
-        /*.nb01 =*/ nb01,
-        /*.nb02 =*/ nb02,
-        /*.nb03 =*/ nb03,
-        /*.nb10 =*/ nb10,
-        /*.nb11 =*/ nb11,
-        /*.nb12 =*/ nb12,
-        /*.nb13 =*/ nb13,
-    };
+        auto pipeline = ggml_metal_library_get_pipeline_memset(lib, op);
 
-    auto pipeline = ggml_metal_library_get_pipeline_count_equal(lib, op);
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op), 1);
 
-    const uint64_t n = ggml_nelements(op->src[0]);
-
-    int nth = 32; // SIMD width
-    while (nth < (int) n && nth < ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)) {
-        nth *= 2;
+        ggml_metal_encoder_dispatch_threadgroups(enc, 1, 1, 1, 1, 1, 1);
     }
 
-    nth = std::min(nth, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
-    nth = std::min(nth, (int) n);
-    const int nthg = (n + nth - 1) / nth;
+    ggml_metal_op_concurrency_reset(ctx);
 
-    const size_t smem = pipeline.smem;
-    int64_t      z    = 0;
-    ggml_backend_tensor_set(op, &z, 0, sizeof(z));
+    {
+        ggml_metal_kargs_count_equal args = {
+            /*.ne00 =*/ ne00,
+            /*.ne01 =*/ ne01,
+            /*.ne02 =*/ ne02,
+            /*.ne03 =*/ ne03,
+            /*.nb00 =*/ nb00,
+            /*.nb01 =*/ nb01,
+            /*.nb02 =*/ nb02,
+            /*.nb03 =*/ nb03,
+            /*.nb10 =*/ nb10,
+            /*.nb11 =*/ nb11,
+            /*.nb12 =*/ nb12,
+            /*.nb13 =*/ nb13,
+        };
 
-    ggml_metal_encoder_set_pipeline(enc, pipeline);
-    ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
-    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[0]), 1);
-    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[1]), 2);
-    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op), 3);
+        auto pipeline = ggml_metal_library_get_pipeline_count_equal(lib, op);
 
-    ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
-    ggml_metal_encoder_dispatch_threadgroups(enc, nthg, 1, 1, nth, 1, 1);
+        const uint64_t n = ggml_nelements(op->src[0]);
+
+        int nth = 32;  // SIMD width
+        while (nth < (int) n && nth < ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)) {
+            nth *= 2;
+        }
+
+        nth            = std::min(nth, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+        nth            = std::min(nth, (int) n);
+        const int nthg = (n + nth - 1) / nth;
+
+        const size_t smem = pipeline.smem;
+        ggml_backend_tensor_memset(op, 0, 0, sizeof(op));
+
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op), 3);
+
+        ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
+        ggml_metal_encoder_dispatch_threadgroups(enc, nthg, 1, 1, nth, 1, 1);
+    }
+
     return 1;
 }
