@@ -1702,7 +1702,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_count_equal(ggml
     if (!res.pipeline) {
         res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
     }
-    res.smem = 32 * sizeof(float);
+    res.smem = 32 * sizeof(int32_t);
 
     return res;
 }

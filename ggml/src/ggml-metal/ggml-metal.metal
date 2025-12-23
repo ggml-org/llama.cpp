@@ -9926,7 +9926,7 @@ kernel void kernel_count_equal_i32(
         device   const char * src0,
         device   const char * src1,
         device      int64_t * dst,
-        threadgroup float   * shmem_f32 [[threadgroup(0)]],
+        threadgroup int32_t * shmem_i32 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort3 tpitg[[thread_position_in_threadgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]],
@@ -9953,7 +9953,7 @@ kernel void kernel_count_equal_i32(
 
     sum = simd_sum(sum);
     if (tiisg == 0) {
-        shmem_f32[sgitg] = (float) sum;
+        shmem_i32[sgitg] = sum;
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -9963,7 +9963,7 @@ kernel void kernel_count_equal_i32(
 
         float v = 0.0f;
         if(tpitg.x < nsg) {
-            v = shmem_f32[tpitg.x];
+            v = shmem_i32[tpitg.x];
         }
 
         float total = simd_sum(v);
