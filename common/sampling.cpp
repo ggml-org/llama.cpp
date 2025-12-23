@@ -393,7 +393,62 @@ struct llama_sampler * common_sampler_get(const struct common_sampler * gsmpl) {
     return gsmpl->chain;
 }
 
+std::pair<llama_token, float> common_sampler_sample_with_prob(struct common_sampler* gsmpl, struct llama_context* ctx, int idx, bool grammar_first) {
+    llama_synchronize(ctx);
+
+    // start measuring sampling time after the llama_context synchronization in order to not measure any ongoing async operations
+    const auto tm = gsmpl->tm();
+
+    llama_token id = LLAMA_TOKEN_NULL;
+
+    auto& grmr = gsmpl->grmr;
+    auto& chain = gsmpl->chain;
+    auto& cur_p = gsmpl->cur_p; // initialized by set_logits
+
+    gsmpl->set_logits(ctx, idx);
+
+    if (grammar_first) {
+        llama_sampler_apply(grmr, &cur_p);
+    }
+
+    llama_sampler_apply(chain, &cur_p);
+
+    id = cur_p.data[cur_p.selected].id;
+
+    if (grammar_first) {
+        return {id, cur_p.data[cur_p.selected].p};
+    }
+
+    // check if it the sampled token fits the grammar (grammar-based rejection sampling)
+    {
+        llama_token_data       single_token_data = { id, 1.0f, 0.0f };
+        llama_token_data_array single_token_data_array = { &single_token_data, 1, -1, false };
+
+        llama_sampler_apply(grmr, &single_token_data_array);
+
+        const bool is_valid = single_token_data_array.data[0].logit != -INFINITY;
+        if (is_valid) {
+            return {id, cur_p.data[cur_p.selected].p };
+        }
+    }
+
+    // resampling:
+    // if the token is not valid, sample again, but first apply the grammar sampler and then the sampling chain
+    gsmpl->set_logits(ctx, idx);
+
+    llama_sampler_apply(grmr, &cur_p);
+    llama_sampler_apply(chain, &cur_p);
+
+    GGML_ASSERT(cur_p.selected != -1 && "no selected token during sampling - check your sampling configuration");
+
+    id = cur_p.data[cur_p.selected].id;
+
+    return {id, cur_p.data[cur_p.selected].p};
+}
+
 llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_context * ctx, int idx, bool grammar_first) {
+    return common_sampler_sample_with_prob(gsmpl, ctx, idx, grammar_first).first;
+/*
     llama_synchronize(ctx);
 
     // start measuring sampling time after the llama_context synchronization in order to not measure any ongoing async operations
@@ -444,6 +499,7 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
     id = cur_p.data[cur_p.selected].id;
 
     return id;
+*/
 }
 
 std::vector<llama_token> common_sampler_sample_and_accept_n(struct common_sampler * gsmpl, struct llama_context * ctx, const std::vector<int> & idxs, const llama_tokens & draft, bool grammar_first) {
