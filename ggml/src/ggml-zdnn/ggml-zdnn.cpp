@@ -4,12 +4,14 @@
 
 #include "ggml-zdnn/common.hpp"
 #include "ggml-zdnn/mmf.hpp"
+#include "ggml-zdnn/elementwise.hpp"
 #include "ggml-zdnn/utils.hpp"
 #include "ggml.h"
 
 #include <vector>
 #include <memory>
-#include <csignal>  // raise(SIGTRAP)
+#include <cstring>   // memcpy
+#include <csignal>   // raise(SIGTRAP)
 #include <unistd.h>
 
 static void ggml_zdnn_compute_forward_mul_mat(
@@ -24,6 +26,35 @@ static void ggml_zdnn_compute_forward_mul_mat(
     ggml_zdnn_mul_mat_f(ctx, src0, src1, dst);
 }
 
+static void ggml_zdnn_compute_forward_add(
+    const ggml_backend_zdnn_context * ctx,
+          ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    ggml_zdnn_add(ctx, src0, src1, dst);
+}
+
+static void ggml_zdnn_compute_forward_mul(
+    const ggml_backend_zdnn_context * ctx,
+          ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    ggml_zdnn_mul(ctx, src0, src1, dst);
+}
+
+static void ggml_zdnn_compute_forward_softmax(
+    const ggml_backend_zdnn_context * ctx,
+          ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    ggml_zdnn_softmax(ctx, src0, dst);
+}
+
 static bool ggml_zdnn_compute_forward(
     ggml_backend_zdnn_context * ctx,
     ggml_tensor * dst) {
@@ -32,6 +63,21 @@ static bool ggml_zdnn_compute_forward(
         case GGML_OP_MUL_MAT:
             {
                 ggml_zdnn_compute_forward_mul_mat(ctx, dst);
+            } break;
+
+        case GGML_OP_ADD:
+            {
+                ggml_zdnn_compute_forward_add(ctx, dst);
+            } break;
+
+        case GGML_OP_MUL:
+            {
+                ggml_zdnn_compute_forward_mul(ctx, dst);
+            } break;
+
+        case GGML_OP_SOFT_MAX:
+            {
+                ggml_zdnn_compute_forward_softmax(ctx, dst);
             } break;
 
         default:
@@ -72,6 +118,18 @@ static enum ggml_status ggml_zdnn_graph_compute(ggml_backend_t backend, ggml_cgr
     GGML_UNUSED(ctx_dev);
 }
 
+// Helper to check if tensor type is supported for element-wise ops
+static bool ggml_zdnn_is_supported_type(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_F32:
+        case GGML_TYPE_F16:
+        case GGML_TYPE_BF16:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_dev, const ggml_tensor * op) {
     switch (op->op) {
         case GGML_OP_NONE:
@@ -107,6 +165,60 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                     default:
                         return false;
                 }
+            } break;
+
+        case GGML_OP_ADD:
+        case GGML_OP_MUL:
+            {
+                const ggml_tensor * src0 = op->src[0];
+                const ggml_tensor * src1 = op->src[1];
+
+                // Both inputs must be contiguous and same type
+                if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1)) {
+                    return false;
+                }
+
+                // Check type support
+                if (!ggml_zdnn_is_supported_type(src0->type) ||
+                    !ggml_zdnn_is_supported_type(src1->type)) {
+                    return false;
+                }
+
+                // Shapes must match for element-wise ops (no broadcasting for now)
+                if (src0->ne[0] != src1->ne[0] || src0->ne[1] != src1->ne[1] ||
+                    src0->ne[2] != src1->ne[2] || src0->ne[3] != src1->ne[3]) {
+                    return false;
+                }
+
+                return true;
+            } break;
+
+        case GGML_OP_SOFT_MAX:
+            {
+                const ggml_tensor * src0 = op->src[0];
+
+                if (!ggml_is_contiguous(src0)) {
+                    return false;
+                }
+
+                // ZDNN softmax has specific requirements
+                // For now, only support when there's no mask (src1 == nullptr)
+                if (op->src[1] != nullptr) {
+                    return false;
+                }
+
+                // Check scale and max_bias parameters
+                // ZDNN softmax doesn't support scaling, so only scale=1.0 is supported
+                float scale = 1.0f;
+                float max_bias = 0.0f;
+                memcpy(&scale, (const float *)op->op_params + 0, sizeof(float));
+                memcpy(&max_bias, (const float *)op->op_params + 1, sizeof(float));
+
+                if (scale != 1.0f || max_bias != 0.0f) {
+                    return false;
+                }
+
+                return ggml_zdnn_is_supported_type(src0->type);
             } break;
 
         default:
