@@ -9965,7 +9965,7 @@ kernel void kernel_count_equal_i32(
         if(tpitg.x < nsg) {
             v = shmem_f32[tpitg.x];
         }
-        
+
         float total = simd_sum(v);
         if (tpitg.x == 0) {
             dst[0] = (int64_t) total;
