@@ -62,6 +62,7 @@ class SettingsStore {
 		if (!modelId) return null;
 
 		const props = modelsStore.getModelProps(modelId);
+
 		return props?.default_generation_settings?.params ?? null;
 	}
 
