@@ -505,6 +505,29 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
                     patterns.reasoning_end_marker = end_tag;
                     LOG_DBG("Set reasoning markers to: start='%s', end='%s'\n",
                             patterns.reasoning_start_marker.c_str(), patterns.reasoning_end_marker.c_str());
+
+                    // Strip reasoning markers from tool call start marker and opener
+                    // The partial_start and end_tag are what appear in the tool call markers
+                    auto strip_marker = [&](std::string & str) {
+                        if (str.empty()) {
+                            return;
+                        }
+                        // Remove partial start marker from beginning if present
+                        if (str.find(partial_start) == 0) {
+                            str = str.substr(partial_start.length());
+                            LOG_DBG("Stripped partial_start '%s' from tool call marker\n", partial_start.c_str());
+                        }
+                        // Remove end marker from anywhere if present
+                        size_t end_pos = str.find(end_tag);
+                        if (end_pos != std::string::npos) {
+                            str = str.substr(0, end_pos) + str.substr(end_pos + end_tag.length());
+                            LOG_DBG("Stripped end_tag '%s' from tool call marker\n", end_tag.c_str());
+                        }
+                    };
+
+                    strip_marker(patterns.tool_call_start_marker);
+                    strip_marker(patterns.tool_call_opener);
+
                     break;
                 }
             }
@@ -1294,7 +1317,49 @@ TemplatePattern::ToolCallFormat TemplateAnalyzer::determine_format_from_patterns
     }
 
     // Look for XML-like patterns in function opener
+    // Only classify as CONSTRUCTED if parameter markers are substantial (not just spaces/quotes)
     if (!patterns.function_opener.empty() && patterns.function_opener.find('<') == 0) {
+        // Check if parameter markers are substantial
+        bool   has_substantial_param_markers = false;
+        size_t meaningful_len                    = 0;
+        if (!patterns.parameter_opener.empty()) {
+            for (char c : patterns.parameter_opener) {
+                if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+                    meaningful_len++;
+                }
+            }
+            has_substantial_param_markers = (meaningful_len > 1); // More than just a quote
+        }
+        if (!has_substantial_param_markers && !patterns.parameter_closer.empty()) {
+            meaningful_len = 0;
+            for (char c : patterns.parameter_closer) {
+                if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+                    meaningful_len++;
+                }
+            }
+            has_substantial_param_markers = (meaningful_len > 1);
+        }
+
+        // If function opener is XML-like but parameter markers are minimal,
+        // check if the overall structure is JSON-native
+        if (!has_substantial_param_markers) {
+            LOG_DBG("Function opener is XML-like but parameter markers are minimal\n");
+            // If tool_call_opener or tool_call_start_marker contains JSON structure markers,
+            // this is likely a NATIVE format with XML-style function name markers
+            if (!patterns.tool_call_opener.empty() &&
+                (patterns.tool_call_opener.find('[') != std::string::npos ||
+                 patterns.tool_call_opener.find('{') != std::string::npos)) {
+                LOG_DBG("Detected JSON_NATIVE format (XML markers but JSON structure in tool_call_opener)\n");
+                return TemplatePattern::JSON_NATIVE;
+            }
+            if (!patterns.tool_call_start_marker.empty() &&
+                (patterns.tool_call_start_marker.find('[') != std::string::npos ||
+                 patterns.tool_call_start_marker.find('{') != std::string::npos)) {
+                LOG_DBG("Detected JSON_NATIVE format (XML markers but JSON structure in tool_call_start_marker)\n");
+                return TemplatePattern::JSON_NATIVE;
+            }
+        }
+
         LOG_DBG("Detected XML_CONSTRUCTED format from function_opener\n");
         return TemplatePattern::XML_CONSTRUCTED;
     }
@@ -1694,16 +1759,21 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplatePattern 
                 thinking_forced_open, start_marker.c_str(), prompt_trimmed.empty() ? '?' : prompt_trimmed.back(),
                 static_cast<int>(inputs.enable_thinking));
 
+        // Calculate has_tools early for validation checks
+        bool has_tools = inputs.tools.is_array() && !inputs.tools.empty();
+
         // ... validation ...
         if (local_pattern.format == TemplatePattern::JSON_NATIVE) {
-            if (local_pattern.special_markers.at("tool_call_start_marker").empty() &&
+            if (has_tools &&
+                local_pattern.special_markers.at("tool_call_start_marker").empty() &&
                 local_pattern.special_markers.at("tool_call_opener").empty() &&
                 local_pattern.special_markers.at("function_opener").empty()) {
                 LOG_DBG("JSON_NATIVE format detected but no meaningful markers - falling back to generic parser\n");
                 throw std::runtime_error("Template analysis failed: JSON_NATIVE format without meaningful markers");
             }
         } else if (local_pattern.format == TemplatePattern::XML_CONSTRUCTED) {
-            if (local_pattern.special_markers.at("tool_call_start_marker").empty() &&
+            if (has_tools &&
+                local_pattern.special_markers.at("tool_call_start_marker").empty() &&
                 local_pattern.special_markers.at("function_opener").empty()) {
                 LOG_DBG("XML_CONSTRUCTED format detected but no meaningful markers - falling back to generic parser\n");
                 throw std::runtime_error("Template analysis failed: XML_CONSTRUCTED format without meaningful markers");
@@ -1714,12 +1784,16 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplatePattern 
 
         if (local_pattern.format == TemplatePattern::JSON_NATIVE) {
             arena       = build_native_parser(local_pattern, tmpl, inputs, thinking_forced_open);
-            data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
-            LOG_DBG("Generated JSON_NATIVE parser successfully\n");
+            // If there are no tools, format should be SIMPLE (content-only)
+            data.format = has_tools ? COMMON_CHAT_FORMAT_PEG_NATIVE : COMMON_CHAT_FORMAT_PEG_SIMPLE;
+            LOG_DBG("Generated JSON_NATIVE parser successfully (actual format: %s)\n",
+                    has_tools ? "PEG_NATIVE" : "PEG_SIMPLE");
         } else if (local_pattern.format == TemplatePattern::XML_CONSTRUCTED) {
             arena       = build_constructed_parser(local_pattern, tmpl, inputs, thinking_forced_open);
-            data.format = COMMON_CHAT_FORMAT_PEG_CONSTRUCTED;
-            LOG_DBG("Generated XML_CONSTRUCTED parser successfully\n");
+            // If there are no tools, format should be SIMPLE (content-only)
+            data.format = has_tools ? COMMON_CHAT_FORMAT_PEG_CONSTRUCTED : COMMON_CHAT_FORMAT_PEG_SIMPLE;
+            LOG_DBG("Generated XML_CONSTRUCTED parser successfully (actual format: %s)\n",
+                    has_tools ? "PEG_CONSTRUCTED" : "PEG_SIMPLE");
         } else {
             // Treat as content only
             arena       = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {

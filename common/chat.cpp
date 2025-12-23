@@ -2682,12 +2682,14 @@ static common_chat_params common_chat_templates_apply_jinja(
         // Pass whether tools are provided to the autoparser
         bool has_tools = params.tools.is_array() && !params.tools.empty();
         TemplatePattern pattern = TemplateAnalyzer::analyze_template(tmpl, has_tools);
-        if (pattern.format != TemplatePattern::UNKNOWN) {
+
+        // Always attempt to generate parser, even for UNKNOWN templates with no tools
+        // The parser generation will handle content-only parsing appropriately
         auto auto_params = UniversalPEGGenerator::generate_parser(pattern, tmpl, params);
-        // Only use the auto-generated parser if it's different from the default format
+
+        // Only use the auto-generated parser if it's different from CONTENT_ONLY
         if (auto_params.format != COMMON_CHAT_FORMAT_CONTENT_ONLY) {
             return auto_params;
-            }
         }
     } catch (const std::exception& e) {
         LOG_DBG("Automatic parser generation failed: %s - falling back to generic handler\n", e.what());
