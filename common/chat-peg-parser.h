@@ -62,7 +62,10 @@ class common_chat_peg_native_builder : public common_chat_peg_builder {
                                           const std::string &    close_tag,
                                           const nlohmann::json & tool_defs,
                                           bool                   parallel_tool_calls,
-                                          bool                   force_tool_calls);
+                                          bool                   force_tool_calls,
+                                          const std::string &    name_field = "name",
+                                          const std::string &    args_field = "arguments",
+                                          const std::string &    id_field   = "");
 };
 
 class common_chat_peg_native_mapper : public common_chat_peg_mapper {
