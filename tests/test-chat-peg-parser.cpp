@@ -20,6 +20,7 @@ static void test_example_native(testing & t);
 static void test_example_qwen3_coder(testing & t);
 static void test_example_qwen3_non_coder(testing & t);
 static void test_command7_parser_compare(testing & t);
+static void test_prefix_tool_names(testing & t);
 
 int main(int argc, char * argv[]) {
     testing t(std::cout);
@@ -36,6 +37,7 @@ int main(int argc, char * argv[]) {
     t.test("qwen3 coder", test_example_qwen3_coder);
     t.test("qwen3 non-coder", test_example_qwen3_non_coder);
     t.test("comparison", test_command7_parser_compare);
+    t.test("prefix tool names", test_prefix_tool_names);
 
     return t.summary();
 }
@@ -782,4 +784,179 @@ void test_command7_parser_compare(testing & t) {
             }
         },
         20);
+}
+
+// Test that tool names that are proper prefixes of other tool names don't cause
+// premature matching during incremental parsing.
+// For example, "special_function" should not match when parsing "special_function_with_opt".
+static void test_prefix_tool_names(testing & t) {
+    // Create tools where one name is a proper prefix of another
+    json tools = json::array();
+
+    json tool_short = {
+        { "type", "function" },
+        { "function",
+          {
+              { "name", "special_function" },
+              { "description", "A special function" },
+              { "parameters",
+                {
+                    { "type", "object" },
+                    { "properties",
+                      {
+                          { "arg1", { { "type", "integer" } } },
+                      } },
+                    { "required", { "arg1" } },
+                } },
+          } }
+    };
+    tools.push_back(tool_short);
+
+    json tool_long = {
+        { "type", "function" },
+        { "function",
+          {
+              { "name", "special_function_with_opt" },
+              { "description", "A special function with optional params" },
+              { "parameters",
+                {
+                    { "type", "object" },
+                    { "properties",
+                      {
+                          { "arg1", { { "type", "integer" } } },
+                          { "arg2", { { "type", "integer" } } },
+                      } },
+                    { "required", { "arg1" } },
+                } },
+          } }
+    };
+    tools.push_back(tool_long);
+
+    // Use standard_constructed_tools which had the prefix matching bug
+    std::map<std::string, std::string> markers = {
+        { "tool_call_start_marker", "<tool_call>" },
+        { "tool_call_end_marker", "</tool_call>" },
+        { "function_opener", "<function=" },
+        { "function_closer", "</function>" },
+        { "function_name_suffix", ">" },
+        { "parameter_key_prefix", "<param=" },
+        { "parameter_key_suffix", ">" },
+        { "parameter_closer", "</param>" },
+    };
+
+    auto parser = build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
+        auto content   = p.rule("content", p.content(p.until("<tool_call>")));
+        auto tool_call = p.standard_constructed_tools(markers, tools, false, false);
+        return content + p.zero_or_more(p.space() + tool_call) + p.end();
+    });
+
+    // Test parsing the long tool name - this should NOT trigger the short tool name
+    t.test("parse long tool name", [&](testing & t) {
+        std::string input =
+            "Let me call the function."
+            "<tool_call>"
+            "<function=special_function_with_opt>"
+            "<param=arg1>42</param>"
+            "</function>"
+            "</tool_call>";
+
+        common_peg_parse_context ctx(input, false);
+        auto                     result = parser.parse(ctx);
+
+        t.assert_true("success", result.success());
+
+        common_chat_msg msg;
+        auto            mapper = common_chat_peg_constructed_mapper(msg);
+        mapper.from_ast(ctx.ast, result);
+
+        t.assert_equal("content", "Let me call the function.", msg.content);
+        t.assert_equal("tool calls count", 1u, msg.tool_calls.size());
+        if (!msg.tool_calls.empty()) {
+            t.assert_equal("tool name", "special_function_with_opt", msg.tool_calls[0].name);
+        }
+    });
+
+    // Test incremental parsing - the key test case
+    // This ensures that when incrementally parsing "special_function_with_opt",
+    // we don't prematurely emit "special_function" as a tool call
+    t.test("incremental parse long tool name", [&](testing & t) {
+        std::string input =
+            "Let me call the function."
+            "<tool_call>"
+            "<function=special_function_with_opt>"
+            "<param=arg1>42</param>"
+            "</function>"
+            "</tool_call>";
+
+        std::vector<std::string> tokens = simple_tokenize(input);
+
+        common_chat_msg prev;
+        for (auto it = tokens.begin(); it != tokens.end(); it++) {
+            std::string in = std::accumulate(tokens.begin(), it + 1, std::string());
+
+            common_peg_parse_context ctx(in, it + 1 < tokens.end());
+            auto                     result = parser.parse(ctx);
+
+            if (!t.assert_equal("not fail", false, result.fail())) {
+                t.log(in.substr(0, result.end) + "[failed->]" + in.substr(result.end));
+                return;
+            }
+
+            common_chat_msg msg;
+            auto            mapper = common_chat_peg_constructed_mapper(msg);
+            mapper.from_ast(ctx.ast, result);
+
+            // The critical check: during incremental parsing, we should never
+            // see "special_function" as the tool name when parsing "special_function_with_opt"
+            for (const auto & tc : msg.tool_calls) {
+                if (!t.assert_equal("tool name should not be short prefix", false,
+                                    tc.name == "special_function")) {
+                    t.log("Premature tool name match at input: " + in);
+                    return;
+                }
+            }
+
+            try {
+                auto diffs = common_chat_msg_diff::compute_diffs(prev, msg);
+            } catch (const std::exception & e) {
+                t.log(in.substr(0, result.end) + "[failed->]" + in.substr(result.end));
+                t.assert_true(std::string("diff failed with ") + e.what(), false);
+                return;
+            }
+
+            prev = msg;
+        }
+
+        // Final check: the complete parse should have the correct tool name
+        t.assert_equal("final tool calls count", 1u, prev.tool_calls.size());
+        if (!prev.tool_calls.empty()) {
+            t.assert_equal("final tool name", "special_function_with_opt", prev.tool_calls[0].name);
+        }
+    });
+
+    // Test parsing the short tool name still works
+    t.test("parse short tool name", [&](testing & t) {
+        std::string input =
+            "Let me call the function."
+            "<tool_call>"
+            "<function=special_function>"
+            "<param=arg1>42</param>"
+            "</function>"
+            "</tool_call>";
+
+        common_peg_parse_context ctx(input, false);
+        auto                     result = parser.parse(ctx);
+
+        t.assert_true("success", result.success());
+
+        common_chat_msg msg;
+        auto            mapper = common_chat_peg_constructed_mapper(msg);
+        mapper.from_ast(ctx.ast, result);
+
+        t.assert_equal("content", "Let me call the function.", msg.content);
+        t.assert_equal("tool calls count", 1u, msg.tool_calls.size());
+        if (!msg.tool_calls.empty()) {
+            t.assert_equal("tool name", "special_function", msg.tool_calls[0].name);
+        }
+    });
 }
