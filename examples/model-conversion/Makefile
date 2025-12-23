@@ -25,6 +25,8 @@ define quantize_model
 	@echo "Export the quantized model path to $(2) variable in your environment"
 endef
 
+DEVICE ?= auto
+
 ###
 ### Casual Model targets/recipes
 ###
@@ -53,7 +55,7 @@ causal-convert-mm-model:
 
 causal-run-original-model:
 	$(call validate_model_path,causal-run-original-model)
-	@MODEL_PATH="$(MODEL_PATH)" ./scripts/causal/run-org-model.py
+	@MODEL_PATH="$(MODEL_PATH)" ./scripts/causal/run-org-model.py --device "$(DEVICE)"
 
 causal-run-converted-model:
 	@CONVERTED_MODEL="$(CONVERTED_MODEL)" ./scripts/causal/run-converted-model.sh
