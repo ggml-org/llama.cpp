@@ -5296,7 +5296,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             if (n_expert != 0) {
                                 const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
                                 const int64_t n_ff_shexp = hparams.n_ff_shexp;
-                                
+
                                 layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), { n_embd, n_expert}, 0);
                                 layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert         }, 0);
 
