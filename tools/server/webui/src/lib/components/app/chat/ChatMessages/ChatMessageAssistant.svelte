@@ -92,8 +92,18 @@
 	const promptProgressValue = $derived(processingState.processingState?.promptProgress);
 	const promptProgressText = $derived(() => {
 		if (!promptProgressValue) return null;
-		const { processed, total, time_ms } = promptProgressValue;
-		return `Processing (${processed.toLocaleString()} / ${total.toLocaleString()} tokens ${Math.round(time_ms / 1000)}s)`;
+		const { processed, total, time_ms, cache } = promptProgressValue;
+
+		// Subtract cached tokens since they're processed instantly from KV cache
+		const actualProcessed = processed - cache;
+		const actualTotal = total - cache;
+
+		const percent = Math.round((actualProcessed / actualTotal) * 100);
+		const tokensPerSec = actualProcessed / (time_ms / 1000);
+		const remaining = actualTotal - actualProcessed;
+		const eta = Math.ceil(remaining / tokensPerSec);
+
+		return `Processing (${actualProcessed.toLocaleString()} / ${actualTotal.toLocaleString()} tokens - ${percent}% - ETA: ${eta}s)`;
 	});
 
 	let currentConfig = $derived(config());
