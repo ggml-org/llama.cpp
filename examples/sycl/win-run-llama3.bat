@@ -8,4 +8,4 @@ set INPUT2="Building a website can be done in 10 simple steps:\nStep 1:"
 :: support malloc device memory more than 4GB.
 set UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
 
-.\build\bin\llama-cli.exe -m models\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf -p %INPUT2% -n 400 -s 0 -e -ngl 99
+.\build\bin\llama-completion.exe -m models\Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf -no-cnv -p %INPUT2% -n 400 -s 0 -e -ngl 99

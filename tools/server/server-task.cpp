@@ -32,8 +32,8 @@ json task_params::to_json(bool only_metrics) const {
     }
 
     json lora = json::array();
-    for (size_t i = 0; i < this->lora.size(); ++i) {
-        lora.push_back({{"id", i}, {"scale", this->lora[i].scale}});
+    for (auto & it : this->lora) {
+        lora.push_back({{"id", it.first}, {"scale", it.second}});
     }
 
     if (only_metrics) {
@@ -145,12 +145,10 @@ json task_params::to_json(bool only_metrics) const {
 //
 
 task_params server_task::params_from_json_cmpl(
-        const llama_context * ctx,
+        const llama_vocab * vocab,
         const common_params & params_base,
+        const int n_ctx_slot,
         const json & data) {
-    const llama_model * model = llama_get_model(ctx);
-    const llama_vocab * vocab = llama_model_get_vocab(model);
-
     task_params params;
 
     // Sampling parameter defaults are loaded from the global server context (but individual requests can still them)
@@ -223,12 +221,12 @@ task_params server_task::params_from_json_cmpl(
 
     if (data.contains("lora")) {
         if (data.at("lora").is_array()) {
-            params.lora = parse_lora_request(params_base.lora_adapters, data.at("lora"));
+            params.lora = parse_lora_request(data.at("lora"));
         } else {
             throw std::runtime_error("Error: 'lora' must be an array of objects with 'id' and 'scale' fields");
         }
     } else {
-        params.lora = params_base.lora_adapters;
+        params.lora = {};
     }
 
     // TODO: add more sanity checks for the input parameters
@@ -243,11 +241,11 @@ task_params server_task::params_from_json_cmpl(
 
     if (params.sampling.penalty_last_n == -1) {
         // note: should be the slot's context and not the full context, but it's ok
-        params.sampling.penalty_last_n = llama_n_ctx(ctx);
+        params.sampling.penalty_last_n = n_ctx_slot;
     }
 
     if (params.sampling.dry_penalty_last_n == -1) {
-        params.sampling.dry_penalty_last_n = llama_n_ctx(ctx);
+        params.sampling.dry_penalty_last_n = n_ctx_slot;
     }
 
     if (params.sampling.dry_base < 1.0f) {
@@ -1153,7 +1151,7 @@ json server_task_result_rerank::to_json() {
 json server_task_result_cmpl_partial::to_json_anthropic() {
     json events = json::array();
     bool first = (n_decoded == 1);
-    static bool text_block_started = false;
+    bool text_block_started = false;
 
     if (first) {
         text_block_started = false;
@@ -1322,6 +1320,30 @@ json server_task_result_slot_erase::to_json() {
         { "id_slot",  id_slot },
         { "n_erased", n_erased },
     };
+}
+
+//
+// server_task_result_get_lora
+//
+
+json server_task_result_get_lora::to_json() {
+    json result = json::array();
+    for (size_t i = 0; i < loras.size(); ++i) {
+        auto & lora = loras[i];
+        json entry = {
+            {"id",            i},
+            {"path",          lora.info.path},
+            {"scale",         lora.info.scale},
+            {"task_name",     lora.info.task_name},
+            {"prompt_prefix", lora.info.prompt_prefix},
+        };
+        if (!lora.alora_invocation_tokens.empty()) {
+            entry["alora_invocation_string"] = lora.alora_invocation_string;
+            entry["alora_invocation_tokens"] = lora.alora_invocation_tokens;
+        }
+        result.push_back(std::move(entry));
+    }
+    return result;
 }
 
 //
