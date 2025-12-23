@@ -160,24 +160,6 @@ struct common_chat_templates {
     std::unique_ptr<common_chat_template> template_tool_use;
 };
 
-struct templates_params {
-    json messages;
-    json tools;
-    common_chat_tool_choice tool_choice;
-    json json_schema;
-    bool parallel_tool_calls;
-    common_reasoning_format reasoning_format;
-    bool stream;
-    std::string grammar;
-    bool add_generation_prompt = true;
-    bool enable_thinking = true;
-    std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
-    json extra_context;
-    bool add_bos;
-    bool add_eos;
-    bool is_inference = true;
-};
-
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
     if (tool_choice == "auto") {
         return COMMON_CHAT_TOOL_CHOICE_AUTO;

@@ -20,25 +20,6 @@
 
 using json = nlohmann::ordered_json;
 
-// Definition of templates_params to match the one in chat.cpp
-struct templates_params {
-    json                                  messages;
-    json                                  tools;
-    common_chat_tool_choice               tool_choice;
-    json                                  json_schema;
-    bool                                  parallel_tool_calls;
-    common_reasoning_format               reasoning_format;
-    bool                                  stream;
-    std::string                           grammar;
-    bool                                  add_generation_prompt;
-    bool                                  enable_thinking;
-    std::chrono::system_clock::time_point now;
-    json                                  extra_context;
-    bool                                  add_bos;
-    bool                                  add_eos;
-    bool                                  is_inference;
-};
-
 // Helper function to read a file as string
 static std::string read_file(const std::string & path) {
     std::ifstream fin(path, std::ios::binary);
