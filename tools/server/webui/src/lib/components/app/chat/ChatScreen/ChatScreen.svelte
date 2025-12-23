@@ -44,6 +44,8 @@
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
 	let autoScrollEnabled = $state(true);
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
+	// Always hand ChatMessages a fresh array so mutations in the store trigger rerenders/merges
+	const liveMessages = $derived.by(() => [...conversationsStore.activeMessages]);
 	let dragCounter = $state(0);
 	let isDragOver = $state(false);
 	let lastScrollTop = $state(0);
@@ -52,6 +54,8 @@
 	let showFileErrorDialog = $state(false);
 	let uploadedFiles = $state<ChatUploadedFile[]>([]);
 	let userScrolledUp = $state(false);
+	let lastPinnedMessageCount = $state(0);
+	let lastPinnedTailId = $state<string | null>(null);
 
 	let fileErrorData = $state<{
 		generallyUnsupported: File[];
@@ -221,14 +225,22 @@
 		}
 	}
 
-	function handleScroll() {
+	function handleScroll(event?: Event) {
 		if (disableAutoScroll || !chatScrollContainer) return;
+
+		// Ignore programmatic scroll events (e.g. our own scrollTo calls) so we only
+		// disable auto-scroll based on user intent.
+		if (event && 'isTrusted' in event && !(event as Event).isTrusted) {
+			lastScrollTop = chatScrollContainer.scrollTop;
+			return;
+		}
 
 		const { scrollTop, scrollHeight, clientHeight } = chatScrollContainer;
 		const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
 		const isAtBottom = distanceFromBottom < AUTO_SCROLL_AT_BOTTOM_THRESHOLD;
 
-		if (scrollTop < lastScrollTop && !isAtBottom) {
+		// Any user-driven upward scroll disables auto-scroll, even if they were close to the bottom.
+		if (scrollTop < lastScrollTop) {
 			userScrolledUp = true;
 			autoScrollEnabled = false;
 		} else if (isAtBottom && userScrolledUp) {
@@ -362,6 +374,25 @@
 			scrollInterval = undefined;
 		}
 	});
+
+	// Keep view pinned to bottom across message merges while auto-scroll is enabled.
+	$effect(() => {
+		const messageCount = liveMessages.length;
+		const tailId = liveMessages[messageCount - 1]?.id ?? null;
+		const shouldPinNow = messageCount !== lastPinnedMessageCount || tailId !== lastPinnedTailId;
+
+		lastPinnedMessageCount = messageCount;
+		lastPinnedTailId = tailId;
+
+		if (!shouldPinNow) return;
+		if (disableAutoScroll || userScrolledUp || !autoScrollEnabled) return;
+
+		queueMicrotask(() => {
+			// Re-check at execution time so user scroll actions can "win" even if a pin was queued earlier.
+			if (disableAutoScroll || userScrolledUp || !autoScrollEnabled) return;
+			scrollChatToBottom('instant');
+		});
+	});
 </script>
 
 {#if isDragOver}
@@ -386,7 +417,7 @@
 	>
 		<ChatMessages
 			class="mb-16 md:mb-24"
-			messages={activeMessages()}
+			messages={liveMessages}
 			onUserAction={() => {
 				if (!disableAutoScroll) {
 					userScrolledUp = false;

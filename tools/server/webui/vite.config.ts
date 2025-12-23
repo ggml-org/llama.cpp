@@ -89,6 +89,9 @@ export default defineConfig({
 			'katex-fonts': resolve('node_modules/katex/dist/fonts')
 		}
 	},
+	optimizeDeps: {
+		include: ['acorn']
+	},
 	build: {
 		assetsInlineLimit: MAX_ASSET_SIZE,
 		chunkSizeWarningLimit: 3072,
@@ -116,9 +119,9 @@ export default defineConfig({
 					browser: {
 						enabled: true,
 						provider: 'playwright',
-						instances: [{ browser: 'chromium' }]
+						instances: [{ browser: 'chromium', headless: true }]
 					},
-					include: ['tests/client/**/*.svelte.{test,spec}.{js,ts}'],
+					include: ['tests/client/**/*.{test,spec}.{js,ts,svelte}'],
 					setupFiles: ['./vitest-setup-client.ts']
 				}
 			},

@@ -1,4 +1,8 @@
-export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> = {
+// Ensure all built-in tools are registered before deriving defaults
+import '$lib/services/tools';
+import { getToolConfigDefaults, getToolSettingDefaults } from '$lib/services/tools/registry';
+
+const BASE_SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> = {
 	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value. Do not use null or undefined for default value.
 	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
 	apiKey: '',
@@ -45,6 +49,12 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	enableContinueGeneration: false
 };
 
+export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> = {
+	...BASE_SETTING_CONFIG_DEFAULT,
+	...getToolSettingDefaults(),
+	...getToolConfigDefaults()
+};
+
 export const SETTING_CONFIG_INFO: Record<string, string> = {
 	apiKey: 'Set the API Key if you are using <code>--api-key</code> option for the server.',
 	systemMessage: 'The starting message that defines how model should behave.',
@@ -89,6 +99,10 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
 	showToolCalls:
 		'Display tool call labels and payloads from Harmony-compatible delta.tool_calls data below assistant messages.',
+	enableCalculatorTool:
+		'Expose a simple calculator tool to the model. When the model calls it, the web UI evaluates the expression locally and resumes generation with the result.',
+	enableCodeInterpreterTool:
+		'Expose a JavaScript code interpreter to the model. Code runs in a sandboxed Worker and the result is sent back to the conversation.',
 	disableReasoningFormat:
 		'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',

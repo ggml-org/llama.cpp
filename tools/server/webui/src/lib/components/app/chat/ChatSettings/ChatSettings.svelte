@@ -9,7 +9,8 @@
 		Moon,
 		ChevronLeft,
 		ChevronRight,
-		Database
+		Database,
+		Wrench
 	} from '@lucide/svelte';
 	import {
 		ChatSettingsFooter,
@@ -20,6 +21,8 @@
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { setMode } from 'mode-watcher';
 	import type { Component } from 'svelte';
+	import '$lib/services/tools'; // ensure built-in tools register
+	import { getAllTools } from '$lib/services/tools';
 
 	interface Props {
 		onSave?: () => void;
@@ -27,259 +30,286 @@
 
 	let { onSave }: Props = $props();
 
-	const settingSections: Array<{
-		fields: SettingsFieldConfig[];
-		icon: Component;
-		title: string;
-	}> = [
-		{
-			title: 'General',
-			icon: Settings,
-			fields: [
-				{
-					key: 'theme',
-					label: 'Theme',
-					type: 'select',
-					options: [
-						{ value: 'system', label: 'System', icon: Monitor },
-						{ value: 'light', label: 'Light', icon: Sun },
-						{ value: 'dark', label: 'Dark', icon: Moon }
-					]
-				},
-				{ key: 'apiKey', label: 'API Key', type: 'input' },
-				{
-					key: 'systemMessage',
-					label: 'System Message',
-					type: 'textarea'
-				},
-				{
-					key: 'pasteLongTextToFileLen',
-					label: 'Paste long text to file length',
-					type: 'input'
-				},
-				{
-					key: 'copyTextAttachmentsAsPlainText',
-					label: 'Copy text attachments as plain text',
-					type: 'checkbox'
-				},
-				{
-					key: 'enableContinueGeneration',
-					label: 'Enable "Continue" button',
-					type: 'checkbox',
-					isExperimental: true
-				},
-				{
-					key: 'pdfAsImage',
-					label: 'Parse PDF as image',
-					type: 'checkbox'
-				},
-				{
-					key: 'askForTitleConfirmation',
-					label: 'Ask for confirmation before changing conversation title',
-					type: 'checkbox'
-				}
-			]
-		},
-		{
-			title: 'Display',
-			icon: Monitor,
-			fields: [
-				{
-					key: 'showMessageStats',
-					label: 'Show message generation statistics',
-					type: 'checkbox'
-				},
-				{
-					key: 'showThoughtInProgress',
-					label: 'Show thought in progress',
-					type: 'checkbox'
-				},
-				{
-					key: 'keepStatsVisible',
-					label: 'Keep stats visible after generation',
-					type: 'checkbox'
-				},
-				{
-					key: 'autoMicOnEmpty',
-					label: 'Show microphone on empty input',
-					type: 'checkbox',
-					isExperimental: true
-				},
-				{
-					key: 'renderUserContentAsMarkdown',
-					label: 'Render user content as Markdown',
-					type: 'checkbox'
-				},
-				{
-					key: 'disableAutoScroll',
-					label: 'Disable automatic scroll',
-					type: 'checkbox'
-				},
-				{
-					key: 'alwaysShowSidebarOnDesktop',
-					label: 'Always show sidebar on desktop',
-					type: 'checkbox'
-				},
-				{
-					key: 'autoShowSidebarOnNewChat',
-					label: 'Auto-show sidebar on new chat',
-					type: 'checkbox'
-				}
-			]
-		},
-		{
-			title: 'Sampling',
-			icon: Funnel,
-			fields: [
-				{
-					key: 'temperature',
-					label: 'Temperature',
-					type: 'input'
-				},
-				{
-					key: 'dynatemp_range',
-					label: 'Dynamic temperature range',
-					type: 'input'
-				},
-				{
-					key: 'dynatemp_exponent',
-					label: 'Dynamic temperature exponent',
-					type: 'input'
-				},
-				{
-					key: 'top_k',
-					label: 'Top K',
-					type: 'input'
-				},
-				{
-					key: 'top_p',
-					label: 'Top P',
-					type: 'input'
-				},
-				{
-					key: 'min_p',
-					label: 'Min P',
-					type: 'input'
-				},
-				{
-					key: 'xtc_probability',
-					label: 'XTC probability',
-					type: 'input'
-				},
-				{
-					key: 'xtc_threshold',
-					label: 'XTC threshold',
-					type: 'input'
-				},
-				{
-					key: 'typ_p',
-					label: 'Typical P',
-					type: 'input'
-				},
-				{
-					key: 'max_tokens',
-					label: 'Max tokens',
-					type: 'input'
-				},
-				{
-					key: 'samplers',
-					label: 'Samplers',
-					type: 'input'
-				}
-			]
-		},
-		{
-			title: 'Penalties',
-			icon: AlertTriangle,
-			fields: [
-				{
-					key: 'repeat_last_n',
-					label: 'Repeat last N',
-					type: 'input'
-				},
-				{
-					key: 'repeat_penalty',
-					label: 'Repeat penalty',
-					type: 'input'
-				},
-				{
-					key: 'presence_penalty',
-					label: 'Presence penalty',
-					type: 'input'
-				},
-				{
-					key: 'frequency_penalty',
-					label: 'Frequency penalty',
-					type: 'input'
-				},
-				{
-					key: 'dry_multiplier',
-					label: 'DRY multiplier',
-					type: 'input'
-				},
-				{
-					key: 'dry_base',
-					label: 'DRY base',
-					type: 'input'
-				},
-				{
-					key: 'dry_allowed_length',
-					label: 'DRY allowed length',
-					type: 'input'
-				},
-				{
-					key: 'dry_penalty_last_n',
-					label: 'DRY penalty last N',
-					type: 'input'
-				}
-			]
-		},
-		{
-			title: 'Import/Export',
-			icon: Database,
-			fields: []
-		},
-		{
-			title: 'Developer',
-			icon: Code,
-			fields: [
-				{
-					key: 'showToolCalls',
-					label: 'Show tool call labels',
-					type: 'checkbox'
-				},
-				{
-					key: 'disableReasoningFormat',
-					label: 'Show raw LLM output',
-					type: 'checkbox'
-				},
-				{
-					key: 'custom',
-					label: 'Custom JSON',
-					type: 'textarea'
-				}
-			]
-		}
-		// TODO: Experimental features section will be implemented after initial release
-		// This includes Python interpreter (Pyodide integration) and other experimental features
-		// {
-		// 	title: 'Experimental',
-		// 	icon: Beaker,
-		// 	fields: [
-		// 		{
-		// 			key: 'pyInterpreterEnabled',
-		// 			label: 'Enable Python interpreter',
-		// 			type: 'checkbox'
-		// 		}
-		// 	]
-		// }
-	];
+	let localConfig: SettingsConfigType = $state({ ...config() });
+
+	function getToolFields(cfg: SettingsConfigType): SettingsFieldConfig[] {
+		return getAllTools().flatMap((tool) => {
+			const enableField: SettingsFieldConfig = {
+				key: tool.enableConfigKey,
+				label: tool.label,
+				type: 'checkbox',
+				help: tool.description
+			};
+
+			const enabled = Boolean(cfg[tool.enableConfigKey]);
+			const settingsFields = (tool.settings ?? []).map((s) => ({
+				...s,
+				disabled: !enabled
+			}));
+
+			return [enableField, ...settingsFields];
+		});
+	}
+
+	const settingSections = $derived.by(
+		(): Array<{
+			fields: SettingsFieldConfig[];
+			icon: Component;
+			title: string;
+		}> => [
+			{
+				title: 'General',
+				icon: Settings,
+				fields: [
+					{
+						key: 'theme',
+						label: 'Theme',
+						type: 'select',
+						options: [
+							{ value: 'system', label: 'System', icon: Monitor },
+							{ value: 'light', label: 'Light', icon: Sun },
+							{ value: 'dark', label: 'Dark', icon: Moon }
+						]
+					},
+					{ key: 'apiKey', label: 'API Key', type: 'input' },
+					{
+						key: 'systemMessage',
+						label: 'System Message',
+						type: 'textarea'
+					},
+					{
+						key: 'pasteLongTextToFileLen',
+						label: 'Paste long text to file length',
+						type: 'input'
+					},
+					{
+						key: 'copyTextAttachmentsAsPlainText',
+						label: 'Copy text attachments as plain text',
+						type: 'checkbox'
+					},
+					{
+						key: 'enableContinueGeneration',
+						label: 'Enable "Continue" button',
+						type: 'checkbox',
+						isExperimental: true
+					},
+					{
+						key: 'pdfAsImage',
+						label: 'Parse PDF as image',
+						type: 'checkbox'
+					},
+					{
+						key: 'askForTitleConfirmation',
+						label: 'Ask for confirmation before changing conversation title',
+						type: 'checkbox'
+					}
+				]
+			},
+			{
+				title: 'Display',
+				icon: Monitor,
+				fields: [
+					{
+						key: 'showMessageStats',
+						label: 'Show message generation statistics',
+						type: 'checkbox'
+					},
+					{
+						key: 'showThoughtInProgress',
+						label: 'Show thought in progress',
+						type: 'checkbox'
+					},
+					{
+						key: 'keepStatsVisible',
+						label: 'Keep stats visible after generation',
+						type: 'checkbox'
+					},
+					{
+						key: 'autoMicOnEmpty',
+						label: 'Show microphone on empty input',
+						type: 'checkbox',
+						isExperimental: true
+					},
+					{
+						key: 'renderUserContentAsMarkdown',
+						label: 'Render user content as Markdown',
+						type: 'checkbox'
+					},
+					{
+						key: 'disableAutoScroll',
+						label: 'Disable automatic scroll',
+						type: 'checkbox'
+					},
+					{
+						key: 'alwaysShowSidebarOnDesktop',
+						label: 'Always show sidebar on desktop',
+						type: 'checkbox'
+					},
+					{
+						key: 'autoShowSidebarOnNewChat',
+						label: 'Auto-show sidebar on new chat',
+						type: 'checkbox'
+					}
+				]
+			},
+			{
+				title: 'Sampling',
+				icon: Funnel,
+				fields: [
+					{
+						key: 'temperature',
+						label: 'Temperature',
+						type: 'input'
+					},
+					{
+						key: 'dynatemp_range',
+						label: 'Dynamic temperature range',
+						type: 'input'
+					},
+					{
+						key: 'dynatemp_exponent',
+						label: 'Dynamic temperature exponent',
+						type: 'input'
+					},
+					{
+						key: 'top_k',
+						label: 'Top K',
+						type: 'input'
+					},
+					{
+						key: 'top_p',
+						label: 'Top P',
+						type: 'input'
+					},
+					{
+						key: 'min_p',
+						label: 'Min P',
+						type: 'input'
+					},
+					{
+						key: 'xtc_probability',
+						label: 'XTC probability',
+						type: 'input'
+					},
+					{
+						key: 'xtc_threshold',
+						label: 'XTC threshold',
+						type: 'input'
+					},
+					{
+						key: 'typ_p',
+						label: 'Typical P',
+						type: 'input'
+					},
+					{
+						key: 'max_tokens',
+						label: 'Max tokens',
+						type: 'input'
+					},
+					{
+						key: 'samplers',
+						label: 'Samplers',
+						type: 'input'
+					}
+				]
+			},
+			{
+				title: 'Penalties',
+				icon: AlertTriangle,
+				fields: [
+					{
+						key: 'repeat_last_n',
+						label: 'Repeat last N',
+						type: 'input'
+					},
+					{
+						key: 'repeat_penalty',
+						label: 'Repeat penalty',
+						type: 'input'
+					},
+					{
+						key: 'presence_penalty',
+						label: 'Presence penalty',
+						type: 'input'
+					},
+					{
+						key: 'frequency_penalty',
+						label: 'Frequency penalty',
+						type: 'input'
+					},
+					{
+						key: 'dry_multiplier',
+						label: 'DRY multiplier',
+						type: 'input'
+					},
+					{
+						key: 'dry_base',
+						label: 'DRY base',
+						type: 'input'
+					},
+					{
+						key: 'dry_allowed_length',
+						label: 'DRY allowed length',
+						type: 'input'
+					},
+					{
+						key: 'dry_penalty_last_n',
+						label: 'DRY penalty last N',
+						type: 'input'
+					}
+				]
+			},
+			{
+				title: 'Import/Export',
+				icon: Database,
+				fields: []
+			},
+			{
+				title: 'Developer',
+				icon: Code,
+				fields: [
+					{
+						key: 'showToolCalls',
+						label: 'Show tool call labels',
+						type: 'checkbox'
+					},
+					{
+						key: 'disableReasoningFormat',
+						label: 'Show raw LLM output',
+						type: 'checkbox'
+					},
+					{
+						key: 'custom',
+						label: 'Custom JSON',
+						type: 'textarea'
+					}
+				]
+			},
+			{
+				title: 'Tools',
+				icon: Wrench,
+				fields: getToolFields(localConfig)
+			}
+			// TODO: Experimental features section will be implemented after initial release
+			// This includes Python interpreter (Pyodide integration) and other experimental features
+			// {
+			// 	title: 'Experimental',
+			// 	icon: Beaker,
+			// 	fields: [
+			// 		{
+			// 			key: 'pyInterpreterEnabled',
+			// 			label: 'Enable Python interpreter',
+			// 			type: 'checkbox'
+			// 		}
+			// 	]
+			// }
+		]
+	);
 
 	let activeSection = $state('General');
 	let currentSection = $derived(
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
-	let localConfig: SettingsConfigType = $state({ ...config() });
 
 	let canScrollLeft = $state(false);
 	let canScrollRight = $state(false);
@@ -333,7 +363,8 @@
 			'dry_multiplier',
 			'dry_base',
 			'dry_allowed_length',
-			'dry_penalty_last_n'
+			'dry_penalty_last_n',
+			'codeInterpreterTimeoutSeconds'
 		];
 
 		for (const field of numericFields) {

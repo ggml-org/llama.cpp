@@ -1,5 +1,6 @@
 import { getJsonHeaders } from '$lib/utils';
 import { AttachmentType } from '$lib/enums';
+import type { ChatRole, ApiToolDefinition, ApiChatCompletionRequestMessage } from '$lib/types';
 
 /**
  * ChatService - Low-level API communication layer for Chat Completions
@@ -88,6 +89,8 @@ export class ChatService {
 			samplers,
 			custom,
 			timings_per_token,
+			tools,
+			tool_choice,
 			// Config options
 			disableReasoningFormat
 		} = options;
@@ -115,7 +118,12 @@ export class ChatService {
 		const requestBody: ApiChatCompletionRequest = {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
 				role: msg.role,
-				content: msg.content
+				content: msg.content,
+				...(msg.reasoning_content ? { reasoning_content: msg.reasoning_content } : {}),
+				...((msg as ApiChatCompletionRequestMessage).tool_call_id
+					? { tool_call_id: (msg as ApiChatCompletionRequestMessage).tool_call_id }
+					: {}),
+				...(msg.tool_calls ? { tool_calls: msg.tool_calls } : {})
 			})),
 			stream
 		};
@@ -167,6 +175,13 @@ export class ChatService {
 			} catch (error) {
 				console.warn('Failed to parse custom parameters:', error);
 			}
+		}
+
+		if (tools) {
+			requestBody.tools = tools as unknown as ApiToolDefinition[];
+		}
+		if (tool_choice) {
+			requestBody.tool_choice = tool_choice;
 		}
 
 		try {
@@ -474,12 +489,8 @@ export class ChatService {
 
 			if (toolCalls && toolCalls.length > 0) {
 				const mergedToolCalls = ChatService.mergeToolCallDeltas([], toolCalls);
-
 				if (mergedToolCalls.length > 0) {
 					serializedToolCalls = JSON.stringify(mergedToolCalls);
-					if (serializedToolCalls) {
-						onToolCallChunk?.(serializedToolCalls);
-					}
 				}
 			}
 
@@ -576,10 +587,28 @@ export class ChatService {
 	static convertDbMessageToApiChatMessageData(
 		message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }
 	): ApiChatMessageData {
+		let toolCalls: ApiChatCompletionToolCallDelta[] | undefined;
+		if (message.role === 'assistant' && message.toolCalls) {
+			try {
+				const parsed = JSON.parse(message.toolCalls);
+				if (Array.isArray(parsed)) {
+					toolCalls = parsed as ApiChatCompletionToolCallDelta[];
+				}
+			} catch {
+				// ignore malformed toolCalls; UI will still show raw string if needed
+			}
+		}
+
 		if (!message.extra || message.extra.length === 0) {
 			return {
-				role: message.role as 'user' | 'assistant' | 'system',
-				content: message.content
+				role: message.role as ChatRole,
+				content: message.content,
+				...(message.role === 'assistant' && message.thinking
+					? { reasoning_content: message.thinking }
+					: {}),
+				// tool_call_id is only relevant for tool role messages
+				...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
+				...(toolCalls ? { tool_calls: toolCalls } : {})
 			};
 		}
 
@@ -666,8 +695,13 @@ export class ChatService {
 		}
 
 		return {
-			role: message.role as 'user' | 'assistant' | 'system',
-			content: contentParts
+			role: message.role as ChatRole,
+			content: contentParts,
+			...(message.role === 'assistant' && message.thinking
+				? { reasoning_content: message.thinking }
+				: {}),
+			...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
+			...(toolCalls ? { tool_calls: toolCalls } : {})
 		};
 	}
 
