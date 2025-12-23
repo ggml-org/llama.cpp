@@ -30,7 +30,9 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     }
 
     if (is_content) {
-        result.content = std::string(trim_trailing_space(node.text));
+        // Concatenate content from multiple content nodes (e.g., when reasoning markers
+        // are preserved before content markers in reasoning_format=NONE mode)
+        result.content += std::string(trim_trailing_space(node.text));
     }
 }
 
@@ -132,18 +134,24 @@ common_peg_parser common_chat_peg_native_builder::standard_json_tools(const std:
                                                                       const std::string &    close_tag,
                                                                       const nlohmann::json & tool_defs,
                                                                       bool                   parallel_tool_calls,
-                                                                      bool                   force_tool_calls) {
+                                                                      bool                   force_tool_calls,
+                                                                      const std::string &    name_field,
+                                                                      const std::string &    args_field,
+                                                                      const std::string &    id_field) {
     auto tools = choice();
     for (const auto & tool : tool_defs) {
         const auto & function = tool.at("function");
         std::string  name     = function.at("name");
         const auto & schema_  = function.at("parameters");
 
-        auto tool_name_ = json_member("name", "\"" + tool_name(literal(name)) + "\"");
-        auto tool_args_ = json_member("arguments", tool_args(schema(json(), "tool-" + name + "-schema", schema_)));
+        auto tool_name_ = json_member(name_field, "\"" + tool_name(literal(name)) + "\"");
+        auto tool_args_ = json_member(args_field, tool_args(schema(json(), "tool-" + name + "-schema", schema_)));
 
-        tools |= rule("tool-" + name, tool_open(literal("{")) << space() << tool_name_ << space() << "," << space()
-                                                              << tool_args_ << space() << "}");
+        auto tool_id_ =
+            id_field.empty() ? eps() : (json_member(id_field, tool_id(json_string())) << space() << "," << space());
+
+        tools |= rule("tool-" + name, tool_open(literal("{")) << space() << tool_id_ << tool_name_ << space() << ","
+                                                              << space() << tool_args_ << space() << "}");
     };
 
     auto parallel_calls = eps();
@@ -151,8 +159,8 @@ common_peg_parser common_chat_peg_native_builder::standard_json_tools(const std:
         parallel_calls = zero_or_more(space() << "," << space() << tools);
     }
 
-    auto tool_call =
-        trigger_rule("tool-call", sequence({ literal(open_tag), tools, parallel_calls, literal(close_tag) }));
+    auto tool_call = trigger_rule(
+        "tool-call", sequence({ literal(open_tag), space(), tools, parallel_calls, space(), literal(close_tag) }));
 
     if (!force_tool_calls) {
         tool_call = optional(tool_call);

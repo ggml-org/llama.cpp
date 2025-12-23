@@ -340,7 +340,17 @@ struct parser_executor {
 
         for (const auto & child_id : p.children) {
             auto result = arena.parse(child_id, ctx, pos);
+
             if (result.fail()) {
+                // In partial mode, if we consumed input up to (or very close to) the end of input,
+                // treat this as needing more input rather than a hard failure.
+                // This handles cases like tool calls where the opening marker matches
+                // but the JSON content is incomplete.
+                // Note: Don't return accumulated nodes here - the sequence hasn't completed,
+                // so any tool calls detected by earlier children aren't valid yet.
+                if (ctx.is_partial && result.end >= ctx.input.size()) {
+                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, result.end);
+                }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos, result.end);
             }
 

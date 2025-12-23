@@ -48,16 +48,19 @@ int main(int argc, char ** argv) {
     }
 
     std::string template_path = argv[1];
-    bool with_tools = true;
+    bool        with_tools    = true;
+    bool        with_deepseek = false;
 
     // Parse command-line options
     for (int i = 2; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--no-tools") {
             with_tools = false;
+        } else if (arg == "--deepseek") {
+            with_deepseek = true;
         } else {
             std::cerr << "Unknown option: " << arg << '\n';
-            std::cerr << "Usage: " << argv[0] << " <template_path> [--no-tools]" << '\n';
+            std::cerr << "Usage: " << argv[0] << " <template_path> [--no-tools] [--deepseek]" << '\n';
             return 1;
         }
     }
@@ -85,31 +88,36 @@ int main(int argc, char ** argv) {
 
         // Generate Parser
         templates_params params;
-        params.messages = json::array();
+        params.messages         = json::array();
+        params.reasoning_format = with_deepseek ? COMMON_REASONING_FORMAT_DEEPSEEK : COMMON_REASONING_FORMAT_NONE;
 
         if (with_tools) {
             // Create test tool schema properly using json::object()
-            json parameters_schema = json::object();
-            parameters_schema["type"] = "object";
-            parameters_schema["properties"] = json::object();
-            parameters_schema["properties"]["arg1"] = json::object({{"type", "string"}});
-            parameters_schema["properties"]["arg2"] = json::object({{"type", "string"}});
-            parameters_schema["required"] = json::array({"arg1", "arg2"});
+            json parameters_schema                  = json::object();
+            parameters_schema["type"]               = "object";
+            parameters_schema["properties"]         = json::object();
+            parameters_schema["properties"]["arg1"] = json::object({
+                { "type", "string" }
+            });
+            parameters_schema["properties"]["arg2"] = json::object({
+                { "type", "string" }
+            });
+            parameters_schema["required"]           = json::array({ "arg1", "arg2" });
 
-            json test_tool = json::array();
-            json tool_def = json::object();
-            tool_def["type"] = "function";
+            json test_tool       = json::array();
+            json tool_def        = json::object();
+            tool_def["type"]     = "function";
             tool_def["function"] = json::object({
-                {"name", "test_tool"},
-                {"description", "A test tool"},
-                {"parameters", parameters_schema}
+                { "name",        "test_tool"       },
+                { "description", "A test tool"     },
+                { "parameters",  parameters_schema }
             });
             test_tool.push_back(tool_def);
-            params.tools = test_tool;
+            params.tools       = test_tool;
             params.tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
         } else {
             // No tools - set tools to null
-            params.tools = json();
+            params.tools       = json();
             params.tool_choice = COMMON_CHAT_TOOL_CHOICE_NONE;
         }
         params.parallel_tool_calls = false;

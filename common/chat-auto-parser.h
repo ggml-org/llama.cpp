@@ -41,6 +41,11 @@ struct TemplatePattern {
     std::string tool_call_start_marker;
     std::string tool_call_end_marker;
 
+    // JSON field names for tool calls (defaults for backwards compatibility)
+    std::string tool_id_field   = "";
+    std::string tool_name_field = "name";
+    std::string tool_args_field = "arguments";
+
     // Reasoning
     std::string reasoning_start_marker;
     std::string reasoning_end_marker;
@@ -66,6 +71,15 @@ struct DiscoveredPattern {
     // Reasoning
     std::string reasoning_start_marker;
     std::string reasoning_end_marker;
+
+    // Content/Response markers (for templates that wrap content in tags like <|START_RESPONSE|>)
+    std::string content_start_marker;
+    std::string content_end_marker;
+
+    // JSON field names for tool calls (defaults for backwards compatibility)
+    std::string tool_id_field   = "";
+    std::string tool_name_field = "name";
+    std::string tool_args_field = "arguments";
 };
 
 // Template analyzer that uses differential analysis of OpenAI-compatible messages
@@ -86,27 +100,28 @@ class TemplateAnalyzer {
 
     // New pure differential analysis methods
     static DiscoveredPattern analyze_by_differential(const minja::chat_template & tmpl);
-    static void analyze_reasoning(const minja::chat_template & tmpl, DiscoveredPattern & patterns);  // New method
-    static DiscoveredPattern               extract_patterns_from_differences(const std::string & tool1_diff,
-                                                                             const std::string & tool2_diff,
-                                                                             const std::string & tool3_diff);
-    static std::string                     find_closing_pattern(const std::string & diff, size_t func_pos);
-    static std::string                     find_tool_call_start(const std::string & diff);
-    static std::string                     find_tool_call_end(const std::string & diff, size_t func_pos);
-    static std::string                     infer_tool_call_opener(const std::string & diff1,
-                                                                  const std::string & diff2,
-                                                                  const std::string & diff3);
-    static std::string                     infer_tool_call_closer(const std::string & diff1,
-                                                                  const std::string & diff2,
-                                                                  const std::string & diff3);
-    static std::string                     find_common_substring(const std::vector<std::string> & strings);
-    static std::string                     find_common_suffix(const std::vector<std::string> & strings);
-    static std::string                     find_common_start_pattern(const std::string & diff1,
-                                                                     const std::string & diff2,
-                                                                     const std::string & diff3);
-    static std::string                     find_common_end_pattern(const std::string & diff1,
-                                                                   const std::string & diff2,
-                                                                   const std::string & diff3);
+    static void              analyze_reasoning(const minja::chat_template & tmpl, DiscoveredPattern & patterns);
+    static void              analyze_content_markers(const minja::chat_template & tmpl, DiscoveredPattern & patterns);
+    static DiscoveredPattern extract_patterns_from_differences(const std::string & tool1_diff,
+                                                               const std::string & tool2_diff,
+                                                               const std::string & tool3_diff);
+    static std::string       find_closing_pattern(const std::string & diff, size_t func_pos);
+    static std::string       find_tool_call_start(const std::string & diff);
+    static std::string       find_tool_call_end(const std::string & diff, size_t func_pos);
+    static std::string       infer_tool_call_opener(const std::string & diff1,
+                                                    const std::string & diff2,
+                                                    const std::string & diff3);
+    static std::string       infer_tool_call_closer(const std::string & diff1,
+                                                    const std::string & diff2,
+                                                    const std::string & diff3);
+    static std::string       find_common_substring(const std::vector<std::string> & strings);
+    static std::string       find_common_suffix(const std::vector<std::string> & strings);
+    static std::string       find_common_start_pattern(const std::string & diff1,
+                                                       const std::string & diff2,
+                                                       const std::string & diff3);
+    static std::string       find_common_end_pattern(const std::string & diff1,
+                                                     const std::string & diff2,
+                                                     const std::string & diff3);
     static TemplatePattern::ToolCallFormat determine_format_from_patterns(const DiscoveredPattern & patterns);
 };
 

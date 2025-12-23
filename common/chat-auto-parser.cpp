@@ -99,6 +99,22 @@ static std::string apply(const minja::chat_template &    tmpl,
     }
 }
 
+// Extract a JSON field name from a tool_call_opener string
+// Looks for patterns like "tool_name": or "name": before the function name placeholder
+static std::string extract_json_field_name(const std::string &              opener,
+                                           const std::string &              default_name,
+                                           const std::vector<std::string> & candidates) {
+    // Look for each candidate pattern in the opener
+    for (const auto & candidate : candidates) {
+        std::string pattern = "\"" + candidate + "\"";
+        if (opener.find(pattern) != std::string::npos) {
+            LOG_DBG("Found JSON field name '%s' in opener\n", candidate.c_str());
+            return candidate;
+        }
+    }
+    return default_name;
+}
+
 // Find the difference between two strings
 static std::string find_string_difference(const std::string & base, const std::string & extended) {
     size_t common_prefix = 0;
@@ -156,7 +172,12 @@ TemplatePattern TemplateAnalyzer::analyze_template(const minja::chat_template & 
         { "parameter_key_prefix",   discovered.parameter_key_prefix   },
         { "parameter_key_suffix",   discovered.parameter_key_suffix   },
         { "reasoning_start_marker", discovered.reasoning_start_marker },
-        { "reasoning_end_marker",   discovered.reasoning_end_marker   }
+        { "reasoning_end_marker",   discovered.reasoning_end_marker   },
+        { "content_start_marker",   discovered.content_start_marker   },
+        { "content_end_marker",     discovered.content_end_marker     },
+        { "tool_name_field",        discovered.tool_name_field        },
+        { "tool_args_field",        discovered.tool_args_field        },
+        { "tool_id_field",          discovered.tool_id_field          }
     };
 
     return pattern;
@@ -369,7 +390,7 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
 
             // Create outputs with add_generation_prompt: false (default)
             auto get_alternative_diffs = [&](bool gen_prompt, std::string & b_out, std::string & t1_out,
-                                          std::string & t1_diff, std::string & t2_diff, std::string & t3_diff) {
+                                             std::string & t1_diff, std::string & t2_diff, std::string & t3_diff) {
                 minja::chat_template_inputs b_inputs;
                 b_inputs.tools                 = inputs.tools;
                 b_inputs.messages              = { alternative_base_msg };
@@ -396,7 +417,7 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
             std::string n_base_true, n_t1_out_true, n_t1_diff_true, n_t2_diff_true, n_t3_diff_true;
 
             bool false_ok = get_alternative_diffs(false, n_base_false, n_t1_out_false, n_t1_diff_false, n_t2_diff_false,
-                                               n_t3_diff_false);
+                                                  n_t3_diff_false);
             bool true_ok =
                 get_alternative_diffs(true, n_base_true, n_t1_out_true, n_t1_diff_true, n_t2_diff_true, n_t3_diff_true);
 
@@ -431,6 +452,9 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
         // Analyze reasoning patterns
         analyze_reasoning(tmpl, patterns);
 
+        // Analyze content/response markers
+        analyze_content_markers(tmpl, patterns);
+
         // Debug print the discovered patterns
         LOG_DBG("=== DISCOVERED PATTERNS ===\n");
         LOG_DBG("tool_call_opener: '%s'\n", patterns.tool_call_opener.c_str());
@@ -457,10 +481,10 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
             // For example: "<|START_THINKING|>" may appear as "THINKING|>" in the diff
             std::vector<std::tuple<std::string, std::string, std::string, std::string>> thinking_patterns = {
                 // Full pattern, partial start, partial end, actual start tag
-                {"<|START_THINKING|>", "THINKING|>", "<|END_THINKING|>", "<|START_THINKING|>"},
-                {"<think>", "think>", "</think>", "<think>"},
-                {"[THINKING]", "THINKING]", "[/THINKING]", "[THINKING]"},
-                {"<thinking>", "thinking>", "</thinking>", "<thinking>"}
+                { "<|START_THINKING|>", "THINKING|>", "<|END_THINKING|>", "<|START_THINKING|>" },
+                { "<think>",            "think>",     "</think>",         "<think>"            },
+                { "[THINKING]",         "THINKING]",  "[/THINKING]",      "[THINKING]"         },
+                { "<thinking>",         "thinking>",  "</thinking>",      "<thinking>"         }
             };
 
             for (const auto & [full_start, partial_start, end_tag, actual_start] : thinking_patterns) {
@@ -470,7 +494,7 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
                 if (!patterns.tool_call_start_marker.empty()) {
                     bool has_start = (patterns.tool_call_start_marker.find(full_start) != std::string::npos ||
                                       patterns.tool_call_start_marker.find(partial_start) != std::string::npos);
-                    bool has_end = patterns.tool_call_start_marker.find(end_tag) != std::string::npos;
+                    bool has_end   = patterns.tool_call_start_marker.find(end_tag) != std::string::npos;
                     if (has_start && has_end) {
                         found_in_marker = true;
                     }
@@ -480,7 +504,7 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
                 if (!found_in_marker && !patterns.tool_call_opener.empty()) {
                     bool has_start = (patterns.tool_call_opener.find(full_start) != std::string::npos ||
                                       patterns.tool_call_opener.find(partial_start) != std::string::npos);
-                    bool has_end = patterns.tool_call_opener.find(end_tag) != std::string::npos;
+                    bool has_end   = patterns.tool_call_opener.find(end_tag) != std::string::npos;
                     if (has_start && has_end) {
                         found_in_marker = true;
                     }
@@ -494,9 +518,9 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
 
                     // Keep the actual thinking tags that were found
                     patterns.reasoning_start_marker = actual_start;
-                    patterns.reasoning_end_marker = end_tag;
-                    LOG_DBG("Set reasoning markers to: start='%s', end='%s'\n",
-                            patterns.reasoning_start_marker.c_str(), patterns.reasoning_end_marker.c_str());
+                    patterns.reasoning_end_marker   = end_tag;
+                    LOG_DBG("Set reasoning markers to: start='%s', end='%s'\n", patterns.reasoning_start_marker.c_str(),
+                            patterns.reasoning_end_marker.c_str());
 
                     // Strip reasoning markers from tool call start marker and opener
                     // The partial_start and end_tag are what appear in the tool call markers
@@ -519,6 +543,7 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
 
                     strip_marker(patterns.tool_call_start_marker);
                     strip_marker(patterns.tool_call_opener);
+                    LOG_DBG("After stripping: tool_call_start_marker='%s'\n", patterns.tool_call_start_marker.c_str());
 
                     break;
                 }
@@ -555,8 +580,9 @@ DiscoveredPattern TemplateAnalyzer::analyze_by_differential(const minja::chat_te
             }
 
             if (!has_meaningful_markers) {
-                LOG_DBG("Detected format %s but no meaningful tool call markers found - falling back to generic parser\n",
-                        TemplatePattern::format_to_str(detected_format));
+                LOG_DBG(
+                    "Detected format %s but no meaningful tool call markers found - falling back to generic parser\n",
+                    TemplatePattern::format_to_str(detected_format));
                 detected_format = TemplatePattern::UNKNOWN;
             }
         }
@@ -602,6 +628,27 @@ DiscoveredPattern TemplateAnalyzer::extract_patterns_from_differences(const std:
         // Extract everything before function_name as tool_call_opener
         // We assume the diff starts after the MARKER (since it's a diff from base)
         patterns.tool_call_opener = tool1_diff.substr(0, func1_pos);
+
+        // Extract JSON field names from the opener immediately, before any potential truncation
+        // Look for common variants of the "name" field
+        patterns.tool_name_field = extract_json_field_name(patterns.tool_call_opener,
+                                                           "name",  // default
+                                                           { "tool_name", "name", "function_name", "function" });
+
+        // Look for common variants of the "arguments" field
+        patterns.tool_args_field = extract_json_field_name(
+            patterns.tool_call_opener + tool1_diff.substr(func1_pos),  // Check full context including parameters
+            "arguments",                                               // default
+            { "parameters", "arguments", "args", "params", "input" });
+
+        // Look for common variants of the "id" field
+        // Note: default is empty string, meaning no ID field expected unless found
+        patterns.tool_id_field = extract_json_field_name(patterns.tool_call_opener,
+                                                         "",  // default (empty means no ID field)
+                                                         { "tool_call_id", "tool_id", "id", "call_id" });
+
+        LOG_DBG("Extracted JSON field names: name_field='%s', args_field='%s', id_field='%s'\n",
+                patterns.tool_name_field.c_str(), patterns.tool_args_field.c_str(), patterns.tool_id_field.c_str());
 
         // Extract parameter structure from tool2_diff with improved logic
         size_t param1_pos       = tool2_diff.find("\"param1\"");
@@ -924,6 +971,28 @@ DiscoveredPattern TemplateAnalyzer::extract_patterns_from_differences(const std:
         // If we couldn't find proper markers, try to infer them from all differences
         if (patterns.tool_call_opener.empty()) {
             patterns.tool_call_opener = infer_tool_call_opener(tool1_diff, tool2_diff, tool3_diff);
+
+            // Extract JSON field names from the inferred opener
+            // Look for common variants of the "name" field
+            patterns.tool_name_field = extract_json_field_name(patterns.tool_call_opener,
+                                                               "name",  // default
+                                                               { "tool_name", "name", "function_name", "function" });
+
+            // Look for common variants of the "arguments" field
+            // Since we might not have func1_pos, use the full diff as context
+            patterns.tool_args_field =
+                extract_json_field_name(patterns.tool_call_opener + tool1_diff,
+                                        "arguments",  // default
+                                        { "parameters", "arguments", "args", "params", "input" });
+
+            // Look for common variants of the "id" field
+            // Note: default is empty string, meaning no ID field expected unless found
+            patterns.tool_id_field = extract_json_field_name(patterns.tool_call_opener,
+                                                             "",  // default (empty means no ID field)
+                                                             { "tool_call_id", "tool_id", "id", "call_id" });
+
+            LOG_DBG("Extracted JSON field names (inferred): name_field='%s', args_field='%s', id_field='%s'\n",
+                    patterns.tool_name_field.c_str(), patterns.tool_args_field.c_str(), patterns.tool_id_field.c_str());
             // Truncate if it overlaps with function name
             if (func1_pos != std::string::npos && patterns.tool_call_opener.length() > func1_pos) {
                 patterns.tool_call_opener = patterns.tool_call_opener.substr(0, func1_pos);
@@ -1313,14 +1382,14 @@ TemplatePattern::ToolCallFormat TemplateAnalyzer::determine_format_from_patterns
     if (!patterns.function_opener.empty() && patterns.function_opener.find('<') == 0) {
         // Check if parameter markers are substantial
         bool   has_substantial_param_markers = false;
-        size_t meaningful_len                    = 0;
+        size_t meaningful_len                = 0;
         if (!patterns.parameter_opener.empty()) {
             for (char c : patterns.parameter_opener) {
                 if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
                     meaningful_len++;
                 }
             }
-            has_substantial_param_markers = (meaningful_len > 1); // More than just a quote
+            has_substantial_param_markers = (meaningful_len > 1);  // More than just a quote
         }
         if (!has_substantial_param_markers && !patterns.parameter_closer.empty()) {
             meaningful_len = 0;
@@ -1338,9 +1407,8 @@ TemplatePattern::ToolCallFormat TemplateAnalyzer::determine_format_from_patterns
             LOG_DBG("Function opener is XML-like but parameter markers are minimal\n");
             // If tool_call_opener or tool_call_start_marker contains JSON structure markers,
             // this is likely a NATIVE format with XML-style function name markers
-            if (!patterns.tool_call_opener.empty() &&
-                (patterns.tool_call_opener.find('[') != std::string::npos ||
-                 patterns.tool_call_opener.find('{') != std::string::npos)) {
+            if (!patterns.tool_call_opener.empty() && (patterns.tool_call_opener.find('[') != std::string::npos ||
+                                                       patterns.tool_call_opener.find('{') != std::string::npos)) {
                 LOG_DBG("Detected JSON_NATIVE format (XML markers but JSON structure in tool_call_opener)\n");
                 return TemplatePattern::JSON_NATIVE;
             }
@@ -1526,10 +1594,10 @@ void TemplateAnalyzer::analyze_reasoning(const minja::chat_template & tmpl, Disc
         if (!patterns.tool_call_start_marker.empty() || !patterns.tool_call_opener.empty()) {
             // Check if either marker contains both a start AND end thinking tag
             std::vector<std::pair<std::string, std::string>> thinking_patterns = {
-                {"<|START_THINKING|>", "<|END_THINKING|>"},
-                {"<think>", "</think>"},
-                {"[THINKING]", "[/THINKING]"},
-                {"<thinking>", "</thinking>"}
+                { "<|START_THINKING|>", "<|END_THINKING|>" },
+                { "<think>",            "</think>"         },
+                { "[THINKING]",         "[/THINKING]"      },
+                { "<thinking>",         "</thinking>"      }
             };
 
             for (const auto & [start_tag, end_tag] : thinking_patterns) {
@@ -1571,27 +1639,22 @@ void TemplateAnalyzer::analyze_reasoning(const minja::chat_template & tmpl, Disc
             }
 
             if (last_open != std::string::npos && last_close == prompt.length() - 1) {
-                std::string tag                 = prompt.substr(last_open);
+                std::string tag = prompt.substr(last_open);
 
                 // Blacklist of tags that should never be considered reasoning markers
                 // These are typically role markers or other structural tags
-                std::vector<std::string> blacklisted_tags = {
-                    "<|CHATBOT_TOKEN|>",
-                    "<|SYSTEM_TOKEN|>",
-                    "<|USER_TOKEN|>",
-                    "<|ASSISTANT_TOKEN|>",
-                    "<|im_start|>",
-                    "<|im_end|>",
-                    "<assistant>",
-                    "<user>",
-                    "<system>"
-                };
+                std::vector<std::string> blacklisted_tags = { "<|CHATBOT_TOKEN|>", "<|SYSTEM_TOKEN|>",
+                                                              "<|USER_TOKEN|>",    "<|ASSISTANT_TOKEN|>",
+                                                              "<|im_start|>",      "<|im_end|>",
+                                                              "<assistant>",       "<user>",
+                                                              "<system>" };
 
                 bool is_blacklisted = false;
                 for (const auto & blacklisted : blacklisted_tags) {
                     if (tag == blacklisted) {
                         is_blacklisted = true;
-                        LOG_DBG("Tag '%s' is blacklisted as a role marker, not using as reasoning marker\n", tag.c_str());
+                        LOG_DBG("Tag '%s' is blacklisted as a role marker, not using as reasoning marker\n",
+                                tag.c_str());
                         break;
                     }
                 }
@@ -1614,6 +1677,132 @@ void TemplateAnalyzer::analyze_reasoning(const minja::chat_template & tmpl, Disc
 
     LOG_DBG("Reasoning markers: start='%s', end='%s'", patterns.reasoning_start_marker.c_str(),
             patterns.reasoning_end_marker.c_str());
+}
+
+// Analyze content/response markers (e.g., <|START_RESPONSE|>...<|END_RESPONSE|>)
+void TemplateAnalyzer::analyze_content_markers(const minja::chat_template & tmpl, DiscoveredPattern & patterns) {
+    LOG_DBG("=== ANALYZING CONTENT MARKERS ===\n");
+
+    // Render a message with a known marker to find what surrounds the content
+    json base_msg = {
+        { "role",    "assistant"            },
+        { "content", "CONTENT_MARKER_12345" }  // Unique marker unlikely to appear elsewhere
+    };
+
+    minja::chat_template_inputs inputs;
+    inputs.messages = { base_msg };
+    std::string output;
+    try {
+        output = tmpl.apply(inputs);
+    } catch (...) {
+        LOG_DBG("Failed to render template for content marker analysis\n");
+        return;
+    }
+
+    // Find the marker in the output
+    size_t marker_pos = output.find("CONTENT_MARKER_12345");
+    if (marker_pos == std::string::npos) {
+        LOG_DBG("Content marker not found in output\n");
+        return;
+    }
+
+    // Look for common content wrapper patterns before the marker
+    // These are patterns like <|START_RESPONSE|>, <response>, etc.
+    std::vector<std::pair<std::string, std::string>> content_patterns = {
+        { "<|START_RESPONSE|>", "<|END_RESPONSE|>" },
+        { "<|response|>",       "<|/response|>"    },
+        { "<response>",         "</response>"      },
+        { "<output>",           "</output>"        },
+        { "<answer>",           "</answer>"        },
+    };
+
+    for (const auto & [start_pattern, end_pattern] : content_patterns) {
+        // Check if start pattern appears before marker
+        size_t start_pos = output.rfind(start_pattern, marker_pos);
+        if (start_pos != std::string::npos) {
+            // Verify the start pattern is close to the marker (within reasonable distance)
+            // and there's no other content between them (except whitespace)
+            std::string between =
+                output.substr(start_pos + start_pattern.length(), marker_pos - start_pos - start_pattern.length());
+            // Trim whitespace
+            size_t first_non_ws = between.find_first_not_of(" \t\n\r");
+            if (first_non_ws == std::string::npos || first_non_ws == between.length()) {
+                // Check if end pattern appears after marker
+                size_t marker_end = marker_pos + strlen("CONTENT_MARKER_12345");
+                size_t end_pos    = output.find(end_pattern, marker_end);
+                if (end_pos != std::string::npos) {
+                    // Verify end pattern is close to marker
+                    std::string after              = output.substr(marker_end, end_pos - marker_end);
+                    size_t      first_non_ws_after = after.find_first_not_of(" \t\n\r");
+                    if (first_non_ws_after == std::string::npos || first_non_ws_after == after.length()) {
+                        patterns.content_start_marker = start_pattern;
+                        patterns.content_end_marker   = end_pattern;
+                        LOG_DBG("Found content markers: start='%s', end='%s'\n", patterns.content_start_marker.c_str(),
+                                patterns.content_end_marker.c_str());
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    // If no predefined patterns found, try to detect custom markers
+    // Look for tag-like patterns immediately before the marker
+    if (marker_pos > 0) {
+        // Search backwards for a closing '>' that might be the end of a start tag
+        size_t      search_start = (marker_pos > 50) ? marker_pos - 50 : 0;
+        std::string before       = output.substr(search_start, marker_pos - search_start);
+
+        // Find last '>' before marker
+        size_t last_gt = before.rfind('>');
+        if (last_gt != std::string::npos) {
+            // Find matching '<' for this tag
+            size_t tag_start = before.rfind('<', last_gt);
+            if (tag_start != std::string::npos) {
+                std::string potential_start = before.substr(tag_start, last_gt - tag_start + 1);
+
+                // Check if this looks like a content/response start tag
+                std::string lower_tag = potential_start;
+                std::transform(lower_tag.begin(), lower_tag.end(), lower_tag.begin(), ::tolower);
+                if (lower_tag.find("response") != std::string::npos || lower_tag.find("content") != std::string::npos ||
+                    lower_tag.find("output") != std::string::npos || lower_tag.find("answer") != std::string::npos) {
+                    // Infer end tag
+                    std::string end_tag;
+                    if (potential_start.find("|>") != std::string::npos) {
+                        // Pattern like <|START_RESPONSE|> -> <|END_RESPONSE|>
+                        std::string tag_name     = potential_start;
+                        size_t      start_prefix = tag_name.find("START_");
+                        if (start_prefix != std::string::npos) {
+                            tag_name.replace(start_prefix, 6, "END_");
+                            end_tag = tag_name;
+                        }
+                    } else if (potential_start[0] == '<' && potential_start.back() == '>') {
+                        // Pattern like <response> -> </response>
+                        std::string tag_name = potential_start.substr(1, potential_start.length() - 2);
+                        size_t      space    = tag_name.find(' ');
+                        if (space != std::string::npos) {
+                            tag_name = tag_name.substr(0, space);
+                        }
+                        end_tag = "</" + tag_name + ">";
+                    }
+
+                    if (!end_tag.empty()) {
+                        // Verify end tag exists after marker
+                        size_t marker_end = marker_pos + strlen("CONTENT_MARKER_12345");
+                        if (output.find(end_tag, marker_end) != std::string::npos) {
+                            patterns.content_start_marker = potential_start;
+                            patterns.content_end_marker   = end_tag;
+                            LOG_DBG("Inferred content markers: start='%s', end='%s'\n",
+                                    patterns.content_start_marker.c_str(), patterns.content_end_marker.c_str());
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    LOG_DBG("No content markers found\n");
 }
 
 // Simplified methods that just delegate to the differential analysis
@@ -1652,6 +1841,12 @@ std::vector<std::string> TemplateAnalyzer::extract_preserved_tokens(const minja:
     if (!discovered.reasoning_end_marker.empty()) {
         tokens.push_back(discovered.reasoning_end_marker);
     }
+    if (!discovered.content_start_marker.empty()) {
+        tokens.push_back(discovered.content_start_marker);
+    }
+    if (!discovered.content_end_marker.empty()) {
+        tokens.push_back(discovered.content_end_marker);
+    }
 
     return tokens;
 }
@@ -1684,9 +1879,9 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplatePattern 
             prompt_trimmed.pop_back();
         }
 
-        LOG_DBG("Prompt trimmed end: '%s'\n", prompt_trimmed.length() > 20 ?
-                                                ("..." + prompt_trimmed.substr(prompt_trimmed.length() - 20)).c_str() :
-                                                prompt_trimmed.c_str());
+        LOG_DBG("Prompt trimmed end: '%s'\n",
+                prompt_trimmed.length() > 20 ? ("..." + prompt_trimmed.substr(prompt_trimmed.length() - 20)).c_str() :
+                                               prompt_trimmed.c_str());
 
         if (!start_marker.empty()) {
             if (string_ends_with(prompt_trimmed, start_marker)) {
@@ -1756,16 +1951,14 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplatePattern 
 
         // ... validation ...
         if (local_pattern.format == TemplatePattern::JSON_NATIVE) {
-            if (has_tools &&
-                local_pattern.special_markers.at("tool_call_start_marker").empty() &&
+            if (has_tools && local_pattern.special_markers.at("tool_call_start_marker").empty() &&
                 local_pattern.special_markers.at("tool_call_opener").empty() &&
                 local_pattern.special_markers.at("function_opener").empty()) {
                 LOG_DBG("JSON_NATIVE format detected but no meaningful markers - falling back to generic parser\n");
                 throw std::runtime_error("Template analysis failed: JSON_NATIVE format without meaningful markers");
             }
         } else if (local_pattern.format == TemplatePattern::XML_CONSTRUCTED) {
-            if (has_tools &&
-                local_pattern.special_markers.at("tool_call_start_marker").empty() &&
+            if (has_tools && local_pattern.special_markers.at("tool_call_start_marker").empty() &&
                 local_pattern.special_markers.at("function_opener").empty()) {
                 LOG_DBG("XML_CONSTRUCTED format detected but no meaningful markers - falling back to generic parser\n");
                 throw std::runtime_error("Template analysis failed: XML_CONSTRUCTED format without meaningful markers");
@@ -1790,8 +1983,8 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplatePattern 
                 auto content = p.content(p.rest());
                 // Only parse reasoning when reasoning_format != NONE
                 // When reasoning_format == NONE, all output (including any thinking markers) goes into content
-                if (inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE &&
-                    thinking_forced_open && !local_pattern.special_markers.at("reasoning_end_marker").empty()) {
+                if (inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE && thinking_forced_open &&
+                    !local_pattern.special_markers.at("reasoning_end_marker").empty()) {
                     return p.reasoning_block(
                                p.reasoning(p.until(local_pattern.special_markers.at("reasoning_end_marker"))) +
                                p.literal(local_pattern.special_markers.at("reasoning_end_marker"))) +
@@ -1845,12 +2038,12 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplatePattern 
 
         // Set preserved tokens - include all discovered markers plus trigger words
         std::vector<std::string> preserved;
-        
+
         // Add trigger word if present
         if (!trigger_word.empty()) {
             preserved.push_back(trigger_word);
         }
-        
+
         // Add all non-empty special markers
         for (const auto & [key, value] : local_pattern.special_markers) {
             if (!value.empty()) {
@@ -1860,14 +2053,14 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplatePattern 
                 }
             }
         }
-        
+
         // Add any from the original pattern
         for (const auto & token : local_pattern.preserved_tokens) {
             if (!token.empty() && std::find(preserved.begin(), preserved.end(), token) == preserved.end()) {
                 preserved.push_back(token);
             }
         }
-        
+
         data.preserved_tokens = preserved;
 
         // data.prompt was already set
@@ -1891,15 +2084,15 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(const TemplatePatter
     auto has_tools = inputs.tools.is_array() && !inputs.tools.empty();
 
     auto parser = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
+        auto reasoning_start = pattern.special_markers.at("reasoning_start_marker");
+        auto reasoning_end   = pattern.special_markers.at("reasoning_end_marker");
+        auto tool_call_start = pattern.special_markers.at("tool_call_start_marker");
+        auto tool_call_end   = pattern.special_markers.at("tool_call_end_marker");
+        auto content_start   = pattern.special_markers.at("content_start_marker");
+        auto content_end     = pattern.special_markers.at("content_end_marker");
+
         // Reasoning/thinking block handling
-        // When reasoning_format != NONE: parse thinking into reasoning_content
-        // When reasoning_format == NONE: include thinking markers in content (don't separate them)
-        auto reasoning               = p.eps();
-        auto thinking_content_prefix = p.eps();  // For NONE format: captures thinking section as content
-        auto reasoning_start         = pattern.special_markers.at("reasoning_start_marker");
-        auto reasoning_end           = pattern.special_markers.at("reasoning_end_marker");
-        auto tool_call_start         = pattern.special_markers.at("tool_call_start_marker");
-        auto tool_call_end           = pattern.special_markers.at("tool_call_end_marker");
+        auto reasoning = p.eps();
 
         if (!reasoning_start.empty() && !reasoning_end.empty()) {
             if (inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE) {
@@ -1912,28 +2105,114 @@ common_peg_arena UniversalPEGGenerator::build_native_parser(const TemplatePatter
                             reasoning_end.c_str());
                     reasoning = p.optional(reasoning_start + p.reasoning(p.until(reasoning_end)) + reasoning_end);
                 }
-            } else {
-                // reasoning_format == NONE: don't do any special handling for thinking markers
-                // The regular content parser will capture everything including thinking markers
-                LOG_DBG("Skipping thinking section handling (format=NONE) - content parser will capture all\n");
-                // thinking_content_prefix stays as eps()
             }
+            // When reasoning_format == NONE, reasoning stays as eps() - no special handling for thinking markers
         }
+
+        // Build content parser based on available markers
+        // Content markers should be stripped when present, but content without markers should also work
+        // When reasoning_format=NONE, reasoning markers are in the input and should be preserved
+        auto build_content = [&]() {
+            if (!content_start.empty() && !content_end.empty()) {
+                // Have content markers - handle both cases:
+                // 1. Content starts with markers: strip them
+                // 2. Content comes after other markers (e.g., reasoning markers): skip to start of content markers, then strip them
+                LOG_DBG("Using optional content markers for content parsing\n");
+
+                // When reasoning_format=NONE, reasoning markers are in the input.
+                // We need to match: [any prefix] + content_start + content + content_end
+                // The [any prefix] captures reasoning markers, which should be preserved in content
+                auto match_content_with_markers = [&]() {
+                    LOG_DBG(
+                        "match_content_with_markers: reasoning_start='%s', reasoning_end='%s', content_start='%s', "
+                        "reasoning_format=%d\n",
+                        reasoning_start.c_str(), reasoning_end.c_str(), content_start.c_str(),
+                        (int) inputs.reasoning_format);
+                    if (!reasoning_start.empty() && !reasoning_end.empty() &&
+                        inputs.reasoning_format == COMMON_REASONING_FORMAT_NONE) {
+                        // When reasoning_format=NONE, preserve reasoning markers in content
+                        // Match: (anything up to content_start as content) + content_start + (content) + content_end
+                        // Both the prefix (including reasoning markers) and the inner content are tagged as content
+                        LOG_DBG(
+                            "preserve reasoning markers in content: using p.content(p.until('%s')) + literal + "
+                            "p.content(until('%s')) + literal\n",
+                            content_start.c_str(), content_end.c_str());
+                        return p.content(p.until(content_start)) + content_start + p.content(p.until(content_end)) +
+                               content_end;
+                    } else {
+                        // Normal case: just match content_start + content + content_end
+                        return content_start + p.content(p.until(content_end)) + content_end;
+                    }
+                };
+
+                // Fallback for content without markers (or when markers come after reasoning)
+                auto build_fallback_content = [&]() {
+                    if (!reasoning_start.empty() && !reasoning_end.empty() &&
+                        inputs.reasoning_format == COMMON_REASONING_FORMAT_NONE) {
+                        // When reasoning_format=NONE, look for reasoning markers then capture rest
+                        // Skip optional reasoning block: (reasoning_start + reasoning + reasoning_end)? + content
+                        return p.optional(reasoning_start + p.until(reasoning_end) + reasoning_end) +
+                               p.content(p.rest());
+                    } else {
+                        // Just capture rest
+                        return p.content(p.rest());
+                    }
+                };
+
+                // Try: (content with markers) | (reasoning markers + content) | (just content)
+                return p.choice({ match_content_with_markers(), build_fallback_content(), p.content(p.rest()) });
+            } else {
+                // No content markers - capture rest as content
+                return p.content(p.rest());
+            }
+        };
 
         if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
             if (pattern.format == TemplatePattern::JSON_NATIVE) {
                 bool force_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
-                auto tool_calls  = p.standard_json_tools(tool_call_start, tool_call_end, inputs.tools,
-                                                         inputs.parallel_tool_calls, force_calls);
+
+                // Get custom field names or use defaults
+                std::string name_field = "name";
+                std::string args_field = "arguments";
+                std::string id_field   = "";
+
+                auto name_it = pattern.special_markers.find("tool_name_field");
+                auto args_it = pattern.special_markers.find("tool_args_field");
+                auto id_it   = pattern.special_markers.find("tool_id_field");
+
+                if (name_it != pattern.special_markers.end() && !name_it->second.empty()) {
+                    name_field = name_it->second;
+                }
+                if (args_it != pattern.special_markers.end() && !args_it->second.empty()) {
+                    args_field = args_it->second;
+                }
+                if (id_it != pattern.special_markers.end() && !id_it->second.empty()) {
+                    id_field = id_it->second;
+                }
+
+                LOG_DBG("Using JSON field names: name='%s', args='%s', id='%s'\n", name_field.c_str(),
+                        args_field.c_str(), id_field.c_str());
+
+                auto tool_calls =
+                    p.standard_json_tools(tool_call_start, tool_call_end, inputs.tools, inputs.parallel_tool_calls,
+                                          force_calls, name_field, args_field, id_field);
 
                 auto content_before_tools = tool_call_start.empty() ? p.eps() : p.content(p.until(tool_call_start));
 
-                return p.sequence({ reasoning, thinking_content_prefix, content_before_tools, p.space(), tool_calls, p.space(), p.end() });
+                return p.sequence({ reasoning, content_before_tools, p.space(), tool_calls, p.space(), p.end() });
             }
             throw std::runtime_error("Native parser requires JSON tool format");
         }
 
-        return p.sequence({ reasoning, thinking_content_prefix, p.rule("content", p.content(p.rest())), p.end() });
+        auto content_parser = build_content();
+
+        // Only add space if reasoning is not empty (has actual meaning)
+        // When reasoning = eps() (reasoning_format=NONE), there's no reason to consume space
+        if (reasoning != p.eps()) {
+            content_parser = p.space() + content_parser;
+        }
+
+        return p.sequence({ reasoning, content_parser, p.end() });
     });
 
     return parser;
@@ -1943,56 +2222,93 @@ common_peg_arena UniversalPEGGenerator::build_constructed_parser(const TemplateP
                                                                  const minja::chat_template &    tmpl,
                                                                  const struct templates_params & inputs,
                                                                  bool                            thinking_forced_open) {
-    (void) tmpl;    // Suppress unused parameter warning
+    (void) tmpl;  // Suppress unused parameter warning
 
     auto parser = build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
         auto reasoning_start = pattern.special_markers.at("reasoning_start_marker");
         auto reasoning_end   = pattern.special_markers.at("reasoning_end_marker");
         auto tool_call_start = pattern.special_markers.at("tool_call_start_marker");
+        auto content_start   = pattern.special_markers.at("content_start_marker");
+        auto content_end     = pattern.special_markers.at("content_end_marker");
 
-        fprintf(stderr, "build_constructed_parser: reasoning_start='%s', reasoning_end='%s', reasoning_format=%d, forced_open=%d\n",
-                reasoning_start.c_str(), reasoning_end.c_str(), static_cast<int>(inputs.reasoning_format), thinking_forced_open);
+        LOG_DBG(
+            "build_constructed_parser: reasoning_start='%s', reasoning_end='%s', content_start='%s', "
+            "content_end='%s'\n",
+            reasoning_start.c_str(), reasoning_end.c_str(), content_start.c_str(), content_end.c_str());
 
         // Reasoning/thinking block handling
-        // When reasoning_format != NONE: parse thinking into reasoning_content
-        // When reasoning_format == NONE: include thinking markers in content (don't separate them)
         auto reasoning = p.eps();
-        auto thinking_content_prefix = p.eps();  // For NONE format: captures thinking section as content
 
         if (!reasoning_start.empty() && !reasoning_end.empty()) {
             if (inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE) {
                 // Parse thinking into reasoning_content
                 if (thinking_forced_open) {
                     LOG_DBG("Building mandatory reasoning block for constructed parser\n");
-                    reasoning = p.rule("reasoning",
-                                       p.reasoning_block(p.reasoning(p.until(reasoning_end)) + p.literal(reasoning_end)));
+                    reasoning = p.rule(
+                        "reasoning", p.reasoning_block(p.reasoning(p.until(reasoning_end)) + p.literal(reasoning_end)));
                 } else {
                     LOG_DBG("Building optional reasoning block for constructed parser\n");
-                    reasoning = p.optional(p.rule(
-                        "reasoning", p.reasoning_block(p.literal(reasoning_start) + p.reasoning(p.until(reasoning_end)) +
-                                                       p.literal(reasoning_end))));
+                    reasoning = p.optional(p.rule("reasoning", p.reasoning_block(p.literal(reasoning_start) +
+                                                                                 p.reasoning(p.until(reasoning_end)) +
+                                                                                 p.literal(reasoning_end))));
                 }
-            } else {
-                // reasoning_format == NONE: don't do any special handling for thinking markers
-                // The regular content parser will capture everything including thinking markers
-                fprintf(stderr, ">>> Skipping thinking section handling (format=NONE) - content parser will capture all\n");
-                // thinking_content_prefix stays as eps()
             }
+            // When reasoning_format == NONE, reasoning stays as eps() - no special handling for thinking markers
+            // The content parser will capture everything including thinking markers
         }
 
-        bool has_tools = inputs.tools.is_array() && !inputs.tools.empty();
+        bool has_tools   = inputs.tools.is_array() && !inputs.tools.empty();
         bool force_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         auto tool_calls  = p.standard_constructed_tools(pattern.special_markers, inputs.tools,
                                                         inputs.parallel_tool_calls, force_calls);
 
-        // Only use tag_with_safe_content when tools are actually provided
-        // When no tools, just capture everything as content (avoids issues with < being treated as potential tag)
+        // Build content parser based on available markers
+        // Content markers (like <|START_RESPONSE|>...<|END_RESPONSE|>) should be stripped when present
+        // but content without markers should also be accepted
+        // When reasoning_format=NONE, reasoning markers are in the input and should be preserved
+        auto build_content = [&]() {
+            if (!content_start.empty() && !content_end.empty()) {
+                // Have content markers - handle both cases:
+                // 1. Content starts with markers: strip them
+                // 2. Content comes after other markers (e.g., reasoning markers): skip to start of content markers, then strip them
+                LOG_DBG("Using optional content markers for content parsing\n");
+
+                // When reasoning_format=NONE, reasoning markers are in the input.
+                // We need to match: [any prefix] + content_start + content + content_end
+                // The [any prefix] captures reasoning markers, which should be preserved in content
+                auto match_content_with_markers = [&]() {
+                    if (!reasoning_start.empty() && !reasoning_end.empty() &&
+                        inputs.reasoning_format == COMMON_REASONING_FORMAT_NONE) {
+                        // When reasoning_format=NONE, preserve reasoning markers in content
+                        // Match: (anything up to content_start as content) + content_start + content + content_end
+                        // Both the prefix (including reasoning markers) and the inner content are tagged as content
+                        LOG_DBG("preserve reasoning markers in content with content markers\n");
+                        return p.content(p.until(content_start)) + p.literal(content_start) +
+                               p.rule("content", p.content(p.until(content_end))) + p.literal(content_end);
+                    } else {
+                        // Normal case: just match content_start + content + content_end
+                        LOG_DBG("normal content markers without preserving reasoning markers\n");
+                        return p.literal(content_start) + p.rule("content", p.content(p.until(content_end))) +
+                               p.literal(content_end);
+                    }
+                };
+
+                // Try: (content with markers) | (content without markers)
+                return p.choice({ match_content_with_markers(), p.rule("content", p.content(p.rest())) });
+            } else {
+                // No content markers - capture rest as content
+                return p.rule("content", p.content(p.rest()));
+            }
+        };
+
         if (has_tools && !tool_call_start.empty()) {
-            return reasoning + thinking_content_prefix + p.space() + p.tag_with_safe_content("content", tool_call_start, tool_calls) +
+            // With tools: reasoning -> content (optionally wrapped) -> tool calls -> trailing content
+            return reasoning + p.space() + p.tag_with_safe_content("content", tool_call_start, tool_calls) +
                    p.optional(p.rule("content", p.content(p.rest())));
         }
 
-        return reasoning + thinking_content_prefix + p.rule("content", p.content(p.rest()));
+        // No tools - just reasoning (if any) followed by content
+        return reasoning + p.space() + build_content();
     });
 
     return parser;
