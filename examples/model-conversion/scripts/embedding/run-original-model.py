@@ -45,7 +45,7 @@ if use_sentence_transformers:
 else:
     tokenizer = AutoTokenizer.from_pretrained(model_path)
 
-    config = AutoConfig.from_pretrained(model_path)
+    config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
 
     # This can be used to override the sliding window size for manual testing. This
     # can be useful to verify the sliding window attention mask in the original model
@@ -64,12 +64,12 @@ else:
 
         try:
             model_class = getattr(importlib.import_module(unreleased_module_path), class_name)
-            model = model_class.from_pretrained(model_path, config=config)
+            model = model_class.from_pretrained(model_path, config=config, trust_remote_code=True)
         except (ImportError, AttributeError) as e:
             print(f"Failed to import or load model: {e}")
             exit(1)
     else:
-        model = AutoModel.from_pretrained(model_path, config=config)
+        model = AutoModel.from_pretrained(model_path, config=config, trust_remote_code=True)
     print(f"Model class: {type(model)}")
     print(f"Model file: {type(model).__module__}")
 
@@ -123,7 +123,7 @@ with torch.no_grad():
         outputs = model(**encoded)
         hidden_states = outputs.last_hidden_state  # Shape: [batch_size, seq_len, hidden_size]
 
-        all_embeddings = hidden_states[0].cpu().numpy()  # Shape: [seq_len, hidden_size]
+        all_embeddings = hidden_states[0].float().cpu().numpy()  # Shape: [seq_len, hidden_size]
 
         print(f"Hidden states shape: {hidden_states.shape}")
         print(f"All embeddings shape: {all_embeddings.shape}")
