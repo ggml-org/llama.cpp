@@ -272,6 +272,9 @@ struct llama_hparams {
     static bool is_masked_swa(uint32_t n_swa, llama_swa_type swa_type, llama_pos p0, llama_pos p1);
 
     bool use_mrope() const;
+
+    // Trillion
+    uint32_t n_global_attn_freq = 4;
 };
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");

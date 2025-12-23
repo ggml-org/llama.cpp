@@ -2338,6 +2338,23 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_TRILLION:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_SCALE, hparams.f_attn_temp_scale);
+
+                hparams.swa_type      = LLAMA_SWA_TYPE_STANDARD;
+                hparams.n_swa         = 4096;
+                hparams.set_swa_pattern(4, false);
+
+                hparams.f_attn_temp_offset = 1.0f;
+                hparams.n_attn_temp_floor_scale = 1; // TODO: get config
+
+                switch (hparams.n_layer) {
+                    case 80: type = LLM_TYPE_70B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
         default: throw std::runtime_error("unsupported model architecture");
     }
 
@@ -2652,6 +2669,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             case LLM_ARCH_GRANITE:
             case LLM_ARCH_GRANITE_MOE:
             case LLM_ARCH_MISTRAL3:
+            case LLM_ARCH_TRILLION:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -7704,6 +7722,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_mistral3>(*this, params);
             } break;
+        case LLM_ARCH_TRILLION:
+            {
+                llm = std::make_unique<llm_build_trillion>(*this, params);
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -7933,6 +7955,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_PANGU_EMBED:
         case LLM_ARCH_AFMOE:
         case LLM_ARCH_QWEN3NEXT:
+        case LLM_ARCH_TRILLION:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:

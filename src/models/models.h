@@ -547,3 +547,7 @@ struct llm_build_wavtokenizer_dec : public llm_graph_context {
 struct llm_build_xverse : public llm_graph_context {
     llm_build_xverse(const llama_model & model, const llm_graph_params & params);
 };
+
+struct llm_build_trillion : public llm_graph_context {
+    llm_build_trillion(const llama_model & model, const llm_graph_params & params);
+};

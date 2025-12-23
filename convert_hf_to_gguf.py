@@ -1230,6 +1230,9 @@ class TextModel(ModelBase):
         if chkhsh == "4a2e2abae11ca2b86d570fc5b44be4d5eb5e72cc8f22dd136a94b37da83ab665":
             # ref: https://huggingface.co/KORMo-Team/KORMo-tokenizer
             res = "kormo"
+        if chkhsh == "a232e0f0978ca952ab8dddb5c271f5af0340524d7cdde1eebf5da12af3c14296":
+            # ref: https://huggingface.co/trillionlabs/Tri-70B-preview-SFT
+            res = "trillion-70b"
 
         if res is None:
             logger.warning("\n")
@@ -10465,6 +10468,27 @@ class JanusProVisionModel(MmprojModel):
             return [(self.map_tensor_name(name), data_torch)]
 
         return []
+    
+
+@ModelBase.register(
+    "TrillionForCausalLM",
+)
+class TrillionModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.TRILLION
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        
+        self.gguf_writer.add_attn_temperature_scale(self.hparams["attn_scale"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        return [(self.map_tensor_name(name), data_torch)]
 
 
 ###### CONVERSION LOGIC ######
