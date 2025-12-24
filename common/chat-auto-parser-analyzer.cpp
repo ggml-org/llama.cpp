@@ -561,7 +561,8 @@ DiscoveredPattern TemplateAnalyzer::extract_patterns_from_differences(const std:
 
             if (value1_pos > key_end) {
                 patterns.parameter_key_suffix = tool2_diff.substr(key_end, value1_pos - key_end);
-                trim_whitespace(patterns.parameter_key_suffix);
+                // Don't trim whitespace from parameter_key_suffix as it may contain structural newlines
+                // that are needed to properly separate parameter keys from values in XML-style formats
             }
 
             size_t value1_len = 6;  // "value1"
@@ -777,10 +778,6 @@ DiscoveredPattern TemplateAnalyzer::extract_patterns_from_differences(const std:
             size_t last  = patterns.tool_call_start_marker.find_last_not_of(" \n\t\r");
             if (first != std::string::npos && last != std::string::npos) {
                 patterns.tool_call_start_marker = patterns.tool_call_start_marker.substr(first, (last - first + 1));
-            }
-            while (!patterns.tool_call_start_marker.empty() &&
-                   (patterns.tool_call_start_marker.back() == '\n' || patterns.tool_call_start_marker.back() == '\r')) {
-                patterns.tool_call_start_marker.pop_back();
             }
         }
 
