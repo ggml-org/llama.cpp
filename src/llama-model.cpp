@@ -2382,7 +2382,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     const auto & tensor_split = params.tensor_split;
 
     const int n_layer      = hparams.n_layer;
-    const int n_gpu_layers = params.n_gpu_layers >= 0 ? params.n_gpu_layers : n_layer + 1;
+    const int n_gpu_layers = this->n_gpu_layers();
 
     const bool use_mmap_buffer = true;
 
@@ -6882,6 +6882,14 @@ size_t llama_model::n_tensors() const {
 
 size_t llama_model::n_devices() const {
     return devices.size();
+}
+
+uint32_t llama_model::n_gpu_layers() const {
+    return params.n_gpu_layers >= 0 ? params.n_gpu_layers : hparams.n_layer + 1;
+}
+
+llama_split_mode llama_model::split_mode() const {
+    return params.split_mode;
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() const {

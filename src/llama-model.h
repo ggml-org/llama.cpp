@@ -466,8 +466,6 @@ struct llama_model {
     struct ggml_tensor * dense_2_out_layers = nullptr;
     struct ggml_tensor * dense_3_out_layers = nullptr;
 
-    llama_model_params params;
-
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
 
@@ -498,6 +496,9 @@ struct llama_model {
     size_t n_tensors() const;
     size_t n_devices() const;
 
+    uint32_t n_gpu_layers() const;
+    llama_split_mode split_mode() const;
+
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
     // total number of parameters in the model
@@ -526,6 +527,8 @@ struct llama_model {
     ggml_cgraph * build_graph(const llm_graph_params & params) const;
 
 private:
+    llama_model_params params;
+
     struct impl;
     std::unique_ptr<impl> pimpl;
 };
