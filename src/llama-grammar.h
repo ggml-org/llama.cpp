@@ -116,9 +116,17 @@ struct llama_grammar_parser {
     void print(FILE * file);
 };
 
+enum llama_grammar_trigger_pattern_type {
+    LLAMA_GRAMMAR_TRIGGER_PATTERN_TYPE_MATCH       = 0,
+    LLAMA_GRAMMAR_TRIGGER_PATTERN_TYPE_SEARCH      = 1,
+};
+
 struct llama_grammar_trigger_pattern {
+    llama_grammar_trigger_pattern_type type;
     std::string pattern;
     std::regex  regex;
+
+    size_t find(const std::string & input) const;
 };
 
 struct llama_grammar {

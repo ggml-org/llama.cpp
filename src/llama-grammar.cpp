@@ -370,6 +370,54 @@ static void print_rule(
 }
 
 //
+// Regex utilities
+//
+static llama_grammar_trigger_pattern llama_grammar_trigger_pattern_compile(const std::string & pattern) {
+    llama_grammar_trigger_pattern_type type = LLAMA_GRAMMAR_TRIGGER_PATTERN_TYPE_SEARCH;
+    if (!pattern.empty() && pattern.front() == '^' && pattern.back() == '$') {
+        // If anchored on both ends, consider it a match
+        type = LLAMA_GRAMMAR_TRIGGER_PATTERN_TYPE_MATCH;
+    }
+    return {type, pattern, std::regex(pattern)};
+}
+
+size_t llama_grammar_trigger_pattern::find(const std::string & input) const {
+    auto find_start_pos = [](const std::smatch & match) {
+        // get from the first matched capturing group to the end of the string
+        size_t start = std::string::npos;
+        for (auto i = 1u; i < match.size(); i++) {
+            if (match.length(i) > 0) {
+                start = match.position(i);
+                break;
+            }
+        }
+        if (start == std::string::npos) {
+            start = match.position(0);
+        }
+        return start;
+    };
+
+    if (type == LLAMA_GRAMMAR_TRIGGER_PATTERN_TYPE_MATCH) {
+        // match against the entire input
+        std::smatch match;
+        if (std::regex_match(input, match, regex)) {
+            return find_start_pos(match);
+        }
+    }
+
+    if (type == LLAMA_GRAMMAR_TRIGGER_PATTERN_TYPE_SEARCH) {
+        // search anywhere
+        std::smatch match;
+        if (std::regex_search(input, match, regex)) {
+            return find_start_pos(match);
+        }
+    }
+
+    return std::string::npos;
+}
+
+
+//
 // implementation
 //
 
@@ -1192,9 +1240,7 @@ struct llama_grammar * llama_grammar_init_impl(
     }
     for (size_t i = 0; i < num_trigger_patterns; i++) {
         GGML_ASSERT(trigger_patterns != nullptr);
-        auto & trigger = vec_trigger_patterns.emplace_back();
-        trigger.pattern = trigger_patterns[i];
-        trigger.regex = std::regex(trigger.pattern);
+        vec_trigger_patterns.emplace_back(llama_grammar_trigger_pattern_compile(trigger_patterns[i]));
     }
 
     // Important: vec_rules has to be moved here, not copied, because stacks contains
@@ -1312,21 +1358,10 @@ void llama_grammar_accept_impl(struct llama_grammar & grammar, llama_token token
             grammar.trigger_buffer_positions.push_back(std::make_pair(token, position));
             grammar.trigger_buffer += piece;
 
-            std::smatch match;
             for (const auto & trigger_pattern : grammar.trigger_patterns) {
-                if (std::regex_match(grammar.trigger_buffer, match, trigger_pattern.regex)) {
+                auto start = trigger_pattern.find(grammar.trigger_buffer);
+                if (start != std::string::npos) {
                     grammar.awaiting_trigger = false;
-                    // get from the first matched capturing group to the end of the string
-                    size_t start = std::string::npos;
-                    for (auto i = 1u; i < match.size(); i++) {
-                        if (match.length(i) > 0) {
-                            start = match.position(i);
-                            break;
-                        }
-                    }
-                    if (start == std::string::npos) {
-                        start = match.position(0);
-                    }
 
                     // replay tokens that overlap with [start, end)
                     for (const auto & [tok, tok_pos] : grammar.trigger_buffer_positions) {
