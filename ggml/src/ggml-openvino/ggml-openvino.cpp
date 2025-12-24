@@ -24,11 +24,6 @@
 #include <string>
 #include <vector>
 
-#define GGML_OPENVINO_MAX_STREAMS 8
-
-// OpenVINO buffer alignment (same as CPU for compatibility)
-#define GGML_OPENVINO_BUFFER_ALIGNMENT 64
-
 // =====================================================
 // OpenVINO Buffer Implementation using ov::Tensor
 // =====================================================
@@ -79,11 +74,7 @@ struct ggml_backend_openvino_buffer_context {
         auto & core = ov_singleton_core();
 
         if (device_name == "CPU") {
-#ifdef _WIN32
-            data = _aligned_malloc(alloc_size, GGML_OPENVINO_BUFFER_ALIGNMENT);
-#else
-            data = aligned_alloc(GGML_OPENVINO_BUFFER_ALIGNMENT, size);
-#endif
+            data = ggml_aligned_malloc(size);
             ov_buffer = std::make_shared<ov::Tensor>(ov::element::u8, ov::Shape{size}, data);
         } else if (device_name == "GPU") {
             auto gpu_context = core.get_default_context("GPU").as<ov::intel_gpu::ocl::ClContext>();
@@ -107,9 +98,9 @@ struct ggml_backend_openvino_buffer_context {
             return;
         }
 
-        if (reinterpret_cast<uintptr_t>(data) % GGML_OPENVINO_BUFFER_ALIGNMENT != 0) {
+        if (reinterpret_cast<uintptr_t>(data) % TENSOR_ALIGNMENT != 0) {
             GGML_LOG_ERROR("%s: %s buffer is not aligned to %d bytes\n", __func__, device_name.c_str(),
-                           GGML_OPENVINO_BUFFER_ALIGNMENT);
+                           TENSOR_ALIGNMENT);
             GGML_ABORT("fatal error");
         }
     }
@@ -121,11 +112,7 @@ struct ggml_backend_openvino_buffer_context {
         }
         tensor_extras.clear();
         if (data && ggml_openvino_get_device_name() == "CPU") {
-#ifdef _WIN32
-            _aligned_free(data);
-#else
-            free(data);
-#endif
+            ggml_aligned_free(data, size);
         }
     }
 };
@@ -479,7 +466,7 @@ static ggml_backend_buffer_t ggml_backend_openvino_buffer_type_alloc_buffer(ggml
 
 static size_t ggml_backend_openvino_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(buft);
-    return GGML_OPENVINO_BUFFER_ALIGNMENT;
+    return TENSOR_ALIGNMENT;
 }
 
 static size_t ggml_backend_openvino_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {

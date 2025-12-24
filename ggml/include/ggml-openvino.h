@@ -51,8 +51,10 @@ struct ggml_openvino_device_info {
     std::array<float, GGML_OPENVINO_MAX_DEVICES> default_tensor_split = {};
 };
 
-const ggml_openvino_device_info & ggml_openvino_info();
-
 #ifdef __cplusplus
 }
+#endif
+
+#ifdef __cplusplus
+const ggml_openvino_device_info & ggml_openvino_info();
 #endif
