@@ -56,7 +56,7 @@ class MainActivity : AppCompatActivity() {
         // Find views
         ggufTv = findViewById(R.id.gguf)
         messagesRv = findViewById(R.id.messages)
-        messagesRv.layoutManager = LinearLayoutManager(this)
+        messagesRv.layoutManager = LinearLayoutManager(this).apply { stackFromEnd = true }
         messagesRv.adapter = messageAdapter
         userInputEt = findViewById(R.id.user_input)
         userActionFab = findViewById(R.id.fab)
