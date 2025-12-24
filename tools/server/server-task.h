@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_set>
 #include <list>
+#include <map>
 
 // TODO: prevent including the whole server-common.h as we only use server_tokens
 #include "server-common.h"
@@ -23,6 +24,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_SAVE,
     SERVER_TASK_TYPE_SLOT_RESTORE,
     SERVER_TASK_TYPE_SLOT_ERASE,
+    SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
 };
 
@@ -60,7 +62,7 @@ struct task_params {
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
 
-    std::vector<common_adapter_lora_info> lora;
+    std::map<int, float> lora; // mapping adapter ID -> scale
 
     std::vector<std::string> antiprompt;
     std::vector<std::string> response_fields;
@@ -105,8 +107,10 @@ struct task_result_state {
 };
 
 struct server_task {
-    int id    = -1; // to be filled by server_queue
-    int index = -1; // used when there are multiple prompts (batch request)
+    int id = -1; // to be filled by server_queue
+
+    // TODO @ngxson : remove this field and implement a mapping task_id -> idx in the response_reader
+    size_t index = 0; // used when there are multiple prompts (batch request)
 
     // used by SERVER_TASK_TYPE_CANCEL
     int id_target = -1;
@@ -138,7 +142,7 @@ struct server_task {
     bool metrics_reset_bucket = false;
 
     // used by SERVER_TASK_TYPE_SET_LORA
-    std::vector<common_adapter_lora_info> set_lora;
+    std::map<int, float> set_lora; // mapping adapter ID -> scale
 
     server_task() = default;
 
@@ -149,9 +153,10 @@ struct server_task {
     }
 
     static task_params params_from_json_cmpl(
-            const llama_context * ctx,
-            const common_params & params_base,
-            const json & data);
+        const llama_vocab * vocab,
+        const common_params & params_base,
+        const int n_ctx_slot,
+        const json & data);
 
     // utility function
     static std::unordered_set<int> get_list_id(const std::vector<server_task> & tasks) {
@@ -162,10 +167,9 @@ struct server_task {
         return ids;
     }
 
-    server_task create_child(int id_parent, int id_child, int idx) const {
+    server_task create_child(int id_parent, int id_child) const {
         server_task copy;
         copy.id        = id_child;
-        copy.index     = idx;
         copy.id_parent = id_parent;
         copy.params    = params;
         copy.type      = type;
@@ -212,6 +216,10 @@ struct result_prompt_progress {
 struct server_task_result {
     int id           = -1;
     int id_slot      = -1;
+
+    // TODO @ngxson : remove this field and implement a mapping task_id -> idx in the response_reader
+    size_t index = 0; // to be used for batched tasks
+
     virtual bool is_error() {
         // only used by server_task_result_error
         return false;
@@ -219,9 +227,6 @@ struct server_task_result {
     virtual bool is_stop() {
         // only used by server_task_result_cmpl_*
         return true;
-    }
-    virtual int get_index() {
-        return -1;
     }
     virtual void update(task_result_state &) {
         // only used by server_task_result_cmpl_*
@@ -255,8 +260,6 @@ struct completion_token_output {
 };
 
 struct server_task_result_cmpl_final : server_task_result {
-    int index = 0;
-
     std::string content;
     llama_tokens tokens;
 
@@ -289,10 +292,6 @@ struct server_task_result_cmpl_final : server_task_result {
     std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
     bool is_updated = false;
 
-    virtual int get_index() override {
-        return index;
-    }
-
     virtual bool is_stop() override {
         return true; // in stream mode, final responses are considered stop
     }
@@ -318,8 +317,6 @@ struct server_task_result_cmpl_final : server_task_result {
 };
 
 struct server_task_result_cmpl_partial : server_task_result {
-    int index = 0;
-
     std::string  content;
     llama_tokens tokens;
 
@@ -339,10 +336,6 @@ struct server_task_result_cmpl_partial : server_task_result {
     std::string        oaicompat_cmpl_id;
     std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
     bool is_updated = false;
-
-    virtual int get_index() override {
-        return index;
-    }
 
     virtual bool is_stop() override {
         return false; // in stream mode, partial responses are not considered stop
@@ -365,17 +358,12 @@ struct server_task_result_cmpl_partial : server_task_result {
 };
 
 struct server_task_result_embd : server_task_result {
-    int index = 0;
     std::vector<std::vector<float>> embedding;
 
     int32_t n_tokens;
 
     // response formatting
     task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
-
-    virtual int get_index() override {
-        return index;
-    }
 
     virtual json to_json() override;
 
@@ -385,20 +373,14 @@ struct server_task_result_embd : server_task_result {
 };
 
 struct server_task_result_rerank : server_task_result {
-    int index = 0;
     float score = -1e6;
 
     int32_t n_tokens;
-
-    virtual int get_index() override {
-        return index;
-    }
 
     virtual json to_json() override;
 };
 
 struct server_task_result_error : server_task_result {
-    int index = 0;
     error_type err_type = ERROR_TYPE_SERVER;
     std::string err_msg;
 
@@ -456,6 +438,17 @@ struct server_task_result_slot_save_load : server_task_result {
 
 struct server_task_result_slot_erase : server_task_result {
     size_t n_erased;
+
+    virtual json to_json() override;
+};
+
+struct server_task_result_get_lora : server_task_result {
+    struct lora {
+        common_adapter_lora_info info;
+        std::string  alora_invocation_string;
+        llama_tokens alora_invocation_tokens;
+    };
+    std::vector<lora> loras;
 
     virtual json to_json() override;
 };
