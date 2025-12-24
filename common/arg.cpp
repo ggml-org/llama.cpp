@@ -3518,15 +3518,15 @@ void common_params_add_preset_options(std::vector<common_arg> & args) {
         [](common_params &, const std::string &) { /* unused */ }
     ).set_env(COMMON_ARG_PRESET_LOAD_ON_STARTUP).set_preset_only());
 
+    args.push_back(common_arg(
+        {"stop-timeout"}, "SECONDS",
+        "in server router mode, force-kill model instance after this many seconds of graceful shutdown",
+        [](common_params &, int) { /* unused */ }
+    ).set_env(COMMON_ARG_PRESET_STOP_TIMEOUT).set_preset_only());
+
     // args.push_back(common_arg(
     //     {"pin"},
     //     "in server router mode, do not unload this model if models_max is exceeded",
     //     [](common_params &) { /* unused */ }
-    // ).set_preset_only());
-
-    // args.push_back(common_arg(
-    //     {"unload-idle-seconds"}, "SECONDS",
-    //     "in server router mode, unload models idle for more than this many seconds",
-    //     [](common_params &, int) { /* unused */ }
     // ).set_preset_only());
 }
