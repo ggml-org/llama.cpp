@@ -1486,6 +1486,7 @@ The precedence rule for preset options is as follows:
 
 We also offer additional options that are exclusive to presets (these aren't treated as command-line arguments):
 - `load-on-startup` (boolean): Controls whether the model loads automatically when the server starts
+- `unsafe-allow-api-override` (string): Specifies which parameters can be overridden via the `/models/load` API endpoint. Accepts multiple values separated by commas. Example: `n-gpu-layers,jinja`. **Warning:** This feature is **unsafe** and must only be used in trusted environments.
 
 ### Routing requests
 
@@ -1571,11 +1572,15 @@ Load a model
 
 Payload:
 - `model`: name of the model to be loaded.
+- `overrides`: list of preset parameter override (an object mapping string to string). Parameters must be whitelisted via the `unsafe-allow-api-override` preset parameter.
 
 ```json
 {
   "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
-  "extra_args": ["-n", "128", "--top-k", "4"]
+  "overrides": {
+    "c": "1024",
+    "jinja": "false"
+  }
 }
 ```
 

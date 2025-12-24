@@ -3518,15 +3518,16 @@ void common_params_add_preset_options(std::vector<common_arg> & args) {
         [](common_params &, const std::string &) { /* unused */ }
     ).set_env(COMMON_ARG_PRESET_LOAD_ON_STARTUP).set_preset_only());
 
+    args.push_back(common_arg(
+        {"unsafe-allow-api-override"}, "PARAM1,PARAM2,...",
+        "allow overriding these params via /models/load endpoint (unsafe)",
+        [](common_params &, const std::string &) { /* unused */ }
+    ).set_env(COMMON_ARG_PRESET_UNSAFE_ALLOW_API_OVERRIDE).set_preset_only());
+
+    // TODO:
     // args.push_back(common_arg(
     //     {"pin"},
     //     "in server router mode, do not unload this model if models_max is exceeded",
     //     [](common_params &) { /* unused */ }
-    // ).set_preset_only());
-
-    // args.push_back(common_arg(
-    //     {"unload-idle-seconds"}, "SECONDS",
-    //     "in server router mode, unload models idle for more than this many seconds",
-    //     [](common_params &, int) { /* unused */ }
     // ).set_preset_only());
 }

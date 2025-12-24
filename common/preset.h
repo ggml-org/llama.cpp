@@ -65,6 +65,10 @@ struct common_preset_context {
     // generate one preset from CLI arguments
     common_preset load_from_args(int argc, char ** argv) const;
 
+    // generate one preset from mapping string to string
+    // key can be either arg name or env variable
+    common_preset load_from_map(const std::map<std::string, std::string> & arg_map) const;
+
     // cascade multiple presets if exist on both: base < added
     // if preset does not exist in base, it will be added without modification
     common_presets cascade(const common_presets & base, const common_presets & added) const;

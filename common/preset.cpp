@@ -236,32 +236,41 @@ common_preset_context::common_preset_context(llama_example ex)
     key_to_opt = get_map_key_opt(ctx_params);
 }
 
+common_preset common_preset_context::load_from_map(const std::map<std::string, std::string> & arg_map) const {
+    common_preset preset;
+    preset.name = COMMON_PRESET_DEFAULT_NAME;
+
+    for (const auto & [key, value] : arg_map) {
+        LOG_DBG("option: %s = %s\n", key.c_str(), value.c_str());
+        if (key_to_opt.find(key) != key_to_opt.end()) {
+            const auto & opt = key_to_opt.at(key);
+            if (is_bool_arg(opt)) {
+                preset.options[opt] = parse_bool_arg(opt, key, value);
+            } else {
+                preset.options[opt] = value;
+            }
+            LOG_DBG("accepted option: %s = %s\n", key.c_str(), preset.options[opt].c_str());
+        } else {
+            LOG_WRN("ignoring unknown option: %s\n", key.c_str());
+        }
+    }
+
+    return preset;
+}
+
 common_presets common_preset_context::load_from_ini(const std::string & path, common_preset & global) const {
     common_presets out;
     auto ini_data = parse_ini_from_file(path);
 
     for (auto section : ini_data) {
-        common_preset preset;
+        common_preset preset = load_from_map(section.second);
+
         if (section.first.empty()) {
             preset.name = COMMON_PRESET_DEFAULT_NAME;
         } else {
             preset.name = section.first;
         }
-        LOG_DBG("loading preset: %s\n", preset.name.c_str());
-        for (const auto & [key, value] : section.second) {
-            LOG_DBG("option: %s = %s\n", key.c_str(), value.c_str());
-            if (key_to_opt.find(key) != key_to_opt.end()) {
-                const auto & opt = key_to_opt.at(key);
-                if (is_bool_arg(opt)) {
-                    preset.options[opt] = parse_bool_arg(opt, key, value);
-                } else {
-                    preset.options[opt] = value;
-                }
-                LOG_DBG("accepted option: %s = %s\n", key.c_str(), preset.options[opt].c_str());
-            } else {
-                // TODO: maybe warn about unknown key?
-            }
-        }
+        LOG_DBG("loaded preset: %s\n", preset.name.c_str());
 
         if (preset.name == "*") {
             // handle global preset

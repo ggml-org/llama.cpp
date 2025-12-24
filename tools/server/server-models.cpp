@@ -18,6 +18,7 @@
 #include <queue>
 #include <filesystem>
 #include <cstring>
+#include <set>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -244,7 +245,7 @@ void server_models::load_models() {
     }
     for (const auto & name : models_to_load) {
         SRV_INF("(startup) loading model %s\n", name.c_str());
-        load(name);
+        load(name, {});
     }
 }
 
@@ -379,7 +380,7 @@ void server_models::unload_lru() {
     }
 }
 
-void server_models::load(const std::string & name) {
+std::vector<std::string> server_models::load(const std::string & name, const std::map<std::string, std::string> & override_params) {
     if (!has_model(name)) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
@@ -390,7 +391,7 @@ void server_models::load(const std::string & name) {
     auto meta = mapping[name].meta;
     if (meta.status != SERVER_MODEL_STATUS_UNLOADED) {
         SRV_INF("model %s is not ready\n", name.c_str());
-        return;
+        return meta.args;
     }
 
     // prepare new instance info
@@ -404,11 +405,37 @@ void server_models::load(const std::string & name) {
         throw std::runtime_error("failed to get a port number");
     }
 
+    // prepare arguments
+    if (override_params.empty()) {
+        inst.meta.update_args(ctx_preset, bin_path); // render args
+    } else {
+        std::unordered_set<std::string> allowed_keys;
+        std::string val;
+        if (inst.meta.preset.get_option(COMMON_ARG_PRESET_UNSAFE_ALLOW_API_OVERRIDE, val)) {
+            auto keys = string_split<std::string>(val, ',');
+            for (auto & key : keys) {
+                allowed_keys.insert(key);
+            }
+        }
+        common_preset orig_preset = inst.meta.preset; // copy
+        for (const auto & [key, value] : override_params) {
+            if (allowed_keys.find(key) != allowed_keys.end()) {
+                inst.meta.preset.set_option(ctx_preset, key, value);
+            } else {
+                throw std::invalid_argument(string_format(
+                    "overriding option '%s' is not allowed for model '%s'",
+                    key.c_str(),
+                    name.c_str()
+                ));
+            }
+        }
+        inst.meta.update_args(ctx_preset, bin_path); // render args
+        inst.meta.preset = orig_preset; // restore
+    }
+
     inst.subproc = std::make_shared<subprocess_s>();
     {
         SRV_INF("spawning server instance with name=%s on port %d\n", inst.meta.name.c_str(), inst.meta.port);
-
-        inst.meta.update_args(ctx_preset, bin_path); // render args
 
         std::vector<std::string> child_args = inst.meta.args; // copy
         std::vector<std::string> child_env  = base_env; // copy
@@ -484,8 +511,11 @@ void server_models::load(const std::string & name) {
         }
     }
 
+    auto args = inst.meta.args; // save args for return
     mapping[name] = std::move(inst);
     cv.notify_all();
+
+    return args;
 }
 
 static void interrupt_subprocess(FILE * stdin_file) {
@@ -565,7 +595,7 @@ bool server_models::ensure_model_loaded(const std::string & name) {
     }
     if (meta->status == SERVER_MODEL_STATUS_UNLOADED) {
         SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
-        load(name);
+        load(name, {});
     }
 
     SRV_INF("waiting until model name=%s is fully loaded...\n", name.c_str());
@@ -743,8 +773,19 @@ void server_models_routes::init_routes() {
             res_err(res, format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        models.load(name);
-        res_ok(res, {{"success", true}});
+        std::map<std::string, std::string> overrides;
+        if (body.contains("overrides")) {
+            json overrides_json = body["overrides"];
+            for (auto it = overrides_json.begin(); it != overrides_json.end(); ++it) {
+                if (!it.value().is_string()) {
+                    res_err(res, format_error_response("override values must be strings", ERROR_TYPE_INVALID_REQUEST));
+                    return res;
+                }
+                overrides[it.key()] = it.value().get<std::string>();
+            }
+        }
+        auto args = models.load(name, overrides);
+        res_ok(res, {{"success", true}, {"args", args}});
         return res;
     };
 
