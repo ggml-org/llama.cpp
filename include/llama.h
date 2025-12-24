@@ -737,6 +737,20 @@ extern "C" {
     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
 
     //
+    // Memory factory extension
+    //
+    // Allows custom memory (KV cache) implementations to be used.
+    // Factory returns non-null to use custom implementation, null to use default.
+    // Call llama_set_memory_factory() before llama_init_from_model().
+
+    typedef llama_memory_t (*llama_memory_factory_fn)(
+            const struct llama_model * model,
+      const struct llama_context_params * params,
+                                   void * user_data);
+
+    LLAMA_API void llama_set_memory_factory(llama_memory_factory_fn factory, void * user_data);
+
+    //
     // State / sessions
     //
 
