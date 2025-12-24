@@ -8,6 +8,7 @@
 	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { ChatSettingsParameterSourceIndicator } from '$lib/components/app';
+	import { normalizeNumber } from '$lib/utils';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -27,6 +28,28 @@
 
 		return settingsStore.getParameterInfo(key);
 	}
+
+	function normalizeComparisonValue(value: string | number | boolean): string | number | boolean {
+		if (typeof value === 'number') {
+			return normalizeNumber(value);
+		}
+
+		if (typeof value === 'string') {
+			const trimmed = value.trim();
+			if (!trimmed) {
+				return '';
+			}
+
+			const numericValue = Number(trimmed);
+			if (!Number.isNaN(numericValue)) {
+				return normalizeNumber(numericValue);
+			}
+
+			return value;
+		}
+
+		return value;
+	}
 </script>
 
 {#each fields as field (field.key)}
@@ -37,18 +60,14 @@
 			{@const propsDefault = paramInfo?.serverDefault}
 			{@const placeholder = settingsStore.getParameterPlaceholder(field.key)}
 			{@const isCustomRealTime = (() => {
-				if (!paramInfo || propsDefault === undefined) return false;
+				if (!settingsStore.canSyncParameter(field.key)) return false;
 
-				// Apply same rounding logic for real-time comparison
-				const inputValue = currentValue;
-				const numericInput = parseFloat(inputValue);
-				const normalizedInput = !isNaN(numericInput)
-					? Math.round(numericInput * 1000000) / 1000000
-					: inputValue;
-				const normalizedDefault =
-					typeof propsDefault === 'number'
-						? Math.round(propsDefault * 1000000) / 1000000
-						: propsDefault;
+				if (!currentValue.trim()) return false;
+
+				const defaultValue = paramInfo?.serverDefault ?? placeholder;
+
+				const normalizedInput = normalizeComparisonValue(currentValue);
+				const normalizedDefault = normalizeComparisonValue(defaultValue);
 
 				return normalizedInput !== normalizedDefault;
 			})()}
