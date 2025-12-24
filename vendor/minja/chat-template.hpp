@@ -172,7 +172,7 @@ class chat_template {
         auto out_empty = render_with_content("");
         auto out_null = render_with_content(json());
         caps_.requires_non_null_content = contains(out_empty, user_needle) && !contains(out_null, user_needle);
-        
+
         json j_null;
         auto make_tool_calls_msg = [&](const json & tool_calls) {
             return json {
