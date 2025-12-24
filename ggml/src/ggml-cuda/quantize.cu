@@ -55,7 +55,7 @@ __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
     // FP4 E2M1: max exponent (unbiased) is 2.
     constexpr int FP4_E2M1_EMAX = 2;
 
-    const float e = __log2f(amax);
+    const float e = log2f(amax);
 
     // "even" -> round-to-nearest integer, ties-to-even
     const int e_int = __float2int_rn(e);
@@ -163,7 +163,7 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
             q.y = (q_hi_1 << 4) | q_lo_1;
             yqs2[quad_idx_in_block * 16 + b * 8 + group_id] = q;
         }
-#endif // CUDART_VERSION >= 12040
+#endif // CUDART_VERSION >= 12080
     }
 
     if (lane_id_32 == 0) {
