@@ -22,6 +22,8 @@ static __global__ void cpy_scalar(const char * cx, char * cdst, const int64_t ne
         return;
     }
 
+    // determine indices i03/i13, i02/i12, i01/i11, i00/i10 as a function of index i of flattened tensor
+    // then combine those indices with the corresponding byte offsets to get the total offsets
     const int64_t i03 = i/(ne00 * ne01 * ne02);
     const int64_t i02 = (i - i03*ne00*ne01*ne02 )/ (ne00*ne01);
     const int64_t i01 = (i - i03*ne00*ne01*ne02  -  i02*ne01*ne00) / ne00;
@@ -51,7 +53,7 @@ static __global__ void cpy_scalar_transpose(const char * cx, char * cdst, const 
 
     const int x = blockIdx.x * CUDA_CPY_TILE_DIM_2D + threadIdx.x;
     const int y = blockIdx.y * CUDA_CPY_TILE_DIM_2D + threadIdx.y;
-    const int tx = blockIdx.y * CUDA_CPY_TILE_DIM_2D + threadIdx.x;
+    const int tx = blockIdx.y * CUDA_CPY_TILE_DIM_2D + threadIdx.x;  // transpose block offset
     const int ty = blockIdx.x * CUDA_CPY_TILE_DIM_2D + threadIdx.y;
 
     __shared__ float tile[CUDA_CPY_TILE_DIM_2D][CUDA_CPY_TILE_DIM_2D+1];
@@ -197,9 +199,9 @@ static void ggml_cpy_scalar_cuda(
     const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13, cudaStream_t stream) {
 
     if (transposed) {
-        GGML_ASSERT(ne == ne00*ne01*ne02);
+        GGML_ASSERT(ne == ne00*ne01*ne02);  // ne[3] is 1 assumed
         int64_t ne00n, ne01n, ne02n;
-        if (nb00 <= nb02) {
+        if (nb00 <= nb02) { // most likely safe to handle nb00 = nb02 case here
             ne00n = ne00;
             ne01n = ne01;
             ne02n = ne02;
@@ -361,6 +363,8 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
     const int64_t ne01 = src0->ne[1];
     const int64_t ne02 = src0->ne[2];
 
+    //GGML_ASSERT(src0->ne[3] == 1);
+
     const int64_t nb00 = src0->nb[0];
     const int64_t nb01 = src0->nb[1];
     const int64_t nb02 = src0->nb[2];
@@ -369,6 +373,8 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
     const int64_t ne10 = src1->ne[0];
     const int64_t ne11 = src1->ne[1];
     const int64_t ne12 = src1->ne[2];
+
+    //GGML_ASSERT(src1->ne[3] == 1);
 
     const int64_t nb10 = src1->nb[0];
     const int64_t nb11 = src1->nb[1];
