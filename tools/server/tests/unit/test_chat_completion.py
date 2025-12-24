@@ -13,16 +13,16 @@ def create_server():
 @pytest.mark.parametrize(
     "model,system_prompt,user_prompt,max_tokens,re_content,n_prompt,n_predicted,finish_reason,jinja,chat_template",
     [
-        (None, "Book", "Hey", 8, "But she couldn't|Some of her", 69, 8, "length", False, None),
-        (None, "Book", "Hey", 8, "But she couldn't|Some of her", 69, 8, "length", True, None),
-        (None, "Book", "What is the best book", 8, "(Suddenly)+|\\{ \" Sarax.|Timmy", 77, 8, "length", False, None),
-        (None, "Book", "What is the best book", 8, "(Suddenly)+|\\{ \" Sarax.|Timmy", 77, 8, "length", True,  None),
-        (None, "Book", "What is the best book", 8, "(Suddenly)+|\\{ \" Sarax.|Timmy", 77, 8, "length", True, 'chatml'),
-        (None, "Book", "What is the best book", 8, "^ blue|very teaful|very busy", 23, 8, "length", True, "This is not a chat template, it is"),
-        ("codellama70b", "You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger|shake)+", 104, 128, "length", False, None),
-        ("codellama70b", "You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger|shake)+", 104, 128, "length", True, None),
-        (None, "Book", [{"type": "text", "text": "What is"}, {"type": "text", "text": "the best book"}], 8, "Whillicter|Some", 79, 8, "length", False, None),
-        (None, "Book", [{"type": "text", "text": "What is"}, {"type": "text", "text": "the best book"}], 8, "Whillicter|Some", 79, 8, "length", True, None),
+        (None, "Book", "Hey", 8, "But she couldn't", 69, 8, "length", False, None),
+        (None, "Book", "Hey", 8, "But she couldn't", 69, 8, "length", True, None),
+        (None, "Book", "What is the best book", 8, "(Suddenly)+|\\{ \" Sarax.", 77, 8, "length", False, None),
+        (None, "Book", "What is the best book", 8, "(Suddenly)+|\\{ \" Sarax.", 77, 8, "length", True,  None),
+        (None, "Book", "What is the best book", 8, "(Suddenly)+|\\{ \" Sarax.", 77, 8, "length", True, 'chatml'),
+        (None, "Book", "What is the best book", 8, "^ blue",                    23, 8, "length", True, "This is not a chat template, it is"),
+        ("codellama70b", "You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger)+", 104, 128, "length", False, None),
+        ("codellama70b", "You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger)+", 104, 128, "length", True, None),
+        (None, "Book", [{"type": "text", "text": "What is"}, {"type": "text", "text": "the best book"}], 8, "Whillicter", 79, 8, "length", False, None),
+        (None, "Book", [{"type": "text", "text": "What is"}, {"type": "text", "text": "the best book"}], 8, "Whillicter", 79, 8, "length", True, None),
     ]
 )
 def test_chat_completion(model, system_prompt, user_prompt, max_tokens, re_content, n_prompt, n_predicted, finish_reason, jinja, chat_template):
@@ -54,8 +54,8 @@ def test_chat_completion(model, system_prompt, user_prompt, max_tokens, re_conte
 @pytest.mark.parametrize(
     "system_prompt,user_prompt,max_tokens,re_content,n_prompt,n_predicted,finish_reason",
     [
-        ("Book", "What is the best book", 8, "(Suddenly)+|Timmy", 77, 8, "length"),
-        ("You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger|shake)+", 104, 128, "length"),
+        ("Book", "What is the best book", 8, "(Suddenly)+", 77, 8, "length"),
+        ("You are a coding assistant.", "Write the fibonacci function in c++.", 128, "(Aside|she|felter|alonger)+", 104, 128, "length"),
     ]
 )
 def test_chat_completion_stream(system_prompt, user_prompt, max_tokens, re_content, n_prompt, n_predicted, finish_reason):
@@ -115,7 +115,7 @@ def test_chat_completion_with_openai_library():
     assert res.system_fingerprint is not None and res.system_fingerprint.startswith("b")
     assert res.choices[0].finish_reason == "length"
     assert res.choices[0].message.content is not None
-    assert match_regex("(Suddenly)+|Timmy", res.choices[0].message.content)
+    assert match_regex("(Suddenly)+", res.choices[0].message.content)
 
 
 def test_chat_template():
@@ -503,5 +503,5 @@ def test_chat_completions_multiple_choices():
     assert len(res.body["choices"]) == 2
     for choice in res.body["choices"]:
         assert "assistant" == choice["message"]["role"]
-        assert match_regex("Suddenly|Timmy", choice["message"]["content"])
+        assert match_regex("Suddenly", choice["message"]["content"])
         assert choice["finish_reason"] == "length"
