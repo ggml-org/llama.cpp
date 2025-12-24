@@ -2064,7 +2064,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
             // Trigger on tool calls that appear in the commentary channel
             data.grammar_triggers.push_back({
                 COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
-                "<\\|channel\\|>(commentary|analysis) to"
+                "<\\|channel\\|>(?:commentary|analysis) to"
             });
 
             // Trigger tool calls that appear in the role section, either at the
