@@ -51,9 +51,7 @@
 {#- ========================================================================== -#}
 
 {%- macro render_tools(tools) -%}
-## Tools
-
-You have access to a set of tools you can use to answer the user's question.
+## Tools{{- "\n\n" -}}You have access to a set of tools you can use to answer the user's question.
 You can invoke functions by writing a "<{{ dsml_token }}function_calls>" block like the following as part of your reply to the user:
 <{{ dsml_token }}function_calls>
 <{{ dsml_token }}invoke name="$FUNCTION_NAME">
@@ -77,9 +75,7 @@ If the thinking_mode is enabled, then after function results you should strongly
 ...
 </function_results>
 
-{{ thinking_start_token }}...thinking about results{{ thinking_end_token }}
-
-Here are the functions available in JSONSchema format:
+{{ thinking_start_token }}...thinking about results{{ thinking_end_token }}{{- "\n\n" -}}Here are the functions available in JSONSchema format:
 <functions>
   {%- for tool in tools -%}
     {{ "\n" }}{{ tool | tojson(ensure_ascii=False) }}
