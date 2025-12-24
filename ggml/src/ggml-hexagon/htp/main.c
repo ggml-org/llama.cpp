@@ -299,7 +299,8 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
 
     ctx->n_threads = n_hvx;
     for (int i = 0; i < ctx->n_threads; i++) {
-        ctx->dma[i] = dma_queue_create(HTP_SPAD_SRC0_NROWS * 2);
+        // see discussion https://github.com/ggml-org/llama.cpp/pull/18151#discussion_r2632388541
+        ctx->dma[i] = dma_queue_create(64);
     }
 
     // init worker pool
