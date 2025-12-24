@@ -179,17 +179,18 @@ class MainActivity : AppCompatActivity() {
                     engine.sendUserPrompt(userMsg)
                         .onCompletion {
                             withContext(Dispatchers.Main) {
+                                userInputEt.isEnabled = true
                                 userActionFab.isEnabled = true
                             }
                         }.collect { token ->
-                            val messageCount = messages.size
-                            check(messageCount > 0 && !messages[messageCount - 1].isUser)
-
-                            messages.removeAt(messageCount - 1).copy(
-                                content = lastAssistantMsg.append(token).toString()
-                            ).let { messages.add(it) }
-
                             withContext(Dispatchers.Main) {
+                                val messageCount = messages.size
+                                check(messageCount > 0 && !messages[messageCount - 1].isUser)
+
+                                messages.removeAt(messageCount - 1).copy(
+                                    content = lastAssistantMsg.append(token).toString()
+                                ).let { messages.add(it) }
+
                                 messageAdapter.notifyItemChanged(messages.size - 1)
                             }
                         }
