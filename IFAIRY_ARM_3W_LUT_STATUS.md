@@ -20,7 +20,7 @@
 **常用环境变量（LUT 路径）**
 
 - `GGML_IFAIRY_LUT=0/1`：禁用/启用 LUT（默认启用）
-- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|auto`：LUT 表布局选择（默认 `legacy`；`auto` 走默认策略）
+- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64|auto`：LUT 表布局选择（默认 `legacy`；`auto` 走默认策略）
 - `GGML_IFAIRY_LUT_BK_BLOCKS=<int>`：K 维按 `QK_K=256` 的 block 做 tiling（0=禁用）
 - `GGML_IFAIRY_LUT_BM=<int>`：M 维行块大小（仅 tiling 时生效）
 - `GGML_IFAIRY_LUT_FULLACC=0/1`：tiled 下启用共享大累加器，减少重复 `preprocess + barrier`
@@ -30,7 +30,10 @@
 - `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：prefetch 距离（默认 `2`；设为 `0` 关闭距离预取；结合 profile 调参）
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` fast-path（默认启用；设为 `0` 强制走通用路径，用于回归/调优 A/B）
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` fast-path 里 group-loop 的 4-way unroll（默认 `4`；设为 `2` 用于 A/B，对照“2-way 是否反而更快”）
-- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`）；当前仅 `sdot` 在 `N==1` 快路上可用，`tbl/merged64` 为预留。
+- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：选择（或影响 auto 策略选择）kernel 路径（默认 `auto`）。当前：
+  - `sdot`：`compact` 的 `N==1` dotprod 实验内核
+  - `tbl`：decode-first `tbl64`
+  - `merged64`：decode-first `merged64`
 - `GGML_IFAIRY_LUT_DECODE_NTH=<int>`：decode (`N==1`) 场景将 graph threads 上限 clamp 到该值（`0` 禁用；用于 A/B）。
 - `GGML_IFAIRY_LUT_DECODE_THRESHOLD=<int>`：decode 小工作量阈值（按 `max(M*K)` 估算）；当 `DECODE_NTH==0` 且 `max(M*K) <= threshold` 时自动 clamp 到 `1` thread（`0` 禁用；用于 A/B）。
 
@@ -101,6 +104,12 @@
 | 2025-12-25T17:04:51Z | `6eef8c01+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_DECODE_NTH=2` | 7.09 | `/tmp/ifairy_bench_6_1_decode_nth2_20251225T170357.jsonl` |
 | 2025-12-25T18:20:24Z | `88497f9c` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 14.68 | `/tmp/ifairy_bench_6_2_layoutdispatch_20251225T182020Z_88497f9c.jsonl` |
 | 2025-12-25T18:20:33Z | `88497f9c` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=compact GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 11.00 | `/tmp/ifairy_bench_6_2_layoutdispatch_20251225T182020Z_88497f9c.jsonl` |
+| 2025-12-26T03:17:01Z | `3098cafb` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 4.39 | `/tmp/ifairy_bench_6_2_kernel_auto_3098cafb_20251226T031701Z.txt` |
+| 2025-12-26T03:17:01Z | `3098cafb` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 19.91 | `/tmp/ifairy_bench_6_2_kernel_auto_3098cafb_20251226T031701Z.txt` |
+| 2025-12-26T03:17:56Z | `3098cafb` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_KERNEL=tbl GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 4.38 | `/tmp/ifairy_bench_6_2_kernel_tbl_3098cafb_20251226T031756Z.txt` |
+| 2025-12-26T03:17:56Z | `3098cafb` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_KERNEL=tbl GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 7.04 | `/tmp/ifairy_bench_6_2_kernel_tbl_3098cafb_20251226T031756Z.txt` |
+| 2025-12-26T03:19:10Z | `3098cafb` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_KERNEL=merged64 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 4.37 | `/tmp/ifairy_bench_6_2_kernel_merged64_3098cafb_20251226T031910Z.txt` |
+| 2025-12-26T03:19:10Z | `3098cafb` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_KERNEL=merged64 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 22.95 | `/tmp/ifairy_bench_6_2_kernel_merged64_3098cafb_20251226T031910Z.txt` |
 
 Note: 2025-12-22 runs showing a large drop were captured with low power mode enabled (`pmset -g` shows `lowpowermode 1`). Re-running `fe740e0a` under the same mode still yields ~4-6 tok/s, so the drop is environmental. Re-benchmark after disabling low power mode; low-power logs are for reference only (`/tmp/ifairy_fe740e0a_20251223T005155.jsonl`, `/tmp/ifairy_fe740e0a_device_none_20251223T005346.jsonl`). Current power-on retest is logged above (`/tmp/ifairy_bench_power_20251223T122617.jsonl`, `/tmp/ifairy_bench_power_run2_20251223T124504.jsonl`, `/tmp/ifairy_bench_power_run3_20251223T124605.jsonl`). 3-run summary: pp128 min/max/mean = 3.291/3.304/3.296; tg256 min/max/mean = 16.750/18.903/17.901.
 
@@ -204,14 +213,18 @@ Note: 2025-12-22 runs showing a large drop were captured with low power mode ena
   - `pat = c0 | (c1<<2) | (c2<<4)`
   - 分组按 `QK_K=256` block 内部进行：`85` 个 triplet + `1` 个尾组（`{255, pad, pad}`），不跨 block、不丢维度。
 - LUT 构表：`ggml/src/ggml-ifairy-lut.cpp::ggml_ifairy_lut_preprocess()`
-  - 支持两种表布局（通过 `GGML_IFAIRY_LUT_LAYOUT=legacy|compact` 选择，默认 `legacy`）：
+  - 支持四种表布局（通过 `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64` 选择，默认 `legacy`）：
     - `legacy`：每组构造完整的 `4 × 64`（`int16`）pattern 表（`512B/group`）
     - `compact`：每组构造紧凑表：`3 positions × 4 codes × 4 channels = 48B/group`（`int8`）
+    - `tbl64`：每组构造 `4ch × 64pat × int8` 表（`256B/group`）
+    - `merged64`：每组构造 `64pat × 4ch × int8` 表（`256B/group`，每个 pattern 对应一组 `{ac,ad,bc,bd}` 的 4 bytes）
   - `compact` 的每个 position 是一个 16B 表：`tbl_pos[code*4 + 0..3] = {ac,ad,bc,bd}`（`int8`），其中 `code∈{0,1,2,3}` 对应 `(-1,0)/(1,0)/(0,-1)/(0,1)`
   - scale：每个 **block** 2 个 `float`（`d_real/d_imag`，被该 block 的全部 `86` 个 group 共享）
 - GEMM：`ggml/src/ggml-ifairy-lut.cpp::ggml_ifairy_lut_qgemm()`
   - `legacy`：每 group 直接读取 `{ac,ad,bc,bd}`（`int16`）并 widen+accum 到 `int32`
   - `compact`：对每个 group 做 3 次 position 查表并相加得到 `{ac,ad,bc,bd}`，再 widen+accum；NEON 下使用 3 次 32-bit load（4B）+ `vaddw_s16` 走整数累加
+  - `tbl64`：对每个 group 读取 `pat` 并从 `4×64` int8 表取出 `{ac,ad,bc,bd}`（当前为标量实现）
+  - `merged64`：对每个 group 读取 `pat` 并从 `64×4` int8 表一次 32-bit load 得到 `{ac,ad,bc,bd}`（NEON 下 widen+accum）
   - 输出默认以 **bf16-pair packed in F32** 的方式写回（与现有 ifairy vec_dot 约定一致）。
   - 在 `__aarch64__ + __ARM_NEON` 下使用 NEON（否则走标量）。
 

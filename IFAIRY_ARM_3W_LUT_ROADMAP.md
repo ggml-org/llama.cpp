@@ -25,18 +25,15 @@
 
 已存在（当前实现）：
 
-- `GGML_IFAIRY_LUT_LAYOUT=auto|legacy|compact`
-- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`（`tbl/merged64` 当前未实现时应 warn 并回退）
-
-计划新增（本路线图落地后才会真正“生效”）：
-
-- `GGML_IFAIRY_LUT_LAYOUT=tbl64`：启用 `tbl64` LUT 布局（新的 preprocess 输出格式）
-- `GGML_IFAIRY_LUT_LAYOUT=merged64`：启用 `merged64` LUT 布局（一次查表）
+- `GGML_IFAIRY_LUT_LAYOUT=auto|legacy|compact|tbl64|merged64`
+- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`
+  - `sdot`：`compact` 的 `N==1` dotprod 实验内核
+  - `tbl/merged64`：decode-first（当前主要用于 `N==1`）；`GGML_IFAIRY_LUT_LAYOUT=auto` 时可由 kernel 触发切到 `tbl64/merged64`（严格模式强制回退到 `legacy`）
 
 约定：
 
-- 当用户显式要求 `GGML_IFAIRY_LUT_LAYOUT=tbl64` 但代码尚未实现时：在 `GGML_IFAIRY_LUT_DEBUG=1` 下给出一次性 warn，然后回退到默认布局（通常 `legacy`）。
-- `strict` 模式下：可选择“强制回退到 reference/通用路径”以避免引入未验证的优化路径（以实现选择为准，但必须可解释、可诊断）。
+- `strict` 模式下：强制回退到 `legacy`（避免引入未验证的优化路径）。
+- `tbl64/merged64` 当前强制禁用 BK tiling（先保证 correctness + decode-first）。
 
 ## 3. tbl64（decode first）目标与范围
 
@@ -88,7 +85,7 @@ tbl64[group][ch][vec][lane]
 
 ## 5. tbl64：落地步骤（最小可验证切片）
 
-### 5.1 P0：最小 correctness（先跑通）
+### 5.1 P0：最小 correctness（先跑通，已落地）
 
 1) **新增 layout 枚举与路由**
    - 在 layout parsing 中加入 `tbl64`（仅当显式 env 设置时生效）
@@ -140,6 +137,6 @@ tbl64[group][ch][vec][lane]
 
 ## 7. 后续候选（简要）
 
-- `merged64`：一次查表（pattern → `{ac,ad,bc,bd}`）以进一步减少查表次数，但工作集更大，需要明确启用门槛与场景。
+- `merged64`：已落地并验证可用（pattern → `{ac,ad,bc,bd}`），当前 `N==1` 场景表现更好；后续主要工作是完善 auto 策略与 tiling/工作集门槛。
 - 批量索引解码：对 `pat` 做更激进的向量化读取/预取，减少前端开销。
 - 框架/同步：结合 `IFAIRY_ARM_3W_LUT_API_PLAN.md` 的 `6.1/6.4`，避免“算子更快但被 barrier 吞掉”。

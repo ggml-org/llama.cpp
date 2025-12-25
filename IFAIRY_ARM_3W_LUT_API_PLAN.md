@@ -30,10 +30,12 @@
 
 ### 2.2 LUT 工作区（activations → lut + scales）
 
-当前实现支持两种 LUT 布局（由 `GGML_IFAIRY_LUT_LAYOUT` 选择；`auto` 走默认策略）：
+当前实现支持四种 LUT 布局（由 `GGML_IFAIRY_LUT_LAYOUT` 选择；`auto` 走默认策略）：
 
 - `legacy`：每组 `4 ch × 64 pat × int16`（`512 B / group / col`）。
 - `compact`：每组 `3 pos × 4 codes × 4 ch × int8`（`48 B / group / col`），NEON 内核用 32-bit load + widen + add 的方式累加。
+- `tbl64`：每组 `4 ch × 64 pat × int8`（`256 B / group / col`，decode-first 实验布局；当前实现为标量路径）。
+- `merged64`：每组 `64 pat × 4 ch × int8`（`256 B / group / col`，decode-first；每 group 一次 32-bit load 得到 `{ac,ad,bc,bd}`）。
 
 缩放数组（`lut_scales`）与 LUT 分离：
 
@@ -64,8 +66,8 @@ struct ifairy_lut_extra {
 - 初始化/释放：`ggml_ifairy_lut_init()`, `ggml_ifairy_lut_free()`
 - 路由与工作区：`ggml_ifairy_lut_can_mul_mat()`, `ggml_ifairy_lut_get_wsize()`, `ggml_ifairy_lut_get_wsize_cfg()`
 - 索引生成：`ggml_ifairy_lut_transform_tensor()`
-- 预处理：`ggml_ifairy_lut_preprocess()`, `ggml_ifairy_lut_preprocess_ex()`, `ggml_ifairy_lut_preprocess_ex_{legacy,compact}()`
-- GEMM/累加：`ggml_ifairy_lut_qgemm()`, `ggml_ifairy_lut_qgemm_ex()`, `ggml_ifairy_lut_qgemm_ex_{legacy,compact}()`, `ggml_ifairy_lut_accum4_ex()`, `ggml_ifairy_lut_accum4_ex_{legacy,compact}()`
+- 预处理：`ggml_ifairy_lut_preprocess()`, `ggml_ifairy_lut_preprocess_ex()`, `ggml_ifairy_lut_preprocess_ex_{legacy,compact,tbl64,merged64}()`
+- GEMM/累加：`ggml_ifairy_lut_qgemm()`, `ggml_ifairy_lut_qgemm_ex()`, `ggml_ifairy_lut_qgemm_ex_{legacy,compact,tbl64,merged64}()`, `ggml_ifairy_lut_accum4_ex()`, `ggml_ifairy_lut_accum4_ex_{legacy,compact,tbl64,merged64}()`
 - 标量回退：`ggml_ifairy_lut_mul_mat_scalar()`
 
 约定：
@@ -101,23 +103,26 @@ struct ifairy_lut_extra {
 ## 5. 运行时开关（当前实现）
 
 - `GGML_IFAIRY_LUT=0/1`：禁用/启用 LUT（默认启用）。
-- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|auto`：选择 LUT 布局（默认 `legacy`；`auto` 走默认策略）。
+- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64|auto`：选择 LUT 布局（默认 `legacy`；`auto` 走默认策略）。
 - `GGML_IFAIRY_LUT_BK_BLOCKS=<int>`：K 维按 256-block 做 tiling（`0` 禁用；strict 下强制禁用）。
 - `GGML_IFAIRY_LUT_BM=<int>`：BM 行块大小（仅 tiling 生效）。
 - `GGML_IFAIRY_LUT_FULLACC=0/1`：tiling 下共享 accumulator（未设置时可能按 `(N,acc_bytes)` 自动启用）。
 - `GGML_IFAIRY_LUT_VALIDATE_STRICT=0/1`：严格对照（验证用）。
 - `GGML_IFAIRY_LUT_DEBUG=0/1`：打印少量路由诊断（默认关闭）。
-- `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 热路径中的 prefetch（默认启用；设为 `0` 方便 profile/sweep 对照；覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`）。
+- `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 热路径中的 prefetch（默认启用；设为 `0` 方便 profile/sweep 对照；覆盖所有 layout 的 `qgemm_ex/accum4_ex`）。
 - `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 `2`；设为 `0` 关闭距离预取；结合 profile 调参）。
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` decode 快路（默认启用；设为 `0` 强制走通用路径做 A/B）。
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` 快路 group-loop 的 unroll（默认 `4`；设为 `2` 用于 A/B）。
-- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`）；当前仅 `sdot` 在 `N==1` 快路上可用，`tbl/merged64` 为预留。
+- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：选择（或影响 auto 策略选择）kernel 路径（默认 `auto`）。当前：
+  - `sdot`：`compact` 的 `N==1` dotprod 实验内核；
+  - `tbl`：decode-first `tbl64`（在 `GGML_IFAIRY_LUT_LAYOUT=auto` 且 `N==1` 时自动切到 `tbl64`；严格模式强制回退到 `legacy`）；
+  - `merged64`：decode-first `merged64`（在 `GGML_IFAIRY_LUT_LAYOUT=auto` 且 `N==1` 时自动切到 `merged64`；严格模式强制回退到 `legacy`）。
 - `GGML_IFAIRY_LUT_DECODE_NTH=<int>`：decode (`N==1`) 场景将 graph threads 上限 clamp 到该值（`0` 禁用；用于 A/B）。
 - `GGML_IFAIRY_LUT_DECODE_THRESHOLD=<int>`：decode 小工作量阈值（按 `max(M*K)` 估算）；当 `DECODE_NTH==0` 且 `max(M*K) <= threshold` 时自动 clamp 到 `1` thread（`0` 禁用；用于 A/B）。
 
-计划新增（未实现，先做文档约定）：
+补充说明（当前实现）：
 
-- `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64`：新增 LUT 布局（候选方案与落地步骤见 `IFAIRY_ARM_3W_LUT_ROADMAP.md`），默认仍由 `auto` 策略决定。
+- `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64` 已可用；在 `tbl64/merged64` 下当前强制禁用 BK tiling（先保证 correctness + decode-first）。
 
 ## 6. 性能提升规划（主线，必须把 tok/s 拉上去）
 
@@ -218,9 +223,9 @@ struct ifairy_lut_extra {
 （精简版）
 
 - 结构性：优先降低 `compact` 每 group 的查表/地址计算/依赖链开销（以 profile 证据驱动）。
-- 优先：把 LUT 的 env 分支从 `qgemm_ex/preprocess_ex` 热路径移除（尤其是 `GGML_IFAIRY_LUT_LAYOUT`）：
+- 优先：把 LUT 的 env 分支从 `qgemm_ex/preprocess_ex` 热路径移除（尤其是 `GGML_IFAIRY_LUT_LAYOUT` / `GGML_IFAIRY_LUT_KERNEL`）：
   - 由 `ggml_graph_compute()` 更新的 `threadpool->ifairy_lut_cfg` 一次性决策 layout/knobs；
-  - `ggml-cpu.c` 直接调用 layout 专用实现（legacy/compact），避免 `layout_from_env() -> getenv()` 在多线程内反复触发全局锁。
+  - `ggml-cpu.c` 直接调用 layout 专用实现（legacy/compact/tbl64/merged64），避免 `layout_from_env() -> getenv()` 在多线程内反复触发全局锁。
 - 调优：`GGML_IFAIRY_LUT_N1_FASTPATH` / `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL` / `GGML_IFAIRY_LUT_PREFETCH(_DIST)` 仅用于 perf-safe A/B（最终以 `STATUS.md:0.1` 的 bench 记录为准）。
 - 历史失败案例/原始日志：统一留在 `IFAIRY_ARM_3W_LUT_STATUS.md`（避免在本文重复维护导致过时）。
 
@@ -231,7 +236,7 @@ struct ifairy_lut_extra {
 - ✅ prefetch A/B + 距离：`GGML_IFAIRY_LUT_PREFETCH=0/1`、`GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ `sdot`（dotprod）实验内核（仅 `N==1`）：`GGML_IFAIRY_LUT_KERNEL=sdot`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ 去掉 `layout_from_env()->getenv()` 热路径锁竞争：新增/暴露 legacy/compact 专用 entrypoint，并在 `ggml/src/ggml-cpu/ggml-cpu.c` 按 `threadpool->ifairy_lut_cfg` 直接 dispatch；保留 `*_from_env()` 供测试/兼容路径使用（`ggml/src/ggml-ifairy-lut.cpp`, `ggml/src/ggml-ifairy-lut-qgemm.cpp`, `ggml/src/ggml-ifairy-lut-preprocess.cpp`）。
-- TODO `GGML_IFAIRY_LUT_KERNEL=tbl|merged64`：实现已占位但会 warn 并回退（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）；落地计划迁移至 `IFAIRY_ARM_3W_LUT_ROADMAP.md`。
+- ✅ `GGML_IFAIRY_LUT_KERNEL=tbl|merged64`：已实现（`ggml/src/ggml-ifairy-lut-qgemm.cpp` + `ggml/src/ggml-ifairy-lut-preprocess.cpp` + `ggml/src/ggml-ifairy-lut.cpp` + `ggml/src/ggml-cpu/ggml-cpu.c`）；默认 `auto` 不启用，`N==1` 下可通过 `GGML_IFAIRY_LUT_KERNEL=tbl|merged64` 触发（严格模式强制回退到 `legacy`）。
 - TODO `compact2`：曾作为 2-lookups 方向尝试，但未合入当前实现（代码中没有该 layout 分支）。
 
 <details>
