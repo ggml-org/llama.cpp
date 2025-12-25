@@ -70,6 +70,7 @@ struct ifairy_lut_extra {
 //   - legacy : 4x64 int16 tables per group (fast for small N, larger workspace)
 //   - compact: int8 "3 positions × 4 codes × 4 channels" tables per group (48 B / group),
 //              NEON uses 32-bit loads + widen
+// - Optional decode thread clamp knobs (A/B): `GGML_IFAIRY_LUT_DECODE_NTH`, `GGML_IFAIRY_LUT_DECODE_THRESHOLD` (default 0=disabled).
 
 void   ggml_ifairy_lut_init(void);
 void   ggml_ifairy_lut_free(void);

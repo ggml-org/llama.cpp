@@ -79,9 +79,12 @@ struct ifairy_lut_extra {
 
 执行流程要点（简化）：
 
-1) thread 0 负责确保 `src0->extra/indexes` 已生成（`transform_tensor`），随后 `ggml_barrier`。
+1) `ggml_graph_compute()` 在启动 worker 线程前做一次 LUT 预处理（主线程）：
+   - 读取/解析 LUT env 并缓存到 `threadpool->ifairy_lut_cfg`（同一 graph 内复用）
+   - 预扫描 `cgraph`，对命中的 iFairy `MUL_MAT` 确保 `src0->extra/indexes` 已生成（`ggml_ifairy_lut_transform_tensor`），因此 mul_mat 内无需 `ggml_barrier`
+   - 可选：decode (`N==1`) 场景可按 `GGML_IFAIRY_LUT_DECODE_NTH/THRESHOLD` 对 graph threads 做 clamp（A/B）
 
-2) 读取运行时开关：`strict/BK/BM/FULLACC/layout`，并计算工作区切分：
+2) `ggml_compute_forward_mul_mat()` 读取缓存的 config（`strict/BK/BM/FULLACC/layout`），并计算工作区切分：
    - `act_q`（可选）：`src1==F32` 时的临时量化缓冲；
    - `lut + scales`：shared 区域（按 tile 大小）；
    - `tmp`：每线程 scratch（accumulator 等）。
@@ -108,12 +111,12 @@ struct ifairy_lut_extra {
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` decode 快路（默认启用；设为 `0` 强制走通用路径做 A/B）。
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` 快路 group-loop 的 unroll（默认 `4`；设为 `2` 用于 A/B）。
 - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`）；当前仅 `sdot` 在 `N==1` 快路上可用，`tbl/merged64` 为预留。
+- `GGML_IFAIRY_LUT_DECODE_NTH=<int>`：decode (`N==1`) 场景将 graph threads 上限 clamp 到该值（`0` 禁用；用于 A/B）。
+- `GGML_IFAIRY_LUT_DECODE_THRESHOLD=<int>`：decode 小工作量阈值（按 `max(M*K)` 估算）；当 `DECODE_NTH==0` 且 `max(M*K) <= threshold` 时自动 clamp 到 `1` thread（`0` 禁用；用于 A/B）。
 
 计划新增（未实现，先做文档约定）：
 
 - `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64`：新增 LUT 布局（候选方案与落地步骤见 `IFAIRY_ARM_3W_LUT_ROADMAP.md`），默认仍由 `auto` 策略决定。
-- `GGML_IFAIRY_LUT_DECODE_NTH=<int>`：decode (`N==1`) 场景强制/上限线程数（用于 A/B；默认仍走现有 `--threads`）。
-- `GGML_IFAIRY_LUT_DECODE_THRESHOLD=<int>`：decode 小工作量阈值（用于 auto-clamp threads；默认先保守，宁可不触发也不误伤）。
 
 ## 6. 性能提升规划（主线，必须把 tok/s 拉上去）
 
@@ -180,10 +183,10 @@ struct ifairy_lut_extra {
 
 建议动作：
 
-- **优先：减少“缓存命中时仍然同步”的开销**：例如 `transform_tensor` 若命中缓存（indexes 已存在且不会再变），应避免每次 mul_mat 都做一次全线程 barrier（只在首次生成/真正做了 transform 时 barrier）。
+- ✅ **优先：减少“缓存命中时仍然同步”的开销**：将 indexes 准备移到 `ggml_graph_compute()` 启动线程前统一预扫/补齐，mul_mat 内不再为 `transform_tensor` 做 barrier。
 - **decode 线程策略复评（用数据说话）**：`N==1` 时 threads 未必越多越快；优先做“可回退的 auto-clamp + env override”，避免把策略写死。
-  - 建议先落地：`N==1` 时按 `M*K*N` 的估算工作量做保守阈值判断，小于阈值则自动 clamp 到 1~2 threads（并保留 `GGML_IFAIRY_LUT_DECODE_NTH` 强制/上限开关用于 A/B）。
-- **env 解析/分发只做一次**：把 LUT 相关 env 读取/解析收敛到 thread0 一次（同一节点内复用同一份 config），避免每线程反复 `getenv + parse` 把开销放大到 decode 热路径。
+  - ✅ 已落地：`GGML_IFAIRY_LUT_DECODE_NTH`（上限 clamp）与 `GGML_IFAIRY_LUT_DECODE_THRESHOLD`（小工作量 auto-clamp 到 1 thread），默认 `0` 禁用，用于 A/B。
+- ✅ **env 解析/分发只做一次**：`ggml_graph_compute()` 每 graph 只做一次 `getenv+parse` 并缓存到 `threadpool->ifairy_lut_cfg`，mul_mat 内只读该 config。
 - 继续减少 LUT 路径里的 barrier 次数（尤其 tiled/BK 版本），能用 `FULLACC` 解决的重复构表/重复同步尽量消掉。
 - 检查是否存在“很小但很频繁”的额外拷贝/转换可在 LUT 路径合并或延后。
 - 对 decode 场景（`N≈1`）重新评估线程数与切分策略，避免线程空转/争用（以 profile 里线程等待为准）。
@@ -192,9 +195,10 @@ struct ifairy_lut_extra {
 实现进度（对照代码）：
 
 - ✅ decode-like 量化分片：`src1=F32` 且 `N < nth` 时按 `K/QK_K` block 做 range 分片（`ggml/src/ggml-cpu/ggml-cpu.c`）。
-- TODO indexes cache 命中时仍然 barrier：目前即使 indexes 已存在，也会无条件 `ggml_barrier`（`ggml/src/ggml-cpu/ggml-cpu.c`）。
-- TODO decode 线程数策略开关：尚未实现 `GGML_IFAIRY_LUT_DECODE_NTH`（或类似）来强制 `N==1` 用 1/2/4 threads 做 A/B。
-- TODO auto-clamp threads：尚未实现 `GGML_IFAIRY_LUT_DECODE_THRESHOLD`（或类似）来让 `N==1` 在小工作量下默认收敛到少线程（并保留可关闭的回退路径）。
+- ✅ indexes 预热：`ggml_graph_compute()` 启动线程前预扫描 `cgraph` 并补齐 `src0->extra/indexes`（`ggml/src/ggml-cpu/ggml-cpu.c`）。
+- ✅ env 解析/分发只做一次：`ggml_graph_compute()` 每 graph 更新 `threadpool->ifairy_lut_cfg`；mul_mat 内只读该 config（`ggml/src/ggml-cpu/ggml-cpu.c`）。
+- ✅ decode 线程数策略开关：`GGML_IFAIRY_LUT_DECODE_NTH`（上限 clamp，用于 A/B，默认禁用）（`ggml/src/ggml-cpu/ggml-cpu.c`）。
+- ✅ auto-clamp threads：`GGML_IFAIRY_LUT_DECODE_THRESHOLD`（按 `max(M*K)` 估算的小工作量阈值，用于 A/B，默认禁用）（`ggml/src/ggml-cpu/ggml-cpu.c`）。
 
 验收（至少满足其一，并记录到 `STATUS.md`）：
 

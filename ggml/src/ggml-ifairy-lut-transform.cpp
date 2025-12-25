@@ -127,22 +127,26 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
 
     {
         std::lock_guard<std::mutex> lock(g_ifairy_lut_mutex);
-        const auto                  it = g_ifairy_lut_index_cache.find(key);
+        extra = (ifairy_lut_extra *) tensor->extra;
+        if (extra && extra->indexes) {
+            if (index_tensor_out) {
+                *index_tensor_out = NULL;
+            }
+            return true;
+        }
+
+        const auto it = g_ifairy_lut_index_cache.find(key);
         if (it != g_ifairy_lut_index_cache.end() && it->second.base && it->second.size == index_bytes) {
-            const bool need_push = (extra == nullptr);
             if (!extra) {
                 extra         = new ifairy_lut_extra;
                 tensor->extra = extra;
+                g_ifairy_lut_extras.push_back(extra);
             }
 
             extra->indexes      = it->second.base;
             extra->size         = it->second.size;
             extra->index_tensor = NULL;
             extra->index_buffer = it->second.buffer;
-
-            if (need_push) {
-                g_ifairy_lut_extras.push_back(extra);
-            }
 
             if (index_tensor_out) {
                 *index_tensor_out = NULL;
@@ -187,36 +191,48 @@ bool ggml_ifairy_lut_transform_tensor(struct ggml_tensor * tensor, struct ggml_t
 
     {
         std::lock_guard<std::mutex> lock(g_ifairy_lut_mutex);
-        if (index_buffer) {
-            const auto it = g_ifairy_lut_index_cache.find(key);
-            if (it == g_ifairy_lut_index_cache.end()) {
-                g_ifairy_lut_index_cache.emplace(key, ifairy_lut_index_cache_entry{
-                                                          /* .buffer = */ index_buffer,
-                                                          /* .base   = */ buf,
-                                                          /* .size   = */ index_bytes,
-                                                      });
-            } else {
-                // Another thread may have populated the cache meanwhile; reuse it and free ours.
+        extra = (ifairy_lut_extra *) tensor->extra;
+        if (extra && extra->indexes) {
+            // Another thread finished while we were encoding; discard our buffer.
+            if (index_buffer) {
                 ggml_backend_buffer_free(index_buffer);
-                index_buffer = it->second.buffer;
-                buf          = it->second.base;
+            } else {
+                ggml_aligned_free(buf, index_bytes);
             }
+            if (index_tensor_out) {
+                *index_tensor_out = NULL;
+            }
+            return true;
         }
 
-        const bool need_push = (extra == nullptr);
+        const auto it = g_ifairy_lut_index_cache.find(key);
+        if (it != g_ifairy_lut_index_cache.end() && it->second.base && it->second.size == index_bytes) {
+            // Another thread populated the cache meanwhile; reuse it and free ours.
+            if (index_buffer) {
+                ggml_backend_buffer_free(index_buffer);
+            } else {
+                ggml_aligned_free(buf, index_bytes);
+            }
+            index_buffer = it->second.buffer;
+            buf          = it->second.base;
+        } else if (index_buffer) {
+            g_ifairy_lut_index_cache.emplace(key, ifairy_lut_index_cache_entry{
+                                                      /* .buffer = */ index_buffer,
+                                                      /* .base   = */ buf,
+                                                      /* .size   = */ index_bytes,
+                                                  });
+        }
+
         if (!extra) {
             extra         = new ifairy_lut_extra;
             tensor->extra = extra;
+            g_ifairy_lut_extras.push_back(extra);
         }
 
         extra->indexes      = buf;
         extra->size         = index_bytes;
         extra->index_tensor = NULL;
         extra->index_buffer = index_buffer;
-
-        if (need_push) {
-            g_ifairy_lut_extras.push_back(extra);
-        }
     }
 
     if (index_tensor_out) {

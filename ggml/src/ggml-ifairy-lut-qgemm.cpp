@@ -843,6 +843,7 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int             m,
     }
 }
 
+// NOLINTNEXTLINE(readability-function-size)
 void ggml_ifairy_lut_qgemm_ex(int             m,
                               int             k,
                               int             n,

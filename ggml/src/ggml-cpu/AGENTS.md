@@ -31,6 +31,8 @@ Primary integration points:
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`
+- `GGML_IFAIRY_LUT_DECODE_NTH=<int>`
+- `GGML_IFAIRY_LUT_DECODE_THRESHOLD=<int>`
 
 If adding a new knob, document it in `IFAIRY_ARM_3W_LUT_STATUS.md` and keep a safe default.
 

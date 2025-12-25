@@ -31,6 +31,8 @@
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` fast-path（默认启用；设为 `0` 强制走通用路径，用于回归/调优 A/B）
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` fast-path 里 group-loop 的 4-way unroll（默认 `4`；设为 `2` 用于 A/B，对照“2-way 是否反而更快”）
 - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`）；当前仅 `sdot` 在 `N==1` 快路上可用，`tbl/merged64` 为预留。
+- `GGML_IFAIRY_LUT_DECODE_NTH=<int>`：decode (`N==1`) 场景将 graph threads 上限 clamp 到该值（`0` 禁用；用于 A/B）。
+- `GGML_IFAIRY_LUT_DECODE_THRESHOLD=<int>`：decode 小工作量阈值（按 `max(M*K)` 估算）；当 `DECODE_NTH==0` 且 `max(M*K) <= threshold` 时自动 clamp 到 `1` thread（`0` 禁用；用于 A/B）。
 
 ## 0.0 当前共识（按优先级）
 
@@ -91,6 +93,12 @@
 | 2025-12-23T04:45:43Z | `ffa206ea` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 18.05 | `/tmp/ifairy_bench_power_run2_20251223T124504.jsonl` |
 | 2025-12-23T04:46:05Z | `ffa206ea` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 3.30 | `/tmp/ifairy_bench_power_run3_20251223T124605.jsonl` |
 | 2025-12-23T04:46:44Z | `ffa206ea` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 16.75 | `/tmp/ifairy_bench_power_run3_20251223T124605.jsonl` |
+| 2025-12-25T17:01:02Z | `6eef8c01+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 3.10 | `/tmp/ifairy_bench_6_1_20251225T170102.jsonl` |
+| 2025-12-25T17:01:44Z | `6eef8c01+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 13.32 | `/tmp/ifairy_bench_6_1_20251225T170102.jsonl` |
+| 2025-12-25T17:02:24Z | `6eef8c01+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_DECODE_NTH=1` | 2.94 | `/tmp/ifairy_bench_6_1_decode_nth1_20251225T170224.jsonl` |
+| 2025-12-25T17:03:07Z | `6eef8c01+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_DECODE_NTH=1` | 6.88 | `/tmp/ifairy_bench_6_1_decode_nth1_20251225T170224.jsonl` |
+| 2025-12-25T17:03:57Z | `6eef8c01+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_DECODE_NTH=2` | 2.39 | `/tmp/ifairy_bench_6_1_decode_nth2_20251225T170357.jsonl` |
+| 2025-12-25T17:04:51Z | `6eef8c01+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_DECODE_NTH=2` | 7.09 | `/tmp/ifairy_bench_6_1_decode_nth2_20251225T170357.jsonl` |
 
 Note: 2025-12-22 runs showing a large drop were captured with low power mode enabled (`pmset -g` shows `lowpowermode 1`). Re-running `fe740e0a` under the same mode still yields ~4-6 tok/s, so the drop is environmental. Re-benchmark after disabling low power mode; low-power logs are for reference only (`/tmp/ifairy_fe740e0a_20251223T005155.jsonl`, `/tmp/ifairy_fe740e0a_device_none_20251223T005346.jsonl`). Current power-on retest is logged above (`/tmp/ifairy_bench_power_20251223T122617.jsonl`, `/tmp/ifairy_bench_power_run2_20251223T124504.jsonl`, `/tmp/ifairy_bench_power_run3_20251223T124605.jsonl`). 3-run summary: pp128 min/max/mean = 3.291/3.304/3.296; tg256 min/max/mean = 16.750/18.903/17.901.
 

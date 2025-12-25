@@ -456,6 +456,20 @@ typedef pthread_mutex_t    ggml_mutex_t;
 #endif
 
 // Threadpool def
+#if defined(GGML_IFAIRY_ARM_LUT)
+struct ggml_ifairy_lut_threadpool_config {
+    bool strict;
+    bool dbg;
+    bool lut_enabled;
+    bool lut_legacy;
+    int  bk_blocks;
+    int  bm;
+    int  fullacc_mode;  // -1=auto, 0=disabled, 1=enabled
+    int  decode_nth;
+    int  decode_threshold;
+};
+#endif
+
 struct ggml_threadpool {
     ggml_mutex_t mutex;       // mutex for cond.var
     ggml_cond_t  cond;        // cond.var for waiting for new work
@@ -482,6 +496,10 @@ struct ggml_threadpool {
     uint32_t     poll;        // Polling level (0 - no polling)
 
     enum ggml_status ec;
+
+#if defined(GGML_IFAIRY_ARM_LUT)
+    struct ggml_ifairy_lut_threadpool_config ifairy_lut_cfg;
+#endif
 };
 
 // Per-thread state
@@ -581,6 +599,144 @@ void ggml_barrier(struct ggml_threadpool * tp) {
     #endif
 #endif
 }
+
+#if defined(GGML_IFAIRY_ARM_LUT)
+static void ggml_ifairy_lut_threadpool_config_update(struct ggml_threadpool * threadpool) {
+    struct ggml_ifairy_lut_threadpool_config cfg;
+
+    cfg.strict = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_VALIDATE_STRICT");
+    cfg.dbg    = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG");
+
+    const char * enabled_env = getenv("GGML_IFAIRY_LUT");
+    cfg.lut_enabled          = !(enabled_env && strcmp(enabled_env, "0") == 0);
+
+    cfg.bk_blocks = 0;
+    if (cfg.lut_enabled && !cfg.strict) {
+        cfg.bk_blocks = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BK_BLOCKS", 0);
+        if (cfg.bk_blocks < 0) {
+            if (cfg.dbg) {
+                GGML_LOG_WARN("ifairy_lut: GGML_IFAIRY_LUT_BK_BLOCKS < 0, clamping to 0\n");
+            }
+            cfg.bk_blocks = 0;
+        }
+    }
+
+    cfg.bm = 64;
+    if (cfg.bk_blocks > 0) {
+        cfg.bm = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BM", 64);
+        if (cfg.bm < 1) {
+            if (cfg.dbg) {
+                GGML_LOG_WARN("ifairy_lut: GGML_IFAIRY_LUT_BM < 1, clamping to 1\n");
+            }
+            cfg.bm = 1;
+        }
+    }
+
+    const char * layout_env = getenv("GGML_IFAIRY_LUT_LAYOUT");
+    cfg.lut_legacy          = !(layout_env && strcmp(layout_env, "compact") == 0);
+
+    const char * fullacc_env = getenv("GGML_IFAIRY_LUT_FULLACC");
+    if (fullacc_env && strcmp(fullacc_env, "0") == 0) {
+        cfg.fullacc_mode = 0;
+    } else if (fullacc_env) {
+        cfg.fullacc_mode = 1;
+    } else {
+        cfg.fullacc_mode = -1;
+    }
+
+    cfg.decode_nth = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_DECODE_NTH", 0);
+    if (cfg.decode_nth < 0) {
+        cfg.decode_nth = 0;
+    }
+
+    cfg.decode_threshold = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_DECODE_THRESHOLD", 0);
+    if (cfg.decode_threshold < 0) {
+        cfg.decode_threshold = 0;
+    }
+
+    threadpool->ifairy_lut_cfg = cfg;
+}
+
+static bool ggml_ifairy_lut_graph_max_decode_mk(const struct ggml_cgraph * cgraph, int64_t * max_mk) {
+    int64_t max_work = 0;
+    bool    found    = false;
+
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        struct ggml_tensor * node = cgraph->nodes[i];
+        if (!node || node->op != GGML_OP_MUL_MAT) {
+            continue;
+        }
+
+        struct ggml_tensor *       src0 = node->src[0];
+        const struct ggml_tensor * src1 = node->src[1];
+
+        if (!src0 || !src1) {
+            continue;
+        }
+        if (src0->type != GGML_TYPE_IFAIRY || (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_IFAIRY_Q16)) {
+            continue;
+        }
+        if (node->type != GGML_TYPE_F32) {
+            continue;
+        }
+        if (src1->ne[1] != 1) {
+            continue;
+        }
+        if (src0->ne[0] % QK_K != 0 || src1->ne[0] != src0->ne[0]) {
+            continue;
+        }
+
+        const int64_t M = src0->ne[1];
+        const int64_t K = src0->ne[0];
+        if (M <= 0 || K <= 0) {
+            continue;
+        }
+
+        const int64_t work = M <= INT64_MAX / K ? M * K : INT64_MAX;
+        if (work > max_work) {
+            max_work = work;
+        }
+        found = true;
+    }
+
+    if (max_mk) {
+        *max_mk = max_work;
+    }
+    return found;
+}
+
+static void ggml_ifairy_lut_prepare_cgraph_indexes(const struct ggml_cgraph * cgraph) {
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        struct ggml_tensor * node = cgraph->nodes[i];
+        if (!node || node->op != GGML_OP_MUL_MAT) {
+            continue;
+        }
+
+        struct ggml_tensor *       src0 = node->src[0];
+        const struct ggml_tensor * src1 = node->src[1];
+
+        if (!src0 || !src1) {
+            continue;
+        }
+        if (src0->type != GGML_TYPE_IFAIRY || (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_IFAIRY_Q16)) {
+            continue;
+        }
+        if (node->type != GGML_TYPE_F32) {
+            continue;
+        }
+        if (src0->ne[0] % QK_K != 0 || src1->ne[0] != src0->ne[0]) {
+            continue;
+        }
+
+        const struct ifairy_lut_extra * extra = (const struct ifairy_lut_extra *) src0->extra;
+        if (extra && extra->indexes) {
+            continue;
+        }
+
+        ggml_ifairy_lut_transform_tensor(src0, NULL);
+    }
+}
+#endif
 
 void ggml_threadpool_chunk_set(struct ggml_threadpool * tp, int value) {
     atomic_store_explicit(&tp->current_chunk, value, memory_order_relaxed);
@@ -1253,13 +1409,8 @@ void ggml_compute_forward_mul_mat(
 
 #if defined(GGML_IFAIRY_ARM_LUT)
     if (ggml_ifairy_lut_can_mul_mat(src0, src1, dst)) {
-        // ensure indexes are prepared
-        bool have_index = src0->extra && ((struct ifairy_lut_extra *) src0->extra)->indexes;
-        if (!have_index && ith == 0) {
-            ggml_ifairy_lut_transform_tensor((struct ggml_tensor *) src0, NULL);
-        }
-        ggml_barrier(params->threadpool);
-        have_index = src0->extra && ((struct ifairy_lut_extra *) src0->extra)->indexes;
+        // NOTE: indexes are prepared up-front in ggml_graph_compute(); this is a cheap cache check.
+        const bool have_index = src0->extra && ((struct ifairy_lut_extra *) src0->extra)->indexes;
 
         const int64_t M = ne01;
         const int64_t K = ne00;
@@ -1268,30 +1419,11 @@ void ggml_compute_forward_mul_mat(
         const int64_t blocks_per_col = K / QK_K;
         const int64_t groups         = blocks_per_col * ((QK_K + 2) / 3);
 
-        const bool strict = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_VALIDATE_STRICT");
-        const bool dbg    = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG");
+        const struct ggml_ifairy_lut_threadpool_config * cfg = &params->threadpool->ifairy_lut_cfg;
 
-        int tile_blocks = 0;
-        if (!strict) {
-            tile_blocks = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BK_BLOCKS", 0);
-        }
-        if (tile_blocks < 0) {
-            if (dbg && ith == 0) {
-                GGML_LOG_WARN("ifairy_lut: GGML_IFAIRY_LUT_BK_BLOCKS < 0, clamping to 0\n");
-            }
-            tile_blocks = 0;
-        }
-
-        int bm = 64;
-        if (tile_blocks > 0) {
-            bm = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BM", 64);
-            if (bm < 1) {
-                if (dbg && ith == 0) {
-                    GGML_LOG_WARN("ifairy_lut: GGML_IFAIRY_LUT_BM < 1, clamping to 1\n");
-                }
-                bm = 1;
-            }
-        }
+        const bool strict      = cfg->strict;
+        const int  tile_blocks = cfg->bk_blocks;
+        const int  bm          = cfg->bm;
 
         const int64_t groups_per_block = (QK_K + 2) / 3;
         const int64_t blocks_tile      = tile_blocks > 0 ? MIN((int64_t) tile_blocks, blocks_per_col) : blocks_per_col;
@@ -1312,8 +1444,7 @@ void ggml_compute_forward_mul_mat(
             GGML_ASSERT(q_elems == 0 || sizeof(block_ifairy_q16) <= SIZE_MAX / q_elems);
             quant_bytes = GGML_PAD(q_elems * sizeof(block_ifairy_q16), 64);
         }
-        const char * layout_env = getenv("GGML_IFAIRY_LUT_LAYOUT");
-        const bool   lut_legacy = !(layout_env && strcmp(layout_env, "compact") == 0);
+        const bool lut_legacy = cfg->lut_legacy;
 
         const size_t groups_tile_sz = (size_t) groups_tile;
         GGML_ASSERT(groups_tile_sz == 0 || (size_t) N <= SIZE_MAX / groups_tile_sz);
@@ -1347,7 +1478,7 @@ void ggml_compute_forward_mul_mat(
         bool   fullacc   = false;
         size_t acc_bytes = 0;
         if (tile_blocks > 0 && M > 0) {
-            const char * env = getenv("GGML_IFAIRY_LUT_FULLACC");
+            const int fullacc_mode = cfg->fullacc_mode;
             GGML_ASSERT((size_t) N <= SIZE_MAX / 4u);
             const size_t acc_elems1 = 4u * (size_t) N;
             size_t       acc_elems  = 0;
@@ -1358,9 +1489,9 @@ void ggml_compute_forward_mul_mat(
             GGML_ASSERT(acc_elems == 0 || sizeof(float) <= SIZE_MAX / acc_elems);
             const size_t acc_bytes_raw = acc_elems * sizeof(float);
             const bool   auto_ok       = (N <= 2) && (acc_bytes_raw <= (size_t) (8 * 1024 * 1024));
-            if (env && strcmp(env, "0") == 0) {
+            if (fullacc_mode == 0) {
                 fullacc = false;
-            } else if (env && strcmp(env, "0") != 0) {
+            } else if (fullacc_mode > 0) {
                 fullacc = true;
             } else {
                 fullacc = auto_ok;
@@ -3580,6 +3711,18 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
         threadpool->poll             = tpp->poll;
         threadpool->prio             = tpp->prio;
         threadpool->ec               = GGML_STATUS_SUCCESS;
+
+#if defined(GGML_IFAIRY_ARM_LUT)
+        threadpool->ifairy_lut_cfg.strict           = false;
+        threadpool->ifairy_lut_cfg.dbg              = false;
+        threadpool->ifairy_lut_cfg.lut_enabled      = true;
+        threadpool->ifairy_lut_cfg.lut_legacy       = true;
+        threadpool->ifairy_lut_cfg.bk_blocks        = 0;
+        threadpool->ifairy_lut_cfg.bm               = 64;
+        threadpool->ifairy_lut_cfg.fullacc_mode     = -1;
+        threadpool->ifairy_lut_cfg.decode_nth       = 0;
+        threadpool->ifairy_lut_cfg.decode_threshold = 0;
+#endif
     }
 
     // Allocate and init workers state
@@ -3655,6 +3798,34 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
         threadpool->abort            = -1;
         threadpool->ec               = GGML_STATUS_SUCCESS;
     }
+
+#if defined(GGML_IFAIRY_ARM_LUT)
+    ggml_ifairy_lut_threadpool_config_update(threadpool);
+
+    const struct ggml_ifairy_lut_threadpool_config * cfg = &threadpool->ifairy_lut_cfg;
+    if (cfg->lut_enabled) {
+        ggml_ifairy_lut_prepare_cgraph_indexes(cgraph);
+    }
+    if (cfg->lut_enabled && (cfg->decode_nth > 0 || cfg->decode_threshold > 0)) {
+        int64_t max_mk = 0;
+        if (ggml_ifairy_lut_graph_max_decode_mk(cgraph, &max_mk)) {
+            int n_threads_new = n_threads;
+            if (cfg->decode_nth > 0) {
+                n_threads_new = MIN(n_threads_new, cfg->decode_nth);
+            } else if (cfg->decode_threshold > 0 && max_mk <= (int64_t) cfg->decode_threshold) {
+                n_threads_new = 1;
+            }
+            n_threads_new = MAX(n_threads_new, 1);
+            if (n_threads_new != n_threads) {
+                if (cfg->dbg) {
+                    GGML_LOG_INFO("ifairy_lut: decode thread clamp: %d -> %d (max_mk=%lld)\n", n_threads, n_threads_new,
+                                  (long long) max_mk);
+                }
+                n_threads = n_threads_new;
+            }
+        }
+    }
+#endif
 
 #ifdef GGML_USE_OPENMP
     if (n_threads > 1) {
