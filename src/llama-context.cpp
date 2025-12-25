@@ -283,7 +283,7 @@ llama_context::llama_context(
         const uint32_t n_seqs = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
-        const size_t max_nodes = this->graph_max_nodes(n_tokens);
+        const size_t max_nodes = this->graph_max_nodes(n_tokens, params.n_lora_tensors);
 
         LLAMA_LOG_DEBUG("%s: max_nodes = %zu\n", __func__, max_nodes);
 
@@ -1438,11 +1438,11 @@ void llama_context::output_reorder() {
 // graph
 //
 
-uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
+uint32_t llama_context::graph_max_nodes(uint32_t n_tokens, uint32_t n_lora_tensors) const {
     if (model.arch == LLM_ARCH_QWEN3NEXT) {
-        return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
+        return std::max<uint32_t>(n_tokens * 40, 32u * (model.n_tensors() +  n_lora_tensors));
     }
-    return std::max<uint32_t>(1024u, 8u*model.n_tensors());
+    return std::max<uint32_t>(1024u, 8u * (model.n_tensors() + n_lora_tensors));
 }
 
 llm_graph_result * llama_context::get_gf_res_reserve() const {
@@ -1476,7 +1476,7 @@ ggml_cgraph * llama_context::graph_reserve(
     llama_ubatch ubatch = balloc.ubatch_reserve(n_tokens/n_seqs, n_seqs);
 
     auto * res = gf_res_reserve.get();
-
+    /* build graph with all lora-s active? */
     const auto gparams = graph_params(res, ubatch, mctx, LLM_GRAPH_TYPE_DEFAULT);
 
     res->reset();
@@ -2392,6 +2392,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.n_lora_tensors              =*/ 0,
     };
 
     return result;

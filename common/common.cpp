@@ -1083,7 +1083,7 @@ struct common_init_result::impl {
     llama_model_ptr   model;
     llama_context_ptr context;
 
-    std::vector<llama_adapter_lora_ptr> lora;
+    std::vector<common_adapter_lora_info> loras;
 
     std::vector<common_sampler_ptr> samplers;
 };
@@ -1149,6 +1149,27 @@ common_init_result::common_init_result(common_params & params) :
         pimpl->samplers[i].reset(common_sampler_init(model, params.sampling));
     }
 
+    // read and load lora adapters
+    uint64_t n_lora_tensors = 0;
+    for (auto & la : params.lora_adapters) {
+        llama_adapter_lora_ptr ptr{ llama_adapter_lora_init(model, la.path.c_str()) };
+        if (ptr == nullptr) {
+            LOG_ERR("%s: failed to load lora adapter '%s'\n", __func__, la.path.c_str());
+            return;
+        }
+        auto & info = pimpl->loras.emplace_back(common_adapter_lora_info{std::move(ptr), la.path, "", ""});
+
+        char buf[1024];
+        auto *lora = info.ptr.get();
+        llama_adapter_meta_val_str(lora, "adapter.lora.task_name", buf, sizeof(buf));
+        info.task_name = buf;
+        llama_adapter_meta_val_str(lora, "adapter.lora.prompt_prefix", buf, sizeof(buf));
+        info.prompt_prefix = buf;
+
+        n_lora_tensors += llama_adapter_lora_get_n_tensors(lora);
+    }
+    cparams.n_lora_tensors = n_lora_tensors;
+
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
         LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
@@ -1170,8 +1191,8 @@ common_sampler * common_init_result::sampler(llama_seq_id seq_id) {
     return pimpl->samplers[seq_id].get();
 }
 
-std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
-    return pimpl->lora;
+const std::vector<common_adapter_lora_info> & common_init_result::loras() const {
+    return pimpl->loras;
 }
 
 void common_init_result::free_context() {
@@ -1245,26 +1266,8 @@ common_init_result_ptr common_init_from_params(common_params & params) {
         }
     }
 
-    // load and optionally apply lora adapters
-    for (auto & la : params.lora_adapters) {
-        llama_adapter_lora_ptr lora;
-        lora.reset(llama_adapter_lora_init(model, la.path.c_str()));
-        if (lora == nullptr) {
-            LOG_ERR("%s: failed to apply lora adapter '%s'\n", __func__, la.path.c_str());
-            return res;
-        }
-
-        char buf[1024];
-        la.ptr = lora.get();
-        llama_adapter_meta_val_str(la.ptr, "adapter.lora.task_name", buf, sizeof(buf));
-        la.task_name = buf;
-        llama_adapter_meta_val_str(la.ptr, "adapter.lora.prompt_prefix", buf, sizeof(buf));
-        la.prompt_prefix = buf;
-        res->lora().emplace_back(std::move(lora)); // copy to list of loaded adapters
-    }
-
     if (!params.lora_init_without_apply) {
-        common_set_adapter_lora(lctx, params.lora_adapters);
+        common_set_adapter_lora(lctx, params.lora_adapters, res->loras());
     }
 
     if (params.warmup) {
@@ -1325,11 +1328,17 @@ std::string get_model_endpoint() {
     return model_endpoint;
 }
 
-void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
+void common_set_adapter_lora(
+            struct llama_context * ctx,
+            const std::vector<common_adapter_lora_param> & lora_params,
+            const std::vector<common_adapter_lora_info> & loras
+        ) {
+
     llama_clear_adapter_lora(ctx);
-    for (auto & la : lora) {
-        if (la.scale != 0.0f) {
-            llama_set_adapter_lora(ctx, la.ptr, la.scale);
+    GGML_ASSERT(loras.size() <= lora_params.size());
+    for (size_t i = 0; i < loras.size(); i++) {
+        if (lora_params[i].scale != 0.0f) {
+            llama_set_adapter_lora(ctx, loras[i].ptr.get(), lora_params[i].scale);
         }
     }
 }

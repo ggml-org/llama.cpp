@@ -147,7 +147,7 @@ struct server_slot {
         return res;
     }
 
-    std::vector<common_adapter_lora_info> lora;
+    lora_scales lora;
     int32_t alora_invocation_start = -1;
 
     // sampling
@@ -542,6 +542,10 @@ private:
     common_init_result_ptr llama_init_dft;
 
     llama_context * ctx = nullptr;
+
+    const std::vector<common_adapter_lora_info> & lora_adapters() const {
+        return llama_init->loras();
+    }
 
     bool vocab_dft_compatible = true;
 
@@ -1048,42 +1052,35 @@ private:
         return res;
     }
 
-    std::vector<common_adapter_lora_info> construct_lora_list(const std::map<int, float> & config) {
-        std::vector<common_adapter_lora_info> output = params_base.lora_adapters; // copy
-        for (size_t i = 0; i < output.size(); ++i) {
-            auto it = config.find(i);
-            if (it != config.end()) {
-                output[i].scale = it->second;
-            } else {
-                output[i].scale = 0.0f;
-            }
-        }
-        return output;
-    }
-
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
         slot.reset();
 
         // process per-request lora adapters
         if (!task.params.lora.empty()) {
-            auto task_loras = construct_lora_list(task.params.lora);
-            if (!are_lora_equal(task_loras, slot.lora)) {
+            if (!are_lora_equal(task.params.lora, slot.lora)) {
                 // if lora has changed, check to see if the cache should be cleared
-                if (lora_should_clear_cache(slot.lora, task_loras)) {
+                if (lora_should_clear_cache(lora_adapters(), slot.lora, task.params.lora)) {
                     SLT_INF(slot, "clearing cache for lora change. %zu loras -> %zu loras\n", slot.lora.size(), task.params.lora.size());
                     slot.prompt.tokens.clear();
                 } else {
-                    SLT_INF(slot, "keeping cache for alora. %zu target loras\n", task_loras.size());
+                    SLT_INF(slot, "keeping cache for alora. %zu target loras\n", task.params.lora.size());
                 }
-                slot.lora = task_loras;
+                slot.lora = task.params.lora;
             }
         } else {
-            slot.lora = params_base.lora_adapters;
+            // fetch default scales from params_base.lora_adapters
+            lora_scales scales;
+            for (size_t i = 0; i < params_base.lora_adapters.size(); i++) {
+                if (params_base.lora_adapters[i].scale != 0.0f) {
+                    scales[i] = params_base.lora_adapters[i].scale;
+                }
+            }
+            slot.lora = scales;
         }
 
         // if using alora, make sure it's only a single one requested and active
         size_t alora_invocation_start = task.tokens.size();
-        if (lora_all_alora(slot.lora)) {
+        if (lora_all_alora(lora_adapters(), slot.lora)) {
             const auto & enabled_ids = lora_get_enabled_ids(slot.lora);
             // TODO: This will error out if a user requests two aloras, but only
             // provides the activation string for one. We could, instead search
@@ -1093,7 +1090,7 @@ private:
                 send_error(task, "Cannot run multiple aLoRAs in a single request", ERROR_TYPE_INVALID_REQUEST);
                 return false;
             }
-            const auto & lora = slot.lora[enabled_ids[0]].ptr;
+            const auto * lora = lora_adapters().at(enabled_ids[0]).ptr.get();
 
             // get the pointer and count for the invocation tokens
             const uint64_t      n_invocation_tokens = llama_adapter_get_alora_n_invocation_tokens(lora);
@@ -1122,7 +1119,7 @@ private:
             // if the activation string is not found, disable the alora
             if (alora_invocation_start == task.tokens.size()) {
                 SLT_DBG(slot, "alora %zu requested, but not found. deactivating\n", enabled_ids[0]);
-                slot.lora[enabled_ids[0]].scale = 0.0f;
+                slot.lora[enabled_ids[0]] = 0.0f;
             } else {
                 SLT_DBG(slot, "alora %zu activated starting at %zu\n", enabled_ids[0], alora_invocation_start);
                 slot.alora_invocation_start = alora_invocation_start;
@@ -1811,38 +1808,50 @@ private:
             case SERVER_TASK_TYPE_GET_LORA:
                 {
                     // TODO @ngxson : make lora_adapters a dedicated member of server_context
-                    auto & loras = params_base.lora_adapters;
+                    const auto & lora_params = params_base.lora_adapters;
+                    GGML_ASSERT(lora_adapters().size() <= lora_params.size());
                     auto res = std::make_unique<server_task_result_get_lora>();
                     res->id = task.id;
-                    for (size_t i = 0; i < loras.size(); ++i) {
-                        auto & lora = loras[i];
-                        std::string alora_invocation_string = "";
-                        const uint64_t n_alora_tokens = llama_adapter_get_alora_n_invocation_tokens(lora.ptr);
+                    for (size_t i = 0; i < lora_adapters().size(); ++i) {
+                        const auto & param = lora_params[i];
+                        const auto & adapter = lora_adapters()[i];
+                        const auto * lora_ptr = adapter.ptr.get();
+                        std::string alora_invocation_string;
+                        const uint64_t n_alora_tokens = llama_adapter_get_alora_n_invocation_tokens(lora_ptr);
                         llama_tokens alora_invocation_tokens;
                         if (n_alora_tokens) {
-                            const llama_token * alora_tokens = llama_adapter_get_alora_invocation_tokens(lora.ptr);
+                            const llama_token * alora_tokens = llama_adapter_get_alora_invocation_tokens(lora_ptr);
                             for (uint64_t j = 0; j < n_alora_tokens; ++j) {
                                 alora_invocation_string += common_token_to_piece(vocab, alora_tokens[j]);
                                 alora_invocation_tokens.push_back(alora_tokens[j]);
                             }
                         }
                         res->loras.push_back(server_task_result_get_lora::lora{
-                            lora,
-                            alora_invocation_string,
-                            alora_invocation_tokens,
+                            param.path,
+                            param.scale,
+                            adapter.task_name,
+                            adapter.prompt_prefix,
+                            std::move(alora_invocation_string),
+                            std::move(alora_invocation_tokens),
                         });
                     }
                     queue_results.send(std::move(res));
                 } break;
             case SERVER_TASK_TYPE_SET_LORA:
                 {
-                    auto new_loras = construct_lora_list(task.set_lora);
-                    // logging
-                    for (size_t i = 0; i < new_loras.size(); ++i) {
-                        SRV_INF("set lora adapter idx=%zu scale=%f\n", i, new_loras[i].scale);
-                    }
                     // TODO @ngxson : make lora_adapters a dedicated member of server_context
-                    params_base.lora_adapters = new_loras;
+                    auto & params = params_base.lora_adapters;
+                    for (size_t i = 0; i < params.size(); i++) {
+                        auto it = task.set_lora.find(i);
+                        if (it != task.set_lora.end()) {
+                            params[i].scale = it->second;
+                        } else {
+                            params[i].scale = 0.0f;
+                        }
+
+                        SRV_INF("set lora adapter idx=%zu scale=%f\n", i, params[i].scale);
+                    }
+
                     auto res = std::make_unique<server_task_result_apply_lora>();
                     res->id = task.id;
                     queue_results.send(std::move(res));
@@ -2368,13 +2377,15 @@ private:
                     // tokens before the invocation sequence need to be
                     // processed without the adapter in a separate batch, then
                     // the adapter needs to be enabled for the remaining tokens.
-                    if (lora_all_alora(slot.lora) && slot.alora_invocation_start - 1 > slot.prompt.n_tokens()) {
+                    if (lora_all_alora(lora_adapters(), slot.lora) && slot.alora_invocation_start - 1 > slot.prompt.n_tokens()) {
                         SLT_DBG(slot, "processing pre-alora tokens without the adapter (n_tokens = %d, alora_invocation_start = %d)\n", slot.prompt.n_tokens(), slot.alora_invocation_start);
                         const auto & enabled_loras = lora_get_enabled_ids(slot.lora);
                         GGML_ASSERT(enabled_loras.size() == 1);
-                        alora_scale = slot.lora[enabled_loras[0]].scale;
-                        slot.lora[enabled_loras[0]].scale = 0.0f;
-                        alora_disabled_id = enabled_loras[0];
+                        auto it = slot.lora.find(enabled_loras[0]);
+                        GGML_ASSERT(it != slot.lora.end());
+                        alora_scale = it->second;
+                        alora_disabled_id = it->first;
+                        slot.lora.erase(it);
                     }
 
                     bool do_checkpoint = params_base.n_ctx_checkpoints > 0;
@@ -2509,13 +2520,18 @@ private:
 
         if (slot_batched) {
             // apply lora, only need to do it once per batch
-            common_set_adapter_lora(ctx, slot_batched->lora);
+            llama_clear_adapter_lora(ctx);
+            for (const auto &scale : slot_batched->lora) {
+                if (scale.second != 0.0f) {
+                    llama_set_adapter_lora(ctx, lora_adapters().at(scale.first).ptr.get(), scale.second);
+                }
+            }
 
             // if the lora is temporarily disabled for an alora, re-enable it
             // for next time
-            if (alora_scale > 0.0f) {
+            if (alora_scale != 0.0f) {
                 SRV_DBG("re-enabling alora with scale %f\n", alora_scale);
-                slot_batched->lora[alora_disabled_id].scale = alora_scale;
+                slot_batched->lora[alora_disabled_id] = alora_scale;
             }
 
             llama_set_embeddings(ctx, slot_batched->need_embd());

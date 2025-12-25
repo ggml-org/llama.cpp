@@ -1332,10 +1332,10 @@ json server_task_result_get_lora::to_json() {
         auto & lora = loras[i];
         json entry = {
             {"id",            i},
-            {"path",          lora.info.path},
-            {"scale",         lora.info.scale},
-            {"task_name",     lora.info.task_name},
-            {"prompt_prefix", lora.info.prompt_prefix},
+            {"path",          lora.path},
+            {"scale",         lora.scale},
+            {"task_name",     lora.task_name},
+            {"prompt_prefix", lora.prompt_prefix},
         };
         if (!lora.alora_invocation_tokens.empty()) {
             entry["alora_invocation_string"] = lora.alora_invocation_string;
