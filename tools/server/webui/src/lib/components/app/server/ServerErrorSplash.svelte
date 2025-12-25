@@ -6,7 +6,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { serverStore, serverLoading } from '$lib/stores/server.svelte';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { fade, fly, scale } from 'svelte/transition';
 
 	interface Props {
@@ -50,8 +50,7 @@
 	function handleShowApiKeyInput() {
 		showApiKeyInput = true;
 		// Pre-fill with current API key if it exists
-		const currentConfig = config();
-		apiKeyInput = currentConfig.apiKey?.toString() || '';
+		apiKeyInput = settingsStore.getConfig('apiKey')?.toString() || '';
 	}
 
 	async function handleSaveApiKey() {

@@ -4,7 +4,7 @@
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { chatStore, isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { activeMessages, activeConversation } from '$lib/stores/conversations.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 
 	const processingState = useProcessingState();
 
@@ -14,7 +14,10 @@
 	let processingDetails = $derived(processingState.getProcessingDetails());
 
 	let showProcessingInfo = $derived(
-		isCurrentConversationLoading || isStreaming || config().keepStatsVisible || hasProcessingData
+		isCurrentConversationLoading ||
+			isStreaming ||
+			settingsStore.getConfig('keepStatsVisible') ||
+			hasProcessingData
 	);
 
 	$effect(() => {
@@ -24,7 +27,7 @@
 	});
 
 	$effect(() => {
-		const keepStatsVisible = config().keepStatsVisible;
+		const keepStatsVisible = settingsStore.getConfig('keepStatsVisible');
 		const shouldMonitor = keepStatsVisible || isCurrentConversationLoading || isStreaming;
 
 		if (shouldMonitor) {
@@ -33,7 +36,7 @@
 
 		if (!isCurrentConversationLoading && !isStreaming && !keepStatsVisible) {
 			const timeout = setTimeout(() => {
-				if (!config().keepStatsVisible && !isChatStreaming()) {
+				if (!settingsStore.getConfig('keepStatsVisible') && !isChatStreaming()) {
 					processingState.stopMonitoring();
 				}
 			}, PROCESSING_INFO_TIMEOUT);
@@ -45,7 +48,7 @@
 	$effect(() => {
 		const conversation = activeConversation();
 		const messages = activeMessages() as DatabaseMessage[];
-		const keepStatsVisible = config().keepStatsVisible;
+		const keepStatsVisible = settingsStore.getConfig('keepStatsVisible');
 
 		if (keepStatsVisible && conversation) {
 			if (messages.length === 0) {

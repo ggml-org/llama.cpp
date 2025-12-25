@@ -4,7 +4,7 @@
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import { buttonVariants } from '$lib/components/ui/button/index.js';
 	import { Card } from '$lib/components/ui/card';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 
 	interface Props {
 		class?: string;
@@ -20,12 +20,10 @@
 		reasoningContent
 	}: Props = $props();
 
-	const currentConfig = config();
-
-	let isExpanded = $state(currentConfig.showThoughtInProgress);
+	let isExpanded = $state(settingsStore.getConfig('showThoughtInProgress'));
 
 	$effect(() => {
-		if (hasRegularContent && reasoningContent && currentConfig.showThoughtInProgress) {
+		if (hasRegularContent && reasoningContent && settingsStore.getConfig('showThoughtInProgress')) {
 			isExpanded = false;
 		}
 	});

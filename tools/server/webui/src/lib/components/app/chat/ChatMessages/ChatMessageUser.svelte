@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Card } from '$lib/components/ui/card';
 	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 	import ChatMessageEditForm from './ChatMessageEditForm.svelte';
 
@@ -64,7 +64,6 @@
 
 	let isMultiline = $state(false);
 	let messageElement: HTMLElement | undefined = $state();
-	const currentConfig = config();
 
 	$effect(() => {
 		if (!messageElement || !message.content.trim()) return;
@@ -126,7 +125,7 @@
 				class="max-w-[80%] rounded-[1.125rem] border-none bg-primary px-3.75 py-1.5 text-primary-foreground data-[multiline]:py-2.5"
 				data-multiline={isMultiline ? '' : undefined}
 			>
-				{#if currentConfig.renderUserContentAsMarkdown}
+				{#if settingsStore.getConfig('renderUserContentAsMarkdown')}
 					<div bind:this={messageElement} class="text-md">
 						<MarkdownContent
 							class="markdown-user-content text-primary-foreground"
