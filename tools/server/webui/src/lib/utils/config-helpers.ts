@@ -14,9 +14,7 @@ export function setConfigValue<T extends SettingsConfigType>(
 	key: string,
 	value: unknown
 ): void {
-	if (key in config) {
-		(config as Record<string, unknown>)[key] = value;
-	}
+	(config as Record<string, unknown>)[key] = value;
 }
 
 /**

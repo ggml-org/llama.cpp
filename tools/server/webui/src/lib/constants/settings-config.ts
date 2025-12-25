@@ -1,30 +1,3 @@
-export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> = {
-	// Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value.
-	// Do not use nested objects, keep it single level. Prefix the key if you need to group them.
-	apiKey: '',
-	systemMessage: '',
-	showSystemMessage: true,
-	theme: 'system',
-	showThoughtInProgress: false,
-	showToolCalls: false,
-	disableReasoningFormat: false,
-	keepStatsVisible: false,
-	showMessageStats: true,
-	askForTitleConfirmation: false,
-	pasteLongTextToFileLen: 2500,
-	copyTextAttachmentsAsPlainText: false,
-	pdfAsImage: false,
-	disableAutoScroll: false,
-	renderUserContentAsMarkdown: false,
-	alwaysShowSidebarOnDesktop: false,
-	autoShowSidebarOnNewChat: true,
-	autoMicOnEmpty: false,
-	custom: '', // custom json-stringified object
-	// experimental features
-	pyInterpreterEnabled: false,
-	enableContinueGeneration: false
-};
-
 export const SETTING_CONFIG_INFO: Record<string, string> = {
 	apiKey: 'Set the API Key if you are using <code>--api-key</code> option for the server.',
 	systemMessage: 'The starting message that defines how model should behave.',

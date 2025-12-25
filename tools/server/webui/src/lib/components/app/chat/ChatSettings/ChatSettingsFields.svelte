@@ -5,7 +5,7 @@
 	import Label from '$lib/components/ui/label/label.svelte';
 	import * as Select from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
-	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
+	import { SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { ChatSettingsParameterSourceIndicator } from '$lib/components/app';
 	import { normalizeNumber } from '$lib/utils';
@@ -57,7 +57,6 @@
 		{#if field.type === 'input'}
 			{@const paramInfo = getParameterSourceInfo(field.key)}
 			{@const currentValue = String(localConfig[field.key] ?? '')}
-			{@const propsDefault = paramInfo?.serverDefault}
 			{@const placeholder = settingsStore.getParameterPlaceholder(field.key)}
 			{@const isCustomRealTime = (() => {
 				if (!settingsStore.canSyncParameter(field.key)) return false;
@@ -102,8 +101,8 @@
 						onclick={() => {
 							settingsStore.resetParameterToServerDefault(field.key);
 							// Trigger UI update by calling onConfigChange with the default value
-							const defaultValue = propsDefault ?? SETTING_CONFIG_DEFAULT[field.key];
-							onConfigChange(field.key, String(defaultValue));
+							const defaultValue = settingsStore.getConfig(field.key as keyof SettingsConfigType);
+							onConfigChange(field.key, String(defaultValue ?? ''));
 						}}
 						class="absolute top-1/2 right-2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
 						aria-label="Reset to default"
@@ -142,10 +141,13 @@
 			{/if}
 
 			{#if field.key === 'systemMessage'}
+				{@const showSystemMessageValue =
+					localConfig.showSystemMessage ??
+					settingsStore.getConfig('showSystemMessage' as keyof SettingsConfigType)}
 				<div class="mt-3 flex items-center gap-2">
 					<Checkbox
 						id="showSystemMessage"
-						checked={Boolean(localConfig.showSystemMessage ?? true)}
+						checked={Boolean(showSystemMessageValue)}
 						onCheckedChange={(checked) => onConfigChange('showSystemMessage', Boolean(checked))}
 					/>
 
@@ -210,8 +212,8 @@
 							onclick={() => {
 								settingsStore.resetParameterToServerDefault(field.key);
 								// Trigger UI update by calling onConfigChange with the default value
-								const defaultValue = propsDefault ?? SETTING_CONFIG_DEFAULT[field.key];
-								onConfigChange(field.key, String(defaultValue));
+								const defaultValue = settingsStore.getConfig(field.key as keyof SettingsConfigType);
+								onConfigChange(field.key, String(defaultValue ?? ''));
 							}}
 							class="absolute top-1/2 right-8 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded transition-colors hover:bg-muted"
 							aria-label="Reset to default"

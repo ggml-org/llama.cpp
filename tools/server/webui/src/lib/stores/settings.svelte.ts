@@ -32,7 +32,6 @@
  */
 
 import { browser } from '$app/environment';
-import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 import { ParameterSyncService } from '$lib/services/parameter-sync';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
@@ -52,7 +51,7 @@ class SettingsStore {
 	// State
 	// ─────────────────────────────────────────────────────────────────────────────
 
-	config = $state<SettingsConfigType>({ ...SETTING_CONFIG_DEFAULT });
+	config = $state<SettingsConfigType>({});
 	theme = $state<string>('auto');
 	isInitialized = $state(false);
 	userOverrides = $state<Set<string>>(new Set());
@@ -113,12 +112,10 @@ class SettingsStore {
 		try {
 			const storedConfigRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
 			const savedVal = JSON.parse(storedConfigRaw || '{}');
-
-			// Merge with defaults to prevent breaking changes
-			this.config = {
-				...SETTING_CONFIG_DEFAULT,
-				...savedVal
-			};
+			this.config =
+				savedVal && typeof savedVal === 'object' && !Array.isArray(savedVal)
+					? { ...(savedVal as Record<string, SettingsConfigValue>) }
+					: {};
 
 			// Load user overrides
 			const savedOverrides = JSON.parse(
@@ -126,8 +123,8 @@ class SettingsStore {
 			);
 			this.userOverrides = new Set(savedOverrides);
 		} catch (error) {
-			console.warn('Failed to parse config from localStorage, using defaults:', error);
-			this.config = { ...SETTING_CONFIG_DEFAULT };
+			console.warn('Failed to parse config from localStorage, using empty config:', error);
+			this.config = {};
 			this.userOverrides = new Set();
 		}
 	}
@@ -270,7 +267,8 @@ class SettingsStore {
 	 * Reset configuration to defaults
 	 */
 	resetConfig() {
-		this.config = { ...SETTING_CONFIG_DEFAULT };
+		// Defaults are now sourced from server-provided webui settings.
+		this.config = { ...this.getServerDefaults() };
 		this.saveConfig();
 	}
 
@@ -302,11 +300,7 @@ class SettingsStore {
 			this.config[key as keyof SettingsConfigType] =
 				value as SettingsConfigType[keyof SettingsConfigType];
 		} else {
-			if (key in SETTING_CONFIG_DEFAULT) {
-				const defaultValue = getConfigValue(SETTING_CONFIG_DEFAULT, key);
-
-				setConfigValue(this.config, key, defaultValue);
-			}
+			delete (this.config as Record<string, SettingsConfigValue>)[key];
 		}
 
 		this.userOverrides.delete(key);
@@ -338,6 +332,7 @@ class SettingsStore {
 			if (isUnset) {
 				this.userOverrides.delete(key);
 
+				setConfigValue(this.config, key, propsValue);
 				continue;
 			}
 
@@ -372,11 +367,7 @@ class SettingsStore {
 
 				setConfigValue(this.config, key, normalizedValue);
 			} else {
-				if (key in SETTING_CONFIG_DEFAULT) {
-					const defaultValue = getConfigValue(SETTING_CONFIG_DEFAULT, key);
-
-					setConfigValue(this.config, key, defaultValue);
-				}
+				delete (this.config as Record<string, SettingsConfigValue>)[key];
 			}
 
 			this.userOverrides.delete(key);
@@ -438,11 +429,6 @@ class SettingsStore {
 		const serverDefault = serverDefaults[key];
 		if (serverDefault !== undefined) {
 			return String(normalizeFloatingPoint(serverDefault));
-		}
-
-		const defaultValue = getConfigValue(SETTING_CONFIG_DEFAULT as SettingsConfigType, key);
-		if (defaultValue !== undefined) {
-			return String(normalizeFloatingPoint(defaultValue));
 		}
 
 		return 'none';
