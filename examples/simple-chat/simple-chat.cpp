@@ -153,7 +153,7 @@ int main(int argc, char ** argv) {
 
     std::vector<llama_chat_message> messages;
     std::vector<char> formatted(llama_n_ctx(ctx));
-    int prev_len = 0;
+    int64_t prev_len = 0;
     while (true) {
         // get user input
         printf("\033[32m> \033[0m");
@@ -168,9 +168,9 @@ int main(int argc, char ** argv) {
 
         // add the user input to the message list and format it
         messages.push_back({"user", strdup(user.c_str())});
-        int new_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, formatted.data(), formatted.size());
-        if (new_len > (int)formatted.size()) {
-            formatted.resize(new_len);
+        int64_t new_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, formatted.data(), formatted.size());
+        if (new_len > (int64_t)formatted.size()) {
+            formatted.resize((size_t)new_len);
             new_len = llama_chat_apply_template(tmpl, messages.data(), messages.size(), true, formatted.data(), formatted.size());
         }
         if (new_len < 0) {

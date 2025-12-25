@@ -463,7 +463,7 @@ bool common_chat_verify_template(const std::string & tmpl, bool use_jinja) {
         }
     }
     llama_chat_message chat[] = {{"user", "test"}};
-    const int res = llama_chat_apply_template(tmpl.c_str(), chat, 1, true, nullptr, 0);
+    const int64_t res = llama_chat_apply_template(tmpl.c_str(), chat, 1, true, nullptr, 0);
     return res >= 0;
 }
 
@@ -2829,7 +2829,7 @@ static common_chat_params common_chat_templates_apply_legacy(
 
     // run the first time to get the total output length
     const auto & src = tmpls->template_default->source();
-    int32_t res = llama_chat_apply_template(src.c_str(), chat.data(), chat.size(), inputs.add_generation_prompt, buf.data(), buf.size());
+    int64_t res = llama_chat_apply_template(src.c_str(), chat.data(), chat.size(), inputs.add_generation_prompt, buf.data(), buf.size());
 
     // error: chat template is not supported
     if (res < 0) {
@@ -2840,7 +2840,7 @@ static common_chat_params common_chat_templates_apply_legacy(
 
     // if it turns out that our buffer is too small, we resize it
     if ((size_t) res > buf.size()) {
-        buf.resize(res);
+        buf.resize((size_t)res);
         res = llama_chat_apply_template(src.c_str(), chat.data(), chat.size(), inputs.add_generation_prompt, buf.data(), buf.size());
     }
 
@@ -2850,7 +2850,7 @@ static common_chat_params common_chat_templates_apply_legacy(
     }
 
     common_chat_params params;
-    params.prompt = std::string(buf.data(), res);
+    params.prompt = std::string(buf.data(), (size_t)res);
     if (!inputs.json_schema.empty()) {
         params.grammar = json_schema_to_grammar(json::parse(inputs.json_schema));
     } else {
