@@ -32,7 +32,7 @@
  */
 
 import { browser } from '$app/environment';
-import { ParameterSyncService } from '$lib/services/parameter-sync';
+import { ParameterSyncService, SYNCABLE_PARAMETERS } from '$lib/services/parameter-sync';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import {
@@ -381,12 +381,23 @@ class SettingsStore {
 	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
-	 * Get a specific configuration value
+	 * Get a specific configuration value with intelligent type-based fallback
 	 * @param key - The configuration key to get
-	 * @returns The configuration value
+	 * @returns The configuration value with safe defaults
 	 */
 	getConfig<K extends keyof SettingsConfigType>(key: K): SettingsConfigType[K] {
-		return this.config[key];
+		// Return value if exists (user override or server default from sync)
+		if (this.config[key] !== undefined) return this.config[key];
+
+		// Type-safe fallback based on SYNCABLE_PARAMETERS
+		const param = SYNCABLE_PARAMETERS.find((p) => p.key === key);
+		if (param) {
+			if (param.type === 'boolean') return false as SettingsConfigType[K];
+			if (param.type === 'string') return '' as SettingsConfigType[K];
+			// number → undefined (server decides for sampling params)
+		}
+
+		return undefined as SettingsConfigType[K];
 	}
 
 	/**
