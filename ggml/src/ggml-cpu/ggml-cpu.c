@@ -194,9 +194,8 @@ typedef void * thread_ret_t;
 typedef pthread_t ggml_thread_t;
 
 #if defined(__APPLE__)
-#include <unistd.h>
-#include <mach/mach.h>
-#include <TargetConditionals.h>
+#    include <mach/mach.h>
+#    include <TargetConditionals.h>
 #endif
 
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
@@ -1531,7 +1530,8 @@ void ggml_compute_forward_mul_mat(
 
         // Keep the workspace layout calculation consistent with the helper used by higher-level allocators.
         // Any drift here risks silent memory corruption.
-        GGML_ASSERT(need == ggml_ifairy_lut_get_wsize(src0, src1, dst, nth));
+        GGML_ASSERT(need == ggml_ifairy_lut_get_wsize_cfg(src0, src1, dst, nth, strict, cfg->lut_legacy, tile_blocks,
+                                                          bm, cfg->fullacc_mode));
 
         if (have_index && params->wdata && params->wsize >= need && shared_bytes > 0 && tmp_bytes > 0) {
             const struct ifairy_lut_extra * extra   = (const struct ifairy_lut_extra *) src0->extra;
@@ -1584,7 +1584,13 @@ void ggml_compute_forward_mul_mat(
             uint8_t * dst_base = (uint8_t *) dst->data;
             if (tile_blocks == 0) {
                 // build LUT once, shared across all threads (parallelize preprocess across threads)
-                ggml_ifairy_lut_preprocess_ex((int) M, (int) K, (int) N, act_src, act_stride, scales, lut, ith, nth);
+                if (cfg->lut_legacy) {
+                    ggml_ifairy_lut_preprocess_ex_legacy((int) M, (int) K, (int) N, act_src, act_stride, scales, lut,
+                                                         ith, nth);
+                } else {
+                    ggml_ifairy_lut_preprocess_ex_compact((int) M, (int) K, (int) N, act_src, act_stride, scales, lut,
+                                                          ith, nth);
+                }
                 ggml_barrier(params->threadpool);
 
                 const int64_t row0  = (M * ith) / nth;
@@ -1594,8 +1600,13 @@ void ggml_compute_forward_mul_mat(
                     const uint8_t *      row_indexes = indexes + (size_t) row0 * index_stride;
                     const block_ifairy * w_row       = (const block_ifairy *) src0->data + row0 * blocks_per_col;
                     float *              dst_f       = (float *) (dst_base + (size_t) row0 * nb0);
-                    ggml_ifairy_lut_qgemm_ex((int) nrows, (int) K, (int) N, w_row, row_indexes, lut, scales, act_src,
-                                             act_stride, dst_f, nb1, nb0, true, strict, false);
+                    if (cfg->lut_legacy) {
+                        ggml_ifairy_lut_qgemm_ex_legacy((int) nrows, (int) K, (int) N, w_row, row_indexes, lut, scales,
+                                                        act_src, act_stride, dst_f, nb1, nb0, true, strict, false);
+                    } else {
+                        ggml_ifairy_lut_qgemm_ex_compact((int) nrows, (int) K, (int) N, w_row, row_indexes, lut, scales,
+                                                         act_src, act_stride, dst_f, nb1, nb0, true, strict, false);
+                    }
                 }
                 return;
             }
@@ -1625,16 +1636,26 @@ void ggml_compute_forward_mul_mat(
                     void *    lut_local = (void *) lut_buf;
                     float *   scale_buf = (float *) (lut_buf + lut_bytes);
 
-                    ggml_ifairy_lut_preprocess_ex((int) M, (int) tile_k, (int) N, act_tile, act_stride, scale_buf,
-                                                  lut_local, ith, nth);
+                    if (cfg->lut_legacy) {
+                        ggml_ifairy_lut_preprocess_ex_legacy((int) M, (int) tile_k, (int) N, act_tile, act_stride,
+                                                             scale_buf, lut_local, ith, nth);
+                    } else {
+                        ggml_ifairy_lut_preprocess_ex_compact((int) M, (int) tile_k, (int) N, act_tile, act_stride,
+                                                              scale_buf, lut_local, ith, nth);
+                    }
                     ggml_barrier(params->threadpool);
 
                     for (;;) {
                         for (int64_t row = ith; row < M; row += nth) {
                             const uint8_t * row_indexes = indexes + (size_t) row * index_stride + (size_t) tile_g0;
                             float *         acc_row     = acc_all + (size_t) row * (size_t) (4 * N);
-                            ggml_ifairy_lut_accum4_ex((int) tile_k, (int) N, row_indexes, lut_local, scale_buf, acc_row,
-                                                      4 * sizeof(float), true);
+                            if (cfg->lut_legacy) {
+                                ggml_ifairy_lut_accum4_ex_legacy((int) tile_k, (int) N, row_indexes, lut_local,
+                                                                 scale_buf, acc_row, 4 * sizeof(float), true);
+                            } else {
+                                ggml_ifairy_lut_accum4_ex_compact((int) tile_k, (int) N, row_indexes, lut_local,
+                                                                  scale_buf, acc_row, 4 * sizeof(float), true);
+                            }
                         }
 
                         const int64_t next_blk0 = blk0 + blocks_tile;
@@ -1648,8 +1669,13 @@ void ggml_compute_forward_mul_mat(
                             uint8_t * next_lut    = shared_lut + (size_t) next_buf * shared_lut_bytes;
                             float *   next_scales = (float *) (next_lut + lut_bytes);
 
-                            ggml_ifairy_lut_preprocess_ex((int) M, (int) next_k, (int) N, next_act, act_stride,
-                                                          next_scales, next_lut, 0, 1);
+                            if (cfg->lut_legacy) {
+                                ggml_ifairy_lut_preprocess_ex_legacy((int) M, (int) next_k, (int) N, next_act,
+                                                                     act_stride, next_scales, next_lut, 0, 1);
+                            } else {
+                                ggml_ifairy_lut_preprocess_ex_compact((int) M, (int) next_k, (int) N, next_act,
+                                                                      act_stride, next_scales, next_lut, 0, 1);
+                            }
                         }
                         ggml_barrier(params->threadpool);
 
@@ -1675,15 +1701,25 @@ void ggml_compute_forward_mul_mat(
 
                         const uint8_t * act_tile = (const uint8_t *) act_src + (size_t) blk0 * sizeof(block_ifairy_q16);
 
-                        ggml_ifairy_lut_preprocess_ex((int) M, (int) tile_k, (int) N, act_tile, act_stride, scales, lut,
-                                                      ith, nth);
+                        if (cfg->lut_legacy) {
+                            ggml_ifairy_lut_preprocess_ex_legacy((int) M, (int) tile_k, (int) N, act_tile, act_stride,
+                                                                 scales, lut, ith, nth);
+                        } else {
+                            ggml_ifairy_lut_preprocess_ex_compact((int) M, (int) tile_k, (int) N, act_tile, act_stride,
+                                                                  scales, lut, ith, nth);
+                        }
                         ggml_barrier(params->threadpool);
 
                         for (int64_t row = ith; row < M; row += nth) {
                             const uint8_t * row_indexes = indexes + (size_t) row * index_stride + (size_t) tile_g0;
                             float *         acc_row     = acc_all + (size_t) row * (size_t) (4 * N);
-                            ggml_ifairy_lut_accum4_ex((int) tile_k, (int) N, row_indexes, lut, scales, acc_row,
-                                                      4 * sizeof(float), true);
+                            if (cfg->lut_legacy) {
+                                ggml_ifairy_lut_accum4_ex_legacy((int) tile_k, (int) N, row_indexes, lut, scales,
+                                                                 acc_row, 4 * sizeof(float), true);
+                            } else {
+                                ggml_ifairy_lut_accum4_ex_compact((int) tile_k, (int) N, row_indexes, lut, scales,
+                                                                  acc_row, 4 * sizeof(float), true);
+                            }
                         }
                         ggml_barrier(params->threadpool);
                     }
@@ -1739,8 +1775,13 @@ void ggml_compute_forward_mul_mat(
                     void *    lut_local = (void *) lut_buf;
                     float *   scale_buf = (float *) (lut_buf + lut_bytes);
 
-                    ggml_ifairy_lut_preprocess_ex((int) M, (int) tile_k, (int) N, act_tile, act_stride, scale_buf,
-                                                  lut_local, ith, nth);
+                    if (cfg->lut_legacy) {
+                        ggml_ifairy_lut_preprocess_ex_legacy((int) M, (int) tile_k, (int) N, act_tile, act_stride,
+                                                             scale_buf, lut_local, ith, nth);
+                    } else {
+                        ggml_ifairy_lut_preprocess_ex_compact((int) M, (int) tile_k, (int) N, act_tile, act_stride,
+                                                              scale_buf, lut_local, ith, nth);
+                    }
                     ggml_barrier(params->threadpool);
 
                     for (;;) {
@@ -1749,8 +1790,13 @@ void ggml_compute_forward_mul_mat(
                                 const int64_t   row         = row0 + r;
                                 const uint8_t * row_indexes = indexes + (size_t) row * index_stride + (size_t) tile_g0;
                                 float *         acc_row     = acc + (size_t) r * (size_t) (4 * N);
-                                ggml_ifairy_lut_accum4_ex((int) tile_k, (int) N, row_indexes, lut_local, scale_buf,
-                                                          acc_row, 4 * sizeof(float), true);
+                                if (cfg->lut_legacy) {
+                                    ggml_ifairy_lut_accum4_ex_legacy((int) tile_k, (int) N, row_indexes, lut_local,
+                                                                     scale_buf, acc_row, 4 * sizeof(float), true);
+                                } else {
+                                    ggml_ifairy_lut_accum4_ex_compact((int) tile_k, (int) N, row_indexes, lut_local,
+                                                                      scale_buf, acc_row, 4 * sizeof(float), true);
+                                }
                             }
                         }
 
@@ -1765,8 +1811,13 @@ void ggml_compute_forward_mul_mat(
                             uint8_t * next_lut    = shared_lut + (size_t) next_buf * shared_lut_bytes;
                             float *   next_scales = (float *) (next_lut + lut_bytes);
 
-                            ggml_ifairy_lut_preprocess_ex((int) M, (int) next_k, (int) N, next_act, act_stride,
-                                                          next_scales, next_lut, 0, 1);
+                            if (cfg->lut_legacy) {
+                                ggml_ifairy_lut_preprocess_ex_legacy((int) M, (int) next_k, (int) N, next_act,
+                                                                     act_stride, next_scales, next_lut, 0, 1);
+                            } else {
+                                ggml_ifairy_lut_preprocess_ex_compact((int) M, (int) next_k, (int) N, next_act,
+                                                                      act_stride, next_scales, next_lut, 0, 1);
+                            }
                         }
                         ggml_barrier(params->threadpool);
 
@@ -1792,8 +1843,13 @@ void ggml_compute_forward_mul_mat(
 
                         const uint8_t * act_tile = (const uint8_t *) act_src + (size_t) blk0 * sizeof(block_ifairy_q16);
 
-                        ggml_ifairy_lut_preprocess_ex((int) M, (int) tile_k, (int) N, act_tile, act_stride, scales, lut,
-                                                      ith, nth);
+                        if (cfg->lut_legacy) {
+                            ggml_ifairy_lut_preprocess_ex_legacy((int) M, (int) tile_k, (int) N, act_tile, act_stride,
+                                                                 scales, lut, ith, nth);
+                        } else {
+                            ggml_ifairy_lut_preprocess_ex_compact((int) M, (int) tile_k, (int) N, act_tile, act_stride,
+                                                                  scales, lut, ith, nth);
+                        }
                         ggml_barrier(params->threadpool);
 
                         if (nrows > 0) {
@@ -1801,8 +1857,13 @@ void ggml_compute_forward_mul_mat(
                                 const int64_t   row         = row0 + r;
                                 const uint8_t * row_indexes = indexes + (size_t) row * index_stride + (size_t) tile_g0;
                                 float *         acc_row     = acc + (size_t) r * (size_t) (4 * N);
-                                ggml_ifairy_lut_accum4_ex((int) tile_k, (int) N, row_indexes, lut, scales, acc_row,
-                                                          4 * sizeof(float), true);
+                                if (cfg->lut_legacy) {
+                                    ggml_ifairy_lut_accum4_ex_legacy((int) tile_k, (int) N, row_indexes, lut, scales,
+                                                                     acc_row, 4 * sizeof(float), true);
+                                } else {
+                                    ggml_ifairy_lut_accum4_ex_compact((int) tile_k, (int) N, row_indexes, lut, scales,
+                                                                      acc_row, 4 * sizeof(float), true);
+                                }
                             }
                         }
                         ggml_barrier(params->threadpool);
@@ -2461,27 +2522,33 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_IFAIRY_RMSNORM:
             {
                 ggml_compute_forward_ifairy_rmsnorm(params, tensor);
-            } break;
+            }
+            break;
         case GGML_OP_IFAIRY_ROPE:
             {
                 ggml_compute_forward_ifairy_rope(params, tensor);
-            } break;
+            }
+            break;
         case GGML_OP_IFAIRY_SPLIT:
             {
                 ggml_compute_forward_ifairy_split(params, tensor);
-            } break;
+            }
+            break;
         case GGML_OP_IFAIRY_MERGE:
             {
                 ggml_compute_forward_ifairy_merge(params, tensor);
-            }break;
+            }
+            break;
         case GGML_OP_IFAIRY_ADD:
             {
                 ggml_compute_forward_ifairy_add(params, tensor);
-            } break;
+            }
+            break;
         case GGML_OP_IFAIRY_MUL:
             {
                 ggml_compute_forward_ifairy_mul(params, tensor);
-            } break;
+            }
+            break;
         case GGML_OP_ROPE:
             {
                 ggml_compute_forward_rope(params, tensor);
@@ -3399,7 +3466,8 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_IFAIRY_RMSNORM:
                     {
                         cur = ggml_type_size(GGML_TYPE_F32) * node->ne[0] * n_tasks;
-                    } break;
+                    }
+                    break;
                 case GGML_OP_SOFT_MAX:
                 case GGML_OP_ROPE:
                 case GGML_OP_ROPE_BACK:

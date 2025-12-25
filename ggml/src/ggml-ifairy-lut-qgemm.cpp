@@ -126,21 +126,21 @@ static inline int32x4_t ggml_ifairy_lut_accum_dot(int32x4_t       acc,
     return acc;
 }
 #endif
-static void ggml_ifairy_lut_qgemm_ex_legacy(int             m,
-                                            int             k,
-                                            int             n,
-                                            const void *    qweights,
-                                            const uint8_t * indexes,
-                                            const void *    lut,
-                                            const void *    lut_scales,
-                                            const void *    act,
-                                            size_t          act_stride,
-                                            float *         dst,
-                                            size_t          dst_col_stride,
-                                            size_t          dst_row_stride,
-                                            bool            pack_bf16,
-                                            bool            strict,
-                                            bool            add) {
+static void ggml_ifairy_lut_qgemm_ex_legacy_impl(int             m,
+                                                 int             k,
+                                                 int             n,
+                                                 const void *    qweights,
+                                                 const uint8_t * indexes,
+                                                 const void *    lut,
+                                                 const void *    lut_scales,
+                                                 const void *    act,
+                                                 size_t          act_stride,
+                                                 float *         dst,
+                                                 size_t          dst_col_stride,
+                                                 size_t          dst_row_stride,
+                                                 bool            pack_bf16,
+                                                 bool            strict,
+                                                 bool            add) {
     if (!indexes || !dst || !qweights || !lut || !lut_scales) {
         return;
     }
@@ -843,29 +843,41 @@ static void ggml_ifairy_lut_qgemm_ex_legacy(int             m,
     }
 }
 
-// NOLINTNEXTLINE(readability-function-size)
-void ggml_ifairy_lut_qgemm_ex(int             m,
-                              int             k,
-                              int             n,
-                              const void *    qweights,
-                              const uint8_t * indexes,
-                              const void *    lut,
-                              const void *    lut_scales,
-                              const void *    act,
-                              size_t          act_stride,
-                              float *         dst,
-                              size_t          dst_col_stride,
-                              size_t          dst_row_stride,
-                              bool            pack_bf16,
-                              bool            strict,
-                              bool            add) {
-    const ggml_ifairy_lut_layout layout = ggml_ifairy_lut_layout_from_env(n);
-    if (layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY) {
-        ggml_ifairy_lut_qgemm_ex_legacy(m, k, n, qweights, indexes, lut, lut_scales, act, act_stride, dst,
-                                        dst_col_stride, dst_row_stride, pack_bf16, strict, add);
-        return;
-    }
+void ggml_ifairy_lut_qgemm_ex_legacy(int             m,
+                                     int             k,
+                                     int             n,
+                                     const void *    qweights,
+                                     const uint8_t * indexes,
+                                     const void *    lut,
+                                     const void *    lut_scales,
+                                     const void *    act,
+                                     size_t          act_stride,
+                                     float *         dst,
+                                     size_t          dst_col_stride,
+                                     size_t          dst_row_stride,
+                                     bool            pack_bf16,
+                                     bool            strict,
+                                     bool            add) {
+    ggml_ifairy_lut_qgemm_ex_legacy_impl(m, k, n, qweights, indexes, lut, lut_scales, act, act_stride, dst,
+                                         dst_col_stride, dst_row_stride, pack_bf16, strict, add);
+}
 
+// NOLINTNEXTLINE(readability-function-size)
+void ggml_ifairy_lut_qgemm_ex_compact(int             m,
+                                      int             k,
+                                      int             n,
+                                      const void *    qweights,
+                                      const uint8_t * indexes,
+                                      const void *    lut,
+                                      const void *    lut_scales,
+                                      const void *    act,
+                                      size_t          act_stride,
+                                      float *         dst,
+                                      size_t          dst_col_stride,
+                                      size_t          dst_row_stride,
+                                      bool            pack_bf16,
+                                      bool            strict,
+                                      bool            add) {
     if (!indexes || !dst || !qweights || !lut || !lut_scales) {
         return;
     }
@@ -1553,7 +1565,7 @@ void ggml_ifairy_lut_qgemm_ex(int             m,
             float acc_bd_xi = 0.0f;
 
 #if defined(__ARM_NEON) && defined(__aarch64__)
-            float32x4_t accv = vdupq_n_f32(0.0f);  // {ac, ad, bc, bd}
+            float32x4_t  accv             = vdupq_n_f32(0.0f);  // {ac, ad, bc, bd}
             const size_t prefetch_groups4 = prefetch ? (size_t) prefetch_dist * 4u : 0;
             const size_t prefetch_groups2 = prefetch ? (size_t) prefetch_dist * 2u : 0;
             const size_t prefetch_groups1 = prefetch ? (size_t) prefetch_dist : 0;
@@ -1884,6 +1896,31 @@ void ggml_ifairy_lut_qgemm_ex(int             m,
     }
 }
 
+void ggml_ifairy_lut_qgemm_ex(int             m,
+                              int             k,
+                              int             n,
+                              const void *    qweights,
+                              const uint8_t * indexes,
+                              const void *    lut,
+                              const void *    lut_scales,
+                              const void *    act,
+                              size_t          act_stride,
+                              float *         dst,
+                              size_t          dst_col_stride,
+                              size_t          dst_row_stride,
+                              bool            pack_bf16,
+                              bool            strict,
+                              bool            add) {
+    const ggml_ifairy_lut_layout layout = ggml_ifairy_lut_layout_from_env(n);
+    if (layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY) {
+        ggml_ifairy_lut_qgemm_ex_legacy(m, k, n, qweights, indexes, lut, lut_scales, act, act_stride, dst,
+                                        dst_col_stride, dst_row_stride, pack_bf16, strict, add);
+    } else {
+        ggml_ifairy_lut_qgemm_ex_compact(m, k, n, qweights, indexes, lut, lut_scales, act, act_stride, dst,
+                                         dst_col_stride, dst_row_stride, pack_bf16, strict, add);
+    }
+}
+
 void ggml_ifairy_lut_qgemm(int             m,
                            int             k,
                            int             n,
@@ -1905,14 +1942,14 @@ void ggml_ifairy_lut_qgemm(int             m,
 // Accumulate the 4 basis sums for the iFairy complex dot product:
 //   dst[c*dst_col_stride + 0..3] += { acc_ac_xr, acc_ad_xi, acc_bc_xr, acc_bd_xi }
 // where each term already includes the per-block activation scales (real/imag).
-static void ggml_ifairy_lut_accum4_ex_legacy(int             k,
-                                             int             n,
-                                             const uint8_t * indexes,
-                                             const void *    lut,
-                                             const void *    lut_scales,
-                                             float *         dst,
-                                             size_t          dst_col_stride,
-                                             bool            add) {
+static void ggml_ifairy_lut_accum4_ex_legacy_impl(int             k,
+                                                  int             n,
+                                                  const uint8_t * indexes,
+                                                  const void *    lut,
+                                                  const void *    lut_scales,
+                                                  float *         dst,
+                                                  size_t          dst_col_stride,
+                                                  bool            add) {
     if (!indexes || !dst || !lut || !lut_scales) {
         return;
     }
@@ -2033,20 +2070,25 @@ static void ggml_ifairy_lut_accum4_ex_legacy(int             k,
     }
 }
 
-void ggml_ifairy_lut_accum4_ex(int             k,
-                               int             n,
-                               const uint8_t * indexes,
-                               const void *    lut,
-                               const void *    lut_scales,
-                               float *         dst,
-                               size_t          dst_col_stride,
-                               bool            add) {
-    const ggml_ifairy_lut_layout layout = ggml_ifairy_lut_layout_from_env(n);
-    if (layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY) {
-        ggml_ifairy_lut_accum4_ex_legacy(k, n, indexes, lut, lut_scales, dst, dst_col_stride, add);
-        return;
-    }
+void ggml_ifairy_lut_accum4_ex_legacy(int             k,
+                                      int             n,
+                                      const uint8_t * indexes,
+                                      const void *    lut,
+                                      const void *    lut_scales,
+                                      float *         dst,
+                                      size_t          dst_col_stride,
+                                      bool            add) {
+    ggml_ifairy_lut_accum4_ex_legacy_impl(k, n, indexes, lut, lut_scales, dst, dst_col_stride, add);
+}
 
+void ggml_ifairy_lut_accum4_ex_compact(int             k,
+                                       int             n,
+                                       const uint8_t * indexes,
+                                       const void *    lut,
+                                       const void *    lut_scales,
+                                       float *         dst,
+                                       size_t          dst_col_stride,
+                                       bool            add) {
     if (!indexes || !dst || !lut || !lut_scales) {
         return;
     }
@@ -2207,6 +2249,22 @@ void ggml_ifairy_lut_accum4_ex(int             k,
         out[2] = acc_bc_xr;
         out[3] = acc_bd_xi;
 #endif
+    }
+}
+
+void ggml_ifairy_lut_accum4_ex(int             k,
+                               int             n,
+                               const uint8_t * indexes,
+                               const void *    lut,
+                               const void *    lut_scales,
+                               float *         dst,
+                               size_t          dst_col_stride,
+                               bool            add) {
+    const ggml_ifairy_lut_layout layout = ggml_ifairy_lut_layout_from_env(n);
+    if (layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY) {
+        ggml_ifairy_lut_accum4_ex_legacy(k, n, indexes, lut, lut_scales, dst, dst_col_stride, add);
+    } else {
+        ggml_ifairy_lut_accum4_ex_compact(k, n, indexes, lut, lut_scales, dst, dst_col_stride, add);
     }
 }
 

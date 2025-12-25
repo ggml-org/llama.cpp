@@ -257,6 +257,21 @@ void ggml_ifairy_lut_preprocess(int          m,
     ggml_ifairy_lut_preprocess_ex(m, k, n, act, act_stride, lut_scales, lut_buf, 0, 1);
 }
 
+void ggml_ifairy_lut_preprocess_ex_legacy(int          m,
+                                          int          k,
+                                          int          n,
+                                          const void * act,
+                                          size_t       act_stride,
+                                          void *       lut_scales,
+                                          void *       lut_buf,
+                                          int          ith,
+                                          int          nth) {
+    (void) nth;
+    if (ith == 0) {
+        ggml_ifairy_lut_preprocess_legacy(m, k, n, act, act_stride, lut_scales, lut_buf);
+    }
+}
+
 void ggml_ifairy_lut_preprocess_ex(int          m,
                                    int          k,
                                    int          n,
@@ -268,12 +283,21 @@ void ggml_ifairy_lut_preprocess_ex(int          m,
                                    int          nth) {
     const ggml_ifairy_lut_layout layout = ggml_ifairy_lut_layout_from_env(n);
     if (layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY) {
-        if (ith == 0) {
-            ggml_ifairy_lut_preprocess_legacy(m, k, n, act, act_stride, lut_scales, lut_buf);
-        }
-        return;
+        ggml_ifairy_lut_preprocess_ex_legacy(m, k, n, act, act_stride, lut_scales, lut_buf, ith, nth);
+    } else {
+        ggml_ifairy_lut_preprocess_ex_compact(m, k, n, act, act_stride, lut_scales, lut_buf, ith, nth);
     }
+}
 
+void ggml_ifairy_lut_preprocess_ex_compact(int          m,
+                                           int          k,
+                                           int          n,
+                                           const void * act,
+                                           size_t       act_stride,
+                                           void *       lut_scales,
+                                           void *       lut_buf,
+                                           int          ith,
+                                           int          nth) {
     (void) m;  // rows unused in preprocess (per-column)
     if (!act || !lut_scales || !lut_buf) {
         return;

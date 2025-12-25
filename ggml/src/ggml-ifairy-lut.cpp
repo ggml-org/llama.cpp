@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <algorithm>
 #include <atomic>
 
 static std::atomic<bool> g_ifairy_lut_warned_bad_layout(false);
@@ -139,6 +140,101 @@ bool ggml_ifairy_lut_can_mul_mat(const struct ggml_tensor * src0,
         GGML_LOG_INFO("ifairy_lut: can_mul_mat=true\n");
     }
     return true;
+}
+
+size_t ggml_ifairy_lut_get_wsize_cfg(const struct ggml_tensor * src0,
+                                     const struct ggml_tensor * src1,
+                                     const struct ggml_tensor * dst,
+                                     int                        n_threads,
+                                     bool                       strict,
+                                     bool                       lut_legacy,
+                                     int                        bk_blocks,
+                                     int                        bm,
+                                     int                        fullacc_mode) {
+    if (!src0 || !src1 || !dst) {
+        return 0;
+    }
+    if (src0->type != GGML_TYPE_IFAIRY || (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_IFAIRY_Q16)) {
+        return 0;
+    }
+    if (dst->type != GGML_TYPE_F32) {
+        return 0;
+    }
+    if (src0->ne[0] % QK_K != 0 || src1->ne[0] != src0->ne[0]) {
+        return 0;
+    }
+    GGML_ASSERT(n_threads > 0);
+
+    const int64_t M                = src0->ne[1];
+    const int64_t K                = src0->ne[0];
+    const int64_t N                = src1->ne[1];
+    const int64_t blocks_per_col   = K / QK_K;
+    const int64_t groups_per_block = (QK_K + 2) / 3;
+
+    GGML_ASSERT(M >= 0);
+    GGML_ASSERT(K >= 0);
+    GGML_ASSERT(N >= 0);
+    GGML_ASSERT(blocks_per_col >= 0);
+    GGML_ASSERT(groups_per_block > 0);
+
+    const int tile_blocks = strict ? 0 : std::max(bk_blocks, 0);
+    const int bm_local    = tile_blocks > 0 ? std::max(bm, 1) : 64;
+
+    size_t quant_bytes = 0;
+    if (src1->type == GGML_TYPE_F32) {
+        const size_t q_elems = ggml_ifairy_checked_mul_size((size_t) N, (size_t) blocks_per_col);
+        quant_bytes          = GGML_PAD(ggml_ifairy_checked_mul_size(q_elems, sizeof(block_ifairy_q16)), 64);
+    }
+
+    const int64_t blocks_tile = tile_blocks > 0 ? MIN((int64_t) tile_blocks, blocks_per_col) : blocks_per_col;
+    const int64_t groups_tile = blocks_tile * groups_per_block;
+
+    const size_t lut_groups = ggml_ifairy_checked_mul_size((size_t) N, (size_t) groups_tile);
+    const size_t lut_bytes =
+        lut_legacy ?
+            ggml_ifairy_checked_mul_size(
+                ggml_ifairy_checked_mul_size(lut_groups, (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns)),
+                sizeof(int16_t)) :
+            ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_group_bytes);
+
+    const size_t scale_bytes = ggml_ifairy_checked_mul_size(
+        ggml_ifairy_checked_mul_size(ggml_ifairy_checked_mul_size((size_t) N, (size_t) blocks_tile), 2u),
+        sizeof(float));
+
+    const size_t shared_lut_bytes      = GGML_PAD(ggml_ifairy_checked_add_size(lut_bytes, scale_bytes), 64);
+    const bool   use_lut_double_buffer = tile_blocks > 0 && blocks_tile < blocks_per_col;
+    const size_t lut_buffers           = use_lut_double_buffer ? 2u : 1u;
+    size_t       shared_bytes          = ggml_ifairy_checked_mul_size(shared_lut_bytes, lut_buffers);
+
+    bool fullacc = false;
+    if (tile_blocks > 0 && M > 0) {
+        const size_t acc_elems = ggml_ifairy_checked_mul_size((size_t) M, ggml_ifairy_checked_mul_size(4u, (size_t) N));
+        const size_t acc_bytes = ggml_ifairy_checked_mul_size(acc_elems, sizeof(float));
+        const bool   auto_ok   = (N <= 2) && (acc_bytes <= (size_t) (8 * 1024 * 1024));
+        if (fullacc_mode == 0) {
+            fullacc = false;
+        } else if (fullacc_mode > 0) {
+            fullacc = true;
+        } else {
+            fullacc = auto_ok;
+        }
+        if (fullacc) {
+            shared_bytes = ggml_ifairy_checked_add_size(shared_bytes, GGML_PAD(acc_bytes, 64));
+        }
+    }
+
+    size_t tmp_elems = 0;
+    if (tile_blocks == 0) {
+        tmp_elems = (size_t) N;
+    } else if (fullacc) {
+        tmp_elems = 16u;
+    } else {
+        tmp_elems = ggml_ifairy_checked_mul_size((size_t) bm_local, ggml_ifairy_checked_mul_size(4u, (size_t) N));
+    }
+    const size_t tmp_bytes = GGML_PAD(ggml_ifairy_checked_mul_size(tmp_elems, sizeof(float)), 64);
+
+    return ggml_ifairy_checked_add_size(ggml_ifairy_checked_add_size(quant_bytes, shared_bytes),
+                                        ggml_ifairy_checked_mul_size(tmp_bytes, (size_t) n_threads));
 }
 
 size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,

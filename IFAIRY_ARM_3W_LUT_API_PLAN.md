@@ -62,10 +62,10 @@ struct ifairy_lut_extra {
 实现：`ggml/src/ggml-ifairy-lut.cpp` + `ggml/src/ggml-ifairy-lut-{transform,preprocess,qgemm}.cpp`
 
 - 初始化/释放：`ggml_ifairy_lut_init()`, `ggml_ifairy_lut_free()`
-- 路由与工作区：`ggml_ifairy_lut_can_mul_mat()`, `ggml_ifairy_lut_get_wsize()`
+- 路由与工作区：`ggml_ifairy_lut_can_mul_mat()`, `ggml_ifairy_lut_get_wsize()`, `ggml_ifairy_lut_get_wsize_cfg()`
 - 索引生成：`ggml_ifairy_lut_transform_tensor()`
-- 预处理：`ggml_ifairy_lut_preprocess()`, `ggml_ifairy_lut_preprocess_ex()`
-- GEMM/累加：`ggml_ifairy_lut_qgemm()`, `ggml_ifairy_lut_qgemm_ex()`, `ggml_ifairy_lut_accum4_ex()`
+- 预处理：`ggml_ifairy_lut_preprocess()`, `ggml_ifairy_lut_preprocess_ex()`, `ggml_ifairy_lut_preprocess_ex_{legacy,compact}()`
+- GEMM/累加：`ggml_ifairy_lut_qgemm()`, `ggml_ifairy_lut_qgemm_ex()`, `ggml_ifairy_lut_qgemm_ex_{legacy,compact}()`, `ggml_ifairy_lut_accum4_ex()`, `ggml_ifairy_lut_accum4_ex_{legacy,compact}()`
 - 标量回退：`ggml_ifairy_lut_mul_mat_scalar()`
 
 约定：
@@ -88,13 +88,14 @@ struct ifairy_lut_extra {
    - `act_q`（可选）：`src1==F32` 时的临时量化缓冲；
    - `lut + scales`：shared 区域（按 tile 大小）；
    - `tmp`：每线程 scratch（accumulator 等）。
+   - 说明：mul_mat 热路径按 `threadpool->ifairy_lut_cfg` 直接 dispatch 到 `*_legacy/_compact` 专用 entrypoint；`*_ex()` 仍保留 `layout_from_env()` 作为兼容/测试路径。
 
 3) 非 tiling：
-   - 所有线程并行执行 `preprocess_ex()` 填充 `lut+scales`，随后 barrier；
-   - 每线程处理自己负责的 row range，调用 `qgemm_ex()` 写回。
+   - 所有线程并行执行 `preprocess_ex_{layout}()` 填充 `lut+scales`，随后 barrier；
+   - 每线程处理自己负责的 row range，调用 `qgemm_ex_{layout}()` 写回。
 
 4) BK tiling：
-   - 每个 K-tile 重复一次 `preprocess_ex()` + barrier；
+   - 每个 K-tile 重复一次 `preprocess_ex_{layout}()` + barrier；
    - `FULLACC` 模式下可用共享 accumulator，减少按 BM 行块重复构表/同步。
 
 ## 5. 运行时开关（当前实现）
@@ -229,7 +230,7 @@ struct ifairy_lut_extra {
 - ✅ `compact N==1` unroll A/B：`GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ prefetch A/B + 距离：`GGML_IFAIRY_LUT_PREFETCH=0/1`、`GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ `sdot`（dotprod）实验内核（仅 `N==1`）：`GGML_IFAIRY_LUT_KERNEL=sdot`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
-- TODO 去掉 `layout_from_env()->getenv()` 热路径锁竞争：新增/暴露 legacy/compact 专用 entrypoint，并在 `ggml/src/ggml-cpu/ggml-cpu.c` 按 `threadpool->ifairy_lut_cfg` 直接 dispatch；保留 `*_from_env()` 供测试/兼容路径使用（`ggml/src/ggml-ifairy-lut.cpp`, `ggml/src/ggml-ifairy-lut-qgemm.cpp`, `ggml/src/ggml-ifairy-lut-preprocess.cpp`）。
+- ✅ 去掉 `layout_from_env()->getenv()` 热路径锁竞争：新增/暴露 legacy/compact 专用 entrypoint，并在 `ggml/src/ggml-cpu/ggml-cpu.c` 按 `threadpool->ifairy_lut_cfg` 直接 dispatch；保留 `*_from_env()` 供测试/兼容路径使用（`ggml/src/ggml-ifairy-lut.cpp`, `ggml/src/ggml-ifairy-lut-qgemm.cpp`, `ggml/src/ggml-ifairy-lut-preprocess.cpp`）。
 - TODO `GGML_IFAIRY_LUT_KERNEL=tbl|merged64`：实现已占位但会 warn 并回退（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）；落地计划迁移至 `IFAIRY_ARM_3W_LUT_ROADMAP.md`。
 - TODO `compact2`：曾作为 2-lookups 方向尝试，但未合入当前实现（代码中没有该 layout 分支）。
 
