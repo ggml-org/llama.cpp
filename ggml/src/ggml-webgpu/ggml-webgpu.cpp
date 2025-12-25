@@ -2323,6 +2323,16 @@ static void ggml_webgpu_init_unary_pipeline(webgpu_context & webgpu_ctx) {
         ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_round_inplace_f32, "round_inplace_f32", constants);
     webgpu_ctx->unary_pipelines[GGML_UNARY_OP_ROUND][GGML_TYPE_F16][1] =
         ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_round_inplace_f16, "round_inplace_f16", constants);
+
+    // TRUNC
+    webgpu_ctx->unary_pipelines[GGML_UNARY_OP_TRUNC][GGML_TYPE_F32][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_trunc_f32, "trunc_f32", constants);
+    webgpu_ctx->unary_pipelines[GGML_UNARY_OP_TRUNC][GGML_TYPE_F16][0] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_trunc_f16, "trunc_f16", constants);
+    webgpu_ctx->unary_pipelines[GGML_UNARY_OP_TRUNC][GGML_TYPE_F32][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_trunc_inplace_f32, "trunc_inplace_f32", constants);
+    webgpu_ctx->unary_pipelines[GGML_UNARY_OP_TRUNC][GGML_TYPE_F16][1] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_trunc_inplace_f16, "trunc_inplace_f16", constants);
 }
 
 static void ggml_webgpu_init_scale_pipeline(webgpu_context & webgpu_ctx) {
@@ -2582,6 +2592,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                     case GGML_UNARY_OP_FLOOR:
                     case GGML_UNARY_OP_CEIL:
                     case GGML_UNARY_OP_ROUND:
+                    case GGML_UNARY_OP_TRUNC:
                     case GGML_UNARY_OP_XIELU:
                         supports_op = supports_op =
                             (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && (src0->type == op->type);

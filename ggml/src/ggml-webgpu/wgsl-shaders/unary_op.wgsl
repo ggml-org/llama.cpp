@@ -21,7 +21,8 @@
     "EXPM1_FUNC": "{{MUTATE}}[dst_i] = exp(src[src_i]) - 1.0;",
     "FLOOR_FUNC": "{{MUTATE}}[dst_i] = floor(src[src_i]);",
     "CEIL_FUNC": "{{MUTATE}}[dst_i] = ceil(src[src_i]);",
-    "ROUND_FUNC": "{ let src_f32 = f32(src[src_i]); let result = select(ceil(src_f32 - 0.5), floor(src_f32 + 0.5), src_f32 >= 0.0); {{MUTATE}}[dst_i] = {{TYPE}}(result); } // Round half away from zero to match C roundf() behavior, not WGSL round() which uses round-to-even"
+    "ROUND_FUNC": "{ let src_f32 = f32(src[src_i]); let result = select(ceil(src_f32 - 0.5), floor(src_f32 + 0.5), src_f32 >= 0.0); {{MUTATE}}[dst_i] = {{TYPE}}(result); } // Round half away from zero to match C roundf() behavior, not WGSL round() which uses round-to-even",
+    "TRUNC_FUNC": "{{MUTATE}}[dst_i] = trunc(src[src_i]);"
 }
 
 #end(REPL_TEMPLATES)
@@ -461,6 +462,26 @@
     {
         "SHADER_NAME": "round_inplace_f16",
         "REPLS": { "TYPE": "f16", "FUNC": "ROUND_FUNC", "EXT_PARAMS": "", "MUTATE": "src" },
+        "DECLS": ["INPLACE"]
+    },
+    {
+        "SHADER_NAME": "trunc_f32",
+        "REPLS": { "TYPE": "f32", "FUNC": "TRUNC_FUNC", "EXT_PARAMS": "", "MUTATE": "dst" },
+        "DECLS": ["NOT_INPLACE"]
+    },
+    {
+        "SHADER_NAME": "trunc_f16",
+        "REPLS": { "TYPE": "f16", "FUNC": "TRUNC_FUNC", "EXT_PARAMS": "", "MUTATE": "dst" },
+        "DECLS": ["NOT_INPLACE"]
+    },
+    {
+        "SHADER_NAME": "trunc_inplace_f32",
+        "REPLS": { "TYPE": "f32", "FUNC": "TRUNC_FUNC", "EXT_PARAMS": "", "MUTATE": "src" },
+        "DECLS": ["INPLACE"]
+    },
+    {
+        "SHADER_NAME": "trunc_inplace_f16",
+        "REPLS": { "TYPE": "f16", "FUNC": "TRUNC_FUNC", "EXT_PARAMS": "", "MUTATE": "src" },
         "DECLS": ["INPLACE"]
     },
 ]
