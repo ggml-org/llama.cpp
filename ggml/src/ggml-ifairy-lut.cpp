@@ -32,6 +32,11 @@ static inline size_t ggml_ifairy_checked_add_size(size_t a, size_t b) {
 }
 
 ggml_ifairy_lut_layout ggml_ifairy_lut_layout_from_env(int n) {
+    // Strict validation is a correctness gate; keep it on the most proven path.
+    if (ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_VALIDATE_STRICT")) {
+        return GGML_IFAIRY_LUT_LAYOUT_LEGACY;
+    }
+
     const char * env = getenv("GGML_IFAIRY_LUT_LAYOUT");
     if (env) {
         if (strcmp(env, "legacy") == 0) {
@@ -40,10 +45,17 @@ ggml_ifairy_lut_layout ggml_ifairy_lut_layout_from_env(int n) {
         if (strcmp(env, "compact") == 0) {
             return GGML_IFAIRY_LUT_LAYOUT_COMPACT;
         }
+        if (strcmp(env, "tbl64") == 0) {
+            return GGML_IFAIRY_LUT_LAYOUT_TBL64;
+        }
+        if (strcmp(env, "merged64") == 0) {
+            return GGML_IFAIRY_LUT_LAYOUT_MERGED64;
+        }
         if (strcmp(env, "auto") != 0) {
             if (ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG") && !g_ifairy_lut_warned_bad_layout.exchange(true)) {
                 GGML_LOG_WARN(
-                    "ifairy_lut: unknown GGML_IFAIRY_LUT_LAYOUT='%s' (expected: legacy|compact|auto), using default\n",
+                    "ifairy_lut: unknown GGML_IFAIRY_LUT_LAYOUT='%s' (expected: legacy|compact|tbl64|merged64|auto), "
+                    "using default\n",
                     env);
             }
         }
@@ -51,8 +63,16 @@ ggml_ifairy_lut_layout ggml_ifairy_lut_layout_from_env(int n) {
     }
 
     // Default policy: prefer the legacy layout to avoid performance regressions.
-    // The compact layout can be enabled explicitly via GGML_IFAIRY_LUT_LAYOUT=compact.
-    (void) n;
+    // Decode-first experimental kernels can override the layout when N==1.
+    const ggml_ifairy_lut_kernel kernel = ggml_ifairy_lut_kernel_from_env();
+    if (n == 1) {
+        if (kernel == GGML_IFAIRY_LUT_KERNEL_TBL) {
+            return GGML_IFAIRY_LUT_LAYOUT_TBL64;
+        }
+        if (kernel == GGML_IFAIRY_LUT_KERNEL_MERGED64) {
+            return GGML_IFAIRY_LUT_LAYOUT_MERGED64;
+        }
+    }
     return GGML_IFAIRY_LUT_LAYOUT_LEGACY;
 }
 
@@ -147,7 +167,7 @@ size_t ggml_ifairy_lut_get_wsize_cfg(const struct ggml_tensor * src0,
                                      const struct ggml_tensor * dst,
                                      int                        n_threads,
                                      bool                       strict,
-                                     bool                       lut_legacy,
+                                     int                        lut_layout,
                                      int                        bk_blocks,
                                      int                        bm,
                                      int                        fullacc_mode) {
@@ -177,7 +197,15 @@ size_t ggml_ifairy_lut_get_wsize_cfg(const struct ggml_tensor * src0,
     GGML_ASSERT(blocks_per_col >= 0);
     GGML_ASSERT(groups_per_block > 0);
 
-    const int tile_blocks = strict ? 0 : std::max(bk_blocks, 0);
+    ggml_ifairy_lut_layout layout = (ggml_ifairy_lut_layout) lut_layout;
+    if (strict) {
+        layout = GGML_IFAIRY_LUT_LAYOUT_LEGACY;
+    }
+
+    int tile_blocks = strict ? 0 : std::max(bk_blocks, 0);
+    if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64 || layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64) {
+        tile_blocks = 0;
+    }
     const int bm_local    = tile_blocks > 0 ? std::max(bm, 1) : 64;
 
     size_t quant_bytes = 0;
@@ -190,12 +218,20 @@ size_t ggml_ifairy_lut_get_wsize_cfg(const struct ggml_tensor * src0,
     const int64_t groups_tile = blocks_tile * groups_per_block;
 
     const size_t lut_groups = ggml_ifairy_checked_mul_size((size_t) N, (size_t) groups_tile);
-    const size_t lut_bytes =
-        lut_legacy ?
-            ggml_ifairy_checked_mul_size(
-                ggml_ifairy_checked_mul_size(lut_groups, (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns)),
-                sizeof(int16_t)) :
-            ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_group_bytes);
+    size_t       lut_bytes  = 0;
+    if (layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY) {
+        lut_bytes = ggml_ifairy_checked_mul_size(
+            ggml_ifairy_checked_mul_size(lut_groups, (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns)),
+            sizeof(int16_t));
+    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_COMPACT) {
+        lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_group_bytes);
+    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64) {
+        lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_tbl64_group_bytes);
+    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64) {
+        lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_merged64_group_bytes);
+    } else {
+        GGML_ASSERT(false && "unknown ifairy LUT layout");
+    }
 
     const size_t scale_bytes = ggml_ifairy_checked_mul_size(
         ggml_ifairy_checked_mul_size(ggml_ifairy_checked_mul_size((size_t) N, (size_t) blocks_tile), 2u),
@@ -245,13 +281,13 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
         return 0;
     }
     GGML_ASSERT(n_threads > 0);
-    const bool strict = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_VALIDATE_STRICT");
-
     const int64_t M                = src0->ne[1];
     const int64_t K                = src0->ne[0];
     const int64_t N                = src1->ne[1];
     const int64_t blocks_per_col   = K / QK_K;
     const int64_t groups_per_block = (QK_K + 2) / 3;
+    const bool                   strict           = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_VALIDATE_STRICT");
+    const ggml_ifairy_lut_layout layout           = ggml_ifairy_lut_layout_from_env((int) N);
 
     GGML_ASSERT(M >= 0);
     GGML_ASSERT(K >= 0);
@@ -268,7 +304,7 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
     // Optional BK tiling (by whole 256-element blocks) to reduce LUT working set.
     // Disabled under strict validation (strict currently assumes full-K single-pass).
     int tile_blocks = 0;
-    if (!strict) {
+    if (!strict && layout != GGML_IFAIRY_LUT_LAYOUT_TBL64 && layout != GGML_IFAIRY_LUT_LAYOUT_MERGED64) {
         tile_blocks = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BK_BLOCKS", 0);
     }
     if (tile_blocks < 0) {
@@ -295,14 +331,21 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
     GGML_ASSERT(blocks_tile >= 0);
     GGML_ASSERT(groups_tile >= 0);
 
-    const ggml_ifairy_lut_layout layout     = ggml_ifairy_lut_layout_from_env((int) N);
     const size_t                 lut_groups = ggml_ifairy_checked_mul_size((size_t) N, (size_t) groups_tile);
-    const size_t                 lut_bytes =
-        layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY ?
-                            ggml_ifairy_checked_mul_size(
-                ggml_ifairy_checked_mul_size(lut_groups, (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns)),
-                sizeof(int16_t)) :
-                            ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_group_bytes);
+    size_t                       lut_bytes  = 0;
+    if (layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY) {
+        lut_bytes = ggml_ifairy_checked_mul_size(
+            ggml_ifairy_checked_mul_size(lut_groups, (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns)),
+            sizeof(int16_t));
+    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_COMPACT) {
+        lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_group_bytes);
+    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64) {
+        lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_tbl64_group_bytes);
+    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64) {
+        lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_merged64_group_bytes);
+    } else {
+        GGML_ASSERT(false && "unknown ifairy LUT layout");
+    }
     // activation scales are per-block (shared by all groups in the block)
     const size_t scale_bytes = ggml_ifairy_checked_mul_size(
         ggml_ifairy_checked_mul_size(ggml_ifairy_checked_mul_size((size_t) N, (size_t) blocks_tile), 2u),
