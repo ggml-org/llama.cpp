@@ -458,17 +458,17 @@ typedef pthread_mutex_t    ggml_mutex_t;
 // Threadpool def
 #if defined(GGML_IFAIRY_ARM_LUT)
 struct ggml_ifairy_lut_threadpool_config {
-    bool strict;
-    bool dbg;
-    bool lut_enabled;
+    bool                        strict;
+    bool                        dbg;
+    bool                        lut_enabled;
     bool                        lut_layout_auto;
     enum ggml_ifairy_lut_layout lut_layout;
     enum ggml_ifairy_lut_kernel lut_kernel;
-    int  bk_blocks;
-    int  bm;
-    int  fullacc_mode;  // -1=auto, 0=disabled, 1=enabled
-    int  decode_nth;
-    int  decode_threshold;
+    int                         bk_blocks;
+    int                         bm;
+    int                         fullacc_mode;  // -1=auto, 0=disabled, 1=enabled
+    int                         decode_nth;
+    int                         decode_threshold;
 };
 #endif
 
@@ -1543,8 +1543,11 @@ void ggml_compute_forward_mul_mat(
     // nb01 >= nb00 - src0 is not transposed
     //   compute by src0 rows
 
-#if defined(GGML_IFAIRY_ARM_LUT)
-    if (ggml_ifairy_lut_can_mul_mat(src0, src1, dst)) {
+#if defined(GGML_IFAIRY_ARM_LUT) && defined(__aarch64__) && defined(__ARM_NEON__)
+    const struct ggml_ifairy_lut_threadpool_config * cfg = &params->threadpool->ifairy_lut_cfg;
+    if (cfg->lut_enabled && src0->type == GGML_TYPE_IFAIRY &&
+        (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_IFAIRY_Q16) && dst->type == GGML_TYPE_F32 &&
+        src0->ne[0] % QK_K == 0 && src1->ne[0] == src0->ne[0]) {
         // NOTE: indexes are prepared up-front in ggml_graph_compute(); this is a cheap cache check.
         const bool have_index = src0->extra && ((struct ifairy_lut_extra *) src0->extra)->indexes;
 
@@ -1554,8 +1557,6 @@ void ggml_compute_forward_mul_mat(
 
         const int64_t blocks_per_col = K / QK_K;
         const int64_t groups         = blocks_per_col * ((QK_K + 2) / 3);
-
-        const struct ggml_ifairy_lut_threadpool_config * cfg = &params->threadpool->ifairy_lut_cfg;
 
         const bool strict = cfg->strict;
 
