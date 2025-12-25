@@ -56,10 +56,10 @@ Options:
 * `--keep-split` will generate the quantized model in the same shards as the input file otherwise it will produce a single quantized file
 
 Advanced options:
-* `--tensor-type` quantize specific tensor(s) to specific quant types. Supports regex syntax. May be specified multiple times.
+* `--tensor-type` quantize specific tensor(s) to specific quant types. Supports regex syntax. May be specified multiple times
 * `--prune-layers` prune (remove) the layers in the list
-* `--target-bpw` automatically choose quant types so that the overall model size matches a given bits per weight (bpw) average.
-* `--no-importance` during bpw computation, treat each tensor equally instead of prioritizing some. It may yield better quality for some models.
+* `--target-bpw` automatically choose quant types so that the overall model size matches a given bits per weight (bpw) average
+* `--no-importance` during bpw computation, treat each tensor equally instead of prioritizing some. It may yield better quality for some models
 * `--override-kv` option to override model metadata by key in the quantized model. May be specified multiple times
 
 Examples:
