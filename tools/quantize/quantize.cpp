@@ -136,7 +136,7 @@ static void usage(const char * executable) {
     printf("      Advanced option to automatically select quantization types to achieve a total bits per weight (bpw) target\n");
     printf("  --no-importance: distribute bpw budget equitably across all tensors\n");
     printf("      Advanced option to disable assigning more bpw budget to important tensors. It may increase quality for some models\n");
-    printf("  --keep-bpw-state: save the bpw computations to <architecture>-<model hash>.bpw_state\n");
+    printf("  --keep-bpw-state: save the bpw computations to <model name>-<model hash>.bpw_state\n");
     printf("  --bpw-state: file name to use instead of default\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
