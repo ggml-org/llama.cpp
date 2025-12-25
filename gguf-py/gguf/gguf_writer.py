@@ -1130,9 +1130,15 @@ class GGUFWriter:
 
     def add_vision_n_wa_pattern(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.N_WA_PATTERN, value)
+        
+    def add_vision_wa_layers(self, layers: Sequence[int]) -> None:
+        self.add_array(Keys.ClipVision.WA_LAYERS, layers)
 
     def add_vision_is_deepstack_layers(self, layers: Sequence[bool]) -> None:
         self.add_array(Keys.ClipVision.IS_DEEPSTACK_LAYERS, layers)
+
+    def add_vision_window_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.WINDOW_SIZE, value)
 
     # audio models
 
