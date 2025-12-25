@@ -39,7 +39,7 @@ extern "C" {
 
 #define RVV_VEC_DOT_DISPATCH(func_name, ...)                                          \
     static ggml_vec_dot_t func_name##_kernel_sel() {                                  \
-        int vlenb = probe_vlenb();                                                    \
+        int vlenb = dispatch_vlenb;                                                   \
         RVV_VEC_DOT_DISPATCH_CHECKS(func_name, __VA_ARGS__)                           \
         return func_name##_generic;                                                   \
     }                                                                                 \
@@ -74,6 +74,7 @@ static int probe_vlenb() {
     }
     return 0;
 }
+static int dispatch_vlenb = probe_vlenb();
 
 #elif defined(__riscv_xtheadvector)
 
@@ -98,6 +99,7 @@ static int probe_vlenb() {
 extern "C" {
 
 RVV_VEC_DOT_DISPATCH(ggml_vec_dot_q2_K_q8_K, 32, _256, 16, _128)
+RVV_VEC_DOT_DISPATCH(ggml_vec_dot_q3_K_q8_K, 32, _256, 16, _128)
 
 }
 
