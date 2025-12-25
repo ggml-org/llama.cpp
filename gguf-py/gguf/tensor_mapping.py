@@ -1290,7 +1290,7 @@ class TensorNameMap:
             "vision_encoder.transformer.layers.{bid}.attention.wq", # pixtral
             "visual.blocks.{bid}.attn.q", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wq", # kimi-vl, generated
-            "siglip2.vision_model.encoder.layers.{bid}.self_attn.q_proj", # utuvl
+            "siglip2.vision_model.encoder.layers.{bid}.self_attn.q_proj", # youtuvl
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
@@ -1357,7 +1357,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.attn.proj", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.wo", # kimi-vl
             "model.vision.transformer.layers.{bid}.attention.dense", # cogvlm
-            "siglip2.vision_model.encoder.layers.{bid}.self_attn.out_proj", # utuvl
+            "siglip2.vision_model.encoder.layers.{bid}.self_attn.out_proj", # youtuvl
         ),
 
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (

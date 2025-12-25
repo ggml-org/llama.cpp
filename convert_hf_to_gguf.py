@@ -1232,7 +1232,7 @@ class TextModel(ModelBase):
             res = "kormo"
         if chkhsh == "9d70134b369a70e5735009b6de918f7581b5211f7c074d1f89f753aea8248af1":
             # ref: ./Youtu-VL
-            res = "utu-vl"
+            res = "youtu-vl"
 
         if res is None:
             logger.warning("\n")
@@ -7136,7 +7136,7 @@ class DeepseekModel(TextModel):
     "DeepseekV2ForCausalLM",
     "DeepseekV3ForCausalLM",
     "KimiVLForConditionalGeneration",
-    "UTUVLForCausalLM",
+    "YOUTUVLForCausalLM",
 )
 class DeepseekV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
@@ -10491,8 +10491,8 @@ class JanusProVisionModel(MmprojModel):
 
         return []
 
-@ModelBase.register("UtuVLForConditionalGeneration", "UTUVLForCausalLM")
-class UtuVLVisionModel(MmprojModel):
+@ModelBase.register("YOUTUVLForConditionalGeneration", "YOUTUVLForCausalLM")
+class YOUTUVLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert self.hparams_vision is not None
@@ -10501,7 +10501,7 @@ class UtuVLVisionModel(MmprojModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.UTUVL)
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.YOUTUVL)
         self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-6))
         
         # Handle activation function
@@ -10511,7 +10511,7 @@ class UtuVLVisionModel(MmprojModel):
         elif hidden_act == "silu":
             self.gguf_writer.add_vision_use_silu(True)
         else:
-            raise ValueError(f"Unsupported activation function for UTUVL: {hidden_act}")
+            raise ValueError(f"Unsupported activation function for YOUTUVL: {hidden_act}")
         
         self.gguf_writer.add_vision_spatial_merge_size(self.hparams.get("spatial_merge_size", 2))
         
@@ -10519,7 +10519,7 @@ class UtuVLVisionModel(MmprojModel):
         if window_size is not None:
             self.gguf_writer.add_vision_window_size(window_size)
         fullatt_block_indexes = self.hparams.get("fullatt_block_indexes")
-        assert fullatt_block_indexes is not None, "fullatt_block_indexes is required for utuvl"
+        assert fullatt_block_indexes is not None, "fullatt_block_indexes is required for youtuvl"
         self.gguf_writer.add_vision_wa_layers(layers=fullatt_block_indexes)
         
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:

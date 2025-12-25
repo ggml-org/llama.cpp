@@ -845,9 +845,9 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
             {
                 builder = std::make_unique<clip_graph_glm4v>(ctx, img);
             } break;
-        case PROJECTOR_TYPE_UTUVL:
+        case PROJECTOR_TYPE_YOUTUVL:
             {
-                builder = std::make_unique<clip_graph_utuvl>(ctx, img);
+                builder = std::make_unique<clip_graph_youtuvl>(ctx, img);
             } break;
         default:
             GGML_ABORT("missing cgraph builder");
@@ -1162,7 +1162,7 @@ struct clip_model_loader {
                             LOG_WRN("%s: more info: https://github.com/ggml-org/llama.cpp/issues/16842\n\n", __func__);
                         }
                     } break;
-                case PROJECTOR_TYPE_UTUVL:
+                case PROJECTOR_TYPE_YOUTUVL:
                     {
                         hparams.n_merge = 2; 
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
@@ -1172,12 +1172,9 @@ struct clip_model_loader {
                         for (auto & layer : wa_layers_vec) {
                             hparams.wa_layers.insert(layer);
                         }
+                        // support max_height * max_width = 8000 * 8000. 8000/16/2 = 250 image tokens
                         hparams.set_limit_image_tokens(1, 62500);
                         hparams.set_warmup_n_tokens(16*16); // avoid OOM on warmup
-                        const int warn_min_pixels = 1 * hparams.n_merge * hparams.n_merge * hparams.patch_size * hparams.patch_size;
-                        if (hparams.image_min_pixels < warn_min_pixels) {
-                            LOG_WRN("%s: Youtu-VL models require at minimum 1 image tokens to function correctly on grounding tasks\n", __func__);
-                        }
                     } break;
                 case PROJECTOR_TYPE_GLM4V:
                     {
@@ -1521,7 +1518,7 @@ struct clip_model_loader {
                     model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
                     model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
-            case PROJECTOR_TYPE_UTUVL:
+            case PROJECTOR_TYPE_YOUTUVL:
                 {
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);        // merger.ln_q (RMS norm)
                     model.mm_0_w = get_tensor(string_format(TN_LLAVA_PROJ, 0, "weight"));  // merger.mlp.0
@@ -2720,7 +2717,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 // res_imgs->data[0] = *res;
                 res_imgs->entries.push_back(std::move(img_f32));
             } break;
-        case PROJECTOR_TYPE_UTUVL:
+        case PROJECTOR_TYPE_YOUTUVL:
             {
                 const int patch_size = params.patch_size;  // typically 16
                 const int merge_size = params.n_merge;      // typically 2
@@ -3003,7 +3000,7 @@ int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * 
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_GLM4V:
-        case PROJECTOR_TYPE_UTUVL:
+        case PROJECTOR_TYPE_YOUTUVL:
             return (img->nx / params.patch_size) / 2;
         default:
             break;
@@ -3019,7 +3016,7 @@ int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * 
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_GLM4V:
-        case PROJECTOR_TYPE_UTUVL:
+        case PROJECTOR_TYPE_YOUTUVL:
             return (img->ny / params.patch_size) / 2;
         default:
             break;
@@ -3080,7 +3077,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_GLM4V:
-        case PROJECTOR_TYPE_UTUVL:
+        case PROJECTOR_TYPE_YOUTUVL:
             {
                 // dynamic size (2 conv, so double patch size)
                 int x_patch = img->nx / (params.patch_size * 2);
@@ -3355,7 +3352,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 set_input_i32("positions", positions);
             } break;
         case PROJECTOR_TYPE_QWEN25VL:
-        case PROJECTOR_TYPE_UTUVL:
+        case PROJECTOR_TYPE_YOUTUVL:
             {
                 // pw * ph = number of tokens output by ViT after apply patch merger
                 // ipw * ipw = number of vision token been processed inside ViT
@@ -3607,7 +3604,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_JANUS_PRO:
-        case PROJECTOR_TYPE_UTUVL:
+        case PROJECTOR_TYPE_YOUTUVL:
             return ctx->model.mm_1_b->ne[0];
         case PROJECTOR_TYPE_QWEN3VL:
             // main path + deepstack paths

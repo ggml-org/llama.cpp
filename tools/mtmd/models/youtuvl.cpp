@@ -1,6 +1,6 @@
 #include "models.h"
 
-ggml_cgraph * clip_graph_utuvl::build() {
+ggml_cgraph * clip_graph_youtuvl::build() {
     GGML_ASSERT(model.class_embedding == nullptr);
     const int batch_size       = 1;
     const bool use_window_attn = !hparams.wa_layers.empty();

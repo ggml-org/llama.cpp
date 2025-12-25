@@ -145,7 +145,7 @@ models = [
     {"name": "granite-docling",  "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/ibm-granite/granite-docling-258M", },
     {"name": "minimax-m2",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/MiniMaxAI/MiniMax-M2", },
     {"name": "kormo",            "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/KORMo-Team/KORMo-tokenizer", },
-    {"name": "utu-vl",           "tokt": TOKENIZER_TYPE.BPE, "repo": "./Youtu-VL", },
+    {"name": "youtu-vl",         "tokt": TOKENIZER_TYPE.BPE, "repo": "./Youtu-VL", },
 ]
 
 # some models are known to be broken upstream, so we will skip them as exceptions
