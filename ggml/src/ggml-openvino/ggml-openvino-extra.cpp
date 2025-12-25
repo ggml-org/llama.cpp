@@ -1,6 +1,7 @@
 #include "ggml-openvino-extra.h"
 
 #include "ggml-impl.h"
+#include "ggml.h"
 
 #include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
 #include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
@@ -224,9 +225,8 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
             layout.weights_per_block = 32;
             break;
         default:
-            // Unsupported requant type - fall through to normal extraction
-            layout.is_requant = false;
-            layout.requant_type = std::nullopt;
+            layout.weights_per_block = -1;
+            GGML_ABORT("Code of re-quantizing to channel-wise is not updated");
             break;
         }
 
@@ -323,15 +323,10 @@ ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor
 
     std::shared_ptr<ov::Tensor> ov_tensor;
     if (is_remote) {
-        if (device_name == "GPU") {
-            auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
-            auto usm_tensor = gpu_context.create_tensor(element_type, shape, tensor->data);
-            ov_tensor = std::make_shared<ov::intel_gpu::ocl::USMTensor>(std::move(usm_tensor));
-        } else {
-            auto npu_context = remote_context->as<ov::intel_npu::level_zero::ZeroContext>();
-            auto l0_tensor = npu_context.create_tensor(element_type, shape, tensor->data);
-            ov_tensor = std::make_shared<ov::intel_npu::level_zero::ZeroBufferTensor>(std::move(l0_tensor));
-        }
+        GGML_ASSERT(device_name == "GPU");
+        auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
+        auto usm_tensor = gpu_context.create_tensor(element_type, shape, tensor->data);
+        ov_tensor = std::make_shared<ov::intel_gpu::ocl::USMTensor>(std::move(usm_tensor));
     } else {
         ov_tensor = std::make_shared<ov::Tensor>(element_type, shape, tensor->data);
     }
