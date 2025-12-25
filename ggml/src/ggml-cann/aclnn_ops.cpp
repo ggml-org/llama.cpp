@@ -2990,32 +2990,156 @@ void ggml_cann_argmax(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     GGML_CANN_CALL_ACLNN_OP(ctx, ArgMax, acl_src.get(), 3, false, acl_dst.get());
 }
 
-void ggml_cann_conv_transpose_1d(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
+void ggml_cann_conv_transpose_1d(ggml_backend_cann_context& ctx, ggml_tensor* dst){
     ggml_tensor * src0 = dst->src[0];
     ggml_tensor * src1 = dst->src[1];
 
     // stride
-    int64_t s0 = ((const int32_t *) (dst->op_params))[0];
+    int64_t s0 = ((const int32_t*)(dst->op_params))[0];
 
-    acl_tensor_ptr acl_input  = ggml_cann_create_tensor(src1, src1->ne, src1->nb, 3, ACL_FORMAT_NCL);
+    acl_tensor_ptr acl_input = ggml_cann_create_tensor(src1, src1->ne, src1->nb, 3, ACL_FORMAT_NCL);
     acl_tensor_ptr acl_weight = ggml_cann_create_tensor(src0, src0->ne, src0->nb, 3, ACL_FORMAT_NCL);
-    acl_tensor_ptr acl_dst    = ggml_cann_create_tensor(dst, dst->ne, dst->nb, 3, ACL_FORMAT_NCL);
+    acl_tensor_ptr acl_dst = ggml_cann_create_tensor(dst, dst->ne, dst->nb, 3, ACL_FORMAT_NCL);
+
+    // get base information of input and kernel
+    int64_t input_len = *(src1->ne);
+    int64_t dst_len = *(dst->ne);
+    int64_t kernel_size = *(src0->ne);
+
+    // set the max kernel size for each conv
+    int64_t max_kernel_size = 255;
+
+    // compute the partition of kernel
+    int64_t part_num = 1;
+    part_num = (kernel_size + max_kernel_size - 1) / max_kernel_size;
 
     int64_t strideVal[1];
-    strideVal[0]                    = s0;
-    acl_int_array_ptr stride        = ggml_cann_create_int_array(strideVal, 1);
-    int64_t           paddingVal[]  = { 0 };
-    acl_int_array_ptr padding       = ggml_cann_create_int_array(paddingVal, 1);
-    int64_t           dilationVal[] = { 1 };
-    acl_int_array_ptr dilation      = ggml_cann_create_int_array(dilationVal, 1);
-    int8_t            cubeMathType  = 0;
+    strideVal[0] = s0;
+    acl_int_array_ptr stride = ggml_cann_create_int_array(strideVal, 1);
+    int64_t paddingVal[] = {0};
+    acl_int_array_ptr padding = ggml_cann_create_int_array(paddingVal, 1);
+    int64_t dilationVal[] = {1};
+    acl_int_array_ptr dilation = ggml_cann_create_int_array(dilationVal, 1);
+    bool transposed = true;
+    int64_t groups = 1;
+    int8_t cubeMathType = 0;
 
 #ifdef ASCEND_310P
     cubeMathType = 1;
 #endif
 
-    GGML_CANN_CALL_ACLNN_OP(ctx, Convolution, acl_input.get(), acl_weight.get(), nullptr, stride.get(), padding.get(),
-                            dilation.get(), true, padding.get(), 1, acl_dst.get(), cubeMathType);
+    auto weight_type = ggml_cann_type_mapping(src0->type);
+    auto dst_type = ggml_cann_type_mapping(dst->type);
+
+    // slice the kernel to make each conv available
+    int64_t slice_dim = -1;
+    int64_t slice_start = 0;
+    int64_t slice_end = max_kernel_size;
+    int64_t slice_step = 1;
+    int64_t interval = max_kernel_size;
+
+    int64_t left_pad_len = dilationVal[0] * (max_kernel_size - 1) + 1 - 2 * paddingVal[0];
+    int64_t right_pad_len = 0;
+
+    acl_scalar_ptr alpha = nullptr;
+    float alphaValue = 1.0;
+    alpha = ggml_cann_create_scalar(&alphaValue, aclDataType::ACL_FLOAT);
+
+    // set zero to destination
+    GGML_CANN_CALL_ACLNN_OP(ctx, InplaceZero, acl_dst.get());
+
+    for(int k = 0; k < part_num; k++){
+
+        // create part kernel tensor and slice from big kernel
+        slice_start = max_kernel_size * k;
+        if(k == part_num - 1){
+            slice_end = kernel_size;
+            interval = kernel_size - max_kernel_size * k;
+        }else{
+            slice_end = max_kernel_size * (k+1);
+        }
+
+        int64_t part_ne[4];
+        for(int i = 0; i < 4; i++) {
+            part_ne[i] = *(src0->ne + i);
+        }
+        part_ne[0] = interval;
+
+        size_t part_nb[4];
+        part_nb[0] = sizeof(weight_type);
+        for (int i = 1; i < 4; i++) {
+            part_nb[i] = part_nb[i - 1] * part_ne[i - 1];
+        }
+
+        ggml_cann_pool_alloc part_kernel_allocator;
+        part_kernel_allocator.alloc(ctx.pool(), part_nb[3]);
+        void* part_kernel_buf = part_kernel_allocator.get();
+
+        acl_tensor_ptr part_kernel = ggml_cann_create_tensor(part_kernel_buf, weight_type,
+                                ggml_element_size(src0), part_ne, part_nb, 3, ACL_FORMAT_NCL);
+
+        GGML_CANN_CALL_ACLNN_OP(ctx, Slice, acl_weight.get(), slice_dim, slice_start, slice_end, slice_step, part_kernel.get());
+
+        // create the part conv result tensor
+        int64_t part_dst_ne[4];
+        for(int i = 0; i < 4; i++){
+            part_dst_ne[i] = *(dst->ne + i);
+        }
+        part_dst_ne[0] = (input_len - 1) * strideVal[0] - 2 * paddingVal[0] + dilationVal[0] * (part_ne[0] - 1) + 1;
+
+        size_t part_dst_nb[4];
+        part_dst_nb[0] = sizeof(weight_type);
+        for (int i = 1; i < 4; i++) {
+            part_dst_nb[i] = part_dst_nb[i - 1] * part_dst_ne[i - 1];
+        }
+        ggml_cann_pool_alloc part_dst_allocator;
+        part_dst_allocator.alloc(ctx.pool(), part_dst_nb[3]);
+        void* part_dst_buf = part_dst_allocator.get();
+
+        acl_tensor_ptr acl_part_dst = ggml_cann_create_tensor(part_dst_buf, dst_type, ggml_element_size(dst),
+                                    part_dst_ne, part_dst_nb, 3, ACL_FORMAT_NCL);
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceZero, acl_part_dst.get());
+
+        // compute part conv transpose 1d
+        GGML_CANN_CALL_ACLNN_OP(ctx, Convolution, acl_input.get(), part_kernel.get(), nullptr, stride.get(),
+        padding.get(), dilation.get(), transposed, padding.get(), groups, acl_part_dst.get(), cubeMathType);
+
+        // compute the position of part result in final result
+        int64_t global_start = slice_start;
+        int64_t global_end = std::min((input_len - 1) * strideVal[0] + slice_end, dst_len);
+
+        left_pad_len = global_start;
+        right_pad_len = dst_len - global_end;
+
+        std::vector<int64_t> padDataVal = {left_pad_len,right_pad_len};
+        acl_int_array_ptr padData = ggml_cann_create_int_array(padDataVal.data(), 2);
+
+        acl_scalar_ptr pad_value = nullptr;
+        float pad_valueVal = 0.0;
+        pad_value = ggml_cann_create_scalar(&pad_valueVal, aclDataType::ACL_FLOAT);
+
+        int64_t conv_result_ne[4];
+        for(int i = 0; i < 4; i++){
+            conv_result_ne[i] = *(dst->ne + i);
+        }
+
+        size_t conv_result_nb[4];
+        conv_result_nb[0] = sizeof(weight_type);
+        for (int i = 1; i < 4; i++) {
+            conv_result_nb[i] = conv_result_nb[i - 1] * conv_result_ne[i - 1];
+        }
+
+        ggml_cann_pool_alloc conv_result_allocator;
+        conv_result_allocator.alloc(ctx.pool(), conv_result_nb[3]);
+        void* conv_result_buf = conv_result_allocator.get();
+
+        acl_tensor_ptr conv_result = ggml_cann_create_tensor(conv_result_buf, dst_type, ggml_element_size(dst),
+                                    conv_result_ne, conv_result_nb, 3, ACL_FORMAT_NCL);
+
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceZero, conv_result.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, ConstantPadNd, acl_part_dst.get(), padData.get(), pad_value.get(), conv_result.get());
+        GGML_CANN_CALL_ACLNN_OP(ctx, InplaceAdd, acl_dst.get(), conv_result.get(), alpha.get());
+    }
 }
 
 void ggml_cann_elu(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
