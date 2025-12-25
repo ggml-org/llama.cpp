@@ -257,6 +257,7 @@ struct ifairy_lut_extra {
 - ✅ `sdot`（dotprod）实验内核（仅 `N==1`）：`GGML_IFAIRY_LUT_KERNEL=sdot`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ 去掉 `layout_from_env()->getenv()` 热路径锁竞争：新增/暴露 legacy/compact 专用 entrypoint，并在 `ggml/src/ggml-cpu/ggml-cpu.c` 按 `threadpool->ifairy_lut_cfg` 直接 dispatch；保留 `*_from_env()` 供测试/兼容路径使用（`ggml/src/ggml-ifairy-lut.cpp`, `ggml/src/ggml-ifairy-lut-qgemm.cpp`, `ggml/src/ggml-ifairy-lut-preprocess.cpp`）。
 - ✅ `GGML_IFAIRY_LUT_KERNEL=tbl|merged64`：已实现（`ggml/src/ggml-ifairy-lut-qgemm.cpp` + `ggml/src/ggml-ifairy-lut-preprocess.cpp` + `ggml/src/ggml-ifairy-lut.cpp` + `ggml/src/ggml-cpu/ggml-cpu.c`）；默认 `auto` 不启用，`N==1` 下可通过 `GGML_IFAIRY_LUT_KERNEL=tbl|merged64` 触发（严格模式强制回退到 `legacy`）。
+- ✅ `merged64` hot-path 进一步优化：`ggml_ifairy_lut_qgemm_ex_merged64` 做 group-loop unroll + 预取；mul_mat 路由不再调用 `ggml_ifairy_lut_can_mul_mat()`（避免 `getenv` 锁竞争），改为基于 `threadpool->ifairy_lut_cfg` + 形状检查直接进入 LUT 路径（`ggml/src/ggml-ifairy-lut-qgemm.cpp`, `ggml/src/ggml-cpu/ggml-cpu.c`）。
 - P3（冻结）`compact2`：2-lookups 方向曾尝试但出现明确回退，先不推进（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 失败案例）。
 
 <details>
