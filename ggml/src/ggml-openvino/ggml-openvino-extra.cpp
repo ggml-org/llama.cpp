@@ -290,7 +290,7 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     return layout;
 }
 
-ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor) {
+ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor, bool is_remote) {
     ov::Shape shape;
     for (int i = GGML_MAX_DIMS - 1; i >= 0; --i) {
         shape.push_back(static_cast<size_t>(tensor->ne[i]));
@@ -322,16 +322,18 @@ ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor
     auto remote_context = ggml_openvino_get_remote_context();
 
     std::shared_ptr<ov::Tensor> ov_tensor;
-    if (device_name == "CPU") {
-        ov_tensor = std::make_shared<ov::Tensor>(element_type, shape, tensor->data);
-    } else if (device_name == "GPU") {
-        auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
-        auto usm_tensor = gpu_context.create_tensor(element_type, shape, tensor->data);
-        ov_tensor = std::make_shared<ov::intel_gpu::ocl::USMTensor>(std::move(usm_tensor));
+    if (is_remote) {
+        if (device_name == "GPU") {
+            auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
+            auto usm_tensor = gpu_context.create_tensor(element_type, shape, tensor->data);
+            ov_tensor = std::make_shared<ov::intel_gpu::ocl::USMTensor>(std::move(usm_tensor));
+        } else {
+            auto npu_context = remote_context->as<ov::intel_npu::level_zero::ZeroContext>();
+            auto l0_tensor = npu_context.create_tensor(element_type, shape, tensor->data);
+            ov_tensor = std::make_shared<ov::intel_npu::level_zero::ZeroBufferTensor>(std::move(l0_tensor));
+        }
     } else {
-        auto npu_context = remote_context->as<ov::intel_npu::level_zero::ZeroContext>();
-        auto l0_tensor = npu_context.create_tensor(element_type, shape, tensor->data);
-        ov_tensor = std::make_shared<ov::intel_npu::level_zero::ZeroBufferTensor>(std::move(l0_tensor));
+        ov_tensor = std::make_shared<ov::Tensor>(element_type, shape, tensor->data);
     }
 
     return new ggml_openvino_tensor_extra(ov_tensor);

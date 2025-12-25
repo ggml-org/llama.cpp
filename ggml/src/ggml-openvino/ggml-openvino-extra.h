@@ -155,4 +155,4 @@ struct ggml_openvino_extracted_layout {
 // Calculate the buffer layout for extracted quantized data
 ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_tensor * tensor);
 
-ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor);
+ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor * tensor, bool is_remote);
