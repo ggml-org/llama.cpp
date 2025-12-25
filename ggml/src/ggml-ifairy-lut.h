@@ -66,10 +66,13 @@ struct ifairy_lut_extra {
 // - CPU-only scalar LUT path integrated into ggml mul_mat (guarded by GGML_IFAIRY_ARM_LUT + GGML_IFAIRY_LUT env).
 // - Correctness matches ggml_vec_dot_ifairy_q16_K_generic semantics (w * conj(x)).
 // - Index encoding is direct 6-bit pattern per 3 weights: pat = c0 | (c1<<2) | (c2<<4).
-// - Two LUT layouts are supported (selected by env `GGML_IFAIRY_LUT_LAYOUT=auto|legacy|compact`):
+// - Four LUT layouts are supported (selected by env `GGML_IFAIRY_LUT_LAYOUT=auto|legacy|compact|tbl64|merged64`):
 //   - legacy : 4x64 int16 tables per group (fast for small N, larger workspace)
 //   - compact: int8 "3 positions × 4 codes × 4 channels" tables per group (48 B / group),
 //              NEON uses 32-bit loads + widen
+//   - tbl64  : 4x64 int8 tables per group (decode-first, experimental)
+//   - merged64: 64x4 int8 tables per group (decode-first, one 32-bit load per group)
+// - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64` may affect the auto policy for N==1; strict validation forces legacy.
 // - Optional decode thread clamp knobs (A/B): `GGML_IFAIRY_LUT_DECODE_NTH`, `GGML_IFAIRY_LUT_DECODE_THRESHOLD` (default 0=disabled).
 
 void   ggml_ifairy_lut_init(void);
