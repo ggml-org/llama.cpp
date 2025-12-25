@@ -209,9 +209,17 @@ struct ifairy_lut_extra {
 
 目标：把 decode 常见的 `N≈1` 进一步提速，并让 `compact` 在 Apple Silicon 上稳定胜出。
 
+（最新 profile：`sample` 10s，`llama-cli` decode，Apple M4 / 4 threads / `GGML_IFAIRY_LUT_LAYOUT=compact`）
+
+- top-of-stack（两次采样量级一致）：`ggml_ifairy_lut_qgemm_ex` ≈ 24k samples（第一热点），`ggml_graph_compute_thread` ≈ 5~6k samples（第二热点）。
+- 额外观察：`ggml_ifairy_lut_layout_from_env()` / `ggml_ifairy_lut_can_mul_mat()` 仍在热路径调用 `getenv`，多线程下可见 `__findenv_locked/_os_unfair_lock_lock_slow/__ulock_wait2` 的锁竞争；应优先消掉这类“每 token 每线程重复”的小开销。
+
 （精简版）
 
 - 结构性：优先降低 `compact` 每 group 的查表/地址计算/依赖链开销（以 profile 证据驱动）。
+- 优先：把 LUT 的 env 分支从 `qgemm_ex/preprocess_ex` 热路径移除（尤其是 `GGML_IFAIRY_LUT_LAYOUT`）：
+  - 由 `ggml_graph_compute()` 更新的 `threadpool->ifairy_lut_cfg` 一次性决策 layout/knobs；
+  - `ggml-cpu.c` 直接调用 layout 专用实现（legacy/compact），避免 `layout_from_env() -> getenv()` 在多线程内反复触发全局锁。
 - 调优：`GGML_IFAIRY_LUT_N1_FASTPATH` / `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL` / `GGML_IFAIRY_LUT_PREFETCH(_DIST)` 仅用于 perf-safe A/B（最终以 `STATUS.md:0.1` 的 bench 记录为准）。
 - 历史失败案例/原始日志：统一留在 `IFAIRY_ARM_3W_LUT_STATUS.md`（避免在本文重复维护导致过时）。
 
@@ -221,6 +229,7 @@ struct ifairy_lut_extra {
 - ✅ `compact N==1` unroll A/B：`GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ prefetch A/B + 距离：`GGML_IFAIRY_LUT_PREFETCH=0/1`、`GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ `sdot`（dotprod）实验内核（仅 `N==1`）：`GGML_IFAIRY_LUT_KERNEL=sdot`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
+- TODO 去掉 `layout_from_env()->getenv()` 热路径锁竞争：新增/暴露 legacy/compact 专用 entrypoint，并在 `ggml/src/ggml-cpu/ggml-cpu.c` 按 `threadpool->ifairy_lut_cfg` 直接 dispatch；保留 `*_from_env()` 供测试/兼容路径使用（`ggml/src/ggml-ifairy-lut.cpp`, `ggml/src/ggml-ifairy-lut-qgemm.cpp`, `ggml/src/ggml-ifairy-lut-preprocess.cpp`）。
 - TODO `GGML_IFAIRY_LUT_KERNEL=tbl|merged64`：实现已占位但会 warn 并回退（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）；落地计划迁移至 `IFAIRY_ARM_3W_LUT_ROADMAP.md`。
 - TODO `compact2`：曾作为 2-lookups 方向尝试，但未合入当前实现（代码中没有该 layout 分支）。
 
@@ -260,6 +269,7 @@ struct ifairy_lut_extra {
 建议动作：
 
 - 先用 profile/日志收集最热 `(M,K,N)`（至少区分 prefill vs decode），只对 top1~2 形状做专用化；其余仍走通用 LUT。
+- 在引入更激进 fast-path 前，先落地 6.2 的 “hot-path 去 getenv/dispatch”（否则可能出现“算子更快但锁竞争/调度把收益吞掉”）。
 - fast-path 必须满足：`strict` 下可回退、可按 env 完全关闭、并且不会把代码拆成“形状模板爆炸”。
 
 实现进度（对照代码）：
@@ -273,6 +283,7 @@ struct ifairy_lut_extra {
 
 建议动作：
 
+- 注意：decode 的 `sample` profile 显示 `ggml_ifairy_lut_preprocess_ex` 并非主热点；6.4 的验收需要以 prefill 主导的 bench/profile 为准（不要用 decode 采样占比做结论）。
 - `FULLACC` 自动策略只在明确收益场景启用（小 `N` + `acc_bytes` 可控），并允许用 env 强制开/关复现差异。
 - 将 “构表下一 tile / 消费上一 tile” 做成 pipeline（先以可验证的 CPU-only 版本落地，再谈进一步重排）。
 - 把 `preprocess_ex` 的切分策略固定为“对 N 或 group 做分片”，避免 false sharing 与 “线程 0 构表、其余等待”。
@@ -304,6 +315,7 @@ struct ifairy_lut_extra {
 - 维持 “相同权重 data 只生成一次 index” 的缓存策略，并确保 `ggml_ifairy_lut_free()` 能完全回收。
 - cache 命中路径尽量做到“只读 + 低锁/无锁”（避免 decode 热路径每次都碰全局锁）；若必须加锁，优先把锁移到“首次构建”分支，并确保可观测（debug 日志或统计）。
 - 如需更精细的生命周期管理，优先考虑按 ctx/graph 绑定或 refcount，避免引入难以追踪的全局泄漏。
+- 现状：decode profile 中索引构建不是热点；当前实现已把 indexes 预热挪到 `ggml_graph_compute()`，并修复 `transform_tensor` 并发竞争（见 `ggml/src/ggml-ifairy-lut-transform.cpp`）。
 
 ### 6.7 再做 BM/BK 调参（放在结构优化之后）
 
