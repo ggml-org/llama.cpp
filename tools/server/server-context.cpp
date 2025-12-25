@@ -3521,7 +3521,7 @@ void server_routes::init_routes() {
     };
 
     this->post_responses_oai = [this](const server_http_req & req) {
-        auto res = std::make_unique<server_res_generator>(ctx_server);
+        auto res = create_response();
         std::vector<raw_buffer> files;
         json body = convert_responses_to_chatcmpl(json::parse(req.body));
         json body_parsed = oaicompat_chat_params_parse(
@@ -3529,12 +3529,10 @@ void server_routes::init_routes() {
             ctx_server.oai_parser_opt,
             files);
         return handle_completions_impl(
-            std::move(res),
-            ctx_server,
+            req,
             SERVER_TASK_TYPE_COMPLETION,
             body_parsed,
             files,
-            req.should_stop,
             TASK_RESPONSE_TYPE_OAI_RESP);
     };
 
