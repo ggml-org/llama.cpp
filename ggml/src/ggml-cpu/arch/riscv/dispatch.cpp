@@ -4,7 +4,10 @@
 
 #include "ggml-cpu.h"
 #include "quants.h"
+
+extern "C" {
 #include "kernels.inc"
+}
 
 #if defined(__riscv_v)
 
