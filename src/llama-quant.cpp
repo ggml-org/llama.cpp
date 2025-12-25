@@ -623,7 +623,7 @@ static void signal_handler(int) {
     bpw_stop.store(true, std::memory_order_relaxed);
 }
 
-// Returns tensor type overrides to meet a global bpw target
+// Returns tensor type overrides that meet a global bpw target
 static std::unordered_map<std::string, ggml_type> target_bpw_type(
     llama_model_loader & ml,
     const llama_model & model,
@@ -650,6 +650,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
     } signal_guard;
 
+    // Error and bias projection per GGML_TYPE per tensor
     struct candidate_types {
         ggml_type type = GGML_TYPE_COUNT;
         float bpw = 0.0f;
@@ -659,6 +660,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         double proj = 0.0;
     };
 
+    // Per‑tensor quantization mix that satisfies a global bpw target
     struct tensor_info {
         const llama_model_loader::llama_tensor_weight * w = nullptr;
         std::vector<candidate_types> candidate;
@@ -697,22 +699,33 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     constexpr uint64_t arbitrary_magic = 0xeabada55cafed00d;
     const char * func = __func__;
 
+    // Tensor size in bytes for a given type
     auto tensor_bytes = [](const ggml_tensor * t, const ggml_type typ) -> size_t {
         const int64_t n_per_row = t->ne[0];
         const size_t row_sz = ggml_row_size(typ, n_per_row);
         return (size_t)ggml_nrows(t) * row_sz;
     };
 
+    // Tensor bpw for a given type
     auto tensor_bpw = [&](const ggml_tensor * t, const ggml_type typ) -> double {
         const size_t bytes = tensor_bytes(t, typ);
         return (double)bytes * 8.0 / (double)ggml_nelements(t);
     };
 
+    // Check if tensor is compatible with quantization type
     auto is_compatible = [](const ggml_tensor * t, const ggml_type typ) -> bool {
         const int64_t blck = ggml_blck_size(typ);
         return blck <= 1 || (t->ne[0] % blck) == 0;
     };
 
+    // Get suitable fallback for type
+    auto make_compatible = [&](const ggml_tensor * t, const ggml_type typ) -> ggml_type {
+        if (is_compatible(t, typ)) { return typ; }
+        const ggml_type fb = fallback_type(typ);
+        return is_compatible(t, fb) ? fb : GGML_TYPE_F16;
+    };
+
+    // Check if tensor is an IQ type
     auto is_iq = [](const enum ggml_type t) {
         switch (t) {
             case GGML_TYPE_IQ1_S:
@@ -730,12 +743,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
     };
 
-    auto make_compatible = [&](const ggml_tensor * t, const ggml_type typ) -> ggml_type {
-        if (is_compatible(t, typ)) { return typ; }
-        const ggml_type fb = fallback_type(typ);
-        return is_compatible(t, fb) ? fb : GGML_TYPE_F16;
-    };
-
+    // Check if tensor can be quantized
     auto can_quantize = [&](const ggml_tensor * t) -> bool {
         if (ggml_n_dims(t) < 2) { return false; } // skip 1D tensors
         return is_quantizable(ggml_get_name(t), model.arch, params);
@@ -750,6 +758,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         size_t n_elements = 0;
     };
 
+    // DJB2 hashing algorithm
     auto djb2_hash = [&](const uint8_t * data, const size_t n) -> uint64_t {
         uint64_t h = 5381;
         for (size_t i = 0; i < n; ++i) {
@@ -758,6 +767,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return h ? h : arbitrary_magic;
     };
 
+    // Get model ID from metadata hash
     auto metadata_id = [&](const gguf_context * ctx) -> uint64_t {
         const size_t sz = gguf_get_meta_size(ctx);
         std::vector<uint8_t> buf(sz);
@@ -794,6 +804,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
     }
 
+    // Serializes vector<tensor_info> to disk
     auto save_bpw_state = [&](const std::vector<tensor_info> & all_vec) {
         const std::string tmp = checkpoint_file + ".tmp";
         std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
@@ -832,6 +843,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         LLAMA_LOG_INFO("%s: saved progress for %lu tensors to %s\n", func, all_vec.size(), checkpoint_file.c_str());
     };
 
+    // Deserializes vector<tensor_info> from disk
     auto load_bpw_state = [&]() -> std::unordered_map<std::string, saved_info> {
         std::unordered_map<std::string, saved_info> out;
         std::ifstream ifs(checkpoint_file, std::ios::binary);
@@ -890,6 +902,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return out;
     };
 
+    // Deletes checkpoint file unless --keep-bpw-state is set
     auto delete_bpw_state = [&] {
         std::ifstream ifs(checkpoint_file);
         if (ifs.good() && !params->keep_bpw_state) {
@@ -898,6 +911,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
     };
 
+    // Check for user interrupt and save progress
     auto check_signal_handler = [&](const std::vector<tensor_info> & all_vec) {
         if (bpw_stop.load(std::memory_order_relaxed)) {
             LLAMA_LOG_INFO("\n%s: saving progress for %lu tensors to %s\n", func, all_vec.size(), checkpoint_file.c_str());
@@ -1161,7 +1175,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     const auto bpw_data = load_bpw_state();
 
-    // Parallelize tensor processing - courtesy of https://github.com/ddh0
+    // Parallelize tensor processing (courtesy of https://github.com/ddh0)
     auto process_tensor = [&](const llama_model_loader::llama_tensor_weight * tw,
         std::vector<no_init<uint8_t>> & thread_local_buffer,
         std::mutex & loader_mutex,
@@ -1555,6 +1569,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     size_t target_total_bytes = std::llround(target_bpw * (double)nq_elements / 8.0);
     size_t budget_bytes = target_total_bytes >= nq_bytes ? target_total_bytes - nq_bytes : min_bytes;
 
+    // Get the types' override
     auto emit_overrides = [&]() -> std::unordered_map<std::string, ggml_type> {
         std::unordered_map<std::string, ggml_type> overrides;
         LLAMA_LOG_INFO("%s: - estimated tensor quantization mix:\n", func);
@@ -1592,7 +1607,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return important;
     };
 
-    // Lagrangian relaxation to minimise error subject to a bpw target constraint
+    // Lagrangian relaxation to minimize error subject to a bpw target constraint
     auto lagrange_penalty = [&](const double mu, std::vector<int> & choice, size_t & bytes, double & err) {
         choice.resize(all.size());
         bytes = 0;
@@ -1636,7 +1651,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     lagrange_penalty(mu_lo, choice_lo, bytes_lo, err_lo);
 
-    // increase mu until we get under budget or hit a safety cap
+    // Increase mu until we get under budget or hit a safety cap
     {
         int expand = 0;
         size_t prev_bytes_hi = std::numeric_limits<size_t>::max();
@@ -1741,7 +1756,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
     }
 
-    delete_bpw_state(); // we're done, clear any checkpoint
+    delete_bpw_state();
 
     return emit_overrides();
 }
