@@ -571,6 +571,10 @@ static void * ggml_backend_rpc_buffer_get_base(ggml_backend_buffer_t buffer) {
     return ctx->base_ptr;
 }
 
+static bool ggml_backend_buffer_is_rpc(ggml_backend_buffer_t buffer) {
+    return buffer->iface.free_buffer == ggml_backend_rpc_buffer_free_buffer;
+}
+
 static rpc_tensor serialize_tensor(const ggml_tensor * tensor) {
     rpc_tensor result;
     if (!tensor) {
@@ -580,10 +584,10 @@ static rpc_tensor serialize_tensor(const ggml_tensor * tensor) {
 
     result.id = reinterpret_cast<uint64_t>(tensor);
     result.type = tensor->type;
-    if (tensor->buffer) {
+    if (tensor->buffer && ggml_backend_buffer_is_rpc(tensor->buffer)) {
         ggml_backend_buffer_t buffer = tensor->buffer;
         ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
-        result.buffer = ctx->remote_ptr;
+        result.buffer = ctx != nullptr ? ctx->remote_ptr : 0;
     } else {
         result.buffer = 0;
     }
@@ -662,10 +666,6 @@ static void ggml_backend_rpc_buffer_get_tensor(ggml_backend_buffer_t buffer, con
     request.size = size;
     bool status = send_rpc_cmd(ctx->sock, RPC_CMD_GET_TENSOR, &request, sizeof(request), data, size);
     RPC_STATUS_ASSERT(status);
-}
-
-static bool ggml_backend_buffer_is_rpc(ggml_backend_buffer_t buffer) {
-    return buffer->iface.free_buffer == ggml_backend_rpc_buffer_free_buffer;
 }
 
 static bool ggml_backend_rpc_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {

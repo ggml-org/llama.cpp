@@ -258,6 +258,7 @@ llama_context::llama_context(
 
         backend_buft.clear();
         backend_ptrs.clear();
+        backend_buf_exp_size.clear();
 
         for (auto & backend : backends) {
             auto * buft = ggml_backend_get_default_buffer_type(backend.get());
@@ -274,6 +275,7 @@ llama_context::llama_context(
 
             backend_buft.push_back(buft);
             backend_ptrs.push_back(backend.get());
+            backend_buf_exp_size.push_back(0);
         }
 
         LLAMA_LOG_DEBUG("%s: backend_ptrs.size() = %zu\n", __func__, backend_ptrs.size());
@@ -389,7 +391,8 @@ llama_context::llama_context(
 
         // reserve pp (prompt processing) graph first so that buffers are only allocated once
         {
-            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
+            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(),
+                model.hparams.no_alloc, model.hparams.no_alloc ? backend_buf_exp_size.data() : nullptr);
             if (!gf) {
                 if (pipeline_parallel) {
                     LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
@@ -407,7 +410,7 @@ llama_context::llama_context(
 
         // reserve with tg (token generation) graph to get the number of splits and nodes
         {
-            auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get());
+            auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get(), model.hparams.no_alloc);
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute tg buffers");
             }
@@ -422,7 +425,7 @@ llama_context::llama_context(
             //
             // auto * gf = graph_reserve(n_tokens, 1, n_tokens, mctx.get());
             //
-            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
+            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get(), model.hparams.no_alloc);
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute pp buffers");
             }
@@ -431,11 +434,13 @@ llama_context::llama_context(
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
             ggml_backend_buffer_type_t buft    = backend_buft[i];
-            size_t size = ggml_backend_sched_get_buffer_size(sched.get(), backend);
-            if (size > 1) {
+            if (!model.hparams.no_alloc) {
+                backend_buf_exp_size[i] = ggml_backend_sched_get_buffer_size(sched.get(), backend);
+            }
+            if (backend_buf_exp_size[i] > 1) {
                 LLAMA_LOG_INFO("%s: %10s compute buffer size = %8.2f MiB\n", __func__,
                         ggml_backend_buft_name(buft),
-                        size / 1024.0 / 1024.0);
+                        backend_buf_exp_size[i] / 1024.0 / 1024.0);
             }
         }
 
@@ -454,6 +459,22 @@ llama_context::llama_context(
 }
 
 llama_context::~llama_context() {
+    if (!model.hparams.no_alloc) {
+        for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+            ggml_backend_t             backend = backend_ptrs[i];
+            ggml_backend_buffer_type_t buft    = backend_buft[i];
+
+            const size_t size_exp = backend_buf_exp_size[i];
+            const size_t size_act = ggml_backend_sched_get_buffer_size(sched.get(), backend);
+            if (size_exp == size_act) {
+                LLAMA_LOG_DEBUG("%s: %10s compute buffer size is %8.4f MiB, matches expectation of %8.4f MiB\n",
+                    __func__, ggml_backend_buft_name(buft), size_act / (1024.0*1024.0), size_exp / (1024.0*1024.0));
+            } else {
+                LLAMA_LOG_WARN("%s: %10s compute buffer size of %8.4f MiB, does not match expectation of %8.4f MiB\n",
+                    __func__, ggml_backend_buft_name(buft), size_act / (1024.0*1024.0), size_exp / (1024.0*1024.0));
+            }
+        }
+    }
     ggml_opt_free(opt_ctx);
 }
 
@@ -1428,7 +1449,8 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
     return static_cast<llm_graph_result *>(gf_res_reserve.get());
 }
 
-ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only) {
+ggml_cgraph * llama_context::graph_reserve(
+        uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
     GGML_ASSERT(n_outputs >= 1);
 
@@ -1465,8 +1487,13 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, u
 
     // initialize scheduler with the specified graph
     if (split_only) {
-        ggml_backend_sched_split_graph(sched.get(), gf);
+        if (sizes) {
+            ggml_backend_sched_reserve_size(sched.get(), gf, sizes);
+        } else {
+            ggml_backend_sched_split_graph(sched.get(), gf);
+        }
     } else if (!ggml_backend_sched_reserve(sched.get(), gf)) {
+        GGML_ASSERT(!sizes);
         LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
         return nullptr;
     }
@@ -2088,15 +2115,26 @@ void llama_context::perf_reset() {
 
 std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> llama_context::memory_breakdown() const {
     std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> ret;
-    for (const auto & buft_size : model.memory_breakdown()) {
-        ret[buft_size.first].model += buft_size.second;
+    for (const auto & [buft, size] : model.memory_breakdown()) {
+        ret[buft].model += size;
     }
-    for (const auto & buft_size : memory->memory_breakdown()) {
-        ret[buft_size.first].context += buft_size.second;
+    if (memory) {
+        for (const auto & [buft, size] : memory->memory_breakdown()) {
+            ret[buft].context += size;
+        }
     }
-    for (const auto & backend_ptr : backends) {
-        ggml_backend_t backend = backend_ptr.get();
-        ret[ggml_backend_sched_get_buffer_type(sched.get(), backend)].compute += ggml_backend_sched_get_buffer_size(sched.get(), backend);
+    if (model.hparams.no_alloc) {
+        for (size_t i = 0; i < backends.size(); ++i) {
+            ggml_backend_t             backend = backends[i].get();
+            ggml_backend_buffer_type_t buft    = ggml_backend_sched_get_buffer_type(sched.get(), backend);
+            ret[buft].compute += backend_buf_exp_size[i];
+        }
+    } else {
+        for (const auto & backend_ptr : backends) {
+            ggml_backend_t             backend = backend_ptr.get();
+            ggml_backend_buffer_type_t buft    = ggml_backend_sched_get_buffer_type(sched.get(), backend);
+            ret[buft].compute += ggml_backend_sched_get_buffer_size(sched.get(), backend);
+        }
     }
     return ret;
 }

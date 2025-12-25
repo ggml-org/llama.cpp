@@ -8,6 +8,10 @@
 #include <vector>
 #include <cstring>
 
+// pseudo-env variable to identify preset-only arguments
+#define COMMON_ARG_PRESET_LOAD_ON_STARTUP "__PRESET_LOAD_ON_STARTUP"
+#define COMMON_ARG_PRESET_STOP_TIMEOUT    "__PRESET_STOP_TIMEOUT"
+
 //
 // CLI argument parsing
 //
@@ -22,6 +26,7 @@ struct common_arg {
     const char * env          = nullptr;
     std::string help;
     bool is_sparam = false; // is current arg a sampling param?
+    bool is_preset_only = false; // is current arg preset-only (not treated as CLI arg)
     void (*handler_void)   (common_params & params) = nullptr;
     void (*handler_string) (common_params & params, const std::string &) = nullptr;
     void (*handler_str_str)(common_params & params, const std::string &, const std::string &) = nullptr;
@@ -70,6 +75,7 @@ struct common_arg {
     common_arg & set_excludes(std::initializer_list<enum llama_example> excludes);
     common_arg & set_env(const char * env);
     common_arg & set_sparam();
+    common_arg & set_preset_only();
     bool in_example(enum llama_example ex);
     bool is_exclude(enum llama_example ex);
     bool get_value_from_env(std::string & output) const;
@@ -114,8 +120,12 @@ struct common_params_context {
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
 
 // parse input arguments from CLI into a map
-// TODO: support repeated args in the future
 bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<common_arg, std::string> & out_map);
+
+// populate preset-only arguments
+// these arguments are not treated as command line arguments
+// see: https://github.com/ggml-org/llama.cpp/issues/18163
+void common_params_add_preset_options(std::vector<common_arg> & args);
 
 // initialize argument parser context - used by test-arg-parser and preset
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);

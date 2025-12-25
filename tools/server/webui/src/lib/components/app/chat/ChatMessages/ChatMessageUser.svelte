@@ -1,18 +1,17 @@
 <script lang="ts">
-	import { Check, X, Send } from '@lucide/svelte';
 	import { Card } from '$lib/components/ui/card';
-	import { Button } from '$lib/components/ui/button';
 	import { ChatAttachmentsList, MarkdownContent } from '$lib/components/app';
-	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import { config } from '$lib/stores/settings.svelte';
-	import { autoResizeTextarea } from '$lib/utils';
 	import ChatMessageActions from './ChatMessageActions.svelte';
+	import ChatMessageEditForm from './ChatMessageEditForm.svelte';
 
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
 		isEditing: boolean;
 		editedContent: string;
+		editedExtras?: DatabaseMessageExtra[];
+		editedUploadedFiles?: ChatUploadedFile[];
 		siblingInfo?: ChatMessageSiblingInfo | null;
 		showDeleteDialog: boolean;
 		deletionInfo: {
@@ -26,6 +25,8 @@
 		onSaveEditOnly?: () => void;
 		onEditKeydown: (event: KeyboardEvent) => void;
 		onEditedContentChange: (content: string) => void;
+		onEditedExtrasChange?: (extras: DatabaseMessageExtra[]) => void;
+		onEditedUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
 		onCopy: () => void;
 		onEdit: () => void;
 		onDelete: () => void;
@@ -40,6 +41,8 @@
 		message,
 		isEditing,
 		editedContent,
+		editedExtras = [],
+		editedUploadedFiles = [],
 		siblingInfo = null,
 		showDeleteDialog,
 		deletionInfo,
@@ -48,6 +51,8 @@
 		onSaveEditOnly,
 		onEditKeydown,
 		onEditedContentChange,
+		onEditedExtrasChange,
+		onEditedUploadedFilesChange,
 		onCopy,
 		onEdit,
 		onDelete,
@@ -60,12 +65,6 @@
 	let isMultiline = $state(false);
 	let messageElement: HTMLElement | undefined = $state();
 	const currentConfig = config();
-
-	$effect(() => {
-		if (isEditing && textareaElement) {
-			autoResizeTextarea(textareaElement);
-		}
-	});
 
 	$effect(() => {
 		if (!messageElement || !message.content.trim()) return;
@@ -98,44 +97,23 @@
 	role="group"
 >
 	{#if isEditing}
-		<div class="w-full max-w-[80%]">
-			<textarea
-				bind:this={textareaElement}
-				bind:value={editedContent}
-				class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
-				onkeydown={onEditKeydown}
-				oninput={(e) => {
-					autoResizeTextarea(e.currentTarget);
-					onEditedContentChange(e.currentTarget.value);
-				}}
-				placeholder="Edit your message..."
-			></textarea>
-
-			<div class="mt-2 flex justify-end gap-2">
-				<Button class="h-8 px-3" onclick={onCancelEdit} size="sm" variant="ghost">
-					<X class="mr-1 h-3 w-3" />
-					Cancel
-				</Button>
-
-				{#if onSaveEditOnly}
-					<Button
-						class="h-8 px-3"
-						onclick={onSaveEditOnly}
-						disabled={!editedContent.trim()}
-						size="sm"
-						variant="outline"
-					>
-						<Check class="mr-1 h-3 w-3" />
-						Save
-					</Button>
-				{/if}
-
-				<Button class="h-8 px-3" onclick={onSaveEdit} disabled={!editedContent.trim()} size="sm">
-					<Send class="mr-1 h-3 w-3" />
-					Send
-				</Button>
-			</div>
-		</div>
+		<ChatMessageEditForm
+			bind:textareaElement
+			messageId={message.id}
+			{editedContent}
+			{editedExtras}
+			{editedUploadedFiles}
+			originalContent={message.content}
+			originalExtras={message.extra}
+			showSaveOnlyOption={!!onSaveEditOnly}
+			{onCancelEdit}
+			{onSaveEdit}
+			{onSaveEditOnly}
+			{onEditKeydown}
+			{onEditedContentChange}
+			{onEditedExtrasChange}
+			{onEditedUploadedFilesChange}
+		/>
 	{:else}
 		{#if message.extra && message.extra.length > 0}
 			<div class="mb-2 max-w-[80%]">

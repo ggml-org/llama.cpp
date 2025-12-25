@@ -8,6 +8,7 @@
 		ChatFormTextarea
 	} from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
+	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -24,7 +25,7 @@
 		MimeTypeImage,
 		MimeTypeText
 	} from '$lib/enums';
-	import { isIMEComposing } from '$lib/utils';
+	import { isIMEComposing, parseClipboardContent } from '$lib/utils';
 	import {
 		AudioRecorder,
 		convertToWav,
@@ -66,7 +67,7 @@
 	let message = $state('');
 	let pasteLongTextToFileLength = $derived.by(() => {
 		const n = Number(currentConfig.pasteLongTextToFileLen);
-		return Number.isNaN(n) ? 2500 : n;
+		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
 	});
 	let previousIsLoading = $state(isLoading);
 	let recordingSupported = $state(false);
@@ -191,7 +192,6 @@
 
 			if ((!message.trim() && uploadedFiles.length === 0) || disabled || isLoading) return;
 
-			// Check if model is selected first
 			if (!checkModelSelected()) return;
 
 			const messageToSend = message.trim();
@@ -227,6 +227,31 @@
 		}
 
 		const text = event.clipboardData.getData(MimeTypeText.PLAIN);
+
+		if (text.startsWith('"')) {
+			const parsed = parseClipboardContent(text);
+
+			if (parsed.textAttachments.length > 0) {
+				event.preventDefault();
+
+				message = parsed.message;
+
+				const attachmentFiles = parsed.textAttachments.map(
+					(att) =>
+						new File([att.content], att.name, {
+							type: MimeTypeText.PLAIN
+						})
+				);
+
+				onFileUpload?.(attachmentFiles);
+
+				setTimeout(() => {
+					textareaRef?.focus();
+				}, 10);
+
+				return;
+			}
+		}
 
 		if (
 			text.length > 0 &&

@@ -9,6 +9,8 @@
 #include <vector>
 #include <functional>
 
+#define DEFAULT_INTERPOLATION_MODE (GGML_SCALE_MODE_BILINEAR | GGML_SCALE_FLAG_ANTIALIAS)
+
 struct clip_graph {
     const clip_model & model;
     const clip_hparams & hparams;
@@ -49,7 +51,7 @@ struct clip_graph {
     void cb(ggml_tensor * cur0, const char * name, int il) const;
 
     // siglip2 naflex
-    ggml_tensor * resize_position_embeddings();
+    ggml_tensor * resize_position_embeddings(uint32_t interpolation_mode = DEFAULT_INTERPOLATION_MODE);
 
     // build vision transformer (ViT) cgraph
     // this function should cover most of the models
@@ -112,4 +114,8 @@ struct clip_graph {
     // aka pixel_shuffle / pixel_unshuffle / patch_merger (Kimi-VL)
     // support dynamic resolution
     ggml_tensor * build_patch_merge_permute(ggml_tensor * cur, int scale_factor);
+
+    // Generic function to stack frames for audio processing
+    // Abstracts out the StackAudioFrames logic used by ultravox
+    ggml_tensor * build_stack(ggml_tensor * cur, int32_t stack_factor, int32_t n_embed);
 };

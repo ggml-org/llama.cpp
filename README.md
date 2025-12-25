@@ -190,6 +190,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - Swift [ShenghaiWang/SwiftLlama](https://github.com/ShenghaiWang/SwiftLlama)
 - Delphi [Embarcadero/llama-cpp-delphi](https://github.com/Embarcadero/llama-cpp-delphi)
 - Go (no CGo needed): [hybridgroup/yzma](https://github.com/hybridgroup/yzma)
+- Android: [llama.android](/examples/llama.android)
 
 </details>
 
@@ -313,7 +314,7 @@ The Hugging Face platform provides a variety of online tools for converting, qua
 
 To learn more about model quantization, [read this documentation](tools/quantize/README.md)
 
-## [`llama-cli`](tools/main)
+## [`llama-cli`](tools/cli)
 
 #### A CLI tool for accessing and experimenting with most of `llama.cpp`'s functionality.
 
@@ -525,7 +526,8 @@ To learn more about model quantization, [read this documentation](tools/quantize
 
 ## Other documentation
 
-- [main (cli)](tools/main/README.md)
+- [cli](tools/cli/README.md)
+- [completion](tools/completion/README.md)
 - [server](tools/server/README.md)
 - [GBNF grammars](grammars/README.md)
 

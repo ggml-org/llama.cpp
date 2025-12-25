@@ -4,9 +4,14 @@
 
 using json = nlohmann::json;
 
-static std::string_view trim_trailing_space(std::string_view sv) {
+static std::string_view trim_trailing_space(std::string_view sv, int max = -1) {
+    int count = 0;
     while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.back()))) {
+        if (max != -1 && count <= max) {
+            break;
+        }
         sv.remove_suffix(1);
+        count++;
     }
     return sv;
 }
@@ -93,7 +98,7 @@ void common_chat_peg_constructed_mapper::map(const common_peg_ast_node & node) {
 
     if (is_arg_string && current_tool) {
         // Serialize to JSON, but exclude the end quote
-        std::string dumped = json(node.text).dump();
+        std::string dumped = json(trim_trailing_space(node.text)).dump();
         current_tool->arguments += dumped.substr(0, dumped.size() - 1);
         needs_closing_quote = true;
     }
@@ -101,6 +106,7 @@ void common_chat_peg_constructed_mapper::map(const common_peg_ast_node & node) {
     if (is_arg_close && current_tool) {
         if (needs_closing_quote) {
             current_tool->arguments += "\"";
+            needs_closing_quote = false;
         }
     }
 
@@ -109,6 +115,10 @@ void common_chat_peg_constructed_mapper::map(const common_peg_ast_node & node) {
     }
 
     if (is_tool_close && current_tool) {
+        if (needs_closing_quote) {
+            current_tool->arguments += "\"";
+            needs_closing_quote = false;
+        }
         current_tool->arguments += "}";
     }
 }

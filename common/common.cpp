@@ -1078,6 +1078,8 @@ struct common_init_result::impl {
     impl() = default;
     ~impl() = default;
 
+    // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
+
     llama_model_ptr   model;
     llama_context_ptr context;
 
@@ -1088,7 +1090,15 @@ struct common_init_result::impl {
 
 common_init_result::common_init_result(common_params & params) :
     pimpl(new impl{}) {
-    const auto mparams = common_model_params_to_llama(params);
+    auto mparams = common_model_params_to_llama(params);
+    auto cparams = common_context_params_to_llama(params);
+
+    if (params.fit_params) {
+        LOG_INF("%s: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on\n", __func__);
+        llama_params_fit(params.model.path.c_str(), &mparams, &cparams,
+            params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target, params.fit_params_min_ctx,
+            params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+    }
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
     if (model == NULL) {
@@ -1102,8 +1112,6 @@ common_init_result::common_init_result(common_params & params) :
     // updates params.sampling
     // TODO: fix naming
     common_init_sampler_from_model(model, params.sampling);
-
-    auto cparams = common_context_params_to_llama(params);
 
     if (params.sampling.ignore_eos && llama_vocab_eos(vocab) == LLAMA_TOKEN_NULL) {
         LOG_WRN("%s: warning: vocab does not have an EOS token, ignoring --ignore-eos\n", __func__);
@@ -1143,8 +1151,7 @@ common_init_result::common_init_result(common_params & params) :
 
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
-        LOG_ERR("%s: failed to create context with model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
-                __func__, params.model.path.c_str());
+        LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
         return;
     }
 
@@ -1176,15 +1183,13 @@ common_init_result_ptr common_init_from_params(common_params & params) {
 
     llama_model * model = res->model();
     if (model == NULL) {
-        LOG_ERR("%s: failed to load model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
-            __func__, params.model.path.c_str());
+        LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.path.c_str());
         return res;
     }
 
     llama_context * lctx = res->context();
     if (lctx == NULL) {
-        LOG_ERR("%s: failed to create context with model '%s', try reducing --n-gpu-layers if you're running out of VRAM\n",
-            __func__, params.model.path.c_str());
+        LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
         return res;
     }
 

@@ -88,8 +88,10 @@ add_library(llama
             models/llama-iswa.cpp
             models/llama.cpp
             models/mamba.cpp
+            models/mimo2-iswa.cpp
             models/minicpm3.cpp
             models/minimax-m2.cpp
+            models/modern-bert.cpp
             models/mpt.cpp
             models/nemotron-h.cpp
             models/nemotron.cpp

@@ -5,6 +5,8 @@
 #include "ggml.h"
 #include <limits> // For std::numeric_limits
 
+#define SYCL_GLU_BLOCK_SIZE 256
+
 template <typename T>
 T neg_infinity() {
     return -std::numeric_limits<T>::infinity();
@@ -40,6 +42,8 @@ void ggml_sycl_gelu(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 void ggml_sycl_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_gelu_quick(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+void ggml_sycl_swiglu_oai(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_gelu_erf(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 

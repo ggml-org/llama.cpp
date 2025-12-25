@@ -5,6 +5,7 @@
 #include <condition_variable>
 #include <deque>
 #include <mutex>
+#include <vector>
 #include <unordered_set>
 
 // struct for managing server tasks
@@ -12,7 +13,10 @@
 struct server_queue {
 private:
     int id = 0;
-    bool running;
+    bool running  = false;
+    bool sleeping = false;
+    bool req_stop_sleeping = false;
+    int64_t time_last_task = 0;
 
     // queues
     std::deque<server_task> queue_tasks;
@@ -24,6 +28,7 @@ private:
     // callback functions
     std::function<void(server_task &&)> callback_new_task;
     std::function<void(void)>           callback_update_slots;
+    std::function<void(bool)>           callback_sleeping_state;
 
 public:
     // Add a new task to the end of the queue
@@ -38,14 +43,17 @@ public:
     // Get the next id for creating a new task
     int get_new_id();
 
-    // Register function to process a new task
-    void on_new_task(std::function<void(server_task &&)> callback);
-
-    // Register the function to be called when all slots data is ready to be processed
-    void on_update_slots(std::function<void(void)> callback);
-
     // Call when the state of one slot is changed, it will move one task from deferred to main queue
     void pop_deferred_task();
+
+    // if sleeping, request exiting sleep state and wait until it is done
+    // returns immediately if not sleeping
+    void wait_until_no_sleep();
+
+    bool is_sleeping() {
+        std::unique_lock<std::mutex> lock(mutex_tasks);
+        return sleeping;
+    }
 
     // end the start_loop routine
     void terminate();
@@ -56,13 +64,41 @@ public:
      * - Process the task (i.e. maybe copy data into slot)
      * - Check if multitask is finished
      * - Update all slots
+     *
+     * Sleeping procedure (disabled if idle_sleep_ms < 0):
+     * - If there is no task after idle_sleep_ms, enter sleeping state
+     * - Call callback_sleeping_state(true)
+     * - Wait until req_stop_sleeping is set to true
+     * - Call callback_sleeping_state(false)
+     * - Exit sleeping state
      */
-    void start_loop();
+    void start_loop(int64_t idle_sleep_ms = -1);
 
     // for metrics
     size_t queue_tasks_deferred_size() {
         std::unique_lock<std::mutex> lock(mutex_tasks);
         return queue_tasks_deferred.size();
+    }
+
+    //
+    // Functions below are not thread-safe, must only be used before start_loop() is called
+    //
+
+    // Register function to process a new task
+    void on_new_task(std::function<void(server_task &&)> callback) {
+        callback_new_task = std::move(callback);
+    }
+
+    // Register the function to be called when all slots data is ready to be processed
+    void on_update_slots(std::function<void(void)> callback) {
+        callback_update_slots = std::move(callback);
+    }
+
+    // Register callback for sleeping state change
+    // note: when entering sleeping state, the callback is called AFTER sleeping is set to true
+    //       when leaving sleeping state, the callback is called BEFORE sleeping is set to false
+    void on_sleeping_state(std::function<void(bool)> callback) {
+        callback_sleeping_state = std::move(callback);
     }
 
 private:
@@ -138,8 +174,10 @@ struct server_response_reader {
     int get_new_id() {
         return queue_tasks.get_new_id();
     }
-    void post_task(server_task && task);
-    void post_tasks(std::vector<server_task> && tasks);
+
+    // if front = true, the task will be posted to the front of the queue (high priority)
+    void post_task(server_task && task, bool front = false);
+    void post_tasks(std::vector<server_task> && tasks, bool front = false);
     bool has_next() const;
 
     // return nullptr if should_stop() is true before receiving a result
