@@ -140,6 +140,10 @@ enum layer_fraction_t {
 };
 // this enum is only used in llama_params_fit_impl but needs to be defined outside of it to fix a Windows compilation issue
 
+class llama_params_fit_exception : public std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
 static void llama_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
@@ -276,28 +280,28 @@ static void llama_params_fit_impl(
     }
 
     if (mparams->n_gpu_layers != default_mparams.n_gpu_layers) {
-        throw std::runtime_error("n_gpu_layers already set by user to " + std::to_string(mparams->n_gpu_layers) + ", abort");
+        throw llama_params_fit_exception("n_gpu_layers already set by user to " + std::to_string(mparams->n_gpu_layers) + ", abort");
     }
     if (nd > 1) {
         if (!tensor_split) {
-            throw std::runtime_error("did not provide a buffer to write the tensor_split to, abort");
+            throw llama_params_fit_exception("did not provide a buffer to write the tensor_split to, abort");
         }
         if (mparams->tensor_split) {
             for (size_t id = 0; id < nd; id++) {
                 if (mparams->tensor_split[id] != 0.0f) {
-                    throw std::runtime_error("model_params::tensor_split already set by user, abort");
+                    throw llama_params_fit_exception("model_params::tensor_split already set by user, abort");
                 }
             }
         }
         if (mparams->split_mode == LLAMA_SPLIT_MODE_ROW) {
-            throw std::runtime_error("changing weight allocation for LLAMA_SPLIT_MODE_ROW not implemented, abort");
+            throw llama_params_fit_exception("changing weight allocation for LLAMA_SPLIT_MODE_ROW not implemented, abort");
         }
     }
     if (!tensor_buft_overrides) {
-        throw std::runtime_error("did not provide buffer to set tensor_buft_overrides, abort");
+        throw llama_params_fit_exception("did not provide buffer to set tensor_buft_overrides, abort");
     }
     if (mparams->tensor_buft_overrides && (mparams->tensor_buft_overrides->pattern || mparams->tensor_buft_overrides->buft)) {
-        throw std::runtime_error("model_params::tensor_buft_overrides already set by user, abort");
+        throw llama_params_fit_exception("model_params::tensor_buft_overrides already set by user, abort");
     }
 
     // step 3: iteratively fill the back to front with "dense" layers
@@ -380,7 +384,7 @@ static void llama_params_fit_impl(
                     tensor_buft_overrides[itbo].buft    = nullptr;
                     itbo++;
                     mparams.tensor_buft_overrides = tensor_buft_overrides;
-                    throw std::runtime_error("llama_params_fit_n_tensor_buft_overrides() == "
+                    throw llama_params_fit_exception("llama_params_fit_n_tensor_buft_overrides() == "
                         + std::to_string(ntbo) + " is insufficient for model\n");
                 }
                 tensor_buft_overrides[itbo].pattern = get_overflow_pattern(il, il == il0 ? ngl_per_device[id].overflow_type : LAYER_FRACTION_MOE);
@@ -678,22 +682,25 @@ static void llama_params_fit_impl(
     set_ngl_tensor_split_tbo(ngl_per_device, overflow_bufts, *mparams);
 }
 
-bool llama_params_fit(
+enum llama_params_fit_status llama_params_fit(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
         size_t margin_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
     const int64_t t0_us = llama_time_us();
-    bool ok = true;
+    llama_params_fit_status status = LLAMA_PARAMS_FIT_STATUS_SUCCESS;
     try {
         llama_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margin_s, n_ctx_min, log_level);
         LLAMA_LOG_INFO("%s: successfully fit params to free device memory\n", __func__);
-    } catch (const std::runtime_error & e) {
+    } catch (const llama_params_fit_exception & e) {
         LLAMA_LOG_WARN("%s: failed to fit params to free device memory: %s\n", __func__, e.what());
-        ok = false;
+        status = LLAMA_PARAMS_FIT_STATUS_FAILURE;
+    } catch (const std::runtime_error & e) {
+        LLAMA_LOG_ERROR("%s: encountered an error while trying to fit params to free device memory: %s\n", __func__, e.what());
+        status = LLAMA_PARAMS_FIT_STATUS_ERROR;
     }
     const int64_t t1_us = llama_time_us();
     LLAMA_LOG_INFO("%s: fitting params to free memory took %.2f seconds\n", __func__, (t1_us - t0_us) * 1e-6);
-    return ok;
+    return status;
 }
 
 struct llama_sampler_chain_params llama_sampler_chain_default_params() {

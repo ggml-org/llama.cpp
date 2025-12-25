@@ -467,10 +467,16 @@ extern "C" {
     // Frees all allocated memory
     LLAMA_API void llama_free(struct llama_context * ctx);
 
+    enum llama_params_fit_status {
+        LLAMA_PARAMS_FIT_STATUS_SUCCESS = 0, // found allocations that are projected to fit
+        LLAMA_PARAMS_FIT_STATUS_FAILURE = 1, // could not find allocations that are projected to fit
+        LLAMA_PARAMS_FIT_STATUS_ERROR   = 2, // a hard error occured, e.g. because no model could be found at the specified path
+    };
+
     // fits mparams and cparams to free device memory (assumes system memory is unlimited)
     // returns true if the parameters could be successfully modified to fit device memory
     // this function is NOT thread safe because it modifies the global llama logger state
-    LLAMA_API bool llama_params_fit(
+    LLAMA_API enum llama_params_fit_status llama_params_fit(
                                    const char   * path_model,
                     struct llama_model_params   * mparams,
                     struct llama_context_params * cparams,
