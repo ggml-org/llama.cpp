@@ -9,7 +9,7 @@
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
@@ -23,8 +23,8 @@
 	let isHomeRoute = $derived(page.route.id === '/');
 	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
 	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
-	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
-	let autoShowSidebarOnNewChat = $derived(config().autoShowSidebarOnNewChat);
+	let alwaysShowSidebarOnDesktop = $derived(settingsStore.getConfig('alwaysShowSidebarOnDesktop'));
+	let autoShowSidebarOnNewChat = $derived(settingsStore.getConfig('autoShowSidebarOnNewChat'));
 	let isMobile = new IsMobile();
 	let isDesktop = $derived(!isMobile.current);
 	let sidebarOpen = $state(false);
@@ -143,7 +143,7 @@
 
 	// Monitor API key changes and redirect to error page if removed or changed when required
 	$effect(() => {
-		const apiKey = config().apiKey;
+		const apiKey = settingsStore.getConfig('apiKey');
 
 		if (
 			(page.route.id === '/' || page.route.id === '/chat/[id]') &&

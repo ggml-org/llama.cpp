@@ -1,6 +1,6 @@
 import { DatabaseService, ChatService } from '$lib/services';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
-import { config } from '$lib/stores/settings.svelte';
+import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import {
 	selectedModelName,
@@ -301,7 +301,7 @@ class ChatStore {
 
 		const contextTotal = this.getContextTotal();
 		const currentConfig = config();
-		const outputTokensMax = currentConfig.max_tokens || -1;
+		const outputTokensMax = settingsStore.getConfig('max_tokens') || -1;
 
 		// Note: for timings data, the n_prompt does NOT include cache tokens
 		const contextUsed = promptTokens + cacheTokens + predictedTokens;
@@ -659,8 +659,7 @@ class ChatStore {
 		try {
 			if (isNewConversation) {
 				const rootId = await DatabaseService.createRootMessage(currentConv.id);
-				const currentConfig = config();
-				const systemPrompt = currentConfig.systemMessage?.toString().trim();
+				const systemPrompt = settingsStore.getConfig('systemMessage')?.toString().trim();
 
 				if (systemPrompt) {
 					const systemMessage = await DatabaseService.createSystemMessage(
@@ -1426,13 +1425,14 @@ class ChatStore {
 		}
 
 		// Config options needed by ChatService
-		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
+		if (settingsStore.getConfig('systemMessage'))
+			apiOptions.systemMessage = settingsStore.getConfig('systemMessage');
 		if (currentConfig.disableReasoningFormat) apiOptions.disableReasoningFormat = true;
 
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);
-		if (hasValue(currentConfig.max_tokens))
-			apiOptions.max_tokens = Number(currentConfig.max_tokens);
+		if (hasValue(settingsStore.getConfig('max_tokens')))
+			apiOptions.max_tokens = Number(settingsStore.getConfig('max_tokens'));
 		if (hasValue(currentConfig.dynatemp_range))
 			apiOptions.dynatemp_range = Number(currentConfig.dynatemp_range);
 		if (hasValue(currentConfig.dynatemp_exponent))

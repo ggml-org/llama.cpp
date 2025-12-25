@@ -4,7 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { MarkdownContent } from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 
 	interface Props {
@@ -59,7 +59,6 @@
 	let isExpanded = $state(false);
 	let contentHeight = $state(0);
 	const MAX_HEIGHT = 200; // pixels
-	const currentConfig = config();
 
 	let showExpandButton = $derived(contentHeight > MAX_HEIGHT);
 
@@ -143,7 +142,7 @@
 								? `max-height: ${MAX_HEIGHT}px;`
 								: 'max-height: none;'}
 						>
-							{#if currentConfig.renderUserContentAsMarkdown}
+							{#if settingsStore.getConfig('renderUserContentAsMarkdown')}
 								<div bind:this={messageElement} class="text-md {isExpanded ? 'cursor-text' : ''}">
 									<MarkdownContent class="markdown-system-content" content={message.content} />
 								</div>
