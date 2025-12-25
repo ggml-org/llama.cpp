@@ -127,6 +127,17 @@ struct ifairy_lut_extra {
 ## 6. 性能提升规划（主线，必须把 tok/s 拉上去）
 
 > 2025-12-18 更新：基于《IFAIRY_LUT_PERF_ANALYSIS_20251218.md》的复盘，decode 场景热点大致为 `ggml_ifairy_lut_qgemm_ex ≈ 53~55%` + `ggml_graph_compute_thread ≈ 30%`。因此主线需要同时推进：压 `qgemm_ex` 单位成本 + 处理同步/调度开销（否则上限会被框架吞掉）。
+>
+> 2025-12-26 更新：`GGML_IFAIRY_LUT_KERNEL=merged64` 已可用，且在当前 bench 口径下 decode（`tg256`）相对 `auto` 有明显提升；下一步应先 **复采样 profile（merged64）**，再决定是继续压 `qgemm_ex` 还是转向 6.1/6.3（很可能“算子更快后框架占比更高”）。
+
+### 6.0.2 当前优先级（建议）
+
+- **P0：decode / `N==1`：`merged64` 优先**：继续把 `merged64` 的收益“稳定化 + 可复现化”，并用 profile 验证下一瓶颈是否已从 `qgemm_ex` 转移。
+- **P1：decode：继续推进 6.1（同步/调度）**：当 `qgemm_ex` 变快后，`ggml_graph_compute_thread` 更容易成为上限（否则 tok/s 提升会被框架吞掉）。
+- **P2：prefill：推进 6.4（BK/BM/FULLACC）**：`tbl64/merged64` 当前禁用 BK tiling；若要在 prefill 场景受益，需要把 tiling 做成“可控且不变慢”的版本。
+- **P3：可选研究项（非默认路径）**：
+  - `tbl64`：目前是 decode-first 候选布局，但需要专用 NEON 内核/更完善的对照与 A/B；优先级低于 `merged64`。
+  - `compact2`：已出现明确回退，先冻结（见 6.2 归档），除非有新的 profile 证据与构表成本突破。
 
 ### 6.0 复现与验收口径（统一）
 
@@ -211,18 +222,27 @@ struct ifairy_lut_extra {
 - decode 基准命令下 `eval tok/s` 相对当前基线提升 ≥ 10%（同一机器/同一冷却口径/同一 seed）。
 - profile 中 `ggml_graph_compute_thread` 占比下降至少 5 p.p.（例如从 ~30% → ≤25%），且 `eval tok/s` 不回退。
 
-### 6.2（decode 优先）继续压 `ggml_ifairy_lut_qgemm_ex` 热点（`compact` 优先）
+### 6.2（decode 优先）继续压 `ggml_ifairy_lut_qgemm_ex` 热点（`merged64` 优先，`compact` 次之）
 
-目标：把 decode 常见的 `N≈1` 进一步提速，并让 `compact` 在 Apple Silicon 上稳定胜出。
+目标：把 decode 常见的 `N≈1` 进一步提速；当前优先把 `merged64` 的 tok/s 拉上去并稳定复现，其次再继续压 `compact`（作为小工作集/低构表成本路线的长期选项）。
 
-（最新 profile：`sample` 10s，`llama-cli` decode，Apple M4 / 4 threads / `GGML_IFAIRY_LUT_LAYOUT=compact`）
+（下一步 profile 建议：`sample` 10s，`llama-cli` decode，Apple M4 / 4 threads / `GGML_IFAIRY_LUT_KERNEL=merged64`）
 
-- top-of-stack（两次采样量级一致）：`ggml_ifairy_lut_qgemm_ex` ≈ 24k samples（第一热点），`ggml_graph_compute_thread` ≈ 5~6k samples（第二热点）。
-- 额外观察：`ggml_ifairy_lut_layout_from_env()` / `ggml_ifairy_lut_can_mul_mat()` 仍在热路径调用 `getenv`，多线程下可见 `__findenv_locked/_os_unfair_lock_lock_slow/__ulock_wait2` 的锁竞争；应优先消掉这类“每 token 每线程重复”的小开销。
+建议动作（按优先级）：
+
+- P0：**复采样 profile（merged64）**，确认新 top1/top2 热点（`qgemm_ex` vs `graph_compute_thread` vs `preprocess_ex`）。
+- P1：**决定是否“提升 auto 策略”**：若 `merged64` 在目标机器/形状上稳定胜出，考虑在 `GGML_IFAIRY_LUT_LAYOUT=auto` 且 `KERNEL=auto` 的 decode (`N==1`) 场景默认优先 `merged64`（必须保留 `GGML_IFAIRY_LUT_LAYOUT`/`KERNEL` 一键回退与 A/B 复现口径）。
+- P2：若 profile 显示 `preprocess_ex` 上升为新瓶颈：优先优化 `merged64` 的构表路径（避免把收益“搬家”到 preprocess）。
+- P3：若 decode 常见 `N==2`：考虑补一个小 `N` 专用路径（仍需 env gating，避免形状模板爆炸）。
+
+- 复采样关注点：
+  - `ggml_ifairy_lut_qgemm_ex` vs `ggml_graph_compute_thread` 的占比变化（判断下一步主攻方向）；
+  - `ggml_ifairy_lut_preprocess_ex` 是否上升为新热点（`merged64`/`tbl64` 构表更大，可能把热点“搬家”到 preprocess）；
+  - 是否仍有 `getenv`/锁竞争类“每 token 每线程重复”开销（原则：继续把 env 分支留在 graph 级缓存，不要回流到热路径）。
 
 （精简版）
 
-- 结构性：优先降低 `compact` 每 group 的查表/地址计算/依赖链开销（以 profile 证据驱动）。
+- 结构性：优先降低 `merged64` 每 group 的查表/地址计算/依赖链开销（以 profile 证据驱动）；`compact` 作为次优先的长期路线保留。
 - 优先：把 LUT 的 env 分支从 `qgemm_ex/preprocess_ex` 热路径移除（尤其是 `GGML_IFAIRY_LUT_LAYOUT` / `GGML_IFAIRY_LUT_KERNEL`）：
   - 由 `ggml_graph_compute()` 更新的 `threadpool->ifairy_lut_cfg` 一次性决策 layout/knobs；
   - `ggml-cpu.c` 直接调用 layout 专用实现（legacy/compact/tbl64/merged64），避免 `layout_from_env() -> getenv()` 在多线程内反复触发全局锁。
@@ -237,7 +257,7 @@ struct ifairy_lut_extra {
 - ✅ `sdot`（dotprod）实验内核（仅 `N==1`）：`GGML_IFAIRY_LUT_KERNEL=sdot`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ 去掉 `layout_from_env()->getenv()` 热路径锁竞争：新增/暴露 legacy/compact 专用 entrypoint，并在 `ggml/src/ggml-cpu/ggml-cpu.c` 按 `threadpool->ifairy_lut_cfg` 直接 dispatch；保留 `*_from_env()` 供测试/兼容路径使用（`ggml/src/ggml-ifairy-lut.cpp`, `ggml/src/ggml-ifairy-lut-qgemm.cpp`, `ggml/src/ggml-ifairy-lut-preprocess.cpp`）。
 - ✅ `GGML_IFAIRY_LUT_KERNEL=tbl|merged64`：已实现（`ggml/src/ggml-ifairy-lut-qgemm.cpp` + `ggml/src/ggml-ifairy-lut-preprocess.cpp` + `ggml/src/ggml-ifairy-lut.cpp` + `ggml/src/ggml-cpu/ggml-cpu.c`）；默认 `auto` 不启用，`N==1` 下可通过 `GGML_IFAIRY_LUT_KERNEL=tbl|merged64` 触发（严格模式强制回退到 `legacy`）。
-- TODO `compact2`：曾作为 2-lookups 方向尝试，但未合入当前实现（代码中没有该 layout 分支）。
+- P3（冻结）`compact2`：2-lookups 方向曾尝试但出现明确回退，先不推进（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 失败案例）。
 
 <details>
 <summary>展开：详细任务拆解与历史记录（归档）</summary>
@@ -246,10 +266,13 @@ struct ifairy_lut_extra {
 
 任务清单（按收益预期排序）：
 
-- **减少 3 次 position 查表的结构性开销（P0，优先探索）**：当前 `compact` 每 group 必做 3 次 position 查表 + widen + add，指令密度高且依赖链长；若能把 “3 次” 减到 “2 次”，通常比微调 unroll/prefetch 更可能拉开稳定差距。
+- **减少查表与依赖链的结构性开销（P0）**：
+  - 现状：`merged64` 已把“每 group 的查表”降低为一次 32-bit load（pattern → `{ac,ad,bc,bd}`），在当前 bench 口径下对 decode 更有优势；下一步优先围绕 `merged64` 做 profile 驱动的 hot-path 精简。
+  - 备选：`compact` 仍是“工作集更小”的路线，但需要在不增加构表成本/写带宽的前提下再进一步降低每 group 的指令开销。
   - 方向 A：`(c0,c1)` 预合并表（16 组合）+ `pos2`（4 组合），将每 group 查表从 3 次降到 2 次（注意 preprocess 成本与 cache footprint 平衡）。
-    - 进展：已尝试 `GGML_IFAIRY_LUT_LAYOUT=compact2`（pos0+pos1 合并为 16-way int16 表），在当前实现与机器上出现明显 tok/s 回退（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 失败案例），暂不继续扩面；后续只在 preprocess 能做到“更便宜/不增加写带宽”时再考虑重启。
-  - 方向 B：小型 64-pattern 表（int8/小 int16），把查表变回“一次读 4ch”的形态，同时尽量保持比 legacy 更小的工作集。
+    - 进展：已尝试 `GGML_IFAIRY_LUT_LAYOUT=compact2`（pos0+pos1 合并为 16-way int16 表），在当前实现与机器上出现明显 tok/s 回退，优先级下调为 P3（冻结）。
+  - 方向 B：小型 64-pattern 表（int8/小 int16），把查表变回“一次读 4ch”的形态。
+    - 进展：已落地 `tbl64/merged64`；其中 `merged64` 作为当前 decode-first 主线，`tbl64` 后续若要推进需要补齐专用 NEON 内核与对照数据。
 - **unroll + 多累加器**：对 group 循环做 2/4-way unroll，采用 `isum0/isum1` 交错累加，减少 load-use 依赖链。
   - 经验：在 Apple M4 上尝试把 `compact` 的 `N==1` fast-path 从 4-way 收敛到 2-way 会明显变慢（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 的失败案例记录）；不要在没有 A/B 的情况下改 unroll。
   - 建议：保留 perf-safe A/B 开关 `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`（默认 `4`），避免为了试 unroll 反复改代码并引入回归点。
@@ -275,7 +298,7 @@ struct ifairy_lut_extra {
 建议动作：
 
 - 先用 profile/日志收集最热 `(M,K,N)`（至少区分 prefill vs decode），只对 top1~2 形状做专用化；其余仍走通用 LUT。
-- 在引入更激进 fast-path 前，先落地 6.2 的 “hot-path 去 getenv/dispatch”（否则可能出现“算子更快但锁竞争/调度把收益吞掉”）。
+- 在引入更激进 fast-path 前，先确保 6.2 的 “hot-path 去 getenv/dispatch” 已完成，并优先在 `GGML_IFAIRY_LUT_KERNEL=merged64` 下复采样确认下一瓶颈（否则容易出现“算子更快但锁竞争/调度把收益吞掉”）。
 - fast-path 必须满足：`strict` 下可回退、可按 env 完全关闭、并且不会把代码拆成“形状模板爆炸”。
 
 实现进度（对照代码）：
@@ -328,9 +351,9 @@ struct ifairy_lut_extra {
 - 在 6.1/6.2/6.4 有明确进展前，不建议依赖 `BK/BM` 调参提升吞吐。
 - 统一用 `scripts/ifairy_lut_sweep.sh` 做 sweep，固定 seed/prompt/token，并区分 decode/prefill 口径输出与留档（避免“只看一个 tok/s 指标”误判）。
 
-### 6.8 候选布局/内核路线图（TBL / merged64 等）
+### 6.8 候选布局/内核路线图（tbl64 / 批量索引解码 / 更激进减同步 等）
 
-候选方案（`tbl64` / `merged64` / 批量索引解码 / 减少 barrier 等）的落地计划与验收口径已迁移到专门文档：`IFAIRY_ARM_3W_LUT_ROADMAP.md`。
+候选方案（例如 `tbl64` 的专用 NEON 内核、批量索引解码、进一步减少 barrier 等）的落地计划与验收口径见：`IFAIRY_ARM_3W_LUT_ROADMAP.md`。
 
 ## 7. 工程地基（并行推进，避免性能“回归/难复现”）
 
