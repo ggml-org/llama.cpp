@@ -43,6 +43,7 @@ export interface SettingsChatServiceOptions {
 	dry_penalty_last_n?: number;
 	// Sampler configuration
 	samplers?: string | string[];
+	backend_sampling?: boolean;
 	// Custom parameters
 	custom?: string;
 	timings_per_token?: boolean;
