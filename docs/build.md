@@ -707,31 +707,41 @@ Follow the instructions below to install OpenVINO runtime and build llama.cpp wi
 
 - Linux or Windows system with Intel hardware (CPU, GPU, or NPU)
 - **For Intel GPU or NPU Usage**: Install the appropriate hardware drivers for your Intel GPU or NPU. For detailed instructions, see: [Additional Configurations for Hardware Acceleration](https://docs.openvino.ai/2025/get-started/install-openvino/configurations.html).
-- Git, CMake, and Ninja software tools are needed for building.
-```bash
-  sudo apt-get update
-  sudo apt-get install -y build-essential libcurl4-openssl-dev libtbb12 cmake ninja-build python3-pip curl wget tar
-```
+
+- **Linux:**
+    - Git, CMake, and Ninja software tools are needed for building.
+    ```bash
+      sudo apt-get update
+      sudo apt-get install -y build-essential libcurl4-openssl-dev libtbb12 cmake ninja-build python3-pip curl wget tar
+    ```
+
+- **Windows:**
+    - Download Microsoft.VisualStudio.2022.BuildTools [Visual_Studio_Build_Tools]https://aka.ms/vs/17/release/vs_BuildTools.exe Select "Desktop development with C++" under workloads.
+    - Install git
+    - Use "x64 Native Tools Command Prompt" for Build
 
 ### 1. Install OpenVINO Runtime
 
 - Follow the guide to install OpenVINO Runtime from an archive file: [Linux](https://docs.openvino.ai/2025/get-started/install-openvino/install-openvino-archive-linux.html) | [Windows](https://docs.openvino.ai/2025/get-started/install-openvino/install-openvino-archive-windows.html)
 
-<details>
-<summary>📦 Click to expand OpenVINO 2025.3 installation from an archive file on Ubuntu</summary>
-<br>
+- **Linux:**
 
-```bash
-wget https://raw.githubusercontent.com/ravi9/misc-scripts/main/openvino/ov-archive-install/install-openvino-from-archive.sh
-chmod +x install-openvino-from-archive.sh
-./install-openvino-from-archive.sh
-```
-</details>
+    <details>
+    <summary>📦 Click to expand OpenVINO 2025.3 installation from an archive file on Ubuntu</summary>
+    <br>
+        
+    ```bash
+    wget https://raw.githubusercontent.com/ravi9/misc-scripts/main/openvino/ov-archive-install/install-openvino-from-archive.sh
+    chmod +x install-openvino-from-archive.sh
+    ./install-openvino-from-archive.sh
+    ```
+    </details>
 
-- Verify OpenVINO is initialized properly
-```bash
-echo $OpenVINO_DIR
-```
+    - Verify OpenVINO is initialized properly
+        - **Linux:**
+            ```bash
+            echo $OpenVINO_DIR
+            ```
 
 ### 2. Build llama.cpp with OpenVINO Backend
 
@@ -741,12 +751,27 @@ Clone the OpenVINO-enabled llama.cpp fork and build it:
 git clone https://github.com/ravi9/llama.cpp.git
 cd llama.cpp
 git switch dev_backend_openvino
-
-# Build with OpenVINO support
-source /opt/intel/openvino/setupvars.sh
-cmake -B build/ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF
-cmake --build build/ReleaseOV --config Release -j $(nproc)
 ```
+
+- **Linux:**
+    ```bash
+    # Build with OpenVINO support
+    source /opt/intel/openvino/setupvars.sh
+    cmake -B build/ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF
+    cmake --build build/ReleaseOV --config Release -j $(nproc)
+    ```
+
+- **Windows:** 
+    ```bash
+    # Build with OpenVINO support
+    "C:\Program Files (x86)\Intel\openvino_2025.3.0\setupvars.bat"
+    cmake -B build/ReleaseOV -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF -DLLAMA_CURL=OFF
+    cmake --build build\ReleaseOV --config Release
+    ```
+    - For faster compilation, add the -- /m argument to run multiple jobs in parallel with as many CPU cores available. 
+    ```bash
+    cmake --build build\ReleaseOV --config Release -- /m
+    ```
 
 ### 3. Download Sample Model
 
