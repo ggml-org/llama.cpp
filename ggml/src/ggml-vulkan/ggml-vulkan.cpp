@@ -1565,7 +1565,7 @@ class vk_perf_logger {
                 total_op_times += time;
             }
             std::cerr << t.first << ": " << t.second.size() << " x " << (total_op_times / t.second.size() / 1000.0)
-                      << " us";
+                      << " us = " << (total_op_times / 1000.0) << " us";
 
             // If we have as many flops entries as timing entries for the op, then compute and log the flops/S.
             auto it = flops.find(t.first);
@@ -2830,9 +2830,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
         s_mmq_wg_denoms_k = { 32,  64,  1 };
 
         // spec constants and tile sizes for quant matmul_id
-        l_warptile_mmqid = { 256, 128, 128, 16, 1, device->subgroup_size };
-        m_warptile_mmqid = { 256, 128, 64, 16, 0, device->subgroup_size };
-        s_warptile_mmqid = { 256, 128, 64, 16, 0, device->subgroup_size };
+        l_warptile_mmqid = { 256, 128, 128, 32, 1, device->subgroup_size };
+        m_warptile_mmqid = { 256, 128, 64, 32, 0, device->subgroup_size };
+        s_warptile_mmqid = { 256, 128, 64, 32, 0, device->subgroup_size };
         l_mmqid_wg_denoms = { 128, 128, 1 };
         m_mmqid_wg_denoms = { 128, 64, 1 };
         s_mmqid_wg_denoms = { 128, 64, 1 };
