@@ -1007,8 +1007,10 @@ private:
         return ret;
     }
 
-    void clear_slot(server_slot & slot) const {
-        GGML_ASSERT(!slot.is_processing());
+    void clear_slot(server_slot & slot, bool allow_processing = false) const {
+        if (!allow_processing) {
+            GGML_ASSERT(!slot.is_processing());
+        }
 
         SLT_WRN(slot, "clearing slot with %zu tokens\n", slot.prompt.tokens.size());
 
@@ -2336,7 +2338,7 @@ private:
                     if (!llama_memory_seq_rm(llama_get_memory(ctx), slot.id, p0, -1)) {
                         SLT_WRN(slot, "failed to truncate tokens with position >= %d - clearing the memory\n", p0);
 
-                        clear_slot(slot);
+                        clear_slot(slot, /*allow_processing=*/true);
 
                         // there is no common part left
                         slot.n_prompt_tokens_cache = 0;
