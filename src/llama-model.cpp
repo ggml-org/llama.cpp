@@ -2256,13 +2256,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ROPE_DIMENSION_COUNT,        hparams.n_rot, false);
                 
                 // KDA (Delta Attention) parameters
-                // derive head dim from embedding/head counts when available; fall back to 128 for Kimi :)
-                const uint32_t derived_kda_head_dim = (hparams.n_head() > 0 && hparams.n_embd % hparams.n_head() == 0)
-                    ? hparams.n_embd / hparams.n_head()
-                    : 0;
-                hparams.kda_head_dim = derived_kda_head_dim != 0 ? derived_kda_head_dim : 128;
+                hparams.kda_head_dim = 128;
 
-                //use GGUF ssm conv kernel if present (Kimi short conv), default to 4.
+                // use GGUF ssm conv kernel if present (Kimi short conv), default to 4.
                 ml.get_key(LLM_KV_SSM_CONV_KERNEL, hparams.ssm_d_conv, false);
                 if (hparams.ssm_d_conv == 0) {
                     hparams.ssm_d_conv = 4;
