@@ -1018,6 +1018,15 @@ static void test_template_output_parsers() {
                 "<function=special_function>{\"arg1\": 1}</function>",
                 /* is_partial= */ false,
                 {COMMON_CHAT_FORMAT_HERMES_2_PRO}));
+        // Test <function=name> with whitespace before JSON (issue: model outputs newline+spaces before JSON)
+        assert_msg_equals(
+            message_assist_call,
+            common_chat_parse(
+                "<function=special_function>\n"
+                "     {\"arg1\": 1}\n"
+                "</function>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_HERMES_2_PRO}));
         assert_msg_equals(
             message_assist_call,
             common_chat_parse(
