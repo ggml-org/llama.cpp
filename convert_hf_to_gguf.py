@@ -1062,6 +1062,9 @@ class TextModel(ModelBase):
         if chkhsh == "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273":
             # ref: https://huggingface.co/alvarobartt/grok-2-tokenizer
             res = "grok-2"
+        if chkhsh == "a77756c3cc91392f442c5b99e414be8020d53ae31460de90754b4fcf5cc84a2d":
+            # ref: https://huggingface.co/MiniMaxAI/MiniMax-M2
+            res = "minimax-m2"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -1224,12 +1227,6 @@ class TextModel(ModelBase):
         if chkhsh == "53e325976a6e142379c19b09afcae354f2f496f147afa8f9e189a33fe4e3024e":
             # ref: https://huggingface.co/ibm-granite/granite-docling-258M
             res = "granite-docling"
-        if chkhsh == "f4f37b6c8eb9ea29b3eac6bb8c8487c5ab7885f8d8022e67edc1c68ce8403e95":
-            # ref: https://huggingface.co/MiniMaxAI/MiniMax-M2
-            res = "minimax-m2"
-        if chkhsh == "a77756c3cc91392f442c5b99e414be8020d53ae31460de90754b4fcf5cc84a2d":
-            # ref: https://huggingface.co/MiniMaxAI/MiniMax-M2.1
-            res = "minimax-m2"
         if chkhsh == "4a2e2abae11ca2b86d570fc5b44be4d5eb5e72cc8f22dd136a94b37da83ab665":
             # ref: https://huggingface.co/KORMo-Team/KORMo-tokenizer
             res = "kormo"
