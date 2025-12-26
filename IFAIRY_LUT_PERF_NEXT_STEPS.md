@@ -4,19 +4,17 @@
 
 ## 1. 当前性能现状（基于最新 bench 记录）
 
-### 1.1 最新 tok/s 记录（2617cc59，Apple M4，4 threads）
+### 1.1 最新 tok/s 记录（95c5bf1f+dirty，Apple M4，4 threads）
 
-| Kernel | pp128 (tok/s) | tg256 (tok/s) | 备注 |
-|--------|---------------|---------------|------|
-| **merged64** | 4.39 | **24.75** | 当前 decode 最优 |
-| auto | 4.33 | 17.75 | 默认策略 |
-| tbl | 4.38 | 7.04 | 明显落后 |
+| Layout/KERNEL | pp128 (tok/s) | tg256 (tok/s) | 备注 |
+|--------------|---------------|---------------|------|
+| `auto`（当前默认偏向 `merged64`） | 29.47 | 24.36 | `/tmp/ifairy_bench_20251226T174919Z_auto_default.jsonl` |
 
 ### 1.2 关键观察
 
-1. **Decode 场景（tg256）**：`merged64` 相对 `auto` 提升 **+39%**（24.75 vs 17.75），收益显著
-2. **Prefill 场景（pp128）**：所有 kernel 都在 ~4 tok/s 附近，明显是瓶颈
-3. **Auto 策略问题**：当前 `auto` 在 `N==1` 时未自动选择 `merged64`，需要显式设置 `KERNEL=merged64`
+1. **auto 默认策略已修正**：在 `GGML_IFAIRY_LUT_LAYOUT=auto` 且 `KERNEL=auto` 时，默认优先走 `merged64`（覆盖 prefill+decode）。
+2. **Prefill 瓶颈已解除**：在当前模型/机器上，prefill 不再停留在 ~4 tok/s（旧瓶颈来自 `auto` 仍走 `legacy`）。
+3. **BK tiling 对该模型可能是负收益**：`K/QK_K` blocks 较少时（本模型 `K=1536` => 6 blocks），`BK_BLOCKS=1` 会引入多次 `preprocess+barrier`，需要以 A/B 结果为准，不应默认开启。
 
 ## 2. 优先级排序（建议）
 
@@ -24,35 +22,35 @@
 
 | 优先级 | 任务 | 预期收益 | 风险 |
 |--------|------|----------|------|
-| **P0** | 让 auto 策略在 decode 场景默认选 merged64 | +39% decode tok/s | 低（配置变更） |
+| **P0** | ✅ auto 默认偏向 merged64（prefill+decode） | 已显著提升 pp/tg | 低（策略变更） |
 | **P1** | 复采样 profile（merged64），确认新热点 | 定向优化基础 | 无（调研） |
 | **P2** | merged64 qgemm 热路径微优化 | +5~15% | 中等（需 A/B） |
-| **P3** | prefill 场景：启用 merged64 的 BK tiling | 提升 prefill tok/s | 高（需验证 correctness） |
+| **P3** | prefill 场景：评估 BK tiling 的收益窗口 | 仅在大 K/多 blocks 可能收益 | 中（需验证 correctness + A/B） |
 | **P4** | 减少框架开销（barrier/调度） | +5~10% | 中等 |
 
 ## 3. 具体优化点与实现方案
 
-### 3.1 【P0】提升 auto 策略：decode 场景默认 merged64
+### 3.1 【P0】提升 auto 策略：默认 merged64（prefill+decode）
 
 **现状问题**：
 - 代码位置：`ggml/src/ggml-cpu/ggml-cpu.c:1546-1577`
-- 当前逻辑：`auto` + `N==1` 时，只有显式设置 `KERNEL=merged64` 才会走 merged64
-- 实际表现：merged64 比 auto 快 39%，但用户必须手动设置 env
+- 当前逻辑（已修正）：`auto` + `KERNEL=auto` 默认优先 `merged64`（不再要求用户显式设置 env）
 
-**建议改动**：
+**已落地改动要点**：
 
 ```c
 // ggml/src/ggml-cpu/ggml-cpu.c 约 1546 行
 if (cfg->lut_layout_auto) {
-    layout = GGML_IFAIRY_LUT_LAYOUT_LEGACY;  // prefill 默认
-    if (N == 1) {
-        // P0: decode 场景默认优先 merged64
-        if (cfg->lut_kernel == GGML_IFAIRY_LUT_KERNEL_AUTO) {
-            layout = GGML_IFAIRY_LUT_LAYOUT_MERGED64;  // NEW: auto 时优先 merged64
-        } else if (cfg->lut_kernel == GGML_IFAIRY_LUT_KERNEL_TBL) {
+    layout = GGML_IFAIRY_LUT_LAYOUT_LEGACY;
+
+    // NEW: auto/merged64 -> 默认优先 merged64（prefill+decode）
+    if (cfg->lut_kernel == GGML_IFAIRY_LUT_KERNEL_AUTO ||
+        cfg->lut_kernel == GGML_IFAIRY_LUT_KERNEL_MERGED64) {
+        layout = GGML_IFAIRY_LUT_LAYOUT_MERGED64;
+    } else if (N == 1) {
+        // decode-only overrides
+        if (cfg->lut_kernel == GGML_IFAIRY_LUT_KERNEL_TBL) {
             layout = GGML_IFAIRY_LUT_LAYOUT_TBL64;
-        } else if (cfg->lut_kernel == GGML_IFAIRY_LUT_KERNEL_MERGED64) {
-            layout = GGML_IFAIRY_LUT_LAYOUT_MERGED64;
         } else if (cfg->lut_kernel == GGML_IFAIRY_LUT_KERNEL_SDOT) {
             layout = GGML_IFAIRY_LUT_LAYOUT_COMPACT;
         }
@@ -61,8 +59,8 @@ if (cfg->lut_layout_auto) {
 ```
 
 **验收**：
-- `GGML_IFAIRY_LUT=1`（无需显式设置 KERNEL）下，decode tok/s 达到 ~24 tok/s
-- 必须保留 `GGML_IFAIRY_LUT_KERNEL=legacy/compact/...` 回退机制
+- `GGML_IFAIRY_LUT=1`（无需显式设置 `KERNEL`/`LAYOUT`）下，pp/tg tok/s 与 merged64 基线对齐（见 1.1）。
+- 回退：`GGML_IFAIRY_LUT_LAYOUT=legacy|compact` 可一键回退；`KERNEL=tbl|sdot` 仍作为 decode-only A/B 选项。
 
 **风险**：低。仅配置策略变更，不改热路径逻辑。
 
@@ -70,22 +68,40 @@ if (cfg->lut_layout_auto) {
 
 ### 3.2 【P1】复采样 profile（merged64），确认新热点
 
-**目的**：merged64 加速后，`qgemm_ex` 占比可能已下降，需确认下一瓶颈是否转移到 `preprocess_ex` 或 `graph_compute_thread`。
+**目的**：以当前默认策略（`auto → merged64`）复采样，确认默认路径的 top1/top2 热点，避免“优化的不是默认路径”。
 
-**建议命令**（Xcode Instruments / sample）：
+**建议命令**（`xctrace` Time Profiler）：
 
 ```bash
-GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_KERNEL=merged64 \
-./build-rel/bin/llama-cli -m models/Fairy-plus-minus-i-700M/ifairy.gguf \
-  --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 128 -no-cnv
+# decode-only（N==1）
+xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_decode.trace \
+  --env GGML_IFAIRY_LUT=1 \
+  --env GGML_IFAIRY_LUT_BK_BLOCKS=0 \
+  --env GGML_IFAIRY_LUT_BM=0 \
+  --env GGML_IFAIRY_LUT_FULLACC=0 \
+  --launch -- ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf \
+    -p 0 -n 256 -b 2048 -ub 512 -t 4 -ngl 0 -dev none -r 1 --no-warmup -o jsonl
+
+# prefill-only（N>1）
+xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_prefill.trace \
+  --env GGML_IFAIRY_LUT=1 \
+  --env GGML_IFAIRY_LUT_BK_BLOCKS=0 \
+  --env GGML_IFAIRY_LUT_BM=0 \
+  --env GGML_IFAIRY_LUT_FULLACC=0 \
+  --launch -- ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf \
+    -p 128 -n 0 -b 2048 -ub 512 -t 4 -ngl 0 -dev none -r 1 --no-warmup -o jsonl
 ```
 
 **关注指标**：
-- `ggml_ifairy_lut_qgemm_ex_merged64` 自耗时占比（目标 < 50%）
-- `ggml_ifairy_lut_preprocess_ex_merged64` 是否上升为新热点
-- `ggml_graph_compute_thread` 是否仍占 ~30%
+- `ggml_ifairy_lut_qgemm_ex_merged64` 自耗时占比（top1 是否仍占绝对大头）
+- `ggml_ifairy_3w_encode` / `ggml_ifairy_lut_preprocess_ex_merged64` 是否抬头成为 top2/top3
+- `ggml_graph_compute_thread`（leaf）是否异常偏高（提示调度/同步/碎 kernel 问题）
 
-**下一步**：根据 profile 结果决定继续压 qgemm 还是转向 preprocess/框架开销。
+**采样结果（2025-12-26，本机，4 threads，leaf CPU time share）**：
+- decode-only（`-p 0 -n 256`，`avg_ts≈25.12 tok/s`）：`ggml_ifairy_lut_qgemm_ex_merged64` ~73%，`ggml_graph_compute_thread` ~13%，`ggml_vec_dot_f16` ~8%，`ggml_ifairy_3w_encode` ~2%，`ggml_ifairy_lut_preprocess_ex_merged64` ~1%。
+- prefill-only（`-p 128 -n 0`，`avg_ts≈30.21 tok/s`）：`ggml_ifairy_lut_qgemm_ex_merged64` ~82%，`ggml_ifairy_3w_encode` ~6%，`ggml_graph_compute_thread` ~5%，`ggml_graph_compute_secondary_thread` ~3%，`ggml_ifairy_lut_preprocess_ex_merged64` ~2%。
+
+**下一步**：现阶段主矛盾仍然是 `qgemm_ex_merged64`，优先推进 3.3（P2）的 qgemm 热路径微优化；`preprocess_ex` 暂不是瓶颈，不要把收益“搬家”到 preprocess。
 
 ---
 
@@ -145,29 +161,27 @@ for (; gi + 8 <= groups_per_block; gi += 8) {
 ### 3.4 【P3】Prefill 场景：启用 merged64 的 BK tiling
 
 **现状问题**：
-- 代码位置：`ggml/src/ggml-cpu/ggml-cpu.c:1582-1586`
-- 当前逻辑：`tbl64/merged64` 强制 `tile_blocks = 0`，即禁用 BK tiling
-- 影响：prefill（大 K）无法受益于 tiling 的 cache 友好性
+- 代码位置：`ggml/src/ggml-cpu/ggml-cpu.c`（tile_blocks 决策处）
+- 当前逻辑（已更新）：`tbl64` 仍禁用 tiling；`merged64` 仅在 decode（`N==1`）禁用 tiling，prefill（`N>1`）允许启用 `BK_BLOCKS` 做 A/B。
+- 注意：对 blocks 较少的模型（例如 `K=1536 => 6 blocks`），`BK_BLOCKS=1` 会把一次 preprocess 拆成多次 `preprocess+barrier`，很可能是负收益；不应默认开启，必须以 A/B 记录为准。
 
 ```c
-// 当前代码
-if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64 || layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64) {
-    tile_blocks = 0;  // force no tiling for now
+// 当前代码（要点）
+if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64 || (layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64 && N == 1)) {
+    tile_blocks = 0;
 }
 ```
 
-**建议分阶段落地**：
+**落地进度**：
 
-1. **Phase 1**：为 merged64 增加 tiled preprocess 支持（`ggml-ifairy-lut-preprocess.cpp`）
-2. **Phase 2**：在 `ggml-cpu.c` 中有条件地启用 tiling（仅当 `N > 1` 或 `K > threshold`）
-3. **Phase 3**：A/B 验证 prefill 场景 tok/s
+- ✅ 已允许 merged64 在 `N>1` 场景启用 tiling（仍保留 decode `N==1` 禁用）
+- ✅ 单测补齐：新增 merged64 tiling regression（`tests/test-ifairy.cpp`）
 
 **验收**：
-- `pp128` tok/s 提升 ≥ 20%
-- `tg256` tok/s 不回退
-- strict 验证通过
+- 以 `llama-bench` 的 prefill 主导口径为准（例如更大 `--n-prompt`、更小 `--n-gen`），并记录到 `STATUS.md:0.1`；
+- decode（`tg256`）不回退，strict 必须通过。
 
-**风险**：高。需要新增 tiled merged64 的 correctness 验证。
+**风险**：中。tiling 更容易引入同步/构表开销与形状相关的性能回退，默认策略应保持保守（BK 默认 0）。
 
 ---
 
@@ -212,7 +226,7 @@ GGML_IFAIRY_LUT_DECODE_NTH=1 ./build-rel/bin/llama-bench ... --threads 4
 
 ```
 Week 1:
-├─ [P0] auto 策略优化：decode 默认 merged64
+├─ [P0] auto 策略优化：默认 merged64（prefill+decode）
 │   ├─ 代码改动（ggml-cpu.c 约 5 行）
 │   ├─ A/B 验证
 │   └─ 更新 STATUS.md tok/s 记录
@@ -228,10 +242,9 @@ Week 2:
 │   └─ 更新 STATUS.md
 
 Week 3-4:
-├─ [P3] prefill tiling（如 profile 显示 preprocess 不是瓶颈）
-│   ├─ merged64 tiled preprocess 实现
+├─ [P3] prefill tiling（仅在大 K/多 blocks 时评估）
 │   ├─ correctness 验证（strict）
-│   └─ prefill A/B
+│   └─ prefill A/B（确认不回退后再考虑默认策略）
 
 ├─ [P4] 框架开销优化（如 profile 显示 graph_compute_thread 占比仍高）
 │   ├─ DECODE_NTH 最佳值确定

@@ -1565,11 +1565,11 @@ void ggml_compute_forward_mul_mat(
             layout = GGML_IFAIRY_LUT_LAYOUT_LEGACY;
         } else if (cfg->lut_layout_auto) {
             layout = GGML_IFAIRY_LUT_LAYOUT_LEGACY;
-            if (N == 1) {
+            if (cfg->lut_kernel == GGML_IFAIRY_LUT_KERNEL_AUTO || cfg->lut_kernel == GGML_IFAIRY_LUT_KERNEL_MERGED64) {
+                layout = GGML_IFAIRY_LUT_LAYOUT_MERGED64;
+            } else if (N == 1) {
                 if (cfg->lut_kernel == GGML_IFAIRY_LUT_KERNEL_TBL) {
                     layout = GGML_IFAIRY_LUT_LAYOUT_TBL64;
-                } else if (cfg->lut_kernel == GGML_IFAIRY_LUT_KERNEL_MERGED64) {
-                    layout = GGML_IFAIRY_LUT_LAYOUT_MERGED64;
                 } else if (cfg->lut_kernel == GGML_IFAIRY_LUT_KERNEL_SDOT) {
                     layout = GGML_IFAIRY_LUT_LAYOUT_COMPACT;
                 }
@@ -1577,7 +1577,7 @@ void ggml_compute_forward_mul_mat(
         }
 
         int tile_blocks = strict ? 0 : cfg->bk_blocks;
-        if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64 || layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64) {
+        if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64 || (layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64 && N == 1)) {
             tile_blocks = 0;
         }
         const int bm = tile_blocks > 0 ? cfg->bm : 64;

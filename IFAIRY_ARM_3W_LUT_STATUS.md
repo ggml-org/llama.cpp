@@ -12,7 +12,7 @@
 - 平台约束：当前 LUT 路由要求 `__aarch64__ + __ARM_NEON`；不满足时会回退（ARM32/无 NEON 不走 LUT）。
 - 推荐性能基准：`./build-rel/bin/llama-bench`（tok/s 记录统一走 bench；`llama-cli` 仅用于 sanity-check）
 - 推荐扫参脚本：`bash scripts/ifairy_lut_sweep.sh`（llama-bench 版；见脚本内 `TEST_MODE/N_PROMPT/N_GEN`）
-- LUT 表布局默认走 `legacy`（更稳；`compact` 在部分设备/形状上更快），如需测试紧凑表：`GGML_IFAIRY_LUT_LAYOUT=compact`（见 1.1 / 0.1 记录）
+- LUT 表布局默认走 `merged64`（当前最佳 baseline）；如需对照旧路径：`GGML_IFAIRY_LUT_LAYOUT=legacy|compact`（见 0.1 记录）
 - `BK/BM/FULLACC` 调参在不同形状/版本上波动较大：以 sweep 输出为准，不建议凭经验固定写死
 - 每次修改 LUT 相关代码后，先做一次 `llama-cli` sanity check（固定 seed/prompt）确认不输出 gibberish（见 3.1）
 - 一键复现（含 `test-ifairy`/strict/`llama-cli`/`llama-bench`）：`scripts/ifairy_lut_repro.sh`
@@ -20,13 +20,13 @@
 **常用环境变量（LUT 路径）**
 
 - `GGML_IFAIRY_LUT=0/1`：禁用/启用 LUT（默认启用）
-- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64|auto`：LUT 表布局选择（默认 `legacy`；`auto` 走默认策略）
+- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64|auto`：LUT 表布局选择（默认走 `auto` 策略；当前 `auto` 默认偏向 `merged64`）
 - `GGML_IFAIRY_LUT_BK_BLOCKS=<int>`：K 维按 `QK_K=256` 的 block 做 tiling（0=禁用）
 - `GGML_IFAIRY_LUT_BM=<int>`：M 维行块大小（仅 tiling 时生效）
 - `GGML_IFAIRY_LUT_FULLACC=0/1`：tiled 下启用共享大累加器，减少重复 `preprocess + barrier`
 - `GGML_IFAIRY_LUT_VALIDATE_STRICT=0/1`：严格对照 reference（用于验证，不用于性能跑分）
 - `GGML_IFAIRY_LUT_DEBUG=0/1`：路由/形状诊断（默认关闭；跑分时不要开）
-- `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 路径内的 prefetch（默认启用；设为 `0` 用于 profile/sweep 对照；覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`）
+- `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 路径内的 prefetch（默认启用；设为 `0` 用于 profile/sweep 对照；覆盖所有 layout 的 `qgemm_ex/accum4_ex`）
 - `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：prefetch 距离（默认 `2`；设为 `0` 关闭距离预取；结合 profile 调参）
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` fast-path（默认启用；设为 `0` 强制走通用路径，用于回归/调优 A/B）
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` fast-path 里 group-loop 的 4-way unroll（默认 `4`；设为 `2` 用于 A/B，对照“2-way 是否反而更快”）
@@ -114,6 +114,8 @@
 | 2025-12-26T04:02:40Z | `2617cc59` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_KERNEL=merged64 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 24.75 | `/tmp/ifairy_bench_opt2_merged64_2617cc59_20251226T040240Z.txt` |
 | 2025-12-26T04:03:20Z | `2617cc59` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 4.33 | `/tmp/ifairy_bench_opt2_auto_2617cc59_20251226T040320Z.txt` |
 | 2025-12-26T04:03:20Z | `2617cc59` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 17.75 | `/tmp/ifairy_bench_opt2_auto_2617cc59_20251226T040320Z.txt` |
+| 2025-12-26T17:49:19Z | `95c5bf1f+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 29.47 | `/tmp/ifairy_bench_20251226T174919Z_auto_default.jsonl` |
+| 2025-12-26T17:49:23Z | `95c5bf1f+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 24.36 | `/tmp/ifairy_bench_20251226T174919Z_auto_default.jsonl` |
 
 Note: 2025-12-22 runs showing a large drop were captured with low power mode enabled (`pmset -g` shows `lowpowermode 1`). Re-running `fe740e0a` under the same mode still yields ~4-6 tok/s, so the drop is environmental. Re-benchmark after disabling low power mode; low-power logs are for reference only (`/tmp/ifairy_fe740e0a_20251223T005155.jsonl`, `/tmp/ifairy_fe740e0a_device_none_20251223T005346.jsonl`). Current power-on retest is logged above (`/tmp/ifairy_bench_power_20251223T122617.jsonl`, `/tmp/ifairy_bench_power_run2_20251223T124504.jsonl`, `/tmp/ifairy_bench_power_run3_20251223T124605.jsonl`). 3-run summary: pp128 min/max/mean = 3.291/3.304/3.296; tg256 min/max/mean = 16.750/18.903/17.901.
 
@@ -177,32 +179,58 @@ Note: 2025-12-22 runs showing a large drop were captured with low power mode ena
   - 结果：短测（`-n 64`）出现大幅回退：`compact mean=5.477` vs `compact2 mean=3.473`（原始 TSV：`/tmp/ifairy_lut_abab_compact_vs_compact2_20251218T153800Z.tsv`）；对 preprocess 做 NEON 向量化后仍显著落后：`compact mean=5.953` vs `compact2 mean=4.623`（原始 TSV：`/tmp/ifairy_lut_abab_compact_vs_compact2_v2_20251218T154608Z.tsv`）。
   - 结论：该方向在当前实现/机器上属于 **明确负收益**；已停止推进（不合入默认路径），后续只在“preprocess 不变或更便宜 + profile 明确显示 qgemm 指令瓶颈且缓存足够”时再考虑重启。
 
-## 0.2 Xcode Profile（以 decode 场景为准）
+## 0.2 xctrace Profile（decode + prefill，merged64 默认）
 
-> 目的：明确“该优化应该打在哪儿”，避免继续做低收益的微调。
+> 目的：明确“该优化应该打在哪儿”，避免继续做低收益的微调；并确保采样覆盖**默认路径**（`auto → merged64`）。
 
-**配置（你提供的条件）**
+**配置（用于采样对照）**
 
-- 环境：`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact`
-- 命令：`./build-rel/bin/llama-cli -m /Users/liweitao/Downloads/Codefield/cpp/llama.cpp/models/Fairy-plus-minus-i-700M/ifairy.gguf --gpu-layers 0 -t 4 -b 1 -p "I believe life is" -n 128 -no-cnv`
+- 环境：`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0`
+- 工具：`xcrun xctrace record --template 'Time Profiler' ...`
+- 说明：统计口径为 `time-profile` 导出的 **leaf CPU time share**（按 sample weight 聚合；多线程累计为 CPU time，不是 wall time）。
 
-**热点占比（Xcode 采样结果）**
+**采样命令（推荐）**
 
-- `ggml_ifairy_lut_qgemm_ex`：63%
-- `ggml_graph_compute_thread`：24%
-- `ggml_compute_forward_mul_mat`：6%
-- 其他：< 2.5%
+```bash
+# decode-only（N==1）
+xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_decode.trace \
+  --env GGML_IFAIRY_LUT=1 \
+  --env GGML_IFAIRY_LUT_BK_BLOCKS=0 \
+  --env GGML_IFAIRY_LUT_BM=0 \
+  --env GGML_IFAIRY_LUT_FULLACC=0 \
+  --launch -- ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf \
+    -p 0 -n 256 -b 2048 -ub 512 -t 4 -ngl 0 -dev none -r 1 --no-warmup -o jsonl
 
-**近期复采样（波动示例）**
+# prefill-only（N>1）
+xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_prefill.trace \
+  --env GGML_IFAIRY_LUT=1 \
+  --env GGML_IFAIRY_LUT_BK_BLOCKS=0 \
+  --env GGML_IFAIRY_LUT_BM=0 \
+  --env GGML_IFAIRY_LUT_FULLACC=0 \
+  --launch -- ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf \
+    -p 128 -n 0 -b 2048 -ub 512 -t 4 -ngl 0 -dev none -r 1 --no-warmup -o jsonl
+```
 
-- sample 1：`ggml_ifairy_lut_qgemm_ex` 52%，`ggml_graph_compute_thread` 30%
-- sample 2：`ggml_ifairy_lut_qgemm_ex` 69%，`ggml_graph_compute_thread` 12%
-- 备注：profile 占比会随温度/调度/输入分布波动；用它做“定位主矛盾”，不要把单次占比当作精确 KPI。
+**热点占比（2025-12-26，本机，4 threads，leaf CPU time share）**
+
+- decode-only（`avg_ts≈25.12 tok/s`）：
+  - `ggml_ifairy_lut_qgemm_ex_merged64`：~73%
+  - `ggml_graph_compute_thread`：~13%
+  - `ggml_vec_dot_f16`：~8%
+  - `ggml_ifairy_3w_encode`：~2%
+  - `ggml_ifairy_lut_preprocess_ex_merged64`：~1%
+- prefill-only（`avg_ts≈30.21 tok/s`）：
+  - `ggml_ifairy_lut_qgemm_ex_merged64`：~82%
+  - `ggml_ifairy_3w_encode`：~6%
+  - `ggml_graph_compute_thread`：~5%
+  - `ggml_graph_compute_secondary_thread`：~3%
+  - `ggml_ifairy_lut_preprocess_ex_merged64`：~2%
 
 **解读**
 
-- 主要瓶颈已非常明确：继续提升 tok/s，优先级应集中在 `ggml_ifairy_lut_qgemm_ex`（降低每次 matmul 的单位成本）
-- `ggml_graph_compute_thread` 的占比说明“线程调度/同步/图执行框架开销”也不可忽略；需要减少 barrier/减少 kernel 次数/减少不必要的工作区搬运
+- 主矛盾非常明确：继续提升 tok/s，优先级应集中在 `ggml_ifairy_lut_qgemm_ex_merged64`（降低每次 matmul 的单位成本）。
+- `preprocess_ex` 暂不是瓶颈（≤~2%），不要把收益“搬家”到构表路径。
+- `ggml_graph_compute_thread`（leaf）在当前默认路径下不是 top1，但仍需关注 decode 场景的 barrier/调度成本（尤其是未来引入更多 tile/分块时）。
 
 ## 1. 当前现状（可工作的 LUT 路径：NEON 优先，标量回退）
 
@@ -217,7 +245,7 @@ Note: 2025-12-22 runs showing a large drop were captured with low power mode ena
   - `pat = c0 | (c1<<2) | (c2<<4)`
   - 分组按 `QK_K=256` block 内部进行：`85` 个 triplet + `1` 个尾组（`{255, pad, pad}`），不跨 block、不丢维度。
 - LUT 构表：`ggml/src/ggml-ifairy-lut.cpp::ggml_ifairy_lut_preprocess()`
-  - 支持四种表布局（通过 `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64` 选择，默认 `legacy`）：
+  - 支持四种表布局（通过 `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64` 选择；默认走 `auto` 策略，当前偏向 `merged64`）：
     - `legacy`：每组构造完整的 `4 × 64`（`int16`）pattern 表（`512B/group`）
     - `compact`：每组构造紧凑表：`3 positions × 4 codes × 4 channels = 48B/group`（`int8`）
     - `tbl64`：每组构造 `4ch × 64pat × int8` 表（`256B/group`）
@@ -234,7 +262,7 @@ Note: 2025-12-22 runs showing a large drop were captured with low power mode ena
 
 ### 1.1 选择 `legacy` 还是 `compact`？
 
-- `legacy/compact` 在同一机器上多次运行会有一定波动：以 0.1 的 tok/s 记录为准；当前默认策略仍为 `legacy`（更稳）
+- `legacy/compact` 在同一机器上多次运行会有一定波动：以 0.1 的 tok/s 记录为准；当前默认策略已切换为 `merged64`（baseline 更优）
 - `compact` 的主要价值是显著降低 per-group LUT 带宽/工作集（`512B -> 48B`），后续要想稳定胜出，需要继续压低 per-group 的额外指令开销
 
 ### 1.2 为什么 LUT 是“四通道”而不是直接存实部/虚部？

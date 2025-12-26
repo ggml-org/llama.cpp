@@ -159,25 +159,30 @@ NEON 内核里对每个 group 只需要：
 ## 6. 运行时开关（当前实现）
 
 - `GGML_IFAIRY_LUT=0/1`：禁用/启用 LUT（默认启用）。
-- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|auto`：选择 LUT 布局（默认 `legacy`；`auto` 走默认策略）。
+- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64|auto`：选择 LUT 布局（默认走 `auto` 策略；当前 `auto` 默认偏向 `merged64`）。
 - `GGML_IFAIRY_LUT_BK_BLOCKS=<int>`：K 维按 256-block 做 tiling（`0` 禁用；strict 下强制禁用）。
 - `GGML_IFAIRY_LUT_BM=<int>`：BM 行块大小（仅 tiling 生效）。
 - `GGML_IFAIRY_LUT_FULLACC=0/1`：tiling 下共享 accumulator（未设置时可能按 `(N,acc_bytes)` 自动启用）。
 - `GGML_IFAIRY_LUT_VALIDATE_STRICT=0/1`：严格对照（验证用）。
 - `GGML_IFAIRY_LUT_DEBUG=0/1`：路由诊断（默认关闭）。
-- `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 热路径中的 prefetch（默认启用；设为 `0` 方便 profile/sweep 对照；覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`）。
+- `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 热路径中的 prefetch（默认启用；设为 `0` 方便 profile/sweep 对照；覆盖所有 layout 的 `qgemm_ex/accum4_ex`）。
+- `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 `2`；设为 `0` 关闭距离预取；用于 A/B 调参）。
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` decode 快路（默认启用；设为 `0` 强制走通用路径做 A/B）。
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` 快路 group-loop 的 unroll（默认 `4`；设为 `2` 用于 A/B）。
-- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：强制选择 kernel 路径（默认 `auto`）；当前仅 `sdot` 在 `N==1` 快路上可用，`tbl/merged64` 为预留。
+- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：选择（或影响 auto 策略选择）kernel 路径（默认 `auto`）。当前：
+  - `auto`：默认偏向 `merged64`（prefill+decode）
+  - `sdot`：`compact` 的 `N==1` dotprod 实验内核（decode-only）
+  - `tbl`：`tbl64`（decode-only）
+  - `merged64`：强制 `merged64`（prefill+decode）
 
 复现脚本：
 
 - `scripts/ifairy_lut_repro.sh`（包含 `test-ifairy`、strict、`llama-cli` sanity 与 `llama-bench`）。
 
-计划新增（未实现，先做文档约定）：
+已实现：
 
-- `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64`：新增 LUT 布局（配合 TBL / merged64 方案），默认仍由 `auto` 策略决定。
-- `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 2~3，需结合 profile 调整）。
+- `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64`
+- `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`
 
 ---
 

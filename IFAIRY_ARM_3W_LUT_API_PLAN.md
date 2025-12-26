@@ -103,7 +103,7 @@ struct ifairy_lut_extra {
 ## 5. 运行时开关（当前实现）
 
 - `GGML_IFAIRY_LUT=0/1`：禁用/启用 LUT（默认启用）。
-- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64|auto`：选择 LUT 布局（默认 `legacy`；`auto` 走默认策略）。
+- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64|auto`：选择 LUT 布局（默认走 `auto` 策略；当前 `auto` 默认偏向 `merged64`）。
 - `GGML_IFAIRY_LUT_BK_BLOCKS=<int>`：K 维按 256-block 做 tiling（`0` 禁用；strict 下强制禁用）。
 - `GGML_IFAIRY_LUT_BM=<int>`：BM 行块大小（仅 tiling 生效）。
 - `GGML_IFAIRY_LUT_FULLACC=0/1`：tiling 下共享 accumulator（未设置时可能按 `(N,acc_bytes)` 自动启用）。
@@ -113,30 +113,26 @@ struct ifairy_lut_extra {
 - `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 `2`；设为 `0` 关闭距离预取；结合 profile 调参）。
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` decode 快路（默认启用；设为 `0` 强制走通用路径做 A/B）。
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` 快路 group-loop 的 unroll（默认 `4`；设为 `2` 用于 A/B）。
-- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：选择（或影响 auto 策略选择）kernel 路径（默认 `auto`）。当前：
+- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：选择（或影响 auto 策略选择）kernel 路径（默认 `auto`）。当前策略：
   - `sdot`：`compact` 的 `N==1` dotprod 实验内核；
-  - `tbl`：decode-first `tbl64`（在 `GGML_IFAIRY_LUT_LAYOUT=auto` 且 `N==1` 时自动切到 `tbl64`；严格模式强制回退到 `legacy`）；
-  - `merged64`：decode-first `merged64`（在 `GGML_IFAIRY_LUT_LAYOUT=auto` 且 `N==1` 时自动切到 `merged64`；严格模式强制回退到 `legacy`）。
+  - `tbl`：decode-only `tbl64`（仅 `N==1` 时生效；严格模式强制回退到 `legacy`）；
+  - `merged64`：强制 `merged64`（prefill+decode）；严格模式强制回退到 `legacy`。
 - `GGML_IFAIRY_LUT_DECODE_NTH=<int>`：decode (`N==1`) 场景将 graph threads 上限 clamp 到该值（`0` 禁用；用于 A/B）。
 - `GGML_IFAIRY_LUT_DECODE_THRESHOLD=<int>`：decode 小工作量阈值（按 `max(M*K)` 估算）；当 `DECODE_NTH==0` 且 `max(M*K) <= threshold` 时自动 clamp 到 `1` thread（`0` 禁用；用于 A/B）。
 
 补充说明（当前实现）：
 
-- `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64` 已可用；在 `tbl64/merged64` 下当前强制禁用 BK tiling（先保证 correctness + decode-first）。
+- `GGML_IFAIRY_LUT_LAYOUT=tbl64|merged64` 已可用；`tbl64` 仍保持 decode-only（并禁用 BK tiling），`merged64` 在 decode（`N==1`）禁用 BK tiling，但在 prefill（`N>1`）允许启用 `BK_BLOCKS` 做 A/B（默认 `BK_BLOCKS=0`）。
 
 ## 6. 性能提升规划（主线，必须把 tok/s 拉上去）
 
 > 2025-12-18 更新：基于《IFAIRY_LUT_PERF_ANALYSIS_20251218.md》的复盘，decode 场景热点大致为 `ggml_ifairy_lut_qgemm_ex ≈ 53~55%` + `ggml_graph_compute_thread ≈ 30%`。因此主线需要同时推进：压 `qgemm_ex` 单位成本 + 处理同步/调度开销（否则上限会被框架吞掉）。
 >
-> 2025-12-26 更新（基于 `IFAIRY_LUT_PERF_NEXT_STEPS.md` 的 bench 记录与代码分析）：
->
-> - Apple M4 / 4 threads / `tg256`：`merged64` ≈ **24.75 tok/s** vs `auto` ≈ 17.75 tok/s（**+39%**）；
-> - `pp128`：各 kernel 均在 ~4 tok/s，prefill 明显是瓶颈；
-> - 当前 `auto` 在 decode（`N==1`）场景仍需显式 `GGML_IFAIRY_LUT_KERNEL=merged64` 才能吃到收益：主线应先把“默认策略”修正到位，再用 profile 驱动后续微优化（否则优化点会偏离真实默认路径）。
+> 2025-12-26 更新（基于 `IFAIRY_LUT_PERF_NEXT_STEPS.md` 与最新 bench）：已将 `auto` 默认策略收敛为 `merged64`（prefill+decode），并修复 scalar path 的 workspace 计算；在 Apple M4 / 4 threads 下，pp/tg 的 tok/s 基线已显著抬升（以 `STATUS.md:0.1` 记录为准）。
 
 ### 6.0.2 当前优先级（建议）
 
-- **P0：让 `auto` 策略在 decode（`N==1`）默认优先 `merged64`**：把“用户不配 env 也能快”的路径先修好（低风险、收益确定）；必须保留 `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64` 与 `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64` 的显式 override 口径（用于 A/B 与一键回退）。
+- **P0：让 `auto` 策略默认优先 `merged64`（prefill+decode）**：把“用户不配 env 也能快”的路径先修好（低风险、收益确定）；必须保留 `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64` 与 `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64` 的显式 override 口径（用于 A/B 与一键回退）。
 - **P1：复采样 profile（`merged64`）确认新瓶颈**：在 P0 落地后重新采样（否则 profile 不代表默认路径），判断下一步是继续压 `qgemm_ex` 还是转向 6.1（同步/调度）/6.4（prefill）。
 - **P2：decode：并行推进 6.1 + 6.2 的“可复现提速点”**：优先做不会扩大回归面的微优化（prefetch 距离/idx prefetch/unroll A/B），并把证据固化到 `STATUS.md:0.1` 记录。
 - **P3：prefill：推进 6.4（让 `merged64` 支持 BK tiling）**：`tbl64/merged64` 当前强制禁用 BK tiling；若要把 `pp tok/s` 拉上去，需要把 tiling 做成“可控且不变慢”的版本（分阶段落地、严格对照）。
@@ -233,14 +229,15 @@ struct ifairy_lut_extra {
 
 目标：把 decode 常见的 `N≈1` 进一步提速；当前优先把 `merged64` 的 tok/s 拉上去并稳定复现，其次再继续压 `compact`（作为小工作集/低构表成本路线的长期选项）。
 
-（下一步 profile 建议：`sample` 10s，`llama-cli` decode，Apple M4 / 4 threads / `GGML_IFAIRY_LUT_KERNEL=merged64`）
+（下一步 profile 建议：用 `xcrun xctrace record --template 'Time Profiler'` 复现采样；decode+prefill 两条命令见 `IFAIRY_ARM_3W_LUT_STATUS.md`，确保覆盖默认路径 `auto → merged64`）
 
 建议动作（按优先级）：
 
-- P0：**提升 auto 策略（decode 默认 merged64）**：在 `GGML_IFAIRY_LUT_LAYOUT=auto` 且 `GGML_IFAIRY_LUT_KERNEL=auto` 的 decode（`N==1`）场景，默认优先走 `merged64`；必须保留 `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|...` 与 `GGML_IFAIRY_LUT_KERNEL=tbl|merged64|sdot` 的显式 override，并维持 strict 下强制回退到 `legacy` 的语义。
+- P0：**提升 auto 策略（默认 merged64，覆盖 prefill+decode）**：在 `GGML_IFAIRY_LUT_LAYOUT=auto` 且 `GGML_IFAIRY_LUT_KERNEL=auto` 时，默认优先走 `merged64`；必须保留 `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|...` 与 `GGML_IFAIRY_LUT_KERNEL=tbl|merged64|sdot` 的显式 override，并维持 strict 下强制回退到 `legacy` 的语义。
   - 代码位置：`ggml/src/ggml-cpu/ggml-cpu.c`（auto 策略/路由处，见 `IFAIRY_LUT_PERF_NEXT_STEPS.md` 的索引）
   - 验收：不设置 `GGML_IFAIRY_LUT_KERNEL` 时，decode（`tg256`）tok/s 应接近显式 `KERNEL=merged64` 的结果；并在 `STATUS.md` 追加一条可复现记录
 - P1：**复采样 profile（merged64）**：在 P0 落地后重新采样，确认新 top1/top2 热点（`qgemm_ex` vs `graph_compute_thread` vs `preprocess_ex`），避免“优化的是非默认路径”。
+  - 近期 xctrace 结果：`qgemm_ex_merged64` 仍为绝对 top1（decode leaf ~73%，prefill leaf ~82%），因此下一步主线继续压 `qgemm_ex`（详见 `STATUS.md:0.2`）。
 - P2：**merged64 qgemm 热路径微优化（A/B 驱动）**：以 profile 证据为准，优先做低风险的微改动（每项都必须可用 env 或 compile-time 一键回退）：
   - prefetch 距离调优：A/B `GGML_IFAIRY_LUT_PREFETCH_DIST=2/4/8`
   - 增加 `idx_blk[]` 的 prefetch（与 group table 同步预取）
@@ -269,7 +266,7 @@ struct ifairy_lut_extra {
 - ✅ prefetch A/B + 距离：`GGML_IFAIRY_LUT_PREFETCH=0/1`、`GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ `sdot`（dotprod）实验内核（仅 `N==1`）：`GGML_IFAIRY_LUT_KERNEL=sdot`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ 去掉 `layout_from_env()->getenv()` 热路径锁竞争：新增/暴露 legacy/compact 专用 entrypoint，并在 `ggml/src/ggml-cpu/ggml-cpu.c` 按 `threadpool->ifairy_lut_cfg` 直接 dispatch；保留 `*_from_env()` 供测试/兼容路径使用（`ggml/src/ggml-ifairy-lut.cpp`, `ggml/src/ggml-ifairy-lut-qgemm.cpp`, `ggml/src/ggml-ifairy-lut-preprocess.cpp`）。
-- ✅ `GGML_IFAIRY_LUT_KERNEL=tbl|merged64`：已实现（`ggml/src/ggml-ifairy-lut-qgemm.cpp` + `ggml/src/ggml-ifairy-lut-preprocess.cpp` + `ggml/src/ggml-ifairy-lut.cpp` + `ggml/src/ggml-cpu/ggml-cpu.c`）；默认 `auto` 不启用，`N==1` 下可通过 `GGML_IFAIRY_LUT_KERNEL=tbl|merged64` 触发（严格模式强制回退到 `legacy`）。
+- ✅ `GGML_IFAIRY_LUT_KERNEL=tbl|merged64`：已实现；当前 `KERNEL=auto` 默认偏向 `merged64`（prefill+decode），`KERNEL=tbl` 仅在 `N==1`（decode）场景生效；严格模式强制回退到 `legacy`。
 - ✅ `merged64` hot-path 进一步优化：`ggml_ifairy_lut_qgemm_ex_merged64` 做 group-loop unroll + 预取；mul_mat 路由不再调用 `ggml_ifairy_lut_can_mul_mat()`（避免 `getenv` 锁竞争），改为基于 `threadpool->ifairy_lut_cfg` + 形状检查直接进入 LUT 路径（`ggml/src/ggml-ifairy-lut-qgemm.cpp`, `ggml/src/ggml-cpu/ggml-cpu.c`）。
 - P3（冻结）`compact2`：2-lookups 方向曾尝试但出现明确回退，先不推进（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 失败案例）。
 
@@ -286,7 +283,7 @@ struct ifairy_lut_extra {
   - 方向 A：`(c0,c1)` 预合并表（16 组合）+ `pos2`（4 组合），将每 group 查表从 3 次降到 2 次（注意 preprocess 成本与 cache footprint 平衡）。
     - 进展：已尝试 `GGML_IFAIRY_LUT_LAYOUT=compact2`（pos0+pos1 合并为 16-way int16 表），在当前实现与机器上出现明显 tok/s 回退，优先级下调为 P3（冻结）。
   - 方向 B：小型 64-pattern 表（int8/小 int16），把查表变回“一次读 4ch”的形态。
-    - 进展：已落地 `tbl64/merged64`；其中 `merged64` 作为当前 decode-first 主线，`tbl64` 后续若要推进需要补齐专用 NEON 内核与对照数据。
+    - 进展：已落地 `tbl64/merged64`；其中 `merged64` 作为当前主线 baseline（prefill+decode），`tbl64` 后续若要推进需要补齐专用 NEON 内核与对照数据。
 - **unroll + 多累加器**：对 group 循环做 2/4-way unroll，采用 `isum0/isum1` 交错累加，减少 load-use 依赖链。
   - 经验：在 Apple M4 上尝试把 `compact` 的 `N==1` fast-path 从 4-way 收敛到 2-way 会明显变慢（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 的失败案例记录）；不要在没有 A/B 的情况下改 unroll。
   - 建议：保留 perf-safe A/B 开关 `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`（默认 `4`），避免为了试 unroll 反复改代码并引入回归点。
@@ -397,7 +394,7 @@ struct ifairy_lut_extra {
 ### 7.1 P1：健壮性与一致性（不影响热路径的硬化优先）
 
 - ✅ size/overflow：为 `ggml_ifairy_lut_get_wsize` 与 `ggml-cpu.c` 的 LUT 工作区切分加入 overflow 断言，避免 size_t wrap 后的越界访问（`2a39f249`）。
-- ✅ prefetch 可控：`GGML_IFAIRY_LUT_PREFETCH=0/1` 可覆盖 legacy/compact 的 `qgemm_ex/accum4_ex`，方便 profile/sweep 对照。
+- ✅ prefetch 可控：`GGML_IFAIRY_LUT_PREFETCH=0/1` 可覆盖所有 layout 的 `qgemm_ex/accum4_ex`，方便 profile/sweep 对照。
 - ✅ env 解析收敛：将 LUT 相关 env 解析 helper 集中复用，减少重复与语义漂移。
 - ✅ 路由/配置健壮性：无效 layout/BK/BM 在 debug 下 warn/clamp，减少 silent fallback。
 - ✅ 工作区一致性：`compact` group bytes 常量化，并在 `ggml-cpu.c` 断言 `need == get_wsize(...)`，避免切分公式漂移导致的 silent memory corruption。
@@ -405,10 +402,12 @@ struct ifairy_lut_extra {
 ### 7.2 P2：可维护性（在性能稳定后再推进）
 
 - ✅ 代码拆分：`ggml/src/ggml-ifairy-lut.cpp` 已按 preprocess/qgemm/transform/common 拆分（`ggml-ifairy-lut-{preprocess,qgemm,transform}.cpp` + `ggml-ifairy-lut-impl.h`），减少 legacy/compact 重复代码。
-- ✅ 测试补齐（`tests/test-ifairy.cpp`）：
+  - ✅ 测试补齐（`tests/test-ifairy.cpp`）：
   - 对齐与误对齐：`test_ifairy_lut_index_alignment()` 覆盖 64B 对齐尺寸与 misaligned index buffer 编码。
   - 小维度：`test_ifairy_lut_scalar_small_dims()`（`M=N=1,K=QK_K`）。
+  - auto 策略：`test_ifairy_lut_layout_auto_decode_default_merged64()`（auto 默认 merged64）。
   - 大维度：`test_ifairy_lut_backend_large_dims()`（tiling vs non-tiling）。
+  - merged64 tiling：`test_ifairy_lut_backend_tiling_regression()` 覆盖 `layout=merged64` 的 tiling 回归。
   - 分配失败/缓冲不足：`test_ifairy_lut_index_encode_failure()`（短 buffer 返回 false）。
   - 并发 transform：`test_ifairy_lut_transform_cache()`。
   - 形状对齐/路由：`test_ifairy_lut_transform_invalid_shape()`（`K % QK_K != 0`）。

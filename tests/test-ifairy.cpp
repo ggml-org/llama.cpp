@@ -1,10 +1,10 @@
 // iFairy 模型单元测试
 // 测试量化、反量化、ROPE 算子和计算图构建
 
-#include "ggml.h"
-#include "ggml-cpu.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
+#include "ggml.h"
 
 // Include internal quantization headers for ifairy types
 extern "C" {
@@ -39,7 +39,7 @@ extern "C" {
 #include <vector>
 
 #if defined(_MSC_VER)
-#pragma warning(disable: 4244 4267) // possible loss of data
+#    pragma warning(disable : 4244 4267)  // possible loss of data
 #endif
 
 // ============================================================================
@@ -47,12 +47,12 @@ extern "C" {
 // ============================================================================
 
 // 简单的 JSON 数组解析器
-std::vector<float> parse_json_float_array(const std::string& json_str, const std::string& key) {
+std::vector<float> parse_json_float_array(const std::string & json_str, const std::string & key) {
     std::vector<float> result;
 
     // 查找 key
     std::string search_key = "\"" + key + "\"";
-    size_t key_pos = json_str.find(search_key);
+    size_t      key_pos    = json_str.find(search_key);
     if (key_pos == std::string::npos) {
         fprintf(stderr, "Error: Key '%s' not found in JSON\n", key.c_str());
         return result;
@@ -79,15 +79,18 @@ std::vector<float> parse_json_float_array(const std::string& json_str, const std
     size_t pos = 0;
     while (pos < array_content.length()) {
         // 跳过空格和逗号
-        while (pos < array_content.length() && (array_content[pos] == ' ' || array_content[pos] == ',' || array_content[pos] == '\n')) {
+        while (pos < array_content.length() &&
+               (array_content[pos] == ' ' || array_content[pos] == ',' || array_content[pos] == '\n')) {
             pos++;
         }
 
-        if (pos >= array_content.length()) break;
+        if (pos >= array_content.length()) {
+            break;
+        }
 
         // 解析数字
-        char* end_ptr;
-        float value = strtof(array_content.c_str() + pos, &end_ptr);
+        char * end_ptr;
+        float  value = strtof(array_content.c_str() + pos, &end_ptr);
         result.push_back(value);
 
         pos = end_ptr - array_content.c_str();
@@ -96,9 +99,9 @@ std::vector<float> parse_json_float_array(const std::string& json_str, const std
     return result;
 }
 
-int parse_json_int(const std::string& json_str, const std::string& key) {
+int parse_json_int(const std::string & json_str, const std::string & key) {
     std::string search_key = "\"" + key + "\"";
-    size_t key_pos = json_str.find(search_key);
+    size_t      key_pos    = json_str.find(search_key);
     if (key_pos == std::string::npos) {
         fprintf(stderr, "Error: Key '%s' not found in JSON\n", key.c_str());
         return 0;
@@ -106,7 +109,9 @@ int parse_json_int(const std::string& json_str, const std::string& key) {
 
     // 查找 : 后的数字
     size_t colon_pos = json_str.find(':', key_pos);
-    if (colon_pos == std::string::npos) return 0;
+    if (colon_pos == std::string::npos) {
+        return 0;
+    }
 
     // 跳过空格
     size_t num_start = colon_pos + 1;
@@ -117,9 +122,9 @@ int parse_json_int(const std::string& json_str, const std::string& key) {
     return atoi(json_str.c_str() + num_start);
 }
 
-float parse_json_float(const std::string& json_str, const std::string& key) {
+float parse_json_float(const std::string & json_str, const std::string & key) {
     std::string search_key = "\"" + key + "\"";
-    size_t key_pos = json_str.find(search_key);
+    size_t      key_pos    = json_str.find(search_key);
     if (key_pos == std::string::npos) {
         fprintf(stderr, "Error: Key '%s' not found in JSON\n", key.c_str());
         return 0.0f;
@@ -127,7 +132,9 @@ float parse_json_float(const std::string& json_str, const std::string& key) {
 
     // 查找 : 后的数字
     size_t colon_pos = json_str.find(':', key_pos);
-    if (colon_pos == std::string::npos) return 0.0f;
+    if (colon_pos == std::string::npos) {
+        return 0.0f;
+    }
 
     // 跳过空格
     size_t num_start = colon_pos + 1;
@@ -138,7 +145,7 @@ float parse_json_float(const std::string& json_str, const std::string& key) {
     return strtof(json_str.c_str() + num_start, nullptr);
 }
 
-std::string read_file(const std::string& filename) {
+std::string read_file(const std::string & filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
         fprintf(stderr, "Error: Cannot open file '%s'\n", filename.c_str());
@@ -184,21 +191,21 @@ static std::string read_ifairy_test_file(const char * filename) {
 
 constexpr float MAX_ERROR = 1e-2f;  // 允许的最大误差
 
-bool compare_arrays(const float* a, const float* b, size_t n, float max_error = MAX_ERROR) {
-    float max_diff = 0.0f;
+bool compare_arrays(const float * a, const float * b, size_t n, float max_error = MAX_ERROR) {
+    float  max_diff     = 0.0f;
     size_t max_diff_idx = 0;
 
     for (size_t i = 0; i < n; i++) {
         float diff = fabsf(a[i] - b[i]);
         if (diff > max_diff) {
-            max_diff = diff;
+            max_diff     = diff;
             max_diff_idx = i;
         }
     }
 
     if (max_diff > max_error) {
-        fprintf(stderr, "  Max diff: %.6f at index %zu (expected: %.6f, got: %.6f)\n",
-                max_diff, max_diff_idx, b[max_diff_idx], a[max_diff_idx]);
+        fprintf(stderr, "  Max diff: %.6f at index %zu (expected: %.6f, got: %.6f)\n", max_diff, max_diff_idx,
+                b[max_diff_idx], a[max_diff_idx]);
         return false;
     }
 
@@ -489,6 +496,7 @@ bool test_ifairy_lut_layout_auto_policy() {
     printf("\n=== Test 2.3: iFairy LUT layout auto policy ===\n");
 
     scoped_env_var env_layout("GGML_IFAIRY_LUT_LAYOUT");
+    scoped_env_var env_kernel("GGML_IFAIRY_LUT_KERNEL");
 
     struct ggml_init_params params = {
         /*.mem_size   =*/4 * 1024 * 1024,
@@ -516,17 +524,75 @@ bool test_ifairy_lut_layout_auto_policy() {
     env_layout.set("legacy");
     const size_t wsize_legacy = ggml_ifairy_lut_get_wsize(w, a, dst, 1);
 
+    env_layout.set("merged64");
+    const size_t wsize_merged64 = ggml_ifairy_lut_get_wsize(w, a, dst, 1);
+
+    env_kernel.unset();
     env_layout.set("auto");
     const size_t wsize_auto = ggml_ifairy_lut_get_wsize(w, a, dst, 1);
 
     ggml_free(ctx);
 
-    if (wsize_legacy == 0 || wsize_auto == 0 || wsize_auto != wsize_legacy) {
-        fprintf(stderr, "layout auto mismatch: legacy=%zu auto=%zu\n", wsize_legacy, wsize_auto);
+    if (wsize_legacy == 0 || wsize_merged64 == 0 || wsize_auto == 0 || wsize_auto != wsize_merged64) {
+        fprintf(stderr, "layout auto mismatch: legacy=%zu merged64=%zu auto=%zu\n", wsize_legacy, wsize_merged64,
+                wsize_auto);
         return false;
     }
 
     printf("  layout auto - PASS\n");
+    return true;
+#endif
+}
+
+bool test_ifairy_lut_layout_auto_decode_default_merged64() {
+#if !defined(GGML_IFAIRY_ARM_LUT) || !defined(__ARM_NEON) || !defined(__aarch64__)
+    printf("\n=== Test 2.3.1: iFairy LUT auto decode default merged64 (SKIP) ===\n");
+    return true;
+#else
+    printf("\n=== Test 2.3.1: iFairy LUT auto decode default merged64 ===\n");
+
+    scoped_env_var env_layout("GGML_IFAIRY_LUT_LAYOUT");
+    scoped_env_var env_kernel("GGML_IFAIRY_LUT_KERNEL");
+
+    struct ggml_init_params params = {
+        /*.mem_size   =*/4 * 1024 * 1024,
+        /*.mem_buffer =*/NULL,
+        /*.no_alloc   =*/false,
+    };
+    struct ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        fprintf(stderr, "Failed to init ggml context\n");
+        return false;
+    }
+
+    const int64_t M   = 2;
+    const int64_t N   = 1;
+    const int64_t K   = QK_K;
+    ggml_tensor * w   = ggml_new_tensor_2d(ctx, GGML_TYPE_IFAIRY, K, M);
+    ggml_tensor * a   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, K, N);
+    ggml_tensor * dst = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, M, N);
+    if (!w || !a || !dst) {
+        fprintf(stderr, "Failed to allocate tensors for auto decode policy test\n");
+        ggml_free(ctx);
+        return false;
+    }
+
+    env_layout.set("merged64");
+    env_kernel.unset();
+    const size_t wsize_merged64 = ggml_ifairy_lut_get_wsize(w, a, dst, 1);
+
+    env_layout.set("auto");
+    env_kernel.unset();
+    const size_t wsize_auto = ggml_ifairy_lut_get_wsize(w, a, dst, 1);
+
+    ggml_free(ctx);
+
+    if (wsize_merged64 == 0 || wsize_auto == 0 || wsize_auto != wsize_merged64) {
+        fprintf(stderr, "auto decode default mismatch: merged64=%zu auto=%zu\n", wsize_merged64, wsize_auto);
+        return false;
+    }
+
+    printf("  auto decode default merged64 - PASS\n");
     return true;
 #endif
 }
@@ -674,8 +740,8 @@ bool test_quantization() {
     }
 
     // 解析输入数据
-    std::vector<float> quantized_real    = parse_json_float_array(json_data, "quantized_real");
-    std::vector<float> quantized_imag    = parse_json_float_array(json_data, "quantized_imag");
+    std::vector<float> quantized_real   = parse_json_float_array(json_data, "quantized_real");
+    std::vector<float> quantized_imag   = parse_json_float_array(json_data, "quantized_imag");
     std::vector<float> expected_dq_real = parse_json_float_array(json_data, "dequantized_real");
     std::vector<float> expected_dq_imag = parse_json_float_array(json_data, "dequantized_imag");
 
@@ -688,11 +754,11 @@ bool test_quantization() {
 
     // 分配量化块（256 个元素对应 1 个块）
     const size_t n_elements = quantized_real.size();
-    const size_t n_blocks = (n_elements + QK_K - 1) / QK_K;
+    const size_t n_blocks   = (n_elements + QK_K - 1) / QK_K;
 
     std::vector<block_ifairy> quantized(n_blocks);
-    std::vector<float> dequantized_real(n_elements);
-    std::vector<float> dequantized_imag(n_elements);
+    std::vector<float>        dequantized_real(n_elements);
+    std::vector<float>        dequantized_imag(n_elements);
 
     // 执行量化
     quantize_row_ifairy_ref(quantized_real.data(), quantized_imag.data(), quantized.data(), n_elements);
@@ -725,58 +791,58 @@ bool test_rope() {
     }
 
     // 解析数据
-    std::vector<float> input_real = parse_json_float_array(json_data, "input_real");
-    std::vector<float> input_imag = parse_json_float_array(json_data, "input_imag");
+    std::vector<float> input_real    = parse_json_float_array(json_data, "input_real");
+    std::vector<float> input_imag    = parse_json_float_array(json_data, "input_imag");
     std::vector<float> expected_real = parse_json_float_array(json_data, "output_real");
     std::vector<float> expected_imag = parse_json_float_array(json_data, "output_imag");
 
-    int batch = parse_json_int(json_data, "batch");
-    int seq_len = parse_json_int(json_data, "seq_len");
-    int n_heads = parse_json_int(json_data, "n_heads");
-    int head_dim = parse_json_int(json_data, "head_dim");
-    int n_dims = parse_json_int(json_data, "n_dims");
+    int   batch     = parse_json_int(json_data, "batch");
+    int   seq_len   = parse_json_int(json_data, "seq_len");
+    int   n_heads   = parse_json_int(json_data, "n_heads");
+    int   head_dim  = parse_json_int(json_data, "head_dim");
+    int   n_dims    = parse_json_int(json_data, "n_dims");
     float freq_base = parse_json_float(json_data, "freq_base");
 
-    printf("Testing ROPE with shape [%d, %d, %d, %d], n_dims=%d, freq_base=%.1f\n",
-           batch, seq_len, n_heads, head_dim, n_dims, freq_base);
+    printf("Testing ROPE with shape [%d, %d, %d, %d], n_dims=%d, freq_base=%.1f\n", batch, seq_len, n_heads, head_dim,
+           n_dims, freq_base);
 
     // 创建 GGML 上下文
     struct ggml_init_params params = {
-        /*.mem_size   =*/ 128*1024*1024,
-        /*.mem_buffer =*/ NULL,
-        /*.no_alloc   =*/ false,
+        /*.mem_size   =*/128 * 1024 * 1024,
+        /*.mem_buffer =*/NULL,
+        /*.no_alloc   =*/false,
     };
 
-    struct ggml_context* ctx = ggml_init(params);
+    struct ggml_context * ctx = ggml_init(params);
 
     // 创建输入张量（交错存储实部和虚部）
-    const int64_t ne[4] = {head_dim * 2, n_heads, seq_len, batch};  // 实部和虚部交错
-    struct ggml_tensor* x = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]);
+    const int64_t        ne[4] = { head_dim * 2, n_heads, seq_len, batch };  // 实部和虚部交错
+    struct ggml_tensor * x     = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], ne[3]);
 
     // 填充数据（交错格式：real0, imag0, real1, imag1, ...）
-    float* x_data = (float*)x->data;
+    float * x_data = (float *) x->data;
     for (size_t i = 0; i < input_real.size(); i++) {
         // 注意：这里需要根据实际的 ROPE 实现调整数据布局
         // 暂时简化处理
         int pos_in_output = i * 2;  // 交错存储
         if (pos_in_output < head_dim * 2 * n_heads * seq_len * batch) {
-            x_data[pos_in_output] = input_real[i];
+            x_data[pos_in_output]     = input_real[i];
             x_data[pos_in_output + 1] = input_imag[i];
         }
     }
 
     // 创建位置张量
-    struct ggml_tensor* pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, seq_len);
-    int32_t* pos_data = (int32_t*)pos->data;
+    struct ggml_tensor * pos      = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, seq_len);
+    int32_t *            pos_data = (int32_t *) pos->data;
     for (int i = 0; i < seq_len; i++) {
         pos_data[i] = i;
     }
 
     // 应用 ROPE
-    struct ggml_tensor* result = ggml_ifairy_rope(ctx, x, pos, n_dims, 0);
+    struct ggml_tensor * result = ggml_ifairy_rope(ctx, x, pos, n_dims, 0);
 
     // 构建计算图
-    struct ggml_cgraph* gf = ggml_new_graph(ctx);
+    struct ggml_cgraph * gf = ggml_new_graph(ctx);
     ggml_build_forward_expand(gf, result);
 
     // 执行计算
@@ -1095,6 +1161,24 @@ bool test_ifairy_lut_backend_tiling_regression() {
         return false;
     }
 
+    // Merged64 tiling regression (prefill-like: N > 1): tiling must not change results.
+    std::vector<uint32_t> out_merged64_no_tile;
+    std::vector<uint32_t> out_merged64_tile;
+    if (!run_ifairy_backend_mul_mat(out_merged64_no_tile, false, 2, "merged64", NULL)) {
+        return false;
+    }
+    if (!run_ifairy_backend_mul_mat(out_merged64_tile, true, 2, "merged64", NULL)) {
+        return false;
+    }
+    if (out_merged64_no_tile.size() != out_merged64_tile.size()) {
+        fprintf(stderr, "Size mismatch (merged64): %zu vs %zu\n", out_merged64_no_tile.size(),
+                out_merged64_tile.size());
+        return false;
+    }
+    if (!compare_u32_arrays(out_merged64_tile.data(), out_merged64_no_tile.data(), out_merged64_no_tile.size())) {
+        return false;
+    }
+
     // Decode-like regression: N == 1, plus layout equivalence (legacy vs compact) for the same backend graph.
     std::vector<uint32_t> out_legacy;
     std::vector<uint32_t> out_compact;
@@ -1188,10 +1272,10 @@ bool test_complex_matmul() {
     }
 
     // 解析数据
-    std::vector<float> a_real = parse_json_float_array(json_data, "a_real");
-    std::vector<float> a_imag = parse_json_float_array(json_data, "a_imag");
-    std::vector<float> b_real = parse_json_float_array(json_data, "b_real");
-    std::vector<float> b_imag = parse_json_float_array(json_data, "b_imag");
+    std::vector<float> a_real          = parse_json_float_array(json_data, "a_real");
+    std::vector<float> a_imag          = parse_json_float_array(json_data, "a_imag");
+    std::vector<float> b_real          = parse_json_float_array(json_data, "b_real");
+    std::vector<float> b_imag          = parse_json_float_array(json_data, "b_imag");
     std::vector<float> expected_c_real = parse_json_float_array(json_data, "c_real");
     std::vector<float> expected_c_imag = parse_json_float_array(json_data, "c_imag");
 
@@ -1236,7 +1320,7 @@ bool test_complex_matmul() {
 // 主函数
 // ============================================================================
 
-int main(int argc, char** argv) {
+int main(int argc, char ** argv) {
     printf("========================================\n");
     printf("iFairy Model Unit Tests\n");
     printf("========================================\n");
@@ -1276,6 +1360,11 @@ int main(int argc, char** argv) {
 
     if (!test_ifairy_lut_layout_auto_policy()) {
         fprintf(stderr, "Test 2.3 FAILED\n");
+        num_failed++;
+    }
+
+    if (!test_ifairy_lut_layout_auto_decode_default_merged64()) {
+        fprintf(stderr, "Test 2.3.1 FAILED\n");
         num_failed++;
     }
 

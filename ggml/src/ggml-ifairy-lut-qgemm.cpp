@@ -2759,10 +2759,19 @@ void ggml_ifairy_lut_mul_mat_scalar(int          m,
     const size_t                 index_bytes_raw = (size_t) m * (size_t) groups;
     const size_t                 index_bytes     = GGML_PAD(index_bytes_raw, 64);
     const ggml_ifairy_lut_layout layout          = ggml_ifairy_lut_layout_from_env(n);
-    const size_t                 lut_bytes =
-        layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY ?
-                            (size_t) n * (size_t) groups * (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns) * sizeof(int16_t) :
-                            (size_t) n * (size_t) groups * (size_t) k_ifairy_lut_group_bytes;
+    size_t                       lut_bytes       = 0;
+    if (layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY) {
+        lut_bytes =
+            (size_t) n * (size_t) groups * (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns) * sizeof(int16_t);
+    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_COMPACT) {
+        lut_bytes = (size_t) n * (size_t) groups * (size_t) k_ifairy_lut_group_bytes;
+    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64) {
+        lut_bytes = (size_t) n * (size_t) groups * (size_t) k_ifairy_lut_tbl64_group_bytes;
+    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64) {
+        lut_bytes = (size_t) n * (size_t) groups * (size_t) k_ifairy_lut_merged64_group_bytes;
+    } else {
+        GGML_ASSERT(false && "unknown ifairy LUT layout");
+    }
     const size_t scale_bytes = (size_t) n * (size_t) blocks * 2 * sizeof(float);
     const size_t total_bytes = index_bytes + lut_bytes + scale_bytes;
 

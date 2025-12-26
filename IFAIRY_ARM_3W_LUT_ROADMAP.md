@@ -52,7 +52,7 @@
 
 - 不改索引编码（仍是 6-bit pattern）
 - 不引入形状模板爆炸（除 decode‑first 的条件分支外）
-- 不改变默认 auto 策略（先通过显式 env 验证）
+- 不改变 tbl64 的默认策略：tbl64 仍要求显式 env 验证（当前 auto 默认偏向 merged64）
 
 ## 4. tbl64：数据布局草案（preprocess 输出）
 

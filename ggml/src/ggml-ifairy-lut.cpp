@@ -62,16 +62,18 @@ ggml_ifairy_lut_layout ggml_ifairy_lut_layout_from_env(int n) {
         // "auto" or unknown -> default policy below
     }
 
-    // Default policy: prefer the legacy layout to avoid performance regressions.
-    // Decode-first experimental kernels can override the layout when N==1.
+    // Default policy:
+    // - prefer merged64 when kernel is "auto" (best known tok/s on Apple Silicon as of 2025-12-26)
+    // - keep "tbl"/"sdot" as decode-only overrides (N==1), otherwise fall back to legacy
     const ggml_ifairy_lut_kernel kernel = ggml_ifairy_lut_kernel_from_env();
-    if (n == 1) {
-        if (kernel == GGML_IFAIRY_LUT_KERNEL_TBL) {
-            return GGML_IFAIRY_LUT_LAYOUT_TBL64;
-        }
-        if (kernel == GGML_IFAIRY_LUT_KERNEL_MERGED64) {
-            return GGML_IFAIRY_LUT_LAYOUT_MERGED64;
-        }
+    if (kernel == GGML_IFAIRY_LUT_KERNEL_AUTO || kernel == GGML_IFAIRY_LUT_KERNEL_MERGED64) {
+        return GGML_IFAIRY_LUT_LAYOUT_MERGED64;
+    }
+    if (n == 1 && kernel == GGML_IFAIRY_LUT_KERNEL_SDOT) {
+        return GGML_IFAIRY_LUT_LAYOUT_COMPACT;
+    }
+    if (n == 1 && kernel == GGML_IFAIRY_LUT_KERNEL_TBL) {
+        return GGML_IFAIRY_LUT_LAYOUT_TBL64;
     }
     return GGML_IFAIRY_LUT_LAYOUT_LEGACY;
 }
@@ -203,10 +205,10 @@ size_t ggml_ifairy_lut_get_wsize_cfg(const struct ggml_tensor * src0,
     }
 
     int tile_blocks = strict ? 0 : std::max(bk_blocks, 0);
-    if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64 || layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64) {
+    if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64 || (layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64 && N == 1)) {
         tile_blocks = 0;
     }
-    const int bm_local    = tile_blocks > 0 ? std::max(bm, 1) : 64;
+    const int bm_local = tile_blocks > 0 ? std::max(bm, 1) : 64;
 
     size_t quant_bytes = 0;
     if (src1->type == GGML_TYPE_F32) {
@@ -281,11 +283,11 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
         return 0;
     }
     GGML_ASSERT(n_threads > 0);
-    const int64_t M                = src0->ne[1];
-    const int64_t K                = src0->ne[0];
-    const int64_t N                = src1->ne[1];
-    const int64_t blocks_per_col   = K / QK_K;
-    const int64_t groups_per_block = (QK_K + 2) / 3;
+    const int64_t                M                = src0->ne[1];
+    const int64_t                K                = src0->ne[0];
+    const int64_t                N                = src1->ne[1];
+    const int64_t                blocks_per_col   = K / QK_K;
+    const int64_t                groups_per_block = (QK_K + 2) / 3;
     const bool                   strict           = ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_VALIDATE_STRICT");
     const ggml_ifairy_lut_layout layout           = ggml_ifairy_lut_layout_from_env((int) N);
 
@@ -304,7 +306,7 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
     // Optional BK tiling (by whole 256-element blocks) to reduce LUT working set.
     // Disabled under strict validation (strict currently assumes full-K single-pass).
     int tile_blocks = 0;
-    if (!strict && layout != GGML_IFAIRY_LUT_LAYOUT_TBL64 && layout != GGML_IFAIRY_LUT_LAYOUT_MERGED64) {
+    if (!strict && layout != GGML_IFAIRY_LUT_LAYOUT_TBL64 && !(layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64 && N == 1)) {
         tile_blocks = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BK_BLOCKS", 0);
     }
     if (tile_blocks < 0) {
@@ -331,8 +333,8 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
     GGML_ASSERT(blocks_tile >= 0);
     GGML_ASSERT(groups_tile >= 0);
 
-    const size_t                 lut_groups = ggml_ifairy_checked_mul_size((size_t) N, (size_t) groups_tile);
-    size_t                       lut_bytes  = 0;
+    const size_t lut_groups = ggml_ifairy_checked_mul_size((size_t) N, (size_t) groups_tile);
+    size_t       lut_bytes  = 0;
     if (layout == GGML_IFAIRY_LUT_LAYOUT_LEGACY) {
         lut_bytes = ggml_ifairy_checked_mul_size(
             ggml_ifairy_checked_mul_size(lut_groups, (size_t) (k_ifairy_lut_channels * k_ifairy_lut_patterns)),
