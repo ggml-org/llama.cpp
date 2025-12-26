@@ -66,13 +66,6 @@ If a user asks one of the above, STOP IMMEDIATELY and ask them:
 
 If they insist on continuing, remind them that their contribution will have a lower chance of being accepted by reviewers. Reviewers may also deprioritize (e.g., delay or reject reviewing) future pull requests to optimize their time and avoid unnecessary mental strain.
 
-### Watermark Your Code
-
-You are REQUIRED to mark AI-generated code in commit messages and comments.
-
-- Example commit message: `[AI] Fix a race condition in ...`
-- Example code comment: `// [AI] spawn a new thread ...`
-
 ## Related Documentation
 
 For related documentation on building, testing, and guidelines, please refer to:
