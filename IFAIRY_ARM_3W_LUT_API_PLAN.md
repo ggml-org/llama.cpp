@@ -128,14 +128,19 @@ struct ifairy_lut_extra {
 
 > 2025-12-18 更新：基于《IFAIRY_LUT_PERF_ANALYSIS_20251218.md》的复盘，decode 场景热点大致为 `ggml_ifairy_lut_qgemm_ex ≈ 53~55%` + `ggml_graph_compute_thread ≈ 30%`。因此主线需要同时推进：压 `qgemm_ex` 单位成本 + 处理同步/调度开销（否则上限会被框架吞掉）。
 >
-> 2025-12-26 更新：`GGML_IFAIRY_LUT_KERNEL=merged64` 已可用，且在当前 bench 口径下 decode（`tg256`）相对 `auto` 有明显提升；下一步应先 **复采样 profile（merged64）**，再决定是继续压 `qgemm_ex` 还是转向 6.1/6.3（很可能“算子更快后框架占比更高”）。
+> 2025-12-26 更新（基于 `IFAIRY_LUT_PERF_NEXT_STEPS.md` 的 bench 记录与代码分析）：
+>
+> - Apple M4 / 4 threads / `tg256`：`merged64` ≈ **24.75 tok/s** vs `auto` ≈ 17.75 tok/s（**+39%**）；
+> - `pp128`：各 kernel 均在 ~4 tok/s，prefill 明显是瓶颈；
+> - 当前 `auto` 在 decode（`N==1`）场景仍需显式 `GGML_IFAIRY_LUT_KERNEL=merged64` 才能吃到收益：主线应先把“默认策略”修正到位，再用 profile 驱动后续微优化（否则优化点会偏离真实默认路径）。
 
 ### 6.0.2 当前优先级（建议）
 
-- **P0：decode / `N==1`：`merged64` 优先**：继续把 `merged64` 的收益“稳定化 + 可复现化”，并用 profile 验证下一瓶颈是否已从 `qgemm_ex` 转移。
-- **P1：decode：继续推进 6.1（同步/调度）**：当 `qgemm_ex` 变快后，`ggml_graph_compute_thread` 更容易成为上限（否则 tok/s 提升会被框架吞掉）。
-- **P2：prefill：推进 6.4（BK/BM/FULLACC）**：`tbl64/merged64` 当前禁用 BK tiling；若要在 prefill 场景受益，需要把 tiling 做成“可控且不变慢”的版本。
-- **P3：可选研究项（非默认路径）**：
+- **P0：让 `auto` 策略在 decode（`N==1`）默认优先 `merged64`**：把“用户不配 env 也能快”的路径先修好（低风险、收益确定）；必须保留 `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64` 与 `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64` 的显式 override 口径（用于 A/B 与一键回退）。
+- **P1：复采样 profile（`merged64`）确认新瓶颈**：在 P0 落地后重新采样（否则 profile 不代表默认路径），判断下一步是继续压 `qgemm_ex` 还是转向 6.1（同步/调度）/6.4（prefill）。
+- **P2：decode：并行推进 6.1 + 6.2 的“可复现提速点”**：优先做不会扩大回归面的微优化（prefetch 距离/idx prefetch/unroll A/B），并把证据固化到 `STATUS.md:0.1` 记录。
+- **P3：prefill：推进 6.4（让 `merged64` 支持 BK tiling）**：`tbl64/merged64` 当前强制禁用 BK tiling；若要把 `pp tok/s` 拉上去，需要把 tiling 做成“可控且不变慢”的版本（分阶段落地、严格对照）。
+- **P4：可选研究项（非默认路径）**：
   - `tbl64`：目前是 decode-first 候选布局，但需要专用 NEON 内核/更完善的对照与 A/B；优先级低于 `merged64`。
   - `compact2`：已出现明确回退，先冻结（见 6.2 归档），除非有新的 profile 证据与构表成本突破。
 
@@ -145,6 +150,8 @@ struct ifairy_lut_extra {
 - **推荐基准命令**：以 `IFAIRY_ARM_3W_LUT_STATUS.md` 的 `0.1 tok/s 记录`表头命令为准（固定 `--threads/--n-prompt/--n-gen/--n-depth` 与 LUT env 组合）。
 - **一键复现脚本**：`scripts/ifairy_lut_repro.sh`（包含 `test-ifairy`、strict、`llama-cli` sanity、`llama-bench`）。
 - **tok/s 口径（llama-bench，CPU only）**：以 `llama-bench` 为准（避免输出长度波动）；`llama-cli` 仅保留 sanity-check。参考命令：`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf --threads 4 --n-prompt 128 --n-gen 256 -ngl 0 --device none --repetitions 1 --no-warmup`（`-ngl 0 --device none` 即 CPU-only）。
+  - decode baseline（auto）：`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 ./build-rel/bin/llama-bench ...`
+  - decode merged64（当前需要显式设置；P0 落地后应可省略）：`GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_KERNEL=merged64 ./build-rel/bin/llama-bench ...`
 - **短测 vs 长测**：
   - A/B 调优：优先用 `llama-bench` 的短测（例如 `--n-prompt 8 --n-gen 8`）做 `ABABAB` 交替跑，减少热漂移偏置；
   - 最终记录：用 `llama-bench` 的长测（例如 `--n-prompt 128 --n-gen 256`）对每个 layout 连续跑 3 次，记录 `min/max/mean` 后再下结论（长测之间要给足冷却；若出现明显 outlier/单调下降，先冷却后重测，否则结论无效）。
@@ -230,10 +237,16 @@ struct ifairy_lut_extra {
 
 建议动作（按优先级）：
 
-- P0：**复采样 profile（merged64）**，确认新 top1/top2 热点（`qgemm_ex` vs `graph_compute_thread` vs `preprocess_ex`）。
-- P1：**决定是否“提升 auto 策略”**：若 `merged64` 在目标机器/形状上稳定胜出，考虑在 `GGML_IFAIRY_LUT_LAYOUT=auto` 且 `KERNEL=auto` 的 decode (`N==1`) 场景默认优先 `merged64`（必须保留 `GGML_IFAIRY_LUT_LAYOUT`/`KERNEL` 一键回退与 A/B 复现口径）。
-- P2：若 profile 显示 `preprocess_ex` 上升为新瓶颈：优先优化 `merged64` 的构表路径（避免把收益“搬家”到 preprocess）。
-- P3：若 decode 常见 `N==2`：考虑补一个小 `N` 专用路径（仍需 env gating，避免形状模板爆炸）。
+- P0：**提升 auto 策略（decode 默认 merged64）**：在 `GGML_IFAIRY_LUT_LAYOUT=auto` 且 `GGML_IFAIRY_LUT_KERNEL=auto` 的 decode（`N==1`）场景，默认优先走 `merged64`；必须保留 `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|...` 与 `GGML_IFAIRY_LUT_KERNEL=tbl|merged64|sdot` 的显式 override，并维持 strict 下强制回退到 `legacy` 的语义。
+  - 代码位置：`ggml/src/ggml-cpu/ggml-cpu.c`（auto 策略/路由处，见 `IFAIRY_LUT_PERF_NEXT_STEPS.md` 的索引）
+  - 验收：不设置 `GGML_IFAIRY_LUT_KERNEL` 时，decode（`tg256`）tok/s 应接近显式 `KERNEL=merged64` 的结果；并在 `STATUS.md` 追加一条可复现记录
+- P1：**复采样 profile（merged64）**：在 P0 落地后重新采样，确认新 top1/top2 热点（`qgemm_ex` vs `graph_compute_thread` vs `preprocess_ex`），避免“优化的是非默认路径”。
+- P2：**merged64 qgemm 热路径微优化（A/B 驱动）**：以 profile 证据为准，优先做低风险的微改动（每项都必须可用 env 或 compile-time 一键回退）：
+  - prefetch 距离调优：A/B `GGML_IFAIRY_LUT_PREFETCH_DIST=2/4/8`
+  - 增加 `idx_blk[]` 的 prefetch（与 group table 同步预取）
+  - 实验性：8-group unroll（先验证寄存器压力，避免反向回退）
+- P3：若 profile 显示 `preprocess_ex` 上升为新瓶颈：优先优化 `merged64` 的构表路径（避免把收益“搬家”到 preprocess）。
+- P4：若 decode 常见 `N==2`：考虑补一个小 `N` 专用路径（仍需 env gating，避免形状模板爆炸）。
 
 - 复采样关注点：
   - `ggml_ifairy_lut_qgemm_ex` vs `ggml_graph_compute_thread` 的占比变化（判断下一步主攻方向）；
@@ -318,6 +331,10 @@ struct ifairy_lut_extra {
 - 将 “构表下一 tile / 消费上一 tile” 做成 pipeline（先以可验证的 CPU-only 版本落地，再谈进一步重排）。
 - 把 `preprocess_ex` 的切分策略固定为“对 N 或 group 做分片”，避免 false sharing 与 “线程 0 构表、其余等待”。
 - 调参只用 sweep 驱动（避免“凭直觉写死 BK/BM”）：优先用 `scripts/ifairy_lut_sweep.sh` 固定 seed/prompt 跑完再决定默认策略。
+- **`merged64` prefill 主线（分阶段落地）**：当前 `tbl64/merged64` 在路由中强制禁用 BK tiling；要把 `pp tok/s` 拉上去，主线是让 `merged64` 支持 tiling（不要求先让 `tbl64` 支持）：
+  1) Phase 1：补齐 `merged64` 的 tiled preprocess/工作区切分支持（先 correctness，再谈 perf）
+  2) Phase 2：在 `ggml-cpu.c` 中有条件启用 tiling（例如仅 `N > 1` 或 `K > threshold`；并保留 env 强制开/关复现）
+  3) Phase 3：A/B 验证 prefill（目标：`pp128` 提升 ≥ 20%），且 decode（`tg256`）不回退；strict 必须通过
 
 实现进度（对照代码）：
 
