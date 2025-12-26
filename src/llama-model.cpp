@@ -2254,6 +2254,15 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,  hparams.n_embd_head_v_mla, false);
                 ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,      hparams.n_lora_kv, false);
                 ml.get_key(LLM_KV_ROPE_DIMENSION_COUNT,        hparams.n_rot, false);
+
+                // kimi MLA uses a larger head dimension than the base n_embd/n_head.
+                // override KV cache head dims to match MLA K/V sizes.
+                if (hparams.n_embd_head_k_mla > 0) {
+                    hparams.n_embd_head_k = hparams.n_embd_head_k_mla;
+                }
+                if (hparams.n_embd_head_v_mla > 0) {
+                    hparams.n_embd_head_v = hparams.n_embd_head_v_mla;
+                }
                 
                 // KDA (Delta Attention) parameters
                 hparams.kda_head_dim = 128;
