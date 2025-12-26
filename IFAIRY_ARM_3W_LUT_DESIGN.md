@@ -196,48 +196,12 @@ NEON 内核里对每个 group 只需要：
 
 ---
 
-## 7. 当前优先级（与 profile/bench 对齐）
+## 7. 说明（不维护优先级与流程）
 
-P0（正确性与回归门槛）：
+本文只描述“数学语义/数据结构/布局与内核形态”。执行层的优先级、验证门槛与工程流程统一维护在：
 
-- 内存/生命周期：减少 `new/delete` + 全局容器；补齐 size/overflow/bounds 检查，避免 silent failure。
-- 线程安全：明确并发模型；缩小锁粒度，避免持锁做重活；补充并发/压力测试。
-- ✅ size/overflow：为 `ggml_ifairy_lut_get_wsize` 与 `ggml-cpu.c` 的 LUT 工作区切分加入 overflow 断言，避免 size_t wrap 后的越界访问（`2a39f249`）。
-
-P1（吞吐主线）：
-
-- 基于 `xctrace`（`leaf CPU time share`）与 `llama-bench`：当前瓶颈明确集中在 `ggml_ifairy_lut_qgemm_ex_merged64`，因此优先级最高的是把 `merged64` 的 qgemm 内环做“可回退的小步 A/B”微优化（详见 `IFAIRY_ARM_3W_LUT_API_PLAN.md` 的 `6.2`）。
-- `preprocess_ex` 当前占比很低（通常 ≤~2%），不要把收益“搬家”到构表路径。
-
-P2（结构优化/调参）：
-
-- decode 小工作量的线程/同步开销、BK/BM/FULLACC 调参放在 `qgemm_ex` 热点压下来之后再推进，以免噪声掩盖收益。
-
-P3（工程化与可维护）：
-
-- ✅ 可维护性重构：拆分 `ggml/src/ggml-ifairy-lut.cpp` 为 `ggml-ifairy-lut-{transform,preprocess,qgemm}.cpp` + `ggml-ifairy-lut-impl.h`，减少 legacy/compact 重复代码。
-- 错误处理一致性：统一 `return false`/`GGML_ASSERT`/日志策略。
-- 路由健壮性：补齐更明确的 CPU feature 判定（NEON/dotprod）与可控回退。
-
----
-
-## 8. 开发检查（clang-format / clang-tidy）
-
-- `clang-format` 检查：优先用 `git clang-format` 对目标分支的 merge-base 做差量检查，并限定 C/C++ 路径，避免全仓格式化。
-  - 示例（仅检查）：`BASE=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD origin/main); git clang-format --style=file --diff "$BASE" -- '*.c' '*.cc' '*.cpp' '*.cxx' '*.h' '*.hh' '*.hpp'`
-  - 要应用格式化：去掉 `--diff`。
-- `clang-tidy` 检查：每次改动后对触及的 C/C++ 源文件做定向检查，使用 `build-rel/compile_commands.json`。
-  - 示例（macOS）：`BASE=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD origin/main); FILES=$(git diff --name-only "$BASE" -- '*.c' '*.cc' '*.cpp' '*.cxx'); [ -n "$FILES" ] && clang-tidy -p build-rel --extra-arg="-isysroot$(xcrun --show-sdk-path)" --checks="-misc-include-cleaner" $FILES`
-- ✅ P1 小步：将 LUT 相关 env 解析 helper 集中到 `ggml/src/ggml-ifairy-lut.h`，并在 `ggml-cpu.c`/`ggml-ifairy-lut.cpp` 复用，减少重复与语义漂移。
-- ✅ P1 小步：错误可观测性与回退一致性：`transform_tensor` 失败在 debug 下输出原因（shape/alloc/encode），并在路由阶段明确要求 `__aarch64__ + __ARM_NEON`（否则回退）。
-- ✅ P1 小步：配置健壮性：`GGML_IFAIRY_LUT_LAYOUT` 无效值在 debug 下 warn（仅一次）并回退默认；`BK_BLOCKS/BM` 的非法值在 debug 下提示并 clamp。
-- SDOT 快路（实验）：当前在 M4 + `compact` 上慢于 `auto`；后续优先验证“拆分专用 loop 去分支”与“16B 对齐的 group 布局”是否能弥补（详见 `IFAIRY_ARM_3W_LUT_STATUS.md` 0.1 记录）。
-
-P2（持续）：
-
-- ✅ 测试补齐：`tests/test-ifairy.cpp` 覆盖对齐/误对齐、极小/大维度、分配失败（短 buffer）、并发 transform、关键 env 语义与 K 对齐 gate。
-- 性能回归：把 decode（`N≈1`）与 prefill 形状的 tok/s 作为可复现基线（见 `IFAIRY_ARM_3W_LUT_STATUS.md`）。
- - 80 tok/s 的分阶段路线图与实现方案见 `IFAIRY_ARM_3W_LUT_API_PLAN.md` 的 `6.8`。
+- `IFAIRY_ARM_3W_LUT_API_PLAN.md`（执行计划与验收口径）
+- `IFAIRY_ARM_3W_LUT_STATUS.md`（可复现 bench/profile 记录）
 
 ---
 

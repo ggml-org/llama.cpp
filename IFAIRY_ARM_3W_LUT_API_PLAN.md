@@ -372,45 +372,20 @@ struct ifairy_lut_extra {
 
 ## 7. 工程地基（并行推进，避免性能“回归/难复现”）
 
-（精简版）
+> 本节只保留“执行层清单/门槛”，避免与 `DESIGN.md/STATUS.md` 重复。
 
-- 跑分口径与原始日志留档：以 `IFAIRY_ARM_3W_LUT_STATUS.md` 为准（`0.1 tok/s 记录` + `/tmp/` raw 日志引用）。
-- correctness gate：`test-ifairy` + `GGML_IFAIRY_LUT_VALIDATE_STRICT=1`。
-- 详细 checklist 归档如下（避免在本文重复维护导致过时）。
+### 7.1 最小验证集（每次改动后）
 
-<details>
-<summary>展开：详细 checklist（归档）</summary>
+- `./build-rel/bin/test-ifairy`
+- `GGML_IFAIRY_LUT_VALIDATE_STRICT=1 ./build-rel/bin/test-ifairy`
+- `GGML_IFAIRY_LUT=1 ./build-rel/bin/llama-cli ...`（固定 seed/prompt 的 sanity-check）
+- `GGML_IFAIRY_LUT=1 ... ./build-rel/bin/llama-bench ... -o jsonl`（prefill+decode，记录 raw log 路径到 `IFAIRY_ARM_3W_LUT_STATUS.md:0.1`）
 
-> 性能冲刺不等于忽略地基；这些问题一旦踩中，会直接把 tok/s 或可复现性拉垮。
+### 7.2 clang-format / clang-tidy（差量、定向）
 
-### 7.0 P0：可复现性与回归门槛（必须落地为“流程”）
+按仓库 `AGENTS.md` 的约定执行；建议仅对本次改动触及的 `.c/.cpp` 源文件做检查，避免全仓噪声。
 
-- **双 build A/B**：保留一个“上一个稳定基线”的 build 目录（例如 `build-rel-a`），每次改动用 “旧 bin vs 新 bin” 做 `ABABAB` 交替跑，避免跨时段热漂移导致误判。
-- **原始日志留档**：A/B 的 raw 日志或 TSV 存 `/tmp/`，并在 `IFAIRY_ARM_3W_LUT_STATUS.md` 引用路径（防止只剩结论没证据）。
-- **env cache 规则**：只缓存“不会被测试用例在进程内动态修改”的 env；若某 env 在 `test-ifairy` 用 `scoped_env_var` 修改，则该 env 不应做进程级 cache（否则测试与复现会失真）。
-  - 当前已缓存：`GGML_IFAIRY_LUT_PREFETCH`、`GGML_IFAIRY_LUT_N1_FASTPATH`、`GGML_IFAIRY_LUT_COMPACT_N1_UNROLL`（进程内不会动态变化）。
-- **profile 使用规范**：profile 用于“定位主矛盾”，不要用单次采样占比当 KPI；需要记录至少 2~3 次采样的波动范围。
+### 7.3 记录约定（避免“有结论没证据”）
 
-### 7.1 P1：健壮性与一致性（不影响热路径的硬化优先）
-
-- ✅ size/overflow：为 `ggml_ifairy_lut_get_wsize` 与 `ggml-cpu.c` 的 LUT 工作区切分加入 overflow 断言，避免 size_t wrap 后的越界访问（`2a39f249`）。
-- ✅ prefetch 可控：`GGML_IFAIRY_LUT_PREFETCH=0/1` 可覆盖所有 layout 的 `qgemm_ex/accum4_ex`，方便 profile/sweep 对照。
-- ✅ env 解析收敛：将 LUT 相关 env 解析 helper 集中复用，减少重复与语义漂移。
-- ✅ 路由/配置健壮性：无效 layout/BK/BM 在 debug 下 warn/clamp，减少 silent fallback。
-- ✅ 工作区一致性：`compact` group bytes 常量化，并在 `ggml-cpu.c` 断言 `need == get_wsize(...)`，避免切分公式漂移导致的 silent memory corruption。
-
-### 7.2 P2：可维护性（在性能稳定后再推进）
-
-- ✅ 代码拆分：`ggml/src/ggml-ifairy-lut.cpp` 已按 preprocess/qgemm/transform/common 拆分（`ggml-ifairy-lut-{preprocess,qgemm,transform}.cpp` + `ggml-ifairy-lut-impl.h`），减少 legacy/compact 重复代码。
-  - ✅ 测试补齐（`tests/test-ifairy.cpp`）：
-  - 对齐与误对齐：`test_ifairy_lut_index_alignment()` 覆盖 64B 对齐尺寸与 misaligned index buffer 编码。
-  - 小维度：`test_ifairy_lut_scalar_small_dims()`（`M=N=1,K=QK_K`）。
-  - auto 策略：`test_ifairy_lut_layout_auto_decode_default_merged64()`（auto 默认 merged64）。
-  - 大维度：`test_ifairy_lut_backend_large_dims()`（tiling vs non-tiling）。
-  - merged64 tiling：`test_ifairy_lut_backend_tiling_regression()` 覆盖 `layout=merged64` 的 tiling 回归。
-  - 分配失败/缓冲不足：`test_ifairy_lut_index_encode_failure()`（短 buffer 返回 false）。
-  - 并发 transform：`test_ifairy_lut_transform_cache()`。
-  - 形状对齐/路由：`test_ifairy_lut_transform_invalid_shape()`（`K % QK_K != 0`）。
-  - 关键 env 语义：`test_ifairy_lut_env_semantics()` + `test_ifairy_lut_layout_auto_policy()`。
-
-</details>
+- bench：统一以 `llama-bench` 的 `avg_ts`（tok/s）作为 KPI，并保存 `-o jsonl` 的 raw log。
+- profile：统一用 `xctrace` 复采样默认路径（`auto → merged64`），并把摘要写到 `IFAIRY_ARM_3W_LUT_STATUS.md:0.2`。
