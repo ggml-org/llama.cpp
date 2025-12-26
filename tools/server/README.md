@@ -19,7 +19,8 @@ Set of LLM REST APIs and a web UI to interact with llama.cpp.
  * Speculative decoding
  * Easy-to-use web UI
 
-For the ful list of features, please refer to [server's changelog](https://github.com/ggml-org/llama.cpp/issues/9291)
+For the full list of features, please refer to [server's changelog](https://github.com/ggml-org/llama.cpp/issues/9291)
+
 
 ## Usage
 
@@ -274,6 +275,90 @@ It is currently available in the following endpoints:
 - The non-OAI-compatible embeddings endpoint.
 
 For more details, please refer to [multimodal documentation](../../docs/multimodal.md)
+
+# Router Mode (Model Management)
+
+The `llama-server` supports a router mode that allows dynamically loading, unloading, and switching between multiple models without restarting the server.
+
+In router mode:
+
+* **Multi-process architecture**: Each model runs in its own process for isolation.
+* **On-demand loading**: Models load automatically when they are first requested via the API.
+* **LRU Eviction**: When the maximum number of loaded models is reached, the least-recently-used model is automatically unloaded to free VRAM.
+* **Unified configuration**: Models can inherit global server settings or use specific overrides via presets.
+
+## Starting the Server in Router Mode
+
+To enable router mode, do not specify a model (`-m` or `--model`) at startup. By default, the server will attempt to discover models in your cache.
+
+```bash
+# Auto-discover from $LLAMA_CACHE or ~/.cache/llama.cpp
+llama-server
+
+# Or specify a custom directory of GGUF files
+llama-server --models-dir ./my-models
+```
+
+## Configuration Options
+
+The following options specifically control the behavior of the router:
+
+| Argument          | Explanation                                                                 |
+|-------------------|-----------------------------------------------------------------------------|
+| `--models-dir PATH` | Directory containing GGUF models for the router server.                     |
+| `--models-max N`    | Maximum number of models to load simultaneously (default: 4, 0 = unlimited). |
+| `--models-autoload` | Whether to automatically load models on request (default: enabled).         |
+| `--models-preset PATH` | Path to an INI file containing per-model configuration overrides.           |
+
+## Using Models via API
+
+Once the server is running in router mode, use the `model` field in your request to specify which GGUF file or alias to use.
+
+### Example: Chat Completion
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemma-3-4b-it:Q4_K_M",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+> **Note**: The first request for a specific model will trigger a loading phase. Subsequent requests will be served instantly.
+
+## Model Management Endpoints
+
+The server provides REST endpoints to inspect and control the lifecycle of models:
+
+1. **List Available Models**  
+   Returns a list of all discovered models and their current status (loaded, loading, or unloaded).
+
+   ```bash
+   curl http://localhost:8080/models
+   ```
+
+2. **Manually Load a Model**  
+   Pre-load a model into memory before the first user request.
+
+   ```bash
+   curl -X POST http://localhost:8080/models/load \
+     -H "Content-Type: application/json" \
+     -d '{"model": "deepseek-v3.gguf"}'
+   ```
+
+3. **Unload a Model**  
+   Manually free VRAM by unloading a specific model.
+
+   ```bash
+   curl -X POST http://localhost:8080/models/unload \
+     -H "Content-Type: application/json" \
+     -d '{"model": "deepseek-v3.gguf"}'
+   ```
+
+## Web UI
+
+The built-in Web UI (accessible at http://localhost:8080) fully supports router mode. You can switch between all available models using the dropdown menu in the interface.
 
 ## Build
 
