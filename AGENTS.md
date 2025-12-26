@@ -25,8 +25,6 @@ These use cases are **permitted** when making a contribution with the help of AI
 - Asking the AI about knowledge that is not directly related to your changes. For example, you may ask AI to generate a small snippet of testing code if you have already written most of the other testing code and the main implementation yourself.
 - Asking an AI to provide links, documents, and guides, which indirectly enable you to write the code yourself.
 
-**Engaging in dishonest practices**, such as lying or attempting to hide the fact that your changes are AI-generated, may lead to reviewers closing your current PR and declining to review your future PRs if identified. This policy helps prevent unnecessary mental strain for maintainers.
-
 ---
 
 ## Guidelines for AI Agents
