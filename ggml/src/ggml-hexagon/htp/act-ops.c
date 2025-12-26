@@ -124,10 +124,9 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
         data_src1 += swapped ? 0 : nc_in_bytes;
     }
 
-
     const size_t src0_row_size_aligned = htp_round_up(src0_row_size, VLEN);
     const size_t src1_row_size_aligned = htp_round_up(src1_row_size, VLEN);
-    const size_t dst_row_size_aligned  = htp_round_up(dst_row_size, VLEN);    
+    const size_t dst_row_size_aligned  = htp_round_up(dst_row_size, VLEN);
 
     uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_spad->size_per_thread);
     uint8_t * restrict src1_spad_data = src1_spad->data + (ith * src1_spad->size_per_thread);
@@ -136,15 +135,15 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
     // While given src0_spad->size_per_thread, divide it to two ping-pong buffer for src0
     size_t src0_spad_half_size = src0_spad->size_per_thread / 2;
     size_t src1_spad_half_size = src1_spad->size_per_thread / 2;
-    size_t dst_spad_half_size  = dst_spad->size_per_thread  / 2;
+    size_t dst_spad_half_size  = dst_spad->size_per_thread / 2;
 
-    const int BLOCK = src0_spad_half_size / src0_row_size_aligned; // How many rows can we process in one block
+    const int BLOCK = src0_spad_half_size / src0_row_size_aligned;  // How many rows can we process in one block
     if (BLOCK == 0) {
-        FARF(ERROR, "swiglu-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n",
+        FARF(ERROR,
+             "swiglu-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n",
              src0_spad->size_per_thread, src0_row_size_aligned);
         return;
     }
-
 
     // See discussion: https://github.com/ggml-org/llama.cpp/pull/18151#issuecomment-3678235379
     for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) {
@@ -163,39 +162,35 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
             src1_row_size_aligned, src1_row_size, block_size);
     }
 
-
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
         const uint32_t block_size = MIN(BLOCK, src0_end_row - ir);
 
-        float* dst_spad  = (float *) dma_queue_pop(dma_queue).src;
-        float* src0_spad = (float *) dma_queue_pop(dma_queue).dst;
-        float* src1_spad = (float *) dma_queue_pop(dma_queue).dst;
+        float * dst_spad  = (float *) dma_queue_pop(dma_queue).src;
+        float * src0_spad = (float *) dma_queue_pop(dma_queue).dst;
+        float * src1_spad = (float *) dma_queue_pop(dma_queue).dst;
 
         for (uint32_t ib = 0; ib < block_size; ib++) {
-            const float* src0_spad_ptr = src0_spad + ib * (src0_row_size_aligned / sizeof(float));
-            const float* src1_spad_ptr = src1_spad + ib * (src1_row_size_aligned / sizeof(float));
-            float* dst_spad_ptr        = dst_spad  + ib * (dst_row_size_aligned  / sizeof(float));
+            const float * src0_spad_ptr = src0_spad + ib * (src0_row_size_aligned / sizeof(float));
+            const float * src1_spad_ptr = src1_spad + ib * (src1_row_size_aligned / sizeof(float));
+            float *       dst_spad_ptr  = dst_spad + ib * (dst_row_size_aligned / sizeof(float));
 
             //swiglu(x) = x1 * sigmoid(x0)
             hvx_fast_sigmoid_f32((const uint8_t *) src0_spad_ptr, (uint8_t *) dst_spad_ptr, nc);
-            hvx_mul_mul_f32_opt((const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr, (const uint8_t *) src1_spad_ptr,
-                                (uint8_t *) dst_spad_ptr, nc);
+            hvx_mul_mul_f32_opt((const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr,
+                                (const uint8_t *) src1_spad_ptr, (uint8_t *) dst_spad_ptr, nc);
         }
 
-        dma_queue_push_vtcm_to_ddr(dma_queue,
-            dma_make_ptr(data_dst + (ir * dst_row_size), dst_spad),
-            dst_row_size, dst_row_size_aligned, block_size);
+        dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(data_dst + (ir * dst_row_size), dst_spad), dst_row_size,
+                                   dst_row_size_aligned, block_size);
 
         // prefetch N+2 loop iteration if any
         const uint32_t pref_block = (ir + BLOCK * 2);
         if (pref_block < src0_end_row) {
             const uint32_t pref_block_size = MIN(BLOCK, src0_end_row - pref_block);
-            dma_queue_push_ddr_to_vtcm(dma_queue,
-                dma_make_ptr(src0_spad, data_src0 + (pref_block * src0_row_size)),
-                src0_row_size_aligned, src0_row_size, pref_block_size);
-            dma_queue_push_ddr_to_vtcm(dma_queue,
-                dma_make_ptr(src1_spad, data_src1 + (pref_block * src1_row_size)),
-                src1_row_size_aligned, src1_row_size, pref_block_size); 
+            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src0_spad, data_src0 + (pref_block * src0_row_size)),
+                                       src0_row_size_aligned, src0_row_size, pref_block_size);
+            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src1_spad, data_src1 + (pref_block * src1_row_size)),
+                                       src1_row_size_aligned, src1_row_size, pref_block_size);
         }
     }
 
@@ -238,8 +233,6 @@ static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
         return;
     }
 
-   
-
     const uint8_t * restrict data_src0 = (const uint8_t *) src0->data;
     const uint8_t * restrict data_src1 = (const uint8_t *) src1->data;
     uint8_t * restrict data_dst        = (uint8_t *) dst->data;
@@ -258,7 +251,7 @@ static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
 
     const size_t src0_row_size_aligned = htp_round_up(src0_row_size, VLEN);
     const size_t src1_row_size_aligned = htp_round_up(src1_row_size, VLEN);
-    const size_t dst_row_size_aligned  = htp_round_up(dst_row_size, VLEN);    
+    const size_t dst_row_size_aligned  = htp_round_up(dst_row_size, VLEN);
 
     uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_spad->size_per_thread);
     uint8_t * restrict src1_spad_data = src1_spad->data + (ith * src1_spad->size_per_thread);
@@ -267,77 +260,75 @@ static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
     // While given src0_spad->size_per_thread, divide it to two ping-pong buffer for src0
     size_t src0_spad_half_size = src0_spad->size_per_thread / 2;
     size_t src1_spad_half_size = src1_spad->size_per_thread / 2;
-    size_t dst_spad_half_size  = dst_spad->size_per_thread  / 2;
+    size_t dst_spad_half_size  = dst_spad->size_per_thread / 2;
 
-    const int BLOCK = src0_spad_half_size / src0_row_size_aligned; // How many rows can we process in one block
+    const int BLOCK = src0_spad_half_size / src0_row_size_aligned;  // How many rows can we process in one block
     if (BLOCK == 0) {
-        FARF(ERROR, "swiglu-oai-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n",
+        FARF(ERROR,
+             "swiglu-oai-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least "
+             "%zu\n",
              src0_spad->size_per_thread, src0_row_size_aligned);
         return;
     }
-    const float   alpha   = ((const float *) (op_params))[2];
-    const float   limit   = ((const float *) (op_params))[3];
-
-
+    const float alpha = ((const float *) (op_params))[2];
+    const float limit = ((const float *) (op_params))[3];
 
     // See discussion: https://github.com/ggml-org/llama.cpp/pull/18151#issuecomment-3678235379
     for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) {
         const uint32_t block_size = MIN(BLOCK, src0_end_row - ir);
 
         // Dummy DMA transation for sequencing (interleaving dst,src,dst,...)
-        dma_queue_push_vtcm_to_ddr(dma_queue,
-            dma_make_ptr(data_dst, dst_spad_data + (spad_idx * dst_spad_half_size)),
-            dst_row_size, dst_row_size_aligned, 0);
+        dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(data_dst, dst_spad_data + (spad_idx * dst_spad_half_size)),
+                                   dst_row_size, dst_row_size_aligned, 0);
 
-        dma_queue_push_ddr_to_vtcm(dma_queue,
+        dma_queue_push_ddr_to_vtcm(
+            dma_queue,
             dma_make_ptr(src0_spad_data + (spad_idx * src0_spad_half_size), data_src0 + (ir * src0_row_size)),
             src0_row_size_aligned, src0_row_size, block_size);
-        dma_queue_push_ddr_to_vtcm(dma_queue,
+        dma_queue_push_ddr_to_vtcm(
+            dma_queue,
             dma_make_ptr(src1_spad_data + (spad_idx * src1_spad_half_size), data_src1 + (ir * src1_row_size)),
             src1_row_size_aligned, src1_row_size, block_size);
     }
 
-
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
         const uint32_t block_size = MIN(BLOCK, src0_end_row - ir);
 
-        float* dst_spad  = (float *) dma_queue_pop(dma_queue).src;
-        float* src0_spad = (float *) dma_queue_pop(dma_queue).dst;
-        float* src1_spad = (float *) dma_queue_pop(dma_queue).dst;
+        float * dst_spad  = (float *) dma_queue_pop(dma_queue).src;
+        float * src0_spad = (float *) dma_queue_pop(dma_queue).dst;
+        float * src1_spad = (float *) dma_queue_pop(dma_queue).dst;
 
         for (uint32_t ib = 0; ib < block_size; ib++) {
-            const float* src0_spad_ptr = src0_spad + ib * (src0_row_size_aligned / sizeof(float));
-            const float* src1_spad_ptr = src1_spad + ib * (src1_row_size_aligned / sizeof(float));
-            float* dst_spad_ptr        = dst_spad  + ib * (dst_row_size_aligned  / sizeof(float));
+            const float * src0_spad_ptr = src0_spad + ib * (src0_row_size_aligned / sizeof(float));
+            const float * src1_spad_ptr = src1_spad + ib * (src1_row_size_aligned / sizeof(float));
+            float *       dst_spad_ptr  = dst_spad + ib * (dst_row_size_aligned / sizeof(float));
 
             // x (src0_spad_data) = std::min(src0_p[k], limit);
-            hvx_min_scalar_f32((const uint8_t *) src0_spad_ptr, limit, ( uint8_t *) src0_spad_ptr, nc);
+            hvx_min_scalar_f32((const uint8_t *) src0_spad_ptr, limit, (uint8_t *) src0_spad_ptr, nc);
             // y1 (src1_spad_data) = std::clamp(src1_p[k], -limit, limit);
-            hvx_clamp_scalar_f32((const uint8_t *) src1_spad_ptr, -limit, limit, ( uint8_t *) src1_spad_ptr, nc);
+            hvx_clamp_scalar_f32((const uint8_t *) src1_spad_ptr, -limit, limit, (uint8_t *) src1_spad_ptr, nc);
             // y (src1_spad_data)  = y1 + 1.f
-            hvx_add_scalar_f32((const uint8_t *)src1_spad_ptr, 1.0, (uint8_t *)src1_spad_ptr, nc);
+            hvx_add_scalar_f32((const uint8_t *) src1_spad_ptr, 1.0, (uint8_t *) src1_spad_ptr, nc);
             // x1 (dst_spad_data) = alpha * (x)
-            hvx_mul_scalar_f32((const uint8_t *)src0_spad_ptr, alpha, (uint8_t *)dst_spad_ptr, nc);
+            hvx_mul_scalar_f32((const uint8_t *) src0_spad_ptr, alpha, (uint8_t *) dst_spad_ptr, nc);
             // x2 (dst_spad_data) = sigmoid(x1) = 1/(1+exp(-x1))
-            hvx_fast_sigmoid_f32((const uint8_t *)dst_spad_ptr, (uint8_t *)dst_spad_ptr, nc);
+            hvx_fast_sigmoid_f32((const uint8_t *) dst_spad_ptr, (uint8_t *) dst_spad_ptr, nc);
             // out = x * sigmoid(alpha * x) * (y + 1.f)
-            hvx_mul_mul_f32_opt((const uint8_t *)src0_spad_ptr, (const uint8_t *)dst_spad_ptr, (const uint8_t *)src1_spad_ptr, (uint8_t *)dst_spad_ptr, nc);
+            hvx_mul_mul_f32_opt((const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr,
+                                (const uint8_t *) src1_spad_ptr, (uint8_t *) dst_spad_ptr, nc);
         }
 
-        dma_queue_push_vtcm_to_ddr(dma_queue,
-            dma_make_ptr(data_dst + (ir * dst_row_size), dst_spad),
-            dst_row_size, dst_row_size_aligned, block_size);
+        dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(data_dst + (ir * dst_row_size), dst_spad), dst_row_size,
+                                   dst_row_size_aligned, block_size);
 
         // prefetch N+2 loop iteration if any
         const uint32_t pref_block = (ir + BLOCK * 2);
         if (pref_block < src0_end_row) {
             const uint32_t pref_block_size = MIN(BLOCK, src0_end_row - pref_block);
-            dma_queue_push_ddr_to_vtcm(dma_queue,
-                dma_make_ptr(src0_spad, data_src0 + (pref_block * src0_row_size)),
-                src0_row_size_aligned, src0_row_size, pref_block_size);
-            dma_queue_push_ddr_to_vtcm(dma_queue,
-                dma_make_ptr(src1_spad, data_src1 + (pref_block * src1_row_size)),
-                src1_row_size_aligned, src1_row_size, pref_block_size); 
+            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src0_spad, data_src0 + (pref_block * src0_row_size)),
+                                       src0_row_size_aligned, src0_row_size, pref_block_size);
+            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src1_spad, data_src1 + (pref_block * src1_row_size)),
+                                       src1_row_size_aligned, src1_row_size, pref_block_size);
         }
     }
 
