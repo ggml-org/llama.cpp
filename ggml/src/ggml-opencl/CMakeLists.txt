@@ -70,6 +70,7 @@ set(GGML_OPENCL_KERNELS
     group_norm
     im2col_f32
     im2col_f16
+    mean
     mul_mat_Ab_Bi_8x4
     mul_mv_f16_f16
     mul_mv_f16_f32_1row
@@ -109,6 +110,9 @@ set(GGML_OPENCL_KERNELS
     softmax_4_f16
     softmax_f32
     softmax_f16
+    sqr
+    sqrt
+    ssm_conv
     sub
     sum_rows
     transpose

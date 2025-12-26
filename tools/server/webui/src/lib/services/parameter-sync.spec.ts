@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { ParameterSyncService } from './parameter-sync';
-import type { ApiLlamaCppServerProps } from '$lib/types/api';
 
 describe('ParameterSyncService', () => {
 	describe('roundFloatingPoint', () => {
@@ -130,6 +129,20 @@ describe('ParameterSyncService', () => {
 			expect(result.samplers).toBe('top_k;temperature');
 			expect(result.max_tokens).toBe(-1);
 			expect(result.temperature).toBe(0.7);
+		});
+
+		it('should merge webui settings from props when provided', () => {
+			const result = ParameterSyncService.extractServerDefaults(null, {
+				pasteLongTextToFileLen: 0,
+				pdfAsImage: true,
+				renderUserContentAsMarkdown: false,
+				theme: 'dark'
+			});
+
+			expect(result.pasteLongTextToFileLen).toBe(0);
+			expect(result.pdfAsImage).toBe(true);
+			expect(result.renderUserContentAsMarkdown).toBe(false);
+			expect(result.theme).toBeUndefined();
 		});
 	});
 });

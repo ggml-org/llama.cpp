@@ -104,12 +104,16 @@ int main(int argc, char ** argv) {
 
     params.embedding = true;
 
+    // get max number of sequences per batch
+    const int n_seq_max = llama_max_parallel_sequences();
+
     // if the number of prompts that would be encoded is known in advance, it's more efficient to specify the
     //   --parallel argument accordingly. for convenience, if not specified, we fallback to unified KV cache
     //   in order to support any number of prompts
     if (params.n_parallel == 1) {
         LOG_INF("%s: n_parallel == 1 -> unified KV cache is enabled\n", __func__);
         params.kv_unified = true;
+        params.n_parallel = n_seq_max;
     }
 
     // utilize the full context
@@ -123,17 +127,14 @@ int main(int argc, char ** argv) {
         params.n_ubatch = params.n_batch;
     }
 
-    // get max number of sequences per batch
-    const int n_seq_max = llama_max_parallel_sequences();
-
     llama_backend_init();
     llama_numa_init(params.numa);
 
     // load the model
-    common_init_result llama_init = common_init_from_params(params);
+    auto llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model.get();
-    llama_context * ctx = llama_init.context.get();
+    auto * model = llama_init->model();
+    auto * ctx = llama_init->context();
 
     if (model == NULL) {
         LOG_ERR("%s: unable to load model\n", __func__);

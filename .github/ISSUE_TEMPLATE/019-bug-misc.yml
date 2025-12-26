@@ -86,6 +86,7 @@ body:
       description: >
           If applicable, please copy and paste any relevant log output, including any generated text.
           This will be automatically formatted into code, so no need for backticks.
+          If you are encountering problems specifically with the `llama_params_fit` module, always upload `--verbose` logs as well.
       render: shell
     validations:
       required: false
