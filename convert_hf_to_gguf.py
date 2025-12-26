@@ -5252,18 +5252,26 @@ class KimiLinearModel(TextModel):
         merges = []
         vocab = {}
         
-        # TikToken stores vocab in mergeable_ranks
-        if hasattr(tokenizer, 'mergeable_ranks'):
+        # TikToken stores vocab in mergeable_ranks (implementation varies by tokenizer wrapper)
+        mergeable_ranks = None
+        if hasattr(tokenizer, "model") and hasattr(tokenizer.model, "_mergeable_ranks"):
+            mergeable_ranks = tokenizer.model._mergeable_ranks
+        elif hasattr(tokenizer, "mergeable_ranks"):
             mergeable_ranks = tokenizer.mergeable_ranks
+        elif hasattr(tokenizer, "tokenizer") and hasattr(tokenizer.tokenizer, "mergeable_ranks"):
+            mergeable_ranks = tokenizer.tokenizer.mergeable_ranks
+
+        if mergeable_ranks is not None:
             for token, rank in mergeable_ranks.items():
-                vocab[self._token_bytes_to_string(token)] = rank
+                vocab[QwenModel.token_bytes_to_string(token)] = rank
                 if len(token) == 1:
                     continue
                 # Build merges
-                merged = self._bpe(mergeable_ranks, token, max_rank=rank)
+                merged = QwenModel.bpe(mergeable_ranks, token, max_rank=rank)
                 if len(merged) == 2:
-                    merges.append(' '.join(map(self._token_bytes_to_string, merged)))
+                    merges.append(' '.join(map(QwenModel.token_bytes_to_string, merged)))
         else:
+            logger.warning("Kimi tokenizer mergeable_ranks not found; falling back to tokenizer.get_vocab without merges")
             # Fallback: get vocab directly
             vocab = {tok: idx for tok, idx in tokenizer.get_vocab().items()}
         
