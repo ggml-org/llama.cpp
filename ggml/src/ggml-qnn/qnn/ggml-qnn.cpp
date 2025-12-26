@@ -1,7 +1,3 @@
-#include <functional>
-#include <memory>
-#include <vector>
-
 #include "backend-ops.hpp"
 #include "common.hpp"
 #include "ggml-backend-impl.h"
@@ -9,6 +5,10 @@
 #include "logger.hpp"
 #include "tensor.hpp"
 #include "utils.hpp"
+
+#include <functional>
+#include <memory>
+#include <vector>
 
 namespace {
 
@@ -41,14 +41,20 @@ ggml_status ggml_backend_qnn_buffer_init_tensor(ggml_backend_buffer_t buffer, gg
     return GGML_STATUS_SUCCESS;
 }
 
-void ggml_backend_qnn_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data,
-                                        size_t offset, size_t size) {
+void ggml_backend_qnn_buffer_set_tensor(ggml_backend_buffer_t buffer,
+                                        ggml_tensor *         tensor,
+                                        const void *          data,
+                                        size_t                offset,
+                                        size_t                size) {
     GGML_UNUSED(buffer);
     memcpy((char *) tensor->data + offset, data, size);
 }
 
-void ggml_backend_qnn_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data,
-                                        size_t offset, size_t size) {
+void ggml_backend_qnn_buffer_get_tensor(ggml_backend_buffer_t buffer,
+                                        const ggml_tensor *   tensor,
+                                        void *                data,
+                                        size_t                offset,
+                                        size_t                size) {
     GGML_UNUSED(buffer);
     memcpy(data, (const char *) tensor->data + offset, size);
 }
@@ -149,8 +155,10 @@ bool ggml_backend_is_qnn(ggml_backend_t backend) {
     return ggml_guid_matches(backend->guid, ggml_backend_qnn_guid());
 }
 
-bool ggml_backend_qnn_cpy_tensor_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const ggml_tensor * src,
-                                       ggml_tensor * dst) {
+bool ggml_backend_qnn_cpy_tensor_async(ggml_backend_t      backend_src,
+                                       ggml_backend_t      backend_dst,
+                                       const ggml_tensor * src,
+                                       ggml_tensor *       dst) {
     GGML_UNUSED(backend_src);
     GGML_UNUSED(backend_dst);
     GGML_UNUSED(src);
@@ -204,6 +212,7 @@ constexpr const ggml_backend_i ggml_backend_qnn_interface = {
     /* .graph_compute           = */ ggml_backend_qnn_graph_compute,
     /* .event_record            = */ nullptr,
     /* .event_wait              = */ nullptr,
+    /* .graph_optimize          = */ nullptr,
 };
 
 /*
@@ -307,8 +316,10 @@ ggml_backend_buffer_type_t ggml_backend_qnn_device_get_buffer_type(ggml_backend_
     return ggml_backend_qnn_buffer_type(dev);
 }
 
-ggml_backend_buffer_t ggml_backend_qnn_device_buffer_from_ptr(ggml_backend_dev_t dev, void * ptr, size_t size,
-                                                              size_t max_tensor_size) {
+ggml_backend_buffer_t ggml_backend_qnn_device_buffer_from_ptr(ggml_backend_dev_t dev,
+                                                              void *             ptr,
+                                                              size_t             size,
+                                                              size_t             max_tensor_size) {
     // TODO
     GGML_UNUSED(dev);
     GGML_UNUSED(max_tensor_size);

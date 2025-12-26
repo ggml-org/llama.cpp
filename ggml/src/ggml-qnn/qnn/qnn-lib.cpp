@@ -58,9 +58,9 @@ constexpr const qnn::device_caps kDeviceCaps[] = {
     {
      // https://docs.qualcomm.com/bundle/publicresource/topics/80-63442-50/HtpOpDefSupplement.html#matmul
         kQnnNpuLibName, GGML_BACKEND_DEVICE_TYPE_ACCEL,
+        (1L << GGML_TYPE_F32) | (1L << GGML_TYPE_F16) | (1L << GGML_TYPE_I16),
 #ifdef GGML_HEXAGON_ENABLE_QUANTIZED_TENSORS
-     (1L << GGML_TYPE_F32) | (1L << GGML_TYPE_F16) | (1L << GGML_TYPE_I16),
-     (1L << GGML_TYPE_Q2_K) | (1L << GGML_TYPE_Q3_K) | (1L << GGML_TYPE_Q4_K) | (1L << GGML_TYPE_Q8_K),
+        (1L << GGML_TYPE_Q2_K) | (1L << GGML_TYPE_Q3_K) | (1L << GGML_TYPE_Q4_K) | (1L << GGML_TYPE_Q8_K),
 #else
         (1L << GGML_TYPE_F32) | (1L << GGML_TYPE_F16),
 #endif
