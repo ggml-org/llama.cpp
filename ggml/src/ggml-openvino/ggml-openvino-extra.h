@@ -83,7 +83,7 @@ const std::string & ggml_openvino_get_device_name();
 bool ggml_openvino_is_npu();
 
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
-std::optional<ExtraQuantType> ggml_openvino_get_requant_type(ggml_type type);
+std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor);
 
 // =====================================================
 // OpenVINO Tensor Extra Types

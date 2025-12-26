@@ -535,40 +535,6 @@ std::shared_ptr<ov::Node> requantize_to_buffers(const ggml_tensor * tensor,
     return result;
 }
 
-std::shared_ptr<ov::Node> requantize(const ggml_tensor * tensor, ExtraQuantType requant_type) {
-    ov::Shape node_shape = {(uint64_t) (tensor->ne[1]), (uint64_t) (tensor->ne[0])};
-
-    // FIXME hardcoded workaround to fix the case where token_emb.weight is q4_0 (instead of q6_k)
-    // (In some q4_0 models which use two different weight for token_emb and output, token_emb is q4_0)
-    std::string device = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "";
-    if (device == "NPU" && std::string(tensor->name) == "token_embd.weight") {
-        requant_type = ExtraQuantType::F16;
-    }
-
-    // Determine block size
-    int64_t block_size = node_shape[1];
-    if (requant_type == ExtraQuantType::Q4_0_128) {
-        block_size = 128;
-    } else if (requant_type == ExtraQuantType::Q8_0_32) {
-        block_size = 32;
-    }
-
-    // Allocate tensors
-    ov::Tensor weights, scales, biases;
-    if (requant_type == ExtraQuantType::F16) {
-        weights = ov::Tensor(ov::element::f16, node_shape);
-    } else {
-        bool is_u4 = (requant_type == ExtraQuantType::Q4_0_C || requant_type == ExtraQuantType::Q4_0_128);
-        ov::element::Type weight_type = is_u4 ? ov::element::u4 : ov::element::u8;
-        ov::Shape scales_shape = {node_shape[0], node_shape[1] / block_size};
-        weights = ov::Tensor(weight_type, node_shape);
-        scales = ov::Tensor(ov::element::f16, scales_shape);
-        biases = ov::Tensor(ov::element::f16, scales_shape);
-    }
-
-    return requantize_to_buffers(tensor, tensor->data, requant_type, block_size, weights, scales, biases);
-}
-
 std::shared_ptr<ov::Node> process_weight_tensor(const ggml_tensor * tensor, const void * data, void * output_base_ptr) {
     GGML_ASSERT(tensor != nullptr);
     GGML_ASSERT(data != nullptr);

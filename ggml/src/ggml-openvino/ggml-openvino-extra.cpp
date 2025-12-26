@@ -3,6 +3,7 @@
 #include "ggml-impl.h"
 #include "ggml.h"
 
+#include <cstring>
 #include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
 #include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
 
@@ -162,19 +163,24 @@ clEnqueueMemcpyINTEL_fn ggml_openvino_get_clEnqueueMemcpyINTEL() {
 }
 
 // Get requantization type for a tensor type (returns nullopt if no requant needed)
-std::optional<ExtraQuantType> ggml_openvino_get_requant_type(ggml_type type) {
+std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor * tensor) {
     if (!ggml_openvino_is_npu()) {
         return std::nullopt;
     }
     // NPU requantization rules
-    switch (type) {
+    if (strncmp(tensor->name, "token_embd.weight", 17) == 0) {
+        return ExtraQuantType::F16;
+    }
+    if (strncmp(tensor->name, "output.weight", 13) == 0) {
+        return ExtraQuantType::Q4_0_128;
+    }
+    switch (tensor->type) {
     case GGML_TYPE_Q4_0:
     case GGML_TYPE_Q4_1:
     case GGML_TYPE_Q4_K:
-        return ExtraQuantType::Q4_0_128;
     case GGML_TYPE_Q6_K:
     case GGML_TYPE_Q5_K:
-        return ExtraQuantType::F16;
+        return ExtraQuantType::Q4_0_128;
     default:
         return std::nullopt;
     }
@@ -200,7 +206,7 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     const size_t alignment = 64;  // Good for SIMD
 
     // Check if requantization is needed (NPU-specific)
-    auto requant_type = ggml_openvino_get_requant_type(tensor->type);
+    auto requant_type = ggml_openvino_get_requant_type(tensor);
     if (requant_type.has_value()) {
         layout.is_requant = true;
         layout.requant_type = requant_type;

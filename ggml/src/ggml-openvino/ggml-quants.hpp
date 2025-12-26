@@ -52,10 +52,6 @@ ov::Output<ov::Node> make_int4_weights(ov::Tensor& weight,
                                        ov::Tensor& biases,
                                        size_t group_size = GGML_QUANTIZATION_GROUP_SIZE);
 
-// ExtraQuantType is defined in ggml-openvino-extra.h
-
-std::shared_ptr<ov::Node> requantize(const ggml_tensor* tensor, ExtraQuantType requant_type);
-
 // Extract quantized weights from tensor and create weight subgraph
 // If weights/scales/biases are provided (non-empty), uses them as output buffers
 // Otherwise allocates new ov::Tensors internally
