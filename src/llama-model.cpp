@@ -6450,6 +6450,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         }
                         
                         if (layer.ssm_q_conv) {
+                             // KDA layer: align recurrent/KV metadata with actual tensors
+                             hparams.recurrent_layer_arr[i] = true;
+                             hparams.n_head_kv_arr[i] = 0;
+
                              // KDA Layer - Conv1d weights may be 3D or 4D
                              layer.ssm_k_conv = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_K, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head, 1}, TENSOR_NOT_REQUIRED);
                              if (!layer.ssm_k_conv) {
@@ -6500,6 +6504,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                              layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_v_kda * n_head, n_embd}, 0);
 
                         } else {
+                             // MLA layer: align recurrent/KV metadata with actual tensors
+                             hparams.recurrent_layer_arr[i] = false;
+                             hparams.n_head_kv_arr[i] = hparams.n_head();
+
                              // MLA Layer - use MLA-specific head dimensions
                              const int64_t q_lora_rank  = hparams.n_lora_q;
                              const int64_t kv_lora_rank = hparams.n_lora_kv;
