@@ -9,12 +9,10 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
     // Note: Kimi MLA does NOT use RoPE (rotary_emb=None in vLLM)
     // So we don't need inp_pos
     
-    // Only use recurrent state input for KDA layers
-    // MLA layers use direct softmax attention without KV cache
-    auto * inp_rs = build_rs_inp();
-    
-    // Input for MLA layers (no KV cache)
-    auto * inp_no_cache = build_attn_inp_no_cache();
+    // Hybrid memory: recurrent state for KDA, KV cache for MLA
+    auto * inp = build_inp_mem_hybrid();
+    auto * inp_rs = inp->get_recr();
+    auto * inp_attn = inp->get_attn();
 
     // Output ids for selecting which tokens to output
     ggml_tensor * inp_out_ids = build_inp_out_ids();
@@ -389,11 +387,11 @@ llm_build_kimi_linear::llm_build_kimi_linear(const llama_model & model, const ll
             ggml_tensor * Kcur = ggml_concat(ctx0, k_nope, k_pe_repeated, 0);
             cb(Kcur, "mla_K", il);  // Debug: K - Final key (k_nope + k_pe)
             
-            // Step 7: Direct softmax attention (without KV cache)
-            // Use build_attn with inp_no_cache for proper mask handling
+            // Step 7: Direct softmax attention (with KV cache)
+            // Use build_attn with inp_attn for proper mask handling
             // Note: build_attn internally dumps "kqv_out" which corresponds to vLLM's "attn_out"
             // (attention output before o_proj)
-            cur = build_attn(inp_no_cache, layer.wo, nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale_mla, il);
+            cur = build_attn(inp_attn, layer.wo, nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale_mla, il);
             cb(cur, "mla_out", il);  // Debug: output - Final layer output (after o_proj)
             
         } else {
