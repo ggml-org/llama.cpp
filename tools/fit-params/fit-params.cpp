@@ -35,7 +35,7 @@ int main(int argc, char ** argv) {
     }
 
     LOG_INF("%s: printing fitted CLI arguments to stdout...\n", __func__);
-    std::this_thread::sleep_for(10ms); // to avoid a race between stderr and stdout
+    common_log_flush(common_log_main());
     printf("-c %" PRIu32 " -ngl %" PRIu32, cparams.n_ctx, mparams.n_gpu_layers);
 
     size_t nd = llama_max_devices();

@@ -829,7 +829,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
   No. We can't support Ollama issue directly, because we aren't familiar with Ollama.
 
-  Sugguest reproducing on llama.cpp and report similar issue to llama.cpp. We will surpport it.
+  Suggest reproducing on llama.cpp and report similar issue to llama.cpp. We will support it.
 
   It's same for other projects including llama.cpp SYCL backend.
 

@@ -229,6 +229,60 @@ struct ggml_graph_node_properties {
     // op
     ggml_op node_op;
     int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
+
+    /**
+     * @brief Check if a ggml tensor node matches this property set.
+     *
+     * This function compares all relevant fields (address, op type, shape, source inputs, op params)
+     * to determine whether the current node matches these previously recorded properties.
+     *
+     * @param node The current ggml tensor node.
+     * @return true if all fields match (excluding GGML_OP_VIEW); false otherwise.
+     */
+    bool has_matching_properties(ggml_tensor * node) {
+        if (node->data != this->node_address && node->op != GGML_OP_VIEW) {
+            return false;
+        }
+
+        if (node->op != this->node_op) {
+            return false;
+        }
+
+        for (int i = 0; i < GGML_MAX_DIMS; i++) {
+            if (node->ne[i] != this->ne[i]) {
+                return false;
+            }
+            if (node->nb[i] != this->nb[i]) {
+                return false;
+            }
+        }
+
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            if (node->src[i]) {
+                if (node->src[i]->data != this->src_address[i] && node->op != GGML_OP_VIEW) {
+                    return false;
+                }
+
+                for (int d = 0; d < GGML_MAX_DIMS; d++) {
+                    if (node->src[i]->ne[d] != this->src_ne[i][d]) {
+                        return false;
+                    }
+                    if (node->src[i]->nb[d] != this->src_nb[i][d]) {
+                        return false;
+                    }
+                }
+            } else {
+                if (this->src_address[i] != nullptr) {
+                    return false;
+                }
+            }
+        }
+
+        if (node->op == GGML_OP_SCALE || node->op == GGML_OP_UNARY || node->op == GGML_OP_GLU) {
+            return memcmp(this->op_params, node->op_params, GGML_MAX_OP_PARAMS) == 0;
+        }
+        return true;
+    }
 };
 
 struct ggml_cann_graph {
@@ -241,6 +295,79 @@ struct ggml_cann_graph {
     aclmdlRI graph = nullptr;
 
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
+
+    /**
+     * @brief Create a new CANN graph from a ggml computation graph.
+     *
+     * This function creates a new ggml_cann_graph object and fills its node properties
+     * (operation type, dimensions, strides, input sources, and operation parameters)
+     * based on the current ggml computation graph.
+     *
+     * Each node in the ggml graph is mapped to a property entry in the new CANN graph:
+     * - node address
+     * - operation type
+     * - shape (ne) and strides (nb)
+     * - source tensor addresses
+     * - operation parameters
+     *
+     * @param cgraph The current ggml computation graph.
+     * @return Pointer to the newly created ggml_cann_graph object.
+     */
+    static ggml_cann_graph * create_from_cgraph(ggml_cgraph * cgraph) {
+        ggml_cann_graph * new_graph = new ggml_cann_graph();
+        new_graph->ggml_graph_properties.resize(cgraph->n_nodes);
+
+        for (int node_idx = 0; node_idx < cgraph->n_nodes; ++node_idx) {
+            ggml_tensor * node = cgraph->nodes[node_idx];
+            auto &        prop = new_graph->ggml_graph_properties[node_idx];
+
+            prop.node_address = node->data;
+            prop.node_op      = node->op;
+
+            std::copy_n(node->ne, GGML_MAX_DIMS, prop.ne);
+            std::copy_n(node->nb, GGML_MAX_DIMS, prop.nb);
+
+            for (int src = 0; src < GGML_MAX_SRC; ++src) {
+                if (node->src[src]) {
+                    prop.src_address[src] = node->src[src]->data;
+                    std::copy_n(node->src[src]->ne, GGML_MAX_DIMS, prop.src_ne[src]);
+                    std::copy_n(node->src[src]->nb, GGML_MAX_DIMS, prop.src_nb[src]);
+                } else {
+                    prop.src_address[src] = nullptr;
+                    std::fill_n(prop.src_ne[src], GGML_MAX_DIMS, 0);
+                    std::fill_n(prop.src_nb[src], GGML_MAX_DIMS, 0);
+                }
+            }
+
+            memcpy(prop.op_params, node->op_params, GGML_MAX_OP_PARAMS);
+        }
+
+        return new_graph;
+    }
+
+    /**
+     * @brief Check whether this CANN graph matches the given ggml computation graph.
+     *
+     * This function compares the number of nodes and each node's properties
+     * (operation type, dimensions, strides, inputs, and operation parameters)
+     * to determine whether this CANN graph matches the given ggml graph.
+     *
+     * @param cgraph The current ggml computation graph.
+     * @return true if this CANN graph matches the ggml graph; false otherwise.
+     */
+    bool matches_cgraph(ggml_cgraph * cgraph) {
+        if (this->ggml_graph_properties.size() != static_cast<size_t>(cgraph->n_nodes)) {
+            return false;
+        }
+
+        for (int i = 0; i < cgraph->n_nodes; ++i) {
+            if (!this->ggml_graph_properties[i].has_matching_properties(cgraph->nodes[i])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
 };
 
 /**
@@ -273,15 +400,6 @@ struct ggml_cann_graph_lru_cache {
     }
 
     /**
-     * @brief Move an existing graph to the front of the cache.
-     * @param node Pointer to the ggml_cann_graph to move.
-     */
-    void move_to_front(ggml_cann_graph * node) {
-        cache_list.remove(node);
-        cache_list.push_front(node);
-    }
-
-    /**
      * @brief Clear all graphs from the cache (also frees memory).
      */
     void clear() {
@@ -295,6 +413,28 @@ struct ggml_cann_graph_lru_cache {
      * @brief Destructor that clears the cache and frees all cached graphs.
      */
     ~ggml_cann_graph_lru_cache() { clear(); }
+
+    /**
+     * @brief Find a cached CANN graph that matches the given ggml graph and move it to front.
+     *
+     * This function iterates through the cached CANN graphs stored in the LRU cache and
+     * compares them against the given ggml computation graph. If a matching graph is found,
+     * it is promoted to the front of the LRU cache and returned. Otherwise, the function
+     * returns nullptr.
+     *
+     * @param cgraph The current ggml computation graph.
+     * @return true if found; false otherwise.
+     */
+    bool find_and_move_to_front(ggml_cgraph * cgraph) {
+        for (auto & graph_ptr : this->cache_list) {
+            if (graph_ptr->matches_cgraph(cgraph)) {
+                cache_list.remove(graph_ptr);
+                cache_list.push_front(graph_ptr);
+                return true;
+            }
+        }
+        return false;
+    }
 };
 #endif  // USE_ACL_GRAPH
 
@@ -317,6 +457,9 @@ struct ggml_cann_rope_cache {
         }
         if (position_select_index_host) {
             free(position_select_index_host);
+        }
+        if (yarn_ramp_cache) {
+            ACL_CHECK(aclrtFree(yarn_ramp_cache));
         }
     }
 
@@ -370,6 +513,7 @@ struct ggml_cann_rope_cache {
     float * theta_scale_exp_host       = nullptr;
     int *   position_select_index_host = nullptr;
     void *  position_select_index      = nullptr;
+    void *  yarn_ramp_cache            = nullptr;
     // sin/cos cache, used only to accelerate first layer on each device
     void *  sin_cache                  = nullptr;
     void *  cos_cache                  = nullptr;
