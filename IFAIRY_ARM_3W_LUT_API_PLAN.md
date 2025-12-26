@@ -34,8 +34,8 @@
 
 - `legacy`：每组 `4 ch × 64 pat × int16`（`512 B / group / col`）。
 - `compact`：每组 `3 pos × 4 codes × 4 ch × int8`（`48 B / group / col`），NEON 内核用 32-bit load + widen + add 的方式累加。
-- `tbl64`：每组 `4 ch × 64 pat × int8`（`256 B / group / col`，decode-first 实验布局；当前实现为标量路径）。
-- `merged64`：每组 `64 pat × 4 ch × int8`（`256 B / group / col`，decode-first；每 group 一次 32-bit load 得到 `{ac,ad,bc,bd}`）。
+- `tbl64`：每组 `4 ch × 64 pat × int8`（`256 B / group / col`，当前仅作为 decode 场景的 A/B 选项；不作为默认 baseline）。
+- `merged64`：每组 `64 pat × 4 ch × int8`（`256 B / group / col`，当前 baseline；每 group 一次 32-bit load 得到 `{ac,ad,bc,bd}`）。
 
 缩放数组（`lut_scales`）与 LUT 分离：
 
@@ -290,7 +290,7 @@ struct ifairy_lut_extra {
 - **减少地址计算**：把每个 position 的 16B 表当作 `4×int32`，用 `t0[c0]` 方式索引（减少 `*4`/LEA）。
   - 已试验（本机，`compact`，`N==1`，`-n 64` 双向交替 A/B）：将 `grp + k * pos_bytes` 改为“基址 + `pos_stride`”访问，未观察到稳定收益（两轮对照方向相反），已回退；该类微改动暂降级为 P2（除非 profile 明确显示地址计算占比异常）。
   - 小点：当 `pat` 已经做过 `& 0x3f` 掩码时，`c2` 可直接用 `pat >> 4`（不需要再 `& 3`），减少一条冗余指令并缩短依赖链。
-- **prefetch 策略**：对 `grp + k_ifairy_lut_group_bytes` 与 `idx_g + ...` 做可控预取（以 Xcode Profile 的 L1 miss 变化为准，避免“盲目 prefetch”）。
+- **prefetch 策略**：对 `grp + k_ifairy_lut_group_bytes` 与 `idx_g + ...` 做可控预取（以 `xctrace` + bench 的对照为准，避免“盲目 prefetch”）。
 - **N==1 快路**：在 `qgemm_ex` 内增加运行时分支，消掉 col 循环与部分指针运算（仍属 LUT 通用内核，不做形状模板爆炸）。
   - 建议保留一个“perf-safe”开关：`GGML_IFAIRY_LUT_N1_FASTPATH=0` 可强制走通用路径，用于回归/调优 A/B（避免“更复杂但更慢”的快路悄悄常驻）。
 - **减少 call/拷贝开销**：非 tiling 情况下尽量避免“每 row 调一次 qgemm + memcpy”，让每线程处理连续 row-block 并直接写回 `dst`。

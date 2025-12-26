@@ -97,7 +97,7 @@ groups_per_row = (K / 256) * 86
 
 ---
 
-## 4. LUT 表结构（两种 layout）
+## 4. LUT 表结构（四种 layout）
 
 ### 4.1 `legacy`：`64 patterns × 4 channels × int16`（大表，路径更直接）
 
@@ -129,7 +129,17 @@ NEON 内核里对每个 group 只需要：
 2) 分别读取 `pos0/pos1/pos2` 的 16B 表，按 `c0/c1/c2` 索引得到 4×int8，再 widen/add；
 3) 继续累加到通道累加器。
 
-### 4.3 缩放数组（per-block）
+### 4.3 `tbl64`：`4 channels × 64 patterns × int8`（A/B 候选）
+
+- 每个 `(col, group)` 一张 256B 表：`t[ch][pat]`（`ch ∈ {ac,ad,bc,bd}`）。
+- 当前主要作为 decode 场景 A/B 选项（不作为默认 baseline），并强制禁用 BK tiling（避免在 `preprocess + barrier` 上放大负收益）。
+
+### 4.4 `merged64`：`64 patterns × 4 channels × int8`（当前 baseline）
+
+- 每个 `(col, group)` 一张 256B 表：`t[pat] = {ac,ad,bc,bd}`（4 bytes）。
+- 内核中每 group 一次 32-bit load 取 `{ac,ad,bc,bd}` 并 widen+accum；当前 `auto → merged64` 作为默认路径覆盖 prefill + decode。
+
+### 4.5 缩放数组（per-block）
 
 激活量化为 `block_ifairy_q16` 时，每个 256-block 有 `d_real/d_imag`。当前实现把它展开到 `lut_scales` 中：
 
@@ -142,7 +152,7 @@ NEON 内核里对每个 group 只需要：
 
 集成点在 `ggml/src/ggml-cpu/ggml-cpu.c::ggml_compute_forward_mul_mat`（`#if defined(GGML_IFAIRY_ARM_LUT)`）。
 
-- 索引生成：thread 0 负责 `ggml_ifairy_lut_transform_tensor()`，随后 barrier，同一 op 的所有线程共享索引。
+- 索引生成：`ggml_graph_compute()` 在启动 worker 线程前预扫描 `cgraph`，对命中的 iFairy `MUL_MAT` 确保 `src0->extra/indexes` 已生成（因此 mul_mat 内无需为 indexes 再做 barrier）。
 - 非 tiling：
   - `preprocess_ex()` 并行构表（跨列/跨 group 切分），随后 barrier；
   - `qgemm_ex()` 按行分片并行写回。
@@ -186,19 +196,24 @@ NEON 内核里对每个 group 只需要：
 
 ---
 
-## 7. 当前主任务（与代码审查结论对齐）
+## 7. 当前优先级（与 profile/bench 对齐）
 
-P0（最高优先级：先恢复 tok/s 回归）：
-
-- `0ec52a5a` 之后出现大幅 tok/s 回归：优先按 `IFAIRY_LUT_PERF_REGRESSION_ANALYSIS.md` 的建议逐项回退/对照，先把 tok/s 拉回“已验证过的高档位”，再继续引入新优化点。
-
-P0（并行推进：但尽量不扩面热路径）：
+P0（正确性与回归门槛）：
 
 - 内存/生命周期：减少 `new/delete` + 全局容器；补齐 size/overflow/bounds 检查，避免 silent failure。
 - 线程安全：明确并发模型；缩小锁粒度，避免持锁做重活；补充并发/压力测试。
 - ✅ size/overflow：为 `ggml_ifairy_lut_get_wsize` 与 `ggml-cpu.c` 的 LUT 工作区切分加入 overflow 断言，避免 size_t wrap 后的越界访问（`2a39f249`）。
 
-P1（近期做）：
+P1（吞吐主线）：
+
+- 基于 `xctrace`（`leaf CPU time share`）与 `llama-bench`：当前瓶颈明确集中在 `ggml_ifairy_lut_qgemm_ex_merged64`，因此优先级最高的是把 `merged64` 的 qgemm 内环做“可回退的小步 A/B”微优化（详见 `IFAIRY_ARM_3W_LUT_API_PLAN.md` 的 `6.2`）。
+- `preprocess_ex` 当前占比很低（通常 ≤~2%），不要把收益“搬家”到构表路径。
+
+P2（结构优化/调参）：
+
+- decode 小工作量的线程/同步开销、BK/BM/FULLACC 调参放在 `qgemm_ex` 热点压下来之后再推进，以免噪声掩盖收益。
+
+P3（工程化与可维护）：
 
 - ✅ 可维护性重构：拆分 `ggml/src/ggml-ifairy-lut.cpp` 为 `ggml-ifairy-lut-{transform,preprocess,qgemm}.cpp` + `ggml-ifairy-lut-impl.h`，减少 legacy/compact 重复代码。
 - 错误处理一致性：统一 `return false`/`GGML_ASSERT`/日志策略。

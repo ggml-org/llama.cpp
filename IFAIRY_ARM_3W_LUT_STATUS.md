@@ -33,7 +33,7 @@
 - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：选择（或影响 auto 策略选择）kernel 路径（默认 `auto`）。当前：
   - `sdot`：`compact` 的 `N==1` dotprod 实验内核
   - `tbl`：decode-first `tbl64`
-  - `merged64`：decode-first `merged64`
+  - `merged64`：强制 `merged64`（prefill+decode）
 - `GGML_IFAIRY_LUT_DECODE_NTH=<int>`：decode (`N==1`) 场景将 graph threads 上限 clamp 到该值（`0` 禁用；用于 A/B）。
 - `GGML_IFAIRY_LUT_DECODE_THRESHOLD=<int>`：decode 小工作量阈值（按 `max(M*K)` 估算）；当 `DECODE_NTH==0` 且 `max(M*K) <= threshold` 时自动 clamp 到 `1` thread（`0` 禁用；用于 A/B）。
 
@@ -42,7 +42,7 @@
 > 更新：当前 baseline 以 `0.1.0` 的 `llama-bench` 3-run 记录为准；接下来优先级以“可复现 + 小步 A/B + 可回退”为主，不再以扩展热路径复杂度为驱动。
 
 - P0：可复现性与回归门槛 —— 固定命令/固定 seed/固定 build 目录；`test-ifairy + strict` 必跑，tok/s 必记录并留 raw 日志路径。
-- P1：吞吐提升 —— 优先压 `qgemm_ex`（让 `compact` 更稳），并降低 decode 场景的同步/调度开销（以 profile + bench 记录为准）。
+- P1：吞吐提升 —— 优先压 `ggml_ifairy_lut_qgemm_ex_merged64`（当前默认路径 top1 热点），并降低 decode 场景的同步/调度开销（以 profile + bench 记录为准）。
 - P2：可维护性 —— 仅在性能稳定后再做生命周期/线程安全等重构，避免掩盖性能回归点。
 
 ## 0.1 tok/s 记录（更新本文档时必填）
@@ -116,8 +116,10 @@
 | 2025-12-26T04:03:20Z | `2617cc59` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 17.75 | `/tmp/ifairy_bench_opt2_auto_2617cc59_20251226T040320Z.txt` |
 | 2025-12-26T17:49:19Z | `95c5bf1f+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 29.47 | `/tmp/ifairy_bench_20251226T174919Z_auto_default.jsonl` |
 | 2025-12-26T17:49:23Z | `95c5bf1f+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 24.36 | `/tmp/ifairy_bench_20251226T174919Z_auto_default.jsonl` |
+| 2025-12-26T18:49:01Z | `97ade285` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 29.72 | `/tmp/ifairy_bench_status_0_1_0_liweitao_20251226T184901Z.jsonl` |
+| 2025-12-26T18:49:16Z | `97ade285` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 25.03 | `/tmp/ifairy_bench_status_0_1_0_liweitao_20251226T184901Z.jsonl` |
 
-Note: 2025-12-22 runs showing a large drop were captured with low power mode enabled (`pmset -g` shows `lowpowermode 1`). Re-running `fe740e0a` under the same mode still yields ~4-6 tok/s, so the drop is environmental. Re-benchmark after disabling low power mode; low-power logs are for reference only (`/tmp/ifairy_fe740e0a_20251223T005155.jsonl`, `/tmp/ifairy_fe740e0a_device_none_20251223T005346.jsonl`). Current power-on retest is logged above (`/tmp/ifairy_bench_power_20251223T122617.jsonl`, `/tmp/ifairy_bench_power_run2_20251223T124504.jsonl`, `/tmp/ifairy_bench_power_run3_20251223T124605.jsonl`). 3-run summary: pp128 min/max/mean = 3.291/3.304/3.296; tg256 min/max/mean = 16.750/18.903/17.901.
+Note: 2025-12-22 部分跑分在低电量模式（`pmset -g` 显示 `lowpowermode 1`）下进行，属于环境噪声；参考日志：`/tmp/ifairy_fe740e0a_20251223T005155.jsonl`、`/tmp/ifairy_fe740e0a_device_none_20251223T005346.jsonl`；power-on 复跑日志：`/tmp/ifairy_bench_power_20251223T122617.jsonl`、`/tmp/ifairy_bench_power_run2_20251223T124504.jsonl`、`/tmp/ifairy_bench_power_run3_20251223T124605.jsonl`。
 
 ### 0.1.1 legacy（llama-cli，已停更）
 
@@ -135,49 +137,8 @@ Note: 2025-12-22 runs showing a large drop were captured with low power mode ena
 | 2025-12-18T05:31:30Z | `79c915e5` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 19.47 |
 | 2025-12-20T07:06:38Z | `d75031f1+dirty` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=legacy` | 18.61 |
 | 2025-12-20T07:06:38Z | `d75031f1+dirty` | Apple M4 | 4 | 256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_LAYOUT=compact` | 20.32 |
-示例（长测 3-run，热漂移影响可见，非“最终结论”）：在 `1e1177a9` 下连续 3 次长测结果为 `legacy mean=14.58 min=14.23 max=14.99`；`compact mean=13.19 min=12.14 max=14.10`。
 
-更新（长测 3-run，热漂移/outlier 示范，**不作为结论**）：在 `12c83d14` 下用 `legacy/compact` 交替跑且只 `sleep 8`，得到 `legacy mean=15.55 min=14.06 max=16.76`；`compact mean=13.23 min=9.32 max=16.69`（`compact` 出现明显 outlier）。这类结果应先冷却（加大间隔）后重测再谈 A/B。
-
-更新（长测 3-run，冷却后可复现，作为当前 baseline 参考）：在 `12c83d14` 下用 `legacy/compact` 交替跑，`initial sleep 120 + 每次 sleep 75`，得到 `legacy mean=19.47 min=18.39 max=20.43`；`compact mean=17.02 min=16.12 max=18.24`。结论：当前 `compact` 仍未稳定胜出，下一步应按 `API_PLAN.md:6.2` 继续压 `qgemm_ex(compact)`。
-
-更新（长测 3-run，冷却后可复现，作为当前 baseline 参考）：在 `8b02f3b4+dirty`（本地 `GGML_IFAIRY_LUT_PREFETCH` env cache 变更）下用 `legacy/compact` 交替跑，`initial sleep 180 + 每次 sleep 90`，得到 `legacy mean=19.45 min=18.99 max=20.23`；`compact mean=16.80 min=15.35 max=18.47`。说明：`compact` 波动仍偏大且均值仍落后，继续按 `6.1` 聚焦压 `qgemm_ex(compact)`。
-
-（说明）`N==1` fast-path / unroll / prefetch 等 A/B 调优建议使用上面的短测命令做 `ABABAB` 交替跑；短测结果仅用于判断方向，最终结论仍以长测 3-run 为准（并在表中记录）。
-
-**短测 ABABAB 汇总（`de40a2fb`，`compact`，`-n 64`）**
-
-- `GGML_IFAIRY_LUT_N1_FASTPATH=1`：mean `19.62`，min `18.49`，max `20.34`
-- `GGML_IFAIRY_LUT_N1_FASTPATH=0`：mean `20.36`，min `17.89`，max `22.42`
-- `GGML_IFAIRY_LUT_PREFETCH=1`：mean `21.28`，min `20.54`，max `22.15`
-- `GGML_IFAIRY_LUT_PREFETCH=0`：mean `20.94`，min `19.99`，max `21.43`
-
-解读：上述两组 A/B 都存在较强重叠（尤其 `N1_FASTPATH` 的方差较大），暂不据此修改默认策略；若要据此做决策，需要在冷却后重跑短测，并用长测 3-run 做最终确认。
-
-**短测 ABABAB（历史样本：unroll knob sanity，`8b5452b1+dirty`，`compact`，`-n 64`）**
-
-- `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=4`：mean `17.45`，min `15.37`，max `18.63`
-- `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2`：mean `15.19`，min `14.45`，max `15.66`
-- 结论：在该次复跑下 `unroll=2` 未显示优势；默认仍保持 `4`。后续如要据此做默认策略调整，必须在冷却后复跑并用长测 3-run 确认（避免热/负载噪声）。
-
-**短测 ABABAB（减少冗余 mask：`c2 = pat >> 4`，`67e7c7e8+dirty`，`compact`，`-n 64`）**
-
-- A（before）：`build-rel-a/bin/llama-cli` mean `23.08`，min `21.57`，max `24.71`
-- B（after）：`build-rel/bin/llama-cli` mean `23.79`，min `21.33`，max `24.69`
-- 备注：该次复跑中出现明显 “频率/调度 ramp”（前两次 ~21 tok/s，后两次 ~24 tok/s），因此目前只认为 **无明显回归**；若要据此做方向判断，需要在更稳定的热/负载状态下复跑并做长测 3-run 确认。原始日志：`/tmp/ifairy_lut_abab_compact_drop_and3_20251218T101156Z.tsv`。
-
-**短测尝试（失败案例：避免重复踩坑）**
-
-- 尝试：在 `compact` 的 `N==1` fast-path 中删除 4-way unroll，仅保留 2-way unroll（意图降低寄存器压力）。
-- 结果：短测（`-n 64`，`GGML_IFAIRY_LUT_LAYOUT=compact`，`N1_FASTPATH=1`，`PREFETCH=1`）6 次复跑 `mean 20.12 -> 14.20`（约 `-29%`），且方差变大；已回退该方向，后续不要轻易将 4-way unroll 收敛为 2-way（至少在 Apple M4 上不成立）。
-- 备注：已补充 `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4` 作为 perf-safe A/B 开关，后续复跑该方向不需要改代码。
-- 尝试：在 `compact` 的 `N==1` fast-path 中，把每个 group 的 3 个 position 表（每个 16B）按 `int32_t[4]` 视角做“基址 + stride”访问（减少指针加法/地址计算）。
-  - 对照：旧/新二进制交替跑两轮（`A=../llama_cpp_perfbase_406715f2/build-rel/bin/llama-cli`，`B=./build-rel/bin/llama-cli`），均为 `-n 64`，对比指标取 `llama_perf_context_print: eval time ... tokens per second`。
-  - 结果：`ABABAB` 显示微弱正向（A mean `5.6467`，B mean `5.6667`；原始 TSV：`/tmp/ifairy_lut_abab_compact_addrchain_20251218T150914Z.tsv`），但 `BABABA` 反向后结论翻转（A mean `5.7667`，B mean `5.7367`；原始 TSV：`/tmp/ifairy_lut_bababa_compact_addrchain_20251218T151445Z.tsv`）。
-  - 结论：该点在当前机器/条件下 **无稳定提升**（更像噪声/热漂移），已回退；后续不要在没有更强证据（profile 指令计数/IPC 或更大样本）前继续堆叠这类“微弱地址计算”改动。
-- 尝试：`GGML_IFAIRY_LUT_LAYOUT=compact2`（实验性 2-lookups）：把 `pos0+pos1` 预合并成 16-way `int16` 表（`idx01 = pat & 0x0f`），`pos2` 仍为 16B `int8` 表（`c2 = pat >> 4`），希望把每 group 的查表从 3 次降到 2 次。
-  - 结果：短测（`-n 64`）出现大幅回退：`compact mean=5.477` vs `compact2 mean=3.473`（原始 TSV：`/tmp/ifairy_lut_abab_compact_vs_compact2_20251218T153800Z.tsv`）；对 preprocess 做 NEON 向量化后仍显著落后：`compact mean=5.953` vs `compact2 mean=4.623`（原始 TSV：`/tmp/ifairy_lut_abab_compact_vs_compact2_v2_20251218T154608Z.tsv`）。
-  - 结论：该方向在当前实现/机器上属于 **明确负收益**；已停止推进（不合入默认路径），后续只在“preprocess 不变或更便宜 + profile 明确显示 qgemm 指令瓶颈且缓存足够”时再考虑重启。
+（说明）以上 legacy/compact 的 `llama-cli` 口径样本仅用于历史参考，本文不再维护其 A/B 细节；需要追溯请查看 `git log -p -- IFAIRY_ARM_3W_LUT_STATUS.md`。
 
 ## 0.2 xctrace Profile（decode + prefill，merged64 默认）
 
@@ -255,7 +216,7 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
 - GEMM：`ggml/src/ggml-ifairy-lut.cpp::ggml_ifairy_lut_qgemm()`
   - `legacy`：每 group 直接读取 `{ac,ad,bc,bd}`（`int16`）并 widen+accum 到 `int32`
   - `compact`：对每个 group 做 3 次 position 查表并相加得到 `{ac,ad,bc,bd}`，再 widen+accum；NEON 下使用 3 次 32-bit load（4B）+ `vaddw_s16` 走整数累加
-  - `tbl64`：对每个 group 读取 `pat` 并从 `4×64` int8 表取出 `{ac,ad,bc,bd}`（当前为标量实现）
+  - `tbl64`：对每个 group 读取 `pat` 并从 `4×64` int8 表取出 `{ac,ad,bc,bd}`（当前仅作为 decode 场景 A/B 选项；不作为默认 baseline）
   - `merged64`：对每个 group 读取 `pat` 并从 `64×4` int8 表一次 32-bit load 得到 `{ac,ad,bc,bd}`（NEON 下 widen+accum）
   - 输出默认以 **bf16-pair packed in F32** 的方式写回（与现有 ifairy vec_dot 约定一致）。
   - 在 `__aarch64__ + __ARM_NEON` 下使用 NEON（否则走标量）。
@@ -344,11 +305,11 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
 > 更新：当前 baseline 以 `0.1.0` 的 bench 记录为准；下方详细“计划/路线图/回归手册”主要作为历史备忘，默认不驱动新的扩面改动（以可复现的小步 A/B 为主）。
 
 - P0：正确性与回归门槛 —— `test-ifairy` + `GGML_IFAIRY_LUT_VALIDATE_STRICT=1` 必跑，必要时用 `scripts/ifairy_lut_repro.sh` 一键复现。
-- P1：吞吐提升 —— 优先压 `qgemm_ex`（让 `compact` 更稳），并降低 decode 场景的同步/调度开销（以 profile + `0.1` 的 bench 记录为准）。
+- P1：吞吐提升 —— 优先压 `ggml_ifairy_lut_qgemm_ex_merged64`（默认路径 top1 热点），并降低 decode 场景的同步/调度开销（以 profile + `0.1` 的 bench 记录为准）。
 - P2：结构与维护 —— BK/BM/FULLACC 调参、索引生命周期/缓存策略等，放在结构性开销下降后再推进。
 
 <details>
-<summary>展开：历史计划/路线图/回归手册（归档）</summary>
+<summary>展开：历史计划/路线图/回归手册（归档，已冻结）</summary>
 
 ### 4.0 回归恢复（最高优先级：先回到 `0ec52a5a` 的 tok/s 档位）
 
@@ -371,14 +332,14 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
 
 > 目标：优先提升 Apple Silicon（ARM64 + NEON）的 tok/s，且不破坏 `w * conj(x)` 语义与现有输出一致性。
 
-（优先级依据：见 0.2 的 Xcode Profile，`ggml_ifairy_lut_qgemm_ex` 占比 63%）
+（优先级依据：见 0.2 的 xctrace Profile；当前默认路径 top1 热点仍是 `ggml_ifairy_lut_qgemm_ex_merged64`）
 
 1) **把 63% 的热点继续压下去：优化 `ggml_ifairy_lut_qgemm_ex`（compact 优先）**  
    - 目标：减少每 group 的 load/widen/add 指令数与依赖链，减少 L1 miss（尤其是 decode：`N≈1`、每 token 都要跑一遍）
    - 任务拆解（不需要形状专用内核；目标是把 inner-loop 变“更像纯带宽”）：
      - **unroll + 多累加器**：对 group 循环做 2/4-way unroll，采用 `isum0/isum1` 交错累加，减少 load-use 依赖链
      - **减少地址计算**：把每个 position 的 16B 表当作 `4×int32`，用 `t0[c0]` 方式索引（减少 `*4`/LEA）
-     - **prefetch 策略**：prefetch `grp + k_ifairy_lut_group_bytes` 与 `idx_g + k`；对比“prefetch 太早/太晚/无效”的差异（Xcode 可直接看到 L1 miss）
+     - **prefetch 策略**：prefetch `grp + k_ifairy_lut_group_bytes` 与 `idx_g + k`；对比“prefetch 太早/太晚/无效”的差异（以 `xctrace`/bench 对照为准）
      - **N==1 快路（仍属于 LUT，不是形状模板）**：为 decode 常见 `N==1` 在 `qgemm_ex` 内加一个 runtime 分支，消掉 col 循环与部分指针运算
      - **减少 call/拷贝开销（仍属于 LUT）**：非 tiling 情况下避免“每 row 调一次 qgemm + memcpy”，改为每线程处理连续 row-block 并直接写回 `dst`
      - **SDOT 快路优化（实验）**：当前 `sdot` 慢于 `auto`，优先做“去分支 + 专用循环”与“布局对齐”验证：
@@ -409,7 +370,7 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
    - 可做：
      - 继续减少 LUT 路径里的 barrier 次数（尤其 tiled/BK 版本），能用 `FULLACC` 解决的重复构表/重复同步尽量消掉
      - 检查是否存在 “很小但很频繁” 的算子（例如某些额外拷贝/转换）可以在 LUT 路径内合并或延后
-     - 对 decode 场景（`N≈1`）评估线程数与切分策略：避免线程空转/争用（Xcode 能看到大量线程在等待就说明要改切分）
+     - 对 decode 场景（`N≈1`）评估线程数与切分策略：避免线程空转/争用（以 `xctrace` 的线程状态/leaf 开销为准）
 
 3) **减少重复 preprocess 与同步开销（先让 BK/BM “不再变慢”）**  
    - 当前已落地：NEON 构表（`pat` 维度向量化）+ NEON 累加（标量回退）。  
