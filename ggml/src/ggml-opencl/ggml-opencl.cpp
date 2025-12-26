@@ -669,10 +669,6 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_transpose_16_buf;
     cl_kernel kernel_transpose_16_4x1;
 
-    //cl_mem A_s_d_max;            // max scale buffer size for transpose
-    //cl_mem A_q_d_max;            // max weight buffer size for transpose
-    //cl_mem B_d_max;              // max activation buffer size for transpose
-
     // Gemm and Gemv related programs, kernels, etc
     cl_program program_CL_gemm;
     cl_program program_CL_gemv_general;
