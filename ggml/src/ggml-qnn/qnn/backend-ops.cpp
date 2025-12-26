@@ -75,6 +75,7 @@ constexpr const bool kQnnSupportedOps[] = {
     false,  // GGML_OP_COS
     false,  // GGML_OP_SUM
     false,  // GGML_OP_SUM_ROWS
+    false,  // GGML_OP_CUMSUM
     false,  // GGML_OP_MEAN
     false,  // GGML_OP_ARGMAX
     false,  // GGML_OP_COUNT_EQUAL
@@ -129,7 +130,10 @@ constexpr const bool kQnnSupportedOps[] = {
     false,  // GGML_OP_ARANGE
     false,  // GGML_OP_TIMESTEP_EMBEDDING
     false,  // GGML_OP_ARGSORT
+    false,  // GGML_OP_TOP_K
     false,  // GGML_OP_LEAKY_RELU
+    false,  // GGML_OP_TRI
+    false,  // GGML_OP_FILL
 
     false,  // GGML_OP_FLASH_ATTN_EXT
     false,  // GGML_OP_FLASH_ATTN_BACK
@@ -142,6 +146,7 @@ constexpr const bool kQnnSupportedOps[] = {
     false,  // GGML_OP_RWKV_WKV6
     false,  // GGML_OP_GATED_LINEAR_ATTN
     false,  // GGML_OP_RWKV_WKV7
+    false,  // GGML_OP_SOLVE_TRI
 
     false,  // GGML_OP_UNARY
 
@@ -172,6 +177,8 @@ constexpr const bool kQnnSupportedOps[] = {
     false,  // GGML_UNARY_OP_HARDSWISH
     false,  // GGML_UNARY_OP_HARDSIGMOID
     false,  // GGML_UNARY_OP_EXP
+    false,  // GGML_UNARY_OP_EXPM1
+    false,  // GGML_UNARY_OP_SOFTPLUS
     false,  // GGML_UNARY_OP_GELU_ERF
     false,  // GGML_UNARY_OP_XIELU
     false,  // GGML_UNARY_OP_FLOOR

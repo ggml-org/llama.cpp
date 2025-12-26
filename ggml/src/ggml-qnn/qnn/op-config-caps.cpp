@@ -116,6 +116,7 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {}, // GGML_OP_COS
     {}, // GGML_OP_SUM
     {}, // GGML_OP_SUM_ROWS
+    {}, // GGML_OP_CUMSUM
     {}, // GGML_OP_MEAN
     {}, // GGML_OP_ARGMAX
     {}, // GGML_OP_COUNT_EQUAL
@@ -180,7 +181,10 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
 
     {}, // GGML_OP_TIMESTEP_EMBEDDING
     {}, // GGML_OP_ARGSORT
+    {}, // GGML_OP_TOP_K
     {}, // GGML_OP_LEAKY_RELU
+    {}, // GGML_OP_TRI
+    {}, // GGML_OP_FILL
 
     {}, // GGML_OP_FLASH_ATTN_EXT
     {}, // GGML_OP_FLASH_ATTN_BACK
@@ -193,6 +197,7 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {}, // GGML_OP_RWKV_WKV6
     {}, // GGML_OP_GATED_LINEAR_ATTN
     {}, // GGML_OP_RWKV_WKV7
+    {}, // GGML_OP_SOLVE_TRI
 
     {}, // GGML_OP_UNARY
 
@@ -226,6 +231,8 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {}, // GGML_UNARY_OP_HARDSWISH
     {}, // GGML_UNARY_OP_HARDSIGMOID
     {}, // GGML_UNARY_OP_EXP
+    {}, // GGML_UNARY_OP_EXPM1
+    {}, // GGML_UNARY_OP_SOFTPLUS
     {}, // GGML_UNARY_OP_GELU_ERF
     {}, // GGML_UNARY_OP_XIELU
     {}, // GGML_UNARY_OP_FLOOR
@@ -312,6 +319,7 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,                                                                                   // GGML_OP_COS
     nullptr,                                                                                   // GGML_OP_SUM
     nullptr,                                                                                   // GGML_OP_SUM_ROWS
+    nullptr,                                                                                   // GGML_OP_CUMSUM
     nullptr,                                                                                   // GGML_OP_MEAN
     nullptr,                                                                                   // GGML_OP_ARGMAX
     nullptr,                                                                                   // GGML_OP_COUNT_EQUAL
@@ -366,7 +374,10 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,  // GGML_OP_ARANGE
     nullptr,  // GGML_OP_TIMESTEP_EMBEDDING
     nullptr,  // GGML_OP_ARGSORT
+    nullptr,  // GGML_OP_TOP_K
     nullptr,  // GGML_OP_LEAKY_RELU
+    nullptr,  // GGML_OP_TRI
+    nullptr,  // GGML_OP_FILL
 
     nullptr,  // GGML_OP_FLASH_ATTN_EXT
     nullptr,  // GGML_OP_FLASH_ATTN_BACK
@@ -379,6 +390,7 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,  // GGML_OP_RWKV_WKV6
     nullptr,  // GGML_OP_GATED_LINEAR_ATTN
     nullptr,  // GGML_OP_RWKV_WKV7
+    nullptr,  // GGML_OP_SOLVE_TRI
 
     nullptr,  // GGML_OP_UNARY
 
@@ -409,6 +421,8 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,  // GGML_UNARY_OP_HARDSWISH
     nullptr,  // GGML_UNARY_OP_HARDSIGMOID
     nullptr,  // GGML_UNARY_OP_EXP
+    nullptr,  // GGML_UNARY_OP_EXPM1
+    nullptr,  // GGML_UNARY_OP_SOFTPLUS
     nullptr,  // GGML_UNARY_OP_GELU_ERF
     nullptr,  // GGML_UNARY_OP_XIELU
     nullptr,  // GGML_UNARY_OP_FLOOR
