@@ -2028,7 +2028,7 @@ private:
         int32_t n_batch  = llama_n_batch(ctx);
         int32_t n_ubatch = llama_n_ubatch(ctx);
 
-        float  alora_scale       = -1.0f;
+        float  alora_scale       = 0.0f;
         size_t alora_disabled_id = 0;
 
         // next, batch any pending prompts without exceeding n_batch
@@ -2416,7 +2416,7 @@ private:
                         // if this is an alora request with pre-invocation
                         // tokens that are not cached, we need to stop filling
                         // this batch at those pre-invocation tokens.
-                        if (alora_scale > 0 && slot.prompt.n_tokens() == slot.alora_invocation_start - 1) {
+                        if (alora_scale != 0.0f && slot.prompt.n_tokens() == slot.alora_invocation_start - 1) {
                             SLT_DBG(slot, "stop prompt batch filling at (n_tokens = %d, alora_invocation_start = %d)\n", slot.prompt.n_tokens(), slot.alora_invocation_start);
                             break;
                         }
