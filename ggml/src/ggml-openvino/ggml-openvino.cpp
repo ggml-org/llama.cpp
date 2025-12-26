@@ -69,12 +69,11 @@ struct ggml_backend_openvino_buffer_context {
         }
 
         const auto & device_name = ggml_openvino_get_device_name();
-        auto & core = ov_singleton_core();
 
         if (is_remote) {
-            // NPU memory is too small even for kvcache
             GGML_ASSERT(device_name == "GPU");
-            auto gpu_context = core.get_default_context("GPU").as<ov::intel_gpu::ocl::ClContext>();
+            auto remote_context = ggml_openvino_get_remote_context();
+            auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
             ov::intel_gpu::ocl::USMTensor usm_tensor =
                 gpu_context.create_usm_device_tensor(ov::element::u8, ov::Shape{size});
             data = usm_tensor.get();
@@ -129,7 +128,7 @@ static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_bu
     // GGML_LOG_DEBUG("%s: buffer usage=%d, tensor name=%s\n", __func__, buffer->usage, tensor->name);
     ggml_backend_openvino_buffer_context * ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
 
-    // Put kvcache on device memory for GPU
+    // Put kvcache on device memory for GPU (NPU memory is too small even for kvcache)
     if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY && strncmp(tensor->name, "cache_", 6) == 0 && !ctx->is_remote &&
         ggml_openvino_get_device_name() == "GPU") {
         GGML_ASSERT(ctx->tensor_extras.empty());
