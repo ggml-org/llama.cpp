@@ -142,6 +142,7 @@ export class AgenticOrchestrator {
 			sessionMessages.push({
 				role: 'assistant',
 				content: turnResult.content || undefined,
+				reasoning_content: turnResult.reasoningContent,
 				tool_calls: normalizedCalls
 			});
 
