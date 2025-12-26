@@ -50,6 +50,8 @@ struct htp_ops_context {
     struct fastdiv_values src1_div21; // fastdiv values for ne2 * ne1
 
     uint32_t flags;
+
+    atomic_uint shared_atomic_lock;
 };
 
 int op_matmul(struct htp_ops_context * octx);
