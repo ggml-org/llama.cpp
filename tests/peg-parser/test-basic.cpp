@@ -451,4 +451,52 @@ void test_basic(testing & t) {
             t.assert_equal("result_is_fail", true, result.fail());
         });
     });
+
+    t.test("until_max", [](testing &t) {
+        // Test until_max with length limit
+        t.test("exact_limit", [](testing &t) {
+            auto parser = build_peg_parser([](common_peg_parser_builder & p) {
+                return p.until_max("</p>", 3) + p.literal("</p>");
+            });
+
+            std::string input = "abc</p>";
+            common_peg_parse_context ctx(input, false);
+            auto result = parser.parse(ctx);
+            t.assert_equal("exact limit match", true, result.success());
+        });
+
+        t.test("under_limit", [](testing &t) {
+            auto parser = build_peg_parser([](common_peg_parser_builder & p) {
+                return p.until_max("</p>", 5) + p.literal("</p>");
+            });
+
+            std::string input = "ab</p>";
+            common_peg_parse_context ctx(input, false);
+            auto result = parser.parse(ctx);
+            t.assert_equal("under limit match", true, result.success());
+        });
+
+        t.test("empty_content", [](testing &t) {
+            auto parser = build_peg_parser([](common_peg_parser_builder & p) {
+                return p.until_max("</p>", 5) + p.literal("</p>");
+            });
+
+            std::string input = "</p>";
+            common_peg_parse_context ctx(input, false);
+            auto result = parser.parse(ctx);
+            t.assert_equal("empty content match", true, result.success());
+        });
+
+        t.test("delimiter_prefix_in_content", [](testing &t) {
+            // Content has delimiter prefix "<" but not full delimiter "</p>"
+            auto parser = build_peg_parser([](common_peg_parser_builder & p) {
+                return p.until_max("</p>", 10) + p.literal("</p>");
+            });
+
+            std::string input = "a<b</p>";
+            common_peg_parse_context ctx(input, false);
+            auto result = parser.parse(ctx);
+            t.assert_equal("delimiter prefix in content", true, result.success());
+        });
+    });
 }

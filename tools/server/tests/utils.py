@@ -87,6 +87,8 @@ class ServerProcess:
     models_dir: str | None = None
     models_max: int | None = None
     no_models_autoload: bool | None = None
+    # experimental_new_parsers: bool | None = None
+    experimental_new_parsers: bool | None = True
     lora_files: List[str] | None = None
     enable_ctx_shift: int | None = False
     draft_min: int | None = None
@@ -233,6 +235,8 @@ class ServerProcess:
             server_args.extend(["--media-path", self.media_path])
         if self.sleep_idle_seconds is not None:
             server_args.extend(["--sleep-idle-seconds", self.sleep_idle_seconds])
+        if self.experimental_new_parsers:
+            server_args.append("--experimental-new-parsers")
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")

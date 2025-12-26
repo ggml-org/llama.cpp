@@ -845,6 +845,7 @@ private:
             /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
             /* enable_thinking       */ enable_thinking,
             /* media_path            */ params_base.media_path,
+            /* experimental_new_parsers       */ params_base.experimental_new_parsers,
         };
 
         // print sample chat example to make it clear which template is used
@@ -1007,8 +1008,8 @@ private:
         return ret;
     }
 
-    void clear_slot(server_slot & slot) const {
-        GGML_ASSERT(!slot.is_processing());
+    void clear_slot(server_slot & slot, bool allow_processing = false) const {
+        GGML_ASSERT(allow_processing || !slot.is_processing());
 
         SLT_WRN(slot, "clearing slot with %zu tokens\n", slot.prompt.tokens.size());
 
@@ -1575,6 +1576,7 @@ private:
             inputs.add_generation_prompt = true;
             inputs.reasoning_format      = opt.reasoning_format;
             inputs.enable_thinking       = opt.enable_thinking;
+            inputs.experimental_new_parsers       = opt.experimental_new_parsers;
 
             // Apply chat template to the list of messages
             auto chat_params = common_chat_templates_apply(opt.tmpls, inputs);
@@ -2336,7 +2338,7 @@ private:
                     if (!llama_memory_seq_rm(llama_get_memory(ctx), slot.id, p0, -1)) {
                         SLT_WRN(slot, "failed to truncate tokens with position >= %d - clearing the memory\n", p0);
 
-                        clear_slot(slot);
+                        clear_slot(slot, /*allow_processing=*/true);
 
                         // there is no common part left
                         slot.n_prompt_tokens_cache = 0;

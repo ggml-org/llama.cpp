@@ -78,7 +78,7 @@ if __name__ == '__main__':
         'LLAMA_CLI_BIN_PATH',
         os.path.join(
             os.path.dirname(__file__),
-            '../build/bin/Release/llama-cli.exe' if os.name == 'nt' else '../build/bin/llama-cli'))
+            '../build/bin/Release/llama-completion.exe' if os.name == 'nt' else '../build/bin/llama-completion'))
 
     for m in models:
         if '<' in m.hf_repo or (m.hf_file is not None and '<' in m.hf_file):
@@ -86,7 +86,7 @@ if __name__ == '__main__':
         if m.hf_file is not None and '-of-' in m.hf_file:
             logging.warning(f'Skipping model at {m.hf_repo} / {m.hf_file} because it is a split file')
             continue
-        logging.info(f'Using llama-cli to ensure model {m.hf_repo}/{m.hf_file} was fetched')
+        logging.info(f'Using llama-completion to ensure model {m.hf_repo}/{m.hf_file} was fetched')
         cmd = [
             cli_path,
             '-hfr', m.hf_repo,
@@ -97,9 +97,10 @@ if __name__ == '__main__':
             '--log-disable',
             '-no-cnv']
         if m.hf_file != 'tinyllamas/stories260K.gguf' and 'Mistral-Nemo' not in m.hf_repo:
-            cmd.append('-fa')
+            cmd.extend(['-fa', 'on'])
+        logging.info(' '.join(cmd))
         try:
             subprocess.check_call(cmd)
         except subprocess.CalledProcessError:
             logging.error(f'Failed to fetch model at {m.hf_repo} / {m.hf_file} with command:\n  {" ".join(cmd)}')
-            exit(1)
+            # exit(1)

@@ -103,6 +103,7 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_GENERIC,
     COMMON_CHAT_FORMAT_MISTRAL_NEMO,
     COMMON_CHAT_FORMAT_MAGISTRAL,
+    COMMON_CHAT_FORMAT_MINISTRAL_3,
     COMMON_CHAT_FORMAT_LLAMA_3_X,
     COMMON_CHAT_FORMAT_LLAMA_3_X_WITH_BUILTIN_TOOLS,
     COMMON_CHAT_FORMAT_DEEPSEEK_R1,
@@ -116,6 +117,7 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_GPT_OSS,
     COMMON_CHAT_FORMAT_SEED_OSS,
     COMMON_CHAT_FORMAT_NEMOTRON_V2,
+    COMMON_CHAT_FORMAT_NEMOTRON_V3,
     COMMON_CHAT_FORMAT_APERTUS,
     COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS,
     COMMON_CHAT_FORMAT_GLM_4_5,
@@ -125,6 +127,7 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_APRIEL_1_5,
     COMMON_CHAT_FORMAT_XIAOMI_MIMO,
 
+    // TODO(ochafik): remove once --experimental-new-parsers graduates.
     // These are intended to be parsed by the PEG parser
     COMMON_CHAT_FORMAT_PEG_SIMPLE,
     COMMON_CHAT_FORMAT_PEG_NATIVE,
@@ -149,6 +152,8 @@ struct common_chat_templates_inputs {
     std::map<std::string, std::string> chat_template_kwargs;
     bool add_bos = false;
     bool add_eos = false;
+    // When true, use experimental new PEG parsers from chat-parsers/*.cpp instead of legacy parsers
+    bool experimental_new_parsers = false;
 };
 
 struct common_chat_params {
@@ -219,6 +224,8 @@ common_chat_msg           common_chat_peg_parse(const common_peg_arena & parser,
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice);
 
 bool common_chat_templates_support_enable_thinking(const common_chat_templates * chat_templates);
+bool common_chat_templates_support_tools(const common_chat_templates * chat_templates);
+bool common_chat_templates_support_parallel_tool_calls(const common_chat_templates * chat_templates);
 
 // Parses a JSON array of messages in OpenAI's chat completion API format.
 // T can be std::string containing JSON or nlohmann::ordered_json

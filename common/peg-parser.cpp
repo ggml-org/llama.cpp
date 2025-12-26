@@ -678,7 +678,7 @@ struct parser_executor {
 
             auto node_id = ctx.ast.add_node(
                 p.name,
-                "",
+                0,  // rules don't have tag_id
                 result.start,
                 result.end,
                 text,
@@ -704,7 +704,7 @@ struct parser_executor {
 
             auto node_id = ctx.ast.add_node(
                 "",
-                p.tag,
+                p.tag_id,
                 result.start,
                 result.end,
                 text,
@@ -849,7 +849,11 @@ std::string common_peg_arena::dump(common_peg_parser_id id) const {
         } else if constexpr (std::is_same_v<T, common_peg_json_string_parser>) {
             return "JsonString()";
         } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
-            return "Until(" + string_join(p.delimiters, " | ") + ")";
+            std::string result = "Until(" + string_join(p.delimiters, " | ");
+            if (p.max_length > 0) {
+                result += ", max=" + std::to_string(p.max_length);
+            }
+            return result + ")";
         } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
             return "Schema(" + dump(p.child) + ", " + (p.schema ? p.schema->dump() : "null") + ")";
         } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
@@ -1095,8 +1099,7 @@ common_peg_parser common_peg_parser_builder::json_object() {
             choice({
                 literal("}"),
                 sequence({members, ws, literal("}")})
-            }),
-            ws
+            })
         });
     });
 }
@@ -1111,8 +1114,7 @@ common_peg_parser common_peg_parser_builder::json_array() {
             choice({
                 literal("]"),
                 sequence({elements, ws, literal("]")})
-            }),
-            ws
+            })
         });
     });
 }
@@ -1143,6 +1145,36 @@ common_peg_parser common_peg_parser_builder::json_member(const std::string & key
         ws,
         p,
     });
+}
+
+common_peg_parser common_peg_parser_builder::schema_or_raw_string_until(
+    const std::string & rule_name,
+    const nlohmann::ordered_json & param_schema,
+    const std::string & end_delimiter,
+    const common_schema_info & schema_info,
+    int string_tag,
+    int json_tag,
+    bool space_around_json)
+{
+    if (schema_info.resolves_to_string(param_schema)) {
+        // For string types, check if maxLength constraint exists
+        int max_length = -1;
+        if (param_schema.contains("maxLength") && param_schema["maxLength"].is_number_integer()) {
+            max_length = param_schema["maxLength"].get<int>();
+        }
+
+        if (max_length > 0) {
+            return tag(string_tag, until_max(end_delimiter, max_length));
+        }
+        return tag(string_tag, until(end_delimiter));
+    }
+
+    // For non-string types (integers, booleans, objects, etc.)
+    auto value_parser = tag(json_tag, schema(json(), rule_name, param_schema));
+    if (space_around_json) {
+        return space() + value_parser + space();
+    }
+    return value_parser;
 }
 
 
@@ -1185,6 +1217,83 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
     }
 
     return "(" + pattern + ")*";
+}
+
+// Generates length-limited exclusion grammar rules.
+// For delimiter "</p>" and max_length=3, generates:
+//   until-0 ::= ""
+//   until-1 ::= [^<] until-0 | ""
+//   until-2 ::= [^<] until-1 | "<" [^/] until-0 | ""
+//   until-3 ::= [^<] until-2 | "<" [^/] until-1 | "</" [^p] until-0 | ""
+// Returns the name of the starting rule (e.g., "until-3").
+static std::string gbnf_length_limited_excluding_pattern(
+    const common_grammar_builder & builder,
+    const std::vector<std::string> & delimiters,
+    int max_length,
+    const std::string & rule_prefix = "until"
+) {
+    if (delimiters.empty() || max_length <= 0) {
+        // Fallback: just limit any character
+        return "[^\\x00]{0," + std::to_string(max_length) + "}";
+    }
+
+    // Build trie and get pieces (prefix + excluded chars)
+    trie matcher(delimiters);
+    auto pieces = matcher.collect_prefix_and_next();
+
+    // Sort pieces by prefix length for consistent ordering
+    std::sort(pieces.begin(), pieces.end(), [](const auto & a, const auto & b) {
+        return a.prefix.length() < b.prefix.length();
+    });
+
+    // Generate rules from 0 to max_length
+    for (int remaining = 0; remaining <= max_length; remaining++) {
+        std::string rule_name = rule_prefix + "-" + std::to_string(remaining);
+
+        if (remaining == 0) {
+            builder.add_rule(rule_name, "\"\"");
+            continue;
+        }
+
+        std::vector<std::string> alternatives;
+
+        // For each piece (prefix + excluded chars), generate an alternative
+        for (const auto & piece : pieces) {
+            int chars_consumed = static_cast<int>(piece.prefix.length()) + 1;
+            int next_remaining = remaining - chars_consumed;
+
+            if (next_remaining < 0) {
+                continue;  // Can't use this piece, would exceed remaining chars
+            }
+
+            // Build the alternative: prefix + [^excluded_chars] + next_rule
+            std::string alt;
+
+            if (!piece.prefix.empty()) {
+                alt += gbnf_format_literal(piece.prefix) + " ";
+            }
+
+            // Build character class for excluded chars
+            std::string cls;
+            for (const auto & ch : piece.next_chars) {
+                cls += gbnf_escape_char_class(ch);
+            }
+            alt += "[^" + cls + "]";
+
+            if (next_remaining > 0) {
+                alt += " " + rule_prefix + "-" + std::to_string(next_remaining);
+            }
+
+            alternatives.push_back(alt);
+        }
+
+        // Always allow ending early (empty match for remaining chars)
+        alternatives.push_back("\"\"");
+
+        builder.add_rule(rule_name, string_join(alternatives, " | "));
+    }
+
+    return rule_prefix + "-" + std::to_string(max_length);
 }
 
 static std::unordered_set<std::string> collect_reachable_rules(
@@ -1268,8 +1377,21 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                     }
                     auto child_gbnf = to_gbnf(child);
                     const auto & child_parser = parsers_.at(child);
-                    if (std::holds_alternative<common_peg_choice_parser>(child_parser) ||
-                        std::holds_alternative<common_peg_sequence_parser>(child_parser)) {
+                    // Check if child is an optional (min=0, max=1) repetition that was already wrapped
+                    // Don't double-wrap: if child is optional repetition wrapping a choice/sequence,
+                    // it's already formatted as "( ... )?" by the repetition handler
+                    bool child_is_optional_wrapped = false;
+                    if (const auto * rep = std::get_if<common_peg_repetition_parser>(&child_parser)) {
+                        if (rep->min_count == 0 && rep->max_count == 1) {
+                            const auto & grandchild_parser = parsers_.at(rep->child);
+                            if (std::holds_alternative<common_peg_choice_parser>(grandchild_parser) ||
+                                std::holds_alternative<common_peg_sequence_parser>(grandchild_parser)) {
+                                child_is_optional_wrapped = true;
+                            }
+                        }
+                    }
+                    if (!child_is_optional_wrapped && (std::holds_alternative<common_peg_choice_parser>(child_parser) ||
+                        std::holds_alternative<common_peg_sequence_parser>(child_parser))) {
                         s += "(" + child_gbnf + ")";
                     } else {
                         s += child_gbnf;
@@ -1294,12 +1416,21 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
             } else if constexpr (std::is_same_v<T, common_peg_repetition_parser>) {
                 auto child_gbnf = to_gbnf(p.child);
                 const auto & child_parser = parsers_.at(p.child);
+                if (p.min_count == 0 && p.max_count == 1) {
+                    // For optional (min=0, max=1), check original type before adding "?"
+                    // If child is choice/sequence and was wrapped, the "?" goes BEFORE the closing ")"
+                    // Otherwise "?" is added after the child
+                    if (std::holds_alternative<common_peg_choice_parser>(child_parser) ||
+                        std::holds_alternative<common_peg_sequence_parser>(child_parser)) {
+                        child_gbnf = "(" + child_gbnf + ")?";
+                    } else {
+                        child_gbnf += "?";
+                    }
+                    return child_gbnf;
+                }
                 if (std::holds_alternative<common_peg_choice_parser>(child_parser) ||
                     std::holds_alternative<common_peg_sequence_parser>(child_parser)) {
                     child_gbnf = "(" + child_gbnf + ")";
-                }
-                if (p.min_count == 0 && p.max_count == 1) {
-                    return child_gbnf + "?";
                 }
                 if (p.min_count == 0 && p.max_count == -1) {
                     return child_gbnf + "*";
@@ -1348,7 +1479,22 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
                 return R"(( [^"\\] | "\\" ( ["\\/ bfnrt] | "u" [0-9a-fA-F]{4} ) )*)";
             } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
                 if (p.delimiters.empty()) {
+                    if (p.max_length > 0) {
+                        return "[^\\x00]{0," + std::to_string(p.max_length) + "}";
+                    }
                     return ".*";
+                }
+                if (p.max_length > 0) {
+                    // Generate length-limited exclusion grammar
+                    // Use a unique prefix based on delimiter hash and max_length to avoid rule conflicts
+                    size_t hash = 0;
+                    for (const auto & d : p.delimiters) {
+                        for (char c : d) {
+                            hash = hash * 31 + static_cast<size_t>(c);
+                        }
+                    }
+                    std::string prefix = "until-" + std::to_string(hash % 10000) + "-" + std::to_string(p.max_length);
+                    return gbnf_length_limited_excluding_pattern(builder, p.delimiters, p.max_length, prefix);
                 }
                 return gbnf_excluding_pattern(p.delimiters);
             } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
@@ -1378,6 +1524,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
 
     // Collect reachable rules
     std::unordered_set<std::string> reachable_rules;
+    bool has_trigger_rules = false;
 
     if (lazy) {
         // Collect rules reachable from trigger rules
@@ -1386,11 +1533,16 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
             if (auto rule = std::get_if<common_peg_rule_parser>(&parser)) {
                 if (rule->trigger) {
                     // Mark trigger as reachable and visit it
+                    has_trigger_rules = true;
                     reachable_rules.insert(name);
                     auto add_rules = collect_reachable_rules(*this, id);
                     reachable_rules.insert(add_rules.begin(), add_rules.end());
                 }
             }
+        }
+        // If no trigger rules found, fall back to non-lazy mode
+        if (!has_trigger_rules) {
+            reachable_rules = collect_reachable_rules(*this, root_);
         }
     } else {
         // Collect rules reachable from root
@@ -1409,7 +1561,7 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
         }
     }
 
-    if (lazy) {
+    if (lazy && has_trigger_rules) {
         // Generate root rule from trigger rules only
         std::vector<std::string> trigger_names;
         for (const auto & [name, rule_id] : rules_) {
@@ -1478,7 +1630,7 @@ static nlohmann::json serialize_parser_variant(const common_peg_parser_variant &
         } else if constexpr (std::is_same_v<T, common_peg_json_string_parser>) {
             return json{{"type", "json_string"}};
         } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
-            return json{{"type", "until"}, {"delimiters", p.delimiters}};
+            return json{{"type", "until"}, {"delimiters", p.delimiters}, {"max_length", p.max_length}};
         } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
             return json{
                 {"type", "schema"},
@@ -1502,7 +1654,7 @@ static nlohmann::json serialize_parser_variant(const common_peg_parser_variant &
             return json{
                 {"type", "tag"},
                 {"child", p.child},
-                {"tag", p.tag}
+                {"tag_id", p.tag_id}
             };
         }
     }, variant);
@@ -1610,7 +1762,8 @@ static common_peg_parser_variant deserialize_parser_variant(const nlohmann::json
         if (!j.contains("delimiters") || !j["delimiters"].is_array()) {
             throw std::runtime_error("until parser missing or invalid 'delimiters' field");
         }
-        return common_peg_until_parser{j["delimiters"].get<std::vector<std::string>>()};
+        int max_length = j.contains("max_length") ? j["max_length"].get<int>() : -1;
+        return common_peg_until_parser{j["delimiters"].get<std::vector<std::string>>(), max_length};
     }
     if (type == "schema") {
         if (!j.contains("child") || !j.contains("name") || !j.contains("schema") || !j.contains("raw")) {
@@ -1650,12 +1803,12 @@ static common_peg_parser_variant deserialize_parser_variant(const nlohmann::json
         };
     }
     if (type == "tag") {
-        if (!j.contains("child") || !j.contains("tag")) {
+        if (!j.contains("child") || !j.contains("tag_id")) {
             throw std::runtime_error("tag parser missing required fields");
         }
         return common_peg_tag_parser{
             j["child"].get<common_peg_parser_id>(),
-            j["tag"].get<std::string>(),
+            j["tag_id"].get<int>(),
         };
     }
 

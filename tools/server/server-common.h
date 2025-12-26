@@ -287,6 +287,7 @@ struct oaicompat_parser_options {
     bool allow_audio;
     bool enable_thinking = true;
     std::string media_path;
+    bool experimental_new_parsers = false;
 };
 
 // used by /chat/completions endpoint

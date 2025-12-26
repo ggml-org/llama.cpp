@@ -135,6 +135,14 @@ static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_
 
     std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
 
+    // Tags for INI parsing
+    enum class ini_tag : int {
+        NONE = 0,
+        SECTION_NAME,
+        KEY,
+        VALUE,
+    };
+
     static const auto parser = build_peg_parser([](auto & p) {
         // newline ::= "\r\n" / "\n" / "\r"
         auto newline = p.rule("newline", p.literal("\r\n") | p.literal("\n") | p.literal("\r"));
@@ -156,10 +164,10 @@ static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_
         auto value = p.rule("value", p.zero_or_more(p.negate(eol_start) + p.any()));
 
         // header-line ::= "[" ws ident ws "]" eol
-        auto header_line = p.rule("header-line", "[" + ws + p.tag("section-name", p.chars("[^]]")) + ws + "]" + eol);
+        auto header_line = p.rule("header-line", "[" + ws + p.tag(ini_tag::SECTION_NAME, p.chars("[^]]")) + ws + "]" + eol);
 
         // kv-line ::= ident ws "=" ws value eol
-        auto kv_line = p.rule("kv-line", p.tag("key", ident) + ws + "=" + ws + p.tag("value", value) + eol);
+        auto kv_line = p.rule("kv-line", p.tag(ini_tag::KEY, ident) + ws + "=" + ws + p.tag(ini_tag::VALUE, value) + eol);
 
         // comment-line ::= ws comment (newline / EOF)
         auto comment_line = p.rule("comment-line", ws + comment + (newline | p.end()));
@@ -186,16 +194,22 @@ static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_
     std::string current_key;
 
     ctx.ast.visit(result, [&](const auto & node) {
-        if (node.tag == "section-name") {
-            const std::string section = std::string(node.text);
-            current_section = section;
-            parsed[current_section] = {};
-        } else if (node.tag == "key") {
-            const std::string key = std::string(node.text);
-            current_key = key;
-        } else if (node.tag == "value" && !current_key.empty() && !current_section.empty()) {
-            parsed[current_section][current_key] = std::string(node.text);
-            current_key.clear();
+        switch (static_cast<ini_tag>(node.tag_id)) {
+            case ini_tag::SECTION_NAME:
+                current_section = std::string(node.text);
+                parsed[current_section] = {};
+                break;
+            case ini_tag::KEY:
+                current_key = std::string(node.text);
+                break;
+            case ini_tag::VALUE:
+                if (!current_key.empty() && !current_section.empty()) {
+                    parsed[current_section][current_key] = std::string(node.text);
+                    current_key.clear();
+                }
+                break;
+            default:
+                break;
         }
     });
 
