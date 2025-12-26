@@ -714,10 +714,23 @@ Follow the instructions below to install OpenVINO runtime and build llama.cpp wi
       sudo apt-get update
       sudo apt-get install -y build-essential libcurl4-openssl-dev libtbb12 cmake ninja-build python3-pip curl wget tar
     ```
+    - OpenCL
+    ```bash
+        sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers intel-opencl-icd
+    ```
 
 - **Windows:**
-    - Download Microsoft.VisualStudio.2022.BuildTools [Visual_Studio_Build_Tools]https://aka.ms/vs/17/release/vs_BuildTools.exe Select "Desktop development with C++" under workloads.
+    - Download Microsoft.VisualStudio.2022.BuildTools: [Visual_Studio_Build_Tools](https://aka.ms/vs/17/release/vs_BuildTools.exe)
+    Select "Desktop development with C++" under workloads
     - Install git
+    - Install OpenCL with vcpkg
+      ```powershell
+      cd C:\
+      git clone https://github.com/microsoft/vcpkg
+      cd vcpkg
+      bootstrap-vcpkg.bat
+      vcpkg install opencl
+      ```
     - Use "x64 Native Tools Command Prompt" for Build
 
 ### 1. Install OpenVINO Runtime
@@ -729,19 +742,19 @@ Follow the instructions below to install OpenVINO runtime and build llama.cpp wi
     <details>
     <summary>📦 Click to expand OpenVINO 2025.3 installation from an archive file on Ubuntu</summary>
     <br>
-        
+
     ```bash
     wget https://raw.githubusercontent.com/ravi9/misc-scripts/main/openvino/ov-archive-install/install-openvino-from-archive.sh
     chmod +x install-openvino-from-archive.sh
     ./install-openvino-from-archive.sh
     ```
+
+    Verify OpenVINO is initialized properly:
+    ```bash
+    echo $OpenVINO_DIR
+    ```
     </details>
 
-    - Verify OpenVINO is initialized properly
-        - **Linux:**
-            ```bash
-            echo $OpenVINO_DIR
-            ```
 
 ### 2. Build llama.cpp with OpenVINO Backend
 
@@ -761,14 +774,14 @@ git switch dev_backend_openvino
     cmake --build build/ReleaseOV --config Release -j $(nproc)
     ```
 
-- **Windows:** 
+- **Windows:**
     ```bash
     # Build with OpenVINO support
     "C:\Program Files (x86)\Intel\openvino_2025.3.0\setupvars.bat"
-    cmake -B build/ReleaseOV -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF -DLLAMA_CURL=OFF
+    cmake -B build\ReleaseOV -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF -DLLAMA_CURL=OFF -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
     cmake --build build\ReleaseOV --config Release
     ```
-    - For faster compilation, add the -- /m argument to run multiple jobs in parallel with as many CPU cores available. 
+    - For faster compilation, add the -- /m argument to run multiple jobs in parallel with as many CPU cores available.
     ```bash
     cmake --build build\ReleaseOV --config Release -- /m
     ```
@@ -845,7 +858,7 @@ docker build --target=full -t llama-openvino:full -f .devops/openvino.Dockerfile
 # Build a minimal CLI-only image containing just the llama-cli executable.
 docker build --target=light -t llama-openvino:light -f .devops/openvino.Dockerfile .
 
-# Builds a server-only image with llama-server executable, health check endpoint, and REST API support. 
+# Builds a server-only image with llama-server executable, health check endpoint, and REST API support.
 docker build --target=server -t llama-openvino:server -f .devops/openvino.Dockerfile .
 
 # If you are behind a proxy:
@@ -868,17 +881,17 @@ llama-openvino:light --no-warmup -m /models/Llama-3.2-1B-Instruct.fp16.gguf
 docker run --rm -it --env GGML_OPENVINO_DEVICE=NPU -v ~/models:/models \
 --device=/dev/accel --group-add=$(stat -c "%g" /dev/dri/render* | head -n 1) -u $(id -u):$(id -g) \
 llama-openvino:light --no-warmup -m /models/Llama-3.2-1B-Instruct.fp16.gguf
-``` 
+```
 
 Run Llama.cpp Server with OpenVINO Backend
 ```bash
 # Run the Server Docker container server
-docker run --rm -it -p 8080:8080 -v ~/models:/models llama-openvino:server --no-warmup -m /models/Llama-3.2-1B-Instruct.fp16.gguf 
+docker run --rm -it -p 8080:8080 -v ~/models:/models llama-openvino:server --no-warmup -m /models/Llama-3.2-1B-Instruct.fp16.gguf
 
 # In a NEW terminal, test the server with curl
 
 # If you are behind a proxy, make sure to set NO_PROXY to avoid proxy for localhost
-export NO_PROXY=localhost,127.0.0.1  
+export NO_PROXY=localhost,127.0.0.1
 
 # Test health endpoint
 curl -f http://localhost:8080/health
