@@ -24,7 +24,7 @@
                 android:id="@+id/gguf"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_margin="16dp"
+                android:padding="16dp"
                 android:text="Selected GGUF model's metadata will show here."
                 style="@style/TextAppearance.MaterialComponents.Body2" />
 
@@ -33,8 +33,7 @@
         <com.google.android.material.divider.MaterialDivider
             android:layout_width="match_parent"
             android:layout_height="2dp"
-            android:layout_marginHorizontal="16dp"
-            android:layout_marginVertical="8dp" />
+            android:layout_marginHorizontal="16dp" />
 
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/messages"

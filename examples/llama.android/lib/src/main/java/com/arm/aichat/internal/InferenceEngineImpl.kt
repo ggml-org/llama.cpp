@@ -15,9 +15,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
@@ -109,9 +111,11 @@ internal class InferenceEngineImpl private constructor(
 
     private val _state =
         MutableStateFlow<InferenceEngine.State>(InferenceEngine.State.Uninitialized)
-    override val state: StateFlow<InferenceEngine.State> = _state
+    override val state: StateFlow<InferenceEngine.State> = _state.asStateFlow()
 
     private var _readyForSystemPrompt = false
+    @Volatile
+    private var _cancelGeneration = false
 
     /**
      * Single-threaded coroutine dispatcher & scope for LLama asynchronous operations
@@ -169,6 +173,8 @@ internal class InferenceEngineImpl private constructor(
                 }
                 Log.i(TAG, "Model loaded!")
                 _readyForSystemPrompt = true
+
+                _cancelGeneration = false
                 _state.value = InferenceEngine.State.ModelReady
             } catch (e: Exception) {
                 Log.e(TAG, (e.message ?: "Error loading model") + "\n" + pathToModel, e)
@@ -231,15 +237,19 @@ internal class InferenceEngineImpl private constructor(
 
             Log.i(TAG, "User prompt processed. Generating assistant prompt...")
             _state.value = InferenceEngine.State.Generating
-            while (true) {
+            while (!_cancelGeneration) {
                 generateNextToken()?.let { utf8token ->
                     if (utf8token.isNotEmpty()) emit(utf8token)
                 } ?: break
             }
-            Log.i(TAG, "Assistant generation complete. Awaiting user prompt...")
+            if (_cancelGeneration) {
+                Log.i(TAG, "Assistant generation aborted per requested.")
+            } else {
+                Log.i(TAG, "Assistant generation complete. Awaiting user prompt...")
+            }
             _state.value = InferenceEngine.State.ModelReady
         } catch (e: CancellationException) {
-            Log.i(TAG, "Generation cancelled by user.")
+            Log.i(TAG, "Assistant generation's flow collection cancelled.")
             _state.value = InferenceEngine.State.ModelReady
             throw e
         } catch (e: Exception) {
@@ -268,8 +278,9 @@ internal class InferenceEngineImpl private constructor(
     /**
      * Unloads the model and frees resources, or reset error states
      */
-    override suspend fun cleanUp() =
-        withContext(llamaDispatcher) {
+    override fun cleanUp() {
+        _cancelGeneration = true
+        runBlocking(llamaDispatcher) {
             when (val state = _state.value) {
                 is InferenceEngine.State.ModelReady -> {
                     Log.i(TAG, "Unloading model and free resources...")
@@ -293,17 +304,21 @@ internal class InferenceEngineImpl private constructor(
                 else -> throw IllegalStateException("Cannot unload model in ${state.javaClass.simpleName}")
             }
         }
+    }
 
     /**
      * Cancel all ongoing coroutines and free GGML backends
      */
     override fun destroy() {
-        _readyForSystemPrompt = false
-        llamaScope.cancel()
-        when(_state.value) {
-            is InferenceEngine.State.Uninitialized -> {}
-            is InferenceEngine.State.Initialized -> shutdown()
-            else -> { unload(); shutdown() }
+        _cancelGeneration = true
+        runBlocking(llamaDispatcher) {
+            _readyForSystemPrompt = false
+            when(_state.value) {
+                is InferenceEngine.State.Uninitialized -> {}
+                is InferenceEngine.State.Initialized -> shutdown()
+                else -> { unload(); shutdown() }
+            }
         }
+        llamaScope.cancel()
     }
 }
