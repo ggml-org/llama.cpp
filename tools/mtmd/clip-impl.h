@@ -7,6 +7,8 @@
 #include <climits>
 #include <cstdarg>
 #include <cinttypes>
+#include <cstdio>
+#include <fstream>
 #include <string>
 #include <map>
 #include <sstream>
@@ -101,6 +103,9 @@
 #define TN_MM_SOFT_EMB_N   "mm.soft_emb_norm.weight"    // gemma3
 #define TN_MM_PROJECTOR    "mm.model.fc.weight"         // idefics3
 #define TN_MM_PATCH_MERGER "mm.patch_merger.%s"         // mistral small 3.1, glm4v
+#define TN_MM_UP           "mm.up.%s"
+#define TN_MM_DOWN         "mm.down.%s"
+#define TN_MM_POST_NORM    "mm.post_norm.%s"
 #define TN_TOK_IMG_BREAK   "v.token_embd.img_break"     // pixtral
 #define TN_TOK_GLM_BOI     "adapter.boi"                // glm-edge (these embeddings are not in text model)
 #define TN_TOK_GLM_EOI     "adapter.eoi"                // glm-edge (these embeddings are not in text model)
@@ -180,6 +185,8 @@ enum projector_type {
     PROJECTOR_TYPE_GLMA,
     PROJECTOR_TYPE_QWEN25O, // will be replaced by QWEN2A or QWEN25VL depending on clip_ctx
     PROJECTOR_TYPE_VOXTRAL,
+    PROJECTOR_TYPE_QWEN3OMNI_AUDIO,
+    PROJECTOR_TYPE_QWEN3OMNI_VISION,
     PROJECTOR_TYPE_LFM2,
     PROJECTOR_TYPE_KIMIVL,
     PROJECTOR_TYPE_LIGHTONOCR,
@@ -209,6 +216,8 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_GLMA,      "glma"},
     { PROJECTOR_TYPE_QWEN25O,   "qwen2.5o"},
     { PROJECTOR_TYPE_VOXTRAL,   "voxtral"},
+    { PROJECTOR_TYPE_QWEN3OMNI_AUDIO, "qwen3omni_audio"},
+    { PROJECTOR_TYPE_QWEN3OMNI_VISION, "qwen3omni_vision"},
     { PROJECTOR_TYPE_LFM2,      "lfm2"},
     { PROJECTOR_TYPE_KIMIVL,    "kimivl"},
     { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},

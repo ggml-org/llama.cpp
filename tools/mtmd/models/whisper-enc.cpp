@@ -86,6 +86,22 @@ ggml_cgraph * clip_graph_whisper_enc::build() {
             FFN_GELU_ERF,
             -1);
 
+    } else if (proj_type == PROJECTOR_TYPE_QWEN3OMNI_AUDIO) {
+        // Qwen3-Omni audio projector: post_ln -> proj1 -> GELU -> proj2
+        // post-norm (uses post_ln tensors)
+        cur = ggml_norm(ctx0, cur, hparams.eps);
+        cur = ggml_mul(ctx0, cur, model.post_ln_w);
+        cur = ggml_add(ctx0, cur, model.post_ln_b);
+
+        // proj1
+        cur = ggml_mul_mat(ctx0, model.mm_1_w, cur);
+        cur = ggml_add(ctx0, cur, model.mm_1_b);
+        cur = ggml_gelu(ctx0, cur);
+
+        // proj2
+        cur = ggml_mul_mat(ctx0, model.mm_2_w, cur);
+        cur = ggml_add(ctx0, cur, model.mm_2_b);
+
     } else if (proj_type == PROJECTOR_TYPE_GLMA) {
             cur = ggml_norm(ctx0, cur, hparams.eps);
             cur = ggml_mul(ctx0, cur, model.mm_norm_pre_w);
