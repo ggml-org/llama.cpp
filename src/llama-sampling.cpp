@@ -2329,61 +2329,39 @@ struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, floa
     return result;
 }
 
-// power-law
+// adaptive-p sampler state
 //
-// this sampler implements a power law probability transformation with adaptive
-// target tracking. it reshapes token probability distributions to favor tokens near a
-// configurable target probability, rather than always selecting from the highest probability
-// candidates.
+// maintains an exponential moving average of the *ORIGINAL* probabilities
+// of selected tokens, used to compute an adapted target at each sampling step.
 //
-// this sampler is like `greedy`, `dist`, and `mirostat` in that it actually selects a token ID
-// rather than just transforming logits. therefore it must always be the last sampler in the
-// sampler chain.
-//
-// minimal truncation before this sampler is recommended.
-//
-// ref: https://github.com/MrJackSpade/llama.cpp/tree/master (original impl)
-// ref: https://github.com/ggml-org/llama.cpp/pull/17927     (llama.cpp PR)
-
-struct llama_sampler_power_law {
-
-    // the desired average probability for selected tokens (0.0 to 1.0)
-    // higher values favor more probable tokens (more stable and predictable)
-    // lower values favor less probable tokens (more creative)
-    // negative values disable Power Law sampling (sample from distribution as-is)
-    const float target;
-
-    // controls how quickly history influence fades (0.0 to 0.99)
-    // lower values = faster adaptation, more reactive to recent tokens
-    // higher values = slower adaptation, more stable over time
-    // effective history length ≈ 1/(1-decay) tokens
-    // example: decay=0.5 --> ~2 tokens; decay=0.9 --> ~10 tokens; decay=0.95 --> ~20 tokens
-    // internally clamped to <= 0.99 to prevent unbounded accumulation
-    const float decay;
-
-    const uint32_t seed;
-    std::mt19937   rng;
-
-    // member variables
-    float              weighted_sum;   // historical token probabilities weighted by recency
-    float              total_weight;   // sum of weights, converges to 1/(1-decay)
-    std::vector<float> original_probs; // used to store original token probabilities
+// see llama.h for a full description of the sampler
+// ref: https://github.com/ggml-org/llama.cpp/pull/17927
+struct llama_sampler_adaptive_p {
+    const float    target; // target probability (0.0 - 1.0; negative = disabled)
+    const float    decay;  // EMA decay; history ≈ 1/(1-decay) tokens (0.0 - 0.99)
+    const uint32_t seed;   // RNG seed
+    std::mt19937   rng;    // RNG
+    float weighted_sum;    // sum(p_i * decay^i)
+    float total_weight;    // sum(decay^i), converges to 1/(1-decay)
+    std::vector<float> original_probs; // pre-transform probs, cached for EMA update
 };
 
-// transformation constants
+// adaptive probability transformation constants
 static constexpr float DISTRIBUTION_WIDTH = 0.3f;
 static constexpr float PEAK_LOGIT_VALUE   = 5.0f;
+static constexpr float SHARPNESS          = 4.0f;
 static constexpr float INV_WIDTH          = 1.0f / DISTRIBUTION_WIDTH;
 
-static const char * llama_sampler_power_law_name(const struct llama_sampler * /*smpl*/) {
-    return "power-law";
+static const char * llama_sampler_adaptive_p_name(const struct llama_sampler * /*smpl*/) {
+    return "adaptive-p";
 }
 
-static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
-    auto * ctx = (llama_sampler_power_law *) smpl->ctx;
+static void llama_sampler_adaptive_p_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+    auto * ctx = (llama_sampler_adaptive_p *) smpl->ctx;
 
     if (ctx->target < 0.0f) {
-        // no-op: just sample from the distribution as-is
+        // at negative target values, adaptive-p is no-op
+        // we simply sample from the existing distribution
         llama_sampler_softmax_impl(cur_p, false);
         cur_p->selected = llama_sample_dist(cur_p, ctx->rng);
         return;
@@ -2397,38 +2375,43 @@ static void llama_sampler_power_law_apply(struct llama_sampler * smpl, llama_tok
     }
 
     // compute the adapted target probability for the current sampling step
-    float computed_target = std::clamp(
-        ctx->total_weight == 0.0f ? ctx->target : 2.0f * ctx->target - (ctx->weighted_sum / ctx->total_weight),
+    auto target = std::clamp(ctx->target, 0.0f, 1.0f);
+    float adapted_target = std::clamp(
+        ctx->total_weight == 0.0f ? target : 2.0f * target - (ctx->weighted_sum / ctx->total_weight),
         0.0f, 1.0f
     );
 
-    // power law transform
+    // adaptive probability transform
+    //
+    // quadratic near target for fine differentiation, transitioning to linear decay in the
+    // tails. unbounded negative logits ensure proper suppression of far-from-target tokens
+    // after the softmax.
+    //
     for (size_t i = 0; i < cur_p->size; ++i) {
-        float dist = (cur_p->data[i].p - computed_target) * INV_WIDTH;
-        cur_p->data[i].logit = PEAK_LOGIT_VALUE / (1.0f + dist * dist);
+        float dist = std::abs((cur_p->data[i].p - adapted_target) * INV_WIDTH);
+        cur_p->data[i].logit = PEAK_LOGIT_VALUE - SHARPNESS * dist * dist / (1.0f + dist);
     }
 
+    // softmax and sample from the transformed distribution
     llama_sampler_softmax_impl(cur_p, false);
-
-    // sample from transformed distribution
     const int idx   = llama_sample_dist(cur_p, ctx->rng);
     cur_p->selected = idx;
 
-    // update running history with the original probability of the selected token
-    ctx->weighted_sum = ctx->original_probs[idx] + ctx->decay * ctx->weighted_sum; // history fades over time
+    // update history with the original probability of the selected token
+    ctx->weighted_sum = ctx->original_probs[idx] + ctx->decay * ctx->weighted_sum;
     ctx->total_weight = 1.0f + ctx->decay * ctx->total_weight;
 }
 
-static void llama_sampler_power_law_reset(struct llama_sampler * smpl) {
-    auto * ctx        = (llama_sampler_power_law *) smpl->ctx;
+static void llama_sampler_adaptive_p_reset(struct llama_sampler * smpl) {
+    auto * ctx        = (llama_sampler_adaptive_p *) smpl->ctx;
     ctx->weighted_sum = 0.0f;
     ctx->total_weight = 0.0f;
 }
 
-static struct llama_sampler * llama_sampler_power_law_clone(const struct llama_sampler * smpl) {
-    const auto * ctx  = (const llama_sampler_power_law *) smpl->ctx;
-    auto * result     = llama_sampler_init_power_law(ctx->target, ctx->decay, ctx->seed);
-    auto * result_ctx = (llama_sampler_power_law *) result->ctx;
+static struct llama_sampler * llama_sampler_adaptive_p_clone(const struct llama_sampler * smpl) {
+    const auto * ctx  = (const llama_sampler_adaptive_p *) smpl->ctx;
+    auto * result     = llama_sampler_init_adaptive_p(ctx->target, ctx->decay, ctx->seed);
+    auto * result_ctx = (llama_sampler_adaptive_p *) result->ctx;
 
     result_ctx->rng          = ctx->rng;
     result_ctx->weighted_sum = ctx->weighted_sum;
@@ -2438,29 +2421,29 @@ static struct llama_sampler * llama_sampler_power_law_clone(const struct llama_s
     return result;
 }
 
-static void llama_sampler_power_law_free(struct llama_sampler * smpl) {
-    delete (llama_sampler_power_law *) smpl->ctx;
+static void llama_sampler_adaptive_p_free(struct llama_sampler * smpl) {
+    delete (llama_sampler_adaptive_p *) smpl->ctx;
 }
 
-static struct llama_sampler_i llama_sampler_power_law_i = {
-    /* .name   = */ llama_sampler_power_law_name,
+static struct llama_sampler_i llama_sampler_adaptive_p_i = {
+    /* .name   = */ llama_sampler_adaptive_p_name,
     /* .accept = */ nullptr,
-    /* .apply  = */ llama_sampler_power_law_apply,
-    /* .reset  = */ llama_sampler_power_law_reset,
-    /* .clone  = */ llama_sampler_power_law_clone,
-    /* .free   = */ llama_sampler_power_law_free,
+    /* .apply  = */ llama_sampler_adaptive_p_apply,
+    /* .reset  = */ llama_sampler_adaptive_p_reset,
+    /* .clone  = */ llama_sampler_adaptive_p_clone,
+    /* .free   = */ llama_sampler_adaptive_p_free,
 };
 
-struct llama_sampler * llama_sampler_init_power_law(
+struct llama_sampler * llama_sampler_init_adaptive_p(
     float    target,
     float    decay,
     uint32_t seed
 ) {
     auto seed_cur = get_rng_seed(seed);
     return llama_sampler_init(
-        /* .iface = */ &llama_sampler_power_law_i,
-        /* .ctx   = */ new llama_sampler_power_law {
-            /* .target         = */ std::clamp(target, 0.0f, 1.0f),
+        /* .iface = */ &llama_sampler_adaptive_p_i,
+        /* .ctx   = */ new llama_sampler_adaptive_p {
+            /* .target         = */ target,
             /* .decay          = */ std::clamp(decay, 0.0f, 0.99f),
             /* .seed           = */ seed_cur,
             /* .rng            = */ std::mt19937(seed_cur),

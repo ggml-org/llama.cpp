@@ -1597,21 +1597,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--power-law-target"}, "N",
-        string_format("power law sampler: select tokens near this probability (valid range 0.0 "
-                      "to 1.0; <0 = disabled) (default: %.2f)\n"
+        {"--adaptive-target"}, "N",
+        string_format("adaptive-p: select tokens near this probability (valid range 0.0 "
+                      "to 1.0; negative = disabled) (default: %.2f)\n"
                       "[(more info)]""(https://github.com/ggml-org/llama.cpp/pull/17927)",
-                      (double)params.sampling.power_law_target),
+                      (double)params.sampling.adaptive_target),
         [](common_params & params, const std::string & value) {
-            params.sampling.power_law_target = std::stof(value);
+            params.sampling.adaptive_target = std::stof(value);
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--power-law-decay"}, "N",
-        string_format("decay rate for target adaptation over time. lower values -> faster but less stable adaptation.\n"
-        "(valid range 0.0 to 1.0; ≤0 = no adaptation) (default: %.2f)", (double)params.sampling.power_law_decay),
+        {"--adaptive-decay"}, "N",
+        string_format("adaptive-p: decay rate for target adaptation over time. lower values "
+                      "are more reactive, higher values are more stable.\n"
+                      "(valid range 0.0 to 0.99) (default: %.2f)",
+                      (double)params.sampling.adaptive_decay),
         [](common_params & params, const std::string & value) {
-            params.sampling.power_law_decay = std::stof(value);
+            params.sampling.adaptive_decay = std::stof(value);
         }
     ).set_sparam());
     add_opt(common_arg(

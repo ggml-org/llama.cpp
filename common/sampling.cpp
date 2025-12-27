@@ -150,11 +150,11 @@ std::string common_params_sampling::print() const {
             "\trepeat_last_n = %d, repeat_penalty = %.3f, frequency_penalty = %.3f, presence_penalty = %.3f\n"
             "\tdry_multiplier = %.3f, dry_base = %.3f, dry_allowed_length = %d, dry_penalty_last_n = %d\n"
             "\ttop_k = %d, top_p = %.3f, min_p = %.3f, xtc_probability = %.3f, xtc_threshold = %.3f, typical_p = %.3f, top_n_sigma = %.3f, temp = %.3f\n"
-            "\tmirostat = %d, mirostat_lr = %.3f, mirostat_ent = %.3f, power_law_target = %.3f, power_law_decay = %.3f",
+            "\tmirostat = %d, mirostat_lr = %.3f, mirostat_ent = %.3f, adaptive_target = %.3f, adaptive_decay = %.3f",
             penalty_last_n, penalty_repeat, penalty_freq, penalty_present,
             dry_multiplier, dry_base, dry_allowed_length, dry_penalty_last_n,
             top_k, top_p, min_p, xtc_probability, xtc_threshold, typ_p, top_n_sigma, temp,
-            mirostat, mirostat_eta, mirostat_tau, power_law_target, power_law_decay);
+            mirostat, mirostat_eta, mirostat_tau, adaptive_target, adaptive_decay);
 
     return std::string(result);
 }
@@ -237,7 +237,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
 
     if (params.mirostat == 0) {
 
-        bool use_power_law = false;
+        bool use_adaptive_p = false; // see below
 
         for (const auto & cnstr : params.samplers) {
             switch (cnstr) {
@@ -278,20 +278,20 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
                 case COMMON_SAMPLER_TYPE_PENALTIES:
                     samplers.push_back(llama_sampler_init_penalties(params.penalty_last_n, params.penalty_repeat, params.penalty_freq, params.penalty_present));
                     break;
-                case COMMON_SAMPLER_TYPE_POWER_LAW:
-                    // the `power_law` sampler is like `dist` in that it selects a single token,
-                    // so we will add `dist` at the end of the chain by default, unless the user
-                    // specifically included `power_law`. we set this flag here so we know to add
-                    // it at the very end.
-                    use_power_law = true;
+                case COMMON_SAMPLER_TYPE_ADAPTIVE_P:
+                    // the `adaptive-p` sampler is like `dist` and `mirostat` in that it selects
+                    // a single token, so we will add `dist` at the end of the chain by default,
+                    // unless the user specifically included `adaptive-p`. we set this flag here
+                    // so we know to add the sampler at the very end.
+                    use_adaptive_p = true;
                     break;
                 default:
                     GGML_ASSERT(false && "unknown sampler type");
             }
         }
-        if (use_power_law) {
-            // only if user explicitly included power_law sampler
-            samplers.push_back(llama_sampler_init_power_law(params.power_law_target, params.power_law_decay, params.seed));
+        if (use_adaptive_p) {
+            // only if user explicitly included adaptive-p sampler
+            samplers.push_back(llama_sampler_init_adaptive_p(params.adaptive_target, params.adaptive_decay, params.seed));
         } else {
             // default: sample from distribution
             samplers.push_back(llama_sampler_init_dist(params.seed));
@@ -581,7 +581,7 @@ char common_sampler_type_to_chr(enum common_sampler_type cnstr) {
         case COMMON_SAMPLER_TYPE_XTC:         return 'x';
         case COMMON_SAMPLER_TYPE_INFILL:      return 'i';
         case COMMON_SAMPLER_TYPE_PENALTIES:   return 'e';
-        case COMMON_SAMPLER_TYPE_POWER_LAW:   return 'w';
+        case COMMON_SAMPLER_TYPE_ADAPTIVE_P:  return 'a';
         default : return '?';
     }
 }
@@ -598,7 +598,7 @@ std::string common_sampler_type_to_str(enum common_sampler_type cnstr) {
         case COMMON_SAMPLER_TYPE_XTC:         return "xtc";
         case COMMON_SAMPLER_TYPE_INFILL:      return "infill";
         case COMMON_SAMPLER_TYPE_PENALTIES:   return "penalties";
-        case COMMON_SAMPLER_TYPE_POWER_LAW:   return "power_law";
+        case COMMON_SAMPLER_TYPE_ADAPTIVE_P:  return "adaptive_p";
         default : return "";
     }
 }
@@ -615,7 +615,7 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         { "xtc",         COMMON_SAMPLER_TYPE_XTC },
         { "infill",      COMMON_SAMPLER_TYPE_INFILL },
         { "penalties",   COMMON_SAMPLER_TYPE_PENALTIES },
-        { "power_law",   COMMON_SAMPLER_TYPE_POWER_LAW },
+        { "adaptive_p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P },
     };
 
     // since samplers names are written multiple ways
@@ -631,7 +631,7 @@ std::vector<common_sampler_type> common_sampler_types_from_names(const std::vect
         { "typ",         COMMON_SAMPLER_TYPE_TYPICAL_P },
         { "min-p",       COMMON_SAMPLER_TYPE_MIN_P },
         { "temp",        COMMON_SAMPLER_TYPE_TEMPERATURE },
-        { "power-law",   COMMON_SAMPLER_TYPE_POWER_LAW },
+        { "adaptive-p",  COMMON_SAMPLER_TYPE_ADAPTIVE_P },
     };
 
     std::vector<common_sampler_type> samplers;

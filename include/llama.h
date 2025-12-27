@@ -1304,25 +1304,28 @@ extern "C" {
                           const char ** seq_breakers,
                               size_t    num_breakers);
 
-    /// power-law
+    /// adaptive-p: select tokens near a configurable target probability over time.
     ///
-    /// this sampler implements a power law probability transformation with adaptive
-    /// target tracking. it reshapes token probability distributions to favor tokens near a
-    /// configurable target probability, rather than always selecting from the highest probability
-    /// candidates.
+    /// the adaptive-p sampler transforms the token probability distribution to favor tokens
+    /// that fall near a user-configurable probability target.
     ///
-    /// this sampler is like `greedy`, `dist`, and `mirostat` in that it actually selects a token ID
-    /// rather than just transforming logits. therefore it must always be the last sampler in the
-    /// sampler chain.
+    /// internally, the sampler maintains an exponential moving average of the *ORIGINAL*
+    /// probabilities of selected tokens at each sampling step. it uses this EMA to compute an
+    /// adapted target probability at each sampling step, thus maintaining the desired target
+    /// probability over time.
     ///
-    /// minimal truncation before this sampler is recommended.
+    /// adaptive-p selects a token ID rather than just mutating candidates, so it must be last
+    /// in the sampler chain (like mirostat, dist, greedy).
     ///
-    /// @param target select tokens near this probability (valid range 0.0 to 1.0; <0 = disabled)
-    /// @param decay decay rate for target adaptation over time. lower values -> faster but less stable adaptation. (valid range 0.0 to 1.0; ≤0 = no adaptation)
+    /// only mild truncation before this sampler is recommended. we suggest applying min-p
+    /// before adaptive-p as the only other active sampler in the chain.
     ///
-    /// ref: https://github.com/MrJackSpade/llama.cpp/tree/master (original impl)
-    /// ref: https://github.com/ggml-org/llama.cpp/pull/17927     (llama.cpp PR)
-    LLAMA_API struct llama_sampler * llama_sampler_init_power_law(
+    /// @param target select tokens near this probability (valid range 0.0 to 1.0; negative = disabled)
+    /// @param decay  EMA decay for adaptation; history ≈ 1/(1-decay) tokens (valid range 0.0 - 0.99)
+    /// @param seed   RNG seed
+    ///
+    /// ref: https://github.com/ggml-org/llama.cpp/pull/17927
+    LLAMA_API struct llama_sampler * llama_sampler_init_adaptive_p(
                                float   target,
                                float   decay,
                             uint32_t   seed);
