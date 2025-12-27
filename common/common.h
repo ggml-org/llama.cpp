@@ -420,7 +420,8 @@ struct common_params {
     bool kv_unified        = false; // enable unified KV cache
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
-    bool use_mmap          = true;  // use mmap for faster loads
+    bool use_mmap          = true;  // enable mmap to use filesystem cache
+    bool use_direct_io     = true;  // read from disk without buffering for faster model loading
     bool use_mlock         = false; // use mlock to keep model in memory
     bool verbose_prompt    = false; // print prompt tokens before generation
     bool display_prompt    = true;  // print prompt before generation
