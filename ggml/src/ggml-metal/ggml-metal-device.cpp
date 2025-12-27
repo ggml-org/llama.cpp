@@ -1684,3 +1684,43 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_opt_step_sgd(ggm
 
     return res;
 }
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_memset(ggml_metal_library_t lib, const ggml_tensor *  op) {
+    GGML_ASSERT(op->type == GGML_TYPE_I64);
+
+    char base[256];
+    char name[256];
+
+    snprintf(base, 256, "kernel_memset_%s", ggml_type_name(op->type));
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+
+    return res;
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_count_equal(ggml_metal_library_t lib, const ggml_tensor *  op) {
+    assert(op->op == GGML_OP_COUNT_EQUAL);
+    GGML_ASSERT(op->src[0]->type == op->src[1]->type);
+    GGML_ASSERT(op->src[0]->type == GGML_TYPE_I32);
+    GGML_ASSERT(op->type == GGML_TYPE_I64);
+    // note: the kernel only supports i32 output due to metal atomic add only supporting atomic_int
+    // Check length < 2^31 to avoid overflow
+    GGML_ASSERT(ggml_nelements(op->src[0]) < (1LL << 31));
+    char base[256];
+    char name[256];
+
+    snprintf(base, 256, "kernel_count_equal_%s", ggml_type_name(op->src[0]->type));
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+    res.smem = 32 * sizeof(int32_t);
+
+    return res;
+}
