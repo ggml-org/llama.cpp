@@ -2125,7 +2125,8 @@ void ggml_ifairy_lut_qgemm_ex_merged64(int             m,
             const float coeff_w_real = GGML_FP16_TO_FP32(w_row[0].d_real);
             const float coeff_w_imag = GGML_FP16_TO_FP32(w_row[0].d_imag);
 
-            float32x4_t accv = vdupq_n_f32(0.0f);  // {ac, ad, bc, bd}
+            float32x2_t acc01 = vdup_n_f32(0.0f);  // {ac, ad}
+            float32x2_t acc23 = vdup_n_f32(0.0f);  // {bc, bd}
 
             const uint8_t * idx_blk = idx_row;
             const int8_t *  grp_blk = lut_col;
@@ -2287,19 +2288,20 @@ void ggml_ifairy_lut_qgemm_ex_merged64(int             m,
                 }
 
                 const float32x2_t srsi  = vld1_f32(scl_blk);
-                const float32x4_t scv   = vcombine_f32(srsi, srsi);  // {sr, si, sr, si}
-                const float32x4_t sumsf = vcvtq_f32_s32(isum);
-                accv                    = vmlaq_f32(accv, sumsf, scv);
+                const float32x2_t sum01 = vcvt_f32_s32(vget_low_s32(isum));
+                const float32x2_t sum23 = vcvt_f32_s32(vget_high_s32(isum));
+                acc01                   = vmla_f32(acc01, sum01, srsi);
+                acc23                   = vmla_f32(acc23, sum23, srsi);
 
                 idx_blk += groups_per_block;
                 grp_blk += (size_t) groups_per_block * k_ifairy_lut_merged64_group_bytes;
                 scl_blk += 2;
             }
 
-            const float acc_ac_xr = vgetq_lane_f32(accv, 0);
-            const float acc_ad_xi = vgetq_lane_f32(accv, 1);
-            const float acc_bc_xr = vgetq_lane_f32(accv, 2);
-            const float acc_bd_xi = vgetq_lane_f32(accv, 3);
+            const float acc_ac_xr = vget_lane_f32(acc01, 0);
+            const float acc_ad_xi = vget_lane_f32(acc01, 1);
+            const float acc_bc_xr = vget_lane_f32(acc23, 0);
+            const float acc_bd_xi = vget_lane_f32(acc23, 1);
 
             const float out_r = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
             const float out_i = coeff_w_imag * acc_bc_xr - coeff_w_real * acc_ad_xi;

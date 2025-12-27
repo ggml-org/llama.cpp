@@ -246,6 +246,7 @@ struct ifairy_lut_extra {
   - prefetch 距离调优：A/B `GGML_IFAIRY_LUT_PREFETCH_DIST=2/4/8`
   - 增加 `idx_blk[]` 的 prefetch（`GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`）
   - merged64：`N==1`（decode）快路（`GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0/1`）
+  - merged64：`N==1` 快路内减少向量拼接/转换（用 `float32x2` 累加，避免 `vcombine + vcvtq`）
   - merged64：int16 block 累加（`GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`）
   - 8-group unroll（`GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`）
 - P3：若 profile 显示 `preprocess_ex` 上升为新瓶颈：优先优化 `merged64` 的构表路径（避免把收益“搬家”到 preprocess）。
@@ -273,6 +274,7 @@ struct ifairy_lut_extra {
 - ✅ prefetch A/B + 距离：`GGML_IFAIRY_LUT_PREFETCH=0/1`、`GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ merged64：prefetch indexes：`GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ merged64：`N==1`（decode）快路：`GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0/1`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
+- ✅ merged64：`N==1` 快路减少向量拼接/转换（`float32x2` 累加）：`ggml/src/ggml-ifairy-lut-qgemm.cpp`。
 - ✅ merged64：int16 block 累加：`GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ merged64：8-group unroll：`GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ `sdot`（dotprod）实验内核（仅 `N==1`）：`GGML_IFAIRY_LUT_KERNEL=sdot`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
