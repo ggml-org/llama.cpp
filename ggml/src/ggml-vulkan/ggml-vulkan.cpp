@@ -535,6 +535,7 @@ struct vk_device_struct {
     vk_queue transfer_queue;
     bool single_queue;
     bool support_async;
+    bool support_events;
     uint32_t subgroup_size;
     uint32_t subgroup_size_log2;
     uint32_t shader_core_count;
@@ -4498,6 +4499,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->subgroup_size = subgroup_props.subgroupSize;
         device->subgroup_size_log2 = uint32_t(log2f(float(device->subgroup_size)));
         device->uma = device->properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
+
+        // Events enable directio support which is showing failures on UMA systems, so disable
+        // it temporarily. See https://github.com/ggml-org/llama.cpp/issues/18317.
+        device->support_events = !device->uma && getenv("GGML_VK_DISABLE_EVENTS") == nullptr;
+
         if (sm_builtins) {
             device->shader_core_count = sm_props.shaderSMCount;
         } else if (amd_shader_core_properties2) {
@@ -14002,6 +14008,8 @@ static enum ggml_backend_dev_type ggml_backend_vk_device_get_type(ggml_backend_d
 static void ggml_backend_vk_device_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props) {
     ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
 
+    const vk_device& device = ggml_vk_get_device(ctx->device);
+
     props->name        = ggml_backend_vk_device_get_name(dev);
     props->description = ggml_backend_vk_device_get_description(dev);
     props->type        = ggml_backend_vk_device_get_type(dev);
@@ -14011,7 +14019,7 @@ static void ggml_backend_vk_device_get_props(ggml_backend_dev_t dev, struct ggml
         /* .async                 = */ true,
         /* .host_buffer           = */ true,
         /* .buffer_from_host_ptr  = */ false,
-        /* .events                = */ true,
+        /* .events                = */ device->support_events,
     };
 }
 
