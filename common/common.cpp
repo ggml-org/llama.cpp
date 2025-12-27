@@ -10,6 +10,8 @@
 #include "llama.h"
 #include "sampling.h"
 
+#include "ggml-backend.h"
+
 #include <algorithm>
 #include <cinttypes>
 #include <climits>
@@ -1343,6 +1345,104 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
 
     if (params.n_gpu_layers != -1) {
         mparams.n_gpu_layers = params.n_gpu_layers;
+    }
+    else {
+        // Dynamic VRAM heuristic
+        int n_gpu_layers = 0;
+
+        // Find the main GPU
+        int count = 0;
+        size_t free = 0;
+        size_t total = 0;
+        bool found_gpu = false;
+
+        size_t dev_count = ggml_backend_dev_count();
+        for (size_t i = 0; i < dev_count; ++i) {
+            ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+            if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                if (count == params.main_gpu) {
+                    ggml_backend_dev_memory(dev, &free, &total);
+                    found_gpu = true;
+                    break;
+                }
+                count++;
+            }
+        }
+
+        if (found_gpu) {
+            // Parse GGUF to get model info
+            struct gguf_init_params gguf_params = {
+                /*.no_alloc = */ true,
+                /*.ctx      = */ NULL,
+            };
+            struct gguf_context * ctx = gguf_init_from_file(params.model.path.c_str(), gguf_params);
+
+            if (ctx) {
+                int n_layers = -1;
+
+                // Find block count from GGUF metadata
+                int n_kv = gguf_get_n_kv(ctx);
+                for (int i = 0; i < n_kv; i++) {
+                    const char * key = gguf_get_key(ctx, i);
+
+                    // Find block_count (e.g. llama.block_count, gemma2.block_count)
+                    const char * suffix     = ".block_count";
+                    size_t       key_len    = strlen(key);
+                    size_t       suffix_len = strlen(suffix);
+                    if (key_len >= suffix_len && strcmp(key + key_len - suffix_len, suffix) == 0) {
+                        n_layers = gguf_get_val_u32(ctx, i);
+                    }
+                }
+
+                if (n_layers > 0) {
+                    size_t file_size = std::filesystem::file_size(params.model.path);
+
+                    // Reserve overhead for KV cache, compute buffers, and system
+                    // KV cache is allocated dynamically by llama.cpp based on offloaded layers
+                    // Conservative overhead: 800MB covers KV cache + compute for most scenarios
+                    const size_t overhead = 800 * 1024 * 1024;
+
+                    if (free > overhead) {
+                        size_t available_for_model = free - overhead;
+                        size_t bytes_per_layer     = file_size / n_layers;
+
+                        if (bytes_per_layer > 0) {
+                            n_gpu_layers = (int) (available_for_model / bytes_per_layer);
+                        }
+
+                        // Clamp to total layers
+                        if (n_gpu_layers > n_layers) {
+                            n_gpu_layers = n_layers;
+                        }
+                        if (n_gpu_layers < 0) {
+                            n_gpu_layers = 0;
+                        }
+
+                        LOG_INF(
+                            "%s: Dynamic VRAM heuristic: available_vram=%zu MB, model_size=%zu MB, n_layers=%d, "
+                            "overhead=%zu MB, calculated_layers=%d\n",
+                            __func__, free / 1024 / 1024, file_size / 1024 / 1024, n_layers, overhead / 1024 / 1024,
+                            n_gpu_layers);
+                    } else {
+                        LOG_WRN(
+                            "%s: Dynamic VRAM heuristic: Insufficient VRAM (%zu MB free, %zu MB overhead needed), "
+                            "disabling GPU offload\n",
+                            __func__, free / 1024 / 1024, overhead / 1024 / 1024);
+                        n_gpu_layers = 0;
+                    }
+                }
+                gguf_free(ctx);
+            } else {
+                LOG_WRN("%s: Failed to open GGUF file for heuristic, disabling GPU offload\n", __func__);
+                // Fallback to CPU-only if GGUF fails
+                n_gpu_layers = 0;
+            }
+        } else {
+             LOG_WRN("%s: Dynamic VRAM heuristic: GPU %d not found, disabling GPU offload\n", __func__, params.main_gpu);
+             n_gpu_layers = 0;
+        }
+
+        mparams.n_gpu_layers = n_gpu_layers;
     }
 
     mparams.main_gpu        = params.main_gpu;
