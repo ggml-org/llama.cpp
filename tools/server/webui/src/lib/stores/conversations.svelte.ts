@@ -2,7 +2,7 @@ import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode } from '$lib/utils';
 import { AttachmentType } from '$lib/enums';
 
@@ -285,9 +285,7 @@ class ConversationsStore {
 		onConfirmationNeeded?: (currentTitle: string, newTitle: string) => Promise<boolean>
 	): Promise<boolean> {
 		try {
-			const currentConfig = config();
-
-			if (currentConfig.askForTitleConfirmation && onConfirmationNeeded) {
+			if (settingsStore.getConfig('askForTitleConfirmation') && onConfirmationNeeded) {
 				const conversation = await DatabaseService.getConversation(convId);
 				if (!conversation) return false;
 

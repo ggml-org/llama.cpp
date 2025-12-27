@@ -1,5 +1,5 @@
 import { activeProcessingState } from '$lib/stores/chat.svelte';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 
 export interface UseProcessingStateReturn {
 	readonly processingState: ApiProcessingState | null;
@@ -56,8 +56,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 		isMonitoring = false;
 
 		// Only clear last known state if keepStatsVisible is disabled
-		const currentConfig = config();
-		if (!currentConfig.keepStatsVisible) {
+		if (!settingsStore.getConfig('keepStatsVisible')) {
 			lastKnownState = null;
 		}
 	}
