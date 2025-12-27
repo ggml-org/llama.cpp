@@ -1254,6 +1254,26 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
     return cur;
 }
 
+
+ggml_tensor * llm_graph_context::build_inp_embd_mtp(ggml_tensor * mtp_tok_embd) const {
+    auto inp = std::make_unique<llm_graph_input_embd>();
+    ggml_tensor * cur = nullptr;
+
+    if (ubatch.token) {
+        inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
+        ggml_set_name(inp->tokens, "mtp_inp_tokens");
+        ggml_set_input(inp->tokens);
+
+        cur = ggml_get_rows(ctx0, mtp_tok_embd, inp->tokens);
+    } else {
+        GGML_ABORT("fatal error: MTP update expects token IDs, not embeddings");
+    }
+
+    cb(cur, "mtp_inp_embd", -1);
+    res->add_input(std::move(inp));
+    return cur;
+}
+
 ggml_tensor * llm_graph_context::build_inp_pos() const {
     auto inp = std::make_unique<llm_graph_input_pos>(hparams.n_pos_per_embd());
 
