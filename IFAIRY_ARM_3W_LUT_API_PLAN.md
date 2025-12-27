@@ -139,8 +139,8 @@ struct ifairy_lut_extra {
 
 ### 6.0.2 当前优先级（建议）
 
-- **P0：让 `auto` 策略默认优先 `merged64`（prefill+decode）**：把“用户不配 env 也能快”的路径先修好（低风险、收益确定）；必须保留 `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64` 与 `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64` 的显式 override 口径（用于 A/B 与一键回退）。
-- **P1：复采样 profile（`merged64`）确认新瓶颈**：在 P0 落地后重新采样（否则 profile 不代表默认路径），判断下一步是继续压 `qgemm_ex` 还是转向 6.1（同步/调度）/6.4（prefill）。
+- **P0：对称性 `sym16`（64→16 canonical + factor）降低 LUT 工作集**：把 `merged64` 的 per-group LUT 从 `256B/group` 降到 `64B/group`（更小 cache footprint，更少 cacheline 触碰），优先打在 decode 的 `qgemm_ex` 热点；先以“新增 layout + env 强制启用”的方式落地做 A/B，通过验收后再考虑进入 `auto` 默认策略（见 6.5）。
+- **P1：保持默认路径稳定并复采样 profile（默认 `auto → merged64`）**：当前 `auto` 已默认 `merged64`（prefill+decode）；在 `sym16` 没有数据证明稳赢前，不贸然改 auto；P0 落地后分别对 `auto/merged64/sym16` 复采样，确认新瓶颈再排下一步。
 - **P2：decode：并行推进 6.1 + 6.2 的“可复现提速点”**：优先做不会扩大回归面的微优化（prefetch 距离/idx prefetch/unroll A/B），并把证据固化到 `STATUS.md:0.1` 记录。
 - **P3：prefill：推进 6.4（让 `merged64` 支持 BK tiling）**：`tbl64/merged64` 当前强制禁用 BK tiling；若要把 `pp tok/s` 拉上去，需要把 tiling 做成“可控且不变慢”的版本（分阶段落地、严格对照）。
 - **P4：可选研究项（非默认路径）**：
@@ -368,6 +368,25 @@ struct ifairy_lut_extra {
 
 目标：在不破坏 `w * conj(x)` 语义的前提下，继续降低 per-group 指令数与工作区读写。
 
+- **P0：对称性 `sym16`（64→16 canonical + factor）**：
+  - 结论：`ifairy-lut-symmetric-optimization.md` 的 “selector(3-bit)+sign(3-bit) → 8 entry” 在“只统计 `Σwr/Σwi`”层面成立，但在当前 3W LUT 里每组对应 **3 个不同 activation**（`x0/x1/x2` 独立），因此无法替代 per-(col,group) LUT（会丢掉逐位置的线性组合信息）。
+  - 可用且精确的对称性：**全局相位因子分解**  
+    - 任意三元组都可写成：`(w0,w1,w2) = factor · (1, u1, u2)`，其中 `factor = w0`，`u1 = w1 / w0`，`u2 = w2 / w0`；`(u1,u2)` 仅 `4^2=16` 种 canonical pattern（见 `IFAIRY_ARM_3W_LUT_DESIGN.md` 附录 A；离线枚举见 `scripts/ifairy_3w_lut_enum.py`）。
+    - 对 `merged64` 的 4 通道 `{ac,ad,bc,bd}`，`factor∈{1,i,-1,-i}` 只对应“通道置换 + 符号翻转”（不改数学语义，且不触及 GGUF/权重格式）。
+  - 方案：新增 LUT layout（建议名：`sym16` 或 `merged16`）  
+    - LUT（每 `(col,group)`）：`16 pat × 4 ch × int8 = 64B/group`（对比 `merged64`: `64×4×int8=256B/group`）。
+    - 索引：仍用现有 `pat`（6-bit pattern/byte）；在 `qgemm_ex` 内用 `pat → (idx16, factor_exp)` 映射后查 `tbl16[idx16]`，再按 `factor_exp` 做通道旋转/取反后累加。
+    - `qgemm_ex(sym16)` 的 NEON 设计点：一次处理 16 个 `pat`，用 `vqtbl4q_u8` 并行完成 `pat → idx16` 与 `pat → factor_exp` 的 64-entry 映射（避免标量 table lookup/分支），再对每个 group 做一次 32-bit load + widen；`factor_exp` 的通道变换用 `vext_s16`（`{ac,ad,bc,bd}→{bc,bd,ac,ad}`）+ `vmul_s16`（符号 mask）实现。
+    - 参考实现：外部 `lut_c/.../mul_mat_with_lut.c` 已实现同构的 “16 pattern + factor” 思路（其 canonical 选取为 `(-1,*,*)`，与 `(1,*,*)` 等价）；BitNet TL2 `ggml_qgemm_lut` 可参考其 **sign 注入** 的 `(x + sign) ^ sign` 技巧（见 `BitNet/preset_kernels/**/bitnet-lut-kernels-tl2.h`）。
+  - 关键风险：**int8 饱和会破坏“对称性推导的严格等价”**  
+    - 现状：`merged64` 构表阶段对每个 pat 的 `int16` 求和用 `vqmovn` 饱和到 `int8`。若 `sym16` 只存 canonical 的饱和结果，再在 `int8` 域做旋转/取反生成其它 pat，则在发生饱和时不严格等价（信息已丢失）。
+    - 两个可选缓解（需 A/B 与对照验证）：
+      1) `sym16` 继续用 int8，但让 LUT 构表保证 “3 项求和不会溢出 int8”——例如把 act 的 q-range 限到 `≤42`（外部代码用 `max/42` 量化），从根源避免饱和破坏对称性；
+      2) `sym16` 改用 `int16` 表项（`16×4×i16=128B/group`）并在累加阶段保持 `int32`，避免饱和（但会增加带宽；必须用数据决定）。
+  - 落地步骤（建议）：
+    1) 用 `scripts/ifairy_3w_lut_enum.py` 生成 `pat→idx16/factor_exp`（并在 C/C++ 侧加 64-pattern 枚举自检，确保 bit 顺序与 `pat = c0 | (c1<<2) | (c2<<4)` 一致）。
+    2) 实现 `preprocess_ex_sym16` + `qgemm_ex_sym16`（先 scalar，再补 NEON），默认不改 `auto`，仅通过 `GGML_IFAIRY_LUT_LAYOUT=sym16` 强制启用做 A/B。
+    3) 若 `sym16` 在默认 decode 基准下稳定 ≥ `merged64`（目标 +10%）且无明显质量回退，再把 `auto` 默认策略从 `merged64` 切到 `sym16`（并保留显式回退口径）。
 - 固定 `compact` 的带宽优势：保持 `48B/group`，避免“表变大但算力没下降”的回退。
 - 优先把 `qgemm_ex` 内部累加保持在 `int32`，只在 block/row 级做一次 `float` 缩放与写回。
 - 谨慎探索更激进的 LUT 合并方案（例如减少 position 查表次数），必须有 profile 证据 + A/B 记录支撑。
