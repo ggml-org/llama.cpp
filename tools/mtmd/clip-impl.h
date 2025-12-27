@@ -49,6 +49,7 @@
 #define KEY_IMAGE_GRID_PINPOINTS  "clip.vision.image_grid_pinpoints"
 #define KEY_IMAGE_CROP_RESOLUTION "clip.vision.image_crop_resolution"
 #define KEY_WIN_ATTN_PATTERN      "clip.vision.n_wa_pattern"
+#define KEY_WIN_ATTN_LAYERS       "clip.vision.wa_layers"
 #define KEY_ATTN_WINDOW_SIZE      "clip.vision.window_size"
 #define KEY_MINICPMV_VERSION      "clip.minicpmv_version"
 #define KEY_MINICPMV_QUERY_NUM    "clip.minicpmv_query_num"
@@ -187,6 +188,7 @@ enum projector_type {
     PROJECTOR_TYPE_JANUS_PRO,
     PROJECTOR_TYPE_LFM2A,
     PROJECTOR_TYPE_GLM4V,
+    PROJECTOR_TYPE_YOUTUVL,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -216,6 +218,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_JANUS_PRO, "janus_pro"},
     { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
     { PROJECTOR_TYPE_GLM4V,     "glm4v"},
+    { PROJECTOR_TYPE_YOUTUVL,     "youtuvl"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
