@@ -15,6 +15,18 @@
 #include <stdexcept>
 
 //
+// Memory factory extension
+//
+
+static llama_memory_factory_fn g_memory_factory = nullptr;
+static void * g_memory_factory_user_data = nullptr;
+
+void llama_set_memory_factory(llama_memory_factory_fn factory, void * user_data) {
+    g_memory_factory = factory;
+    g_memory_factory_user_data = user_data;
+}
+
+//
 // llama_context
 //
 
@@ -249,7 +261,15 @@ llama_context::llama_context(
             /*.swa_full =*/ params.swa_full,
         };
 
-        memory.reset(model.create_memory(params_mem, cparams));
+        // Try custom memory factory first
+        if (g_memory_factory) {
+            memory.reset(g_memory_factory(&model, &params, g_memory_factory_user_data));
+        }
+
+        // Fall back to default if factory returned null or not set
+        if (!memory) {
+            memory.reset(model.create_memory(params_mem, cparams));
+        }
     }
 
     // init backends
