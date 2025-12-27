@@ -2978,6 +2978,58 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         json first_result_json = first_result->to_json();
         if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
             res->data = format_anthropic_sse(first_result_json);
+        } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
+            const json created = {
+                {"event", "response.created"},
+                {"data", json {
+                    {"type", "response.created"},
+                    {"response", json {
+                        {"object", "response"},
+                        {"status", "in_progress"}
+                    }}
+                }}
+            };
+            const json in_progress = {
+                {"event", "response.in_progress"},
+                {"data", json {
+                    {"type", "response.in_progress"},
+                    {"response", json {
+                        {"object", "response"},
+                        {"status", "in_progress"}
+                    }}
+                }}
+            };
+            const json output_item_added = {
+                {"event", "response.output_item.added"},
+                {"data", json {
+                    {"type", "response.output_item.added"},
+                    {"item", json {
+                        {"type", "message"},
+                        {"status", "in_progress"},
+                        {"content", json::array()},
+                        {"role", "assistant"}
+                    }}
+                }}
+            };
+            const json content_part_added = {
+                {"event", "response.content_part.added"},
+                {"data", json {
+                    {"type", "response.content_part.added"},
+                    {"part", json {
+                        {"type", "output_text"},
+                        {"text", ""}
+                    }}
+                }}
+            };
+
+            const json initial_events = json::array({
+                created,
+                in_progress,
+                output_item_added,
+                content_part_added
+            });
+
+            res->data = format_oai_resp_sse(initial_events) + format_oai_resp_sse(first_result_json);
         } else {
             res->data = format_oai_sse(first_result_json);
         }
@@ -3012,13 +3064,16 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
 
                 // check if there is more data
                 if (!rd.has_next()) {
-                    if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
-                        // Anthropic doesn't send [DONE], message_stop was already sent
-                        output = "";
-                    } else if (res_type != TASK_RESPONSE_TYPE_NONE) {
-                        output = "data: [DONE]\n\n";
-                    } else {
-                        output = "";
+                    switch (res_type) {
+                        case TASK_RESPONSE_TYPE_NONE:
+                        case TASK_RESPONSE_TYPE_OAI_RESP:
+                        case TASK_RESPONSE_TYPE_ANTHROPIC:
+                            output = "";
+                            break;
+
+                        default:
+                            output = "data: [DONE]\n\n";
+                            break;
                     }
                     SRV_DBG("%s", "all results received, terminating stream\n");
                     return false; // no more data, terminate
@@ -3045,6 +3100,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     json res_json = result->to_json();
                     if (res_type == TASK_RESPONSE_TYPE_ANTHROPIC) {
                         output = format_anthropic_sse(res_json);
+                    } else if (res_type == TASK_RESPONSE_TYPE_OAI_RESP) {
+                        output = format_oai_resp_sse(res_json);
                     } else {
                         output = format_oai_sse(res_json);
                     }
@@ -3463,6 +3520,22 @@ void server_routes::init_routes() {
             body_parsed,
             files,
             TASK_RESPONSE_TYPE_OAI_CHAT);
+    };
+
+    this->post_responses_oai = [this](const server_http_req & req) {
+        auto res = create_response();
+        std::vector<raw_buffer> files;
+        json body = convert_responses_to_chatcmpl(json::parse(req.body));
+        json body_parsed = oaicompat_chat_params_parse(
+            body,
+            ctx_server.oai_parser_opt,
+            files);
+        return handle_completions_impl(
+            req,
+            SERVER_TASK_TYPE_COMPLETION,
+            body_parsed,
+            files,
+            TASK_RESPONSE_TYPE_OAI_RESP);
     };
 
     this->post_anthropic_messages = [this](const server_http_req & req) {
