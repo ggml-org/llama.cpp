@@ -133,7 +133,6 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_XIAOMI_MIMO,
     COMMON_CHAT_FORMAT_SOLAR_OPEN,
     COMMON_CHAT_FORMAT_EXAONE_MOE,
-    COMMON_CHAT_FORMAT_GIGACHAT_V3,
 
     // These are intended to be parsed by the PEG parser
     COMMON_CHAT_FORMAT_PEG_SIMPLE,

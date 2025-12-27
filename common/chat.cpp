@@ -733,7 +733,6 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_PEG_SIMPLE: return "peg-simple";
         case COMMON_CHAT_FORMAT_PEG_NATIVE: return "peg-native";
         case COMMON_CHAT_FORMAT_PEG_CONSTRUCTED: return "peg-constructed";
-        case COMMON_CHAT_FORMAT_GIGACHAT_V3: return "GigaChat V3";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1844,55 +1843,68 @@ static common_chat_params common_chat_params_init_gigachat_v3(
 
     auto prompt = apply(tmpl, inputs);
     data.prompt = prompt;
-    data.format = COMMON_CHAT_FORMAT_GIGACHAT_V3;
+    data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
 
     data.preserved_tokens = {
         "<|message_sep|>\n\n",
         "<|role_sep|>\n",
     };
 
-    if (inputs.tools.is_array() && !inputs.tools.empty()) {
-        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED && inputs.json_schema.is_null();
+    auto has_tools = inputs.tools.is_array() && !inputs.tools.empty();
+    auto include_grammar = true;
+    auto tool_call_start_prefix = "<|message_sep|>\n\nfunction call<|role_sep|>\n";
 
-        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-            std::vector<std::string> rules;
-
-
-            foreach_function(inputs.tools, [&](const json & tool) {
+    auto parser = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
+        if (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
+            // Build a choice of all available tools
+            auto tool_choice = p.choice();
+            for (const auto & tool : inputs.tools) {
                 const auto & function = tool.at("function");
                 std::string name = function.at("name");
-                auto parameters = function.at("parameters");
-                builder.resolve_refs(parameters);
+                const auto & schema = function.at("parameters");
 
-                // JSON schema for this tool
-                json schema = {
-                    {"type", "object"},
-                    {"properties", {
-                        {"name", {{"type", "string"}, {"const", name}}},
-                        {"arguments", parameters}
-                    }},
-                    {"required", json::array({"name", "arguments"})}
-                };
+                auto tool_name = p.json_member("name", "\"" + p.tool_name(p.literal(name)) + "\"");
+                auto tool_args = p.json_member("arguments", p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)));
 
-                // Add a rule for this tool
-                rules.push_back(
-                    R"("<|message_sep|>\n\nfunction call<|role_sep|>\n")" + 
-                    builder.add_schema(name + "-call", schema)
-                );
+                auto tool_open = p.tool_open(p.literal("{") << tool_name);
+
+                tool_choice |= p.rule("tool-" + name, tool_open << "," << tool_args << "}");
+            }
+
+            // Define the tool call structure
+            auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
+            auto max_calls = 1; // parallel toolcalls are not supported
+            auto tool_call = p.rule("tool-call", p.literal(tool_call_start_prefix) + tool_choice);
+            auto tool_calls = p.trigger_rule("tool-call-root", p.repeat(tool_call, /* min = */ min_calls, /* max = */ max_calls));
+
+            return p.content(p.until("<|message_sep|>\n\n")) << tool_calls;
+        }
+
+        // Content only parser
+        include_grammar = false;
+        return p.content(p.rest());
+
+    });
+
+    data.parser = parser.save();
+
+    if (include_grammar) {
+        data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                auto schema = function.at("parameters");
+                builder.resolve_refs(schema);
             });
-
-            builder.add_rule("root",
-                "(" + string_join(rules, " | ") + ")" +
-                (inputs.parallel_tool_calls ? "*" : "")
-            );
-
-            data.grammar_triggers.push_back({
-                COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
-                "<|message_sep|>\n\nfunction call<|role_sep|>\n"
-            });
+            parser.build_grammar(builder, data.grammar_lazy);
         });
-    }
 
+        data.grammar_triggers = {
+            {COMMON_GRAMMAR_TRIGGER_TYPE_WORD, tool_call_start_prefix}
+        };
+    }
+        
     return data;
 }
 
