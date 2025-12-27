@@ -84,6 +84,9 @@ struct llama_hparams {
     uint32_t moe_every_n_layers   = 0;
     uint32_t nextn_predict_layers = 0;
 
+    // Qwen3-Omni Talker: dimension of the Thinker hidden state
+    uint32_t n_thinker_hidden = 0;
+
     float f_norm_eps;
     float f_norm_rms_eps;
     float f_norm_group_eps;

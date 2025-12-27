@@ -1144,6 +1144,31 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_QWEN3OMNI_TALKER:
+            {
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp, false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_TALKER_THINKER_HIDDEN_SIZE, hparams.n_thinker_hidden, false);
+                // Talker is a 20-layer MoE transformer
+                switch (hparams.n_layer) {
+                    case 20: type = LLM_TYPE_UNKNOWN; break; // Talker-specific, no standard size
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
+        case LLM_ARCH_QWEN3OMNIMOE:
+            {
+                // Qwen3-Omni Thinker: Qwen3MOE with M-RoPE and shared experts
+                // Qwen3-Omni uses 3 active M-RoPE sections [24, 20, 20, 0] (4th is padding)
+                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, true);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp, false);
+                ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                switch (hparams.n_layer) {
+                    case 48: type = LLM_TYPE_30B_A3B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
         case LLM_ARCH_PHI2:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
@@ -2591,7 +2616,17 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     buft_list = pimpl->dev_output.buft_list;
                     break;
                 case LLM_TENSOR_LAYER_REPEATING:
-                    buft_list = pimpl->dev_layer.at(tn.bid).buft_list;
+                    // For vocoder/decoder components that use block IDs outside the main layer range,
+                    // fall back to the input device. This handles Code2Wav decoder blocks (bid=1-4, 10-42)
+                    // which don't correspond to main transformer layer indices.
+                    LLAMA_LOG_DEBUG("%s: REPEATING tensor %s bid=%d dev_layer.size()=%zu\n",
+                                   __func__, tn.str().c_str(), tn.bid, pimpl->dev_layer.size());
+                    if (tn.bid >= 0 && tn.bid < (int)pimpl->dev_layer.size()) {
+                        buft_list = pimpl->dev_layer.at(tn.bid).buft_list;
+                    } else {
+                        LLAMA_LOG_DEBUG("%s: bid %d out of range, using input device\n", __func__, tn.bid);
+                        buft_list = pimpl->dev_input.buft_list;
+                    }
                     break;
                 default:
                     GGML_ABORT("invalid layer %d for tensor %s", info.layer, tn.str().c_str());
@@ -3620,6 +3655,278 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
                         layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0);
                         layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+                    }
+                } break;
+            case LLM_ARCH_QWEN3OMNI_TALKER:
+                {
+                    // Main Talker MoE transformer (20 layers)
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                    if (output == NULL) {
+                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                    }
+
+                    // Talker projection layers
+                    // These project from Thinker hidden dim (n_thinker_hidden) to Talker n_embd
+                    // fc1: [n_thinker_hidden, n_thinker_hidden], fc2: [n_thinker_hidden, n_embd]
+                    const int64_t n_th = hparams.n_thinker_hidden ? hparams.n_thinker_hidden : n_embd;
+                    talker_text_proj_fc1   = create_tensor(tn(LLM_TENSOR_TALKER_TEXT_PROJ_FC1,   "weight"), {n_th, n_th}, TENSOR_NOT_REQUIRED);
+                    talker_text_proj_fc1_b = create_tensor(tn(LLM_TENSOR_TALKER_TEXT_PROJ_FC1,   "bias"),   {n_th}, TENSOR_NOT_REQUIRED);
+                    talker_text_proj_fc2   = create_tensor(tn(LLM_TENSOR_TALKER_TEXT_PROJ_FC2,   "weight"), {n_th, n_embd}, TENSOR_NOT_REQUIRED);
+                    talker_text_proj_fc2_b = create_tensor(tn(LLM_TENSOR_TALKER_TEXT_PROJ_FC2,   "bias"),   {n_embd}, TENSOR_NOT_REQUIRED);
+                    talker_hidden_proj_fc1 = create_tensor(tn(LLM_TENSOR_TALKER_HIDDEN_PROJ_FC1, "weight"), {n_th, n_th}, TENSOR_NOT_REQUIRED);
+                    talker_hidden_proj_fc1_b = create_tensor(tn(LLM_TENSOR_TALKER_HIDDEN_PROJ_FC1, "bias"), {n_th}, TENSOR_NOT_REQUIRED);
+                    talker_hidden_proj_fc2 = create_tensor(tn(LLM_TENSOR_TALKER_HIDDEN_PROJ_FC2, "weight"), {n_th, n_embd}, TENSOR_NOT_REQUIRED);
+                    talker_hidden_proj_fc2_b = create_tensor(tn(LLM_TENSOR_TALKER_HIDDEN_PROJ_FC2, "bias"), {n_embd}, TENSOR_NOT_REQUIRED);
+                    talker_codec_head      = create_tensor(tn(LLM_TENSOR_TALKER_CODEC_HEAD,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+                    // Talker codec embeddings (16 codebooks)
+                    talker_codec_embd.resize(16);
+                    for (int i = 0; i < 16; ++i) {
+                        talker_codec_embd[i] = create_tensor(tn(LLM_TENSOR_TALKER_CODEC_EMBD, "weight", i), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                    }
+
+                    // Main MoE layers
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+                        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+                        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
+
+                        const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+
+                        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+                        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0);
+                        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+
+                        // Shared expert
+                        const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
+                        layer.ffn_gate_inp_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP_SHEXP, "weight", i), {n_embd, 1}, TENSOR_NOT_REQUIRED);
+                        layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_shexp}, TENSOR_NOT_REQUIRED);
+                        layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_shexp}, TENSOR_NOT_REQUIRED);
+                    }
+
+                    // Code Predictor tensors (5-layer transformer for codebooks 2-16)
+                    // Code Predictor has: n_embd=1024, n_head=16, n_head_kv=8, head_dim=128, n_ff=3072, vocab=2048
+                    const int64_t cp_n_embd = n_embd;  // 1024
+                    const int64_t cp_n_head = 16;
+                    const int64_t cp_n_head_kv = 8;
+                    const int64_t cp_head_dim = 128;
+                    const int64_t cp_n_ff = 3072;
+                    const int64_t cp_vocab = 2048;
+                    const int cp_n_layer = 5;
+
+                    // Codec embeddings (15 for codebooks 1-15, indices 0-14)
+                    // Note: Codebook 0 comes from the Talker's main tok_embd, not Code Predictor
+                    talker_cp_codec_embd.resize(15);
+                    for (int i = 0; i < 15; ++i) {
+                        talker_cp_codec_embd[i] = create_tensor(tn(LLM_TENSOR_TALKER_CP_CODEC_EMBD, "weight", i), {cp_n_embd, cp_vocab}, TENSOR_NOT_REQUIRED);
+                    }
+
+                    // Output norm
+                    talker_cp_output_norm = create_tensor(tn(LLM_TENSOR_TALKER_CP_OUTPUT_NORM, "weight"), {cp_n_embd}, TENSOR_NOT_REQUIRED);
+
+                    // LM heads (15 for codebooks 2-16, indices 0-14)
+                    talker_cp_lm_head.resize(15);
+                    for (int i = 0; i < 15; ++i) {
+                        talker_cp_lm_head[i] = create_tensor(tn(LLM_TENSOR_TALKER_CP_LM_HEAD, "weight", i), {cp_n_embd, cp_vocab}, TENSOR_NOT_REQUIRED);
+                    }
+
+                    // Code Predictor layers (5 layers)
+                    talker_cp_layers.resize(cp_n_layer);
+                    for (int i = 0; i < cp_n_layer; ++i) {
+                        auto & layer = talker_cp_layers[i];
+
+                        layer.attn_norm   = create_tensor(tn(LLM_TENSOR_TALKER_CP_ATTN_NORM, "weight", i), {cp_n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.wq          = create_tensor(tn(LLM_TENSOR_TALKER_CP_ATTN_Q, "weight", i), {cp_n_embd, cp_n_head * cp_head_dim}, TENSOR_NOT_REQUIRED);
+                        layer.wk          = create_tensor(tn(LLM_TENSOR_TALKER_CP_ATTN_K, "weight", i), {cp_n_embd, cp_n_head_kv * cp_head_dim}, TENSOR_NOT_REQUIRED);
+                        layer.wv          = create_tensor(tn(LLM_TENSOR_TALKER_CP_ATTN_V, "weight", i), {cp_n_embd, cp_n_head_kv * cp_head_dim}, TENSOR_NOT_REQUIRED);
+                        layer.wo          = create_tensor(tn(LLM_TENSOR_TALKER_CP_ATTN_OUT, "weight", i), {cp_n_head * cp_head_dim, cp_n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_TALKER_CP_ATTN_Q_NORM, "weight", i), {cp_head_dim}, TENSOR_NOT_REQUIRED);
+                        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_TALKER_CP_ATTN_K_NORM, "weight", i), {cp_head_dim}, TENSOR_NOT_REQUIRED);
+                        layer.ffn_norm    = create_tensor(tn(LLM_TENSOR_TALKER_CP_FFN_NORM, "weight", i), {cp_n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.ffn_gate    = create_tensor(tn(LLM_TENSOR_TALKER_CP_FFN_GATE, "weight", i), {cp_n_embd, cp_n_ff}, TENSOR_NOT_REQUIRED);
+                        layer.ffn_up      = create_tensor(tn(LLM_TENSOR_TALKER_CP_FFN_UP, "weight", i), {cp_n_embd, cp_n_ff}, TENSOR_NOT_REQUIRED);
+                        layer.ffn_down    = create_tensor(tn(LLM_TENSOR_TALKER_CP_FFN_DOWN, "weight", i), {cp_n_ff, cp_n_embd}, TENSOR_NOT_REQUIRED);
+                    }
+
+                    // Code2Wav vocoder tensors (HiFi-GAN style)
+                    const int64_t c2w_n_embd = 1024;
+                    const int64_t c2w_n_ff = 3072;
+                    const int c2w_pre_n_layer = 8;
+                    const int c2w_up_n_block = 2;  // ConvNeXt upsample blocks
+
+                    // Code2Wav code embedding (all 16 codebooks × 2048 vocab concatenated)
+                    c2w_code_embd = create_tensor(tn(LLM_TENSOR_C2W_CODE_EMBD, "weight"), {c2w_n_embd, 32768}, TENSOR_NOT_REQUIRED);
+
+                    // Pre-transformer (8 layers with LayerScale)
+                    c2w_pre_layers.resize(c2w_pre_n_layer);
+                    for (int i = 0; i < c2w_pre_n_layer; ++i) {
+                        auto & layer = c2w_pre_layers[i];
+                        layer.attn_norm  = create_tensor(tn(LLM_TENSOR_C2W_PRE_ATTN_NORM, "weight", i), {c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.wq         = create_tensor(tn(LLM_TENSOR_C2W_PRE_ATTN_Q, "weight", i), {c2w_n_embd, c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.wk         = create_tensor(tn(LLM_TENSOR_C2W_PRE_ATTN_K, "weight", i), {c2w_n_embd, c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.wv         = create_tensor(tn(LLM_TENSOR_C2W_PRE_ATTN_V, "weight", i), {c2w_n_embd, c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.wo         = create_tensor(tn(LLM_TENSOR_C2W_PRE_ATTN_OUT, "weight", i), {c2w_n_embd, c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.attn_scale = create_tensor(tn(LLM_TENSOR_C2W_PRE_ATTN_SCALE, i), {c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.ffn_norm   = create_tensor(tn(LLM_TENSOR_C2W_PRE_FFN_NORM, "weight", i), {c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.ffn_gate   = create_tensor(tn(LLM_TENSOR_C2W_PRE_FFN_GATE, "weight", i), {c2w_n_embd, c2w_n_ff}, TENSOR_NOT_REQUIRED);
+                        layer.ffn_up     = create_tensor(tn(LLM_TENSOR_C2W_PRE_FFN_UP, "weight", i), {c2w_n_embd, c2w_n_ff}, TENSOR_NOT_REQUIRED);
+                        layer.ffn_down   = create_tensor(tn(LLM_TENSOR_C2W_PRE_FFN_DOWN, "weight", i), {c2w_n_ff, c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.ffn_scale  = create_tensor(tn(LLM_TENSOR_C2W_PRE_FFN_SCALE, i), {c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                    }
+                    c2w_pre_output_norm = create_tensor(tn(LLM_TENSOR_C2W_PRE_OUTPUT_NORM, "weight"), {c2w_n_embd}, TENSOR_NOT_REQUIRED);
+
+                    // Upsample blocks (ConvNeXt style) - both blocks have same shapes
+                    const int64_t c2w_up_conv_kernel = 2;  // transpose conv kernel
+                    const int64_t c2w_up_dwconv_kernel = 7;
+                    const int64_t c2w_up_ff = 4096;  // pwconv expansion
+                    c2w_up_blocks.resize(c2w_up_n_block);
+                    for (int i = 0; i < c2w_up_n_block; ++i) {
+                        auto & block = c2w_up_blocks[i];
+                        block.conv         = create_tensor(tn(LLM_TENSOR_C2W_UP_CONV, "weight", i), {c2w_up_conv_kernel, c2w_n_embd, c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        block.conv_bias    = create_tensor(tn(LLM_TENSOR_C2W_UP_CONV, "bias", i), {c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        // dwconv weight is permuted in GGUF converter: [C,1,K] -> [K,1,C] in PyTorch, saves as {C,1,K} in GGML
+                        block.dwconv       = create_tensor(tn(LLM_TENSOR_C2W_UP_DWCONV, "weight", i), {c2w_n_embd, 1, c2w_up_dwconv_kernel}, TENSOR_NOT_REQUIRED);
+                        block.dwconv_bias  = create_tensor(tn(LLM_TENSOR_C2W_UP_DWCONV, "bias", i), {c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        block.norm         = create_tensor(tn(LLM_TENSOR_C2W_UP_NORM, "weight", i), {c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        block.norm_bias    = create_tensor(tn(LLM_TENSOR_C2W_UP_NORM, "bias", i), {c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        block.pwconv1      = create_tensor(tn(LLM_TENSOR_C2W_UP_PWCONV1, "weight", i), {c2w_n_embd, c2w_up_ff}, TENSOR_NOT_REQUIRED);
+                        block.pwconv1_bias = create_tensor(tn(LLM_TENSOR_C2W_UP_PWCONV1, "bias", i), {c2w_up_ff}, TENSOR_NOT_REQUIRED);
+                        block.pwconv2      = create_tensor(tn(LLM_TENSOR_C2W_UP_PWCONV2, "weight", i), {c2w_up_ff, c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        block.pwconv2_bias = create_tensor(tn(LLM_TENSOR_C2W_UP_PWCONV2, "bias", i), {c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                        block.gamma        = create_tensor(tn(LLM_TENSOR_C2W_UP_GAMMA, i), {c2w_n_embd}, TENSOR_NOT_REQUIRED);
+                    }
+
+                    // Decoder (HiFi-GAN with Snake activation)
+                    // Dimensions based on Qwen3-Omni vocoder config
+                    const int64_t c2w_dec_dim = 1536;       // decoder hidden dimension
+                    const int64_t c2w_dec_n_stage = 4;      // 4 upsample stages with rates [8, 5, 4, 3]
+                    const int64_t c2w_dec_n_resblk = 3;     // 3 residual blocks per stage
+
+                    // Initial conv: 1024 -> 1536
+                    c2w_dec_conv_in   = create_tensor(tn(LLM_TENSOR_C2W_DEC_CONV_IN, "weight"), {7, c2w_n_embd, c2w_dec_dim}, TENSOR_NOT_REQUIRED);
+                    c2w_dec_conv_in_b = create_tensor(tn(LLM_TENSOR_C2W_DEC_CONV_IN_B), {c2w_dec_dim}, TENSOR_NOT_REQUIRED);
+
+                    // Final Snake activation (decoder.5)
+                    c2w_dec_final_snake_a = create_tensor(tn(LLM_TENSOR_C2W_DEC_FINAL_SNAKE_A), {96}, TENSOR_NOT_REQUIRED);
+                    c2w_dec_final_snake_b = create_tensor(tn(LLM_TENSOR_C2W_DEC_FINAL_SNAKE_B), {96}, TENSOR_NOT_REQUIRED);
+
+                    // Final conv: last_stage_dim -> 1 (mono audio)
+                    c2w_dec_conv_out   = create_tensor(tn(LLM_TENSOR_C2W_DEC_CONV_OUT, "weight"), {7, 96, 1}, TENSOR_NOT_REQUIRED);
+                    c2w_dec_conv_out_b = create_tensor(tn(LLM_TENSOR_C2W_DEC_CONV_OUT, "bias"), {1}, TENSOR_NOT_REQUIRED);
+
+                    // 4 decoder stages (outer Snake activations + upsample conv)
+                    // Note: bid starts at 1 (decoder.1 through decoder.4)
+                    // Dimensions: stage 1=1536, 2=768, 3=384, 4=192 (halving each stage)
+                    // Upsample rates: [8, 5, 4, 3], kernel = rate * 2
+                    const int64_t dec_dims[4] = {1536, 768, 384, 192};
+                    const int64_t dec_out_dims[4] = {768, 384, 192, 96};
+                    const int64_t upsample_kernels[4] = {16, 10, 8, 6};  // rate * 2
+
+                    c2w_dec_blocks.resize(c2w_dec_n_stage);
+                    for (int i = 0; i < c2w_dec_n_stage; ++i) {
+                        auto & block = c2w_dec_blocks[i];
+                        const int64_t dim_in = dec_dims[i];
+                        const int64_t dim_out = dec_out_dims[i];
+                        const int64_t kernel = upsample_kernels[i];
+
+                        // Snake alpha/beta for stage (bid = i+1 since decoder.0 is conv_in)
+                        block.snake_alpha = create_tensor(tn(LLM_TENSOR_C2W_DEC_SNAKE_ALPHA, i + 1), {dim_in}, TENSOR_NOT_REQUIRED);
+                        block.snake_beta  = create_tensor(tn(LLM_TENSOR_C2W_DEC_SNAKE_BETA, i + 1), {dim_in}, TENSOR_NOT_REQUIRED);
+                        // Transpose conv for upsampling: [kernel, out_dim, in_dim]
+                        block.upsample      = create_tensor(tn(LLM_TENSOR_C2W_DEC_UPSAMPLE, "weight", i + 1), {kernel, dim_out, dim_in}, TENSOR_NOT_REQUIRED);
+                        block.upsample_bias = create_tensor(tn(LLM_TENSOR_C2W_DEC_UPSAMPLE_B, i + 1), {dim_out}, TENSOR_NOT_REQUIRED);
+                    }
+
+                    // 12 residual blocks (3 per stage × 4 stages)
+                    // Flattened indexing: bid = stage * 10 + block_idx
+                    // Dimensions per stage: {768, 384, 192, 96} (after upsample)
+                    c2w_dec_res_blks.resize(c2w_dec_n_stage * c2w_dec_n_resblk);
+                    for (int stage = 0; stage < c2w_dec_n_stage; ++stage) {
+                        const int64_t dim = dec_out_dims[stage];  // ResBlocks use output dim of stage
+                        for (int rb = 0; rb < c2w_dec_n_resblk; ++rb) {
+                            int flat_idx = stage * c2w_dec_n_resblk + rb;
+                            int bid = (stage + 1) * 10 + rb;  // decoder.{stage+1}.block.{rb}
+                            auto & blk = c2w_dec_res_blks[flat_idx];
+
+                            // Conv weights: [kernel, out_dim, in_dim] - here in=out=dim
+                            blk.conv1       = create_tensor(tn(LLM_TENSOR_C2W_DEC_BLK_CONV1, "weight", bid), {7, dim, dim}, TENSOR_NOT_REQUIRED);
+                            blk.conv1_bias  = create_tensor(tn(LLM_TENSOR_C2W_DEC_BLK_CONV1, "bias", bid), {dim}, TENSOR_NOT_REQUIRED);
+                            blk.conv2       = create_tensor(tn(LLM_TENSOR_C2W_DEC_BLK_CONV2, "weight", bid), {1, dim, dim}, TENSOR_NOT_REQUIRED);
+                            blk.conv2_bias  = create_tensor(tn(LLM_TENSOR_C2W_DEC_BLK_CONV2, "bias", bid), {dim}, TENSOR_NOT_REQUIRED);
+                            // Snake activations: [dim]
+                            blk.act1_alpha  = create_tensor(tn(LLM_TENSOR_C2W_DEC_BLK_ACT1_A, bid), {dim}, TENSOR_NOT_REQUIRED);
+                            blk.act1_beta   = create_tensor(tn(LLM_TENSOR_C2W_DEC_BLK_ACT1_B, bid), {dim}, TENSOR_NOT_REQUIRED);
+                            blk.act2_alpha  = create_tensor(tn(LLM_TENSOR_C2W_DEC_BLK_ACT2_A, bid), {dim}, TENSOR_NOT_REQUIRED);
+                            blk.act2_beta   = create_tensor(tn(LLM_TENSOR_C2W_DEC_BLK_ACT2_B, bid), {dim}, TENSOR_NOT_REQUIRED);
+                        }
+                    }
+                } break;
+            case LLM_ARCH_QWEN3OMNIMOE:
+                {
+                    // Qwen3-Omni Thinker: Qwen3MOE with M-RoPE and shared experts
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    // output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                    // if output is NULL, init from the input tok embed
+                    if (output == NULL) {
+                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                    }
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+                        // Qwen3-style Q/K normalization
+                        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+                        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
+
+                        if (n_expert == 0) {
+                            throw std::runtime_error("n_expert must be > 0 for QWEN3OMNIMOE");
+                        }
+                        if (n_expert_used == 0) {
+                            throw std::runtime_error("n_expert_used must be > 0 for QWEN3OMNIMOE");
+                        }
+
+                        // MoE experts
+                        const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+
+                        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+                        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0);
+                        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+
+                        // Shared expert (optional, based on model config)
+                        const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff_exp;
+                        layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_shexp}, TENSOR_NOT_REQUIRED);
+                        layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_shexp, n_embd}, TENSOR_NOT_REQUIRED);
+                        layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_shexp}, TENSOR_NOT_REQUIRED);
                     }
                 } break;
             case LLM_ARCH_PHI2:
@@ -7049,8 +7356,12 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: n_ff_shexp       = %d\n",     __func__, hparams.n_ff_shexp);
     }
 
-    if (arch == LLM_ARCH_QWEN3MOE || arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_QWEN3VLMOE || arch == LLM_ARCH_RND1) {
+    if (arch == LLM_ARCH_QWEN3MOE || arch == LLM_ARCH_OPENAI_MOE || arch == LLM_ARCH_QWEN3VLMOE || arch == LLM_ARCH_RND1 || arch == LLM_ARCH_QWEN3OMNI_TALKER || arch == LLM_ARCH_QWEN3OMNIMOE) {
         LLAMA_LOG_INFO("%s: n_ff_exp         = %d\n",     __func__, hparams.n_ff_exp);
+    }
+
+    if (arch == LLM_ARCH_QWEN3OMNI_TALKER || arch == LLM_ARCH_QWEN3OMNIMOE) {
+        LLAMA_LOG_INFO("%s: n_ff_shexp       = %d\n",     __func__, hparams.n_ff_shexp);
     }
 
     if (arch == LLM_ARCH_MINICPM ||
@@ -7442,6 +7753,15 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_QWEN3VLMOE:
             {
+                llm = std::make_unique<llm_build_qwen3vlmoe>(*this, params);
+            } break;
+        case LLM_ARCH_QWEN3OMNI_TALKER:
+            {
+                llm = std::make_unique<llm_build_qwen3omni_talker>(*this, params);
+            } break;
+        case LLM_ARCH_QWEN3OMNIMOE:
+            {
+                // Use Qwen3VLMOE builder which supports M-RoPE via ggml_rope_multi()
                 llm = std::make_unique<llm_build_qwen3vlmoe>(*this, params);
             } break;
         case LLM_ARCH_PHI2:
@@ -7960,6 +8280,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN2MOE:
         case LLM_ARCH_QWEN3:
         case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_QWEN3OMNI_TALKER:
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:
         case LLM_ARCH_OLMO2:
@@ -8006,6 +8327,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
             return LLAMA_ROPE_TYPE_MROPE;
         case LLM_ARCH_QWEN3VL:
         case LLM_ARCH_QWEN3VLMOE:
+        case LLM_ARCH_QWEN3OMNIMOE:
             return LLAMA_ROPE_TYPE_IMROPE;
 
         case LLM_ARCH_GLM4:

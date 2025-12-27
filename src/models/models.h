@@ -437,6 +437,28 @@ struct llm_build_qwen3vl : public llm_graph_context {
 struct llm_build_qwen3vlmoe : public llm_graph_context {
     llm_build_qwen3vlmoe(const llama_model & model, const llm_graph_params & params);
 };
+
+struct llm_build_qwen3omni_talker : public llm_graph_context {
+    llm_build_qwen3omni_talker(const llama_model & model, const llm_graph_params & params);
+};
+
+// Code Predictor: 5-layer transformer for generating codebook tokens 2-16
+// Input: single codec token, Output: logits for next codebook
+// Called sequentially 15 times from TTS tool after Talker generates first token
+// Note: codebook_idx selects which embedding/lm_head to use (0-14 → codebooks 2-16)
+struct llm_build_qwen3omni_code_predictor : public llm_graph_context {
+    llm_build_qwen3omni_code_predictor(const llama_model & model, const llm_graph_params & params, int codebook_idx = 0);
+private:
+    int m_codebook_idx;
+};
+
+// Code2Wav: HiFi-GAN vocoder for converting codec tokens to audio waveform
+// Architecture: Pre-transformer (8 layers) -> Upsample (ConvNeXt) -> Decoder (Snake+Conv)
+// Input: 16 codec tokens (from Talker + Code Predictor), Output: audio samples at 24kHz
+struct llm_build_qwen3omni_code2wav : public llm_graph_context {
+    llm_build_qwen3omni_code2wav(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_qwen3next : public llm_graph_context_mamba {
     llm_build_qwen3next(const llama_model & model, const llm_graph_params & params);
 private:
