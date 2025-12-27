@@ -2055,6 +2055,7 @@ ggml_backend_reg_t ggml_backend_rpc_reg(void) {
 static uint32_t ggml_backend_rpc_get_device_count(const char * endpoint) {
     auto sock = get_socket(endpoint);
     if (sock == nullptr) {
+        GGML_LOG_ERROR("Failed to connect to %s\n", endpoint);
         return 0;
     }
     rpc_msg_device_count_rsp response;
