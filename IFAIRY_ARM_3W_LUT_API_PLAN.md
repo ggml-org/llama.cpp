@@ -111,7 +111,7 @@ struct ifairy_lut_extra {
 - `GGML_IFAIRY_LUT_DEBUG=0/1`：打印少量路由诊断（默认关闭）。
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 热路径中的 prefetch（默认启用；设为 `0` 方便 profile/sweep 对照；覆盖所有 layout 的 `qgemm_ex/accum4_ex`）。
 - `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 `2`；设为 `0` 关闭距离预取；结合 profile 调参）。
-- `GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`：预取 indexes（默认启用；用于 merged64 的 A/B）。
+- `GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`：预取 indexes（默认关闭；设为 `1` 用于 merged64 的 A/B）。
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` decode 快路（默认启用；设为 `0` 强制走通用路径做 A/B）。
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` 快路 group-loop 的 unroll（默认 `4`；设为 `2` 用于 A/B）。
 - `GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`：merged64 在每个 block 内先用 `int16` 累加再 widen（默认启用；设为 `0` 回退做 A/B）。
@@ -119,6 +119,7 @@ struct ifairy_lut_extra {
 - `GGML_IFAIRY_LUT_MERGED64_N1_STREAM_ADD=0/1`：merged64 的 `N==1`（decode）acc16 unroll loop 使用“streaming load+add”以降低寄存器压力（默认启用；设为 `0` 回退做 A/B）。
 - `GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0/1`：merged64 的 `N==1`（decode）快路（默认启用；设为 `0` 回退做 A/B）。
 - `GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`：merged64 group-loop unroll（默认 `8`；设为 `4` 回退做 A/B）。
+- `GGML_IFAIRY_LUT_MERGED64_UNROLL8_2X4=0/1`：merged64 的 `N==1` acc16 unroll=8 变体（2×unroll4；默认关闭；设为 `1` 启用做 A/B）。
 - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：选择（或影响 auto 策略选择）kernel 路径（默认 `auto`）。当前策略：
   - `sdot`：`compact` 的 `N==1` dotprod 实验内核；
   - `tbl`：decode-only `tbl64`（仅 `N==1` 时生效；严格模式强制回退到 `legacy`）；
@@ -288,6 +289,7 @@ struct ifairy_lut_extra {
 - ✅ `GGML_IFAIRY_LUT_KERNEL=tbl|merged64`：已实现；当前 `KERNEL=auto` 默认偏向 `merged64`（prefill+decode），`KERNEL=tbl` 仅在 `N==1`（decode）场景生效；严格模式强制回退到 `legacy`。
 - ✅ `merged64` hot-path 进一步优化：`ggml_ifairy_lut_qgemm_ex_merged64` 做 group-loop unroll + 预取；mul_mat 路由不再调用 `ggml_ifairy_lut_can_mul_mat()`（避免 `getenv` 锁竞争），改为基于 `threadpool->ifairy_lut_cfg` + 形状检查直接进入 LUT 路径（`ggml/src/ggml-ifairy-lut-qgemm.cpp`, `ggml/src/ggml-cpu/ggml-cpu.c`）。
 - P3（冻结）`compact2`：2-lookups 方向曾尝试但出现明确回退，先不推进（见 `IFAIRY_ARM_3W_LUT_STATUS.md` 失败案例）。
+- decode hot-path 迭代建议：优先用 `tools/ifairy-microbench` 对 `merged64(N==1)` 做小步 A/B（避免 `llama-bench` 噪声），再用 `llama-bench` 验证 tok/s 与 `xctrace` 复采样（写入 `IFAIRY_ARM_3W_LUT_STATUS.md`）。
 
 <details>
 <summary>展开：详细任务拆解与历史记录（归档）</summary>

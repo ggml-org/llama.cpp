@@ -28,7 +28,7 @@
 - `GGML_IFAIRY_LUT_DEBUG=0/1`：路由/形状诊断（默认关闭；跑分时不要开）
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 路径内的 prefetch（默认启用；设为 `0` 用于 profile/sweep 对照；覆盖所有 layout 的 `qgemm_ex/accum4_ex`）
 - `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：prefetch 距离（默认 `2`；设为 `0` 关闭距离预取；结合 profile 调参）
-- `GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`：prefetch indexes（默认启用；用于 merged64 的 A/B）
+- `GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`：prefetch indexes（默认关闭；设为 `1` 用于 A/B）
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` fast-path（默认启用；设为 `0` 强制走通用路径，用于回归/调优 A/B）
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` fast-path 里 group-loop 的 4-way unroll（默认 `4`；设为 `2` 用于 A/B，对照“2-way 是否反而更快”）
 - `GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`：merged64 per-block 先 int16 累加再 widen（默认启用；设为 `0` 回退做 A/B）
@@ -36,6 +36,7 @@
 - `GGML_IFAIRY_LUT_MERGED64_N1_STREAM_ADD=0/1`：merged64 的 `N==1`（decode）acc16 unroll loop 使用“streaming load+add”以降低寄存器压力（默认启用；设为 `0` 回退做 A/B）
 - `GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0/1`：merged64 的 `N==1`（decode）快路（默认启用；设为 `0` 回退做 A/B）
 - `GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`：merged64 group-loop unroll（默认 `8`；设为 `4` 回退做 A/B）
+- `GGML_IFAIRY_LUT_MERGED64_UNROLL8_2X4=0/1`：merged64 的 `N==1` acc16 unroll=8 变体（2×unroll4，降低寄存器压力的尝试；默认关闭；设为 `1` 启用做 A/B）
 - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：选择（或影响 auto 策略选择）kernel 路径（默认 `auto`）。当前：
   - `sdot`：`compact` 的 `N==1` dotprod 实验内核
   - `tbl`：decode-first `tbl64`
@@ -108,6 +109,8 @@
 | 2025-12-27T04:54:59Z | `9849930f+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 26.56 | `/tmp/ifairy_bench_stream_add_on_20251227T045448Z.jsonl` |
 | 2025-12-27T04:55:28Z | `9849930f+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_N1_STREAM_ADD=0` | 33.28 | `/tmp/ifairy_bench_stream_add_off_20251227T045528Z.jsonl` |
 | 2025-12-27T04:55:39Z | `9849930f+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_N1_STREAM_ADD=0` | 25.18 | `/tmp/ifairy_bench_stream_add_off_20251227T045528Z.jsonl` |
+| 2025-12-27T10:19:39Z | `451a80c3` | Apple M4 | 4 | pp128 (r3) | `GGML_IFAIRY_LUT=0` | 133.58 | `tmp/ifairy_bench_no_lut_20251227T101939Z_rerun.txt` |
+| 2025-12-27T10:19:39Z | `451a80c3` | Apple M4 | 4 | tg256 (r3) | `GGML_IFAIRY_LUT=0` | 78.91 | `tmp/ifairy_bench_no_lut_20251227T101939Z_rerun.txt` |
 | 2025-12-26T20:41:43Z | `c5f646bd+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_INDEX=0` | 30.98 | `/tmp/ifairy_bench_merged64_prefetch_idx0_20251226T204039Z.jsonl` |
 | 2025-12-26T20:41:48Z | `c5f646bd+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_INDEX=0` | 27.85 | `/tmp/ifairy_bench_merged64_prefetch_idx0_20251226T204039Z.jsonl` |
 | 2025-12-26T20:41:57Z | `c5f646bd+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_DIST=4` | 30.28 | `/tmp/ifairy_bench_merged64_prefetch_dist4_20251226T204039Z.jsonl` |
@@ -218,6 +221,7 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
 说明：
 
 - 若 `xctrace` 报错无法写入 `~/Library/Caches/com.apple.dt.InstrumentsCLI`，可临时指定可写 HOME：`CFFIXED_USER_HOME=/tmp/xctracehome HOME=/tmp/xctracehome xcrun xctrace ...`。
+- 若报错类似 “Cannot create temporary directory … `~/Library/Caches/com.apple.dt.InstrumentsCLI`”，优先尝试先创建：`mkdir -p ~/Library/Caches/com.apple.dt.InstrumentsCLI`。
 - 导出与摘要（leaf/self time）：
   - `xcrun xctrace export --input /tmp/xctrace_ifairy_decode.trace --xpath '/trace-toc/run[@number=\"1\"]/data/table[@schema=\"time-profile\"]' | python3 scripts/ifairy_xctrace_leaf.py --top 20`
 
@@ -268,6 +272,18 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
 - 主矛盾非常明确：继续提升 tok/s，优先级应集中在 `ggml_ifairy_lut_qgemm_ex_merged64`（降低每次 matmul 的单位成本）。
 - `preprocess_ex` 暂不是瓶颈（≤~2%），不要把收益“搬家”到构表路径。
 - `ggml_graph_compute_thread`（leaf）在当前默认路径下不是 top1，但仍需关注 decode 场景的 barrier/调度成本（尤其是未来引入更多 tile/分块时）。
+
+## 0.3 ifairy-microbench（decode 内核 A/B，用于降低噪声）
+
+目标：把 decode 场景的 top1 热点 `ggml_ifairy_lut_qgemm_ex_merged64(N==1)` 单独拉出来测，避免 `llama-bench` 受图调度/其它算子波动影响。
+
+- 构建：`cmake --build build-rel --target ifairy-microbench -j $(nproc 2>/dev/null || sysctl -n hw.ncpu)`
+- 运行：`./build-rel/bin/ifairy-microbench --m 2048 --k 4096 --iters 200 --warmup 30 --seed 1`
+- xctrace（示例，6s window）：`xcrun xctrace record --template 'Time Profiler' --output tmp/xctrace/ifairy-microbench_base.trace --time-limit 6s --no-prompt --launch -- ./build-rel/bin/ifairy-microbench --m 2048 --k 4096 --iters 30000 --warmup 200 --seed 1`
+- 采样摘要：`xcrun xctrace export --input tmp/xctrace/ifairy-microbench_base.trace --xpath '/trace-toc/run[@number=\"1\"]/data/table[@schema=\"time-profile\"]' | python3 scripts/ifairy_xctrace_leaf.py --top 10`
+- 采样结果（本机，6s，trace: `tmp/xctrace/ifairy-microbench_base.trace`）：leaf `ggml_ifairy_lut_qgemm_ex_merged64` ≈ 99.82%（`tmp/xctrace/ifairy-microbench_base.leaf.txt`）
+
+（A/B 记录）`GGML_IFAIRY_LUT_MERGED64_UNROLL8_2X4=1`：在本机 `ifairy-microbench` 与 `llama-bench tg256` 上都出现回退，暂不作为默认（trace: `tmp/xctrace/ifairy-microbench_unroll8_2x4.trace`）。
 
 ## 1. 当前现状（可工作的 LUT 路径：NEON 优先，标量回退）
 
