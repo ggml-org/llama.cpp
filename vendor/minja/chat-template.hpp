@@ -194,10 +194,9 @@ class chat_template {
         const json dummy_args_obj {{"argument_needle", "print('Hello, World!')"}};
         const auto contains_arg_needle = [&](const std::string & out_str) {
             return contains(out_str, "<parameter=argument_needle>")
-                || contains(out_str, "\"argument_needle\":")
+                || contains(out_str, "\"argument_needle\"")
                 || contains(out_str, "'argument_needle':")
-                || contains(out_str, ">argument_needle<")
-                || contains(out_str, "<parameter name=\"argument_needle\">");
+                || contains(out_str, ">argument_needle<");
         };
 
         // Note: the arguments are rendered in both cases, but may be double-escaped, which we don't want.

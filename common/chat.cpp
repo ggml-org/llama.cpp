@@ -672,6 +672,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_PEG_SIMPLE: return "peg-simple";
         case COMMON_CHAT_FORMAT_PEG_NATIVE: return "peg-native";
         case COMMON_CHAT_FORMAT_PEG_CONSTRUCTED: return "peg-constructed";
+        case COMMON_CHAT_FORMAT_DEEPSEEK_V3_2: return "DeepSeek V3.2";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1752,6 +1753,54 @@ static common_chat_params common_chat_params_init_deepseek_v3_1(const common_cha
     return data;
 }
 
+static common_chat_params common_chat_params_init_deepseek_v3_2(const common_chat_template & tmpl, const struct templates_params & params) {
+    common_chat_params data;
+    data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    data.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_2;
+
+    data.prompt = apply(tmpl, params);
+
+    if (string_ends_with(data.prompt, "<think>")) {
+        if (!params.enable_thinking) {
+            // Close the thinking tag immediately if thinking is disabled
+            data.prompt += "</think>";
+        } else {
+            // Mark thinking as forced open (template started with <think>)
+            data.thinking_forced_open = true;
+        }
+    }
+
+    data.preserved_tokens = {
+        "<think>",
+        "</think>",
+        "function_calls>",
+        "invoke>",
+        "<｜end▁of▁sentence｜>",
+    };
+
+    data.additional_stops.insert(data.additional_stops.end(), {
+        "<｜end▁of▁sentence｜>"
+    });
+    // build grammar for tool call
+    static const xml_tool_call_format form = ([]() {
+        xml_tool_call_format form {};
+        form.scope_start  = "<｜DSML｜function_calls>\n";
+        form.tool_start   = "<｜DSML｜invoke name=\"";
+        form.tool_sep     = "\">\n";
+        form.key_start    = "<｜DSML｜parameter name=\"";
+        form.key_val_sep  = "\" string=\"";
+        form.allowed_literal_between_kvsep = {"true", "false"};
+        form.key_val_sep2 = "\">";
+        form.val_end      = "</｜DSML｜parameter>\n";
+        form.tool_end     = "</｜DSML｜invoke>\n";
+        form.scope_end    = "</｜DSML｜function_calls>";
+        return form;
+    })();
+    build_grammar_xml_tool_call(data, params.tools, form);
+
+    return data;
+}
+
 static common_chat_params common_chat_params_init_minimax_m2(const common_chat_template & tmpl, const struct templates_params & params) {
     common_chat_params data;
     data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
@@ -2739,6 +2788,21 @@ static common_chat_params common_chat_templates_apply_jinja(
         src.find("<tool_calls>[") != std::string::npos &&
         src.find("]</tool_calls>") != std::string::npos) {
         return common_chat_params_init_apriel_1_5(tmpl, params);
+    }
+
+    // DeepSeek V3.2 format detection
+    if (src.find("<think>") != std::string::npos &&
+        src.find("</think>") != std::string::npos &&
+        src.find("<｜begin▁of▁sentence｜>") != std::string::npos &&
+        src.find("<｜end▁of▁sentence｜>") != std::string::npos &&
+        src.find("｜DSML｜") != std::string::npos &&
+        src.find("function_calls>") != std::string::npos &&
+        src.find("<function_results>") != std::string::npos &&
+        src.find("</function_results>") != std::string::npos &&
+        src.find("invoke name=") != std::string::npos &&
+        src.find("parameter name=") != std::string::npos &&
+        src.find("string=\"true|false\">") != std::string::npos) {
+        return common_chat_params_init_deepseek_v3_2(tmpl, params);
     }
 
     // Use generic handler when mixing tools + JSON schema.
