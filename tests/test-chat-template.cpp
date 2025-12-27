@@ -300,7 +300,7 @@ int main(void) {
         }
     };
     std::vector<char> formatted_chat(1024);
-    int32_t res;
+    int64_t res;
 
     // list all supported templates
     std::vector<const char *> supported_tmpl;
