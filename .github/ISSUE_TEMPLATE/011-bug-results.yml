@@ -103,13 +103,13 @@ body:
       value: |
         <details>
         <summary>Logs</summary>
-        <!-- Copy-pasted short logs go into the "shell" area here -->
+        <!-- Copy-pasted short logs go into the "console" area here -->
 
-        ```shell
+        ```console
 
         ```
         </details>
 
-        <!-- Long logs that you upload as files go here, outside the "shell" area -->
+        <!-- Long logs that you upload as files go here, outside the "console" area -->
     validations:
       required: true
