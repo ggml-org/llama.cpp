@@ -139,7 +139,7 @@ struct ifairy_lut_extra {
 
 ### 6.0.2 当前优先级（建议）
 
-- **P0：对称性 `sym16`（64→16 canonical + factor）降低 LUT 工作集**：把 `merged64` 的 per-group LUT 从 `256B/group` 降到 `64B/group`（更小 cache footprint，更少 cacheline 触碰），优先打在 decode 的 `qgemm_ex` 热点；先以“新增 layout + env 强制启用”的方式落地做 A/B，通过验收后再考虑进入 `auto` 默认策略（见 6.5）。
+- **P0：对称性 `sym16`（64→16 canonical + factor）降低 LUT 工作集**：把 `merged64` 的 per-group LUT 从 `256B/group` 降到 `128B/group`（`sym16` 用 `int16` 避免饱和破坏严格等价；仍显著减小 cache footprint 与 cacheline 触碰），优先打在 decode 的 `qgemm_ex` 热点；先以“新增 layout + env 强制启用”的方式落地做 A/B，通过验收后再考虑进入 `auto` 默认策略（见 6.5）。
 - **P1：保持默认路径稳定并复采样 profile（默认 `auto → merged64`）**：当前 `auto` 已默认 `merged64`（prefill+decode）；在 `sym16` 没有数据证明稳赢前，不贸然改 auto；P0 落地后分别对 `auto/merged64/sym16` 复采样，确认新瓶颈再排下一步。
 - **P2：decode：并行推进 6.1 + 6.2 的“可复现提速点”**：优先做不会扩大回归面的微优化（prefetch 距离/idx prefetch/unroll A/B），并把证据固化到 `STATUS.md:0.1` 记录。
 - **P3：prefill：推进 6.4（让 `merged64` 支持 BK tiling）**：`tbl64/merged64` 当前强制禁用 BK tiling；若要把 `pp tok/s` 拉上去，需要把 tiling 做成“可控且不变慢”的版本（分阶段落地、严格对照）。
@@ -374,9 +374,9 @@ struct ifairy_lut_extra {
     - 任意三元组都可写成：`(w0,w1,w2) = factor · (1, u1, u2)`，其中 `factor = w0`，`u1 = w1 / w0`，`u2 = w2 / w0`；`(u1,u2)` 仅 `4^2=16` 种 canonical pattern（见 `IFAIRY_ARM_3W_LUT_DESIGN.md` 附录 A；离线枚举见 `scripts/ifairy_3w_lut_enum.py`）。
     - 对 `merged64` 的 4 通道 `{ac,ad,bc,bd}`，`factor∈{1,i,-1,-i}` 只对应“通道置换 + 符号翻转”（不改数学语义，且不触及 GGUF/权重格式）。
   - 方案：新增 LUT layout（建议名：`sym16` 或 `merged16`）  
-    - LUT（每 `(col,group)`）：`16 pat × 4 ch × int8 = 64B/group`（对比 `merged64`: `64×4×int8=256B/group`）。
+    - LUT（每 `(col,group)`）：`16 pat × 4 ch × int16 = 128B/group`（对比 `merged64`: `64×4×int8=256B/group`；仍减半工作集）。
     - 索引：仍用现有 `pat`（6-bit pattern/byte）；在 `qgemm_ex` 内用 `pat → (idx16, factor_exp)` 映射后查 `tbl16[idx16]`，再按 `factor_exp` 做通道旋转/取反后累加。
-    - `qgemm_ex(sym16)` 的 NEON 设计点：一次处理 16 个 `pat`，用 `vqtbl4q_u8` 并行完成 `pat → idx16` 与 `pat → factor_exp` 的 64-entry 映射（避免标量 table lookup/分支），再对每个 group 做一次 32-bit load + widen；`factor_exp` 的通道变换用 `vext_s16`（`{ac,ad,bc,bd}→{bc,bd,ac,ad}`）+ `vmul_s16`（符号 mask）实现。
+    - `qgemm_ex(sym16)` 的 NEON 设计点：一次处理 16 个 `pat`，用 `vqtbl4q_u8` 并行完成 `pat → idx16`（64-entry），再用 `vqtbl1q_u8` 以 `c0`（4-entry）映射 `pat → factor_exp`（避免标量 table lookup/分支）；每个 group 做一次 64-bit load（`{ac,ad,bc,bd}` as `int16x4`）并在 `int32` 域累加；`factor_exp` 的通道变换用 `vext_s16`（`{ac,ad,bc,bd}→{bc,bd,ac,ad}`）+ `vmul_s16`（符号 mask）实现。
     - 参考实现：外部 `lut_c/.../mul_mat_with_lut.c` 已实现同构的 “16 pattern + factor” 思路（其 canonical 选取为 `(-1,*,*)`，与 `(1,*,*)` 等价）；BitNet TL2 `ggml_qgemm_lut` 可参考其 **sign 注入** 的 `(x + sign) ^ sign` 技巧（见 `BitNet/preset_kernels/**/bitnet-lut-kernels-tl2.h`）。
   - 关键风险：**int8 饱和会破坏“对称性推导的严格等价”**  
     - 现状：`merged64` 构表阶段对每个 pat 的 `int16` 求和用 `vqmovn` 饱和到 `int8`。若 `sym16` 只存 canonical 的饱和结果，再在 `int8` 域做旋转/取反生成其它 pat，则在发生饱和时不严格等价（信息已丢失）。
