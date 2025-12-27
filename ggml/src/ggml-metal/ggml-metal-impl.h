@@ -261,6 +261,41 @@ typedef struct {
 } ggml_metal_kargs_rope;
 
 typedef struct {
+    int32_t  ne00;
+    int32_t  ne01;
+    int32_t  ne02;
+    int32_t  ne03;
+    uint64_t nb00;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
+    int32_t  ne0;
+    int32_t  ne1;
+    int32_t  ne2;
+    int32_t  ne3;
+    uint64_t nb0;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+    int32_t  n_rot;
+    int32_t  idx_pair;
+    int32_t  idx_scale;
+    int32_t  idx_offset;
+    float    theta_scale;
+    float    yarn_high;
+    float    yarn_low;
+    float    freq_scale;
+    float    ramp_factor;
+    float    attn_factor;
+    int32_t  sect_0;
+    int32_t  sect_1;
+    int32_t  sect_2;
+    int32_t  sect_3;
+    int      mode;
+    bool     src2;
+} ggml_metal_kargs_rope_comp;
+
+typedef struct {
     int32_t  ne11;
     int32_t  ne_12_2; // assume K and V are same shape
     int32_t  ne_12_3;

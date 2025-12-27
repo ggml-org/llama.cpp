@@ -370,6 +370,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             {
                 n_fuse = ggml_metal_op_rope(ctx, idx);
             } break;
+        case GGML_OP_ROPE_COMP:
+            {
+                n_fuse = ggml_metal_op_rope_comp(ctx, idx);
+            } break;
         case GGML_OP_IM2COL:
             {
                 n_fuse = ggml_metal_op_im2col(ctx, idx);
@@ -3199,6 +3203,98 @@ int ggml_metal_op_rope(ggml_metal_op_t ctx, int idx) {
     };
 
     auto pipeline = ggml_metal_library_get_pipeline_rope(lib, op);
+
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+    if (op->src[2]) {
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[2]), 3);
+    } else {
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 3);
+    }
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         4);
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, 1, 1);
+
+    return 1;
+}
+
+int ggml_metal_op_rope_comp(ggml_metal_op_t ctx, int idx) {
+    ggml_tensor * op = ctx->node(idx);
+
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
+    GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
+    GGML_TENSOR_LOCALS( int32_t, ne1, op->src[1], ne);
+    GGML_TENSOR_LOCALS(uint64_t, nb1, op->src[1], nb);
+    GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
+    GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
+
+    // make sure we have one or more position id(ne10) per token(ne02)
+    GGML_ASSERT(ne10 % ne02 == 0);
+    GGML_ASSERT(ne10 >= ne02);
+
+    const int nth = std::min(1024, ne00);
+
+    int32_t n_rot, idx_pair, idx_scale, idx_offset, mode;
+    float theta_scale, yarn_high, yarn_low, freq_scale, ramp_factor, attn_factor;
+    int32_t sections[4];
+
+    memcpy(&n_rot,          (int32_t *)op->op_params +  0, sizeof(int32_t));
+    memcpy(&idx_pair,       (int32_t *)op->op_params +  1, sizeof(int32_t));
+    memcpy(&idx_scale,      (int32_t *)op->op_params +  2, sizeof(int32_t));
+    memcpy(&idx_offset,     (int32_t *)op->op_params +  3, sizeof(int32_t));
+    memcpy(&theta_scale,    (int32_t *)op->op_params +  4, sizeof(float));
+    memcpy(&yarn_high,      (int32_t *)op->op_params +  5, sizeof(float));
+    memcpy(&yarn_low,       (int32_t *)op->op_params +  6, sizeof(float));
+    memcpy(&freq_scale,     (int32_t *)op->op_params +  7, sizeof(float));
+    memcpy(&attn_factor,    (int32_t *)op->op_params +  8, sizeof(float));
+    memcpy(&ramp_factor,    (int32_t *)op->op_params +  9, sizeof(float));
+    memcpy(&sections[0],    (int32_t *)op->op_params + 10, sizeof(int32_t));
+    memcpy(&sections[1],    (int32_t *)op->op_params + 11, sizeof(int32_t));
+    memcpy(&sections[2],    (int32_t *)op->op_params + 12, sizeof(int32_t));
+    memcpy(&sections[3],    (int32_t *)op->op_params + 13, sizeof(int32_t));
+    memcpy(&mode,           (int32_t *)op->op_params + 14, sizeof(int32_t));
+
+    ggml_metal_kargs_rope_comp args = {
+        /*.ne00        =*/ ne00,
+        /*.ne01        =*/ ne01,
+        /*.ne02        =*/ ne02,
+        /*.ne03        =*/ ne03,
+        /*.nb00        =*/ nb00,
+        /*.nb01        =*/ nb01,
+        /*.nb02        =*/ nb02,
+        /*.nb03        =*/ nb03,
+        /*.ne0         =*/ ne0,
+        /*.ne1         =*/ ne1,
+        /*.ne2         =*/ ne2,
+        /*.ne3         =*/ ne3,
+        /*.nb0         =*/ nb0,
+        /*.nb1         =*/ nb1,
+        /*.nb2         =*/ nb2,
+        /*.nb3         =*/ nb3,
+        /*.n_rot       =*/ n_rot,
+        /*.idx_pair    =*/ idx_pair,
+        /*.idx_scale   =*/ idx_scale,
+        /*.idx_offset  =*/ idx_offset,
+        /*.theta_scale =*/ theta_scale,
+        /*.yarn_high   =*/ yarn_high,
+        /*.yarn_low    =*/ yarn_low,
+        /*.freq_scale  =*/ freq_scale,
+        /*.ramp_factor =*/ ramp_factor,
+        /*.attn_factor =*/ attn_factor,
+        /*.sect_0      =*/ sections[0],
+        /*.sect_1      =*/ sections[1],
+        /*.sect_2      =*/ sections[2],
+        /*.sect_3      =*/ sections[3],
+        /*.mode        =*/ mode,
+        /*.src2        =*/ op->src[2] != nullptr,
+    };
+
+    auto pipeline = ggml_metal_library_get_pipeline_rope_comp(lib, op);
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
     ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);

@@ -514,6 +514,7 @@ extern "C" {
         GGML_OP_SOFT_MAX,
         GGML_OP_SOFT_MAX_BACK,
         GGML_OP_ROPE,
+        GGML_OP_ROPE_COMP,
         GGML_OP_ROPE_BACK,
         GGML_OP_CLAMP,
         GGML_OP_CONV_TRANSPOSE_1D,
@@ -1857,6 +1858,55 @@ extern "C" {
     // compute correction dims for YaRN RoPE scaling
     GGML_API void ggml_rope_yarn_corr_dims(
         int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow, float dims[2]);
+
+
+    enum ggml_rope_ordering {
+        GGML_ROPE_ORDERING_NORMAL,
+        GGML_ROPE_ORDERING_NEOX,
+    };
+
+    // RoPE composable API
+    // note:
+    //     theta_scale is usually powf(freq_base, -2.0f / (float)n_rot)
+    //     each dimension i_dim is rotated by angle theta as follows:
+    //     theta = pos[i_token] * theta_scale^i_dim
+    GGML_API struct ggml_tensor * ggml_rope_comp(
+            struct ggml_context   * ctx,
+            struct ggml_tensor    * a,
+            struct ggml_tensor    * b,
+            int32_t                 n_rot,
+            float                   theta_scale,
+            enum ggml_rope_ordering ordering);
+
+    GGML_API struct ggml_tensor * ggml_rope_comp_set_freq_factors(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * node,
+            struct ggml_tensor  * freq_factors);
+
+    // set YaRN parameters
+    // note:
+    //    freq_scale == 1.0f / scale_factor
+    //    ramp_factor is usually 1.0f
+    //    n_dims is usually n_rot, but can also be different because it is not used for indexing
+    GGML_API struct ggml_tensor * ggml_rope_comp_set_yarn(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * node,
+            int                   n_ctx_orig,
+            int                   n_dims,
+            float                 freq_base,
+            float                 freq_scale,
+            float                 ramp_factor,
+            float                 attn_factor,
+            float                 beta_fast,
+            float                 beta_slow);
+
+    // set M-RoPE mode
+    // pos tensor must have shape [n_tokens, 4]
+    GGML_API struct ggml_tensor * ggml_rope_comp_set_multi(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * node,
+            int                   mode,
+            int                   sections[GGML_MROPE_SECTIONS]);
 
     // rotary position embedding backward, i.e compute dx from dy
     // a - dy
