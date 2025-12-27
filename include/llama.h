@@ -339,6 +339,7 @@ extern "C" {
         float    yarn_beta_fast;   // YaRN low correction dim
         float    yarn_beta_slow;   // YaRN high correction dim
         uint32_t yarn_orig_ctx;    // YaRN original context size
+        int32_t  n_layer_output;   // extract hidden states from this layer (0 = all layers, >0 = stop at layer N)
         float    defrag_thold;     // [DEPRECATED] defragment the KV cache if holes/size > thold, <= 0 disabled (default)
 
         ggml_backend_sched_eval_callback cb_eval;
@@ -938,6 +939,10 @@ extern "C" {
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     LLAMA_API void llama_set_warmup(struct llama_context * ctx, bool warmup);
+
+    // Set whether to preserve layer outputs for debugging
+    // If true, layer outputs (l_out tensors) will not be reused, allowing extraction after decode
+    LLAMA_API void llama_set_debug_layer_outputs(struct llama_context * ctx, bool debug_layer_outputs);
 
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);

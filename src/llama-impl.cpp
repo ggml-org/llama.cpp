@@ -99,6 +99,9 @@ std::string format(const char * fmt, ...) {
 }
 
 std::string llama_format_tensor_shape(const std::vector<int64_t> & ne) {
+    if (ne.empty()) {
+        return "(any)";
+    }
     char buf[256];
     snprintf(buf, sizeof(buf), "%5" PRId64, ne.at(0));
     for (size_t i = 1; i < ne.size(); i++) {

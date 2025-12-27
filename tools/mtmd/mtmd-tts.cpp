@@ -392,6 +392,7 @@ static bool apply_text_projection(
     float * output,
     int n_tokens,
     bool verbose) {
+    GGML_UNUSED(verbose);
 
     if (!model->talker_text_proj_fc1 || !model->talker_text_proj_fc2) {
         fprintf(stderr, "Warning: Text projection tensors not found\n");

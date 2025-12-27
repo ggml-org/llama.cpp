@@ -44,7 +44,6 @@ static ggml_tensor * build_snake_activation(
 // It generates codec tokens that are then processed by Code2Wav for audio synthesis
 
 llm_build_qwen3omni_talker::llm_build_qwen3omni_talker(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
-    const int64_t n_embd = hparams.n_embd;
     const int64_t n_embd_head = hparams.n_embd_head_v;
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -218,7 +217,6 @@ llm_build_qwen3omni_code_predictor::llm_build_qwen3omni_code_predictor(
     : llm_graph_context(params), m_codebook_idx(codebook_idx) {
 
     // Code Predictor hyperparameters (fixed, not from hparams)
-    const int64_t cp_n_embd = 1024;
     const int64_t cp_n_head = 16;
     const int64_t cp_n_head_kv = 8;
     const int64_t cp_head_dim = 128;

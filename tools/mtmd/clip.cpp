@@ -3518,7 +3518,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
             print_tensor_shape(t);
             print_tensor_data(t, data.data(), 3);
-            save_tensor_binary(t, data.data());
         }
     }
 

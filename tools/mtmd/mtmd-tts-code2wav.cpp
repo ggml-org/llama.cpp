@@ -28,6 +28,13 @@
 #include <cstring>
 #include <cmath>
 #include <vector>
+
+// Forward declaration for external linkage
+std::vector<float> mtmd_code2wav_run(
+    const llama_model * model,
+    const std::vector<std::vector<int>> & all_codebook_tokens,
+    bool verbose,
+    bool cpu_only);
 #include <fstream>
 #include <algorithm>
 
@@ -167,7 +174,7 @@ static ggml_tensor * build_causal_conv1d(ggml_context * ctx, ggml_tensor * kerne
 // Initialize Code2Wav Context
 // =============================================================================
 
-bool mtmd_code2wav_init(mtmd_code2wav_context * ctx, bool cpu_only) {
+static bool mtmd_code2wav_init(mtmd_code2wav_context * ctx, bool cpu_only) {
     // Try to get GPU backend first
     if (!cpu_only) {
         ggml_backend_t backend_gpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
