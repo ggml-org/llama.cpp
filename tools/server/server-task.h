@@ -444,7 +444,11 @@ struct server_task_result_slot_erase : server_task_result {
 
 struct server_task_result_get_lora : server_task_result {
     struct lora {
-        common_adapter_lora_info info;
+        std::string path;
+        float scale;
+        std::string task_name;
+        std::string prompt_prefix;
+
         std::string  alora_invocation_string;
         llama_tokens alora_invocation_tokens;
     };

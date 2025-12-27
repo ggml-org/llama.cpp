@@ -2300,7 +2300,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "path to LoRA adapter (use comma-separated values to load multiple adapters)",
         [](common_params & params, const std::string & value) {
             for (const auto & item : string_split<std::string>(value, ',')) {
-                params.lora_adapters.push_back({ item, 1.0, "", "", nullptr });
+                params.lora_adapters.push_back({ item, 1.0 });
             }
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
@@ -2315,7 +2315,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 if (parts.size() != 2) {
                     throw std::invalid_argument("lora-scaled format: FNAME:SCALE");
                 }
-                params.lora_adapters.push_back({ parts[0], std::stof(parts[1]), "", "", nullptr });
+                params.lora_adapters.push_back({ parts[0], std::stof(parts[1]) });
             }
         }
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg

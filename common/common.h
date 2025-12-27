@@ -39,14 +39,17 @@ struct common_time_meas {
     int64_t & t_acc;
 };
 
-struct common_adapter_lora_info {
+struct common_adapter_lora_param {
     std::string path;
     float scale;
+};
 
+struct common_adapter_lora_info {
+    llama_adapter_lora_ptr ptr;
+
+    std::string path;
     std::string task_name;
     std::string prompt_prefix;
-
-    struct llama_adapter_lora * ptr;
 };
 
 using llama_tokens = std::vector<llama_token>;
@@ -375,8 +378,8 @@ struct common_params {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
 
-    bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_adapter_lora_apply)
-    std::vector<common_adapter_lora_info> lora_adapters; // lora adapter path with user defined scale
+    bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_set_adapter_lora)
+    std::vector<common_adapter_lora_param> lora_adapters; // lora adapter path with user defined scale
 
     std::vector<common_control_vector_load_info> control_vectors; // control vector with user defined scale
 
@@ -691,7 +694,7 @@ struct common_init_result {
     llama_context * context();
     common_sampler * sampler(llama_seq_id seq_id);
 
-    std::vector<llama_adapter_lora_ptr> & lora();
+    const std::vector<common_adapter_lora_info> & loras() const;
 
     void free_context();
 
@@ -709,7 +712,10 @@ struct llama_context_params   common_context_params_to_llama(const common_params
 struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_params & params);
 
 // clear LoRA adapters from context, then apply new list of adapters
-void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
+void common_set_adapter_lora(
+            struct llama_context * ctx,
+            const std::vector<common_adapter_lora_param> & lora_params,
+            const std::vector<common_adapter_lora_info> & loras);
 
 std::string                   get_model_endpoint();
 

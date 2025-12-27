@@ -364,6 +364,8 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+
+        uint64_t n_lora_tensors;
     };
 
     // model quantization parameters
@@ -632,6 +634,9 @@ extern "C" {
     // Manually free a LoRA adapter
     // NOTE: loaded adapters will be free when the associated model is deleted
     LLAMA_API void llama_adapter_lora_free(struct llama_adapter_lora * adapter);
+
+    // for llama_context_params::n_lora_tensors */
+    LLAMA_API uint64_t llama_adapter_lora_get_n_tensors(const struct llama_adapter_lora * adapter);
 
     // Get the invocation tokens if the current lora is an alora
     LLAMA_API uint64_t            llama_adapter_get_alora_n_invocation_tokens(const struct llama_adapter_lora * adapter);

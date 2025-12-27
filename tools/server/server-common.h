@@ -98,23 +98,26 @@ std::string gen_tool_call_id();
 // lora utils
 //
 
+using lora_scales = std::map<int, float>;
+
 // check whether the given lora set has only aloras activated (empty => false)
-bool lora_all_alora(const std::vector<common_adapter_lora_info> & loras);
+bool lora_all_alora(const std::vector<common_adapter_lora_info> & lora_adapters, const lora_scales & loras);
 
 // if the two sets of loras are different, they require a cache clear unless the
 // change is only from aloras to aloras.
 bool lora_should_clear_cache(
-        const std::vector<common_adapter_lora_info> & current,
-        const std::vector<common_adapter_lora_info> & next);
+        const std::vector<common_adapter_lora_info> & lora_adapters,
+        const lora_scales & current,
+        const lora_scales & next);
 
 std::map<int, float> parse_lora_request(const json & data);
 
 bool are_lora_equal(
-        const std::vector<common_adapter_lora_info> & l1,
-        const std::vector<common_adapter_lora_info> & l2);
+        const lora_scales & l1,
+        const lora_scales & l2);
 
 // get the ids of all enabled loras
-std::vector<size_t> lora_get_enabled_ids(const std::vector<common_adapter_lora_info> & loras);
+std::vector<size_t> lora_get_enabled_ids(const lora_scales & loras);
 
 //
 // server_tokens

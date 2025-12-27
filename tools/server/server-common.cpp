@@ -88,11 +88,15 @@ std::string gen_tool_call_id() {
 // lora utils
 //
 
-bool lora_all_alora(const std::vector<common_adapter_lora_info> & loras) {
+bool lora_all_alora(
+        const std::vector<common_adapter_lora_info> & lora_adapters,
+        const std::map<int, float> & loras) {
+
     bool found_alora = false;
-    for (const auto & lora : loras) {
-        if (lora.scale != 0) {
-            if (llama_adapter_get_alora_n_invocation_tokens(lora.ptr) == 0) {
+    for (size_t i = 0; i < lora_adapters.size(); i++) {
+        auto it = loras.find(i);
+        if (it != loras.end() && it->second != 0.0f) {
+            if (llama_adapter_get_alora_n_invocation_tokens(lora_adapters[i].ptr.get()) == 0) {
                 return false;
             }
             found_alora = true;
@@ -102,8 +106,9 @@ bool lora_all_alora(const std::vector<common_adapter_lora_info> & loras) {
 }
 
 bool lora_should_clear_cache(
-        const std::vector<common_adapter_lora_info> & current,
-        const std::vector<common_adapter_lora_info> & next) {
+        const std::vector<common_adapter_lora_info> & lora_adapters,
+        const lora_scales & current,
+        const lora_scales & next) {
 
     // This should always be called after determining that the two sets are
     // _not_ equal. This assert is therefore some slightly wasted work and
@@ -111,12 +116,12 @@ bool lora_should_clear_cache(
     GGML_ASSERT(!are_lora_equal(current, next));
 
     return (
-        !(lora_get_enabled_ids(current).empty() || lora_all_alora(current)) ||
-        !lora_all_alora(next));
+        !(lora_get_enabled_ids(current).empty() || lora_all_alora(lora_adapters, current)) ||
+        !lora_all_alora(lora_adapters, next));
 }
 
-std::map<int, float> parse_lora_request(const json & data) {
-    std::map<int, float> lora;
+lora_scales parse_lora_request(const json & data) {
+    lora_scales lora;
 
     // set value
     for (const auto & entry : data) {
@@ -129,25 +134,17 @@ std::map<int, float> parse_lora_request(const json & data) {
 }
 
 bool are_lora_equal(
-        const std::vector<common_adapter_lora_info> & l1,
-        const std::vector<common_adapter_lora_info> & l2) {
-    if (l1.size() != l2.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < l1.size(); ++i) {
-        // we don't check lora.path to reduce the time complexity
-        if (l1[i].scale != l2[i].scale || l1[i].ptr != l2[i].ptr) {
-            return false;
-        }
-    }
-    return true;
+        const lora_scales & l1,
+        const lora_scales & l2) {
+
+    return l1 == l2;
 }
 
-std::vector<size_t> lora_get_enabled_ids(const std::vector<common_adapter_lora_info> & loras) {
+std::vector<size_t> lora_get_enabled_ids(const lora_scales & loras) {
     std::vector<size_t> enabled_ids;
-    for (size_t i = 0; i < loras.size(); ++i) {
-        if (loras[i].scale > 0) {
-            enabled_ids.push_back(i);
+    for (const auto &it : loras) {
+        if (it.second != 0.0f) {
+            enabled_ids.push_back(it.first);
         }
     }
     return enabled_ids;

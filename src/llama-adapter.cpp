@@ -472,6 +472,13 @@ void llama_adapter_lora_free(llama_adapter_lora * adapter) {
     delete adapter;
 }
 
+uint64_t llama_adapter_lora_get_n_tensors(const struct llama_adapter_lora * adapter) {
+    if (!adapter) {
+        return 0;
+    }
+    return adapter->ab_map.size() * 2;
+}
+
 uint64_t llama_adapter_get_alora_n_invocation_tokens(const struct llama_adapter_lora * adapter) {
     if (!adapter) {
         return 0;
