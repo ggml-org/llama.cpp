@@ -3474,6 +3474,7 @@ class VisionProjectorType:
     LIGHTONOCR = "lightonocr"
     COGVLM = "cogvlm"
     JANUS_PRO = "janus_pro"
+    EAGLE2VL = "eagle2vl"
     LFM2A = "lfm2a" # audio
     GLM4V = "glm4v"
 
