@@ -39,6 +39,13 @@ if (CUDAToolkit_FOUND)
     endif()
     message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
+    if(NOT DEFINED CMAKE_CUDA_COMPILER)
+        if(WIN32)
+            set(CMAKE_CUDA_COMPILER "${CUDAToolkit_BIN_DIR}/nvcc.exe")
+        else()
+            set(CMAKE_CUDA_COMPILER "${CUDAToolkit_BIN_DIR}/nvcc")
+        endif()
+    endif()
     enable_language(CUDA)
 
     # Replace any 12x-real architectures with 12x{a}-real. FP4 ptx instructions are not available in just 12x
