@@ -992,6 +992,19 @@ bool test_ifairy_lut_scalar_small_dims() {
     return ok;
 }
 
+bool test_ifairy_lut_scalar_sym16_matmul() {
+    printf("\n=== Test 4.2: iFairy LUT scalar sym16 matmul ===\n");
+
+    scoped_env_var env_layout("GGML_IFAIRY_LUT_LAYOUT");
+    env_layout.set("sym16");
+
+    const bool ok = run_ifairy_lut_scalar_case(2, 2, QK_K);
+    if (!ok) {
+        fprintf(stderr, "Scalar LUT sym16 matmul mismatch\n");
+    }
+    return ok;
+}
+
 // ============================================================================
 // 测试 5: CPU backend LUT tiling 回归（非 tiling vs BK/BM tiling）
 // ============================================================================
@@ -1179,6 +1192,23 @@ bool test_ifairy_lut_backend_tiling_regression() {
         return false;
     }
 
+    // sym16 tiling regression (prefill-like: N > 1): tiling must not change results.
+    std::vector<uint32_t> out_sym16_no_tile;
+    std::vector<uint32_t> out_sym16_tile;
+    if (!run_ifairy_backend_mul_mat(out_sym16_no_tile, false, 2, "sym16", NULL)) {
+        return false;
+    }
+    if (!run_ifairy_backend_mul_mat(out_sym16_tile, true, 2, "sym16", NULL)) {
+        return false;
+    }
+    if (out_sym16_no_tile.size() != out_sym16_tile.size()) {
+        fprintf(stderr, "Size mismatch (sym16): %zu vs %zu\n", out_sym16_no_tile.size(), out_sym16_tile.size());
+        return false;
+    }
+    if (!compare_u32_arrays(out_sym16_tile.data(), out_sym16_no_tile.data(), out_sym16_no_tile.size())) {
+        return false;
+    }
+
     // Decode-like regression: N == 1, plus layout equivalence (legacy vs compact) for the same backend graph.
     std::vector<uint32_t> out_legacy;
     std::vector<uint32_t> out_compact;
@@ -1192,7 +1222,20 @@ bool test_ifairy_lut_backend_tiling_regression() {
         fprintf(stderr, "Size mismatch (layout): %zu vs %zu\n", out_legacy.size(), out_compact.size());
         return false;
     }
-    return compare_u32_arrays(out_compact.data(), out_legacy.data(), out_legacy.size());
+
+    std::vector<uint32_t> out_sym16;
+    if (!run_ifairy_backend_mul_mat(out_sym16, false, 1, "sym16", NULL)) {
+        return false;
+    }
+    if (out_sym16.size() != out_legacy.size()) {
+        fprintf(stderr, "Size mismatch (sym16): %zu vs %zu\n", out_sym16.size(), out_legacy.size());
+        return false;
+    }
+
+    if (!compare_u32_arrays(out_compact.data(), out_legacy.data(), out_legacy.size())) {
+        return false;
+    }
+    return compare_u32_arrays(out_sym16.data(), out_legacy.data(), out_legacy.size());
 #endif
 }
 
@@ -1395,6 +1438,11 @@ int main(int argc, char ** argv) {
 
     if (!test_ifairy_lut_scalar_small_dims()) {
         fprintf(stderr, "Test 4.1 FAILED\n");
+        num_failed++;
+    }
+
+    if (!test_ifairy_lut_scalar_sym16_matmul()) {
+        fprintf(stderr, "Test 4.2 FAILED\n");
         num_failed++;
     }
 

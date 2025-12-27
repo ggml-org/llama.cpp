@@ -66,12 +66,13 @@ struct ifairy_lut_extra {
 // - CPU-only scalar LUT path integrated into ggml mul_mat (guarded by GGML_IFAIRY_ARM_LUT + GGML_IFAIRY_LUT env).
 // - Correctness matches ggml_vec_dot_ifairy_q16_K_generic semantics (w * conj(x)).
 // - Index encoding is direct 6-bit pattern per 3 weights: pat = c0 | (c1<<2) | (c2<<4).
-// - Four LUT layouts are supported (selected by env `GGML_IFAIRY_LUT_LAYOUT=auto|legacy|compact|tbl64|merged64`):
+// - Five LUT layouts are supported (selected by env `GGML_IFAIRY_LUT_LAYOUT=auto|legacy|compact|tbl64|merged64|sym16`):
 //   - legacy : 4x64 int16 tables per group (fast for small N, larger workspace)
 //   - compact: int8 "3 positions × 4 codes × 4 channels" tables per group (48 B / group),
 //              NEON uses 32-bit loads + widen
 //   - tbl64  : 4x64 int8 tables per group (decode-first, experimental)
 //   - merged64: 64x4 int8 tables per group (decode-first, one 32-bit load per group)
+//   - sym16  : 16x4 int16 tables per group (canonical patterns) + factor transform (decode-first, experimental)
 // - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64` may affect the auto policy for N==1; strict validation forces legacy.
 // - Optional decode thread clamp knobs (A/B): `GGML_IFAIRY_LUT_DECODE_NTH`, `GGML_IFAIRY_LUT_DECODE_THRESHOLD` (default 0=disabled).
 
@@ -146,6 +147,15 @@ void   ggml_ifairy_lut_preprocess_ex_merged64(int          m,
                                               void *       lut_buf,
                                               int          ith,
                                               int          nth);
+void   ggml_ifairy_lut_preprocess_ex_sym16(int          m,
+                                           int          k,
+                                           int          n,
+                                           const void * act,
+                                           size_t       act_stride,
+                                           void *       lut_scales,
+                                           void *       lut_buf,
+                                           int          ith,
+                                           int          nth);
 void   ggml_ifairy_lut_qgemm(int             m,
                              int             k,
                              int             n,
@@ -235,6 +245,21 @@ void   ggml_ifairy_lut_qgemm_ex_merged64(int             m,
                                          bool            pack_bf16,
                                          bool            strict,
                                          bool            add);
+void   ggml_ifairy_lut_qgemm_ex_sym16(int             m,
+                                      int             k,
+                                      int             n,
+                                      const void *    qweights,
+                                      const uint8_t * indexes,
+                                      const void *    lut,
+                                      const void *    lut_scales,
+                                      const void *    act,
+                                      size_t          act_stride,
+                                      float *         dst,
+                                      size_t          dst_col_stride,
+                                      size_t          dst_row_stride,
+                                      bool            pack_bf16,
+                                      bool            strict,
+                                      bool            add);
 void   ggml_ifairy_lut_accum4_ex(int             k,
                                  int             n,
                                  const uint8_t * indexes,
@@ -275,6 +300,14 @@ void   ggml_ifairy_lut_accum4_ex_merged64(int             k,
                                           float *         dst,
                                           size_t          dst_col_stride,
                                           bool            add);
+void   ggml_ifairy_lut_accum4_ex_sym16(int             k,
+                                       int             n,
+                                       const uint8_t * indexes,
+                                       const void *    lut,
+                                       const void *    lut_scales,
+                                       float *         dst,
+                                       size_t          dst_col_stride,
+                                       bool            add);
 void   ggml_ifairy_lut_mul_mat_scalar(int          m,
                                       int          k,
                                       int          n,

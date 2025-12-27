@@ -51,10 +51,14 @@ ggml_ifairy_lut_layout ggml_ifairy_lut_layout_from_env(int n) {
         if (strcmp(env, "merged64") == 0) {
             return GGML_IFAIRY_LUT_LAYOUT_MERGED64;
         }
+        if (strcmp(env, "sym16") == 0) {
+            return GGML_IFAIRY_LUT_LAYOUT_SYM16;
+        }
         if (strcmp(env, "auto") != 0) {
             if (ggml_ifairy_env_enabled("GGML_IFAIRY_LUT_DEBUG") && !g_ifairy_lut_warned_bad_layout.exchange(true)) {
                 GGML_LOG_WARN(
-                    "ifairy_lut: unknown GGML_IFAIRY_LUT_LAYOUT='%s' (expected: legacy|compact|tbl64|merged64|auto), "
+                    "ifairy_lut: unknown GGML_IFAIRY_LUT_LAYOUT='%s' (expected: "
+                    "legacy|compact|tbl64|merged64|sym16|auto), "
                     "using default\n",
                     env);
             }
@@ -205,7 +209,8 @@ size_t ggml_ifairy_lut_get_wsize_cfg(const struct ggml_tensor * src0,
     }
 
     int tile_blocks = strict ? 0 : std::max(bk_blocks, 0);
-    if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64 || (layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64 && N == 1)) {
+    if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64 ||
+        ((layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64 || layout == GGML_IFAIRY_LUT_LAYOUT_SYM16) && N == 1)) {
         tile_blocks = 0;
     }
     const int bm_local = tile_blocks > 0 ? std::max(bm, 1) : 64;
@@ -231,6 +236,8 @@ size_t ggml_ifairy_lut_get_wsize_cfg(const struct ggml_tensor * src0,
         lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_tbl64_group_bytes);
     } else if (layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64) {
         lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_merged64_group_bytes);
+    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_SYM16) {
+        lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_sym16_group_bytes);
     } else {
         GGML_ASSERT(false && "unknown ifairy LUT layout");
     }
@@ -306,7 +313,8 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
     // Optional BK tiling (by whole 256-element blocks) to reduce LUT working set.
     // Disabled under strict validation (strict currently assumes full-K single-pass).
     int tile_blocks = 0;
-    if (!strict && layout != GGML_IFAIRY_LUT_LAYOUT_TBL64 && !(layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64 && N == 1)) {
+    if (!strict && layout != GGML_IFAIRY_LUT_LAYOUT_TBL64 && !(layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64 && N == 1) &&
+        !(layout == GGML_IFAIRY_LUT_LAYOUT_SYM16 && N == 1)) {
         tile_blocks = ggml_ifairy_env_get_int_nonzero("GGML_IFAIRY_LUT_BK_BLOCKS", 0);
     }
     if (tile_blocks < 0) {
@@ -345,6 +353,8 @@ size_t ggml_ifairy_lut_get_wsize(const struct ggml_tensor * src0,
         lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_tbl64_group_bytes);
     } else if (layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64) {
         lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_merged64_group_bytes);
+    } else if (layout == GGML_IFAIRY_LUT_LAYOUT_SYM16) {
+        lut_bytes = ggml_ifairy_checked_mul_size(lut_groups, (size_t) k_ifairy_lut_sym16_group_bytes);
     } else {
         GGML_ASSERT(false && "unknown ifairy LUT layout");
     }

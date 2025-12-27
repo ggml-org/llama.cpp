@@ -7,6 +7,7 @@ enum ggml_ifairy_lut_layout {
     GGML_IFAIRY_LUT_LAYOUT_COMPACT  = 1,  // int8 per-position tables (3 positions x 4 codes x 4 channels)
     GGML_IFAIRY_LUT_LAYOUT_TBL64    = 2,  // 4ch x 64pat x int8 tables per group (decode-first)
     GGML_IFAIRY_LUT_LAYOUT_MERGED64 = 3,  // 64pat x 4ch x int8 tables per group (decode-first, one lookup)
+    GGML_IFAIRY_LUT_LAYOUT_SYM16    = 4,  // 16pat x 4ch x int8 tables per group + factor transform (decode-first)
 };
 
 #ifdef __cplusplus
@@ -44,3 +45,6 @@ static const size_t k_ifairy_lut_tbl64_group_bytes =
     (size_t) k_ifairy_lut_channels * (size_t) k_ifairy_lut_patterns;  // 256
 static const size_t k_ifairy_lut_merged64_group_bytes =
     (size_t) k_ifairy_lut_channels * (size_t) k_ifairy_lut_patterns;  // 256
+static const size_t k_ifairy_lut_sym16_patterns = 16;
+static const size_t k_ifairy_lut_sym16_group_bytes =
+    (size_t) k_ifairy_lut_channels * k_ifairy_lut_sym16_patterns * sizeof(int16_t);  // 128

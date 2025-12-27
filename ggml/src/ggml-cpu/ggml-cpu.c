@@ -647,10 +647,13 @@ static void ggml_ifairy_lut_threadpool_config_update(struct ggml_threadpool * th
             cfg.lut_layout = GGML_IFAIRY_LUT_LAYOUT_TBL64;
         } else if (strcmp(layout_env, "merged64") == 0) {
             cfg.lut_layout = GGML_IFAIRY_LUT_LAYOUT_MERGED64;
+        } else if (strcmp(layout_env, "sym16") == 0) {
+            cfg.lut_layout = GGML_IFAIRY_LUT_LAYOUT_SYM16;
         } else {
             if (cfg.dbg) {
                 GGML_LOG_WARN(
-                    "ifairy_lut: unknown GGML_IFAIRY_LUT_LAYOUT='%s' (expected: legacy|compact|tbl64|merged64|auto), "
+                    "ifairy_lut: unknown GGML_IFAIRY_LUT_LAYOUT='%s' (expected: "
+                    "legacy|compact|tbl64|merged64|sym16|auto), "
                     "using default\n",
                     layout_env);
             }
@@ -726,6 +729,9 @@ static void ggml_ifairy_lut_preprocess_ex_dispatch(enum ggml_ifairy_lut_layout l
         case GGML_IFAIRY_LUT_LAYOUT_MERGED64:
             ggml_ifairy_lut_preprocess_ex_merged64(m, k, n, act, act_stride, lut_scales, lut_buf, ith, nth);
             return;
+        case GGML_IFAIRY_LUT_LAYOUT_SYM16:
+            ggml_ifairy_lut_preprocess_ex_sym16(m, k, n, act, act_stride, lut_scales, lut_buf, ith, nth);
+            return;
     }
     GGML_ASSERT(false && "unknown ifairy LUT layout");
 }
@@ -763,6 +769,10 @@ static void ggml_ifairy_lut_qgemm_ex_dispatch(enum ggml_ifairy_lut_layout layout
             ggml_ifairy_lut_qgemm_ex_merged64(m, k, n, qweights, indexes, lut, lut_scales, act, act_stride, dst,
                                               dst_col_stride, dst_row_stride, pack_bf16, strict, add);
             return;
+        case GGML_IFAIRY_LUT_LAYOUT_SYM16:
+            ggml_ifairy_lut_qgemm_ex_sym16(m, k, n, qweights, indexes, lut, lut_scales, act, act_stride, dst,
+                                           dst_col_stride, dst_row_stride, pack_bf16, strict, add);
+            return;
     }
     GGML_ASSERT(false && "unknown ifairy LUT layout");
 }
@@ -788,6 +798,9 @@ static void ggml_ifairy_lut_accum4_ex_dispatch(enum ggml_ifairy_lut_layout layou
             return;
         case GGML_IFAIRY_LUT_LAYOUT_MERGED64:
             ggml_ifairy_lut_accum4_ex_merged64(k, n, indexes, lut, lut_scales, dst, dst_col_stride, add);
+            return;
+        case GGML_IFAIRY_LUT_LAYOUT_SYM16:
+            ggml_ifairy_lut_accum4_ex_sym16(k, n, indexes, lut, lut_scales, dst, dst_col_stride, add);
             return;
     }
     GGML_ASSERT(false && "unknown ifairy LUT layout");
@@ -1577,7 +1590,8 @@ void ggml_compute_forward_mul_mat(
         }
 
         int tile_blocks = strict ? 0 : cfg->bk_blocks;
-        if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64 || (layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64 && N == 1)) {
+        if (layout == GGML_IFAIRY_LUT_LAYOUT_TBL64 ||
+            ((layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64 || layout == GGML_IFAIRY_LUT_LAYOUT_SYM16) && N == 1)) {
             tile_blocks = 0;
         }
         const int bm = tile_blocks > 0 ? cfg->bm : 64;
@@ -1621,6 +1635,9 @@ void ggml_compute_forward_mul_mat(
         } else if (layout == GGML_IFAIRY_LUT_LAYOUT_MERGED64) {
             GGML_ASSERT(lut_groups == 0 || (size_t) k_ifairy_lut_merged64_group_bytes <= SIZE_MAX / lut_groups);
             lut_bytes = lut_groups * (size_t) k_ifairy_lut_merged64_group_bytes;
+        } else if (layout == GGML_IFAIRY_LUT_LAYOUT_SYM16) {
+            GGML_ASSERT(lut_groups == 0 || (size_t) k_ifairy_lut_sym16_group_bytes <= SIZE_MAX / lut_groups);
+            lut_bytes = lut_groups * (size_t) k_ifairy_lut_sym16_group_bytes;
         } else {
             GGML_ASSERT(false && "unknown ifairy LUT layout");
         }
