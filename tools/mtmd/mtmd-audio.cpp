@@ -467,17 +467,23 @@ bool mtmd_audio_preprocessor_whisper::preprocess(
         return false;
     }
 
+    // Check if this is Qwen3-Omni which uses variable-length audio
+    // (not fixed 30-second chunks like Whisper)
+    const bool is_qwen3omni = (clip_get_projector_type(ctx) == PROJECTOR_TYPE_QWEN3OMNI_AUDIO);
+
     std::vector<float> smpl;
-    // if input is too short, pad with zeros
-    // this is to avoid potential issues with stage1/2 padding in log_mel_spectrogram
-    // TODO: maybe handle this better
-    size_t min_samples = (size_t)hparams.audio_sample_rate * (hparams.audio_chunk_len + 1); // +1 second margin
-    if (n_samples < min_samples) {
-        smpl.resize(min_samples, 0.0f);
-        std::memcpy(smpl.data(), samples, n_samples * sizeof(float));
-        samples   = smpl.data();
-        n_samples = smpl.size();
+    if (!is_qwen3omni) {
+        // Whisper-style models: pad to fixed 30+ second chunks
+        size_t min_samples = (size_t)hparams.audio_sample_rate * (hparams.audio_chunk_len + 1); // +1 second margin
+        if (n_samples < min_samples) {
+            smpl.resize(min_samples, 0.0f);
+            std::memcpy(smpl.data(), samples, n_samples * sizeof(float));
+            samples   = smpl.data();
+            n_samples = smpl.size();
+        }
     }
+    // For Qwen3-Omni: process actual audio length (no padding to 30s)
+    // The STFT center_padding handles edge cases
 
     filter_params params;
     params.n_mel            = hparams.n_mel_bins;
@@ -485,7 +491,7 @@ bool mtmd_audio_preprocessor_whisper::preprocess(
     params.hann_window_size = hparams.audio_window_len;
     params.hop_length       = hparams.audio_hop_len;
     params.sample_rate      = hparams.audio_sample_rate;
-    params.center_padding   = false;
+    params.center_padding   = true;  // Match HuggingFace WhisperFeatureExtractor
     params.preemph          = 0.0f; // disabled
     params.use_natural_log  = false;
     params.norm_per_feature = false;
@@ -506,31 +512,57 @@ bool mtmd_audio_preprocessor_whisper::preprocess(
         return false;
     }
 
-    // because the cgraph in clip.cpp only accepts 3000 frames each, we need to split the mel
-    // we always expect the mel to have 3000 silent frames at the end
     if (DEBUG) {
         printf("output: n_mel = %d, n_len = %d\n", out_full.n_mel, out_full.n_len);
     }
-    const size_t frames_per_chunk = 3000;
-    GGML_ASSERT((size_t)out_full.n_len > frames_per_chunk);
-    for (size_t off = 0; off < (size_t)out_full.n_len; off += frames_per_chunk) {
-        int n_len = std::min(frames_per_chunk, (size_t)out_full.n_len - off);
-        if ((size_t)n_len < frames_per_chunk) {
-            break; // last uncomplete chunk will always be a padded chunk, safe to ignore
+
+    if (is_qwen3omni) {
+        // Qwen3-Omni: return single chunk with actual audio length
+        // Pad to multiple of 8 frames (required by 3x stride-2 conv layers)
+        const int pad_to = 8;
+        int padded_len = ((out_full.n_len + pad_to - 1) / pad_to) * pad_to;
+        if (padded_len != out_full.n_len) {
+            // Need to pad with zeros
+            int pad_frames = padded_len - out_full.n_len;
+            std::vector<float> padded_data;
+            padded_data.reserve(out_full.n_mel * padded_len);
+            // Copy each mel bin and add padding
+            for (int m = 0; m < out_full.n_mel; m++) {
+                auto src_start = out_full.data.begin() + m * out_full.n_len;
+                padded_data.insert(padded_data.end(), src_start, src_start + out_full.n_len);
+                // Pad with zeros (log mel of silence)
+                padded_data.insert(padded_data.end(), pad_frames, 0.0f);
+            }
+            out_full.data = std::move(padded_data);
+            out_full.n_len = padded_len;
         }
-
-        mtmd_audio_mel out_chunk;
-        out_chunk.n_len     = n_len;
-        out_chunk.n_mel     = out_full.n_mel;
-        out_chunk.n_len_org = out_full.n_mel; // unused
-        out_chunk.data.reserve(out_chunk.n_mel * out_chunk.n_len);
-
-        for (int i = 0; i < out_full.n_mel; i++) {
-            auto src = out_full.data.begin() + i*out_full.n_len + off;
-            out_chunk.data.insert(out_chunk.data.end(), src, src + frames_per_chunk);
+        if (DEBUG) {
+            printf("Qwen3-Omni audio: padded to %d frames (%d tokens)\n", out_full.n_len, out_full.n_len / 8);
         }
+        output.push_back(std::move(out_full));
+    } else {
+        // Whisper-style: split into fixed 3000-frame chunks
+        const size_t frames_per_chunk = 3000;
+        GGML_ASSERT((size_t)out_full.n_len > frames_per_chunk);
+        for (size_t off = 0; off < (size_t)out_full.n_len; off += frames_per_chunk) {
+            int n_len = std::min(frames_per_chunk, (size_t)out_full.n_len - off);
+            if ((size_t)n_len < frames_per_chunk) {
+                break; // last uncomplete chunk will always be a padded chunk, safe to ignore
+            }
 
-        output.push_back(std::move(out_chunk));
+            mtmd_audio_mel out_chunk;
+            out_chunk.n_len     = n_len;
+            out_chunk.n_mel     = out_full.n_mel;
+            out_chunk.n_len_org = out_full.n_mel; // unused
+            out_chunk.data.reserve(out_chunk.n_mel * out_chunk.n_len);
+
+            for (int i = 0; i < out_full.n_mel; i++) {
+                auto src = out_full.data.begin() + i*out_full.n_len + off;
+                out_chunk.data.insert(out_chunk.data.end(), src, src + frames_per_chunk);
+            }
+
+            output.push_back(std::move(out_chunk));
+        }
     }
 
     return true;

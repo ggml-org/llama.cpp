@@ -188,20 +188,27 @@ struct mtmd_context {
         }
 
         // if both vision and audio mmproj are present, we need to validate their n_embd
+        // Exception: Qwen3-Omni has intentionally different dims (vision=8192 with deepstack, audio=2048)
         if (ctx_v && ctx_a) {
             int n_embd_v = clip_n_mmproj_embd(ctx_v);
             int n_embd_a = clip_n_mmproj_embd(ctx_a);
-            if (n_embd_v != n_embd_a) {
+            projector_type proj_v = clip_get_projector_type(ctx_v);
+            projector_type proj_a = clip_get_projector_type(ctx_a);
+            bool is_qwen3omni = (proj_v == PROJECTOR_TYPE_QWEN3OMNI_VISION && proj_a == PROJECTOR_TYPE_QWEN3OMNI_AUDIO);
+            if (n_embd_v != n_embd_a && !is_qwen3omni) {
                 throw std::runtime_error(string_format(
                     "mismatch between vision and audio mmproj (n_embd_v = %d, n_embd_a = %d)\n",
                     n_embd_v, n_embd_a));
             }
         }
 
-        // since we already validate n_embd of vision and audio mmproj,
-        // we can safely assume that they are the same
+        // validate n_embd against text model
+        // For combined audio+vision, use vision n_embd if available (handles deepstack correctly)
+        // Exception: Qwen3-Omni vision has 8192 output but text model may report 2048 (missing deepstack metadata)
         int n_embd_clip = clip_n_mmproj_embd(ctx_v ? ctx_v : ctx_a);
-        if (n_embd_text != n_embd_clip) {
+        projector_type proj = ctx_v ? clip_get_projector_type(ctx_v) : PROJECTOR_TYPE_UNKNOWN;
+        bool is_qwen3omni_vision = (proj == PROJECTOR_TYPE_QWEN3OMNI_VISION);
+        if (n_embd_text != n_embd_clip && !is_qwen3omni_vision) {
             throw std::runtime_error(string_format(
                 "mismatch between text model (n_embd = %d) and mmproj (n_embd = %d)\n"
                 "hint: you may be using wrong mmproj\n",
@@ -283,7 +290,7 @@ struct mtmd_context {
             // https://github.com/huggingface/transformers/blob/1cd110c6cb6a6237614130c470e9a902dbc1a4bd/docs/source/en/model_doc/pixtral.md
             img_end = "[IMG_END]";
 
-        } else if (proj == PROJECTOR_TYPE_QWEN2VL || proj == PROJECTOR_TYPE_QWEN25VL || proj == PROJECTOR_TYPE_QWEN3VL) {
+        } else if (proj == PROJECTOR_TYPE_QWEN2VL || proj == PROJECTOR_TYPE_QWEN25VL || proj == PROJECTOR_TYPE_QWEN3VL || proj == PROJECTOR_TYPE_QWEN3OMNI_VISION) {
             // <|vision_start|> ... (image embeddings) ... <|vision_end|>
             img_beg = "<|vision_start|>";
             img_end = "<|vision_end|>";
@@ -330,6 +337,7 @@ struct mtmd_context {
             case PROJECTOR_TYPE_ULTRAVOX:
             case PROJECTOR_TYPE_VOXTRAL:
             case PROJECTOR_TYPE_GLMA:
+            case PROJECTOR_TYPE_QWEN3OMNI_AUDIO:
                 audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
                 break;
             case PROJECTOR_TYPE_LFM2A:
@@ -352,6 +360,12 @@ struct mtmd_context {
             // [BEGIN_AUDIO] ... (embeddings) ...
             aud_beg = "[BEGIN_AUDIO]";
 
+        } else if (proj == PROJECTOR_TYPE_QWEN3OMNI_AUDIO) {
+            // <|audio_start|> ... (embeddings) ... <|audio_end|>
+            aud_beg = "<|audio_start|>";
+            aud_end = "<|audio_end|>";
+            // Qwen3-Omni Thinker uses IMRoPE (interleaved M-RoPE)
+            use_mrope = true;
         }
     }
 

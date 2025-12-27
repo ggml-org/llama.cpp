@@ -8,8 +8,10 @@
 #include "chat.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "mtmd-tts.h"
 
 #include <vector>
+#include <string>
 #include <limits.h>
 #include <cinttypes>
 
@@ -42,7 +44,12 @@ static void show_additional_info(int /*argc*/, char ** argv) {
         "  -m and --mmproj are required\n"
         "  -hf user/repo can replace both -m and --mmproj in most cases\n"
         "  --image, --audio and -p are optional, if NOT provided, the CLI will run in chat mode\n"
-        "  to disable using GPU for mmproj model, add --no-mmproj-offload\n",
+        "  to disable using GPU for mmproj model, add --no-mmproj-offload\n\n"
+        "TTS options (Qwen3-Omni):\n"
+        "  --tts-model <path>   Path to Talker model for speech synthesis\n"
+        "  --tts-output <path>  Default output WAV file (default: output.wav)\n"
+        "  --speak              Auto-generate speech in non-interactive mode\n"
+        "  Use /speak command in chat mode to generate speech from last response\n",
         argv[0]
     );
 }
@@ -84,6 +91,12 @@ struct mtmd_cli_context {
 
     // support for legacy templates (models not having EOT token)
     llama_tokens antiprompt_tokens;
+
+    // TTS support (Qwen3-Omni)
+    llama_model       * tts_model = nullptr;
+    mtmd_tts_context  * tts_ctx = nullptr;
+    std::string         tts_output_path = "output.wav";
+    std::string         last_response;  // for /speak command
 
     int n_threads    = 1;
     llama_pos n_past = 0;
@@ -127,6 +140,87 @@ struct mtmd_cli_context {
     ~mtmd_cli_context() {
         llama_batch_free(batch);
         common_sampler_free(smpl);
+        if (tts_ctx) {
+            mtmd_tts_free(tts_ctx);
+        }
+        if (tts_model) {
+            llama_model_free(tts_model);
+        }
+    }
+
+    bool init_tts(const std::string & tts_model_path, int n_gpu_layers = 99) {
+        if (tts_model_path.empty()) {
+            return true;  // TTS not requested
+        }
+
+        LOG_INF("Loading TTS model: %s\n", tts_model_path.c_str());
+
+        llama_model_params tts_mparams = llama_model_default_params();
+        tts_mparams.n_gpu_layers = n_gpu_layers;
+
+        tts_model = llama_model_load_from_file(tts_model_path.c_str(), tts_mparams);
+        if (!tts_model) {
+            LOG_ERR("Failed to load TTS model\n");
+            return false;
+        }
+
+        // Check if TTS is supported
+        if (!mtmd_tts_supported(tts_model)) {
+            LOG_ERR("TTS model does not have required tensors (Code2Wav)\n");
+            llama_model_free(tts_model);
+            tts_model = nullptr;
+            return false;
+        }
+
+        mtmd_tts_params tts_params = mtmd_tts_params_default();
+        tts_params.verbose = false;
+
+        tts_ctx = mtmd_tts_init(model, tts_model, tts_params);
+        if (!tts_ctx) {
+            LOG_ERR("Failed to initialize TTS context\n");
+            llama_model_free(tts_model);
+            tts_model = nullptr;
+            return false;
+        }
+
+        LOG_INF("TTS initialized successfully\n");
+        return true;
+    }
+
+    bool generate_speech(const std::string & output_path) {
+        if (!tts_ctx) {
+            LOG_ERR("TTS not initialized. Use --tts-model to enable.\n");
+            return false;
+        }
+
+        if (last_response.empty()) {
+            LOG_ERR("No response to speak. Generate a response first.\n");
+            return false;
+        }
+
+        LOG_INF("Generating speech for: \"%s\"\n", last_response.c_str());
+
+        // Allocate output buffer
+        int max_samples = mtmd_tts_estimate_samples(500);  // Max 500 codec tokens
+        std::vector<float> audio_samples(max_samples);
+
+        // Generate speech using convenience function (handles tokenization and Thinker inference)
+        int n_samples = mtmd_tts_generate_from_text(tts_ctx, lctx, last_response.c_str(),
+                                                    audio_samples.data(), max_samples);
+
+        if (n_samples <= 0) {
+            LOG_ERR("Failed to generate speech\n");
+            return false;
+        }
+
+        // Write WAV file
+        if (!mtmd_tts_write_wav(output_path.c_str(), audio_samples.data(), n_samples, 24000)) {
+            LOG_ERR("Failed to write WAV file\n");
+            return false;
+        }
+
+        LOG_INF("Saved speech to: %s (%.2f sec)\n", output_path.c_str(), n_samples / 24000.0f);
+        return true;
     }
 
     void init_vision_context(common_params & params) {
@@ -207,6 +301,9 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
     msg.content = generated_text;
     ctx.chat_history.push_back(std::move(msg));
 
+    // Save for TTS /speak command
+    ctx.last_response = generated_text;
+
     return 0;
 }
 
@@ -269,9 +366,31 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
 int main(int argc, char ** argv) {
     ggml_time_init();
 
+    // Pre-parse TTS arguments and filter them from argv (not handled by common_params)
+    std::string tts_model_path;
+    std::string tts_output_path = "output.wav";
+    bool auto_speak = false;  // Auto-generate speech in non-interactive mode
+    std::vector<char *> filtered_argv;
+    filtered_argv.push_back(argv[0]);
+
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "--tts-model" && i + 1 < argc) {
+            tts_model_path = argv[++i];
+        } else if (arg == "--tts-output" && i + 1 < argc) {
+            tts_output_path = argv[++i];
+        } else if (arg == "--speak") {
+            auto_speak = true;
+        } else {
+            filtered_argv.push_back(argv[i]);
+        }
+    }
+
+    int filtered_argc = (int)filtered_argv.size();
+
     common_params params;
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MTMD, show_additional_info)) {
+    if (!common_params_parse(filtered_argc, filtered_argv.data(), params, LLAMA_EXAMPLE_MTMD, show_additional_info)) {
         return 1;
     }
 
@@ -287,7 +406,17 @@ int main(int argc, char ** argv) {
     mtmd_cli_context ctx(params);
     LOG_INF("%s: loading model: %s\n", __func__, params.model.path.c_str());
 
-    bool is_single_turn = !params.prompt.empty() && !params.image.empty();
+    // Initialize TTS if model specified
+    ctx.tts_output_path = tts_output_path;
+    if (!tts_model_path.empty()) {
+        if (!ctx.init_tts(tts_model_path, params.n_gpu_layers)) {
+            LOG_WRN("TTS initialization failed, /speak command will be unavailable\n");
+        }
+    }
+
+    // Single-turn mode: prompt + (media OR auto-speak TTS)
+    // This allows text-only TTS when --speak is provided without image/audio
+    bool is_single_turn = !params.prompt.empty() && (!params.image.empty() || auto_speak);
 
     int n_predict = params.n_predict < 0 ? INT_MAX : params.n_predict;
 
@@ -352,6 +481,11 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
+        // Auto-speak if --speak flag was provided
+        if (auto_speak && ctx.tts_ctx && !g_is_interrupted) {
+            ctx.generate_speech(tts_output_path);
+        }
+
     } else {
         LOG("\n Running in chat mode, available commands:");
         if (mtmd_support_vision(ctx.ctx_vision.get())) {
@@ -359,6 +493,9 @@ int main(int argc, char ** argv) {
         }
         if (mtmd_support_audio(ctx.ctx_vision.get())) {
             LOG("\n   /audio <path>    load an audio");
+        }
+        if (ctx.tts_ctx) {
+            LOG("\n   /speak [path]    generate speech from last response (default: output.wav)");
         }
         LOG("\n   /clear           clear the chat history");
         LOG("\n   /quit or /exit   exit the program");
@@ -392,6 +529,18 @@ int main(int argc, char ** argv) {
                 continue;
             }
             g_is_generating = true;
+
+            // TTS: /speak command
+            bool is_speak = line == "/speak" || line.find("/speak ") == 0;
+            if (is_speak) {
+                std::string output_path = ctx.tts_output_path;
+                if (line.size() > 7) {
+                    output_path = line.substr(7);
+                }
+                ctx.generate_speech(output_path);
+                continue;
+            }
+
             bool is_image = line == "/image" || line.find("/image ") == 0;
             bool is_audio = line == "/audio" || line.find("/audio ") == 0;
             if (is_image || is_audio) {
