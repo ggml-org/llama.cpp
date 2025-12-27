@@ -445,7 +445,8 @@ private:
                     seq.emplace_back("|", false);
                     i++;
                 } else if (c == '*' || c == '+' || c == '?') {
-                    seq.back() = std::make_pair(to_rule(seq.back()) + c, false);
+                    if (!seq.empty())
+                        seq.back() = std::make_pair(to_rule(seq.back()) + c, false);
                     i++;
                 } else if (c == '{') {
                     std::string curly_brackets = std::string(1, c);
