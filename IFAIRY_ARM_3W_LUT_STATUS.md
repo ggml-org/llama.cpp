@@ -177,28 +177,49 @@ Note: 2025-12-22 部分跑分在低电量模式（`pmset -g` 显示 `lowpowermod
 ```bash
 # decode-only（N==1）
 xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_decode.trace \
+  --time-limit 30s --window 20s --no-prompt \
   --env GGML_IFAIRY_LUT=1 \
   --env GGML_IFAIRY_LUT_BK_BLOCKS=0 \
   --env GGML_IFAIRY_LUT_BM=0 \
   --env GGML_IFAIRY_LUT_FULLACC=0 \
   --launch -- ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf \
-    -p 0 -n 256 -b 2048 -ub 512 -t 4 -ngl 0 -dev none -r 1 --no-warmup -o jsonl
+    -p 0 -n 200000 -b 2048 -ub 512 -t 4 -ngl 0 -dev none -r 1 --no-warmup -o jsonl > /dev/null
 
 # prefill-only（N>1）
 xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_prefill.trace \
+  --time-limit 30s --window 20s --no-prompt \
   --env GGML_IFAIRY_LUT=1 \
   --env GGML_IFAIRY_LUT_BK_BLOCKS=0 \
   --env GGML_IFAIRY_LUT_BM=0 \
   --env GGML_IFAIRY_LUT_FULLACC=0 \
   --launch -- ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf \
-    -p 128 -n 0 -b 2048 -ub 512 -t 4 -ngl 0 -dev none -r 1 --no-warmup -o jsonl
+    -p 128 -n 0 -b 2048 -ub 512 -t 4 -ngl 0 -dev none -r 100 --no-warmup -o jsonl > /dev/null
 ```
 
 说明：
 
 - 若 `xctrace` 报错无法写入 `~/Library/Caches/com.apple.dt.InstrumentsCLI`，可临时指定可写 HOME：`CFFIXED_USER_HOME=/tmp/xctracehome HOME=/tmp/xctracehome xcrun xctrace ...`。
+- 导出与摘要（leaf/self time）：
+  - `xcrun xctrace export --input /tmp/xctrace_ifairy_decode.trace --xpath '/trace-toc/run[@number=\"1\"]/data/table[@schema=\"time-profile\"]' | python3 scripts/ifairy_xctrace_leaf.py --top 20`
 
-**热点占比（2025-12-26，本机，4 threads，leaf CPU time share）**
+**热点占比（2025-12-27，本机，4 threads，leaf CPU time share，稳态 window=20s）**
+
+> 说明：
+>
+> - `xctrace record` 在 `--time-limit` 触发时通常会返回非零（常见 `54`）并 SIGKILL 目标进程，但 trace 会保存成功；以 trace 内容为准。
+> - `xctrace export` 的 `time-profile` 表内大量 `backtrace ref=...`，解析时必须 resolve ref，否则会严重低估热点占比；建议用 `scripts/ifairy_xctrace_leaf.py`。
+
+- decode-only（`N==1`，trace: `/tmp/xctrace_ifairy_decode_steady_20251227T021157Z.trace`）：
+  - `ggml_ifairy_lut_qgemm_ex_merged64`：64.66%
+  - `ggml_vec_dot_f16`：13.16%
+  - `ggml_graph_compute_thread`：12.48%
+  - `ggml_ifairy_lut_preprocess_ex_merged64`：1.14%
+- prefill-only（`N>1`，trace: `/tmp/xctrace_ifairy_prefill_steady_20251227T021157Z.trace`）：
+  - `ggml_ifairy_lut_qgemm_ex_merged64`：88.27%
+  - `ggml_graph_compute_thread`：6.23%
+  - `ggml_ifairy_lut_preprocess_ex_merged64`：1.39%
+
+（历史参考）**热点占比（2025-12-26，本机，4 threads，leaf CPU time share）**
 
 - decode-only（`avg_ts≈25.12 tok/s`）：
   - `ggml_ifairy_lut_qgemm_ex_merged64`：~73%

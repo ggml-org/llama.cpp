@@ -97,9 +97,9 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
 - `ggml_ifairy_3w_encode` / `ggml_ifairy_lut_preprocess_ex_merged64` 是否抬头成为 top2/top3
 - `ggml_graph_compute_thread`（leaf）是否异常偏高（提示调度/同步/碎 kernel 问题）
 
-**采样结果（2025-12-26，本机，4 threads，leaf CPU time share）**：
-- decode-only（`-p 0 -n 256`，`avg_ts≈25.12 tok/s`）：`ggml_ifairy_lut_qgemm_ex_merged64` ~73%，`ggml_graph_compute_thread` ~13%，`ggml_vec_dot_f16` ~8%，`ggml_ifairy_3w_encode` ~2%，`ggml_ifairy_lut_preprocess_ex_merged64` ~1%。
-- prefill-only（`-p 128 -n 0`，`avg_ts≈30.21 tok/s`）：`ggml_ifairy_lut_qgemm_ex_merged64` ~82%，`ggml_ifairy_3w_encode` ~6%，`ggml_graph_compute_thread` ~5%，`ggml_graph_compute_secondary_thread` ~3%，`ggml_ifairy_lut_preprocess_ex_merged64` ~2%。
+**采样结果（2025-12-27，本机，4 threads，leaf CPU time share，稳态 window=20s）**：
+- decode-only（`N==1`，trace: `/tmp/xctrace_ifairy_decode_steady_20251227T021157Z.trace`）：`ggml_ifairy_lut_qgemm_ex_merged64` 64.66%，`ggml_vec_dot_f16` 13.16%，`ggml_graph_compute_thread` 12.48%。
+- prefill-only（`N>1`，trace: `/tmp/xctrace_ifairy_prefill_steady_20251227T021157Z.trace`）：`ggml_ifairy_lut_qgemm_ex_merged64` 88.27%，`ggml_graph_compute_thread` 6.23%，`ggml_ifairy_lut_preprocess_ex_merged64` 1.39%。
 
 **下一步**：现阶段主矛盾仍然是 `qgemm_ex_merged64`，优先推进 3.3（P2）的 qgemm 热路径微优化；`preprocess_ex` 暂不是瓶颈，不要把收益“搬家”到 preprocess。
 
