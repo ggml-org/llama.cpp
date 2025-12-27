@@ -10028,6 +10028,14 @@ class ModernBertModel(BertModel):
 
         if name.startswith("model."):
             name = name[6:]
+        
+        if self.cls_out_labels:
+            # For BertForSequenceClassification (direct projection layer)
+            if name == "classifier.weight":
+                name = "classifier.out_proj.weight"
+
+            if name == "classifier.bias":
+                name = "classifier.out_proj.bias"
 
         return super().modify_tensors(data_torch, name, bid)
 
