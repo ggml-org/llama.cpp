@@ -107,7 +107,9 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
 
 ### 3.3 【P2】merged64 qgemm 热路径微优化
 
-**代码位置**：`ggml/src/ggml-ifairy-lut-qgemm.cpp:2037-2095`（NEON 路径）
+**代码位置**：`ggml/src/ggml-ifairy-lut-qgemm.cpp::ggml_ifairy_lut_qgemm_ex_merged64()`（NEON 路径）
+
+**进展（2025-12-27）**：已补齐 merged64 的 `N==1`（decode）快路，并提供 A/B 回退开关 `GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0/1`；性能与 profile 证据见 `IFAIRY_ARM_3W_LUT_STATUS.md:0.1` 与 `IFAIRY_ARM_3W_LUT_STATUS.md:0.2`。
 
 #### 3.3.1 Prefetch 距离调优
 

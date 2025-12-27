@@ -32,6 +32,7 @@
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` fast-path（默认启用；设为 `0` 强制走通用路径，用于回归/调优 A/B）
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` fast-path 里 group-loop 的 4-way unroll（默认 `4`；设为 `2` 用于 A/B，对照“2-way 是否反而更快”）
 - `GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`：merged64 per-block 先 int16 累加再 widen（默认启用；设为 `0` 回退做 A/B）
+- `GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0/1`：merged64 的 `N==1`（decode）快路（默认启用；设为 `0` 回退做 A/B）
 - `GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`：merged64 group-loop unroll（默认 `8`；设为 `4` 回退做 A/B）
 - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：选择（或影响 auto 策略选择）kernel 路径（默认 `auto`）。当前：
   - `sdot`：`compact` 的 `N==1` dotprod 实验内核
@@ -89,6 +90,10 @@
 | 2025-12-26T20:41:18Z | `c5f646bd+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_ACC16=0` | 25.33 | `/tmp/ifairy_bench_merged64_acc16_0_20251226T204039Z.jsonl` |
 | 2025-12-26T20:41:28Z | `c5f646bd+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_UNROLL=4` | 26.94 | `/tmp/ifairy_bench_merged64_unroll4_20251226T204039Z.jsonl` |
 | 2025-12-26T20:41:33Z | `c5f646bd+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_UNROLL=4` | 24.72 | `/tmp/ifairy_bench_merged64_unroll4_20251226T204039Z.jsonl` |
+| 2025-12-27T02:27:15Z | `490e9a37+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 37.39 | `/tmp/ifairy_bench_n1fast_fastpath_on_20251227T022712Z.jsonl` |
+| 2025-12-27T02:27:26Z | `490e9a37+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 27.18 | `/tmp/ifairy_bench_n1fast_fastpath_on_20251227T022712Z.jsonl` |
+| 2025-12-27T02:27:54Z | `490e9a37+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0` | 33.65 | `/tmp/ifairy_bench_n1fast_fastpath_off_20251227T022712Z.jsonl` |
+| 2025-12-27T02:28:05Z | `490e9a37+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0` | 25.48 | `/tmp/ifairy_bench_n1fast_fastpath_off_20251227T022712Z.jsonl` |
 | 2025-12-26T20:41:43Z | `c5f646bd+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_INDEX=0` | 30.98 | `/tmp/ifairy_bench_merged64_prefetch_idx0_20251226T204039Z.jsonl` |
 | 2025-12-26T20:41:48Z | `c5f646bd+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_INDEX=0` | 27.85 | `/tmp/ifairy_bench_merged64_prefetch_idx0_20251226T204039Z.jsonl` |
 | 2025-12-26T20:41:57Z | `c5f646bd+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_DIST=4` | 30.28 | `/tmp/ifairy_bench_merged64_prefetch_dist4_20251226T204039Z.jsonl` |
@@ -214,6 +219,9 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
   - `ggml_vec_dot_f16`：13.16%
   - `ggml_graph_compute_thread`：12.48%
   - `ggml_ifairy_lut_preprocess_ex_merged64`：1.14%
+- decode-only A/B（`N==1`，merged64 N1 fast-path）：
+  - ON（默认；trace: `/tmp/xctrace_ifairy_decode_on_20251227T023339Z.trace`）：`ggml_ifairy_lut_qgemm_ex_merged64` 63.81%（62241ms）
+  - OFF（`GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0`；trace: `/tmp/xctrace_ifairy_decode_off_20251227T023339Z.trace`）：`ggml_ifairy_lut_qgemm_ex_merged64` 64.49%（63223ms）
 - prefill-only（`N>1`，trace: `/tmp/xctrace_ifairy_prefill_steady_20251227T021157Z.trace`）：
   - `ggml_ifairy_lut_qgemm_ex_merged64`：88.27%
   - `ggml_graph_compute_thread`：6.23%
