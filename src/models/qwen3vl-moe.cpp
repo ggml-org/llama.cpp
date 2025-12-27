@@ -8,6 +8,10 @@ llm_build_qwen3vlmoe::llm_build_qwen3vlmoe(const llama_model & model, const llm_
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
     GGML_ASSERT(n_embd_head == hparams.n_rot);
 
+    // Support early exit for hidden state extraction (e.g., layer 18 for Qwen3-Omni Thinker -> Talker)
+    const int32_t n_layer_out = (cparams.n_layer_output > 0 && cparams.n_layer_output < n_layer)
+        ? cparams.n_layer_output : static_cast<int32_t>(n_layer);
+
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -32,9 +36,12 @@ llm_build_qwen3vlmoe::llm_build_qwen3vlmoe(const llama_model & model, const llm_
 
     auto * inp_attn = build_attn_inp_kv();
 
-    ggml_tensor * inp_out_ids = build_inp_out_ids();
+    // Only build inp_out_ids when doing full layers (not early exit)
+    // Early exit returns all hidden states, not filtered by out_ids
+    ggml_tensor * inp_out_ids = (cparams.n_layer_output <= 0 || cparams.n_layer_output >= n_layer)
+        ? build_inp_out_ids() : nullptr;
 
-    for (int il = 0; il < n_layer; ++il) {
+    for (int il = 0; il < n_layer_out; ++il) {
         ggml_tensor * inpSA = inpL;
 
         // norm
@@ -131,19 +138,28 @@ llm_build_qwen3vlmoe::llm_build_qwen3vlmoe(const llama_model & model, const llm_
 
     cur = inpL;
 
-    cur = build_norm(cur,
-            model.output_norm, NULL,
-            LLM_NORM_RMS, -1);
+    // Early exit: return hidden states without final norm/lm_head
+    // Used for Thinker -> Talker pipeline where we extract intermediate layer outputs
+    if (cparams.n_layer_output > 0 && cparams.n_layer_output < n_layer) {
+        cb(cur, "result_hidden", -1);
+        res->t_embd = cur;
+        ggml_build_forward_expand(gf, cur);
+    } else {
+        // Normal path: apply final norm and lm_head
+        cur = build_norm(cur,
+                model.output_norm, NULL,
+                LLM_NORM_RMS, -1);
 
-    cb(cur, "result_norm", -1);
-    res->t_embd = cur;
+        cb(cur, "result_norm", -1);
+        res->t_embd = cur;
 
-    // lm_head
-    cur = build_lora_mm(model.output, cur);
+        // lm_head
+        cur = build_lora_mm(model.output, cur);
 
-    cb(cur, "result_output", -1);
-    res->t_logits = cur;
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
 
-    ggml_build_forward_expand(gf, cur);
+        ggml_build_forward_expand(gf, cur);
+    }
 }
 

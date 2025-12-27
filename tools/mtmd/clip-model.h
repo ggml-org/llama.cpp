@@ -293,11 +293,14 @@ struct clip_model {
     ggml_tensor * mm_patch_merger_w = nullptr;
     ggml_tensor * mm_patch_merger_b = nullptr;
 
-    // ultravox / whisper encoder
+    // ultravox / whisper encoder / qwen3omni audio
     ggml_tensor * conv1d_1_w = nullptr;
     ggml_tensor * conv1d_1_b = nullptr;
     ggml_tensor * conv1d_2_w = nullptr;
     ggml_tensor * conv1d_2_b = nullptr;
+    ggml_tensor * conv1d_3_w = nullptr;  // qwen3omni audio has 3 conv layers
+    ggml_tensor * conv1d_3_b = nullptr;
+    ggml_tensor * conv_out_w = nullptr;  // qwen3omni audio: linear projection after conv2d
     ggml_tensor * mm_norm_pre_w = nullptr;
     ggml_tensor * mm_norm_pre_b = nullptr;
     ggml_tensor * mm_norm_mid_w = nullptr;
