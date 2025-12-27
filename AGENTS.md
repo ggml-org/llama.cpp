@@ -21,7 +21,7 @@ Required after code changes (fast, targeted only):
   - Example (check only): `BASE=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD origin/main); git clang-format --style=file --diff "$BASE" -- '*.c' '*.cc' '*.cpp' '*.cxx' '*.h' '*.hh' '*.hpp'`
   - To apply formatting: drop `--diff`.
 - `clang-tidy` check: run on the C/C++ source files you touched using `build-rel/compile_commands.json` (avoid headers and full-repo tidy runs).
-  - Example (macOS): `BASE=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD origin/main); FILES=$(git diff --name-only "$BASE" -- '*.c' '*.cc' '*.cpp' '*.cxx'); [ -n "$FILES" ] && clang-tidy -p build-rel --extra-arg="-isysroot$(xcrun --show-sdk-path)" --checks="-misc-include-cleaner" $FILES`
+  - Example (macOS, staged-only): `FILES=$(git diff --name-only --cached -- '*.c' '*.cc' '*.cpp' '*.cxx'); [ -n "$FILES" ] && clang-tidy -p build-rel --extra-arg="-isysroot$(xcrun --show-sdk-path)" --checks="-misc-include-cleaner" $FILES`
 
 ## 1) Project Structure & Ownership Map
 
@@ -83,7 +83,7 @@ For complex changes (e.g. adding a new architecture, changing hot-path kernels),
 
 ## 5) iFairy / LUT Special Rules (global summary only)
 
-This repo includes an iFairy 2-bit complex LUT path. When touching it:
+This repo includes an iFairy 3-weight complex LUT path. When touching it:
 
 - Semantic invariant: must match baseline exactly (`w * conj(x)`)
 - Correctness gate: `./build-rel/bin/test-ifairy` + strict mode must pass:
@@ -91,6 +91,7 @@ This repo includes an iFairy 2-bit complex LUT path. When touching it:
 - Performance claims must include reproducible commands + raw `eval tok/s` logs
 - Edge-case coverage lives in `tests/test-ifairy.cpp` (alignment, small/large dims, env semantics); keep docs in sync.
 - If adding/changing iFairy LUT env knobs, update `IFAIRY_ARM_3W_LUT_API_PLAN.md` + `IFAIRY_ARM_3W_LUT_STATUS.md` to avoid drift.
+- For profiling summaries, prefer `xcrun xctrace export ... | python3 scripts/ifairy_xctrace_leaf.py` and record traces/summary in `IFAIRY_ARM_3W_LUT_STATUS.md`.
 
 Detailed iFairy rules live in:
 - `ggml/src/ggml-cpu/AGENTS.md`
