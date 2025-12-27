@@ -111,8 +111,11 @@ struct ifairy_lut_extra {
 - `GGML_IFAIRY_LUT_DEBUG=0/1`：打印少量路由诊断（默认关闭）。
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 热路径中的 prefetch（默认启用；设为 `0` 方便 profile/sweep 对照；覆盖所有 layout 的 `qgemm_ex/accum4_ex`）。
 - `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：预取距离（默认 `2`；设为 `0` 关闭距离预取；结合 profile 调参）。
+- `GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`：预取 indexes（默认启用；用于 merged64 的 A/B）。
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` decode 快路（默认启用；设为 `0` 强制走通用路径做 A/B）。
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` 快路 group-loop 的 unroll（默认 `4`；设为 `2` 用于 A/B）。
+- `GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`：merged64 在每个 block 内先用 `int16` 累加再 widen（默认启用；设为 `0` 回退做 A/B）。
+- `GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`：merged64 group-loop unroll（默认 `8`；设为 `4` 回退做 A/B）。
 - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：选择（或影响 auto 策略选择）kernel 路径（默认 `auto`）。当前策略：
   - `sdot`：`compact` 的 `N==1` dotprod 实验内核；
   - `tbl`：decode-only `tbl64`（仅 `N==1` 时生效；严格模式强制回退到 `legacy`）；
@@ -240,8 +243,9 @@ struct ifairy_lut_extra {
   - 近期 xctrace 结果：`qgemm_ex_merged64` 仍为绝对 top1（decode leaf ~73%，prefill leaf ~82%），因此下一步主线继续压 `qgemm_ex`（详见 `STATUS.md:0.2`）。
 - P2：**merged64 qgemm 热路径微优化（A/B 驱动）**：以 profile 证据为准，优先做低风险的微改动（每项都必须可用 env 或 compile-time 一键回退）：
   - prefetch 距离调优：A/B `GGML_IFAIRY_LUT_PREFETCH_DIST=2/4/8`
-  - 增加 `idx_blk[]` 的 prefetch（与 group table 同步预取）
-  - 实验性：8-group unroll（先验证寄存器压力，避免反向回退）
+  - 增加 `idx_blk[]` 的 prefetch（`GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`）
+  - merged64：int16 block 累加（`GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`）
+  - 8-group unroll（`GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`）
 - P3：若 profile 显示 `preprocess_ex` 上升为新瓶颈：优先优化 `merged64` 的构表路径（避免把收益“搬家”到 preprocess）。
 - P4：若 decode 常见 `N==2`：考虑补一个小 `N` 专用路径（仍需 env gating，避免形状模板爆炸）。
 
@@ -256,14 +260,18 @@ struct ifairy_lut_extra {
 - 优先：把 LUT 的 env 分支从 `qgemm_ex/preprocess_ex` 热路径移除（尤其是 `GGML_IFAIRY_LUT_LAYOUT` / `GGML_IFAIRY_LUT_KERNEL`）：
   - 由 `ggml_graph_compute()` 更新的 `threadpool->ifairy_lut_cfg` 一次性决策 layout/knobs；
   - `ggml-cpu.c` 直接调用 layout 专用实现（legacy/compact/tbl64/merged64），避免 `layout_from_env() -> getenv()` 在多线程内反复触发全局锁。
-- 调优：`GGML_IFAIRY_LUT_N1_FASTPATH` / `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL` / `GGML_IFAIRY_LUT_PREFETCH(_DIST)` 仅用于 perf-safe A/B（最终以 `STATUS.md:0.1` 的 bench 记录为准）。
+- 调优：`GGML_IFAIRY_LUT_N1_FASTPATH` / `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL` / `GGML_IFAIRY_LUT_PREFETCH(_DIST|_INDEX)` / `GGML_IFAIRY_LUT_MERGED64_(ACC16|UNROLL)` 仅用于 perf-safe A/B（最终以 `STATUS.md:0.1` 的 bench 记录为准）。
 - 历史失败案例/原始日志：统一留在 `IFAIRY_ARM_3W_LUT_STATUS.md`（避免在本文重复维护导致过时）。
+- 注：若 `xctrace` 在某些环境（例如沙箱/CI 权限限制）不可用，至少保证 `llama-bench` 的 A/B 记录齐全；profile 由本机执行并把摘要写入 `STATUS.md:0.2`。
 
 实现进度（对照代码）：
 
 - ✅ `N==1` fast-path（非 strict）：`GGML_IFAIRY_LUT_N1_FASTPATH`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ `compact N==1` unroll A/B：`GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ prefetch A/B + 距离：`GGML_IFAIRY_LUT_PREFETCH=0/1`、`GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
+- ✅ merged64：prefetch indexes：`GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
+- ✅ merged64：int16 block 累加：`GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
+- ✅ merged64：8-group unroll：`GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ `sdot`（dotprod）实验内核（仅 `N==1`）：`GGML_IFAIRY_LUT_KERNEL=sdot`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ 去掉 `layout_from_env()->getenv()` 热路径锁竞争：新增/暴露 legacy/compact 专用 entrypoint，并在 `ggml/src/ggml-cpu/ggml-cpu.c` 按 `threadpool->ifairy_lut_cfg` 直接 dispatch；保留 `*_from_env()` 供测试/兼容路径使用（`ggml/src/ggml-ifairy-lut.cpp`, `ggml/src/ggml-ifairy-lut-qgemm.cpp`, `ggml/src/ggml-ifairy-lut-preprocess.cpp`）。
 - ✅ `GGML_IFAIRY_LUT_KERNEL=tbl|merged64`：已实现；当前 `KERNEL=auto` 默认偏向 `merged64`（prefill+decode），`KERNEL=tbl` 仅在 `N==1`（decode）场景生效；严格模式强制回退到 `legacy`。

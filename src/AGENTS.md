@@ -9,13 +9,9 @@ This directory owns: GGUF metadata parsing, tensor mapping, graph building, and 
 
 Avoid searching `build*`, `models`, `tmp` unless you are explicitly debugging those outputs.
 
-## Formatting & Static Analysis (required)
+## Formatting & Static Analysis
 
-- `clang-format` check: use `git clang-format` against the merge-base of your target branch, scoped to C/C++ paths.
-  - Example (check only): `BASE=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD origin/main); git clang-format --style=file --diff "$BASE" -- '*.c' '*.cc' '*.cpp' '*.cxx' '*.h' '*.hh' '*.hpp'`
-  - To apply formatting: drop `--diff`.
-- `clang-tidy` check: run on the C/C++ source files you touched via `build-rel/compile_commands.json`.
-  - Example (macOS): `BASE=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD origin/main); FILES=$(git diff --name-only "$BASE" -- '*.c' '*.cc' '*.cpp' '*.cxx'); [ -n "$FILES" ] && clang-tidy -p build-rel --extra-arg="-isysroot$(xcrun --show-sdk-path)" --checks="-misc-include-cleaner" $FILES`
+Follow repo-root `AGENTS.md` for `git clang-format` / `clang-tidy` (diff-only, and only on the `.c/.cpp` files you touched).
 
 ## Architecture Entry Points (real anchors in this repo)
 

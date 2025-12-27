@@ -22,15 +22,20 @@ Primary integration points:
 ## Runtime toggles (must preserve)
 
 - `GGML_IFAIRY_LUT=0/1`
-- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|auto`
+- `GGML_IFAIRY_LUT_LAYOUT=legacy|compact|tbl64|merged64|auto`
+- `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`
 - `GGML_IFAIRY_LUT_BK_BLOCKS=<int>`
 - `GGML_IFAIRY_LUT_BM=<int>`
 - `GGML_IFAIRY_LUT_FULLACC=0/1`
 - `GGML_IFAIRY_LUT_VALIDATE_STRICT=0/1`
 - `GGML_IFAIRY_LUT_DEBUG=0/1`
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`
+- `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`
+- `GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`
+- `GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`
+- `GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`
 - `GGML_IFAIRY_LUT_DECODE_NTH=<int>`
 - `GGML_IFAIRY_LUT_DECODE_THRESHOLD=<int>`
 
@@ -38,11 +43,7 @@ If adding a new knob, document it in `IFAIRY_ARM_3W_LUT_STATUS.md` and keep a sa
 
 ## Formatting & Static Analysis (required)
 
-- `clang-format` check: use `git clang-format` against the merge-base of your target branch, scoped to C/C++ paths.
-  - Example (check only): `BASE=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD origin/main); git clang-format --style=file --diff "$BASE" -- '*.c' '*.cc' '*.cpp' '*.cxx' '*.h' '*.hh' '*.hpp'`
-  - To apply formatting: drop `--diff`.
-- `clang-tidy` check: run on the C/C++ source files you touched via `build-rel/compile_commands.json`.
-  - Example (macOS): `BASE=$(git merge-base HEAD origin/master 2>/dev/null || git merge-base HEAD origin/main); FILES=$(git diff --name-only "$BASE" -- '*.c' '*.cc' '*.cpp' '*.cxx'); [ -n "$FILES" ] && clang-tidy -p build-rel --extra-arg="-isysroot$(xcrun --show-sdk-path)" --checks="-misc-include-cleaner" $FILES`
+Follow repo-root `AGENTS.md` for `git clang-format` / `clang-tidy` (diff-only, and only on the `.c/.cpp` files you touched).
 
 ## Validation gates (required for any LUT change)
 

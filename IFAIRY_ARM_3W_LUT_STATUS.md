@@ -28,8 +28,11 @@
 - `GGML_IFAIRY_LUT_DEBUG=0/1`：路由/形状诊断（默认关闭；跑分时不要开）
 - `GGML_IFAIRY_LUT_PREFETCH=0/1`：控制 LUT 路径内的 prefetch（默认启用；设为 `0` 用于 profile/sweep 对照；覆盖所有 layout 的 `qgemm_ex/accum4_ex`）
 - `GGML_IFAIRY_LUT_PREFETCH_DIST=<int>`：prefetch 距离（默认 `2`；设为 `0` 关闭距离预取；结合 profile 调参）
+- `GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`：prefetch indexes（默认启用；用于 merged64 的 A/B）
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` fast-path（默认启用；设为 `0` 强制走通用路径，用于回归/调优 A/B）
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` fast-path 里 group-loop 的 4-way unroll（默认 `4`；设为 `2` 用于 A/B，对照“2-way 是否反而更快”）
+- `GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`：merged64 per-block 先 int16 累加再 widen（默认启用；设为 `0` 回退做 A/B）
+- `GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`：merged64 group-loop unroll（默认 `8`；设为 `4` 回退做 A/B）
 - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：选择（或影响 auto 策略选择）kernel 路径（默认 `auto`）。当前：
   - `sdot`：`compact` 的 `N==1` dotprod 实验内核
   - `tbl`：decode-first `tbl64`
@@ -74,6 +77,26 @@
 
 注：本阶段新增 `--n-gen 32` 记录，表中以 `tg32` 标注。
 
+**最新记录（精选）**
+
+| time (UTC) | git | machine | threads | test | env | avg tok/s | log |
+|---|---|---|---:|---|---|---:|---|
+| 2025-12-26T18:49:01Z | `97ade285` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 29.72 | `/tmp/ifairy_bench_status_0_1_0_liweitao_20251226T184901Z.jsonl` |
+| 2025-12-26T18:49:16Z | `97ade285` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 25.03 | `/tmp/ifairy_bench_status_0_1_0_liweitao_20251226T184901Z.jsonl` |
+| 2025-12-26T20:40:39Z | `c5f646bd+dirty` | Apple M4 | 4 | pp128 (r3) | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 40.53 | `/tmp/ifairy_bench_merged64_default_20251226T204039Z.jsonl` |
+| 2025-12-26T20:40:49Z | `c5f646bd+dirty` | Apple M4 | 4 | tg256 (r3) | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 30.88 | `/tmp/ifairy_bench_merged64_default_20251226T204039Z.jsonl` |
+| 2025-12-26T20:41:14Z | `c5f646bd+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_ACC16=0` | 27.82 | `/tmp/ifairy_bench_merged64_acc16_0_20251226T204039Z.jsonl` |
+| 2025-12-26T20:41:18Z | `c5f646bd+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_ACC16=0` | 25.33 | `/tmp/ifairy_bench_merged64_acc16_0_20251226T204039Z.jsonl` |
+| 2025-12-26T20:41:28Z | `c5f646bd+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_UNROLL=4` | 26.94 | `/tmp/ifairy_bench_merged64_unroll4_20251226T204039Z.jsonl` |
+| 2025-12-26T20:41:33Z | `c5f646bd+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_UNROLL=4` | 24.72 | `/tmp/ifairy_bench_merged64_unroll4_20251226T204039Z.jsonl` |
+| 2025-12-26T20:41:43Z | `c5f646bd+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_INDEX=0` | 30.98 | `/tmp/ifairy_bench_merged64_prefetch_idx0_20251226T204039Z.jsonl` |
+| 2025-12-26T20:41:48Z | `c5f646bd+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_INDEX=0` | 27.85 | `/tmp/ifairy_bench_merged64_prefetch_idx0_20251226T204039Z.jsonl` |
+| 2025-12-26T20:41:57Z | `c5f646bd+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_DIST=4` | 30.28 | `/tmp/ifairy_bench_merged64_prefetch_dist4_20251226T204039Z.jsonl` |
+| 2025-12-26T20:42:01Z | `c5f646bd+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_DIST=4` | 27.24 | `/tmp/ifairy_bench_merged64_prefetch_dist4_20251226T204039Z.jsonl` |
+
+<details>
+<summary>展开：历史记录（归档）</summary>
+
 | time (UTC) | git | machine | threads | test | env | avg tok/s | log |
 |---|---|---|---:|---|---|---:|---|
 | 2025-12-22T16:05:53Z | `2337850b` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 1.41 | `/tmp/ifairy_bench_20251223T000553.jsonl` |
@@ -116,8 +139,7 @@
 | 2025-12-26T04:03:20Z | `2617cc59` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 17.75 | `/tmp/ifairy_bench_opt2_auto_2617cc59_20251226T040320Z.txt` |
 | 2025-12-26T17:49:19Z | `95c5bf1f+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 29.47 | `/tmp/ifairy_bench_20251226T174919Z_auto_default.jsonl` |
 | 2025-12-26T17:49:23Z | `95c5bf1f+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 24.36 | `/tmp/ifairy_bench_20251226T174919Z_auto_default.jsonl` |
-| 2025-12-26T18:49:01Z | `97ade285` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 29.72 | `/tmp/ifairy_bench_status_0_1_0_liweitao_20251226T184901Z.jsonl` |
-| 2025-12-26T18:49:16Z | `97ade285` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 25.03 | `/tmp/ifairy_bench_status_0_1_0_liweitao_20251226T184901Z.jsonl` |
+</details>
 
 Note: 2025-12-22 部分跑分在低电量模式（`pmset -g` 显示 `lowpowermode 1`）下进行，属于环境噪声；参考日志：`/tmp/ifairy_fe740e0a_20251223T005155.jsonl`、`/tmp/ifairy_fe740e0a_device_none_20251223T005346.jsonl`；power-on 复跑日志：`/tmp/ifairy_bench_power_20251223T122617.jsonl`、`/tmp/ifairy_bench_power_run2_20251223T124504.jsonl`、`/tmp/ifairy_bench_power_run3_20251223T124605.jsonl`。
 
@@ -171,6 +193,10 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
   --launch -- ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf \
     -p 128 -n 0 -b 2048 -ub 512 -t 4 -ngl 0 -dev none -r 1 --no-warmup -o jsonl
 ```
+
+说明：
+
+- 若 `xctrace` 报错无法写入 `~/Library/Caches/com.apple.dt.InstrumentsCLI`，可临时指定可写 HOME：`CFFIXED_USER_HOME=/tmp/xctracehome HOME=/tmp/xctracehome xcrun xctrace ...`。
 
 **热点占比（2025-12-26，本机，4 threads，leaf CPU time share）**
 

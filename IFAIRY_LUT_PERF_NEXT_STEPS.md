@@ -4,11 +4,11 @@
 
 ## 1. 当前性能现状（基于最新 bench 记录）
 
-### 1.1 最新 tok/s 记录（95c5bf1f+dirty，Apple M4，4 threads）
+### 1.1 最新 tok/s 记录（c5f646bd+dirty，Apple M4，4 threads）
 
 | Layout/KERNEL | pp128 (tok/s) | tg256 (tok/s) | 备注 |
 |--------------|---------------|---------------|------|
-| `auto`（当前默认偏向 `merged64`） | 29.47 | 24.36 | `/tmp/ifairy_bench_20251226T174919Z_auto_default.jsonl` |
+| `auto`（当前默认偏向 `merged64`） | 40.53 | 30.88 | `/tmp/ifairy_bench_merged64_default_20251226T204039Z.jsonl` |
 
 ### 1.2 关键观察
 
@@ -115,7 +115,7 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
 - 默认 `GGML_IFAIRY_LUT_PREFETCH_DIST=2`（2 groups = 512B ahead）
 - Apple M4 L1 cache line = 64B，prefetch 队列较深
 
-**建议**：A/B 测试 `PREFETCH_DIST=4` 或 `PREFETCH_DIST=8`
+**建议**：A/B 测试 `PREFETCH_DIST=4/8`（以 bench 为准；prefetch 很容易“越调越慢”）
 
 ```bash
 # A/B 短测
@@ -126,35 +126,36 @@ GGML_IFAIRY_LUT_PREFETCH_DIST=8 ./build-rel/bin/llama-bench ...  # candidate
 
 #### 3.3.2 增加 indexes 数组的 prefetch
 
-**现状**：只对 group table 做 prefetch，未对 `idx_blk[]` 做 prefetch
+**现状**：只对 group table 做 prefetch，`idx_blk[]` 的读取更像“随机 1B load”，会更容易出现 L1 miss（尤其当每 row 的 index 访问跨 cacheline 时）。
 
-**建议改动**（`ggml-ifairy-lut-qgemm.cpp` 约 2055 行）：
+**已实现**：新增可控开关 `GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`（默认启用），与 group table 的 prefetch 同步预取 `idx_blk + gi_pf`。
 
-```c
-// 在 prefetch group table 的同时，也 prefetch indexes
-#if defined(__aarch64__) && defined(__ARM_NEON)
-if (do_prefetch && (gi + pf_dist + 4) < groups_per_block) {
-    __builtin_prefetch(grp + (gi + pf_dist) * grp_stride, 0, 3);
-    __builtin_prefetch(idx_blk + gi + pf_dist + 4, 0, 3);  // NEW: prefetch indexes
-}
-#endif
-```
+bench A/B（Apple M4 / 4 threads / `pp128,tg256`）：
 
-#### 3.3.3 Unroll 8 groups（实验性）
+- `GGML_IFAIRY_LUT_PREFETCH_INDEX=0` 会明显回退（见 `IFAIRY_ARM_3W_LUT_STATUS.md:0.1` 的 raw log 记录）。
 
-**现状**：merged64 NEON 路径每次处理 4 groups
+#### 3.3.3 merged64：int16 累加（减少 widen 与依赖链）
 
-**建议**：在寄存器压力允许的情况下尝试 8-group unroll
+**目标**：把 `{ac,ad,bc,bd}` 的 per-block sum 从 “每次 load 都 widen 到 int32” 改为 “先用 int16 累加，再在 block 末尾一次 widen”。
 
-```c
-// 实验：8-group unroll（需要验证寄存器压力）
-for (; gi + 8 <= groups_per_block; gi += 8) {
-    // 4 个 isum + 4 个 isum2 = 8 个累加器
-    // ...
-}
-```
+**已实现**：`GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`（默认启用；设为 `0` 可回退到 legacy int32 accumulator 路径做 A/B）。
 
-**风险**：中等。需要 A/B 验证，可能因寄存器溢出反而变慢。
+安全范围（单 block）：
+
+- `groups_per_block=86`
+- `max_abs(sum)=86*127=10922`，在 `int16` 范围内
+
+bench A/B（Apple M4 / 4 threads / `pp128,tg256`）：
+
+- `GGML_IFAIRY_LUT_MERGED64_ACC16=0` 回退（见 `IFAIRY_ARM_3W_LUT_STATUS.md:0.1` 的 raw log 记录）。
+
+#### 3.3.4 Unroll 8 groups（merged64，默认启用，可回退）
+
+**已实现**：`GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`（默认 `8`；设为 `4` 做回归/rollback A/B）。
+
+bench A/B（Apple M4 / 4 threads / `pp128,tg256`）：
+
+- `UNROLL=8` 在当前模型上收益明显（见 `IFAIRY_ARM_3W_LUT_STATUS.md:0.1` 的 raw log 记录）。
 
 ---
 
