@@ -3,27 +3,165 @@
  * by Humans for All
  */
 
-#fullbody {
-    height: 98vh;
+:root {
+    --background-color: #f4f4f9;
+    --background-color-contrast-vlight: #e8e8e8;
+    --system-color: lightblue;
+    --user-color: #D0F0FF;
+    --assistant-color: #F7FAFC;
+    --tool-call-color: antiquewhite;
+    --tool-resp-color: #B0F0E0;
 }
 
-.heading {
-    background-color: lightgray;
+body {
+    background-color: var(--background-color);
+    font-family: 'Inter', 'Segoe UI', Helvetica, Arial, sans-serif;
+}
+#fullbody {
+    height: 97vh;
+}
+
+#heading {
+    background: linear-gradient(135deg, var(--background-color) 0%, var(--system-color) 100%);
+    margin: 0;
+}
+#sessions-div {
+    display: flex;
+    gap: 0.4vmin;
+    overflow: auto;
+    scrollbar-width: none;
+}
+#icons-div {
+    display: flex;
+    gap: 0.4vmin;
 }
 
 .session-selected {
-    background-color: lightblue;
+    background-color: var(--system-color);
+}
+
+#sessionsprompts-div .role-system {
+    border-radius: 1vmin;
+}
+
+#system-in {
+    padding-inline: 0.5rem;
 }
 
 .role-system {
-    background-color: lightblue;
+    background: linear-gradient(135deg, var(--system-color) 0%, var(--background-color) 100%);
+    border-radius: 0.1vmin;
 }
 .role-user {
-    background-color: lightgray;
+    background: linear-gradient(135deg, var(--user-color) 0%, var(--background-color) 100%);
+}
+.role-assistant {
+    text-align: initial;
+    background: linear-gradient(135deg, var(--assistant-color) 0%, var(--background-color) 100%)
+}
+.role-tool {
+    background: linear-gradient(135deg, var(--background-color) 0%, var(--tool-resp-color) 100%);
+}
+.role-TOOL-TEMP {
+    background: linear-gradient(135deg, var(--background-color) 0%, var(--tool-resp-color) 100%);
 }
 .role-trim {
-    background-color: lightpink;
+    background: linear-gradient(135deg, lightpink 0%, transparent 100%);
 }
+
+#DefaultUsage {
+    margin: 0.0vmin;
+}
+#DefaultRestore {
+    margin: 0.0vmin;
+}
+#DefaultInfo {
+    margin: 0.0vmin;
+}
+#DefaultTitle {
+    font-size: xx-small;
+    text-align: end;
+}
+
+.chat-message {
+    display: flex;
+    border-radius: 1vmin;
+    margin-bottom: 2vh;
+    border: none;
+    padding: 0.4vmin;
+    padding-left: 0;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.08);
+}
+.chat-message:hover {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
+}
+.chat-message-role {
+    border: none;
+    writing-mode: vertical-lr;
+    padding-inline: 1vmin;
+    border-right: 1px solid rgba(0, 0, 0, 0.2);
+}
+.chat-message-reasoning {
+    border-block-style: dashed;
+    overflow-wrap: break-word;
+    word-break: break-word;
+    hyphens: auto;
+    border-width: thin;
+}
+.chat-message-toolcall {
+    border-style: solid;
+    border-color: grey;
+    border-width: thin;
+    padding: 0.5vmin;
+}
+.chat-message-toolcall-arg {
+    border-style: solid;
+    border-color: grey;
+    border-width: thin;
+    padding: inherit;
+}
+.chat-message-content {
+    overflow-wrap: break-word;
+    word-break: break-word;
+    hyphens: auto;
+}
+.chat-message-content thead th {
+    text-align: left;
+    background-color: lightgray;
+    /* padding-inline: 1vmin; */
+    border-radius: 0.4vmin;
+}
+.chat-message-content-live {
+    overflow-wrap: break-word;
+    word-break: break-word;
+    hyphens: auto;
+}
+.chat-message-img {
+    max-width: fit-content;
+    max-height: 20vh;
+}
+#popover-chatmsg {
+    position:fixed;
+    /*
+    position-area: span-top span-left;
+    inset-block-start: anchor(start);
+    inset-inline-start: anchor(center);
+    */
+    background-color: transparent;
+    padding: 0;
+    margin: 0;
+    border-width: 0;
+}
+#popover-chatmsg button {
+    padding: 0;
+    border-radius: 0.5vmin;
+    border-color: lightgray;
+    min-width: fit-content;
+    max-width: fit-content;
+    min-height: fit-content;
+    max-height: fit-content;
+}
+
 
 .gridx2 {
     display: grid;
@@ -36,18 +174,59 @@
 .flex-grow {
     flex-grow: 1;
 }
+.flex-nogrow {
+    flex-grow: 0;
+}
 .float-right {
     float: right;
 }
 
 #chat-div {
-    overflow: scroll;
+    overflow: auto;
     flex-grow: 1;
     flex-shrink: 1;
     min-height: 40vh;
 }
+#tool-div {
+    border-width: thin;
+    border-color: yellow;
+    border-style: ridge;
+    background-color: var(--tool-call-color);
+}
+#user-in-div {
+    border-width: thin;
+    border-color: black;
+    border-style: solid;
+}
+#user-in-imgs img {
+    max-width: 12vmin;
+    max-height: 12vmin;
+}
+#poimage-img {
+    max-width: 60vmin;
+    max-height: 60vmin;
+}
+#user-in {
+    background-color: #ffffff;
+    padding: 1.6vmin 2vmin;
+    border-radius: 2.5vmin;
+    field-sizing: content;
+    max-height: 16vh;
+}
+#user-in[data-role="TOOL-TEMP"] {
+    background: linear-gradient(135deg, var(--background-color) 0%, var(--tool-resp-color) 100%);
+}
+#user-in-div button {
+    padding-inline: 1vmin;
+    border-radius: 2vmin;
+    min-height: 1vmin;
+}
+
 button {
-    min-width: 8vw;
+    padding-inline: 1vmin;
+    border-radius: 1vmin;
+    min-height: 2vmin;
+    border-color: #80A0E0;
 }
 
 .sameline {
@@ -66,14 +245,68 @@ button {
     padding-inline-start: 2vw;
 }
 
-* {
-    margin: 0.6vmin;
+
+.DivObjPropsInfoL0 {
+    margin: 0%;
+}
+[class^=SectionObjPropsInfoL] {
+    margin-left: 2vmin;
+}
+.ObjPropsEdit * {
+    border-radius: 0.2rem;
+    padding-inline: 0.5rem;
+}
+.ObjPropsEdit button, .ObjPropsEdit select, .ObjPropsEdit input {
+    border-radius: 0.2rem;
+    padding-inline: 0.5rem;
+    min-height: 2vmin;
+    border-width: thin;
 }
 
+
+.visibility-visible {
+    visibility: visible;
+    display: block;
+}
+.visibility-hidden {
+    visibility: hidden;
+    display: none;
+}
+
+
+* {
+    margin: 0.6vmin;
+    scrollbar-color: var(--background-color-contrast-vlight) var(--background-color);
+    scrollbar-width: thin;
+    border-radius: 0.5rem;
+}
+
+
 @media print {
+
+    :root {
+        --background-color: white;
+    }
 
     #fullbody {
         height: auto;
     }
+
+    .chat-message {
+        display:inherit;
+        padding: 0.4vmin;
+        border-radius: 1vmin;
+        margin-bottom: 2vh;
+        border: none;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+    }
+    .chat-message-role {
+        writing-mode:inherit;
+        max-width: fit-content;
+        padding-inline: 1vmin;
+        border: none;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.2);
+    }
+
 
 }
