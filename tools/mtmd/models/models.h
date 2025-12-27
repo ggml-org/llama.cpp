@@ -66,3 +66,8 @@ struct clip_graph_glm4v : clip_graph {
     clip_graph_glm4v(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
 };
+
+struct clip_graph_qwen3omni_audio : clip_graph {
+    clip_graph_qwen3omni_audio(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
