@@ -1333,6 +1333,46 @@ int ggml_metal_op_soft_max(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
+int ggml_metal_op_cross_entropy_loss(ggml_metal_op_t ctx, int idx){
+    ggml_tensor * op = ctx->node(idx);
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+    const ggml_tensor * src0 = op->src[0]; // NOTE: logits
+    const ggml_tensor * src1 = op->src[1]; // NOTE: labels
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    GGML_ASSERT(ggml_is_contiguous(src1));
+
+    const int32_t ne00 = src0->ne[0];
+    const int32_t nrows = ggml_nrows(src1);
+    ggml_metal_kargs_cross_entropy_loss args = {
+        /*int32_t*/  ne00,
+        /*int32_t*/  nrows,
+        /*int32_t*/  nrows,
+    };
+    int nth = 32;
+    auto pipeline = ggml_metal_library_get_pipeline_cross_entropy(lib, op);
+
+    const size_t smem = pipeline.smem;
+
+    ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+    if (op->src[1]) {
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+    } else {
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[0]), 2);
+    }
+
+    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op), 4);
+
+    ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, ne00, nrows, nrows, nth, 1, 1);
+    return 1;
+}
+
 int ggml_metal_op_ssm_conv(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
