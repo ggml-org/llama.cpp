@@ -108,6 +108,21 @@ static inline bool ggml_ifairy_lut_merged64_n1_fastpath_enabled(void) {
     return v != 0;
 }
 
+// merged64: accumulate int32 sums into float using float32x2 lanes (reduce vcombine/vcvtq overhead).
+// Enabled by default; set GGML_IFAIRY_LUT_MERGED64_ACC_F32X2=0 to disable for A/B/rollback.
+// Note: env is read once per process (cached) to avoid per-op getenv overhead.
+static inline bool ggml_ifairy_lut_merged64_acc_f32x2_enabled(void) {
+    static std::atomic<int> cached(-1);  // -1=unset, 0=disabled, 1=enabled
+    int                     v = cached.load(std::memory_order_relaxed);
+    if (v >= 0) {
+        return v != 0;
+    }
+    const char * env = getenv("GGML_IFAIRY_LUT_MERGED64_ACC_F32X2");
+    v                = (env && strcmp(env, "0") == 0) ? 0 : 1;
+    cached.store(v, std::memory_order_relaxed);
+    return v != 0;
+}
+
 // merged64: group-loop unroll factor (4 or 8). Defaults to 8; set GGML_IFAIRY_LUT_MERGED64_UNROLL=4 for A/B/rollback.
 // Note: env is read once per process (cached) to avoid per-op getenv overhead.
 static inline int ggml_ifairy_lut_merged64_unroll(void) {
@@ -2106,6 +2121,7 @@ void ggml_ifairy_lut_qgemm_ex_merged64(int             m,
     const size_t prefetch_groups = prefetch ? (size_t) prefetch_dist : 0;
     const bool   acc16           = ggml_ifairy_lut_merged64_acc16_enabled();
     const bool   n1_fastpath     = ggml_ifairy_lut_merged64_n1_fastpath_enabled();
+    const bool   acc_f32x2       = ggml_ifairy_lut_merged64_acc_f32x2_enabled();
     const int    unroll          = ggml_ifairy_lut_merged64_unroll();
 
     auto load_s16x4 = [](const int8_t * ptr) -> int16x4_t {
@@ -2125,8 +2141,9 @@ void ggml_ifairy_lut_qgemm_ex_merged64(int             m,
             const float coeff_w_real = GGML_FP16_TO_FP32(w_row[0].d_real);
             const float coeff_w_imag = GGML_FP16_TO_FP32(w_row[0].d_imag);
 
-            float32x2_t acc01 = vdup_n_f32(0.0f);  // {ac, ad}
-            float32x2_t acc23 = vdup_n_f32(0.0f);  // {bc, bd}
+            float32x2_t acc01 = vdup_n_f32(0.0f);   // {ac, ad}
+            float32x2_t acc23 = vdup_n_f32(0.0f);   // {bc, bd}
+            float32x4_t accv  = vdupq_n_f32(0.0f);  // {ac, ad, bc, bd}
 
             const uint8_t * idx_blk = idx_row;
             const int8_t *  grp_blk = lut_col;
@@ -2287,21 +2304,28 @@ void ggml_ifairy_lut_qgemm_ex_merged64(int             m,
                     }
                 }
 
-                const float32x2_t srsi  = vld1_f32(scl_blk);
-                const float32x2_t sum01 = vcvt_f32_s32(vget_low_s32(isum));
-                const float32x2_t sum23 = vcvt_f32_s32(vget_high_s32(isum));
-                acc01                   = vmla_f32(acc01, sum01, srsi);
-                acc23                   = vmla_f32(acc23, sum23, srsi);
+                if (acc_f32x2) {
+                    const float32x2_t srsi  = vld1_f32(scl_blk);
+                    const float32x2_t sum01 = vcvt_f32_s32(vget_low_s32(isum));
+                    const float32x2_t sum23 = vcvt_f32_s32(vget_high_s32(isum));
+                    acc01                   = vmla_f32(acc01, sum01, srsi);
+                    acc23                   = vmla_f32(acc23, sum23, srsi);
+                } else {
+                    const float32x2_t srsi  = vld1_f32(scl_blk);
+                    const float32x4_t scv   = vcombine_f32(srsi, srsi);  // {sr, si, sr, si}
+                    const float32x4_t sumsf = vcvtq_f32_s32(isum);
+                    accv                    = vmlaq_f32(accv, sumsf, scv);
+                }
 
                 idx_blk += groups_per_block;
                 grp_blk += (size_t) groups_per_block * k_ifairy_lut_merged64_group_bytes;
                 scl_blk += 2;
             }
 
-            const float acc_ac_xr = vget_lane_f32(acc01, 0);
-            const float acc_ad_xi = vget_lane_f32(acc01, 1);
-            const float acc_bc_xr = vget_lane_f32(acc23, 0);
-            const float acc_bd_xi = vget_lane_f32(acc23, 1);
+            const float acc_ac_xr = acc_f32x2 ? vget_lane_f32(acc01, 0) : vgetq_lane_f32(accv, 0);
+            const float acc_ad_xi = acc_f32x2 ? vget_lane_f32(acc01, 1) : vgetq_lane_f32(accv, 1);
+            const float acc_bc_xr = acc_f32x2 ? vget_lane_f32(acc23, 0) : vgetq_lane_f32(accv, 2);
+            const float acc_bd_xi = acc_f32x2 ? vget_lane_f32(acc23, 1) : vgetq_lane_f32(accv, 3);
 
             const float out_r = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
             const float out_i = coeff_w_imag * acc_bc_xr - coeff_w_real * acc_ad_xi;
@@ -2337,7 +2361,9 @@ void ggml_ifairy_lut_qgemm_ex_merged64(int             m,
             const float coeff_w_real = GGML_FP16_TO_FP32(w_row[0].d_real);
             const float coeff_w_imag = GGML_FP16_TO_FP32(w_row[0].d_imag);
 
-            float32x4_t accv = vdupq_n_f32(0.0f);  // {ac, ad, bc, bd}
+            float32x2_t acc01 = vdup_n_f32(0.0f);   // {ac, ad}
+            float32x2_t acc23 = vdup_n_f32(0.0f);   // {bc, bd}
+            float32x4_t accv  = vdupq_n_f32(0.0f);  // {ac, ad, bc, bd}
 
             for (int64_t blk = 0; blk < blocks; ++blk) {
                 const uint8_t * idx_blk = idx_row + (size_t) blk * (size_t) groups_per_block;
@@ -2498,16 +2524,24 @@ void ggml_ifairy_lut_qgemm_ex_merged64(int             m,
                     }
                 }
 
-                const float32x2_t srsi  = vld1_f32(scales + (size_t) blk * 2u);
-                const float32x4_t scv   = vcombine_f32(srsi, srsi);  // {sr, si, sr, si}
-                const float32x4_t sumsf = vcvtq_f32_s32(isum);
-                accv                    = vmlaq_f32(accv, sumsf, scv);
+                if (acc_f32x2) {
+                    const float32x2_t srsi  = vld1_f32(scales + (size_t) blk * 2u);
+                    const float32x2_t sum01 = vcvt_f32_s32(vget_low_s32(isum));
+                    const float32x2_t sum23 = vcvt_f32_s32(vget_high_s32(isum));
+                    acc01                   = vmla_f32(acc01, sum01, srsi);
+                    acc23                   = vmla_f32(acc23, sum23, srsi);
+                } else {
+                    const float32x2_t srsi  = vld1_f32(scales + (size_t) blk * 2u);
+                    const float32x4_t scv   = vcombine_f32(srsi, srsi);  // {sr, si, sr, si}
+                    const float32x4_t sumsf = vcvtq_f32_s32(isum);
+                    accv                    = vmlaq_f32(accv, sumsf, scv);
+                }
             }
 
-            const float acc_ac_xr = vgetq_lane_f32(accv, 0);
-            const float acc_ad_xi = vgetq_lane_f32(accv, 1);
-            const float acc_bc_xr = vgetq_lane_f32(accv, 2);
-            const float acc_bd_xi = vgetq_lane_f32(accv, 3);
+            const float acc_ac_xr = acc_f32x2 ? vget_lane_f32(acc01, 0) : vgetq_lane_f32(accv, 0);
+            const float acc_ad_xi = acc_f32x2 ? vget_lane_f32(acc01, 1) : vgetq_lane_f32(accv, 1);
+            const float acc_bc_xr = acc_f32x2 ? vget_lane_f32(acc23, 0) : vgetq_lane_f32(accv, 2);
+            const float acc_bd_xi = acc_f32x2 ? vget_lane_f32(acc23, 1) : vgetq_lane_f32(accv, 3);
 
             const float out_r = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
             const float out_i = coeff_w_imag * acc_bc_xr - coeff_w_real * acc_ad_xi;

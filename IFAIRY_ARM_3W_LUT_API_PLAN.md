@@ -115,6 +115,7 @@ struct ifairy_lut_extra {
 - `GGML_IFAIRY_LUT_N1_FASTPATH=0/1`：控制 `compact` 的 `N==1` decode 快路（默认启用；设为 `0` 强制走通用路径做 A/B）。
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` 快路 group-loop 的 unroll（默认 `4`；设为 `2` 用于 A/B）。
 - `GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`：merged64 在每个 block 内先用 `int16` 累加再 widen（默认启用；设为 `0` 回退做 A/B）。
+- `GGML_IFAIRY_LUT_MERGED64_ACC_F32X2=0/1`：merged64 将 per-block `int32` 累加转换为 float 时用 `float32x2`（默认启用；设为 `0` 回退做 A/B）。
 - `GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0/1`：merged64 的 `N==1`（decode）快路（默认启用；设为 `0` 回退做 A/B）。
 - `GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`：merged64 group-loop unroll（默认 `8`；设为 `4` 回退做 A/B）。
 - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：选择（或影响 auto 策略选择）kernel 路径（默认 `auto`）。当前策略：
@@ -247,6 +248,7 @@ struct ifairy_lut_extra {
   - 增加 `idx_blk[]` 的 prefetch（`GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`）
   - merged64：`N==1`（decode）快路（`GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0/1`）
   - merged64：`N==1` 快路内减少向量拼接/转换（用 `float32x2` 累加，避免 `vcombine + vcvtq`）
+  - merged64：通用路径 + `N==1` 快路统一使用 `float32x2` 累加（`GGML_IFAIRY_LUT_MERGED64_ACC_F32X2=0/1`）
   - merged64：int16 block 累加（`GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`）
   - 8-group unroll（`GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`）
 - P3：若 profile 显示 `preprocess_ex` 上升为新瓶颈：优先优化 `merged64` 的构表路径（避免把收益“搬家”到 preprocess）。
@@ -275,6 +277,7 @@ struct ifairy_lut_extra {
 - ✅ merged64：prefetch indexes：`GGML_IFAIRY_LUT_PREFETCH_INDEX=0/1`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ merged64：`N==1`（decode）快路：`GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0/1`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ merged64：`N==1` 快路减少向量拼接/转换（`float32x2` 累加）：`ggml/src/ggml-ifairy-lut-qgemm.cpp`。
+- ✅ merged64：累加 `float32x2` A/B：`GGML_IFAIRY_LUT_MERGED64_ACC_F32X2=0/1`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ merged64：int16 block 累加：`GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ merged64：8-group unroll：`GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
 - ✅ `sdot`（dotprod）实验内核（仅 `N==1`）：`GGML_IFAIRY_LUT_KERNEL=sdot`（`ggml/src/ggml-ifairy-lut-qgemm.cpp`）。
