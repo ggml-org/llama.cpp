@@ -5,9 +5,10 @@
 #include "ggml.h"
 
 #include <cmath>
-#include <cstdio>
 #include <string>
 #include <vector>
+#include <filesystem>
+#include <fstream>
 
 /**
  * This the arbitrary data which will be passed to each callback.
@@ -160,6 +161,49 @@ static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
     return true;
 }
 
+static void save_logits(llama_context * ctx, const llama_model * model, const common_params & params) {
+    const llama_vocab * vocab   = llama_model_get_vocab(model);
+    const bool          add_bos = llama_vocab_get_add_bos(vocab);
+
+    // TODO: print tokens and and prompt.
+    std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, add_bos);
+
+    const float * logits   = llama_get_logits_ith(ctx, tokens.size() - 1);
+    const int     n_logits = llama_vocab_n_tokens(vocab);
+
+    std::filesystem::create_directory(params.logits_output_dir);
+    std::filesystem::path model_path{params.model.path};
+    std::string model_name{model_path.stem().string()};
+    auto base_path = std::filesystem::path{params.logits_output_dir} / ("llamacpp-" + model_name);
+
+    // Save logits to binary file.
+    {
+        std::filesystem::path filepath{base_path.string() + ".bin"};
+        std::ofstream file{filepath, std::ios::binary};
+        if (!file) {
+            LOG_ERR("%s: error: failed to open binary output file\n", __func__);
+            return;
+        }
+        file.write(reinterpret_cast<const char*>(logits), n_logits * sizeof(float));
+        LOG("Logits saved to %s\n", filepath.c_str());
+    }
+
+    // Save logits to text file.
+    {
+        std::filesystem::path filepath{base_path.string() + ".txt"};
+        std::ofstream file{filepath};
+        if (!file) {
+            LOG_ERR("%s: error: failed to open text output file\n", __func__);
+            return;
+        }
+        for (int i = 0; i < n_logits; i++) {
+            file << i << ": " << logits[i] << "\n";
+        }
+        LOG("Logits saved to %s\n", filepath.c_str());
+    }
+
+}
+
 static bool run(llama_context * ctx, const common_params & params) {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
@@ -186,7 +230,7 @@ int main(int argc, char ** argv) {
 
     common_params params;
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_EVAL_CALLBACK)) {
         return 1;
     }
 
@@ -222,6 +266,10 @@ int main(int argc, char ** argv) {
     bool OK = run(ctx, params);
     if (!OK) {
         return 1;
+    }
+
+    if (params.save_logits) {
+        save_logits(ctx, model, params);
     }
 
     LOG("\n");

@@ -3329,6 +3329,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--save-logits"},
+        string_format("save final logits to files for verification (default: %s)", params.save_logits ? "true" : "false"),
+        [](common_params & params) {
+            params.save_logits = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_EVAL_CALLBACK}));
+    add_opt(common_arg(
+        {"--logits-output-dir"}, "PATH",
+        string_format("directory for saving logits output files (default: %s)", params.logits_output_dir.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.logits_output_dir = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_EVAL_CALLBACK}));
 
     // presets
     add_opt(common_arg(
