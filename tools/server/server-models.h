@@ -183,7 +183,10 @@ public:
                       const std::string & path,
                       const std::map<std::string, std::string> & headers,
                       const std::string & body,
-                      const std::function<bool()> should_stop);
+                      const std::function<bool()> should_stop,
+                      int32_t timeout_read,
+                      int32_t timeout_write
+                      );
     ~server_http_proxy() {
         if (cleanup) {
             cleanup();
