@@ -15,7 +15,9 @@ elseif(SUPPORTS_SYCL)
 else()
     message(FATAL_ERROR "C++ compiler lacks SYCL support.")
 endif()
-message(STATUS "SYCL found")
+if (SUPPORTS_SYCL)
+    message(STATUS "SYCL found")
+endif()
 #todo: AOT
 
 ggml_add_backend_library(ggml-sycl
@@ -30,17 +32,32 @@ target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
 if (WIN32)
     # To generate a Visual Studio solution, using Intel C++ Compiler for ggml-sycl is mandatory
     if( ${CMAKE_GENERATOR} MATCHES "Visual Studio" AND NOT (${CMAKE_GENERATOR_TOOLSET} MATCHES "Intel C"))
+        if (NOT CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
+             message(FATAL_ERROR "Visual Studio generator with SYCL requires Intel oneAPI compiler. Please configure with icx/icpx.")
+        endif()
         set_target_properties(ggml-sycl PROPERTIES VS_PLATFORM_TOOLSET "Intel C++ Compiler 2025")
-        set(CMAKE_CXX_COMPILER "icx")
-        set(CMAKE_CXX_COMPILER_ID "IntelLLVM")
     endif()
 endif()
 
-find_package(IntelSYCL)
-if (IntelSYCL_FOUND)
+# Intel oneAPI 2025.x ships a broken IntelSYCLConfig.cmake
+# (SYCL_FEATURE_TEST_EXTRACT invocation error)
+# Until fixed upstream by Intel, bypass find_package(IntelSYCL)
+# and rely on manual SYCL flags in the else() block below.
+option(GGML_SYCL_USE_FIND_PACKAGE "Try to use find_package(IntelSYCL)" OFF)
+
+if (GGML_SYCL_USE_FIND_PACKAGE)
+    find_package(IntelSYCL)
+else()
+    message(STATUS "Skipping find_package(IntelSYCL); using manual SYCL flags (oneAPI 2025.x workaround)")
+endif()
+
+if (GGML_SYCL_USE_FIND_PACKAGE AND IntelSYCL_FOUND)
     # Use oneAPI CMake when possible
     target_link_libraries(ggml-sycl PRIVATE IntelSYCL::SYCL_CXX)
 else()
+    if (NOT SUPPORTS_SYCL)
+        message(FATAL_ERROR "C++ compiler does not support SYCL (-fsycl missing).")
+    endif()
     # Fallback to the simplest way of enabling SYCL when using intel/llvm nightly for instance
     target_compile_options(ggml-sycl PRIVATE "-fsycl")
     target_link_options(ggml-sycl PRIVATE "-fsycl")
