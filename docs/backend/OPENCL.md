@@ -218,6 +218,10 @@ cmake .. -G Ninja `
 ninja
 ```
 
+## Linux 
+
+The two steps just above also apply to Linux. If building for Linux, Ensure you have Git, CMake, Clang, Ninja and Python installed, in the second step remove the `-DCMAKE_TOOLCHAIN_FILE` parameter, and then in both steps replace the backticks with back slashes.  
+
 ## Known Issues
 
 - Flash attention does not always improve performance.
