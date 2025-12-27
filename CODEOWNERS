@@ -47,6 +47,7 @@
 /ggml/cmake/                            @ggerganov
 /ggml/include/                          @ggerganov
 /ggml/src/ggml-common.h                 @ggerganov
+/ggml/src/ggml-blas/                    @taronaeo
 /ggml/src/ggml-cpu/                     @ggerganov
 /ggml/src/ggml-cpu/spacemit/            @alex-spacemit
 /ggml/src/ggml-cuda/fattn*              @JohannesGaessler
