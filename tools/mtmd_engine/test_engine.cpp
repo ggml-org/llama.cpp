@@ -76,16 +76,16 @@ void log_call(int level, const std::string& msg) {
     std::cout<<"log(" << level << "): " << msg << std::endl;
 }
 
-void test_mem_file() {
-    std::vector<unsigned char> data = load_img_file("e:/wafer.jpg");
-    auto mmf = MemoryMappedFile::CreateWithData(data.data(), data.size());
-    FILE* fp = mmf->GetFilePointer();
-    std::vector<unsigned char> new_data;
-    new_data.resize(data.size());
-    fread(new_data.data(), 1, data.size(), fp);
-    std::ofstream new_f("e:/new_wafer.jpg", std::ios::binary);
-    new_f.write((char*)new_data.data(), new_data.size());
-}
+//void test_mem_file() {
+//    std::vector<unsigned char> data = load_img_file("e:/wafer.jpg");
+//    auto mmf = MemoryMappedFile::CreateWithData(data.data(), data.size());
+//    FILE* fp = mmf->GetFilePointer();
+//    std::vector<unsigned char> new_data;
+//    new_data.resize(data.size());
+//    fread(new_data.data(), 1, data.size(), fp);
+//    std::ofstream new_f("e:/new_wafer.jpg", std::ios::binary);
+//    new_f.write((char*)new_data.data(), new_data.size());
+//}
 
 
 
@@ -99,23 +99,28 @@ int main() {
 
     llama_engine::EngineConfigParam param;
     param.gpu_devices.clear();
+    param.gpu_layer_count = 999;
     param.log_call_back = log_call;
     //param.fit_param = false;
 
     llama_engine::InferEngine engine;
     auto status = engine.set_config_param(param);
     auto start = std::chrono::system_clock::now();
-    auto model_buf = load_img_file("d:/qwen/Qwen3VL-2B-Instruct-Q4_K_M.gguf");
-    auto mmproj_buf = load_img_file("d:/qwen/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf");
+    //auto model_buf = load_img_file("d:/qwen/official_gguf/Qwen3VL-2B-Instruct-Q4_K_M.gguf");
+    ////auto model_buf = load_img_file("d:/qwen/o_gen/mmproj-Qwen3-VL-2B-Instruct-F16.gguf");
+    ////auto mmproj_buf = load_img_file("d:/qwen/official_gguf/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf");
+    //auto mmproj_buf = load_img_file("d:/qwen/o_gen/mmproj-Qwen3-VL-2B-Instruct-F16.gguf");
 
 
-    //status = engine.load_model_from_file(
-    //    //"d:/qwen/Qwen3VL-2B-Instruct-F16.gguf",
-    //    //"d:/qwen/mmproj-Qwen3VL-2B-Instruct-F16.gguf"
-    //    "d:/qwen/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
-    //    "d:/qwen/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
-    //);
-    status = engine.load_model_from_buffer((char*)model_buf.data(), model_buf.size(), (char*)mmproj_buf.data(), mmproj_buf.size());
+    status = engine.load_model_from_file(
+        //"d:/qwen/Qwen3VL-2B-Instruct-F16.gguf",
+        //"d:/qwen/mmproj-Qwen3VL-2B-Instruct-F16.gguf"
+        "d:/qwen/official_gguf/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+        "d:/qwen/official_gguf/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
+        //"g:/model_test/qwen/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+        //"g:/model_test/qwen/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
+    );
+    //status = engine.load_model_from_buffer((char*)model_buf.data(), model_buf.size(), (char*)mmproj_buf.data(), mmproj_buf.size());
     auto start1 = std::chrono::system_clock::now();
     status = engine.infer(input, res);
     std::cout << "============= result =======================" << std::endl;

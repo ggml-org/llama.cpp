@@ -11,6 +11,7 @@
 //#include "llama-cpp.h"
 #include <string>
 #include <vector>
+#include <thread>
 
 
 #ifdef LLAMA_BUILD
@@ -57,6 +58,7 @@ struct InferResult{
 typedef void (*engine_log_callback)(int level, const std::string& text);
 
 struct EngineConfigParam {
+    // gpu列表为空时使用cpu，不为空时使用给定的gpu列表
     std::vector<size_t> gpu_devices{0};
     int32_t main_gpu = 0;
     int32_t gpu_layer_count = 999;
@@ -64,6 +66,7 @@ struct EngineConfigParam {
     int32_t max_predict_token_count = -1; // -1 == nolimit; max new token to generate
     bool need_prob{true};
     bool keep_space = false;
+    int max_cpu_threads = std::thread::hardware_concurrency();;
     //int log_level;
     //enum ggml_log_level {
     //    GGML_LOG_LEVEL_NONE = 0,

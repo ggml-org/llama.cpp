@@ -17,8 +17,15 @@
 #include <utility>
 #include <exception>
 #include <mutex>
+#include <iostream>
+#include <thread>
+
+/*限定模型只使用cpu的核心参数：
+1. -dev none: 禁止VLM模型使用gpu
+2. --no-mmproj-offload: 禁止视觉投影模型占用gpu
 
 
+*/
 //int external_log_to_internal(int level) {
 //    switch (level) {
 //    case GGML_LOG_LEVEL_DEBUG: return LOG_LEVEL_DEBUG;
@@ -50,7 +57,7 @@ namespace llama_engine{
 struct InferEngine::Impl{
     EngineConfigParam config_param;
     std::mutex infer_mutex;
-
+    bool use_gpu = true;
     const std::string prompt = "Read the characters in the image.";
 
     mtmd::context_ptr ctx_vision{nullptr};
@@ -74,7 +81,7 @@ struct InferEngine::Impl{
     // support for legacy templates (models not having EOT token)
     llama_tokens antiprompt_tokens;
 
-    int n_threads = 5;
+    //int n_threads = 5;
     llama_pos n_past = 0;
 
     Impl() {
@@ -132,23 +139,34 @@ struct InferEngine::Impl{
         ctx_arg.params.sampling.temp = 0;
         ctx_arg.params.sampling.penalty_repeat = 1.0;
 
-
         // devices
         ctx_arg.params.main_gpu = config_param.main_gpu;
         ctx_arg.params.devices.clear();
         std::vector<ggml_backend_dev_t> devices;
         auto device_ids = config_param.gpu_devices;
-        if(device_ids.empty()) device_ids.push_back(0);
-        for (const auto i : device_ids) {
-            std::string dev_name = "CUDA" + std::to_string(i);
-            auto * dev = ggml_backend_dev_by_name(dev_name.c_str());
-            if (!dev || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
-                write_log(LogLevel::kLogWarn, __FILE__, __LINE__,
-                        string_format("Config cuda device %d is not valid, ignore this device.", i).c_str());
-                continue;
+
+        if (device_ids.empty()) {
+            // 为空时使用cpu
+            auto* dev = ggml_backend_dev_by_name("CPU");
+            if (!dev || ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                return write_log(LogLevel::kLogError, __FILE__, __LINE__, "Config CPU device failed.");
             }
             devices.push_back(dev);
+            use_gpu = false;
+        } else {
+            for (const auto i : device_ids) {
+                std::string dev_name = "CUDA" + std::to_string(i);
+                auto* dev = ggml_backend_dev_by_name(dev_name.c_str());
+                if (!dev || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                    write_log(LogLevel::kLogWarn, __FILE__, __LINE__,
+                        string_format("Config cuda device %d is not valid, ignore this device.", i).c_str());
+                    continue;
+                }
+                devices.push_back(dev);
+            }
+            use_gpu = true;
         }
+
         if (devices.empty()) {
             auto msg = "Setted gpu devices all invalid.";
             return write_log(LogLevel::kLogError, __FILE__, __LINE__, msg);
@@ -174,7 +192,7 @@ struct InferEngine::Impl{
         lctx = llama_init->context();
         vocab = llama_model_get_vocab(model);
         smpl = common_sampler_init(model, llama_param.sampling);
-        n_threads = llama_param.cpuparams.n_threads;
+        //n_threads = llama_param.cpuparams.n_threads;
         batch = llama_batch_init(1, 0, 1); // batch for next token generation
         n_batch = llama_param.n_batch;
 
@@ -227,14 +245,13 @@ struct InferEngine::Impl{
         llama_param.use_mmap = false;
 
         return load_model_helper(llama_param);
-        return { -1, "This function is not yet supported." };
     }
 
     Status init_vision_context(common_params& params) {
         mtmd_context_params mparams = mtmd_context_params_default();
-        mparams.use_gpu = params.mmproj_use_gpu;
+        mparams.use_gpu = use_gpu;
+        mparams.n_threads = std::max(1, config_param.max_cpu_threads);
         mparams.print_timings = true;
-        mparams.n_threads = params.cpuparams.n_threads;
         mparams.flash_attn_type = params.flash_attn_type;
         mparams.warmup = params.warmup;
         mparams.image_min_tokens = params.image_min_tokens;
