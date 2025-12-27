@@ -201,6 +201,9 @@ static ggml_cuda_device_info ggml_cuda_init() {
     GGML_ASSERT(info.device_count <= GGML_CUDA_MAX_DEVICES);
 
     int64_t total_vram = 0;
+#ifdef CUDART_VERSION
+    GGML_LOG_INFO("%s: Compiled with CUDART_VERSION=%d\n", __func__, CUDART_VERSION);
+#endif //CUDART_VERSION
 #ifdef GGML_CUDA_FORCE_MMQ
     GGML_LOG_INFO("%s: GGML_CUDA_FORCE_MMQ:    yes\n", __func__);
 #else
