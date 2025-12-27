@@ -248,9 +248,9 @@ ggml_tensor * llm_build_gemma3n_iswa::view_2d_slice(ggml_tensor * x, int idx) {
 // equivalent to get_per_layer_inputs() in python code
 // output shape: [n_embd_altup, n_layer, n_tokens]
 ggml_tensor * llm_build_gemma3n_iswa::get_per_layer_inputs() {
-    auto          inp = std::make_unique<llm_graph_input_embd>();
     ggml_tensor * inp_per_layer;
     if (ubatch.token) {
+        auto inp = std::make_unique<llm_graph_input_embd>();
         inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
         ggml_set_input(inp->tokens);
         res->t_tokens = inp->tokens;
@@ -258,10 +258,20 @@ ggml_tensor * llm_build_gemma3n_iswa::get_per_layer_inputs() {
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_altup, n_layer, n_tokens);
         inp_per_layer = ggml_scale(ctx0, inp_per_layer, sqrtf((float) n_embd_altup));
         cb(inp_per_layer, "inp_per_layer_selected", -1);
+        res->add_input(std::move(inp));
     } else {
-        GGML_ABORT("TODO: support embd input");
+        // Vision embedding path: use padding token (ID=0) embedding
+        const int64_t embd_size = model.tok_embd_per_layer->ne[0];  // n_embd_altup * n_layer
+
+        // Extract and dequantize padding token embedding (column 0)
+        ggml_tensor * padding_q = ggml_view_1d(ctx0, model.tok_embd_per_layer, embd_size, 0);
+        ggml_tensor * padding_f32 = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, embd_size);
+        inp_per_layer = ggml_cpy(ctx0, padding_q, padding_f32);
+
+        // Reshape to [n_embd_altup, n_layer, 1]
+        inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_altup, n_layer, 1);
+        cb(inp_per_layer, "inp_per_layer_vision", -1);
     }
-    res->add_input(std::move(inp));
     return inp_per_layer;
 }
 
@@ -279,7 +289,7 @@ ggml_tensor * llm_build_gemma3n_iswa::project_per_layer_inputs(ggml_tensor * inp
                                               -1);  // [n_embd_altup, n_layer, n_tokens]
     cb(per_layer_proj, "per_layer_proj", -1);
 
-    inp_per_layer = ggml_add(ctx0, inp_per_layer, per_layer_proj);
+    inp_per_layer = ggml_add(ctx0, per_layer_proj, inp_per_layer);
     inp_per_layer = ggml_scale(ctx0, inp_per_layer, per_layer_input_scale);
     cb(inp_per_layer, "inp_per_layer", -1);
 

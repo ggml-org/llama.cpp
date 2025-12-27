@@ -460,6 +460,7 @@ class VISION_PROJECTOR_TYPE(IntEnum):
     RESAMPLER = auto()
     GLM_EDGE  = auto()
     MERGER    = auto()
+    GEMMA3N   = auto()
     GEMMA3    = auto()
     QWEN3VL   = auto()
     COGVLM    = auto()
@@ -670,6 +671,15 @@ class MODEL_TENSOR(IntEnum):
     V_MM_INP_NORM        = auto()
     V_MM_INP_PROJ        = auto() # gemma3
     V_MM_SOFT_EMB_NORM   = auto() # gemma3
+    V_MM_EMBEDDING       = auto() # gemma3n
+    V_MM_HARD_EMB_NORM   = auto() # gemma3n
+    V_ENC_CONV_STEM       = auto() # gemma3n
+    V_ENC_CONV_STEM_NORM  = auto() # gemma3n
+    V_ENC_MSFA_EXP        = auto() # gemma3n
+    V_ENC_MSFA_EXP_NORM   = auto() # gemma3n
+    V_ENC_MSFA_PROJ       = auto() # gemma3n
+    V_ENC_MSFA_PROJ_NORM  = auto() # gemma3n
+    V_ENC_MSFA_NORM       = auto() # gemma3n
     V_RESMPL_POS_EMBD_K  = auto() # minicpmv
     V_RESMPL_ATTN_Q      = auto() # minicpmv
     V_RESMPL_ATTN_K      = auto() # minicpmv
@@ -1064,7 +1074,16 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MM_POST_NORM:            "mm.post_norm",
     MODEL_TENSOR.V_MM_INP_PROJ:             "mm.input_projection",
     MODEL_TENSOR.V_MM_INP_NORM:             "mm.input_norm",
-    MODEL_TENSOR.V_MM_SOFT_EMB_NORM:        "mm.soft_emb_norm",
+    MODEL_TENSOR.V_MM_SOFT_EMB_NORM:        "mm.soft_emb_norm",             # gemma3n
+    MODEL_TENSOR.V_MM_EMBEDDING:            "mm.embedding",                 # gemma3n
+    MODEL_TENSOR.V_MM_HARD_EMB_NORM:        "mm.hard_emb_norm",             # gemma3n
+    MODEL_TENSOR.V_ENC_CONV_STEM:           "v.conv_stem.conv",         # gemma3n
+    MODEL_TENSOR.V_ENC_CONV_STEM_NORM:      "v.conv_stem.bn",           # gemma3n
+    MODEL_TENSOR.V_ENC_MSFA_EXP:            "v.msfa.ffn.pw_exp.conv",   # gemma3n
+    MODEL_TENSOR.V_ENC_MSFA_EXP_NORM:       "v.msfa.ffn.pw_exp.bn",     # gemma3n
+    MODEL_TENSOR.V_ENC_MSFA_PROJ:           "v.msfa.ffn.pw_proj.conv",  # gemma3n
+    MODEL_TENSOR.V_ENC_MSFA_PROJ_NORM:      "v.msfa.ffn.pw_proj.bn",    # gemma3n
+    MODEL_TENSOR.V_ENC_MSFA_NORM:           "v.msfa.norm",              # gemma3n
     MODEL_TENSOR.V_RESMPL_POS_EMBD_K:       "resampler.pos_embd_k",
     MODEL_TENSOR.V_RESMPL_ATTN_Q:           "resampler.attn.q",
     MODEL_TENSOR.V_RESMPL_ATTN_K:           "resampler.attn.k",
@@ -1163,6 +1182,15 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_MM_INP_PROJ,
         MODEL_TENSOR.V_MM_INP_NORM,
         MODEL_TENSOR.V_MM_SOFT_EMB_NORM,
+        MODEL_TENSOR.V_MM_EMBEDDING,
+        MODEL_TENSOR.V_MM_HARD_EMB_NORM,
+        MODEL_TENSOR.V_ENC_CONV_STEM,
+        MODEL_TENSOR.V_ENC_CONV_STEM_NORM,
+        MODEL_TENSOR.V_ENC_MSFA_EXP,
+        MODEL_TENSOR.V_ENC_MSFA_EXP_NORM,
+        MODEL_TENSOR.V_ENC_MSFA_PROJ,
+        MODEL_TENSOR.V_ENC_MSFA_PROJ_NORM,
+        MODEL_TENSOR.V_ENC_MSFA_NORM,
         MODEL_TENSOR.V_RESMPL_POS_EMBD_K,
         MODEL_TENSOR.V_RESMPL_ATTN_Q,
         MODEL_TENSOR.V_RESMPL_ATTN_K,
@@ -3457,6 +3485,7 @@ class GGUFValueType(IntEnum):
 
 class VisionProjectorType:
     GEMMA3 = "gemma3"
+    GEMMA3N = "gemma3n"
     IDEFICS3 = "idefics3"
     PIXTRAL = "pixtral"
     LLAMA4 = "llama4"
