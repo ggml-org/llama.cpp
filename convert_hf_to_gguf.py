@@ -71,6 +71,7 @@ class SentencePieceTokenTypes(IntEnum):
 class ModelType(IntEnum):
     TEXT = 1
     MMPROJ = 2
+    TALKER = 3
 
 
 AnyModel = TypeVar("AnyModel", bound="type[ModelBase]")
@@ -80,6 +81,7 @@ class ModelBase:
     _model_classes: dict[ModelType, dict[str, type[ModelBase]]] = {
         ModelType.TEXT: {},
         ModelType.MMPROJ: {},
+        ModelType.TALKER: {},
     }
 
     dir_model: Path
@@ -730,7 +732,12 @@ class ModelBase:
         assert names
 
         def func(modelcls: AnyModel) -> AnyModel:
-            model_type = ModelType.MMPROJ if modelcls.model_arch == gguf.MODEL_ARCH.MMPROJ else ModelType.TEXT
+            if modelcls.model_arch == gguf.MODEL_ARCH.MMPROJ:
+                model_type = ModelType.MMPROJ
+            elif hasattr(gguf.MODEL_ARCH, 'QWEN3OMNI_TALKER') and modelcls.model_arch == gguf.MODEL_ARCH.QWEN3OMNI_TALKER:
+                model_type = ModelType.TALKER
+            else:
+                model_type = ModelType.TEXT
             for name in names:
                 cls._model_classes[model_type][name] = modelcls
             return modelcls
@@ -4239,6 +4246,531 @@ class Qwen3MoeModel(Qwen2MoeModel):
         super().set_vocab()
 
 
+@ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
+class Qwen3OmniThinkerModel(Qwen3MoeModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3OMNIMOE
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Qwen3-Omni has a nested thinker_config like Qwen2.5-Omni
+        # Merge it into hparams for the base class to use
+        import copy
+        self.global_config = copy.deepcopy(self.hparams)
+        if "thinker_config" in self.global_config:
+            thinker_config = self.global_config["thinker_config"]
+            # Merge thinker_config into hparams
+            for key, value in thinker_config.items():
+                if key not in ["audio_config", "vision_config"]:
+                    self.hparams[key] = value
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        # Write M-RoPE dimension sections for multimodal [temporal, spatial_y, spatial_x, padding]
+        # Padded to 4 elements as expected by llama.cpp
+        self.gguf_writer.add_rope_dimension_sections([24, 20, 20, 0])
+
+    def set_vocab(self):
+        super().set_vocab()
+        # Fix EOS/BOS/PAD tokens - Qwen3-Omni's tokenizer_config.json has null for bos,
+        # causing llama.cpp to use gpt2 defaults (token 11 = comma) which breaks generation.
+        # Token IDs from HF tokenizer:
+        #   <|im_end|> = 151645 (EOS for chat)
+        #   <|endoftext|> = 151643 (BOS, PAD)
+        self.gguf_writer.add_eos_token_id(151645)  # <|im_end|>
+        self.gguf_writer.add_bos_token_id(151643)  # <|endoftext|>
+        self.gguf_writer.add_pad_token_id(151643)  # <|endoftext|> (same as HF)
+        self.gguf_writer.add_add_bos_token(False)  # Qwen doesn't add BOS automatically
+        logger.info("Qwen3-Omni: Set EOS=151645, BOS=151643, PAD=151643")
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Strip thinker prefix if present
+        if name.startswith("thinker."):
+            name = name.replace("thinker.", "", 1)
+
+        # Filter out non-Thinker components
+        if (name.startswith("audio_tower.")
+                or name.startswith("visual.")
+                or name.startswith("talker.")
+                or name.startswith("code2wav.")):
+            return []
+
+        return super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
+class Qwen3OmniMmprojModel(MmprojModel):
+    """Qwen3-Omni MMProj (audio encoder).
+
+    Qwen3-Omni has a nested config structure with both vision and audio encoders.
+    This class exports BOTH encoders to a single GGUF file.
+
+    - Vision: Same architecture as Qwen3-VL (27-layer ViT with deepstack)
+    - Audio: Whisper-style encoder (32 transformer layers)
+    """
+    has_vision_encoder = True
+    has_audio_encoder = True
+
+    def __init__(self, *args, **kwargs):
+        # Override n_embd_text extraction before calling super().__init__
+        # because Qwen3-Omni has nested config at thinker_config.text_config
+        import json
+        dir_model = args[0] if args else kwargs.get("dir_model")
+        assert dir_model is not None, "dir_model is required"
+        config_path = dir_model / "config.json"
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+
+        # Get n_embd_text from nested thinker_config.text_config
+        thinker_config = config.get("thinker_config", config)
+        text_config = thinker_config.get("text_config", thinker_config)
+        self._n_embd_text_override = text_config.get("hidden_size", 2048)
+
+        super().__init__(*args, **kwargs)
+
+        # Setup audio config
+        assert self.hparams_audio is not None
+        # Normalize audio config to match expected keys (Whisper naming)
+        self.hparams_audio["hidden_size"] = self.hparams_audio["d_model"]
+        self.hparams_audio["intermediate_size"] = self.hparams_audio["encoder_ffn_dim"]
+        self.hparams_audio["num_attention_heads"] = self.hparams_audio["encoder_attention_heads"]
+        self.hparams_audio["num_hidden_layers"] = self.hparams_audio["encoder_layers"]
+
+        # Setup vision config (similar to Qwen3VLVisionModel)
+        assert self.hparams_vision is not None
+        if "image_size" not in self.hparams_vision:
+            num_pos = self.hparams_vision.get("num_position_embeddings", 2304)
+            patch_size = self.hparams_vision.get("patch_size", 16)
+            image_size = int(num_pos**0.5 * patch_size)
+            self.hparams_vision["image_size"] = image_size
+        self.hparams_vision["num_attention_heads"] = self.hparams_vision.get("num_heads")
+        self.hparams_vision["num_hidden_layers"] = self.hparams_vision.get("depth")
+
+        self.is_deepstack_layers = [False] * int(self.hparams_vision["num_hidden_layers"] or 0)
+        for idx in self.hparams_vision.get("deepstack_visual_indexes", []):
+            self.is_deepstack_layers[idx] = True
+
+        # Override the wrong n_embd_text that MmprojModel found
+        self.n_embd_text = self._n_embd_text_override
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # Audio parameters
+        assert self.hparams_audio is not None
+        self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio["num_mel_bins"])
+        self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams_audio.get("layer_norm_eps", 1e-5))
+        # Audio projector type is set via clip.audio.projector_type
+        self.gguf_writer.add_string("clip.audio.projector_type", "qwen3omni_audio")
+
+        # Vision parameters - use qwen3omni_vision projector type (not qwen3vl_merger)
+        # Qwen3-Omni vision has different output format: deepstack concat at input, not output
+        self.gguf_writer.add_string("clip.vision.projector_type", "qwen3omni_vision")
+        self.gguf_writer.add_vision_use_gelu(True)
+        if self.hparams_vision is not None:
+            merge_size = self.hparams_vision.get("spatial_merge_size")
+            if merge_size is not None:
+                self.gguf_writer.add_vision_spatial_merge_size(int(merge_size))
+        rms_norm_eps = self.global_config.get("thinker_config", {}).get("text_config", {}).get("rms_norm_eps", 1e-6)
+        self.gguf_writer.add_vision_attention_layernorm_eps(rms_norm_eps)
+        if self.is_deepstack_layers:
+            self.gguf_writer.add_vision_is_deepstack_layers(self.is_deepstack_layers)
+
+    def get_vision_config(self) -> dict[str, Any] | None:
+        # Qwen3-Omni has nested config at thinker_config.vision_config
+        thinker_config = self.global_config.get("thinker_config", self.global_config)
+        return thinker_config.get("vision_config")
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        # Qwen3-Omni has nested config at thinker_config.audio_config
+        thinker_config = self.global_config.get("thinker_config", self.global_config)
+        return thinker_config.get("audio_config")
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # SinusoidsPositionEmbedding for audio encoder
+        assert self.hparams_audio is not None
+        max_timescale = 10000
+        length = 1500
+        channels = self.hparams_audio["hidden_size"]
+        log_timescale_increment = np.log(max_timescale) / (channels // 2 - 1)
+        inv_timescales = torch.exp(-log_timescale_increment * torch.arange(channels // 2).float())
+        scaled_time = torch.arange(length)[:, np.newaxis] * inv_timescales[np.newaxis, :]
+        pos_embd = torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=1).to(dtype=torch.float32)
+        yield ("audio_tower.embed_positions.weight", pos_embd)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".conv" in name and ".weight" in name:
+            return gguf.GGMLQuantizationType.F16
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Strip thinker prefix if present
+        if name.startswith("thinker."):
+            name = name.replace("thinker.", "")
+
+        # Process audio_tower tensors
+        if name.startswith("audio_tower"):
+            if "conv1.bias" in name or "conv2.bias" in name:
+                data_torch = data_torch.unsqueeze(-1)
+            if "audio_bos_eos_token" in name:
+                return []
+            # Handle conv_out specially - use audio n_layer instead of block_count
+            # conv_out should map to a.conv1d.{n_audio_layer - 1}.weight
+            if "conv_out" in name:
+                assert self.hparams_audio is not None
+                audio_n_layer = self.hparams_audio.get("num_hidden_layers", self.hparams_audio.get("encoder_layers", 32))
+                suffix = ".weight" if ".weight" in name else ".bias"
+                return [(f"a.conv1d.{audio_n_layer - 1}{suffix}", data_torch)]
+            return [(self.map_tensor_name(name), data_torch)]
+
+        # Process visual tensors (use Qwen3VL tensor mapping)
+        if name.startswith("visual."):
+            # Reuse Qwen3VL tensor mapping by prefixing with model.
+            name = "model." + name
+            return self._process_vision_tensor(data_torch, name, bid)
+
+        # Filter out all other tensors (thinker LLM, talker, etc.)
+        return []
+
+    def _process_vision_tensor(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        """Process vision tensors using Qwen3VL patterns."""
+        assert self.hparams_vision is not None
+
+        # Deepstack merger (merger_list.0/1/2 - one per deepstack layer)
+        if name.startswith("model.visual.merger_list."):
+            # model.visual.merger_list.0.ln_q.weight -> deepstack layer 0
+            prefix, rest = name.split(".", maxsplit=4)[3:]
+            idx = self.hparams_vision.get("deepstack_visual_indexes", [])[int(prefix)]
+            target = rest
+
+            if target.startswith("norm.") or target.startswith("ln_q."):
+                tensor_type = gguf.MODEL_TENSOR.V_DS_NORM
+                suffix = target.rsplit(".", 1)[-1]  # "weight" or "bias"
+            elif target.startswith("linear_fc1.") or target.startswith("mlp.0."):
+                tensor_type = gguf.MODEL_TENSOR.V_DS_FC1
+                suffix = target.rsplit(".", 1)[-1]  # "mlp.0.weight" -> "weight"
+            elif target.startswith("linear_fc2.") or target.startswith("mlp.2."):
+                tensor_type = gguf.MODEL_TENSOR.V_DS_FC2
+                suffix = target.rsplit(".", 1)[-1]  # "mlp.2.weight" -> "weight"
+            else:
+                raise ValueError(f"Unexpected deepstack tensor: {name}")
+
+            new_name = self.format_tensor_name(tensor_type, idx, suffix=f".{suffix}")
+            return [(new_name, data_torch)]
+
+        # Main merger (not deepstack)
+        if name.startswith("model.visual.merger."):
+            parts = name.split(".")
+            suffix = ".".join(parts[3:])
+
+            if suffix.startswith("linear_fc") or suffix.startswith("mlp."):
+                if "linear_fc1" in suffix or "mlp.0" in suffix:
+                    fc_idx = 0
+                elif "linear_fc2" in suffix or "mlp.2" in suffix:
+                    fc_idx = 2
+                else:
+                    raise ValueError(f"unexpected fc index in {name}")
+                # Get just "weight" or "bias" from the end
+                tail = suffix.rsplit(".", 1)[-1]  # "mlp.0.weight" -> "weight"
+                new_name = self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, fc_idx, suffix=f".{tail}")
+            elif suffix.startswith("norm.") or suffix.startswith("ln_q."):
+                new_name = self.format_tensor_name(gguf.MODEL_TENSOR.V_POST_NORM, suffix=f".{suffix.split('.', 1)[1]}")
+            else:
+                raise ValueError(f"Unexpected merger tensor: {name}")
+            return [(new_name, data_torch)]
+
+        if name == "model.visual.patch_embed.proj.weight":
+            c1, c2, kt, _, _ = data_torch.shape
+            del c1, c2
+            if kt != 2:
+                raise ValueError("Current implementation only supports temporal_patch_size of 2")
+            return [
+                (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight", data_torch[:, :, 0, ...]),
+                (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", data_torch[:, :, 1, ...]),
+            ]
+
+        if name == "model.visual.patch_embed.proj.bias":
+            return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".bias", data_torch)]
+
+        # Skip ViT's internal post_ln - the merger has its own layernorm for projection
+        # (same pattern as audio encoder where build_vit applies post_ln internally)
+        if name.startswith("model.visual.post_ln."):
+            return []
+
+        if name.startswith("model.visual."):
+            # Strip 'model.' prefix - tensor_mapping expects 'visual.blocks...' not 'model.visual.blocks...'
+            name = name.replace("model.", "", 1)
+            return [(self.map_tensor_name(name), data_torch)]
+
+        return []
+
+
+@ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
+class Qwen3OmniTalkerModel(Qwen2MoeModel):
+    """Qwen3-Omni Talker (speech synthesis model + Code2Wav vocoder).
+
+    This model is exported using the --talker CLI flag.
+    Contains:
+    - Talker transformer (20 layers, MoE with 128 experts)
+    - Code predictor (5 layers + 15 lm heads)
+    - Code2Wav vocoder (HiFi-GAN with pre-transformer + ConvNeXt upsample + decoder)
+    """
+    model_arch = gguf.MODEL_ARCH.QWEN3OMNI_TALKER
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Qwen3-Omni has nested configs - extract talker_config
+        import copy
+        self.global_config = copy.deepcopy(self.hparams)
+        if "talker_config" in self.global_config:
+            talker_config = self.global_config["talker_config"]
+            # Talker model parameters are in text_config (not top level)
+            text_config = talker_config.get("text_config", {})
+            # Merge text_config into hparams for base class
+            for key, value in text_config.items():
+                self.hparams[key] = value
+            # Also merge top-level talker_config for Talker-specific metadata
+            for key, value in talker_config.items():
+                if key != "text_config":
+                    self.global_config[key] = value
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        arch_name = gguf.MODEL_ARCH_NAMES[self.model_arch]
+
+        # Override block_count with Talker layer count (20 layers, not Thinker's 48)
+        talker_config = self.global_config.get("talker_config", {})
+        text_config = talker_config.get("text_config", {})
+        n_layer = text_config.get("num_hidden_layers", 20)
+        self.gguf_writer.add_block_count(n_layer)
+
+        # Override embedding_length with Talker hidden size (1024, not Thinker's 2048)
+        n_embd = text_config.get("hidden_size", 1024)
+        self.gguf_writer.add_embedding_length(n_embd)
+        logger.info(f"gguf: Talker embedding length = {n_embd}")
+
+        # Override other architecture-specific values from Talker config
+        if (n_head := text_config.get("num_attention_heads")) is not None:
+            self.gguf_writer.add_head_count(n_head)
+        if (n_head_kv := text_config.get("num_key_value_heads")) is not None:
+            self.gguf_writer.add_head_count_kv(n_head_kv)
+        if (n_ctx := text_config.get("max_position_embeddings")) is not None:
+            self.gguf_writer.add_context_length(n_ctx)
+
+        # Talker-specific parameters
+        if (accept_hidden_layer := self.global_config.get("accept_hidden_layer")) is not None:
+            self.gguf_writer.add_key_value(
+                gguf.Keys.Talker.ACCEPT_HIDDEN_LAYER.format(arch=arch_name),
+                accept_hidden_layer,
+                gguf.GGUFValueType.UINT32
+            )
+
+        # thinker_hidden_size is needed for text_projection and hidden_projection layers
+        # These project from thinker hidden dim (2048) to talker hidden dim (1024)
+        if (thinker_hidden_size := self.global_config.get("thinker_hidden_size")) is not None:
+            self.gguf_writer.add_key_value(
+                gguf.Keys.Talker.THINKER_HIDDEN_SIZE.format(arch=arch_name),
+                thinker_hidden_size,
+                gguf.GGUFValueType.UINT32
+            )
+
+        if (text_proj_dim := self.global_config.get("text_proj_dim")) is not None:
+            self.gguf_writer.add_key_value(
+                gguf.Keys.Talker.TEXT_PROJ_DIM.format(arch=arch_name),
+                text_proj_dim,
+                gguf.GGUFValueType.UINT32
+            )
+
+        if (codec_vocab_size := self.global_config.get("codec_vocab_size")) is not None:
+            self.gguf_writer.add_key_value(
+                gguf.Keys.Talker.CODEC_VOCAB_SIZE.format(arch=arch_name),
+                codec_vocab_size,
+                gguf.GGUFValueType.UINT32
+            )
+
+        if (num_codebooks := self.global_config.get("num_codebooks")) is not None:
+            self.gguf_writer.add_key_value(
+                gguf.Keys.Talker.NUM_CODEBOOKS.format(arch=arch_name),
+                num_codebooks,
+                gguf.GGUFValueType.UINT32
+            )
+
+        # Code2Wav parameters (skipped for now - architecture too complex)
+        # TODO: Add Code2Wav metadata once tensor mappings are complete
+
+    def set_vocab(self):
+        # Talker uses codec embeddings (not a text tokenizer)
+        # Use "none" tokenizer model like WavTokenizerDec - no merges needed
+        self._set_vocab_none()
+
+        # Set vocab_size for the codec embedding layer
+        # The codec_embedding.weight shape is [vocab_size, n_embd]
+        # Get it from talker_config or infer from tensor
+        talker_config = self.global_config.get("talker_config", {})
+        text_config = talker_config.get("text_config", {})
+        # vocab_size in config is the actual embedding table size (includes special tokens)
+        vocab_size = text_config.get("vocab_size", 3072)
+        self.gguf_writer.add_vocab_size(vocab_size)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Only process talker.* and code2wav.* tensors
+        if not (name.startswith("talker.") or name.startswith("code2wav.")):
+            return []
+
+        # Handle talker transformer tensors (talker.model.*)
+        if name.startswith("talker.model."):
+            # Strip "talker.model." prefix -> becomes "model." (standard transformer)
+            name = name.replace("talker.model.", "model.", 1)
+
+            # Talker uses codec_embedding instead of embed_tokens
+            # Map it to TOKEN_EMBD for compatibility
+            if name == "model.codec_embedding.weight":
+                name = "model.embed_tokens.weight"
+
+            # Handle individual expert tensors - delegate to Qwen2MoeModel's expert handling
+            expert_suffixes = (
+                "experts.gate_up_proj", "experts.gate_up_proj.weight",
+                "experts.down_proj", "experts.down_proj.weight",
+                "experts.gate_proj", "experts.gate_proj.weight",
+                "experts.up_proj", "experts.up_proj.weight"
+            )
+            if "experts" in name and not name.endswith(expert_suffixes):
+                # This is an individual expert tensor like model.layers.0.mlp.experts.0.gate_proj.weight
+                # Let the parent class handle stacking them
+                return super().modify_tensors(data_torch, name, bid)
+
+            # Map the tensor (will use standard transformer mappings)
+            return super().modify_tensors(data_torch, name, bid)
+
+        # Other talker.* tensors (code_predictor, projections, etc.)
+        if name.startswith("talker."):
+            try:
+                mapped_name = self.map_tensor_name(name)
+                return [(mapped_name, data_torch)]
+            except ValueError:
+                logger.warning(f"Skipping unmapped Talker tensor: {name}")
+                return []
+
+        # Code2Wav tensors (HiFi-GAN vocoder)
+        if name.startswith("code2wav."):
+            # Handle decoder tensors with complex nested structure
+            if name.startswith("code2wav.decoder."):
+                mapped_name = self._map_c2w_decoder_tensor(name)
+                if mapped_name:
+                    return [(mapped_name, data_torch)]
+                logger.warning(f"Skipping unmapped decoder tensor: {name}")
+                return []
+
+            # Skip bias tensors for pre_transformer (C++ implementation doesn't use them)
+            # But allow upsample biases through - they are important for audio quality
+            if ".bias" in name and "upsample" not in name:
+                return []
+
+            # Handle other code2wav tensors (embedding, pre_transformer, upsampler) via standard mapping
+            try:
+                mapped_name = self.map_tensor_name(name)
+
+                # Depthwise convolution (dwconv) weights need permutation
+                # PyTorch dwconv: [out_ch, 1, kernel] = [1024, 1, 7]
+                # We need GGUF ne = [1024, 1, 7] (what C++ expects for ggml_conv_1d_dw_ph)
+                # GGUF writer reverses numpy shape, so we need numpy = [7, 1, 1024]
+                # Permute: [1024, 1, 7] -> [7, 1, 1024]
+                if "dwconv" in name and name.endswith(".weight") and len(data_torch.shape) == 3:
+                    data_torch = data_torch.permute(2, 1, 0).contiguous()
+                    logger.info(f"Permuted dwconv weight {name}: shape now {list(data_torch.shape)}")
+
+                # NOTE: ConvTranspose1d weights (upsample conv) DON'T need permutation
+                # PyTorch [in_ch, out_ch, kernel] gets reversed by GGUF writer to ne = [kernel, out_ch, in_ch]
+                # This is exactly what C++ ggml_conv_transpose_1d expects
+
+                return [(mapped_name, data_torch)]
+            except ValueError:
+                logger.warning(f"Skipping unmapped Code2Wav tensor: {name}")
+                return []
+
+        return []
+
+    def _map_c2w_decoder_tensor(self, name: str) -> str | None:
+        """Map HiFi-GAN decoder tensor names to GGUF format.
+
+        Original structure:
+        - decoder.0.conv - conv_in (1024→1536)
+        - decoder.{1-4}.block.0.alpha/beta - outer Snake
+        - decoder.{1-4}.block.1.conv - upsample transpose conv
+        - decoder.{1-4}.block.{2-4}.act1.alpha/beta - resblock act1
+        - decoder.{1-4}.block.{2-4}.conv1.conv - resblock conv1
+        - decoder.{1-4}.block.{2-4}.act2.alpha/beta - resblock act2
+        - decoder.{1-4}.block.{2-4}.conv2.conv - resblock conv2
+        - decoder.5.alpha/beta - final Snake
+        - decoder.6.conv - conv_out (1536→1)
+        """
+        import re
+
+        # conv_in: decoder.0.conv.weight/bias
+        if name == "code2wav.decoder.0.conv.weight":
+            return "code2wav.dec.conv_in.weight"
+        if name == "code2wav.decoder.0.conv.bias":
+            return "code2wav.dec.conv_in.bias"
+
+        # conv_out: decoder.6.conv.weight/bias
+        if name == "code2wav.decoder.6.conv.weight":
+            return "code2wav.dec.conv_out.weight"
+        if name == "code2wav.decoder.6.conv.bias":
+            return "code2wav.dec.conv_out.bias"
+
+        # Final Snake: decoder.5.alpha/beta
+        m = re.match(r"code2wav\.decoder\.5\.(alpha|beta)", name)
+        if m:
+            return f"code2wav.dec.final_snake_{m.group(1)}"
+
+        # Stage tensors: decoder.{stage}.block.{blk}.*
+        m = re.match(r"code2wav\.decoder\.(\d+)\.block\.(\d+)\.(.*)", name)
+        if m:
+            stage = int(m.group(1))  # 1-4
+            blk = int(m.group(2))    # 0, 1, or 2-4
+            rest = m.group(3)
+
+            if stage < 1 or stage > 4:
+                return None
+
+            # Outer Snake: block.0.alpha/beta
+            if blk == 0:
+                if rest == "alpha":
+                    return f"code2wav.dec.{stage}.snake_alpha"
+                elif rest == "beta":
+                    return f"code2wav.dec.{stage}.snake_beta"
+
+            # Upsample conv: block.1.conv.weight/bias
+            if blk == 1 and rest == "conv.weight":
+                return f"code2wav.dec.{stage}.upsample.weight"
+            if blk == 1 and rest == "conv.bias":
+                return f"code2wav.dec.{stage}.upsample.bias"
+
+            # ResBlocks: block.{2,3,4}.*
+            if blk >= 2 and blk <= 4:
+                # Use flattened index: stage * 10 + (blk - 2)
+                # stage 1, blk 2 → 10; stage 1, blk 3 → 11; stage 1, blk 4 → 12
+                flat_idx = stage * 10 + (blk - 2)
+
+                if rest == "act1.alpha":
+                    return f"code2wav.dec_blk.{flat_idx}.act1_alpha"
+                elif rest == "act1.beta":
+                    return f"code2wav.dec_blk.{flat_idx}.act1_beta"
+                elif rest == "conv1.conv.weight":
+                    return f"code2wav.dec_blk.{flat_idx}.conv1.weight"
+                elif rest == "conv1.conv.bias":
+                    return f"code2wav.dec_blk.{flat_idx}.conv1.bias"
+                elif rest == "act2.alpha":
+                    return f"code2wav.dec_blk.{flat_idx}.act2_alpha"
+                elif rest == "act2.beta":
+                    return f"code2wav.dec_blk.{flat_idx}.act2_beta"
+                elif rest == "conv2.conv.weight":
+                    return f"code2wav.dec_blk.{flat_idx}.conv2.weight"
+                elif rest == "conv2.conv.bias":
+                    return f"code2wav.dec_blk.{flat_idx}.conv2.bias"
+
+        return None
+
+
 @ModelBase.register("Qwen3NextForCausalLM")
 class Qwen3NextModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3NEXT
@@ -4456,6 +4988,57 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
         if name.startswith("model.visual."):
             return []
 
+        return super().modify_tensors(data_torch, name, bid)
+
+
+class Qwen3OmniVisionMmprojModel(Qwen3VLVisionModel):
+    """Qwen3-Omni Vision mmproj model.
+
+    Uses the same vision architecture as Qwen3-VL (27-layer ViT with deepstack).
+    The only difference is tensor prefix: thinker.visual.* instead of model.visual.*
+
+    Usage: python convert_hf_to_gguf.py <model> --mmproj --mmproj-modality vision
+    """
+    has_vision_encoder = True
+    has_audio_encoder = False
+
+    def __init__(self, *args, **kwargs):
+        # Need to set up the config properly before calling super().__init__
+        import json
+        dir_model = args[0] if args else kwargs.get("dir_model")
+        assert dir_model is not None, "dir_model is required"
+        config_path = dir_model / "config.json"
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+
+        # Get n_embd_text from nested thinker_config.text_config
+        thinker_config = config.get("thinker_config", config)
+        text_config = thinker_config.get("text_config", thinker_config)
+        self._n_embd_text_override = text_config.get("hidden_size", 2048)
+
+        super().__init__(*args, **kwargs)
+
+        # Override the wrong n_embd_text that MmprojModel found
+        self.n_embd_text = self._n_embd_text_override
+
+    def get_vision_config(self) -> dict[str, Any] | None:
+        # Qwen3-Omni has nested config at thinker_config.vision_config
+        thinker_config = self.global_config.get("thinker_config", self.global_config)
+        return thinker_config.get("vision_config")
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        return None  # Vision-only mmproj
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Strip thinker prefix if present - Qwen3-Omni uses thinker.visual.*
+        if name.startswith("thinker."):
+            name = name.replace("thinker.", "model.", 1)
+
+        # Only process vision tensors
+        if not name.startswith("model.visual."):
+            return []
+
+        # Delegate to parent class which handles Qwen3VL vision tensor mapping
         return super().modify_tensors(data_torch, name, bid)
 
 
@@ -10748,6 +11331,14 @@ def parse_args() -> argparse.Namespace:
         help="(Experimental) Export multimodal projector (mmproj) for vision models. This will only work on some vision models. A prefix 'mmproj-' will be added to the output file name.",
     )
     parser.add_argument(
+        "--mmproj-modality", type=str, default=None, choices=["audio", "vision"],
+        help="For models with both audio and vision encoders (e.g., Qwen3-Omni), specify which modality to export. Default: auto-detect or audio if both present.",
+    )
+    parser.add_argument(
+        "--talker", action="store_true",
+        help="(Experimental) Export talker (speech synthesis) model. This will only work on some multimodal models. A prefix 'talker-' will be added to the output file name.",
+    )
+    parser.add_argument(
         "--mistral-format", action="store_true",
         help="Whether the model is stored following the Mistral format.",
     )
@@ -10877,16 +11468,29 @@ def main() -> None:
 
     with torch.inference_mode():
         output_type = ftype_map[args.outtype]
-        model_type = ModelType.MMPROJ if args.mmproj else ModelType.TEXT
+        if args.talker:
+            model_type = ModelType.TALKER
+        elif args.mmproj:
+            model_type = ModelType.MMPROJ
+        else:
+            model_type = ModelType.TEXT
         hparams = ModelBase.load_hparams(dir_model, is_mistral_format)
         if not is_mistral_format:
             model_architecture = get_model_architecture(hparams, model_type)
             logger.info(f"Model architecture: {model_architecture}")
-            try:
-                model_class = ModelBase.from_model_architecture(model_architecture, model_type=model_type)
-            except NotImplementedError:
-                logger.error(f"Model {model_architecture} is not supported")
-                sys.exit(1)
+
+            # Special handling for Qwen3-Omni vision mmproj
+            if (model_type == ModelType.MMPROJ
+                    and model_architecture == "Qwen3OmniMoeForConditionalGeneration"
+                    and args.mmproj_modality == "vision"):
+                model_class = Qwen3OmniVisionMmprojModel
+                logger.info("Using Qwen3-Omni vision mmproj (--mmproj-modality=vision)")
+            else:
+                try:
+                    model_class = ModelBase.from_model_architecture(model_architecture, model_type=model_type)
+                except NotImplementedError:
+                    logger.error(f"Model {model_architecture} is not supported")
+                    sys.exit(1)
         elif args.mmproj:
             assert hparams.get("vision_encoder") is not None, "This model does not support multimodal"
             model_class = PixtralModel

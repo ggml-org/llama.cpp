@@ -1561,6 +1561,8 @@ class TensorNameMap:
         MODEL_TENSOR.A_ENC_CONV1D: (
             "audio_tower.conv{bid}", # ultravox
             "conformer.pre_encode.conv.{bid}", # lfm2
+            "audio_tower.conv2d{bid}",  # qwen3omni - 2D conv layers (conv2d1, conv2d2, conv2d3)
+            "audio_tower.conv_out",     # qwen3omni - linear projection from conv to transformer
         ),
 
         MODEL_TENSOR.A_PRE_NORM: (),
@@ -1649,12 +1651,13 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_MMPROJ: (
             "audio.multi_modal_projector.linear_{bid}", # ultravox
-            "audio_adapter.model.{bid}" # lfm2
+            "audio_adapter.model.{bid}", # lfm2
+            "audio_tower.proj{bid}",  # qwen3omni - two-layer MLP projector (proj1, proj2)
         ),
 
         MODEL_TENSOR.A_MMPROJ_FC: (
             "audio.multi_modal_projector.linear", # qwen2audio
-            "audio_tower.proj", # qwen2omni
+            "audio_tower.proj", # qwen2omni (single layer)
         ),
 
         MODEL_TENSOR.A_MM_NORM_PRE: (
@@ -1683,6 +1686,258 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_NORM_CONV: (
             "conformer.layers.{bid}.norm_conv", # lfm2
+        ),
+
+        # Talker (Qwen3-Omni speech synthesis)
+        MODEL_TENSOR.TALKER_TEXT_PROJ_FC1: (
+            "talker.text_projection.linear_fc1",  # qwen3omni - projects thinker hidden to talker dim (MLP fc1)
+        ),
+
+        MODEL_TENSOR.TALKER_TEXT_PROJ_FC2: (
+            "talker.text_projection.linear_fc2",  # qwen3omni - projects thinker hidden to talker dim (MLP fc2)
+        ),
+
+        MODEL_TENSOR.TALKER_HIDDEN_PROJ_FC1: (
+            "talker.hidden_projection.linear_fc1",  # qwen3omni - hidden projection MLP fc1
+        ),
+
+        MODEL_TENSOR.TALKER_HIDDEN_PROJ_FC2: (
+            "talker.hidden_projection.linear_fc2",  # qwen3omni - hidden projection MLP fc2
+        ),
+
+        MODEL_TENSOR.TALKER_CODEC_HEAD: (
+            "talker.codec_head",  # qwen3omni - predicts first codebook token
+        ),
+
+        MODEL_TENSOR.TALKER_CODEC_EMBD: (
+            "talker.codec_embeddings.{bid}",  # qwen3omni - codec embeddings (16 codebooks)
+        ),
+
+        # Talker code_predictor (5-layer transformer + 15 lm heads)
+        MODEL_TENSOR.TALKER_CP_CODEC_EMBD: (
+            "talker.code_predictor.model.codec_embedding.{bid}",  # qwen3omni - code_predictor codec embeddings
+        ),
+
+        MODEL_TENSOR.TALKER_CP_ATTN_Q: (
+            "talker.code_predictor.model.layers.{bid}.self_attn.q_proj",  # qwen3omni
+        ),
+
+        MODEL_TENSOR.TALKER_CP_ATTN_K: (
+            "talker.code_predictor.model.layers.{bid}.self_attn.k_proj",  # qwen3omni
+        ),
+
+        MODEL_TENSOR.TALKER_CP_ATTN_V: (
+            "talker.code_predictor.model.layers.{bid}.self_attn.v_proj",  # qwen3omni
+        ),
+
+        MODEL_TENSOR.TALKER_CP_ATTN_OUT: (
+            "talker.code_predictor.model.layers.{bid}.self_attn.o_proj",  # qwen3omni
+        ),
+
+        MODEL_TENSOR.TALKER_CP_ATTN_Q_NORM: (
+            "talker.code_predictor.model.layers.{bid}.self_attn.q_norm",  # qwen3omni - QK norm
+        ),
+
+        MODEL_TENSOR.TALKER_CP_ATTN_K_NORM: (
+            "talker.code_predictor.model.layers.{bid}.self_attn.k_norm",  # qwen3omni - QK norm
+        ),
+
+        MODEL_TENSOR.TALKER_CP_ATTN_NORM: (
+            "talker.code_predictor.model.layers.{bid}.input_layernorm",  # qwen3omni
+        ),
+
+        MODEL_TENSOR.TALKER_CP_FFN_GATE: (
+            "talker.code_predictor.model.layers.{bid}.mlp.gate_proj",  # qwen3omni
+        ),
+
+        MODEL_TENSOR.TALKER_CP_FFN_UP: (
+            "talker.code_predictor.model.layers.{bid}.mlp.up_proj",  # qwen3omni
+        ),
+
+        MODEL_TENSOR.TALKER_CP_FFN_DOWN: (
+            "talker.code_predictor.model.layers.{bid}.mlp.down_proj",  # qwen3omni
+        ),
+
+        MODEL_TENSOR.TALKER_CP_FFN_NORM: (
+            "talker.code_predictor.model.layers.{bid}.post_attention_layernorm",  # qwen3omni
+        ),
+
+        MODEL_TENSOR.TALKER_CP_OUTPUT_NORM: (
+            "talker.code_predictor.model.norm",  # qwen3omni - final output norm
+        ),
+
+        MODEL_TENSOR.TALKER_CP_LM_HEAD: (
+            "talker.code_predictor.lm_head.{bid}",  # qwen3omni - 15 per-codebook lm heads
+        ),
+
+        # Code2Wav (Qwen3-Omni HiFi-GAN vocoder)
+        # Input embedding
+        MODEL_TENSOR.C2W_CODE_EMBD: (
+            "code2wav.code_embedding",  # qwen3omni codec token embedding
+        ),
+
+        # Pre-transformer (8 layers)
+        MODEL_TENSOR.C2W_PRE_ATTN_Q: (
+            "code2wav.pre_transformer.layers.{bid}.self_attn.q_proj",
+        ),
+
+        MODEL_TENSOR.C2W_PRE_ATTN_K: (
+            "code2wav.pre_transformer.layers.{bid}.self_attn.k_proj",
+        ),
+
+        MODEL_TENSOR.C2W_PRE_ATTN_V: (
+            "code2wav.pre_transformer.layers.{bid}.self_attn.v_proj",
+        ),
+
+        MODEL_TENSOR.C2W_PRE_ATTN_OUT: (
+            "code2wav.pre_transformer.layers.{bid}.self_attn.o_proj",
+        ),
+
+        MODEL_TENSOR.C2W_PRE_ATTN_NORM: (
+            "code2wav.pre_transformer.layers.{bid}.input_layernorm",
+        ),
+
+        MODEL_TENSOR.C2W_PRE_FFN_GATE: (
+            "code2wav.pre_transformer.layers.{bid}.mlp.gate_proj",
+        ),
+
+        MODEL_TENSOR.C2W_PRE_FFN_UP: (
+            "code2wav.pre_transformer.layers.{bid}.mlp.up_proj",
+        ),
+
+        MODEL_TENSOR.C2W_PRE_FFN_DOWN: (
+            "code2wav.pre_transformer.layers.{bid}.mlp.down_proj",
+        ),
+
+        MODEL_TENSOR.C2W_PRE_FFN_NORM: (
+            "code2wav.pre_transformer.layers.{bid}.post_attention_layernorm",
+        ),
+
+        MODEL_TENSOR.C2W_PRE_ATTN_SCALE: (
+            "code2wav.pre_transformer.layers.{bid}.self_attn_layer_scale.scale",
+        ),
+
+        MODEL_TENSOR.C2W_PRE_FFN_SCALE: (
+            "code2wav.pre_transformer.layers.{bid}.mlp_layer_scale.scale",
+        ),
+
+        MODEL_TENSOR.C2W_PRE_OUTPUT_NORM: (
+            "code2wav.pre_transformer.norm",  # final output norm
+        ),
+
+        # Upsample blocks (4 ConvNeXt-style blocks)
+        MODEL_TENSOR.C2W_UP_CONV: (
+            "code2wav.upsample.{bid}.0.conv",  # transpose conv
+        ),
+
+        MODEL_TENSOR.C2W_UP_DWCONV: (
+            "code2wav.upsample.{bid}.1.dwconv.conv",  # depthwise conv
+        ),
+
+        MODEL_TENSOR.C2W_UP_NORM: (
+            "code2wav.upsample.{bid}.1.norm",  # layer norm
+        ),
+
+        MODEL_TENSOR.C2W_UP_PWCONV1: (
+            "code2wav.upsample.{bid}.1.pwconv1",  # pointwise conv 1
+        ),
+
+        MODEL_TENSOR.C2W_UP_PWCONV2: (
+            "code2wav.upsample.{bid}.1.pwconv2",  # pointwise conv 2
+        ),
+
+        MODEL_TENSOR.C2W_UP_GAMMA: (
+            "code2wav.upsample.{bid}.1.gamma",  # layer scale
+        ),
+
+        # Upsample biases (ConvNeXt)
+        MODEL_TENSOR.C2W_UP_CONV_B: (
+            "code2wav.upsample.{bid}.0.conv.bias",  # transpose conv bias
+        ),
+
+        MODEL_TENSOR.C2W_UP_DWCONV_B: (
+            "code2wav.upsample.{bid}.1.dwconv.conv.bias",  # depthwise conv bias
+        ),
+
+        MODEL_TENSOR.C2W_UP_NORM_B: (
+            "code2wav.upsample.{bid}.1.norm.bias",  # layer norm bias
+        ),
+
+        MODEL_TENSOR.C2W_UP_PWCONV1_B: (
+            "code2wav.upsample.{bid}.1.pwconv1.bias",  # pointwise conv 1 bias
+        ),
+
+        MODEL_TENSOR.C2W_UP_PWCONV2_B: (
+            "code2wav.upsample.{bid}.1.pwconv2.bias",  # pointwise conv 2 bias
+        ),
+
+        # HiFi-GAN decoder (Snake activation + residual blocks)
+        # Structure: decoder.0 = conv_in, decoder.1-4 = upsample stages,
+        #            decoder.5 = final snake, decoder.6 = conv_out
+        MODEL_TENSOR.C2W_DEC_CONV_IN: (
+            "code2wav.decoder.0.conv",  # initial conv (1024→1536)
+        ),
+
+        # Outer Snake for each stage (stage 1-4: decoder.{stage}.block.0.alpha/beta)
+        MODEL_TENSOR.C2W_DEC_SNAKE_ALPHA: (
+            "code2wav.decoder.{bid}.block.0.alpha",  # outer Snake alpha (bid = stage 1-4)
+        ),
+
+        MODEL_TENSOR.C2W_DEC_SNAKE_BETA: (
+            "code2wav.decoder.{bid}.block.0.beta",  # outer Snake beta (bid = stage 1-4)
+        ),
+
+        # Upsample conv for each stage (decoder.{stage}.block.1.conv)
+        MODEL_TENSOR.C2W_DEC_UPSAMPLE: (
+            "code2wav.decoder.{bid}.block.1.conv",  # transpose conv for upsampling (bid = stage 1-4)
+        ),
+
+        MODEL_TENSOR.C2W_DEC_UPSAMPLE_B: (
+            "code2wav.decoder.{bid}.block.1.conv.bias",  # transpose conv bias (bid = stage 1-4)
+        ),
+
+        # ResBlock tensors - 3 blocks per stage at decoder.{stage}.block.{2,3,4}
+        # bid is flattened: stage * 10 + (block_idx - 2), so stage 1, block 2 = 10
+        # These are handled manually in converter, mappings are for output tensor names only
+        MODEL_TENSOR.C2W_DEC_BLK_ACT1_A: (
+            "code2wav.dec_blk.{bid}.act1_alpha",  # flattened from decoder.X.block.Y.act1.alpha
+        ),
+
+        MODEL_TENSOR.C2W_DEC_BLK_ACT1_B: (
+            "code2wav.dec_blk.{bid}.act1_beta",  # flattened from decoder.X.block.Y.act1.beta
+        ),
+
+        MODEL_TENSOR.C2W_DEC_BLK_CONV1: (
+            "code2wav.dec_blk.{bid}.conv1",  # flattened from decoder.X.block.Y.conv1.conv
+        ),
+
+        MODEL_TENSOR.C2W_DEC_BLK_ACT2_A: (
+            "code2wav.dec_blk.{bid}.act2_alpha",  # flattened from decoder.X.block.Y.act2.alpha
+        ),
+
+        MODEL_TENSOR.C2W_DEC_BLK_ACT2_B: (
+            "code2wav.dec_blk.{bid}.act2_beta",  # flattened from decoder.X.block.Y.act2.beta
+        ),
+
+        MODEL_TENSOR.C2W_DEC_BLK_CONV2: (
+            "code2wav.dec_blk.{bid}.conv2",  # flattened from decoder.X.block.Y.conv2.conv
+        ),
+
+        # Unused - retained for potential future use
+        MODEL_TENSOR.C2W_DEC_BLK_SNAKE_A: (
+            "code2wav.dec_blk.{bid}.snake_alpha",  # not used by current model
+        ),
+
+        MODEL_TENSOR.C2W_DEC_BLK_SNAKE_B: (
+            "code2wav.dec_blk.{bid}.snake_beta",  # not used by current model
+        ),
+
+        MODEL_TENSOR.C2W_DEC_BLK_CONV: (
+            "code2wav.dec_blk.{bid}.conv",  # not used by current model
+        ),
+
+        MODEL_TENSOR.C2W_DEC_CONV_OUT: (
+            "code2wav.decoder.6.conv",  # final output conv (1536→1)
         ),
 
         # NextN/MTP tensors for GLM4_MOE

@@ -223,6 +223,25 @@ class Keys:
     class ShortConv:
         L_CACHE = "{arch}.shortconv.l_cache"
 
+    class Talker:
+        # Talker model configuration (Qwen3-Omni speech synthesis)
+        ACCEPT_HIDDEN_LAYER   = "{arch}.talker.accept_hidden_layer"   # which Thinker layer to extract from
+        THINKER_HIDDEN_SIZE   = "{arch}.talker.thinker_hidden_size"   # Thinker model hidden dimension (2048)
+        TEXT_PROJ_DIM         = "{arch}.talker.text_proj_dim"         # text projection output dimension
+        CODEC_VOCAB_SIZE      = "{arch}.talker.codec_vocab_size"      # codec vocabulary size (3072)
+        NUM_CODEBOOKS         = "{arch}.talker.num_codebooks"         # number of codebook embeddings (16)
+
+    class Code2Wav:
+        # Code2Wav neural audio codec configuration (Qwen3-Omni)
+        CODEBOOK_SIZE         = "{arch}.code2wav.codebook_size"           # codebook vocabulary size (2048)
+        CODEBOOK_DIM          = "{arch}.code2wav.codebook_dim"            # codebook embedding dimension (512)
+        NUM_QUANTIZERS        = "{arch}.code2wav.num_quantizers"          # number of quantizers (16)
+        SEMANTIC_CODEBOOK_SIZE = "{arch}.code2wav.semantic_codebook_size" # semantic codebook size (4096)
+        HIDDEN_SIZE           = "{arch}.code2wav.hidden_size"             # transformer hidden size (1024)
+        DECODER_DIM           = "{arch}.code2wav.decoder_dim"             # decoder dimension (1536)
+        UPSAMPLE_RATES        = "{arch}.code2wav.upsample_rates"          # upsample rates [8, 5, 4, 3]
+        SLIDING_WINDOW        = "{arch}.code2wav.sliding_window"          # attention sliding window (72)
+
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"
         PRE                  = "tokenizer.ggml.pre"
@@ -372,6 +391,8 @@ class MODEL_ARCH(IntEnum):
     QWEN3NEXT        = auto()
     QWEN3VL          = auto()
     QWEN3VLMOE       = auto()
+    QWEN3OMNIMOE     = auto()
+    QWEN3OMNI_TALKER = auto()
     PHI2             = auto()
     PHI3             = auto()
     PHIMOE           = auto()
@@ -734,6 +755,75 @@ class MODEL_TENSOR(IntEnum):
     A_ENC_CONV_NORM        = auto() # SSM conv
     A_ENC_CONV_PW1         = auto()
     A_ENC_CONV_PW2         = auto()
+    # qwen3-omni talker
+    TALKER_TEXT_PROJ_FC1   = auto()  # project thinker hidden states to talker dim (MLP fc1)
+    TALKER_TEXT_PROJ_FC2   = auto()  # project thinker hidden states to talker dim (MLP fc2)
+    TALKER_HIDDEN_PROJ_FC1 = auto()  # project hidden states (MLP fc1)
+    TALKER_HIDDEN_PROJ_FC2 = auto()  # project hidden states (MLP fc2)
+    TALKER_CODEC_HEAD      = auto()  # predict first codebook token
+    TALKER_CODEC_EMBD    = auto()  # codec embeddings (16 codebooks)
+    # qwen3-omni talker code_predictor (5-layer transformer + 15 lm heads)
+    TALKER_CP_CODEC_EMBD = auto()  # code_predictor codec embeddings (15 codebooks)
+    TALKER_CP_ATTN_Q     = auto()  # code_predictor attention query
+    TALKER_CP_ATTN_K     = auto()  # code_predictor attention key
+    TALKER_CP_ATTN_V     = auto()  # code_predictor attention value
+    TALKER_CP_ATTN_OUT   = auto()  # code_predictor attention output
+    TALKER_CP_ATTN_Q_NORM = auto() # code_predictor Q norm (QK normalization)
+    TALKER_CP_ATTN_K_NORM = auto() # code_predictor K norm (QK normalization)
+    TALKER_CP_ATTN_NORM  = auto()  # code_predictor input layernorm
+    TALKER_CP_FFN_GATE   = auto()  # code_predictor FFN gate projection
+    TALKER_CP_FFN_UP     = auto()  # code_predictor FFN up projection
+    TALKER_CP_FFN_DOWN   = auto()  # code_predictor FFN down projection
+    TALKER_CP_FFN_NORM   = auto()  # code_predictor post-attention layernorm
+    TALKER_CP_OUTPUT_NORM = auto() # code_predictor final output norm
+    TALKER_CP_LM_HEAD    = auto()  # code_predictor lm heads (15 per-codebook heads)
+    # qwen3-omni code2wav (HiFi-GAN vocoder)
+    # Input embedding
+    C2W_CODE_EMBD        = auto()  # code2wav.code_embedding - codec token embedding
+    # Pre-transformer (8 layers)
+    C2W_PRE_ATTN_Q       = auto()  # pre_transformer.layers.{bid}.self_attn.q_proj
+    C2W_PRE_ATTN_K       = auto()  # pre_transformer.layers.{bid}.self_attn.k_proj
+    C2W_PRE_ATTN_V       = auto()  # pre_transformer.layers.{bid}.self_attn.v_proj
+    C2W_PRE_ATTN_OUT     = auto()  # pre_transformer.layers.{bid}.self_attn.o_proj
+    C2W_PRE_ATTN_NORM    = auto()  # pre_transformer.layers.{bid}.input_layernorm
+    C2W_PRE_FFN_GATE     = auto()  # pre_transformer.layers.{bid}.mlp.gate_proj
+    C2W_PRE_FFN_UP       = auto()  # pre_transformer.layers.{bid}.mlp.up_proj
+    C2W_PRE_FFN_DOWN     = auto()  # pre_transformer.layers.{bid}.mlp.down_proj
+    C2W_PRE_FFN_NORM     = auto()  # pre_transformer.layers.{bid}.post_attention_layernorm
+    C2W_PRE_ATTN_SCALE   = auto()  # pre_transformer.layers.{bid}.self_attn_layer_scale
+    C2W_PRE_FFN_SCALE    = auto()  # pre_transformer.layers.{bid}.mlp_layer_scale
+    C2W_PRE_OUTPUT_NORM  = auto()  # pre_transformer.norm - final norm
+    # Upsample blocks (4 ConvNeXt-style blocks)
+    C2W_UP_CONV          = auto()  # upsample.{bid}.0.conv - transpose conv
+    C2W_UP_DWCONV        = auto()  # upsample.{bid}.1.dwconv.conv - depthwise conv
+    C2W_UP_NORM          = auto()  # upsample.{bid}.1.norm - layer norm
+    C2W_UP_PWCONV1       = auto()  # upsample.{bid}.1.pwconv1 - pointwise conv 1
+    C2W_UP_PWCONV2       = auto()  # upsample.{bid}.1.pwconv2 - pointwise conv 2
+    C2W_UP_GAMMA         = auto()  # upsample.{bid}.1.gamma - layer scale
+    # Upsample biases
+    C2W_UP_CONV_B        = auto()  # upsample.{bid}.0.conv.bias - transpose conv bias
+    C2W_UP_DWCONV_B      = auto()  # upsample.{bid}.1.dwconv.conv.bias - depthwise conv bias
+    C2W_UP_NORM_B        = auto()  # upsample.{bid}.1.norm.bias - layer norm bias
+    C2W_UP_PWCONV1_B     = auto()  # upsample.{bid}.1.pwconv1.bias - pointwise conv 1 bias
+    C2W_UP_PWCONV2_B     = auto()  # upsample.{bid}.1.pwconv2.bias - pointwise conv 2 bias
+    # HiFi-GAN decoder (Snake activation + residual blocks)
+    C2W_DEC_CONV_IN      = auto()  # decoder.0.conv - initial conv
+    C2W_DEC_SNAKE_ALPHA  = auto()  # decoder.{bid}.alpha - outer Snake alpha
+    C2W_DEC_SNAKE_BETA   = auto()  # decoder.{bid}.beta - outer Snake beta
+    C2W_DEC_UPSAMPLE     = auto()  # decoder.{bid}.convtr - transpose conv for upsampling
+    C2W_DEC_UPSAMPLE_B   = auto()  # decoder.{bid}.convtr.bias - transpose conv bias
+    C2W_DEC_BLK_SNAKE_A  = auto()  # decoder.{bid}.block.{idx}.alpha - block Snake alpha
+    C2W_DEC_BLK_SNAKE_B  = auto()  # decoder.{bid}.block.{idx}.beta - block Snake beta
+    C2W_DEC_BLK_CONV     = auto()  # decoder.{bid}.block.{idx}.conv - single conv
+    C2W_DEC_BLK_CONV1    = auto()  # decoder.{bid}.block.{idx}.conv1.conv - dual conv 1
+    C2W_DEC_BLK_CONV2    = auto()  # decoder.{bid}.block.{idx}.conv2.conv - dual conv 2
+    C2W_DEC_BLK_ACT1_A   = auto()  # decoder.{bid}.block.{idx}.act1.alpha
+    C2W_DEC_BLK_ACT1_B   = auto()  # decoder.{bid}.block.{idx}.act1.beta
+    C2W_DEC_BLK_ACT2_A   = auto()  # decoder.{bid}.block.{idx}.act2.alpha
+    C2W_DEC_BLK_ACT2_B   = auto()  # decoder.{bid}.block.{idx}.act2.beta
+    C2W_DEC_FINAL_SNAKE_A = auto()  # decoder.5.alpha - final Snake alpha
+    C2W_DEC_FINAL_SNAKE_B = auto()  # decoder.5.beta - final Snake beta
+    C2W_DEC_CONV_OUT     = auto()  # decoder.6.conv - final output conv
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
@@ -768,6 +858,8 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN3NEXT:        "qwen3next",
     MODEL_ARCH.QWEN3VL:          "qwen3vl",
     MODEL_ARCH.QWEN3VLMOE:       "qwen3vlmoe",
+    MODEL_ARCH.QWEN3OMNIMOE:     "qwen3omnimoe",
+    MODEL_ARCH.QWEN3OMNI_TALKER: "qwen3omni-talker",
     MODEL_ARCH.PHI2:             "phi2",
     MODEL_ARCH.PHI3:             "phi3",
     MODEL_ARCH.PHIMOE:           "phimoe",
@@ -1130,6 +1222,75 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.NEXTN_HNORM:               "blk.{bid}.nextn.hnorm",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD:    "blk.{bid}.nextn.shared_head_head",
     MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM:    "blk.{bid}.nextn.shared_head_norm",
+    # qwen3-omni talker
+    MODEL_TENSOR.TALKER_TEXT_PROJ_FC1:      "talker.text_projection.fc1",
+    MODEL_TENSOR.TALKER_TEXT_PROJ_FC2:      "talker.text_projection.fc2",
+    MODEL_TENSOR.TALKER_HIDDEN_PROJ_FC1:    "talker.hidden_projection.fc1",
+    MODEL_TENSOR.TALKER_HIDDEN_PROJ_FC2:    "talker.hidden_projection.fc2",
+    MODEL_TENSOR.TALKER_CODEC_HEAD:         "talker.codec_head",
+    MODEL_TENSOR.TALKER_CODEC_EMBD:         "talker.codec_embeddings.{bid}",
+    # qwen3-omni talker code_predictor
+    MODEL_TENSOR.TALKER_CP_CODEC_EMBD:      "talker.code_predictor.codec_embeddings.{bid}",
+    MODEL_TENSOR.TALKER_CP_ATTN_Q:          "talker.code_predictor.blk.{bid}.attn_q",
+    MODEL_TENSOR.TALKER_CP_ATTN_K:          "talker.code_predictor.blk.{bid}.attn_k",
+    MODEL_TENSOR.TALKER_CP_ATTN_V:          "talker.code_predictor.blk.{bid}.attn_v",
+    MODEL_TENSOR.TALKER_CP_ATTN_OUT:        "talker.code_predictor.blk.{bid}.attn_out",
+    MODEL_TENSOR.TALKER_CP_ATTN_Q_NORM:     "talker.code_predictor.blk.{bid}.attn_q_norm",
+    MODEL_TENSOR.TALKER_CP_ATTN_K_NORM:     "talker.code_predictor.blk.{bid}.attn_k_norm",
+    MODEL_TENSOR.TALKER_CP_ATTN_NORM:       "talker.code_predictor.blk.{bid}.attn_norm",
+    MODEL_TENSOR.TALKER_CP_FFN_GATE:        "talker.code_predictor.blk.{bid}.ffn_gate",
+    MODEL_TENSOR.TALKER_CP_FFN_UP:          "talker.code_predictor.blk.{bid}.ffn_up",
+    MODEL_TENSOR.TALKER_CP_FFN_DOWN:        "talker.code_predictor.blk.{bid}.ffn_down",
+    MODEL_TENSOR.TALKER_CP_FFN_NORM:        "talker.code_predictor.blk.{bid}.ffn_norm",
+    MODEL_TENSOR.TALKER_CP_OUTPUT_NORM:     "talker.code_predictor.output_norm",
+    MODEL_TENSOR.TALKER_CP_LM_HEAD:         "talker.code_predictor.lm_head.{bid}",
+    # qwen3-omni code2wav (HiFi-GAN vocoder)
+    # Input embedding
+    MODEL_TENSOR.C2W_CODE_EMBD:             "code2wav.code_embd",
+    # Pre-transformer (8 layers)
+    MODEL_TENSOR.C2W_PRE_ATTN_Q:            "code2wav.pre.blk.{bid}.attn_q",
+    MODEL_TENSOR.C2W_PRE_ATTN_K:            "code2wav.pre.blk.{bid}.attn_k",
+    MODEL_TENSOR.C2W_PRE_ATTN_V:            "code2wav.pre.blk.{bid}.attn_v",
+    MODEL_TENSOR.C2W_PRE_ATTN_OUT:          "code2wav.pre.blk.{bid}.attn_out",
+    MODEL_TENSOR.C2W_PRE_ATTN_NORM:         "code2wav.pre.blk.{bid}.attn_norm",
+    MODEL_TENSOR.C2W_PRE_FFN_GATE:          "code2wav.pre.blk.{bid}.ffn_gate",
+    MODEL_TENSOR.C2W_PRE_FFN_UP:            "code2wav.pre.blk.{bid}.ffn_up",
+    MODEL_TENSOR.C2W_PRE_FFN_DOWN:          "code2wav.pre.blk.{bid}.ffn_down",
+    MODEL_TENSOR.C2W_PRE_FFN_NORM:          "code2wav.pre.blk.{bid}.ffn_norm",
+    MODEL_TENSOR.C2W_PRE_ATTN_SCALE:        "code2wav.pre.blk.{bid}.attn_scale",
+    MODEL_TENSOR.C2W_PRE_FFN_SCALE:         "code2wav.pre.blk.{bid}.ffn_scale",
+    MODEL_TENSOR.C2W_PRE_OUTPUT_NORM:       "code2wav.pre.output_norm",
+    # Upsample blocks (ConvNeXt style)
+    MODEL_TENSOR.C2W_UP_CONV:               "code2wav.up.{bid}.conv",
+    MODEL_TENSOR.C2W_UP_DWCONV:             "code2wav.up.{bid}.dwconv",
+    MODEL_TENSOR.C2W_UP_NORM:               "code2wav.up.{bid}.norm",
+    MODEL_TENSOR.C2W_UP_PWCONV1:            "code2wav.up.{bid}.pwconv1",
+    MODEL_TENSOR.C2W_UP_PWCONV2:            "code2wav.up.{bid}.pwconv2",
+    MODEL_TENSOR.C2W_UP_GAMMA:              "code2wav.up.{bid}.gamma",
+    # Upsample biases
+    MODEL_TENSOR.C2W_UP_CONV_B:             "code2wav.up.{bid}.conv.bias",
+    MODEL_TENSOR.C2W_UP_DWCONV_B:           "code2wav.up.{bid}.dwconv.bias",
+    MODEL_TENSOR.C2W_UP_NORM_B:             "code2wav.up.{bid}.norm.bias",
+    MODEL_TENSOR.C2W_UP_PWCONV1_B:          "code2wav.up.{bid}.pwconv1.bias",
+    MODEL_TENSOR.C2W_UP_PWCONV2_B:          "code2wav.up.{bid}.pwconv2.bias",
+    # HiFi-GAN decoder (uses flattened bid = dec_blk * 10 + inner_blk for nested blocks)
+    MODEL_TENSOR.C2W_DEC_CONV_IN:           "code2wav.dec.conv_in",
+    MODEL_TENSOR.C2W_DEC_SNAKE_ALPHA:       "code2wav.dec.{bid}.snake_alpha",
+    MODEL_TENSOR.C2W_DEC_SNAKE_BETA:        "code2wav.dec.{bid}.snake_beta",
+    MODEL_TENSOR.C2W_DEC_UPSAMPLE:          "code2wav.dec.{bid}.upsample",
+    MODEL_TENSOR.C2W_DEC_UPSAMPLE_B:        "code2wav.dec.{bid}.upsample.bias",
+    MODEL_TENSOR.C2W_DEC_BLK_SNAKE_A:       "code2wav.dec_blk.{bid}.snake_alpha",
+    MODEL_TENSOR.C2W_DEC_BLK_SNAKE_B:       "code2wav.dec_blk.{bid}.snake_beta",
+    MODEL_TENSOR.C2W_DEC_BLK_CONV:          "code2wav.dec_blk.{bid}.conv",
+    MODEL_TENSOR.C2W_DEC_BLK_CONV1:         "code2wav.dec_blk.{bid}.conv1",
+    MODEL_TENSOR.C2W_DEC_BLK_CONV2:         "code2wav.dec_blk.{bid}.conv2",
+    MODEL_TENSOR.C2W_DEC_BLK_ACT1_A:        "code2wav.dec_blk.{bid}.act1_alpha",
+    MODEL_TENSOR.C2W_DEC_BLK_ACT1_B:        "code2wav.dec_blk.{bid}.act1_beta",
+    MODEL_TENSOR.C2W_DEC_BLK_ACT2_A:        "code2wav.dec_blk.{bid}.act2_alpha",
+    MODEL_TENSOR.C2W_DEC_BLK_ACT2_B:        "code2wav.dec_blk.{bid}.act2_beta",
+    MODEL_TENSOR.C2W_DEC_FINAL_SNAKE_A:     "code2wav.dec.final_snake_alpha",
+    MODEL_TENSOR.C2W_DEC_FINAL_SNAKE_B:     "code2wav.dec.final_snake_beta",
+    MODEL_TENSOR.C2W_DEC_CONV_OUT:          "code2wav.dec.conv_out",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
@@ -1717,6 +1878,115 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
+    ],
+    MODEL_ARCH.QWEN3OMNIMOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+    ],
+    MODEL_ARCH.QWEN3OMNI_TALKER: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_INP_SHEXP,  # Talker has shared expert gate (unlike Thinker)
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.TALKER_TEXT_PROJ_FC1,
+        MODEL_TENSOR.TALKER_TEXT_PROJ_FC2,
+        MODEL_TENSOR.TALKER_HIDDEN_PROJ_FC1,
+        MODEL_TENSOR.TALKER_HIDDEN_PROJ_FC2,
+        MODEL_TENSOR.TALKER_CODEC_HEAD,
+        MODEL_TENSOR.TALKER_CODEC_EMBD,
+        # Talker code_predictor (5-layer transformer + 15 lm heads)
+        MODEL_TENSOR.TALKER_CP_CODEC_EMBD,
+        MODEL_TENSOR.TALKER_CP_ATTN_Q,
+        MODEL_TENSOR.TALKER_CP_ATTN_K,
+        MODEL_TENSOR.TALKER_CP_ATTN_V,
+        MODEL_TENSOR.TALKER_CP_ATTN_OUT,
+        MODEL_TENSOR.TALKER_CP_ATTN_Q_NORM,
+        MODEL_TENSOR.TALKER_CP_ATTN_K_NORM,
+        MODEL_TENSOR.TALKER_CP_ATTN_NORM,
+        MODEL_TENSOR.TALKER_CP_FFN_GATE,
+        MODEL_TENSOR.TALKER_CP_FFN_UP,
+        MODEL_TENSOR.TALKER_CP_FFN_DOWN,
+        MODEL_TENSOR.TALKER_CP_FFN_NORM,
+        MODEL_TENSOR.TALKER_CP_OUTPUT_NORM,
+        MODEL_TENSOR.TALKER_CP_LM_HEAD,
+        # Code2Wav HiFi-GAN vocoder (bundled with Talker)
+        # Input embedding
+        MODEL_TENSOR.C2W_CODE_EMBD,
+        # Pre-transformer (8 layers)
+        MODEL_TENSOR.C2W_PRE_ATTN_Q,
+        MODEL_TENSOR.C2W_PRE_ATTN_K,
+        MODEL_TENSOR.C2W_PRE_ATTN_V,
+        MODEL_TENSOR.C2W_PRE_ATTN_OUT,
+        MODEL_TENSOR.C2W_PRE_ATTN_NORM,
+        MODEL_TENSOR.C2W_PRE_FFN_GATE,
+        MODEL_TENSOR.C2W_PRE_FFN_UP,
+        MODEL_TENSOR.C2W_PRE_FFN_DOWN,
+        MODEL_TENSOR.C2W_PRE_FFN_NORM,
+        MODEL_TENSOR.C2W_PRE_ATTN_SCALE,
+        MODEL_TENSOR.C2W_PRE_FFN_SCALE,
+        MODEL_TENSOR.C2W_PRE_OUTPUT_NORM,
+        # Upsample blocks (ConvNeXt style)
+        MODEL_TENSOR.C2W_UP_CONV,
+        MODEL_TENSOR.C2W_UP_DWCONV,
+        MODEL_TENSOR.C2W_UP_NORM,
+        MODEL_TENSOR.C2W_UP_PWCONV1,
+        MODEL_TENSOR.C2W_UP_PWCONV2,
+        MODEL_TENSOR.C2W_UP_GAMMA,
+        # Upsample biases
+        MODEL_TENSOR.C2W_UP_CONV_B,
+        MODEL_TENSOR.C2W_UP_DWCONV_B,
+        MODEL_TENSOR.C2W_UP_NORM_B,
+        MODEL_TENSOR.C2W_UP_PWCONV1_B,
+        MODEL_TENSOR.C2W_UP_PWCONV2_B,
+        # HiFi-GAN decoder
+        MODEL_TENSOR.C2W_DEC_CONV_IN,
+        MODEL_TENSOR.C2W_DEC_SNAKE_ALPHA,
+        MODEL_TENSOR.C2W_DEC_SNAKE_BETA,
+        MODEL_TENSOR.C2W_DEC_UPSAMPLE,
+        MODEL_TENSOR.C2W_DEC_UPSAMPLE_B,
+        MODEL_TENSOR.C2W_DEC_BLK_SNAKE_A,
+        MODEL_TENSOR.C2W_DEC_BLK_SNAKE_B,
+        MODEL_TENSOR.C2W_DEC_BLK_CONV,
+        MODEL_TENSOR.C2W_DEC_BLK_CONV1,
+        MODEL_TENSOR.C2W_DEC_BLK_CONV2,
+        MODEL_TENSOR.C2W_DEC_BLK_ACT1_A,
+        MODEL_TENSOR.C2W_DEC_BLK_ACT1_B,
+        MODEL_TENSOR.C2W_DEC_BLK_ACT2_A,
+        MODEL_TENSOR.C2W_DEC_BLK_ACT2_B,
+        MODEL_TENSOR.C2W_DEC_FINAL_SNAKE_A,
+        MODEL_TENSOR.C2W_DEC_FINAL_SNAKE_B,
+        MODEL_TENSOR.C2W_DEC_CONV_OUT,
     ],
     MODEL_ARCH.PLAMO: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -3467,6 +3737,7 @@ class VisionProjectorType:
     INTERNVL = "internvl"
     QWEN2A = "qwen2a" # audio
     GLMA = "glma" # audio
+    QWEN3OMNI_AUDIO = "qwen3omni_audio"  # audio
     QWEN25O = "qwen2.5o" # omni
     VOXTRAL = "voxtral"
     LFM2 = "lfm2"
