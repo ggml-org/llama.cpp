@@ -1230,12 +1230,15 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_PLAMO3:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-                hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
-                if (hparams.n_swa == 0) {
-                    hparams.n_swa = 2048;
+                const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+                if (found_swa && hparams.n_swa > 0) {
+                    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+                    hparams.rope_freq_base_train_swa  = 10000.0f;
+                    hparams.rope_freq_scale_train_swa = 1.0f;
+                    hparams.set_swa_pattern(8);
+                } else {
+                    hparams.swa_type = LLAMA_SWA_TYPE_NONE;
                 }
-                hparams.set_swa_pattern(8);
 
                 switch (hparams.n_layer) {
                     case 24: type = LLM_TYPE_2B; break;
@@ -3877,8 +3880,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
                         layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, i), {n_embd}, 0);
 
-                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff_cur}, 0);
-                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff_cur}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff_cur * 2}, 0);
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff_cur, n_embd}, 0);
                     }
                 } break;
@@ -7521,7 +7523,11 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_PLAMO3:
             {
-                llm = std::make_unique<llm_build_plamo3>(*this, params);
+                if (hparams.is_swa_any()) {
+                    llm = std::make_unique<llm_build_plamo3<true>> (*this, params);
+                } else {
+                    llm = std::make_unique<llm_build_plamo3<false>>(*this, params);
+                }
             } break;
         case LLM_ARCH_GPT2:
             {

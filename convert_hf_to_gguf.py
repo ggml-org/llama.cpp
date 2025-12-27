@@ -5063,30 +5063,13 @@ class Plamo3Model(TextModel):
         return []
 
     def set_gguf_parameters(self):
-        hparams = self.hparams
-        block_count = hparams["num_hidden_layers"]
-
-        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
-        self.gguf_writer.add_context_length(hparams["max_position_embeddings"])
-        self.gguf_writer.add_embedding_length(hparams["hidden_size"])
-        self.gguf_writer.add_feed_forward_length(hparams["intermediate_size"])
-        self.gguf_writer.add_block_count(block_count)
-        self.gguf_writer.add_head_count(hparams["num_attention_heads"])
-        self.gguf_writer.add_head_count_kv(hparams["num_key_value_heads"])
-        head_dim = hparams["head_dim"]
-        self.gguf_writer.add_key_length(head_dim)
-        self.gguf_writer.add_value_length(head_dim)
-        self.gguf_writer.add_layer_norm_rms_eps(hparams["rms_norm_eps"])
-        self.gguf_writer.add_rope_freq_base(hparams["rope_theta"])
-
-        window_size = hparams.get("window_size") or hparams.get("sliding_window") or 0
-        self.gguf_writer.add_sliding_window(window_size)
-
-        pattern = self._sliding_window_pattern(block_count)
-        if len(pattern) == block_count and any(pattern):
-            self.gguf_writer.add_sliding_window_pattern(pattern)
-
-        self.gguf_writer.add_file_type(self.ftype)
+        super().set_gguf_parameters()
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+        if (sliding_window := self.find_hparam(["window_size", "sliding_window"], optional=True)) is not None:
+            self.gguf_writer.add_sliding_window(sliding_window)
+            pattern = self._sliding_window_pattern(self.block_count)
+            if len(pattern) == self.block_count and any(pattern):
+                self.gguf_writer.add_sliding_window_pattern(pattern)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
 
@@ -5103,18 +5086,7 @@ class Plamo3Model(TextModel):
         elif name.endswith(".norm.weight"):
             data_torch = data_torch + 1.0
 
-        results: list[tuple[str, Tensor]] = []
-
-        if "gate_up_proj.weight" in name:
-            name_up = name.replace("gate_up_proj.weight", "up_proj.weight")
-            name_gate = name.replace("gate_up_proj.weight", "gate_proj.weight")
-            gate_proj_weight, up_proj_weight = torch.chunk(data_torch, 2, dim=0)
-            results.append((self.map_tensor_name(name_gate), gate_proj_weight))
-            results.append((self.map_tensor_name(name_up), up_proj_weight))
-        else:
-            results.append((self.map_tensor_name(name), data_torch))
-
-        return results
+        return [(self.map_tensor_name(name), data_torch)]
 
 
 @ModelBase.register("CodeShellForCausalLM")

@@ -1,18 +1,20 @@
 #include "models.h"
 
-llm_build_plamo3::llm_build_plamo3(const llama_model & model, const llm_graph_params & params) :
+template <bool iswa>
+llm_build_plamo3<iswa>::llm_build_plamo3(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params) {
     const int64_t head_dim_q = hparams.n_embd_head_k;
     const int64_t head_dim_v = hparams.n_embd_head_v;
 
+    ggml_tensor * cur;
     ggml_tensor * inpL = build_inp_embd(model.tok_embd);
     ggml_tensor * inp_pos = build_inp_pos();
 
-    llm_graph_input_attn_kv_iswa * inp_attn_iswa = nullptr;
-    llm_graph_input_attn_kv * inp_attn = nullptr;
+    using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv>;
+    inp_attn_type * inp_attn = nullptr;
 
-    if (hparams.is_swa_any()) {
-        inp_attn_iswa = build_attn_inp_kv_iswa();
+    if constexpr (iswa) {
+        inp_attn = build_attn_inp_kv_iswa();
     } else {
         inp_attn = build_attn_inp_kv();
     }
@@ -26,7 +28,7 @@ llm_build_plamo3::llm_build_plamo3(const llama_model & model, const llm_graph_pa
         const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
         ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
 
-        ggml_tensor * cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+        cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
         ggml_tensor * qkv = build_lora_mm(model.layers[il].wqkv, cur);
@@ -64,15 +66,9 @@ llm_build_plamo3::llm_build_plamo3(const llama_model & model, const llm_graph_pa
 
         const float attn_scale = 1.0f / sqrtf(float(head_dim_q));
 
-        if (inp_attn_iswa) {
-            cur = build_attn(inp_attn_iswa,
-                    model.layers[il].wo, NULL,
-                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, attn_scale, il);
-        } else {
-            cur = build_attn(inp_attn,
-                    model.layers[il].wo, NULL,
-                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, attn_scale, il);
-        }
+        cur = build_attn(inp_attn,
+                model.layers[il].wo, NULL,
+                Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, attn_scale, il);
         cb(cur, "attn_out", il);
 
         if (il == n_layer - 1 && inp_out_ids) {
@@ -91,17 +87,13 @@ llm_build_plamo3::llm_build_plamo3(const llama_model & model, const llm_graph_pa
         cur = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
-        ggml_tensor * ffn_up   = build_lora_mm(model.layers[il].ffn_up,   cur);
-        cb(ffn_up, "ffn_up", il);
-
-        ggml_tensor * ffn_gate = build_lora_mm(model.layers[il].ffn_gate, cur);
-        cb(ffn_gate, "ffn_gate", il);
-
-        ggml_tensor * ffn_act  = ggml_swiglu_split(ctx0, ffn_gate, ffn_up);
-        cb(ffn_act, "ffn_act", il);
-
-        cur = build_lora_mm(model.layers[il].ffn_down, ffn_act);
-        cb(cur, "ffn_down", il);
+        cur = build_ffn(cur,
+                model.layers[il].ffn_up,   NULL, NULL,
+                NULL,                      NULL, NULL,
+                model.layers[il].ffn_down, NULL, NULL,
+                NULL,
+                LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
+        cb(cur, "ffn_out", il);
 
         cur = build_norm(cur, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "ffn_post_norm", il);
@@ -114,7 +106,7 @@ llm_build_plamo3::llm_build_plamo3(const llama_model & model, const llm_graph_pa
         inpL = cur;
     }
 
-    ggml_tensor * cur = inpL;
+    cur = inpL;
 
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
     res->t_embd = cur;
@@ -124,3 +116,7 @@ llm_build_plamo3::llm_build_plamo3(const llama_model & model, const llm_graph_pa
 
     ggml_build_forward_expand(gf, cur);
 }
+
+// Explicit template instantiations
+template struct llm_build_plamo3<false>;
+template struct llm_build_plamo3<true>;
