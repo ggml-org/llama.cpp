@@ -49,6 +49,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "deepseek",          LLM_CHAT_TEMPLATE_DEEPSEEK          },
     { "deepseek2",         LLM_CHAT_TEMPLATE_DEEPSEEK_2        },
     { "deepseek3",         LLM_CHAT_TEMPLATE_DEEPSEEK_3        },
+    { "deepseek-ocr",      LLM_CHAT_TEMPLATE_DEEPSEEK_OCR      },
     { "command-r",         LLM_CHAT_TEMPLATE_COMMAND_R         },
     { "llama3",            LLM_CHAT_TEMPLATE_LLAMA_3           },
     { "chatglm3",          LLM_CHAT_TEMPLATE_CHATGLM_3         },
@@ -540,6 +541,11 @@ int32_t llm_chat_apply_template(
         }
         if (add_ass) {
             ss << LU8("<｜Assistant｜>");
+        }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_DEEPSEEK_OCR) {
+        for (auto message : chat) {
+            // no template
+            ss << message->content;
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_EXAONE_3) {
         // ref: https://huggingface.co/LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct/discussions/8#66bae61b1893d14ee8ed85bb

@@ -95,7 +95,7 @@ ggml_cgraph * clip_graph_glm4v::build() {
 
     // FC projector
     {
-        cur = ggml_mul_mat(ctx0, model.projection, cur);
+        cur = ggml_mul_mat(ctx0, model.fc_w, cur);
         // default LayerNorm (post_projection_norm)
         cur = build_norm(cur, model.mm_post_norm_w, model.mm_post_norm_b, NORM_TYPE_NORMAL, 1e-5, -1);
         cur = ggml_gelu_erf(ctx0, cur);

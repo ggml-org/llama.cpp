@@ -28,6 +28,14 @@ if [ "${1:-}" = "huge" ]; then
     echo "Include BIG and HUGE models..."
 fi
 
+# Check if the second argument is "flash", then enable flash attention
+# This is useful to test if flash attention off works correctly
+FLASH_ATTN="on"
+if [ "${2:-}" = "flash_off" ] || [ "${1:-}" = "flash_off" ]; then
+    FLASH_ATTN="off"
+    echo "Flash attention disabled..."
+fi
+
 ###############
 
 arr_prefix=()
@@ -100,6 +108,8 @@ if [ "$RUN_BIG_TESTS" = true ]; then
     add_test_vision "ggml-org/Qwen2.5-Omni-7B-GGUF:Q4_K_M"
     # add_test_vision "ggml-org/Qwen2.5-VL-32B-Instruct-GGUF:Q4_K_M" # does not work on my mac M3 Ultra
     # add_test_vision "ggml-org/Kimi-VL-A3B-Thinking-2506-GGUF:Q4_K_M" # not always working
+    add_test_vision "sabafallah/DeepSeek-OCR-GGUF:q8_0" -p "Free OCR." --chat-template deepseek-ocr
+    add_test_vision "ggml-org/GLM-4.6V-Flash-GGUF:Q4_K_M" -p "extract all texts from this image"
 
     add_test_audio  "ggml-org/ultravox-v0_5-llama-3_1-8b-GGUF:Q4_K_M"
     add_test_audio  "ggml-org/Qwen2.5-Omni-7B-GGUF:Q4_K_M"
@@ -143,6 +153,7 @@ for i in "${!arr_hf[@]}"; do
         -hf $(printf %q "$hf") \
         --image $(printf %q "$SCRIPT_DIR/$inp_file") \
         --temp 0 -n 128 \
+        --flash-attn $(printf %q "$FLASH_ATTN") \
         ${extra_args}"
 
     # if extra_args does not contain -p, we add a default prompt
