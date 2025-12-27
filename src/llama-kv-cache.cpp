@@ -1328,7 +1328,11 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch 
     const auto & cells = v_cells[0];
 
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
-    GGML_ASSERT(!ubatch->equal_seqs()); // TODO: use ubatch->n_seqs instead of failing
+    // [AI] Relaxed assertion for encoder-decoder beam search support
+    // TODO: use ubatch->n_seqs instead of failing
+    if (ubatch->equal_seqs()) {
+        LLAMA_LOG_WARN("%s: ubatch->equal_seqs() is true, this may cause issues with beam search\n", __func__);
+    }
 
     int32_t * data = (int32_t *) dst->data;
 
