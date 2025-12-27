@@ -85,12 +85,15 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
                                        struct htp_spad *         dst_spad,
                                        uint32_t                  nth,
                                        uint32_t                  ith,
-                                       uint32_t                  src0_nrows_per_thread) {
+                                       uint32_t                  src0_nrows_per_thread,
+                                       dma_queue *               dma_queue) {
     htp_act_preamble3;
 
     size_t src0_row_size = nb01;
     size_t src1_row_size = nb11;
     size_t dst_row_size  = nb1;
+
+
 
     const uint32_t src0_nrows = ne01 * ne02 * ne03;  // src0 rows
 
@@ -105,10 +108,129 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
 
-    int is_aligned = 1;
-    if (!htp_is_aligned((void *) src0->data, VLEN) || !htp_is_aligned((void *) dst->data, VLEN)) {
-        is_aligned = 0;
-        FARF(HIGH, "swiglu-f32: unaligned addresses in elementwise op, possibly slower execution\n");
+    const uint8_t * restrict data_src0 = (const uint8_t *) src0->data;
+    const uint8_t * restrict data_src1 = (const uint8_t *) src1->data;
+    uint8_t * restrict data_dst        = (uint8_t *) dst->data;
+
+    const bool src1_valid = src1->ne[0];
+    const int  nc         = (src1_valid) ? ne00 : ne00 / 2;
+    if (!src1_valid) {
+        const int32_t swapped = op_params[1];
+        data_src1             = data_src0;
+        src1_row_size         = src0_row_size;
+
+        const size_t nc_in_bytes = nc * SIZEOF_FP32;
+        data_src0 += swapped ? nc_in_bytes : 0;
+        data_src1 += swapped ? 0 : nc_in_bytes;
+    }
+
+    const size_t src0_row_size_aligned = htp_round_up(src0_row_size, VLEN);
+    const size_t src1_row_size_aligned = htp_round_up(src1_row_size, VLEN);
+    const size_t dst_row_size_aligned  = htp_round_up(dst_row_size, VLEN);
+
+    uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_spad->size_per_thread);
+    uint8_t * restrict src1_spad_data = src1_spad->data + (ith * src1_spad->size_per_thread);
+    uint8_t * restrict dst_spad_data  = dst_spad->data + (ith * dst_spad->size_per_thread);
+
+    // While given src0_spad->size_per_thread, divide it to two ping-pong buffer for src0
+    size_t src0_spad_half_size = src0_spad->size_per_thread / 2;
+    size_t src1_spad_half_size = src1_spad->size_per_thread / 2;
+    size_t dst_spad_half_size  = dst_spad->size_per_thread / 2;
+
+    const int BLOCK = src0_spad_half_size / src0_row_size_aligned;  // How many rows can we process in one block
+    if (BLOCK == 0) {
+        FARF(ERROR,
+             "swiglu-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n",
+             src0_spad->size_per_thread, src0_row_size_aligned);
+        return;
+    }
+
+    // See discussion: https://github.com/ggml-org/llama.cpp/pull/18151#issuecomment-3678235379
+    for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) {
+        const uint32_t block_size = MIN(BLOCK, src0_end_row - ir);
+
+        // Dummy DMA transation for sequencing (interleaving dst,src,dst,...)
+        dma_queue_push_vtcm_to_ddr(dma_queue,
+            dma_make_ptr(data_dst, dst_spad_data + (spad_idx * dst_spad_half_size)),
+            dst_row_size, dst_row_size_aligned, 0);
+
+        dma_queue_push_ddr_to_vtcm(dma_queue,
+            dma_make_ptr(src0_spad_data + (spad_idx * src0_spad_half_size), data_src0 + (ir * src0_row_size)),
+            src0_row_size_aligned, src0_row_size, block_size);
+        dma_queue_push_ddr_to_vtcm(dma_queue,
+            dma_make_ptr(src1_spad_data + (spad_idx * src1_spad_half_size), data_src1 + (ir * src1_row_size)),
+            src1_row_size_aligned, src1_row_size, block_size);
+    }
+
+    for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
+        const uint32_t block_size = MIN(BLOCK, src0_end_row - ir);
+
+        float * dst_spad  = (float *) dma_queue_pop(dma_queue).src;
+        float * src0_spad = (float *) dma_queue_pop(dma_queue).dst;
+        float * src1_spad = (float *) dma_queue_pop(dma_queue).dst;
+
+        for (uint32_t ib = 0; ib < block_size; ib++) {
+            const float * src0_spad_ptr = src0_spad + ib * (src0_row_size_aligned / sizeof(float));
+            const float * src1_spad_ptr = src1_spad + ib * (src1_row_size_aligned / sizeof(float));
+            float *       dst_spad_ptr  = dst_spad + ib * (dst_row_size_aligned / sizeof(float));
+
+            //swiglu(x) = x1 * sigmoid(x0)
+            hvx_fast_sigmoid_f32((const uint8_t *) src0_spad_ptr, (uint8_t *) dst_spad_ptr, nc);
+            hvx_mul_mul_f32_opt((const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr,
+                                (const uint8_t *) src1_spad_ptr, (uint8_t *) dst_spad_ptr, nc);
+        }
+
+        dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(data_dst + (ir * dst_row_size), dst_spad), dst_row_size,
+                                   dst_row_size_aligned, block_size);
+
+        // prefetch N+2 loop iteration if any
+        const uint32_t pref_block = (ir + BLOCK * 2);
+        if (pref_block < src0_end_row) {
+            const uint32_t pref_block_size = MIN(BLOCK, src0_end_row - pref_block);
+            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src0_spad, data_src0 + (pref_block * src0_row_size)),
+                                       src0_row_size_aligned, src0_row_size, pref_block_size);
+            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src1_spad, data_src1 + (pref_block * src1_row_size)),
+                                       src1_row_size_aligned, src1_row_size, pref_block_size);
+        }
+    }
+
+    dma_queue_flush(dma_queue);
+
+    t2 = HAP_perf_get_qtimer_count();
+
+    FARF(HIGH, "swiglu-f32 %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
+         ne00, ne01, ne02, ne03, src0_start_row, src0_end_row, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3,
+         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+}
+
+static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
+                                           const struct htp_tensor * src1,
+                                           struct htp_tensor *       dst,
+                                           const int32_t *           op_params,
+                                           struct htp_spad *         src0_spad,
+                                           struct htp_spad *         src1_spad,
+                                           struct htp_spad *         dst_spad,
+                                           uint32_t                  nth,
+                                           uint32_t                  ith,
+                                           uint32_t                  src0_nrows_per_thread,
+                                           dma_queue *               dma_queue) {
+    htp_act_preamble3;
+
+    uint64_t t1, t2;
+    t1 = HAP_perf_get_qtimer_count();
+
+    size_t src0_row_size = nb01;
+    size_t src1_row_size = nb11;
+    size_t dst_row_size  = nb1;
+
+    const uint32_t src0_nrows = ne01 * ne02 * ne03;  // src0 rows
+
+    const uint32_t src0_start_row = src0_nrows_per_thread * ith;
+    const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
+
+    // no work for this thread
+    if (src0_start_row >= src0_end_row) {
+        return;
     }
 
     const uint8_t * restrict data_src0 = (const uint8_t *) src0->data;
@@ -127,130 +249,94 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
         data_src1 += swapped ? 0 : nc_in_bytes;
     }
 
-    uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_row_size);
-    uint8_t * restrict src1_spad_data = src1_spad->data + (ith * src1_row_size);
-    uint8_t * restrict dst_spad_data  = dst_spad->data + (ith * dst_row_size);
+    const size_t src0_row_size_aligned = htp_round_up(src0_row_size, VLEN);
+    const size_t src1_row_size_aligned = htp_round_up(src1_row_size, VLEN);
+    const size_t dst_row_size_aligned  = htp_round_up(dst_row_size, VLEN);
 
-    const bool opt_path = ((1 == is_aligned) && !(nb01 & (VLEN - 1)));
-    for (uint32_t ir = src0_start_row; ir < src0_end_row; ir++) {
-        const float * restrict src0 = (float *) (data_src0 + (ir * src0_row_size));
-        const float * restrict src1 = (float *) (data_src1 + (ir * src1_row_size));
-        float * restrict dst        = (float *) (data_dst + (ir * dst_row_size));
+    uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_spad->size_per_thread);
+    uint8_t * restrict src1_spad_data = src1_spad->data + (ith * src1_spad->size_per_thread);
+    uint8_t * restrict dst_spad_data  = dst_spad->data + (ith * dst_spad->size_per_thread);
 
-        if (ir + 1 < src0_end_row) {
-            htp_l2fetch(src0 + src0_row_size, 1, src0_row_size, src0_row_size);
-        }
+    // While given src0_spad->size_per_thread, divide it to two ping-pong buffer for src0
+    size_t src0_spad_half_size = src0_spad->size_per_thread / 2;
+    size_t src1_spad_half_size = src1_spad->size_per_thread / 2;
+    size_t dst_spad_half_size  = dst_spad->size_per_thread / 2;
 
-        if (opt_path) {
-            hvx_fast_sigmoid_f32((const uint8_t *) src0, (uint8_t *) src0_spad_data, nc);
-            hvx_mul_mul_f32_opt((const uint8_t *) src0, (const uint8_t *) src0_spad_data, (const uint8_t *) src1,
-                                (uint8_t *) dst, nc);
-        } else {
-            hvx_exp_f32((const uint8_t *) src0, src0_spad_data, nc, true);
-            hvx_add_scalar_f32(src0_spad_data, 1.0, src1_spad_data, nc);
-            hvx_inverse_f32(src1_spad_data, src0_spad_data, nc);
-
-            hvx_mul_f32((const uint8_t *) src0, src0_spad_data, dst_spad_data, nc);
-            hvx_mul_f32(dst_spad_data, (const uint8_t *) src1, (uint8_t *) dst, nc);
-        }
-    }
-
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "swiglu-f32 %d/%d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth, opt_path,
-         ne00, ne01, ne02, ne03, src0_start_row, src0_end_row, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3,
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
-}
-
-static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
-                                           const struct htp_tensor * src1,
-                                           struct htp_tensor *       dst,
-                                           const int32_t *           op_params,
-                                           struct htp_spad *         src0_spad,
-                                           struct htp_spad *         src1_spad,
-                                           struct htp_spad *         dst_spad,
-                                           uint32_t                  nth,
-                                           uint32_t                  ith,
-                                           uint32_t                  src0_nrows_per_thread) {
-    htp_act_preamble3;
-
-    uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
-
-    const size_t src0_row_size = nb01;
-    const size_t src1_row_size = nb11;
-    const size_t dst_row_size  = nb1;
-
-    const uint32_t src0_nrows = ne01 * ne02 * ne03;  // src0 rows
-
-    const uint32_t src0_start_row = src0_nrows_per_thread * ith;
-    const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, src0_nrows);
-
-    // no work for this thread
-    if (src0_start_row >= src0_end_row) {
+    const int BLOCK = src0_spad_half_size / src0_row_size_aligned;  // How many rows can we process in one block
+    if (BLOCK == 0) {
+        FARF(ERROR,
+             "swiglu-oai-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least "
+             "%zu\n",
+             src0_spad->size_per_thread, src0_row_size_aligned);
         return;
     }
+    const float alpha = ((const float *) (op_params))[2];
+    const float limit = ((const float *) (op_params))[3];
 
-    if (!htp_is_aligned((void *) src0->data, VLEN) || !htp_is_aligned((void *) dst->data, VLEN)) {
-        FARF(HIGH, "act-f32: unaligned addresses in activations op, possibly slower execution\n");
+    // See discussion: https://github.com/ggml-org/llama.cpp/pull/18151#issuecomment-3678235379
+    for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) {
+        const uint32_t block_size = MIN(BLOCK, src0_end_row - ir);
+
+        // Dummy DMA transation for sequencing (interleaving dst,src,dst,...)
+        dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(data_dst, dst_spad_data + (spad_idx * dst_spad_half_size)),
+                                   dst_row_size, dst_row_size_aligned, 0);
+
+        dma_queue_push_ddr_to_vtcm(
+            dma_queue,
+            dma_make_ptr(src0_spad_data + (spad_idx * src0_spad_half_size), data_src0 + (ir * src0_row_size)),
+            src0_row_size_aligned, src0_row_size, block_size);
+        dma_queue_push_ddr_to_vtcm(
+            dma_queue,
+            dma_make_ptr(src1_spad_data + (spad_idx * src1_spad_half_size), data_src1 + (ir * src1_row_size)),
+            src1_row_size_aligned, src1_row_size, block_size);
     }
 
-    const uint8_t * restrict data_src0 = (const uint8_t *) src0->data;
-    const uint8_t * restrict data_src1 = (const uint8_t *) src1->data;
-    uint8_t * restrict data_dst        = (uint8_t *) dst->data;
+    for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
+        const uint32_t block_size = MIN(BLOCK, src0_end_row - ir);
 
-    bool src1_valid = src1->ne[0];
-    if (!src1_valid) {
-        data_src1 = data_src0;
-    }
+        float * dst_spad  = (float *) dma_queue_pop(dma_queue).src;
+        float * src0_spad = (float *) dma_queue_pop(dma_queue).dst;
+        float * src1_spad = (float *) dma_queue_pop(dma_queue).dst;
 
-    uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_row_size);
-    uint8_t * restrict src1_spad_data = src1_spad->data + (ith * src1_row_size);
-    uint8_t * restrict dst_spad_data  = dst_spad->data + (ith * dst_row_size);
+        for (uint32_t ib = 0; ib < block_size; ib++) {
+            const float * src0_spad_ptr = src0_spad + ib * (src0_row_size_aligned / sizeof(float));
+            const float * src1_spad_ptr = src1_spad + ib * (src1_row_size_aligned / sizeof(float));
+            float *       dst_spad_ptr  = dst_spad + ib * (dst_row_size_aligned / sizeof(float));
 
-    const int32_t swapped = op_params[1];
-    const float   alpha   = ((const float *) (op_params))[2];
-    const float   limit   = ((const float *) (op_params))[3];
-
-    const int nc = (src1_valid) ? ne00 : ne00 / 2;
-
-    for (uint32_t ir = src0_start_row; ir < src0_end_row; ir++) {
-        const float * restrict src0 = (float *) (data_src0 + (ir * src0_row_size));
-        const float * restrict src1 = (float *) (data_src1 + (ir * src1_row_size));
-        float * restrict dst        = (float *) (data_dst + (ir * dst_row_size));
-
-        if (ir + 1 < src0_end_row) {
-            htp_l2fetch(src0 + src0_row_size, 1, src0_row_size, src0_row_size);
+            // x (src0_spad_data) = std::min(src0_p[k], limit);
+            hvx_min_scalar_f32((const uint8_t *) src0_spad_ptr, limit, (uint8_t *) src0_spad_ptr, nc);
+            // y1 (src1_spad_data) = std::clamp(src1_p[k], -limit, limit);
+            hvx_clamp_scalar_f32((const uint8_t *) src1_spad_ptr, -limit, limit, (uint8_t *) src1_spad_ptr, nc);
+            // y (src1_spad_data)  = y1 + 1.f
+            hvx_add_scalar_f32((const uint8_t *) src1_spad_ptr, 1.0, (uint8_t *) src1_spad_ptr, nc);
+            // x1 (dst_spad_data) = alpha * (x)
+            hvx_mul_scalar_f32((const uint8_t *) src0_spad_ptr, alpha, (uint8_t *) dst_spad_ptr, nc);
+            // x2 (dst_spad_data) = sigmoid(x1) = 1/(1+exp(-x1))
+            hvx_fast_sigmoid_f32((const uint8_t *) dst_spad_ptr, (uint8_t *) dst_spad_ptr, nc);
+            // out = x * sigmoid(alpha * x) * (y + 1.f)
+            hvx_mul_mul_f32_opt((const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr,
+                                (const uint8_t *) src1_spad_ptr, (uint8_t *) dst_spad_ptr, nc);
         }
 
-        if (!src1) {
-            src0 += swapped ? nc : 0;
-            src1 += swapped ? 0 : nc;
-        }
+        dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(data_dst + (ir * dst_row_size), dst_spad), dst_row_size,
+                                   dst_row_size_aligned, block_size);
 
-        // x (src0_spad_data) = std::min(src0_p[k], limit);
-        hvx_min_scalar_f32((const uint8_t *) src0, limit, src0_spad_data, nc);
-        // y1 (src1_spad_data) = std::clamp(src1_p[k], -limit, limit);
-        hvx_clamp_scalar_f32((const uint8_t *) src1, -limit, limit, src1_spad_data, nc);
-        // y (src1_spad_data)  = y1 + 1.f
-        hvx_add_scalar_f32(src1_spad_data, 1.0, src1_spad_data, nc);
-        // x1 (dst_spad_data) = alpha * (x)
-        hvx_mul_scalar_f32(src0_spad_data, alpha, dst_spad_data, nc);
-        // x2 (dst_spad_data) = expf(-x1)
-        hvx_exp_f32(dst_spad_data, dst_spad_data, nc, true);
-        // x3 (dst_spad_data) = x2 + 1.f
-        hvx_add_scalar_f32(dst_spad_data, 1.0, dst_spad_data, nc);
-        // x4 (dst_spad_data) = 1 / x3
-        hvx_inverse_f32(dst_spad_data, dst_spad_data, nc);
-        // out_glu(dst_spad_data) = x * x4
-        hvx_mul_f32(src0_spad_data, dst_spad_data, dst_spad_data, nc);
-        // out = out_glu * (y + 1.f);
-        hvx_mul_f32(dst_spad_data, src1_spad_data, (uint8_t *) dst, nc);
+        // prefetch N+2 loop iteration if any
+        const uint32_t pref_block = (ir + BLOCK * 2);
+        if (pref_block < src0_end_row) {
+            const uint32_t pref_block_size = MIN(BLOCK, src0_end_row - pref_block);
+            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src0_spad, data_src0 + (pref_block * src0_row_size)),
+                                       src0_row_size_aligned, src0_row_size, pref_block_size);
+            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src1_spad, data_src1 + (pref_block * src1_row_size)),
+                                       src1_row_size_aligned, src1_row_size, pref_block_size);
+        }
     }
+
+    dma_queue_flush(dma_queue);
 
     t2 = HAP_perf_get_qtimer_count();
 
-    FARF(HIGH, "swiglu-f32 %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth, src0->ne[0],
+    FARF(HIGH, "swiglu-oai-f32 %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth, src0->ne[0],
          src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0], src1->ne[1], src1->ne[2],
          src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
@@ -371,7 +457,8 @@ static void unary_silu_fp32_per_thread(const struct htp_tensor * src0,
                                        struct htp_spad *         dst_spad,
                                        uint32_t                  nth,
                                        uint32_t                  ith,
-                                       uint32_t                  src0_nrows_per_thread) {
+                                       uint32_t                  src0_nrows_per_thread,
+                                       dma_queue *               dma_queue) {
     htp_act_preamble2;
 
     uint64_t t1, t2;
@@ -379,6 +466,8 @@ static void unary_silu_fp32_per_thread(const struct htp_tensor * src0,
 
     const size_t src0_row_size = nb01;
     const size_t dst_row_size  = nb1;
+    const size_t src0_row_size_aligned = htp_round_up(src0_row_size, VLEN);
+    const size_t dst_row_size_aligned  = htp_round_up(dst_row_size, VLEN);
 
     const uint32_t src0_nrows = ne01 * ne02 * ne03;
 
@@ -390,64 +479,91 @@ static void unary_silu_fp32_per_thread(const struct htp_tensor * src0,
         return;
     }
 
-    int is_aligned = 1;
-    int opt_path   = 0;
-    if (!htp_is_aligned((void *) src0->data, VLEN) || !htp_is_aligned((void *) dst->data, VLEN)) {
-        is_aligned = 0;
-        FARF(HIGH, "silu-f32: unaligned addresses in elementwise op, possibly slower execution\n");
+    const uint8_t * data_src0 = (const uint8_t *) src0->data;
+    uint8_t * data_dst        = (uint8_t *) dst->data;
+
+    uint8_t * src0_spad_data = src0_spad->data + (ith * src0_spad->size_per_thread);
+    uint8_t * dst_spad_data  = dst_spad->data  + (ith * dst_spad->size_per_thread);
+
+    // While given src0_spad->size_per_thread, divide it to two ping-pong buffer for src0
+    size_t src0_spad_half_size = src0_spad->size_per_thread / 2;
+    size_t dst_spad_half_size  = dst_spad->size_per_thread  / 2;
+
+    const int BLOCK = src0_spad_half_size / src0_row_size_aligned; // How many rows can we process in one block
+
+    if (BLOCK == 0) {
+        FARF(ERROR, "silu-f32 : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n",
+                src0_spad->size_per_thread, src0_row_size_aligned);
+        return;
     }
-    if ((1 == is_aligned) && !(nb01 & (VLEN - 1))) {
-        opt_path = 1;
+
+    // See discussion: https://github.com/ggml-org/llama.cpp/pull/18151#issuecomment-3678235379
+    for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) {
+        const uint32_t block_size = MIN(BLOCK, src0_end_row - ir);
+
+        // Dummy DMA transation for sequencing (interleaving dst,src,dst,...)
+        dma_queue_push_vtcm_to_ddr(dma_queue,
+            dma_make_ptr(data_dst, dst_spad_data + (spad_idx * dst_spad_half_size)),
+            dst_row_size, dst_row_size_aligned, 0);
+
+        dma_queue_push_ddr_to_vtcm(dma_queue,
+            dma_make_ptr(src0_spad_data + (spad_idx * src0_spad_half_size), data_src0 + (ir * src0_row_size)),
+            src0_row_size_aligned, src0_row_size, block_size);
     }
 
-    const uint8_t * restrict data_src0 = (const uint8_t *) src0->data;
-    uint8_t * restrict data_dst        = (uint8_t *) dst->data;
+    for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
+        const uint32_t block_size = MIN(BLOCK, src0_end_row - ir);
 
-    uint8_t * restrict src0_spad_data = src0_spad->data + (ith * src0_row_size);
-    uint8_t * restrict dst_spad_data  = dst_spad->data + (ith * dst_row_size);
+        float* dst_spad  = (float *) dma_queue_pop(dma_queue).src;
+        float* src0_spad = (float *) dma_queue_pop(dma_queue).dst;
 
-    for (uint32_t ir = src0_start_row; ir < src0_end_row; ir++) {
-        const float * restrict src0 = (float *) (data_src0 + (ir * src0_row_size));
-        float * restrict dst        = (float *) (data_dst + (ir * dst_row_size));
+        for (uint32_t ib = 0; ib < block_size; ib++) {
+            const float* src0_spad_ptr = src0_spad + ib * (src0_row_size_aligned / sizeof(float));
+            float* dst_spad_ptr        = dst_spad  + ib * (dst_row_size_aligned  / sizeof(float));
 
-        if (ir + 1 < src0_end_row) {
-            htp_l2fetch(src0 + src0_row_size, 1, src0_row_size, src0_row_size);
+            // silu = x * sigmoid(x)
+            hvx_fast_sigmoid_f32((const uint8_t *) src0_spad_ptr, (uint8_t *) dst_spad_ptr, ne0);
+            hvx_mul_f32_opt((const uint8_t *) src0_spad_ptr, (uint8_t *) dst_spad_ptr, (uint8_t *) dst_spad_ptr, ne0);
         }
 
-        if (1 == opt_path) {
-            hvx_fast_sigmoid_f32((const uint8_t *) src0, (uint8_t *) src0_spad_data, ne0);
-            hvx_mul_f32_opt((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
-        } else {
-            hvx_exp_f32((const uint8_t *) src0, src0_spad_data, ne0, true);
-            hvx_add_scalar_f32(src0_spad_data, 1.0, dst_spad_data, ne0);
-            hvx_inverse_f32(dst_spad_data, src0_spad_data, ne0);
+        dma_queue_push_vtcm_to_ddr(dma_queue,
+            dma_make_ptr(data_dst + (ir * dst_row_size), dst_spad),
+            dst_row_size, dst_row_size_aligned, block_size);
 
-            hvx_mul_f32((const uint8_t *) src0, src0_spad_data, (uint8_t *) dst, ne0);
+        // prefetch N+2 loop iteration if any
+        const uint32_t pref_block = (ir + BLOCK * 2);
+        if (pref_block < src0_end_row) {
+            const uint32_t pref_block_size = MIN(BLOCK, src0_end_row - pref_block);
+            dma_queue_push_ddr_to_vtcm(dma_queue,
+                dma_make_ptr(src0_spad, data_src0 + (pref_block * src0_row_size)),
+                src0_row_size_aligned, src0_row_size, pref_block_size);
         }
     }
+
+    dma_queue_flush(dma_queue);
 
     t2 = HAP_perf_get_qtimer_count();
 
-    FARF(HIGH, "silu-f32 %d/%d/%d: %ux%ux%ux%u (%u:%u) -> %ux%ux%ux%u usec %u\n", ith, nth, opt_path, ne00, ne01, ne02,
+    FARF(HIGH, "silu-f32 %d/%d: %ux%ux%ux%u (%u:%u) -> %ux%ux%ux%u usec %u\n", ith, nth, ne00, ne01, ne02,
          ne03, src0_start_row, src0_end_row, ne0, ne1, ne2, ne3, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
 static void unary_silu_fp32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = (struct htp_ops_context *) data;
     unary_silu_fp32_per_thread(&octx->src0, &octx->dst, octx->op_params, &octx->src0_spad, &octx->dst_spad, n, i,
-                               octx->src0_nrows_per_thread);
+                               octx->src0_nrows_per_thread, octx->ctx->dma[i]);
 }
 
 static void glu_swiglu_fp32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = (struct htp_ops_context *) data;
     glu_swiglu_fp32_per_thread(&octx->src0, &octx->src1, &octx->dst, octx->op_params, &octx->src0_spad,
-                               &octx->src1_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread);
+                               &octx->src1_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
 }
 
 static void glu_swiglu_oai_fp32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = (struct htp_ops_context *) data;
     glu_swiglu_oai_fp32_per_thread(&octx->src0, &octx->src1, &octx->dst, octx->op_params, &octx->src0_spad,
-                                   &octx->src1_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread);
+                                   &octx->src1_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
 }
 
 static int execute_op_activations_fp32(struct htp_ops_context * octx) {
