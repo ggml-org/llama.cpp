@@ -222,7 +222,7 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
 
 // Simple version of "llama_apply_chat_template" that only works with strings
 // This function uses heuristic checks to determine commonly used template. It is not a jinja parser.
-int32_t llm_chat_apply_template(
+int64_t llm_chat_apply_template(
     llm_chat_template tmpl,
     const std::vector<const llama_chat_message *> & chat,
     std::string & dest, bool add_ass) {
