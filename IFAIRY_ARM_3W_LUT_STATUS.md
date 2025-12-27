@@ -33,6 +33,7 @@
 - `GGML_IFAIRY_LUT_COMPACT_N1_UNROLL=2|4`：控制 `compact` 的 `N==1` fast-path 里 group-loop 的 4-way unroll（默认 `4`；设为 `2` 用于 A/B，对照“2-way 是否反而更快”）
 - `GGML_IFAIRY_LUT_MERGED64_ACC16=0/1`：merged64 per-block 先 int16 累加再 widen（默认启用；设为 `0` 回退做 A/B）
 - `GGML_IFAIRY_LUT_MERGED64_ACC_F32X2=0/1`：merged64 将 per-block `int32` 累加转换为 float 时用 `float32x2`（默认启用；设为 `0` 回退做 A/B）
+- `GGML_IFAIRY_LUT_MERGED64_N1_STREAM_ADD=0/1`：merged64 的 `N==1`（decode）acc16 unroll loop 使用“streaming load+add”以降低寄存器压力（默认启用；设为 `0` 回退做 A/B）
 - `GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0/1`：merged64 的 `N==1`（decode）快路（默认启用；设为 `0` 回退做 A/B）
 - `GGML_IFAIRY_LUT_MERGED64_UNROLL=4|8`：merged64 group-loop unroll（默认 `8`；设为 `4` 回退做 A/B）
 - `GGML_IFAIRY_LUT_KERNEL=auto|sdot|tbl|merged64`：选择（或影响 auto 策略选择）kernel 路径（默认 `auto`）。当前：
@@ -103,6 +104,10 @@
 | 2025-12-27T04:38:39Z | `06d4d75b+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 27.87 | `/tmp/ifairy_bench_accf32x2_on_20251227T043826Z.jsonl` |
 | 2025-12-27T04:39:07Z | `06d4d75b+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_ACC_F32X2=0` | 35.38 | `/tmp/ifairy_bench_accf32x2_off_20251227T043905Z.jsonl` |
 | 2025-12-27T04:39:19Z | `06d4d75b+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_ACC_F32X2=0` | 25.96 | `/tmp/ifairy_bench_accf32x2_off_20251227T043905Z.jsonl` |
+| 2025-12-27T04:54:48Z | `9849930f+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 37.85 | `/tmp/ifairy_bench_stream_add_on_20251227T045448Z.jsonl` |
+| 2025-12-27T04:54:59Z | `9849930f+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 26.56 | `/tmp/ifairy_bench_stream_add_on_20251227T045448Z.jsonl` |
+| 2025-12-27T04:55:28Z | `9849930f+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_N1_STREAM_ADD=0` | 33.28 | `/tmp/ifairy_bench_stream_add_off_20251227T045528Z.jsonl` |
+| 2025-12-27T04:55:39Z | `9849930f+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_MERGED64_N1_STREAM_ADD=0` | 25.18 | `/tmp/ifairy_bench_stream_add_off_20251227T045528Z.jsonl` |
 | 2025-12-26T20:41:43Z | `c5f646bd+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_INDEX=0` | 30.98 | `/tmp/ifairy_bench_merged64_prefetch_idx0_20251226T204039Z.jsonl` |
 | 2025-12-26T20:41:48Z | `c5f646bd+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_INDEX=0` | 27.85 | `/tmp/ifairy_bench_merged64_prefetch_idx0_20251226T204039Z.jsonl` |
 | 2025-12-26T20:41:57Z | `c5f646bd+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_DIST=4` | 30.28 | `/tmp/ifairy_bench_merged64_prefetch_dist4_20251226T204039Z.jsonl` |
@@ -235,6 +240,9 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
 - decode-only A/B（merged64 accum f32x2）：
   - ON（默认；trace: `/tmp/xctrace_ifairy_decode_accf32x2_on_20251227T044007Z.trace`）：`ggml_ifairy_lut_qgemm_ex_merged64` 61.37%（45525ms）
   - OFF（`GGML_IFAIRY_LUT_MERGED64_ACC_F32X2=0`；trace: `/tmp/xctrace_ifairy_decode_accf32x2_off_20251227T044042Z.trace`）：`ggml_ifairy_lut_qgemm_ex_merged64` 61.29%（59581ms）
+- decode-only A/B（merged64 N1 acc16 unroll streaming add）：
+  - ON（默认；trace: `/tmp/xctrace_ifairy_decode_stream_add_on_seq_20251227T045920Z.trace`）：`ggml_ifairy_lut_qgemm_ex_merged64` 62.95%（60469ms）
+  - OFF（`GGML_IFAIRY_LUT_MERGED64_N1_STREAM_ADD=0`；trace: `/tmp/xctrace_ifairy_decode_stream_add_off_seq_20251227T050006Z.trace`）：`ggml_ifairy_lut_qgemm_ex_merged64` 62.33%（61290ms）
 - prefill-only（`N>1`，trace: `/tmp/xctrace_ifairy_prefill_steady_20251227T021157Z.trace`）：
   - `ggml_ifairy_lut_qgemm_ex_merged64`：88.27%
   - `ggml_graph_compute_thread`：6.23%
