@@ -115,6 +115,10 @@
 | 2025-12-26T20:41:48Z | `c5f646bd+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_INDEX=0` | 27.85 | `/tmp/ifairy_bench_merged64_prefetch_idx0_20251226T204039Z.jsonl` |
 | 2025-12-26T20:41:57Z | `c5f646bd+dirty` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_DIST=4` | 30.28 | `/tmp/ifairy_bench_merged64_prefetch_dist4_20251226T204039Z.jsonl` |
 | 2025-12-26T20:42:01Z | `c5f646bd+dirty` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0 GGML_IFAIRY_LUT_PREFETCH_DIST=4` | 27.24 | `/tmp/ifairy_bench_merged64_prefetch_dist4_20251226T204039Z.jsonl` |
+| 2025-12-27T15:00:47Z | `0ed9dbb3` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=sym16 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 10.72 | `tmp/ifairy_bench_sym16_20251227T150047Z.jsonl` |
+| 2025-12-27T15:00:59Z | `0ed9dbb3` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=sym16 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 2.36 | `tmp/ifairy_bench_sym16_20251227T150047Z.jsonl` |
+| 2025-12-27T15:02:57Z | `0ed9dbb3` | Apple M4 | 4 | pp128 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=merged64 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 30.15 | `tmp/ifairy_bench_merged64_20251227T150257Z.jsonl` |
+| 2025-12-27T15:03:01Z | `0ed9dbb3` | Apple M4 | 4 | tg256 | `GGML_IFAIRY_LUT=1 GGML_IFAIRY_LUT_LAYOUT=merged64 GGML_IFAIRY_LUT_BK_BLOCKS=0 GGML_IFAIRY_LUT_BM=0 GGML_IFAIRY_LUT_FULLACC=0` | 19.70 | `tmp/ifairy_bench_merged64_20251227T150257Z.jsonl` |
 
 <details>
 <summary>展开：历史记录（归档）</summary>
@@ -237,6 +241,10 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
   - `ggml_vec_dot_f16`：13.16%
   - `ggml_graph_compute_thread`：12.48%
   - `ggml_ifairy_lut_preprocess_ex_merged64`：1.14%
+- decode-only（`N==1`，`GGML_IFAIRY_LUT_LAYOUT=sym16`，trace: `tmp/xctrace/ifairy_sym16_decode_20251227.trace`）：
+  - `ggml_ifairy_lut_qgemm_ex_sym16`：86.10%
+  - `ggml_ifairy_3w_encode`：1.09%
+  - `ggml_ifairy_lut_preprocess_ex_sym16`：0.05%
 - decode-only A/B（`N==1`，merged64 N1 fast-path）：
   - ON（默认；trace: `/tmp/xctrace_ifairy_decode_on_20251227T023339Z.trace`）：`ggml_ifairy_lut_qgemm_ex_merged64` 63.81%（62241ms）
   - OFF（`GGML_IFAIRY_LUT_MERGED64_N1_FASTPATH=0`；trace: `/tmp/xctrace_ifairy_decode_off_20251227T023339Z.trace`）：`ggml_ifairy_lut_qgemm_ex_merged64` 64.49%（63223ms）
@@ -251,6 +259,11 @@ xcrun xctrace record --template 'Time Profiler' --output /tmp/xctrace_ifairy_pre
   - `ggml_ifairy_lut_qgemm_ex_merged64`：88.27%
   - `ggml_graph_compute_thread`：6.23%
   - `ggml_ifairy_lut_preprocess_ex_merged64`：1.39%
+- prefill-only（`N>1`，`GGML_IFAIRY_LUT_LAYOUT=sym16`，trace: `tmp/xctrace/ifairy_sym16_prefill_20251227.trace`）：
+  - `ggml_ifairy_lut_qgemm_ex_sym16`：92.49%
+  - `ggml_graph_compute_thread`：5.58%
+  - `ggml_ifairy_3w_encode`：0.68%
+  - `ggml_ifairy_lut_preprocess_ex_sym16`：0.17%
 
 （历史参考）**热点占比（2025-12-26，本机，4 threads，leaf CPU time share）**
 
