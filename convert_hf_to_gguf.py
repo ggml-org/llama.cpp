@@ -1230,15 +1230,9 @@ class TextModel(ModelBase):
         if chkhsh == "f4f37b6c8eb9ea29b3eac6bb8c8487c5ab7885f8d8022e67edc1c68ce8403e95":
             # ref: https://huggingface.co/MiniMaxAI/MiniMax-M2
             res = "minimax-m2"
-        if chkhsh == "4a2e2abae11ca2b86d570fc5b44be4d5eb5e72cc8f22dd136a94b37da83ab665":
-            # ref: https://huggingface.co/KORMo-Team/KORMo-tokenizer
-            res = "kormo"
-        if chkhsh == "9d70134b369a70e5735009b6de918f7581b5211f7c074d1f89f753aea8248af1":
-            # ref: https://huggingface.co/tencent/Youtu-LLM-2B
-            res = "youtu"
-        if chkhsh == "16389f0a1f51ee53e562ffd51c371dc508639ab0e4261502071836e50e223e91":
-            # ref: https://huggingface.co/upstage/Solar-Open-100B
-            res = "solar-open"
+        if chkhsh == "6c81ce329e0802883b22eabab0d3fa48357337ef1ecb45443828bf1f6254833f":
+            # ref: https://huggingface.co/LGAI-EXAONE/K-EXAONE-236B-A23B
+            res = "exaone-moe"
 
         if res is None:
             logger.warning("\n")
@@ -8484,6 +8478,80 @@ class Exaone4Model(TextModel):
                         rope_factors.append(1 / ((1 - smooth) / factor + smooth))
 
                 yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
+
+
+@ModelBase.register("ExaoneMoEForCausalLM")
+class ExaoneMoEModel(Exaone4Model):
+    model_arch = gguf.MODEL_ARCH.EXAONE_MOE
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        # We check whether the layer is MoE or not by referencing MoE module dynamically, not by the layer index
+        self.gguf_writer.add_expert_count(self.hparams["num_experts"])
+        self.gguf_writer.add_expert_used_count(self.hparams["num_experts_per_tok"])
+        moe_intermediate_size = self.hparams["moe_intermediate_size"]
+        num_shared_experts = self.hparams["num_shared_experts"]
+        self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+        self.gguf_writer.add_expert_shared_count(num_shared_experts)
+        self.gguf_writer.add_expert_shared_feed_forward_length(moe_intermediate_size * num_shared_experts)
+        self.gguf_writer.add_expert_group_count(self.hparams["n_group"])            # 확인 필요
+        self.gguf_writer.add_expert_group_used_count(self.hparams["topk_group"])    # 확인 필요
+        self.gguf_writer.add_expert_weights_scale(self.hparams["routed_scaling_factor"])
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        self.gguf_writer.add_expert_weights_norm(self.hparams["norm_topk_prob"])
+        
+        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("mtp."):
+            return [] # ignore MTP layers for now
+
+        if name.endswith("e_score_correction_bias"):
+            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
+        
+        if name.find("mlp.experts") != -1:
+            n_experts = self.hparams["num_experts"]
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+
+                # merge the experts into a single 3d tensor
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+
+                    new_name = self.map_tensor_name(merged_name)
+
+                    tensors.append((new_name, data_torch))
+                return tensors
+            else:
+                return []
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._experts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @ModelBase.register("GraniteForCausalLM")
