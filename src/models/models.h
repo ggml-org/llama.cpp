@@ -470,6 +470,15 @@ private:
                 ggml_tensor * diag_mask,
                         int   il);
 
+    ggml_tensor * build_delta_net_fused(
+                ggml_tensor * q,
+                ggml_tensor * k,
+                ggml_tensor * v,
+                ggml_tensor * g,
+                ggml_tensor * beta,
+                ggml_tensor * state,
+                        int   il);
+
     ggml_tensor * build_delta_net_autoregressive(
                 ggml_tensor * q,
                 ggml_tensor * k,
@@ -477,7 +486,7 @@ private:
                 ggml_tensor * g,
                 ggml_tensor * beta,
                 ggml_tensor * state,
-                int           il);
+                        int   il);
 
     ggml_tensor * build_norm_gated(
                 ggml_tensor * input,
