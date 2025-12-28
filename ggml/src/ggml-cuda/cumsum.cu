@@ -5,7 +5,7 @@
 #include "ggml.h"
 
 #ifdef GGML_CUDA_USE_CUB
-#   include <cub/block/block_scan.cuh>
+#   include <cub/cub.cuh>
 #endif // GGML_CUDA_USE_CUB
 
 template<typename T, int BLOCK_SIZE>
