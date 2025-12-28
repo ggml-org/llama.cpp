@@ -54,6 +54,10 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     # TODO
 else()
     set(GGML_STANDALONE OFF)
+
+    if (NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+        set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+    endif()
 endif()
 
 if (EMSCRIPTEN)
@@ -250,6 +254,7 @@ set   (GGML_OPENCL_TARGET_VERSION "300" CACHE STRING
                                             "gmml: OpenCL API version to target")
 
 option(GGML_HEXAGON                         "ggml: enable Hexagon backend"                    OFF)
+set(GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE 128 CACHE STRING "ggml: quantize group size (32, 64, or 128)")
 
 # toolchain for vulkan-shaders-gen
 set   (GGML_VULKAN_SHADERS_GEN_TOOLCHAIN "" CACHE FILEPATH "ggml: toolchain file for vulkan-shaders-gen")
@@ -425,10 +430,22 @@ if (MSVC)
     configure_msvc_target(ggml-cpu-x64)
     configure_msvc_target(ggml-cpu-sse42)
     configure_msvc_target(ggml-cpu-sandybridge)
+    # __FMA__ and __F16C__ are not defined in MSVC, however they are implied with AVX2/AVX512
+    # skipping            ggml-cpu-ivybridge
+    # skipping            ggml-cpu-piledriver
     configure_msvc_target(ggml-cpu-haswell)
     configure_msvc_target(ggml-cpu-skylakex)
+    configure_msvc_target(ggml-cpu-cannonlake)
+    configure_msvc_target(ggml-cpu-cascadelake)
     configure_msvc_target(ggml-cpu-icelake)
+    # MSVC 2022 doesn't support BF16 intrinsics without `/arch:AVX10.1` ?!
+    # https://learn.microsoft.com/en-us/cpp/intrinsics/x64-amd64-intrinsics-list?view=msvc-170
+    # https://learn.microsoft.com/en-us/cpp/build/reference/arch-x64?view=msvc-170
+    # skipping            ggml-cpu-cooperlake
+    # skipping            ggml-cpu-zen4
     configure_msvc_target(ggml-cpu-alderlake)
+    # MSVC doesn't support AMX
+    # skipping            ggml-cpu-sapphirerapids
 
     if (GGML_BUILD_EXAMPLES)
         configure_msvc_target(common-ggml)

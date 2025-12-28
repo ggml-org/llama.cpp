@@ -1,6 +1,7 @@
 #include "server-common.h"
 #include "server-models.h"
 
+#include "preset.h"
 #include "download.h"
 
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
@@ -15,6 +16,8 @@
 #include <atomic>
 #include <chrono>
 #include <queue>
+#include <filesystem>
+#include <cstring>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -31,7 +34,14 @@
 #include <limits.h>
 #endif
 
-#define CMD_EXIT "exit"
+#define DEFAULT_STOP_TIMEOUT 10 // seconds
+
+#define CMD_ROUTER_TO_CHILD_EXIT  "cmd_router_to_child:exit"
+#define CMD_CHILD_TO_ROUTER_READY "cmd_child_to_router:ready"
+
+// address for child process, this is needed because router may run on 0.0.0.0
+// ref: https://github.com/ggml-org/llama.cpp/issues/17862
+#define CHILD_ADDR "127.0.0.1"
 
 static std::filesystem::path get_server_exec_path() {
 #if defined(_WIN32)
@@ -74,62 +84,30 @@ static std::filesystem::path get_server_exec_path() {
 #endif
 }
 
-struct local_model {
-    std::string name;
-    std::string path;
-    std::string path_mmproj;
-};
-
-static std::vector<local_model> list_local_models(const std::string & dir) {
-    if (!std::filesystem::exists(dir) || !std::filesystem::is_directory(dir)) {
-        throw std::runtime_error(string_format("error: '%s' does not exist or is not a directory\n", dir.c_str()));
+static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
+    preset.unset_option("LLAMA_ARG_SSL_KEY_FILE");
+    preset.unset_option("LLAMA_ARG_SSL_CERT_FILE");
+    preset.unset_option("LLAMA_API_KEY");
+    preset.unset_option("LLAMA_ARG_MODELS_DIR");
+    preset.unset_option("LLAMA_ARG_MODELS_MAX");
+    preset.unset_option("LLAMA_ARG_MODELS_PRESET");
+    preset.unset_option("LLAMA_ARG_MODELS_AUTOLOAD");
+    if (unset_model_args) {
+        preset.unset_option("LLAMA_ARG_MODEL");
+        preset.unset_option("LLAMA_ARG_MMPROJ");
+        preset.unset_option("LLAMA_ARG_HF_REPO");
     }
+}
 
-    std::vector<local_model> models;
-    auto scan_subdir = [&models](const std::string & subdir_path, const std::string & name) {
-        auto files = fs_list(subdir_path, false);
-        common_file_info model_file;
-        common_file_info first_shard_file;
-        common_file_info mmproj_file;
-        for (const auto & file : files) {
-            if (string_ends_with(file.name, ".gguf")) {
-                if (file.name.find("mmproj") != std::string::npos) {
-                    mmproj_file = file;
-                } else if (file.name.find("-00001-of-") != std::string::npos) {
-                    first_shard_file = file;
-                } else {
-                    model_file = file;
-                }
-            }
-        }
-        // single file model
-        local_model model{
-            /* name        */ name,
-            /* path        */ first_shard_file.path.empty() ? model_file.path : first_shard_file.path,
-            /* path_mmproj */ mmproj_file.path // can be empty
-        };
-        if (!model.path.empty()) {
-            models.push_back(model);
-        }
-    };
-
-    auto files = fs_list(dir, true);
-    for (const auto & file : files) {
-        if (file.is_dir) {
-            scan_subdir(file.path, file.name);
-        } else if (string_ends_with(file.name, ".gguf")) {
-            // single file model
-            std::string name = file.name;
-            string_replace_all(name, ".gguf", "");
-            local_model model{
-                /* name        */ name,
-                /* path        */ file.path,
-                /* path_mmproj */ ""
-            };
-            models.push_back(model);
-        }
-    }
-    return models;
+void server_model_meta::update_args(common_preset_context & ctx_preset, std::string bin_path) {
+    // update params
+    unset_reserved_args(preset, false);
+    preset.set_option(ctx_preset, "LLAMA_ARG_HOST",  CHILD_ADDR);
+    preset.set_option(ctx_preset, "LLAMA_ARG_PORT",  std::to_string(port));
+    preset.set_option(ctx_preset, "LLAMA_ARG_ALIAS", name);
+    // TODO: maybe validate preset before rendering ?
+    // render args
+    args = preset.to_args(bin_path);
 }
 
 //
@@ -140,67 +118,150 @@ server_models::server_models(
         const common_params & params,
         int argc,
         char ** argv,
-        char ** envp) : base_params(params) {
-    for (int i = 0; i < argc; i++) {
-        base_args.push_back(std::string(argv[i]));
-    }
+        char ** envp)
+            : ctx_preset(LLAMA_EXAMPLE_SERVER),
+              base_params(params),
+              base_preset(ctx_preset.load_from_args(argc, argv)) {
     for (char ** env = envp; *env != nullptr; env++) {
         base_env.push_back(std::string(*env));
     }
-    GGML_ASSERT(!base_args.empty());
+    // clean up base preset
+    unset_reserved_args(base_preset, true);
     // set binary path
     try {
-        base_args[0] = get_server_exec_path().string();
+        bin_path = get_server_exec_path().string();
     } catch (const std::exception & e) {
+        bin_path = argv[0];
         LOG_WRN("failed to get server executable path: %s\n", e.what());
-        LOG_WRN("using original argv[0] as fallback: %s\n", base_args[0].c_str());
+        LOG_WRN("using original argv[0] as fallback: %s\n", argv[0]);
     }
-    // TODO: allow refreshing cached model list
-    // add cached models
-    auto cached_models = common_list_cached_models();
-    for (const auto & model : cached_models) {
-        server_model_meta meta{
-            /* name        */ model.to_string(),
-            /* path        */ model.manifest_path,
-            /* path_mmproj */ "", // auto-detected when loading
-            /* in_cache    */ true,
-            /* port        */ 0,
-            /* status      */ SERVER_MODEL_STATUS_UNLOADED,
-            /* last_used   */ 0,
-            /* args        */ std::vector<std::string>(),
-            /* exit_code   */ 0
-        };
-        mapping[meta.name] = instance_t{
-            /* subproc */ std::make_shared<subprocess_s>(),
-            /* th      */ std::thread(),
-            /* meta    */ meta
-        };
+    load_models();
+}
+
+void server_models::add_model(server_model_meta && meta) {
+    if (mapping.find(meta.name) != mapping.end()) {
+        throw std::runtime_error(string_format("model '%s' appears multiple times", meta.name.c_str()));
     }
-    // add local models specificed via --models-dir
-    if (!params.models_dir.empty()) {
-        auto local_models = list_local_models(params.models_dir);
-        for (const auto & model : local_models) {
-            if (mapping.find(model.name) != mapping.end()) {
-                // already exists in cached models, skip
-                continue;
-            }
-            server_model_meta meta{
-                /* name        */ model.name,
-                /* path        */ model.path,
-                /* path_mmproj */ model.path_mmproj,
-                /* in_cache    */ false,
-                /* port        */ 0,
-                /* status      */ SERVER_MODEL_STATUS_UNLOADED,
-                /* last_used   */ 0,
-                /* args        */ std::vector<std::string>(),
-                /* exit_code   */ 0
-            };
-            mapping[meta.name] = instance_t{
-                /* subproc */ std::make_shared<subprocess_s>(),
-                /* th      */ std::thread(),
-                /* meta    */ meta
-            };
+    meta.update_args(ctx_preset, bin_path); // render args
+    std::string name = meta.name;
+    mapping[name] = instance_t{
+        /* subproc */ std::make_shared<subprocess_s>(),
+        /* th      */ std::thread(),
+        /* meta    */ std::move(meta)
+    };
+}
+
+// TODO: allow refreshing cached model list
+void server_models::load_models() {
+    // loading models from 3 sources:
+    // 1. cached models
+    common_presets cached_models = ctx_preset.load_from_cache();
+    SRV_INF("Loaded %zu cached model presets\n", cached_models.size());
+    // 2. local models from --models-dir
+    common_presets local_models;
+    if (!base_params.models_dir.empty()) {
+        local_models = ctx_preset.load_from_models_dir(base_params.models_dir);
+        SRV_INF("Loaded %zu local model presets from %s\n", local_models.size(), base_params.models_dir.c_str());
+    }
+    // 3. custom-path models from presets
+    common_preset global = {};
+    common_presets custom_presets = {};
+    if (!base_params.models_preset.empty()) {
+        custom_presets = ctx_preset.load_from_ini(base_params.models_preset, global);
+        SRV_INF("Loaded %zu custom model presets from %s\n", custom_presets.size(), base_params.models_preset.c_str());
+    }
+
+    // cascade, apply global preset first
+    cached_models  = ctx_preset.cascade(global, cached_models);
+    local_models   = ctx_preset.cascade(global, local_models);
+    custom_presets = ctx_preset.cascade(global, custom_presets);
+
+    // note: if a model exists in both cached and local, local takes precedence
+    common_presets final_presets;
+    for (const auto & [name, preset] : cached_models) {
+        final_presets[name] = preset;
+    }
+    for (const auto & [name, preset] : local_models) {
+        final_presets[name] = preset;
+    }
+
+    // process custom presets from INI
+    for (const auto & [name, custom] : custom_presets) {
+        if (final_presets.find(name) != final_presets.end()) {
+            // apply custom config if exists
+            common_preset & target = final_presets[name];
+            target.merge(custom);
+        } else {
+            // otherwise add directly
+            final_presets[name] = custom;
         }
+    }
+
+    // server base preset from CLI args take highest precedence
+    for (auto & [name, preset] : final_presets) {
+        preset.merge(base_preset);
+    }
+
+    // convert presets to server_model_meta and add to mapping
+    for (const auto & preset : final_presets) {
+        server_model_meta meta{
+            /* preset       */ preset.second,
+            /* name         */ preset.first,
+            /* port         */ 0,
+            /* status       */ SERVER_MODEL_STATUS_UNLOADED,
+            /* last_used    */ 0,
+            /* args         */ std::vector<std::string>(),
+            /* exit_code    */ 0,
+            /* stop_timeout */ DEFAULT_STOP_TIMEOUT,
+        };
+        add_model(std::move(meta));
+    }
+
+    // log available models
+    {
+        std::unordered_set<std::string> custom_names;
+        for (const auto & [name, preset] : custom_presets) {
+            custom_names.insert(name);
+        }
+        SRV_INF("Available models (%zu) (*: custom preset)\n", mapping.size());
+        for (const auto & [name, inst] : mapping) {
+            bool has_custom = custom_names.find(name) != custom_names.end();
+            SRV_INF("  %c %s\n", has_custom ? '*' : ' ', name.c_str());
+        }
+    }
+
+    // handle custom stop-timeout option
+    for (auto & [name, inst] : mapping) {
+        std::string val;
+        if (inst.meta.preset.get_option(COMMON_ARG_PRESET_STOP_TIMEOUT, val)) {
+            try {
+                inst.meta.stop_timeout = std::stoi(val);
+            } catch (...) {
+                SRV_WRN("invalid stop-timeout value '%s' for model '%s', using default %d seconds\n",
+                    val.c_str(), name.c_str(), DEFAULT_STOP_TIMEOUT);
+                inst.meta.stop_timeout = DEFAULT_STOP_TIMEOUT;
+            }
+        }
+    }
+
+    // load any autoload models
+    std::vector<std::string> models_to_load;
+    for (const auto & [name, inst] : mapping) {
+        std::string val;
+        if (inst.meta.preset.get_option(COMMON_ARG_PRESET_LOAD_ON_STARTUP, val)) {
+            models_to_load.push_back(name);
+        }
+    }
+    if ((int)models_to_load.size() > base_params.models_max) {
+        throw std::runtime_error(string_format(
+            "number of models to load on startup (%zu) exceeds models_max (%d)",
+            models_to_load.size(),
+            base_params.models_max
+        ));
+    }
+    for (const auto & name : models_to_load) {
+        SRV_INF("(startup) loading model %s\n", name.c_str());
+        load(name);
     }
 }
 
@@ -318,7 +379,7 @@ void server_models::unload_lru() {
     int64_t lru_last_used = ggml_time_ms();
     size_t count_active = 0;
     {
-        std::lock_guard<std::mutex> lk(mutex);
+        std::unique_lock<std::mutex> lk(mutex);
         for (const auto & m : mapping) {
             if (m.second.meta.is_active()) {
                 count_active++;
@@ -332,22 +393,17 @@ void server_models::unload_lru() {
     if (!lru_model_name.empty() && count_active >= (size_t)base_params.models_max) {
         SRV_INF("models_max limit reached, removing LRU name=%s\n", lru_model_name.c_str());
         unload(lru_model_name);
-    }
-}
-
-static void add_or_replace_arg(std::vector<std::string> & args, const std::string & key, const std::string & value) {
-    for (size_t i = 0; i < args.size(); i++) {
-        if (args[i] == key && i + 1 < args.size()) {
-            args[i + 1] = value;
-            return;
+        // wait for unload to complete
+        {
+            std::unique_lock<std::mutex> lk(mutex);
+            cv.wait(lk, [this, &lru_model_name]() {
+                return mapping[lru_model_name].meta.status == SERVER_MODEL_STATUS_UNLOADED;
+            });
         }
     }
-    // not found, append
-    args.push_back(key);
-    args.push_back(value);
 }
 
-void server_models::load(const std::string & name, bool auto_load) {
+void server_models::load(const std::string & name) {
     if (!has_model(name)) {
         throw std::runtime_error("model name=" + name + " is not found");
     }
@@ -376,26 +432,10 @@ void server_models::load(const std::string & name, bool auto_load) {
     {
         SRV_INF("spawning server instance with name=%s on port %d\n", inst.meta.name.c_str(), inst.meta.port);
 
-        std::vector<std::string> child_args;
-        if (auto_load && !meta.args.empty()) {
-            child_args = meta.args; // copy previous args
-        } else {
-            child_args = base_args; // copy
-            if (inst.meta.in_cache) {
-                add_or_replace_arg(child_args, "-hf", inst.meta.name);
-            } else {
-                add_or_replace_arg(child_args, "-m", inst.meta.path);
-                if (!inst.meta.path_mmproj.empty()) {
-                    add_or_replace_arg(child_args, "--mmproj", inst.meta.path_mmproj);
-                }
-            }
-        }
+        inst.meta.update_args(ctx_preset, bin_path); // render args
 
-        // set model args
-        add_or_replace_arg(child_args, "--port", std::to_string(inst.meta.port));
-        add_or_replace_arg(child_args, "--alias", inst.meta.name);
-
-        std::vector<std::string> child_env = base_env; // copy
+        std::vector<std::string> child_args = inst.meta.args; // copy
+        std::vector<std::string> child_env  = base_env; // copy
         child_env.push_back("LLAMA_SERVER_ROUTER_PORT=" + std::to_string(base_params.port));
 
         SRV_INF("%s", "spawning server instance with args:\n");
@@ -407,6 +447,8 @@ void server_models::load(const std::string & name, bool auto_load) {
         std::vector<char *> argv = to_char_ptr_array(child_args);
         std::vector<char *> envp = to_char_ptr_array(child_env);
 
+        // TODO @ngxson : maybe separate stdout and stderr in the future
+        //                so that we can use stdout for commands and stderr for logging
         int options = subprocess_option_no_window | subprocess_option_combined_stdout_stderr;
         int result = subprocess_create_ex(argv.data(), options, envp.data(), inst.subproc.get());
         if (result != 0) {
@@ -418,32 +460,83 @@ void server_models::load(const std::string & name, bool auto_load) {
 
     // start a thread to manage the child process
     // captured variables are guaranteed to be destroyed only after the thread is joined
-    inst.th = std::thread([this, name, child_proc = inst.subproc, port = inst.meta.port]() {
-        // read stdout/stderr and forward to main server log
-        FILE * p_stdout_stderr = subprocess_stdout(child_proc.get());
-        if (p_stdout_stderr) {
-            char buffer[4096];
-            while (fgets(buffer, sizeof(buffer), p_stdout_stderr) != nullptr) {
-                LOG("[%5d] %s", port, buffer);
+    inst.th = std::thread([this, name, child_proc = inst.subproc, port = inst.meta.port, stop_timeout = inst.meta.stop_timeout]() {
+        FILE * stdin_file = subprocess_stdin(child_proc.get());
+        FILE * stdout_file = subprocess_stdout(child_proc.get()); // combined stdout/stderr
+
+        std::thread log_thread([&]() {
+            // read stdout/stderr and forward to main server log
+            // also handle status report from child process
+            bool state_received = false; // true if child state received
+            if (stdout_file) {
+                char buffer[4096];
+                while (fgets(buffer, sizeof(buffer), stdout_file) != nullptr) {
+                    LOG("[%5d] %s", port, buffer);
+                    if (!state_received && std::strstr(buffer, CMD_CHILD_TO_ROUTER_READY) != nullptr) {
+                        // child process is ready
+                        this->update_status(name, SERVER_MODEL_STATUS_LOADED, 0);
+                        state_received = true;
+                    }
+                }
+            } else {
+                SRV_ERR("failed to get stdout/stderr of child process for name=%s\n", name.c_str());
             }
-        } else {
-            SRV_ERR("failed to get stdout/stderr of child process for name=%s\n", name.c_str());
-        }
+        });
+
+        std::thread stopping_thread([&]() {
+            // thread to monitor stopping signal
+            auto is_stopping = [this, &name]() {
+                return this->stopping_models.find(name) != this->stopping_models.end();
+            };
+            {
+                std::unique_lock<std::mutex> lk(this->mutex);
+                this->cv_stop.wait(lk, is_stopping);
+            }
+            SRV_INF("stopping model instance name=%s\n", name.c_str());
+            // send interrupt to child process
+            fprintf(stdin_file, "%s\n", CMD_ROUTER_TO_CHILD_EXIT);
+            fflush(stdin_file);
+            // wait to stop gracefully or timeout
+            int64_t start_time = ggml_time_ms();
+            while (true) {
+                std::unique_lock<std::mutex> lk(this->mutex);
+                if (!is_stopping()) {
+                    return; // already stopped
+                }
+                int64_t elapsed = ggml_time_ms() - start_time;
+                if (elapsed >= stop_timeout * 1000) {
+                    // timeout, force kill
+                    SRV_WRN("force-killing model instance name=%s after %d seconds timeout\n", name.c_str(), stop_timeout);
+                    subprocess_terminate(child_proc.get());
+                    return;
+                }
+                this->cv_stop.wait_for(lk, std::chrono::seconds(1));
+            }
+        });
+
         // we reach here when the child process exits
+        // note: we cannot join() prior to this point because it will close stdin_file
+        if (log_thread.joinable()) {
+            log_thread.join();
+        }
+
+        // stop the timeout monitoring thread
+        {
+            std::lock_guard<std::mutex> lk(this->mutex);
+            stopping_models.erase(name);
+            cv_stop.notify_all();
+        }
+        if (stopping_thread.joinable()) {
+            stopping_thread.join();
+        }
+
+        // get the exit code
         int exit_code = 0;
         subprocess_join(child_proc.get(), &exit_code);
         subprocess_destroy(child_proc.get());
-        // update PID and status
-        {
-            std::lock_guard<std::mutex> lk(mutex);
-            auto it = mapping.find(name);
-            if (it != mapping.end()) {
-                auto & meta = it->second.meta;
-                meta.exit_code = exit_code;
-                meta.status    = SERVER_MODEL_STATUS_UNLOADED;
-            }
-            cv.notify_all();
-        }
+
+        // update status and exit code
+        this->update_status(name, SERVER_MODEL_STATUS_UNLOADED, exit_code);
         SRV_INF("instance name=%s exited with status %d\n", name.c_str(), exit_code);
     });
 
@@ -464,22 +557,14 @@ void server_models::load(const std::string & name, bool auto_load) {
     cv.notify_all();
 }
 
-static void interrupt_subprocess(FILE * stdin_file) {
-    // because subprocess.h does not provide a way to send SIGINT,
-    // we will send a command to the child process to exit gracefully
-    if (stdin_file) {
-        fprintf(stdin_file, "%s\n", CMD_EXIT);
-        fflush(stdin_file);
-    }
-}
-
 void server_models::unload(const std::string & name) {
     std::lock_guard<std::mutex> lk(mutex);
     auto it = mapping.find(name);
     if (it != mapping.end()) {
         if (it->second.meta.is_active()) {
             SRV_INF("unloading model instance name=%s\n", name.c_str());
-            interrupt_subprocess(it->second.stdin_file);
+            stopping_models.insert(name);
+            cv_stop.notify_all();
             // status change will be handled by the managing thread
         } else {
             SRV_WRN("model instance name=%s is not loaded\n", name.c_str());
@@ -494,7 +579,8 @@ void server_models::unload_all() {
         for (auto & [name, inst] : mapping) {
             if (inst.meta.is_active()) {
                 SRV_INF("unloading model instance name=%s\n", name.c_str());
-                interrupt_subprocess(inst.stdin_file);
+                stopping_models.insert(name);
+                cv_stop.notify_all();
                 // status change will be handled by the managing thread
             }
             // moving the thread to join list to avoid deadlock
@@ -508,16 +594,15 @@ void server_models::unload_all() {
     }
 }
 
-void server_models::update_status(const std::string & name, server_model_status status) {
-    // for now, we only allow updating to LOADED status
-    if (status != SERVER_MODEL_STATUS_LOADED) {
-        throw std::runtime_error("invalid status value");
+void server_models::update_status(const std::string & name, server_model_status status, int exit_code) {
+    std::unique_lock<std::mutex> lk(mutex);
+    auto it = mapping.find(name);
+    if (it != mapping.end()) {
+        auto & meta = it->second.meta;
+        meta.status    = status;
+        meta.exit_code = exit_code;
     }
-    auto meta = get_meta(name);
-    if (meta.has_value()) {
-        meta->status = status;
-        update_meta(name, meta.value());
-    }
+    cv.notify_all();
 }
 
 void server_models::wait_until_loaded(const std::string & name) {
@@ -541,9 +626,10 @@ bool server_models::ensure_model_loaded(const std::string & name) {
     }
     if (meta->status == SERVER_MODEL_STATUS_UNLOADED) {
         SRV_INF("model name=%s is not loaded, loading...\n", name.c_str());
-        load(name, true);
+        load(name);
     }
 
+    // for loading state
     SRV_INF("waiting until model name=%s is fully loaded...\n", name.c_str());
     wait_until_loaded(name);
 
@@ -571,7 +657,7 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     SRV_INF("proxying request to model %s on port %d\n", name.c_str(), meta->port);
     auto proxy = std::make_unique<server_http_proxy>(
             method,
-            base_params.hostname,
+            CHILD_ADDR,
             meta->port,
             req.path,
             req.headers,
@@ -580,32 +666,13 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     return proxy;
 }
 
-std::thread server_models::setup_child_server(const common_params & base_params, int router_port, const std::string & name, std::function<void(int)> & shutdown_handler) {
+std::thread server_models::setup_child_server(const std::function<void(int)> & shutdown_handler) {
     // send a notification to the router server that a model instance is ready
-    // TODO @ngxson : use HTTP client from libcommon
-    httplib::Client cli(base_params.hostname, router_port);
-    cli.set_connection_timeout(0, 200000); // 200 milliseconds
-
-    httplib::Request req;
-    req.method = "POST";
-    req.path   = "/models/status";
-    req.set_header("Content-Type", "application/json");
-    if (!base_params.api_keys.empty()) {
-        req.set_header("Authorization", "Bearer " + base_params.api_keys[0]);
-    }
-
-    json body;
-    body["model"] = name;
-    body["value"] = server_model_status_to_string(SERVER_MODEL_STATUS_LOADED);
-    req.body = body.dump();
-
-    SRV_INF("notifying router server (port=%d) that model %s is ready\n", router_port, name.c_str());
-    auto result = cli.send(std::move(req));
-    if (result.error() != httplib::Error::Success) {
-        auto err_str = httplib::to_string(result.error());
-        SRV_ERR("failed to notify router server: %s\n", err_str.c_str());
-        exit(1); // force exit
-    }
+    common_log_pause(common_log_main());
+    fflush(stdout);
+    fprintf(stdout, "%s\n", CMD_CHILD_TO_ROUTER_READY);
+    fflush(stdout);
+    common_log_resume(common_log_main());
 
     // setup thread for monitoring stdin
     return std::thread([shutdown_handler]() {
@@ -619,7 +686,7 @@ std::thread server_models::setup_child_server(const common_params & base_params,
                 eof = true;
                 break;
             }
-            if (line.find(CMD_EXIT) != std::string::npos) {
+            if (line.find(CMD_ROUTER_TO_CHILD_EXIT) != std::string::npos) {
                 SRV_INF("%s", "exit command received, exiting...\n");
                 shutdown_handler(0);
                 break;
@@ -695,6 +762,7 @@ void server_models_routes::init_routes() {
                     {"params", json{}},
                     {"n_ctx",  0},
                 }},
+                {"webui_settings", webui_settings},
             });
             return res;
         }
@@ -724,38 +792,6 @@ void server_models_routes::init_routes() {
         return models.proxy_request(req, method, name, true); // update last usage for POST request only
     };
 
-    this->get_router_models = [this](const server_http_req &) {
-        auto res = std::make_unique<server_http_res>();
-        json models_json = json::array();
-        auto all_models = models.get_all_meta();
-        std::time_t t = std::time(0);
-        for (const auto & meta : all_models) {
-            json status {
-                {"value", server_model_status_to_string(meta.status)},
-                {"args",  meta.args},
-            };
-            if (meta.is_failed()) {
-                status["exit_code"] = meta.exit_code;
-                status["failed"]    = true;
-            }
-            models_json.push_back(json {
-                {"id",       meta.name},
-                {"object",   "model"},    // for OAI-compat
-                {"owned_by", "llamacpp"}, // for OAI-compat
-                {"created",  t},          // for OAI-compat
-                {"in_cache", meta.in_cache},
-                {"path",     meta.path},
-                {"status",   status},
-                // TODO: add other fields, may require reading GGUF metadata
-            });
-        }
-        res_ok(res, {
-            {"data", models_json},
-            {"object", "list"},
-        });
-        return res;
-    };
-
     this->post_router_models_load = [this](const server_http_req & req) {
         auto res = std::make_unique<server_http_res>();
         json body = json::parse(req.body);
@@ -769,19 +805,7 @@ void server_models_routes::init_routes() {
             res_err(res, format_error_response("model is already loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        models.load(name, false);
-        res_ok(res, {{"success", true}});
-        return res;
-    };
-
-    // used by child process to notify the router about status change
-    // TODO @ngxson : maybe implement authentication for this endpoint in the future
-    this->post_router_models_status = [this](const server_http_req & req) {
-        auto res = std::make_unique<server_http_res>();
-        json body = json::parse(req.body);
-        std::string model = json_value(body, "model", std::string());
-        std::string value = json_value(body, "value", std::string());
-        models.update_status(model, server_model_status_from_string(value));
+        models.load(name);
         res_ok(res, {{"success", true}});
         return res;
     };
@@ -793,9 +817,17 @@ void server_models_routes::init_routes() {
         std::time_t t = std::time(0);
         for (const auto & meta : all_models) {
             json status {
-                {"value", server_model_status_to_string(meta.status)},
-                {"args",  meta.args},
+                {"value",  server_model_status_to_string(meta.status)},
+                {"args",   meta.args},
             };
+            if (!meta.preset.name.empty()) {
+                common_preset preset_copy = meta.preset;
+                unset_reserved_args(preset_copy, false);
+                preset_copy.unset_option("LLAMA_ARG_HOST");
+                preset_copy.unset_option("LLAMA_ARG_PORT");
+                preset_copy.unset_option("LLAMA_ARG_ALIAS");
+                status["preset"] = preset_copy.to_ini();
+            }
             if (meta.is_failed()) {
                 status["exit_code"] = meta.exit_code;
                 status["failed"]    = true;
@@ -805,8 +837,6 @@ void server_models_routes::init_routes() {
                 {"object",   "model"},    // for OAI-compat
                 {"owned_by", "llamacpp"}, // for OAI-compat
                 {"created",  t},          // for OAI-compat
-                {"in_cache", meta.in_cache},
-                {"path",     meta.path},
                 {"status",   status},
                 // TODO: add other fields, may require reading GGUF metadata
             });
@@ -827,7 +857,7 @@ void server_models_routes::init_routes() {
             res_err(res, format_error_response("model is not found", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        if (model->status != SERVER_MODEL_STATUS_LOADED) {
+        if (!model->is_active()) {
             res_err(res, format_error_response("model is not loaded", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }

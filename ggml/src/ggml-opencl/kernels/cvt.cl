@@ -117,6 +117,27 @@ kernel void kernel_convert_block_q4_0_noshuffle(
     }
 }
 
+kernel void kernel_restore_block_q4_0_noshuffle(
+    global uchar * src_q,
+    global half  * src_d,
+    global struct block_q4_0 * dst,
+    uchar mask_0F,
+    uchar mask_F0
+) {
+    global struct block_q4_0 * b = (global struct block_q4_0 *) dst + get_global_id(0);
+    global uchar * q = (global uchar *) src_q + QK4_0/2*get_global_id(0);
+    global half  * d = (global half *) src_d + get_global_id(0);
+
+    b->d = *d;
+    for (int i = 0; i < QK4_0/4; ++i) {
+        uchar x0 = q[i + 0      ] ;
+        uchar x1 = q[i + QK4_0/4];
+
+        b->qs[2*i + 0] = convert_uchar((x0 & mask_0F) | ((x1 & mask_0F) << 4));
+        b->qs[2*i + 1] = convert_uchar(((x0 & mask_F0) >> 4) | (x1 & mask_F0));
+    }
+}
+
 //------------------------------------------------------------------------------
 // block_mxfp4
 //------------------------------------------------------------------------------

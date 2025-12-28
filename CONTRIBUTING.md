@@ -15,6 +15,7 @@ The project differentiates between 3 levels of contributors:
     - If you modified the `ggml` source, run the `test-backend-ops` tool to check whether different backend implementations of the `ggml` operators produce consistent results (this requires access to at least two different `ggml` backends)
     - If you modified a `ggml` operator or added a new one, add the corresponding test cases to `test-backend-ops`
 - Create separate PRs for each feature or fix. Avoid combining unrelated changes in a single PR
+- When adding support for a new model or feature, focus on **CPU support only** in the initial PR unless you have a good reason not to. Add support for other backends like CUDA in follow-up PRs
 - Consider allowing write access to your branch for faster reviews, as reviewers can push commits directly
 - If your PR becomes stale, rebase it on top of latest `master` to get maintainers attention
 - Maintainers will rely on your insights and approval when making a final decision to approve and merge a PR

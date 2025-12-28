@@ -64,6 +64,7 @@ export { default as CopyToClipboardIcon } from './misc/CopyToClipboardIcon.svelt
 export { default as KeyboardShortcutInfo } from './misc/KeyboardShortcutInfo.svelte';
 export { default as MarkdownContent } from './misc/MarkdownContent.svelte';
 export { default as RemoveButton } from './misc/RemoveButton.svelte';
+export { default as SearchInput } from './misc/SearchInput.svelte';
 export { default as SyntaxHighlightedCode } from './misc/SyntaxHighlightedCode.svelte';
 export { default as ModelsSelector } from './models/ModelsSelector.svelte';
 

@@ -425,7 +425,7 @@ struct parser_executor {
 
         if (result.need_more_input()) {
             // Propagate - need to know what child would match before negating
-            return result;
+            return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos);
         }
 
         // Child failed, so negation succeeds

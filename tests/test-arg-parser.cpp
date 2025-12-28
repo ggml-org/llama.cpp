@@ -16,25 +16,50 @@ int main(void) {
     for (int ex = 0; ex < LLAMA_EXAMPLE_COUNT; ex++) {
         try {
             auto ctx_arg = common_params_parser_init(params, (enum llama_example)ex);
+            common_params_add_preset_options(ctx_arg.options);
             std::unordered_set<std::string> seen_args;
             std::unordered_set<std::string> seen_env_vars;
             for (const auto & opt : ctx_arg.options) {
                 // check for args duplications
-                for (const auto & arg : opt.args) {
+                for (const auto & arg : opt.get_args()) {
                     if (seen_args.find(arg) == seen_args.end()) {
                         seen_args.insert(arg);
                     } else {
-                        fprintf(stderr, "test-arg-parser: found different handlers for the same argument: %s", arg);
+                        fprintf(stderr, "test-arg-parser: found different handlers for the same argument: %s", arg.c_str());
                         exit(1);
                     }
                 }
                 // check for env var duplications
-                if (opt.env) {
-                    if (seen_env_vars.find(opt.env) == seen_env_vars.end()) {
-                        seen_env_vars.insert(opt.env);
+                for (const auto & env : opt.get_env()) {
+                    if (seen_env_vars.find(env) == seen_env_vars.end()) {
+                        seen_env_vars.insert(env);
                     } else {
-                        fprintf(stderr, "test-arg-parser: found different handlers for the same env var: %s", opt.env);
+                        fprintf(stderr, "test-arg-parser: found different handlers for the same env var: %s", env.c_str());
                         exit(1);
+                    }
+                }
+
+                // ensure shorter argument precedes longer argument
+                if (opt.args.size() > 1) {
+                    const std::string first(opt.args.front());
+                    const std::string last(opt.args.back());
+
+                    if (first.length() > last.length()) {
+                        fprintf(stderr, "test-arg-parser: shorter argument should come before longer one: %s, %s\n",
+                                first.c_str(), last.c_str());
+                        assert(false);
+                    }
+                }
+
+                // same check for negated arguments
+                if (opt.args_neg.size() > 1) {
+                    const std::string first(opt.args_neg.front());
+                    const std::string last(opt.args_neg.back());
+
+                    if (first.length() > last.length()) {
+                        fprintf(stderr, "test-arg-parser: shorter negated argument should come before longer one: %s, %s\n",
+                                first.c_str(), last.c_str());
+                        assert(false);
                     }
                 }
             }
@@ -71,6 +96,10 @@ int main(void) {
     // non-existence arg in specific example (--draft cannot be used outside llama-speculative)
     argv = {"binary_name", "--draft", "123"};
     assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_EMBEDDING));
+
+    // negated arg
+    argv = {"binary_name", "--no-mmap"};
+    assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
 
 
     printf("test-arg-parser: test valid usage\n\n");
@@ -115,6 +144,14 @@ int main(void) {
     assert(params.model.path == "blah.gguf");
     assert(params.cpuparams.n_threads == 1010);
 
+    printf("test-arg-parser: test negated environment variables\n\n");
+
+    setenv("LLAMA_ARG_MMAP", "0", true);
+    setenv("LLAMA_ARG_NO_PERF", "1", true); // legacy format
+    argv = {"binary_name"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.use_mmap == false);
+    assert(params.no_perf == true);
 
     printf("test-arg-parser: test environment variables being overwritten\n\n");
 

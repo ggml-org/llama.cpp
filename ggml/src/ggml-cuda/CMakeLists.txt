@@ -15,6 +15,7 @@ if (CUDAToolkit_FOUND)
         # 80     == Ampere, asynchronous data loading, faster tensor core instructions
         # 86     == RTX 3000, needs CUDA v11.1
         # 89     == RTX 4000, needs CUDA v11.8
+        # 120    == Blackwell, needs CUDA v12.8, FP4 tensor cores
         #
         # XX-virtual == compile CUDA code as PTX, do JIT compilation to binary code on first run
         # XX-real    == compile CUDA code as device code for this specific architecture
@@ -36,9 +37,35 @@ if (CUDAToolkit_FOUND)
             endif()
         endif()
     endif()
-    message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
     enable_language(CUDA)
+
+    # Replace any 12x-real architectures with 12x{a}-real. FP4 ptx instructions are not available in just 12x
+    if (GGML_NATIVE)
+        set(PROCESSED_ARCHITECTURES "")
+        if (NOT DEFINED CMAKE_CUDA_ARCHITECTURES AND CMAKE_CUDA_ARCHITECTURES_NATIVE)
+            set(ARCH_LIST ${CMAKE_CUDA_ARCHITECTURES_NATIVE})
+        else()
+            set(ARCH_LIST ${CMAKE_CUDA_ARCHITECTURES})
+        endif()
+        foreach(ARCH ${ARCH_LIST})
+            if (ARCH MATCHES "^12[0-9](-real|-virtual)?$")
+                string(REGEX REPLACE "^(12[0-9]).*$" "\\1" BASE_ARCH ${ARCH})
+                message(STATUS "Replacing ${ARCH} with ${BASE_ARCH}a-real")
+                list(APPEND PROCESSED_ARCHITECTURES "${BASE_ARCH}a-real")
+            else()
+                list(APPEND PROCESSED_ARCHITECTURES ${ARCH})
+            endif()
+        endforeach()
+        set(CMAKE_CUDA_ARCHITECTURES ${PROCESSED_ARCHITECTURES})
+    else()
+        foreach(ARCH ${CMAKE_CUDA_ARCHITECTURES})
+            if(ARCH MATCHES "^12[0-9](-real|-virtual)?$")
+                message(FATAL_ERROR "Compute capability ${ARCH} used, use ${ARCH}a or ${ARCH}f for Blackwell specific optimizations")
+            endif()
+        endforeach()
+    endif()
+    message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
     file(GLOB   GGML_HEADERS_CUDA "*.cuh")
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")

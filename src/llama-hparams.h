@@ -34,6 +34,7 @@ struct llama_hparams_convnext {
 
 struct llama_hparams {
     bool vocab_only;
+    bool no_alloc;
     bool rope_finetuned;
     bool use_par_res;
     bool swin_norm;
@@ -107,6 +108,7 @@ struct llama_hparams {
     float    rope_freq_base_train_swa;
     float    rope_freq_scale_train;
     float    rope_freq_scale_train_swa;
+
     uint32_t n_ctx_orig_yarn;
     float    rope_yarn_log_mul = 0.0f;
 
@@ -121,10 +123,11 @@ struct llama_hparams {
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
     // the size of the sliding window (0 - no SWA)
     uint32_t n_swa = 0;
-    // if swa_layers[il] == true, then layer il is SWA
-    // if swa_layers[il] == false, then layer il is dense (i.e. non-SWA)
+    // if swa_layers[il] == 1, then layer il is SWA
+    // if swa_layers[il] == 0, then layer il is dense (i.e. non-SWA)
     // by default, all layers are dense
-    std::array<bool, LLAMA_MAX_LAYERS> swa_layers;
+    // note: using uint32_t type for compatibility reason
+    std::array<uint32_t, LLAMA_MAX_LAYERS> swa_layers;
 
     // for State Space Models
     uint32_t ssm_d_conv  = 0;
@@ -164,6 +167,7 @@ struct llama_hparams {
     uint32_t n_no_rope_layer_step    = 4;
     uint32_t n_attn_temp_floor_scale = 0;
     float    f_attn_temp_scale       = 0.0f;
+    float    f_attn_temp_offset      = 0.0f; // offset position index
 
     // gemma3n altup
     uint32_t n_altup      = 4; // altup_num_inputs
@@ -267,7 +271,8 @@ struct llama_hparams {
     // TODO: think of a better place for this function
     // TODO: pack the SWA params in a struct?
     static bool is_masked_swa(uint32_t n_swa, llama_swa_type swa_type, llama_pos p0, llama_pos p1);
+
+    bool use_mrope() const;
 };
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");
-

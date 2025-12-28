@@ -103,6 +103,8 @@ SYCL backend supports Intel GPU Family:
 - Intel Built-in Arc GPU
 - Intel iGPU in Core CPU (11th Generation Core CPU and newer, refer to [oneAPI supported GPU](https://www.intel.com/content/www/us/en/developer/articles/system-requirements/intel-oneapi-base-toolkit-system-requirements.html#inpage-nav-1-1)).
 
+On older Intel GPUs, you may try [OpenCL](/docs/backend/OPENCL.md) although the performance is not optimal, and some GPUs may not support OpenCL nor have any GPGPU capabilities.
+
 #### Verified devices
 
 | Intel GPU                     | Status  | Verified Model                        |
@@ -827,7 +829,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
   No. We can't support Ollama issue directly, because we aren't familiar with Ollama.
 
-  Sugguest reproducing on llama.cpp and report similar issue to llama.cpp. We will surpport it.
+  Suggest reproducing on llama.cpp and report similar issue to llama.cpp. We will support it.
 
   It's same for other projects including llama.cpp SYCL backend.
 
