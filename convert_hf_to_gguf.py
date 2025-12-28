@@ -5052,6 +5052,7 @@ class Plamo3Model(TextModel):
         self._set_vocab_plamo()
 
         tokenizer_config_path = self.dir_model / "tokenizer_config.json"
+        tokenizer_config = {}
 
         if tokenizer_config_path.is_file():
             with open(tokenizer_config_path, encoding="utf-8") as f:
