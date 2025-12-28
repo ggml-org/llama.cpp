@@ -1081,23 +1081,23 @@ json convert_responses_to_chatcmpl(const json & body) {
     const json input_value = body.at("input");
     json chatcmpl_messages = json::array();
 
-    if (input_value.is_array()) {
-        chatcmpl_messages = input_value;
-    } else if (input_value.is_string()) {
-        chatcmpl_messages.push_back({
-            {"role",    "user"},
-            {"content", input_value},
-        });
-    } else {
-        std::invalid_argument("'input' must be a string or array of objects");
-    }
-
-    const std::string instructions = json_value(body, "instructions", std::string{});
+    const std::string instructions = json_value(body, "instructions", std::string());
     if (instructions != "") {
         chatcmpl_messages.push_back({
             {"role",    "system"},
             {"content", instructions},
         });
+    }
+
+    if (input_value.is_string()) {
+        chatcmpl_messages.push_back({
+            {"role",    "user"},
+            {"content", input_value},
+        });
+    } else if (input_value.is_array()) {
+        chatcmpl_messages = input_value;
+    } else {
+        throw std::invalid_argument("'input' must be a string or array of objects");
     }
 
     json chatcmpl_body = body;
