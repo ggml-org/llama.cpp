@@ -7533,7 +7533,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_PLAMO3:
             {
-                if (hparams.is_swa_any()) {
+                if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
                     llm = std::make_unique<llm_build_plamo3<true>> (*this, params);
                 } else {
                     llm = std::make_unique<llm_build_plamo3<false>>(*this, params);
