@@ -1095,7 +1095,74 @@ json convert_responses_to_chatcmpl(const json & body) {
             {"content", input_value},
         });
     } else if (input_value.is_array()) {
-        chatcmpl_messages = input_value;
+        for (const auto & input_message : input_value) {
+            if (!input_message.contains("content")) {
+                throw std::invalid_argument("'content' is required");
+            }
+            const json content = input_message.at("content");
+
+            if (content.is_string()) {
+                chatcmpl_messages.push_back(input_message);
+            } else if (content.is_array()) {
+                json new_content = json::array();
+
+                for (const auto & input_item : content) {
+                    const std::string type = json_value(input_item, "type", std::string());
+
+                    if (type == "input_text") {
+                        if (!input_item.contains("text")) {
+                            throw std::invalid_argument("'Input text' requires 'text'");
+                        }
+                        new_content.push_back({
+                            {"text", input_item.at("text")},
+                            {"type", "text"}
+                        });
+                    } else if (type == "input_image") {
+                        // While `detail` is marked as required,
+                        // it has default value("auto") and can be omitted.
+
+                        if (!input_item.contains("image_url")) {
+                            throw std::invalid_argument("'image_url' is required");
+                        }
+                        new_content.push_back({
+                            {"image_url", json {{"url", input_item.at("image_url")}}},
+                            {"type", "image_url"}
+                        });
+                    } else if (type == "input_file") {
+                        if (input_item.contains("file_url")) {
+                            throw std::invalid_argument("'file_url' is not supported");
+                        }
+                        if (!input_item.contains("file_data") || !input_item.contains("filename")) {
+                            throw std::invalid_argument("Both 'file_data' and 'filename' are required");
+                        }
+                        new_content.push_back({
+                            {"file", json {
+                                {"file_data", input_item.at("file_data")},
+                                {"filename",  input_item.at("filename")}}},
+                            {"type", "file"}
+                        });
+                    } else {
+                        throw std::invalid_argument("'type' must be one of input_text, input_image, or input_file");
+                    }
+                }
+
+                json new_input_message = input_message;
+                new_input_message["content"] = new_content;
+
+                chatcmpl_messages.push_back(new_input_message);
+            } else {
+                throw std::invalid_argument("'content' must be a string or array of objects");
+            }
+
+            const std::string role = json_value(input_message, "role", std::string());
+            if (role != "user" && role != "assistant" && role != "system" && role != "developer") {
+                throw std::invalid_argument("'role' must be one of user, assistant, system, or developer");
+            }
+
+            if (input_message.contains("type") && input_message.at("type") != "message") {
+                throw std::invalid_argument("If 'type' is defined, it should be 'message'");
+            }
+        }
     } else {
         throw std::invalid_argument("'input' must be a string or array of objects");
     }
