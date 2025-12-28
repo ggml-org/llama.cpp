@@ -1,134 +1,131 @@
 #pragma once
 
 #include "chat.h"
-#include "chat-auto-parser-helpers.h"
 
 #include <chrono>
-#include <map>
 #include <minja/chat-template.hpp>
 #include <minja/minja.hpp>
-#include <optional>
 #include <string>
 #include <vector>
 
 using json = nlohmann::ordered_json;
 
-// Structure to hold detected template patterns
-struct TemplatePattern {
-    enum ToolCallFormat {
-        JSON_NATIVE,      // JSON-style like Nemotron
-        XML_CONSTRUCTED,  // XML-style like Qwen3/Seed-OSS
-        CONTENT_ONLY,     // No tool call support detected
-        UNKNOWN
+// ============================================================================
+// UNIFIED AUTO-PARSER DATA STRUCTURES
+// ============================================================================
+
+// Phase 1 result: Content and reasoning structure (analyzed without tools)
+struct ContentStructure {
+    // Reasoning handling mode
+    enum ReasoningMode {
+        REASONING_NONE,        // No reasoning markers detected
+        REASONING_OPTIONAL,    // <think>...</think> may appear before content
+        REASONING_FORCED_OPEN, // Template ends with open reasoning tag (thinking_forced_open)
     };
 
-    ToolCallFormat format;
+    ReasoningMode reasoning_mode = REASONING_NONE;
+    std::string   reasoning_start;  // e.g., "<think>", "<|START_THINKING|>"
+    std::string   reasoning_end;    // e.g., "</think>", "<|END_THINKING|>"
 
-    static const char *                format_to_str(ToolCallFormat format);
-    std::vector<std::string>           preserved_tokens;
-    std::map<std::string, std::string> special_markers;
-    bool                               has_reasoning_support = false;
+    // Content wrapping mode
+    enum ContentMode {
+        CONTENT_PLAIN,                  // No content markers
+        CONTENT_ALWAYS_WRAPPED,         // <response>...</response> always present
+        CONTENT_WRAPPED_WITH_REASONING, // Content wrapped only when reasoning present
+    };
 
-    // For XML-style templates
-    std::string function_open_marker;
-    std::string function_close_marker;
-    std::string function_name_suffix;  // New field
-    std::string parameter_open_marker;
-    std::string parameter_close_marker;
-
-    // Improved parameter parsing
-    std::string parameter_key_prefix;
-    std::string parameter_key_suffix;
-
-    // For JSON-style templates
-    std::string tool_call_start_marker;
-    std::string tool_call_end_marker;
-
-    // JSON field names for tool calls (defaults for backwards compatibility)
-    std::string tool_id_field   = "";
-    std::string tool_name_field = "name";
-    std::string tool_args_field = "arguments";
-
-    // Reasoning
-    std::string reasoning_start_marker;
-    std::string reasoning_end_marker;
+    ContentMode content_mode = CONTENT_PLAIN;
+    std::string content_start;  // e.g., "<response>", "<|START_RESPONSE|>"
+    std::string content_end;    // e.g., "</response>", "<|END_RESPONSE|>"
 };
 
-// Structure to hold discovered patterns through differential analysis
-struct DiscoveredPattern {
-    std::string tool_call_opener;
-    std::string tool_call_closer;
-    std::string function_opener;
-    std::string function_closer;
-    std::string function_name_suffix;  // New field
-    std::string parameter_opener;
-    std::string parameter_closer;
-    std::string argument_separator;
-    std::string tool_call_start_marker;
-    std::string tool_call_end_marker;
+// Phase 2 result: Tool call structure (layered on Phase 1)
+struct ToolCallStructure {
+    bool supports_tools = false;
 
-    // Improved parameter parsing
-    std::string parameter_key_prefix;
-    std::string parameter_key_suffix;
+    // Container markers (what wraps all tool calls)
+    std::string tool_section_start;  // e.g., "<tool_call>", "[TOOL_CALLS]", "<TOOLCALL>", ""
+    std::string tool_section_end;    // e.g., "</tool_call>", "]", "</TOOLCALL>", ""
 
-    // Reasoning
-    std::string reasoning_start_marker;
-    std::string reasoning_end_marker;
+    // Function format (how individual functions are structured)
+    enum FunctionFormat {
+        FUNC_JSON_OBJECT,   // {"name": "X", "arguments": {...}}
+        FUNC_TAG_WITH_NAME, // <function=X>{...}</function>
+        FUNC_TAG_NAME_ONLY, // <X>...</X> where X is function name (rare)
+    };
+    FunctionFormat function_format = FUNC_JSON_OBJECT;
 
-    // Content/Response markers (for templates that wrap content in tags like <|START_RESPONSE|>)
-    std::string content_start_marker;
-    std::string content_end_marker;
+    // For FUNC_JSON_OBJECT format - field names (may vary between templates)
+    std::string name_field = "name";       // Could be "tool_name", "function"
+    std::string args_field = "arguments";  // Could be "parameters", "params", "input"
+    std::string id_field;                  // Optional: "id", "tool_call_id", ""
 
-    // JSON field names for tool calls (defaults for backwards compatibility)
-    std::string tool_id_field   = "";
-    std::string tool_name_field = "name";
-    std::string tool_args_field = "arguments";
+    // For FUNC_TAG_WITH_NAME format
+    std::string function_prefix;  // e.g., "<function="
+    std::string function_suffix;  // e.g., ">"
+    std::string function_close;   // e.g., "</function>"
+
+    // Argument format (how arguments are structured within a function)
+    enum ArgumentFormat {
+        ARGS_JSON,    // Standard JSON object: {"key": "value", ...}
+        ARGS_TAGGED,  // XML-style: <param=key>value</param>
+    };
+    ArgumentFormat argument_format = ARGS_JSON;
+
+    // For ARGS_TAGGED format
+    std::string arg_prefix;     // e.g., "<param=", "<parameter="
+    std::string arg_suffix;     // e.g., ">"
+    std::string arg_close;      // e.g., "</param>", "</parameter>"
+    std::string arg_separator;  // e.g., "", "\n"
 };
 
-// Template analyzer that uses differential analysis of OpenAI-compatible messages
+// Combined result of unified template analysis
+struct TemplateAnalysisResult {
+    ContentStructure  content;
+    ToolCallStructure tools;
+
+    // Preserved tokens for tokenizer (union of all markers)
+    std::vector<std::string> preserved_tokens;
+};
+
+// ============================================================================
+// TEMPLATE ANALYZER
+// ============================================================================
+
+// Template analyzer that uses two-phase differential analysis
 class TemplateAnalyzer {
   public:
-    static TemplatePattern analyze_template(const minja::chat_template & tmpl);
+    // Main entry point: Unified two-phase analysis
+    static TemplateAnalysisResult analyze_template(const minja::chat_template & tmpl);
+
+    // Phase 1 - Analyze content and reasoning structure (no tools)
+    static ContentStructure analyze_content_structure(const minja::chat_template & tmpl);
+
+    // Phase 2 - Analyze tool call structure (layered on Phase 1)
+    static ToolCallStructure analyze_tool_structure(const minja::chat_template & tmpl,
+                                                    const ContentStructure &     content);
 
   private:
-    static TemplatePattern::ToolCallFormat    detect_format_by_differential(const minja::chat_template & tmpl);
-    static std::vector<std::string>           extract_preserved_tokens(const minja::chat_template & tmpl);
-    static bool                               has_reasoning_support(const minja::chat_template & tmpl);
-    static std::map<std::string, std::string> extract_special_markers(const minja::chat_template & tmpl);
+    // Phase 1 detection helpers
+    static void detect_reasoning_markers(const minja::chat_template & tmpl, ContentStructure & cs);
+    static void detect_content_markers(const minja::chat_template & tmpl, ContentStructure & cs);
+    static ContentStructure::ReasoningMode detect_reasoning_mode(const minja::chat_template & tmpl,
+                                                                 const ContentStructure &     cs,
+                                                                 const std::string &          prompt);
 
-    // Helper methods for differential analysis
-    static std::string analyze_tool_call_differences(const minja::chat_template & tmpl);
-    static std::string analyze_reasoning_differences(const minja::chat_template & tmpl);
-    static std::string analyze_content_differences(const minja::chat_template & tmpl);
+    // Phase 2 detection helpers
+    static void detect_tool_markers(const minja::chat_template & tmpl, ToolCallStructure & ts);
+    static void detect_function_format(const minja::chat_template & tmpl, ToolCallStructure & ts);
+    static void detect_argument_format(const minja::chat_template & tmpl, ToolCallStructure & ts);
 
-    // New pure differential analysis methods
-    static DiscoveredPattern analyze_by_differential(const minja::chat_template & tmpl);
-    static void              analyze_reasoning(const minja::chat_template & tmpl, DiscoveredPattern & patterns);
-    static void              analyze_content_markers(const minja::chat_template & tmpl, DiscoveredPattern & patterns);
-    static DiscoveredPattern extract_patterns_from_differences(const std::string & tool1_diff,
-                                                               const std::string & tool2_diff,
-                                                               const std::string & tool3_diff);
-    static std::string       find_closing_pattern(const std::string & diff, size_t func_pos);
-    static std::string       find_tool_call_start(const std::string & diff);
-    static std::string       find_tool_call_end(const std::string & diff, size_t func_pos);
-    static std::string       infer_tool_call_opener(const std::string & diff1,
-                                                    const std::string & diff2,
-                                                    const std::string & diff3);
-    static std::string       infer_tool_call_closer(const std::string & diff1,
-                                                    const std::string & diff2,
-                                                    const std::string & diff3);
-    static std::string       find_common_substring(const std::vector<std::string> & strings);
-    static std::string       find_common_suffix(const std::vector<std::string> & strings);
-    static std::string       find_common_start_pattern(const std::string & diff1,
-                                                       const std::string & diff2,
-                                                       const std::string & diff3);
-    static std::string       find_common_end_pattern(const std::string & diff1,
-                                                       const std::string & diff2,
-                                                       const std::string & diff3);
-    static TemplatePattern::ToolCallFormat determine_format_from_patterns(const DiscoveredPattern & patterns);
+    // Helper to collect preserved tokens from analysis result
+    static void collect_preserved_tokens(TemplateAnalysisResult & result);
 };
 
-// Structure for template parameters
+// ============================================================================
+// TEMPLATE PARAMETERS
+// ============================================================================
+
 struct templates_params {
     json                                  messages;
     json                                  tools;
@@ -148,21 +145,21 @@ struct templates_params {
     bool                                  add_inference;
 };
 
-// Universal PEG parser generator
+// ============================================================================
+// PEG PARSER GENERATOR
+// ============================================================================
+
 class UniversalPEGGenerator {
   public:
-    static common_chat_params generate_parser(const TemplatePattern &         pattern,
-                                               const minja::chat_template &    tmpl,
-                                               const struct templates_params & inputs);
+    // Generate parser from analysis result
+    static common_chat_params generate_parser(const TemplateAnalysisResult &  analysis,
+                                              const minja::chat_template &    tmpl,
+                                              const struct templates_params & inputs);
 
   private:
-    static common_peg_arena build_native_parser(const TemplatePattern &         pattern,
-                                                 const minja::chat_template &    tmpl,
-                                                 const struct templates_params & inputs,
-                                                 bool                            thinking_forced_open);
-
-    static common_peg_arena build_constructed_parser(const TemplatePattern &         pattern,
-                                                      const minja::chat_template &    tmpl,
-                                                      const struct templates_params & inputs,
-                                                      bool                            thinking_forced_open);
+    // Build unified parser (single code path for all formats)
+    static common_peg_arena build_parser(const TemplateAnalysisResult &  analysis,
+                                         const minja::chat_template &    tmpl,
+                                         const struct templates_params & inputs,
+                                         bool                            thinking_forced_open);
 };

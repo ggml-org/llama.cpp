@@ -1,9 +1,6 @@
 #include "../src/llama-grammar.h"
 #include "chat-auto-parser.h"
-// #include "chat-parser.h"
 #include "common.h"
-// #include "json-schema-to-grammar.h"
-// #include "peg-parser.h"
 #include "peg-parser/testing.h"
 
 #include <iostream>
@@ -41,28 +38,32 @@ static bool match_string(const std::string & input, const std::string & grammar_
 static void test_qwen3_tool_call(testing & t) {
     t.log("Testing Qwen3-Coder tool call grammar acceptance");
 
-    // Setup Template Pattern
-    TemplatePattern qwen3_pattern;
-    qwen3_pattern.format                                    = TemplatePattern::XML_CONSTRUCTED;
-    qwen3_pattern.special_markers["tool_call_start_marker"] = "<tool_call>";
-    qwen3_pattern.special_markers["tool_call_end_marker"]   = "</tool_call>";
-    qwen3_pattern.special_markers["function_opener"]        = "<function=";
-    qwen3_pattern.special_markers["function_name_suffix"]   = ">";
-    qwen3_pattern.special_markers["function_closer"]        = "</function>";
-    qwen3_pattern.special_markers["parameter_key_prefix"]   = "<parameter=";
-    qwen3_pattern.special_markers["parameter_key_suffix"]   = ">";
-    qwen3_pattern.special_markers["parameter_closer"]       = "</parameter>";
-    qwen3_pattern.special_markers["argument_separator"]     = "\n";
-    qwen3_pattern.special_markers["parameter_opener"]       = "";
-    qwen3_pattern.special_markers["reasoning_start_marker"] = "";
-    qwen3_pattern.special_markers["reasoning_end_marker"]   = "";
+    // Setup analysis result using unified structures
+    TemplateAnalysisResult analysis;
+
+    // Content structure (no reasoning for this test)
+    analysis.content.reasoning_mode = ContentStructure::REASONING_NONE;
+    analysis.content.content_mode   = ContentStructure::CONTENT_PLAIN;
+
+    // Tool call structure for Qwen3-style XML tags
+    analysis.tools.supports_tools     = true;
+    analysis.tools.function_format    = ToolCallStructure::FUNC_TAG_WITH_NAME;
+    analysis.tools.argument_format    = ToolCallStructure::ARGS_TAGGED;
+    analysis.tools.tool_section_start = "<tool_call>";
+    analysis.tools.tool_section_end   = "</tool_call>";
+    analysis.tools.function_prefix    = "<function=";
+    analysis.tools.function_suffix    = ">";
+    analysis.tools.function_close     = "</function>";
+    analysis.tools.arg_prefix         = "<parameter=";
+    analysis.tools.arg_suffix         = ">";
+    analysis.tools.arg_close          = "</parameter>";
+    analysis.tools.arg_separator      = "\n";
 
     // Define Tools
     std::vector<common_chat_tool> tools;
     common_chat_tool              tool;
     tool.name        = "get_weather";
     tool.description = "Get weather";
-    // parameters is std::string in common_chat_tool
     tool.parameters  = R"({
         "type": "object",
         "properties": {
@@ -78,19 +79,19 @@ static void test_qwen3_tool_call(testing & t) {
     params.tool_choice             = COMMON_CHAT_TOOL_CHOICE_AUTO;
     params.reasoning_format        = COMMON_REASONING_FORMAT_NONE;
     params.tools                   = nlohmann::json::array();
-    for (auto & t : tools) {
+    for (auto & tool_item : tools) {
         json tj;
         tj["type"]                    = "function";
-        tj["function"]["name"]        = t.name;
-        tj["function"]["description"] = t.description;
-        tj["function"]["parameters"]  = json::parse(t.parameters);
+        tj["function"]["name"]        = tool_item.name;
+        tj["function"]["description"] = tool_item.description;
+        tj["function"]["parameters"]  = json::parse(tool_item.parameters);
         params.tools.push_back(tj);
     }
 
     // minja::chat_template constructor takes (source, bos, eos)
     minja::chat_template tmpl(std::string(""), std::string(""), std::string(""));
 
-    auto        result_params = UniversalPEGGenerator::generate_parser(qwen3_pattern, tmpl, params);
+    auto        result_params = UniversalPEGGenerator::generate_parser(analysis, tmpl, params);
     std::string grammar_str   = result_params.grammar;
 
     // 3. Test Strings
@@ -125,21 +126,26 @@ static void test_qwen3_tool_call(testing & t) {
 static void test_seed_tool_call(testing & t) {
     t.log("Testing Seed-OSS tool call grammar acceptance");
 
-    // Setup Template Pattern for Seed
-    TemplatePattern seed_pattern;
-    seed_pattern.format                                    = TemplatePattern::XML_CONSTRUCTED;
-    seed_pattern.special_markers["tool_call_start_marker"] = "<seed:tool_call>";
-    seed_pattern.special_markers["tool_call_end_marker"]   = "</seed:tool_call>";
-    seed_pattern.special_markers["function_opener"]        = "<function=";
-    seed_pattern.special_markers["function_name_suffix"]   = ">";
-    seed_pattern.special_markers["function_closer"]        = "</function>";
-    seed_pattern.special_markers["parameter_key_prefix"]   = "<parameter=";
-    seed_pattern.special_markers["parameter_key_suffix"]   = ">";
-    seed_pattern.special_markers["parameter_closer"]       = "</parameter>";
-    seed_pattern.special_markers["argument_separator"]     = "\n";
-    seed_pattern.special_markers["parameter_opener"]       = "";
-    seed_pattern.special_markers["reasoning_start_marker"] = "";
-    seed_pattern.special_markers["reasoning_end_marker"]   = "";
+    // Setup analysis result using unified structures
+    TemplateAnalysisResult analysis;
+
+    // Content structure (no reasoning for this test)
+    analysis.content.reasoning_mode = ContentStructure::REASONING_NONE;
+    analysis.content.content_mode   = ContentStructure::CONTENT_PLAIN;
+
+    // Tool call structure for Seed-style XML tags
+    analysis.tools.supports_tools     = true;
+    analysis.tools.function_format    = ToolCallStructure::FUNC_TAG_WITH_NAME;
+    analysis.tools.argument_format    = ToolCallStructure::ARGS_TAGGED;
+    analysis.tools.tool_section_start = "<seed:tool_call>";
+    analysis.tools.tool_section_end   = "</seed:tool_call>";
+    analysis.tools.function_prefix    = "<function=";
+    analysis.tools.function_suffix    = ">";
+    analysis.tools.function_close     = "</function>";
+    analysis.tools.arg_prefix         = "<parameter=";
+    analysis.tools.arg_suffix         = ">";
+    analysis.tools.arg_close          = "</parameter>";
+    analysis.tools.arg_separator      = "\n";
 
     // Define Tools
     std::vector<common_chat_tool> tools;
@@ -161,18 +167,18 @@ static void test_seed_tool_call(testing & t) {
     params.tool_choice             = COMMON_CHAT_TOOL_CHOICE_AUTO;
     params.reasoning_format        = COMMON_REASONING_FORMAT_AUTO;
     params.tools                   = nlohmann::json::array();
-    for (auto & t : tools) {
+    for (auto & tool_item : tools) {
         json tj;
         tj["type"]                    = "function";
-        tj["function"]["name"]        = t.name;
-        tj["function"]["description"] = t.description;
-        tj["function"]["parameters"]  = json::parse(t.parameters);
+        tj["function"]["name"]        = tool_item.name;
+        tj["function"]["description"] = tool_item.description;
+        tj["function"]["parameters"]  = json::parse(tool_item.parameters);
         params.tools.push_back(tj);
     }
 
     minja::chat_template tmpl(std::string(""), std::string(""), std::string(""));
 
-    auto        result_params = UniversalPEGGenerator::generate_parser(seed_pattern, tmpl, params);
+    auto        result_params = UniversalPEGGenerator::generate_parser(analysis, tmpl, params);
     std::string grammar_str   = result_params.grammar;
 
     // Test Valid Seed tool call
