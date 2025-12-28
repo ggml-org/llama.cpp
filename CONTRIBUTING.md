@@ -45,7 +45,7 @@ After submitting a pull request (PR), anticipate requests for changes to align w
 
 ## Handling Reviews and Rejections
 
-Rejections are rare and unwelcome, but they're sometimes essential for the project's overall health. Maintainers hold final say on merge criteria. For intricate features, consider opening a feature request first to discuss and align expectations.
+It is unfortunately sometimes necessary to reject PRs for the project's overall health. In such cases maintainers hold final say on merge criteria. For complex features, consider opening a feature request first to discuss and align expectations.
 
 # Pull requests (for maintainers)
 
