@@ -595,6 +595,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.attention.self.layer_norm_q",                # jina-bert-v2
             "transformer.layers.{bid}.attn.q_norm",                           # openelm
             "model.layers.layers.{bid}.mixer.q",                              # plamo2
+            "model.layers.layers.{bid}.mixer.q_norm",                         # plamo3
             "layers.{bid}.self_attn.q_norm",                                  # qwen3-embedding
             "model.layers.{bid}.attention.query_layernorm",                   # apertus
         ),
@@ -610,6 +611,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.attention.self.layer_norm_k",                # jina-bert-v2
             "transformer.layers.{bid}.attn.k_norm",                           # openelm
             "model.layers.layers.{bid}.mixer.k",                              # plamo2
+            "model.layers.layers.{bid}.mixer.k_norm",                         # plamo3
             "layers.{bid}.self_attn.k_norm",                                  # qwen3-embedding
             "model.layers.{bid}.attention.key_layernorm",                     # apertus
         ),

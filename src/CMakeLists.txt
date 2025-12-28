@@ -107,6 +107,7 @@ add_library(llama
             models/phi3.cpp
             models/plamo.cpp
             models/plamo2.cpp
+            models/plamo3.cpp
             models/plm.cpp
             models/qwen.cpp
             models/qwen2.cpp
