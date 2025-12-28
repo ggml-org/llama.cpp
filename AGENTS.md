@@ -18,7 +18,7 @@ These use cases are **permitted** when making a contribution with the help of AI
 - Pointing out documents, links, and parts of the code that are worth your time
 - Reviewing human-written code and providing suggestions for improvements
 - Expanding on verbose modifications that the contributor has already conceptualized. For example:
-    - Generating repeated lines with minor variations
+    - Generating repeated lines with minor variations (this should only be used for short code snippets where deduplication would add more complexity, compared to having almost the same code in multiple places)
     - Formatting code for consistency and readability
     - Completing code segments based on established patterns
     - Drafting documentation for project components with which the contributor is already familiar

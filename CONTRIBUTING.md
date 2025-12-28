@@ -19,7 +19,7 @@ If AI is used to generate any portion of the code, contributors must adhere to t
 
 1. Explicitly disclose the manner in which AI was employed.
 2. Perform a comprehensive manual review prior to submitting the pull request.
-3. Be prepared to explain every line of code submitted if asked by maintainer.
+3. Be prepared to explain every line of code submitted if asked about it by a maintainer.
 4. Using AI to respond to human reviewer is strictly prohibited. Human-to-human communication ensures the most effective review process.
 
 For more info, please refer to the [AGENTS.md](AGENTS.md) file.
@@ -38,6 +38,14 @@ For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 - If your PR becomes stale, rebase it on top of latest `master` to get maintainers attention
 - Maintainers will rely on your insights and approval when making a final decision to approve and merge a PR
 - Consider adding yourself to [CODEOWNERS](CODEOWNERS) to indicate your availability for reviewing related PRs
+
+## Post-Submission Expectations
+
+After submitting a pull request (PR), anticipate requests for changes to align with llama.cpp's code quality and maintenance standards. Your code must not only function correctly but also be well-structured to reduce long-term upkeep for the project.
+
+## Handling Reviews and Rejections
+
+Rejections are rare and unwelcome, but they're sometimes essential for the project's overall health. Maintainers hold final say on merge criteria. For intricate features, consider opening a feature request first to discuss and align expectations.
 
 # Pull requests (for maintainers)
 
