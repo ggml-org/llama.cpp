@@ -24,9 +24,15 @@ llm_build_plamo3<iswa>::llm_build_plamo3(const llama_model & model, const llm_gr
     for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * residual = inpL;
 
-        const float freq_base_l  = model.get_rope_freq_base (cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
-        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+        float freq_base_l  = 0.0f;
+        float freq_scale_l = 0.0f;
+        if constexpr (iswa) {
+            freq_base_l  = model.get_rope_freq_base (cparams, il);
+            freq_scale_l = model.get_rope_freq_scale(cparams, il);
+        } else {
+            freq_base_l  = freq_base;
+            freq_scale_l = freq_scale;
+        }
 
         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
@@ -57,10 +63,10 @@ llm_build_plamo3<iswa>::llm_build_plamo3(const llama_model & model, const llm_gr
         Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
         cb(Kcur, "attn_k_norm", il);
 
-        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, rope_factors,
+        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr,
                 n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                 ext_factor, attn_factor, beta_fast, beta_slow);
-        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, rope_factors,
+        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr,
                 n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                 ext_factor, attn_factor, beta_fast, beta_slow);
 
