@@ -1,5 +1,6 @@
 <script lang="ts">
 	import '../app.css';
+	import { base } from '$app/paths';
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
 	import { ChatSidebar, DialogConversationTitleUpdate } from '$lib/components/app';
@@ -118,7 +119,7 @@
 	$effect(() => {
 		const serverProps = serverStore.props;
 
-		if (serverProps?.default_generation_settings?.params) {
+		if (serverProps) {
 			settingsStore.syncWithServerDefaults();
 		}
 	});
@@ -157,7 +158,7 @@
 				headers.Authorization = `Bearer ${apiKey.trim()}`;
 			}
 
-			fetch(`./props`, { headers })
+			fetch(`${base}/props`, { headers })
 				.then((response) => {
 					if (response.status === 401 || response.status === 403) {
 						window.location.reload();

@@ -8,6 +8,7 @@
 		ChatFormTextarea
 	} from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
+	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -66,7 +67,7 @@
 	let message = $state('');
 	let pasteLongTextToFileLength = $derived.by(() => {
 		const n = Number(currentConfig.pasteLongTextToFileLen);
-		return Number.isNaN(n) ? 2500 : n;
+		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
 	});
 	let previousIsLoading = $state(isLoading);
 	let recordingSupported = $state(false);

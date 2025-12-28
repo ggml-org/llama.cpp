@@ -242,7 +242,7 @@ int main(int argc, char ** argv) {
                 bool accept = false;
                 if (params.sampling.temp > 0) {
                     // stochastic verification
-                    common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft]);
+                    common_sampler_sample(smpl, ctx_tgt, drafts[s_keep].i_batch_tgt[i_dft], true);
 
                     auto & dist_tgt = *common_sampler_get_candidates(smpl, true);
 
@@ -491,7 +491,7 @@ int main(int argc, char ** argv) {
                     continue;
                 }
 
-                common_sampler_sample(drafts[s].smpl, ctx_dft, drafts[s].i_batch_dft);
+                common_sampler_sample(drafts[s].smpl, ctx_dft, drafts[s].i_batch_dft, true);
 
                 const auto * cur_p = common_sampler_get_candidates(drafts[s].smpl, true);
 
