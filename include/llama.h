@@ -286,7 +286,7 @@ extern "C" {
         // NULL-terminated list of buffer types to use for tensors that match a pattern
         const struct llama_model_tensor_buft_override * tensor_buft_overrides;
 
-        int32_t n_gpu_layers; // number of layers to store in VRAM
+        int32_t n_gpu_layers; // number of layers to store in VRAM, a negative value means all layers
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
 
         // the GPU that is used for the entire model when split_mode is LLAMA_SPLIT_MODE_NONE
@@ -474,8 +474,9 @@ extern "C" {
     };
 
     // fits mparams and cparams to free device memory (assumes system memory is unlimited)
-    // returns true if the parameters could be successfully modified to fit device memory
-    // this function is NOT thread safe because it modifies the global llama logger state
+    //   - returns true if the parameters could be successfully modified to fit device memory
+    //   - this function is NOT thread safe because it modifies the global llama logger state
+    //   - only parameters that have the same value as in llama_default_model_params are modified
     LLAMA_API enum llama_params_fit_status llama_params_fit(
                                    const char   * path_model,
                     struct llama_model_params   * mparams,
