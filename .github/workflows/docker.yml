@@ -45,8 +45,7 @@ jobs:
           - { tag: "intel",  dockerfile: ".devops/intel.Dockerfile",  platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true,  runs_on: "ubuntu-22.04" }
           - { tag: "vulkan", dockerfile: ".devops/vulkan.Dockerfile", platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: false, runs_on: "ubuntu-22.04" }
           - { tag: "s390x",  dockerfile: ".devops/s390x.Dockerfile",  platforms: "linux/s390x", full: true, light: true, server: true, free_disk_space: false, runs_on: "ubuntu-22.04-s390x" }
-          # Note: the rocm images are failing due to a compiler error and are disabled until this is fixed to allow the workflow to complete
-          #- {tag: "rocm", dockerfile: ".devops/rocm.Dockerfile", platforms: "linux/amd64,linux/arm64", full: true, light: true, server: true, free_disk_space: true }
+          - { tag: "rocm",   dockerfile: ".devops/rocm.Dockerfile",   platforms: "linux/amd64", full: true, light: true, server: true, free_disk_space: true,  runs_on: "ubuntu-22.04" }
     steps:
       - name: Check out the repo
         uses: actions/checkout@v4
