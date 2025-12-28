@@ -320,6 +320,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.ATTN_SINKS: (
             "model.layers.{bid}.self_attn.sinks", # openai-moe
+            "model.layers.{bid}.self_attn.attention_sink_bias", # mimov2
         ),
 
         MODEL_TENSOR.ATTN_GATE: (

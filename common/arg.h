@@ -10,6 +10,7 @@
 
 // pseudo-env variable to identify preset-only arguments
 #define COMMON_ARG_PRESET_LOAD_ON_STARTUP "__PRESET_LOAD_ON_STARTUP"
+#define COMMON_ARG_PRESET_STOP_TIMEOUT    "__PRESET_STOP_TIMEOUT"
 
 //
 // CLI argument parsing
