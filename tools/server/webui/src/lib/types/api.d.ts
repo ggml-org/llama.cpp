@@ -35,6 +35,8 @@ export interface ApiChatMessageData {
 	role: ChatRole;
 	content: string | ApiChatMessageContentPart[];
 	timestamp?: number;
+	// [AI] Tool message name field
+	name?: string;
 }
 
 /**
@@ -214,6 +216,20 @@ export interface ApiChatCompletionRequest {
 	// Custom parameters (JSON string)
 	custom?: Record<string, unknown>;
 	timings_per_token?: boolean;
+	// [AI] Tool calling support
+	tools?: ApiChatCompletionTool[];
+	tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+	parallel_tool_calls?: boolean;
+}
+
+// [AI] OpenAI-compatible tool definition
+export interface ApiChatCompletionTool {
+	type: 'function';
+	function: {
+		name: string;
+		description?: string;
+		parameters?: Record<string, unknown>;
+	};
 }
 
 export interface ApiChatCompletionToolCallFunctionDelta {

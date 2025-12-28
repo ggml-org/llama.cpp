@@ -15,6 +15,7 @@ export type {
 	ApiModelListResponse,
 	ApiLlamaCppServerProps,
 	ApiChatCompletionRequest,
+	ApiChatCompletionTool,
 	ApiChatCompletionToolCallFunctionDelta,
 	ApiChatCompletionToolCallDelta,
 	ApiChatCompletionToolCall,
@@ -68,3 +69,15 @@ export type {
 	SettingsChatServiceOptions,
 	SettingsConfigType
 } from './settings';
+
+// [AI] MCP types
+export type {
+	MCPServer,
+	MCPServerStatus,
+	MCPTool,
+	MCPToolExecutionRequest,
+	MCPToolExecutionResult,
+	MCPServerListResponse,
+	MCPToolsListResponse
+} from './mcp';
+export { MCPServerStatus } from './mcp';

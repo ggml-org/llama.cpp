@@ -66,6 +66,10 @@ export class ChatService {
 			// Generation parameters
 			temperature,
 			max_tokens,
+			// [AI] Tool calling support
+			tools,
+			tool_choice,
+			parallel_tool_calls,
 			// Sampling parameters
 			dynatemp_range,
 			dynatemp_exponent,
@@ -115,7 +119,8 @@ export class ChatService {
 		const requestBody: ApiChatCompletionRequest = {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
 				role: msg.role,
-				content: msg.content
+				content: msg.content,
+				...(msg.name && { name: msg.name })
 			})),
 			stream
 		};
@@ -160,6 +165,13 @@ export class ChatService {
 
 		if (timings_per_token !== undefined) requestBody.timings_per_token = timings_per_token;
 
+		// [AI] Include tool calling parameters if tools provided
+		if (tools && tools.length > 0) {
+			requestBody.tools = tools;
+			if (tool_choice !== undefined) requestBody.tool_choice = tool_choice;
+			if (parallel_tool_calls !== undefined) requestBody.parallel_tool_calls = parallel_tool_calls;
+		}
+
 		if (custom) {
 			try {
 				const customParams = typeof custom === 'string' ? JSON.parse(custom) : custom;
@@ -170,6 +182,13 @@ export class ChatService {
 		}
 
 		try {
+			// [AI] Log request for debugging
+			console.log("[ChatService] Sending request to /v1/chat/completions:", { 
+				messages: requestBody.messages.map(m => ({ role: m.role, content: typeof m.content === "string" ? m.content.substring(0, 100) + "..." : "[multipart]" })),
+				tools: requestBody.tools?.length || 0,
+				tool_choice: requestBody.tool_choice,
+				temperature: requestBody.temperature
+			});
 			const response = await fetch(`./v1/chat/completions`, {
 				method: 'POST',
 				headers: getJsonHeaders(),

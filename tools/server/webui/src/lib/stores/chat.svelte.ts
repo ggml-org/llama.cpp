@@ -1,4 +1,4 @@
-import { DatabaseService, ChatService } from '$lib/services';
+import { DatabaseService, ChatService, MCPService } from '$lib/services';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
@@ -7,6 +7,7 @@ import {
 	modelsStore,
 	selectedModelContextSize
 } from '$lib/stores/models.svelte';
+import { mcpStore } from '$lib/stores/mcp.svelte';
 import {
 	normalizeModelName,
 	filterByLeafNodeId,
@@ -15,6 +16,15 @@ import {
 } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
+
+// [AI] Tool execution state tracking type
+interface ToolExecution {
+	messageId: string;
+	toolName: string;
+	status: 'pending' | 'executing' | 'completed' | 'error';
+	result?: string;
+	error?: string;
+}
 
 /**
  * chatStore - Active AI interaction and streaming state management
@@ -76,7 +86,10 @@ class ChatStore {
 	private isStreamingActive = $state(false);
 	private isEditModeActive = $state(false);
 	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
-
+	// [AI] Tool execution state tracking for real-time UI indicators
+	activeToolExecutions = $state<ToolExecution[]>([]);
+	private toolExecutionCleanupTimeouts = new Map<string, number>();
+	
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Loading State
 	// ─────────────────────────────────────────────────────────────────────────────
@@ -253,6 +266,7 @@ class ChatStore {
 	 */
 	stopStreaming(): void {
 		this.isStreamingActive = false;
+		this.clearToolExecutionTimeouts();
 	}
 
 	/**
@@ -260,6 +274,16 @@ class ChatStore {
 	 */
 	isStreaming(): boolean {
 		return this.isStreamingActive;
+	}
+
+	/**
+	 * [AI] Clear all pending tool execution cleanup timeouts
+	 */
+	private clearToolExecutionTimeouts(): void {
+		for (const timeoutId of this.toolExecutionCleanupTimeouts.values()) {
+			clearTimeout(timeoutId);
+		}
+		this.toolExecutionCleanupTimeouts.clear();
 	}
 
 	private getContextTotal(): number {
@@ -468,6 +492,172 @@ class ChatStore {
 		);
 	}
 
+	/**
+	 * [AI] Handle tool execution from assistant tool calls
+	 * Executes tools, creates tool result messages, and continues conversation
+	 */
+	private async handleToolExecution(
+		toolCallsJson: string,
+		assistantMessage: DatabaseMessage
+	): Promise<void> {
+		try {
+			// Parse tool calls from JSON
+			const toolCalls = JSON.parse(toolCallsJson) as Array<{
+				id?: string;
+				type: string;
+				function?: {
+					name: string;
+					arguments?: string;
+				};
+			}>;
+
+			if (!toolCalls || toolCalls.length === 0) return;
+
+			// [AI] Cache tools list once to avoid redundant API calls
+			const availableTools = await MCPService.listTools();
+
+			// Execute each tool call
+			for (const toolCall of toolCalls) {
+				if (!toolCall.function?.name) continue;
+
+				const toolName = toolCall.function.name;
+				const argsJson = toolCall.function.arguments || '{}';
+				let args: Record<string, unknown> = {};
+
+				try {
+					args = JSON.parse(argsJson);
+				} catch (error) {
+					console.error('Failed to parse tool arguments:', error);
+					args = {};
+				}
+
+				// Add to active tool executions
+				this.activeToolExecutions = [
+					...this.activeToolExecutions,
+					{ messageId: assistantMessage.id, toolName, status: 'pending' }
+				];
+
+				try {
+					// Determine server ID from tool name using cached list
+					const matchingTool = availableTools.find((t) => t.function.name === toolName);
+
+					if (!matchingTool) {
+						console.error(`Tool ${toolName} not found in available MCP tools`);
+						// Update status to error
+						this.activeToolExecutions = this.activeToolExecutions.map((t) =>
+							t.messageId === assistantMessage.id && t.toolName === toolName
+								? { ...t, status: 'error' as const, error: 'Tool not found' }
+								: t
+						);
+						continue;
+					}
+
+					// Update status to executing
+					this.activeToolExecutions = this.activeToolExecutions.map((t) =>
+						t.messageId === assistantMessage.id && t.toolName === toolName
+							? { ...t, status: 'executing' as const }
+							: t
+					);
+
+					// Execute the tool
+					const result = await MCPService.executeTool({
+						serverId: matchingTool.serverId,
+						toolName,
+						arguments: args
+					});
+
+					// Create tool result message
+					const toolResultContent = result.success
+						? typeof result.result === 'string'
+							? result.result
+							: JSON.stringify(result.result)
+						: `Error: ${result.error}`;
+
+					// Update status to completed or error
+					this.activeToolExecutions = this.activeToolExecutions.map((t) =>
+						t.messageId === assistantMessage.id && t.toolName === toolName
+							? {
+									...t,
+									status: (result.success ? 'completed' : 'error') as const,
+									result: result.success ? toolResultContent : undefined,
+									error: result.success ? undefined : result.error
+								}
+							: t
+					);
+
+					// Add tool result as a new message
+					const toolMessage = await DatabaseService.createMessageBranch(
+						{
+							convId: assistantMessage.convId,
+							type: 'text',
+							role: 'tool',
+						name: toolName,
+						content: toolResultContent,
+							timestamp: Date.now(),
+							thinking: '',
+							toolCalls: '',
+							children: [],
+							model: null
+						},
+						assistantMessage.id
+					);
+
+					if (toolMessage) {
+						conversationsStore.addMessageToActive(toolMessage);
+					}
+				} catch (error) {
+					// Update status to error
+					this.activeToolExecutions = this.activeToolExecutions.map((t) =>
+						t.messageId === assistantMessage.id && t.toolName === toolName
+							? {
+									...t,
+									status: 'error' as const,
+									error: error instanceof Error ? error.message : 'Unknown error'
+								}
+							: t
+					);
+				}
+			}
+
+			// [AI] Clear completed tool executions after delay (keep errors visible)
+			// Cancel any existing cleanup timeout for this message
+			const existingTimeout = this.toolExecutionCleanupTimeouts.get(assistantMessage.id);
+			if (existingTimeout) {
+				clearTimeout(existingTimeout);
+			}
+
+			// Schedule cleanup of completed executions only
+			const timeoutId = setTimeout(() => {
+				this.activeToolExecutions = this.activeToolExecutions.filter(
+					(t) => !(t.messageId === assistantMessage.id && t.status === 'completed')
+				);
+				this.toolExecutionCleanupTimeouts.delete(assistantMessage.id);
+			}, 3000);
+
+			this.toolExecutionCleanupTimeouts.set(assistantMessage.id, timeoutId as unknown as number);
+
+			// After all tools executed, create new assistant message to generate final response
+			const continuationMessage = await this.createAssistantMessage(
+				conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1]?.id
+			);
+
+			if (!continuationMessage) {
+				throw new Error('Failed to create continuation message');
+			}
+
+			conversationsStore.addMessageToActive(continuationMessage);
+
+			// Continue conversation with tool results included
+			await this.streamChatCompletion(
+				conversationsStore.activeMessages.slice(0, -1),
+				continuationMessage
+			);
+		} catch (error) {
+			console.error('Tool execution error:', error);
+			// Don't throw - conversation can continue even if tools fail
+		}
+	}
+
 	private async streamChatCompletion(
 		allMessages: DatabaseMessage[],
 		assistantMessage: DatabaseMessage,
@@ -580,6 +770,15 @@ class ChatStore {
 
 					conversationsStore.updateMessageAtIndex(idx, uiUpdate);
 					await conversationsStore.updateCurrentNode(assistantMessage.id);
+
+					// Handle tool calls if present
+					const finalToolCalls = toolCallContent || streamedToolCallContent;
+					if (finalToolCalls && finalToolCalls.trim()) {
+						// Execute tools and continue conversation
+						await this.handleToolExecution(finalToolCalls, assistantMessage);
+						// Don't clear loading state yet - handleToolExecution will trigger another completion
+						return;
+					}
 
 					if (onComplete) await onComplete(streamedContent);
 					this.setChatLoading(assistantMessage.convId, false);
@@ -1456,6 +1655,14 @@ class ChatStore {
 		if (currentConfig.samplers) apiOptions.samplers = currentConfig.samplers;
 		if (currentConfig.custom) apiOptions.custom = currentConfig.custom;
 
+		// Include MCP tools if available
+		console.log("MCP tools check:", { hasTools: mcpStore.hasTools(), toolCount: mcpStore.tools.length, tools: mcpStore.getToolsForAPI() });
+		if (mcpStore.hasTools()) {
+			apiOptions.tools = mcpStore.getToolsForAPI();
+			apiOptions.tool_choice = 'auto';
+			apiOptions.parallel_tool_calls = true;
+		}
+
 		return apiOptions;
 	}
 }
@@ -1463,6 +1670,8 @@ class ChatStore {
 export const chatStore = new ChatStore();
 
 export const activeProcessingState = () => chatStore.activeProcessingState;
+// [AI] Export tool execution state accessor
+export const activeToolExecutions = () => chatStore.activeToolExecutions;
 export const clearEditMode = () => chatStore.clearEditMode();
 export const currentResponse = () => chatStore.currentResponse;
 export const errorDialog = () => chatStore.errorDialogState;

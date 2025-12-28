@@ -4,13 +4,14 @@
 		ChatMessageActions,
 		ChatMessageStatistics,
 		ChatMessageThinkingBlock,
+		ChatMessageToolExecution, // [AI] Tool execution indicator component
 		CopyToClipboardIcon,
 		MarkdownContent,
 		ModelsSelector
 	} from '$lib/components/app';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
-	import { isLoading } from '$lib/stores/chat.svelte';
+	import { isLoading, activeToolExecutions } from '$lib/stores/chat.svelte'; // [AI] Tool execution state
 	import { autoResizeTextarea, copyToClipboard } from '$lib/utils';
 	import { fade } from 'svelte/transition';
 	import { Check, X, Wrench } from '@lucide/svelte';
@@ -87,6 +88,10 @@
 		Array.isArray(toolCallContent) ? (toolCallContent as ApiChatCompletionToolCall[]) : null
 	);
 	const fallbackToolCalls = $derived(typeof toolCallContent === 'string' ? toolCallContent : null);
+	// [AI] Filter tool executions for this message
+	const messageToolExecutions = $derived(
+		activeToolExecutions().filter((t) => t.messageId === message.id)
+	);
 
 	const processingState = useProcessingState();
 	let currentConfig = $derived(config());
@@ -307,6 +312,20 @@
 					{/if}
 				</span>
 			{/if}
+		{/if}
+
+		<!-- [AI] Tool execution indicators -->
+		{#if messageToolExecutions.length > 0}
+			<div class="mt-2 flex flex-wrap gap-2">
+				{#each messageToolExecutions as execution (execution.toolName)}
+					<ChatMessageToolExecution
+						toolName={execution.toolName}
+						status={execution.status}
+						result={execution.result}
+						error={execution.error}
+					/>
+				{/each}
+			</div>
 		{/if}
 	</div>
 

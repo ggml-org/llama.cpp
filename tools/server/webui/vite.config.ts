@@ -6,6 +6,8 @@ import { resolve } from 'path';
 import { defineConfig } from 'vite';
 import devtoolsJson from 'vite-plugin-devtools-json';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
+// [AI] MCP integration plugin
+import { mcpPlugin } from './src/lib/server/vite-plugin-mcp';
 
 const GUIDE_FOR_FRONTEND = `
 <!--
@@ -105,7 +107,7 @@ export default defineConfig({
 			}
 		}
 	},
-	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
+	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), mcpPlugin(), llamaCppBuildPlugin()],
 	test: {
 		projects: [
 			{

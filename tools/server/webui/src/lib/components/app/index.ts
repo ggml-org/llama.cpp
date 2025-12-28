@@ -21,6 +21,7 @@ export { default as ChatMessageBranchingControls } from './chat/ChatMessages/Cha
 export { default as ChatMessageStatistics } from './chat/ChatMessages/ChatMessageStatistics.svelte';
 export { default as ChatMessageSystem } from './chat/ChatMessages/ChatMessageSystem.svelte';
 export { default as ChatMessageThinkingBlock } from './chat/ChatMessages/ChatMessageThinkingBlock.svelte';
+export { default as ChatMessageToolExecution } from './chat/ChatMessages/ChatMessageToolExecution.svelte';
 export { default as ChatMessages } from './chat/ChatMessages/ChatMessages.svelte';
 export { default as MessageBranchingControls } from './chat/ChatMessages/ChatMessageBranchingControls.svelte';
 
@@ -48,6 +49,7 @@ export { default as DialogConfirmation } from './dialogs/DialogConfirmation.svel
 export { default as DialogConversationSelection } from './dialogs/DialogConversationSelection.svelte';
 export { default as DialogConversationTitleUpdate } from './dialogs/DialogConversationTitleUpdate.svelte';
 export { default as DialogEmptyFileAlert } from './dialogs/DialogEmptyFileAlert.svelte';
+export { default as DialogMCPSettings } from './dialogs/DialogMCPSettings.svelte';
 export { default as DialogModelInformation } from './dialogs/DialogModelInformation.svelte';
 export { default as DialogModelNotAvailable } from './dialogs/DialogModelNotAvailable.svelte';
 

@@ -1,5 +1,6 @@
 import type { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-import type { ChatMessageTimings } from './chat';
+import type { ChatMessageTimings, ChatMessagePromptProgress } from './chat';
+import type { ApiChatCompletionTool } from './api';
 
 export type SettingsConfigValue = string | number | boolean;
 
@@ -46,6 +47,10 @@ export interface SettingsChatServiceOptions {
 	// Custom parameters
 	custom?: string;
 	timings_per_token?: boolean;
+	// [AI] Tool calling
+	tools?: ApiChatCompletionTool[];
+	tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+	parallel_tool_calls?: boolean;
 	// Callbacks
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
