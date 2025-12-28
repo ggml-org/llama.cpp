@@ -2017,7 +2017,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     if (llama_supports_rpc()) {
         add_opt(common_arg(
             {"--rpc"}, "SERVERS",
-            "comma separated list of RPC servers",
+            "comma separated list of RPC servers (host:port)",
             [](common_params & params, const std::string & value) {
                 add_rpc_devices(value);
                 GGML_UNUSED(params);
@@ -2137,11 +2137,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_N_CPU_MOE_DRAFT"));
+    GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
-        string_format("max. number of layers to store in VRAM (default: %d)", params.n_gpu_layers),
-        [](common_params & params, int value) {
-            params.n_gpu_layers = value;
+        string_format("max. number of layers to store in VRAM, either an exact number, 'auto', or 'all' (default: %s)", params.n_gpu_layers == -1 ? "auto" : "all"),
+        [](common_params & params, const std::string & value) {
+            if (value == "auto") {
+                params.n_gpu_layers = -1;
+            } else if (value == "all") {
+                params.n_gpu_layers = -2;
+            } else {
+                params.n_gpu_layers = std::stoi(value);
+            }
             if (!llama_supports_gpu_offload()) {
                 fprintf(stderr, "warning: no usable GPU found, --gpu-layers option will be ignored\n");
                 fprintf(stderr, "warning: one possible reason is that llama.cpp was compiled without GPU support\n");
@@ -3175,11 +3182,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.devices = parse_device_list(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    GGML_ASSERT(params.speculative.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngld", "--gpu-layers-draft", "--n-gpu-layers-draft"}, "N",
-        "number of layers to store in VRAM for the draft model",
-        [](common_params & params, int value) {
-            params.speculative.n_gpu_layers = value;
+        string_format("max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: %s)",
+            params.speculative.n_gpu_layers == -1 ? "auto" : "all"),
+        [](common_params & params, const std::string & value) {
+            if (value == "auto") {
+                params.speculative.n_gpu_layers = -1;
+            } else if (value == "all") {
+                params.speculative.n_gpu_layers = -2;
+            } else {
+                params.speculative.n_gpu_layers = std::stoi(value);
+            }
             if (!llama_supports_gpu_offload()) {
                 fprintf(stderr, "warning: no usable GPU found, --gpu-layers-draft option will be ignored\n");
                 fprintf(stderr, "warning: one possible reason is that llama.cpp was compiled without GPU support\n");
