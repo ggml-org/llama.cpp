@@ -2829,7 +2829,7 @@ static common_chat_params common_chat_templates_apply_legacy(
 
     // run the first time to get the total output length
     const auto & src = tmpls->template_default->source();
-    int32_t res = llama_chat_apply_template(src.c_str(), chat.data(), chat.size(), inputs.add_generation_prompt, buf.data(), buf.size());
+    int64_t res = llama_chat_apply_template(src.c_str(), chat.data(), chat.size(), inputs.add_generation_prompt, buf.data(), buf.size());
 
     // error: chat template is not supported
     if (res < 0) {

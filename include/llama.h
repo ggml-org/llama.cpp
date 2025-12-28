@@ -1116,13 +1116,13 @@ extern "C" {
     /// @param buf A buffer to hold the output formatted prompt. The recommended alloc size is 2 * (total number of characters of all messages)
     /// @param length The size of the allocated buffer
     /// @return The total number of bytes of the formatted prompt. If is it larger than the size of buffer, you may need to re-alloc it and then re-apply the template.
-    LLAMA_API int32_t llama_chat_apply_template(
+    LLAMA_API int64_t llama_chat_apply_template(
                             const char * tmpl,
        const struct llama_chat_message * chat,
                                 size_t   n_msg,
                                   bool   add_ass,
                                   char * buf,
-                               int32_t   length);
+                               int64_t   length);
 
     // Get list of built-in chat templates
     LLAMA_API int32_t llama_chat_builtin_templates(const char ** output, size_t len);

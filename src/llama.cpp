@@ -1012,13 +1012,13 @@ void llama_model_save_to_file(const struct llama_model * model, const char * pat
 // chat templates
 //
 
-int32_t llama_chat_apply_template(
+int64_t llama_chat_apply_template(
                               const char * tmpl,
          const struct llama_chat_message * chat,
                                   size_t   n_msg,
                                     bool   add_ass,
                                     char * buf,
-                                 int32_t   length) {
+                                 int64_t   length) {
     const std::string curr_tmpl(tmpl == nullptr ? "chatml" : tmpl);
 
     // format the chat to string
@@ -1033,7 +1033,7 @@ int32_t llama_chat_apply_template(
     if (detected_tmpl == LLM_CHAT_TEMPLATE_UNKNOWN) {
         return -1;
     }
-    int32_t res = llm_chat_apply_template(detected_tmpl, chat_vec, formatted_chat, add_ass);
+    int64_t res = llm_chat_apply_template(detected_tmpl, chat_vec, formatted_chat, add_ass);
     if (res < 0) {
         return res;
     }
