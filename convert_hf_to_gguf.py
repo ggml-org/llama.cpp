@@ -4970,7 +4970,7 @@ class Plamo2Model(TextModel):
 class Plamo3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PLAMO3
 
-    def set_vocab(self):
+    def _set_vocab_plamo(self):
         # PLaMo models use a custom tokenizer with a .jsonl file
         tokenizer_jsonl_path = self.dir_model / "tokenizer.jsonl"
         tokenizer_config_path = self.dir_model / "tokenizer_config.json"
@@ -5048,28 +5048,32 @@ class Plamo3Model(TextModel):
 
         self.gguf_writer.add_add_space_prefix(False)
 
-        if "chat_template" in tokenizer_config and tokenizer_config["chat_template"] is not None:
-            self.gguf_writer.add_chat_template(tokenizer_config["chat_template"])
+    def set_vocab(self):
+        self._set_vocab_plamo()
 
-    def _sliding_window_pattern(self, block_count: int) -> list[bool]:
-        layer_types = self.hparams.get("layer_types")
-        if isinstance(layer_types, list) and len(layer_types) == block_count:
-            return [t == "sliding_attention" for t in layer_types]
+        tokenizer_config_path = self.dir_model / "tokenizer_config.json"
 
-        pattern = self.hparams.get("sliding_window_pattern")
-        if isinstance(pattern, int) and pattern > 0:
-            return [((i + 1) % pattern) != 0 for i in range(block_count)]
+        if tokenizer_config_path.is_file():
+            with open(tokenizer_config_path, encoding="utf-8") as f:
+                tokenizer_config = json.load(f)
 
-        return []
+        chat_template = tokenizer_config.get("chat_template")
+        chat_template_jinja = self.dir_model / "chat_template.jinja"
+
+        if chat_template_jinja.is_file():
+            with open(chat_template_jinja, encoding="utf-8") as f:
+                chat_template = f.read()
+
+        if chat_template:
+            self.gguf_writer.add_chat_template(chat_template)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
         if (sliding_window := self.find_hparam(["window_size", "sliding_window"], optional=True)) is not None:
             self.gguf_writer.add_sliding_window(sliding_window)
-            pattern = self._sliding_window_pattern(self.block_count)
-            if len(pattern) == self.block_count and any(pattern):
-                self.gguf_writer.add_sliding_window_pattern(pattern)
+            self.gguf_writer.add_sliding_window_pattern(self.hparams["sliding_window_pattern"])
+            self.gguf_writer.add_rope_freq_base_swa(self.rope_parameters.get("sliding_attention", {"rope_theta": self.hparams.get("rope_local_theta")})["rope_theta"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
 
