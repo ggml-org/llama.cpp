@@ -154,7 +154,7 @@ static void test_example_native(testing & t) {
     };
 
     auto build_parser = [](const test_case & tc) {
-        return build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
+        return build_chat_peg_unified_parser([&](common_chat_peg_unified_builder & p) {
             auto reasoning_in_content = (tc.reasoning_format == COMMON_REASONING_FORMAT_NONE);
             auto reasoning            = p.eps();
             if (tc.thinking_forced_open) {
@@ -366,7 +366,7 @@ static void test_example_native(testing & t) {
             t.assert_true("success", result.success());
 
             common_chat_msg msg;
-            auto            mapper = common_chat_peg_native_mapper(msg);
+            auto            mapper = common_chat_peg_unified_mapper(msg);
             mapper.from_ast(ctx.ast, result);
 
             t.assert_equal("content equal", tc.expect_content, msg.content);
@@ -382,7 +382,7 @@ static void test_example_native(testing & t) {
 
 static void test_example_qwen3_coder(testing & t) {
     auto tools  = create_tools();
-    auto parser = build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
+    auto parser = build_chat_peg_unified_parser([&](common_chat_peg_unified_builder & p) {
         auto content = p.rule("content", p.content(p.until("<tool_call>")));
 
         std::vector<common_peg_parser> tool_parsers;
@@ -465,7 +465,7 @@ static void test_example_qwen3_coder(testing & t) {
             }
 
             common_chat_msg msg;
-            auto            mapper = common_chat_peg_constructed_mapper(msg);
+            auto            mapper = common_chat_peg_unified_mapper(msg);
             mapper.from_ast(ctx.ast, result);
 
             //t.log("Input: " + input);
@@ -493,7 +493,7 @@ static void test_example_qwen3_coder(testing & t) {
 
 static void test_example_qwen3_non_coder(testing & t) {
     auto tools  = create_tools();
-    auto parser = build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
+    auto parser = build_chat_peg_unified_parser([&](common_chat_peg_unified_builder & p) {
         // tool calling parser using standard JSON format
         auto tool_call = p.standard_json_tools("<tool_call>", "</tool_call>", tools, true, false);
 
@@ -528,7 +528,7 @@ static void test_example_qwen3_non_coder(testing & t) {
         t.assert_true("success", result.success());
 
         common_chat_msg msg;
-        auto            mapper = common_chat_peg_native_mapper(msg);
+        auto            mapper = common_chat_peg_unified_mapper(msg);
         mapper.from_ast(ctx.ast, result);
 
         t.assert_equal("content", "I need to get the weather.", msg.content);
@@ -563,7 +563,7 @@ static void test_example_qwen3_non_coder(testing & t) {
             }
 
             common_chat_msg msg;
-            auto            mapper = common_chat_peg_native_mapper(msg);
+            auto            mapper = common_chat_peg_unified_mapper(msg);
             mapper.from_ast(ctx.ast, result);
 
             //t.log("Input: " + input);
@@ -590,7 +590,7 @@ static void test_example_qwen3_non_coder(testing & t) {
 }
 
 void test_command7_parser_compare(testing & t) {
-    auto parser = build_chat_peg_native_parser([](common_chat_peg_native_builder & p) {
+    auto parser = build_chat_peg_unified_parser([](common_chat_peg_unified_builder & p) {
         auto thinking =
             p.reasoning_block("<|START_THINKING|>" << p.reasoning(p.until("<|END_THINKING|>")) << "<|END_THINKING|>");
 
@@ -620,7 +620,7 @@ void test_command7_parser_compare(testing & t) {
         auto                     result = p.parse(ctx);
 
         common_chat_msg msg;
-        auto            mapper = common_chat_peg_native_mapper(msg);
+        auto            mapper = common_chat_peg_unified_mapper(msg);
         mapper.from_ast(ctx.ast, result);
 
         if (print_results) {
@@ -844,7 +844,7 @@ static void test_prefix_tool_names(testing & t) {
         { "parameter_closer", "</param>" },
     };
 
-    auto parser = build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
+    auto parser = build_chat_peg_unified_parser([&](common_chat_peg_unified_builder & p) {
         auto content   = p.rule("content", p.content(p.until("<tool_call>")));
         auto tool_call = p.standard_constructed_tools(markers, tools, false, false);
         return content + p.zero_or_more(p.space() + tool_call) + p.end();
@@ -866,7 +866,7 @@ static void test_prefix_tool_names(testing & t) {
         t.assert_true("success", result.success());
 
         common_chat_msg msg;
-        auto            mapper = common_chat_peg_constructed_mapper(msg);
+        auto            mapper = common_chat_peg_unified_mapper(msg);
         mapper.from_ast(ctx.ast, result);
 
         t.assert_equal("content", "Let me call the function.", msg.content);
@@ -903,7 +903,7 @@ static void test_prefix_tool_names(testing & t) {
             }
 
             common_chat_msg msg;
-            auto            mapper = common_chat_peg_constructed_mapper(msg);
+            auto            mapper = common_chat_peg_unified_mapper(msg);
             mapper.from_ast(ctx.ast, result);
 
             // The critical check: during incremental parsing, we should never
@@ -950,7 +950,7 @@ static void test_prefix_tool_names(testing & t) {
         t.assert_true("success", result.success());
 
         common_chat_msg msg;
-        auto            mapper = common_chat_peg_constructed_mapper(msg);
+        auto            mapper = common_chat_peg_unified_mapper(msg);
         mapper.from_ast(ctx.ast, result);
 
         t.assert_equal("content", "Let me call the function.", msg.content);

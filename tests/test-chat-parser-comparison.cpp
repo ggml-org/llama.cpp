@@ -201,12 +201,8 @@ static common_chat_msg run_auto_parser(const std::string & input, const std::str
     auto                 template_source = common_chat_templates_source(tmpls.get());
     minja::chat_template chat_template(template_source, "", "");
 
-    // Analyze the template to get pattern
-    TemplatePattern pattern = TemplateAnalyzer::analyze_template(chat_template);
-
-    if (pattern.format == TemplatePattern::UNKNOWN) {
-        throw std::runtime_error("Could not analyze template: " + template_path);
-    }
+    // Analyze the template to get analysis result
+    TemplateAnalysisResult analysis = TemplateAnalyzer::analyze_template(chat_template);
 
     // Create test parameters
     templates_params params;
@@ -226,7 +222,7 @@ static common_chat_msg run_auto_parser(const std::string & input, const std::str
     params.is_inference          = false;
 
     // Generate parser
-    auto parser_data = UniversalPEGGenerator::generate_parser(pattern, chat_template, params);
+    auto parser_data = UniversalPEGGenerator::generate_parser(analysis, chat_template, params);
 
     // Create syntax for auto parser
     common_chat_syntax syntax;

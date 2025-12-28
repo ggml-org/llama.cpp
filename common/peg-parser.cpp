@@ -321,6 +321,12 @@ struct parser_executor {
         for (auto i = 0u; i < p.literal.size(); ++i) {
             if (pos >= ctx.input.size()) {
                 if (!ctx.is_partial) {
+                    if (ctx.input.size() > pos && ctx.input[pos] == '<') {
+                         fprintf(stderr, "Check literal '%s' against '%s'\n", p.literal.c_str(), ctx.input.substr(pos, 20).c_str());
+                    }
+                    if (p.literal == "<think>") {
+                         fprintf(stderr, "Literal match failed: expected '%s', got '%c' (0x%02x) at pos %zu\n", p.literal.c_str(), ctx.input[pos], (unsigned char)ctx.input[pos], pos);
+                    }
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                 }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
@@ -335,6 +341,7 @@ struct parser_executor {
     }
 
     common_peg_parse_result operator()(const common_peg_sequence_parser & p) {
+        // if (start_pos == 0) fprintf(stderr, "Sequence at pos %zu\n", start_pos);
         auto                           pos = start_pos;
         std::vector<common_peg_ast_id> nodes;
 
@@ -692,6 +699,9 @@ struct parser_executor {
     }
 
     common_peg_parse_result operator()(const common_peg_rule_parser & p) {
+        if (!ctx.is_partial) {
+             fprintf(stderr, "Enter rule '%s' at pos %zu\n", p.name.c_str(), start_pos);
+        }
         // Parse the child
         auto result = arena.parse(p.child, ctx, start_pos);
 

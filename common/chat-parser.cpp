@@ -752,7 +752,7 @@ static void common_chat_parse_command_r7b(common_chat_msg_parser & builder) {
     }
 }
 
-static void common_chat_parse_llama_3_1(common_chat_msg_parser & builder, bool with_builtin_tools = false) {
+static void common_chat_parse_llama_3_1(common_chat_msg_parser & builder) {
     builder.try_parse_reasoning("<think>", "</think>");
 
     if (!builder.syntax().parse_tool_calls) {
@@ -765,42 +765,6 @@ static void common_chat_parse_llama_3_1(common_chat_msg_parser & builder, bool w
         ": ");
     static const common_regex close_regex("\\}\\s*");
 
-    static const common_regex function_name_regex("\\s*(\\w+)\\s*\\.\\s*call\\(");
-    static const common_regex arg_name_regex("\\s*(\\w+)\\s*=\\s*");
-
-    if (with_builtin_tools) {
-        static const common_regex builtin_call_regex("<\\|python_tag\\|>");
-        if (auto res = builder.try_find_regex(builtin_call_regex)) {
-            auto fun_res       = builder.consume_regex(function_name_regex);
-            auto function_name = builder.str(fun_res.groups[1]);
-
-            common_healing_marker healing_marker;
-            json                  args = json::object();
-            while (true) {
-                if (auto arg_res = builder.try_consume_regex(arg_name_regex)) {
-                    auto arg_name                   = builder.str(arg_res->groups[1]);
-                    auto partial                    = builder.consume_json();
-                    args[arg_name]                  = partial.json;
-                    healing_marker.marker           = partial.healing_marker.marker;
-                    healing_marker.json_dump_marker = partial.healing_marker.json_dump_marker;
-                    builder.consume_spaces();
-                    if (!builder.try_consume_literal(",")) {
-                        break;
-                    }
-                } else {
-                    break;
-                }
-            }
-            builder.consume_literal(")");
-            builder.consume_spaces();
-
-            auto arguments = args.dump();
-            if (!builder.add_tool_call(function_name, "", arguments)) {
-                throw common_chat_msg_partial_exception("Incomplete tool call");
-            }
-            return;
-        }
-    }
     parse_json_tool_calls(builder,
                           /* block_open= */ std::nullopt,
                           /* function_regex_start_only= */ function_regex,
@@ -1112,8 +1076,6 @@ static void common_chat_parse_functionary_v3_1_llama_3_1(common_chat_msg_parser 
         builder.add_content(builder.consume_rest());
         return;
     }
-    // This version of Functionary still supports the llama 3.1 tool call format for the python tool.
-    static const common_regex python_tag_regex(regex_escape("<|python_tag|>"));
 
     static const common_regex function_regex(R"(<function=(\w+)>)");
     static const common_regex close_regex(R"(</function>)");
@@ -1121,12 +1083,6 @@ static void common_chat_parse_functionary_v3_1_llama_3_1(common_chat_msg_parser 
     parse_json_tool_calls(builder,
                           /* block_open= */ std::nullopt,
                           /* function_regex_start_only= */ std::nullopt, function_regex, close_regex, std::nullopt);
-
-    if (auto res = builder.try_find_regex(python_tag_regex)) {
-        auto arguments = wrap_code_as_arguments(builder, builder.consume_rest());
-        builder.add_tool_call("python", "", arguments);
-        return;
-    }
 }
 
 static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
@@ -1536,9 +1492,6 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
         case COMMON_CHAT_FORMAT_LLAMA_3_X:
             common_chat_parse_llama_3_1(builder);
             break;
-        case COMMON_CHAT_FORMAT_LLAMA_3_X_WITH_BUILTIN_TOOLS:
-            common_chat_parse_llama_3_1(builder, /* with_builtin_tools= */ true);
-            break;
         case COMMON_CHAT_FORMAT_DEEPSEEK_R1:
             common_chat_parse_deepseek_r1(builder);
             break;
@@ -1654,10 +1607,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &   parser,
     msg.role = "assistant";
 
     if (syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE) {
-        auto mapper = common_chat_peg_native_mapper(msg);
-        mapper.from_ast(ctx.ast, result);
-    } else if (syntax.format == COMMON_CHAT_FORMAT_PEG_CONSTRUCTED) {
-        auto mapper = common_chat_peg_constructed_mapper(msg);
+        auto mapper = common_chat_peg_unified_mapper(msg);
         mapper.from_ast(ctx.ast, result);
     } else {
         // Generic mapper

@@ -61,7 +61,7 @@ static void test_simplified_parser() {
     printf("\n=== TEST: Simplified CohereForAI-style parser ===\n\n");
 
     // Build a parser that mimics the CohereForAI structure - SIMPLIFIED VERSION
-    auto parser = build_chat_peg_native_parser([](common_chat_peg_native_builder & p) {
+    auto parser = build_chat_peg_unified_parser([](common_chat_peg_unified_builder & p) {
         std::string reasoning_start = "<|START_THINKING|>";
         std::string reasoning_end   = "<|END_THINKING|>";
         std::string tool_call_start = "<|START_ACTION|>[";
@@ -218,7 +218,7 @@ static void compare_parser_structures() {
     printf("\n=== COMPARISON: Simplified vs Actual Parser Root Structure ===\n\n");
 
     // Build simplified parser
-    auto simplified = build_chat_peg_native_parser([](common_chat_peg_native_builder & p) {
+    auto simplified = build_chat_peg_unified_parser([](common_chat_peg_unified_builder & p) {
         std::string reasoning_start = "<|START_THINKING|>";
         std::string reasoning_end   = "<|END_THINKING|>";
         std::string tool_call_start = "<|START_ACTION|>[";

@@ -277,49 +277,6 @@ std::string find_first_pattern(const std::string & str, const std::vector<std::s
     return "";
 }
 
-// ============================================================================
-// Token Collection Helpers
-// ============================================================================
-
-void collect_non_empty_tokens(const DiscoveredPattern & discovered, std::vector<std::string> & tokens) {
-    if (!discovered.tool_call_opener.empty()) {
-        tokens.push_back(discovered.tool_call_opener);
-    }
-    if (!discovered.tool_call_closer.empty()) {
-        tokens.push_back(discovered.tool_call_closer);
-    }
-    if (!discovered.function_opener.empty()) {
-        tokens.push_back(discovered.function_opener);
-    }
-    if (!discovered.function_closer.empty()) {
-        tokens.push_back(discovered.function_closer);
-    }
-    if (!discovered.parameter_opener.empty()) {
-        tokens.push_back(discovered.parameter_opener);
-    }
-    if (!discovered.parameter_closer.empty()) {
-        tokens.push_back(discovered.parameter_closer);
-    }
-    if (!discovered.tool_call_start_marker.empty()) {
-        tokens.push_back(discovered.tool_call_start_marker);
-    }
-    if (!discovered.tool_call_end_marker.empty()) {
-        tokens.push_back(discovered.tool_call_end_marker);
-    }
-    if (!discovered.reasoning_start_marker.empty()) {
-        tokens.push_back(discovered.reasoning_start_marker);
-    }
-    if (!discovered.reasoning_end_marker.empty()) {
-        tokens.push_back(discovered.reasoning_end_marker);
-    }
-    if (!discovered.content_start_marker.empty()) {
-        tokens.push_back(discovered.content_start_marker);
-    }
-    if (!discovered.content_end_marker.empty()) {
-        tokens.push_back(discovered.content_end_marker);
-    }
-}
-
 std::string apply_template(const minja::chat_template &    tmpl,
                         const struct templates_params & inputs,
                         const std::optional<json> &     messages_override,

@@ -15,9 +15,6 @@ namespace minja {
 struct chat_template;
 }
 
-// Structure to hold discovered patterns through differential analysis
-struct DiscoveredPattern;
-
 // ============================================================================
 // String Manipulation Helpers
 // ============================================================================
@@ -67,12 +64,6 @@ std::string find_common_substring_limited(const std::vector<std::string> & strin
                                            size_t max_length, const std::string & delimiters);
 std::string find_first_pattern(const std::string & str, const std::vector<std::string> & candidates,
                                 size_t start_pos = 0);
-
-// ============================================================================
-// Token Collection Helpers
-// ============================================================================
-
-void collect_non_empty_tokens(const DiscoveredPattern & discovered, std::vector<std::string> & tokens);
 
 // ============================================================================
 // Additional Helper Functions

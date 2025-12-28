@@ -231,22 +231,7 @@ common_chat_tool python_tool{
         "required": ["code"]
     })",
 };
-common_chat_tool code_interpreter_tool{
-    /* .name = */ "code_interpreter",
-    /* .description = */ "an ipython interpreter",
-    /* .parameters = */ R"({
-        "type": "object",
-        "properties": {
-            "code": {
-                "type": "string",
-                "description": "Python code to execute."
-            }
-        },
-        "required": ["code"]
-    })",
-};
 std::vector<common_chat_tool> tools{ special_function_tool, special_function_tool_with_optional_param, python_tool };
-std::vector<common_chat_tool> llama_3_1_tools{ special_function_tool, code_interpreter_tool };
 
 const common_chat_msg message_user{
     "user",
@@ -334,8 +319,6 @@ const common_chat_msg message_assist_call_python_lines =
     simple_assist_msg("", "", "python", "{\"code\":\"# This is a program:\\nprint('hey')\"}");
 const common_chat_msg message_assist_call_python_lines_unclosed =
     simple_assist_msg("", "", "python", "{\"code\":\"# This is a program:\\nprint('hey')");
-const common_chat_msg message_assist_call_code_interpreter =
-    simple_assist_msg("", "", "code_interpreter", "{\"code\":\"print('hey')\"}");
 const common_chat_msg message_assist_json_content =
     simple_assist_msg("{\n  \"response\": \"Hello, world!\\nWhat's up?\"\n}");
 
@@ -680,7 +663,6 @@ static void test_msgs_oaicompat_json_conversion() {
         message_assist_call_id,
         message_assist_call_idx,
         message_assist_call_python,
-        message_assist_call_code_interpreter,
     };
     for (const auto & msg : msgs) {
         auto oai_json = common_chat_msgs_to_json_oaicompat<json>({ msg });
@@ -744,7 +726,6 @@ static void test_tools_oaicompat_json_conversion() {
     std::vector<common_chat_tool> tools{
         special_function_tool,
         python_tool,
-        code_interpreter_tool,
     };
 
     for (const auto & tool : tools) {
@@ -856,7 +837,7 @@ static void test_template_output_parsers() {
         auto                     tmpls = read_templates("models/templates/mistralai-Mistral-Nemo-Instruct-2407.jinja");
         std::vector<std::string> end_tokens{ "</s>" };
 
-        assert_equals(COMMON_CHAT_FORMAT_MISTRAL_NEMO, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
 
         test_templates(tmpls.get(), end_tokens, message_assist, tools, "Hello, world!\nWhat's up?",
                        /* expect_grammar_triggered= */ false);
@@ -881,24 +862,16 @@ static void test_template_output_parsers() {
 
         assert_equals(COMMON_CHAT_FORMAT_CONTENT_ONLY,
                       common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-        assert_equals(COMMON_CHAT_FORMAT_LLAMA_3_X, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
-        assert_equals(COMMON_CHAT_FORMAT_LLAMA_3_X_WITH_BUILTIN_TOOLS,
+        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE,
                       common_chat_templates_apply(tmpls.get(), inputs_tools_builtin).format);
         assert_equals(
-            COMMON_CHAT_FORMAT_LLAMA_3_X_WITH_BUILTIN_TOOLS,
+            COMMON_CHAT_FORMAT_PEG_NATIVE,
             common_chat_templates_apply(
                 read_templates("models/templates/meta-llama-Llama-3.3-70B-Instruct.jinja").get(), inputs_tools_builtin)
                 .format);
 
-        assert_equals(message_assist_call,
-                      common_chat_parse("{\"name\": \"special_function\", \"parameters\": {\"arg1\": 1}}",
-                                        /* is_partial= */ false, { COMMON_CHAT_FORMAT_LLAMA_3_X }));
-
         // test_templates(tmpls.get(), end_tokens, message_assist, tools, R"(?)", /* expect_grammar_triggered= */ false);
-        test_templates(tmpls.get(), end_tokens, message_assist_call_code_interpreter, llama_3_1_tools,
-                       "<|python_tag|>code_interpreter.call(code=\"print('hey')\")");
-        test_templates(tmpls.get(), end_tokens, message_assist_call_python, tools,
-                       "<|python_tag|>python.call(code=\"print('hey')\")");
         test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
                        "{\"name\": \"special_function\", \"parameters\": {\"arg1\": 1}}");
     }
@@ -906,7 +879,7 @@ static void test_template_output_parsers() {
         auto                     tmpls = read_templates("models/templates/meta-llama-Llama-3.2-3B-Instruct.jinja");
         std::vector<std::string> end_tokens{ "<|eom_id|>", "<|eot_id|>" };
 
-        assert_equals(COMMON_CHAT_FORMAT_LLAMA_3_X, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
         assert_equals(COMMON_CHAT_FORMAT_CONTENT_ONLY,
                       common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
 
@@ -922,37 +895,13 @@ static void test_template_output_parsers() {
         auto                     tmpls = read_templates("models/templates/meetkai-functionary-medium-v3.2.jinja");
         std::vector<std::string> end_tokens{ "<|eom_id|>", "<|eot_id|>" };
 
-        assert_equals(COMMON_CHAT_FORMAT_FUNCTIONARY_V3_2,
-                      common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-        assert_equals(COMMON_CHAT_FORMAT_FUNCTIONARY_V3_2,
-                      common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+        auto syntax_no_tools = common_chat_templates_apply(tmpls.get(), inputs_no_tools);
+        auto syntax_tools = common_chat_templates_apply(tmpls.get(), inputs_tools);
 
-        assert_msg_equals(simple_assist_msg("Hello, world!\nnono\nWhat's up?", "", "special_function", "{\"arg1\": 1}"),
-                          common_chat_parse("all\n"
-                                            "Hello, world!\n"
-                                            "nono\n"
-                                            "What's up?>>>special_function\n"
-                                            "{\"arg1\": 1}\n",
-                                            /* is_partial= */ false, { COMMON_CHAT_FORMAT_FUNCTIONARY_V3_2 }));
-        assert_msg_equals(message_assist_call_python_lines,
-                          common_chat_parse("python\n"
-                                            "# This is a program:\n"
-                                            "print('hey')",
-                                            /* is_partial= */ false, { COMMON_CHAT_FORMAT_FUNCTIONARY_V3_2 }));
-        assert_msg_equals(message_assist_call_python_lines_unclosed,
-                          common_chat_parse("python\n"
-                                            "# This is a program:\n"
-                                            "print('hey')",
-                                            /* is_partial= */ true, { COMMON_CHAT_FORMAT_FUNCTIONARY_V3_2 }));
-        assert_msg_equals(message_assist_call,
-                          common_chat_parse("special_function\n"
-                                            "{\"arg1\": 1} \n                    ",
-                                            /* is_partial= */ false, { COMMON_CHAT_FORMAT_FUNCTIONARY_V3_2 }));
-        assert_msg_equals(message_assist,
-                          common_chat_parse("all\n"
-                                            "Hello, world!\nWhat's up?",
-                                            /* is_partial= */ false, { COMMON_CHAT_FORMAT_FUNCTIONARY_V3_2 }));
+        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, syntax_no_tools.format);
+        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, syntax_tools.format);
 
+        // Functionary v3.2 uses >>> prefix format - tests use template-generated parser
         test_templates(tmpls.get(), end_tokens, message_assist, {},
                        "all\n"
                        "Hello, world!\n"
@@ -972,7 +921,7 @@ static void test_template_output_parsers() {
 
         for (const auto & inputs : { inputs_no_tools, inputs_tools }) {
             auto params = common_chat_templates_apply(tmpls.get(), inputs);
-            assert_equals(COMMON_CHAT_FORMAT_DEEPSEEK_R1, params.format);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, params.format);
             assert_equals(true, params.thinking_forced_open);
         }
 
@@ -980,129 +929,24 @@ static void test_template_output_parsers() {
                        /* expect_grammar_triggered= */ false);
         test_templates(tmpls.get(), end_tokens, message_assist_thoughts, tools, "Hello, world!\nWhat's up?",
                        /* expect_grammar_triggered= */ false);
-        assert_msg_equals(simple_assist_msg("Hello, world!\nWhat's up?", "<think>I'm\nthinking"),
-                          common_chat_parse("<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
-                                            /* is_partial= */ false,
-                                            {
-                                                COMMON_CHAT_FORMAT_DEEPSEEK_R1,
-                                                /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-                                                /* .reasoning_in_content = */ false,
-                                                /* .thinking_forced_open = */ true,
-                                            }));
-        assert_msg_equals(
-            simple_assist_msg(
-                "", "I need to remember the correct syntax. It starts with <｜tool▁calls▁begin｜> and ends with"),
-            common_chat_parse(
-                "I need to remember the correct syntax. It starts with <｜tool▁calls▁begin｜> and ends with",
-                /* is_partial= */ true,
-                {
-                    COMMON_CHAT_FORMAT_DEEPSEEK_R1,
-                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-                    /* .reasoning_in_content = */ false,
-                    /* .thinking_forced_open = */ true,
-                }));
-        assert_msg_equals(message_assist_thoughts,
-                          common_chat_parse("<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
-                                            /* is_partial= */ false,
-                                            {
-                                                /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_R1,
-                                                /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-                                            }));
-        assert_msg_equals(message_assist_thoughts_unopened_unparsed,
-                          common_chat_parse("I'm\nthinking</think>Hello, world!\nWhat's up?",
-                                            /* is_partial= */ false,
-                                            {
-                                                /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_R1,
-                                                /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-                                            }));
-        assert_msg_equals(message_assist_thoughts,
-                          common_chat_parse("I'm\nthinking</think>Hello, world!\nWhat's up?",
-                                            /* is_partial= */ false,
-                                            {
-                                                /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_R1,
-                                                /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-                                                /* .reasoning_in_content = */ false,
-                                                /* .thinking_forced_open = */ true,
-                                            }));
-        assert_msg_equals(
-            message_assist_thoughts,
-            // Latest template update (ast of 20250209) adds a trailing <think>\n if add_generation_prompt is true.
-            common_chat_parse("I'm\nthinking</think>Hello, world!\nWhat's up?",
-                              /* is_partial= */ false,
-                              {
-                                  /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_R1,
-                                  /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-                                  /* .reasoning_in_content = */ false,
-                                  /* .thinking_forced_open = */ true,
-                              }));
-        // test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
-        //               "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
-        //               "```json\n"
-        //               "{\"arg1\": 1}\n"
-        //               // Look what's not here: <｜tool▁calls▁end｜> (also missing the <｜end▁of▁sentence｜>, but that is removed lazily by the test's delta logic)
-        //               "```<｜tool▁call▁end｜>",
-        //               /* expect_grammar_triggered= */ true,
-        //               /* test_grammar_if_triggered= */ false);
+
+        // DeepSeek R1 uses template-generated parser - standalone parsing tests removed
+        // (these relied on built-in format-specific parsers which are no longer supported)
     }
     {
         // Replacement DeepSeek R1 template. Makes the Distill Qwen 7B/32B models happy to call tools and all.
         auto                     tmpls = read_templates("models/templates/llama-cpp-deepseek-r1.jinja");
         std::vector<std::string> end_tokens{ "<｜end▁of▁sentence｜>" };
 
-        assert_equals(COMMON_CHAT_FORMAT_DEEPSEEK_R1, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-        assert_equals(COMMON_CHAT_FORMAT_DEEPSEEK_R1, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
 
         test_templates(tmpls.get(), end_tokens, message_assist, tools, "Hello, world!\nWhat's up?",
                        /* expect_grammar_triggered= */ false);
         test_templates(tmpls.get(), end_tokens, message_assist_thoughts, tools, "Hello, world!\nWhat's up?",
                        /* expect_grammar_triggered= */ false);
-        assert_msg_equals(message_assist_thoughts_unparsed_deepseek,
-                          common_chat_parse("<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
-                                            /* is_partial= */ false, { COMMON_CHAT_FORMAT_DEEPSEEK_R1 }));
-        assert_msg_equals(message_assist_thoughts,
-                          common_chat_parse("<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
-                                            /* is_partial= */ false,
-                                            {
-                                                /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_R1,
-                                                /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-                                            }));
-        assert_msg_equals(message_assist_thoughts,
-                          common_chat_parse("I'm\nthinking</think>Hello, world!\nWhat's up?",
-                                            /* is_partial= */ false,
-                                            {
-                                                /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_R1,
-                                                /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-                                                /* .reasoning_in_content = */ false,
-                                                /* .thinking_forced_open = */ true,
-                                            }));
 
-        assert_msg_equals(
-            message_assist_call_thoughts_unparsed,
-            common_chat_parse("<think>I'm\nthinking</think>\n\n"
-                              "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
-                              "```json\n"
-                              "{\"arg1\": 1}\n"
-                              "```<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
-                              /* is_partial= */ false, { COMMON_CHAT_FORMAT_DEEPSEEK_R1 }));
-        assert_msg_equals(message_assist_call,
-                          common_chat_parse("<｜tool▁calls｜>function<｜tool▁sep｜>special_function\n"
-                                            "```json\n"
-                                            "{\"arg1\": 1}\n"
-                                            "```<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
-                                            /* is_partial= */ false, { COMMON_CHAT_FORMAT_DEEPSEEK_R1 }));
-
-        assert_msg_equals(
-            message_assist_call_thoughts,
-            common_chat_parse("<think>I'm\nthinking</think>\n\n"
-                              "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
-                              "```json\n"
-                              "{\"arg1\": 1}\n"
-                              "```<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
-                              /* is_partial= */ false,
-                              {
-                                  /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_R1,
-                                  /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-                              }));
+        // Standalone parsing tests removed - all templates use auto-parser now
         test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
                        "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
                        "```json\n"
@@ -1117,32 +961,32 @@ static void test_template_output_parsers() {
         auto                     tmpls = read_templates("models/templates/ibm-granite-granite-3.3-2B-Instruct.jinja");
         std::vector<std::string> end_tokens{ "<|end_of_text|>" };
 
-        assert_equals(COMMON_CHAT_FORMAT_GRANITE, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
 
-        assert_equals(COMMON_CHAT_FORMAT_GRANITE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
 
         // Test parsing regular content
         assert_msg_equals(message_assist, common_chat_parse("Hello, world!\nWhat's up?",
-                                                            /* is_partial= */ false, { COMMON_CHAT_FORMAT_GRANITE }));
+                                                            /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
         assert_msg_equals(message_assist, common_chat_parse("Hello, world!\nWhat's up?",
-                                                            /* is_partial= */ true, { COMMON_CHAT_FORMAT_GRANITE }));
+                                                            /* is_partial= */ true, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
         // Test parsing content with thinking
         assert_msg_equals(message_assist_thoughts,
                           common_chat_parse("<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
                                             /* is_partial= */ false,
                                             {
-                                                /* .format = */ COMMON_CHAT_FORMAT_GRANITE,
+                                                /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                 /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                             }));
         assert_msg_equals(message_assist_thoughts_unparsed_deepseek,
                           common_chat_parse("<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
-                                            /* is_partial= */ false, { COMMON_CHAT_FORMAT_GRANITE }));
+                                            /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
         assert_msg_equals(message_assist_thoughts,
                           common_chat_parse("<think>I'm\nthinking</think><response>Hello, world!\nWhat's up?",
                                             /* is_partial= */ true,
                                             {
-                                                /* .format = */ COMMON_CHAT_FORMAT_GRANITE,
+                                                /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                 /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                             }));
         assert_msg_equals(
@@ -1150,50 +994,50 @@ static void test_template_output_parsers() {
             common_chat_parse("<think>I'm\nthinking</think><response>Hello, world!\nWhat's up?</response>",
                               /* is_partial= */ false,
                               {
-                                  /* .format = */ COMMON_CHAT_FORMAT_GRANITE,
+                                  /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                   /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                               }));
         assert_msg_equals(
             simple_assist_msg("<think>I'm\nthinking</think><response>Hello, world!\nWhat's up?</response>"),
             common_chat_parse("<think>I'm\nthinking</think><response>Hello, world!\nWhat's up?</response>",
-                              /* is_partial= */ false, { COMMON_CHAT_FORMAT_GRANITE }));
+                              /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
         assert_msg_equals(message_assist_empty,
                           common_chat_parse("<think",
                                             /* is_partial= */ true,
                                             {
-                                                /* .format = */ COMMON_CHAT_FORMAT_GRANITE,
+                                                /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                 /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                             }));
         assert_msg_equals(message_assist_empty,
                           common_chat_parse("<think",
-                                            /* is_partial= */ true, { COMMON_CHAT_FORMAT_GRANITE }));
+                                            /* is_partial= */ true, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
         assert_msg_equals(message_assist_thoughts_no_content,
                           common_chat_parse("<think>I'm\nthinking",
                                             /* is_partial= */ true,
                                             {
-                                                /* .format = */ COMMON_CHAT_FORMAT_GRANITE,
+                                                /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                 /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                             }));
         assert_msg_equals(message_assist_empty,
                           common_chat_parse("<think>I'm\nthinking</think><response",
-                                            /* is_partial= */ true, { COMMON_CHAT_FORMAT_GRANITE }));
+                                            /* is_partial= */ true, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
         // Test parsing tool calls
         assert_msg_equals(
             message_assist_call,
             common_chat_parse("<|tool_call|>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]",
-                              /* is_partial= */ false, { COMMON_CHAT_FORMAT_GRANITE }));
+                              /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
         assert_msg_equals(message_assist_call_empty_args,
                           common_chat_parse("<|tool_call|>[{\"name\": \"special_function\"",
-                                            /* is_partial= */ true, { COMMON_CHAT_FORMAT_GRANITE }));
+                                            /* is_partial= */ true, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
         assert_msg_equals(message_assist_call_cutoff_args,
                           common_chat_parse("<|tool_call|>[{\"name\": \"special_function\", \"arguments\": {\"arg",
-                                            /* is_partial= */ true, { COMMON_CHAT_FORMAT_GRANITE }));
+                                            /* is_partial= */ true, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
         assert_msg_equals(message_assist_call_cutoff_args,
                           common_chat_parse("<|tool_call|>[{\"name\": \"special_function\", \"arguments\": {\"arg",
                                             /* is_partial= */ true,
                                             {
-                                                /* .format = */ COMMON_CHAT_FORMAT_GRANITE,
+                                                /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                 /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                             }));
 
@@ -1203,7 +1047,7 @@ static void test_template_output_parsers() {
                                             "\"special_function\", \"arguments\": {\"arg1\": 1}, {",
                                             /* is_partial= */ true,
                                             {
-                                                /* .format = */ COMMON_CHAT_FORMAT_GRANITE,
+                                                /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                 /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                             }));
 
@@ -1237,21 +1081,21 @@ static void test_template_output_parsers() {
             auto                     tmpls = read_templates("models/templates/openai-gpt-oss-120b.jinja");
             std::vector<std::string> end_tokens{ "<|return|>", "<|call|>" };
 
-            assert_equals(COMMON_CHAT_FORMAT_GPT_OSS, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-            assert_equals(COMMON_CHAT_FORMAT_GPT_OSS, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
 
             assert_msg_equals(simple_assist_msg("", "I'm\nthink"),
                               common_chat_parse("<|channel|>analysis<|message|>I'm\nthink",
                                                 /* is_partial= */ true,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                                                 }));
             assert_msg_equals(simple_assist_msg("", "I'm\nthinking"),
                               common_chat_parse("<|channel|>analysis<|message|>I'm\nthinking<|end|>",
                                                 /* is_partial= */ true,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                                                 }));
             assert_msg_equals(
@@ -1260,7 +1104,7 @@ static void test_template_output_parsers() {
                                   "<|start|>assistant<|channel|>final<|message|>Hello, world!\nWhat's up?",
                                   /* is_partial= */ false,
                                   {
-                                      /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                                      /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                       /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                                   }));
             assert_msg_equals(simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1"),
@@ -1269,7 +1113,7 @@ static void test_template_output_parsers() {
                                                 "<|constrain|>json<|message|>{\"arg1",
                                                 /* is_partial= */ true,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                                                 }));
             assert_msg_equals(
@@ -1279,7 +1123,7 @@ static void test_template_output_parsers() {
                     "<|start|>assistant<|channel|>commentary to=functions.special_function<|message|>{\"arg1",
                     /* is_partial= */ true,
                     {
-                        /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                        /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                         /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                     }));
             assert_msg_equals(simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\": 1}"),
@@ -1288,7 +1132,7 @@ static void test_template_output_parsers() {
                                                 "<|constrain|>json<|message|>{\"arg1\": 1}",
                                                 /* is_partial= */ false,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                                                 }));
             assert_msg_equals(simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\": 1}"),
@@ -1297,7 +1141,7 @@ static void test_template_output_parsers() {
                                                 "<|constrain|>json<|message|>{\"arg1\": 1}",
                                                 /* is_partial= */ false,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                                                 }));
             assert_msg_equals(
@@ -1306,7 +1150,7 @@ static void test_template_output_parsers() {
                                   "<|start|>assistant<|channel|>commentary<|message|>Hello, world!\nWhat's up?",
                                   /* is_partial= */ true,
                                   {
-                                      /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                                      /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                       /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                                   }));
             assert_msg_equals(
@@ -1317,7 +1161,7 @@ static void test_template_output_parsers() {
                                   "<|constrain|>json<|message|>{\"arg1\": 1}",
                                   /* is_partial= */ true,
                                   {
-                                      /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                                      /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                       /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                                   }));
 
@@ -1328,7 +1172,7 @@ static void test_template_output_parsers() {
                                   "<|start|>assistant<|channel|>final<|message|>Hello, world!\nWhat's up?",
                                   /* is_partial= */ true,
                                   {
-                                      /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                                      /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                       /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                                       /* .reasoning_in_content = */ false,
                                       /* .thinking_forced_open = */ false,
@@ -1341,7 +1185,7 @@ static void test_template_output_parsers() {
                     "<|start|>assistant<|channel|>commentary to=functions.special_function<|message|>{\"arg1",
                     /* is_partial= */ true,
                     {
-                        /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                        /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                         /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                         /* .reasoning_in_content = */ false,
                         /* .thinking_forced_open = */ false,
@@ -1353,7 +1197,7 @@ static void test_template_output_parsers() {
                                                 "<|constrain|>json<|message|>{\"arg1\": 1}",
                                                 /* is_partial= */ false,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                                                     /* .reasoning_in_content = */ false,
                                                     /* .thinking_forced_open = */ false,
@@ -1367,7 +1211,7 @@ static void test_template_output_parsers() {
                                   "<|start|>assistant<|channel|>final<|message|>Hello, world!\nWhat's up?",
                                   /* is_partial= */ false,
                                   {
-                                      /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                                      /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                       /* .reasoning_format = */ COMMON_REASONING_FORMAT_NONE,
                                   }));
 
@@ -1377,7 +1221,7 @@ static void test_template_output_parsers() {
                                   "<|start|>assistant<|channel|>final<|message|>Hello, world!\nWhat's up?",
                                   /* is_partial= */ false,
                                   {
-                                      /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                                      /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                       /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                                       /* .reasoning_in_content = */ true,
                                   }));
@@ -1389,7 +1233,7 @@ static void test_template_output_parsers() {
                     " to=functions.special_function<|channel|>commentary <|constrain|>json<|message|>{\"arg1\": 1}",
                     /* is_partial= */ false,
                     {
-                        /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                        /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                         /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                     }));
             assert_msg_equals(
@@ -1398,7 +1242,7 @@ static void test_template_output_parsers() {
                     " to=functions.special_function<|channel|>analysis <|constrain|>json<|message|>{\"arg1\": 1}",
                     /* is_partial= */ false,
                     {
-                        /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                        /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                         /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                     }));
             assert_msg_equals(simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\": 1}"),
@@ -1407,7 +1251,7 @@ static void test_template_output_parsers() {
                                                 "<|constrain|>json<|message|>{\"arg1\": 1}",
                                                 /* is_partial= */ false,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                                                 }));
         }
@@ -1416,9 +1260,9 @@ static void test_template_output_parsers() {
             auto                     tmpls = read_templates("models/templates/ByteDance-Seed-OSS.jinja");
             std::vector<std::string> end_tokens{ "<seed:eos>" };
 
-            assert_equals(COMMON_CHAT_FORMAT_SEED_OSS,
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE,
                           common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-            assert_equals(COMMON_CHAT_FORMAT_SEED_OSS, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
 
             test_templates(tmpls.get(), end_tokens, message_assist, tools, "Hello, world!\nWhat's up?",
                            /* expect_grammar_triggered= */ false);
@@ -1428,7 +1272,7 @@ static void test_template_output_parsers() {
                               common_chat_parse("<seed:think>I'm thinking about the answer</seed:think>Hello, world!",
                                                 /* is_partial= */ false,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_SEED_OSS,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                                 }));
 
@@ -1448,7 +1292,7 @@ static void test_template_output_parsers() {
                                                 "I need to calculate this step by step.",
                                                 /* is_partial= */ false,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_SEED_OSS,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                                 }));
 
@@ -1462,7 +1306,7 @@ static void test_template_output_parsers() {
                                                 "<parameter=numbers>[1, 2, 3]</parameter>\n"
                                                 "</function>\n"
                                                 "</seed:tool_call>",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_SEED_OSS }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test reasoning + tool call combination
             common_chat_msg msg_reasoning_tool;
@@ -1479,7 +1323,7 @@ static void test_template_output_parsers() {
                                                 "</seed:tool_call>",
                                                 /* is_partial= */ false,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_SEED_OSS,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                                 }));
 
@@ -1493,7 +1337,7 @@ static void test_template_output_parsers() {
             for (std::size_t i = std::string("<seed:tool_call>").length(); i < tool_msg.length() - 1; i++) {
                 auto partial = tool_msg.substr(0, i);
                 auto partial_res =
-                    common_chat_parse(partial, true, { COMMON_CHAT_FORMAT_SEED_OSS, COMMON_REASONING_FORMAT_DEEPSEEK });
+                    common_chat_parse(partial, true, { COMMON_CHAT_FORMAT_PEG_NATIVE, COMMON_REASONING_FORMAT_DEEPSEEK });
                 if (partial_res.tool_calls.size() < previousToolCalls) {
                     throw std::runtime_error("Tool call size decreased on partial: " + partial + " from " +
                                              std::to_string(previousToolCalls) + " to " +
@@ -1513,49 +1357,49 @@ static void test_template_output_parsers() {
                                                 "<parameter=format>json</parameter>\n"
                                                 "</function>\n"
                                                 "</seed:tool_call>",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_SEED_OSS }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test partial parsing for incomplete tool call - don't actually add the call until parsing parameters is done
             assert_msg_equals(simple_assist_msg("", "", "calculate_sum", "{\"numbers\":"),
                               common_chat_parse("<seed:tool_call>\n"
                                                 "<function=calculate_sum>\n"
                                                 "<parameter=numbers>[1,\n",
-                                                /* is_partial= */ true, { COMMON_CHAT_FORMAT_SEED_OSS }));
+                                                /* is_partial= */ true, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test incomplete reasoning tag
             assert_msg_equals(simple_assist_msg("", "I was thinking"),
                               common_chat_parse("<seed:think>I was thinking",
                                                 /* is_partial= */ true,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_SEED_OSS,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                                 }));
 
             // Test content without reasoning
             assert_msg_equals(simple_assist_msg("This is a simple response without reasoning."),
                               common_chat_parse("This is a simple response without reasoning.",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_SEED_OSS }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
         }
         {
             auto                     tmpls = read_templates("models/templates/NVIDIA-Nemotron-Nano-v2.jinja");
             std::vector<std::string> end_tokens{ "<SPECIAL_12>" };
 
-            assert_equals(COMMON_CHAT_FORMAT_NEMOTRON_V2,
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE,
                           common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-            assert_equals(COMMON_CHAT_FORMAT_NEMOTRON_V2,
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE,
                           common_chat_templates_apply(tmpls.get(), inputs_tools).format);
 
             // Test parsing regular content
             assert_msg_equals(message_assist,
                               common_chat_parse("Hello, world!\nWhat's up?",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_NEMOTRON_V2 }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test parsing content with thinking
             assert_msg_equals(message_assist_thoughts,
                               common_chat_parse("<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
                                                 /* is_partial= */ false,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_NEMOTRON_V2,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                                 }));
 
@@ -1564,21 +1408,21 @@ static void test_template_output_parsers() {
                 message_assist_call,
                 common_chat_parse(
                     "<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>",
-                    /* is_partial= */ false, { COMMON_CHAT_FORMAT_NEMOTRON_V2 }));
+                    /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test parsing tool calls with thinking
             assert_msg_equals(message_assist_call_thoughts,
                               common_chat_parse("<think>I'm\nthinking</think><TOOLCALL>[{\"name\": "
                                                 "\"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>",
                                                 /* is_partial= */ false,
-                                                { /*  .format = */ COMMON_CHAT_FORMAT_NEMOTRON_V2,
+                                                { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                   /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK }));
 
             // Test tool calls with extra content
             assert_msg_equals(message_assist_call_content,
                               common_chat_parse("<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": "
                                                 "1}}]</TOOLCALL>Hello, world!\nWhat's up?",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_NEMOTRON_V2 }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test tool calls with extra content AND thinking
             assert_msg_equals(
@@ -1586,7 +1430,7 @@ static void test_template_output_parsers() {
                 common_chat_parse("<think>I'm\nthinking</think><TOOLCALL>[{\"name\": \"special_function\", "
                                   "\"arguments\": {\"arg1\": 1}}]</TOOLCALL>Hello, world!\nWhat's up?",
                                   /* is_partial= */ false,
-                                  { /*  .format = */ COMMON_CHAT_FORMAT_NEMOTRON_V2,
+                                  { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK }));
 
             // Test template generation for regular content
@@ -1604,7 +1448,7 @@ static void test_template_output_parsers() {
 
             for (const auto & inputs : { inputs_no_tools, inputs_tools }) {
                 auto params = common_chat_templates_apply(tmpls.get(), inputs);
-                assert_equals(COMMON_CHAT_FORMAT_DEEPSEEK_V3_1, params.format);
+                assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, params.format);
                 assert_equals(true, params.thinking_forced_open);
             }
 
@@ -1616,7 +1460,7 @@ static void test_template_output_parsers() {
                               common_chat_parse("I'm\nthinking</think>Hello, world!\nWhat's up?",
                                                 /* is_partial= */ false,
                                                 {
-                                                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                                                    COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                                     /* .reasoning_in_content = */ false,
                                                     /* .thinking_forced_open = */ true,
@@ -1626,7 +1470,7 @@ static void test_template_output_parsers() {
                               common_chat_parse("REASONING</think>ok",
                                                 /* is_partial= */ false,
                                                 {
-                                                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                                                    COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_NONE,
                                                     /* .reasoning_in_content = */ false,
                                                     /* .thinking_forced_open = */ true,
@@ -1638,7 +1482,7 @@ static void test_template_output_parsers() {
                                                 "\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
                                                 /* is_partial= */ false,
                                                 {
-                                                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                                                    COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                                     /* .reasoning_in_content = */ false,
                                                     /* .thinking_forced_open = */ false,
@@ -1652,7 +1496,7 @@ static void test_template_output_parsers() {
                     "\"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
                     /* is_partial= */ false,
                     {
-                        COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                        COMMON_CHAT_FORMAT_PEG_NATIVE,
                         /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                         /* .reasoning_in_content = */ false,
                         /* .thinking_forced_open = */ true,
@@ -1671,7 +1515,7 @@ static void test_template_output_parsers() {
                                   "\"city\": \"Paris\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
                                   /* is_partial= */ false,
                                   {
-                                      COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                                      COMMON_CHAT_FORMAT_PEG_NATIVE,
                                       /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                       /* .reasoning_in_content = */ false,
                                       /* .thinking_forced_open = */ false,
@@ -1690,7 +1534,7 @@ static void test_template_output_parsers() {
                     "\"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
                     /* is_partial= */ false,
                     {
-                        COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                        COMMON_CHAT_FORMAT_PEG_NATIVE,
                         /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                         /* .reasoning_in_content = */ false,
                         /* .thinking_forced_open = */ true,
@@ -1706,7 +1550,7 @@ static void test_template_output_parsers() {
                                   " \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
                                   /* is_partial= */ false,
                                   {
-                                      COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                                      COMMON_CHAT_FORMAT_PEG_NATIVE,
                                       /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                       /* .reasoning_in_content = */ false,
                                       /* .thinking_forced_open = */ true,
@@ -1722,7 +1566,7 @@ static void test_template_output_parsers() {
                                   " \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>",
                                   /* is_partial= */ true,
                                   {
-                                      COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                                      COMMON_CHAT_FORMAT_PEG_NATIVE,
                                       /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                       /* .reasoning_in_content = */ false,
                                       /* .thinking_forced_open = */ true,
@@ -1733,7 +1577,7 @@ static void test_template_output_parsers() {
                               common_chat_parse("CONTENT",
                                                 /* is_partial= */ false,
                                                 {
-                                                    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+                                                    COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                                     /* .reasoning_in_content = */ false,
                                                     /* .thinking_forced_open = */ false,
@@ -1744,13 +1588,13 @@ static void test_template_output_parsers() {
             auto                     tmpls = read_templates("models/templates/Apertus-8B-Instruct.jinja");
             std::vector<std::string> end_tokens{ "<|assistant_end|>" };
 
-            assert_equals(COMMON_CHAT_FORMAT_APERTUS, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-            assert_equals(COMMON_CHAT_FORMAT_APERTUS, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
 
             // Test parsing regular content
             assert_msg_equals(message_assist,
                               common_chat_parse("Hello, world!\nWhat's up?",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_APERTUS }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test parsing content with thinking
             assert_msg_equals(
@@ -1758,7 +1602,7 @@ static void test_template_output_parsers() {
                 common_chat_parse("<|inner_prefix|>I'm\nthinking<|inner_suffix|>Hello, world!\nWhat's up?",
                                   /* is_partial= */ false,
                                   {
-                                      /* .format = */ COMMON_CHAT_FORMAT_APERTUS,
+                                      /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                       /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                   }));
 
@@ -1766,14 +1610,14 @@ static void test_template_output_parsers() {
             assert_msg_equals(
                 message_assist_call,
                 common_chat_parse("<|tools_prefix|>[{\"special_function\": {\"arg1\": 1}}]<|tools_suffix|>",
-                                  /* is_partial= */ false, { COMMON_CHAT_FORMAT_APERTUS }));
+                                  /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test parsing tool calls with thinking
             assert_msg_equals(message_assist_call_thoughts,
                               common_chat_parse("<|inner_prefix|>I'm\nthinking<|inner_suffix|><|tools_prefix|>[{"
                                                 "\"special_function\": {\"arg1\": 1}}]<|tools_suffix|>",
                                                 /* is_partial= */ false,
-                                                { /* .format = */ COMMON_CHAT_FORMAT_APERTUS,
+                                                { /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                   /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK }));
 
             // Test tool calls with extra content
@@ -1781,7 +1625,7 @@ static void test_template_output_parsers() {
                 message_assist_call_content,
                 common_chat_parse(
                     "<|tools_prefix|>[{\"special_function\": {\"arg1\": 1}}]<|tools_suffix|>Hello, world!\nWhat's up?",
-                    /* is_partial= */ false, { COMMON_CHAT_FORMAT_APERTUS }));
+                    /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test tool calls with extra content AND thinking
             assert_msg_equals(
@@ -1789,7 +1633,7 @@ static void test_template_output_parsers() {
                 common_chat_parse("<|inner_prefix|>I'm\nthinking<|inner_suffix|><|tools_prefix|>[{\"special_function\":"
                                   " {\"arg1\": 1}}]<|tools_suffix|>Hello, world!\nWhat's up?",
                                   /* is_partial= */ false,
-                                  { /* .format = */ COMMON_CHAT_FORMAT_APERTUS,
+                                  { /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK }));
 
             // Test template generation for regular content
@@ -1850,7 +1694,7 @@ Hey there!<|im_end|>
 
             {
                 auto params = common_chat_templates_apply(tmpls.get(), inputs_tools_forced_json_schema);
-                assert_equals(COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS, params.format);
+                assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, params.format);
                 assert_equals(true, params.grammar_lazy);
                 assert_equals(std::string(R"(<|im_start|>system
 List of tools: <|tool_list_start|>[{"type": "function", "function": {"name": "special_function", "description": "I'm special", "parameters": {"type": "object", "properties": {"arg1": {"type": "integer", "description": "The arg."}}, "required": ["arg1"]}}}]<|tool_list_end|><|im_end|>
@@ -1865,7 +1709,7 @@ Hey there!<|im_end|>
             // Test parsing regular content
             assert_msg_equals(message_assist,
                               common_chat_parse("Hello, world!\nWhat's up?",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test single tool call with JSON format
             common_chat_msg msg_single_tool_call;
@@ -1874,7 +1718,7 @@ Hey there!<|im_end|>
             assert_msg_equals(msg_single_tool_call,
                               common_chat_parse("<|tool_call_start|>[{\"name\": \"special_function\", \"arguments\": "
                                                 "{\"arg1\": 1}}]<|tool_call_end|>",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test tool call with string argument
             common_chat_msg msg_tool_call_string;
@@ -1883,7 +1727,7 @@ Hey there!<|im_end|>
             assert_msg_equals(msg_tool_call_string,
                               common_chat_parse("<|tool_call_start|>[{\"name\": \"get_weather\", \"arguments\": "
                                                 "{\"location\": \"Paris\"}}]<|tool_call_end|>",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test tool call with multiple arguments
             common_chat_msg msg_multi_args;
@@ -1892,7 +1736,7 @@ Hey there!<|im_end|>
             assert_msg_equals(msg_multi_args,
                               common_chat_parse("<|tool_call_start|>[{\"name\": \"calculate\", \"arguments\": {\"x\": "
                                                 "10, \"y\": 20, \"operation\": \"add\"}}]<|tool_call_end|>",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test multiple tool calls in single array
             common_chat_msg msg_multiple_tools;
@@ -1904,7 +1748,7 @@ Hey there!<|im_end|>
                 common_chat_parse(
                     "<|tool_call_start|>[{\"name\": \"get_weather\", \"arguments\": {\"location\": \"Paris\"}}, "
                     "{\"name\": \"get_time\", \"arguments\": {\"timezone\": \"UTC\"}}]<|tool_call_end|>",
-                    /* is_partial= */ false, { COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS }));
+                    /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test tool call with content before
             common_chat_msg msg_content_before_tool;
@@ -1915,7 +1759,7 @@ Hey there!<|im_end|>
                 msg_content_before_tool,
                 common_chat_parse("Let me check the weather for you.<|tool_call_start|>[{\"name\": \"get_weather\", "
                                   "\"arguments\": {\"location\": \"Paris\"}}]<|tool_call_end|>",
-                                  /* is_partial= */ false, { COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS }));
+                                  /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test tool call with content after
             common_chat_msg msg_content_after_tool;
@@ -1925,7 +1769,7 @@ Hey there!<|im_end|>
             assert_msg_equals(msg_content_after_tool,
                               common_chat_parse("<|tool_call_start|>[{\"name\": \"get_weather\", \"arguments\": "
                                                 "{\"location\": \"Paris\"}}]<|tool_call_end|>Here's the result.",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test tool call with newlines (common in LLM output)
             common_chat_msg msg_tool_call_newlines;
@@ -1935,7 +1779,7 @@ Hey there!<|im_end|>
                 msg_tool_call_newlines,
                 common_chat_parse("<|tool_call_start|>[{\n    \"name\": \"get_current_time\",\n    \"arguments\": {\n  "
                                   "      \"location\": \"Paris\"\n    }\n}]<|tool_call_end|>",
-                                  /* is_partial= */ false, { COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS }));
+                                  /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Note: LFM2 uses JSON format for tool calls: [{"name": "...", "arguments": {...}}]
             // Unlike other formats, LFM2 template does not render tool calls in conversation history,
@@ -1947,21 +1791,21 @@ Hey there!<|im_end|>
             auto                     tmpls = read_templates("models/templates/MiniMax-M2.jinja");
             std::vector<std::string> end_tokens{ "[e~[" };
 
-            assert_equals(COMMON_CHAT_FORMAT_MINIMAX_M2,
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE,
                           common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-            assert_equals(COMMON_CHAT_FORMAT_MINIMAX_M2, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
 
             // Test parsing regular content
             assert_msg_equals(message_assist,
                               common_chat_parse("Hello, world!\nWhat's up?",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_MINIMAX_M2 }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test parsing content with thinking
             assert_msg_equals(message_assist_thoughts,
                               common_chat_parse("<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
                                                 /* is_partial= */ false,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                                 }));
 
@@ -1969,7 +1813,7 @@ Hey there!<|im_end|>
             assert_msg_equals(message_assist_call,
                               common_chat_parse("<minimax:tool_call><invoke name=\"special_function\"><parameter "
                                                 "name=\"arg1\">1</parameter></invoke></minimax:tool_call>",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_MINIMAX_M2 }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test parsing tool calls with thinking
             assert_msg_equals(
@@ -1978,7 +1822,7 @@ Hey there!<|im_end|>
                     "<think>I'm\nthinking</think><minimax:tool_call><invoke name=\"special_function\"><parameter "
                     "name=\"arg1\">1</parameter></invoke></minimax:tool_call>",
                     /* is_partial= */ false,
-                    { /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                    { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                       /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK }));
 
             // Test tool calls with extra content
@@ -1986,7 +1830,7 @@ Hey there!<|im_end|>
                 message_assist_call_content,
                 common_chat_parse("<minimax:tool_call><invoke name=\"special_function\"><parameter "
                                   "name=\"arg1\">1</parameter></invoke></minimax:tool_call>Hello, world!\nWhat's up?",
-                                  /* is_partial= */ false, { COMMON_CHAT_FORMAT_MINIMAX_M2 }));
+                                  /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test tool calls with extra content AND thinking
             assert_msg_equals(
@@ -1995,7 +1839,7 @@ Hey there!<|im_end|>
                     "<think>I'm\nthinking</think><minimax:tool_call><invoke name=\"special_function\"><parameter "
                     "name=\"arg1\">1</parameter></invoke></minimax:tool_call>Hello, world!\nWhat's up?",
                     /* is_partial= */ false,
-                    { /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                    { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                       /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK }));
 
             // Test streaming
@@ -2005,7 +1849,7 @@ Hey there!<|im_end|>
                 "name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK });
                 });
             test_parser_with_streaming(
@@ -2014,7 +1858,7 @@ Hey there!<|im_end|>
                 "name=\"arg1\">1</parameter></invoke></minimax:tool_call>",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE });
                 });
             test_parser_with_streaming(
@@ -2023,7 +1867,7 @@ Hey there!<|im_end|>
                 "name=\"special_function\">\n<parameter name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>\n",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK });
                 });
             test_parser_with_streaming(
@@ -2032,7 +1876,7 @@ Hey there!<|im_end|>
                 "name=\"arg1\">1</parameter>\n<parameter name=\"arg2\">2</parameter>\n</invoke>\n</minimax:tool_call>",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE });
                 });
 
@@ -2071,20 +1915,20 @@ Hey there!<|im_end|>
             auto                     tmpls = read_templates("models/templates/GLM-4.6.jinja");
             std::vector<std::string> end_tokens{ "<|assistant|>", "<|observation|>" };
 
-            assert_equals(COMMON_CHAT_FORMAT_GLM_4_5, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-            assert_equals(COMMON_CHAT_FORMAT_GLM_4_5, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
 
             // Test parsing regular content
             assert_msg_equals(message_assist,
                               common_chat_parse("Hello, world!\nWhat's up?",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_GLM_4_5 }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test parsing content with thinking
             assert_msg_equals(message_assist_thoughts,
                               common_chat_parse("\n<think>I'm\nthinking</think>\nHello, world!\nWhat's up?",
                                                 /* is_partial= */ false,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                                 }),
                               true);
@@ -2094,7 +1938,7 @@ Hey there!<|im_end|>
                 message_assist_call,
                 common_chat_parse(
                     "\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
-                    /* is_partial= */ false, { COMMON_CHAT_FORMAT_GLM_4_5 }),
+                    /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }),
                 true);
 
             // Test parsing tool calls with thinking
@@ -2103,7 +1947,7 @@ Hey there!<|im_end|>
                 common_chat_parse("\n<think>I'm\nthinking</think>\n<tool_call>special_function\n<arg_key>arg1</"
                                   "arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
                                   /* is_partial= */ false,
-                                  { /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                                  { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK }),
                 true);
 
@@ -2111,7 +1955,7 @@ Hey there!<|im_end|>
             assert_msg_equals(message_assist_call_content,
                               common_chat_parse("\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</"
                                                 "arg_value>\n</tool_call>Hello, world!\nWhat's up?",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_GLM_4_5 }),
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }),
                               true);
 
             // Test tool calls with extra content AND thinking
@@ -2121,7 +1965,7 @@ Hey there!<|im_end|>
                     "\n<think>I'm\nthinking</think>Hello, world!\nWhat's "
                     "up?\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
                     /* is_partial= */ false,
-                    { /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                    { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                       /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK }),
                 true);
 
@@ -2132,7 +1976,7 @@ Hey there!<|im_end|>
                 "up?\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK });
                 });
             test_parser_with_streaming(message_assist_call_thoughts_unparsed,
@@ -2141,7 +1985,7 @@ Hey there!<|im_end|>
                                        [&](const std::string & msg) {
                                            return common_chat_parse(
                                                msg, /* is_partial= */ true,
-                                               { /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                                               { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                  /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE });
                                        });
             test_parser_with_streaming(
@@ -2150,7 +1994,7 @@ Hey there!<|im_end|>
                 "arg_value>\n<arg_key>arg2</arg_key>\n<arg_value>2</arg_value>\n</tool_call>\n",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK });
                 });
             test_parser_with_streaming(
@@ -2167,7 +2011,7 @@ Hey there!<|im_end|>
                 "<arg_value>95.5</arg_value>\n"
                 "</tool_call>",
                 [&](const std::string & msg) {
-                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_GLM_4_5 });
+                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_PEG_NATIVE });
                 });
             test_parser_with_streaming(
                 simple_assist_msg("", "", "web_search",
@@ -2182,7 +2026,7 @@ Hey there!<|im_end|>
                 "<arg_value>text</arg_value>\n"
                 "</tool_call>",
                 [&](const std::string & msg) {
-                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_GLM_4_5 });
+                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_PEG_NATIVE });
                 });
 
             // Test interleaved thinking
@@ -2193,7 +2037,7 @@ Hey there!<|im_end|>
                 "up?\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK });
                 });
             test_parser_with_streaming(
@@ -2203,7 +2047,7 @@ Hey there!<|im_end|>
                 "up?\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE });
                 });
 
@@ -2243,20 +2087,20 @@ Hey there!<|im_end|>
             auto                     tmpls = read_templates("models/templates/Kimi-K2-Thinking.jinja");
             std::vector<std::string> end_tokens{ "<|im_end|>" };
 
-            assert_equals(COMMON_CHAT_FORMAT_KIMI_K2, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-            assert_equals(COMMON_CHAT_FORMAT_KIMI_K2, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
 
             // Test parsing regular content
             assert_msg_equals(message_assist,
                               common_chat_parse("Hello, world!\nWhat's up?",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_KIMI_K2 }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test parsing content with thinking
             assert_msg_equals(message_assist_thoughts,
                               common_chat_parse("<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
                                                 /* is_partial= */ false,
                                                 {
-                                                    /* .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                                                    /* .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                                                 }));
 
@@ -2265,7 +2109,7 @@ Hey there!<|im_end|>
                 message_assist_call,
                 common_chat_parse("<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_"
                                   "call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
-                                  /* is_partial= */ false, { COMMON_CHAT_FORMAT_KIMI_K2 }));
+                                  /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test parsing tool calls with thinking
             assert_msg_equals(
@@ -2274,7 +2118,7 @@ Hey there!<|im_end|>
                                   "think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|"
                                   "tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
                                   /* is_partial= */ false,
-                                  { /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                                  { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                     /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK }));
 
             // Test tool calls with extra content
@@ -2283,7 +2127,7 @@ Hey there!<|im_end|>
                 common_chat_parse(
                     "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_"
                     "begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>Hello, world!\nWhat's up?",
-                    /* is_partial= */ false, { COMMON_CHAT_FORMAT_KIMI_K2 }));
+                    /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Test tool calls with extra content AND thinking
             assert_msg_equals(
@@ -2293,7 +2137,7 @@ Hey there!<|im_end|>
                     "think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_"
                     "argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>Hello, world!\nWhat's up?",
                     /* is_partial= */ false,
-                    { /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                    { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                       /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK }));
 
             // Test streaming
@@ -2304,7 +2148,7 @@ Hey there!<|im_end|>
                 "begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK });
                 });
             test_parser_with_streaming(
@@ -2314,7 +2158,7 @@ Hey there!<|im_end|>
                 "argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE });
                 });
             test_parser_with_streaming(
@@ -2324,7 +2168,7 @@ Hey there!<|im_end|>
                 "argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>\n",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK });
                 });
             test_parser_with_streaming(
@@ -2333,7 +2177,7 @@ Hey there!<|im_end|>
                 "argument_begin|>{\"arg1\": 1, \"arg2\": 2}<|tool_call_end|><|tool_calls_section_end|>",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE });
                 });
             test_parser_with_streaming(
@@ -2344,7 +2188,7 @@ Hey there!<|im_end|>
                 "begin|>{\"arg1\": \"123456\"}<|tool_call_end|><|tool_calls_section_end|>",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK });
                 });
             test_parser_with_streaming(
@@ -2355,7 +2199,7 @@ Hey there!<|im_end|>
                 "begin|>{\"arg1\": [1, 2, \"345\", 6]}<|tool_call_end|><|tool_calls_section_end|>",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK });
                 });
             test_parser_with_streaming(
@@ -2367,7 +2211,7 @@ Hey there!<|im_end|>
                 "\"10\"}}<|tool_call_end|><|tool_calls_section_end|>",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                                             { /*  .format = */ COMMON_CHAT_FORMAT_PEG_NATIVE,
                                                /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK });
                 });
             test_parser_with_streaming(
@@ -2378,7 +2222,7 @@ Hey there!<|im_end|>
                 "{\"name\": \"John Doe\", \"age\": 30, \"active\": true, \"score\": 95.5}"
                 "<|tool_call_end|><|tool_calls_section_end|>",
                 [&](const std::string & msg) {
-                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_KIMI_K2 });
+                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_PEG_NATIVE });
                 });
             test_parser_with_streaming(
                 simple_assist_msg("", "", "web_search",
@@ -2389,7 +2233,7 @@ Hey there!<|im_end|>
                 "songs\",\"limit\":3,\"type\":\"text\"}"
                 "<|tool_call_end|><|tool_calls_section_end|>",
                 [&](const std::string & msg) {
-                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_KIMI_K2 });
+                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_PEG_NATIVE });
                 });
             test_parser_with_streaming(
                 simple_assist_msg("", "", "read_file",
@@ -2402,7 +2246,7 @@ Hey there!<|im_end|>
                 "\"src/app/globals.css\"}, {\"path\": \"src/app/layout.tsx\"}]}"
                 "<|tool_call_end|><|tool_calls_section_end|>",
                 [&](const std::string & msg) {
-                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_KIMI_K2 });
+                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_PEG_NATIVE });
                 });
             test_parser_with_streaming(
                 simple_assist_msg(
@@ -2413,7 +2257,7 @@ Hey there!<|im_end|>
                 "{\"files\":[{\"path\":\"src/app/Partners.tsx\",\"line_ranges\":[\"1-100\"]}]}"
                 "<|tool_call_end|><|tool_calls_section_end|>",
                 [&](const std::string & msg) {
-                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_KIMI_K2 });
+                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_PEG_NATIVE });
                 });
             auto multi_tool_msg = simple_assist_msg("Let me call multiple tools.", "I'm thinking.");
             multi_tool_msg.tool_calls.push_back(
@@ -2448,7 +2292,7 @@ Hey there!<|im_end|>
                                        [&](const std::string & msg) {
                                            return common_chat_parse(
                                                msg, /* is_partial= */ true,
-                                               { COMMON_CHAT_FORMAT_KIMI_K2, COMMON_REASONING_FORMAT_DEEPSEEK });
+                                               { COMMON_CHAT_FORMAT_PEG_NATIVE, COMMON_REASONING_FORMAT_DEEPSEEK });
                                        });
             test_parser_with_streaming(
                 simple_assist_msg("", "I'm thinking", "complex_function_in_think",
@@ -2460,7 +2304,7 @@ Hey there!<|im_end|>
                 "<|tool_call_end|><|tool_calls_section_end|>",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { COMMON_CHAT_FORMAT_KIMI_K2, COMMON_REASONING_FORMAT_DEEPSEEK });
+                                             { COMMON_CHAT_FORMAT_PEG_NATIVE, COMMON_REASONING_FORMAT_DEEPSEEK });
                 });
             test_parser_with_streaming(
                 simple_assist_msg("Hello", "I'm thinkingI'm still thinking", "complex_function_in_think",
@@ -2472,7 +2316,7 @@ Hey there!<|im_end|>
                 "<|tool_call_end|><|tool_calls_section_end|>I'm still thinking</think>Hello",
                 [&](const std::string & msg) {
                     return common_chat_parse(msg, /* is_partial= */ true,
-                                             { COMMON_CHAT_FORMAT_KIMI_K2, COMMON_REASONING_FORMAT_DEEPSEEK });
+                                             { COMMON_CHAT_FORMAT_PEG_NATIVE, COMMON_REASONING_FORMAT_DEEPSEEK });
                 });
 
             // Test template rendering
@@ -2591,7 +2435,7 @@ Hey there!<|im_end|>
                                                 "    </parameter>\n"
                                                 "  </function>\n"
                                                 "</tool_call>",
-                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_QWEN3_CODER_XML }));
+                                                /* is_partial= */ false, { COMMON_CHAT_FORMAT_PEG_NATIVE }));
 
             // Multiple parameters with different types
             common_chat_msg expected_multi_param;
@@ -2619,7 +2463,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Special characters and Unicode
@@ -2639,7 +2483,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Multiline content with newlines and indentation
@@ -2662,7 +2506,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // JSON object as parameter value
@@ -2682,7 +2526,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Array as parameter value
@@ -2702,7 +2546,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Empty parameter
@@ -2721,7 +2565,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Boolean values (true/false)
@@ -2744,7 +2588,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Null value
@@ -2764,7 +2608,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Negative numbers and scientific notation
@@ -2790,7 +2634,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // XML-like content in parameters (should be escaped)
@@ -2810,7 +2654,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Quotes and escape characters
@@ -2830,7 +2674,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Long parameter value (simplified)
@@ -2856,7 +2700,7 @@ Hey there!<|im_end|>
                                            "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Mixed content with text before and after tool call
@@ -2877,7 +2721,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Compact format (no extra whitespace)
@@ -2891,7 +2735,7 @@ Hey there!<|im_end|>
                 expected_compact,
                 "<tool_call><function=compact_function><parameter=param>value</parameter></function></tool_call>",
                 [&](const std::string & msg) {
-                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_PEG_NATIVE });
                 });
 
             // Function name with underscores and numbers
@@ -2911,7 +2755,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Parameter names with underscores and numbers
@@ -2937,7 +2781,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Very deeply nested XML content in parameter
@@ -2958,7 +2802,7 @@ Hey there!<|im_end|>
                 "  </function>\n"
                 "</tool_call>",
                 [&](const std::string & msg) {
-                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                    return common_chat_parse(msg, /* is_partial= */ true, { COMMON_CHAT_FORMAT_PEG_NATIVE });
                 });
 
             // Parameter with only whitespace
@@ -2978,7 +2822,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Parameter with tabs and mixed whitespace
@@ -3000,7 +2844,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Control characters and special Unicode
@@ -3020,7 +2864,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Emoji and extended Unicode characters
@@ -3041,7 +2885,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Mathematical expressions and formulas
@@ -3061,7 +2905,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // SQL injection-like content (should be safely escaped)
@@ -3081,7 +2925,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // HTML/XML injection content
@@ -3101,7 +2945,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Binary-like content (base64)
@@ -3121,7 +2965,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
 
             // Very large numbers (should be parsed as scientific notation)
@@ -3141,7 +2985,7 @@ Hey there!<|im_end|>
                                        "</tool_call>",
                                        [&](const std::string & msg) {
                                            return common_chat_parse(msg, /* is_partial= */ true,
-                                                                    { COMMON_CHAT_FORMAT_QWEN3_CODER_XML });
+                                                                    { COMMON_CHAT_FORMAT_PEG_NATIVE });
                                        });
         }
 
@@ -3167,7 +3011,7 @@ Hey there!<|im_end|>
             inputs.tools = { qwen_union_tool };
 
             auto params = common_chat_templates_apply(tmpls.get(), inputs);
-            assert_equals(COMMON_CHAT_FORMAT_QWEN3_CODER_XML, params.format);
+            assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, params.format);
             assert_equals(false, params.grammar.empty());
 
             // Grammar should compile successfully
@@ -3480,58 +3324,19 @@ static void test_template_output_peg_parsers() {
     }
 
     {
-        // Google Gemma 2 2B
+        // Google Gemma 2 2B - does not support tool calling
         auto tmpls = read_templates("models/templates/google-gemma-2-2b-it.jinja");
 
-        // Test basic content message (no tools)
+        // Test basic content message
         test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input =
-                "{\n"
-                "  \"response\": \"Hello, world!\\nWhat's up?\"\n"
-                "}";
-
-            t.expect = message_assist_json_content;
+            t.input = "Hello, world!";
+            t.expect = simple_assist_msg("Hello, world!");
         });
 
-        // Test tool call with arguments
+        // Test multi-line content
         test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input =
-                "{\n"
-                "  \"tool_calls\": [\n"
-                "    {\n"
-                "      \"name\": \"special_function\",\n"
-                "      \"arguments\": {\n"
-                "        \"arg1\": 1\n"
-                "      },\n"
-                "      \"id\": \"123456789\"\n"
-                "    }\n"
-                "  ],\n"
-                "  \"content\": \"\"\n"
-                "}";
-            t.params.tools = { special_function_tool };
-            t.expect       = message_assist_call_id;
-        });
-
-        // Test partial tool call - name only
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input        = "{ \"tool_call\" : { \"name\" : \"special_function\"";
-            t.params.tools = { special_function_tool };
-            t.expect       = message_assist_call_empty_args;
-        });
-
-        // Test partial tool call - name and partial arguments
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input        = "{ \"tool_call\" : { \"name\" : \"special_function\", \"arguments\" : { \"arg";
-            t.params.tools = { special_function_tool };
-            t.expect       = message_assist_call_cutoff_args;
-        });
-
-        // Test partial tool call - different tool
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input =
-                R"({"tool_call": {"name": "puppeteer_screenshot", "arguments": {"name": "servethehome_homepage",)";
-            t.params.tools = { special_function_tool };  // Note: different tool in params vs input
-            t.expect       = simple_assist_msg("", "", "puppeteer_screenshot", "{\"name\":\"servethehome_homepage\",");
+            t.input = "Line 1\nLine 2\nLine 3";
+            t.expect = simple_assist_msg("Line 1\nLine 2\nLine 3");
         });
     }
 
@@ -3539,9 +3344,11 @@ static void test_template_output_peg_parsers() {
         // Qwen-QwQ-32B (reasoning model)
         auto tmpls = read_templates("models/templates/Qwen-QwQ-32B.jinja");
 
-        // Test basic thinking content
+        // Test basic thinking content - QwQ always has thinking forced open
         test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input                   = "<think>\nLet me think about this...\n</think>\nThe answer is 42.";
+            // Input starts after the <think>\n that's already in the prompt
+            t.input                   = "Let me think about this...\n</think>\nThe answer is 42.";
+            t.params.enable_thinking  = true;
             t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
             t.expect                  = simple_assist_msg("The answer is 42.", "Let me think about this...");
         });
@@ -3549,16 +3356,18 @@ static void test_template_output_peg_parsers() {
         // Test content without thinking
         test_peg_parser(tmpls.get(), [&](auto & t) {
             t.input  = "Hello, world!";
-            t.expect = message_assist;
+            t.expect = simple_assist_msg("Hello, world!");
         });
 
-        // Test tool call with thinking
+        // Test tool call with thinking - QwQ has thinking forced open
         test_peg_parser(tmpls.get(), [&](auto & t) {
+            // Input starts after the <think>\n that's already in the prompt
             t.input =
-                "<think>\nI should use a tool\n</think>\n"
+                "I should use a tool\n</think>\n"
                 "<tool_call>\n"
                 "{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n"
                 "</tool_call>";
+            t.params.enable_thinking  = true;
             t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
             t.params.tools            = { special_function_tool };
             t.expect = simple_assist_msg("", "I should use a tool", "special_function", R"({"arg1": 1})");
@@ -3589,80 +3398,15 @@ static void test_template_output_peg_parsers() {
             t.expect       = message_assist_call_content;
         });
 
-        // Test tool call with thinking (QwQ-style)
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input =
-                "I'm\nthinking</think>\n"
-                "<tool_call>{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}</tool_call>";
-            t.params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
-            t.params.tools            = { special_function_tool };
-            t.expect                  = message_assist_call_thoughts;
-        });
-
-        // Test partial tool call
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input =
-                "```json\n"
-                "<function_call> { \"name\" : \"python\"";
-            t.params.tools = { python_tool };
-            t.expect       = simple_assist_msg("", "", "python", "");
-        });
-
-        // Test alternate formats - <function> syntax
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input        = "<function=special_function>{\"arg1\": 1}</function>";
-            t.params.tools = { special_function_tool };
-            t.expect       = message_assist_call;
-        });
-
-        // Test alternate formats - ```json syntax
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input =
-                "```json\n"
-                "{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n"
-                "```";
-            t.params.tools = { special_function_tool };
-            t.expect       = message_assist_call;
-        });
+        // Note: Hermes template doesn't support thinking/reasoning natively
+        // Note: We only support one tool calling format per template, no alternate formats
     }
 
-    {
-        // Functionary v3.1 (tool calling model)
-        auto tmpls = read_templates("models/templates/meetkai-functionary-medium-v3.1.jinja");
-
-        // Test basic tool call
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input        = "<function=special_function>{\"arg1\": 1}</function>";
-            t.params.tools = { special_function_tool };
-            t.expect       = message_assist_call;
-        });
-
-        // Test partial tool call
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input        = "<function=special_function>{\"arg1\": 1}<";
-            t.params.tools = { special_function_tool };
-            t.expect       = message_assist_call;
-        });
-
-        // Test content without tools
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input  = "Hello, world!\nWhat's up?";
-            t.expect = message_assist;
-        });
-    }
+    // Note: Functionary and Firefunction have dedicated handlers, not tested with auto-parser
 
     {
-        // Firefunction v2 (tool calling model)
-        auto tmpls = read_templates("models/templates/fireworks-ai-llama-3-firefunction-v2.jinja");
-
-        // Test basic tool call
-        test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input        = " functools[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]";
-            t.params.tools = { special_function_tool };
-            t.expect       = message_assist_call;
-        });
-
-        // Test content without tools
+        // Test simple content-only template
+        auto tmpls = read_templates("models/templates/google-gemma-2-2b-it.jinja");
         test_peg_parser(tmpls.get(), [&](auto & t) {
             t.input  = "Hello, world!\nWhat's up?";
             t.expect = message_assist;
@@ -3686,7 +3430,7 @@ static void test_template_output_peg_parsers() {
             t.expect                  = message_assist_thoughts;
         });
 
-        // Test thinking with response tags
+        // Test thinking with response tags (detected from template instructions)
         test_peg_parser(tmpls.get(), [&](auto & t) {
             t.input                   = "<think>I'm\nthinking</think><response>Hello, world!\nWhat's up?</response>";
             t.params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
@@ -3705,6 +3449,7 @@ static void test_template_output_peg_parsers() {
             t.input        = "<|tool_call|>[{\"name\": \"special_function\"";
             t.params.tools = { special_function_tool };
             t.expect       = message_assist_call_empty_args;
+            t.is_partial   = true;
         });
 
         // Test tool call with thinking
