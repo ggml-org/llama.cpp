@@ -4,3 +4,6 @@
 [submodule "ggml-tsi-kernel"]
 	path = ggml-tsi-kernel
 	url = git@github.com:tsisw/ggml-tsi-kernel.git
+[submodule "toolbox"]
+	path = toolbox
+	url = git@github.com:tsisw/toolbox.git
