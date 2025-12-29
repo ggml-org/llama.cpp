@@ -1,32 +1,14 @@
-export type JsonRpcId = number | string;
+// Re-export SDK types that we use
+import type {
+	ClientCapabilities as SDKClientCapabilities,
+	Implementation as SDKImplementation,
+	Tool,
+	CallToolResult
+} from '@modelcontextprotocol/sdk/types.js';
 
-export type JsonRpcRequest = {
-	jsonrpc: '2.0';
-	id: JsonRpcId;
-	method: string;
-	params?: Record<string, unknown>;
-};
-
-export type JsonRpcNotification = {
-	jsonrpc: '2.0';
-	method: string;
-	params?: Record<string, unknown>;
-};
-
-export type JsonRpcError = {
-	code: number;
-	message: string;
-	data?: unknown;
-};
-
-export type JsonRpcResponse = {
-	jsonrpc: '2.0';
-	id: JsonRpcId;
-	result?: Record<string, unknown>;
-	error?: JsonRpcError;
-};
-
-export type JsonRpcMessage = JsonRpcRequest | JsonRpcResponse | JsonRpcNotification;
+export type { Tool, CallToolResult };
+export type ClientCapabilities = SDKClientCapabilities;
+export type Implementation = SDKImplementation;
 
 export class MCPError extends Error {
 	code: number;
@@ -39,18 +21,6 @@ export class MCPError extends Error {
 		this.data = data;
 	}
 }
-
-export type MCPToolInputSchema = Record<string, unknown>;
-
-export type MCPToolDefinition = {
-	name: string;
-	description?: string;
-	inputSchema?: MCPToolInputSchema;
-};
-
-export type MCPServerCapabilities = Record<string, unknown>;
-
-export type MCPClientCapabilities = Record<string, unknown>;
 
 export type MCPTransportType = 'websocket' | 'streamable_http';
 
@@ -70,14 +40,9 @@ export type MCPServerConfig = {
 	/** Optional per-server request timeout override (ms). */
 	requestTimeoutMs?: number;
 	/** Optional per-server capability overrides. */
-	capabilities?: MCPClientCapabilities;
+	capabilities?: ClientCapabilities;
 	/** Optional pre-negotiated session identifier for Streamable HTTP transport. */
 	sessionId?: string;
-};
-
-export type MCPClientInfo = {
-	name: string;
-	version?: string;
 };
 
 export type MCPClientConfig = {
@@ -85,9 +50,9 @@ export type MCPClientConfig = {
 	/** Defaults to `2025-06-18`. */
 	protocolVersion?: string;
 	/** Default capabilities advertised during initialize. */
-	capabilities?: MCPClientCapabilities;
+	capabilities?: ClientCapabilities;
 	/** Custom client info to advertise. */
-	clientInfo?: MCPClientInfo;
+	clientInfo?: Implementation;
 	/** Request timeout when waiting for MCP responses (ms). Default: 30_000. */
 	requestTimeoutMs?: number;
 };
@@ -102,23 +67,29 @@ export type MCPToolCall = {
 	};
 };
 
-export type MCPToolResultContent =
-	| string
-	| {
-			type: 'text';
-			text: string;
-	  }
-	| {
-			type: 'image';
-			data: string;
-			mimeType?: string;
-	  }
-	| {
-			type: 'resource';
-			resource: Record<string, unknown>;
-	  };
-
-export type MCPToolsCallResult = {
-	content?: MCPToolResultContent | MCPToolResultContent[];
-	result?: unknown;
+/**
+ * Raw MCP server configuration entry stored in settings.
+ */
+export type MCPServerSettingsEntry = {
+	id: string;
+	enabled: boolean;
+	url: string;
+	requestTimeoutSeconds: number;
 };
+
+/**
+ * Interface defining the public API for MCP clients.
+ * Both MCPClient (custom) and MCPClientSDK (official SDK) implement this interface.
+ */
+export interface IMCPClient {
+	initialize(): Promise<void>;
+	shutdown(): Promise<void>;
+	listTools(): string[];
+	getToolsDefinition(): Promise<
+		{
+			type: 'function';
+			function: { name: string; description?: string; parameters: Record<string, unknown> };
+		}[]
+	>;
+	execute(toolCall: MCPToolCall, abortSignal?: AbortSignal): Promise<string>;
+}
