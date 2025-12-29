@@ -1624,15 +1624,26 @@ void ggml_vec_dot_ifairy_q16_K(
     float acc_bc_xr = 0.0f;
     float acc_ad_xi = 0.0f;
 
-    // Fused-6 (K=1536): if activation scales are uniform across 6 blocks, we can
-    // accumulate integer sums across blocks and apply x scales once.
-    const ggml_fp16_t x0_d_real        = x[0].d_real;
-    const ggml_fp16_t x0_d_imag        = x[0].d_imag;
-    const bool        x_scales_uniform = (nb == 6) && (x0_d_real == x[1].d_real) && (x0_d_real == x[2].d_real) &&
-                                  (x0_d_real == x[3].d_real) && (x0_d_real == x[4].d_real) &&
-                                  (x0_d_real == x[5].d_real) && (x0_d_imag == x[1].d_imag) &&
-                                  (x0_d_imag == x[2].d_imag) && (x0_d_imag == x[3].d_imag) &&
-                                  (x0_d_imag == x[4].d_imag) && (x0_d_imag == x[5].d_imag);
+    // If activation scales are uniform across blocks (tensor-scale activation),
+    // we can accumulate integer sums across blocks and apply x scales once.
+    const ggml_fp16_t x0_d_real = x[0].d_real;
+    const ggml_fp16_t x0_d_imag = x[0].d_imag;
+
+    bool x_scales_uniform = true;
+    if (nb == 6) {
+        // Fast-path for the common K=1536 case (avoid an extra loop branch).
+        x_scales_uniform = (x0_d_real == x[1].d_real) && (x0_d_real == x[2].d_real) && (x0_d_real == x[3].d_real) &&
+                           (x0_d_real == x[4].d_real) && (x0_d_real == x[5].d_real) && (x0_d_imag == x[1].d_imag) &&
+                           (x0_d_imag == x[2].d_imag) && (x0_d_imag == x[3].d_imag) && (x0_d_imag == x[4].d_imag) &&
+                           (x0_d_imag == x[5].d_imag);
+    } else {
+        for (int i = 1; i < nb; ++i) {
+            if ((x0_d_real != x[i].d_real) || (x0_d_imag != x[i].d_imag)) {
+                x_scales_uniform = false;
+                break;
+            }
+        }
+    }
 
     int32_t sum_ac_total = 0;
     int32_t sum_ad_total = 0;
