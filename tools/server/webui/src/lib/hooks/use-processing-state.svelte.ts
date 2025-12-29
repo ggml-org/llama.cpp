@@ -46,6 +46,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 	let isMonitoring = $state(false);
 	let lastKnownState = $state<ApiProcessingState | null>(null);
 	let etaSecondsRemaining = $state<number | null>(null);
+	let lastKnownProcessingStats = $state<LiveProcessingStats | null>(null);
 
 	// Derive processing state reactively from chatStore's direct state
 	const processingState = $derived.by(() => {
@@ -60,6 +61,25 @@ export function useProcessingState(): UseProcessingStateReturn {
 	$effect(() => {
 		if (processingState && isMonitoring) {
 			lastKnownState = processingState;
+		}
+	});
+
+	// Track last known processing stats for when promptProgress disappears
+	$effect(() => {
+		if (processingState?.promptProgress) {
+			const { processed, total, time_ms, cache } = processingState.promptProgress;
+			const actualProcessed = processed - cache;
+			const actualTotal = total - cache;
+
+			if (actualProcessed > 0 && time_ms > 0) {
+				const tokensPerSecond = actualProcessed / (time_ms / 1000);
+				lastKnownProcessingStats = {
+					tokensProcessed: actualProcessed,
+					totalTokens: actualTotal,
+					timeMs: time_ms,
+					tokensPerSecond
+				};
+			}
 		}
 	});
 
@@ -106,6 +126,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 		const currentConfig = config();
 		if (!currentConfig.keepStatsVisible) {
 			lastKnownState = null;
+			lastKnownProcessingStats = null;
 		}
 	}
 
@@ -200,25 +221,50 @@ export function useProcessingState(): UseProcessingStateReturn {
 	}
 
 	/**
-	 * Returns live processing statistics for display
+	 * Returns live processing statistics for display (prompt processing phase)
+	 * Returns last known stats when promptProgress becomes unavailable
 	 */
 	function getLiveProcessingStats(): LiveProcessingStats | null {
-		if (!processingState?.promptProgress) return null;
+		if (processingState?.promptProgress) {
+			const { processed, total, time_ms, cache } = processingState.promptProgress;
 
-		const { processed, total, time_ms, cache } = processingState.promptProgress;
+			const actualProcessed = processed - cache;
+			const actualTotal = total - cache;
 
-		const actualProcessed = processed - cache;
-		const actualTotal = total - cache;
+			if (actualProcessed > 0 && time_ms > 0) {
+				const tokensPerSecond = actualProcessed / (time_ms / 1000);
 
-		if (actualProcessed <= 0 || time_ms <= 0) return null;
+				return {
+					tokensProcessed: actualProcessed,
+					totalTokens: actualTotal,
+					timeMs: time_ms,
+					tokensPerSecond
+				};
+			}
+		}
 
-		const tokensPerSecond = actualProcessed / (time_ms / 1000);
+		// Return last known stats if promptProgress is no longer available
+		return lastKnownProcessingStats;
+	}
+
+	/**
+	 * Returns live generation statistics for display (token generation phase)
+	 */
+	function getLiveGenerationStats(): LiveGenerationStats | null {
+		if (!processingState) return null;
+
+		const { tokensDecoded, tokensPerSecond } = processingState;
+
+		if (tokensDecoded <= 0) return null;
+
+		// Calculate time from tokens and speed
+		const timeMs =
+			tokensPerSecond && tokensPerSecond > 0 ? (tokensDecoded / tokensPerSecond) * 1000 : 0;
 
 		return {
-			tokensProcessed: actualProcessed,
-			totalTokens: actualTotal,
-			timeMs: time_ms,
-			tokensPerSecond
+			tokensGenerated: tokensDecoded,
+			timeMs,
+			tokensPerSecond: tokensPerSecond || 0
 		};
 	}
 
