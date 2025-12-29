@@ -1,39 +1,46 @@
-import { getDefaultMcpConfig } from '$lib/config/mcp';
-import { JsonRpcProtocol } from './protocol';
-import type {
-	JsonRpcMessage,
-	MCPClientConfig,
-	MCPServerCapabilities,
-	MCPServerConfig,
-	MCPToolCall,
-	MCPToolDefinition,
-	MCPToolsCallResult
-} from './types';
-import { MCPError } from './types';
-import type { MCPTransport } from './transports/types';
-import { WebSocketTransport } from './transports/websocket';
-import { StreamableHttpTransport } from './transports/streamable-http';
+/**
+ * MCP Client implementation using the official @modelcontextprotocol/sdk
+ *
+ * This module provides a wrapper around the SDK's Client class that maintains
+ * backward compatibility with our existing MCPClient API.
+ */
 
-const MCP_DEFAULTS = getDefaultMcpConfig();
+import { Client } from '@modelcontextprotocol/sdk/client';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { MCPClientConfig, MCPServerConfig, MCPToolCall } from '$lib/types/mcp';
+import { MCPError } from '$lib/types/mcp';
+import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 
-interface PendingRequest {
-	resolve: (value: Record<string, unknown>) => void;
-	reject: (reason?: unknown) => void;
-	timeout: ReturnType<typeof setTimeout>;
+// Type for tool call result content item
+interface ToolResultContentItem {
+	type: string;
+	text?: string;
+	data?: string;
+	mimeType?: string;
+	resource?: { text?: string; blob?: string; uri?: string };
 }
 
-interface ServerState {
-	transport: MCPTransport;
-	pending: Map<number, PendingRequest>;
-	requestId: number;
-	tools: MCPToolDefinition[];
-	requestTimeoutMs?: number;
-	capabilities?: MCPServerCapabilities;
-	protocolVersion?: string;
+// Type for tool call result (SDK uses complex union type)
+interface ToolCallResult {
+	content?: ToolResultContentItem[];
+	isError?: boolean;
+	_meta?: Record<string, unknown>;
 }
 
+interface ServerConnection {
+	client: Client;
+	transport: Transport;
+	tools: Tool[];
+}
+
+/**
+ * MCP Client using the official @modelcontextprotocol/sdk.
+ */
 export class MCPClient {
-	private readonly servers: Map<string, ServerState> = new Map();
+	private readonly servers: Map<string, ServerConnection> = new Map();
 	private readonly toolsToServer: Map<string, string> = new Map();
 	private readonly config: MCPClientConfig;
 
@@ -46,9 +53,25 @@ export class MCPClient {
 
 	async initialize(): Promise<void> {
 		const entries = Object.entries(this.config.servers);
-		await Promise.all(
+		const results = await Promise.allSettled(
 			entries.map(([name, serverConfig]) => this.initializeServer(name, serverConfig))
 		);
+
+		// Log any failures but don't throw if at least one server connected
+		const failures = results.filter((r) => r.status === 'rejected');
+		if (failures.length > 0) {
+			for (const failure of failures) {
+				console.error(
+					'[MCP] Server initialization failed:',
+					(failure as PromiseRejectedResult).reason
+				);
+			}
+		}
+
+		const successes = results.filter((r) => r.status === 'fulfilled');
+		if (successes.length === 0) {
+			throw new Error('All MCP server connections failed');
+		}
 	}
 
 	listTools(): string[] {
@@ -73,7 +96,7 @@ export class MCPClient {
 					function: {
 						name: tool.name,
 						description: tool.description,
-						parameters: tool.inputSchema ?? {
+						parameters: (tool.inputSchema as Record<string, unknown>) ?? {
 							type: 'object',
 							properties: {},
 							required: []
@@ -93,10 +116,16 @@ export class MCPClient {
 			throw new MCPError(`Unknown tool: ${toolName}`, -32601);
 		}
 
+		const connection = this.servers.get(serverName);
+		if (!connection) {
+			throw new MCPError(`Server ${serverName} is not connected`, -32000);
+		}
+
 		if (abortSignal?.aborted) {
 			throw new DOMException('Aborted', 'AbortError');
 		}
 
+		// Parse arguments
 		let args: Record<string, unknown>;
 		const originalArgs = toolCall.function.arguments;
 		if (typeof originalArgs === 'string') {
@@ -133,234 +162,128 @@ export class MCPClient {
 			throw new MCPError(`Invalid tool arguments type: ${typeof originalArgs}`, -32602);
 		}
 
-		const response = await this.call(
-			serverName,
-			'tools/call',
-			{
-				name: toolName,
-				arguments: args
-			},
-			abortSignal
-		);
+		try {
+			const result = await connection.client.callTool(
+				{ name: toolName, arguments: args },
+				undefined,
+				{ signal: abortSignal }
+			);
 
-		return MCPClient.formatToolResult(response as MCPToolsCallResult);
+			return MCPClient.formatToolResult(result as ToolCallResult);
+		} catch (error) {
+			if (error instanceof DOMException && error.name === 'AbortError') {
+				throw error;
+			}
+			const message = error instanceof Error ? error.message : String(error);
+			throw new MCPError(`Tool execution failed: ${message}`, -32603);
+		}
 	}
 
 	async shutdown(): Promise<void> {
-		for (const [, state] of this.servers) {
-			await state.transport.stop();
+		const closePromises: Promise<void>[] = [];
+
+		for (const [name, connection] of this.servers) {
+			console.log(`[MCP][${name}] Closing connection...`);
+			closePromises.push(
+				connection.client.close().catch((error) => {
+					console.warn(`[MCP][${name}] Error closing client:`, error);
+				})
+			);
 		}
+
+		await Promise.allSettled(closePromises);
 		this.servers.clear();
 		this.toolsToServer.clear();
 	}
 
 	private async initializeServer(name: string, config: MCPServerConfig): Promise<void> {
-		const protocolVersion = this.config.protocolVersion ?? MCP_DEFAULTS.protocolVersion;
-		const transport = this.createTransport(config, protocolVersion);
-		await transport.start();
+		console.log(`[MCP][${name}] Starting server initialization...`);
 
-		const state: ServerState = {
-			transport,
-			pending: new Map(),
-			requestId: 0,
-			tools: [],
-			requestTimeoutMs: config.requestTimeoutMs
-		};
-
-		transport.onMessage((message) => this.handleMessage(name, message));
-		this.servers.set(name, state);
-
-		const clientInfo = this.config.clientInfo ?? MCP_DEFAULTS.clientInfo;
+		const clientInfo = this.config.clientInfo ?? DEFAULT_MCP_CONFIG.clientInfo;
 		const capabilities =
-			config.capabilities ?? this.config.capabilities ?? MCP_DEFAULTS.capabilities;
+			config.capabilities ?? this.config.capabilities ?? DEFAULT_MCP_CONFIG.capabilities;
 
-		const initResult = await this.call(name, 'initialize', {
-			protocolVersion,
-			capabilities,
-			clientInfo
-		});
+		// Create SDK client
+		const client = new Client(
+			{ name: clientInfo.name, version: clientInfo.version ?? '1.0.0' },
+			{ capabilities }
+		);
 
-		const negotiatedVersion = (initResult?.protocolVersion as string) ?? protocolVersion;
+		// Create transport with fallback
+		const transport = await this.createTransportWithFallback(name, config);
 
-		state.capabilities = (initResult?.capabilities as MCPServerCapabilities) ?? {};
-		state.protocolVersion = negotiatedVersion;
+		console.log(`[MCP][${name}] Connecting to server...`);
+		await client.connect(transport);
+		console.log(`[MCP][${name}] Connected, listing tools...`);
 
-		const notification = JsonRpcProtocol.createNotification('notifications/initialized');
-		await state.transport.send(notification as JsonRpcMessage);
+		// List available tools
+		const toolsResult = await client.listTools();
+		const tools = toolsResult.tools ?? [];
+		console.log(`[MCP][${name}] Found ${tools.length} tools`);
 
-		await this.refreshTools(name);
+		// Store connection
+		const connection: ServerConnection = {
+			client,
+			transport,
+			tools
+		};
+		this.servers.set(name, connection);
+
+		// Map tools to server
+		for (const tool of tools) {
+			this.toolsToServer.set(tool.name, name);
+		}
+
+		// Note: Tool list changes will be handled by re-calling listTools when needed
+		// The SDK's listChanged handler requires server capability support
+
+		console.log(`[MCP][${name}] Server initialization complete`);
 	}
 
-	private createTransport(config: MCPServerConfig, protocolVersion: string): MCPTransport {
+	private async createTransportWithFallback(
+		name: string,
+		config: MCPServerConfig
+	): Promise<Transport> {
 		if (!config.url) {
 			throw new Error('MCP server configuration is missing url');
 		}
 
-		const transportType = config.transport ?? 'websocket';
+		const url = new URL(config.url);
+		const requestInit: RequestInit = {};
 
-		if (transportType === 'streamable_http') {
-			return new StreamableHttpTransport({
-				url: config.url,
-				headers: config.headers,
-				credentials: config.credentials,
-				protocolVersion,
+		if (config.headers) {
+			requestInit.headers = config.headers;
+		}
+		if (config.credentials) {
+			requestInit.credentials = config.credentials;
+		}
+
+		// Try StreamableHTTP first (modern), fall back to SSE (legacy)
+		try {
+			console.log(`[MCP][${name}] Trying StreamableHTTP transport...`);
+			const transport = new StreamableHTTPClientTransport(url, {
+				requestInit,
 				sessionId: config.sessionId
 			});
-		}
-
-		if (transportType !== 'websocket') {
-			throw new Error(`Unsupported transport "${transportType}" in webui environment`);
-		}
-
-		return new WebSocketTransport({
-			url: config.url,
-			protocols: config.protocols,
-			handshakeTimeoutMs: config.handshakeTimeoutMs
-		});
-	}
-
-	private async refreshTools(serverName: string): Promise<void> {
-		const state = this.servers.get(serverName);
-		if (!state) return;
-
-		const response = await this.call(serverName, 'tools/list');
-		const tools = (response.tools as MCPToolDefinition[]) ?? [];
-		state.tools = tools;
-
-		for (const [tool, owner] of Array.from(this.toolsToServer.entries())) {
-			if (owner === serverName && !tools.find((t) => t.name === tool)) {
-				this.toolsToServer.delete(tool);
-			}
-		}
-
-		for (const tool of tools) {
-			this.toolsToServer.set(tool.name, serverName);
-		}
-	}
-
-	private call(
-		serverName: string,
-		method: string,
-		params?: Record<string, unknown>,
-		abortSignal?: AbortSignal
-	): Promise<Record<string, unknown>> {
-		const state = this.servers.get(serverName);
-		if (!state) {
-			return Promise.reject(new MCPError(`Server ${serverName} is not connected`, -32000));
-		}
-
-		const id = ++state.requestId;
-		const message = JsonRpcProtocol.createRequest(id, method, params);
-
-		const timeoutDuration =
-			state.requestTimeoutMs ??
-			this.config.requestTimeoutMs ??
-			MCP_DEFAULTS.requestTimeoutSeconds * 1000;
-
-		if (abortSignal?.aborted) {
-			return Promise.reject(new DOMException('Aborted', 'AbortError'));
-		}
-
-		return new Promise((resolve, reject) => {
-			const cleanupTasks: Array<() => void> = [];
-			const cleanup = () => {
-				for (const task of cleanupTasks.splice(0)) {
-					task();
-				}
-			};
-
-			const timeout = setTimeout(() => {
-				cleanup();
-				reject(new Error(`Timeout while waiting for ${method} response from ${serverName}`));
-			}, timeoutDuration);
-			cleanupTasks.push(() => clearTimeout(timeout));
-			cleanupTasks.push(() => state.pending.delete(id));
-
-			if (abortSignal) {
-				const abortHandler = () => {
-					cleanup();
-					reject(new DOMException('Aborted', 'AbortError'));
-				};
-				abortSignal.addEventListener('abort', abortHandler, { once: true });
-				cleanupTasks.push(() => abortSignal.removeEventListener('abort', abortHandler));
-			}
-
-			state.pending.set(id, {
-				resolve: (value) => {
-					cleanup();
-					resolve(value);
-				},
-				reject: (reason) => {
-					cleanup();
-					reject(reason);
-				},
-				timeout
-			});
-
-			const handleSendError = (error: unknown) => {
-				cleanup();
-				reject(error);
-			};
+			return transport;
+		} catch (httpError) {
+			console.warn(`[MCP][${name}] StreamableHTTP failed, trying SSE transport...`, httpError);
 
 			try {
-				void state.transport
-					.send(message as JsonRpcMessage)
-					.catch((error) => handleSendError(error));
-			} catch (error) {
-				handleSendError(error);
+				const transport = new SSEClientTransport(url, {
+					requestInit
+				});
+				return transport;
+			} catch (sseError) {
+				// Both failed, throw combined error
+				const httpMsg = httpError instanceof Error ? httpError.message : String(httpError);
+				const sseMsg = sseError instanceof Error ? sseError.message : String(sseError);
+				throw new Error(`Failed to create transport. StreamableHTTP: ${httpMsg}; SSE: ${sseMsg}`);
 			}
-		});
-	}
-
-	private handleMessage(serverName: string, message: JsonRpcMessage): void {
-		const state = this.servers.get(serverName);
-		if (!state) {
-			return;
-		}
-
-		if ('method' in message && !('id' in message)) {
-			this.handleNotification(serverName, message.method, message.params);
-			return;
-		}
-
-		const response = JsonRpcProtocol.parseResponse(message);
-		if (!response) {
-			return;
-		}
-
-		const pending = state.pending.get(response.id as number);
-		if (!pending) {
-			return;
-		}
-
-		state.pending.delete(response.id as number);
-		clearTimeout(pending.timeout);
-
-		if (response.error) {
-			pending.reject(
-				new MCPError(response.error.message, response.error.code, response.error.data)
-			);
-			return;
-		}
-
-		pending.resolve(response.result ?? {});
-	}
-
-	private handleNotification(
-		serverName: string,
-		method: string,
-		params?: Record<string, unknown>
-	): void {
-		if (method === 'notifications/tools/list_changed') {
-			void this.refreshTools(serverName).catch((error) => {
-				console.error(`[MCP] Failed to refresh tools for ${serverName}:`, error);
-			});
-		} else if (method === 'notifications/logging/message' && params) {
-			console.debug(`[MCP][${serverName}]`, params);
 		}
 	}
 
-	private static formatToolResult(result: MCPToolsCallResult): string {
+	private static formatToolResult(result: ToolCallResult): string {
 		const content = result.content;
 		if (Array.isArray(content)) {
 			return content
@@ -368,46 +291,30 @@ export class MCPClient {
 				.filter(Boolean)
 				.join('\n');
 		}
-		if (content) {
-			return MCPClient.formatSingleContent(content);
-		}
-		if (result.result !== undefined) {
-			return typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
-		}
 		return '';
 	}
 
-	private static formatSingleContent(content: unknown): string {
-		if (content === null || content === undefined) {
-			return '';
+	private static formatSingleContent(content: ToolResultContentItem): string {
+		if (content.type === 'text' && content.text) {
+			return content.text;
 		}
-
-		if (typeof content === 'string') {
-			return content;
+		if (content.type === 'image' && content.data) {
+			return `data:${content.mimeType ?? 'image/png'};base64,${content.data}`;
 		}
-
-		if (typeof content === 'object') {
-			const typed = content as {
-				type?: string;
-				text?: string;
-				data?: string;
-				mimeType?: string;
-				resource?: unknown;
-			};
-			if (typed.type === 'text' && typeof typed.text === 'string') {
-				return typed.text;
+		if (content.type === 'resource' && content.resource) {
+			const resource = content.resource;
+			if (resource.text) {
+				return resource.text;
 			}
-			if (typed.type === 'image' && typeof typed.data === 'string' && typed.mimeType) {
-				return `data:${typed.mimeType};base64,${typed.data}`;
+			if (resource.blob) {
+				return resource.blob;
 			}
-			if (typed.type === 'resource' && typed.resource) {
-				return JSON.stringify(typed.resource);
-			}
-			if (typeof typed.text === 'string') {
-				return typed.text;
-			}
+			return JSON.stringify(resource);
 		}
-
+		// audio type
+		if (content.data && content.mimeType) {
+			return `data:${content.mimeType};base64,${content.data}`;
+		}
 		return JSON.stringify(content);
 	}
 }
