@@ -44,7 +44,7 @@ After submitting your PR:
 - Expect requests for modifications to ensure the code meets llama.cpp's standards for quality and long-term maintainability
 - Maintainers will rely on your insights and approval when making a final decision to approve and merge a PR
 - If your PR becomes stale, rebase it on top of latest `master` to get maintainers attention
-- Consider adding yourself to [CODEOWNERS](CODEOWNERS) to indicate your availability for reviewing related 
+- Consider adding yourself to [CODEOWNERS](CODEOWNERS) to indicate your availability for reviewing related
 
 # Pull requests (for maintainers)
 
