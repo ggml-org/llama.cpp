@@ -190,11 +190,25 @@ common_peg_parser common_chat_peg_unified_builder::build_tool_section(
             // This happens when:
             // - Section markers wrap the ENTIRE section (e.g., <tool_calls_begin>...<tool_calls_end>)
             // - Function prefix contains its own per-call marker (e.g., <tool_call_begin>...)
-            // Example: DeepSeek R1 with section and call markers
+            // Example: DeepSeek R1 with section and call markers, Kimi-K2 with prefixed-indexed format
             // We detect this by checking if function_prefix contains a per-call START marker
             // (indicated by words like "call_begin", "call_start", or similar patterns)
             bool has_separate_section_and_call_markers = false;
-            if (ts.function_format == ToolCallStructure::FUNC_TAG_WITH_NAME && !ts.function_prefix.empty()) {
+
+            // FUNC_PREFIXED_INDEXED always has separate section and per-call markers
+            if (ts.function_format == ToolCallStructure::FUNC_PREFIXED_INDEXED) {
+                has_separate_section_and_call_markers = true;
+            } else if (ts.function_format == ToolCallStructure::FUNC_NAME_AS_KEY) {
+                // FUNC_NAME_AS_KEY uses comma-separated JSON objects in an array
+                // Format: [{"func1": args}, {"func2": args}]
+                // The brackets are included in section markers
+                auto tool_call = trigger_rule("tool-call", tool_choices);
+                auto tool_calls = tool_call;
+                if (parallel_tool_calls) {
+                    tool_calls = tool_call + zero_or_more(space() + literal(",") + space() + tool_call);
+                }
+                return literal(ts.tool_section_start) + space() + tool_calls + space() + literal(ts.tool_section_end);
+            } else if (ts.function_format == ToolCallStructure::FUNC_TAG_WITH_NAME && !ts.function_prefix.empty()) {
                 // Check if function_prefix contains a per-call marker like "<tool_call_begin>"
                 // This differentiates DeepSeek R1 (where function_prefix has its own call marker)
                 // from Nemotron (where function_prefix is just "<function=")
@@ -309,6 +323,28 @@ common_peg_parser common_chat_peg_unified_builder::build_function(
             return tool(tool_open(opening) + space() + tool_args(args) +
                         space() + tool_close(literal("</" + name + ">")));
         }
+
+        case ToolCallStructure::FUNC_PREFIXED_INDEXED: {
+            // Build prefixed-indexed parser (e.g., Kimi-K2):
+            // <|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{...}<|tool_call_end|>
+            // The index number after : is ignored (we use zero_or_more(digit) to skip it)
+            auto opening = literal(ts.per_call_start) +
+                           literal(ts.function_namespace) +
+                           tool_name(literal(name)) +
+                           literal(":") +
+                           zero_or_more(chars("0-9", 1, 1)) +  // Skip the index
+                           literal(ts.args_marker);
+            return tool(tool_open(opening) + space() + tool_args(args) +
+                        space() + tool_close(literal(ts.per_call_end)));
+        }
+
+        case ToolCallStructure::FUNC_NAME_AS_KEY: {
+            // Build name-as-key parser (e.g., Apertus):
+            // {"function_name": {...arguments...}}
+            // The function name IS the JSON key, and arguments are the value directly
+            auto opening = literal("{\"") + tool_name(literal(name)) + literal("\":");
+            return tool(tool_open(opening) + space() + tool_args(args) + space() + literal("}"));
+        }
     }
 
     return eps();
@@ -344,6 +380,34 @@ common_peg_parser common_chat_peg_unified_builder::build_arguments(
                                          literal(ts.arg_suffix) + tool_arg_value(until(ts.arg_close)) +
                                          tool_arg_close(literal(ts.arg_close)) +
                                          (ts.arg_separator.empty() ? eps() : optional(literal(ts.arg_separator))));
+                arg_choice |= arg_rule;
+            }
+            return zero_or_more(arg_choice + space());
+        }
+
+        case ToolCallStructure::ARGS_KEY_VALUE_TAGS: {
+            // Key-value tag arguments (GLM-4.6 style):
+            // <arg_key>key</arg_key>
+            // <arg_value>value</arg_value>
+            if (!params.contains("properties") || params.at("properties").empty()) {
+                return eps();
+            }
+
+            auto arg_choice = choice();
+            for (const auto & el : params.at("properties").items()) {
+                const std::string & prop_name = el.key();
+
+                // Parse: <arg_key>key</arg_key>\n<arg_value>value</arg_value>
+                // ts.arg_prefix = "<arg_key>", ts.arg_suffix = "</arg_key>", ts.arg_close = "</arg_value>"
+                auto arg_rule = tool_arg(
+                    tool_arg_open(literal(ts.arg_prefix)) +
+                    tool_arg_name(literal(prop_name)) +
+                    literal(ts.arg_suffix) +  // </arg_key>
+                    space() +
+                    literal("<arg_value>") +
+                    tool_arg_value(until(ts.arg_close)) +
+                    tool_arg_close(literal(ts.arg_close))
+                );
                 arg_choice |= arg_rule;
             }
             return zero_or_more(arg_choice + space());
