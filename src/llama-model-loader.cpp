@@ -1120,7 +1120,7 @@ bool llama_model_loader::load_all_data(
                         ggml_backend_event_synchronize(events[buffer_idx]);
 
                         // Read aligned chunk from file
-                        file->read_raw(reinterpret_cast<void *>(ptr_dest_aligned), read_size);
+                        file->read_raw_unsafe(reinterpret_cast<void *>(ptr_dest_aligned), read_size);
 
                         // Calculate actual data portion (excluding alignment padding)
                         uintptr_t ptr_data = ptr_dest_aligned;
