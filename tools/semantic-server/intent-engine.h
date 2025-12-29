@@ -127,6 +127,10 @@ private:
     std::string generate_response(const std::string & prompt) {
         // Tokenize the prompt
         const int n_prompt = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), NULL, 0, true, true);
+        if (n_prompt <= 0) {
+            return "{}"; // Return empty object on error
+        }
+        
         std::vector<llama_token> prompt_tokens(n_prompt);
         if (llama_tokenize(vocab, prompt.c_str(), prompt.size(), prompt_tokens.data(), prompt_tokens.size(), true, true) < 0) {
             return "{}"; // Return empty object on error

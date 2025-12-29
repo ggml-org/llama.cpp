@@ -55,11 +55,14 @@ def send_to_pipe(pipe_name, message):
                 pipe_out.write(message)
                 pipe_out.flush()
             
-            # Open pipe for reading (response)
-            # Note: In a real implementation, you'd need a response pipe
-            # For now, we just send the command
-            print("Command sent to pipe (response mechanism depends on your setup)")
-            return "Command sent"
+            # Note: This is a simplified client that only sends commands.
+            # In a production environment, you would need a separate response pipe
+            # or a bidirectional communication mechanism. The semantic server
+            # currently writes responses back through the same pipe, so a full
+            # client implementation would need to handle reading from the pipe
+            # in a separate thread or process.
+            print("Command sent to pipe")
+            return "Command sent (response handling not implemented in test client)"
             
         except Exception as e:
             print(f"Error communicating with pipe: {e}")

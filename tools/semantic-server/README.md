@@ -6,7 +6,7 @@ A 64-bit C++ Semantic AI Server that processes natural language commands for Fra
 
 This server implements:
 
-1. **JSON Command Schema**: Defines verbs (PAN, LEAN, ADD, DELETE, SHOT, etc.) with required and optional parameters
+1. **JSON Command Schema**: Defines verbs (PAN, TILT, LEAN, ROLL, ADD, DELETE, SHOT, etc.) with required and optional parameters
 2. **Intent Engine**: Uses Llama-3 (or similar models) with a strict system prompt for intent classification
 3. **Command Validation**: Validates LLM output against command schemas
 4. **IPC Communication**: Named Pipes for high-speed inter-process communication with external applications
