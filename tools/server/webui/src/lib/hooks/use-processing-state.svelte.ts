@@ -8,12 +8,19 @@ export interface LiveProcessingStats {
 	tokensPerSecond: number;
 }
 
+export interface LiveGenerationStats {
+	tokensGenerated: number;
+	timeMs: number;
+	tokensPerSecond: number;
+}
+
 export interface UseProcessingStateReturn {
 	readonly processingState: ApiProcessingState | null;
 	getProcessingDetails(): string[];
 	getProcessingMessage(): string;
 	getPromptProgressText(): string | null;
 	getLiveProcessingStats(): LiveProcessingStats | null;
+	getLiveGenerationStats(): LiveGenerationStats | null;
 	shouldShowDetails(): boolean;
 	startMonitoring(): void;
 	stopMonitoring(): void;
@@ -116,10 +123,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 				}
 				return 'Preparing response...';
 			case 'generating':
-				if (processingState.tokensDecoded > 0) {
-					return `Generating... (${processingState.tokensDecoded} tokens)`;
-				}
-				return 'Generating...';
+				return '';
 			default:
 				return 'Processing...';
 		}
@@ -226,6 +230,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 		getProcessingMessage,
 		getPromptProgressText,
 		getLiveProcessingStats,
+		getLiveGenerationStats,
 		shouldShowDetails,
 		startMonitoring,
 		stopMonitoring
