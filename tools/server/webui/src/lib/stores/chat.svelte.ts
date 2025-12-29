@@ -1,6 +1,7 @@
 import { DatabaseService, ChatService } from '$lib/services';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
+import { mcpStore } from '$lib/stores/mcp.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import {
 	selectedModelName,
@@ -15,6 +16,7 @@ import {
 } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
+import { getAgenticConfig } from '$lib/config/agentic';
 
 /**
  * chatStore - Active AI interaction and streaming state management
@@ -517,6 +519,10 @@ class ChatStore {
 
 		const abortController = this.getOrCreateAbortController(assistantMessage.convId);
 
+		// Get MCP client if agentic mode is enabled (store layer responsibility)
+		const agenticConfig = getAgenticConfig(config());
+		const mcpClient = agenticConfig.enabled ? await mcpStore.ensureClient() : undefined;
+
 		await ChatService.sendMessage(
 			allMessages,
 			{
@@ -635,7 +641,8 @@ class ChatStore {
 				}
 			},
 			assistantMessage.convId,
-			abortController.signal
+			abortController.signal,
+			mcpClient ?? undefined
 		);
 	}
 
@@ -1120,7 +1127,8 @@ class ChatStore {
 					}
 				},
 				msg.convId,
-				abortController.signal
+				abortController.signal,
+				undefined // No MCP for continue generation
 			);
 		} catch (error) {
 			if (!this.isAbortError(error)) console.error('Failed to continue message:', error);
