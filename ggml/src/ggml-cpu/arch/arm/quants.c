@@ -1645,10 +1645,12 @@ void ggml_vec_dot_ifairy_q16_K(
     const float x_real_uniform = x_scales_uniform ? GGML_CPU_FP16_TO_FP32(x0_d_real) : 0.0f;
     const float x_imag_uniform = x_scales_uniform ? GGML_CPU_FP16_TO_FP32(x0_d_imag) : 0.0f;
 
-    // 权重按 |0 16 32 48|1 17 33 49|...|15 31 47 63| 排列，直接用立即数右移解码 4 个 16-lane 组
-    const uint8x16_t v_mask_3 = vdupq_n_u8(0x3);
-    const int32x4_t  vzero    = vdupq_n_s32(0);
-        
+    // 权重按 |0 16 32 48|1 17 33 49|...|15 31 47 63| 排列
+    // 每个 byte 存 4 个 2-bit code：bits[1:0], bits[3:2], bits[5:4], bits[7:6]
+    // 这里用 nibble (4-bit) 直接查两套 LUT，避免 3x shift + 3x mask。
+    const uint8x16_t v_mask_0f = vdupq_n_u8(0x0F);
+    const int32x4_t  vzero     = vdupq_n_s32(0);
+
     // 2bit index → {real, imag} 查表
     // 约定编码：00(-1) 01(1) 10(-i) 11(i)
     static const int8_t lut_real_data[16] = {
@@ -1657,11 +1659,23 @@ void ggml_vec_dot_ifairy_q16_K(
     static const int8_t lut_imag_data[16] = {
          0, 0,-1, 1,   0, 0,-1, 1,  0, 0,-1, 1,   0, 0,-1, 1
     };
-    const int8x16_t v_lut_real = vld1q_s8(lut_real_data);
-    const int8x16_t v_lut_imag = vld1q_s8(lut_imag_data);
-    register uint8x16_t v_mask_3_reg asm("v28") = v_mask_3;
-    register int8x16_t  v_lut_imag_reg asm("v29") = v_lut_imag;
-    register int8x16_t  v_lut_real_reg asm("v30") = v_lut_real;
+    static const int8_t lut_wr_idx1_data[16] = {
+        -1, -1, -1, -1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+    };
+    static const int8_t lut_wi_idx1_data[16] = {
+        0, 0, 0, 0, 0, 0, 0, 0, -1, -1, -1, -1, 1, 1, 1, 1,
+    };
+
+    const int8x16_t v_lut_wr_i0 = vld1q_s8(lut_real_data);
+    const int8x16_t v_lut_wi_i0 = vld1q_s8(lut_imag_data);
+    const int8x16_t v_lut_wr_i1 = vld1q_s8(lut_wr_idx1_data);
+    const int8x16_t v_lut_wi_i1 = vld1q_s8(lut_wi_idx1_data);
+
+    register uint8x16_t v_mask_0f_reg asm("v27")   = v_mask_0f;
+    register int8x16_t  v_lut_wr_i0_reg asm("v28") = v_lut_wr_i0;
+    register int8x16_t  v_lut_wi_i0_reg asm("v29") = v_lut_wi_i0;
+    register int8x16_t  v_lut_wr_i1_reg asm("v30") = v_lut_wr_i1;
+    register int8x16_t  v_lut_wi_i1_reg asm("v31") = v_lut_wi_i1;
 
     for (int i = 0; i < nb; ++i) {
         __builtin_prefetch(w + i + 1, 0, 1);
@@ -1685,28 +1699,23 @@ void ggml_vec_dot_ifairy_q16_K(
 
             asm volatile(
                 // ---- block 0: weights 0..63 ----
-                "ldr            q0, [%[w]]                  \n"  // w_all_0
-                "and            v1.16b, v0.16b, %[m3].16b   \n"  // idx0
-                "ushr           v2.16b, v0.16b, #2          \n"
-                "ushr           v3.16b, v0.16b, #4          \n"
-                "ushr           v4.16b, v0.16b, #6          \n"
-                "and            v2.16b, v2.16b, %[m3].16b   \n"
-                "and            v3.16b, v3.16b, %[m3].16b   \n"
-                "and            v4.16b, v4.16b, %[m3].16b   \n"
+                "ldr            q0, [%[w]]                  \n"   // w_all_0
+                "and            v1.16b, v0.16b, %[m0f].16b  \n"   // lo nibble
+                "ushr           v2.16b, v0.16b, #4          \n"   // hi nibble
 
-                "ldp            q8,  q10, [%[xr]]           \n"  // xr0, xr1
-                "ldp            q9,  q11, [%[xi]]           \n"  // xi0, xi1
-                "ldp            q12, q14, [%[xr], #32]      \n"  // xr2, xr3
-                "ldp            q13, q15, [%[xi], #32]      \n"  // xi2, xi3
+                "ldp            q8,  q10, [%[xr]]           \n"   // xr0, xr1
+                "ldp            q9,  q11, [%[xi]]           \n"   // xi0, xi1
+                "ldp            q12, q14, [%[xr], #32]      \n"   // xr2, xr3
+                "ldp            q13, q15, [%[xi], #32]      \n"   // xi2, xi3
 
-                "tbl            v5.16b, {%[lr].16b}, v1.16b \n"  // wr0
-                "tbl            v6.16b, {%[li].16b}, v1.16b \n"  // wi0
-                "tbl            v16.16b,{%[lr].16b}, v2.16b \n"  // wr1
-                "tbl            v17.16b,{%[li].16b}, v2.16b \n"  // wi1
-                "tbl            v18.16b,{%[lr].16b}, v3.16b \n"  // wr2
-                "tbl            v19.16b,{%[li].16b}, v3.16b \n"  // wi2
-                "tbl            v1.16b, {%[lr].16b}, v4.16b \n"  // wr3 reuse v1
-                "tbl            v2.16b, {%[li].16b}, v4.16b \n"  // wi3 reuse v2
+                "tbl            v5.16b, {%[wr0].16b}, v1.16b \n"  // wr0 (bits[1:0] of lo nibble)
+                "tbl            v6.16b, {%[wi0].16b}, v1.16b \n"  // wi0
+                "tbl            v16.16b,{%[wr1].16b}, v1.16b \n"  // wr1 (bits[3:2] of lo nibble)
+                "tbl            v17.16b,{%[wi1].16b}, v1.16b \n"  // wi1
+                "tbl            v18.16b,{%[wr0].16b}, v2.16b \n"  // wr2 (bits[1:0] of hi nibble)
+                "tbl            v19.16b,{%[wi0].16b}, v2.16b \n"  // wi2
+                "tbl            v1.16b, {%[wr1].16b}, v2.16b \n"  // wr3 (bits[3:2] of hi nibble), reuse v1
+                "tbl            v2.16b, {%[wi1].16b}, v2.16b \n"  // wi3 reuse v2
 
                 "sdot           %[ac0].4s, v8.16b,  v5.16b  \n"
                 "sdot           %[ad0].4s, v9.16b,  v5.16b  \n"
@@ -1730,27 +1739,22 @@ void ggml_vec_dot_ifairy_q16_K(
 
                 // ---- block 1: weights 64..127 ----
                 "ldr            q0, [%[w],  #16]            \n"
-                "and            v1.16b, v0.16b, %[m3].16b   \n"
-                "ushr           v2.16b, v0.16b, #2          \n"
-                "ushr           v3.16b, v0.16b, #4          \n"
-                "ushr           v4.16b, v0.16b, #6          \n"
-                "and            v2.16b, v2.16b, %[m3].16b   \n"
-                "and            v3.16b, v3.16b, %[m3].16b   \n"
-                "and            v4.16b, v4.16b, %[m3].16b   \n"
+                "and            v1.16b, v0.16b, %[m0f].16b  \n"
+                "ushr           v2.16b, v0.16b, #4          \n"
 
                 "ldp            q8,  q10, [%[xr], #64]      \n"
                 "ldp            q9,  q11, [%[xi], #64]      \n"
                 "ldp            q12, q14, [%[xr], #96]      \n"
                 "ldp            q13, q15, [%[xi], #96]      \n"
 
-                "tbl            v5.16b, {%[lr].16b}, v1.16b \n"
-                "tbl            v6.16b, {%[li].16b}, v1.16b \n"
-                "tbl            v16.16b,{%[lr].16b}, v2.16b \n"
-                "tbl            v17.16b,{%[li].16b}, v2.16b \n"
-                "tbl            v18.16b,{%[lr].16b}, v3.16b \n"
-                "tbl            v19.16b,{%[li].16b}, v3.16b \n"
-                "tbl            v1.16b, {%[lr].16b}, v4.16b \n"
-                "tbl            v2.16b, {%[li].16b}, v4.16b \n"
+                "tbl            v5.16b, {%[wr0].16b}, v1.16b \n"
+                "tbl            v6.16b, {%[wi0].16b}, v1.16b \n"
+                "tbl            v16.16b,{%[wr1].16b}, v1.16b \n"
+                "tbl            v17.16b,{%[wi1].16b}, v1.16b \n"
+                "tbl            v18.16b,{%[wr0].16b}, v2.16b \n"
+                "tbl            v19.16b,{%[wi0].16b}, v2.16b \n"
+                "tbl            v1.16b, {%[wr1].16b}, v2.16b \n"
+                "tbl            v2.16b, {%[wi1].16b}, v2.16b \n"
 
                 "sdot           %[ac0].4s, v8.16b,  v5.16b  \n"
                 "sdot           %[ad0].4s, v9.16b,  v5.16b  \n"
@@ -1773,10 +1777,10 @@ void ggml_vec_dot_ifairy_q16_K(
                 "sdot           %[bd1].4s, v15.16b, v2.16b  \n"
                 : [ac0] "+w"(acc_ac0), [ad0] "+w"(acc_ad0), [bc0] "+w"(acc_bc0), [bd0] "+w"(acc_bd0),
                   [ac1] "+w"(acc_ac1), [ad1] "+w"(acc_ad1), [bc1] "+w"(acc_bc1), [bd1] "+w"(acc_bd1)
-                : [w] "r"(w_iter), [xr] "r"(xr), [xi] "r"(xi), [m3] "w"(v_mask_3_reg), [lr] "w"(v_lut_real_reg),
-                  [li] "w"(v_lut_imag_reg)
-                : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16",
-                  "v17", "v18", "v19", "memory");
+                : [w] "r"(w_iter), [xr] "r"(xr), [xi] "r"(xi), [m0f] "w"(v_mask_0f_reg), [wr0] "w"(v_lut_wr_i0_reg),
+                  [wi0] "w"(v_lut_wi_i0_reg), [wr1] "w"(v_lut_wr_i1_reg), [wi1] "w"(v_lut_wi_i1_reg)
+                : "v0", "v1", "v2", "v5", "v6", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17",
+                  "v18", "v19", "memory");
         } // j loop
 
         // 合并四个累加 Bank
