@@ -78,6 +78,7 @@
 		"vitest-browser-svelte": "^0.1.0"
 	},
 	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.25.1",
 		"highlight.js": "^11.11.1",
 		"mode-watcher": "^1.1.0",
 		"pdfjs-dist": "^5.4.54",
@@ -89,6 +90,7 @@
 		"remark-html": "^16.0.1",
 		"remark-rehype": "^11.1.2",
 		"svelte-sonner": "^1.0.5",
-		"unist-util-visit": "^5.0.0"
+		"unist-util-visit": "^5.0.0",
+		"zod": "^4.2.1"
 	}
 }
