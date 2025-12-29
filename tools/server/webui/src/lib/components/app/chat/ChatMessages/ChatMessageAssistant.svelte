@@ -8,7 +8,6 @@
 		MarkdownContent,
 		ModelsSelector
 	} from '$lib/components/app';
-	import { ChatMessageStatsView } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
@@ -274,11 +273,14 @@
 				{:else if isLoading() && currentConfig.showMessageStats}
 					{@const liveStats = processingState.getLiveProcessingStats()}
 					{@const genStats = processingState.getLiveGenerationStats()}
+					{@const promptProgress = processingState.processingState?.promptProgress}
+					{@const isStillProcessingPrompt =
+						promptProgress && promptProgress.processed < promptProgress.total}
 
 					{#if liveStats || genStats}
 						<ChatMessageStatistics
 							isLive={true}
-							initialView={ChatMessageStatsView.READING}
+							isProcessingPrompt={!!isStillProcessingPrompt}
 							promptTokens={liveStats?.tokensProcessed}
 							promptMs={liveStats?.timeMs}
 							predictedTokens={genStats?.tokensGenerated}

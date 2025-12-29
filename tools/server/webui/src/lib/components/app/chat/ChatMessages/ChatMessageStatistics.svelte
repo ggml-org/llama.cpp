@@ -11,7 +11,9 @@
 		promptMs?: number;
 		// Live mode: when true, shows stats during streaming
 		isLive?: boolean;
-		// Initial view to show (defaults to GENERATION, but READING during processing phase)
+		// Whether prompt processing is still in progress
+		isProcessingPrompt?: boolean;
+		// Initial view to show (defaults to READING in live mode)
 		initialView?: ChatMessageStatsView;
 	}
 
@@ -21,21 +23,27 @@
 		promptTokens,
 		promptMs,
 		isLive = false,
-		initialView = ChatMessageStatsView.READING
+		isProcessingPrompt = false,
+		initialView = ChatMessageStatsView.GENERATION
 	}: Props = $props();
 
 	let activeView: ChatMessageStatsView = $state(initialView);
 	let hasAutoSwitchedToGeneration = $state(false);
 
-	// In live mode: start with READING, auto-switch to GENERATION when tokens arrive
+	// In live mode: auto-switch to GENERATION tab when prompt processing completes
 	$effect(() => {
 		if (isLive) {
-			// Auto-switch to generation tab when generation stats become available (once)
-			if (!hasAutoSwitchedToGeneration && predictedTokens && predictedTokens > 0) {
+			// Auto-switch to generation tab only when prompt processing is done (once)
+			if (
+				!hasAutoSwitchedToGeneration &&
+				!isProcessingPrompt &&
+				predictedTokens &&
+				predictedTokens > 0
+			) {
 				activeView = ChatMessageStatsView.GENERATION;
 				hasAutoSwitchedToGeneration = true;
 			} else if (!hasAutoSwitchedToGeneration) {
-				// Stay on READING until we have generation stats
+				// Stay on READING while prompt is still being processed
 				activeView = ChatMessageStatsView.READING;
 			}
 		}
