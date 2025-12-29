@@ -75,7 +75,6 @@ static __global__ void cumsum_cub_kernel(
         if (tid == 0) {
             block_carry += block_total;
         }
-        __syncthreads();
     }
 #else
     NO_DEVICE_CODE;
@@ -183,7 +182,6 @@ static __global__ void cumsum_kernel(
         if (tid == 0) {
             *s_carry += *s_chunk_total;
         }
-        __syncthreads();
     }
 }
 
