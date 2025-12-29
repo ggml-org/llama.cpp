@@ -21,7 +21,7 @@ target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
 
 if (GGML_SYCL_PROVIDER STREQUAL "oneAPI" OR GGML_SYCL_PROVIDER STREQUAL "auto")
 
-    # 3.1 Compiler Validation
+    # Compiler Validation
     if (NOT CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
         if (GGML_SYCL_PROVIDER STREQUAL "oneAPI")
             message(FATAL_ERROR "Provider 'oneAPI' requires the IntelLLVM compiler (icx/icpx). Found: ${CMAKE_CXX_COMPILER_ID}")
@@ -30,12 +30,12 @@ if (GGML_SYCL_PROVIDER STREQUAL "oneAPI" OR GGML_SYCL_PROVIDER STREQUAL "auto")
 
     check_cxx_compiler_flag("-fsycl" SUPPORTS_SYCL)
     if (NOT SUPPORTS_SYCL)
-         if (GGML_SYCL_PROVIDER STREQUAL "oneAPI")
+        if (GGML_SYCL_PROVIDER STREQUAL "oneAPI")
             message(FATAL_ERROR "Compiler '${CMAKE_CXX_COMPILER_ID}' does not support SYCL (-fsycl).")
-         endif()
+        endif()
     endif()
 
-    # 3.2 Configuration Path
+    # Configuration Path
     set(USE_MANUAL_FLAGS OFF)
     set(PACKAGE_CHECK_PASSED OFF)
 
@@ -47,7 +47,7 @@ if (GGML_SYCL_PROVIDER STREQUAL "oneAPI" OR GGML_SYCL_PROVIDER STREQUAL "auto")
         set(SYCL_PKG_TEST_DIR "${CMAKE_CURRENT_BINARY_DIR}/sycl_pkg_check")
         file(MAKE_DIRECTORY "${SYCL_PKG_TEST_DIR}")
         file(WRITE "${SYCL_PKG_TEST_DIR}/CMakeLists.txt"
-            "cmake_minimum_required(VERSION 3.12)\n"
+            "cmake_minimum_required(VERSION ${CMAKE_VERSION})\n"
             "project(SyclCheck LANGUAGES CXX)\n"
             "find_package(IntelSYCL QUIET)\n"
         )
@@ -67,7 +67,7 @@ if (GGML_SYCL_PROVIDER STREQUAL "oneAPI" OR GGML_SYCL_PROVIDER STREQUAL "auto")
                 set(PACKAGE_CHECK_PASSED ON)
             endif()
         else()
-             message(STATUS "IntelSYCL package configuration failed or crashed (known issue in oneAPI 2025.x). Falling back to manual flags.")
+            message(STATUS "IntelSYCL package configuration failed or crashed (known issue in oneAPI 2025.x). Falling back to manual flags.")
         endif()
         
         if (NOT PACKAGE_CHECK_PASSED)
@@ -90,8 +90,10 @@ if (GGML_SYCL_PROVIDER STREQUAL "oneAPI" OR GGML_SYCL_PROVIDER STREQUAL "auto")
         target_link_options(ggml-sycl PRIVATE "-fsycl")
         target_compile_definitions(ggml-sycl PRIVATE GGML_USE_SYCL)
         message(STATUS "SYCL configured via manual flags (-fsycl).")
+    elseif (GGML_SYCL_PROVIDER STREQUAL "auto" AND NOT SUPPORTS_SYCL)
+        message(FATAL_ERROR "Auto-detection of SYCL failed: compiler '${CMAKE_CXX_COMPILER_ID}' does not support SYCL (-fsycl) and no suitable SYCL package was found. Install a SYCL-enabled toolchain (e.g., Intel oneAPI) or set GGML_SYCL_PROVIDER=manual with a SYCL-capable compiler.")
     else()
-        message(FATAL_ERROR "Could not configure SYCL. Package not found/broken and compiler lacks -fsycl support.")
+        message(FATAL_ERROR "Could not configure SYCL. Package not found or broken, and manual flag configuration is disabled.")
     endif()
 
 elseif (GGML_SYCL_PROVIDER STREQUAL "manual")
