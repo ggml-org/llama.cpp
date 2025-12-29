@@ -90,7 +90,7 @@
 
 	const processingState = useProcessingState();
 	const promptProgressValue = $derived(processingState.processingState?.promptProgress);
-	const promptProgressText = $derived(() => {
+	const promptProgressText = $derived.by(() => {
 		if (!promptProgressValue) return null;
 		const { processed, total, time_ms, cache } = promptProgressValue;
 
