@@ -1,6 +1,5 @@
 <script lang="ts">
 	import {
-		BadgeChatStatistic,
 		ModelBadge,
 		ChatMessageActions,
 		ChatMessageStatistics,
@@ -9,7 +8,7 @@
 		MarkdownContent,
 		ModelsSelector
 	} from '$lib/components/app';
-	import { Clock, Gauge, WholeWord } from '@lucide/svelte';
+	import { ChatMessageStatsView } from '$lib/enums';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
@@ -274,30 +273,17 @@
 					/>
 				{:else if isLoading() && currentConfig.showMessageStats}
 					{@const liveStats = processingState.getLiveProcessingStats()}
+					{@const genStats = processingState.getLiveGenerationStats()}
 
-					{#if liveStats}
-						<div class="inline-flex items-center gap-1 px-2 text-xs text-muted-foreground">
-							<BadgeChatStatistic
-								class="bg-transparent"
-								icon={WholeWord}
-								value="{liveStats.tokensProcessed.toLocaleString()} tokens"
-								tooltipLabel="Tokens processed"
-							/>
-
-							<BadgeChatStatistic
-								class="bg-transparent"
-								icon={Clock}
-								value="{(liveStats.timeMs / 1000).toFixed(2)}s"
-								tooltipLabel="Processing time"
-							/>
-
-							<BadgeChatStatistic
-								class="bg-transparent"
-								icon={Gauge}
-								value="{liveStats.tokensPerSecond.toFixed(2)} tokens/s"
-								tooltipLabel="Processing speed"
-							/>
-						</div>
+					{#if liveStats || genStats}
+						<ChatMessageStatistics
+							isLive={true}
+							initialView={ChatMessageStatsView.READING}
+							promptTokens={liveStats?.tokensProcessed}
+							promptMs={liveStats?.timeMs}
+							predictedTokens={genStats?.tokensGenerated}
+							predictedMs={genStats?.timeMs}
+						/>
 					{/if}
 				{/if}
 			</div>
