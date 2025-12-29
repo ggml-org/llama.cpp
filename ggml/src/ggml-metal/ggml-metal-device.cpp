@@ -1475,6 +1475,37 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_rope(ggml_metal_
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_rope_comp(ggml_metal_library_t lib, const ggml_tensor * op) {
+    assert(op->op == GGML_OP_ROPE_COMP);
+
+    const int mode = ((const int32_t *) op->op_params)[14];
+
+    const bool is_mrope  = mode == GGML_ROPE_TYPE_MROPE;
+    const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE;
+    const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
+    const char * mode_name = "norm";
+    if (is_mrope) {
+        mode_name = "mrope";
+    } else if (is_imrope) {
+        mode_name = "imrope";
+    } else if (is_vision) {
+        mode_name = "vision";
+    }
+
+    char base[256];
+    char name[256];
+
+    snprintf(base, 256, "kernel_rope_comp_%s_%s", mode_name, ggml_type_name(op->src[0]->type));
+    snprintf(name, 256, "%s", base);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
+    }
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_im2col(ggml_metal_library_t lib, const ggml_tensor * op) {
     assert(op->op == GGML_OP_IM2COL);
 

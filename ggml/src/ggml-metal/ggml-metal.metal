@@ -4099,6 +4099,118 @@ static void rope_yarn_corr_dims(
     dims[1] = min(n_dims - 1.0f, ceil(rope_yarn_corr_factor(n_dims, n_ctx_orig, beta_slow, freq_base)));
 }
 
+enum ggml_rope_comp_mode {
+    GGML_ROPE_COMP_MODE_NORMAL,
+    GGML_ROPE_COMP_MODE_MROPE,
+    GGML_ROPE_COMP_MODE_IMROPE,
+    GGML_ROPE_COMP_MODE_VISION,
+};
+
+template<typename T, ggml_rope_comp_mode mode>
+kernel void kernel_rope_comp(
+        constant ggml_metal_kargs_rope_comp & args,
+        device const char * src0,
+        device const char * src1,
+        device const char * src2,
+        device       char * dst,
+        ushort  tiitg[[thread_index_in_threadgroup]],
+        ushort3 tptg [[threads_per_threadgroup]],
+        uint3   tgpig[[threadgroup_position_in_grid]]) {
+    const int i3 = tgpig[2];
+    const int i2 = tgpig[1];
+    const int i1 = tgpig[0];
+
+    const int ne2 = args.ne02;
+
+    const int sect_0 = args.sect_0;
+    const int sect_1 = args.sect_1;
+    const int sect_2 = args.sect_2;
+    const int sect_3 = args.sect_3;
+    const int sect_dims = sect_0 + sect_1 + sect_2 + sect_3;
+    const int sec_w     = sect_0 + sect_1;
+
+    device const float * pos = (device const float *) src1;
+    float th_base = pos[i2];
+
+    for (int i0 = 2*tiitg; i0 < args.ne0; i0 += 2*tptg.x) {
+        if (i0 < args.n_rot) {
+            int i_dim = i0/2;
+
+            // handle m-rope and vision rope
+            // dim: t = time, h = height, w = width, e = extra
+            if (mode == GGML_ROPE_COMP_MODE_MROPE) {
+                int sector = (i0 / 2) % sect_dims;
+                if (sector >= sect_0 && sector < sec_w) {
+                    th_base = pos[i2 + ne2]; // h
+                } else if (sector >= sec_w && sector < sec_w + sect_2) {
+                    th_base = pos[i2 + ne2 * 2]; // w
+                } else if (sector >= sec_w + sect_2) {
+                    th_base = pos[i2 + ne2 * 3]; // e
+                } else {
+                    th_base = pos[i2]; // t
+                }
+            } else if (mode == GGML_ROPE_COMP_MODE_IMROPE) {
+                int sector = (i0 / 2) % sect_dims;
+                if (sector % 3 == 1 && sector < 3 * sect_1) {
+                    th_base = pos[i2 + ne2]; // h
+                } else if (sector % 3 == 2 && sector < 3 * sect_2) {
+                    th_base = pos[i2 + ne2 * 2]; // w
+                } else if (sector % 3 == 0 && sector < 3 * sect_0) {
+                    th_base = pos[i2]; // t
+                } else {
+                    th_base = pos[i2 + ne2 * 3]; // e
+                }
+            } else if (mode == GGML_ROPE_COMP_MODE_VISION) {
+                // for vision, we reset the dim index for each section
+                // it is equivalent to running 2 rope op separatedly
+                int sector = (i0 / 2) % sec_w;
+
+                // only 2 dims are supported for vision rope
+                if (sector < sect_0) {
+                    th_base = pos[i2];
+                    i_dim = sector;
+                } else {
+                    th_base = pos[i2 + ne2];
+                    i_dim = sector - sect_0;
+                }
+            }
+
+            const float freq_factor = args.src2 ? ((device const float *) src2)[i0/2] : 1.0f;
+
+            float theta = th_base * pow(args.theta_scale, i_dim) / freq_factor;
+            const float theta_extrap = theta;
+            const float theta_interp = args.freq_scale * theta;
+
+            if (args.ramp_factor != 0.0f) {
+                const float ramp_mix = rope_yarn_ramp(args.yarn_low, args.yarn_high, i0) * args.ramp_factor;
+                theta = theta_interp * (1 - ramp_mix) + theta_extrap * ramp_mix;
+            } else {
+                theta = theta_interp;
+            }
+
+            const float cos_theta = cos(theta) * args.attn_factor;
+            const float sin_theta = sin(theta) * args.attn_factor;
+
+            const int ic = i0 / args.idx_scale;
+
+            device const T * const src = (device T *)(src0 + i3*args.nb03 + i2*args.nb02 + i1*args.nb01 + ic*args.nb00);
+            device       T * dst_data  = (device T *)( dst + i3*args.nb3  + i2*args.nb2  + i1*args.nb1  + ic*args.nb0);
+
+            const float x0 = src[0];
+            const float x1 = src[args.idx_pair];
+
+            dst_data[0]             = x0*cos_theta - x1*sin_theta;
+            dst_data[args.idx_pair] = x0*sin_theta + x1*cos_theta;
+        } else {
+            device const T * const src = (device T *)(src0 + i3*args.nb03 + i2*args.nb02 + i1*args.nb01 + i0*args.nb00);
+            device       T * dst_data  = (device T *)( dst + i3*args.nb3  + i2*args.nb2  + i1*args.nb1  + i0*args.nb0);
+
+            dst_data[0] = src[0];
+            dst_data[1] = src[1];
+        }
+    }
+}
+
 template<typename T>
 kernel void kernel_rope_norm(
         constant ggml_metal_kargs_rope & args,
@@ -4371,6 +4483,24 @@ template [[host_name("kernel_rope_multi_f16")]] kernel kernel_rope_multi_t kerne
 
 template [[host_name("kernel_rope_vision_f32")]] kernel kernel_rope_vision_t kernel_rope_vision<float>;
 template [[host_name("kernel_rope_vision_f16")]] kernel kernel_rope_vision_t kernel_rope_vision<half>;
+
+
+typedef decltype(kernel_rope_comp<float, GGML_ROPE_COMP_MODE_NORMAL>) kernel_rope_comp_norm_t;
+typedef decltype(kernel_rope_comp<float, GGML_ROPE_COMP_MODE_MROPE>) kernel_rope_comp_mrope_t;
+typedef decltype(kernel_rope_comp<float, GGML_ROPE_COMP_MODE_IMROPE>) kernel_rope_comp_imrope_t;
+typedef decltype(kernel_rope_comp<float, GGML_ROPE_COMP_MODE_VISION>) kernel_rope_comp_vision_t;
+
+template [[host_name("kernel_rope_comp_norm_f32")]] kernel kernel_rope_comp_norm_t kernel_rope_comp<float, GGML_ROPE_COMP_MODE_NORMAL>;
+template [[host_name("kernel_rope_comp_norm_f16")]] kernel kernel_rope_comp_norm_t kernel_rope_comp<half, GGML_ROPE_COMP_MODE_NORMAL>;
+
+template [[host_name("kernel_rope_comp_mrope_f32")]] kernel kernel_rope_comp_mrope_t kernel_rope_comp<float, GGML_ROPE_COMP_MODE_MROPE>;
+template [[host_name("kernel_rope_comp_mrope_f16")]] kernel kernel_rope_comp_mrope_t kernel_rope_comp<half, GGML_ROPE_COMP_MODE_MROPE>;
+
+template [[host_name("kernel_rope_comp_imrope_f32")]] kernel kernel_rope_comp_imrope_t kernel_rope_comp<float, GGML_ROPE_COMP_MODE_IMROPE>;
+template [[host_name("kernel_rope_comp_imrope_f16")]] kernel kernel_rope_comp_imrope_t kernel_rope_comp<half, GGML_ROPE_COMP_MODE_IMROPE>;
+
+template [[host_name("kernel_rope_comp_vision_f32")]] kernel kernel_rope_comp_vision_t kernel_rope_comp<float, GGML_ROPE_COMP_MODE_VISION>;
+template [[host_name("kernel_rope_comp_vision_f16")]] kernel kernel_rope_comp_vision_t kernel_rope_comp<half, GGML_ROPE_COMP_MODE_VISION>;
 
 typedef void (im2col_t)(
         constant ggml_metal_kargs_im2col & args,

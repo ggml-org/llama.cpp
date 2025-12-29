@@ -991,6 +991,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "SOFT_MAX",
     "SOFT_MAX_BACK",
     "ROPE",
+    "ROPE_COMP",
     "ROPE_BACK",
     "CLAMP",
     "CONV_TRANSPOSE_1D",
@@ -1045,7 +1046,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1154,7 +1155,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -4261,8 +4262,126 @@ void ggml_rope_yarn_corr_dims(
     // start and end correction dims
     float start = floorf(ggml_rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_fast, freq_base));
     float end   =  ceilf(ggml_rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_slow, freq_base));
-    dims[0] = MAX(0, start);
-    dims[1] = MIN(n_dims - 1, end);
+    dims[0] = MAX(0, start);        // yarn_low  (see rope.cu)
+    dims[1] = MIN(n_dims - 1, end); // yarn_high (see rope.cu)
+}
+
+// ggml_rope_comp
+
+GGML_API struct ggml_tensor * ggml_rope_comp(
+        struct ggml_context   * ctx,
+        struct ggml_tensor    * a,
+        struct ggml_tensor    * b,
+        int32_t                 n_rot,
+        float                   theta_scale,
+        enum ggml_rope_ordering ordering) {
+    GGML_ASSERT(b->type == GGML_TYPE_F32);
+    GGML_ASSERT(b->ne[0] == a->ne[2]);
+    GGML_ASSERT(b->ne[1] == 1 || b->ne[1] == GGML_MROPE_SECTIONS);
+
+    int32_t idx_pair  = 1;
+    int32_t idx_scale = 1;
+    if (ordering == GGML_ROPE_ORDERING_NEOX) {
+        idx_pair  = n_rot / 2;
+        idx_scale = 2;
+    }
+
+    int32_t i_zero = 0;
+    float   f_zero = 0.0f;
+    float   f_one  = 1.0f;
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+    int32_t params[15];
+    memset(params, 0, sizeof(params));
+    memcpy(params +  0, &n_rot,       sizeof(int32_t)); // n_rot
+    memcpy(params +  1, &idx_pair,    sizeof(int32_t)); // idx_pair
+    memcpy(params +  2, &idx_scale,   sizeof(int32_t)); // idx_scale
+    memcpy(params +  3, &i_zero,      sizeof(int32_t)); // idx_offset (for future use)
+    memcpy(params +  4, &theta_scale, sizeof(float));   // theta_scale
+    memcpy(params +  5, &f_zero,      sizeof(float));   // yarn_high
+    memcpy(params +  6, &f_zero,      sizeof(float));   // yarn_low
+    memcpy(params +  7, &f_one,       sizeof(float));   // freq_scale
+    memcpy(params +  8, &f_one,       sizeof(float));   // attn_factor
+    memcpy(params +  9, &f_zero,      sizeof(float));   // ramp_factor
+    memcpy(params + 10, &i_zero,      sizeof(int32_t)); // sections[0]
+    memcpy(params + 11, &i_zero,      sizeof(int32_t)); // sections[1]
+    memcpy(params + 12, &i_zero,      sizeof(int32_t)); // sections[2]
+    memcpy(params + 13, &i_zero,      sizeof(int32_t)); // sections[3]
+    memcpy(params + 14, &i_zero,      sizeof(int32_t)); // mode
+    ggml_set_op_params(result, params, sizeof(params));
+
+    result->op     = GGML_OP_ROPE_COMP;
+    result->src[0] = a;
+    result->src[1] = b;
+    result->src[2] = NULL;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_rope_comp_set_freq_factors(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * node,
+            struct ggml_tensor  * freq_factors) {
+    GGML_UNUSED(ctx);
+    GGML_ASSERT(node->op == GGML_OP_ROPE_COMP);
+    GGML_ASSERT(freq_factors->type == GGML_TYPE_F32);
+
+    const int32_t n_rot = *((int32_t *) node->op_params + 0);
+    GGML_ASSERT(freq_factors->ne[0] >= n_rot / 2);
+
+    node->src[2] = freq_factors;
+
+    return node;
+}
+
+struct ggml_tensor * ggml_rope_comp_set_yarn(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * node,
+        int                   n_ctx_orig,
+        int                   n_dims,
+        float                 freq_base,
+        float                 freq_scale,
+        float                 ramp_factor,
+        float                 attn_factor,
+        float                 beta_fast,
+        float                 beta_slow) {
+    GGML_UNUSED(ctx);
+    GGML_ASSERT(node->op == GGML_OP_ROPE_COMP);
+
+    const float start     = floorf(ggml_rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_fast, freq_base));
+    const float end       =  ceilf(ggml_rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_slow, freq_base));
+    const float yarn_low  = MAX(0, start);
+    const float yarn_high = MIN(n_dims - 1, end);
+
+    memcpy((float *) node->op_params +  5, &yarn_high,   sizeof(float));
+    memcpy((float *) node->op_params +  6, &yarn_low,    sizeof(float));
+    memcpy((float *) node->op_params +  7, &freq_scale,  sizeof(float));
+    memcpy((float *) node->op_params +  8, &attn_factor, sizeof(float));
+    memcpy((float *) node->op_params +  9, &ramp_factor, sizeof(float));
+    return node;
+}
+
+struct ggml_tensor * ggml_rope_comp_set_multi(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * node,
+            int                   mode,
+            int                   sections[GGML_MROPE_SECTIONS]) {
+    GGML_UNUSED(ctx);
+    GGML_ASSERT(node->op == GGML_OP_ROPE_COMP);
+
+    bool is_mrope  = mode == GGML_ROPE_TYPE_MROPE;
+    bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE;
+    bool is_vision = mode == GGML_ROPE_TYPE_VISION;
+
+    GGML_ASSERT(is_mrope || is_imrope || is_vision);
+    GGML_ASSERT(node->src[1]->ne[1] == GGML_MROPE_SECTIONS);
+
+    memcpy(node->op_params + 10, &sections[0], sizeof(int32_t));
+    memcpy(node->op_params + 11, &sections[1], sizeof(int32_t));
+    memcpy(node->op_params + 12, &sections[2], sizeof(int32_t));
+    memcpy(node->op_params + 13, &sections[3], sizeof(int32_t));
+    memcpy(node->op_params + 14, &mode,        sizeof(int32_t));
+    return node;
 }
 
 // ggml_rope_back
@@ -6848,6 +6967,7 @@ void ggml_build_backward_expand(
             case GGML_OP_GET_ROWS:      // row indices not differentiable
             case GGML_OP_GET_ROWS_BACK: // same as for GET_ROWS
             case GGML_OP_ROPE:          // positions not differentiable
+            case GGML_OP_ROPE_COMP:     // same as for ROPE
                 ignore_src[1] = true;
                 break;
 
