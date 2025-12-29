@@ -20,32 +20,31 @@ If AI is used to generate any portion of the code, contributors must adhere to t
 1. Explicitly disclose the manner in which AI was employed.
 2. Perform a comprehensive manual review prior to submitting the pull request.
 3. Be prepared to explain every line of code submitted if asked about it by a maintainer.
-4. Using AI to respond to human reviewer is strictly prohibited. Human-to-human communication ensures the most effective review process.
+4. Using AI to respond to human reviewer is strictly prohibited.
 
 For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 
 # Pull requests (for contributors & collaborators)
 
+Before submitting your PR:
+- Search for existing PRs to prevent duplicating efforts
 - llama.cpp uses the ggml tensor library for model evaluation. If you are unfamiliar with ggml, consider taking a look at the [examples in the ggml repository](https://github.com/ggml-org/ggml/tree/master/examples/). [simple](https://github.com/ggml-org/ggml/tree/master/examples/simple) shows the bare minimum for using ggml. [gpt-2](https://github.com/ggml-org/ggml/tree/master/examples/gpt-2) has minimal implementations for language model inference using GPT-2. [mnist](https://github.com/ggml-org/ggml/tree/master/examples/mnist) demonstrates how to train and evaluate a simple image classifier
 - Test your changes:
     - Execute [the full CI locally on your machine](ci/README.md) before publishing
     - Verify that the perplexity and the performance are not affected negatively by your changes (use `llama-perplexity` and `llama-bench`)
     - If you modified the `ggml` source, run the `test-backend-ops` tool to check whether different backend implementations of the `ggml` operators produce consistent results (this requires access to at least two different `ggml` backends)
     - If you modified a `ggml` operator or added a new one, add the corresponding test cases to `test-backend-ops`
-- Create separate PRs for each feature or fix. Avoid combining unrelated changes in a single PR
-- When adding support for a new model or feature, focus on **CPU support only** in the initial PR unless you have a good reason not to. Add support for other backends like CUDA in follow-up PRs
-- Consider allowing write access to your branch for faster reviews, as reviewers can push commits directly
-- If your PR becomes stale, rebase it on top of latest `master` to get maintainers attention
+- Create separate PRs for each feature or fix:
+    - Avoid combining unrelated changes in a single PR
+    - For intricate features, consider opening a feature request first to discuss and align expectations
+    - When adding support for a new model or feature, focus on **CPU support only** in the initial PR unless you have a good reason not to. Add support for other backends like CUDA in follow-up PRs
+- Consider allowing write access to your branch for faster reviews, as reviewers can push commits directlyPRs
+
+After submitting your PR:
+- Expect requests for modifications to ensure the code meets llama.cpp's standards for quality and long-term maintainability
 - Maintainers will rely on your insights and approval when making a final decision to approve and merge a PR
-- Consider adding yourself to [CODEOWNERS](CODEOWNERS) to indicate your availability for reviewing related PRs
-
-## Post-Submission Expectations
-
-After submitting a pull request (PR), anticipate requests for changes to align with llama.cpp's code quality and maintenance standards. Your code must not only function correctly but also be well-structured to reduce long-term upkeep for the project.
-
-## Handling Reviews and Rejections
-
-It is unfortunately sometimes necessary to reject PRs for the project's overall health. In such cases maintainers hold final say on merge criteria. For complex features, consider opening a feature request first to discuss and align expectations.
+- If your PR becomes stale, rebase it on top of latest `master` to get maintainers attention
+- Consider adding yourself to [CODEOWNERS](CODEOWNERS) to indicate your availability for reviewing related 
 
 # Pull requests (for maintainers)
 
