@@ -303,11 +303,17 @@ class ChatStore {
 		const currentConfig = config();
 		const outputTokensMax = currentConfig.max_tokens || -1;
 
+		// Note: for timings data, the n_prompt does NOT include cache tokens
 		const contextUsed = promptTokens + cacheTokens + predictedTokens;
 		const outputTokensUsed = predictedTokens;
 
+		// Note: for prompt progress, the "processed" DOES include cache tokens
+		// we need to exclude them to get the real prompt tokens processed count
+		const progressCache = promptProgress?.cache || 0;
+		const progressActualDone = (promptProgress?.processed ?? 0) - progressCache;
+		const progressActualTotal = (promptProgress?.total ?? 0) - progressCache;
 		const progressPercent = promptProgress
-			? Math.round((promptProgress.processed / promptProgress.total) * 100)
+			? Math.round((progressActualDone / progressActualTotal) * 100)
 			: undefined;
 
 		return {

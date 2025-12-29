@@ -6,6 +6,7 @@ export interface LiveProcessingStats {
 	totalTokens: number;
 	timeMs: number;
 	tokensPerSecond: number;
+	etaSecs?: number;
 }
 
 export interface LiveGenerationStats {
@@ -81,6 +82,15 @@ export function useProcessingState(): UseProcessingStateReturn {
 			}
 		}
 	});
+
+	function getETASecs(done: number, total: number, elapsedMs: number): number | undefined {
+		const elapsedSecs = elapsedMs / 1000;
+		const progressETASecs =
+			done === 0 || elapsedSecs < 0.5
+				? undefined // can be the case for the 0% progress report
+				: elapsedSecs * (total / done - 1);
+		return progressETASecs;
+	}
 
 	function startMonitoring(): void {
 		if (isMonitoring) return;
@@ -178,6 +188,12 @@ export function useProcessingState(): UseProcessingStateReturn {
 		const actualProcessed = processed - cache;
 		const actualTotal = total - cache;
 		const percent = Math.round((actualProcessed / actualTotal) * 100);
+		const eta = getETASecs(actualProcessed, actualTotal, processingState.promptProgress.time_ms);
+
+		if (eta !== undefined) {
+			const etaSecs = Math.ceil(eta);
+			return `Processing ${percent}% (ETA: ${etaSecs}s)`;
+		}
 
 		return `Processing ${percent}%`;
 	}
