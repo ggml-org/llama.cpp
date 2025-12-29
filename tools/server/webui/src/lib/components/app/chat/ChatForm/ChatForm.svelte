@@ -59,13 +59,12 @@
 
 	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
-	let currentConfig = $derived(config());
 	let fileAcceptString = $state<string | undefined>(undefined);
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
 	let isRecording = $state(false);
 	let message = $state('');
 	let pasteLongTextToFileLength = $derived.by(() => {
-		const n = Number(currentConfig.pasteLongTextToFileLen);
+		const n = Number(settingsStore.getConfig('pasteLongTextToFileLen'));
 		if (!Number.isNaN(n)) {
 			return n;
 		}

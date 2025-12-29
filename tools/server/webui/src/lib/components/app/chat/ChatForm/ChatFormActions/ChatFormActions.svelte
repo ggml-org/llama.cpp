@@ -42,7 +42,6 @@
 		onStop
 	}: Props = $props();
 
-	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 
 	let conversationModel = $derived(
@@ -117,7 +116,7 @@
 		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
 	);
 	let shouldShowRecordButton = $derived(
-		hasAudioModality && !hasText && !hasAudioAttachments && currentConfig.autoMicOnEmpty
+		hasAudioModality && !hasText && !hasAudioAttachments && settingsStore.getConfig('autoMicOnEmpty')
 	);
 
 	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());

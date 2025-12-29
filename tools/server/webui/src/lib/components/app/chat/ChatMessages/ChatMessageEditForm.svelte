@@ -58,10 +58,9 @@
 	let saveWithoutRegenerate = $state(false);
 	let showDiscardDialog = $state(false);
 	let isRouter = $derived(isRouterMode());
-	let currentConfig = $derived(config());
 
 	let pasteLongTextToFileLength = $derived.by(() => {
-		const n = Number(currentConfig.pasteLongTextToFileLen);
+		const n = Number(settingsStore.getConfig('pasteLongTextToFileLen'));
 
 		if (!Number.isNaN(n)) {
 			return n;
