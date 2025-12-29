@@ -314,6 +314,13 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 
+    if (amd_wmma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
+        if (can_use_vector_kernel && Q->ne[1] <= 2) {
+            return BEST_FATTN_KERNEL_VEC;
+        }
+        return BEST_FATTN_KERNEL_MMA_F16;
+    }
+
     if (volta_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
         int gqa_ratio_eff = 1;
         const int ncols2_max = Q->ne[0] == 576 ? 16 : 8;
