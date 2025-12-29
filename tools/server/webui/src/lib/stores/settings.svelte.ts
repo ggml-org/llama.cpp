@@ -472,6 +472,5 @@ class SettingsStore {
 
 export const settingsStore = new SettingsStore();
 
-export const config = () => settingsStore.config;
 export const theme = () => settingsStore.theme;
 export const isInitialized = () => settingsStore.isInitialized;
