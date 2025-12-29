@@ -72,6 +72,7 @@
 
 		const placeholder = settingsStore.getParameterPlaceholder('pasteLongTextToFileLen');
 		const placeholderNumber = Number(placeholder);
+
 		return Number.isNaN(placeholderNumber) ? 0 : placeholderNumber;
 	});
 	let previousIsLoading = $state(isLoading);
