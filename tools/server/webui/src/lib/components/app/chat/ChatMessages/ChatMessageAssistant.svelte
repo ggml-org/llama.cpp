@@ -1,5 +1,7 @@
 <script lang="ts">
 	import {
+		AgenticContent,
+		ModelBadge,
 		ChatMessageActions,
 		ChatMessageStatistics,
 		MarkdownContent,
@@ -123,23 +125,11 @@
 	// Get edit context
 	const editCtx = getMessageEditContext();
 
-	// Local state for assistant-specific editing
-	let shouldBranchAfterEdit = $state(false);
+	// Check if content contains agentic tool call markers
+	const isAgenticContent = $derived(
+		messageContent?.includes('<!-- AGENTIC_TOOL_CALL_START -->') ?? false
+	);
 
-	function handleEditKeydown(event: KeyboardEvent) {
-		if (event.key === KeyboardKey.ENTER && !event.shiftKey && !isIMEComposing(event)) {
-			event.preventDefault();
-			editCtx.save();
-		} else if (event.key === KeyboardKey.ESCAPE) {
-			event.preventDefault();
-			editCtx.cancel();
-		}
-	}
-
-	const parsedMessageContent = $derived.by(() => parseReasoningContent(messageContent));
-	const visibleMessageContent = $derived(parsedMessageContent.content);
-	const thinkingContent = $derived(parsedMessageContent.reasoningContent);
-	const hasReasoningMarkers = $derived(parsedMessageContent.hasReasoningMarkers);
 	const processingState = useProcessingState();
 
 	let currentConfig = $derived(config());
@@ -298,6 +288,8 @@
 	{:else if message.role === MessageRole.ASSISTANT}
 		{#if showRawOutput}
 			<pre class="raw-output">{messageContent || ''}</pre>
+		{:else if isAgenticContent}
+			<AgenticContent content={messageContent || ''} />
 		{:else}
 			<MarkdownContent content={visibleMessageContent || ''} attachments={message.extra} />
 		{/if}

@@ -24,6 +24,8 @@ export { default as ChatFormActionSubmit } from './chat/ChatForm/ChatFormActions
 export { default as ChatFormFileInputInvisible } from './chat/ChatForm/ChatFormFileInputInvisible.svelte';
 export { default as ChatFormHelperText } from './chat/ChatForm/ChatFormHelperText.svelte';
 export { default as ChatFormTextarea } from './chat/ChatForm/ChatFormTextarea.svelte';
+
+export { default as AgenticContent } from './chat/ChatMessages/AgenticContent.svelte';
 export { default as ChatMessage } from './chat/ChatMessages/ChatMessage.svelte';
 export { default as ChatMessageActions } from './chat/ChatMessages/ChatMessageActions.svelte';
 export { default as ChatMessageAssistant } from './chat/ChatMessages/ChatMessageAssistant.svelte';
