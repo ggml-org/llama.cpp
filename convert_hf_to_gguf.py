@@ -1230,6 +1230,9 @@ class TextModel(ModelBase):
         if chkhsh == "4a2e2abae11ca2b86d570fc5b44be4d5eb5e72cc8f22dd136a94b37da83ab665":
             # ref: https://huggingface.co/KORMo-Team/KORMo-tokenizer
             res = "kormo"
+        if chkhsh == "9d70134b369a70e5735009b6de918f7581b5211f7c074d1f89f753aea8248af1":
+            # ref: ./Youtu-VL
+            res = "youtu-vl"
 
         if res is None:
             logger.warning("\n")
@@ -7181,6 +7184,7 @@ class DeepseekModel(TextModel):
     "DeepseekV2ForCausalLM",
     "DeepseekV3ForCausalLM",
     "KimiVLForConditionalGeneration",
+    "YOUTUVLForCausalLM",
 )
 class DeepseekV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
@@ -7259,11 +7263,26 @@ class DeepseekV2Model(TextModel):
         self.gguf_writer.add_key_length_mla(hparams["qk_nope_head_dim"] + hparams["qk_rope_head_dim"])
         self.gguf_writer.add_value_length_mla(hparams["v_head_dim"])
 
-        self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
-        self.gguf_writer.add_expert_count(hparams["n_routed_experts"])
-        self.gguf_writer.add_expert_shared_count(hparams["n_shared_experts"])
-        self.gguf_writer.add_expert_weights_scale(hparams["routed_scaling_factor"])
-        self.gguf_writer.add_expert_weights_norm(hparams["norm_topk_prob"])
+        if (moe_intermediate_size := hparams.get("moe_intermediate_size")) is not None:
+            self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+        else:
+            self.gguf_writer.add_expert_feed_forward_length(hparams.get("intermediate_size", 0))
+        
+        if (n_routed_experts := hparams.get("n_routed_experts")) is not None:
+            self.gguf_writer.add_expert_count(n_routed_experts)
+        
+        if (n_shared_experts := hparams.get("n_shared_experts")) is not None:
+            self.gguf_writer.add_expert_shared_count(n_shared_experts)
+        else:
+            self.gguf_writer.add_expert_shared_count(0)
+        
+        if (routed_scaling_factor := hparams.get("routed_scaling_factor")) is not None:
+            self.gguf_writer.add_expert_weights_scale(routed_scaling_factor)
+        else:
+            self.gguf_writer.add_expert_weights_scale(1.0)
+        
+        if (norm_topk_prob := hparams.get("norm_topk_prob")) is not None and norm_topk_prob:
+            self.gguf_writer.add_expert_weights_norm(norm_topk_prob)
 
         self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
 
@@ -7279,9 +7298,16 @@ class DeepseekV2Model(TextModel):
         # skip vision tensors and remove "language_model." for Kimi-VL
         if "vision_tower" in name or "multi_modal_projector" in name:
             return []
-
+        if name.startswith("siglip2.") or name.startswith("merger."):
+            return []
         if name.startswith("language_model."):
             name = name.replace("language_model.", "")
+
+        # skip lm_head.weight if tie_word_embeddings is True
+        if self.hparams.get("tie_word_embeddings", False):
+            if name == "lm_head.weight" or name == "model.lm_head.weight":
+                logger.info("Skipping tied output layer 'lm_head.weight' (will use token_embd.weight)")
+                return []
 
         # rename e_score_correction_bias tensors
         if name.endswith("e_score_correction_bias"):
@@ -7294,7 +7320,7 @@ class DeepseekV2Model(TextModel):
             return []
 
         # process the experts separately
-        if name.find("mlp.experts") != -1:
+        if name.find("mlp.experts") != -1 and self.hparams.get("n_routed_experts") is not None:
             n_experts = self.hparams["n_routed_experts"]
             assert bid is not None
 
@@ -10603,7 +10629,53 @@ class JanusProVisionModel(MmprojModel):
 
         return []
 
-
+@ModelBase.register("YOUTUVLForConditionalGeneration", "YOUTUVLForCausalLM")
+class YOUTUVLVisionModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        self.hparams_vision["image_size"] = self.hparams_vision.get("image_size", 560)
+    
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.YOUTUVL)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-6))
+        
+        # Handle activation function
+        hidden_act = str(self.hparams.get("hidden_act", "gelu_pytorch_tanh")).lower()
+        if hidden_act in ("gelu", "gelu_pytorch_tanh", "gelu_fast", "gelu_new", "gelu_accurate"):
+            self.gguf_writer.add_vision_use_gelu(True)
+        elif hidden_act == "silu":
+            self.gguf_writer.add_vision_use_silu(True)
+        else:
+            raise ValueError(f"Unsupported activation function for YOUTUVL: {hidden_act}")
+        
+        self.gguf_writer.add_vision_spatial_merge_size(self.hparams.get("spatial_merge_size", 2))
+        
+        window_size = self.hparams.get("window_size")
+        if window_size is not None:
+            self.gguf_writer.add_vision_window_size(window_size)
+        fullatt_block_indexes = self.hparams.get("fullatt_block_indexes")
+        assert fullatt_block_indexes is not None, "fullatt_block_indexes is required for youtuvl"
+        self.gguf_writer.add_vision_wa_layers(layers=fullatt_block_indexes)
+        
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+        
+        # Skip language model tensors
+        skip_prefixes = ('lm_head.', 'model.layers.', 'model.embed_tokens.', 'model.norm.')
+        if name.startswith(skip_prefixes):
+            return []
+        
+        # Try to map the tensor using TensorNameMap (handles vision encoder and projector)
+        try:
+            new_name = self.map_tensor_name(name)
+            return [(new_name, data_torch)]
+        except ValueError:
+            # If mapping fails, log warning and skip
+            logger.warning(f"Cannot map tensor: {name}")
+            return []  
 ###### CONVERSION LOGIC ######
 
 
