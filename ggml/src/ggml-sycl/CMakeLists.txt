@@ -39,28 +39,33 @@ if (WIN32)
     endif()
 endif()
 
-# Intel oneAPI 2025.x ships a broken IntelSYCLConfig.cmake
-# (SYCL_FEATURE_TEST_EXTRACT invocation error)
-# Until fixed upstream by Intel, bypass find_package(IntelSYCL)
-# and rely on manual SYCL flags in the else() block below.
-option(GGML_SYCL_USE_FIND_PACKAGE "Try to use find_package(IntelSYCL)" OFF)
-
-if (GGML_SYCL_USE_FIND_PACKAGE)
-    find_package(IntelSYCL)
-else()
-    message(STATUS "Skipping find_package(IntelSYCL); using manual SYCL flags (oneAPI 2025.x workaround)")
+# Attempt to find IntelSYCL package first. Some compiler versions may have
+# incompatible configuration files, so we skip the package detection for those
+# and use manual SYCL flags instead.
+set(SHOULD_TRY_INTELSYCL_PACKAGE ON)
+if (CMAKE_CXX_COMPILER_ID MATCHES "IntelLLVM")
+    if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "2025.0" AND 
+        CMAKE_CXX_COMPILER_VERSION VERSION_LESS "2026.0")
+        set(SHOULD_TRY_INTELSYCL_PACKAGE OFF)
+    endif()
 endif()
 
-if (GGML_SYCL_USE_FIND_PACKAGE AND IntelSYCL_FOUND)
-    # Use oneAPI CMake when possible
+if (SHOULD_TRY_INTELSYCL_PACKAGE)
+    find_package(IntelSYCL QUIET)
+endif()
+
+if (IntelSYCL_FOUND)
+    # Use IntelSYCL package when available
+    message(STATUS "Using IntelSYCL package")
     target_link_libraries(ggml-sycl PRIVATE IntelSYCL::SYCL_CXX)
-else()
-    if (NOT SUPPORTS_SYCL)
-        message(FATAL_ERROR "C++ compiler does not support SYCL (-fsycl missing).")
-    endif()
-    # Fallback to the simplest way of enabling SYCL when using intel/llvm nightly for instance
+elseif (SUPPORTS_SYCL)
+    # Package not available or skipped - use manual flags
+    message(STATUS "Using manual SYCL flags")
     target_compile_options(ggml-sycl PRIVATE "-fsycl")
     target_link_options(ggml-sycl PRIVATE "-fsycl")
+else()
+    # No working SYCL environment detected
+    message(FATAL_ERROR "C++ compiler does not support SYCL (-fsycl missing) and IntelSYCL package not found.")
 endif()
 
 target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
