@@ -2850,12 +2850,11 @@ static void ggml_vk_load_shaders(vk_device& device) {
             m_warptile_mmq = m_warptile_mmq_int = { 256, 64, 64, 32, 16, 16, 2, 2, 2, 1, 16 };
             m_warptile_mmqid = m_warptile_mmqid_int = { 256, 64, 64, 32, 16, 16, 2, 2, 2, 1, 16 };
         }
-        else if ((device->vendor_id == VK_VENDOR_ID_INTEL)) {
+        else if (device->vendor_id == VK_VENDOR_ID_INTEL) {
             if (device->coopmat_support && device->architecture == INTEL_XE2) {
                 // Xe2/Xe3 with coopmat enabled - warptile performance tuning
-                m_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
-                m_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
-                m_mmq_wg_denoms = m_wg_denoms = { 128, 128, 1 };
+                l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
+                l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             }
         }
 
@@ -4876,10 +4875,15 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #ifndef GGML_VULKAN_RUN_TESTS
             case VK_VENDOR_ID_AMD:
             case VK_VENDOR_ID_INTEL:
-                device->mul_mat_l[i] = false;
+                if (!device->coopmat_support || device->architecture != INTEL_XE2) {
+                    device->mul_mat_l[i] = false;
+                    device->mul_mat_id_l[i] = false;
+                } else {
+                    device->mul_mat_l[i] = true;  // if coopmat & XE2+, allow large matmul warptile config for Intel
+                    device->mul_mat_id_l[i] = true;
+                }
                 device->mul_mat_m[i] = true;
                 device->mul_mat_s[i] = true;
-                device->mul_mat_id_l[i] = false;
                 device->mul_mat_id_m[i] = true;
                 device->mul_mat_id_s[i] = true;
                 break;
