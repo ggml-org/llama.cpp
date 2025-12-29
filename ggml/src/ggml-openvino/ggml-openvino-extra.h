@@ -146,6 +146,7 @@ struct ggml_openvino_extracted_layout {
     size_t biases_size;       // Size of biases in bytes
     bool is_u4;               // true for U4 weights, false for U8
     int64_t weights_per_block;// weights per scale/bias block
+    bool is_symmetric;        // true for symmetric quantization
 
     // Requantization info
     bool is_requant;                              // true if this tensor needs requantization

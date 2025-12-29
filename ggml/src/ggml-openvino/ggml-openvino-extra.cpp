@@ -192,6 +192,7 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
 
 ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_tensor * tensor) {
     ggml_openvino_extracted_layout layout = {};
+    layout.is_symmetric = false;
 
     if (!ggml_is_quantized(tensor->type)) {
         return layout;
@@ -225,10 +226,26 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
         case ExtraQuantType::Q4_0_128:
             layout.is_u4 = true;
             layout.weights_per_block = 128;
+            layout.is_symmetric = true;
+            break;
+        case ExtraQuantType::Q4_0_C:
+            layout.is_u4 = true;
+            layout.weights_per_block = tensor->ne[0];
+            layout.is_symmetric = true;
             break;
         case ExtraQuantType::Q8_0_32:
             layout.is_u4 = false;
             layout.weights_per_block = 32;
+            layout.is_symmetric = true;
+            break;
+        case ExtraQuantType::Q8_0_C:
+            layout.is_u4 = false;
+            layout.weights_per_block = tensor->ne[0];
+            layout.is_symmetric = true;
+            break;
+        case ExtraQuantType::Q8_1_C:
+            layout.is_u4 = false;
+            layout.weights_per_block = tensor->ne[0];
             break;
         default:
             layout.weights_per_block = -1;
@@ -241,7 +258,8 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
             layout.weights_size = layout.is_u4 ? (n_elements / 2) : n_elements;
             int64_t n_blocks = n_elements / layout.weights_per_block;
             layout.scales_size = n_blocks * sizeof(uint16_t);
-            layout.biases_size = n_blocks * sizeof(uint16_t);
+            // For symmetric quantization, we only need one bias value (not one per block)
+            layout.biases_size = layout.is_symmetric ? sizeof(uint16_t) : n_blocks * sizeof(uint16_t);
 
             layout.weights_offset = 0;
             layout.scales_offset = ((layout.weights_size + alignment - 1) / alignment) * alignment;
@@ -256,7 +274,14 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     // Normal extraction (no requant) - determine format based on tensor type
     switch (tensor->type) {
     case GGML_TYPE_Q4_0:
+        layout.is_u4 = true;
+        layout.weights_per_block = 32;
+        layout.is_symmetric = true;
+        break;
     case GGML_TYPE_Q4_1:
+        layout.is_u4 = true;
+        layout.weights_per_block = 32;
+        break;
     case GGML_TYPE_Q4_K:
         layout.is_u4 = true;
         layout.weights_per_block = 32;
@@ -264,10 +289,12 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     case GGML_TYPE_Q8_0:
         layout.is_u4 = false;
         layout.weights_per_block = 32;
+        layout.is_symmetric = true;
         break;
     case GGML_TYPE_Q6_K:
         layout.is_u4 = false;
         layout.weights_per_block = 16;
+        layout.is_symmetric = true;
         break;
     case GGML_TYPE_Q5_K:
         layout.is_u4 = false;
@@ -285,7 +312,8 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     // Scales and biases: F16 per block
     int64_t n_blocks = n_elements / layout.weights_per_block;
     layout.scales_size = n_blocks * sizeof(uint16_t);  // F16 = 2 bytes
-    layout.biases_size = n_blocks * sizeof(uint16_t);  // F16 = 2 bytes
+    // For symmetric quantization, we only need one bias value (not one per block)
+    layout.biases_size = layout.is_symmetric ? sizeof(uint16_t) : n_blocks * sizeof(uint16_t);
 
     // Layout in buffer: [weights | scales | biases] with alignment
     layout.weights_offset = 0;
