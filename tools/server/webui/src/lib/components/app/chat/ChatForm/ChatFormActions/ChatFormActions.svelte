@@ -116,7 +116,10 @@
 		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
 	);
 	let shouldShowRecordButton = $derived(
-		hasAudioModality && !hasText && !hasAudioAttachments && settingsStore.getConfig('autoMicOnEmpty')
+		hasAudioModality &&
+			!hasText &&
+			!hasAudioAttachments &&
+			settingsStore.getConfig('autoMicOnEmpty')
 	);
 
 	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
