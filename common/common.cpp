@@ -251,7 +251,7 @@ bool set_process_priority(enum ggml_sched_priority prio) {
         case GGML_SCHED_PRIO_REALTIME: p = -20; break;
     }
 
-    if (!setpriority(PRIO_PROCESS, 0, p)) {
+    if (setpriority(PRIO_PROCESS, 0, p) != 0) {
         LOG_WRN("failed to set process priority %d : %s (%d)\n", prio, strerror(errno), errno);
         return false;
     }

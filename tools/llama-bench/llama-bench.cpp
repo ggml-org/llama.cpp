@@ -2037,7 +2037,10 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    set_process_priority(params.prio);
+    if (!set_process_priority(params.prio)) {
+        fprintf(stderr, "%s: error: failed to set process priority\n", __func__);
+        return 1;
+    }
 
     // initialize printer
     std::unique_ptr<printer> p     = create_printer(params.output_format);
