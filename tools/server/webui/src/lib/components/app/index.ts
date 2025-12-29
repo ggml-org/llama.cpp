@@ -15,6 +15,7 @@ export { default as ChatFormFileInputInvisible } from './chat/ChatForm/ChatFormF
 export { default as ChatFormHelperText } from './chat/ChatForm/ChatFormHelperText.svelte';
 export { default as ChatFormTextarea } from './chat/ChatForm/ChatFormTextarea.svelte';
 
+export { default as AgenticContent } from './chat/ChatMessages/AgenticContent.svelte';
 export { default as ChatMessage } from './chat/ChatMessages/ChatMessage.svelte';
 export { default as ChatMessageActions } from './chat/ChatMessages/ChatMessageActions.svelte';
 export { default as ChatMessageBranchingControls } from './chat/ChatMessages/ChatMessageBranchingControls.svelte';

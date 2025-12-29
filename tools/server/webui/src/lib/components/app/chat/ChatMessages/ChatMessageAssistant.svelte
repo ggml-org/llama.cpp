@@ -1,5 +1,6 @@
 <script lang="ts">
 	import {
+		AgenticContent,
 		ModelBadge,
 		ChatMessageActions,
 		ChatMessageStatistics,
@@ -87,6 +88,11 @@
 		Array.isArray(toolCallContent) ? (toolCallContent as ApiChatCompletionToolCall[]) : null
 	);
 	const fallbackToolCalls = $derived(typeof toolCallContent === 'string' ? toolCallContent : null);
+
+	// Check if content contains agentic tool call markers
+	const isAgenticContent = $derived(
+		messageContent?.includes('<!-- AGENTIC_TOOL_CALL_START -->') ?? false
+	);
 
 	const processingState = useProcessingState();
 
@@ -240,6 +246,8 @@
 	{:else if message.role === 'assistant'}
 		{#if config().disableReasoningFormat}
 			<pre class="raw-output">{messageContent || ''}</pre>
+		{:else if isAgenticContent}
+			<AgenticContent content={messageContent || ''} />
 		{:else}
 			<MarkdownContent content={messageContent || ''} />
 		{/if}
