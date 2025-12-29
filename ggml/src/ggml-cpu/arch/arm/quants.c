@@ -1627,6 +1627,24 @@ void ggml_vec_dot_ifairy_q16_K(
     const float coeff_w_real = GGML_CPU_FP16_TO_FP32(w[0].d_real);
     const float coeff_w_imag = GGML_CPU_FP16_TO_FP32(w[0].d_imag);
 
+    // Fused-6 (K=1536): if activation scales are uniform across 6 blocks, we can
+    // accumulate integer sums across blocks and apply x scales once.
+    const ggml_fp16_t x0_d_real        = x[0].d_real;
+    const ggml_fp16_t x0_d_imag        = x[0].d_imag;
+    const bool        x_scales_uniform = (nb == 6) && (x0_d_real == x[1].d_real) && (x0_d_real == x[2].d_real) &&
+                                  (x0_d_real == x[3].d_real) && (x0_d_real == x[4].d_real) &&
+                                  (x0_d_real == x[5].d_real) && (x0_d_imag == x[1].d_imag) &&
+                                  (x0_d_imag == x[2].d_imag) && (x0_d_imag == x[3].d_imag) &&
+                                  (x0_d_imag == x[4].d_imag) && (x0_d_imag == x[5].d_imag);
+
+    int32_t sum_ac_total = 0;
+    int32_t sum_ad_total = 0;
+    int32_t sum_bc_total = 0;
+    int32_t sum_bd_total = 0;
+
+    const float x_real_uniform = x_scales_uniform ? GGML_CPU_FP16_TO_FP32(x0_d_real) : 0.0f;
+    const float x_imag_uniform = x_scales_uniform ? GGML_CPU_FP16_TO_FP32(x0_d_imag) : 0.0f;
+
     // 权重按 |0 16 32 48|1 17 33 49|...|15 31 47 63| 排列，直接用立即数右移解码 4 个 16-lane 组
     const uint8x16_t v_mask_3 = vdupq_n_u8(0x3);
     const int32x4_t  vzero    = vdupq_n_s32(0);
@@ -1667,8 +1685,8 @@ void ggml_vec_dot_ifairy_q16_K(
 
             asm volatile(
                 // ---- block 0: weights 0..63 ----
-                "ldr            q0, [%[w]]                  \n" // w_all_0
-                "and            v1.16b, v0.16b, %[m3].16b   \n" // idx0
+                "ldr            q0, [%[w]]                  \n"  // w_all_0
+                "and            v1.16b, v0.16b, %[m3].16b   \n"  // idx0
                 "ushr           v2.16b, v0.16b, #2          \n"
                 "ushr           v3.16b, v0.16b, #4          \n"
                 "ushr           v4.16b, v0.16b, #6          \n"
@@ -1676,23 +1694,19 @@ void ggml_vec_dot_ifairy_q16_K(
                 "and            v3.16b, v3.16b, %[m3].16b   \n"
                 "and            v4.16b, v4.16b, %[m3].16b   \n"
 
-                "ldr            q8,  [%[xr]]                \n" // xr0
-                "ldr            q9,  [%[xi]]                \n" // xi0
-                "ldr            q10, [%[xr], #16]           \n" // xr1
-                "ldr            q11, [%[xi], #16]           \n" // xi1
-                "ldr            q12, [%[xr], #32]           \n" // xr2
-                "ldr            q13, [%[xi], #32]           \n" // xi2
-                "ldr            q14, [%[xr], #48]           \n" // xr3
-                "ldr            q15, [%[xi], #48]           \n" // xi3
+                "ldp            q8,  q10, [%[xr]]           \n"  // xr0, xr1
+                "ldp            q9,  q11, [%[xi]]           \n"  // xi0, xi1
+                "ldp            q12, q14, [%[xr], #32]      \n"  // xr2, xr3
+                "ldp            q13, q15, [%[xi], #32]      \n"  // xi2, xi3
 
-                "tbl            v5.16b, {%[lr].16b}, v1.16b \n" // wr0
-                "tbl            v6.16b, {%[li].16b}, v1.16b \n" // wi0
-                "tbl            v16.16b,{%[lr].16b}, v2.16b \n" // wr1
-                "tbl            v17.16b,{%[li].16b}, v2.16b \n" // wi1
-                "tbl            v18.16b,{%[lr].16b}, v3.16b \n" // wr2
-                "tbl            v19.16b,{%[li].16b}, v3.16b \n" // wi2
-                "tbl            v1.16b, {%[lr].16b}, v4.16b \n" // wr3 reuse v1
-                "tbl            v2.16b, {%[li].16b}, v4.16b \n" // wi3 reuse v2
+                "tbl            v5.16b, {%[lr].16b}, v1.16b \n"  // wr0
+                "tbl            v6.16b, {%[li].16b}, v1.16b \n"  // wi0
+                "tbl            v16.16b,{%[lr].16b}, v2.16b \n"  // wr1
+                "tbl            v17.16b,{%[li].16b}, v2.16b \n"  // wi1
+                "tbl            v18.16b,{%[lr].16b}, v3.16b \n"  // wr2
+                "tbl            v19.16b,{%[li].16b}, v3.16b \n"  // wi2
+                "tbl            v1.16b, {%[lr].16b}, v4.16b \n"  // wr3 reuse v1
+                "tbl            v2.16b, {%[li].16b}, v4.16b \n"  // wi3 reuse v2
 
                 "sdot           %[ac0].4s, v8.16b,  v5.16b  \n"
                 "sdot           %[ad0].4s, v9.16b,  v5.16b  \n"
@@ -1724,14 +1738,10 @@ void ggml_vec_dot_ifairy_q16_K(
                 "and            v3.16b, v3.16b, %[m3].16b   \n"
                 "and            v4.16b, v4.16b, %[m3].16b   \n"
 
-                "ldr            q8,  [%[xr], #64]           \n"
-                "ldr            q9,  [%[xi], #64]           \n"
-                "ldr            q10, [%[xr], #80]           \n"
-                "ldr            q11, [%[xi], #80]           \n"
-                "ldr            q12, [%[xr], #96]           \n"
-                "ldr            q13, [%[xi], #96]           \n"
-                "ldr            q14, [%[xr], #112]          \n"
-                "ldr            q15, [%[xi], #112]          \n"
+                "ldp            q8,  q10, [%[xr], #64]      \n"
+                "ldp            q9,  q11, [%[xi], #64]      \n"
+                "ldp            q12, q14, [%[xr], #96]      \n"
+                "ldp            q13, q15, [%[xi], #96]      \n"
 
                 "tbl            v5.16b, {%[lr].16b}, v1.16b \n"
                 "tbl            v6.16b, {%[li].16b}, v1.16b \n"
@@ -1763,9 +1773,10 @@ void ggml_vec_dot_ifairy_q16_K(
                 "sdot           %[bd1].4s, v15.16b, v2.16b  \n"
                 : [ac0] "+w"(acc_ac0), [ad0] "+w"(acc_ad0), [bc0] "+w"(acc_bc0), [bd0] "+w"(acc_bd0),
                   [ac1] "+w"(acc_ac1), [ad1] "+w"(acc_ad1), [bc1] "+w"(acc_bc1), [bd1] "+w"(acc_bd1)
-                : [w] "r"(w_iter), [xr] "r"(xr), [xi] "r"(xi),
-                  [m3] "w"(v_mask_3_reg), [lr] "w"(v_lut_real_reg), [li] "w"(v_lut_imag_reg)
-                : "v0","v1","v2","v3","v4","v5","v6","v8","v9","v10","v11","v12","v13","v14","v15","v16","v17","v18","v19","memory");
+                : [w] "r"(w_iter), [xr] "r"(xr), [xi] "r"(xi), [m3] "w"(v_mask_3_reg), [lr] "w"(v_lut_real_reg),
+                  [li] "w"(v_lut_imag_reg)
+                : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16",
+                  "v17", "v18", "v19", "memory");
         } // j loop
 
         // 合并四个累加 Bank
@@ -1780,17 +1791,34 @@ void ggml_vec_dot_ifairy_q16_K(
         const int32_t sum_bc = vaddvq_s32(acc_bc0);
         const int32_t sum_bd = vaddvq_s32(acc_bd0);
 
-        const float x_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
-        const float x_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
+        if (x_scales_uniform) {
+            sum_ac_total += sum_ac;
+            sum_bd_total += sum_bd;
+            sum_bc_total += sum_bc;
+            sum_ad_total += sum_ad;
+        } else {
+            const float x_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
+            const float x_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
 
-        acc_ac_xr += x_real * (float) sum_ac;
-        acc_bd_xi += x_imag * (float) sum_bd;
-        acc_bc_xr += x_real * (float) sum_bc;
-        acc_ad_xi += x_imag * (float) sum_ad;
+            acc_ac_xr += x_real * (float) sum_ac;
+            acc_bd_xi += x_imag * (float) sum_bd;
+            acc_bc_xr += x_real * (float) sum_bc;
+            acc_ad_xi += x_imag * (float) sum_ad;
+        }
     }
 
-    sum_real_total = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
-    sum_imag_total = coeff_w_imag * acc_bc_xr - coeff_w_real * acc_ad_xi;
+    if (x_scales_uniform) {
+        const float acc_ac_xr_fused = x_real_uniform * (float) sum_ac_total;
+        const float acc_bd_xi_fused = x_imag_uniform * (float) sum_bd_total;
+        const float acc_bc_xr_fused = x_real_uniform * (float) sum_bc_total;
+        const float acc_ad_xi_fused = x_imag_uniform * (float) sum_ad_total;
+
+        sum_real_total = coeff_w_real * acc_ac_xr_fused + coeff_w_imag * acc_bd_xi_fused;
+        sum_imag_total = coeff_w_imag * acc_bc_xr_fused - coeff_w_real * acc_ad_xi_fused;
+    } else {
+        sum_real_total = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
+        sum_imag_total = coeff_w_imag * acc_bc_xr - coeff_w_real * acc_ad_xi;
+    }
 
     ((ggml_bf16_t *) s)[0] = GGML_FP32_TO_BF16(sum_real_total);
     ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
