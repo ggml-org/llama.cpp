@@ -8,6 +8,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "ggml-wgsl-shaders.hpp"
+#include "pre_wgsl.hpp"
 
 #ifdef __EMSCRIPTEN__
 #    include <emscripten/emscripten.h>
@@ -18,6 +19,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -269,6 +271,67 @@ struct webgpu_command {
 #endif
 };
 
+// Pipeline keys
+
+template <typename T>
+static inline void webgpu_hash_combine(size_t & seed, const T & value) {
+    seed ^= std::hash<T>{}(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+}
+
+static inline const char * ggml_webgpu_wgsl_kv_type(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_F16: return "f16";
+        case GGML_TYPE_F32: return "f32";
+        default: return nullptr;
+    }
+}
+
+struct flash_attn_pipeline_key {
+    int      q_type;
+    int      kv_type;
+    int      mask_type;
+    int      sinks_type;
+    int      dst_type;
+    uint32_t head_dim_q;
+    uint32_t head_dim_v;
+    uint32_t n_heads;
+    bool     has_mask;
+    bool     has_sinks;
+    bool     uses_logit_softcap;
+
+    bool operator==(const flash_attn_pipeline_key & other) const {
+        return q_type == other.q_type &&
+            kv_type == other.kv_type &&
+            mask_type == other.mask_type &&
+            sinks_type == other.sinks_type &&
+            dst_type == other.dst_type &&
+            head_dim_q == other.head_dim_q &&
+            head_dim_v == other.head_dim_v &&
+            n_heads == other.n_heads &&
+            has_mask == other.has_mask &&
+            has_sinks == other.has_sinks &&
+            uses_logit_softcap == other.uses_logit_softcap;
+    }
+};
+
+struct flash_attn_pipeline_key_hash {
+    size_t operator()(const flash_attn_pipeline_key & key) const {
+        size_t seed = 0;
+        webgpu_hash_combine(seed, key.q_type);
+        webgpu_hash_combine(seed, key.kv_type);
+        webgpu_hash_combine(seed, key.mask_type);
+        webgpu_hash_combine(seed, key.sinks_type);
+        webgpu_hash_combine(seed, key.dst_type);
+        webgpu_hash_combine(seed, key.head_dim_q);
+        webgpu_hash_combine(seed, key.head_dim_v);
+        webgpu_hash_combine(seed, key.n_heads);
+        webgpu_hash_combine(seed, key.has_mask);
+        webgpu_hash_combine(seed, key.has_sinks);
+        webgpu_hash_combine(seed, key.uses_logit_softcap);
+        return seed;
+    }
+};
+
 // All the base objects needed to run operations on a WebGPU device
 struct webgpu_context_struct {
     wgpu::Instance instance;
@@ -290,13 +353,16 @@ struct webgpu_context_struct {
     webgpu_buf_pool param_buf_pool;
     webgpu_buf_pool set_rows_error_buf_pool;
 
+    pre_wgsl::Preprocessor p;
+
     std::map<int, webgpu_pipeline> memset_pipelines;                                 // variant or type index
 
     std::map<int, std::map<int, std::map<int, webgpu_pipeline>>> mul_mat_pipelines;  // src0_type, src1_type, vectorized
     std::map<int, std::map<int, std::map<int, webgpu_pipeline>>>
         mul_mat_vec_pipelines;                                                       // src0_type, src1_type, vectorized
 
-    webgpu_pipeline flash_attn_pipeline;
+    std::unordered_map<flash_attn_pipeline_key, webgpu_pipeline, flash_attn_pipeline_key_hash>
+        flash_attn_pipelines;
 
     std::map<int, std::map<int, webgpu_pipeline>> set_rows_pipelines;                 // dst_type, vectorized
     std::map<int, std::map<int, webgpu_pipeline>> get_rows_pipelines;                 // src_type, vectorized
@@ -373,6 +439,21 @@ struct ggml_backend_webgpu_buffer_context {
 
 /* WebGPU object initializations */
 
+static void ggml_webgpu_create_buffer(wgpu::Device &    device,
+                                      wgpu::Buffer &    buffer,
+                                      size_t            size,
+                                      wgpu::BufferUsage usage,
+                                      const char *      label) {
+    wgpu::BufferDescriptor buffer_desc;
+    buffer_desc.size             = size;
+    buffer_desc.usage            = usage;
+    buffer_desc.label            = label;
+    buffer_desc.mappedAtCreation = false;
+
+    // TODO: error handling
+    buffer = device.CreateBuffer(&buffer_desc);
+}
+
 // Process a WGSL shader string, replacing tokens of the form {{KEY}} with
 // the corresponding values provided in `repls`.
 static std::string ggml_webgpu_process_shader_repls(const char *                               src,
@@ -416,19 +497,45 @@ static webgpu_pipeline ggml_webgpu_create_pipeline(wgpu::Device &               
     return { device.CreateComputePipeline(&pipeline_desc), label };
 }
 
-static void ggml_webgpu_create_buffer(wgpu::Device &    device,
-                                      wgpu::Buffer &    buffer,
-                                      size_t            size,
-                                      wgpu::BufferUsage usage,
-                                      const char *      label) {
-    wgpu::BufferDescriptor buffer_desc;
-    buffer_desc.size             = size;
-    buffer_desc.usage            = usage;
-    buffer_desc.label            = label;
-    buffer_desc.mappedAtCreation = false;
+static webgpu_pipeline ggml_webgpu_get_flash_attn_pipeline(webgpu_context & ctx,
+                                                           ggml_tensor *    Q,
+                                                           ggml_tensor *    K,
+                                                           ggml_tensor *    V,
+                                                           ggml_tensor *    mask,
+                                                           ggml_tensor *    sinks,
+                                                           ggml_tensor *    dst,
+                                                           float            logit_softcap) {
+    GGML_ASSERT(K->type == V->type);
 
-    // TODO: error handling
-    buffer = device.CreateBuffer(&buffer_desc);
+    flash_attn_pipeline_key key = {
+        .q_type = Q->type,
+        .kv_type = K->type,
+        .mask_type = mask->type,
+        .sinks_type = sinks->type,
+        .dst_type = dst->type,
+        .head_dim_q = (uint32_t) Q->ne[0],
+        .head_dim_v = (uint32_t) V->ne[0],
+        .n_heads = (uint32_t) Q->ne[2],
+        .has_mask = true,
+        .has_sinks = true,
+        .uses_logit_softcap = logit_softcap != 0.0f,
+    };
+
+    if (ctx->flash_attn_pipelines.count(key)) {
+        return ctx->flash_attn_pipelines[key];
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+    if (ctx->flash_attn_pipelines.count(key)) {
+        return ctx->flash_attn_pipelines[key];
+    }
+
+    const char * kv_type = ggml_webgpu_wgsl_kv_type(K->type);
+    std::string label = std::string("flash_attn_kv_") + kv_type;
+    std::string shader = ctx->p.preprocess(wgsl_flash_attn, { std::string("KV_TYPE=") + kv_type });
+    webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(ctx->device, shader.c_str(), label.c_str());
+    ctx->flash_attn_pipelines.emplace(key, pipeline);
+    return pipeline;
 }
 
 /** End WebGPU object initializations */
@@ -1009,22 +1116,19 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     float m0          = powf(2.0f, -(max_bias) / n_head_log2);
     float m1          = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
-    // print type and dimensions of Q/K/V/mask/sinks/dst
-    //    std::cout << "ggml_webgpu_flash_attn: Q type: " << ggml_type_name(Q->type) << ", ne: [" << Q->ne[0] << ", " << Q->ne[1] << ", " << Q->ne[2]
-    //              << ", " << Q->ne[3] << "]\n";
-    //    std::cout << "ggml_webgpu_flash_attn: K type: " << ggml_type_name(K->type) << ", ne: [" << K->ne[0] << ", " << K->ne[1] << ", " << K->ne[2]
-    //              << ", " << K->ne[3] << "]\n";
-    //    std::cout << "ggml_webgpu_flash_attn: V type: " << ggml_type_name(V->type) << ", ne: [" << V->ne[0] << ", " << V->ne[1] << ", " << V->ne[2]
-    //              << ", " << V->ne[3] << "]\n";
-    //    std::cout << "ggml_webgpu_flash_attn: mask type: " << ggml_type_name(mask->type) << ", ne: [" << mask->ne[0] << ", " << mask->ne[1] << ", " << mask->ne[2]
-    //              << ", " << mask->ne[3] << "]\n";
-    //    std::cout << "ggml_webgpu_flash_attn: sinks type: " << ggml_type_name(sinks->type) << ", ne: [" << sinks->ne[0] << ", " << sinks->ne[1] << ", " << sinks->ne[2]
-    //              << ", " << sinks->ne[3] << "]\n";
-    //    std::cout << "ggml_webgpu_flash_attn: dst type: " << ggml_type_name(dst->type) << ", ne: [" << dst->ne[0] << ", " << dst->ne[1] << ", " << dst->ne[2]
-    //              << ", " << dst->ne[3] << "]\n";
-
-    //    std::cout << "ggml_webgpu_flash_attn: offsets: Q=" << offset_q << ", K=" << offset_k << ", V=" << offset_v
-    //              << ", mask=" << offset_mask << ", sinks=" << offset_sinks << ", dst=" << offset_dst << "\n";
+     // print type and dimensions of Q/K/V/mask/sinks/dst
+//        std::cout << "ggml_webgpu_flash_attn: Q type: " << ggml_type_name(Q->type) << ", ne: [" << Q->ne[0] << ", " << Q->ne[1] << ", " << Q->ne[2]
+//                  << ", " << Q->ne[3] << "]\n";
+//        std::cout << "ggml_webgpu_flash_attn: K type: " << ggml_type_name(K->type) << ", ne: [" << K->ne[0] << ", " << K->ne[1] << ", " << K->ne[2]
+//                  << ", " << K->ne[3] << "]\n";
+//        std::cout << "ggml_webgpu_flash_attn: V type: " << ggml_type_name(V->type) << ", ne: [" << V->ne[0] << ", " << V->ne[1] << ", " << V->ne[2]
+//                  << ", " << V->ne[3] << "]\n";
+//        std::cout << "ggml_webgpu_flash_attn: mask type: " << ggml_type_name(mask->type) << ", ne: [" << mask->ne[0] << ", " << mask->ne[1] << ", " << mask->ne[2]
+//                  << ", " << mask->ne[3] << "]\n";
+//        std::cout << "ggml_webgpu_flash_attn: sinks type: " << ggml_type_name(sinks->type) << ", ne: [" << sinks->ne[0] << ", " << sinks->ne[1] << ", " << sinks->ne[2]
+//                  << ", " << sinks->ne[3] << "]\n";
+//        std::cout << "ggml_webgpu_flash_attn: dst type: " << ggml_type_name(dst->type) << ", ne: [" << dst->ne[0] << ", " << dst->ne[1] << ", " << dst->ne[2]
+//                  << ", " << dst->ne[3] << "]\n";
 
     std::vector<uint32_t> params = {
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, Q) / ggml_type_size(Q->type)),
@@ -1088,10 +1192,12 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         //         .size    = ctx->debug_dev_buf.GetSize() }
     };
 
+    webgpu_pipeline pipeline = ggml_webgpu_get_flash_attn_pipeline(ctx, Q, K, V, mask, sinks, dst, logit_softcap);
+
     uint32_t wg_per_head = CEIL_DIV(Q->ne[1], WEBGPU_FLASH_ATTN_Q_TILE);
     uint32_t wg_x        = wg_per_head * Q->ne[2] * Q->ne[3];  // wg per head * number of heads * number of batches
     //std::cout << "ggml_webgpu_flash_attn: wg_x: " << wg_x << "\n";
-    return ggml_backend_webgpu_build(ctx, ctx->flash_attn_pipeline, params, entries, wg_x);
+    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
 }
 
 static webgpu_command ggml_webgpu_unary_op(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
@@ -2007,10 +2113,6 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
         webgpu_ctx->device, wgsl_mul_mat_vec_q4_0_f32, "mul_mat_vec_q4_0_f32", mul_mat_vec_constants);
 }
 
-static void ggml_webgpu_init_flash_attn_pipeline(webgpu_context & webgpu_ctx) {
-    webgpu_ctx->flash_attn_pipeline = ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_flash_attn, "flash_attn");
-}
-
 static void ggml_webgpu_init_set_rows_pipeline(webgpu_context & webgpu_ctx) {
     webgpu_ctx->set_rows_pipelines[0][0] = ggml_webgpu_create_pipeline(
         webgpu_ctx->device, wgsl_set_rows_f16, "set_rows_f16", ggml_webgpu_wg_size_entry(WEBGPU_MAX_WG_SIZE));
@@ -2597,10 +2699,20 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 break;
             }
         case GGML_OP_FLASH_ATTN_EXT:
-            supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 &&
-                          src2->type == GGML_TYPE_F32 && op->src[3] != nullptr && op->src[4] != nullptr;
-            supports_op &= op->ne[0] <= 128 && src0->ne[0] <= 128; // max seq len 128 for qkv
+        {
+            supports_op = true;
+            // Q-type
+            supports_op &= src0->type == GGML_TYPE_F32;
+            // KV-type
+            supports_op &= src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16;
+            // Mask-type
+            supports_op &= op->src[3] != nullptr;
+            // Sink-type
+            supports_op &= op->src[4] != nullptr;
+            // qkv sequence length
+            supports_op &= op->ne[0] <= 128 && src0->ne[0] <= 128;
             break;
+        }
         case GGML_OP_RMS_NORM:
             supports_op = op->type == GGML_TYPE_F32 && src0->type == GGML_TYPE_F32;
             break;
@@ -2874,7 +2986,6 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
 
     ggml_webgpu_init_memset_pipeline(ctx);
     ggml_webgpu_init_mul_mat_pipeline(ctx);
-    ggml_webgpu_init_flash_attn_pipeline(ctx);
     ggml_webgpu_init_set_rows_pipeline(ctx);
     ggml_webgpu_init_get_rows_pipeline(ctx);
     ggml_webgpu_init_cpy_pipeline(ctx);

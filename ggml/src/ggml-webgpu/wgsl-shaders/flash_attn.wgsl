@@ -4,6 +4,9 @@ enable f16;
 enable subgroups;
 enable chromium_experimental_subgroup_matrix;
 
+// Default values
+#define KV_TYPE f32
+
 struct Params {
     offset_q: u32,
     offset_k: u32,
@@ -44,8 +47,8 @@ struct Params {
 };
 
 @group(0) @binding(0) var<storage, read> Q: array<f32>;
-@group(0) @binding(1) var<storage, read> K: array<f32>;
-@group(0) @binding(2) var<storage, read> V: array<f32>;
+@group(0) @binding(1) var<storage, read> K: array<KV_TYPE>;
+@group(0) @binding(2) var<storage, read> V: array<KV_TYPE>;
 @group(0) @binding(3) var<storage, read> mask: array<f16>;
 @group(0) @binding(4) var<storage, read> sinks: array<f32>;
 @group(0) @binding(5) var<storage, read_write> dst: array<f32>;
