@@ -1,20 +1,20 @@
+#include "../../common/common.h"
+#include "../../external/whisper/include/whisper.h"
+#include "frameforge-ipc.h"
+#include "frameforge-json.h"
 #include "frameforge-schema.h"
 #include "frameforge-validator.h"
-#include "frameforge-json.h"
-#include "frameforge-ipc.h"
-
 #include "llama.h"
-#include "../../external/whisper/include/whisper.h"
-#include "../../common/common.h"
 
-#include <iostream>
-#include <fstream>
-#include <vector>
-#include <string>
-#include <thread>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <thread>
+#include <vector>
 
 // System prompt for Llama intent classification
 static const char * INTENT_SYSTEM_PROMPT = R"(You are an intent classifier for FrameForge Studio, a professional previsualization software.
@@ -146,18 +146,21 @@ static bool read_wav(const std::string & fname, std::vector<float> & pcmf32, int
         fprintf(stderr, "Error: Failed to open audio file: %s\n", fname.c_str());
         return false;
     }
-    
+
+    constexpr int WAV_HEADER_SIZE        = 44;
+    constexpr int WAV_SAMPLE_RATE_OFFSET = 24;
+
     char buf[256];
-    size_t bytes_read = fread(buf, 1, 44, f);  // Read WAV header (44 bytes)
-    if (bytes_read != 44) {
+    size_t bytes_read = fread(buf, 1, WAV_HEADER_SIZE, f);
+    if (bytes_read != WAV_HEADER_SIZE) {
         fprintf(stderr, "Error: Failed to read WAV header\n");
         fclose(f);
         return false;
     }
 
-    // Get sample rate from header
-    sample_rate = *(int32_t *)(buf + 24);
-    
+    // Get sample rate from header (offset 24 in WAV spec)
+    sample_rate = *(int32_t *) (buf + WAV_SAMPLE_RATE_OFFSET);
+
     // Read audio data
     std::vector<int16_t> pcm16;
     int16_t sample;

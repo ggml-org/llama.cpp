@@ -16,6 +16,11 @@
 
 namespace frameforge {
 
+// IPC constants
+constexpr size_t MAX_MESSAGE_SIZE   = 1024 * 1024;  // 1MB
+constexpr int    MAX_PIPE_INSTANCES = 1;
+constexpr int    PIPE_BUFFER_SIZE   = 4096;
+
 // IPCServer implementation
 
 IPCServer::IPCServer(const std::string & pipe_name)
@@ -110,18 +115,14 @@ void IPCServer::set_message_callback(std::function<void(const std::string &)> ca
 
 bool IPCServer::create_pipe() {
     std::string pipe_path = "\\\\.\\pipe\\" + pipe_name_;
-    
-    pipe_handle_ = CreateNamedPipeA(
-        pipe_path.c_str(),
-        PIPE_ACCESS_DUPLEX,
-        PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
-        1,  // max instances
-        4096,  // out buffer size
-        4096,  // in buffer size
-        0,  // default timeout
-        NULL
-    );
-    
+
+    pipe_handle_ = CreateNamedPipeA(pipe_path.c_str(), PIPE_ACCESS_DUPLEX,
+                                    PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT, MAX_PIPE_INSTANCES,
+                                    PIPE_BUFFER_SIZE,  // out buffer size
+                                    PIPE_BUFFER_SIZE,  // in buffer size
+                                    0,                 // default timeout
+                                    NULL);
+
     if (pipe_handle_ == INVALID_HANDLE_VALUE) {
         std::cerr << "Failed to create named pipe: " << GetLastError() << std::endl;
         return false;
@@ -320,11 +321,11 @@ std::string IPCClient::receive_message() {
     if (!ReadFile(pipe_handle_, &msg_size, sizeof(msg_size), &bytes_read, NULL)) {
         return "";
     }
-    
-    if (msg_size == 0 || msg_size > 1024 * 1024) {  // 1MB max
+
+    if (msg_size == 0 || msg_size > MAX_MESSAGE_SIZE) {
         return "";
     }
-    
+
     // Read message data
     std::string message(msg_size, '\0');
     if (!ReadFile(pipe_handle_, &message[0], msg_size, &bytes_read, NULL)) {
@@ -343,11 +344,11 @@ std::string IPCClient::receive_message() {
     if (read(pipe_fd_, &msg_size, sizeof(msg_size)) != sizeof(msg_size)) {
         return "";
     }
-    
-    if (msg_size == 0 || msg_size > 1024 * 1024) {  // 1MB max
+
+    if (msg_size == 0 || msg_size > MAX_MESSAGE_SIZE) {
         return "";
     }
-    
+
     // Read message data
     std::string message(msg_size, '\0');
     if (read(pipe_fd_, &message[0], msg_size) != static_cast<ssize_t>(msg_size)) {
