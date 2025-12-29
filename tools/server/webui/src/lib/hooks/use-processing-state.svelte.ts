@@ -5,6 +5,7 @@ export interface UseProcessingStateReturn {
 	readonly processingState: ApiProcessingState | null;
 	getProcessingDetails(): string[];
 	getProcessingMessage(): string;
+	getPromptProgressText(): string | null;
 	shouldShowDetails(): boolean;
 	startMonitoring(): void;
 	stopMonitoring(): void;
@@ -135,12 +136,38 @@ export function useProcessingState(): UseProcessingStateReturn {
 		return state !== null && state.status !== 'idle';
 	}
 
+	function getPromptProgressText(): string | null {
+		const promptProgressValue = processingState?.promptProgress;
+		if (!promptProgressValue) return null;
+
+		const { processed, total, time_ms, cache } = promptProgressValue;
+
+		// Subtract cached tokens since they're processed instantly from KV cache
+		const actualProcessed = processed - cache;
+		const actualTotal = total - cache;
+		const percent = Math.round((actualProcessed / actualTotal) * 100);
+
+		// First chunk: show progress without ETA
+		if (actualProcessed === 0 || time_ms === 0) {
+			return `Processing (${actualProcessed.toLocaleString()} / ${actualTotal.toLocaleString()} tokens - ${percent}%)`;
+		}
+
+		// Subsequent chunks: calculate and show ETA
+		const tokensPerSec = actualProcessed / (time_ms / 1000);
+		const remaining = actualTotal - actualProcessed;
+		const etaSec = Math.ceil(remaining / tokensPerSec);
+		const etaDisplay = etaSec >= 60 ? `${Math.floor(etaSec / 60)}m${etaSec % 60}s` : `${etaSec}s`;
+
+		return `Processing (${actualProcessed.toLocaleString()} / ${actualTotal.toLocaleString()} tokens - ${percent}% - ETA: ${etaDisplay})`;
+	}
+
 	return {
 		get processingState() {
 			return processingState;
 		},
 		getProcessingDetails,
 		getProcessingMessage,
+		getPromptProgressText,
 		shouldShowDetails,
 		startMonitoring,
 		stopMonitoring

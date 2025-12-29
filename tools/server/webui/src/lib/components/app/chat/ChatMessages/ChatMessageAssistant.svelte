@@ -89,30 +89,6 @@
 	const fallbackToolCalls = $derived(typeof toolCallContent === 'string' ? toolCallContent : null);
 
 	const processingState = useProcessingState();
-	const promptProgressValue = $derived(processingState.processingState?.promptProgress);
-	const promptProgressText = $derived.by(() => {
-		if (!promptProgressValue) return null;
-
-		const { processed, total, time_ms, cache } = promptProgressValue;
-
-		// Subtract cached tokens since they're processed instantly from KV cache
-		const actualProcessed = processed - cache;
-		const actualTotal = total - cache;
-		const percent = Math.round((actualProcessed / actualTotal) * 100);
-
-		// First chunk: show progress without ETA
-		if (actualProcessed === 0 || time_ms === 0) {
-			return `Processing (${actualProcessed.toLocaleString()} / ${actualTotal.toLocaleString()} tokens - ${percent}%)`;
-		}
-
-		// Subsequent chunks: calculate and show ETA
-		const tokensPerSec = actualProcessed / (time_ms / 1000);
-		const remaining = actualTotal - actualProcessed;
-		const etaSec = Math.ceil(remaining / tokensPerSec);
-		const etaDisplay = etaSec >= 60 ? `${Math.floor(etaSec / 60)}m${etaSec % 60}s` : `${etaSec}s`;
-
-		return `Processing (${actualProcessed.toLocaleString()} / ${actualTotal.toLocaleString()} tokens - ${percent}% - ETA: ${etaDisplay})`;
-	});
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
@@ -217,7 +193,7 @@
 		<div class="mt-6 w-full max-w-[48rem]" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
-					{promptProgressText ?? processingState.getProcessingMessage()}
+					{processingState.getPromptProgressText() ?? processingState.getProcessingMessage()}
 				</span>
 			</div>
 		</div>
