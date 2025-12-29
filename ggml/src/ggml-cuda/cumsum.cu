@@ -61,13 +61,15 @@ static __global__ void cumsum_cub_kernel(
 
         // Add offset to each item and store
         T thread_offset = thread_prefix - thread_sum + block_carry;
-        #pragma unroll
+#pragma unroll
         for (int i = 0; i < UNROLL_FACTOR; i++) {
             int64_t idx = start + tid * UNROLL_FACTOR + i;
             if (idx < ne00) {
                 dst_row[idx] = items[i] + thread_offset;
             }
         }
+
+        __syncthreads();
 
         // Update carry for next tile
         if (tid == 0) {
@@ -174,6 +176,8 @@ static __global__ void cumsum_kernel(
                 dst_row[idx + j] = temp[j] + ggml_cuda_cast<T, float>(final_val_offset);
             }
         }
+
+        __syncthreads();
 
         // Update carry for next chunk
         if (tid == 0) {
