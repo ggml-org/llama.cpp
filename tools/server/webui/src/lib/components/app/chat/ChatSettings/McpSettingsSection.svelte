@@ -4,14 +4,12 @@
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { Button } from '$lib/components/ui/button';
-	import {
-		detectMcpTransportFromUrl,
-		parseMcpServerSettings,
-		getDefaultMcpConfig,
-		type MCPServerSettingsEntry
-	} from '$lib/config/mcp';
+	import { parseMcpServerSettings } from '$lib/config/mcp';
+	import { detectMcpTransportFromUrl } from '$lib/utils/mcp';
+	import type { MCPServerSettingsEntry } from '$lib/types/mcp';
 	import { MCPClient } from '$lib/mcp';
 	import type { SettingsConfigType } from '$lib/types/settings';
+	import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 
 	interface Props {
 		localConfig: SettingsConfigType;
@@ -19,8 +17,6 @@
 	}
 
 	let { localConfig, onConfigChange }: Props = $props();
-
-	const defaultMcpConfig = getDefaultMcpConfig();
 
 	type HealthCheckState =
 		| { status: 'idle' }
@@ -44,7 +40,7 @@
 			id: crypto.randomUUID ? crypto.randomUUID() : `server-${Date.now()}`,
 			enabled: true,
 			url: '',
-			requestTimeoutSeconds: defaultMcpConfig.requestTimeoutSeconds
+			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds
 		};
 
 		serializeServers([...servers, newServer]);
@@ -103,15 +99,15 @@
 		const timeoutMs = Math.round(server.requestTimeoutSeconds * 1000);
 
 		const mcpClient = new MCPClient({
-			protocolVersion: defaultMcpConfig.protocolVersion,
-			capabilities: defaultMcpConfig.capabilities,
-			clientInfo: defaultMcpConfig.clientInfo,
+			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
+			capabilities: DEFAULT_MCP_CONFIG.capabilities,
+			clientInfo: DEFAULT_MCP_CONFIG.clientInfo,
 			requestTimeoutMs: timeoutMs,
 			servers: {
 				[server.id]: {
 					url: trimmedUrl,
 					transport: detectMcpTransportFromUrl(trimmedUrl),
-					handshakeTimeoutMs: defaultMcpConfig.connectionTimeoutMs,
+					handshakeTimeoutMs: DEFAULT_MCP_CONFIG.connectionTimeoutMs,
 					requestTimeoutMs: timeoutMs
 				}
 			}
@@ -228,7 +224,7 @@
 										requestTimeoutSeconds:
 											Number.isFinite(parsed) && parsed > 0
 												? parsed
-												: defaultMcpConfig.requestTimeoutSeconds
+												: DEFAULT_MCP_CONFIG.requestTimeoutSeconds
 									});
 								}}
 							/>

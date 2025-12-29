@@ -1,68 +1,12 @@
-import type {
-	MCPClientCapabilities,
-	MCPClientConfig,
-	MCPClientInfo,
-	MCPServerConfig
-} from '../mcp/types';
+import type { MCPClientConfig, MCPServerConfig, MCPServerSettingsEntry } from '$lib/types/mcp';
 import type { SettingsConfigType } from '$lib/types/settings';
-
-/**
- * Raw MCP server configuration entry stored in settings.
- */
-export type MCPServerSettingsEntry = {
-	id: string;
-	enabled: boolean;
-	url: string;
-	requestTimeoutSeconds: number;
-};
-
-const defaultMcpConfig = {
-	protocolVersion: '2025-06-18',
-	capabilities: { tools: { listChanged: true } } as MCPClientCapabilities,
-	clientInfo: { name: 'llama-webui-mcp', version: 'dev' } as MCPClientInfo,
-	requestTimeoutSeconds: 300, // 5 minutes for long-running tools
-	connectionTimeoutMs: 10_000 // 10 seconds for connection establishment
-};
-
-export function getDefaultMcpConfig() {
-	return defaultMcpConfig;
-}
-
-export function detectMcpTransportFromUrl(url: string): 'websocket' | 'streamable_http' {
-	const normalized = url.trim().toLowerCase();
-	return normalized.startsWith('ws://') || normalized.startsWith('wss://')
-		? 'websocket'
-		: 'streamable_http';
-}
-
-function normalizeRequestTimeoutSeconds(value: unknown, fallback: number): number {
-	const parsed = typeof value === 'string' ? Number.parseFloat(value) : Number(value);
-	if (!Number.isFinite(parsed) || parsed <= 0) {
-		return fallback;
-	}
-
-	return parsed;
-}
-
-function sanitizeId(id: unknown, index: number): string {
-	if (typeof id === 'string' && id.trim()) {
-		return id.trim();
-	}
-
-	return `server-${index + 1}`;
-}
-
-function sanitizeUrl(url: unknown): string {
-	if (typeof url === 'string') {
-		return url.trim();
-	}
-
-	return '';
-}
+import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
+import { detectMcpTransportFromUrl, generateMcpServerId } from '$lib/utils/mcp';
+import { normalizePositiveNumber } from '$lib/utils/number';
 
 export function parseMcpServerSettings(
 	rawServers: unknown,
-	fallbackRequestTimeoutSeconds = defaultMcpConfig.requestTimeoutSeconds
+	fallbackRequestTimeoutSeconds = DEFAULT_MCP_CONFIG.requestTimeoutSeconds
 ): MCPServerSettingsEntry[] {
 	if (!rawServers) return [];
 
@@ -84,15 +28,15 @@ export function parseMcpServerSettings(
 	if (!Array.isArray(parsed)) return [];
 
 	return parsed.map((entry, index) => {
-		const requestTimeoutSeconds = normalizeRequestTimeoutSeconds(
+		const requestTimeoutSeconds = normalizePositiveNumber(
 			(entry as { requestTimeoutSeconds?: unknown })?.requestTimeoutSeconds,
 			fallbackRequestTimeoutSeconds
 		);
 
-		const url = sanitizeUrl((entry as { url?: unknown })?.url);
+		const url = typeof entry?.url === 'string' ? entry.url.trim() : '';
 
 		return {
-			id: sanitizeId((entry as { id?: unknown })?.id, index),
+			id: generateMcpServerId((entry as { id?: unknown })?.id, index),
 			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 			url,
 			requestTimeoutSeconds
@@ -102,7 +46,7 @@ export function parseMcpServerSettings(
 
 function buildServerConfig(
 	entry: MCPServerSettingsEntry,
-	connectionTimeoutMs = defaultMcpConfig.connectionTimeoutMs
+	connectionTimeoutMs = DEFAULT_MCP_CONFIG.connectionTimeoutMs
 ): MCPServerConfig | undefined {
 	if (!entry?.url) {
 		return undefined;
@@ -133,7 +77,7 @@ export function buildMcpClientConfig(config: SettingsConfigType): MCPClientConfi
 
 		const normalized = buildServerConfig(entry);
 		if (normalized) {
-			servers[sanitizeId(entry.id, index)] = normalized;
+			servers[generateMcpServerId(entry.id, index)] = normalized;
 		}
 	}
 
@@ -142,10 +86,10 @@ export function buildMcpClientConfig(config: SettingsConfigType): MCPClientConfi
 	}
 
 	return {
-		protocolVersion: defaultMcpConfig.protocolVersion,
-		capabilities: defaultMcpConfig.capabilities,
-		clientInfo: defaultMcpConfig.clientInfo,
-		requestTimeoutMs: Math.round(defaultMcpConfig.requestTimeoutSeconds * 1000),
+		protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
+		capabilities: DEFAULT_MCP_CONFIG.capabilities,
+		clientInfo: DEFAULT_MCP_CONFIG.clientInfo,
+		requestTimeoutMs: Math.round(DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000),
 		servers
 	};
 }

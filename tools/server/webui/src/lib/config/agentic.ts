@@ -1,49 +1,29 @@
 import { hasEnabledMcpServers } from './mcp';
 import type { SettingsConfigType } from '$lib/types/settings';
-
-/**
- * Agentic orchestration configuration.
- */
-export interface AgenticConfig {
-	enabled: boolean;
-	maxTurns: number;
-	maxToolPreviewLines: number;
-	filterReasoningAfterFirstTurn: boolean;
-}
-
-const defaultAgenticConfig: AgenticConfig = {
-	enabled: true,
-	maxTurns: 100,
-	maxToolPreviewLines: 25,
-	filterReasoningAfterFirstTurn: true
-};
-
-function normalizeNumber(value: unknown, fallback: number): number {
-	const parsed = typeof value === 'string' ? Number.parseFloat(value) : Number(value);
-	if (!Number.isFinite(parsed) || parsed <= 0) {
-		return fallback;
-	}
-
-	return parsed;
-}
+import type { AgenticConfig } from '$lib/types/agentic';
+import { DEFAULT_AGENTIC_CONFIG } from '$lib/constants/agentic';
+import { normalizePositiveNumber } from '$lib/utils/number';
 
 /**
  * Gets the current agentic configuration.
  * Automatically disables agentic mode if no MCP servers are configured.
  */
 export function getAgenticConfig(settings: SettingsConfigType): AgenticConfig {
-	const maxTurns = normalizeNumber(settings.agenticMaxTurns, defaultAgenticConfig.maxTurns);
-	const maxToolPreviewLines = normalizeNumber(
+	const maxTurns = normalizePositiveNumber(
+		settings.agenticMaxTurns,
+		DEFAULT_AGENTIC_CONFIG.maxTurns
+	);
+	const maxToolPreviewLines = normalizePositiveNumber(
 		settings.agenticMaxToolPreviewLines,
-		defaultAgenticConfig.maxToolPreviewLines
+		DEFAULT_AGENTIC_CONFIG.maxToolPreviewLines
 	);
 	const filterReasoningAfterFirstTurn =
 		typeof settings.agenticFilterReasoningAfterFirstTurn === 'boolean'
 			? settings.agenticFilterReasoningAfterFirstTurn
-			: defaultAgenticConfig.filterReasoningAfterFirstTurn;
+			: DEFAULT_AGENTIC_CONFIG.filterReasoningAfterFirstTurn;
 
 	return {
-		enabled: hasEnabledMcpServers(settings) && defaultAgenticConfig.enabled,
+		enabled: hasEnabledMcpServers(settings) && DEFAULT_AGENTIC_CONFIG.enabled,
 		maxTurns,
 		maxToolPreviewLines,
 		filterReasoningAfterFirstTurn
