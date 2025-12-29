@@ -1438,8 +1438,25 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
         // this overlap between the views will guarantee that the tensor with the maximum size will fully fit into
         // one of the views
         const size_t size_ovlp = ((max_tensor_size + size_page - 1) / size_page + 1) * size_page; // round-up 2 pages just in case
+        if (size_ovlp >= props_dev->max_buffer_size) {
+            GGML_LOG_ERROR("%s: error: max_tensor_size too large for buffer mapping (max_tensor_size = %zu, max_buffer_size = %zu, size_ovlp = %zu)\n",
+                           __func__, max_tensor_size, props_dev->max_buffer_size, size_ovlp);
+            free(res);
+            return NULL;
+        }
         const size_t size_step = props_dev->max_buffer_size - size_ovlp;
         const size_t size_view = props_dev->max_buffer_size;
+
+        size_t required = size / size_step;
+        if (size % size_step != 0) {
+            ++required;
+        }
+        if (required > GGML_METAL_MAX_BUFFERS) {
+            GGML_LOG_ERROR("%s: error: required buffers exceed max (required = %zu, max = %d)\n",
+                           __func__, required, GGML_METAL_MAX_BUFFERS);
+            free(res);
+            return NULL;
+        }
 
         for (size_t i = 0; i < size; i += size_step) {
             const size_t size_step_aligned = (i + size_view <= size) ? size_view : (size_aligned - i);
