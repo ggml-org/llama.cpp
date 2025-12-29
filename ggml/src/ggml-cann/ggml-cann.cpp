@@ -1888,6 +1888,8 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
             break;
         case GGML_OP_OUT_PROD:
             ggml_cann_out_prod(ctx, dst);
+        case GGML_OP_SSM_CONV:
+            ggml_cann_ssm_conv(ctx, dst);
             break;
         default:
             return false;
@@ -2424,8 +2426,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 }
             }
         case GGML_OP_CONV_TRANSPOSE_1D:
-            // TODO: ((weightL - 1) * dilationW - padLeft)=1336 should not be larger than 255.
-            return (op->src[0]->ne[0] - 1) <= 255;
+            return true;
         case GGML_OP_SCALE:
             float bias;
             memcpy(&bias, (const float *) (op->op_params) + 1, sizeof(float));
@@ -2472,6 +2473,8 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 }
                 return true;
             }
+        case GGML_OP_SSM_CONV:
+            return true;
         default:
             return false;
     }
