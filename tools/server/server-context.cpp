@@ -274,7 +274,7 @@ struct server_slot {
     int get_n_draft_max() const {
         GGML_ASSERT(task);
 
-        if (!can_speculate()) {
+        if (!can_speculate() && !task->params.speculative.use_self) {
             return 0;
         }
 
@@ -1181,7 +1181,7 @@ private:
 
         // initialize draft batch
         // TODO: rework speculative decoding [TAG_SERVER_SPEC_REWORK]
-        if (slot.ctx_dft) {
+        if (slot.ctx_dft || task.params.speculative.use_self) {
             llama_batch_free(slot.batch_spec);
 
             slot.batch_spec = llama_batch_init(task.params.speculative.n_max + 1, 0, 1);
@@ -2066,12 +2066,23 @@ private:
                     GGML_ABORT("not supported by multimodal");
                 }
 
-                struct common_speculative_params params_spec;
-                params_spec.n_draft = n_draft_max;
-                params_spec.n_reuse = llama_n_ctx(slot.ctx_dft) - slot.task->params.speculative.n_max;
-                params_spec.p_min   = slot.task->params.speculative.p_min;
-                const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
-                llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
+                llama_tokens draft = {};
+
+                if (slot.task->params.speculative.use_self) {
+                    // we search at least 5 tokens in history to try a self-speculative draft
+                    const int n_draft_min = std::max(5, slot.task->params.speculative.n_min);
+                    const llama_tokens & tokens = slot.prompt.tokens.get_text_tokens();
+                    llama_token id = slot.sampled;
+                    draft = common_speculative_gen_self_draft(tokens, id, n_draft_min, n_draft_max);
+                }
+                if (draft.empty() && slot.can_speculate()) {
+                    struct common_speculative_params params_spec;
+                    params_spec.n_draft = n_draft_max;
+                    params_spec.n_reuse = llama_n_ctx(slot.ctx_dft) - slot.task->params.speculative.n_max;
+                    params_spec.p_min   = slot.task->params.speculative.p_min;
+                    const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
+                    draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
+                }
 
                 // add the sampled token to the batch
                 slot.i_batch_dft.push_back(batch.n_tokens);
@@ -2843,6 +2854,7 @@ private:
 
                 SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int) ids.size() - 1, (int) n_draft, slot.prompt.n_tokens());
             }
+
         }
 
         SRV_DBG("%s", "run slots completed\n");
