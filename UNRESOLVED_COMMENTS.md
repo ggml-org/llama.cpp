@@ -1,6 +1,6 @@
 # Unresolved Code Review Comments
 
-This document captures all unresolved code review comments from merged PRs #1 and #2. These comments were made by automated code review but were not addressed before the PRs were merged.
+This document captures all unresolved code review comments from merged PRs #1 and #2. These comments were made by the Copilot Pull Request Reviewer but were not addressed before the PRs were merged.
 
 ## Table of Contents
 
@@ -179,7 +179,7 @@ while (std::getline(std::cin, line)) {
 
 **Suggested Fix:**
 ```cpp
-char buf[WAV_HEADER_SIZE];
+char buf[WAV_HEADER_SIZE] = {0};  // Zero-initialize for safety
 ```
 
 ---

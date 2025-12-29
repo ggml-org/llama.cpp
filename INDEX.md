@@ -57,7 +57,7 @@ This directory contains comprehensive documentation of unresolved code review co
 | Priority | Count | Documents |
 |----------|-------|-----------|
 | 🔴 Security | 1 | [UNRESOLVED §6](./UNRESOLVED_COMMENTS.md#6-security-per-user-fifo-location-line-140), [QUICK §Priority 1](./QUICK_REFERENCE.md#priority-1-security-issues-1-comment) |
-| 🟠 High | 7 | [UNRESOLVED §3-4,11,23-24](./UNRESOLVED_COMMENTS.md#ipc-handler-pr-2), [QUICK §Priority 2](./QUICK_REFERENCE.md#priority-2-high-severity-7-comments) |
+| 🟠 High | 6 | [UNRESOLVED §3-4,11,23-24](./UNRESOLVED_COMMENTS.md#ipc-handler-pr-2), [QUICK §Priority 2](./QUICK_REFERENCE.md#priority-2-high-severity-6-comments) |
 | 🟡 Medium | 23 | [UNRESOLVED §1-2,5,7-9...](./UNRESOLVED_COMMENTS.md#pr-2-frameforge-sidecar), [QUICK §Priority 3-4](./QUICK_REFERENCE.md#priority-3-medium-severity---critical-12-comments) |
 | 🟢 Low | 6 | [UNRESOLVED §10,14-15,22,27,35-36](./UNRESOLVED_COMMENTS.md#pr-1-semantic-server), [QUICK §Priority 5](./QUICK_REFERENCE.md#priority-5-low-severity-6-comments) |
 
@@ -135,12 +135,12 @@ This directory contains comprehensive documentation of unresolved code review co
 ```
 Total Unresolved Comments: 36
 ├── Security:  1 (2.8%)
-├── High:      7 (19.4%)
+├── High:      6 (16.7%)
 ├── Medium:   23 (63.9%)
 └── Low:       6 (16.7%)
 
-Estimated Total Time: 57.5-69.5 hours
-├── Phase 1 (Security & Critical): 17-27 hours
+Estimated Total Time: 55.5-67.5 hours
+├── Phase 1 (Security & Critical): 15-25 hours
 ├── Phase 2 (Stability):          18 hours
 ├── Phase 3 (Quality):            20-22 hours
 └── Phase 4 (Polish):             2.5 hours
@@ -177,9 +177,9 @@ PR #1 (Semantic Server): 14 comments (38.9%)
 
 ## Related Documentation
 
-- [CONTRIBUTING.md](./CONTRIBUTING.md) - General contribution guidelines for llama.cpp
-- [SECURITY.md](./SECURITY.md) - Security policy and vulnerability reporting
-- [README.md](./README.md) - Project overview and getting started
+- [CONTRIBUTING.md](../CONTRIBUTING.md) - General contribution guidelines for llama.cpp
+- [SECURITY.md](../SECURITY.md) - Security policy and vulnerability reporting
+- [README.md](../README.md) - Project overview and getting started
 
 ---
 

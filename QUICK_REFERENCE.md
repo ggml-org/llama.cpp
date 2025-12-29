@@ -10,7 +10,7 @@ This document provides a quick reference for addressing the 36 unresolved code r
 
 **Action:** Modify IPC implementation to use `$XDG_RUNTIME_DIR` or per-user `/tmp` directory with proper permissions.
 
-## Priority 2: High Severity (7 comments)
+## Priority 2: High Severity (6 comments)
 
 | # | File | Line | Issue | Estimate |
 |---|------|------|-------|----------|
@@ -20,7 +20,9 @@ This document provides a quick reference for addressing the 36 unresolved code r
 | 23 | tools/semantic-server/ipc-handler.h | 176 | Windows handle validation | 2-3 hours |
 | 24 | tools/semantic-server/ipc-handler.h | 73 | Stop method hang | 2-3 hours |
 
-**Total Estimate:** 15-23 hours
+**Total Estimate:** 13-21 hours
+
+Note: Issue #6 (Security) was previously counted in this section but is now properly categorized under Priority 1 (Security).
 
 ## Priority 3: Medium Severity - Critical (12 comments)
 
@@ -96,11 +98,11 @@ This document provides a quick reference for addressing the 36 unresolved code r
 | Priority | Count | Estimated Time |
 |----------|-------|----------------|
 | Security | 1 | 2-4 hours |
-| High | 6 | 15-23 hours |
+| High | 6 | 13-21 hours |
 | Medium (Critical) | 12 | 18 hours |
 | Medium (Important) | 11 | 20-22 hours |
 | Low | 6 | 2.5 hours |
-| **TOTAL** | **36** | **57.5-69.5 hours** |
+| **TOTAL** | **36** | **55.5-67.5 hours** |
 
 ## Recommended Approach
 
