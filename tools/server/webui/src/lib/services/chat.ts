@@ -775,6 +775,7 @@ export class ChatService {
 			| undefined
 	): void {
 		if (!onTimingsCallback || (!timings && !promptProgress)) return;
+
 		onTimingsCallback(timings, promptProgress);
 	}
 }

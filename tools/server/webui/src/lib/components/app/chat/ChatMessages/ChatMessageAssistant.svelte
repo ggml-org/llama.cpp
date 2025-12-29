@@ -1,5 +1,6 @@
 <script lang="ts">
 	import {
+		BadgeChatStatistic,
 		ModelBadge,
 		ChatMessageActions,
 		ChatMessageStatistics,
@@ -8,6 +9,7 @@
 		MarkdownContent,
 		ModelsSelector
 	} from '$lib/components/app';
+	import { Clock, Gauge, WholeWord } from '@lucide/svelte';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
@@ -89,6 +91,7 @@
 	const fallbackToolCalls = $derived(typeof toolCallContent === 'string' ? toolCallContent : null);
 
 	const processingState = useProcessingState();
+
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 	let displayedModel = $derived((): string | null => {
@@ -269,6 +272,33 @@
 						predictedTokens={message.timings.predicted_n}
 						predictedMs={message.timings.predicted_ms}
 					/>
+				{:else if isLoading() && currentConfig.showMessageStats}
+					{@const liveStats = processingState.getLiveProcessingStats()}
+
+					{#if liveStats}
+						<div class="inline-flex items-center gap-1 px-2 text-xs text-muted-foreground">
+							<BadgeChatStatistic
+								class="bg-transparent"
+								icon={WholeWord}
+								value="{liveStats.tokensProcessed.toLocaleString()} tokens"
+								tooltipLabel="Tokens processed"
+							/>
+
+							<BadgeChatStatistic
+								class="bg-transparent"
+								icon={Clock}
+								value="{(liveStats.timeMs / 1000).toFixed(2)}s"
+								tooltipLabel="Processing time"
+							/>
+
+							<BadgeChatStatistic
+								class="bg-transparent"
+								icon={Gauge}
+								value="{liveStats.tokensPerSecond.toFixed(2)} tokens/s"
+								tooltipLabel="Processing speed"
+							/>
+						</div>
+					{/if}
 				{/if}
 			</div>
 		{/if}
