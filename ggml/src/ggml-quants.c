@@ -2826,6 +2826,56 @@ void quantize_row_ifairy_q16_ref(const float * GGML_RESTRICT x, block_ifairy_q16
     }
 }
 
+void quantize_row_ifairy_q16_tensor_ref(const float * GGML_RESTRICT x, block_ifairy_q16 * GGML_RESTRICT y, int64_t k) {
+    assert(k % QK_K == 0);
+    const int64_t nb = k / QK_K;
+
+    float max_real = 1e-5f;
+    float max_imag = 1e-5f;
+
+    for (int64_t j = 0; j < k; ++j) {
+        const float * x_com = x + j;
+
+        const ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t *) (x_com))[0];
+        const ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t *) (x_com))[1];
+
+        const float x_real = GGML_BF16_TO_FP32(x_real_bf16);
+        const float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
+
+        max_real = MAX(max_real, fabsf(x_real));
+        max_imag = MAX(max_imag, fabsf(x_imag));
+    }
+
+    const float iscale_real = 127.f / max_real;
+    const float iscale_imag = 127.f / max_imag;
+
+    const ggml_half d_real = GGML_FP32_TO_FP16(1.f / iscale_real);
+    const ggml_half d_imag = GGML_FP32_TO_FP16(1.f / iscale_imag);
+
+    for (int64_t ib = 0; ib < nb; ++ib) {
+        y[ib].d_real = d_real;
+        y[ib].d_imag = d_imag;
+
+        for (int j = 0; j < QK_K; ++j) {
+            const float * x_com = x + j;
+
+            const ggml_bf16_t x_real_bf16 = ((const ggml_bf16_t *) (x_com))[0];
+            const ggml_bf16_t x_imag_bf16 = ((const ggml_bf16_t *) (x_com))[1];
+
+            const float x_real = GGML_BF16_TO_FP32(x_real_bf16);
+            const float x_imag = GGML_BF16_TO_FP32(x_imag_bf16);
+
+            int v           = nearest_int(iscale_real * x_real);
+            y[ib].x_real[j] = (int8_t) MAX(-127, MIN(127, v));
+
+            v               = nearest_int(iscale_imag * x_imag);
+            y[ib].x_imag[j] = (int8_t) MAX(-127, MIN(127, v));
+        }
+
+        x += QK_K;
+    }
+}
+
 void dequantize_row_ifairy_q16(const block_ifairy_q16 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     assert(k % QK_K == 0);
     const int64_t nb = k / QK_K;

@@ -220,6 +220,96 @@ void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT
 #endif
 }
 
+void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK_K == 0);
+    const int nb = k / QK_K;
+
+    block_ifairy_q16 * GGML_RESTRICT y = vy;
+
+#if defined(__ARM_NEON) && defined(__aarch64__)
+    const float32x4_t vmin_init = vdupq_n_f32(1e-5f);
+
+    float32x4_t max_real = vmin_init;
+    float32x4_t max_imag = vmin_init;
+
+    // pass 1: global max |real| / |imag| over entire tensor (k elements)
+    for (int ib = 0; ib < nb; ++ib) {
+        const uint16_t * GGML_RESTRICT src = (const uint16_t *) (x + ib * QK_K);
+        int                            cnt = QK_K * 2;  // number of bf16 halves to process
+
+        asm volatile(
+            "1:\n"
+            "ld1            {v0.8h}, [%[src]], #16\n"
+            "ushll          v1.4s, v0.4h, #0\n"
+            "ushll2         v2.4s, v0.8h, #0\n"
+            "shl            v1.4s, v1.4s, #16\n"
+            "shl            v2.4s, v2.4s, #16\n"
+            "uzp1           v3.4s, v1.4s, v2.4s\n"
+            "uzp2           v4.4s, v1.4s, v2.4s\n"
+            "fabs           v3.4s, v3.4s\n"
+            "fabs           v4.4s, v4.4s\n"
+            "fmax           %[maxr].4s, %[maxr].4s, v3.4s\n"
+            "fmax           %[maxi].4s, %[maxi].4s, v4.4s\n"
+            "subs           %w[cnt], %w[cnt], #8\n"
+            "b.gt           1b\n"
+            : [maxr] "+w"(max_real), [maxi] "+w"(max_imag), [src] "+r"(src), [cnt] "+r"(cnt)
+            :
+            : "v0", "v1", "v2", "v3", "v4", "cc", "memory");
+    }
+
+    const float max_r = vmaxvq_f32(max_real);
+    const float max_i = vmaxvq_f32(max_imag);
+
+    const float iscale_r = 127.f / max_r;
+    const float iscale_i = 127.f / max_i;
+
+    const ggml_half d_real = GGML_CPU_FP32_TO_FP16(1.f / iscale_r);
+    const ggml_half d_imag = GGML_CPU_FP32_TO_FP16(1.f / iscale_i);
+
+    // pass 2: quantize per block with shared scale
+    const float32x4_t vs_r = vdupq_n_f32(iscale_r);
+    const float32x4_t vs_i = vdupq_n_f32(iscale_i);
+
+    for (int ib = 0; ib < nb; ++ib) {
+        const uint16_t * GGML_RESTRICT src = (const uint16_t *) (x + ib * QK_K);
+        int8_t * GGML_RESTRICT         yr  = (int8_t *) y[ib].x_real;
+        int8_t * GGML_RESTRICT         yi  = (int8_t *) y[ib].x_imag;
+        int                            cnt = QK_K;  // number of complex values
+
+        y[ib].d_real = d_real;
+        y[ib].d_imag = d_imag;
+
+        asm volatile(
+            "1:\n"
+            "ld1            {v0.8h}, [%[src]], #16\n"
+            "ushll          v1.4s, v0.4h, #0\n"
+            "ushll2         v2.4s, v0.8h, #0\n"
+            "shl            v1.4s, v1.4s, #16\n"
+            "shl            v2.4s, v2.4s, #16\n"
+            "uzp1           v3.4s, v1.4s, v2.4s\n"
+            "uzp2           v4.4s, v1.4s, v2.4s\n"
+            "fmul           v3.4s, v3.4s, %[sr].4s\n"
+            "fmul           v4.4s, v4.4s, %[si].4s\n"
+            "fcvtns         v3.4s, v3.4s\n"
+            "fcvtns         v4.4s, v4.4s\n"
+            "sqxtn          v5.4h, v3.4s\n"
+            "sqxtn          v6.4h, v4.4s\n"
+            "sqxtn          v5.8b, v5.8h\n"
+            "sqxtn          v6.8b, v6.8h\n"
+            "st1            {v5.s}[0], [%[yr]], #4\n"
+            "st1            {v6.s}[0], [%[yi]], #4\n"
+            "subs           %w[cnt], %w[cnt], #4\n"
+            "b.gt           1b\n"
+            : [src] "+r"(src), [yr] "+r"(yr), [yi] "+r"(yi), [cnt] "+r"(cnt)
+            : [sr] "w"(vs_r), [si] "w"(vs_i)
+            : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "cc", "memory");
+    }
+#else
+    GGML_UNUSED(nb);
+    quantize_row_ifairy_q16_tensor_ref(x, y, k);
+#endif
+}
+
 // placeholder implementation for Apple targets
 void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q8_K_ref(x, y, k);

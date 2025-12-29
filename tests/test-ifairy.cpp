@@ -11,6 +11,8 @@ extern "C" {
 #include "../ggml/src/ggml-common.h"
 #include "../ggml/src/ggml-ifairy-lut.h"
 #include "../ggml/src/ggml-quants.h"
+
+void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
 }
 
 #ifndef GGML_FP16_TO_FP32
@@ -34,6 +36,7 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <random>
 #include <string>
 #include <thread>
 #include <vector>
@@ -777,6 +780,90 @@ bool test_quantization() {
 }
 
 // ============================================================================
+// 测试 1.1: 激活 Q16 tensor-scale 量化
+// ============================================================================
+
+static bool test_ifairy_q16_tensor_quantization() {
+    printf("\n=== Test 1.1: iFairy Q16 Tensor-Scale Quantization ===\n");
+
+    const int k  = 1536;
+    const int nb = k / QK_K;
+
+    std::mt19937                          rng(1);
+    std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
+
+    std::vector<uint32_t> x_words((size_t) k);
+    float                 max_real = 1e-5f;
+    float                 max_imag = 1e-5f;
+
+    for (int j = 0; j < k; ++j) {
+        const float xr0 = dist(rng);
+        const float xi0 = dist(rng);
+
+        const ggml_bf16_t xr = GGML_FP32_TO_BF16(xr0);
+        const ggml_bf16_t xi = GGML_FP32_TO_BF16(xi0);
+
+        const float xr_f = GGML_BF16_TO_FP32(xr);
+        const float xi_f = GGML_BF16_TO_FP32(xi);
+
+        max_real = std::max(max_real, std::abs(xr_f));
+        max_imag = std::max(max_imag, std::abs(xi_f));
+
+        x_words[j] = (uint32_t) xi.bits << 16 | (uint32_t) xr.bits;
+    }
+
+    std::vector<block_ifairy_q16> q((size_t) nb);
+    quantize_row_ifairy_q16_tensor(reinterpret_cast<const float *>(x_words.data()), q.data(), k);
+
+    for (int ib = 1; ib < nb; ++ib) {
+        assert(q[ib].d_real == q[0].d_real);
+        assert(q[ib].d_imag == q[0].d_imag);
+    }
+
+    const float d_real = GGML_FP16_TO_FP32(q[0].d_real);
+    const float d_imag = GGML_FP16_TO_FP32(q[0].d_imag);
+
+    const float d_real_expected = max_real / 127.0f;
+    const float d_imag_expected = max_imag / 127.0f;
+
+    const float d_real_diff = std::abs(d_real - d_real_expected);
+    const float d_imag_diff = std::abs(d_imag - d_imag_expected);
+
+    printf("  d_real=%.8f expected=%.8f diff=%.8g\n", d_real, d_real_expected, d_real_diff);
+    printf("  d_imag=%.8f expected=%.8f diff=%.8g\n", d_imag, d_imag_expected, d_imag_diff);
+
+    float max_err_real = 0.0f;
+    float max_err_imag = 0.0f;
+    for (int ib = 0; ib < nb; ++ib) {
+        const float d_r = GGML_FP16_TO_FP32(q[ib].d_real);
+        const float d_i = GGML_FP16_TO_FP32(q[ib].d_imag);
+
+        for (int j = 0; j < QK_K; ++j) {
+            const int idx = ib * QK_K + j;
+
+            const ggml_bf16_t xr_ref{ (uint16_t) (x_words[idx] & 0xFFFFu) };
+            const ggml_bf16_t xi_ref{ (uint16_t) (x_words[idx] >> 16) };
+
+            const float xr_f = GGML_BF16_TO_FP32(xr_ref);
+            const float xi_f = GGML_BF16_TO_FP32(xi_ref);
+
+            const float xr_q = d_r * (float) (int8_t) q[ib].x_real[j];
+            const float xi_q = d_i * (float) (int8_t) q[ib].x_imag[j];
+
+            max_err_real = std::max(max_err_real, std::abs(xr_q - xr_f));
+            max_err_imag = std::max(max_err_imag, std::abs(xi_q - xi_f));
+        }
+    }
+
+    printf("  max_abs_err_real=%.6f\n", max_err_real);
+    printf("  max_abs_err_imag=%.6f\n", max_err_imag);
+
+    const bool ok = (max_err_real < 0.10f) && (max_err_imag < 0.10f);
+    printf("  tensor-scale quantization - %s\n", ok ? "PASS" : "FAIL");
+    return ok;
+}
+
+// ============================================================================
 // 测试 3: ROPE 算子
 // ============================================================================
 
@@ -1383,6 +1470,11 @@ int main(int argc, char ** argv) {
     // 运行测试
     if (!test_quantization()) {
         fprintf(stderr, "Test 1 FAILED\n");
+        num_failed++;
+    }
+
+    if (!test_ifairy_q16_tensor_quantization()) {
+        fprintf(stderr, "Test 1.1 FAILED\n");
         num_failed++;
     }
 

@@ -32,7 +32,7 @@ void quantize_row_tq1_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, i
 void quantize_row_tq2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_ifairy(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
-
+void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 
 void quantize_row_iq4_nl (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_iq4_xs (const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
