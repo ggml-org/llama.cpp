@@ -1,11 +1,19 @@
 import { activeProcessingState } from '$lib/stores/chat.svelte';
 import { config } from '$lib/stores/settings.svelte';
 
+export interface LiveProcessingStats {
+	tokensProcessed: number;
+	totalTokens: number;
+	timeMs: number;
+	tokensPerSecond: number;
+}
+
 export interface UseProcessingStateReturn {
 	readonly processingState: ApiProcessingState | null;
 	getProcessingDetails(): string[];
 	getProcessingMessage(): string;
 	getPromptProgressText(): string | null;
+	getLiveProcessingStats(): LiveProcessingStats | null;
 	shouldShowDetails(): boolean;
 	startMonitoring(): void;
 	stopMonitoring(): void;
@@ -30,6 +38,7 @@ export interface UseProcessingStateReturn {
 export function useProcessingState(): UseProcessingStateReturn {
 	let isMonitoring = $state(false);
 	let lastKnownState = $state<ApiProcessingState | null>(null);
+	let etaSecondsRemaining = $state<number | null>(null);
 
 	// Derive processing state reactively from chatStore's direct state
 	const processingState = $derived.by(() => {
@@ -45,6 +54,36 @@ export function useProcessingState(): UseProcessingStateReturn {
 		if (processingState && isMonitoring) {
 			lastKnownState = processingState;
 		}
+	});
+
+	// Update ETA when new progress data arrives
+	$effect(() => {
+		if (processingState?.promptProgress) {
+			const { processed, total, time_ms, cache } = processingState.promptProgress;
+			const actualProcessed = processed - cache;
+			const actualTotal = total - cache;
+
+			if (actualProcessed > 0 && time_ms > 0) {
+				const tokensPerSec = actualProcessed / (time_ms / 1000);
+				const remaining = actualTotal - actualProcessed;
+				etaSecondsRemaining = Math.ceil(remaining / tokensPerSec);
+			}
+		} else {
+			etaSecondsRemaining = null;
+		}
+	});
+
+	// Client-side timer to enhance the wait time experience
+	$effect(() => {
+		if (etaSecondsRemaining === null || etaSecondsRemaining <= 0) return;
+
+		const interval = setInterval(() => {
+			if (etaSecondsRemaining !== null && etaSecondsRemaining > 0) {
+				etaSecondsRemaining--;
+			}
+		}, 1000);
+
+		return () => clearInterval(interval);
 	});
 
 	function startMonitoring(): void {
@@ -64,22 +103,21 @@ export function useProcessingState(): UseProcessingStateReturn {
 	}
 
 	function getProcessingMessage(): string {
-		const state = processingState;
-		if (!state) {
+		if (!processingState) {
 			return 'Processing...';
 		}
 
-		switch (state.status) {
+		switch (processingState.status) {
 			case 'initializing':
 				return 'Initializing...';
 			case 'preparing':
-				if (state.progressPercent !== undefined) {
-					return `Processing (${state.progressPercent}%)`;
+				if (processingState.progressPercent !== undefined) {
+					return `Processing (${processingState.progressPercent}%)`;
 				}
 				return 'Preparing response...';
 			case 'generating':
-				if (state.tokensDecoded > 0) {
-					return `Generating... (${state.tokensDecoded} tokens)`;
+				if (processingState.tokensDecoded > 0) {
+					return `Generating... (${processingState.tokensDecoded} tokens)`;
 				}
 				return 'Generating...';
 			default:
@@ -132,33 +170,52 @@ export function useProcessingState(): UseProcessingStateReturn {
 	}
 
 	function shouldShowDetails(): boolean {
-		const state = processingState;
-		return state !== null && state.status !== 'idle';
+		return processingState !== null && processingState.status !== 'idle';
 	}
 
+	/**
+	 * Returns a short progress message percent and ETA
+	 */
 	function getPromptProgressText(): string | null {
-		const promptProgressValue = processingState?.promptProgress;
-		if (!promptProgressValue) return null;
+		if (!processingState?.promptProgress) return null;
 
-		const { processed, total, time_ms, cache } = promptProgressValue;
+		const { processed, total, cache } = processingState.promptProgress;
 
-		// Subtract cached tokens since they're processed instantly from KV cache
 		const actualProcessed = processed - cache;
 		const actualTotal = total - cache;
 		const percent = Math.round((actualProcessed / actualTotal) * 100);
 
-		// First chunk: show progress without ETA
-		if (actualProcessed === 0 || time_ms === 0) {
-			return `Processing (${actualProcessed.toLocaleString()} / ${actualTotal.toLocaleString()} tokens - ${percent}%)`;
+		if (etaSecondsRemaining === null || etaSecondsRemaining <= 0) {
+			return `Processing ${percent}%`;
 		}
 
-		// Subsequent chunks: calculate and show ETA
-		const tokensPerSec = actualProcessed / (time_ms / 1000);
-		const remaining = actualTotal - actualProcessed;
-		const etaSec = Math.ceil(remaining / tokensPerSec);
+		const etaSec = Math.max(0, etaSecondsRemaining);
 		const etaDisplay = etaSec >= 60 ? `${Math.floor(etaSec / 60)}m${etaSec % 60}s` : `${etaSec}s`;
 
-		return `Processing (${actualProcessed.toLocaleString()} / ${actualTotal.toLocaleString()} tokens - ${percent}% - ETA: ${etaDisplay})`;
+		return `Processing ${percent}% - ETA: ${etaDisplay}`;
+	}
+
+	/**
+	 * Returns live processing statistics for display
+	 */
+	function getLiveProcessingStats(): LiveProcessingStats | null {
+		if (!processingState?.promptProgress) return null;
+
+		const { processed, total, time_ms, cache } = processingState.promptProgress;
+
+		const actualProcessed = processed - cache;
+		const actualTotal = total - cache;
+
+		if (actualProcessed <= 0 || time_ms <= 0) return null;
+
+		const tokensPerSecond = actualProcessed / (time_ms / 1000);
+
+		return {
+			tokensProcessed: actualProcessed,
+			totalTokens: actualTotal,
+			timeMs: time_ms,
+			tokensPerSecond
+		};
 	}
 
 	return {
@@ -168,6 +225,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 		getProcessingDetails,
 		getProcessingMessage,
 		getPromptProgressText,
+		getLiveProcessingStats,
 		shouldShowDetails,
 		startMonitoring,
 		stopMonitoring
