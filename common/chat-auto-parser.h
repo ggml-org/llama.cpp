@@ -49,9 +49,11 @@ struct ToolCallStructure {
 
     // Function format (how individual functions are structured)
     enum FunctionFormat {
-        FUNC_JSON_OBJECT,   // {"name": "X", "arguments": {...}}
-        FUNC_TAG_WITH_NAME, // <function=X>{...}</function>
-        FUNC_TAG_NAME_ONLY, // <X>...</X> where X is function name (rare)
+        FUNC_JSON_OBJECT,      // {"name": "X", "arguments": {...}}
+        FUNC_TAG_WITH_NAME,    // <function=X>{...}</function>
+        FUNC_TAG_NAME_ONLY,    // <X>...</X> where X is function name (rare)
+        FUNC_PREFIXED_INDEXED, // <|tool_call_begin|>functions.X:0<|tool_call_argument_begin|>{...}<|tool_call_end|>
+        FUNC_NAME_AS_KEY,      // [{"function_name": {...arguments...}}] (Apertus-style)
     };
     FunctionFormat function_format = FUNC_JSON_OBJECT;
 
@@ -65,10 +67,17 @@ struct ToolCallStructure {
     std::string function_suffix;  // e.g., ">"
     std::string function_close;   // e.g., "</function>"
 
+    // For FUNC_PREFIXED_INDEXED format (e.g., Kimi-K2)
+    std::string per_call_start;      // e.g., "<|tool_call_begin|>"
+    std::string function_namespace;  // e.g., "functions." (prefix before function name)
+    std::string args_marker;         // e.g., "<|tool_call_argument_begin|>"
+    std::string per_call_end;        // e.g., "<|tool_call_end|>"
+
     // Argument format (how arguments are structured within a function)
     enum ArgumentFormat {
-        ARGS_JSON,    // Standard JSON object: {"key": "value", ...}
-        ARGS_TAGGED,  // XML-style: <param=key>value</param>
+        ARGS_JSON,           // Standard JSON object: {"key": "value", ...}
+        ARGS_TAGGED,         // XML-style: <param=key>value</param>
+        ARGS_KEY_VALUE_TAGS, // <arg_key>key</arg_key><arg_value>value</arg_value> (GLM-4.6)
     };
     ArgumentFormat argument_format = ARGS_JSON;
 

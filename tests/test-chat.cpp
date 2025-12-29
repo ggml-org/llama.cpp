@@ -3559,7 +3559,10 @@ static void test_template_output_peg_parsers() {
     //         .run();
     // }
 
-    // TODO: GLM-4.6 tests disabled - autoparser doesn't support the <arg_key>/<arg_value> tool format
+    // TODO: GLM-4.6 tests - format detected but parser needs fixing
+    // The ARGS_KEY_VALUE_TAGS format is partially implemented but the argument extraction
+    // doesn't work correctly yet. The issue is in how the parser handles the bare function
+    // name followed by key-value pairs.
     // {
     //     auto tst = peg_tester("models/templates/GLM-4.6.jinja");
     //     tst.test("\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>")
@@ -3568,14 +3571,44 @@ static void test_template_output_peg_parsers() {
     //         .run();
     // }
 
-    // TODO: Kimi-K2-Thinking tests disabled - autoparser doesn't support the functions.name:index tool format
-    // {
-    //     auto tst = peg_tester("models/templates/Kimi-K2-Thinking.jinja");
-    //     tst.test("<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_call)
-    //         .run();
-    // }
+    // Kimi-K2-Thinking tests - now supported with FUNC_PREFIXED_INDEXED format
+    {
+        auto tst = peg_tester("models/templates/Kimi-K2-Thinking.jinja");
+        tst.test("<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
+
+    // Apertus-8B-Instruct tests - now supported with FUNC_NAME_AS_KEY format
+    // Format: <|tools_prefix|>[{"function_name": {...arguments...}}]<|tools_suffix|>
+    {
+        auto tst = peg_tester("models/templates/Apertus-8B-Instruct.jinja");
+        tst.test("<|tools_prefix|>[{\"special_function\": {\"arg1\": 1}}]<|tools_suffix|>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
+
+    // MiniMax-M2 tests - XML invoke format with parameter tags
+    // Format: <minimax:tool_call><invoke name="func"><parameter name="key">value</parameter></invoke></minimax:tool_call>
+    {
+        auto tst = peg_tester("models/templates/MiniMax-M2.jinja");
+        tst.test("<minimax:tool_call>\n<invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke>\n</minimax:tool_call>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
+
+    // NVIDIA-Nemotron-Nano-v2 tests - <TOOLCALL>...</TOOLCALL> format
+    // Format: <TOOLCALL>[{"name": "func", "arguments": {...}}]</TOOLCALL>
+    {
+        auto tst = peg_tester("models/templates/NVIDIA-Nemotron-Nano-v2.jinja");
+        tst.test("<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
 }
 
 static void test_msg_diffs_compute() {
