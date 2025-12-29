@@ -410,7 +410,7 @@ c = std::toupper(static_cast<unsigned char>(c));
 ## Summary Statistics
 
 - **Total Comments:** 36
-- **High Severity:** 7
+- **High Severity:** 6
 - **Medium Severity:** 23
 - **Low Severity:** 6
 - **Security Issues:** 1

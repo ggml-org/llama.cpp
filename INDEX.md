@@ -95,7 +95,7 @@ This directory contains comprehensive documentation of unresolved code review co
 
 2. **Pick an issue to work on:**
    - Start with [Security issues](./QUICK_REFERENCE.md#priority-1-security-issues-1-comment) (highest priority)
-   - Then [High severity](./QUICK_REFERENCE.md#priority-2-high-severity-7-comments)
+   - Then [High severity](./QUICK_REFERENCE.md#priority-2-high-severity-6-comments)
    - Consider [owner-requested items](./QUICK_REFERENCE.md#owner-requests)
 
 3. **Create a branch:**
