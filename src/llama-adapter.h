@@ -79,7 +79,7 @@ struct llama_adapter_lora {
     llama_adapter_lora_weight * get_weight(ggml_tensor * w);
 
     uint32_t get_n_nodes() const {
-        return ab_map.size() * 3u; // mul_mat, scale, add
+        return ab_map.size() * 4u; // scale, add, 2 x mul_mat
     }
 };
 
