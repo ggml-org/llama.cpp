@@ -23,3 +23,31 @@ export function normalizeFloatingPoint(value: unknown): unknown {
 export function normalizeNumber(value: number): number {
 	return Math.round(value * PRECISION_MULTIPLIER) / PRECISION_MULTIPLIER;
 }
+
+/**
+ * Normalize comparison values for consistent equality checks
+ * Handles strings, numbers, and booleans with proper type conversion
+ */
+export function normalizeComparisonValue(
+	value: string | number | boolean
+): string | number | boolean {
+	if (typeof value === 'number') {
+		return normalizeNumber(value);
+	}
+
+	if (typeof value === 'string') {
+		const trimmed = value.trim();
+		if (!trimmed) {
+			return '';
+		}
+
+		const numericValue = Number(trimmed);
+		if (!Number.isNaN(numericValue)) {
+			return normalizeNumber(numericValue);
+		}
+
+		return value;
+	}
+
+	return value;
+}

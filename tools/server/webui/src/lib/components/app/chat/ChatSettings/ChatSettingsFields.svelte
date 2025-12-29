@@ -8,7 +8,7 @@
 	import { SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { ChatSettingsParameterSourceIndicator } from '$lib/components/app';
-	import { normalizeNumber } from '$lib/utils';
+	import { normalizeComparisonValue } from '$lib/utils';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -27,28 +27,6 @@
 		}
 
 		return settingsStore.getParameterInfo(key);
-	}
-
-	function normalizeComparisonValue(value: string | number | boolean): string | number | boolean {
-		if (typeof value === 'number') {
-			return normalizeNumber(value);
-		}
-
-		if (typeof value === 'string') {
-			const trimmed = value.trim();
-			if (!trimmed) {
-				return '';
-			}
-
-			const numericValue = Number(trimmed);
-			if (!Number.isNaN(numericValue)) {
-				return normalizeNumber(numericValue);
-			}
-
-			return value;
-		}
-
-		return value;
 	}
 </script>
 

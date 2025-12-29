@@ -90,7 +90,6 @@
 
 	const processingState = useProcessingState();
 
-	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 	let displayedModel = $derived((): string | null => {
 		if (message.model) {
@@ -270,7 +269,7 @@
 						predictedTokens={message.timings.predicted_n}
 						predictedMs={message.timings.predicted_ms}
 					/>
-				{:else if isLoading() && currentConfig.showMessageStats}
+				{:else if isLoading() && settingsStore.getConfig('showMessageStats')}
 					{@const liveStats = processingState.getLiveProcessingStats()}
 					{@const genStats = processingState.getLiveGenerationStats()}
 					{@const promptProgress = processingState.processingState?.promptProgress}
