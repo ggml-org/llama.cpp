@@ -1,0 +1,3 @@
+[submodule "external/whisper"]
+	path = external/whisper
+	url = https://github.com/TheOriginalBytePlayer/whisper.cpp
