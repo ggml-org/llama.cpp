@@ -45,8 +45,11 @@ export interface UseProcessingStateReturn {
 export function useProcessingState(): UseProcessingStateReturn {
 	let isMonitoring = $state(false);
 	let lastKnownState = $state<ApiProcessingState | null>(null);
-	let etaSecondsRemaining = $state<number | null>(null);
 	let lastKnownProcessingStats = $state<LiveProcessingStats | null>(null);
+
+	let baseEtaSeconds = $state<number | null>(null); // ETA calculated from last progress update
+	let etaCalculatedAt = $state<number | null>(null); // Timestamp when ETA was calculated
+	let etaTick = $state(0); // Counter to force re-renders for smooth countdown
 
 	// Derive processing state reactively from chatStore's direct state
 	const processingState = $derived.by(() => {
@@ -83,7 +86,8 @@ export function useProcessingState(): UseProcessingStateReturn {
 		}
 	});
 
-	// Update ETA when new progress data arrives
+	// Calculate base ETA when progress data arrives
+	// This only sets the baseline - actual display uses time-based calculation
 	$effect(() => {
 		if (processingState?.promptProgress) {
 			const { processed, total, time_ms, cache } = processingState.promptProgress;
@@ -93,25 +97,38 @@ export function useProcessingState(): UseProcessingStateReturn {
 			if (actualProcessed > 0 && time_ms > 0) {
 				const tokensPerSec = actualProcessed / (time_ms / 1000);
 				const remaining = actualTotal - actualProcessed;
-				etaSecondsRemaining = Math.ceil(remaining / tokensPerSec);
+
+				baseEtaSeconds = Math.ceil(remaining / tokensPerSec);
+				etaCalculatedAt = Date.now();
 			}
 		} else {
-			etaSecondsRemaining = null;
+			baseEtaSeconds = null;
+			etaCalculatedAt = null;
 		}
 	});
 
-	// Client-side timer to enhance the wait time experience
+	// Timer to force re-renders for smooth countdown display
+	// Does NOT modify ETA value - only triggers reactive updates
 	$effect(() => {
-		if (etaSecondsRemaining === null || etaSecondsRemaining <= 0) return;
+		if (baseEtaSeconds === null) return;
 
 		const interval = setInterval(() => {
-			if (etaSecondsRemaining !== null && etaSecondsRemaining > 0) {
-				etaSecondsRemaining--;
-			}
+			etaTick++; // Force re-render
 		}, 1000);
 
 		return () => clearInterval(interval);
 	});
+
+	function getEtaSecondsRemaining(): number | null {
+		void etaTick;
+
+		if (baseEtaSeconds === null || etaCalculatedAt === null) return null;
+
+		const elapsedSeconds = Math.floor((Date.now() - etaCalculatedAt) / 1000);
+		const remaining = baseEtaSeconds - elapsedSeconds;
+
+		return Math.max(0, remaining);
+	}
 
 	function startMonitoring(): void {
 		if (isMonitoring) return;
@@ -210,14 +227,15 @@ export function useProcessingState(): UseProcessingStateReturn {
 		const actualTotal = total - cache;
 		const percent = Math.round((actualProcessed / actualTotal) * 100);
 
-		if (etaSecondsRemaining === null || etaSecondsRemaining <= 0) {
+		const etaSeconds = getEtaSecondsRemaining();
+		if (etaSeconds === null || etaSeconds <= 0) {
 			return `Processing ${percent}%`;
 		}
 
-		const etaSec = Math.max(0, etaSecondsRemaining);
-		const etaDisplay = etaSec >= 60 ? `${Math.floor(etaSec / 60)}m${etaSec % 60}s` : `${etaSec}s`;
+		const etaDisplay =
+			etaSeconds >= 60 ? `${Math.floor(etaSeconds / 60)}m${etaSeconds % 60}s` : `${etaSeconds}s`;
 
-		return `Processing ${percent}% - ETA: ${etaDisplay}`;
+		return `Processing ${percent}% (${etaDisplay} left)`;
 	}
 
 	/**
