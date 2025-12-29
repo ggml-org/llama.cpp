@@ -92,6 +92,7 @@
 	const promptProgressValue = $derived(processingState.processingState?.promptProgress);
 	const promptProgressText = $derived.by(() => {
 		if (!promptProgressValue) return null;
+
 		const { processed, total, time_ms, cache } = promptProgressValue;
 
 		// Subtract cached tokens since they're processed instantly from KV cache
