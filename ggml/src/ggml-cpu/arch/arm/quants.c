@@ -1618,32 +1618,10 @@ void ggml_vec_dot_ifairy_q16_K(
     float sum_real_total = 0.0f;
     float sum_imag_total = 0.0f;
 
-    // 临时累加器，用于最后阶段的合并
-    float acc_ac_xr = 0.0f;
-    float acc_bd_xi = 0.0f;
-    float acc_bc_xr = 0.0f;
-    float acc_ad_xi = 0.0f;
-
     // If activation scales are uniform across blocks (tensor-scale activation),
     // we can accumulate integer sums across blocks and apply x scales once.
     const ggml_fp16_t x0_d_real = x[0].d_real;
     const ggml_fp16_t x0_d_imag = x[0].d_imag;
-
-    bool x_scales_uniform = true;
-    if (nb == 6) {
-        // Fast-path for the common K=1536 case (avoid an extra loop branch).
-        x_scales_uniform = (x0_d_real == x[1].d_real) && (x0_d_real == x[2].d_real) && (x0_d_real == x[3].d_real) &&
-                           (x0_d_real == x[4].d_real) && (x0_d_real == x[5].d_real) && (x0_d_imag == x[1].d_imag) &&
-                           (x0_d_imag == x[2].d_imag) && (x0_d_imag == x[3].d_imag) && (x0_d_imag == x[4].d_imag) &&
-                           (x0_d_imag == x[5].d_imag);
-    } else {
-        for (int i = 1; i < nb; ++i) {
-            if ((x0_d_real != x[i].d_real) || (x0_d_imag != x[i].d_imag)) {
-                x_scales_uniform = false;
-                break;
-            }
-        }
-    }
 
     int32_t sum_ac_total = 0;
     int32_t sum_ad_total = 0;
@@ -1814,41 +1792,26 @@ void ggml_vec_dot_ifairy_q16_K(
         const int32_t sum_bc = vaddvq_s32(acc_bc0);
         const int32_t sum_bd = vaddvq_s32(acc_bd0);
 
-        if (x_scales_uniform) {
-            sum_ac_total += sum_ac;
-            sum_bd_total += sum_bd;
-            sum_bc_total += sum_bc;
-            sum_ad_total += sum_ad;
-        } else {
-            const float x_real = GGML_CPU_FP16_TO_FP32(x[i].d_real);
-            const float x_imag = GGML_CPU_FP16_TO_FP32(x[i].d_imag);
-
-            acc_ac_xr += x_real * (float) sum_ac;
-            acc_bd_xi += x_imag * (float) sum_bd;
-            acc_bc_xr += x_real * (float) sum_bc;
-            acc_ad_xi += x_imag * (float) sum_ad;
-        }
+        sum_ac_total += sum_ac;
+        sum_bd_total += sum_bd;
+        sum_bc_total += sum_bc;
+        sum_ad_total += sum_ad;
     }
 
     // Load these scales late to reduce register pressure in the hot loop.
     const float coeff_w_real = GGML_CPU_FP16_TO_FP32(w[0].d_real);
     const float coeff_w_imag = GGML_CPU_FP16_TO_FP32(w[0].d_imag);
 
-    if (x_scales_uniform) {
-        const float x_real_uniform = GGML_CPU_FP16_TO_FP32(x0_d_real);
-        const float x_imag_uniform = GGML_CPU_FP16_TO_FP32(x0_d_imag);
+    const float x_real_uniform = GGML_CPU_FP16_TO_FP32(x0_d_real);
+    const float x_imag_uniform = GGML_CPU_FP16_TO_FP32(x0_d_imag);
 
-        const float acc_ac_xr_fused = x_real_uniform * (float) sum_ac_total;
-        const float acc_bd_xi_fused = x_imag_uniform * (float) sum_bd_total;
-        const float acc_bc_xr_fused = x_real_uniform * (float) sum_bc_total;
-        const float acc_ad_xi_fused = x_imag_uniform * (float) sum_ad_total;
+    const float acc_ac_xr_fused = x_real_uniform * (float) sum_ac_total;
+    const float acc_bd_xi_fused = x_imag_uniform * (float) sum_bd_total;
+    const float acc_bc_xr_fused = x_real_uniform * (float) sum_bc_total;
+    const float acc_ad_xi_fused = x_imag_uniform * (float) sum_ad_total;
 
-        sum_real_total = coeff_w_real * acc_ac_xr_fused + coeff_w_imag * acc_bd_xi_fused;
-        sum_imag_total = coeff_w_imag * acc_bc_xr_fused - coeff_w_real * acc_ad_xi_fused;
-    } else {
-        sum_real_total = coeff_w_real * acc_ac_xr + coeff_w_imag * acc_bd_xi;
-        sum_imag_total = coeff_w_imag * acc_bc_xr - coeff_w_real * acc_ad_xi;
-    }
+    sum_real_total = coeff_w_real * acc_ac_xr_fused + coeff_w_imag * acc_bd_xi_fused;
+    sum_imag_total = coeff_w_imag * acc_bc_xr_fused - coeff_w_real * acc_ad_xi_fused;
 
     ((ggml_bf16_t *) s)[0] = GGML_FP32_TO_BF16(sum_real_total);
     ((ggml_bf16_t *) s)[1] = GGML_FP32_TO_BF16(sum_imag_total);
