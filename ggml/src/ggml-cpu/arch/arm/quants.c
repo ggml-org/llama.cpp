@@ -1624,9 +1624,6 @@ void ggml_vec_dot_ifairy_q16_K(
     float acc_bc_xr = 0.0f;
     float acc_ad_xi = 0.0f;
 
-    const float coeff_w_real = GGML_CPU_FP16_TO_FP32(w[0].d_real);
-    const float coeff_w_imag = GGML_CPU_FP16_TO_FP32(w[0].d_imag);
-
     // Fused-6 (K=1536): if activation scales are uniform across 6 blocks, we can
     // accumulate integer sums across blocks and apply x scales once.
     const ggml_fp16_t x0_d_real        = x[0].d_real;
@@ -1641,9 +1638,6 @@ void ggml_vec_dot_ifairy_q16_K(
     int32_t sum_ad_total = 0;
     int32_t sum_bc_total = 0;
     int32_t sum_bd_total = 0;
-
-    const float x_real_uniform = x_scales_uniform ? GGML_CPU_FP16_TO_FP32(x0_d_real) : 0.0f;
-    const float x_imag_uniform = x_scales_uniform ? GGML_CPU_FP16_TO_FP32(x0_d_imag) : 0.0f;
 
     // 权重按 |0 16 32 48|1 17 33 49|...|15 31 47 63| 排列
     // 每个 byte 存 4 个 2-bit code：bits[1:0], bits[3:2], bits[5:4], bits[7:6]
@@ -1681,11 +1675,15 @@ void ggml_vec_dot_ifairy_q16_K(
         __builtin_prefetch(w + i + 1, 0, 1);
         __builtin_prefetch(x + i + 1, 0, 1);
 
-        // 累加器初始化
-        int32x4_t acc_ac0 = vzero, acc_ac1 = vzero;
-        int32x4_t acc_ad0 = vzero, acc_ad1 = vzero;
-        int32x4_t acc_bc0 = vzero, acc_bc1 = vzero;
-        int32x4_t acc_bd0 = vzero, acc_bd1 = vzero;
+        // 累加器初始化（绑定到 caller-saved NEON 寄存器，避免使用 v8..v15 触发函数序言保存/恢复）
+        register int32x4_t acc_ac0 asm("v20") = vzero;
+        register int32x4_t acc_ad0 asm("v21") = vzero;
+        register int32x4_t acc_bc0 asm("v22") = vzero;
+        register int32x4_t acc_bd0 asm("v23") = vzero;
+        register int32x4_t acc_ac1 asm("v24") = vzero;
+        register int32x4_t acc_ad1 asm("v25") = vzero;
+        register int32x4_t acc_bc1 asm("v26") = vzero;
+        register int32x4_t acc_bd1 asm("v7")  = vzero;
 
         const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
         const int8_t  * GGML_RESTRICT x_r_ptr = x[i].x_real;
@@ -1699,88 +1697,98 @@ void ggml_vec_dot_ifairy_q16_K(
 
             asm volatile(
                 // ---- block 0: weights 0..63 ----
-                "ldr            q0, [%[w]]                  \n"   // w_all_0
-                "and            v1.16b, v0.16b, %[m0f].16b  \n"   // lo nibble
-                "ushr           v2.16b, v0.16b, #4          \n"   // hi nibble
+                "ldr            q0, [%[w]]                  \n"  // w_all_0
+                "and            v1.16b, v0.16b, %[m0f].16b  \n"  // lo nibble
+                "ushr           v2.16b, v0.16b, #4          \n"  // hi nibble
 
-                "ldp            q8,  q10, [%[xr]]           \n"   // xr0, xr1
-                "ldp            q9,  q11, [%[xi]]           \n"   // xi0, xi1
-                "ldp            q12, q14, [%[xr], #32]      \n"   // xr2, xr3
-                "ldp            q13, q15, [%[xi], #32]      \n"   // xi2, xi3
+                // Use caller-saved NEON regs (avoid v8..v15) to reduce prologue
+                // save/restore overhead for this very hot function.
+                //
+                // xr0/xr1 -> v3/v4, xi0/xi1 -> v5/v6
+                "ldp            q3,  q4,  [%[xr]]           \n"
+                "ldp            q5,  q6,  [%[xi]]           \n"
 
-                "tbl            v5.16b, {%[wr0].16b}, v1.16b \n"  // wr0 (bits[1:0] of lo nibble)
-                "tbl            v6.16b, {%[wi0].16b}, v1.16b \n"  // wi0
-                "tbl            v16.16b,{%[wr1].16b}, v1.16b \n"  // wr1 (bits[3:2] of lo nibble)
-                "tbl            v17.16b,{%[wi1].16b}, v1.16b \n"  // wi1
-                "tbl            v18.16b,{%[wr0].16b}, v2.16b \n"  // wr2 (bits[1:0] of hi nibble)
-                "tbl            v19.16b,{%[wi0].16b}, v2.16b \n"  // wi2
-                "tbl            v1.16b, {%[wr1].16b}, v2.16b \n"  // wr3 (bits[3:2] of hi nibble), reuse v1
-                "tbl            v2.16b, {%[wi1].16b}, v2.16b \n"  // wi3 reuse v2
+                // lo nibble: idx0 -> v16/v17, idx1 -> v18/v19
+                "tbl            v16.16b, {%[wr0].16b}, v1.16b \n"
+                "tbl            v17.16b, {%[wi0].16b}, v1.16b \n"
+                "tbl            v18.16b, {%[wr1].16b}, v1.16b \n"
+                "tbl            v19.16b, {%[wi1].16b}, v1.16b \n"
 
-                "sdot           %[ac0].4s, v8.16b,  v5.16b  \n"
-                "sdot           %[ad0].4s, v9.16b,  v5.16b  \n"
-                "sdot           %[bc0].4s, v8.16b,  v6.16b  \n"
-                "sdot           %[bd0].4s, v9.16b,  v6.16b  \n"
+                "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
 
-                "sdot           %[ac0].4s, v10.16b, v16.16b \n"
-                "sdot           %[ad0].4s, v11.16b, v16.16b \n"
-                "sdot           %[bc0].4s, v10.16b, v17.16b \n"
-                "sdot           %[bd0].4s, v11.16b, v17.16b \n"
+                "sdot           %[ac0].4s, v4.16b,  v18.16b \n"
+                "sdot           %[ad0].4s, v6.16b,  v18.16b \n"
+                "sdot           %[bc0].4s, v4.16b,  v19.16b \n"
+                "sdot           %[bd0].4s, v6.16b,  v19.16b \n"
 
-                "sdot           %[ac1].4s, v12.16b, v18.16b \n"
-                "sdot           %[ad1].4s, v13.16b, v18.16b \n"
-                "sdot           %[bc1].4s, v12.16b, v19.16b \n"
-                "sdot           %[bd1].4s, v13.16b, v19.16b \n"
+                // xr2/xr3 -> v3/v4, xi2/xi3 -> v5/v6
+                "ldp            q3,  q4,  [%[xr], #32]      \n"
+                "ldp            q5,  q6,  [%[xi], #32]      \n"
 
-                "sdot           %[ac1].4s, v14.16b, v1.16b  \n"
-                "sdot           %[ad1].4s, v15.16b, v1.16b  \n"
-                "sdot           %[bc1].4s, v14.16b, v2.16b  \n"
-                "sdot           %[bd1].4s, v15.16b, v2.16b  \n"
+                // hi nibble: idx2 -> v16/v17, idx3 -> v18/v19
+                "tbl            v16.16b, {%[wr0].16b}, v2.16b \n"
+                "tbl            v17.16b, {%[wi0].16b}, v2.16b \n"
+                "tbl            v18.16b, {%[wr1].16b}, v2.16b \n"
+                "tbl            v19.16b, {%[wi1].16b}, v2.16b \n"
+
+                "sdot           %[ac1].4s, v3.16b,  v16.16b \n"
+                "sdot           %[ad1].4s, v5.16b,  v16.16b \n"
+                "sdot           %[bc1].4s, v3.16b,  v17.16b \n"
+                "sdot           %[bd1].4s, v5.16b,  v17.16b \n"
+
+                "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
 
                 // ---- block 1: weights 64..127 ----
                 "ldr            q0, [%[w],  #16]            \n"
                 "and            v1.16b, v0.16b, %[m0f].16b  \n"
                 "ushr           v2.16b, v0.16b, #4          \n"
 
-                "ldp            q8,  q10, [%[xr], #64]      \n"
-                "ldp            q9,  q11, [%[xi], #64]      \n"
-                "ldp            q12, q14, [%[xr], #96]      \n"
-                "ldp            q13, q15, [%[xi], #96]      \n"
+                "ldp            q3,  q4,  [%[xr], #64]      \n"
+                "ldp            q5,  q6,  [%[xi], #64]      \n"
 
-                "tbl            v5.16b, {%[wr0].16b}, v1.16b \n"
-                "tbl            v6.16b, {%[wi0].16b}, v1.16b \n"
-                "tbl            v16.16b,{%[wr1].16b}, v1.16b \n"
-                "tbl            v17.16b,{%[wi1].16b}, v1.16b \n"
-                "tbl            v18.16b,{%[wr0].16b}, v2.16b \n"
-                "tbl            v19.16b,{%[wi0].16b}, v2.16b \n"
-                "tbl            v1.16b, {%[wr1].16b}, v2.16b \n"
-                "tbl            v2.16b, {%[wi1].16b}, v2.16b \n"
+                "tbl            v16.16b, {%[wr0].16b}, v1.16b \n"
+                "tbl            v17.16b, {%[wi0].16b}, v1.16b \n"
+                "tbl            v18.16b, {%[wr1].16b}, v1.16b \n"
+                "tbl            v19.16b, {%[wi1].16b}, v1.16b \n"
 
-                "sdot           %[ac0].4s, v8.16b,  v5.16b  \n"
-                "sdot           %[ad0].4s, v9.16b,  v5.16b  \n"
-                "sdot           %[bc0].4s, v8.16b,  v6.16b  \n"
-                "sdot           %[bd0].4s, v9.16b,  v6.16b  \n"
+                "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
 
-                "sdot           %[ac0].4s, v10.16b, v16.16b \n"
-                "sdot           %[ad0].4s, v11.16b, v16.16b \n"
-                "sdot           %[bc0].4s, v10.16b, v17.16b \n"
-                "sdot           %[bd0].4s, v11.16b, v17.16b \n"
+                "sdot           %[ac0].4s, v4.16b,  v18.16b \n"
+                "sdot           %[ad0].4s, v6.16b,  v18.16b \n"
+                "sdot           %[bc0].4s, v4.16b,  v19.16b \n"
+                "sdot           %[bd0].4s, v6.16b,  v19.16b \n"
 
-                "sdot           %[ac1].4s, v12.16b, v18.16b \n"
-                "sdot           %[ad1].4s, v13.16b, v18.16b \n"
-                "sdot           %[bc1].4s, v12.16b, v19.16b \n"
-                "sdot           %[bd1].4s, v13.16b, v19.16b \n"
+                "ldp            q3,  q4,  [%[xr], #96]      \n"
+                "ldp            q5,  q6,  [%[xi], #96]      \n"
 
-                "sdot           %[ac1].4s, v14.16b, v1.16b  \n"
-                "sdot           %[ad1].4s, v15.16b, v1.16b  \n"
-                "sdot           %[bc1].4s, v14.16b, v2.16b  \n"
-                "sdot           %[bd1].4s, v15.16b, v2.16b  \n"
+                "tbl            v16.16b, {%[wr0].16b}, v2.16b \n"
+                "tbl            v17.16b, {%[wi0].16b}, v2.16b \n"
+                "tbl            v18.16b, {%[wr1].16b}, v2.16b \n"
+                "tbl            v19.16b, {%[wi1].16b}, v2.16b \n"
+
+                "sdot           %[ac1].4s, v3.16b,  v16.16b \n"
+                "sdot           %[ad1].4s, v5.16b,  v16.16b \n"
+                "sdot           %[bc1].4s, v3.16b,  v17.16b \n"
+                "sdot           %[bd1].4s, v5.16b,  v17.16b \n"
+
+                "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
                 : [ac0] "+w"(acc_ac0), [ad0] "+w"(acc_ad0), [bc0] "+w"(acc_bc0), [bd0] "+w"(acc_bd0),
                   [ac1] "+w"(acc_ac1), [ad1] "+w"(acc_ad1), [bc1] "+w"(acc_bc1), [bd1] "+w"(acc_bd1)
                 : [w] "r"(w_iter), [xr] "r"(xr), [xi] "r"(xi), [m0f] "w"(v_mask_0f_reg), [wr0] "w"(v_lut_wr_i0_reg),
                   [wi0] "w"(v_lut_wi_i0_reg), [wr1] "w"(v_lut_wr_i1_reg), [wi1] "w"(v_lut_wi_i1_reg)
-                : "v0", "v1", "v2", "v5", "v6", "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15", "v16", "v17",
-                  "v18", "v19", "memory");
+                : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v16", "v17", "v18", "v19", "memory");
         } // j loop
 
         // 合并四个累加 Bank
@@ -1811,7 +1819,14 @@ void ggml_vec_dot_ifairy_q16_K(
         }
     }
 
+    // Load these scales late to reduce register pressure in the hot loop.
+    const float coeff_w_real = GGML_CPU_FP16_TO_FP32(w[0].d_real);
+    const float coeff_w_imag = GGML_CPU_FP16_TO_FP32(w[0].d_imag);
+
     if (x_scales_uniform) {
+        const float x_real_uniform = GGML_CPU_FP16_TO_FP32(x0_d_real);
+        const float x_imag_uniform = GGML_CPU_FP16_TO_FP32(x0_d_imag);
+
         const float acc_ac_xr_fused = x_real_uniform * (float) sum_ac_total;
         const float acc_bd_xi_fused = x_imag_uniform * (float) sum_bd_total;
         const float acc_bc_xr_fused = x_real_uniform * (float) sum_bc_total;
