@@ -8,7 +8,7 @@
 		ChatFormTextarea
 	} from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';

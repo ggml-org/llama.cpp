@@ -5,7 +5,7 @@
 	import { ChatAttachmentsList, DialogConfirmation, ModelsSelector } from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import { AttachmentType, FileTypeCategory, MimeTypeText } from '$lib/enums';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { setEditModeActive, clearEditMode } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
