@@ -2,8 +2,8 @@
 #include <sstream>
 #include <algorithm>
 
-// We'll use the nlohmann/json library that's already vendored in llama.cpp
-#include "../../examples/json.hpp"
+// Use vendored nlohmann/json library
+#include "../../vendor/nlohmann/json.hpp"
 
 using json = nlohmann::json;
 

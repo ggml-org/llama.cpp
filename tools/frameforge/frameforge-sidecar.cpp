@@ -148,8 +148,13 @@ static bool read_wav(const std::string & fname, std::vector<float> & pcmf32, int
     }
     
     char buf[256];
-    fread(buf, 1, 44, f);  // Read WAV header (44 bytes)
-    
+    size_t bytes_read = fread(buf, 1, 44, f);  // Read WAV header (44 bytes)
+    if (bytes_read != 44) {
+        fprintf(stderr, "Error: Failed to read WAV header\n");
+        fclose(f);
+        return false;
+    }
+
     // Get sample rate from header
     sample_rate = *(int32_t *)(buf + 24);
     
@@ -205,73 +210,70 @@ static std::string classify_intent(llama_context * lctx, llama_model * model, co
     if (!lctx || !model) {
         return "";
     }
-    
+
+    // Get vocab from model
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
     // Build the prompt
     std::string prompt = std::string(INTENT_SYSTEM_PROMPT) + "\n\nUser input: " + user_input + "\n\nJSON output:";
-    
+
     // Tokenize the prompt
-    std::vector<llama_token> tokens = ::llama_tokenize(model, prompt, true, true);
-    
+    // First get the required size
+    const int                n_tokens = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), NULL, 0, true, true);
+    std::vector<llama_token> tokens(n_tokens);
+    if (llama_tokenize(vocab, prompt.c_str(), prompt.size(), tokens.data(), tokens.size(), true, true) < 0) {
+        fprintf(stderr, "Error: Failed to tokenize prompt\n");
+        return "";
+    }
+
     if (verbose) {
         fprintf(stderr, "Prompt tokens: %zu\n", tokens.size());
     }
     
     // Evaluate the prompt
-    llama_batch batch = llama_batch_init(tokens.size(), 0, 1);
-    for (size_t i = 0; i < tokens.size(); i++) {
-        llama_batch_add(batch, tokens[i], i, {0}, false);
-    }
-    batch.logits[batch.n_tokens - 1] = true;
-    
+    llama_batch batch = llama_batch_get_one(tokens.data(), tokens.size());
+
     if (llama_decode(lctx, batch) != 0) {
         fprintf(stderr, "Error: Failed to evaluate prompt\n");
-        llama_batch_free(batch);
         return "";
     }
-    
-    llama_batch_free(batch);
-    
+
     // Generate response
     std::string response;
-    const int max_tokens = 512;
-    int n_cur = tokens.size();
-    
+    const int   max_tokens = 512;
+
     for (int i = 0; i < max_tokens; i++) {
         auto * logits = llama_get_logits_ith(lctx, -1);
         
         // Simple greedy sampling
         llama_token new_token = 0;
         float max_logit = logits[0];
-        for (int j = 1; j < llama_n_vocab(model); j++) {
+        for (int j = 1; j < llama_vocab_n_tokens(vocab); j++) {
             if (logits[j] > max_logit) {
                 max_logit = logits[j];
                 new_token = j;
             }
         }
-        
+
         // Check for end of text
-        if (new_token == llama_token_eos(model)) {
+        if (llama_vocab_is_eog(vocab, new_token)) {
             break;
         }
-        
+
         // Decode token to text
         char buf[128];
-        int n = llama_token_to_piece(model, new_token, buf, sizeof(buf), 0, true);
+        int  n = llama_token_to_piece(vocab, new_token, buf, sizeof(buf), 0, true);
         if (n > 0) {
             response.append(buf, n);
         }
         
         // Evaluate the new token
-        batch = llama_batch_init(1, 0, 1);
-        llama_batch_add(batch, new_token, n_cur++, {0}, true);
-        
+        batch = llama_batch_get_one(&new_token, 1);
+
         if (llama_decode(lctx, batch) != 0) {
-            llama_batch_free(batch);
             break;
         }
-        
-        llama_batch_free(batch);
-        
+
         // Check if we have a complete JSON object
         if (response.find('}') != std::string::npos) {
             break;
@@ -304,7 +306,7 @@ int main(int argc, char ** argv) {
     // Initialize Llama
     fprintf(stderr, "Loading Llama model: %s\n", params.llama_model.c_str());
     llama_model_params model_params = llama_model_default_params();
-    llama_model * model = llama_load_model_from_file(params.llama_model.c_str(), model_params);
+    llama_model *      model        = llama_model_load_from_file(params.llama_model.c_str(), model_params);
     if (!model) {
         fprintf(stderr, "Error: Failed to load Llama model\n");
         whisper_free(wctx);
@@ -314,10 +316,10 @@ int main(int argc, char ** argv) {
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 2048;
     ctx_params.n_threads = params.n_threads;
-    llama_context * lctx = llama_new_context_with_model(model, ctx_params);
+    llama_context * lctx            = llama_init_from_model(model, ctx_params);
     if (!lctx) {
         fprintf(stderr, "Error: Failed to create Llama context\n");
-        llama_free_model(model);
+        llama_model_free(model);
         whisper_free(wctx);
         return 1;
     }
@@ -333,7 +335,7 @@ int main(int argc, char ** argv) {
         int sample_rate = 0;
         if (!read_wav(params.audio_file, pcmf32, sample_rate)) {
             llama_free(lctx);
-            llama_free_model(model);
+            llama_model_free(model);
             whisper_free(wctx);
             return 1;
         }
@@ -360,7 +362,7 @@ int main(int argc, char ** argv) {
         }
         
         llama_free(lctx);
-        llama_free_model(model);
+        llama_model_free(model);
         whisper_free(wctx);
         return 0;
     }
@@ -372,7 +374,7 @@ int main(int argc, char ** argv) {
     if (!ipc_server.start()) {
         fprintf(stderr, "Error: Failed to start IPC server\n");
         llama_free(lctx);
-        llama_free_model(model);
+        llama_model_free(model);
         whisper_free(wctx);
         return 1;
     }
@@ -395,7 +397,7 @@ int main(int argc, char ** argv) {
     
     ipc_server.stop();
     llama_free(lctx);
-    llama_free_model(model);
+    llama_model_free(model);
     whisper_free(wctx);
     
     return 0;

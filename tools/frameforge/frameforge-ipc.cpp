@@ -1,6 +1,8 @@
 #include "frameforge-ipc.h"
-#include <iostream>
+
+#include <cstdint>
 #include <cstring>
+#include <iostream>
 
 #ifdef _WIN32
 #include <windows.h>

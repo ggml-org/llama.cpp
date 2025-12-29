@@ -1,5 +1,6 @@
 #include "frameforge-json.h"
-#include "../../examples/json.hpp"
+
+#include "../../vendor/nlohmann/json.hpp"
 
 using json = nlohmann::json;
 
