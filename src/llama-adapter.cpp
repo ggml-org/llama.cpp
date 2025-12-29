@@ -475,8 +475,8 @@ int32_t llama_adapter_meta_val_str_by_index(const llama_adapter_lora * adapter, 
 
 void llama_adapter_lora_free(llama_adapter_lora * adapter) {
     // update number of nodes used
+    GGML_ASSERT(adapter->model.n_lora_nodes >= adapter->get_n_nodes());
     adapter->model.n_lora_nodes -= adapter->get_n_nodes();
-    GGML_ASSERT(adapter->model.n_lora_nodes >= 0);
 
     delete adapter;
 }
