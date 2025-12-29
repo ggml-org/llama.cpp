@@ -1304,6 +1304,9 @@ private:
     void populate_token_probs(const server_slot & slot, completion_token_output & result, bool post_sampling, bool special, int idx) const {
         const size_t n_probs = slot.task->params.sampling.n_probs;
 
+        // get the previous token text in case of incomplete unicode token
+        std::string tok_prefix = slot.generated_text.substr(slot.n_sent_text);
+
         if (post_sampling) {
             const auto * cur_p = common_sampler_get_candidates(slot.smpl.get(), true);
             const size_t max_probs = cur_p->size;
@@ -1321,7 +1324,7 @@ private:
             for (size_t i = 0; i < std::min(max_probs, n_probs); i++) {
                 result.probs.push_back({
                     cur_p->data[i].id,
-                    common_token_to_piece(ctx, cur_p->data[i].id, special),
+                    tok_prefix + common_token_to_piece(ctx, cur_p->data[i].id, special),
                     cur_p->data[i].p
                 });
             }
@@ -1343,7 +1346,7 @@ private:
             for (size_t i = 0; i < std::min(cur.size(), n_probs); i++) {
                 result.probs.push_back({
                     cur[i].id,
-                    common_token_to_piece(ctx, cur[i].id, special),
+                    tok_prefix + common_token_to_piece(ctx, cur[i].id, special),
                     cur[i].p
                 });
             }
