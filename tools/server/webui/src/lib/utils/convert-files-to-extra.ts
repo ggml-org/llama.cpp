@@ -86,8 +86,7 @@ export async function parseFilesToMessageExtras(
 					: false;
 
 				// Force PDF-to-text for non-vision models
-				let shouldProcessAsImages =
-					Boolean(settingsStore.getConfig('pdfAsImage')) && hasVisionSupport;
+				let shouldProcessAsImages = settingsStore.getConfig('pdfAsImage') && hasVisionSupport;
 
 				// If user had pdfAsImage enabled but model doesn't support vision, update setting and notify
 				if (settingsStore.getConfig('pdfAsImage') && !hasVisionSupport) {

@@ -41,7 +41,7 @@
 
 	let { showCenteredEmpty = false } = $props();
 
-	let disableAutoScroll = $derived(Boolean(settingsStore.getConfig('disableAutoScroll')));
+	let disableAutoScroll = $derived(settingsStore.getConfig('disableAutoScroll'));
 	let autoScrollEnabled = $state(true);
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
 	let dragCounter = $state(0);

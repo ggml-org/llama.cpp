@@ -108,7 +108,7 @@
 	}
 
 	async function handleCopy() {
-		const asPlainText = Boolean(settingsStore.getConfig('copyTextAttachmentsAsPlainText'));
+		const asPlainText = settingsStore.getConfig('copyTextAttachmentsAsPlainText');
 		const clipboardContent = formatMessageForClipboard(message.content, message.extra, asPlainText);
 		await copyToClipboard(clipboardContent, 'Message copied to clipboard');
 		onCopy?.(message);
