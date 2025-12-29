@@ -19,8 +19,8 @@ If AI is used to generate any portion of the code, contributors must adhere to t
 
 1. Explicitly disclose the manner in which AI was employed.
 2. Perform a comprehensive manual review prior to submitting the pull request.
-3. Be prepared to explain every line of code submitted if asked about it by a maintainer.
-4. Using AI to respond to human reviewer is strictly prohibited.
+3. Be prepared to explain every line of code they submitted when asked about it by a maintainer.
+4. Using AI to respond to human reviewers is strictly prohibited.
 
 For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 
@@ -38,7 +38,7 @@ Before submitting your PR:
     - Avoid combining unrelated changes in a single PR
     - For intricate features, consider opening a feature request first to discuss and align expectations
     - When adding support for a new model or feature, focus on **CPU support only** in the initial PR unless you have a good reason not to. Add support for other backends like CUDA in follow-up PRs
-- Consider allowing write access to your branch for faster reviews, as reviewers can push commits directlyPRs
+- Consider allowing write access to your branch for faster reviews, as reviewers can push commits directly
 
 After submitting your PR:
 - Expect requests for modifications to ensure the code meets llama.cpp's standards for quality and long-term maintainability
@@ -55,7 +55,7 @@ After submitting your PR:
 - When merging a PR, make sure you have a good understanding of the changes
 - Be mindful of maintenance: most of the work going into a feature happens after the PR is merged. If the PR author is not committed to contribute long-term, someone else needs to take responsibility (you)
 
-Maintainers reserve the right to decline review or close pull requests that satisfy any of the following conditions:
+Maintainers reserve the right to decline review or close pull requests for any reason, particularly under any of the following conditions:
 - The proposed change is already mentioned in the roadmap or an existing issue, and it has been assigned to someone.
 - The pull request duplicates an existing one.
 - The contributor fails to adhere to this contributing guide.
