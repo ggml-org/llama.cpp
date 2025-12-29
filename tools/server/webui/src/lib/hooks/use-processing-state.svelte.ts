@@ -47,10 +47,6 @@ export function useProcessingState(): UseProcessingStateReturn {
 	let lastKnownState = $state<ApiProcessingState | null>(null);
 	let lastKnownProcessingStats = $state<LiveProcessingStats | null>(null);
 
-	let baseEtaSeconds = $state<number | null>(null); // ETA calculated from last progress update
-	let etaCalculatedAt = $state<number | null>(null); // Timestamp when ETA was calculated
-	let etaTick = $state(0); // Counter to force re-renders for smooth countdown
-
 	// Derive processing state reactively from chatStore's direct state
 	const processingState = $derived.by(() => {
 		if (!isMonitoring) {
@@ -85,50 +81,6 @@ export function useProcessingState(): UseProcessingStateReturn {
 			}
 		}
 	});
-
-	// Calculate base ETA when progress data arrives
-	// This only sets the baseline - actual display uses time-based calculation
-	$effect(() => {
-		if (processingState?.promptProgress) {
-			const { processed, total, time_ms, cache } = processingState.promptProgress;
-			const actualProcessed = processed - cache;
-			const actualTotal = total - cache;
-
-			if (actualProcessed > 0 && time_ms > 0) {
-				const tokensPerSec = actualProcessed / (time_ms / 1000);
-				const remaining = actualTotal - actualProcessed;
-
-				baseEtaSeconds = Math.ceil(remaining / tokensPerSec);
-				etaCalculatedAt = Date.now();
-			}
-		} else {
-			baseEtaSeconds = null;
-			etaCalculatedAt = null;
-		}
-	});
-
-	// Timer to force re-renders for smooth countdown display
-	// Does NOT modify ETA value - only triggers reactive updates
-	$effect(() => {
-		if (baseEtaSeconds === null) return;
-
-		const interval = setInterval(() => {
-			etaTick++; // Force re-render
-		}, 1000);
-
-		return () => clearInterval(interval);
-	});
-
-	function getEtaSecondsRemaining(): number | null {
-		void etaTick;
-
-		if (baseEtaSeconds === null || etaCalculatedAt === null) return null;
-
-		const elapsedSeconds = Math.floor((Date.now() - etaCalculatedAt) / 1000);
-		const remaining = baseEtaSeconds - elapsedSeconds;
-
-		return Math.max(0, remaining);
-	}
 
 	function startMonitoring(): void {
 		if (isMonitoring) return;
@@ -216,7 +168,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 	}
 
 	/**
-	 * Returns a short progress message percent and ETA
+	 * Returns a short progress message with percent
 	 */
 	function getPromptProgressText(): string | null {
 		if (!processingState?.promptProgress) return null;
@@ -227,15 +179,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 		const actualTotal = total - cache;
 		const percent = Math.round((actualProcessed / actualTotal) * 100);
 
-		const etaSeconds = getEtaSecondsRemaining();
-		if (etaSeconds === null || etaSeconds <= 0) {
-			return `Processing ${percent}%`;
-		}
-
-		const etaDisplay =
-			etaSeconds >= 60 ? `${Math.floor(etaSeconds / 60)}m${etaSeconds % 60}s` : `${etaSeconds}s`;
-
-		return `Processing ${percent}% (${etaDisplay} left)`;
+		return `Processing ${percent}%`;
 	}
 
 	/**
