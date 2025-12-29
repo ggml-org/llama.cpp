@@ -1696,6 +1696,84 @@ class TextModel(ModelBase):
         if template is not None:
             self.gguf_writer.add_chat_template(template)
 
+    def _set_vocab_plamo(self):
+        # PLaMo models use a custom tokenizer with a .jsonl file
+        tokenizer_jsonl_path = self.dir_model / "tokenizer.jsonl"
+        tokenizer_config_path = self.dir_model / "tokenizer_config.json"
+
+        if not tokenizer_jsonl_path.is_file():
+            raise FileNotFoundError(f"PLaMo tokenizer file not found: {tokenizer_jsonl_path}")
+
+        # Load tokenizer config
+        with open(tokenizer_config_path, "r", encoding="utf-8") as f:
+            tokenizer_config = json.load(f)
+
+        # Load tokens from JSONL file (actually a list format)
+        tokens = []
+        scores = []
+        toktypes = []
+
+        with open(tokenizer_jsonl_path, "r", encoding="utf-8") as f:
+            for line_num, line in enumerate(f):
+                if line.strip():
+                    token_data = json.loads(line)
+                    # Format: [token, score, type, ?, ?, ?, ?]
+                    token = token_data[0].encode("utf-8")
+                    score = float(token_data[1])
+                    token_type_str = token_data[2] if len(token_data) > 2 else "NORMAL"
+
+                    tokens.append(token)
+                    scores.append(score)
+
+                    if token_type_str == "UNKNOWN":
+                        toktypes.append(gguf.TokenType.UNKNOWN)
+                    elif token_type_str == "CONTROL":
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    elif token_type_str == "BYTE":
+                        toktypes.append(gguf.TokenType.BYTE)
+                    else:
+                        token_str = token_data[0]
+                        if token_str.startswith("<|plamo:") and token_str.endswith("|>"):
+                            toktypes.append(gguf.TokenType.CONTROL)
+                        else:
+                            toktypes.append(gguf.TokenType.NORMAL)
+
+        vocab_size = self.hparams["vocab_size"]
+        if vocab_size > len(tokens):
+            pad_count = vocab_size - len(tokens)
+            logger.debug(f"Padding vocab with {pad_count} token(s) - [PAD1] through [PAD{pad_count}]")
+            for i in range(1, pad_count + 1):
+                tokens.append(bytes(f"[PAD{i}]", encoding="utf-8"))
+                scores.append(-1000.0)
+                toktypes.append(gguf.TokenType.UNUSED)
+
+        self.gguf_writer.add_tokenizer_model("plamo2")
+        self.gguf_writer.add_tokenizer_pre("default")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+
+        if "bos_token" in tokenizer_config and tokenizer_config["bos_token"] is not None:
+            token_id = tokens.index(tokenizer_config["bos_token"].encode("utf-8"))
+            self.gguf_writer.add_bos_token_id(token_id)
+        if "eos_token" in tokenizer_config and tokenizer_config["eos_token"] is not None:
+            token_id = tokens.index(tokenizer_config["eos_token"].encode("utf-8"))
+            self.gguf_writer.add_eos_token_id(token_id)
+        if "pad_token" in tokenizer_config and tokenizer_config["pad_token"] is not None:
+            token_id = tokens.index(tokenizer_config["pad_token"].encode("utf-8"))
+            self.gguf_writer.add_pad_token_id(token_id)
+        if "sep_token" in tokenizer_config and tokenizer_config["sep_token"] is not None:
+            token_id = tokens.index(tokenizer_config["sep_token"].encode("utf-8"))
+            self.gguf_writer.add_sep_token_id(token_id)
+        if "unk_token" in tokenizer_config and tokenizer_config["unk_token"] is not None:
+            token_id = tokens.index(tokenizer_config["unk_token"].encode("utf-8"))
+            self.gguf_writer.add_unk_token_id(token_id)
+
+        # Add <|plamo:op|> as EOT to ensure appropriate end of generation
+        self.gguf_writer.add_eot_token_id(4)
+
+        self.gguf_writer.add_add_space_prefix(False)
+
 
 class MmprojModel(ModelBase):
     model_type = ModelType.MMPROJ
@@ -4798,87 +4876,7 @@ class Plamo2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PLAMO2
 
     def set_vocab(self):
-        # PLaMo 2 uses a custom tokenizer with a .jsonl file
-        # We need to handle this specially
-        tokenizer_jsonl_path = self.dir_model / "tokenizer.jsonl"
-        tokenizer_config_path = self.dir_model / "tokenizer_config.json"
-
-        if not tokenizer_jsonl_path.is_file():
-            raise FileNotFoundError(f"PLaMo 2 tokenizer file not found: {tokenizer_jsonl_path}")
-
-        # Load tokenizer config
-        with open(tokenizer_config_path, 'r', encoding='utf-8') as f:
-            tokenizer_config = json.load(f)
-
-        # Load tokens from JSONL file (actually a list format)
-        tokens = []
-        scores = []
-        toktypes = []
-
-        with open(tokenizer_jsonl_path, 'r', encoding='utf-8') as f:
-            for line_num, line in enumerate(f):
-                if line.strip():
-                    token_data = json.loads(line)
-                    # Format: [token, score, type, ?, ?, ?, ?]
-                    token = token_data[0].encode("utf-8")
-                    score = float(token_data[1])
-                    token_type_str = token_data[2] if len(token_data) > 2 else "NORMAL"
-
-                    tokens.append(token)
-                    scores.append(score)
-
-                    # Map token type strings to GGUF token types
-                    if token_type_str == "UNKNOWN":
-                        toktypes.append(gguf.TokenType.UNKNOWN)
-                    elif token_type_str == "CONTROL":
-                        toktypes.append(gguf.TokenType.CONTROL)
-                    elif token_type_str == "BYTE":
-                        toktypes.append(gguf.TokenType.BYTE)
-                    else:
-                        # Check for PLaMo-2 special tokens
-                        token_str = token_data[0]
-                        if token_str.startswith("<|plamo:") and token_str.endswith("|>"):
-                            toktypes.append(gguf.TokenType.CONTROL)
-                        else:
-                            toktypes.append(gguf.TokenType.NORMAL)
-
-        vocab_size = self.hparams["vocab_size"]
-        if vocab_size > len(tokens):
-            pad_count = vocab_size - len(tokens)
-            logger.debug(f"Padding vocab with {pad_count} token(s) - [PAD1] through [PAD{pad_count}]")
-            for i in range(1, pad_count + 1):
-                tokens.append(bytes(f"[PAD{i}]", encoding="utf-8"))
-                scores.append(-1000.0)
-                toktypes.append(gguf.TokenType.UNUSED)
-
-        # Use "plamo2" tokenizer type for PLaMo-2's custom Aho-Corasick tokenizer
-        self.gguf_writer.add_tokenizer_model("plamo2")
-        self.gguf_writer.add_tokenizer_pre("default")
-        self.gguf_writer.add_token_list(tokens)
-        self.gguf_writer.add_token_scores(scores)
-        self.gguf_writer.add_token_types(toktypes)
-
-        # Add special tokens from config
-        if "bos_token" in tokenizer_config and tokenizer_config["bos_token"] is not None:
-            token_id = tokens.index(tokenizer_config["bos_token"].encode("utf-8"))
-            self.gguf_writer.add_bos_token_id(token_id)
-        if "eos_token" in tokenizer_config and tokenizer_config["eos_token"] is not None:
-            token_id = tokens.index(tokenizer_config["eos_token"].encode("utf-8"))
-            self.gguf_writer.add_eos_token_id(token_id)
-        if "pad_token" in tokenizer_config and tokenizer_config["pad_token"] is not None:
-            token_id = tokens.index(tokenizer_config["pad_token"].encode("utf-8"))
-            self.gguf_writer.add_pad_token_id(token_id)
-        if "sep_token" in tokenizer_config and tokenizer_config["sep_token"] is not None:
-            token_id = tokens.index(tokenizer_config["sep_token"].encode("utf-8"))
-            self.gguf_writer.add_sep_token_id(token_id)
-        if "unk_token" in tokenizer_config and tokenizer_config["unk_token"] is not None:
-            token_id = tokens.index(tokenizer_config["unk_token"].encode("utf-8"))
-            self.gguf_writer.add_unk_token_id(token_id)
-
-        # Add <|plamo:op|> as EOT to ensure appropriate end of generation
-        self.gguf_writer.add_eot_token_id(4)
-
-        self.gguf_writer.add_add_space_prefix(False)
+        self._set_vocab_plamo()
 
     def set_gguf_parameters(self):
         hparams = self.hparams
@@ -4964,6 +4962,56 @@ class Plamo2Model(TextModel):
         new_name = self.map_tensor_name(name)
 
         return [(new_name, data_torch)]
+
+
+@ModelBase.register("Plamo3ForCausalLM", "PLaMo3ForCausalLM")
+class Plamo3Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.PLAMO3
+
+    def set_vocab(self):
+        self._set_vocab_plamo()
+
+        tokenizer_config_path = self.dir_model / "tokenizer_config.json"
+        tokenizer_config = {}
+
+        if tokenizer_config_path.is_file():
+            with open(tokenizer_config_path, encoding="utf-8") as f:
+                tokenizer_config = json.load(f)
+
+        chat_template = tokenizer_config.get("chat_template")
+        chat_template_jinja = self.dir_model / "chat_template.jinja"
+
+        if chat_template_jinja.is_file():
+            with open(chat_template_jinja, encoding="utf-8") as f:
+                chat_template = f.read()
+
+        if chat_template:
+            self.gguf_writer.add_chat_template(chat_template)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+        if (sliding_window := self.find_hparam(["window_size", "sliding_window"], optional=True)) is not None:
+            self.gguf_writer.add_sliding_window(sliding_window)
+            self.gguf_writer.add_sliding_window_pattern(self.hparams["sliding_window_pattern"])
+            self.gguf_writer.add_rope_freq_base_swa(self.rope_parameters.get("sliding_attention", {"rope_theta": self.hparams.get("rope_local_theta")})["rope_theta"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+
+        if name.endswith(".pre_mixer_norm.weight"):
+            data_torch = data_torch + 1.0
+        elif name.endswith(".post_mixer_norm.weight"):
+            data_torch = data_torch + 1.0 / 5
+        elif name.endswith(".pre_mlp_norm.weight"):
+            data_torch = data_torch + 1.0
+        elif name.endswith(".post_mlp_norm.weight"):
+            data_torch = data_torch + 1.0 / (5**1.5)
+        elif name.endswith((".mixer.q_norm.weight", ".mixer.k_norm.weight")):
+            data_torch = data_torch + 1.0
+        elif name.endswith(".norm.weight"):
+            data_torch = data_torch + 1.0
+
+        return [(self.map_tensor_name(name), data_torch)]
 
 
 @ModelBase.register("CodeShellForCausalLM")
