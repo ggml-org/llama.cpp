@@ -324,6 +324,7 @@ class ChatStore {
 			topP: currentConfig.top_p ?? 0.95,
 			speculative: false,
 			progressPercent,
+			promptProgress,
 			promptTokens,
 			promptMs,
 			cacheTokens
@@ -534,7 +535,7 @@ class ChatStore {
 					conversationsStore.updateMessageAtIndex(idx, { toolCalls: streamedToolCallContent });
 				},
 				onModel: (modelName: string) => recordModel(modelName),
-				onTimings: (timings: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
+				onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 					const tokensPerSecond =
 						timings?.predicted_ms && timings?.predicted_n
 							? (timings.predicted_n / timings.predicted_ms) * 1000
@@ -1032,7 +1033,7 @@ class ChatStore {
 						});
 					},
 
-					onTimings: (timings: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
+					onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 						const tokensPerSecond =
 							timings?.predicted_ms && timings?.predicted_n
 								? (timings.predicted_n / timings.predicted_ms) * 1000
