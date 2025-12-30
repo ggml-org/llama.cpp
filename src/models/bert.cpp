@@ -142,11 +142,21 @@ llm_build_bert::llm_build_bert(const llama_model & model, const llm_graph_params
                     LLM_FFN_GELU, LLM_FFN_SEQ, il);
             cb(cur, "ffn_out", il);
         } else if (model.arch == LLM_ARCH_JINA_BERT_V2) {
-            cur = build_ffn(cur,
-                    model.layers[il].ffn_up, NULL, NULL,
-                    model.layers[il].ffn_gate, NULL, NULL,
-                    model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL, NULL,
-                    model.layers[il].ffn_gate ? LLM_FFN_GELU : LLM_FFN_GEGLU, LLM_FFN_PAR, il);
+            if (hparams.ffn_type == LLAMA_FFN_TYPE_GELU) {
+                // Standard GELU FFN
+                cur = build_ffn(cur,
+                        model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL,
+                        NULL, NULL, NULL,
+                        model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL, NULL,
+                        LLM_FFN_GELU, LLM_FFN_SEQ, il);
+            } else {
+                // GEGLU or gated GELU
+                cur = build_ffn(cur,
+                        model.layers[il].ffn_up, NULL, NULL,
+                        model.layers[il].ffn_gate, NULL, NULL,
+                        model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL, NULL,
+                        model.layers[il].ffn_gate ? LLM_FFN_GELU : LLM_FFN_GEGLU, LLM_FFN_PAR, il);
+            }
             cb(cur, "ffn_out", il);
         } else {
             cur = build_ffn(cur,
