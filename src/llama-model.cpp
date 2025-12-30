@@ -915,6 +915,15 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_POOLING_TYPE,               hparams.pooling_type, false);
                 hparams.f_max_alibi_bias = 8.0f;
 
+                std::string ffn_type;
+                if (ml.get_key(LLM_KV_FEED_FORWARD_TYPE, ffn_type, false)) {
+                    if (ffn_type == "original" || ffn_type == "gelu") {
+                        hparams.ffn_type = LLAMA_FFN_TYPE_GELU;
+                    } else {
+                        hparams.ffn_type = LLAMA_FFN_TYPE_GEGLU;
+                    }
+                }
+
                 switch (hparams.n_layer) {
                     case 4:  type = LLM_TYPE_33M;  break; // jina-embeddings-small
                     case 12: type = LLM_TYPE_137M; break; // jina-embeddings-base

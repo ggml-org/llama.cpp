@@ -22,6 +22,12 @@ enum llama_swa_type {
     LLAMA_SWA_TYPE_SYMMETRIC = 3,
 };
 
+enum llama_ffn_type {
+    LLAMA_FFN_TYPE_NONE  = 0,
+    LLAMA_FFN_TYPE_GEGLU = 1,
+    LLAMA_FFN_TYPE_GELU  = 2,
+};
+
 struct llama_hparams_posnet {
     uint32_t n_embd;
     uint32_t n_layer;
@@ -91,6 +97,9 @@ struct llama_hparams {
     float f_attn_logit_softcapping   = 50.0f;
     float f_router_logit_softcapping = 30.0f;
     float f_final_logit_softcapping  = 30.0f;
+
+    // for jina-bert-v2
+    llama_ffn_type ffn_type = LLAMA_FFN_TYPE_NONE;
 
     // for RWKV
     uint32_t rescale_every_n_layers = 0;
