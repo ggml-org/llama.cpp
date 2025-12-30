@@ -414,7 +414,7 @@ static void llama_adapter_lora_init_impl(const char * path_lora, llama_adapter_l
     }
 
     // update number of nodes used
-    adapter.model.n_lora_nodes += adapter.get_n_nodes();
+    model.n_lora_nodes += adapter.get_n_nodes();
 
     LLAMA_LOG_INFO("%s: loaded %zu tensors from lora file\n", __func__, adapter.ab_map.size()*2);
 }
