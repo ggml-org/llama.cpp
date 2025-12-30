@@ -217,6 +217,7 @@ Here is also a list of known limitations (contributions welcome):
 - Remote `$ref`s not supported in the C++ version (Python & JavaScript versions fetch https refs)
 - `string` [formats](https://json-schema.org/draft/2020-12/json-schema-validation#name-defined-formats) lack `uri`, `email`
 - No [`patternProperties`](https://json-schema.org/draft/2020-12/json-schema-core#name-patternproperties)
+- JSON Schema [annotations](https://json-schema.org/understanding-json-schema/reference/annotations) such as `description` are not taken into account.
 
 And a non-exhaustive list of other unsupported features that are unlikely to be implemented (hard and/or too slow to support w/ stateless grammars):
 
