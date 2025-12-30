@@ -57,7 +57,7 @@ This directory contains comprehensive documentation of unresolved code review co
 | Priority | Count | Documents |
 |----------|-------|-----------|
 | 🔴 Security | 1 | [UNRESOLVED §6](./UNRESOLVED_COMMENTS.md#6-security-per-user-fifo-location-line-140), [QUICK §Priority 1](./QUICK_REFERENCE.md#priority-1-security-issues-1-comment) |
-| 🟠 High | 6 | [UNRESOLVED §3-4,11,23-24](./UNRESOLVED_COMMENTS.md#ipc-handler-pr-2), [QUICK §Priority 2](./QUICK_REFERENCE.md#priority-2-high-severity-6-comments) |
+| 🟠 High | 5 | [UNRESOLVED §3-4,11,23-24](./UNRESOLVED_COMMENTS.md#ipc-handler-pr-2), [QUICK §Priority 2](./QUICK_REFERENCE.md#priority-2-high-severity-5-comments) |
 | 🟡 Medium | 23 | [UNRESOLVED §1-2,5,7-9...](./UNRESOLVED_COMMENTS.md#pr-2-frameforge-sidecar), [QUICK §Priority 3-4](./QUICK_REFERENCE.md#priority-3-medium-severity---critical-12-comments) |
 | 🟢 Low | 6 | [UNRESOLVED §10,14-15,22,27,35-36](./UNRESOLVED_COMMENTS.md#pr-1-semantic-server), [QUICK §Priority 5](./QUICK_REFERENCE.md#priority-5-low-severity-6-comments) |
 
@@ -95,7 +95,7 @@ This directory contains comprehensive documentation of unresolved code review co
 
 2. **Pick an issue to work on:**
    - Start with [Security issues](./QUICK_REFERENCE.md#priority-1-security-issues-1-comment) (highest priority)
-   - Then [High severity](./QUICK_REFERENCE.md#priority-2-high-severity-6-comments)
+   - Then [High severity](./QUICK_REFERENCE.md#priority-2-high-severity-5-comments)
    - Consider [owner-requested items](./QUICK_REFERENCE.md#owner-requests)
 
 3. **Create a branch:**
@@ -134,7 +134,7 @@ This directory contains comprehensive documentation of unresolved code review co
 
 ```
 Total Unresolved Comments: 36
-├── Security:  2 (5.6%)
+├── Security:  1 (2.8%)
 ├── High:      5 (13.9%)
 ├── Medium:   23 (63.9%)
 └── Low:       6 (16.7%)
@@ -168,9 +168,9 @@ PR #1 (Semantic Server): 14 comments (38.9%)
 
 | Document | Size | Last Updated | Status |
 |----------|------|--------------|--------|
-| UNRESOLVED_COMMENTS.md | 20KB | 2025-12-29 | ✅ Complete |
-| QUICK_REFERENCE.md | 7KB | 2025-12-29 | ✅ Complete |
-| RECOMMENDATIONS.md | 7KB | 2025-12-29 | ✅ Complete |
+| UNRESOLVED_COMMENTS.md | 20KB | 2025-12-30 | ✅ Complete |
+| QUICK_REFERENCE.md | 7KB | 2025-12-30 | ✅ Complete |
+| RECOMMENDATIONS.md | 7KB | 2025-12-30 | ✅ Complete |
 | INDEX.md (this file) | 5KB | 2025-12-30 | ✅ Complete |
 
 ---

@@ -10,7 +10,7 @@ This document provides a quick reference for addressing the 36 unresolved code r
 
 **Action:** Modify IPC implementation to use `$XDG_RUNTIME_DIR` or per-user `/tmp` directory with proper permissions.
 
-## Priority 2: High Severity (6 comments)
+## Priority 2: High Severity (5 comments)
 
 | # | File | Line | Issue | Estimate |
 |---|------|------|-------|----------|
@@ -98,7 +98,7 @@ Note: Issue #6 (Security) was previously counted in this section but is now prop
 | Priority | Count | Estimated Time |
 |----------|-------|----------------|
 | Security | 1 | 2-4 hours |
-| High | 6 | 13-21 hours |
+| High | 5 | 13-21 hours |
 | Medium (Critical) | 12 | 18 hours |
 | Medium (Important) | 11 | 20-22 hours |
 | Low | 6 | 2.5 hours |

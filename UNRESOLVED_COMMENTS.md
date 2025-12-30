@@ -410,10 +410,10 @@ c = std::toupper(static_cast<unsigned char>(c));
 ## Summary Statistics
 
 - **Total Comments:** 36
-- **High Severity:** 6
+- **Security Issues:** 1 (classified as high severity)
+- **High Severity:** 5 (plus 1 security issue = 6 total high severity)
 - **Medium Severity:** 23
 - **Low Severity:** 6
-- **Security Issues:** 1
 
 ### By Module
 - **PR #2 (FrameForge):** 22 comments
@@ -433,7 +433,7 @@ c = std::toupper(static_cast<unsigned char>(c));
 1. **Security Issues** (1 comment)
    - Comment #6: Per-user FIFO location
 
-2. **High Severity** (6 additional comments)
+2. **High Severity** (5 additional comments)
    - Comment #3: Non-blocking I/O error handling
    - Comment #4: IPCServer callback not invoked
    - Comment #11: Server mode not implemented
