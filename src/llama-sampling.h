@@ -16,14 +16,14 @@ struct llama_sampler_chain {
 
     std::vector<struct llama_sampler *> samplers;
 
+    // pre-allocated buffer for llama_sampler_sample to avoid repeated allocations
+    std::vector<llama_token_data> cur;
+
     // timing
 
     mutable int64_t t_sample_us;
 
-    mutable int32_t n_sample;
-
-    // pre-allocated buffer for llama_sampler_sample to avoid repeated allocations
-    std::vector<llama_token_data> cur;
+    mutable int32_t n_sample;   
 };
 
 struct llama_sampler * llama_sampler_init_dry_testing(
