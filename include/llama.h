@@ -607,6 +607,8 @@ extern "C" {
     //
 
     // Load a LoRA adapter from file
+    // The adapter is valid as long as the associated model is not freed
+    // All adapters must be loaded before context creation
     LLAMA_API struct llama_adapter_lora * llama_adapter_lora_init(
             struct llama_model * model,
             const char * path_lora);
