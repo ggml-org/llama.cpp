@@ -2066,23 +2066,14 @@ private:
                     GGML_ABORT("not supported by multimodal");
                 }
 
-                llama_tokens draft = {};
-
-                if (slot.task->params.speculative.use_self) {
-                    // we search at least 5 tokens in history to try a self-speculative draft
-                    const int n_draft_min = std::max(5, slot.task->params.speculative.n_min);
-                    const llama_tokens & tokens = slot.prompt.tokens.get_text_tokens();
-                    llama_token id = slot.sampled;
-                    draft = common_speculative_gen_self_draft(tokens, id, n_draft_min, n_draft_max);
-                }
-                if (draft.empty() && slot.can_speculate()) {
-                    struct common_speculative_params params_spec;
-                    params_spec.n_draft = n_draft_max;
-                    params_spec.n_reuse = llama_n_ctx(slot.ctx_dft) - slot.task->params.speculative.n_max;
-                    params_spec.p_min   = slot.task->params.speculative.p_min;
-                    const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
-                    draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
-                }
+                struct common_speculative_params params_spec;
+                params_spec.n_draft   = n_draft_max;
+                params_spec.n_reuse   = slot.ctx_dft ? (llama_n_ctx(slot.ctx_dft) - slot.task->params.speculative.n_max) : 0;
+                params_spec.p_min     = slot.task->params.speculative.p_min;
+                params_spec.self_mode       = slot.task->params.speculative.use_self;
+                params_spec.self_ngram_size = std::max(5, slot.task->params.speculative.n_min);
+                const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
+                llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
 
                 // add the sampled token to the batch
                 slot.i_batch_dft.push_back(batch.n_tokens);
