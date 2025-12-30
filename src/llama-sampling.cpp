@@ -2358,10 +2358,10 @@ struct llama_sampler_adaptive_p {
 };
 
 // adaptive probability transformation constants
-static constexpr float DISTRIBUTION_WIDTH = 0.3f;
-static constexpr float PEAK_LOGIT_VALUE   = 5.0f;
-static constexpr float SHARPNESS          = 4.0f;
-static constexpr float INV_WIDTH          = 1.0f / DISTRIBUTION_WIDTH;
+static constexpr float DISTRIBUTION_WIDTH =  0.3f;
+static constexpr float PEAK_LOGIT_VALUE   =  5.0f;
+static constexpr float SHARPNESS          = 10.0f;
+static constexpr float INV_WIDTH          =  1.0f / DISTRIBUTION_WIDTH;
 
 static const char * llama_sampler_adaptive_p_name(const struct llama_sampler * /*smpl*/) {
     return "adaptive-p";
