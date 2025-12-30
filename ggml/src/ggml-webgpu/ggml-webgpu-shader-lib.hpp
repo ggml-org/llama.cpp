@@ -1,70 +1,71 @@
 #ifndef GGML_WEBGPU_SHADER_LIB_HPP
 #define GGML_WEBGPU_SHADER_LIB_HPP
 
-#include "ggml-webgpu-structs.hpp"
+#include "pre_wgsl.hpp"
 
 #include <string>
 #include <vector>
 
-extern const char * wgsl_flash_attn;
+struct ggml_webgpu_flash_attn_shader_lib_context {
+    const char * kv_type;
+    uint32_t     head_dim_qk;
+    uint32_t     head_dim_v;
+    bool         has_mask;
+    bool         has_sinks;
+    bool         uses_logit_softcap;
+    uint32_t     sg_mat_m;
+    uint32_t     sg_mat_n;
+    uint32_t     sg_mat_k;
+};
 
-webgpu_pipeline ggml_webgpu_create_pipeline(wgpu::Device &                           device,
-                                            const char *                             shader_code,
-                                            const char *                             label,
-                                            const std::vector<wgpu::ConstantEntry> & constants = {});
+struct ggml_webgpu_flash_attn_shader_decisions {
+    int unused = 0;
+};
 
-static inline const char * ggml_webgpu_wgsl_kv_type(ggml_type type) {
-    switch (type) {
-        case GGML_TYPE_F16:
-            return "f16";
-        case GGML_TYPE_F32:
-            return "f32";
-        default:
-            return nullptr;
+struct ggml_webgpu_processed_shader {
+    std::string                             wgsl;
+    std::string                             variant;
+    ggml_webgpu_flash_attn_shader_decisions decisions;
+};
+
+inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
+    pre_wgsl::Preprocessor &                          preprocessor,
+    const char *                                      shader_src,
+    const ggml_webgpu_flash_attn_shader_lib_context & context) {
+    std::vector<std::string> defines;
+    std::string              variant = "flash_attn";
+
+    defines.push_back(std::string("KV_TYPE=") + context.kv_type);
+    variant += std::string("_") + context.kv_type;
+
+    if (context.has_mask) {
+        defines.push_back("MASK");
+        variant += "_mask";
     }
-}
-
-inline webgpu_pipeline ggml_webgpu_get_flash_attn_pipeline(webgpu_context & ctx,
-                                                           ggml_tensor *    Q,
-                                                           ggml_tensor *    K,
-                                                           ggml_tensor *    V,
-                                                           ggml_tensor *    mask,
-                                                           ggml_tensor *    sinks,
-                                                           ggml_tensor *    dst,
-                                                           float            logit_softcap) {
-    GGML_ASSERT(K->type == V->type);
-
-    flash_attn_pipeline_key key = {
-        .q_type             = Q->type,
-        .kv_type            = K->type,
-        .mask_type          = mask->type,
-        .sinks_type         = sinks->type,
-        .dst_type           = dst->type,
-        .head_dim_q         = (uint32_t) Q->ne[0],
-        .head_dim_v         = (uint32_t) V->ne[0],
-        .n_heads            = (uint32_t) Q->ne[2],
-        .has_mask           = true,
-        .has_sinks          = true,
-        .uses_logit_softcap = logit_softcap != 0.0f,
-    };
-
-    auto it = ctx->flash_attn_pipelines.find(key);
-    if (it != ctx->flash_attn_pipelines.end()) {
-        return it->second;
+    if (context.has_sinks) {
+        defines.push_back("SINKS");
+        variant += "_sinks";
+    }
+    if (context.uses_logit_softcap) {
+        defines.push_back("LOGIT_SOFTCAP");
+        variant += "_lgsc";
     }
 
-    std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
-    it = ctx->flash_attn_pipelines.find(key);
-    if (it != ctx->flash_attn_pipelines.end()) {
-        return it->second;
-    }
+    defines.push_back(std::string("HEAD_DIM_QK=") + std::to_string(context.head_dim_qk));
+    variant += std::string("_hsqk") + std::to_string(context.head_dim_qk);
 
-    const char *    kv_type  = ggml_webgpu_wgsl_kv_type(K->type);
-    std::string     label    = std::string("flash_attn_kv_") + kv_type;
-    std::string     shader   = ctx->p.preprocess(wgsl_flash_attn, { std::string("KV_TYPE=") + kv_type });
-    webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(ctx->device, shader.c_str(), label.c_str());
-    ctx->flash_attn_pipelines.emplace(key, pipeline);
-    return pipeline;
+    defines.push_back(std::string("HEAD_DIM_V=") + std::to_string(context.head_dim_v));
+    variant += std::string("_hsv") + std::to_string(context.head_dim_v);
+
+    // For now these are not part of the variant name
+    defines.push_back(std::string("SG_MAT_M=") + std::to_string(context.sg_mat_m));
+    defines.push_back(std::string("SG_MAT_N=") + std::to_string(context.sg_mat_n));
+    defines.push_back(std::string("SG_MAT_K=") + std::to_string(context.sg_mat_k));
+
+    ggml_webgpu_processed_shader result;
+    result.wgsl    = preprocessor.preprocess(shader_src, defines);
+    result.variant = variant;
+    return result;
 }
 
 #endif  // GGML_WEBGPU_SHADER_LIB_HPP

@@ -6,6 +6,17 @@ enable chromium_experimental_subgroup_matrix;
 
 // Default values
 #define KV_TYPE f32
+#define HEAD_DIM_QK 64
+#define HEAD_DIM_V 64
+
+#define Q_TILE 16
+#define KV_TILE 16
+
+// The number of rows/columns/k in a subgroup matrix. MxK * KxN = MxN
+// Note that the "K" here does not correspond to the K in attention's Q/K/V, it's just the common dimension.
+#define SG_MAT_M 8
+#define SG_MAT_N 8
+#define SG_MAT_K 8
 
 struct Params {
     offset_q: u32,
@@ -49,26 +60,44 @@ struct Params {
 @group(0) @binding(0) var<storage, read> Q: array<f32>;
 @group(0) @binding(1) var<storage, read> K: array<KV_TYPE>;
 @group(0) @binding(2) var<storage, read> V: array<KV_TYPE>;
+
+#if defined(MASK) && defined(SINKS)
 @group(0) @binding(3) var<storage, read> mask: array<f16>;
 @group(0) @binding(4) var<storage, read> sinks: array<f32>;
-@group(0) @binding(5) var<storage, read_write> dst: array<f32>;
+#define DST_BINDING 5
+#define PARAMS_BINDING 6
+#elif defined(MASK)
+@group(0) @binding(3) var<storage, read> mask: array<f16>;
+#define DST_BINDING 4
+#define PARAMS_BINDING 5
+#elif defined(SINKS)
+@group(0) @binding(3) var<storage, read> sinks: array<f32>;
+#define DST_BINDING 4
+#define PARAMS_BINDING 5
+#else
+#define DST_BINDING 3
+#define PARAMS_BINDING 4
+#endif
+
+@group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<f32>;
 //@group(0) @binding(6) var<storage, read_write> debug: array<f32>;
-@group(0) @binding(6) var<uniform> params: Params;
+@group(0) @binding(PARAMS_BINDING) var<uniform> params: Params;
 
 const FLOAT_MIN: f16 = -65504.0;
 
 // The number of Q rows processed per workgroup
-const Q_TILE = 16u;
-var<workgroup> q_shmem: array<f16, Q_TILE * 128>; // assumes max head_dim_qk of 128
+var<workgroup> q_shmem: array<f16, Q_TILE * HEAD_DIM_QK>;
 
-const KV_TILE = 16u;
-// we can reuse the same shmem for K and V since we only need one at a time right?
-var<workgroup> kv_shmem: array<f16, KV_TILE * 128>; // assuming max head_dim_v of 128
+// we can reuse the same shmem for K and V since we only need one at a time
+const kv_shmem_size = KV_TILE * max(HEAD_DIM_QK, HEAD_DIM_V);
+var<workgroup> kv_shmem: array<f16, kv_shmem_size>;
 
-var<workgroup> o_shmem: array<f16, Q_TILE * 128>; // output shmem
+var<workgroup> o_shmem: array<f16, Q_TILE * HEAD_DIM_V>; // output shmem
 
+#ifdef MASK
 // storage for mask values
 var<workgroup> mask_shmem: array<f16, Q_TILE * KV_TILE>;
+#endif
 
 // storage for output of Q*K^T scores for online softmax (S matrix from paper)
 // also storage for diagonal matrix during online softmax (P matrix from paper)
@@ -78,12 +107,6 @@ var<workgroup> inter_shmem: array<f16, Q_TILE * KV_TILE>;
 // Storage for row max and exp sum during online softmax
 var<workgroup> row_max_shmem: array<f16, Q_TILE>;
 var<workgroup> exp_sum_shmem: array<f16, Q_TILE>;
-
-// The number of rows/columns/k in a subgroup matrix. MxK * KxN = MxN
-// Note that the "K" here does not correspond to the K in attention's Q/K/V, it's just the common dimension.
-const SG_MAT_M = 8u;
-const SG_MAT_N = 8u;
-const SG_MAT_K = 8u;
 
 // Number of blocks this workgroup handles at the subgroup matrix level. SG_MAT_M must divide Q_TILE.
 const Q_BLOCKS = Q_TILE / SG_MAT_M;
@@ -134,8 +157,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let wg_in_head = wg_in_batch % wg_per_head;
     let q_row_start = wg_in_head * Q_TILE;
 
+#ifdef MASK
     // mask offset
     let mask_global_offset = params.offset_mask + batch_idx * params.stride_mask3 + q_row_start * params.seq_len_kv;
+#endif
 
     // note that the output is permuted, the layout is [head_dim_v, n_heads, seq_len_q, batch_size]
     let dst_global_offset = dst_batch_offset + q_row_start * dst2_stride + head_idx * params.head_dim_v;
@@ -202,6 +227,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           }
       }
 
+#ifdef MASK
       // load mask tile into shared memory for this KV block
       // TODO: optimize and skip if mask is -INF for the entire tile
       for (var elem_idx = local_id.x; elem_idx < Q_TILE * KV_TILE; elem_idx += WG_SIZE) {
@@ -214,6 +240,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
           mask_shmem[elem_idx] = select(0.0, mask[mask_idx], mask_in_bounds);
       }
+#endif
 
       workgroupBarrier();
 
@@ -233,14 +260,16 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
               // TODO: is this faster than having all threads read shared memory?
               var prev_max = select(0.0, row_max_shmem[q_tile_row], sg_inv_id == 0);
               prev_max = subgroupBroadcastFirst(prev_max);
+              var thread_tile_row_max = select(FLOAT_MIN, inter_shmem[sg_inv_id + q_tile_row * KV_TILE] * f16(params.scale), sg_inv_id < KV_TILE);
+#ifdef LOGIT_SOFTCAP
+              thread_tile_row_max = f16(params.logit_softcap) * tanh(thread_tile_row_max);
+#endif
+#ifdef MASK
               // The mask value for this Q row and K col
               let mask_val = select(0.0, mask_shmem[q_tile_row * KV_TILE + sg_inv_id], sg_inv_id < KV_TILE);
               let mask_term = slope * mask_val;
-              var thread_tile_row_max = select(FLOAT_MIN, inter_shmem[sg_inv_id + q_tile_row * KV_TILE] * f16(params.scale), sg_inv_id < KV_TILE);
-              if (params.logit_softcap != 0.0) {
-                  thread_tile_row_max = f16(params.logit_softcap) * tanh(thread_tile_row_max);
-              }
               thread_tile_row_max += mask_term;
+#endif
               let new_max = subgroupMax(max(prev_max, thread_tile_row_max));
 
               // calculate running exp sum
@@ -323,6 +352,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
       workgroupBarrier();
     }
 
+#ifdef SINKS
     // add sinks (applied once after processing all KV tiles)
     for (var sg_block = subgroup_id; sg_block < Q_BLOCKS; sg_block += num_subgroups) {
         let block_row_start = sg_block * SG_MAT_M;
@@ -358,6 +388,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     }
 
     workgroupBarrier();
+#endif
 
     // write output back to global memory
     for (var sg_block = subgroup_id; sg_block < Q_BLOCKS; sg_block += num_subgroups) {
