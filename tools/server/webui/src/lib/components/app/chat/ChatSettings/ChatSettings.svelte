@@ -272,11 +272,6 @@
 			icon: Code,
 			fields: [
 				{
-					key: 'showToolCalls',
-					label: 'Show tool call labels',
-					type: 'checkbox'
-				},
-				{
 					key: 'disableReasoningFormat',
 					label: 'Show raw LLM output',
 					type: 'checkbox'

@@ -1,26 +1,36 @@
 import { browser } from '$app/environment';
-import { MCPClient, type IMCPClient } from '$lib/mcp';
+import {
+	MCPHostManager,
+	type OpenAIToolDefinition,
+	type ServerStatus
+} from '$lib/mcp/host-manager';
+import type { ToolExecutionResult } from '$lib/mcp/server-connection';
 import { buildMcpClientConfig } from '$lib/config/mcp';
 import { config } from '$lib/stores/settings.svelte';
+import type { MCPToolCall } from '$lib/types/mcp';
+import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 
 /**
- * mcpStore - Reactive store for MCP (Model Context Protocol) client management
+ * mcpStore - Reactive store for MCP (Model Context Protocol) host management
  *
  * This store manages:
- * - MCP client lifecycle (initialization, shutdown)
- * - Connection state tracking
- * - Available tools from connected MCP servers
+ * - MCPHostManager lifecycle (initialization, shutdown)
+ * - Connection state tracking for multiple MCP servers
+ * - Aggregated tools from all connected MCP servers
  * - Error handling for MCP operations
  *
  * **Architecture & Relationships:**
- * - **MCPClient**: SDK-based client wrapper for MCP server communication
- * - **mcpStore** (this class): Reactive store for MCP state
- * - **ChatService**: Uses mcpStore for agentic orchestration
+ * - **MCPHostManager**: Coordinates multiple MCPServerConnection instances
+ * - **MCPServerConnection**: Single SDK Client wrapper per server
+ * - **mcpStore** (this class): Reactive Svelte store for MCP state
+ * - **agenticStore**: Uses mcpStore for tool execution in agentic loop
  * - **settingsStore**: Provides MCP server configuration
  *
  * **Key Features:**
  * - Reactive state with Svelte 5 runes ($state, $derived)
  * - Automatic reinitialization on config changes
+ * - Aggregates tools from multiple servers
+ * - Routes tool calls to appropriate server automatically
  * - Graceful error handling with fallback to standard chat
  */
 class MCPStore {
@@ -28,18 +38,18 @@ class MCPStore {
 	// State
 	// ─────────────────────────────────────────────────────────────────────────────
 
-	private _client = $state<MCPClient | null>(null);
+	private _hostManager = $state<MCPHostManager | null>(null);
 	private _isInitializing = $state(false);
 	private _error = $state<string | null>(null);
 	private _configSignature = $state<string | null>(null);
-	private _initPromise: Promise<MCPClient | undefined> | null = null;
+	private _initPromise: Promise<MCPHostManager | undefined> | null = null;
 
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Computed Getters
 	// ─────────────────────────────────────────────────────────────────────────────
 
-	get client(): IMCPClient | null {
-		return this._client;
+	get hostManager(): MCPHostManager | null {
+		return this._hostManager;
 	}
 
 	get isInitializing(): boolean {
@@ -47,7 +57,7 @@ class MCPStore {
 	}
 
 	get isInitialized(): boolean {
-		return this._client !== null;
+		return this._hostManager?.isInitialized ?? false;
 	}
 
 	get error(): string | null {
@@ -65,23 +75,45 @@ class MCPStore {
 	}
 
 	/**
-	 * Get list of available tool names
+	 * Get list of available tool names (aggregated from all servers)
 	 */
 	get availableTools(): string[] {
-		return this._client?.listTools() ?? [];
+		return this._hostManager?.getToolNames() ?? [];
 	}
 
 	/**
-	 * Get tool definitions for LLM
+	 * Get number of connected servers
 	 */
-	async getToolDefinitions(): Promise<
-		{
-			type: 'function';
-			function: { name: string; description?: string; parameters: Record<string, unknown> };
-		}[]
-	> {
-		if (!this._client) return [];
-		return this._client.getToolsDefinition();
+	get connectedServerCount(): number {
+		return this._hostManager?.connectedServerCount ?? 0;
+	}
+
+	/**
+	 * Get names of connected servers
+	 */
+	get connectedServerNames(): string[] {
+		return this._hostManager?.connectedServerNames ?? [];
+	}
+
+	/**
+	 * Get total tool count
+	 */
+	get toolCount(): number {
+		return this._hostManager?.toolCount ?? 0;
+	}
+
+	/**
+	 * Get tool definitions for LLM (OpenAI function calling format)
+	 */
+	getToolDefinitions(): OpenAIToolDefinition[] {
+		return this._hostManager?.getToolDefinitionsForLLM() ?? [];
+	}
+
+	/**
+	 * Get status of all servers
+	 */
+	getServersStatus(): ServerStatus[] {
+		return this._hostManager?.getServersStatus() ?? [];
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────────
@@ -89,11 +121,11 @@ class MCPStore {
 	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
-	 * Ensure MCP client is initialized with current config.
-	 * Returns the client if successful, undefined otherwise.
+	 * Ensure MCP host manager is initialized with current config.
+	 * Returns the host manager if successful, undefined otherwise.
 	 * Handles config changes by reinitializing as needed.
 	 */
-	async ensureClient(): Promise<IMCPClient | undefined> {
+	async ensureInitialized(): Promise<MCPHostManager | undefined> {
 		if (!browser) return undefined;
 
 		const mcpConfig = buildMcpClientConfig(config());
@@ -106,8 +138,8 @@ class MCPStore {
 		}
 
 		// Already initialized with correct config
-		if (this._client && this._configSignature === signature) {
-			return this._client;
+		if (this._hostManager?.isInitialized && this._configSignature === signature) {
+			return this._hostManager;
 		}
 
 		// Init in progress with correct config - wait for it
@@ -115,55 +147,63 @@ class MCPStore {
 			return this._initPromise;
 		}
 
-		// Config changed or first init - shutdown old client first
-		if (this._client || this._initPromise) {
+		// Config changed or first init - shutdown old manager first
+		if (this._hostManager || this._initPromise) {
 			await this.shutdown();
 		}
 
-		// Initialize new client
+		// Initialize new host manager
 		return this.initialize(signature, mcpConfig!);
 	}
 
 	/**
-	 * Initialize MCP client with given config
+	 * Initialize MCP host manager with given config
 	 */
 	private async initialize(
 		signature: string,
-		mcpConfig: ReturnType<typeof buildMcpClientConfig>
-	): Promise<MCPClient | undefined> {
-		if (!mcpConfig) return undefined;
-
+		mcpConfig: NonNullable<ReturnType<typeof buildMcpClientConfig>>
+	): Promise<MCPHostManager | undefined> {
 		this._isInitializing = true;
 		this._error = null;
 		this._configSignature = signature;
 
-		const client = new MCPClient(mcpConfig);
+		const hostManager = new MCPHostManager();
 
-		this._initPromise = client
-			.initialize()
+		this._initPromise = hostManager
+			.initialize({
+				servers: mcpConfig.servers,
+				clientInfo: mcpConfig.clientInfo ?? DEFAULT_MCP_CONFIG.clientInfo,
+				capabilities: mcpConfig.capabilities ?? DEFAULT_MCP_CONFIG.capabilities
+			})
 			.then(() => {
 				// Check if config changed during initialization
 				if (this._configSignature !== signature) {
-					void client.shutdown().catch((err) => {
-						console.error('[MCP Store] Failed to shutdown stale client:', err);
+					void hostManager.shutdown().catch((err) => {
+						console.error('[MCP Store] Failed to shutdown stale host manager:', err);
 					});
 					return undefined;
 				}
 
-				this._client = client;
+				this._hostManager = hostManager;
 				this._isInitializing = false;
+
+				const toolNames = hostManager.getToolNames();
+				const serverNames = hostManager.connectedServerNames;
+
 				console.log(
-					`[MCP Store] Initialized with ${client.listTools().length} tools:`,
-					client.listTools()
+					`[MCP Store] Initialized: ${serverNames.length} servers, ${toolNames.length} tools`
 				);
-				return client;
+				console.log(`[MCP Store] Servers: ${serverNames.join(', ')}`);
+				console.log(`[MCP Store] Tools: ${toolNames.join(', ')}`);
+
+				return hostManager;
 			})
 			.catch((error) => {
 				console.error('[MCP Store] Initialization failed:', error);
 				this._error = error instanceof Error ? error.message : String(error);
 				this._isInitializing = false;
 
-				void client.shutdown().catch((err) => {
+				void hostManager.shutdown().catch((err) => {
 					console.error('[MCP Store] Failed to shutdown after error:', err);
 				});
 
@@ -179,7 +219,7 @@ class MCPStore {
 	}
 
 	/**
-	 * Shutdown MCP client and clear state
+	 * Shutdown MCP host manager and clear state
 	 */
 	async shutdown(): Promise<void> {
 		// Wait for any pending initialization
@@ -188,15 +228,15 @@ class MCPStore {
 			this._initPromise = null;
 		}
 
-		if (this._client) {
-			const clientToShutdown = this._client;
-			this._client = null;
+		if (this._hostManager) {
+			const managerToShutdown = this._hostManager;
+			this._hostManager = null;
 			this._configSignature = null;
 			this._error = null;
 
 			try {
-				await clientToShutdown.shutdown();
-				console.log('[MCP Store] Client shutdown complete');
+				await managerToShutdown.shutdown();
+				console.log('[MCP Store] Host manager shutdown complete');
 			} catch (error) {
 				console.error('[MCP Store] Shutdown error:', error);
 			}
@@ -208,16 +248,43 @@ class MCPStore {
 	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
-	 * Execute a tool call via MCP client
+	 * Execute a tool call via MCP host manager.
+	 * Automatically routes to the appropriate server.
 	 */
-	async execute(
-		toolCall: { id: string; function: { name: string; arguments: string } },
-		abortSignal?: AbortSignal
-	): Promise<string> {
-		if (!this._client) {
-			throw new Error('MCP client not initialized');
+	async executeTool(toolCall: MCPToolCall, signal?: AbortSignal): Promise<ToolExecutionResult> {
+		if (!this._hostManager) {
+			throw new Error('MCP host manager not initialized');
 		}
-		return this._client.execute(toolCall, abortSignal);
+		return this._hostManager.executeTool(toolCall, signal);
+	}
+
+	/**
+	 * Execute a tool by name with arguments.
+	 * Simpler interface for direct tool calls.
+	 */
+	async executeToolByName(
+		toolName: string,
+		args: Record<string, unknown>,
+		signal?: AbortSignal
+	): Promise<ToolExecutionResult> {
+		if (!this._hostManager) {
+			throw new Error('MCP host manager not initialized');
+		}
+		return this._hostManager.executeToolByName(toolName, args, signal);
+	}
+
+	/**
+	 * Check if a tool exists
+	 */
+	hasTool(toolName: string): boolean {
+		return this._hostManager?.hasTool(toolName) ?? false;
+	}
+
+	/**
+	 * Get which server provides a specific tool
+	 */
+	getToolServer(toolName: string): string | undefined {
+		return this._hostManager?.getToolServer(toolName);
 	}
 
 	// ─────────────────────────────────────────────────────────────────────────────
@@ -239,8 +306,8 @@ class MCPStore {
 export const mcpStore = new MCPStore();
 
 // Reactive exports for components
-export function mcpClient() {
-	return mcpStore.client;
+export function mcpHostManager() {
+	return mcpStore.hostManager;
 }
 
 export function mcpIsInitializing() {
@@ -261,4 +328,16 @@ export function mcpIsEnabled() {
 
 export function mcpAvailableTools() {
 	return mcpStore.availableTools;
+}
+
+export function mcpConnectedServerCount() {
+	return mcpStore.connectedServerCount;
+}
+
+export function mcpConnectedServerNames() {
+	return mcpStore.connectedServerNames;
+}
+
+export function mcpToolCount() {
+	return mcpStore.toolCount;
 }

@@ -76,20 +76,3 @@ export type MCPServerSettingsEntry = {
 	url: string;
 	requestTimeoutSeconds: number;
 };
-
-/**
- * Interface defining the public API for MCP clients.
- * Both MCPClient (custom) and MCPClientSDK (official SDK) implement this interface.
- */
-export interface IMCPClient {
-	initialize(): Promise<void>;
-	shutdown(): Promise<void>;
-	listTools(): string[];
-	getToolsDefinition(): Promise<
-		{
-			type: 'function';
-			function: { name: string; description?: string; parameters: Record<string, unknown> };
-		}[]
-	>;
-	execute(toolCall: MCPToolCall, abortSignal?: AbortSignal): Promise<string>;
-}
