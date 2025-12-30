@@ -303,11 +303,17 @@ class ChatStore {
 		const currentConfig = config();
 		const outputTokensMax = currentConfig.max_tokens || -1;
 
+		// Note: for timings data, the n_prompt does NOT include cache tokens
 		const contextUsed = promptTokens + cacheTokens + predictedTokens;
 		const outputTokensUsed = predictedTokens;
 
+		// Note: for prompt progress, the "processed" DOES include cache tokens
+		// we need to exclude them to get the real prompt tokens processed count
+		const progressCache = promptProgress?.cache || 0;
+		const progressActualDone = (promptProgress?.processed ?? 0) - progressCache;
+		const progressActualTotal = (promptProgress?.total ?? 0) - progressCache;
 		const progressPercent = promptProgress
-			? Math.round((promptProgress.processed / promptProgress.total) * 100)
+			? Math.round((progressActualDone / progressActualTotal) * 100)
 			: undefined;
 
 		return {
@@ -324,6 +330,7 @@ class ChatStore {
 			topP: currentConfig.top_p ?? 0.95,
 			speculative: false,
 			progressPercent,
+			promptProgress,
 			promptTokens,
 			promptMs,
 			cacheTokens
@@ -534,7 +541,7 @@ class ChatStore {
 					conversationsStore.updateMessageAtIndex(idx, { toolCalls: streamedToolCallContent });
 				},
 				onModel: (modelName: string) => recordModel(modelName),
-				onTimings: (timings: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
+				onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 					const tokensPerSecond =
 						timings?.predicted_ms && timings?.predicted_n
 							? (timings.predicted_n / timings.predicted_ms) * 1000
@@ -1032,7 +1039,7 @@ class ChatStore {
 						});
 					},
 
-					onTimings: (timings: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
+					onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 						const tokensPerSecond =
 							timings?.predicted_ms && timings?.predicted_n
 								? (timings.predicted_n / timings.predicted_ms) * 1000
