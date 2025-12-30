@@ -60,6 +60,7 @@ struct socket_t {
         close(this->fd);
 #endif
     }
+    std::mutex send_rpc_cmd_mutex;
 };
 
 // macro for nicer error messages on server crash
@@ -459,6 +460,7 @@ static bool parse_endpoint(const std::string & endpoint, std::string & host, int
 // RPC request : | rpc_cmd (1 byte) | request_size (8 bytes) | request_data (request_size bytes) |
 // No response
 static bool send_rpc_cmd(const std::shared_ptr<socket_t> & sock, enum rpc_cmd cmd, const void * input, size_t input_size) {
+    std::lock_guard<std::mutex> lock(sock->send_rpc_cmd_mutex);
     uint8_t cmd_byte = cmd;
     if (!send_data(sock->fd, &cmd_byte, sizeof(cmd_byte))) {
         return false;
