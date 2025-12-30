@@ -1070,18 +1070,18 @@ json oaicompat_chat_params_parse(
     return llama_params;
 }
 
-json convert_responses_to_chatcmpl(const json & body) {
-    if (!body.contains("input")) {
+json convert_responses_to_chatcmpl(const json & response_body) {
+    if (!response_body.contains("input")) {
         throw std::invalid_argument("'input' is required");
     }
-    if (!json_value(body, "previous_response_id", std::string{}).empty()) {
+    if (!json_value(response_body, "previous_response_id", std::string{}).empty()) {
         throw std::invalid_argument("llama.cpp does not support 'previous_response_id'.");
     }
 
-    const json input_value = body.at("input");
+    const json input_value = response_body.at("input");
     json chatcmpl_messages = json::array();
 
-    const std::string instructions = json_value(body, "instructions", std::string());
+    const std::string instructions = json_value(response_body, "instructions", std::string());
     if (instructions != "") {
         chatcmpl_messages.push_back({
             {"role",    "system"},
@@ -1168,13 +1168,13 @@ json convert_responses_to_chatcmpl(const json & body) {
         throw std::invalid_argument("'input' must be a string or array of objects");
     }
 
-    json chatcmpl_body = body;
+    json chatcmpl_body = response_body;
     chatcmpl_body.erase("input");
     chatcmpl_body["messages"] = chatcmpl_messages;
 
-    if (body.contains("max_output_tokens")) {
+    if (response_body.contains("max_output_tokens")) {
         chatcmpl_body.erase("max_output_tokens");
-        chatcmpl_body["max_tokens"] = body["max_output_tokens"];
+        chatcmpl_body["max_tokens"] = response_body["max_output_tokens"];
     }
 
     return chatcmpl_body;
