@@ -38,9 +38,15 @@ jobs:
       matrix:
         sanitizer: [ADDRESS, UNDEFINED] # THREAD is broken
         build_type: [RelWithDebInfo]
+        extra_args: []
         include:
           - build_type: Release
             sanitizer: ""
+            extra_args: ""
+        include:
+          - build_type: Release
+            sanitizer: ""
+            extra_args: "LLAMA_ARG_BACKEND_SAMPLING=1"
       fail-fast: false # While -DLLAMA_SANITIZE_THREAD=ON is broken
 
     steps:
@@ -75,6 +81,15 @@ jobs:
         id: test_dependencies
         run: |
           pip install -r tools/server/tests/requirements.txt
+
+      - name: Tests
+        id: server_integration_tests
+        if: ${{ !matrix.disabled_on_pr || !github.event.pull_request }}
+        run: |
+          cd tools/server/tests
+          export ${matrix.extra_args}
+          $env:PYTHONIOENCODING = ":replace"
+          pytest -v -x -m "not slow"
 
   server-windows:
     runs-on: windows-2022
