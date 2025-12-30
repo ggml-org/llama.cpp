@@ -6856,12 +6856,6 @@ class OlmoeModel(TextModel):
 class JinaBertV2Model(BertModel):
     model_arch = gguf.MODEL_ARCH.JINA_BERT_V2
 
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()
-        # Default is "geglu" for jina-bert-v2, but some models use "original" (standard GELU)
-        ff_type = self.hparams.get("feed_forward_type", "geglu")
-        self.gguf_writer.add_feed_forward_type(ff_type)
-
     def set_vocab(self):
         tokenizer_class = 'BertTokenizer'
         with open(self.dir_model / "tokenizer_config.json", "r", encoding="utf-8") as f:
