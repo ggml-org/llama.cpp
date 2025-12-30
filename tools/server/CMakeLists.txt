@@ -68,3 +68,10 @@ if (WIN32)
 endif()
 
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+# Link against CUDA Runtime for signal handler cleanup
+if (GGML_CUDA)
+    # Re-find CUDA Toolkit to ensure CUDA::cudart is visible in this scope
+    find_package(CUDAToolkit REQUIRED)
+    target_link_libraries(llama-server PRIVATE CUDA::cudart)
+endif()

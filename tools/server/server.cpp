@@ -7,6 +7,10 @@
 #include "llama.h"
 #include "log.h"
 
+#ifdef GGML_USE_CUDA
+#include <cuda_runtime.h>
+#endif
+
 #include <atomic>
 #include <exception>
 #include <signal.h>
@@ -20,6 +24,13 @@ static std::function<void(int)> shutdown_handler;
 static std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
 
 static inline void signal_handler(int signal) {
+    #ifdef GGML_USE_CUDA
+    // CRITICAL: Release UVM pages immediately to prevent driver hang on GH200/Jetson
+    // Without this, Ctrl+C on Unified Memory systems causes indefinite deadlock
+    // as the driver waits for pending page migrations to complete
+    cudaDeviceReset(); 
+    #endif
+
     if (is_terminating.test_and_set()) {
         // in case it hangs, we can force terminate the server by hitting Ctrl+C twice
         // this is for better developer experience, we can remove when the server is stable enough
