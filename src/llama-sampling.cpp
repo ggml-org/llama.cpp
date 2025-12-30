@@ -2346,7 +2346,9 @@ struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, floa
 // of selected tokens, used to compute an adapted target at each sampling step.
 //
 // see llama.h for a full description of the sampler
+//
 // ref: https://github.com/ggml-org/llama.cpp/pull/17927
+//
 struct llama_sampler_adaptive_p {
     const float    target; // target probability (0.0 - 1.0; negative = disabled)
     const float    decay;  // EMA decay; history ~= 1/(1-decay) tokens (0.0 - 0.99)
@@ -2414,12 +2416,12 @@ static void llama_sampler_adaptive_p_apply(struct llama_sampler * smpl, llama_to
 }
 
 static void llama_sampler_adaptive_p_reset(struct llama_sampler * smpl) {
-    auto * ctx          = (llama_sampler_adaptive_p *) smpl->ctx;
+    auto * ctx = (llama_sampler_adaptive_p *) smpl->ctx;
     // ctx->target and ctx->decay never change after init, so it's safe to keep them as is.
     // original_probs is completely overwritten on every call to _apply.
     // so we only need to reset the EMA state.
-    ctx->weighted_sum   = ctx->target / (1.0f - ctx->decay);
-    ctx->total_weight   = 1.0f / (1.0f - ctx->decay);
+    ctx->weighted_sum = ctx->target / (1.0f - ctx->decay);
+    ctx->total_weight = 1.0f / (1.0f - ctx->decay);
 }
 
 static struct llama_sampler * llama_sampler_adaptive_p_clone(const struct llama_sampler * smpl) {

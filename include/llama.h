@@ -1334,6 +1334,7 @@ extern "C" {
     /// @param seed   RNG seed
     ///
     /// ref: https://github.com/ggml-org/llama.cpp/pull/17927
+    ///
     LLAMA_API struct llama_sampler * llama_sampler_init_adaptive_p(
                                float   target,
                                float   decay,
