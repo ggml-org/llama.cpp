@@ -6,10 +6,13 @@
 struct common_speculative;
 
 struct common_speculative_params {
-    int n_draft = 16;  // max drafted tokens
-    int n_reuse = 256;
+    int n_draft         = 16;  // max drafted tokens
+    int n_reuse         = 256;
 
-    float p_min = 0.75f; // min probability required to accept a token in the draft
+    float p_min         = 0.75f; // min probability required to accept a token in the draft
+
+    int self_mode       = 0; // 0: off, 1: self speculative lookup
+    int self_ngram_size = 12; // length of pattern to search for in self mode
 };
 
 struct common_speculative * common_speculative_init(

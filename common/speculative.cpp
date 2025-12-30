@@ -187,6 +187,18 @@ llama_tokens common_speculative_gen_draft(
         struct common_speculative_params params,
         const llama_tokens & prompt_tgt_main_model, // specified in target model vocab
         llama_token id_last) {
+    if (params.self_mode == 1) {
+        // Look in the current context for a n-gram and return the following tokens as the draft.
+        llama_tokens draft_self = common_speculative_gen_self_draft(prompt_tgt_main_model, id_last,
+                params.self_ngram_size, params.n_draft);
+        if (!draft_self.empty()) {
+            return draft_self;
+        }
+    }
+    if (spec == nullptr) {
+        return {};
+    }
+
     auto & batch  = spec->batch;
     auto & ctx_tgt = spec->ctx_tgt;
     auto & ctx_dft = spec->ctx_dft;
