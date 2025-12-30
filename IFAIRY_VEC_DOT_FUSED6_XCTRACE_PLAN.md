@@ -485,3 +485,96 @@ xcrun xctrace export --input tmp/xctrace/ifairy-vecdot_fused6_counters.trace --t
 - mul_mat 路由（LUT vs 非 LUT）：`ggml/src/ggml-cpu/ggml-cpu.c::ggml_compute_forward_mul_mat`
 - xctrace leaf 解析脚本：`scripts/ifairy_xctrace_leaf.py`
 
+---
+
+## 10) Stage 4+：asm 极限优化 Roadmap（macOS M4 / NEON + DOTPROD）
+
+本节是在 Stage 3（tensor-scale activation + fused6 + nibble-LUT + register tuning）基础上的后续“极限榨干”规划。
+
+前提（你已决定采用）：
+
+- **激活永远按 tensor-scale 量化**（vec_dot 侧可直接假设 `x[i].d_real/d_imag` 全部相同）。
+- 语义不变：严格 `w * conj(x)`。
+- 仅针对 Apple Silicon（AArch64 + NEON + DOTPROD），不做 x86。
+
+### 10.1 优先级 #1：打断 `sdot` 依赖链（accumulator banking）
+
+现状：同一组 accumulator（例如 `acc_ac0`）在一个 64 元素子段内会被多次连续写回，容易形成 “processing bottleneck”（`sdot` RAW 依赖链）。
+
+做法（最小 diff、风险最低）：
+
+- 将 `acc_*0/acc_*1` 不再作为 “low/high nibble 分流”，而是作为 **两路 bank**：
+  - 所有使用 `v3/v5`（xr0/xi0 或 xr2/xi2）的 `sdot` 写入 `acc_*0`
+  - 所有使用 `v4/v6`（xr1/xi1 或 xr3/xi3）的 `sdot` 写入 `acc_*1`
+- 外层 block 结束时仍用 `vaddq_s32(acc_*0, acc_*1)` 合并，数值完全等价。
+
+验收：
+
+- `xcrun xctrace` 的 CPU Counters：`cycles` 下降，且 `processing` ratio 下降（或 `useful` 上升）。
+- CPU Profiler leaf：主要 cycles 仍集中在 `ggml_vec_dot_ifairy_q16_K`，无明显新热点。
+- `test-ifairy`（含 strict）+ microbench verify 全通过。
+
+实验记录：
+
+- 进一步尝试 4-bank（使用 callee-saved `v8..v15`）在当前实现下回退，详见 `IFAIRY_VEC_DOT_FUSED6_XCTRACE_RESULTS_STAGE4H_4BANK.md`。
+
+### 10.2 优先级 #2：减少 `tbl`（仅在 #1 收益见顶后考虑）
+
+两条可选路线（择一深挖）：
+
+1) **数学重写（更激进）**：将 4 路（`ac/ad/bc/bd`）点积重写为 2 路（real/imag）点积，理论上可显著减少 `sdot` 次数；实现复杂、需要更严格的 correctness gate。
+2) **解码流水**：保持 nibble-LUT，但通过更深的软件流水把 `tbl` 延迟藏到下一段 load / sdot 中（避免扩大 I-cache 过多）。
+
+实验记录：
+
+- 尝试 packed-LUT（2×`tbl` + `shl/sshr` 拆分）明显回退，详见 `IFAIRY_VEC_DOT_FUSED6_XCTRACE_RESULTS_STAGE4G_PACKEDLUT.md`。
+
+### 10.3 优先级 #3：软件流水 / 预取实验（以 counters 证明，不靠直觉）
+
+- 尝试更明确的预取粒度（例如预取 `w_iter` / `xr/xi` 的下一 cache line），并用 counters 看 L1D miss 与 cycles。
+- 同时做 “删除现有 `__builtin_prefetch`” 的对照（Apple M 系列硬件 prefetch 很强，手写 prefetch 可能是负优化）。
+- 实验记录：外层 `__builtin_prefetch`（`w + i + 1` / `x + i + 1`）删除后，microbench/cycles 未见稳定收益，且 k=1536 有回退倾向；详见 `IFAIRY_VEC_DOT_FUSED6_XCTRACE_RESULTS_STAGE4F_NOPREFETCH.md`。
+
+### 10.4 优先级 #4：代码大小 / delivery 控制（避免 unroll 反噬）
+
+如果 xctrace 显示 `delivery` ratio 上升或 “High Delivery Bottleneck” remarks 增多：
+
+- 避免盲目把 `j` loop 全展开到 256（可能增大 I-cache 压力）
+- 以 “cycles + delivery ratio” 双指标决定是否值得更大 unroll
+
+### 10.5 统一测量口径（建议固定）
+
+microbench（两种 K，覆盖 nb==6 与 nb>6）：
+
+```bash
+./build-rel/bin/ifairy-vecdot-microbench --k 1536 --iters 50000000 --warmup 2000 --seed 1 --x-scale tensor --no-verify
+./build-rel/bin/ifairy-vecdot-microbench --k 4096 --iters 50000000 --warmup 2000 --seed 1 --x-scale tensor --no-verify
+```
+
+CPU Counters（cycle-based A/B）：
+
+```bash
+xcrun xctrace record --template 'CPU Counters' --time-limit 20s \
+  --output tmp/xctrace/vecdot_cpu_counters.trace \
+  --launch -- ./build-rel/bin/ifairy-vecdot-microbench --k 1536 --iters 50000000 --warmup 2000 --seed 1 --x-scale tensor --no-verify
+
+xcrun xctrace export --input tmp/xctrace/vecdot_cpu_counters.trace \
+  --xpath '/trace-toc/run[@number="1"]/data/table[@schema="MetricAggregationForThread"]' \
+  | python3 scripts/ifairy_xctrace_cpu_counters_summary.py
+```
+
+CPU Profiler（leaf cycles）：
+
+```bash
+xcrun xctrace record --template 'CPU Profiler' --time-limit 10s \
+  --output tmp/xctrace/vecdot_cpu_profiler.trace \
+  --launch -- ./build-rel/bin/ifairy-vecdot-microbench --k 4096 --iters 50000000 --warmup 2000 --seed 1 --x-scale tensor --no-verify
+```
+
+端到端（warmup 默认开启，`--repetitions 3`）：
+
+```bash
+GGML_IFAIRY_LUT=0 GGML_IFAIRY_VEC_DOT_ACT_TENSOR=1 \
+  ./build-rel/bin/llama-bench -m models/Fairy-plus-minus-i-700M/ifairy.gguf \
+  --threads 4 --n-prompt 64 --n-gen 128 -ngl 0 --device none --repetitions 3
+```

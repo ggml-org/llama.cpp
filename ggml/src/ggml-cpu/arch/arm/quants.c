@@ -1637,10 +1637,10 @@ void ggml_vec_dot_ifairy_q16_K(
     // 2bit index → {real, imag} 查表
     // 约定编码：00(-1) 01(1) 10(-i) 11(i)
     static const int8_t lut_real_data[16] = {
-        -1, 1, 0, 0,  -1, 1, 0, 0, -1, 1, 0, 0,  -1, 1, 0, 0
+        -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0,
     };
     static const int8_t lut_imag_data[16] = {
-         0, 0,-1, 1,   0, 0,-1, 1,  0, 0,-1, 1,   0, 0,-1, 1
+        0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1, 0, 0, -1, 1,
     };
     static const int8_t lut_wr_idx1_data[16] = {
         -1, -1, -1, -1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -1708,10 +1708,11 @@ void ggml_vec_dot_ifairy_q16_K(
                 "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
                 "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
 
-                "sdot           %[ac0].4s, v4.16b,  v18.16b \n"
-                "sdot           %[ad0].4s, v6.16b,  v18.16b \n"
-                "sdot           %[bc0].4s, v4.16b,  v19.16b \n"
-                "sdot           %[bd0].4s, v6.16b,  v19.16b \n"
+                // Accumulator banking: v3/v5 -> bank0, v4/v6 -> bank1.
+                "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
 
                 // xr2/xr3 -> v3/v4, xi2/xi3 -> v5/v6
                 "ldp            q3,  q4,  [%[xr], #32]      \n"
@@ -1723,10 +1724,10 @@ void ggml_vec_dot_ifairy_q16_K(
                 "tbl            v18.16b, {%[wr1].16b}, v2.16b \n"
                 "tbl            v19.16b, {%[wi1].16b}, v2.16b \n"
 
-                "sdot           %[ac1].4s, v3.16b,  v16.16b \n"
-                "sdot           %[ad1].4s, v5.16b,  v16.16b \n"
-                "sdot           %[bc1].4s, v3.16b,  v17.16b \n"
-                "sdot           %[bd1].4s, v5.16b,  v17.16b \n"
+                "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
 
                 "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
                 "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
@@ -1751,10 +1752,10 @@ void ggml_vec_dot_ifairy_q16_K(
                 "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
                 "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
 
-                "sdot           %[ac0].4s, v4.16b,  v18.16b \n"
-                "sdot           %[ad0].4s, v6.16b,  v18.16b \n"
-                "sdot           %[bc0].4s, v4.16b,  v19.16b \n"
-                "sdot           %[bd0].4s, v6.16b,  v19.16b \n"
+                "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
+                "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
+                "sdot           %[bc1].4s, v4.16b,  v19.16b \n"
+                "sdot           %[bd1].4s, v6.16b,  v19.16b \n"
 
                 "ldp            q3,  q4,  [%[xr], #96]      \n"
                 "ldp            q5,  q6,  [%[xi], #96]      \n"
@@ -1764,10 +1765,10 @@ void ggml_vec_dot_ifairy_q16_K(
                 "tbl            v18.16b, {%[wr1].16b}, v2.16b \n"
                 "tbl            v19.16b, {%[wi1].16b}, v2.16b \n"
 
-                "sdot           %[ac1].4s, v3.16b,  v16.16b \n"
-                "sdot           %[ad1].4s, v5.16b,  v16.16b \n"
-                "sdot           %[bc1].4s, v3.16b,  v17.16b \n"
-                "sdot           %[bd1].4s, v5.16b,  v17.16b \n"
+                "sdot           %[ac0].4s, v3.16b,  v16.16b \n"
+                "sdot           %[ad0].4s, v5.16b,  v16.16b \n"
+                "sdot           %[bc0].4s, v3.16b,  v17.16b \n"
+                "sdot           %[bd0].4s, v5.16b,  v17.16b \n"
 
                 "sdot           %[ac1].4s, v4.16b,  v18.16b \n"
                 "sdot           %[ad1].4s, v6.16b,  v18.16b \n"
@@ -1780,7 +1781,7 @@ void ggml_vec_dot_ifairy_q16_K(
                 : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v16", "v17", "v18", "v19", "memory");
         } // j loop
 
-        // 合并四个累加 Bank
+        // 合并两个累加 Bank
         acc_ac0 = vaddq_s32(acc_ac0, acc_ac1);
         acc_ad0 = vaddq_s32(acc_ad0, acc_ad1);
         acc_bc0 = vaddq_s32(acc_bc0, acc_bc1);
