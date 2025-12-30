@@ -2979,18 +2979,21 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         // in streaming mode, the first error must be treated as non-stream response
         // this is to match the OAI API behavior
         // ref: https://github.com/ggml-org/llama.cpp/pull/16486#discussion_r2419657309
-        server_task_result_ptr first_result = rd.next(req.should_stop);
+        auto first_result = rd.next(req.should_stop);
         if (first_result == nullptr) {
+            GGML_ASSERT(req.should_stop());
             return res; // connection is closed
-        } else if (first_result->is_error()) {
+        }
+
+        if (first_result->is_error()) {
             res->error(first_result->to_json());
             return res;
-        } else {
-            GGML_ASSERT(
-                dynamic_cast<server_task_result_cmpl_partial*>(first_result.get()) != nullptr
-                || dynamic_cast<server_task_result_cmpl_final*>(first_result.get()) != nullptr
-            );
         }
+
+        GGML_ASSERT(
+            dynamic_cast<server_task_result_cmpl_partial*>(first_result.get()) != nullptr ||
+            dynamic_cast<server_task_result_cmpl_final*>  (first_result.get()) != nullptr
+        );
 
         // next responses are streamed
         // to be sent immediately
@@ -3047,6 +3050,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 auto result = rd.next(req.should_stop);
                 if (result == nullptr) {
                     SRV_DBG("%s", "stopping streaming due to should_stop condition\n");
+                    GGML_ASSERT(req.should_stop());
                     return false; // should_stop condition met
                 }
 
@@ -3130,6 +3134,11 @@ void server_routes::init_routes() {
 
         // get the result
         auto result = res->rd.next(req.should_stop);
+        if (!result) {
+            // connection was closed
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
 
         if (result->is_error()) {
             res->error(result->to_json());
@@ -3230,6 +3239,11 @@ void server_routes::init_routes() {
 
         // get the result
         auto result = res->rd.next(req.should_stop);
+        if (!result) {
+            // connection was closed
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
 
         if (result->is_error()) {
             res->error(result->to_json());
@@ -3736,7 +3750,12 @@ void server_routes::init_routes() {
         }
 
         // get the result
-        server_task_result_ptr result = rd.next(req.should_stop);
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            // connection was closed
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
 
         if (result->is_error()) {
             res->error(result->to_json());
@@ -3765,7 +3784,12 @@ void server_routes::init_routes() {
         }
 
         // get the result
-        server_task_result_ptr result = rd.next(req.should_stop);
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            // connection was closed
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
 
         if (result->is_error()) {
             res->error(result->to_json());
@@ -3798,7 +3822,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const ser
         rd.post_task(std::move(task));
     }
 
-    server_task_result_ptr result = rd.next(req.should_stop);
+    auto result = rd.next(req.should_stop);
+    if (!result) {
+        // connection was closed
+        GGML_ASSERT(req.should_stop());
+        return res;
+    }
 
     if (result->is_error()) {
         res->error(result->to_json());
@@ -3829,7 +3858,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_restore(const 
         rd.post_task(std::move(task));
     }
 
-    server_task_result_ptr result = rd.next(req.should_stop);
+    auto result = rd.next(req.should_stop);
+    if (!result) {
+        // connection was closed
+        GGML_ASSERT(req.should_stop());
+        return res;
+    }
 
     if (result->is_error()) {
         res->error(result->to_json());
@@ -3851,7 +3885,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_erase(const se
         rd.post_task(std::move(task));
     }
 
-    server_task_result_ptr result = rd.next(req.should_stop);
+    auto result = rd.next(req.should_stop);
+    if (!result) {
+        // connection was closed
+        GGML_ASSERT(req.should_stop());
+        return res;
+    }
 
     if (result->is_error()) {
         res->error(result->to_json());
