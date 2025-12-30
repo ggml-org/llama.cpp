@@ -1696,7 +1696,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
-        {"--backend-sampling"},
+        {"-bs", "--backend-sampling"},
         "enable backend sampling (default: disabled)",
         [](common_params & params) {
             params.sampling.backend_sampling = true;
