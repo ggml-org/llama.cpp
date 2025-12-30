@@ -650,7 +650,7 @@ static void test_msgs_oaicompat_json_conversion() {
             "[\n"
             "  {\n"
             "    \"role\": \"assistant\",\n"
-            "    \"content\": null,\n"
+            "    \"content\": \"\",\n"
             "    \"tool_calls\": [\n"
             "      {\n"
             "        \"type\": \"function\",\n"
@@ -906,7 +906,8 @@ static void test_template_output_parsers() {
                       "      },\n"
                       "      \"id\": \"123456789\"\n"
                       "    }\n"
-                      "  ]\n"
+                      "  ],\n"
+                      "  \"content\": \"\"\n"
                       "}");
     }
     {
@@ -1713,7 +1714,8 @@ static void test_template_output_parsers() {
                       "      },\n"
                       "      \"id\": \"123456789\"\n"
                       "    }\n"
-                      "  ]\n"
+                      "  ],\n"
+                      "  \"content\": \"\"\n"
                       "}",
                       /* expect_grammar_triggered= */ false
         );
