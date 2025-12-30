@@ -1446,7 +1446,7 @@ struct ArgumentsExpression {
 static std::string strip(const std::string & s, const std::string & chars = "", bool left = true, bool right = true) {
   auto charset = chars.empty() ? " \t\n\r" : chars;
   auto start = left ? s.find_first_not_of(charset) : 0;
-    if (start == std::string::npos) return "";
+  if (start == std::string::npos) return "";
   auto end = right ? s.find_last_not_of(charset) : s.size() - 1;
   return s.substr(start, end - start + 1);
 }
@@ -1461,20 +1461,6 @@ static std::vector<std::string> split(const std::string & s, const std::string &
     end = s.find(sep, start);
   }
   result.push_back(s.substr(start));
-  return result;
-}
-
-static std::vector<std::string> rsplit(const std::string & s, const std::string & sep) {
-  std::vector<std::string> result;
-  size_t end = s.length();
-  size_t pos = s.rfind(sep);
-  while (pos != std::string::npos) {
-    result.insert(result.begin(), s.substr(pos + sep.length(), end - pos - sep.length()));
-    end = pos;
-    if (pos == 0) break;
-    pos = s.rfind(sep, pos - 1);
-  }
-  result.insert(result.begin(), s.substr(0, end));
   return result;
 }
 
@@ -1582,15 +1568,6 @@ public:
             vargs.expectArgs("split method", {1, 1}, {0, 0});
             auto sep = vargs.args[0].get<std::string>();
             auto parts = split(str, sep);
-            Value result = Value::array();
-            for (const auto& part : parts) {
-              result.push_back(Value(part));
-            }
-            return result;
-          } else if (method->get_name() == "rsplit") {
-            vargs.expectArgs("rsplit method", {1, 1}, {0, 0});
-            auto sep = vargs.args[0].get<std::string>();
-            auto parts = rsplit(str, sep);
             Value result = Value::array();
             for (const auto& part : parts) {
               result.push_back(Value(part));
