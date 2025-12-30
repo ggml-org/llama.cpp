@@ -214,6 +214,15 @@ static constexpr __device__ int get_cols_per_thread() {
 #endif // defined(AMD_WMMA_AVAILABLE)
 }
 
+static __host__ int get_cols_per_warp(const int cc) {
+    if (turing_mma_available(cc) || amd_wmma_available(cc)) {
+        return 16;
+    } else {
+        // Volta
+        return 32;
+    }
+}
+
 // ------------------------------------------------------------------------------------------------------------------
 
 static __host__ int ggml_cuda_fattn_mma_get_nstages(const int DKQ, const int DV, const int ncols1, const int ncols2, const int cc) {
@@ -748,7 +757,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                 VKQ_C[i].x[l] *= KQ_max_scale_h2;
             }
         }
-#endif // defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
+#endif // defined(TURING_MMA_AVAILABLE)
     }
 
     // Convert KQ C tiles into B tiles for VKQ calculation:
@@ -815,7 +824,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
                 const int k0 = k00 + (threadIdx.y % np)*T_A_VKQ::J;
 
                 T_A_VKQ A; // Transposed in SRAM but not in registers, gets transposed on load.
-#if defined(TURING_MMA_AVAILABLE)
+#if defined(LDMATRIX_TRANS_AVAILABLE)
                 load_ldmatrix_trans(A, tile_V_i + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2, stride_tile_V);
 #else
                 using tile_V_i_t = tile<16, 16, half, DATA_LAYOUT_J_MAJOR>;
@@ -1610,7 +1619,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     const bool Q_in_reg       = ggml_cuda_fattn_mma_get_Q_in_reg      (DKQ, DV, ncols, cc);
     const int  nstages        = ggml_cuda_fattn_mma_get_nstages       (DKQ, DV, ncols1, ncols2, cc);
 
-    const int cols_per_warp = std::min(ncols, turing_mma_available(cc) ? 16 : 32);
+    const int cols_per_warp = std::min(ncols, get_cols_per_warp(cc));
     const int nwarps        = nthreads / WARP_SIZE;
 
     constexpr bool mla = DKQ == 576;
