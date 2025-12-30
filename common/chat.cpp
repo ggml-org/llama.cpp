@@ -319,7 +319,7 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
                 }
             }
         } else {
-            jmsg["content"] = json(); // null
+            jmsg["content"] = "";
         }
         if (!msg.reasoning_content.empty()) {
             jmsg["reasoning_content"] = msg.reasoning_content;

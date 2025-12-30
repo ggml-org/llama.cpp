@@ -38,7 +38,7 @@ Example function tool call syntax:
     {%- if message['role'] == 'user' -%}
         {{- '<｜User｜>' + message['content'] + '<｜end▁of▁sentence｜>' -}}
     {%- endif -%}
-    {%- if message['role'] == 'assistant' and message['content'] is none -%}
+    {%- if message['role'] == 'assistant' and not message['content'] -%}
         {{- '<｜Assistant｜><｜tool▁calls▁begin｜>' -}}
         {%- set ns.is_first = true -%}
         {%- for tc in message['tool_calls'] -%}
@@ -53,7 +53,7 @@ Example function tool call syntax:
         {%- endfor -%}
         {{- '<｜tool▁calls▁end｜><｜end▁of▁sentence｜>' -}}
     {%- endif -%}
-    {%- if message['role'] == 'assistant' and message['content'] is  not none -%}
+    {%- if message['role'] == 'assistant' and message['content'] -%}
         {{- flush_tool_outputs() -}}
         {%- set content = message['content'] -%}
         {%- if '</think>' in content -%}
