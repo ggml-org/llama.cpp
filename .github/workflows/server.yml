@@ -38,7 +38,6 @@ jobs:
       matrix:
         sanitizer: [ADDRESS, UNDEFINED] # THREAD is broken
         build_type: [RelWithDebInfo]
-        extra_args: []
         include:
           - build_type: Release
             sanitizer: ""
