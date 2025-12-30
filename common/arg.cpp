@@ -1600,7 +1600,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--adaptive-target"}, "N",
         string_format("adaptive-p: select tokens near this probability (valid range 0.0 "
                       "to 1.0; negative = disabled) (default: %.2f)\n"
-                      "[(more info)]""(https://github.com/ggml-org/llama.cpp/pull/17927)",
+                      "[(more info)](https://github.com/ggml-org/llama.cpp/pull/17927)",
                       (double)params.sampling.adaptive_target),
         [](common_params & params, const std::string & value) {
             params.sampling.adaptive_target = std::stof(value);
