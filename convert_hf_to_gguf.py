@@ -1932,12 +1932,7 @@ class MmprojModel(ModelBase):
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         del bid, name, n_dims  # unused
         if ".patch_embd.weight" in new_name or ".patch_merger.weight" in new_name:
-            if self.ftype == gguf.LlamaFileType.MOSTLY_F16:
-                return gguf.GGMLQuantizationType.F16
-            elif self.ftype == gguf.LlamaFileType.MOSTLY_BF16:
-                return gguf.GGMLQuantizationType.BF16
-            else:
-                return gguf.GGMLQuantizationType.F32
+            return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
         return False
 
 
@@ -9305,7 +9300,8 @@ class AudioFlamingo3WhisperEncoderModel(WhisperEncoderModel):
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if ".conv" in name and ".weight" in name:
-            return gguf.GGMLQuantizationType.BF16 # model was trained and inferences in BF16
+            # Was trained in BF16, being safe, avoiding quantizing to FP16
+            return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 @ModelBase.register("FalconH1ForCausalLM")
