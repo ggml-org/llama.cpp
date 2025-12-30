@@ -14,11 +14,19 @@ enum class ActionGroup {
     ACTOR_POSE,
     OBJECT_MGMT,
     SHOT_MGMT,
+    MASTER_VERB,
     UNKNOWN
 };
 
 // Command Verbs
 enum class Verb {
+    // Master Verbs (require secondary verb)
+    START,
+    BEGIN,
+    HAVE,
+    MAKE,
+    STOP,
+    
     // Camera Control
     PAN,
     TILT,
@@ -69,17 +77,19 @@ struct CommandParameters {
     std::optional<float> degrees;
     std::optional<float> speed;
     std::optional<std::string> target;
+    std::optional<std::string> subject;  // Moved from Command structure
     std::optional<std::string> pose_description;
     std::optional<std::vector<Joint>> joint_rotations;
     std::optional<std::map<std::string, std::string>> additional_params;
 };
 
-// Main Command structure
+// Main Command structure (for Delphi Bridge compatibility)
 struct Command {
     Verb verb;
-    std::string subject;           // e.g., "Camera1", "Tom"
+    std::optional<Verb> master_verb;  // For Master Verbs (START, BEGIN, etc.)
     ActionGroup action_group;
     CommandParameters parameters;
+    std::string timestamp;            // ISO 8601 timestamp
     bool valid;
     std::string error_message;
 };
@@ -99,6 +109,15 @@ ActionGroup get_action_group_for_verb(Verb verb);
 
 // Get required parameters for a verb
 std::vector<std::string> get_required_parameters(Verb verb);
+
+// Get optional parameters for a verb
+std::vector<std::string> get_optional_parameters(Verb verb);
+
+// Check if a verb is a master verb
+bool is_master_verb(Verb verb);
+
+// Get current ISO 8601 timestamp
+std::string get_current_timestamp();
 
 // Load verb definitions from JSON file
 bool load_verb_definitions(const std::string & json_path);

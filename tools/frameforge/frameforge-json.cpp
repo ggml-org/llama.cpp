@@ -10,8 +10,14 @@ std::string command_to_json(const Command & cmd) {
     json j;
     
     j["verb"] = verb_to_string(cmd.verb);
-    j["subject"] = cmd.subject;
+    
+    // Add master_verb if present
+    if (cmd.master_verb.has_value()) {
+        j["master_verb"] = verb_to_string(cmd.master_verb.value());
+    }
+    
     j["action_group"] = action_group_to_string(cmd.action_group);
+    j["timestamp"] = cmd.timestamp;
     j["valid"] = cmd.valid;
     
     if (!cmd.error_message.empty()) {
@@ -19,6 +25,10 @@ std::string command_to_json(const Command & cmd) {
     }
     
     json params = json::object();
+    
+    if (cmd.parameters.subject.has_value()) {
+        params["subject"] = cmd.parameters.subject.value();
+    }
     
     if (cmd.parameters.direction.has_value()) {
         params["direction"] = direction_to_string(cmd.parameters.direction.value());
@@ -71,13 +81,22 @@ Command json_to_command(const std::string & json_str) {
         json j = json::parse(json_str);
         
         cmd.verb = string_to_verb(j.value("verb", ""));
-        cmd.subject = j.value("subject", "");
+        
+        if (j.contains("master_verb")) {
+            cmd.master_verb = string_to_verb(j["master_verb"].get<std::string>());
+        }
+        
         cmd.action_group = string_to_action_group(j.value("action_group", ""));
+        cmd.timestamp = j.value("timestamp", get_current_timestamp());
         cmd.valid = j.value("valid", false);
         cmd.error_message = j.value("error_message", "");
         
         if (j.contains("parameters")) {
             json params = j["parameters"];
+            
+            if (params.contains("subject")) {
+                cmd.parameters.subject = params["subject"].get<std::string>();
+            }
             
             if (params.contains("direction")) {
                 cmd.parameters.direction = string_to_direction(params["direction"].get<std::string>());

@@ -61,9 +61,10 @@ static void test_valid_command() {
     // Create a valid PAN command
     Command cmd;
     cmd.verb = Verb::PAN;
-    cmd.subject = "Camera1";
     cmd.action_group = ActionGroup::CAMERA_CONTROL;
+    cmd.timestamp = get_current_timestamp();
     cmd.parameters.direction = Direction::LEFT;
+    cmd.parameters.subject = "Camera1";  // Subject now in parameters
     
     ValidationResult result = validator.validate(cmd);
     assert(result.valid);
@@ -79,8 +80,9 @@ static void test_missing_parameters() {
     // Create PAN command without direction
     Command cmd;
     cmd.verb = Verb::PAN;
-    cmd.subject = "Camera1";
     cmd.action_group = ActionGroup::CAMERA_CONTROL;
+    cmd.timestamp = get_current_timestamp();
+    cmd.parameters.subject = "Camera1";
     // Missing direction parameter
     
     ValidationResult result = validator.validate(cmd);
@@ -97,9 +99,10 @@ static void test_json_parsing() {
     
     std::string json_str = R"({
         "verb": "PAN",
-        "subject": "Camera1",
         "action_group": "CAMERA_CONTROL",
+        "timestamp": "2024-01-01T12:00:00.000Z",
         "parameters": {
+            "subject": "Camera1",
             "direction": "LEFT"
         }
     })";
@@ -109,7 +112,8 @@ static void test_json_parsing() {
     
     assert(result.valid);
     assert(cmd.verb == Verb::PAN);
-    assert(cmd.subject == "Camera1");
+    assert(cmd.parameters.subject.has_value());
+    assert(cmd.parameters.subject.value() == "Camera1");
     assert(cmd.parameters.direction.has_value());
     assert(cmd.parameters.direction.value() == Direction::LEFT);
     
@@ -121,8 +125,9 @@ static void test_json_serialization() {
     
     Command cmd;
     cmd.verb = Verb::PAN;
-    cmd.subject = "Camera1";
     cmd.action_group = ActionGroup::CAMERA_CONTROL;
+    cmd.timestamp = "2024-01-01T12:00:00.000Z";
+    cmd.parameters.subject = "Camera1";
     cmd.parameters.direction = Direction::LEFT;
     cmd.valid = true;
     
@@ -132,6 +137,7 @@ static void test_json_serialization() {
     assert(json.find("\"PAN\"") != std::string::npos);
     assert(json.find("\"Camera1\"") != std::string::npos);
     assert(json.find("\"LEFT\"") != std::string::npos);
+    assert(json.find("timestamp") != std::string::npos);
     
     std::cout << "  ✓ JSON serialization test passed" << std::endl;
 }
@@ -143,9 +149,10 @@ static void test_complex_command() {
     
     std::string json_str = R"({
         "verb": "SET_POSE",
-        "subject": "Tom",
         "action_group": "ACTOR_POSE",
+        "timestamp": "2024-01-01T12:00:00.000Z",
         "parameters": {
+            "subject": "Tom",
             "pose_description": "arms crossed",
             "joint_rotations": [
                 {"name": "shoulder_left", "rotation_x": 0, "rotation_y": 45, "rotation_z": 0},
@@ -159,7 +166,8 @@ static void test_complex_command() {
     
     assert(result.valid);
     assert(cmd.verb == Verb::SET_POSE);
-    assert(cmd.subject == "Tom");
+    assert(cmd.parameters.subject.has_value());
+    assert(cmd.parameters.subject.value() == "Tom");
     assert(cmd.parameters.joint_rotations.has_value());
     assert(cmd.parameters.joint_rotations.value().size() == 2);
     
@@ -173,8 +181,9 @@ static void test_clarification_request() {
     
     Command cmd;
     cmd.verb = Verb::PAN;
-    cmd.subject = "Camera1";
     cmd.action_group = ActionGroup::CAMERA_CONTROL;
+    cmd.timestamp = get_current_timestamp();
+    cmd.parameters.subject = "Camera1";
     
     ValidationResult result = validator.validate(cmd);
     assert(!result.valid);

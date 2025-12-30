@@ -32,6 +32,8 @@ bool CommandValidator::check_required_parameters(
             missing.push_back("speed");
         } else if (param == "target" && !cmd.parameters.target.has_value()) {
             missing.push_back("target");
+        } else if (param == "subject" && !cmd.parameters.subject.has_value()) {
+            missing.push_back("subject");
         } else if (param == "pose_description" && 
                    !cmd.parameters.pose_description.has_value() &&
                    !cmd.parameters.joint_rotations.has_value()) {
@@ -72,11 +74,7 @@ bool CommandValidator::validate_parameter_values(
         }
     }
     
-    // Validate subject is not empty
-    if (cmd.subject.empty()) {
-        error = "Subject cannot be empty";
-        return false;
-    }
+    // Subject validation removed - it's now optional in parameters
     
     return true;
 }
@@ -142,13 +140,17 @@ ValidationResult CommandValidator::validate_json(
         }
         out_cmd.verb = string_to_verb(j["verb"].get<std::string>());
         
-        // Parse subject
-        if (!j.contains("subject")) {
-            result.valid = false;
-            result.error_message = "Missing 'subject' field in JSON";
-            return result;
+        // Parse master_verb (optional)
+        if (j.contains("master_verb")) {
+            out_cmd.master_verb = string_to_verb(j["master_verb"].get<std::string>());
         }
-        out_cmd.subject = j["subject"].get<std::string>();
+        
+        // Parse timestamp (optional, generate if missing)
+        if (j.contains("timestamp")) {
+            out_cmd.timestamp = j["timestamp"].get<std::string>();
+        } else {
+            out_cmd.timestamp = get_current_timestamp();
+        }
         
         // Parse action_group (optional, can be inferred)
         if (j.contains("action_group")) {
@@ -160,6 +162,10 @@ ValidationResult CommandValidator::validate_json(
         // Parse parameters
         if (j.contains("parameters")) {
             json params = j["parameters"];
+            
+            if (params.contains("subject")) {
+                out_cmd.parameters.subject = params["subject"].get<std::string>();
+            }
             
             if (params.contains("direction")) {
                 out_cmd.parameters.direction = string_to_direction(params["direction"].get<std::string>());
@@ -234,9 +240,14 @@ std::string CommandValidator::generate_clarification_request(
     std::ostringstream oss;
     oss << "I need clarification for the command '" 
         << verb_to_string(cmd.verb) 
-        << "' on subject '" 
-        << cmd.subject 
-        << "'. ";
+        << "'";
+    
+    // Include subject if present in parameters
+    if (cmd.parameters.subject.has_value()) {
+        oss << " for '" << cmd.parameters.subject.value() << "'";
+    }
+    
+    oss << ". ";
     
     if (!result.missing_parameters.empty()) {
         oss << "Please provide the following parameters: ";

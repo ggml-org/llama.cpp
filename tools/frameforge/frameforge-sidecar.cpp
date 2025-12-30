@@ -24,24 +24,37 @@ Analyze user voice commands and map them to one of these Action Groups:
 - ACTOR_POSE: Actor positioning and poses
 - OBJECT_MGMT: Adding, deleting, moving, or rotating objects
 - SHOT_MGMT: Managing shots (save, load)
+- MASTER_VERB: Master verbs that require secondary verbs (START, BEGIN, HAVE, MAKE, STOP)
 
 Extract parameters from the user's natural language input:
+- Subject: Names of actors or objects being controlled (goes in parameters)
 - Direction: LEFT, RIGHT, UP, DOWN, FORWARD, BACKWARD
 - Degrees: Numeric values for rotation (0-360)
 - Speed: Numeric values for movement speed (0-100)
-- Target: Names of objects, cameras, or actors
+- Target: Names of objects, cameras, or shots
 - PoseDescription: Natural language description of a pose
+
+Master Verbs:
+- START/BEGIN: Initiates an action (e.g., "START PANNING LEFT")
+- HAVE/MAKE: Commands an actor/object (e.g., "HAVE TOM WALK FORWARD")
+- STOP: Stops an ongoing action
 
 Important rules:
 1. If user says "PIN", map it to "PAN" verb
-2. If Action Group is ACTOR_POSE, generate a JSON array of joint rotations for the described pose
-3. Infer missing subjects when context is clear (e.g., "camera" for camera commands)
-4. Return ONLY a valid JSON object with this structure:
+2. If user says "ROOM", map it to "ZOOM" verb  
+3. If user says "PUSH", map it to "DOLLY" verb
+4. For Master Verbs, include both master_verb and verb fields
+5. If Action Group is ACTOR_POSE, generate a JSON array of joint rotations for the described pose
+6. Infer missing parameters when context is clear
+7. Subject is now inside parameters, not at root level
+8. Return ONLY a valid JSON object with this structure:
 {
   "verb": "VERB_NAME",
-  "subject": "SubjectName",
+  "master_verb": "MASTER_VERB_NAME",
   "action_group": "ACTION_GROUP",
+  "timestamp": "2024-01-01T12:00:00.000Z",
   "parameters": {
+    "subject": "ActorOrObjectName",
     "direction": "DIRECTION",
     "degrees": 45.0,
     "speed": 10.0,
