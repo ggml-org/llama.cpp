@@ -266,5 +266,15 @@ target_link_libraries(test-frameforge-json-loader PRIVATE common)
 add_test(NAME test-frameforge-json-loader COMMAND $<TARGET_FILE:test-frameforge-json-loader> WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests)
 set_property(TEST test-frameforge-json-loader PROPERTY LABELS "main")
 
+# FrameForge new features tests (master verbs, timestamp, etc.)
+add_executable(test-frameforge-new-features test-frameforge-new-features.cpp
+    ${CMAKE_SOURCE_DIR}/tools/frameforge/frameforge-schema.cpp
+    ${CMAKE_SOURCE_DIR}/tools/frameforge/frameforge-validator.cpp
+    ${CMAKE_SOURCE_DIR}/tools/frameforge/frameforge-json.cpp)
+target_include_directories(test-frameforge-new-features PRIVATE ${CMAKE_SOURCE_DIR}/tools/frameforge ${CMAKE_SOURCE_DIR}/vendor)
+target_link_libraries(test-frameforge-new-features PRIVATE common)
+add_test(NAME test-frameforge-new-features COMMAND $<TARGET_FILE:test-frameforge-new-features> WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests)
+set_property(TEST test-frameforge-new-features PROPERTY LABELS "main")
+
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
