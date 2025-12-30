@@ -276,9 +276,9 @@
 			icon: Code,
 			fields: [
 				{
-					key: SETTINGS_KEYS.DISABLE_REASONING_PARSING,
-					label: 'Disable reasoning content parsing',
-					type: SettingsFieldType.CHECKBOX
+					key: 'disableReasoningFormat',
+					label: 'Show raw LLM output',
+					type: 'checkbox'
 				},
 				{
 					key: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,

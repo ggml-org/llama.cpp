@@ -9,8 +9,7 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	showSystemMessage: true,
 	theme: ColorMode.SYSTEM,
 	showThoughtInProgress: false,
-	disableReasoningParsing: false,
-	showRawOutputSwitch: false,
+	disableReasoningFormat: false,
 	keepStatsVisible: false,
 	showMessageStats: true,
 	askForTitleConfirmation: false,
@@ -97,10 +96,8 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	max_tokens: 'The maximum number of token per output. Use -1 for infinite (no limit).',
 	custom: 'Custom JSON parameters to send to the API. Must be valid JSON format.',
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
-	disableReasoningParsing:
-		'Send reasoning_format=none to prevent server-side extraction of reasoning tokens into separate field',
-	showRawOutputSwitch:
-		'Show toggle button to display messages as plain text instead of Markdown-formatted content',
+	disableReasoningFormat:
+		'Show raw LLM output without backend parsing and frontend Markdown rendering to inspect streaming across different models.',
 	keepStatsVisible: 'Keep processing statistics visible after generation finishes.',
 	showMessageStats:
 		'Display generation statistics (tokens/second, token count, duration) below each assistant message.',

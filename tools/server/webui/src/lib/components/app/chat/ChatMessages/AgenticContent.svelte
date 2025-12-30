@@ -1,7 +1,18 @@
 <script lang="ts">
+	/**
+	 * AgenticContent - Chronological display of agentic flow output
+	 *
+	 * Parses content with tool call markers and displays them inline
+	 * with text content. Each tool call is shown as a collapsible box
+	 * similar to the reasoning/thinking block UI.
+	 */
+
 	import { MarkdownContent } from '$lib/components/app';
-	import { Wrench, ChevronDown, ChevronRight } from '@lucide/svelte';
-	import { slide } from 'svelte/transition';
+	import { Wrench } from '@lucide/svelte';
+	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
+	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
+	import { buttonVariants } from '$lib/components/ui/button/index.js';
+	import { Card } from '$lib/components/ui/card';
 
 	interface Props {
 		content: string;
@@ -17,11 +28,19 @@
 
 	let { content }: Props = $props();
 
-	// Parse content into sections
+	// Parse content into chronological sections
 	const sections = $derived(parseAgenticContent(content));
 
-	// Track collapsed state for each tool call
-	let collapsedArgs: Record<number, boolean> = $state({});
+	// Track expanded state for each tool call (default expanded)
+	let expandedStates: Record<number, boolean> = $state({});
+
+	function isExpanded(index: number): boolean {
+		return expandedStates[index] ?? true;
+	}
+
+	function toggleExpanded(index: number) {
+		expandedStates[index] = !isExpanded(index);
+	}
 
 	function parseAgenticContent(rawContent: string): AgenticSection[] {
 		if (!rawContent) return [];
@@ -74,10 +93,6 @@
 		return sections;
 	}
 
-	function toggleArgs(index: number) {
-		collapsedArgs[index] = !collapsedArgs[index];
-	}
-
 	function formatToolArgs(args: string): string {
 		try {
 			const parsed = JSON.parse(args);
@@ -91,46 +106,57 @@
 <div class="agentic-content">
 	{#each sections as section, index (index)}
 		{#if section.type === 'text'}
-			<div class="agentic-section agentic-text">
+			<div class="agentic-text">
 				<MarkdownContent content={section.content} />
 			</div>
 		{:else if section.type === 'tool_call'}
-			<div class="agentic-section agentic-tool-call" transition:slide={{ duration: 200 }}>
-				<div class="tool-call-header">
-					<div class="tool-call-title">
-						<Wrench class="h-4 w-4" />
-						<span class="tool-name">{section.toolName}</span>
-					</div>
-					{#if section.toolArgs && section.toolArgs !== '{}'}
-						<button
-							type="button"
-							class="tool-args-toggle"
-							onclick={() => toggleArgs(index)}
-							aria-expanded={!collapsedArgs[index]}
+			<Collapsible.Root open={isExpanded(index)} class="mb-4">
+				<Card class="gap-0 border-muted bg-muted/30 py-0">
+					<Collapsible.Trigger
+						class="flex w-full cursor-pointer items-center justify-between p-3"
+						onclick={() => toggleExpanded(index)}
+					>
+						<div class="flex items-center gap-2 text-muted-foreground">
+							<Wrench class="h-4 w-4" />
+							<span class="font-mono text-sm font-medium">{section.toolName}</span>
+						</div>
+
+						<div
+							class={buttonVariants({
+								variant: 'ghost',
+								size: 'sm',
+								class: 'h-6 w-6 p-0 text-muted-foreground hover:text-foreground'
+							})}
 						>
-							{#if collapsedArgs[index]}
-								<ChevronRight class="h-4 w-4" />
-							{:else}
-								<ChevronDown class="h-4 w-4" />
+							<ChevronsUpDownIcon class="h-4 w-4" />
+							<span class="sr-only">Toggle tool call content</span>
+						</div>
+					</Collapsible.Trigger>
+
+					<Collapsible.Content>
+						<div class="border-t border-muted px-3 pb-3">
+							{#if section.toolArgs && section.toolArgs !== '{}'}
+								<div class="pt-3">
+									<div class="mb-1 text-xs text-muted-foreground">Arguments:</div>
+									<pre
+										class="rounded bg-muted/30 p-2 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap">{formatToolArgs(
+											section.toolArgs
+										)}</pre>
+								</div>
 							{/if}
-							<span class="text-xs">Arguments</span>
-						</button>
-					{/if}
-				</div>
 
-				{#if section.toolArgs && section.toolArgs !== '{}' && !collapsedArgs[index]}
-					<div class="tool-args" transition:slide={{ duration: 150 }}>
-						<pre class="tool-args-content">{formatToolArgs(section.toolArgs)}</pre>
-					</div>
-				{/if}
-
-				{#if section.toolResult}
-					<div class="tool-result">
-						<div class="tool-result-label">Result:</div>
-						<MarkdownContent content={section.toolResult} />
-					</div>
-				{/if}
-			</div>
+							{#if section.toolResult}
+								<div class="pt-3">
+									<div class="mb-1 text-xs text-muted-foreground">Result:</div>
+									<div class="text-sm">
+										<MarkdownContent content={section.toolResult} />
+									</div>
+								</div>
+							{/if}
+						</div>
+					</Collapsible.Content>
+				</Card>
+			</Collapsible.Root>
 		{/if}
 	{/each}
 </div>
@@ -139,82 +165,12 @@
 	.agentic-content {
 		display: flex;
 		flex-direction: column;
-		gap: 1rem;
-	}
-
-	.agentic-section {
+		gap: 0.5rem;
 		width: 100%;
+		max-width: 48rem;
 	}
 
-	.agentic-tool-call {
-		border-left: 3px solid hsl(var(--primary) / 0.5);
-		padding-left: 1rem;
-		margin: 0.5rem 0;
-	}
-
-	.tool-call-header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 0.5rem;
-		margin-bottom: 0.5rem;
-	}
-
-	.tool-call-title {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		font-weight: 600;
-		color: hsl(var(--primary));
-	}
-
-	.tool-name {
-		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Monaco, monospace;
-		font-size: 0.875rem;
-	}
-
-	.tool-args-toggle {
-		display: flex;
-		align-items: center;
-		gap: 0.25rem;
-		padding: 0.25rem 0.5rem;
-		border-radius: 0.25rem;
-		background: hsl(var(--muted) / 0.5);
-		color: hsl(var(--muted-foreground));
-		border: none;
-		cursor: pointer;
-		transition: background-color 0.15s;
-	}
-
-	.tool-args-toggle:hover {
-		background: hsl(var(--muted));
-	}
-
-	.tool-args {
-		margin: 0.5rem 0;
-		padding: 0.5rem;
-		background: hsl(var(--muted) / 0.3);
-		border-radius: 0.375rem;
-		overflow-x: auto;
-	}
-
-	.tool-args-content {
-		margin: 0;
-		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Monaco, monospace;
-		font-size: 0.75rem;
-		color: hsl(var(--muted-foreground));
-		white-space: pre-wrap;
-		word-break: break-word;
-	}
-
-	.tool-result {
-		margin-top: 0.5rem;
-	}
-
-	.tool-result-label {
-		font-size: 0.75rem;
-		font-weight: 500;
-		color: hsl(var(--muted-foreground));
-		margin-bottom: 0.25rem;
+	.agentic-text {
+		width: 100%;
 	}
 </style>

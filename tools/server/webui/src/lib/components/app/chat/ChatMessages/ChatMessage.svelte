@@ -83,16 +83,7 @@
 		startEdit: handleEdit
 	});
 
-	$effect(() => {
-		const pendingId = pendingEditMessageId();
-
-		if (pendingId && pendingId === message.id && !isEditing) {
-			handleEdit();
-			chatStore.clearPendingEditMessageId();
-		}
-	});
-
-	async function handleCancelEdit() {
+	function handleCancelEdit() {
 		isEditing = false;
 
 		// If canceling a new system message with placeholder content, remove it without deleting children
@@ -277,5 +268,6 @@
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
 		{showDeleteDialog}
 		{siblingInfo}
+		{thinkingContent}
 	/>
 {/if}

@@ -4,6 +4,7 @@
 		ModelBadge,
 		ChatMessageActions,
 		ChatMessageStatistics,
+		ChatMessageThinkingBlock,
 		MarkdownContent,
 		ModelBadge,
 		ModelsSelector
@@ -49,58 +50,7 @@
 		showDeleteDialog: boolean;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 		textareaElement?: HTMLTextAreaElement;
-	}
-
-	interface ParsedReasoningContent {
-		content: string;
-		reasoningContent: string | null;
-		hasReasoningMarkers: boolean;
-	}
-
-	function parseReasoningContent(content: string | undefined): ParsedReasoningContent {
-		if (!content) {
-			return {
-				content: '',
-				reasoningContent: null,
-				hasReasoningMarkers: false
-			};
-		}
-
-		const plainParts: string[] = [];
-		const reasoningParts: string[] = [];
-		const { START, END } = REASONING_TAGS;
-		let cursor = 0;
-		let hasReasoningMarkers = false;
-
-		while (cursor < content.length) {
-			const startIndex = content.indexOf(START, cursor);
-
-			if (startIndex === -1) {
-				plainParts.push(content.slice(cursor));
-				break;
-			}
-
-			hasReasoningMarkers = true;
-			plainParts.push(content.slice(cursor, startIndex));
-
-			const reasoningStart = startIndex + START.length;
-			const endIndex = content.indexOf(END, reasoningStart);
-
-			if (endIndex === -1) {
-				reasoningParts.push(content.slice(reasoningStart));
-				cursor = content.length;
-				break;
-			}
-
-			reasoningParts.push(content.slice(reasoningStart, endIndex));
-			cursor = endIndex + END.length;
-		}
-
-		return {
-			content: plainParts.join(''),
-			reasoningContent: reasoningParts.length > 0 ? reasoningParts.join('\n\n') : null,
-			hasReasoningMarkers
-		};
+		thinkingContent: string | null;
 	}
 
 	let {
@@ -119,11 +69,9 @@
 		onShowDeleteDialogChange,
 		showDeleteDialog,
 		siblingInfo = null,
-		textareaElement = $bindable()
+		textareaElement = $bindable(),
+		thinkingContent
 	}: Props = $props();
-
-	// Get edit context
-	const editCtx = getMessageEditContext();
 
 	// Check if content contains agentic tool call markers
 	const isAgenticContent = $derived(
