@@ -149,6 +149,9 @@ You can use GBNF grammars:
 - To convert to a grammar ahead of time:
     - in CLI, with [examples/json_schema_to_grammar.py](../examples/json_schema_to_grammar.py)
     - in JavaScript with [json-schema-to-grammar.mjs](../tools/server/public_legacy/json-schema-to-grammar.mjs) (this is used by the [server](../tools/server)'s Web UI)
+ 
+> [!NOTE]
+> The JSON schema is only used to constrain the model output and is not injected into the prompt. The model has no visibility into the schema, so if you want it to understand the expected structure, describe it explicitly in your prompt. This does not apply to tool calling, where schemas are injected into the prompt.
 
 Take a look at [tests](../tests/test-json-schema-to-grammar.cpp) to see which features are likely supported (you'll also find usage examples in https://github.com/ggml-org/llama.cpp/pull/5978, https://github.com/ggml-org/llama.cpp/pull/6659 & https://github.com/ggml-org/llama.cpp/pull/6555).
 
@@ -217,7 +220,6 @@ Here is also a list of known limitations (contributions welcome):
 - Remote `$ref`s not supported in the C++ version (Python & JavaScript versions fetch https refs)
 - `string` [formats](https://json-schema.org/draft/2020-12/json-schema-validation#name-defined-formats) lack `uri`, `email`
 - No [`patternProperties`](https://json-schema.org/draft/2020-12/json-schema-core#name-patternproperties)
-- JSON Schema [annotations](https://json-schema.org/understanding-json-schema/reference/annotations) such as `description` are not taken into account.
 
 And a non-exhaustive list of other unsupported features that are unlikely to be implemented (hard and/or too slow to support w/ stateless grammars):
 
