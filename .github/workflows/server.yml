@@ -85,7 +85,7 @@ jobs:
         if: ${{ !matrix.disabled_on_pr || !github.event.pull_request }}
         run: |
           cd tools/server/tests
-          export ${matrix.extra_args}
+          export ${{ matrix.extra_args }}
           $env:PYTHONIOENCODING = ":replace"
           pytest -v -x -m "not slow"
 
