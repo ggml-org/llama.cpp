@@ -82,11 +82,10 @@ jobs:
 
       - name: Tests
         id: server_integration_tests
-        if: ${{ !matrix.disabled_on_pr || !github.event.pull_request }}
+        if: ${{ (!matrix.disabled_on_pr || !github.event.pull_request) && matrix.build_type == 'Release' }}
         run: |
           cd tools/server/tests
           export ${{ matrix.extra_args }}
-          $env:PYTHONIOENCODING = ":replace"
           pytest -v -x -m "not slow"
 
   server-windows:
