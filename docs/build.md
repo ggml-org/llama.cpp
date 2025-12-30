@@ -768,22 +768,16 @@ git switch dev_backend_openvino
 
 - **Linux:**
     ```bash
-    # Build with OpenVINO support
     source /opt/intel/openvino/setupvars.sh
     cmake -B build/ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF
-    cmake --build build/ReleaseOV --config Release -j $(nproc)
+    cmake --build build/ReleaseOV --parallel
     ```
 
 - **Windows:**
     ```bash
-    # Build with OpenVINO support
     "C:\Program Files (x86)\Intel\openvino_2025.3.0\setupvars.bat"
-    cmake -B build\ReleaseOV -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF -DLLAMA_CURL=OFF -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
-    cmake --build build\ReleaseOV --config Release
-    ```
-    - For faster compilation, add the -- /m argument to run multiple jobs in parallel with as many CPU cores available.
-    ```bash
-    cmake --build build\ReleaseOV --config Release -- /m
+    cmake -B build\ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF -DLLAMA_CURL=OFF -DCMAKE_TOOLCHAIN_FILE=C:\vcpkg\scripts\buildsystems\vcpkg.cmake
+    cmake --build build\ReleaseOV --parallel
     ```
 
 ### 3. Download Sample Model
@@ -791,16 +785,9 @@ git switch dev_backend_openvino
 Download models for testing:
 
 ```bash
-# Create models directory
 mkdir -p ~/models/
-
-# Download model file: Llama-3.2-1B-Instruct.fp16.gguf
-wget https://huggingface.co/MaziyarPanahi/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct.fp16.gguf \
-     -O ~/models/Llama-3.2-1B-Instruct.fp16.gguf
-
-# Download model file: Phi-3-mini-4k-instruct-fp16.gguf
-wget https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-fp16.gguf \
-     -O ~/models/Phi-3-mini-4k-instruct-fp16.gguf
+wget https://huggingface.co/unsloth/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf \
+     -O ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf
 ```
 
 ### 4. Run inference with OpenVINO backend:
@@ -808,20 +795,14 @@ wget https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/P
 When using the OpenVINO backend, the first inference token may have slightly higher latency due to on-the-fly conversion to the OpenVINO graph. Subsequent tokens and runs will be faster.
 
 ```bash
-export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
-# Default device is GPU.
-# If not set, automatically selects the first available device in priority order: GPU, CPU, NPU.
+# If device is unset or unavailable, default to CPU.
 export GGML_OPENVINO_DEVICE=GPU
-
-./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct.fp16.gguf -n 50 "The story of AI is "
-
+./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -n 50 "The story of AI is "
 ```
 
 To run in chat mode:
 ```bash
-export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
-./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct.fp16.gguf -n 50 "The story of AI is "
-
+./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf
 ```
 
 ### Configuration Options
@@ -833,16 +814,11 @@ Control OpenVINO behavior using these environment variables:
 -   **`GGML_OPENVINO_PROFILING`**: Enable execution time profiling.
 -   **`GGML_OPENVINO_DUMP_CGRAPH`**: Save compute graph to `cgraph.txt`.
 -   **`GGML_OPENVINO_DUMP_IR`**: Export OpenVINO IR files with timestamps.
--   **`GGML_OPENVINO_DEBUG_INPUT`**: Enable input debugging.
--   **`GGML_OPENVINO_DEBUG_OUTPUT`**: Enable output debugging.
 
 ### Example with Profiling
 
 ```bash
-export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
-export GGML_OPENVINO_PROFILING=1
-
-GGML_OPENVINO_DEVICE=GPU ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct.fp16.gguf -n 50 "The story of AI is "
+GGML_OPENVINO_PROFILING=1 GGML_OPENVINO_DEVICE=GPU ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct-Q4_0.gguf -n 50 "The story of AI is "
 ```
 
 ### Docker build Llama.cpp with OpenVINO Backend
