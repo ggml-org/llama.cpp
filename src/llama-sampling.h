@@ -23,7 +23,7 @@ struct llama_sampler_chain {
 
     mutable int64_t t_sample_us;
 
-    mutable int32_t n_sample;   
+    mutable int32_t n_sample;
 };
 
 struct llama_sampler * llama_sampler_init_dry_testing(
