@@ -12,7 +12,7 @@
       "action_group": "MASTER_VERB",
       "required_parameters": [],
       "optional_parameters": ["subject", "target", "direction", "speed", "degrees"],
-      "aliases": ["BEGIN"],
+      "aliases": [],
       "is_master_verb": true,
       "description": "Begin an action (requires secondary verb)"
     },

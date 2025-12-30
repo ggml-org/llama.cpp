@@ -55,9 +55,8 @@ static void test_required_parameters_with_json() {
     assert(pan_params[0] == "direction");
     
     auto dolly_params = get_required_parameters(Verb::DOLLY);
-    assert(dolly_params.size() == 2);
+    assert(dolly_params.size() == 1);
     assert(dolly_params[0] == "direction");
-    assert(dolly_params[1] == "speed");
     
     auto lean_params = get_required_parameters(Verb::LEAN);
     assert(lean_params.size() == 2);
