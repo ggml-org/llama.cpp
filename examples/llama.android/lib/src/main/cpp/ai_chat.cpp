@@ -300,9 +300,11 @@ static void reset_short_term_states() {
  * TODO-hyin: implement sliding-window version as a better alternative
  *
  * Context shifting by discarding the older half of the tokens appended after system prompt:
- * - take the [system_prompt_position] first tokens from the original prompt
- * - take half of the last (system_prompt_position - system_prompt_position) tokens
+ * - take the [keep_recent] first tokens from the original prompt
+ * - take half of the last (current_position - keep_first) tokens
  * - recompute the logits in batches
+ *
+ * attention_sink: keep the first 4 tokens to maintain attention.
  */
 static void shift_context() {
     const int attention_sink = 4;
