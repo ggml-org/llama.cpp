@@ -118,11 +118,6 @@ void ggml_cuda_mul_mat_q(
     // TODO: tighter pool buffer size vs q8 path
     const bool use_native_mxfp4 = blackwell_mma_available(cc) && src0->type == GGML_TYPE_MXFP4;
 
-    if (static bool logged = false; !logged && use_native_mxfp4) {
-        logged = true;
-        GGML_LOG_INFO("ggml-cuda: Blackwell native mxfp4 tensor cores enabled\n");
-    }
-
     if (!ids) {
         const size_t nbytes_src1_q8_1 = ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1 +
             get_mmq_x_max_host(cc)*sizeof(block_q8_1_mmq);
