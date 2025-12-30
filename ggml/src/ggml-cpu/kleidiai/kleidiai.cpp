@@ -53,19 +53,11 @@ static const char* cpu_feature_to_string(cpu_feature f) {
     } else if ((f & CPU_FEATURE_SVE) == CPU_FEATURE_SVE) {
         return "SVE";
     }
-#if defined(__APPLE__)
-    else if ((f & CPU_FEATURE_DOTPROD) == CPU_FEATURE_DOTPROD) {
-        return "DOTPROD";
-    } else if ((f & CPU_FEATURE_I8MM) == CPU_FEATURE_I8MM) {
-        return "I8MM";
-    }
-#else
     else if ((f & CPU_FEATURE_I8MM) == CPU_FEATURE_I8MM) {
         return "I8MM";
     } else if ((f & CPU_FEATURE_DOTPROD) == CPU_FEATURE_DOTPROD) {
         return "DOTPROD";
     }
-#endif
     else {
         return "UNKNOWN";
     }
