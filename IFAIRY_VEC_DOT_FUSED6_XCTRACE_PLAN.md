@@ -53,6 +53,38 @@
 
 ---
 
+### 0.3 关于 `nrc==2`（i8mm / `vmmlaq_s32`）的调研结论
+
+这份计划文档主要面向 Apple Silicon（AArch64 + NEON + DOTPROD）的 `xctrace` 优化闭环；但 ggml 里确实存在一种 **`nrc==2` 的 2×2 tile vec_dot** 模式（典型实现使用 i8mm 的 `vmmlaq_s32`），因此这里先把可行性与改动点明确下来，避免重复踩坑。
+
+现状（截至当前代码）：
+
+- `ggml/src/ggml-cpu/arch/arm/quants.c::ggml_vec_dot_ifairy_q16_K()` 入口直接 `(void)nrc;`，实际只支持 `nrc==1`。
+- `ggml/src/ggml-cpu/quants.c::ggml_vec_dot_ifairy_q16_K_generic()` 里 `assert(nrc == 1)`。
+- `ggml/src/ggml-cpu/ggml-cpu.c` 的 `type_traits_cpu[GGML_TYPE_IFAIRY].nrows == 1`，因此 `ggml_compute_forward_mul_mat_*()` 不会对 iFairy 调用 `nrc==2`。
+
+对照（ggml 里已有的 nrc==2 模板）：
+
+- `ggml/src/ggml-cpu/arch/arm/quants.c::ggml_vec_dot_q4_0_q8_0()` 在 `__ARM_FEATURE_MATMUL_INT8` 下支持 `nrc==2`，并用 `vmmlaq_s32` 一次计算 2×2 输出 tile（`vx0/vx1` × `vy0/vy1`）。
+
+结论（针对本文件的 Apple/xctrace 目标）：
+
+- **默认编译参数**下（不显式开启 i8mm），clang 预定义宏里通常只有 `__ARM_FEATURE_DOTPROD`，没有 `__ARM_FEATURE_MATMUL_INT8`（可用 `clang -dM -E -x c /dev/null | rg '__ARM_FEATURE_(DOTPROD|MATMUL_INT8)'` 自查），这时 i8mm 的 `nrc==2` 路径 **不会编译/不会命中**。
+- 在 **M4 这类确实支持 i8mm 的机器**上，如果用 `-mcpu=native`（或显式 `-mcpu=apple-m4` / `-march=...+i8mm`）构建，通常会看到 `__ARM_FEATURE_MATMUL_INT8`，此时从“指令可用性”角度讲是可以做 `nrc==2` 的；但 iFairy 目前的 vec_dot 仍未实现 `nrc==2` 分支（见上面的“现状”），所以还需要额外工程落地。
+- 因此这份文档主线仍以 DOTPROD（`sdot`）为核心做 fused6 与 asm 优化；i8mm `nrc==2` 更像是“在确认 build flags + 形状收益之后”的独立分支课题。
+
+如果要面向支持 i8mm 的 AArch64（例如部分 Android/服务器 ARMv8.x）把 `nrc==2` 做起来，改动点是清晰的（但属于另一条工作流）：
+
+1) 在 `ggml/src/ggml-cpu/ggml-cpu.c` 把 `type_traits_cpu[GGML_TYPE_IFAIRY].nrows` 在 `__ARM_FEATURE_MATMUL_INT8` 下改为 `2`（与 Q4_0/Q4_1 的做法一致），让 mul_mat 的 tile 调用真正传入 `nrc==2`。
+2) 在 `ggml/src/ggml-cpu/arch/arm/quants.c::ggml_vec_dot_ifairy_q16_K()` 增加 `if (nrc == 2)` 分支，并严格遵循 ggml 的布局约定：
+   - 输出 `s` 是一个临时 tile 缓冲的行指针（单位是 `float` 元素，但对 iFairy 来说每个元素实际是 bf16-pair 复数，占 4 bytes）。
+   - `bs` 是 tile 内 “下一列” 的 stride（当前 mul_mat 里固定传 `16`），所以应把 `(col0,row0/row1)` 写到 `s[...]`，把 `(col1,row0/row1)` 写到 `s + bs`。
+   - `bx/by` 分别是 `vx/vy` 的 row/col stride（byte stride），用于定位 `vx1` 与 `vy1`。
+3) 同时让 `ggml_vec_dot_ifairy_q16_K_generic()` 至少能在 `nrc==2` 时通过 “拆成 4 次 nrc==1 调用” 做参考（否则非 i8mm/非 ARM fallback 会直接 assert）。
+4) 验证与测量：
+   - 正确性：扩展 `tools/ifairy-vecdot-microbench` 支持 `--nrc 2`（或新增一个小测试）来验证 2×2 tile 的打包与数值一致性。
+   - 性能：i8mm 平台优先用 `perf`/`simpleperf`（而不是 xctrace）做 leaf 与 counters 对照。
+
 ## 1) 需求明确化（Spec）
 
 ### 1.1 需求
