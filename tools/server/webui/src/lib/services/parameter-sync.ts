@@ -69,7 +69,6 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		type: 'boolean',
 		canSync: true
 	},
-	{ key: 'showToolCalls', serverKey: 'showToolCalls', type: 'boolean', canSync: true },
 	{
 		key: 'disableReasoningFormat',
 		serverKey: 'disableReasoningFormat',
