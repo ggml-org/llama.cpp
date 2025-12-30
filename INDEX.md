@@ -134,8 +134,8 @@ This directory contains comprehensive documentation of unresolved code review co
 
 ```
 Total Unresolved Comments: 36
-├── Security:  1 (2.8%)
-├── High:      6 (16.7%)
+├── Security:  2 (5.6%)
+├── High:      5 (13.9%)
 ├── Medium:   23 (63.9%)
 └── Low:       6 (16.7%)
 
