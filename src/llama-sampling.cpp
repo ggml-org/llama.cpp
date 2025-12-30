@@ -1156,6 +1156,8 @@ static bool llama_sampler_dist_backend_init(
 
         // Allocate all tensors from our context to the backend
         sctx->inp_buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(sctx->inp_ctx.get(), buft));
+
+        ggml_backend_buffer_clear(sctx->inp_buf.get(), 0);
     }
 
     const bool res = llama_sampler_backend_support(smpl, buft);
@@ -1232,7 +1234,8 @@ static void llama_sampler_dist_backend_set_input(struct llama_sampler * smpl) {
     // std::uniform_real_distribution<float> with same rng will produce
     // different sequences).
     std::uniform_real_distribution<double> dist(0.0f, 1.0f);
-    const float                            rnd = dist(sctx->rng);
+    const float rnd = dist(sctx->rng);
+
     ggml_backend_tensor_set(sctx->inp_uniform, &rnd, 0, sizeof(float));
 }
 
@@ -3430,6 +3433,8 @@ static bool llama_sampler_logit_bias_backend_init(
 
     // Allocate all tensors from our context to the backend
     sctx->inp_buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(sctx->inp_ctx.get(), buft));
+
+    ggml_backend_buffer_clear(sctx->inp_buf.get(), 0);
 
     return true;
 }
