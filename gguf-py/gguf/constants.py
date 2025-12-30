@@ -108,6 +108,7 @@ class Keys:
         BLOCK_COUNT                       = "{arch}.block_count"
         LEADING_DENSE_BLOCK_COUNT         = "{arch}.leading_dense_block_count"
         FEED_FORWARD_LENGTH               = "{arch}.feed_forward_length"
+        FEED_FORWARD_TYPE                 = "{arch}.feed_forward_type"
         EXPERT_FEED_FORWARD_LENGTH        = "{arch}.expert_feed_forward_length"
         EXPERT_SHARED_FEED_FORWARD_LENGTH = "{arch}.expert_shared_feed_forward_length"
         EXPERT_CHUNK_FEED_FORWARD_LENGTH  = "{arch}.expert_chunk_feed_forward_length"

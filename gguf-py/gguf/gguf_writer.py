@@ -711,6 +711,9 @@ class GGUFWriter:
         else:
             self.add_array(Keys.LLM.FEED_FORWARD_LENGTH.format(arch=self.arch), length)
 
+    def add_feed_forward_type(self, ff_type: str) -> None:
+        self.add_string(Keys.LLM.FEED_FORWARD_TYPE.format(arch=self.arch), ff_type)
+
     def add_expert_feed_forward_length(self, length: int) -> None:
         self.add_uint32(Keys.LLM.EXPERT_FEED_FORWARD_LENGTH.format(arch=self.arch), length)
 
