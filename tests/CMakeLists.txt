@@ -258,5 +258,13 @@ target_link_libraries(test-frameforge-validator PRIVATE common)
 add_test(NAME test-frameforge-validator COMMAND $<TARGET_FILE:test-frameforge-validator>)
 set_property(TEST test-frameforge-validator PROPERTY LABELS "main")
 
+# FrameForge JSON loader tests
+add_executable(test-frameforge-json-loader test-frameforge-json-loader.cpp
+    ${CMAKE_SOURCE_DIR}/tools/frameforge/frameforge-schema.cpp)
+target_include_directories(test-frameforge-json-loader PRIVATE ${CMAKE_SOURCE_DIR}/tools/frameforge ${CMAKE_SOURCE_DIR}/vendor)
+target_link_libraries(test-frameforge-json-loader PRIVATE common)
+add_test(NAME test-frameforge-json-loader COMMAND $<TARGET_FILE:test-frameforge-json-loader> WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests)
+set_property(TEST test-frameforge-json-loader PROPERTY LABELS "main")
+
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)

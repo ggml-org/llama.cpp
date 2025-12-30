@@ -58,6 +58,7 @@ struct frameforge_params {
     std::string llama_model;
     std::string audio_file;
     std::string pipe_name = "frameforge_pipe";
+    std::string verb_definitions_file;  // Path to verb definitions JSON
     int n_threads = 4;
     bool verbose = false;
 };
@@ -69,6 +70,7 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "  -lm, --llama-model FNAME    Path to Llama model file\n");
     fprintf(stderr, "  -a,  --audio FILE           Audio file to transcribe (for testing)\n");
     fprintf(stderr, "  -p,  --pipe NAME            Named pipe name (default: frameforge_pipe)\n");
+    fprintf(stderr, "  -vd, --verb-defs FILE       Path to verb definitions JSON file\n");
     fprintf(stderr, "  -t,  --threads N            Number of threads (default: 4)\n");
     fprintf(stderr, "  -v,  --verbose              Enable verbose output\n");
     fprintf(stderr, "  -h,  --help                 Show this help message\n");
@@ -102,6 +104,13 @@ static bool parse_params(int argc, char ** argv, frameforge_params & params) {
         } else if (arg == "-p" || arg == "--pipe") {
             if (i + 1 < argc) {
                 params.pipe_name = argv[++i];
+            } else {
+                fprintf(stderr, "Error: Missing value for %s\n", arg.c_str());
+                return false;
+            }
+        } else if (arg == "-vd" || arg == "--verb-defs") {
+            if (i + 1 < argc) {
+                params.verb_definitions_file = argv[++i];
             } else {
                 fprintf(stderr, "Error: Missing value for %s\n", arg.c_str());
                 return false;
@@ -295,6 +304,16 @@ int main(int argc, char ** argv) {
     
     if (!parse_params(argc, argv, params)) {
         return 1;
+    }
+    
+    // Load verb definitions if provided
+    if (!params.verb_definitions_file.empty()) {
+        fprintf(stderr, "Loading verb definitions from: %s\n", params.verb_definitions_file.c_str());
+        if (!frameforge::load_verb_definitions(params.verb_definitions_file)) {
+            fprintf(stderr, "Warning: Failed to load verb definitions, using hard-coded defaults\n");
+        }
+    } else {
+        fprintf(stderr, "No verb definitions file specified, using hard-coded defaults\n");
     }
     
     // Initialize Whisper

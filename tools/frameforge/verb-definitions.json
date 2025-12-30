@@ -1,0 +1,108 @@
+{
+  "action_groups": {
+    "CAMERA_CONTROL": "Camera movements and controls",
+    "ACTOR_POSE": "Actor positioning and poses",
+    "OBJECT_MGMT": "Object manipulation",
+    "SHOT_MGMT": "Shot management"
+  },
+  "verbs": [
+    {
+      "name": "PAN",
+      "action_group": "CAMERA_CONTROL",
+      "required_parameters": ["direction"],
+      "aliases": ["PIN"],
+      "description": "Pan the camera left or right"
+    },
+    {
+      "name": "TILT",
+      "action_group": "CAMERA_CONTROL",
+      "required_parameters": ["direction"],
+      "aliases": [],
+      "description": "Tilt the camera up or down"
+    },
+    {
+      "name": "DOLLY",
+      "action_group": "CAMERA_CONTROL",
+      "required_parameters": ["direction", "speed"],
+      "aliases": [],
+      "description": "Move the camera forward or backward"
+    },
+    {
+      "name": "ZOOM",
+      "action_group": "CAMERA_CONTROL",
+      "required_parameters": ["direction"],
+      "aliases": [],
+      "description": "Zoom the camera in or out"
+    },
+    {
+      "name": "LEAN",
+      "action_group": "CAMERA_CONTROL",
+      "required_parameters": ["direction", "degrees"],
+      "aliases": [],
+      "description": "Lean the camera at an angle"
+    },
+    {
+      "name": "SET_POSE",
+      "action_group": "ACTOR_POSE",
+      "required_parameters": ["pose_description"],
+      "aliases": [],
+      "description": "Set an actor's pose"
+    },
+    {
+      "name": "ADJUST_POSE",
+      "action_group": "ACTOR_POSE",
+      "required_parameters": ["pose_description"],
+      "aliases": [],
+      "description": "Adjust an actor's current pose"
+    },
+    {
+      "name": "ADD",
+      "action_group": "OBJECT_MGMT",
+      "required_parameters": ["target"],
+      "aliases": [],
+      "description": "Add an object to the scene"
+    },
+    {
+      "name": "DELETE",
+      "action_group": "OBJECT_MGMT",
+      "required_parameters": ["target"],
+      "aliases": ["REMOVE"],
+      "description": "Delete an object from the scene"
+    },
+    {
+      "name": "MOVE",
+      "action_group": "OBJECT_MGMT",
+      "required_parameters": ["target", "direction"],
+      "aliases": [],
+      "description": "Move an object in a direction"
+    },
+    {
+      "name": "ROTATE",
+      "action_group": "OBJECT_MGMT",
+      "required_parameters": ["target", "degrees"],
+      "aliases": [],
+      "description": "Rotate an object"
+    },
+    {
+      "name": "SHOT",
+      "action_group": "SHOT_MGMT",
+      "required_parameters": ["target"],
+      "aliases": [],
+      "description": "Create or select a shot"
+    },
+    {
+      "name": "SAVE_SHOT",
+      "action_group": "SHOT_MGMT",
+      "required_parameters": ["target"],
+      "aliases": [],
+      "description": "Save the current shot"
+    },
+    {
+      "name": "LOAD_SHOT",
+      "action_group": "SHOT_MGMT",
+      "required_parameters": ["target"],
+      "aliases": [],
+      "description": "Load a saved shot"
+    }
+  ]
+}

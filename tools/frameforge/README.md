@@ -97,9 +97,53 @@ The binary will be located at: `build/bin/frameforge-sidecar`
 - `-lm, --llama-model FNAME` - Path to Llama model file (required)
 - `-a, --audio FILE` - Audio file to transcribe (for testing)
 - `-p, --pipe NAME` - Named pipe name (default: frameforge_pipe)
+- `-vd, --verb-defs FILE` - Path to verb definitions JSON file (optional)
 - `-t, --threads N` - Number of threads (default: 4)
 - `-v, --verbose` - Enable verbose output
 - `-h, --help` - Show help message
+
+### Verb Definitions
+
+As of the latest version, verb definitions can be loaded from a JSON file instead of being hard-coded. This allows for easier customization and extension without modifying the source code.
+
+**JSON File Format:**
+
+The verb definitions file should follow this structure:
+
+```json
+{
+  "action_groups": {
+    "CAMERA_CONTROL": "Camera movements and controls",
+    "ACTOR_POSE": "Actor positioning and poses",
+    "OBJECT_MGMT": "Object manipulation",
+    "SHOT_MGMT": "Shot management"
+  },
+  "verbs": [
+    {
+      "name": "PAN",
+      "action_group": "CAMERA_CONTROL",
+      "required_parameters": ["direction"],
+      "aliases": ["PIN"],
+      "description": "Pan the camera left or right"
+    }
+  ]
+}
+```
+
+**Using Custom Verb Definitions:**
+
+```bash
+./build/bin/frameforge-sidecar \
+  -wm whisper-base.en.bin \
+  -lm llama-3-8b-instruct.gguf \
+  -vd /path/to/custom-verbs.json \
+  -a test_command.wav \
+  -v
+```
+
+A sample verb definitions file is provided at `tools/frameforge/verb-definitions.json` containing all the currently defined verbs.
+
+If no verb definitions file is specified, the system will fall back to hard-coded defaults.
 
 ## Architecture
 

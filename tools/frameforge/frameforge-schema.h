@@ -100,6 +100,12 @@ ActionGroup get_action_group_for_verb(Verb verb);
 // Get required parameters for a verb
 std::vector<std::string> get_required_parameters(Verb verb);
 
+// Load verb definitions from JSON file
+bool load_verb_definitions(const std::string & json_path);
+
+// Check if verb definitions are loaded
+bool are_verb_definitions_loaded();
+
 } // namespace frameforge
 
 #endif // FRAMEFORGE_SCHEMA_H
