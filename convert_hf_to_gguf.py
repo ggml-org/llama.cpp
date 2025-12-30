@@ -1231,8 +1231,8 @@ class TextModel(ModelBase):
             # ref: https://huggingface.co/KORMo-Team/KORMo-tokenizer
             res = "kormo"
         if chkhsh == "9d70134b369a70e5735009b6de918f7581b5211f7c074d1f89f753aea8248af1":
-            # ref: ./Youtu-VL
-            res = "youtu-vl"
+            # ref: https://huggingface.co/tencent/Youtu-LLM-2B
+            res = "youtu"
 
         if res is None:
             logger.warning("\n")
@@ -7136,7 +7136,7 @@ class DeepseekModel(TextModel):
     "DeepseekV2ForCausalLM",
     "DeepseekV3ForCausalLM",
     "KimiVLForConditionalGeneration",
-    "YOUTUVLForCausalLM",
+    "YoutuForCausalLM",
 )
 class DeepseekV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
@@ -7203,7 +7203,15 @@ class DeepseekV2Model(TextModel):
         super().set_gguf_parameters()
         hparams = self.hparams
 
-        self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
+        # first_k_dense_replace: number of leading layers using dense FFN instead of MoE
+        # For non-MoE models (like Youtu), set to n_layer to use dense FFN for all layers
+        # For MoE models (like DeepSeek-V2), this is the number of leading non-MoE layers
+        has_moe = hparams.get("n_routed_experts") is not None
+        first_k_dense_replace = hparams.get("first_k_dense_replace")
+        if first_k_dense_replace is None:
+            # Default: if no MoE, all layers are dense; if MoE, none are dense
+            first_k_dense_replace = hparams["num_hidden_layers"] if not has_moe else 0
+        self.gguf_writer.add_leading_dense_block_count(first_k_dense_replace)
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
         if "q_lora_rank" in hparams and hparams["q_lora_rank"] is not None:
             self.gguf_writer.add_q_lora_rank(hparams["q_lora_rank"])
@@ -7215,24 +7223,20 @@ class DeepseekV2Model(TextModel):
         self.gguf_writer.add_key_length_mla(hparams["qk_nope_head_dim"] + hparams["qk_rope_head_dim"])
         self.gguf_writer.add_value_length_mla(hparams["v_head_dim"])
 
-        if (moe_intermediate_size := hparams.get("moe_intermediate_size")) is not None:
-            self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
-        else:
-            self.gguf_writer.add_expert_feed_forward_length(hparams.get("intermediate_size", 0))
+        # MoE parameters (required by C++ code for DEEPSEEK2 arch)
+        # For non-MoE models like Youtu, use intermediate_size as expert_feed_forward_length
+        moe_intermediate_size = self.find_hparam(["moe_intermediate_size", "intermediate_size"], optional=False)
+        self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
         
         if (n_routed_experts := hparams.get("n_routed_experts")) is not None:
             self.gguf_writer.add_expert_count(n_routed_experts)
         
-        if (n_shared_experts := hparams.get("n_shared_experts")) is not None:
-            self.gguf_writer.add_expert_shared_count(n_shared_experts)
-        else:
-            self.gguf_writer.add_expert_shared_count(0)
+        # expert_shared_count is required by C++ code, default to 0 for non-MoE models
+        n_shared_experts = hparams.get("n_shared_experts", 0)
+        self.gguf_writer.add_expert_shared_count(n_shared_experts)
         
-        if (routed_scaling_factor := hparams.get("routed_scaling_factor")) is not None:
-            self.gguf_writer.add_expert_weights_scale(routed_scaling_factor)
-        else:
-            self.gguf_writer.add_expert_weights_scale(1.0)
-        
+        # expert_weights_scale is required by C++ code
+        self.gguf_writer.add_expert_weights_scale(hparams.get("routed_scaling_factor", 1.0))
         if (norm_topk_prob := hparams.get("norm_topk_prob")) is not None and norm_topk_prob:
             self.gguf_writer.add_expert_weights_norm(norm_topk_prob)
 
@@ -7272,7 +7276,7 @@ class DeepseekV2Model(TextModel):
             return []
 
         # process the experts separately
-        if name.find("mlp.experts") != -1 and self.hparams.get("n_routed_experts") is not None:
+        if name.find("mlp.experts") != -1:
             n_experts = self.hparams["n_routed_experts"]
             assert bid is not None
 
@@ -10518,9 +10522,13 @@ class YOUTUVLVisionModel(MmprojModel):
         window_size = self.hparams.get("window_size")
         if window_size is not None:
             self.gguf_writer.add_vision_window_size(window_size)
+        # fullatt_block_indexes contains explicit layer indices that use full attention
+        # e.g., [2, 5, 8, 11] means layers 2, 5, 8, 11 use full attention
+        # All other layers use window attention
         fullatt_block_indexes = self.hparams.get("fullatt_block_indexes")
         assert fullatt_block_indexes is not None, "fullatt_block_indexes is required for youtuvl"
-        self.gguf_writer.add_vision_wa_layers(layers=fullatt_block_indexes)
+        # Store the explicit layer indices for YoutuVL (irregular pattern approach)
+        self.gguf_writer.add_vision_wa_layer_indexes(layers=fullatt_block_indexes)
         
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
