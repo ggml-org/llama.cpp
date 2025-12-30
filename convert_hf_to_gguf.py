@@ -9298,39 +9298,15 @@ class VoxtralWhisperEncoderModel(WhisperEncoderModel):
 
 
 @ModelBase.register("AudioFlamingo3ForConditionalGeneration")
-class AudioFlamingo3WhisperEncoderModel(MmprojModel):
-    has_vision_encoder = False
-    has_audio_encoder = True
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        if "hidden_size" not in self.hparams and "intermediate_size" not in self.hparams:
-            self.hparams["hidden_size"] = self.hparams["d_model"]
-            self.hparams["intermediate_size"] = self.hparams["encoder_ffn_dim"]
-            self.hparams["num_attention_heads"] = self.hparams["encoder_attention_heads"]
-
+class AudioFlamingo3WhisperEncoderModel(WhisperEncoderModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MUSIC_FLAMINGO)
-        self.gguf_writer.add_audio_num_mel_bins(self.hparams["num_mel_bins"])
-        self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-5))
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        del bid  # unused
-        if name.startswith("language_model."):
-            # skip llm
-            return []
-        
-        # was clashing with vision tensor logic
-        if name.startswith("multi_modal_projector"):
-            name = "audio." + name
-
-        if "conv1.bias" in name or "conv2.bias" in name:
-            # transpose conv1 and conv2 bias
-            data_torch = data_torch.unsqueeze(-1)
-
-        return [(self.map_tensor_name(name), data_torch)]
-
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".conv" in name and ".weight" in name:
+            return gguf.GGMLQuantizationType.BF16 # model was trained and inferences in BF16
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
 @ModelBase.register("FalconH1ForCausalLM")
 class FalconH1Model(Mamba2Model):
