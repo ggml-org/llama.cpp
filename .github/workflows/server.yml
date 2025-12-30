@@ -43,7 +43,6 @@ jobs:
           - build_type: Release
             sanitizer: ""
             extra_args: ""
-        include:
           - build_type: Release
             sanitizer: ""
             extra_args: "LLAMA_ARG_BACKEND_SAMPLING=1"
