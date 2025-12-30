@@ -1,0 +1,51 @@
+object FuzzyForm: TFuzzyForm
+  Left = 0
+  Top = 0
+  Caption = 'Fuzzy Correction'
+  ClientHeight = 150
+  ClientWidth = 400
+  FormFactor.Width = 320
+  FormFactor.Height = 480
+  FormFactor.Devices = [Desktop]
+  OnCreate = FormCreate
+  DesignerMasterStyle = 0
+  object RectangleBackground: TRectangle
+    Align = Client
+    Fill.Color = claLightgray
+    Size.Width = 400.000000000000000000
+    Size.Height = 150.000000000000000000
+    Size.PlatformDefault = False
+    Stroke.Color = claGray
+    Stroke.Thickness = 2.000000000000000000
+    object PanelMain: TPanel
+      Align = Client
+      Size.Width = 396.000000000000000000
+      Size.Height = 146.000000000000000000
+      Size.PlatformDefault = False
+      TabOrder = 0
+      object LabelIntent: TLabel
+        Align = Top
+        StyledSettings = [Family, Style]
+        Size.Width = 396.000000000000000000
+        Size.Height = 80.000000000000000000
+        Size.PlatformDefault = False
+        TextSettings.Font.Size = 14.000000000000000000
+        TextSettings.FontColor = claBlack
+        TextSettings.HorzAlign = Center
+        Text = 'Waiting for command...'
+        TabOrder = 0
+      end
+      object ButtonUndo: TButton
+        Align = Bottom
+        Enabled = False
+        Position.Y = 100.000000000000000000
+        Size.Width = 396.000000000000000000
+        Size.Height = 46.000000000000000000
+        Size.PlatformDefault = False
+        TabOrder = 1
+        Text = 'Undo'
+        OnClick = ButtonUndoClick
+      end
+    end
+  end
+end
