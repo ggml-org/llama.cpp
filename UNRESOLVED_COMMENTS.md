@@ -448,5 +448,5 @@ c = std::toupper(static_cast<unsigned char>(c));
 
 ---
 
-**Document Generated:** 2025-12-29
+**Document Generated:** 2025-12-30
 **Source PRs:** #1, #2
