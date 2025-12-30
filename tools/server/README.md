@@ -19,7 +19,7 @@ Set of LLM REST APIs and a web UI to interact with llama.cpp.
  * Speculative decoding
  * Easy-to-use web UI
 
-For the ful list of features, please refer to [server's changelog](https://github.com/ggml-org/llama.cpp/issues/9291)
+For the full list of features, please refer to [server's changelog](https://github.com/ggml-org/llama.cpp/issues/9291)
 
 ## Usage
 
