@@ -12,6 +12,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <set>
 
 struct llama_cparams;
 struct llama_ubatch;
@@ -475,8 +476,8 @@ struct llama_model {
     // for quantize-stats only
     std::vector<std::pair<std::string, struct ggml_tensor *>> tensors_by_name;
 
-    // for keeping track of extra nodes used by lora adapters
-    uint32_t n_lora_nodes = 0;
+    // for keeping track of associated LoRA adapters
+    std::set<llama_adapter_lora *> loras;
 
     int64_t t_load_us  = 0;
     int64_t t_start_us = 0;

@@ -413,8 +413,8 @@ static void llama_adapter_lora_init_impl(const char * path_lora, llama_adapter_l
         }
     }
 
-    // update number of nodes used
-    model.n_lora_nodes += adapter.get_n_nodes();
+    // register adapter with model
+    model.loras.insert(&adapter);
 
     LLAMA_LOG_INFO("%s: loaded %zu tensors from lora file\n", __func__, adapter.ab_map.size()*2);
 }
@@ -474,9 +474,10 @@ int32_t llama_adapter_meta_val_str_by_index(const llama_adapter_lora * adapter, 
 }
 
 void llama_adapter_lora_free(llama_adapter_lora * adapter) {
-    // update number of nodes used
-    GGML_ASSERT(adapter->model.n_lora_nodes >= adapter->get_n_nodes());
-    adapter->model.n_lora_nodes -= adapter->get_n_nodes();
+    // remove adapter from associated model
+    auto & model = adapter->model;
+    GGML_ASSERT(model.loras.find(adapter) != model.loras.end());
+    model.loras.erase(adapter);
 
     delete adapter;
 }
