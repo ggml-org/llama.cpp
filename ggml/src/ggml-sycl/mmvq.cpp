@@ -1240,9 +1240,8 @@ bool convert_tensor_to_coalesced(const ggml_tensor* tensor, dpct::queue_ptr stre
 // This is a convenience wrapper that checks policy (env var, TP sharding) then
 // calls the unified convert_tensor_to_coalesced() function.
 bool ggml_sycl_convert_to_coalesced_q4_0(const ggml_tensor * tensor, dpct::queue_ptr stream) {
-    // Check if coalesced mode is enabled via env var
-    static bool coalesced_enabled = (std::getenv("GGML_SYCL_MMVQ_COALESCED") != nullptr);
-    if (!coalesced_enabled) {
+    // Check if coalesced mode is enabled via global reorder mode
+    if (g_ggml_sycl_reorder_mode != reorder_mode::COALESCED) {
         return false;
     }
 
@@ -1471,9 +1470,8 @@ static void convert_q8_0_to_coalesced_sycl(void * data, const int ncols, const i
 
 // Public API for Q8_0 coalesced conversion - call at model load time, after reorder
 bool ggml_sycl_convert_to_coalesced_q8_0(const ggml_tensor * tensor, dpct::queue_ptr stream) {
-    // Check if coalesced mode is enabled via env var
-    static bool coalesced_enabled = (std::getenv("GGML_SYCL_MMVQ_COALESCED") != nullptr);
-    if (!coalesced_enabled) {
+    // Check if coalesced mode is enabled via global reorder mode
+    if (g_ggml_sycl_reorder_mode != reorder_mode::COALESCED) {
         return false;
     }
 
@@ -1680,9 +1678,8 @@ static void convert_mxfp4_to_coalesced_sycl(void * data, const int ncols, const 
 
 // Public API for MXFP4 coalesced conversion
 bool ggml_sycl_convert_to_coalesced_mxfp4(const ggml_tensor * tensor, dpct::queue_ptr stream) {
-    // Check if coalesced mode is enabled via env var
-    static bool coalesced_enabled = (std::getenv("GGML_SYCL_MMVQ_COALESCED") != nullptr);
-    if (!coalesced_enabled) {
+    // Check if coalesced mode is enabled via global reorder mode
+    if (g_ggml_sycl_reorder_mode != reorder_mode::COALESCED) {
         return false;
     }
 

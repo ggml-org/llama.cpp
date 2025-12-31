@@ -9502,9 +9502,8 @@ static bool graph_needs_reorder(ggml_backend_sycl_context& ctx, ggml_cgraph * cg
 // Convert reordered tensors to coalesced layout for better memory access patterns.
 // Must be called AFTER reorder pass completes. Safe to call even if no tensors need conversion.
 static void graph_convert_to_coalesced(ggml_backend_sycl_context& ctx, ggml_cgraph * cgraph) {
-    // Check if coalesced mode is enabled
-    static bool coalesced_enabled = (std::getenv("GGML_SYCL_MMVQ_COALESCED") != nullptr);
-    if (!coalesced_enabled) {
+    // Check if coalesced mode is enabled via global reorder mode
+    if (g_ggml_sycl_reorder_mode != reorder_mode::COALESCED) {
         return;
     }
 
