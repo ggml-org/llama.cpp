@@ -188,7 +188,15 @@ struct mtmd_context {
         }
 
         // if both vision and audio mmproj are present, we need to validate their n_embd
-        if (ctx_v && ctx_a) {
+        // Note: QWEN3O has different embedding dimensions for vision and audio, which is valid
+        // - Vision uses deepstack, so n_embd_v = n_embd * (1 + n_deepstack_layers) = 8192
+        // - Audio doesn't use deepstack, so n_embd_a = projection_dim = 2048
+        projector_type proj_v = ctx_v ? clip_get_projector_type(ctx_v) : PROJECTOR_TYPE_UNKNOWN;
+        projector_type proj_a = ctx_a ? clip_get_projector_type(ctx_a) : PROJECTOR_TYPE_UNKNOWN;
+        bool is_qwen3o = (proj_v == PROJECTOR_TYPE_QWEN3VL || proj_v == PROJECTOR_TYPE_QWEN3O) &&
+                         (proj_a == PROJECTOR_TYPE_QWEN3O);
+
+        if (ctx_v && ctx_a && !is_qwen3o) {
             int n_embd_v = clip_n_mmproj_embd(ctx_v);
             int n_embd_a = clip_n_mmproj_embd(ctx_a);
             if (n_embd_v != n_embd_a) {
@@ -198,9 +206,9 @@ struct mtmd_context {
             }
         }
 
-        // since we already validate n_embd of vision and audio mmproj,
-        // we can safely assume that they are the same
-        int n_embd_clip = clip_n_mmproj_embd(ctx_v ? ctx_v : ctx_a);
+        // For QWEN3O, use vision embedding dimension (includes deepstack) for validation
+        // For other models, vision and audio should have same embedding dimension
+        int n_embd_clip = is_qwen3o ? clip_n_mmproj_embd(ctx_v) : clip_n_mmproj_embd(ctx_v ? ctx_v : ctx_a);
         if (n_embd_text != n_embd_clip) {
             throw std::runtime_error(string_format(
                 "mismatch between text model (n_embd = %d) and mmproj (n_embd = %d)\n"

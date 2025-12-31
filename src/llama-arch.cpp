@@ -37,6 +37,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_QWEN3NEXT,        "qwen3next"        },
     { LLM_ARCH_QWEN3VL,          "qwen3vl"          },
     { LLM_ARCH_QWEN3VLMOE,       "qwen3vlmoe"       },
+    { LLM_ARCH_QWEN3OMNI,        "qwen3omni"        },
     { LLM_ARCH_PHI2,             "phi2"             },
     { LLM_ARCH_PHI3,             "phi3"             },
     { LLM_ARCH_PHIMOE,           "phimoe"           },
@@ -915,6 +916,7 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
             };
         case LLM_ARCH_QWEN3MOE:
         case LLM_ARCH_QWEN3VLMOE:
+        case LLM_ARCH_QWEN3OMNI:
         case LLM_ARCH_OLMOE:
         case LLM_ARCH_LLADA_MOE:
         case LLM_ARCH_RND1:
