@@ -53,9 +53,11 @@ struct ToolCallStructure {
 
     // Function format
     enum FunctionFormat {
-        FUNC_JSON_OBJECT,   // {"name": "X", "arguments": {...}}
-        FUNC_TAG_WITH_NAME, // <function=X>{...}</function>
-        FUNC_TAG_NAME_ONLY, // <X>...</X>
+        FUNC_JSON_OBJECT,      // {"name": "X", "arguments": {...}}
+        FUNC_TAG_WITH_NAME,    // <function=X>{...}</function>
+        FUNC_TAG_NAME_ONLY,    // <X>...</X>
+        FUNC_PREFIXED_INDEXED, // <|tool_call_begin|>functions.X:0<|tool_call_argument_begin|>{...}
+        FUNC_NAME_AS_KEY,      // [{"function_name": {...arguments...}}]
     };
     FunctionFormat function_format;
 
@@ -69,14 +71,21 @@ struct ToolCallStructure {
     std::string function_suffix;  // ">"
     std::string function_close;   // "</function>"
 
+    // Markers for prefixed-indexed formats (e.g. Kimi)
+    std::string per_call_start;      // "<|tool_call_begin|>"
+    std::string function_namespace;  // "functions."
+    std::string args_marker;         // "<|tool_call_argument_begin|>"
+    std::string per_call_end;        // "<|tool_call_end|>"
+
     // Argument format
-    enum ArgumentFormat { ARGS_JSON, ARGS_TAGGED };
+    enum ArgumentFormat { ARGS_JSON, ARGS_TAGGED, ARGS_KEY_VALUE_TAGS };
     ArgumentFormat argument_format;
 
     // Tag patterns for tagged arguments
-    std::string arg_prefix;   // "<param="
-    std::string arg_suffix;   // ">"
-    std::string arg_close;    // "</param>"
+    std::string arg_prefix;     // "<param="
+    std::string arg_suffix;     // ">"
+    std::string arg_close;      // "</param>"
+    std::string arg_separator;  // separator between args
 };
 ```
 
@@ -228,3 +237,33 @@ To support a new template format:
 1. **Forced Thinking**: If `enable_thinking` is true but the model has already started a thought block (e.g., ended the prompt with `<think>`), the parser enters "forced thinking" mode where it immediately expects reasoning content.
 2. **Ambiguous Content**: Templates that mix content and tool calls without clear delimiters can be tricky. The analyzer tries to find "common" start/end patterns across multiple examples to be robust.
 3. **Fallback**: If analysis fails or finds no consistent pattern, it falls back to generic content-only handling or the legacy manual handlers if applicable.
+
+## State of the Autoparser (Dec 2025)
+
+As of December 2025, the unified auto-parser successfully handles major template families including DeepSeek V3, Llama 3 (native JSON), and standard XML/JSON formats. However, several specific template variants remain unsupported or have known regressions.
+
+### Currently Unsupported Templates
+
+| Template Family | Model / Variant | Issue Description |
+|----------------|-----------------|-------------------|
+| **GLM** | `GLM-4.6` | **Argument Extraction**: Autoparser detects `TAGGED` format, but fails to correctly extract arguments using the `ARGS_KEY_VALUE_TAGS` logic. |
+| **Kimi** | `Kimi-K2`, `Instruct` | **Parsing as Content**: Tool calls are incorrectly identified as plain content, likely due to failure in detecting `<|tool_calls_section_begin|>` markers. |
+| **Apertus** | `Apertus-8B-Instruct` | **Section Detection**: Similar to Kimi, the parser fails to identify the start of the tool section. |
+| **MiniMax** | `MiniMax-M2` | **XML Variant**: Uses `<minimax:tool_call><invoke>` which is not currently detected by the XML analyzer hooks. |
+| **Nemotron** | `Nano-v2` | **Streaming Regression**: Tests fail with "invalid diff" errors during streaming parsing, suggesting mismatch in incremental state updates. |
+| **DeepSeek** | `R1 Distill` | **Marker Handling**: Specific issues with reasoning marker stripping and `enable_thinking` logic for distillation variants. |
+| **Cohere** | `Command R+` | **Marker Stripping**: `<|START_RESPONSE|>` markers are leaking into the parsed content. |
+| **Mistral** | `Nemo`, `Small` | **Tool Detection**: Fails to parse standard tool calls, possibly due to `[TOOL_CALLS]` wrapper handling specificities or JSON formatting. |
+| **Functionary**| `v3.1`, `v3.2` | **Tag Format**: Specific `<function=name>` syntax parsing failures. |
+| **OpenAI** | `GPT-OSS` | **Channel Markers**: Complex `<|channel|>` marker structure confuses the content/tool separation. |
+| **Phi** | `3.5 Mini` | **Detection Failure**: Autoparser fails to detect that the template supports tools at all. |
+
+### TODO / Roadmap
+
+- [ ] **Fix GLM-4.6**: Debug `common_chat_peg_unified_builder::build_arguments` for `ARGS_KEY_VALUE_TAGS`.
+- [ ] **Fix Kimi/Apertus**: Improve `extract_patterns_from_differences` to reliably detect section markers like `<|tool_calls_section_begin|>`.
+- [ ] **Add MiniMax Support**: Add detection logic for namespaced XML tags (`minimax:tool_call`).
+- [ ] **Fix Nemotron Streaming**: Debug `test_parser_with_streaming` for Nemotron's JSON array format.
+- [ ] **Refine DeepSeek R1**: Audit marker configuration for R1 distillations to ensure consistency with V3.1 fix.
+- [ ] **Fix Cohere Markers**: Add Cohere's structural markers to the ignored/skipped token list in the parser.
+- [ ] **Investigate Mistral/Phi**: Analyze why Phase 2 detection returns false for these templates (run `debug-template-parser` with verbose logging).
