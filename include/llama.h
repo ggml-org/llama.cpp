@@ -370,7 +370,8 @@ extern "C" {
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
 
-        // backend sampler chain configuration (make sure the caller keeps the sampler chains alive) [EXPERIMENTAL]
+        // [EXPERIMENTAL]
+        // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
         // note: the samplers must be sampler chains (i.e. use llama_sampler_chain_init)
         struct llama_sampler_seq_config * samplers;
         size_t                            n_samplers;
@@ -1000,6 +1001,11 @@ extern "C" {
     // otherwise: float[n_embd] (1-dimensional)
     LLAMA_API float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id);
 
+    //
+    // backend sampling API [EXPERIMENTAL]
+    // note: use only if the llama_context was created with at least one llama_sampler_seq_config
+    //
+
     // Get the backend sampled token for the ith token.
     // Returns LLAMA_TOKEN_NULL if no token was sampled.
     LLAMA_API llama_token llama_get_sampled_token_ith(struct llama_context * ctx, int32_t i);
@@ -1007,24 +1013,18 @@ extern "C" {
     // Get the backend sampled probabilites for the ith token
     // The index matches llama_get_sampled_token_ith().
     // Returns NULL if no probabilites were generated.
-    LLAMA_API float * llama_get_sampled_probs_ith(struct llama_context * ctx, int32_t i);
-    //
-    // Get the number of backend sampled probabilites for the ith token.
+    LLAMA_API float *  llama_get_sampled_probs_ith      (struct llama_context * ctx, int32_t i);
     LLAMA_API uint32_t llama_get_sampled_probs_count_ith(struct llama_context * ctx, int32_t i);
 
     // Get the backend sampled logits for the ith token
     // Returns NULL if no logits were sampled.
-    LLAMA_API float * llama_get_sampled_logits_ith(struct llama_context * ctx, int32_t i);
-    //
-    // Get the number of backend sampled logits for the ith token.
+    LLAMA_API float *  llama_get_sampled_logits_ith      (struct llama_context * ctx, int32_t i);
     LLAMA_API uint32_t llama_get_sampled_logits_count_ith(struct llama_context * ctx, int32_t i);
 
     // Get the backend sampled candidates (token ids) for the ith token
     // Returns NULL if no candidates were sampled.
-    LLAMA_API llama_token * llama_get_sampled_candidates_ith(struct llama_context * ctx, int32_t i);
-    //
-    // Get the number of backend sampled candidates for the ith token.
-    LLAMA_API uint32_t llama_get_sampled_candidates_count_ith(struct llama_context * ctx, int32_t i);
+    LLAMA_API llama_token * llama_get_sampled_candidates_ith      (struct llama_context * ctx, int32_t i);
+    LLAMA_API uint32_t      llama_get_sampled_candidates_count_ith(struct llama_context * ctx, int32_t i);
 
     //
     // Vocab
@@ -1216,6 +1216,7 @@ extern "C" {
         struct llama_sampler * (*clone) (const struct llama_sampler * smpl);                                 // can be NULL if ctx is NULL
         void                   (*free)  (      struct llama_sampler * smpl);                                 // can be NULL if ctx is NULL
 
+        // [EXPERIMENTAL]
         // backend sampling interface:
 
         // return true if the backend supports all ops needed by the sampler
@@ -1246,6 +1247,10 @@ extern "C" {
         llama_sampler_context_t ctx;
     };
 
+    // [EXPERIMENTAL]
+    // attach a sampler to the context
+    // note: prefer initializing the context with llama_context_params.samplers when possible
+    // note: changing the samplers of a context can cause graph reallocations and degraded performance
     LLAMA_API bool llama_set_sampler(struct llama_context * ctx, llama_seq_id seq_id, struct llama_sampler * smpl);
 
     // mirror of llama_sampler_i:
