@@ -3321,8 +3321,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, TENSOR_NOT_REQUIRED);
 
-                        // ffn_up is a required tensor
-                        // -1 is a placeholder since create_tensor will fail if tensor is missing
                         const auto tn_ffn_up_weight = tn(LLM_TENSOR_FFN_UP, "weight", i);
                         ggml_tensor * t_ffn_up = ml.get_tensor_meta(tn_ffn_up_weight.str().c_str());
                         const int64_t n_ffn_up = t_ffn_up ? t_ffn_up->ne[1] : n_ff;
