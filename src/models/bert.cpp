@@ -148,7 +148,7 @@ llm_build_bert::llm_build_bert(const llama_model & model, const llm_graph_params
                     model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL,
                     model.layers[il].ffn_gate, NULL, NULL,
                     model.layers[il].ffn_down, model.layers[il].ffn_down_b, NULL, NULL,
-                    type_op, type_gate, il);
+                    type_op, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
         } else {
             cur = build_ffn(cur,
