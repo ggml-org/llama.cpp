@@ -528,6 +528,187 @@ static void convert_unary_sycl(const void * vx, dst_t * y, const int64_t k, dpct
     convert_unary_nc_sycl<src_t>(vx, y, k, 1, 1, 1, k, k, k, queue);
 }
 
+// =============================================================================
+// Q4_0 COALESCED REORDER KERNEL
+// =============================================================================
+// Reorders Q4_0 data from AoS (block_q4_0 structs) to a warp-coalesced layout
+// where adjacent threads in a warp (32 threads) access adjacent memory addresses.
+//
+// Input layout (AoS - Array of Structures):
+//   Each block_q4_0: [d:2 bytes][qs[0..15]:16 bytes] = 18 bytes per block
+//   Blocks are stored contiguously: [block0][block1]...[blockN]
+//
+// Output layout (Coalesced):
+//   Tiles of WARP_SIZE (32) blocks where:
+//   - qs bytes are interleaved: byte[i] of block[b] at offset [tile * 512 + i * 32 + b]
+//   - d values grouped after qs: [tile * (512 + 64) + 512 + b * 2]
+//
+//   This ensures thread t accesses consecutive memory addresses:
+//   Thread 0: bytes 0, 32, 64, ...
+//   Thread 1: bytes 1, 33, 65, ...
+//   etc.
+// =============================================================================
+
+// GPU kernel for Q4_0 AoS to Coalesced conversion
+static void reorder_q4_0_aos_to_coalesced_kernel(
+    const block_q4_0 * __restrict__ src,
+    uint8_t * __restrict__ dst,
+    const int blocks_per_row,
+    const int nrows,
+    const sycl::nd_item<2> & item)
+{
+    constexpr int TILE_BLOCKS = WARP_SIZE;  // 32 blocks per tile
+    constexpr int QS_BYTES_PER_BLOCK = QK4_0 / 2;  // 16 bytes of qs per block
+    constexpr int D_BYTES_PER_BLOCK = sizeof(sycl::half);  // 2 bytes for scale
+
+    const int row = item.get_global_id(0);
+    const int tid = item.get_local_id(1);      // 0-31 within tile (thread in warp)
+    const int tile = item.get_group(1);        // Which tile
+
+    if (row >= nrows) return;
+
+    const int block_idx = tile * TILE_BLOCKS + tid;
+    if (block_idx >= blocks_per_row) return;
+
+    // Source: AoS layout - each block_q4_0 is 18 bytes
+    const block_q4_0 * src_block = &src[row * blocks_per_row + block_idx];
+
+    // Calculate tile dimensions
+    const int tiles_per_row = (blocks_per_row + TILE_BLOCKS - 1) / TILE_BLOCKS;
+    constexpr int qs_bytes_per_tile = TILE_BLOCKS * QS_BYTES_PER_BLOCK;  // 512 bytes
+    constexpr int d_bytes_per_tile = TILE_BLOCKS * D_BYTES_PER_BLOCK;    // 64 bytes
+    constexpr int bytes_per_tile = qs_bytes_per_tile + d_bytes_per_tile; // 576 bytes
+
+    // Destination offsets - use int64_t to avoid overflow for large tensors
+    const int64_t row_offset = (int64_t)row * tiles_per_row * bytes_per_tile;
+    const int64_t tile_qs_base = row_offset + (int64_t)tile * bytes_per_tile;
+    const int64_t tile_d_base = tile_qs_base + qs_bytes_per_tile;
+
+    // Copy qs bytes - interleaved by thread index for coalesced access
+    // Thread tid writes its 16 qs bytes at positions [i * 32 + tid] for i in [0,15]
+    for (int i = 0; i < QS_BYTES_PER_BLOCK; i++) {
+        dst[tile_qs_base + i * TILE_BLOCKS + tid] = src_block->qs[i];
+    }
+
+    // Copy d value (scale) - grouped at end of tile
+    // Thread tid writes its d at position [tile_d_base + tid * 2]
+    *(sycl::half *)(dst + tile_d_base + tid * D_BYTES_PER_BLOCK) = src_block->d;
+}
+
+// Host function to launch Q4_0 AoS to Coalesced reorder
+void reorder_q4_0_aos_to_coalesced_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,  // number of elements per row
+    int64_t ne01,  // number of rows
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT(ne00 % QK4_0 == 0);  // Must be multiple of block size
+
+    const int blocks_per_row = ne00 / QK4_0;
+    const int nrows = ne01;
+    const int tiles_per_row = (blocks_per_row + WARP_SIZE - 1) / WARP_SIZE;
+
+    // Launch kernel: one work-item per block, organized into warp-sized tiles
+    stream->parallel_for(
+        sycl::nd_range<2>(
+            sycl::range<2>(nrows, tiles_per_row * WARP_SIZE),
+            sycl::range<2>(1, WARP_SIZE)),
+        [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+            reorder_q4_0_aos_to_coalesced_kernel(
+                (const block_q4_0 *)src,
+                (uint8_t *)dst,
+                blocks_per_row,
+                nrows,
+                item);
+        });
+}
+
+// =============================================================================
+// Q4_0 COALESCED to SoA REVERSE CONVERSION (for compatibility/debugging)
+// =============================================================================
+// This reverses the coalesced layout back to SoA layout if needed.
+// Not typically used in the hot path, but useful for testing.
+
+static void reorder_q4_0_coalesced_to_soa_kernel(
+    const uint8_t * __restrict__ src,
+    uint8_t * __restrict__ dst_qs,
+    sycl::half * __restrict__ dst_d,
+    const int blocks_per_row,
+    const int nrows,
+    const sycl::nd_item<2> & item)
+{
+    constexpr int TILE_BLOCKS = WARP_SIZE;
+    constexpr int QS_BYTES_PER_BLOCK = QK4_0 / 2;
+    constexpr int D_BYTES_PER_BLOCK = sizeof(sycl::half);
+
+    const int row = item.get_global_id(0);
+    const int tid = item.get_local_id(1);
+    const int tile = item.get_group(1);
+
+    if (row >= nrows) return;
+
+    const int block_idx = tile * TILE_BLOCKS + tid;
+    if (block_idx >= blocks_per_row) return;
+
+    // Calculate tile dimensions (same as forward conversion)
+    const int tiles_per_row = (blocks_per_row + TILE_BLOCKS - 1) / TILE_BLOCKS;
+    constexpr int qs_bytes_per_tile = TILE_BLOCKS * QS_BYTES_PER_BLOCK;
+    constexpr int d_bytes_per_tile = TILE_BLOCKS * D_BYTES_PER_BLOCK;
+    constexpr int bytes_per_tile = qs_bytes_per_tile + d_bytes_per_tile;
+
+    // Source offsets (coalesced layout) - use int64_t to avoid overflow
+    const int64_t row_offset = (int64_t)row * tiles_per_row * bytes_per_tile;
+    const int64_t tile_qs_base = row_offset + (int64_t)tile * bytes_per_tile;
+    const int64_t tile_d_base = tile_qs_base + qs_bytes_per_tile;
+
+    // Destination: SoA layout - use int64_t for offsets
+    // qs: all quants contiguous, then all d values
+    const int64_t dst_qs_offset = (int64_t)row * blocks_per_row * QS_BYTES_PER_BLOCK + block_idx * QS_BYTES_PER_BLOCK;
+    const int64_t dst_d_idx = (int64_t)row * blocks_per_row + block_idx;
+
+    // Read interleaved qs and write to contiguous SoA
+    for (int i = 0; i < QS_BYTES_PER_BLOCK; i++) {
+        dst_qs[dst_qs_offset + i] = src[tile_qs_base + i * TILE_BLOCKS + tid];
+    }
+
+    // Read d value and write to d array
+    dst_d[dst_d_idx] = *(const sycl::half *)(src + tile_d_base + tid * D_BYTES_PER_BLOCK);
+}
+
+// Host function to launch Q4_0 Coalesced to SoA conversion
+void reorder_q4_0_coalesced_to_soa_sycl(
+    const void * src,
+    void * dst,  // SoA format: [all qs bytes][all d values]
+    int64_t ne00,
+    int64_t ne01,
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT(ne00 % QK4_0 == 0);
+
+    const int blocks_per_row = ne00 / QK4_0;
+    const int nrows = ne01;
+    const int tiles_per_row = (blocks_per_row + WARP_SIZE - 1) / WARP_SIZE;
+
+    // SoA layout: qs bytes first, then d values
+    uint8_t * dst_qs = (uint8_t *)dst;
+    sycl::half * dst_d = (sycl::half *)((uint8_t *)dst + nrows * blocks_per_row * (QK4_0 / 2));
+
+    stream->parallel_for(
+        sycl::nd_range<2>(
+            sycl::range<2>(nrows, tiles_per_row * WARP_SIZE),
+            sycl::range<2>(1, WARP_SIZE)),
+        [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+            reorder_q4_0_coalesced_to_soa_kernel(
+                (const uint8_t *)src,
+                dst_qs,
+                dst_d,
+                blocks_per_row,
+                nrows,
+                item);
+        });
+}
+
 
 to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst, bool full_tensor) {
     // SoA-aware reorder kernels compute d_offset from k parameter.

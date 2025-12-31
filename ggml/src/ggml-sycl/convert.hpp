@@ -33,4 +33,36 @@ using to_t_nc_sycl_t = void (*)(const void * x, T * y, int64_t ne00, int64_t ne0
 typedef to_t_nc_sycl_t<sycl::half> to_fp16_nc_sycl_t;
 to_fp16_nc_sycl_t get_to_fp16_nc_sycl(ggml_type type);
 
+// =============================================================================
+// Q4_0 Coalesced Layout Reorder Functions
+// =============================================================================
+// These functions convert Q4_0 data between different memory layouts:
+//
+// AoS (Array of Structures): Original block_q4_0 format
+//   [block0: d,qs[16]][block1: d,qs[16]]...
+//
+// Coalesced: Warp-optimized layout for GPU memory access
+//   Tiles of 32 blocks with interleaved qs for coalesced access:
+//   [tile0: qs interleaved (512B), d values (64B)][tile1...]
+//
+// SoA (Structure of Arrays): Intermediate format
+//   [all qs bytes contiguous][all d values contiguous]
+// =============================================================================
+
+// Convert Q4_0 from AoS (block_q4_0) to Coalesced layout
+void reorder_q4_0_aos_to_coalesced_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,  // number of elements per row
+    int64_t ne01,  // number of rows
+    dpct::queue_ptr stream);
+
+// Convert Q4_0 from Coalesced layout to SoA layout (for testing/debugging)
+void reorder_q4_0_coalesced_to_soa_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,
+    int64_t ne01,
+    dpct::queue_ptr stream);
+
 #endif  // GGML_SYCL_CONVERT_HPP
