@@ -2,83 +2,81 @@
 
 > **Fork with Qwen3-Omni multimodal architecture support**
 
-[![Qwen3-Omni](https://img.shields.io/badge/Qwen3--Omni-Supported-green)](https://huggingface.co/phnxsystms/Qwen3-Omni-30B-A3B-Instruct-GGUF)
-[![Models](https://img.shields.io/badge/GGUF%20Models-HuggingFace-yellow)](https://huggingface.co/phnxsystms/Qwen3-Omni-30B-A3B-Instruct-GGUF)
-
-## What's Added
-
-Support for **Qwen3-Omni**, Alibaba's multimodal LLM:
-
-- `LLM_ARCH_QWEN3OMNI` - Main LLM architecture (MoE: 48 layers, 128 experts)
-- `PROJECTOR_TYPE_QWEN3O` - Vision encoder support
-- IMROPE position encoding for multimodal inputs
-
-**Note:** Audio encoder support is WIP.
-
 ## Quick Start
 
 ```bash
-# Clone this fork
+# Clone and build
 git clone https://github.com/phnxsystms/llama.cpp.git
 cd llama.cpp
+cmake -B build -DGGML_CUDA=ON
+cmake --build build -j
 
-# Build with CUDA
-mkdir build && cd build
-cmake .. -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build . -j
-
-# Download models from HuggingFace
+# Download models
 huggingface-cli download phnxsystms/Qwen3-Omni-30B-A3B-Instruct-GGUF --local-dir models/
-
-# Text inference
-./bin/llama-cli -m models/qwen3-omni-30B-Q8_0.gguf -p "Hello!" -ngl 99
-
-# Vision inference
-./bin/llama-mtmd-cli \
-    -m models/qwen3-omni-30B-Q8_0.gguf \
-    --mmproj models/mmproj-qwen3-omni-30B-F16-fixed.gguf \
-    --image your_image.jpg \
-    -p "What's in this image?"
 ```
 
-## Distributed Inference (RPC)
+## Run Server (Recommended)
 
-For large models, use llama.cpp's RPC backend to distribute across multiple machines:
+Spin up an OpenAI-compatible API server:
 
 ```bash
-# On worker nodes - start RPC server
-./bin/llama-rpc-server --host 0.0.0.0 --port 50052
+./build/bin/llama-server \
+    -m models/qwen3-omni-30B-Q8_0.gguf \
+    --mmproj models/mmproj-qwen3-omni-30B-F16-fixed.gguf \
+    --host 0.0.0.0 \
+    --port 8080 \
+    -ngl 99
+```
 
-# On main node - connect to workers
-./bin/llama-cli \
+Then use it:
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+## CLI Usage
+
+```bash
+# Text
+./build/bin/llama-cli -m models/qwen3-omni-30B-Q8_0.gguf -p "Hello!" -ngl 99
+
+# Vision
+./build/bin/llama-mtmd-cli \
+    -m models/qwen3-omni-30B-Q8_0.gguf \
+    --mmproj models/mmproj-qwen3-omni-30B-F16-fixed.gguf \
+    --image photo.jpg \
+    -p "Describe this image"
+```
+
+## Multi-GPU / Distributed
+
+Model is 31GB - for multi-GPU or distributed inference:
+
+```bash
+# Distributed: start RPC on worker machines
+./build/bin/llama-rpc-server --host 0.0.0.0 --port 50052
+
+# Main: connect to workers
+./build/bin/llama-server \
     -m models/qwen3-omni-30B-Q8_0.gguf \
     --rpc worker1:50052,worker2:50052 \
-    -ngl 99 \
-    -p "Hello!"
+    -ngl 99
 ```
 
 ## Models
 
-| Model | Size | Description |
-|-------|------|-------------|
-| [qwen3-omni-30B-Q8_0.gguf](https://huggingface.co/phnxsystms/Qwen3-Omni-30B-A3B-Instruct-GGUF/resolve/main/qwen3-omni-30B-Q8_0.gguf) | 31GB | Main LLM (Q8_0) |
-| [mmproj-qwen3-omni-30B-F16-fixed.gguf](https://huggingface.co/phnxsystms/Qwen3-Omni-30B-A3B-Instruct-GGUF/resolve/main/mmproj-qwen3-omni-30B-F16-fixed.gguf) | 2.3GB | Vision projector (F16) |
+| File | Size |
+|------|------|
+| [qwen3-omni-30B-Q8_0.gguf](https://huggingface.co/phnxsystms/Qwen3-Omni-30B-A3B-Instruct-GGUF) | 31GB |
+| [mmproj-qwen3-omni-30B-F16-fixed.gguf](https://huggingface.co/phnxsystms/Qwen3-Omni-30B-A3B-Instruct-GGUF) | 2.3GB |
 
-## Performance
+## Status
 
-Tested on multi-GPU distributed setup:
-- **41-44 tokens/sec** inference speed
-- Text and vision inference working
-
-## Files Changed
-
-```
-src/llama-arch.cpp      # Architecture registration
-src/llama-model.cpp     # Model loading & graph building
-tools/mtmd/clip.cpp     # Vision projector support
-tools/mtmd/mtmd.cpp     # Multimodal pipeline
-```
+- ✅ Text inference
+- ✅ Vision inference  
+- 🚧 Audio (WIP)
 
 ## License
 
-MIT (same as llama.cpp)
+MIT
