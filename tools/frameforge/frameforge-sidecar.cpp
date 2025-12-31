@@ -24,24 +24,37 @@ Analyze user voice commands and map them to one of these Action Groups:
 - ACTOR_POSE: Actor positioning and poses
 - OBJECT_MGMT: Adding, deleting, moving, or rotating objects
 - SHOT_MGMT: Managing shots (save, load)
+- MASTER_VERB: Master verbs that require secondary verbs (START, BEGIN, HAVE, MAKE, STOP)
 
 Extract parameters from the user's natural language input:
+- Subject: Names of actors or objects being controlled (goes in parameters)
 - Direction: LEFT, RIGHT, UP, DOWN, FORWARD, BACKWARD
 - Degrees: Numeric values for rotation (0-360)
 - Speed: Numeric values for movement speed (0-100)
-- Target: Names of objects, cameras, or actors
+- Target: Names of objects, cameras, or shots
 - PoseDescription: Natural language description of a pose
+
+Master Verbs:
+- START/BEGIN: Initiates an action (e.g., "START PANNING LEFT")
+- HAVE/MAKE: Commands an actor/object (e.g., "HAVE TOM WALK FORWARD")
+- STOP: Stops an ongoing action
 
 Important rules:
 1. If user says "PIN", map it to "PAN" verb
-2. If Action Group is ACTOR_POSE, generate a JSON array of joint rotations for the described pose
-3. Infer missing subjects when context is clear (e.g., "camera" for camera commands)
-4. Return ONLY a valid JSON object with this structure:
+2. If user says "ROOM", map it to "ZOOM" verb  
+3. If user says "PUSH", map it to "DOLLY" verb
+4. For Master Verbs, include both master_verb and verb fields
+5. If Action Group is ACTOR_POSE, generate a JSON array of joint rotations for the described pose
+6. Infer missing parameters when context is clear
+7. Subject is now inside parameters, not at root level
+8. Return ONLY a valid JSON object with this structure:
 {
   "verb": "VERB_NAME",
-  "subject": "SubjectName",
+  "master_verb": "MASTER_VERB_NAME",
   "action_group": "ACTION_GROUP",
+  "timestamp": "2024-01-01T12:00:00.000Z",
   "parameters": {
+    "subject": "ActorOrObjectName",
     "direction": "DIRECTION",
     "degrees": 45.0,
     "speed": 10.0,
@@ -58,6 +71,7 @@ struct frameforge_params {
     std::string llama_model;
     std::string audio_file;
     std::string pipe_name = "frameforge_pipe";
+    std::string verb_definitions_file;  // Path to verb definitions JSON
     int n_threads = 4;
     bool verbose = false;
 };
@@ -69,6 +83,7 @@ static void print_usage(const char * argv0) {
     fprintf(stderr, "  -lm, --llama-model FNAME    Path to Llama model file\n");
     fprintf(stderr, "  -a,  --audio FILE           Audio file to transcribe (for testing)\n");
     fprintf(stderr, "  -p,  --pipe NAME            Named pipe name (default: frameforge_pipe)\n");
+    fprintf(stderr, "  -vd, --verb-defs FILE       Path to verb definitions JSON file\n");
     fprintf(stderr, "  -t,  --threads N            Number of threads (default: 4)\n");
     fprintf(stderr, "  -v,  --verbose              Enable verbose output\n");
     fprintf(stderr, "  -h,  --help                 Show this help message\n");
@@ -102,6 +117,13 @@ static bool parse_params(int argc, char ** argv, frameforge_params & params) {
         } else if (arg == "-p" || arg == "--pipe") {
             if (i + 1 < argc) {
                 params.pipe_name = argv[++i];
+            } else {
+                fprintf(stderr, "Error: Missing value for %s\n", arg.c_str());
+                return false;
+            }
+        } else if (arg == "-vd" || arg == "--verb-defs") {
+            if (i + 1 < argc) {
+                params.verb_definitions_file = argv[++i];
             } else {
                 fprintf(stderr, "Error: Missing value for %s\n", arg.c_str());
                 return false;
@@ -295,6 +317,16 @@ int main(int argc, char ** argv) {
     
     if (!parse_params(argc, argv, params)) {
         return 1;
+    }
+    
+    // Load verb definitions if provided
+    if (!params.verb_definitions_file.empty()) {
+        fprintf(stderr, "Loading verb definitions from: %s\n", params.verb_definitions_file.c_str());
+        if (!frameforge::load_verb_definitions(params.verb_definitions_file)) {
+            fprintf(stderr, "Warning: Failed to load verb definitions, using hard-coded defaults\n");
+        }
+    } else {
+        fprintf(stderr, "No verb definitions file specified, using hard-coded defaults\n");
     }
     
     // Initialize Whisper
