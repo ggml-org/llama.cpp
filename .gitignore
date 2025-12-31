@@ -137,3 +137,4 @@ poetry.toml
 /.windsurf/
 # emscripten
 a.out.*
+.worktrees/
