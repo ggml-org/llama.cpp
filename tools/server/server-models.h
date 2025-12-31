@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <functional>
 #include <memory>
+#include <set>
 
 /**
  * state diagram:
@@ -56,6 +57,7 @@ struct server_model_meta {
     int64_t last_used = 0; // for LRU unloading
     std::vector<std::string> args; // args passed to the model instance, will be populated by render_args()
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
+    int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
 
     bool is_active() const {
         return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_LOADING;
@@ -82,6 +84,10 @@ private:
     std::mutex mutex;
     std::condition_variable cv;
     std::map<std::string, instance_t> mapping;
+
+    // for stopping models
+    std::condition_variable cv_stop;
+    std::set<std::string> stopping_models;
 
     common_preset_context ctx_preset;
 
@@ -119,7 +125,7 @@ public:
     void unload_all();
 
     // update the status of a model instance (thread-safe)
-    void update_status(const std::string & name, server_model_status status);
+    void update_status(const std::string & name, server_model_status status, int exit_code);
 
     // wait until the model instance is fully loaded (thread-safe)
     // return when the model is loaded or failed to load
@@ -177,7 +183,10 @@ public:
                       const std::string & path,
                       const std::map<std::string, std::string> & headers,
                       const std::string & body,
-                      const std::function<bool()> should_stop);
+                      const std::function<bool()> should_stop,
+                      int32_t timeout_read,
+                      int32_t timeout_write
+                      );
     ~server_http_proxy() {
         if (cleanup) {
             cleanup();
