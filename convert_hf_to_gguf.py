@@ -7227,18 +7227,18 @@ class DeepseekV2Model(TextModel):
         # For non-MoE models like Youtu, use intermediate_size as expert_feed_forward_length
         moe_intermediate_size = self.find_hparam(["moe_intermediate_size", "intermediate_size"], optional=False)
         self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
-        
+
         if (n_routed_experts := hparams.get("n_routed_experts")) is not None:
             self.gguf_writer.add_expert_count(n_routed_experts)
-        
+
         # expert_shared_count is required by C++ code, default to 0 for non-MoE models
         n_shared_experts = hparams.get("n_shared_experts", 0)
         self.gguf_writer.add_expert_shared_count(n_shared_experts)
-        
+
         # When not set, C++ code will use scale_w = false to skip the no-op scaling
         if (routed_scaling_factor := hparams.get("routed_scaling_factor")) is not None:
             self.gguf_writer.add_expert_weights_scale(routed_scaling_factor)
-        
+
         if (norm_topk_prob := hparams.get("norm_topk_prob")) is not None and norm_topk_prob:
             self.gguf_writer.add_expert_weights_norm(norm_topk_prob)
 
@@ -7340,6 +7340,7 @@ class DeepseekV2Model(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
 
 @ModelBase.register("MiniMaxM2ForCausalLM")
 class MiniMaxM2Model(TextModel):
@@ -10497,19 +10498,20 @@ class JanusProVisionModel(MmprojModel):
 
         return []
 
+
 @ModelBase.register("YOUTUVLForConditionalGeneration", "YOUTUVLForCausalLM")
 class YOUTUVLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert self.hparams_vision is not None
         self.hparams_vision["image_size"] = self.hparams_vision.get("image_size", 560)
-    
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        
+
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.YOUTUVL)
         self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-6))
-        
+
         # Handle activation function
         hidden_act = str(self.hparams.get("hidden_act", "gelu_pytorch_tanh")).lower()
         if hidden_act in ("gelu", "gelu_pytorch_tanh", "gelu_fast", "gelu_new", "gelu_accurate"):
@@ -10518,9 +10520,9 @@ class YOUTUVLVisionModel(MmprojModel):
             self.gguf_writer.add_vision_use_silu(True)
         else:
             raise ValueError(f"Unsupported activation function for YOUTUVL: {hidden_act}")
-        
+
         self.gguf_writer.add_vision_spatial_merge_size(self.hparams.get("spatial_merge_size", 2))
-        
+
         window_size = self.hparams.get("window_size")
         if window_size is not None:
             self.gguf_writer.add_vision_window_size(window_size)
@@ -10531,15 +10533,15 @@ class YOUTUVLVisionModel(MmprojModel):
         assert fullatt_block_indexes is not None, "fullatt_block_indexes is required for youtuvl"
         # Store the explicit layer indices for YoutuVL (irregular pattern approach)
         self.gguf_writer.add_vision_wa_layer_indexes(layers=fullatt_block_indexes)
-        
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
-        
+
         # Skip language model tensors
         skip_prefixes = ('lm_head.', 'model.layers.', 'model.embed_tokens.', 'model.norm.')
         if name.startswith(skip_prefixes):
             return []
-        
+
         # Try to map the tensor using TensorNameMap (handles vision encoder and projector)
         try:
             new_name = self.map_tensor_name(name)
@@ -10547,7 +10549,9 @@ class YOUTUVLVisionModel(MmprojModel):
         except ValueError:
             # If mapping fails, log warning and skip
             logger.warning(f"Cannot map tensor: {name}")
-            return []  
+            return []
+
+
 ###### CONVERSION LOGIC ######
 
 
