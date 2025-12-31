@@ -83,10 +83,13 @@
 
 	// Check if content contains agentic tool call markers
 	const isAgenticContent = $derived(
-		messageContent?.includes('<!-- AGENTIC_TOOL_CALL_START -->') ?? false
+		messageContent?.includes('<<<AGENTIC_TOOL_CALL_START>>>') ?? false
 	);
 
 	const processingState = useProcessingState();
+
+	// Local state for raw output toggle (per message)
+	let showRawOutput = $state(false);
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
@@ -184,7 +187,7 @@
 			</div>
 		</div>
 	{:else if message.role === 'assistant'}
-		{#if config().disableReasoningFormat}
+		{#if showRawOutput}
 			<pre class="raw-output">{messageContent || ''}</pre>
 		{:else if isAgenticContent}
 			<AgenticContent content={messageContent || ''} />
@@ -258,6 +261,9 @@
 			{onConfirmDelete}
 			{onNavigateToSibling}
 			{onShowDeleteDialogChange}
+			showRawOutputSwitch={currentConfig.disableReasoningFormat}
+			rawOutputEnabled={showRawOutput}
+			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
 		/>
 	{/if}
 </div>
