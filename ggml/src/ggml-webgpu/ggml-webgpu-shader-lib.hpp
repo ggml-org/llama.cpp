@@ -136,7 +136,6 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
 
     // Add chosen Q/KV tile sizes
     auto [q_tile, kv_tile] = ggml_webgpu_flash_attn_tile_sizes(context);
-    kv_tile                = std::min<uint32_t>(kv_tile, 32);  // TODO: temporary cap to 32 for testing
     defines.push_back(std::string("Q_TILE=") + std::to_string(q_tile));
     defines.push_back(std::string("KV_TILE=") + std::to_string(kv_tile));
 

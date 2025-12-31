@@ -109,6 +109,21 @@ var<workgroup> inter_shmem: array<f16, Q_TILE * KV_TILE>;
 var<workgroup> row_max_shmem: array<f16, Q_TILE>;
 var<workgroup> exp_sum_shmem: array<f16, Q_TILE>;
 
+fn calc_softmax_term(kv_idx: u32, q_tile_row: u32, slope: f16) -> f16 {
+    var v = select(FLOAT_MIN,
+                   inter_shmem[kv_idx + q_tile_row * KV_TILE] * f16(params.scale),
+                   kv_idx < KV_TILE);
+#ifdef LOGIT_SOFTCAP
+    v = f16(params.logit_softcap) * tanh(v);
+#endif
+#ifdef MASK
+    let mask_val = select(0.0, mask_shmem[q_tile_row * KV_TILE + kv_idx], kv_idx < KV_TILE);
+    let mask_term = slope * mask_val;
+    v += mask_term;
+#endif
+    return v;
+}
+
 // Number of blocks this workgroup handles at the subgroup matrix level. SG_MAT_M must divide Q_TILE.
 const Q_BLOCKS = Q_TILE / SG_MAT_M;
 // Number of subgroup-matrix-width blocks that span the KV tile. SG_MAT_N must divide KV_TILE.
@@ -220,7 +235,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                   acc = subgroupMatrixMultiplyAccumulate(q_sg_mat, k_sg_mat, acc);
               }
 
-              // store acc to shared memory for softmax
+              // store acc to shared memory for softmax (S matrix from paper)
               let inter_offset = sg_block * SG_MAT_M * KV_TILE + kv_block * SG_MAT_N;
               subgroupMatrixStore(&inter_shmem, inter_offset, acc, false, KV_TILE);
           }
@@ -254,42 +269,45 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                   break;
               }
 
-              // calculate running max
+              // initialize running max for this row
               // only the first thread in the subgroup needs to read from shared memory.
               // TODO: is this faster than having all threads read shared memory?
               var prev_max = select(0.0, row_max_shmem[q_tile_row], sg_inv_id == 0);
               prev_max = subgroupBroadcastFirst(prev_max);
-              var thread_tile_row_max = select(FLOAT_MIN, inter_shmem[sg_inv_id + q_tile_row * KV_TILE] * f16(params.scale), sg_inv_id < KV_TILE);
-#ifdef LOGIT_SOFTCAP
-              thread_tile_row_max = f16(params.logit_softcap) * tanh(thread_tile_row_max);
-#endif
-#ifdef MASK
-              // The mask value for this Q row and K col
-              let mask_val = select(0.0, mask_shmem[q_tile_row * KV_TILE + sg_inv_id], sg_inv_id < KV_TILE);
-              let mask_term = slope * mask_val;
-              thread_tile_row_max += mask_term;
-#endif
-              let new_max = subgroupMax(max(prev_max, thread_tile_row_max));
+              var final_max = prev_max;
 
-              // calculate running exp sum
-              let cur_p = select(0.0, exp(thread_tile_row_max - new_max), kv_tile + sg_inv_id < params.seq_len_kv && sg_inv_id < KV_TILE);
-              let new_exp_term = subgroupAdd(cur_p);
-
-              // store back to shared memory (P matrix)
-              if (sg_inv_id < KV_TILE) {
-                  inter_shmem[sg_inv_id + q_tile_row * KV_TILE] = cur_p;
+              // pass 1: compute final max across the full KV tile in chunks
+              for (var kv_offset = 0u; kv_offset < KV_TILE; kv_offset += subgroup_size) {
+                  let kv_idx = kv_offset + sg_inv_id;
+                  let softmax_term = calc_softmax_term(kv_idx, q_tile_row, slope);
+                  final_max = subgroupMax(max(final_max, softmax_term));
               }
 
-              let cur_exp = exp(prev_max - new_max);
+              var total_exp_term: f16 = 0.0;
+
+              // pass 2: compute exp sum and write P using final_max
+              for (var kv_offset = 0u; kv_offset < KV_TILE; kv_offset += subgroup_size) {
+                  let kv_idx = kv_offset + sg_inv_id;
+                  let softmax_term = calc_softmax_term(kv_idx, q_tile_row, slope);
+                  let cur_p = select(0.0,
+                                     exp(softmax_term - final_max),
+                                     kv_tile + kv_idx < params.seq_len_kv && kv_idx < KV_TILE);
+                  total_exp_term += subgroupAdd(cur_p);
+                  if (kv_idx < KV_TILE) {
+                      inter_shmem[kv_idx + q_tile_row * KV_TILE] = cur_p;
+                  }
+              }
+
+              let cur_exp = exp(prev_max - final_max);
+
               if (sg_inv_id == 0) {
-                  row_max_shmem[q_tile_row] = new_max;
-                  exp_sum_shmem[q_tile_row] = exp_sum_shmem[q_tile_row] * cur_exp + new_exp_term;
+                  row_max_shmem[q_tile_row] = final_max;
+                  exp_sum_shmem[q_tile_row] = exp_sum_shmem[q_tile_row] * cur_exp + total_exp_term;
               }
 
               for (var elem_idx = sg_inv_id; elem_idx < params.head_dim_v; elem_idx += subgroup_size) {
                   let idx = q_tile_row * params.head_dim_v + elem_idx;
-                  let val = o_shmem[idx] * cur_exp;
-                  o_shmem[idx] = val;
+                  o_shmem[idx] *= cur_exp;
               }
           }
       }
