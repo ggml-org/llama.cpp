@@ -1161,6 +1161,7 @@ static void convert_q4_0_to_coalesced_sycl(void * data, const int ncols, const i
 // Forward declarations for type-specific coalesced conversion functions
 static void convert_q8_0_to_coalesced_sycl(void * data, const int ncols, const int nrows, dpct::queue_ptr stream);
 static void convert_mxfp4_to_coalesced_sycl(void * data, const int ncols, const int nrows, dpct::queue_ptr stream);
+static void convert_q6_k_to_coalesced_sycl(void * data, const int ncols, const int nrows, dpct::queue_ptr stream);
 
 // =============================================================================
 // UNIFIED COALESCED REORDER FUNCTION
@@ -1240,6 +1241,11 @@ bool convert_tensor_to_coalesced(const ggml_tensor* tensor, dpct::queue_ptr stre
 // This is a convenience wrapper that checks policy (env var, TP sharding) then
 // calls the unified convert_tensor_to_coalesced() function.
 bool ggml_sycl_convert_to_coalesced_q4_0(const ggml_tensor * tensor, dpct::queue_ptr stream) {
+    // Use centralized type support check
+    if (!is_coalesced_supported(tensor->type)) {
+        return false;
+    }
+
     // Check if coalesced mode is enabled via global reorder mode
     if (g_ggml_sycl_reorder_mode != reorder_mode::COALESCED) {
         return false;
@@ -1252,7 +1258,7 @@ bool ggml_sycl_convert_to_coalesced_q4_0(const ggml_tensor * tensor, dpct::queue
     }
 
     // Use the unified function - it handles all validation and atomic transform+flag
-    return convert_tensor_to_coalesced(tensor, stream, "ggml_sycl_convert_to_coalesced_q4_0");
+    return convert_tensor_to_coalesced(tensor, stream, "ggml_sycl_convert_to_coalesced");
 }
 
 // Dispatch function for coalesced Q4_0 MMVQ kernel
@@ -1470,6 +1476,11 @@ static void convert_q8_0_to_coalesced_sycl(void * data, const int ncols, const i
 
 // Public API for Q8_0 coalesced conversion - call at model load time, after reorder
 bool ggml_sycl_convert_to_coalesced_q8_0(const ggml_tensor * tensor, dpct::queue_ptr stream) {
+    // Use centralized type support check (Q8_0 not yet enabled)
+    if (!is_coalesced_supported(tensor->type)) {
+        return false;
+    }
+
     // Check if coalesced mode is enabled via global reorder mode
     if (g_ggml_sycl_reorder_mode != reorder_mode::COALESCED) {
         return false;
@@ -1482,7 +1493,7 @@ bool ggml_sycl_convert_to_coalesced_q8_0(const ggml_tensor * tensor, dpct::queue
     }
 
     // Use the unified function - it handles all validation and atomic transform+flag
-    return convert_tensor_to_coalesced(tensor, stream, "ggml_sycl_convert_to_coalesced_q8_0");
+    return convert_tensor_to_coalesced(tensor, stream, "ggml_sycl_convert_to_coalesced");
 }
 
 // Dispatch function for coalesced Q8_0 MMVQ kernel
@@ -1676,8 +1687,155 @@ static void convert_mxfp4_to_coalesced_sycl(void * data, const int ncols, const 
     });
 }
 
+// Q6_K Coalesced Conversion
+// SoA layout: [all ql][all qh][all scales][all d]
+// Coalesced layout per tile (16 blocks):
+//   [ql word-major: 2048 bytes] [qh word-major: 1024 bytes] [scales word-major: 256 bytes]
+// D values remain at tensor end (not coalesced within tiles)
+static void convert_q6_k_to_coalesced_kernel(
+    const uint8_t * __restrict__ src,   // SoA format
+    uint8_t * __restrict__ dst,          // Coalesced format
+    const int ncols, const int nrows,
+    const sycl::nd_item<3> & item)
+{
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16
+    const int blocks_per_row = ncols / QK_K;
+    const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
+
+    // SoA region sizes per row
+    const int ql_per_row = blocks_per_row * (QK_K / 2);       // 128 bytes/block
+    const int qh_per_row = blocks_per_row * (QK_K / 4);       // 64 bytes/block
+    const int sc_per_row = blocks_per_row * (QK_K / 16);      // 16 bytes/block
+
+    // SoA base pointers
+    const uint8_t * src_ql = src;
+    const uint8_t * src_qh = src_ql + nrows * ql_per_row;
+    const uint8_t * src_sc = src_qh + nrows * qh_per_row;
+    // D values stay in place (at tensor end)
+
+    // Coalesced tile sizes
+    constexpr int ql_tile_bytes = TILE_BLOCKS * (QK_K / 2);   // 16 * 128 = 2048
+    constexpr int qh_tile_bytes = TILE_BLOCKS * (QK_K / 4);   // 16 * 64 = 1024
+    constexpr int sc_tile_bytes = TILE_BLOCKS * (QK_K / 16);  // 16 * 16 = 256
+    constexpr int tile_total = ql_tile_bytes + qh_tile_bytes + sc_tile_bytes;  // 3328 bytes
+
+    // Destination base for quant data (coalesced tiles)
+    uint8_t * dst_tiles = dst;
+    // D values remain at same location as SoA (after all ql+qh+sc)
+
+    // Each thread handles one word (4 bytes) reordering
+    const int global_id = item.get_global_linear_id();
+    const int total_threads = item.get_global_range().size();
+
+    // Process ql words (32 words per block, 512 words per tile)
+    const int ql_words_per_tile = TILE_BLOCKS * 32;
+    const int total_ql_words = nrows * tiles_per_row * ql_words_per_tile;
+
+    for (int i = global_id; i < total_ql_words; i += total_threads) {
+        const int tile_word = i % ql_words_per_tile;
+        const int tile_idx = (i / ql_words_per_tile) % tiles_per_row;
+        const int row = i / (tiles_per_row * ql_words_per_tile);
+
+        const int word_in_block = tile_word / TILE_BLOCKS;
+        const int block_in_tile = tile_word % TILE_BLOCKS;
+
+        // Source: SoA sequential blocks
+        const int src_offset = row * ql_per_row + (tile_idx * TILE_BLOCKS + block_in_tile) * (QK_K / 2) + word_in_block * 4;
+
+        // Dest: word-major within tile
+        const int dst_tile_base = row * tiles_per_row * tile_total + tile_idx * tile_total;
+        const int dst_offset = dst_tile_base + word_in_block * (TILE_BLOCKS * 4) + block_in_tile * 4;
+
+        *((int *)(dst_tiles + dst_offset)) = *((const int *)(src_ql + src_offset));
+    }
+
+    // Process qh words (16 words per block, 256 words per tile)
+    const int qh_words_per_tile = TILE_BLOCKS * 16;
+    const int total_qh_words = nrows * tiles_per_row * qh_words_per_tile;
+
+    for (int i = global_id; i < total_qh_words; i += total_threads) {
+        const int tile_word = i % qh_words_per_tile;
+        const int tile_idx = (i / qh_words_per_tile) % tiles_per_row;
+        const int row = i / (tiles_per_row * qh_words_per_tile);
+
+        const int word_in_block = tile_word / TILE_BLOCKS;
+        const int block_in_tile = tile_word % TILE_BLOCKS;
+
+        const int src_offset = row * qh_per_row + (tile_idx * TILE_BLOCKS + block_in_tile) * (QK_K / 4) + word_in_block * 4;
+        const int dst_tile_base = row * tiles_per_row * tile_total + tile_idx * tile_total + ql_tile_bytes;
+        const int dst_offset = dst_tile_base + word_in_block * (TILE_BLOCKS * 4) + block_in_tile * 4;
+
+        *((int *)(dst_tiles + dst_offset)) = *((const int *)(src_qh + src_offset));
+    }
+
+    // Process scales words (4 words per block, 64 words per tile)
+    const int sc_words_per_tile = TILE_BLOCKS * 4;
+    const int total_sc_words = nrows * tiles_per_row * sc_words_per_tile;
+
+    for (int i = global_id; i < total_sc_words; i += total_threads) {
+        const int tile_word = i % sc_words_per_tile;
+        const int tile_idx = (i / sc_words_per_tile) % tiles_per_row;
+        const int row = i / (tiles_per_row * sc_words_per_tile);
+
+        const int word_in_block = tile_word / TILE_BLOCKS;
+        const int block_in_tile = tile_word % TILE_BLOCKS;
+
+        const int src_offset = row * sc_per_row + (tile_idx * TILE_BLOCKS + block_in_tile) * (QK_K / 16) + word_in_block * 4;
+        const int dst_tile_base = row * tiles_per_row * tile_total + tile_idx * tile_total + ql_tile_bytes + qh_tile_bytes;
+        const int dst_offset = dst_tile_base + word_in_block * (TILE_BLOCKS * 4) + block_in_tile * 4;
+
+        *((int *)(dst_tiles + dst_offset)) = *((const int *)(src_sc + src_offset));
+    }
+}
+
+static void convert_q6_k_to_coalesced_sycl(void * data, const int ncols, const int nrows, dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK_K == 0);
+    GGML_ASSERT((ncols / QK_K) % MMVQ_COALESCED_TILE_BLOCKS == 0);
+
+    const int blocks_per_row = ncols / QK_K;
+    const int tiles_per_row = blocks_per_row / MMVQ_COALESCED_TILE_BLOCKS;
+
+    // Total quant bytes (ql + qh + scales, excluding d)
+    const size_t quant_bytes_per_row = blocks_per_row * ((QK_K/2) + (QK_K/4) + (QK_K/16));
+    const size_t total_quant_bytes = nrows * quant_bytes_per_row;
+
+    // Allocate temp buffer for in-place conversion
+    uint8_t * temp = (uint8_t *)sycl::malloc_device(total_quant_bytes, *stream);
+    GGML_ASSERT(temp != nullptr);
+
+    // Copy current data to temp
+    sycl::event copy_event = stream->memcpy(temp, data, total_quant_bytes);
+
+    // Launch conversion kernel
+    const int total_work = nrows * tiles_per_row * MMVQ_COALESCED_TILE_BLOCKS * 32;  // ql dominant
+    const int block_size = 256;
+    const int num_blocks = (total_work + block_size - 1) / block_size;
+
+    sycl::event convert_event = stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(copy_event);
+        cgh.parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks * block_size), sycl::range<3>(1, 1, block_size)),
+            [=](sycl::nd_item<3> item) {
+                convert_q6_k_to_coalesced_kernel(temp, (uint8_t *)data, ncols, nrows, item);
+            });
+    });
+
+    // Free temp after kernel completes
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(convert_event);
+        cgh.host_task([temp, stream]() {
+            sycl::free(temp, *stream);
+        });
+    });
+}
+
 // Public API for MXFP4 coalesced conversion
 bool ggml_sycl_convert_to_coalesced_mxfp4(const ggml_tensor * tensor, dpct::queue_ptr stream) {
+    // Use centralized type support check (MXFP4 not yet enabled)
+    if (!is_coalesced_supported(tensor->type)) {
+        return false;
+    }
+
     // Check if coalesced mode is enabled via global reorder mode
     if (g_ggml_sycl_reorder_mode != reorder_mode::COALESCED) {
         return false;
@@ -1690,7 +1848,7 @@ bool ggml_sycl_convert_to_coalesced_mxfp4(const ggml_tensor * tensor, dpct::queu
     }
 
     // Use the unified function - it handles all validation and atomic transform+flag
-    return convert_tensor_to_coalesced(tensor, stream, "ggml_sycl_convert_to_coalesced_mxfp4");
+    return convert_tensor_to_coalesced(tensor, stream, "ggml_sycl_convert_to_coalesced");
 }
 
 // Dispatch function for coalesced MXFP4 MMVQ kernel
