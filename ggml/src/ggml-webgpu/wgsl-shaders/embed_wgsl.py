@@ -26,6 +26,15 @@ def replace_repl_placeholders(variant, template_map):
         variant["REPLS"][repl] = code
     return variant
 
+def replace_repl_placeholders(variant, template_map):
+    for repl, code in variant["REPLS"].items():
+        for key, val in template_map.items():
+            # Match "key" and avoid matching subsequences using by using \b
+            code = re.sub(rf'\b{re.escape(str(key))}\b', str(val), code)
+        variant["REPLS"][repl] = code
+    return variant
+
+
 def replace_placeholders(shader_text, replacements):
     for key, val in replacements.items():
         # Match {{KEY}} literally, where KEY is escaped

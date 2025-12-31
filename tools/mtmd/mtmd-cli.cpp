@@ -65,7 +65,7 @@ static void sigint_handler(int signo) {
 
 struct mtmd_cli_context {
     mtmd::context_ptr ctx_vision;
-    common_init_result llama_init;
+    common_init_result_ptr llama_init;
 
     llama_model       * model;
     llama_context     * lctx;
@@ -89,8 +89,8 @@ struct mtmd_cli_context {
     llama_pos n_past = 0;
 
     mtmd_cli_context(common_params & params) : llama_init(common_init_from_params(params)) {
-        model = llama_init.model.get();
-        lctx = llama_init.context.get();
+        model = llama_init->model();
+        lctx = llama_init->context();
         vocab = llama_model_get_vocab(model);
         smpl = common_sampler_init(model, params.sampling);
         n_threads = params.cpuparams.n_threads;
@@ -135,8 +135,8 @@ struct mtmd_cli_context {
         mparams.use_gpu          = params.mmproj_use_gpu;
         mparams.print_timings    = true;
         mparams.n_threads        = params.cpuparams.n_threads;
-        mparams.verbosity        = params.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
         mparams.flash_attn_type  = params.flash_attn_type;
+        mparams.warmup           = params.warmup;
         mparams.image_min_tokens = params.image_min_tokens;
         mparams.image_max_tokens = params.image_max_tokens;
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
@@ -270,13 +270,13 @@ int main(int argc, char ** argv) {
     ggml_time_init();
 
     common_params params;
-    params.sampling.temp = 0.2; // lower temp by default for better quality
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MTMD, show_additional_info)) {
         return 1;
     }
 
     common_init();
+    mtmd_helper_log_set(common_log_default_callback, nullptr);
 
     if (params.mmproj.path.empty()) {
         show_additional_info(argc, argv);
@@ -285,7 +285,7 @@ int main(int argc, char ** argv) {
     }
 
     mtmd_cli_context ctx(params);
-    LOG("%s: loading model: %s\n", __func__, params.model.path.c_str());
+    LOG_INF("%s: loading model: %s\n", __func__, params.model.path.c_str());
 
     bool is_single_turn = !params.prompt.empty() && !params.image.empty();
 
@@ -309,13 +309,34 @@ int main(int argc, char ** argv) {
 
     if (g_is_interrupted) return 130;
 
+    auto eval_system_prompt_if_present = [&] {
+        if (params.system_prompt.empty()) {
+            return 0;
+        }
+
+        common_chat_msg msg;
+        msg.role = "system";
+        msg.content = params.system_prompt;
+        return eval_message(ctx, msg);
+    };
+
+    LOG_WRN("WARN: This is an experimental CLI for testing multimodal capability.\n");
+    LOG_WRN("      For normal use cases, please use the standard llama-cli\n");
+
+    if (eval_system_prompt_if_present()) {
+        return 1;
+    }
+
     if (is_single_turn) {
         g_is_generating = true;
         if (params.prompt.find(mtmd_default_marker()) == std::string::npos) {
             for (size_t i = 0; i < params.image.size(); i++) {
-                params.prompt += mtmd_default_marker();
+                // most models require the marker before each image
+                // ref: https://github.com/ggml-org/llama.cpp/pull/17616
+                params.prompt = mtmd_default_marker() + params.prompt;
             }
         }
+
         common_chat_msg msg;
         msg.role = "user";
         msg.content = params.prompt;
@@ -348,11 +369,11 @@ int main(int argc, char ** argv) {
         while (!g_is_interrupted) {
             g_is_generating = false;
             LOG("\n> ");
-            console::set_display(console::user_input);
+            console::set_display(DISPLAY_TYPE_USER_INPUT);
             std::string line;
             console::readline(line, false);
             if (g_is_interrupted) break;
-            console::set_display(console::reset);
+            console::set_display(DISPLAY_TYPE_RESET);
             line = string_strip(line);
             if (line.empty()) {
                 continue;
@@ -364,6 +385,9 @@ int main(int argc, char ** argv) {
                 ctx.n_past = 0;
                 ctx.chat_history.clear();
                 llama_memory_clear(llama_get_memory(ctx.lctx), true);
+                if (eval_system_prompt_if_present()) {
+                    return 1;
+                }
                 LOG("Chat history cleared\n\n");
                 continue;
             }

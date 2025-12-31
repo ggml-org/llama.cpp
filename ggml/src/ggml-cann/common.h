@@ -23,26 +23,26 @@
 #ifndef CANN_COMMON_H
 #define CANN_COMMON_H
 
-#include <acl/acl.h>
-
-#include <cstdio>
-#include <iostream>
-#include <map>
-#include <memory>
-#include <string>
-#include <vector>
-#include <atomic>
-#include <condition_variable>
-#include <mutex>
-#include <thread>
-#include <unistd.h>
-#include <functional>
-#include <optional>
-#include <list>
-
+#include "../ggml-impl.h"
 #include "../include/ggml-cann.h"
 #include "../include/ggml.h"
-#include "../ggml-impl.h"
+
+#include <acl/acl.h>
+#include <unistd.h>
+
+#include <atomic>
+#include <condition_variable>
+#include <cstdio>
+#include <functional>
+#include <iostream>
+#include <list>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <thread>
+#include <vector>
 
 #define MATRIX_ROW_PADDING    512
 #define GGML_CANN_MAX_STREAMS 8
@@ -214,130 +214,6 @@ struct ggml_cann_pool_alloc {
     ggml_cann_pool_alloc & operator=(ggml_cann_pool_alloc &&) = delete;
 };
 
-/**
- * @brief Function pointer type for ACLNN operator calls.
- */
-using aclnn_func_t = aclnnStatus (*)(void *, uint64_t, aclOpExecutor *, aclrtStream);
-
-/**
- * @brief Base class for all CANN tasks to be submitted to the task queue.
- *
- * Users should override the run_task() method with actual task logic.
- */
-class cann_task {
-  public:
-    virtual void run_task() {}
-};
-
-/**
- * @brief A lock-free ring-buffer based task queue for asynchronously executing cann_task instances.
- */
-class cann_task_queue {
-  public:
-    /**
-     * @brief Constructs a task queue with a fixed power-of-two capacity for a specific device.
-     *
-     * @param capacity Queue capacity. Must be a power of 2.
-     * @param device Target device ID (used for context setting).
-     */
-    explicit cann_task_queue(size_t capacity, int32_t device) :
-        buffer_(capacity),
-        capacity_(capacity),
-        head_(0),
-        tail_(0),
-        running_(false),
-        device_(device) {
-        GGML_ASSERT((capacity & (capacity - 1)) == 0 && "capacity must be power of 2");
-        mask_ = capacity_ - 1;
-    }
-
-    /**
-     * @brief Attempts to enqueue a task into the queue.
-     *
-     * @param item Unique pointer to the task.
-     * @return true if the task was successfully enqueued, false if the queue was full.
-     */
-    bool enqueue(std::unique_ptr<cann_task> && item) {
-        size_t next_tail = (tail_ + 1) & mask_;
-
-        if (next_tail == head_) {
-            return false;
-        }
-
-        buffer_[tail_] = std::move(item);
-        std::atomic_thread_fence(std::memory_order_release);
-        tail_ = next_tail;
-
-        return true;
-    }
-
-    /**
-     * @brief Submits a task to the queue, and starts the worker thread if not already running.
-     *
-     * @param task Task to be submitted.
-     */
-    void submit_task(std::unique_ptr<cann_task> && task) {
-        while (!enqueue(std::move(task))) {
-            std::this_thread::yield();
-            continue;
-        }
-
-        if (!running_) {
-            running_ = true;
-            thread_  = std::thread(&cann_task_queue::execute, this);
-        }
-    }
-
-    /**
-     * @brief Waits until the queue is completely empty and no tasks are being processed.
-     */
-    void wait() {
-        while (running_ && head_ != tail_) {
-            std::this_thread::yield();
-            continue;
-        }
-    }
-
-    /**
-     * @brief Stops the task queue and joins the worker thread.
-     */
-    void stop() {
-        running_ = false;
-        if (thread_.joinable()) {
-            thread_.join();
-        }
-    }
-
-  private:
-    /**
-     * @brief Worker thread function that continuously dequeues and executes tasks.
-     */
-    void execute() {
-        ggml_cann_set_device(device_);
-
-        while (running_) {
-            if (head_ == tail_) {
-                std::this_thread::yield();
-                continue;
-            }
-
-            std::atomic_thread_fence(std::memory_order_acquire);
-            buffer_[head_]->run_task();
-            buffer_[head_].reset();
-            head_ = (head_ + 1) & mask_;
-        }
-    }
-
-    std::vector<std::unique_ptr<cann_task>> buffer_;
-    const size_t                            capacity_;
-    size_t                                  mask_;
-    size_t                                  head_;
-    size_t                                  tail_;
-    bool                                    running_;
-    std::thread                             thread_;
-    int32_t                                 device_;
-};
-
 #ifdef USE_ACL_GRAPH
 struct ggml_graph_node_properties {
     // dst tensor
@@ -353,6 +229,60 @@ struct ggml_graph_node_properties {
     // op
     ggml_op node_op;
     int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
+
+    /**
+     * @brief Check if a ggml tensor node matches this property set.
+     *
+     * This function compares all relevant fields (address, op type, shape, source inputs, op params)
+     * to determine whether the current node matches these previously recorded properties.
+     *
+     * @param node The current ggml tensor node.
+     * @return true if all fields match (excluding GGML_OP_VIEW); false otherwise.
+     */
+    bool has_matching_properties(ggml_tensor * node) {
+        if (node->data != this->node_address && node->op != GGML_OP_VIEW) {
+            return false;
+        }
+
+        if (node->op != this->node_op) {
+            return false;
+        }
+
+        for (int i = 0; i < GGML_MAX_DIMS; i++) {
+            if (node->ne[i] != this->ne[i]) {
+                return false;
+            }
+            if (node->nb[i] != this->nb[i]) {
+                return false;
+            }
+        }
+
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            if (node->src[i]) {
+                if (node->src[i]->data != this->src_address[i] && node->op != GGML_OP_VIEW) {
+                    return false;
+                }
+
+                for (int d = 0; d < GGML_MAX_DIMS; d++) {
+                    if (node->src[i]->ne[d] != this->src_ne[i][d]) {
+                        return false;
+                    }
+                    if (node->src[i]->nb[d] != this->src_nb[i][d]) {
+                        return false;
+                    }
+                }
+            } else {
+                if (this->src_address[i] != nullptr) {
+                    return false;
+                }
+            }
+        }
+
+        if (node->op == GGML_OP_SCALE || node->op == GGML_OP_UNARY || node->op == GGML_OP_GLU) {
+            return memcmp(this->op_params, node->op_params, GGML_MAX_OP_PARAMS) == 0;
+        }
+        return true;
+    }
 };
 
 struct ggml_cann_graph {
@@ -365,6 +295,79 @@ struct ggml_cann_graph {
     aclmdlRI graph = nullptr;
 
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
+
+    /**
+     * @brief Create a new CANN graph from a ggml computation graph.
+     *
+     * This function creates a new ggml_cann_graph object and fills its node properties
+     * (operation type, dimensions, strides, input sources, and operation parameters)
+     * based on the current ggml computation graph.
+     *
+     * Each node in the ggml graph is mapped to a property entry in the new CANN graph:
+     * - node address
+     * - operation type
+     * - shape (ne) and strides (nb)
+     * - source tensor addresses
+     * - operation parameters
+     *
+     * @param cgraph The current ggml computation graph.
+     * @return Pointer to the newly created ggml_cann_graph object.
+     */
+    static ggml_cann_graph * create_from_cgraph(ggml_cgraph * cgraph) {
+        ggml_cann_graph * new_graph = new ggml_cann_graph();
+        new_graph->ggml_graph_properties.resize(cgraph->n_nodes);
+
+        for (int node_idx = 0; node_idx < cgraph->n_nodes; ++node_idx) {
+            ggml_tensor * node = cgraph->nodes[node_idx];
+            auto &        prop = new_graph->ggml_graph_properties[node_idx];
+
+            prop.node_address = node->data;
+            prop.node_op      = node->op;
+
+            std::copy_n(node->ne, GGML_MAX_DIMS, prop.ne);
+            std::copy_n(node->nb, GGML_MAX_DIMS, prop.nb);
+
+            for (int src = 0; src < GGML_MAX_SRC; ++src) {
+                if (node->src[src]) {
+                    prop.src_address[src] = node->src[src]->data;
+                    std::copy_n(node->src[src]->ne, GGML_MAX_DIMS, prop.src_ne[src]);
+                    std::copy_n(node->src[src]->nb, GGML_MAX_DIMS, prop.src_nb[src]);
+                } else {
+                    prop.src_address[src] = nullptr;
+                    std::fill_n(prop.src_ne[src], GGML_MAX_DIMS, 0);
+                    std::fill_n(prop.src_nb[src], GGML_MAX_DIMS, 0);
+                }
+            }
+
+            memcpy(prop.op_params, node->op_params, GGML_MAX_OP_PARAMS);
+        }
+
+        return new_graph;
+    }
+
+    /**
+     * @brief Check whether this CANN graph matches the given ggml computation graph.
+     *
+     * This function compares the number of nodes and each node's properties
+     * (operation type, dimensions, strides, inputs, and operation parameters)
+     * to determine whether this CANN graph matches the given ggml graph.
+     *
+     * @param cgraph The current ggml computation graph.
+     * @return true if this CANN graph matches the ggml graph; false otherwise.
+     */
+    bool matches_cgraph(ggml_cgraph * cgraph) {
+        if (this->ggml_graph_properties.size() != static_cast<size_t>(cgraph->n_nodes)) {
+            return false;
+        }
+
+        for (int i = 0; i < cgraph->n_nodes; ++i) {
+            if (!this->ggml_graph_properties[i].has_matching_properties(cgraph->nodes[i])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
 };
 
 /**
@@ -397,15 +400,6 @@ struct ggml_cann_graph_lru_cache {
     }
 
     /**
-     * @brief Move an existing graph to the front of the cache.
-     * @param node Pointer to the ggml_cann_graph to move.
-     */
-    void move_to_front(ggml_cann_graph * node) {
-        cache_list.remove(node);
-        cache_list.push_front(node);
-    }
-
-    /**
      * @brief Clear all graphs from the cache (also frees memory).
      */
     void clear() {
@@ -419,35 +413,123 @@ struct ggml_cann_graph_lru_cache {
      * @brief Destructor that clears the cache and frees all cached graphs.
      */
     ~ggml_cann_graph_lru_cache() { clear(); }
+
+    /**
+     * @brief Find a cached CANN graph that matches the given ggml graph and move it to front.
+     *
+     * This function iterates through the cached CANN graphs stored in the LRU cache and
+     * compares them against the given ggml computation graph. If a matching graph is found,
+     * it is promoted to the front of the LRU cache and returned. Otherwise, the function
+     * returns nullptr.
+     *
+     * @param cgraph The current ggml computation graph.
+     * @return true if found; false otherwise.
+     */
+    bool find_and_move_to_front(ggml_cgraph * cgraph) {
+        for (auto & graph_ptr : this->cache_list) {
+            if (graph_ptr->matches_cgraph(cgraph)) {
+                cache_list.remove(graph_ptr);
+                cache_list.push_front(graph_ptr);
+                return true;
+            }
+        }
+        return false;
+    }
 };
 #endif  // USE_ACL_GRAPH
 
 struct ggml_cann_rope_cache {
     ~ggml_cann_rope_cache() {
-        if (theta_scale_cache != nullptr) {
+        if (theta_scale_cache) {
             ACL_CHECK(aclrtFree(theta_scale_cache));
         }
-        if (sin_cache != nullptr) {
+        if (sin_cache) {
             ACL_CHECK(aclrtFree(sin_cache));
         }
-        if (cos_cache != nullptr) {
+        if (cos_cache) {
             ACL_CHECK(aclrtFree(cos_cache));
+        }
+        if (position_select_index) {
+            ACL_CHECK(aclrtFree(position_select_index));
+        }
+        if (theta_scale_exp_host) {
+            free(theta_scale_exp_host);
+        }
+        if (position_select_index_host) {
+            free(position_select_index_host);
+        }
+        if (yarn_ramp_cache) {
+            ACL_CHECK(aclrtFree(yarn_ramp_cache));
         }
     }
 
-    void *  theta_scale_cache  = nullptr;
-    int64_t theta_scale_length = 0;
+    bool equal(int64_t theta_scale_length,
+               int64_t position_length,
+               float   ext_factor,
+               float   theta_scale,
+               float   freq_scale,
+               float   attn_factor,
+               bool    is_neox,
+               bool    indep_sects,
+               bool    mrope_used,
+               bool    is_imrope,
+               int     sections[4]) {
+        return this->theta_scale_length == theta_scale_length && this->position_length == position_length &&
+               this->ext_factor == ext_factor && this->theta_scale == theta_scale && this->freq_scale == freq_scale &&
+               this->attn_factor == attn_factor && this->is_neox == is_neox && this->indep_sects == indep_sects &&
+               this->mrope_used == mrope_used && this->is_imrope == is_imrope && this->sections[0] == sections[0] &&
+               this->sections[1] == sections[1] && this->sections[2] == sections[2] && this->sections[3] == sections[3];
+    }
+
+    void set(int64_t theta_scale_length,
+             int64_t position_length,
+             float   ext_factor,
+             float   theta_scale,
+             float   freq_scale,
+             float   attn_factor,
+             bool    is_neox,
+             bool    indep_sects,
+             bool    mrope_used,
+             bool    is_imrope,
+             int     sections[4]) {
+        this->theta_scale_length = theta_scale_length;
+        this->position_length    = position_length;
+        this->ext_factor         = ext_factor;
+        this->theta_scale        = theta_scale;
+        this->freq_scale         = freq_scale;
+        this->attn_factor        = attn_factor;
+        this->is_neox            = is_neox;
+        this->indep_sects        = indep_sects;
+        this->mrope_used         = mrope_used;
+        this->is_imrope          = is_imrope;
+        this->sections[0]        = sections[0];
+        this->sections[1]        = sections[1];
+        this->sections[2]        = sections[2];
+        this->sections[3]        = sections[3];
+    }
+
+    // memory cache, prepare before inferencing.
+    void *  theta_scale_cache          = nullptr;
+    float * theta_scale_exp_host       = nullptr;
+    int *   position_select_index_host = nullptr;
+    void *  position_select_index      = nullptr;
+    void *  yarn_ramp_cache            = nullptr;
     // sin/cos cache, used only to accelerate first layer on each device
-    void *  sin_cache          = nullptr;
-    void *  cos_cache          = nullptr;
-    int64_t position_length    = 0;
+    void *  sin_cache                  = nullptr;
+    void *  cos_cache                  = nullptr;
     // Properties to check before reusing the sincos cache
-    bool    cached             = false;
-    float   ext_factor         = 0.0f;
-    float   theta_scale        = 0.0f;
-    float   freq_scale         = 0.0f;
-    float   attn_factor        = 0.0f;
-    bool    is_neox            = false;
+    int64_t theta_scale_length         = 0;
+    int64_t position_length            = 0;
+    bool    cached                     = false;
+    float   ext_factor                 = 0.0f;
+    float   theta_scale                = 0.0f;
+    float   freq_scale                 = 0.0f;
+    float   attn_factor                = 0.0f;
+    bool    is_neox                    = false;
+    bool    indep_sects                = false;
+    bool    mrope_used                 = false;
+    int     sections[4]                = { 0, 0, 0, 0 };
+    bool    is_imrope                  = false;
 };
 
 struct ggml_cann_tensor_cache {
@@ -474,7 +556,6 @@ struct ggml_backend_cann_context {
     ggml_cann_graph_lru_cache graph_lru_cache;
     bool                      acl_graph_mode = true;
 #endif
-    cann_task_queue        task_queue;
     bool                   async_mode;
     // Rope Cache
     ggml_cann_rope_cache   rope_cache;
@@ -488,15 +569,10 @@ struct ggml_backend_cann_context {
      * @brief Constructor for initializing the context with a given device.
      * @param device Device ID.
      */
-    explicit ggml_backend_cann_context(int device) :
-        device(device),
-        name("CANN" + std::to_string(device)),
-        task_queue(1024, device) {
+    explicit ggml_backend_cann_context(int device) : device(device), name("CANN" + std::to_string(device)) {
         ggml_cann_set_device(device);
         description = aclrtGetSocName();
 
-        async_mode = parse_bool(get_env("GGML_CANN_ASYNC_MODE").value_or(""));
-        GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__, device, async_mode ? "ON" : "OFF");
 #ifdef USE_ACL_GRAPH
         acl_graph_mode = parse_bool(get_env("GGML_CANN_ACL_GRAPH").value_or("on"));
         GGML_LOG_INFO("%s: device %d execution mode is %s (%s)\n", __func__, device, acl_graph_mode ? "GRAPH" : "EAGER",
@@ -509,7 +585,6 @@ struct ggml_backend_cann_context {
      */
     ~ggml_backend_cann_context() {
         ggml_cann_set_device(device);
-        task_queue.stop();
         if (copy_event != nullptr) {
             ACL_CHECK(aclrtDestroyEvent(copy_event));
         }

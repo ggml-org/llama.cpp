@@ -1,0 +1,159 @@
+{# ----------‑‑‑ special token variables ‑‑‑---------- #}
+{%- set toolcall_begin_token   = '<minimax:tool_call>'         -%}
+{%- set toolcall_end_token     = '</minimax:tool_call>'        -%}
+{#- Tool Rendering Functions ============================================== -#}
+{%- macro render_tool_namespace(namespace_name, tool_list) -%}
+{%- for tool in tool_list -%}
+<tool>{{ tool.function | tojson(ensure_ascii=False) }}</tool>
+{% endfor -%}
+{%- endmacro -%}
+{%- macro visible_text(content) -%}
+    {%- if content is string -%}
+        {{ content }}
+    {%- elif content is iterable and content is not mapping -%}
+        {%- for item in content -%}
+            {%- if item is mapping and item.type == 'text' -%}
+                {{- item.text }}
+            {%- elif item is string -%}
+                {{- item }}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- else -%}
+        {{- content }}
+    {%- endif -%}
+{%- endmacro -%}
+{#- System Message Construction ============================================ -#}
+{%- macro build_system_message(system_message) -%}
+    {%- if system_message and system_message.content -%}
+        {{- visible_text(system_message.content) }}
+    {%- else -%}
+        {%- if model_identity is not defined -%}
+            {%- set model_identity = "You are a helpful assistant." -%}
+        {%- endif -%}
+        {{- model_identity }}
+    {%- endif -%}
+    
+    {#- Handle current_date -#}
+    {%- if system_message and system_message.current_date -%}
+        {{- '\n' ~ 'Current date: ' + system_message.current_date }}
+    {%- endif -%}
+    {#- Handle current_location -#}
+    {%- if system_message and system_message.current_location -%}
+        {{- '\n' ~ 'Current location: ' + system_message.current_location }}
+    {%- endif -%}
+{%- endmacro -%}
+{#- Main Template Logic ================================================= -#}
+{#- Extract system message (only first message if it's system) -#}
+{%- set system_message = none -%}
+{%- set conversation_messages = messages -%}
+{%- if messages and messages[0].role == "system" -%}
+    {%- set system_message = messages[0] -%}
+    {%- set conversation_messages = messages[1:] -%}
+{%- endif -%}
+{#- Get the last user message turn, for interleved thinking -#}
+{%- set ns = namespace(last_user_index=-1) %}
+{% for m in conversation_messages %}
+    {%- if m.role == 'user' %}
+        {% set ns.last_user_index = loop.index0 -%}
+    {%- endif %}
+{%- endfor %}
+{#- Render system message -#}
+{{- ']~!b[' ~ ']~b]system' ~ '\n' }}
+{{- build_system_message(system_message) }}
+{#- Render tools if available -#}
+{%- if tools -%}
+    {{- '\n\n' ~ '# Tools' ~ '\n' ~ 'You may call one or more tools to assist with the user query.\nHere are the tools available in JSONSchema format:' ~ '\n' }}
+    {{- '\n' ~ '<tools>' ~ '\n' }}
+    {{- render_tool_namespace("functions", tools) }}
+    {{- '</tools>' ~ '\n\n' }}
+{{- 'When making tool calls, use XML format to invoke tools and pass parameters:' ~ '\n' }}
+{{- '\n' ~ toolcall_begin_token }}
+<invoke name="tool-name-1">
+<parameter name="param-key-1">param-value-1</parameter>
+<parameter name="param-key-2">param-value-2</parameter>
+...
+</invoke>
+{{- '\n' ~ toolcall_end_token }}
+{%- endif -%}
+{{- '[e~[\n' }}
+
+{#- Render messages -#}
+{%- set last_tool_call = namespace(name=none) -%}
+{%- for message in conversation_messages -%}
+    {%- if message.role == 'assistant' -%}
+        {#- Only render reasoning_content if no user message follows -#}
+        {{- ']~b]ai' ~ '\n' }}
+
+        {%- set reasoning_content = '' %}
+        {%- set content = visible_text(message.content) %}
+        {%- if message.reasoning_content is string %}
+            {%- set reasoning_content = message.reasoning_content %}
+        {%- else %}
+            {%- if '</think>' in content %}
+                {%- set reasoning_content = content.split('</think>')[0].strip('\n').split('<think>')[-1].strip('\n') %}
+                {%- set content = content.split('</think>')[-1].strip('\n') %}
+            {%- endif %}
+        {%- endif %}
+        {%- if reasoning_content and loop.index0 > ns.last_user_index -%}
+            {{- '<think>' ~ '\n' ~ reasoning_content ~ '\n' ~ '</think>' ~ '\n\n' }}
+        {%- endif -%}
+        {%- if content -%}
+            {{- content }}
+        {%- endif -%}
+        {%- if message.tool_calls -%}
+            {{- '\n' ~ toolcall_begin_token ~ '\n' }}
+
+            {%- for tool_call in message.tool_calls -%}
+                {%- if tool_call.function %}
+                    {%- set tool_call = tool_call.function %}
+                {%- endif %}
+                {{- '<invoke name="' + tool_call.name + '">' }}
+                {% set _args = tool_call.arguments %}
+                {%- for k, v in _args.items() %}
+                {{- '<parameter name="' + k + '">' }}
+                {{- v | tojson(ensure_ascii=False) if v is not string else v }}
+                {{- '</parameter>' }}
+                {% endfor %}
+                {{- '</invoke>' ~ '\n' }}
+            {%- endfor -%}
+            
+            {{- toolcall_end_token}}
+            {%- set last_tool_call.name = message.tool_calls[-1].function.name -%}
+        {%- else -%}
+            {%- set last_tool_call.name = none -%}
+        {%- endif -%}
+        {{- '[e~[' ~ '\n' }}
+        
+    {%- elif message.role == 'tool' -%}
+    {%- if last_tool_call.name is none -%}
+        {{- raise_exception("Message has tool role, but there was no previous assistant message with a tool call!") }}
+    {%- endif -%}
+    {%- if loop.first or (conversation_messages[loop.index0 - 1].role != 'tool') -%}
+        {{- ']~b]tool' }}
+    {%- endif -%}
+    {%- if message.content is string -%}
+        {{- '\n<response>' }}
+        {{- message.content }}
+        {{- '</response>' }}
+    {%- else -%}
+        {%- for tr in message.content -%}
+            {{- '\n<response>' }}
+            {{- tr.output if tr.output is defined else (tr.text if tr.type == 'text' and tr.text is defined else tr) }}
+            {{- '\n</response>' }}
+        {%- endfor -%}
+    {%- endif -%}
+    {%- if loop.last or (conversation_messages[loop.index0 + 1].role != 'tool') -%}
+        {{- '[e~[\n' -}}
+    {%- endif -%}
+        
+    {%- elif message.role == 'user' -%}
+        {{- ']~b]user' ~ '\n' }}
+        {{- visible_text(message.content) }}
+        {{- '[e~[' ~ '\n' }}
+    {%- endif -%}
+{%- endfor -%}
+
+{#- Generation prompt -#}
+{%- if add_generation_prompt -%}
+{{- ']~b]ai' ~ '\n' ~ '<think>' ~ '\n' }}
+{%- endif -%}

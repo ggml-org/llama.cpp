@@ -4,6 +4,7 @@
 #include "llama-vocab.h"
 #include "llama-grammar.h"
 
+#include <array>
 #include <algorithm>
 #include <cassert>
 #include <cfloat>
@@ -361,23 +362,39 @@ const char * llama_sampler_name(const struct llama_sampler * smpl) {
 }
 
 void llama_sampler_accept(struct llama_sampler * smpl, llama_token token) {
+    if (!smpl) {
+        return;
+    }
+
     if (smpl->iface->accept) {
         smpl->iface->accept(smpl, token);
     }
 }
 
 void llama_sampler_apply(struct llama_sampler * smpl, struct llama_token_data_array * cur_p) {
+    if (!smpl) {
+        return;
+    }
+
     GGML_ASSERT(smpl->iface->apply);
     smpl->iface->apply(smpl, cur_p);
 }
 
 void llama_sampler_reset(struct llama_sampler * smpl) {
+    if (!smpl) {
+        return;
+    }
+
     if (smpl->iface->reset) {
         smpl->iface->reset(smpl);
     }
 }
 
 struct llama_sampler * llama_sampler_clone(const struct llama_sampler * smpl) {
+    if (!smpl) {
+        return nullptr;
+    }
+
     if (smpl->iface->clone) {
         return smpl->iface->clone(smpl);
     }
@@ -402,39 +419,6 @@ void llama_sampler_free(struct llama_sampler * smpl) {
     }
 
     delete smpl;
-}
-
-llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx) {
-    const auto * logits = llama_get_logits_ith(ctx, idx);
-
-    const llama_model * model = llama_get_model(ctx);
-    const llama_vocab * vocab = llama_model_get_vocab(model);
-
-    const int n_vocab = llama_vocab_n_tokens(vocab);
-
-    // TODO: do not allocate each time
-    std::vector<llama_token_data> cur;
-    cur.reserve(n_vocab);
-    for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
-        cur.emplace_back(llama_token_data{token_id, logits[token_id], 0.0f});
-    }
-
-    llama_token_data_array cur_p = {
-        /* .data       = */ cur.data(),
-        /* .size       = */ cur.size(),
-        /* .selected   = */ -1,
-        /* .sorted     = */ false,
-    };
-
-    llama_sampler_apply(smpl, &cur_p);
-
-    GGML_ASSERT(cur_p.selected >= 0 && cur_p.selected < (int32_t) cur_p.size);
-
-    auto token = cur_p.data[cur_p.selected].id;
-
-    llama_sampler_accept(smpl, token);
-
-    return token;
 }
 
 // sampler chain
@@ -471,9 +455,6 @@ static void llama_sampler_chain_reset(struct llama_sampler * smpl) {
     for (auto * smpl : chain->samplers) {
         llama_sampler_reset(smpl);
     }
-
-    chain->t_sample_us = 0;
-    chain->n_sample    = 0;
 }
 
 static struct llama_sampler * llama_sampler_chain_clone(const struct llama_sampler * smpl) {
@@ -513,10 +494,54 @@ struct llama_sampler * llama_sampler_chain_init(struct llama_sampler_chain_param
         /* .ctx   = */ new llama_sampler_chain {
             /* .params      = */ params,
             /* .samplers    = */ {},
+            /* .cur         = */ {},
             /* .t_sample_us = */ 0,
             /* .n_sample    = */ 0,
         }
     );
+}
+
+llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx) {
+    const auto * logits = llama_get_logits_ith(ctx, idx);
+
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    const int n_vocab = llama_vocab_n_tokens(vocab);
+
+    // use pre-allocated buffer from chain if available, otherwise allocate locally
+    std::vector<llama_token_data> * cur_ptr;
+    std::vector<llama_token_data> cur_local;
+
+    if (smpl->iface == &llama_sampler_chain_i) {
+        auto * chain = (llama_sampler_chain *) smpl->ctx;
+        cur_ptr = &chain->cur;
+    } else {
+        cur_ptr = &cur_local;
+    }
+
+    auto & cur = *cur_ptr;
+    cur.resize(n_vocab);
+    for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
+        cur[token_id] = llama_token_data{token_id, logits[token_id], 0.0f};
+    }
+
+    llama_token_data_array cur_p = {
+        /* .data       = */ cur.data(),
+        /* .size       = */ cur.size(),
+        /* .selected   = */ -1,
+        /* .sorted     = */ false,
+    };
+
+    llama_sampler_apply(smpl, &cur_p);
+
+    GGML_ASSERT(cur_p.selected >= 0 && cur_p.selected < (int32_t) cur_p.size);
+
+    auto token = cur_p.data[cur_p.selected].id;
+
+    llama_sampler_accept(smpl, token);
+
+    return token;
 }
 
 void llama_sampler_chain_add(struct llama_sampler * chain, struct llama_sampler * smpl) {
@@ -1625,10 +1650,12 @@ static struct llama_sampler * llama_sampler_init_grammar_impl(
     auto * ctx = new llama_sampler_grammar;
 
     if (grammar_str != nullptr && grammar_str[0] != '\0') {
+        std::string trigger_pattern;
+        llama_grammar * grammar = nullptr;
         // TODO: remove trigger_words support.
         if (trigger_words != nullptr && num_trigger_words > 0) {
             GGML_ASSERT(trigger_patterns == nullptr && num_trigger_patterns == 0);
-            std::string trigger_pattern("[\\s\\S]*?(");
+            trigger_pattern = "[\\s\\S]*?(";
             for (size_t i = 0; i < num_trigger_words; ++i) {
                 static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
                 if (i > 0) {
@@ -1637,15 +1664,17 @@ static struct llama_sampler * llama_sampler_init_grammar_impl(
                 trigger_pattern += std::regex_replace(trigger_words[i], special_chars, "\\$0");
             }
             trigger_pattern += ")[\\s\\S]*";
-            const auto * trigger_pattern_c = trigger_pattern.c_str();
-            trigger_patterns = &trigger_pattern_c;
-            num_trigger_patterns = 1;
+
+            std::array<const char *, 1> tmp_trigger_patterns = { trigger_pattern.c_str() };
+            grammar = llama_grammar_init_impl(vocab, grammar_str, grammar_root, lazy, tmp_trigger_patterns.data(), tmp_trigger_patterns.size(), trigger_tokens, num_trigger_tokens);
+        } else {
+            grammar = llama_grammar_init_impl(vocab, grammar_str, grammar_root, lazy, trigger_patterns, num_trigger_patterns, trigger_tokens, num_trigger_tokens);
         }
         *ctx = {
             /* .vocab        = */ vocab,
             /* .grammar_str  = */ grammar_str,
             /* .grammar_root = */ grammar_root,
-            /* .grammar      = */ llama_grammar_init_impl(vocab, grammar_str, grammar_root, lazy, trigger_patterns, num_trigger_patterns, trigger_tokens, num_trigger_tokens),
+            /* .grammar      = */ grammar,
         };
         if (!ctx->grammar) {
             delete ctx;
@@ -2665,8 +2694,7 @@ struct llama_perf_sampler_data llama_perf_sampler(const struct llama_sampler * c
 void llama_perf_sampler_print(const struct llama_sampler * chain) {
     const auto data = llama_perf_sampler(chain);
 
-    LLAMA_LOG_INFO("%s:    sampling time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
-            __func__, data.t_sample_ms, data.n_sample, data.t_sample_ms / data.n_sample, 1e3 / data.t_sample_ms * data.n_sample);
+    LLAMA_LOG_INFO("%s:    samplers time = %10.2f ms / %5d runs\n", __func__, data.t_sample_ms, data.n_sample);
 }
 
 void llama_perf_sampler_reset(struct llama_sampler * chain) {
@@ -2676,5 +2704,6 @@ void llama_perf_sampler_reset(struct llama_sampler * chain) {
 
     auto * ctx = (struct llama_sampler_chain *) chain->ctx;
 
-    ctx->t_sample_us = ctx->n_sample = 0;
+    ctx->t_sample_us = 0;
+    ctx->n_sample    = 0;
 }

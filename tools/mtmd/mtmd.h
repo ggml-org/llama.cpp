@@ -22,6 +22,14 @@
  *          Issues related to API usage may receive lower priority support.
  *
  * For the usage, see an example in mtmd-cli.cpp
+ *
+ * For contributors:
+ * - Make sure the C API is aligned with the libllama C API (as in llama.h)
+ * - Do not include model name (e.g., qwen, gemma) in the API, use generic terms instead
+ * - Keep the API minimal, do not expose internal details unless necessary
+ *
+ * IMPORTANT: The mtmd module does NOT accept pull requests that are fully or predominantly AI-generated.
+ * We encourage human contributors to ensure the quality and reliability of the codebase.
  */
 
 #ifdef LLAMA_SHARED
@@ -79,10 +87,10 @@ struct mtmd_context_params {
     bool use_gpu;
     bool print_timings;
     int n_threads;
-    enum ggml_log_level verbosity;
     const char * image_marker; // deprecated, use media_marker instead
     const char * media_marker;
     enum llama_flash_attn_type flash_attn_type;
+    bool warmup; // whether to run a warmup encode pass after initialization
 
     // limit number of image tokens, only for vision models with dynamic resolution
     int image_min_tokens; // minimum number of tokens for image input (default: read from metadata)
@@ -214,6 +222,10 @@ MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
 // the reading size (in bytes) is equal to:
 // llama_model_n_embd(model) * mtmd_input_chunk_get_n_tokens(chunk) * sizeof(float)
 MTMD_API float * mtmd_get_output_embd(mtmd_context * ctx);
+
+// Set callback for all future logging events.
+// If this is not called, or NULL is supplied, everything is output on stderr.
+MTMD_API void mtmd_log_set(ggml_log_callback log_callback, void * user_data);
 
 /////////////////////////////////////////
 

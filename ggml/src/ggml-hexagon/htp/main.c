@@ -143,16 +143,25 @@ AEEResult htp_iface_disable_etm(remote_handle64 handle) {
 }
 
 static int vtcm_acquire(struct htp_context * ctx) {
+    int err;
     if (!ctx->vtcm_valid) {
         // Temporarily bump thread priority to make sure it's higher than other sessions.
         // This way the resource manager will notify the other thread to release VTCM.
         // Note that we need to reaquire VTCM at normal priority for this to work next time.
         qurt_thread_set_priority(qurt_thread_get_id(), ctx->thread_prio - 10);
-        HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 1000000);
+        err = HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 1000000);
+        if (err != 0) {
+            FARF(ERROR, "Failed to acquire VTCM: 0x%08x", (unsigned)err);
+            abort();
+        }
         HAP_compute_res_release_cached(ctx->vtcm_rctx);
         qurt_thread_set_priority(qurt_thread_get_id(), ctx->thread_prio);
 
-        HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 1000000);
+        err = HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 1000000);
+        if (err != 0) {
+            FARF(ERROR, "Failed to acquire VTCM: 0x%08x", (unsigned)err);
+            abort();
+        }
         ctx->vtcm_valid = true;
     }
 
@@ -201,7 +210,7 @@ static int vtcm_alloc(struct htp_context * ctx) {
     HAP_compute_res_attr_init(&attr);
     HAP_compute_res_attr_set_serialize(&attr, 0);
     HAP_compute_res_attr_set_cache_mode(&attr, 1);
-    HAP_compute_res_attr_set_vtcm_param_v2(&attr, vtcm_size, vtcm_size, vtcm_size);
+    HAP_compute_res_attr_set_vtcm_param_v2(&attr, vtcm_size, 0, vtcm_size);
     HAP_compute_res_attr_set_release_callback(&attr, vtcm_release_callback, (void *) ctx);
     HAP_compute_res_attr_set_hmx_param(&attr, 1);
 
@@ -290,7 +299,8 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32 sess_id, uint64 dsp_que
 
     ctx->n_threads = n_hvx;
     for (int i = 0; i < ctx->n_threads; i++) {
-        ctx->dma[i] = dma_queue_create(HTP_SPAD_SRC0_NROWS * 2);
+        // see discussion https://github.com/ggml-org/llama.cpp/pull/18151#discussion_r2632388541
+        ctx->dma[i] = dma_queue_create(64);
     }
 
     // init worker pool
@@ -789,6 +799,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                 break;
 
             case HTP_OP_UNARY_SILU:
+            case HTP_OP_UNARY_GELU:
                 if (n_bufs != 2) {
                     FARF(ERROR, "Bad act-req buffer list");
                     continue;
@@ -797,6 +808,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                 break;
 
             case HTP_OP_GLU_SWIGLU:
+            case HTP_OP_GLU_SWIGLU_OAI:
             case HTP_OP_SOFTMAX:
                 if ((n_bufs != 2) && (n_bufs != 3)) {
                     FARF(ERROR, "Bad act-req buffer list");
