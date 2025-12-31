@@ -87,6 +87,7 @@ int g_ggml_sycl_use_xmx_gemm = 0;  // Enable XMX-accelerated GEMM (experimental,
 int g_ggml_sycl_xmx_threshold = 1024; // Max batch size for XMX (XMX faster for N < threshold)
 #endif
 thread_local bool g_ggml_sycl_graph_recording = false;  // True when SYCL graph is recording
+reorder_mode g_ggml_sycl_reorder_mode = reorder_mode::SOA;  // Default to SoA (existing behavior)
 
 // Model load phase flag - when true, skip weight caching to avoid OOM during load
 static std::atomic<bool> g_sycl_in_model_load{false};
@@ -244,6 +245,31 @@ static inline int get_sycl_env(const char *env_name, int default_val) {
     return user_number;
 }
 
+// Get reorder mode from environment variable GGML_SYCL_REORDER_MODE
+// Valid values: "none", "soa", "coalesced"
+// Falls back to GGML_SYCL_DISABLE_OPT for backward compatibility
+static reorder_mode get_reorder_mode() {
+    const char* mode = getenv("GGML_SYCL_REORDER_MODE");
+    if (mode == nullptr) {
+        // Default: use SoA (existing behavior) unless GGML_SYCL_DISABLE_OPT is set
+        return getenv("GGML_SYCL_DISABLE_OPT") ? reorder_mode::NONE : reorder_mode::SOA;
+    }
+    if (strcmp(mode, "none") == 0) return reorder_mode::NONE;
+    if (strcmp(mode, "soa") == 0) return reorder_mode::SOA;
+    if (strcmp(mode, "coalesced") == 0) return reorder_mode::COALESCED;
+    fprintf(stderr, "WARN: Unknown GGML_SYCL_REORDER_MODE '%s', using soa\n", mode);
+    return reorder_mode::SOA;
+}
+
+static const char* reorder_mode_to_string(reorder_mode mode) {
+    switch (mode) {
+        case reorder_mode::NONE: return "none";
+        case reorder_mode::SOA: return "soa";
+        case reorder_mode::COALESCED: return "coalesced";
+        default: return "unknown";
+    }
+}
+
 static void ggml_check_sycl() try {
     static bool initialized = false;
 
@@ -258,6 +284,7 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_use_xmx_gemm = get_sycl_env("GGML_SYCL_USE_XMX_GEMM", 0);
         g_ggml_sycl_xmx_threshold = get_sycl_env("GGML_SYCL_XMX_THRESHOLD", 64);
 #endif
+        g_ggml_sycl_reorder_mode = get_reorder_mode();
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
         GGML_LOG_INFO("Running with Environment Variables:\n");
         GGML_LOG_INFO("  GGML_SYCL_DEBUG: %d\n", g_ggml_sycl_debug);
@@ -274,6 +301,7 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: DNN disabled by compile flag\n");
 #endif
         GGML_LOG_INFO("  GGML_SYCL_PRIORITIZE_DMMV: %d\n", g_ggml_sycl_prioritize_dmmv);
+        GGML_LOG_INFO("  GGML_SYCL_REORDER_MODE: %s\n", reorder_mode_to_string(g_ggml_sycl_reorder_mode));
 #ifdef GGML_SYCL_XMX_GEMM
         GGML_LOG_INFO("  GGML_SYCL_USE_XMX_GEMM: %d (experimental, 5-11x slower)\n", g_ggml_sycl_use_xmx_gemm);
         if (g_ggml_sycl_use_xmx_gemm) {

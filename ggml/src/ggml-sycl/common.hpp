@@ -301,6 +301,9 @@ enum class reorder_mode : uint8_t {
     COALESCED = 2,  // Tile-based layout for better cache line utilization (requires SOA first)
 };
 
+// Global reorder mode setting (from GGML_SYCL_REORDER_MODE env var)
+extern reorder_mode g_ggml_sycl_reorder_mode;
+
 // =============================================================================
 // UNIFIED REORDER API - The ONLY way to change tensor reorder state
 // =============================================================================
