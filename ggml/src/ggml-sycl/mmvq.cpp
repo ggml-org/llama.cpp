@@ -2008,6 +2008,27 @@ static void coalesced_mul_mat_vec_mxfp4_q8_1_sycl(const void * vx, const void * 
     });
 }
 
+// Dispatch function for coalesced Q6_K MMVQ kernel
+static void coalesced_mul_mat_vec_q6_k_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
+                                                  const int nrows, dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK_K == 0);
+    GGML_ASSERT((ncols / QK_K) % MMVQ_COALESCED_TILE_BLOCKS == 0);
+
+    constexpr size_t num_subgroups = 16;
+    const int block_num_y = ceil_div(nrows, (int)num_subgroups);
+
+    const sycl::range<3> global_size(1, 1, block_num_y * num_subgroups * WARP_SIZE);
+    const sycl::range<3> workgroup_size(1, 1, num_subgroups * WARP_SIZE);
+
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for(
+            sycl::nd_range<3>(global_size, workgroup_size),
+            [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                mul_mat_vec_q6_k_coalesced(vx, vy, dst, ncols, nrows, nd_item);
+            });
+    });
+}
+
 static void mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols, const int nrows,
                                        dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK4_0 == 0);
