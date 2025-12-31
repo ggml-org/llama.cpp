@@ -5291,12 +5291,7 @@ class BertModel(TextModel):
             if tok.startswith("[") and tok.endswith("]"):
                 return tok
             if tok.startswith("##"):
-                suffix = tok[2:]
-                # If the suffix resembles a special token, keep the original to avoid collision
-                # E.g., preserve "##[1]" to avoid conflict with an existing "[1]" token.
-                if suffix.startswith("[") and suffix.endswith("]"):
-                    return tok
-                return suffix
+                return tok[2:]
             return "\u2581" + tok
         tokens = list(map(phantom, tokens))
 
