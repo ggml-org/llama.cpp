@@ -7235,8 +7235,10 @@ class DeepseekV2Model(TextModel):
         n_shared_experts = hparams.get("n_shared_experts", 0)
         self.gguf_writer.add_expert_shared_count(n_shared_experts)
         
-        # expert_weights_scale is required by C++ code
-        self.gguf_writer.add_expert_weights_scale(hparams.get("routed_scaling_factor", 1.0))
+        # When not set, C++ code will use scale_w = false to skip the no-op scaling
+        if (routed_scaling_factor := hparams.get("routed_scaling_factor")) is not None:
+            self.gguf_writer.add_expert_weights_scale(routed_scaling_factor)
+        
         if (norm_topk_prob := hparams.get("norm_topk_prob")) is not None and norm_topk_prob:
             self.gguf_writer.add_expert_weights_norm(norm_topk_prob)
 
