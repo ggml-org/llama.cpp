@@ -4317,6 +4317,44 @@ class Qwen3MoeModel(Qwen2MoeModel):
         super().set_vocab()
 
 
+@ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
+class Qwen3OmniThinkerModel(Qwen3MoeModel):
+    model_arch = gguf.MODEL_ARCH.QWEN3OMNIMOE
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Qwen3-Omni has nested thinker_config - merge into hparams
+        import copy
+        self.global_config = copy.deepcopy(self.hparams)
+        if "thinker_config" in self.global_config:
+            thinker_config = self.global_config["thinker_config"]
+            for key, value in thinker_config.items():
+                if key not in ["audio_config", "vision_config"]:
+                    self.hparams[key] = value
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        # M-RoPE dimension sections [temporal, spatial_y, spatial_x, padding]
+        self.gguf_writer.add_rope_dimension_sections([24, 20, 20, 0])
+
+    def set_vocab(self):
+        super().set_vocab()
+        # Fix EOS/BOS/PAD - Qwen3-Omni tokenizer_config.json has null for bos
+        self.gguf_writer.add_eos_token_id(151645)  # <|im_end|>
+        self.gguf_writer.add_bos_token_id(151643)  # <|endoftext|>
+        self.gguf_writer.add_pad_token_id(151643)
+        self.gguf_writer.add_add_bos_token(False)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Strip thinker prefix
+        if name.startswith("thinker."):
+            name = name.replace("thinker.", "", 1)
+        # Filter non-Thinker components
+        if name.startswith(("audio_tower.", "visual.", "talker.", "code2wav.")):
+            return []
+        return super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("Qwen3NextForCausalLM")
 class Qwen3NextModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3NEXT

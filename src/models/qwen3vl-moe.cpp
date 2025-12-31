@@ -113,7 +113,21 @@ llm_build_qwen3vlmoe::llm_build_qwen3vlmoe(const llama_model & model, const llm_
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
                     il);
         cb(moe_out, "ffn_moe_out", il);
-        cur = moe_out;
+
+        // Shared expert (optional, for QWEN3OMNIMOE)
+        if (model.layers[il].ffn_up_shexp != nullptr) {
+            ggml_tensor * ffn_shexp =
+                build_ffn(cur,
+                    model.layers[il].ffn_up_shexp, nullptr, nullptr,
+                    model.layers[il].ffn_gate_shexp, nullptr, nullptr,
+                    model.layers[il].ffn_down_shexp, nullptr, nullptr,
+                    nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
+            cb(ffn_shexp, "ffn_shexp", il);
+            cur = ggml_add(ctx0, moe_out, ffn_shexp);
+            cb(cur, "ffn_out", il);
+        } else {
+            cur = moe_out;
+        }
 
         cur = ggml_add(ctx0, cur, ffn_inp);
 
