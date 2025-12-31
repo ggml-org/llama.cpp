@@ -301,6 +301,24 @@ enum class reorder_mode : uint8_t {
     COALESCED = 2,  // Tile-based layout for better cache line utilization (requires SOA first)
 };
 
+// Check if a tensor type supports coalesced memory layout conversion
+// Add new types here as coalesced kernels are implemented
+inline bool is_coalesced_supported(ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+            return true;
+        case GGML_TYPE_Q6_K:
+            return true;
+        // Future: add Q8_0, MXFP4, etc. as kernels are verified
+        // case GGML_TYPE_Q8_0:
+        //     return true;
+        // case GGML_TYPE_MXFP4:
+        //     return true;
+        default:
+            return false;
+    }
+}
+
 // Global reorder mode setting (from GGML_SYCL_REORDER_MODE env var)
 extern reorder_mode g_ggml_sycl_reorder_mode;
 
@@ -392,6 +410,13 @@ public:
     // ONLY call this when the data in device memory is already in SoA layout!
     void mark_soa_pretransformed(const char* tensor_name) {
         reorder_ = reorder_mode::SOA;
+        GGML_UNUSED(tensor_name);
+    }
+
+    // Mark as Coalesced when data was transformed on CPU before upload
+    // ONLY call this when the data in device memory is already in Coalesced layout!
+    void mark_coalesced_pretransformed(const char* tensor_name) {
+        reorder_ = reorder_mode::COALESCED;
         GGML_UNUSED(tensor_name);
     }
 
