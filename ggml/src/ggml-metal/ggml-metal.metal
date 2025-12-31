@@ -1790,6 +1790,7 @@ kernel void kernel_op_sum_f32(
         return;
     }
 
+    // TODO: become function constant
     const uint nsg = (ntg.x + 31) / 32;
 
     float sumf = 0;
@@ -9924,7 +9925,7 @@ kernel void kernel_opt_step_sgd_f32(
 template<typename T>
 kernel void kernel_memset(
         constant ggml_metal_kargs_fill & args,
-        device       T * dst,
+        device T * dst,
         uint tpig[[thread_position_in_grid]]) {
     dst[tpig] = args.val;
 }
@@ -9933,6 +9934,7 @@ typedef decltype(kernel_memset<int64_t>) kernel_memset_t;
 
 template [[host_name("kernel_memset_i64")]] kernel kernel_memset_t kernel_memset<int64_t>;
 
+constant short FC_count_equal_nsg [[function_constant(FC_COUNT_EQUAL + 0)]];
 
 template<typename T>
 kernel void kernel_count_equal(
@@ -9946,6 +9948,7 @@ kernel void kernel_count_equal(
         ushort  sgitg[[simdgroup_index_in_threadgroup]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort3   ntg[[threads_per_threadgroup]]) {
+    const short NSG = FC_count_equal_nsg;
 
     const int i3 = tgpig.z;
     const int i2 = tgpig.y;
@@ -9956,6 +9959,7 @@ kernel void kernel_count_equal(
     }
 
     int sum = 0;
+
     device const char * base0 = src0 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03;
     device const char * base1 = src1 + i1*args.nb11 + i2*args.nb12 + i3*args.nb13;
 
@@ -9966,16 +9970,16 @@ kernel void kernel_count_equal(
     }
 
     sum = simd_sum(sum);
+
     if (tiisg == 0) {
         shmem_i32[sgitg] = sum;
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    const uint nsg = (ntg.x + 31) / 32;
 
     if (sgitg == 0) {
         float v = 0.0f;
-        if (tpitg.x < nsg) {
+        if (tpitg.x < NSG) {
             v = shmem_i32[tpitg.x];
         }
 
@@ -9984,7 +9988,6 @@ kernel void kernel_count_equal(
             atomic_fetch_add_explicit(dst, (int32_t) total, memory_order_relaxed);
         }
     }
-
 }
 
 typedef decltype(kernel_count_equal<int32_t>) kernel_count_equal_t;

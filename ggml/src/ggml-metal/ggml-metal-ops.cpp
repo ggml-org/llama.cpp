@@ -451,8 +451,7 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
         case GGML_OP_COUNT_EQUAL:
             {
                 n_fuse = ggml_metal_op_count_equal(ctx, idx);
-            }
-            break;
+            } break;
         default:
             {
                 GGML_LOG_ERROR("%s: error: node %3d, op = %8s not implemented\n", __func__, idx, ggml_op_name(node->op));
@@ -4102,9 +4101,10 @@ int ggml_metal_op_count_equal(ggml_metal_op_t ctx, int idx) {
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
-    GGML_TENSOR_LOCALS(int32_t, ne0, op->src[0], ne);
+    GGML_TENSOR_LOCALS(int32_t,  ne0, op->src[0], ne);
     GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
     GGML_TENSOR_LOCALS(uint64_t, nb1, op->src[1], nb);
+
     {
         ggml_metal_kargs_memset args = { /*.val =*/ 0 };
 
@@ -4137,19 +4137,11 @@ int ggml_metal_op_count_equal(ggml_metal_op_t ctx, int idx) {
 
         auto pipeline = ggml_metal_library_get_pipeline_count_equal(lib, op);
 
-        const uint64_t n = ggml_nelements(op->src[0]);
-
-        int nth = 32;  // SIMD width
-        while (nth < (int) n && nth < ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)) {
-            nth *= 2;
-        }
-
-        nth            = std::min(nth, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
-        nth            = std::min(nth, (int) n);
-        const int nthg = (n + nth - 1) / nth;
-
         const size_t smem = pipeline.smem;
-        ggml_backend_tensor_memset(op, 0, 0, sizeof(op));
+
+        const int nth = 32*pipeline.nsg;
+
+        GGML_ASSERT(nth <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 
         ggml_metal_encoder_set_pipeline(enc, pipeline);
         ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
@@ -4158,7 +4150,7 @@ int ggml_metal_op_count_equal(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op), 3);
 
         ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
-        ggml_metal_encoder_dispatch_threadgroups(enc, nthg, 1, 1, nth, 1, 1);
+        ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, 1, 1);
     }
 
     return 1;
