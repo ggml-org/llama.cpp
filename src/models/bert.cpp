@@ -142,15 +142,8 @@ llm_build_bert::llm_build_bert(const llama_model & model, const llm_graph_params
                     LLM_FFN_GELU, LLM_FFN_SEQ, il);
             cb(cur, "ffn_out", il);
         } else if (model.arch == LLM_ARCH_JINA_BERT_V2) {
-            // |---------------|----------|----------|----------|----------|
-            // | FFN Type      | type_op | type_gate | ffn_up_b | ffn_gate |
-            // |---------------|---------|-----------|----------|----------|
-            // | Standard GELU | GELU    | SEQ       | yes      | no       |
-            // | Gated GELU    | GELU    | PAR       | no       | yes      |
-            // | GEGLU         | GEGLU   | PAR       | no       | no       |
-            // |---------------|----------|----------|----------|----------|
-            auto type_op   = (model.layers[il].ffn_up_b || model.layers[il].ffn_gate) ? LLM_FFN_GELU : LLM_FFN_GEGLU;
-            auto type_gate = model.layers[il].ffn_up_b ? LLM_FFN_SEQ : LLM_FFN_PAR;
+            const bool up_contains_gate = !model.layers[il].ffn_gate && model.layers[il].ffn_up->ne[1] != hparams.n_ff();
+            auto type_op = up_contains_gate ? LLM_FFN_GEGLU : LLM_FFN_GELU;
             cur = build_ffn(cur,
                     model.layers[il].ffn_up, model.layers[il].ffn_up_b, NULL,
                     model.layers[il].ffn_gate, NULL, NULL,
