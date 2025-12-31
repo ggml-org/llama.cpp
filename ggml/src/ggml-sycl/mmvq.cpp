@@ -1357,6 +1357,14 @@ bool convert_tensor_to_coalesced(const ggml_tensor* tensor, dpct::queue_ptr stre
             convert_mxfp4_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
             break;
 
+        case GGML_TYPE_Q6_K:
+            block_size = QK_K;
+            if ((ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS != 0) {
+                return false;  // Not tile-aligned
+            }
+            convert_q6_k_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+            break;
+
         default:
             fprintf(stderr, "[COALESCED-UNIFIED] ERROR: tensor '%s' type %d not supported\n",
                     tensor->name ? tensor->name : "?", tensor->type);
