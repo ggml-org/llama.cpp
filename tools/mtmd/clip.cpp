@@ -1167,10 +1167,10 @@ struct clip_model_loader {
                         hparams.n_merge = 2;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         get_u32(KEY_ATTN_WINDOW_SIZE, hparams.attn_window_size, true);
-                        std::vector<int> wa_layers_vec;
-                        get_arr_int(KEY_WIN_ATTN_LAYERS, wa_layers_vec, true);
-                        for (auto & layer : wa_layers_vec) {
-                            hparams.wa_layers.insert(layer);
+                        std::vector<int> wa_layer_indexes_vec;
+                        get_arr_int(KEY_WIN_ATTN_LAYER_INDEXES, wa_layer_indexes_vec, true);
+                        for (auto & layer : wa_layer_indexes_vec) {
+                            hparams.wa_layer_indexes.insert(layer);
                         }
                         // support max_height * max_width = 8000 * 8000. 8000/16/2 = 250 image tokens
                         hparams.set_limit_image_tokens(1, 62500);
@@ -1244,9 +1244,9 @@ struct clip_model_loader {
                 LOG_INF("%s: minicpmv_version:   %d\n", __func__, hparams.minicpmv_version);
                 LOG_INF("%s: n_merge:            %d\n", __func__, hparams.n_merge);
                 LOG_INF("%s: n_wa_pattern: %d\n", __func__, hparams.n_wa_pattern);
-                if (!hparams.wa_layers.empty()) {
-                    LOG_INF("%s: wa_layers:          ", __func__);
-                    for (auto & layer : hparams.wa_layers) {
+                if (!hparams.wa_layer_indexes.empty()) {
+                    LOG_INF("%s: wa_layer_indexes:  ", __func__);
+                    for (auto & layer : hparams.wa_layer_indexes) {
                         LOG_INF("%d ", layer);
                     }
                     LOG_INF("\n");
@@ -3356,7 +3356,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
             {
                 // pw * ph = number of tokens output by ViT after apply patch merger
                 // ipw * ipw = number of vision token been processed inside ViT
-                const bool use_window_attn = ctx->model.proj_type == PROJECTOR_TYPE_QWEN25VL ? hparams.n_wa_pattern > 0 : !hparams.wa_layers.empty();
+                const bool use_window_attn = ctx->model.proj_type == PROJECTOR_TYPE_QWEN25VL ? hparams.n_wa_pattern > 0 : !hparams.wa_layer_indexes.empty();
                 const int merge_ratio = 2;
                 const int pw  = image_size_width  / patch_size / merge_ratio;
                 const int ph  = image_size_height / patch_size / merge_ratio;

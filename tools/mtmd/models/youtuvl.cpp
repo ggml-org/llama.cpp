@@ -3,7 +3,7 @@
 ggml_cgraph * clip_graph_youtuvl::build() {
     GGML_ASSERT(model.class_embedding == nullptr);
     const int batch_size       = 1;
-    const bool use_window_attn = !hparams.wa_layers.empty();
+    const bool use_window_attn = !hparams.wa_layer_indexes.empty();
     const int n_pos            = n_patches;
     const int num_position_ids = n_pos * 4;
     const int m = 2;
@@ -88,7 +88,7 @@ ggml_cgraph * clip_graph_youtuvl::build() {
     // loop over layers
     for (int il = 0; il < n_layer; il++) {
         const auto & layer = model.layers[il];
-        const bool full_attn = use_window_attn ? hparams.wa_layers.count(il) > 0 : true;
+        const bool full_attn = use_window_attn ? hparams.wa_layer_indexes.count(il) > 0 : true;
 
         ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
 

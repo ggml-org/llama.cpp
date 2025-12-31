@@ -1155,7 +1155,7 @@ class GGUFWriter:
         - n_wa_pattern: Defines a regular interval pattern (every Nth layer uses full attention)
         - wa_layer_indexes: Explicitly lists which layers use full attention (irregular pattern)
         """
-        self.add_array(Keys.ClipVision.WA_LAYERS, layers)
+        self.add_array(Keys.ClipVision.WA_LAYER_INDEXES, layers)
 
     def add_vision_is_deepstack_layers(self, layers: Sequence[bool]) -> None:
         self.add_array(Keys.ClipVision.IS_DEEPSTACK_LAYERS, layers)
