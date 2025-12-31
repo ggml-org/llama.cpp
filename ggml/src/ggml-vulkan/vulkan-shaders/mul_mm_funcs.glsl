@@ -208,8 +208,8 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
             const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
 
-            const uint ib = idx / 128;                 // 2 values per idx
-            const uint iqs = idx % 128;                // 0..127
+            const uint ib = idx / 64;                  // 4 values per idx
+            const uint iqs = (idx % 64) * 2;           // 0,2,4..126
 
             const uint n = iqs / 32;                   // 0,1,2,3
             const uint b = (iqs % 32) / 16;            // 0,1
@@ -236,12 +236,12 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
             const float d = loadd.x * sc;
             const float m = -loadd.y * mbyte;
 
-            const uint qs = (uint(data_a_packed16[ib].qs[qsi / 2]) >> (b * 4)) & 0x0F0F;
-            const uint qh = ((uint(data_a_packed16[ib].qh[qhi / 2]) >> (iqs / 16)) & 0x0101) << 4;
-            const vec2 q = vec2(unpack8(qs | qh).xy);
+            const uint qs = (data_a_packed32[ib].qs[qsi / 4] >> (b * 4)) & 0x0F0F0F0F;
+            const uint qh = ((data_a_packed32[ib].qh[qhi / 4] >> (iqs / 16)) & 0x01010101) << 4;
+            const vec4 q = vec4(unpack8(qs | qh));
 
-            buf_a[buf_idx] = FLOAT_TYPE_VEC2(fma(d, q.x, m),
-                                             fma(d, q.y, m));
+            buf_a[buf_idx    ] = FLOAT_TYPE_VEC2(fma(d, q.x, m), fma(d, q.y, m));
+            buf_a[buf_idx + 1] = FLOAT_TYPE_VEC2(fma(d, q.z, m), fma(d, q.w, m));
 #elif defined(DATA_A_Q6_K)
             const uint idx = pos_a + col * p.stride_a / LOAD_VEC_A + row;
             const uint buf_idx = col * SHMEM_STRIDE + row * LOAD_VEC_A / 2;
