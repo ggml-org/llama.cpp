@@ -2254,20 +2254,34 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,  hparams.n_embd_head_v_mla, false);
                 ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,      hparams.n_lora_kv, false);
                 ml.get_key(LLM_KV_ROPE_DIMENSION_COUNT,        hparams.n_rot, false);
+
+                // kimi MLA uses a larger head dimension than the base n_embd/n_head.
+                // override KV cache head dims to match MLA K/V sizes.
+                if (hparams.n_embd_head_k_mla > 0) {
+                    hparams.n_embd_head_k = hparams.n_embd_head_k_mla;
+                }
+                if (hparams.n_embd_head_v_mla > 0) {
+                    hparams.n_embd_head_v = hparams.n_embd_head_v_mla;
+                }
                 
                 // KDA (Delta Attention) parameters
-                hparams.kda_head_dim = 128;  // linear_attn_config.head_dim
-                hparams.kda_d_conv = 4;      // linear_attn_config.short_conv_kernel_size
+                hparams.kda_head_dim = 128;
+
+                // use GGUF ssm conv kernel if present (Kimi short conv), default to 4.
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL, hparams.ssm_d_conv, false);
+                if (hparams.ssm_d_conv == 0) {
+                    hparams.ssm_d_conv = 4;
+                }
+                hparams.kda_d_conv = hparams.ssm_d_conv;
                 
                 // MLA qk_rope_head_dim (for reference)
                 // qk_rope_head_dim = 64, qk_nope_head_dim = 128, qk_head_dim = 192
                 
-                // Mark KDA layers as recurrent using n_head_kv pattern (like Jamba)
-                // MLA layers are at: 3, 7, 11, 15, 19, 23, 26 (7 MLA layers total)
-                // KDA layers are all others: 0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 16, 17, 18, 20, 21, 22, 24, 25 (20 KDA layers)
+                // Mark KDA layers as recurrent using the 3:1 KDA:MLA pattern (every 4th layer is MLA)
                 // Set n_head_kv = 0 for KDA layers (recurrent), n_head_kv = n_head for MLA layers (attention)
+                const uint32_t mla_interval = 4;
                 for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-                    bool is_mla = (i == 3 || i == 7 || i == 11 || i == 15 || i == 19 || i == 23 || i == 26);
+                    const bool is_mla = (mla_interval > 0) && ((i + 1) % mla_interval == 0);
                     hparams.n_head_kv_arr[i] = is_mla ? hparams.n_head() : 0;
                     hparams.recurrent_layer_arr[i] = !is_mla;  // KDA layers are recurrent
                 }
@@ -6422,9 +6436,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         // Check for KDA specific tensors to determine layer type or if it's a mixed model
                         // Assuming KDA layer if KDA tensors are present
                         
-                        // KDA uses head_dim = 128 (from linear_attn_config.head_dim)
-                        const int64_t n_embd_head_k_kda = 128;
-                        const int64_t n_embd_head_v_kda = 128;
+                        const int64_t kda_head_dim = hparams.kda_head_dim > 0 ? hparams.kda_head_dim : 128;
+                        const int64_t n_embd_head_k_kda = kda_head_dim;
+                        const int64_t n_embd_head_v_kda = kda_head_dim;
                         const int64_t ssm_d_conv = hparams.ssm_d_conv > 0 ? hparams.ssm_d_conv : 4;
                         
                         // Try loading KDA specific tensors (using SSM_ prefix)
@@ -6436,6 +6450,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         }
                         
                         if (layer.ssm_q_conv) {
+                             // KDA layer: align recurrent/KV metadata with actual tensors
+                             hparams.recurrent_layer_arr[i] = true;
+                             hparams.n_head_kv_arr[i] = 0;
+
                              // KDA Layer - Conv1d weights may be 3D or 4D
                              layer.ssm_k_conv = create_tensor(tn(LLM_TENSOR_SSM_CONV1D_K, "weight", i), {ssm_d_conv, 1, n_embd_head_k_kda * n_head, 1}, TENSOR_NOT_REQUIRED);
                              if (!layer.ssm_k_conv) {
@@ -6486,6 +6504,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                              layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_v_kda * n_head, n_embd}, 0);
 
                         } else {
+                             // MLA layer: align recurrent/KV metadata with actual tensors
+                             hparams.recurrent_layer_arr[i] = false;
+                             hparams.n_head_kv_arr[i] = hparams.n_head();
+
                              // MLA Layer - use MLA-specific head dimensions
                              const int64_t q_lora_rank  = hparams.n_lora_q;
                              const int64_t kv_lora_rank = hparams.n_lora_kv;
