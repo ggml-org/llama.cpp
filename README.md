@@ -1,4 +1,71 @@
-# llama.cpp
+# llama.cpp + Qwen3-Omni
+
+> **This fork adds Qwen3-Omni multimodal architecture support to llama.cpp**
+
+[![Qwen3-Omni](https://img.shields.io/badge/Qwen3--Omni-Supported-green)](https://huggingface.co/phnxsystms/Qwen3-Omni-30B-A3B-Instruct-GGUF)
+[![Models](https://img.shields.io/badge/GGUF%20Models-HuggingFace-yellow)](https://huggingface.co/phnxsystms/Qwen3-Omni-30B-A3B-Instruct-GGUF)
+
+## What's Added
+
+This fork includes support for **Qwen3-Omni**, Alibaba's multimodal LLM that handles text and vision:
+
+- `LLM_ARCH_QWEN3OMNI` - Main LLM architecture (MoE: 48 layers, 128 experts)
+- `PROJECTOR_TYPE_QWEN3O` - Vision encoder support
+- IMROPE position encoding for multimodal inputs
+
+## Quick Start
+
+```bash
+# Clone this fork
+git clone https://github.com/phnxsystms/llama.cpp.git
+cd llama.cpp
+
+# Build with CUDA
+mkdir build && cd build
+cmake .. -DGGML_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build . -j
+
+# Download models
+huggingface-cli download phnxsystms/Qwen3-Omni-30B-A3B-Instruct-GGUF --local-dir models/
+
+# Run text inference
+./bin/llama-cli -m models/qwen3-omni-30B-Q8_0.gguf -p "Hello!" -ngl 99
+
+# Run vision inference
+./bin/llama-mtmd-cli \
+    -m models/qwen3-omni-30B-Q8_0.gguf \
+    --mmproj models/mmproj-qwen3-omni-30B-F16-fixed.gguf \
+    --image your_image.jpg \
+    -p "What's in this image?"
+```
+
+## Models
+
+| Model | Size | Link |
+|-------|------|------|
+| Qwen3-Omni-30B Q8_0 | 31GB | [Download](https://huggingface.co/phnxsystms/Qwen3-Omni-30B-A3B-Instruct-GGUF/resolve/main/qwen3-omni-30B-Q8_0.gguf) |
+| Vision Projector F16 | 2.3GB | [Download](https://huggingface.co/phnxsystms/Qwen3-Omni-30B-A3B-Instruct-GGUF/resolve/main/mmproj-qwen3-omni-30B-F16-fixed.gguf) |
+
+## Performance
+
+Tested on distributed 5-GPU setup:
+- **41-44 tokens/sec** inference speed
+- Text and vision inference working
+
+## Changes from Upstream
+
+Key files modified:
+- `src/llama-arch.cpp` - Architecture registration
+- `src/llama-model.cpp` - Model loading and graph building  
+- `tools/mtmd/clip.cpp` - Vision projector support
+- `tools/mtmd/mtmd.cpp` - Multimodal pipeline
+
+This fork stays synced with upstream llama.cpp. The Qwen3-Omni additions are minimal and focused.
+
+---
+
+# Original llama.cpp README
+
 
 ![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
 
