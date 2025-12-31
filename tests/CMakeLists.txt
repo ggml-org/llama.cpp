@@ -481,6 +481,20 @@ if(GGML_SYCL)
     add_test(NAME test-dmmv-q8-0 COMMAND $<TARGET_FILE:test-dmmv-q8-0>)
 endif()
 
+# test-dmmv-q4-0-coalesced: TDD test for Q4_0 DMMV with coalesced memory layout
+# Tests that coalesced layout produces same output as SoA layout
+if(GGML_SYCL)
+    add_executable(test-dmmv-q4-0-coalesced test-dmmv-q4-0-coalesced.cpp)
+    target_link_libraries(test-dmmv-q4-0-coalesced PRIVATE ggml)
+    target_include_directories(test-dmmv-q4-0-coalesced PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-dmmv-q4-0-coalesced PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-dmmv-q4-0-coalesced PRIVATE "-fsycl")
+    install(TARGETS test-dmmv-q4-0-coalesced RUNTIME)
+    add_test(NAME test-dmmv-q4-0-coalesced COMMAND $<TARGET_FILE:test-dmmv-q4-0-coalesced>)
+endif()
+
 # test-q8-0-production-flow: Production-like Q8_0 test (MMQ -> DMMV flow)
 # Tests the actual inference pattern: prompt processing then token generation
 if(GGML_SYCL)
