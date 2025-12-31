@@ -1136,6 +1136,7 @@ class GGUFWriter:
         Used by models like Qwen2.5-VL where full attention layers follow a regular pattern.
         """
         self.add_uint32(Keys.ClipVision.N_WA_PATTERN, value)
+
     def add_vision_wa_layer_indexes(self, layers: Sequence[int]) -> None:
         """Add explicit layer indexes that use full attention in vision models.
         This specifies the exact layer indices (0-based) that should use full attention
@@ -1149,10 +1150,13 @@ class GGUFWriter:
         - wa_layer_indexes: Explicitly lists which layers use full attention (irregular pattern)
         """
         self.add_array(Keys.ClipVision.WA_LAYERS, layers)
+
     def add_vision_is_deepstack_layers(self, layers: Sequence[bool]) -> None:
         self.add_array(Keys.ClipVision.IS_DEEPSTACK_LAYERS, layers)
+
     def add_vision_window_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.WINDOW_SIZE, value)
+
     # audio models
 
     def add_audio_projection_dim(self, value: int) -> None:
