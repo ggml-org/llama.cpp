@@ -3826,16 +3826,12 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
 
     const bool use_cuda_graph = ggml_cuda_set_cuda_graph_enabled(cuda_ctx);
 
-    static bool disable_graph_optimization = [] {
-        const char * env     = getenv("GGML_CUDA_DISABLE_GRAPH_OPT");
-        bool         disable = env != nullptr && atoi(env) == 1;
-
-        env = getenv("GGML_CUDA_GRAPH_OPT");
-        GGML_ASSERT(env == nullptr && "GGML_CUDA_GRAPH_OPT is deprecated, use GGML_CUDA_DISABLE_GRAPH_OPT instead");
-        return disable;
+    static bool enable_graph_optimization = [] {
+        const char * env     = getenv("GGML_CUDA_GRAPH_OPT");
+        return env != nullptr && atoi(env) == 1;
     }();
 
-    if (disable_graph_optimization) {
+    if (!enable_graph_optimization) {
         return;
     }
 
