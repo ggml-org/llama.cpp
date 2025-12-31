@@ -5,7 +5,7 @@ ggml_cgraph * clip_graph_youtuvl::build() {
     const int batch_size       = 1;
     const bool use_window_attn = !hparams.wa_layers.empty();
     const int n_pos            = n_patches;
-    const int num_position_ids = n_pos * 4; 
+    const int num_position_ids = n_pos * 4;
     const int m = 2;
     const int Wp = n_patches_x;
     const int Hp = n_patches_y;
@@ -16,14 +16,14 @@ ggml_cgraph * clip_graph_youtuvl::build() {
     int mrope_sections[4] = {d_head/4, d_head/4, d_head/4, d_head/4};
 
     ggml_tensor * inp = build_inp_raw();
-    
-    // change conv3d to linear 
+
+    // change conv3d to linear
     // reshape and permute to get patches, permute from (patch_size, m, Wm, patch_size, m, Hm, C) to (C, patch_size, patch_size, m, m, Wm, Hm)
     {
         inp = ggml_reshape_4d(
             ctx0, inp,
             Wm * m * patch_size, m * patch_size, Hm, 3);
-        inp = ggml_permute(ctx0, inp, 1, 2, 3, 0); 
+        inp = ggml_permute(ctx0, inp, 1, 2, 3, 0);
         inp = ggml_cont_4d(
             ctx0, inp,
             m * patch_size * 3, Wm, m * patch_size, Hm);
@@ -37,20 +37,20 @@ ggml_cgraph * clip_graph_youtuvl::build() {
         inp = ggml_cont_4d(
             ctx0, inp,
             patch_size, 3, patch_size, Hm * Wm * m * m);
-        
+
         inp = ggml_permute(ctx0, inp, 2, 0, 1, 3);
         inp = ggml_cont_3d(
             ctx0, inp,
             3*patch_size* patch_size,  Hm * Wm * m * m, 1);
     }
     inp = ggml_mul_mat(ctx0, model.patch_embeddings_0, inp);
-    
+
     if (model.patch_bias) {
         inp = ggml_add(ctx0, inp, model.patch_bias);
     }
-    
+
     inp = ggml_reshape_2d(ctx0, inp, n_embd, n_patches);
-    
+
     ggml_tensor * inpL           = inp;
     ggml_tensor * window_mask    = nullptr;
     ggml_tensor * window_idx     = nullptr;
@@ -91,7 +91,7 @@ ggml_cgraph * clip_graph_youtuvl::build() {
         const bool full_attn = use_window_attn ? hparams.wa_layers.count(il) > 0 : true;
 
         ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
-            
+
         // layernorm1
         cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
         // self-attention

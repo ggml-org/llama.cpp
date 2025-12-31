@@ -1164,7 +1164,7 @@ struct clip_model_loader {
                     } break;
                 case PROJECTOR_TYPE_YOUTUVL:
                     {
-                        hparams.n_merge = 2; 
+                        hparams.n_merge = 2;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
                         get_u32(KEY_ATTN_WINDOW_SIZE, hparams.attn_window_size, true);
                         std::vector<int> wa_layers_vec;
@@ -2722,15 +2722,15 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                 const int patch_size = params.patch_size;  // typically 16
                 const int merge_size = params.n_merge;      // typically 2
                 const int align_size = patch_size * merge_size;  // 32
-                
-                const int max_num_patches = params.image_max_pixels > 0 ? 
+
+                const int max_num_patches = params.image_max_pixels > 0 ?
                     params.image_max_pixels / (patch_size * patch_size) : 256;
-                
+
                 // Linear search for optimal scale to fit within max_num_patches
                 float scale = 1.0f;
                 int target_height = original_size.height;
                 int target_width = original_size.width;
-                
+
                 auto get_scaled_image_size = [align_size](float scale, int size) -> int {
                     float scaled_size = size * scale;
                     // Round up to nearest multiple of align_size
@@ -2738,33 +2738,33 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
                     // Ensure at least one patch
                     return std::max(align_size, aligned);
                 };
-                
+
                 // Linear search with 0.02 step size
                 while (scale > 0.0f) {
                     target_height = get_scaled_image_size(scale, original_size.height);
                     target_width = get_scaled_image_size(scale, original_size.width);
-                    
+
                     int num_patches_h = target_height / patch_size;
                     int num_patches_w = target_width / patch_size;
                     int num_patches = num_patches_h * num_patches_w;
-                    
+
                     if (num_patches > max_num_patches) {
                         scale -= 0.02f;
                     } else {
                         break;
                     }
                 }
-                
+
                 clip_image_size new_size = {target_width, target_height};
-                
+
                 // Resize the image
                 clip_image_u8 resized;
                 img_tool::resize(*img, resized, new_size, img_tool::RESIZE_ALGO_BILINEAR, false);
-                
+
                 // Normalize to float32
                 clip_image_f32_ptr img_f32(clip_image_f32_init());
                 normalize_image_u8_to_f32(resized, *img_f32, params.image_mean, params.image_std);
-                
+
                 // Add to results
                 res_imgs->entries.push_back(std::move(img_f32));
             } break;
