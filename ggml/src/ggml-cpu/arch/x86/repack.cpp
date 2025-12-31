@@ -1412,21 +1412,11 @@ void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     UNUSED(blocklen);
 
 #if defined(__AVX2__)
-    // Lookup table to convert signed nibbles to signed bytes
-
-    static const __m256i signextendlut = _mm256_permute2f128_si256(_mm256_castsi128_si256(_mm_set_epi8(-1, -2, -3, -4, -5, -6, -7, -8, 7, 6, 5, 4, 3, 2, 1, 0)), _mm256_castsi128_si256(_mm_set_epi8(-1, -2, -3, -4, -5, -6, -7, -8, 7, 6, 5, 4, 3, 2, 1, 0)), 0);
     // Shuffle masks to rearrange delta and scale values to multiply with appropriate scales
     static const __m128i deltamask = _mm_set_epi8(15, 14, 7, 6, 13, 12, 5, 4, 11, 10, 3, 2, 9, 8, 1, 0);
     static const __m128i scalemask = _mm_set_epi8(7, 7, 3, 3, 6, 6, 2, 2, 5, 5, 1, 1, 4, 4, 0, 0);
     // Permute mask used for easier vector processing at later stages
     static const __m256i finalpermutemask = _mm256_set_epi32(7, 5, 3, 1, 6, 4, 2, 0);
-
-    static const  __m256i highByteShuffleMask = _mm256_setr_epi8(
-        0x01, 0x80, 0x03, 0x80, 0x05, 0x80, 0x07, 0x80,
-        0x09, 0x80, 0x0B, 0x80, 0x0D, 0x80, 0x0F, 0x80,
-        0x01, 0x80, 0x03, 0x80, 0x05, 0x80, 0x07, 0x80,
-        0x09, 0x80, 0x0B, 0x80, 0x0D, 0x80, 0x0F, 0x80
-    );
 
     // Mask to extract nibbles from bytes
     static const __m256i m4b = _mm256_set1_epi8(0x0F);
@@ -1471,7 +1461,7 @@ void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                 const int sbCount = QK_K / 64;
 
-                const uint32_t *utmp = (uint32_t*) (b_ptr[b].scales);
+                const uint32_t *utmp = (const uint32_t*) (b_ptr[b].scales);
 
                 // Processes two sub blocks from each Q4_K in each iteration
                 for (int sb = 0; sb < sbCount; sb++) {
@@ -1504,8 +1494,8 @@ void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     utmp += 6;
 
-                    uint32_t* a_values = (uint32_t*) (a_ptr[b].qs + sb * 64);
-                    uint32_t* b_values = (uint32_t*) (b_ptr[b].qs + sb * 256);
+                    const uint32_t* a_values = (const uint32_t*) (a_ptr[b].qs + sb * 64);
+                    const uint32_t* b_values = (const uint32_t*) (b_ptr[b].qs + sb * 256);
 
                     // Load the eight block_q4_K for two sub blocks quantized values interleaved with each other in chunks of eight - B0,B1 ....B6,B7
                     const __m256i rhs_raw_vec_0123_0 = _mm256_loadu_si256((const __m256i * )(b_values));
@@ -2759,7 +2749,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 // dmin values - Load the eight dmin values of block_q4_kx8
                 const __m256 col_dmin_f32 = GGML_F32Cx8_LOAD(b_ptr[b].dmin);
 
-                const uint32_t *utmp = (uint32_t*) (b_ptr[b].scales);
+                const uint32_t *utmp = (const uint32_t*) (b_ptr[b].scales);
 
                 // Loop to iterate over the eight sub blocks of a super block - two sub blocks are processed per iteration
                 for (int sb = 0; sb < QK_K / 64; sb++) {
