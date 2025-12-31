@@ -3628,8 +3628,9 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                         const void * soa_base = ggml_sycl_get_data_ptr(src0, ctx.device);
                         reorder_mul_mat_vec_q6_k_q8_1_sycl(soa_base, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, ne01, row_low, stream);
                     } else if (extra && extra->optimized_feature.is_coalesced()) {
-                        // COALESCED layout not implemented for Q6_K
-                        GGML_ABORT("mmvq Q6_K: COALESCED layout not implemented");
+                        GGML_SYCL_DEBUG("Calling coalesced_mul_mat_vec_q6_k_q8_1_sycl\n");
+                        GGML_SYCL_KTRACE("mmvq_q6_k_coalesced", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+                        coalesced_mul_mat_vec_q6_k_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                     } else {
                         GGML_SYCL_DEBUG("Calling mul_mat_vec_q6_k_q8_1_sycl\n");
                         GGML_SYCL_KTRACE("mmvq_q6_k_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
