@@ -3323,10 +3323,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         // ffn_up is a required tensor
                         // -1 is a placeholder since create_tensor will fail if tensor is missing
-                        ggml_tensor * t_ffn_up = ml.get_tensor_meta(tn(LLM_TENSOR_FFN_UP, "weight", i).str().c_str());
-                        const int64_t n_ffn_up = t_ffn_up ? t_ffn_up->ne[1] : -1;
+                        const auto tn_ffn_up_weight = tn(LLM_TENSOR_FFN_UP, "weight", i);
+                        ggml_tensor * t_ffn_up = ml.get_tensor_meta(tn_ffn_up_weight.str().c_str());
+                        const int64_t n_ffn_up = t_ffn_up ? t_ffn_up->ne[1] : n_ff;
 
-                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP, "weight", i), {n_embd, n_ffn_up}, 0);
+                        GGML_ASSERT(n_ffn_up == n_ff || n_ffn_up == n_ff * 2);
+                        layer.ffn_up   = create_tensor(tn_ffn_up_weight, {n_embd, n_ffn_up}, 0);
                         layer.ffn_up_b = create_tensor(tn(LLM_TENSOR_FFN_UP, "bias", i), {n_ffn_up}, TENSOR_NOT_REQUIRED);
 
                         layer.ffn_down   = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
