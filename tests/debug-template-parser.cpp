@@ -29,6 +29,7 @@ enum class InputMessageType {
     TOOL_CALL_ONLY,    // Message with tool_calls only
     CONTENT_TOOL_CALL, // Message with content + tool_calls
     REASONING_TOOL_CALL, // Message with reasoning_content + tool_calls
+    CONTENT_FAKE_TOOL_CALL, // Message with content but no actual tool_calls (for testing)
     ALL                // Render all scenarios
 };
 
@@ -66,7 +67,8 @@ static void print_usage(const char * program_name) {
     LOG_ERR("  --output=MODE           Output mode: analysis, template, both (default: both)\n");
     LOG_ERR("  --input-message=TYPE    Message type to render:\n");
     LOG_ERR("                          content_only, reasoning_content, tool_call_only,\n");
-    LOG_ERR("                          content_tool_call, reasoning_tool_call, all\n");
+    LOG_ERR("                          content_tool_call, reasoning_tool_call,\n");
+    LOG_ERR("                          content_fake_tool_call, all\n");
     LOG_ERR("\nExamples:\n");
     LOG_ERR("  %s template.jinja --input-message=all --generation-prompt=1\n", program_name);
     LOG_ERR("  %s template.jinja --output=template --input-message=tool_call_only\n", program_name);
@@ -119,6 +121,8 @@ static bool parse_options(int argc, char ** argv, DebugOptions & opts) {
                 opts.input_message = InputMessageType::CONTENT_TOOL_CALL;
             } else if (type == "reasoning_tool_call") {
                 opts.input_message = InputMessageType::REASONING_TOOL_CALL;
+            } else if (type == "content_fake_tool_call") {
+                opts.input_message = InputMessageType::CONTENT_FAKE_TOOL_CALL;
             } else if (type == "all") {
                 opts.input_message = InputMessageType::ALL;
             } else {
@@ -210,6 +214,15 @@ static json build_reasoning_tool_call_message() {
     };
 }
 
+static json build_content_fake_tool_call_message() {
+    // This message has content but NO tool_calls field
+    // It's used to test if a template renders tool definitions but not tool calls
+    return json{
+        { "role", "assistant" },
+        { "content", "I'll help you by calling a function." }
+    };
+}
+
 static json build_tools_definition() {
     json parameters_schema = json::object();
     parameters_schema["type"] = "object";
@@ -264,7 +277,10 @@ static void render_scenario(
             inputs.tools = tools;
         }
 
-        std::string output = tmpl.apply(inputs);
+        minja::chat_template_options opts;
+        opts.apply_polyfills = false;
+
+        std::string output = tmpl.apply(inputs, opts);
 
         LOG_ERR("\n--- Rendered Output ---\n");
         LOG_ERR("%s\n", output.c_str());
@@ -295,6 +311,7 @@ static void render_all_scenarios(
     render_if(InputMessageType::TOOL_CALL_ONLY, "tool_call_only", build_tool_call_only_message());
     render_if(InputMessageType::CONTENT_TOOL_CALL, "content_tool_call", build_content_tool_call_message());
     render_if(InputMessageType::REASONING_TOOL_CALL, "reasoning_tool_call", build_reasoning_tool_call_message());
+    render_if(InputMessageType::CONTENT_FAKE_TOOL_CALL, "content_fake_tool_call", build_content_fake_tool_call_message());
 
     // Also render with add_generation_prompt=true to show the prompt ending
     if (message_type == InputMessageType::ALL) {

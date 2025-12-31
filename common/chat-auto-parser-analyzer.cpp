@@ -616,17 +616,25 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(
 
     ToolCallStructure ts;
 
-    // Check if minja reports tool call support
-    auto caps = tmpl.original_caps();
-    ts.supports_tools = caps.supports_tool_calls;
-
-    if (!ts.supports_tools) {
-        LOG_DBG("Template does not support tool calls (per minja caps)\n");
-    }
-
     // Use differential analysis to detect tool patterns
+    // This now includes a robust test that renders two payloads:
+    // 1. Tool definitions + content only
+    // 2. Tool definitions + content + tool calls
+    // If outputs are identical, the template doesn't support tool calls
     auto discovered = analyze_by_differential(tmpl);
     auto format = determine_format_from_patterns(discovered);
+
+    if (format == FORMAT_UNKNOWN) {
+        LOG_DBG("Template does not support tool calls (differential analysis returned no patterns)\n");
+        ts.supports_tools = false;
+        return ts;
+    }
+
+    // Check if minja reports tool call support (for informational purposes)
+    auto caps = tmpl.original_caps();
+    if (!caps.supports_tool_calls) {
+        LOG_DBG("Note: minja caps indicate no tool support, but differential analysis found patterns\n");
+    }
 
     if (format == FORMAT_JSON_NATIVE) {
         ts.supports_tools = true;

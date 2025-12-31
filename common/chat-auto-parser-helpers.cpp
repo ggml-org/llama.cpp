@@ -181,6 +181,7 @@ std::string apply_template(const minja::chat_template &    tmpl,
     }
 
     minja::chat_template_options tmpl_opts;
+    tmpl_opts.apply_polyfills = false;
     try {
         auto result = tmpl.apply(tmpl_inputs, tmpl_opts);
         return result;
@@ -838,12 +839,123 @@ InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & t
             LOG_DBG("Template doesn't support standard tool calls (per minja caps detection)\n");
         }
 
-        // Some templates require alternating user/assistant roles
+        // Define tools for testing
+        json tools = {
+            { { "type", "function" },
+             { "function",
+                { { "name", "test_function_name" },
+                  { "description", "A test function" },
+                  { "parameters",
+                    { { "type", "object" },
+                      { "properties",
+                        { { "param1", { { "type", "string" }, { "description", "First parameter" } } },
+                          { "param2", { { "type", "string" }, { "description", "Second parameter" } } } } },
+                      { "required", json::array({ "param1", "param2" }) } } } } } },
+            { { "type", "function" },
+             { "function",
+                { { "name", "another_test_function" },
+                  { "description", "Another test function" },
+                  { "parameters",
+                    { { "type", "object" },
+                      { "properties",
+                        { { "param1", { { "type", "string" }, { "description", "First parameter" } } } } },
+                      { "required", json::array({ "param1" }) } } } } } }
+        };
+
+        // Test payload 1: Tool definitions + user + assistant with content only (no tool calls)
         json user_msg = {
-            { "role",    "user" },
+            { "role", "user" },
             { "content", "Please help me with a task." }
         };
 
+        json assistant_content_only = {
+            { "role", "assistant" },
+            { "content", "I'll help you with that task right away." }
+        };
+
+        // Test payload 2: Tool definitions + user + assistant with content + tool calls
+        json assistant_content_with_tool = {
+            { "role", "assistant" },
+            { "content", "I'll help you with that task right away." },
+            { "tool_calls",
+             json::array({ { { "id", "call_0001" },
+                            { "type", "function" },
+                            { "function",
+                              { { "name", "test_function_name" },
+                                { "arguments", json::object({ { "param1", "value1" }, { "param2", "value2" } }) } } } } }) }
+        };
+
+        // Also test with content = null + tool calls (some templates check for this)
+        json assistant_null_content_with_tool = {
+            { "role", "assistant" },
+            { "content", nullptr },
+            { "tool_calls",
+             json::array({ { { "id", "call_0001" },
+                            { "type", "function" },
+                            { "function",
+                              { { "name", "test_function_name" },
+                                { "arguments", json::object({ { "param1", "value1" }, { "param2", "value2" } }) } } } } }) }
+        };
+
+        minja::chat_template_inputs inputs;
+        inputs.tools = tools;
+
+        // Use options with polyfills disabled to test true template capabilities
+        minja::chat_template_options opts;
+        opts.apply_polyfills = false;
+
+        // Helper function to safely render template, handling null content issues
+        auto safe_render = [&](const json& messages) -> std::string {
+            try {
+                // First try with the original messages
+                inputs.messages = messages;
+                return tmpl.apply(inputs, opts);
+            } catch (const std::exception& e) {
+                // If it fails, try replacing null content with empty string
+                json fixed_messages = messages;
+                for (auto& msg : fixed_messages) {
+                    if (msg.contains("content") && msg["content"].is_null()) {
+                        msg["content"] = "";
+                    }
+                }
+                inputs.messages = fixed_messages;
+                try {
+                    return tmpl.apply(inputs, opts);
+                } catch (...) {
+                    return "";
+                }
+            }
+        };
+
+        // Render payload 1: content only
+        std::string output_content_only = safe_render({ user_msg, assistant_content_only });
+
+        // Render payload 2: content + tool calls
+        std::string output_content_with_tool = safe_render({ user_msg, assistant_content_with_tool });
+
+        // Render payload 3: null content + tool calls
+        std::string output_null_content_with_tool = safe_render({ user_msg, assistant_null_content_with_tool });
+
+        LOG_DBG("Output 1 (content only): %s\n", output_content_only.c_str());
+        LOG_DBG("Output 2 (content + tools): %s\n", output_content_with_tool.c_str());
+        LOG_DBG("Output 3 (null + tools): %s\n", output_null_content_with_tool.c_str());
+
+        // Check if the template renders tool calls in any scenario
+        // Test 1: content vs content+tool_calls (for templates that render both)
+        // Test 2: content vs null+tool_calls (for templates that only render tools when content is null)
+        bool renders_tool_calls_with_content = (output_content_only != output_content_with_tool);
+        bool renders_tool_calls_without_content = (output_content_only != output_null_content_with_tool);
+
+        if (!renders_tool_calls_with_content && !renders_tool_calls_without_content) {
+            LOG_DBG("Template does NOT render tool calls in any scenario\n");
+            // Return empty patterns to indicate no tool support
+            return patterns;
+        }
+
+        LOG_DBG("Template renders tool calls, proceeding with differential analysis\n");
+
+        // If we get here, the template does support tool calls
+        // Use the original differential analysis approach but now we know it's valid
         json base_msg = {
             { "role",    "assistant" },
             { "content", "MARKER"    }
@@ -883,43 +995,17 @@ InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & t
                             { "function", { { "name", "another_test_function" }, { "arguments", json::object() } } } } }) }
         };
 
-        json tools = {
-            { { "type", "function" },
-             { "function",
-                { { "name", "test_function_name" },
-                  { "description", "A test function" },
-                  { "parameters",
-                    { { "type", "object" },
-                      { "properties",
-                        { { "param1", { { "type", "string" }, { "description", "First parameter" } } },
-                          { "param2", { { "type", "string" }, { "description", "Second parameter" } } } } },
-                      { "required", json::array({ "param1", "param2" }) } } } } } },
-            { { "type", "function" },
-             { "function",
-                { { "name", "another_test_function" },
-                  { "description", "Another test function" },
-                  { "parameters",
-                    { { "type", "object" },
-                      { "properties",
-                        { { "param1", { { "type", "string" }, { "description", "First parameter" } } } } },
-                      { "required", json::array({ "param1" }) } } } } } }
-        };
-
-        minja::chat_template_inputs inputs;
-        inputs.tools = tools;
-
-        // Include user message before assistant for templates requiring role alternation
         inputs.messages = { user_msg, base_msg };
-        auto base_output = tmpl.apply(inputs);
+        auto base_output = safe_render({ user_msg, base_msg });
 
         inputs.messages = { user_msg, tool_msg1 };
-        auto tool1_output = tmpl.apply(inputs);
+        auto tool1_output = safe_render({ user_msg, tool_msg1 });
 
         inputs.messages = { user_msg, tool_msg2 };
-        auto tool2_output = tmpl.apply(inputs);
+        auto tool2_output = safe_render({ user_msg, tool_msg2 });
 
         inputs.messages = { user_msg, tool_msg3 };
-        auto tool3_output = tmpl.apply(inputs);
+        auto tool3_output = safe_render({ user_msg, tool_msg3 });
 
         std::string tool1_diff = find_string_difference(base_output, tool1_output);
         std::string tool2_diff = find_string_difference(base_output, tool2_output);
@@ -930,7 +1016,7 @@ InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & t
         LOG_DBG("Tool3 diff length: %zu\n", tool3_diff.length());
 
         if (tool1_diff.empty() && tool2_diff.empty() && tool3_diff.empty()) {
-            LOG_DBG("All diffs are empty - template may not produce tool calls in output\n");
+            LOG_DBG("All diffs are empty - trying without add_generation_prompt\n");
             // Try with add_generation_prompt variations
             json alternative_base_msg = {
                 { "role", "assistant" },
@@ -941,17 +1027,17 @@ InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & t
             alt_inputs.tools = tools;
             alt_inputs.messages = { user_msg, alternative_base_msg };
             alt_inputs.add_generation_prompt = false;
-            auto alt_base = tmpl.apply(alt_inputs);
+            auto alt_base = tmpl.apply(alt_inputs, opts);
 
             alt_inputs.messages = { user_msg, tool_msg1 };
-            auto alt_tool1 = tmpl.apply(alt_inputs);
+            auto alt_tool1 = tmpl.apply(alt_inputs, opts);
 
             tool1_diff = find_string_difference(alt_base, alt_tool1);
             if (!tool1_diff.empty()) {
                 alt_inputs.messages = { user_msg, tool_msg2 };
-                tool2_diff = find_string_difference(alt_base, tmpl.apply(alt_inputs));
+                tool2_diff = find_string_difference(alt_base, tmpl.apply(alt_inputs, opts));
                 alt_inputs.messages = { user_msg, tool_msg3 };
-                tool3_diff = find_string_difference(alt_base, tmpl.apply(alt_inputs));
+                tool3_diff = find_string_difference(alt_base, tmpl.apply(alt_inputs, opts));
             }
         }
 
