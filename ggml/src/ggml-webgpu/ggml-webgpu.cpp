@@ -112,11 +112,6 @@
 #define WEBGPU_MUL_MAT_VEC_OUTPUTS_PER_WG 64
 #define WEBGPU_MUL_MAT_VEC_TILE_K         256
 
-// Flash Attention parameters
-#define WEBGPU_FLASH_ATTN_WG_SIZE 32
-#define WEBGPU_FLASH_ATTN_Q_TILE  16
-#define WEBGPU_FLASH_ATTN_KV_TILE 8
-
 /* End Constants */
 
 void ggml_webgpu_create_buffer(wgpu::Device &    device,
@@ -246,6 +241,7 @@ struct webgpu_gpu_profile_buf_pool {
 struct webgpu_pipeline {
     wgpu::ComputePipeline pipeline;
     std::string           name;
+    void *                user_data = nullptr;
 };
 
 struct webgpu_command {
@@ -305,7 +301,7 @@ struct webgpu_context_struct {
     wgpu::Queue    queue;
     wgpu::Limits   limits;
 
-    uint32_t subgroup_size;
+    uint32_t max_subgroup_size;
 
 #ifndef __EMSCRIPTEN__
     bool                       supports_subgroup_matrix = false;
@@ -761,6 +757,11 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
 #if !defined(GGML_WEBGPU_CPU_PROFILE) && !defined(GGML_WEBGPU_GPU_PROFILE)
     GGML_UNUSED(ctx);
 #endif
+
+    for (auto & kv : ctx->webgpu_ctx->flash_attn_pipelines) {
+        delete static_cast<ggml_webgpu_flash_attn_shader_decisions *>(kv.second.user_data);
+        kv.second.user_data = nullptr;
+    }
 }
 
 static size_t ggml_webgpu_tensor_offset(const ggml_tensor * tensor) {
@@ -1148,15 +1149,18 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     };
 
     webgpu_pipeline pipeline;
+    ggml_webgpu_flash_attn_shader_decisions decisions = {};
     auto            it = ctx->flash_attn_pipelines.find(key);
 
     if (it != ctx->flash_attn_pipelines.end()) {
         pipeline = it->second;
+        decisions = *static_cast<ggml_webgpu_flash_attn_shader_decisions *>(pipeline.user_data);
     } else {
         std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
         it = ctx->flash_attn_pipelines.find(key);
         if (it != ctx->flash_attn_pipelines.end()) {
             pipeline = it->second;
+            decisions = *static_cast<ggml_webgpu_flash_attn_shader_decisions *>(pipeline.user_data);
         } else {
             ggml_webgpu_flash_attn_shader_lib_context shader_lib_ctx = {
                 .kv_type            = ggml_type_name(K->type),
@@ -1168,16 +1172,20 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
                 .sg_mat_m           = ctx->subgroup_matrix_config.M,
                 .sg_mat_n           = ctx->subgroup_matrix_config.N,
                 .sg_mat_k           = ctx->subgroup_matrix_config.K,
+                .wg_mem_limit_bytes = ctx->limits.maxComputeWorkgroupStorageSize,
+                .max_subgroup_size  = ctx->max_subgroup_size
             };
             ggml_webgpu_processed_shader processed =
                 ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn, shader_lib_ctx);
 
             pipeline = ggml_webgpu_create_pipeline(ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
+            pipeline.user_data = new ggml_webgpu_flash_attn_shader_decisions(processed.decisions);
             ctx->flash_attn_pipelines.emplace(key, pipeline);
+            decisions = processed.decisions;
         }
     }
 
-    uint32_t wg_per_head = CEIL_DIV(Q->ne[1], WEBGPU_FLASH_ATTN_Q_TILE);
+    uint32_t wg_per_head = CEIL_DIV(Q->ne[1], decisions.q_tile);
     uint32_t wg_x        = wg_per_head * Q->ne[2] * Q->ne[3];  // wg per head * number of heads * number of batches
     //std::cout << "ggml_webgpu_flash_attn: wg_x: " << wg_x << "\n";
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
@@ -2010,7 +2018,7 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
 #ifndef __EMSCRIPTEN__
     if (webgpu_ctx->supports_subgroup_matrix) {
         std::map<std::string, std::string> sg_matrix_repls;
-        sg_matrix_repls["WEBGPU_MAX_SUBGROUP_SIZE"] = std::to_string(webgpu_ctx->subgroup_size);
+        sg_matrix_repls["WEBGPU_MAX_SUBGROUP_SIZE"] = std::to_string(webgpu_ctx->max_subgroup_size);
         sg_matrix_repls["WEBGPU_TILE_K"]            = std::to_string(WEBGPU_MUL_MAT_TILE_K);
         sg_matrix_repls["WEBGPU_SUBGROUP_M"]        = std::to_string(WEBGPU_MUL_MAT_SUBGROUP_M);
         sg_matrix_repls["WEBGPU_SUBGROUP_N"]        = std::to_string(WEBGPU_MUL_MAT_SUBGROUP_N);
@@ -2683,13 +2691,27 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             }
         case GGML_OP_FLASH_ATTN_EXT:
             {
+                if (!webgpu_ctx->supports_subgroup_matrix) {
+                    break;
+                }
+                // Head dimensions must fit in workgroup memory with minimum tile sizes
+                size_t       limit_bytes = webgpu_ctx->limits.maxComputeWorkgroupStorageSize;
+                const bool   has_mask = op->src[3] != nullptr;
+                const size_t min_bytes =
+                    ggml_webgpu_flash_attn_wg_mem_bytes(webgpu_ctx->subgroup_matrix_config.M,
+                                                        webgpu_ctx->subgroup_matrix_config.N,
+                                                        (uint32_t) src0->ne[0],
+                                                        (uint32_t) src2->ne[0],
+                                                        has_mask);
+                if (min_bytes > limit_bytes) {
+                    break;
+                }
+
                 supports_op = true;
                 // Q-type
                 supports_op &= src0->type == GGML_TYPE_F32;
                 // KV-type
                 supports_op &= src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16;
-                // qkv sequence length
-                supports_op &= op->ne[0] <= 128 && src0->ne[0] <= 128;
                 break;
             }
         case GGML_OP_RMS_NORM:
@@ -2879,7 +2901,7 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
 #endif
     // For subgroup matrix code to be the most efficient, we would like the subgroup size to be consistent and accurate.
     // Unfortunately, that is not possible, so we use the maximum subgroup size reported by the adapter.
-    ctx->subgroup_size = info.subgroupMaxSize;
+    ctx->max_subgroup_size = info.subgroupMaxSize;
 
     // Initialize device
     std::vector<wgpu::FeatureName> required_features = { wgpu::FeatureName::ShaderF16 };

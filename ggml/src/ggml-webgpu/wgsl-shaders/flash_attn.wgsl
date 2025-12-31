@@ -11,6 +11,7 @@ enable chromium_experimental_subgroup_matrix;
 
 #define Q_TILE 16
 #define KV_TILE 16
+#define WG_SIZE 64
 
 // The number of rows/columns/k in a subgroup matrix. MxK * KxN = MxN
 // Note that the "K" here does not correspond to the K in attention's Q/K/V, it's just the common dimension.
@@ -112,8 +113,6 @@ var<workgroup> exp_sum_shmem: array<f16, Q_TILE>;
 const Q_BLOCKS = Q_TILE / SG_MAT_M;
 // Number of subgroup-matrix-width blocks that span the KV tile. SG_MAT_N must divide KV_TILE.
 const KV_BLOCKS = KV_TILE / SG_MAT_N;
-
-const WG_SIZE = 64u;
 
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
