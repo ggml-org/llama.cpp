@@ -3492,6 +3492,7 @@ class VisionProjectorType:
     COGVLM = "cogvlm"
     JANUS_PRO = "janus_pro"
     LFM2A = "lfm2a" # audio
+    MUSIC_FLAMINGO = "musicflamingo" # audio
     GLM4V = "glm4v"
 
 
