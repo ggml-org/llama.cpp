@@ -595,11 +595,13 @@ static void ggml_sycl_flash_attn_ext_dispatch_ncols(
     if (g_sycl_fa_esimd_enabled && fattn_esimd_f16_available()) {
         if (ne01 <= 1) {
             // Partitioned kernel: each thread processes disjoint KV ranges
+            GGML_SYCL_KTRACE("fattn_esimd_f16", " D=%d ne01=%d", D, ne01);
             fattn_esimd_f16<D, Q_type>(params, *stream);
             return;
         } else if (false && D == 64 && ne01 <= 8 && fattn_esimd_batched_fits_slm<D>()) {
             // DISABLED: Batched ESIMD is 20% slower than XMX for pp
             // Keep single-query ESIMD for tg (ne01 <= 1) which has +7% speedup
+            GGML_SYCL_KTRACE("fattn_esimd_f16_batched", " D=%d ne01=%d", D, ne01);
             fattn_esimd_f16_batched<D, Q_type>(params, *stream);
             return;
         }
@@ -620,23 +622,31 @@ static void ggml_sycl_flash_attn_ext_dispatch_ncols(
         // because XMX hardware throughput exceeds scalar operations despite
         // 7/8 of tiles being "wasted" in the 8x8 joint_matrix operations
         if (ne01 <= 1) {
+            GGML_SYCL_KTRACE("fattn_xmx_f16", " D=%d ncols=1 ne01=%d", D, ne01);
             DISPATCH_NCOLS(1, launch_fattn_xmx_f16);
         } else if (ne01 <= 2) {
+            GGML_SYCL_KTRACE("fattn_xmx_f16", " D=%d ncols=2 ne01=%d", D, ne01);
             DISPATCH_NCOLS(2, launch_fattn_xmx_f16);
         } else if (ne01 <= 4) {
+            GGML_SYCL_KTRACE("fattn_xmx_f16", " D=%d ncols=4 ne01=%d", D, ne01);
             DISPATCH_NCOLS(4, launch_fattn_xmx_f16);
         } else {
+            GGML_SYCL_KTRACE("fattn_xmx_f16", " D=%d ncols=8 ne01=%d", D, ne01);
             DISPATCH_NCOLS(8, launch_fattn_xmx_f16);
         }
     } else {
         // MMA F16 kernel - scalar fallback for non-XMX GPUs
         if (ne01 <= 1) {
+            GGML_SYCL_KTRACE("fattn_mma_f16", " D=%d ncols=1 ne01=%d", D, ne01);
             DISPATCH_NCOLS(1, launch_fattn_mma_f16);
         } else if (ne01 <= 2) {
+            GGML_SYCL_KTRACE("fattn_mma_f16", " D=%d ncols=2 ne01=%d", D, ne01);
             DISPATCH_NCOLS(2, launch_fattn_mma_f16);
         } else if (ne01 <= 4) {
+            GGML_SYCL_KTRACE("fattn_mma_f16", " D=%d ncols=4 ne01=%d", D, ne01);
             DISPATCH_NCOLS(4, launch_fattn_mma_f16);
         } else {
+            GGML_SYCL_KTRACE("fattn_mma_f16", " D=%d ncols=8 ne01=%d", D, ne01);
             DISPATCH_NCOLS(8, launch_fattn_mma_f16);
         }
     }
@@ -1312,6 +1322,39 @@ scalar_v2_dispatch:
         }
     } else {
          GGML_ABORT("Unsupported Q type for SYCL flash attention");
+    }
+
+    // Buffer aliasing debug: trace flash attention output pointer and values
+    // This helps identify if FA writes to expected buffer vs what MUL_MAT reads
+    // NOTE: Only enabled when graphs are disabled (wait() is incompatible with graph recording)
+    {
+        static bool fa_buf_debug = getenv("GGML_SYCL_BUFFER_ALIAS_DEBUG") != nullptr;
+        static bool graphs_disabled = getenv("GGML_SYCL_DISABLE_GRAPH") != nullptr;
+        if (fa_buf_debug && graphs_disabled) {
+            static int fa_trace_count = 0;
+            fa_trace_count++;
+            if (fa_trace_count <= 10) {
+                auto* stream = ctx.stream();
+                stream->wait();  // Ensure kernel completes
+
+                // Read first 4 floats from dst
+                float host_vals[4] = {0};
+                size_t total_elements = params.ne01 * params.ne02 * D;  // n_queries * n_heads * head_dim
+                if (total_elements >= 4) {
+                    stream->memcpy(host_vals, params.dst, 4 * sizeof(float)).wait();
+                }
+
+                bool is_zeros = (host_vals[0] == 0.0f && host_vals[1] == 0.0f &&
+                                host_vals[2] == 0.0f && host_vals[3] == 0.0f);
+
+                fprintf(stderr, "[FA_OUTPUT] %s dst=%p first4=[%.4f, %.4f, %.4f, %.4f] is_zeros=%d "
+                        "ne01=%lld ne02=%lld D=%d\n",
+                        dst->name, (void*)params.dst,
+                        host_vals[0], host_vals[1], host_vals[2], host_vals[3],
+                        is_zeros ? 1 : 0,
+                        (long long)params.ne01, (long long)params.ne02, D);
+            }
+        }
     }
 
     // Debug dumping controlled by GGML_SYCL_FA_DEBUG environment variable

@@ -2307,6 +2307,126 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_FIT_CTX"));
     add_opt(common_arg(
+        { "--gpu-memory-pct" }, "N",
+        "percentage of GPU memory to use (1-100), automatically calculates optimal layers to offload",
+        [](common_params & params, int value) {
+            if (value < 1 || value > 100) {
+                throw std::invalid_argument("--gpu-memory-pct must be between 1 and 100");
+            }
+            params.gpu_memory_pct = static_cast<float>(value);
+            params.fit_params = true;  // Enable fit mode when using percentage
+        }
+    ).set_env("LLAMA_ARG_GPU_MEMORY_PCT"));
+    add_opt(common_arg(
+        {"--moe-profile"}, "PATH",
+        "path to save/load MoE expert usage profile for guided expert placement",
+        [](common_params & params, const std::string & value) {
+            params.moe_profile_path = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_PROFILE"));
+    add_opt(common_arg(
+        {"--moe-warmup"}, "N",
+        "number of tokens to process for MoE expert profiling (default: 0 = disabled)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("--moe-warmup must be non-negative");
+            }
+            params.moe_warmup_tokens = value;
+        }
+    ).set_env("LLAMA_ARG_MOE_WARMUP"));
+    add_opt(common_arg(
+        {"--moe-gpu-fraction"}, "F",
+        string_format("fraction of experts to keep on GPU (0.0-1.0, default: %.2f)", params.moe_gpu_fraction),
+        [](common_params & params, const std::string & value) {
+            float f = std::stof(value);
+            if (f < 0.0f || f > 1.0f) {
+                throw std::invalid_argument("--moe-gpu-fraction must be between 0.0 and 1.0");
+            }
+            params.moe_gpu_fraction = f;
+        }
+    ).set_env("LLAMA_ARG_MOE_GPU_FRACTION"));
+    add_opt(common_arg(
+        {"--expert-cache-size"}, "N",
+        "size of expert cache in MB for MoE models (default: 0 = auto, 50% of free VRAM)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("--expert-cache-size must be non-negative");
+            }
+            params.expert_cache_size_mb = value;
+        }
+    ).set_env("LLAMA_ARG_EXPERT_CACHE_SIZE"));
+    add_opt(common_arg(
+        {"--lazy-moe"},
+        "lazy load MoE experts on-demand (keep weights in host memory, cache to GPU as needed)",
+        [](common_params & params) {
+            params.lazy_moe = true;
+        }
+    ).set_env("LLAMA_ARG_LAZY_MOE"));
+    add_opt(common_arg(
+        {"--weight-streaming"},
+        "enable weight streaming for limited VRAM (stream layers on-demand from mmap)",
+        [](common_params & params) {
+            params.weight_streaming = true;
+        }
+    ).set_env("LLAMA_ARG_WEIGHT_STREAMING"));
+    add_opt(common_arg(
+        {"--weight-cache-pct"}, "N",
+        string_format("percentage of remaining VRAM for weight cache (default: %.1f)", params.weight_cache_pct),
+        [](common_params & params, int value) {
+            if (value < 1 || value > 100) {
+                throw std::invalid_argument("--weight-cache-pct must be between 1 and 100");
+            }
+            params.weight_cache_pct = static_cast<float>(value);
+        }
+    ).set_env("LLAMA_ARG_WEIGHT_CACHE_PCT"));
+    add_opt(common_arg(
+        {"--weight-granularity"}, "N",
+        string_format("weight cache granularity: 0=layer, 1=tensor, 2=layer_group (default: %d)", params.weight_granularity),
+        [](common_params & params, int value) {
+            if (value < 0 || value > 2) {
+                throw std::invalid_argument("--weight-granularity must be 0, 1, or 2");
+            }
+            params.weight_granularity = value;
+        }
+    ).set_env("LLAMA_ARG_WEIGHT_GRANULARITY"));
+    add_opt(common_arg(
+        {"--layer-group-size"}, "N",
+        string_format("layers per group when --weight-granularity=2 (default: %d)", params.layer_group_size),
+        [](common_params & params, int value) {
+            if (value < 1) {
+                throw std::invalid_argument("--layer-group-size must be at least 1");
+            }
+            params.layer_group_size = value;
+        }
+    ).set_env("LLAMA_ARG_LAYER_GROUP_SIZE"));
+    add_opt(common_arg(
+        {"--kv-offload"},
+        "enable KV cache offload to CPU for long contexts",
+        [](common_params & params) {
+            params.kv_offload = true;
+        }
+    ).set_env("LLAMA_ARG_KV_OFFLOAD"));
+    add_opt(common_arg(
+        {"--kv-offload-threshold"}, "N",
+        string_format("context length (tokens) to trigger KV offload (default: %d)", params.kv_offload_threshold),
+        [](common_params & params, int value) {
+            if (value < 1) {
+                throw std::invalid_argument("--kv-offload-threshold must be at least 1");
+            }
+            params.kv_offload_threshold = value;
+        }
+    ).set_env("LLAMA_ARG_KV_OFFLOAD_THRESHOLD"));
+    add_opt(common_arg(
+        {"--kv-gpu-pct"}, "N",
+        string_format("percentage of KV cache to keep on GPU when offloading (default: %.1f)", params.kv_gpu_pct),
+        [](common_params & params, int value) {
+            if (value < 1 || value > 100) {
+                throw std::invalid_argument("--kv-gpu-pct must be between 1 and 100");
+            }
+            params.kv_gpu_pct = static_cast<float>(value);
+        }
+    ).set_env("LLAMA_ARG_KV_GPU_PCT"));
+    add_opt(common_arg(
         {"--check-tensors"},
         string_format("check model tensor data for invalid values (default: %s)", params.check_tensors ? "true" : "false"),
         [](common_params & params) {

@@ -84,7 +84,10 @@ template <int ElementsPerWI> struct quantize_and_reorder_q8_1_soa {
         auto quant_ptr = (int8_t *) ((char *) reordered_q8_tensor + row_offset + col_offset);
         *reinterpret_cast<sycl::vec<int8_t, ElementsPerWI> *>(quant_ptr) = quantized_values;
 
-        auto ds_ptr = (sycl::half2 *) ((char *) reordered_q8_tensor + row_offset + kx + col * sizeof(sycl::half2));
+        // ds at: row_offset + kx + col * sizeof(half2)
+        // For SoA: qs are at [0, kx) per row, ds are at [kx, kx + blocks*4) per row
+        const size_t ds_byte_offset = row_offset + kx + col * sizeof(sycl::half2);
+        auto ds_ptr = (sycl::half2 *) ((char *) reordered_q8_tensor + ds_byte_offset);
         if (wi_id == 0) {
             *ds_ptr = sycl::half2(sycl::half(d), sycl::half(sum));
         }

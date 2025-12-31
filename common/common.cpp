@@ -4,6 +4,7 @@
 
 #include "ggml.h"
 #include "gguf.h"
+#include "ggml-backend.h"
 
 #include "common.h"
 #include "log.h"
@@ -1074,6 +1075,210 @@ static void common_init_sampler_from_model(
     get_float(llama_model_meta_key_str(LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_ETA),    sparams.mirostat_eta,    common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA);
 }
 
+// Calculate optimal n_gpu_layers based on target GPU memory percentage
+// Returns the calculated n_gpu_layers, or -1 if calculation not possible
+static int32_t calculate_gpu_layers_from_memory_pct(
+    const std::string & model_path,
+    float gpu_memory_pct,
+    int32_t n_ctx,
+    ggml_type cache_type_k,
+    ggml_type cache_type_v
+) {
+    if (gpu_memory_pct <= 0.0f || gpu_memory_pct > 100.0f) {
+        return -1;
+    }
+
+    // Read model metadata to get layer count
+    gguf_init_params gguf_params = { true, nullptr }; // no_alloc = true
+    gguf_context * meta = gguf_init_from_file(model_path.c_str(), gguf_params);
+    if (!meta) {
+        LOG_WRN("%s: failed to read model metadata from '%s'\n", __func__, model_path.c_str());
+        return -1;
+    }
+
+    // Get layer count from metadata (try common key patterns)
+    int32_t n_layer = -1;
+    const char * arch_keys[] = {
+        "llama.block_count",
+        "gpt-oss.block_count",
+        "gpt2.block_count",
+        "falcon.block_count",
+        "mpt.block_count",
+        "starcoder.block_count",
+        "refact.block_count",
+        "bert.block_count",
+        "bloom.block_count",
+        "qwen2.block_count",
+        "phi2.block_count",
+        "phi3.block_count",
+        "plamo.block_count",
+        "codeshell.block_count",
+        "orion.block_count",
+        "internlm2.block_count",
+        "minicpm.block_count",
+        "gemma.block_count",
+        "gemma2.block_count",
+        "starcoder2.block_count",
+        "mamba.block_count",
+        "xverse.block_count",
+        "command-r.block_count",
+        "dbrx.block_count",
+        "olmo.block_count",
+        "openelm.block_count",
+        "arctic.block_count",
+        "deepseek2.block_count",
+        "chatglm.block_count",
+        "bitnet.block_count",
+        "t5.block_count",
+        "t5encoder.block_count",
+        "jais.block_count",
+        "nemotron.block_count",
+        "exaone.block_count",
+        "rwkv6.block_count",
+        "granite.block_count",
+        "chameleon.block_count",
+        "wavtokenizer-dec.block_count",
+        nullptr
+    };
+
+    for (const char ** key = arch_keys; *key != nullptr; ++key) {
+        int key_id = gguf_find_key(meta, *key);
+        if (key_id >= 0) {
+            n_layer = gguf_get_val_u32(meta, key_id);
+            break;
+        }
+    }
+
+    if (n_layer <= 0) {
+        LOG_WRN("%s: could not determine layer count from model metadata\n", __func__);
+        gguf_free(meta);
+        return -1;
+    }
+
+    // Get embedding dimension for KV cache estimation
+    int32_t n_embd = 0;
+    int32_t n_head_kv = 0;
+    const char * embd_keys[] = { "llama.embedding_length", "gpt-oss.embedding_length", "gpt2.embedding_length", nullptr };
+    const char * head_kv_keys[] = { "llama.attention.head_count_kv", "gpt-oss.attention.head_count_kv", "gpt2.attention.head_count_kv", nullptr };
+
+    for (const char ** key = embd_keys; *key != nullptr; ++key) {
+        int key_id = gguf_find_key(meta, *key);
+        if (key_id >= 0) {
+            n_embd = gguf_get_val_u32(meta, key_id);
+            break;
+        }
+    }
+    for (const char ** key = head_kv_keys; *key != nullptr; ++key) {
+        int key_id = gguf_find_key(meta, *key);
+        if (key_id >= 0) {
+            n_head_kv = gguf_get_val_u32(meta, key_id);
+            break;
+        }
+    }
+
+    // Check for MoE model (expert count > 0)
+    int32_t n_expert = 0;
+    const char * expert_keys[] = {
+        "llama.expert_count", "gpt-oss.expert_count", "qwen2.expert_count",
+        "deepseek2.expert_count", "arctic.expert_count", nullptr
+    };
+    for (const char ** key = expert_keys; *key != nullptr; ++key) {
+        int key_id = gguf_find_key(meta, *key);
+        if (key_id >= 0) {
+            n_expert = gguf_get_val_u32(meta, key_id);
+            break;
+        }
+    }
+
+    gguf_free(meta);
+
+    // For MoE models, fall back to fit algorithm which handles expert placement better
+    if (n_expert > 0) {
+        LOG_INF("%s: MoE model detected (%d experts), using fit algorithm for optimal layer calculation\n",
+                __func__, n_expert);
+        return -1;  // Signal to use fit algorithm
+    }
+
+    // Get model file size to estimate total model memory
+    size_t model_file_size = 0;
+    {
+        std::ifstream file(model_path, std::ios::binary | std::ios::ate);
+        if (file.is_open()) {
+            model_file_size = file.tellg();
+        }
+    }
+
+    if (model_file_size == 0) {
+        LOG_WRN("%s: could not determine model file size\n", __func__);
+        return -1;
+    }
+
+    // Estimate per-layer model memory (weights only)
+    // Rough estimate: model weights are ~95% of file size, distributed across layers + embeddings
+    const size_t weights_size = model_file_size * 95 / 100;
+    const size_t per_layer_weights = weights_size / (n_layer + 2); // +2 for input/output embeddings
+
+    // Estimate KV cache memory per layer
+    size_t kv_cache_per_layer = 0;
+    if (n_embd > 0 && n_head_kv > 0 && n_ctx > 0) {
+        const size_t head_dim = n_embd / n_head_kv;
+        const size_t k_size = n_ctx * n_head_kv * head_dim * ggml_type_size(cache_type_k);
+        const size_t v_size = n_ctx * n_head_kv * head_dim * ggml_type_size(cache_type_v);
+        kv_cache_per_layer = k_size + v_size;
+    }
+
+    // Total per-layer memory estimate
+    const size_t per_layer_total = per_layer_weights + kv_cache_per_layer;
+
+    // Query GPU device memory
+    size_t total_gpu_memory = 0;
+    size_t free_gpu_memory = 0;
+    int gpu_count = 0;
+
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+            size_t free, total;
+            ggml_backend_dev_memory(dev, &free, &total);
+            total_gpu_memory += total;
+            free_gpu_memory += free;
+            gpu_count++;
+        }
+    }
+
+    if (gpu_count == 0 || total_gpu_memory == 0) {
+        LOG_WRN("%s: no GPU devices found or could not query memory\n", __func__);
+        return -1;
+    }
+
+    // Calculate target memory usage
+    const size_t target_memory = (size_t)(total_gpu_memory * gpu_memory_pct / 100.0f);
+
+    // Reserve memory for compute buffers (~5% of target or 512MB, whichever is larger)
+    const size_t compute_reserve = std::max(target_memory * 5 / 100, (size_t)(512 * 1024 * 1024));
+    const size_t available_for_model = target_memory > compute_reserve ? target_memory - compute_reserve : 0;
+
+    // Calculate layers that fit
+    int32_t calculated_layers = 0;
+    if (per_layer_total > 0) {
+        calculated_layers = (int32_t)(available_for_model / per_layer_total);
+    }
+
+    // Clamp to actual layer count
+    calculated_layers = std::min(calculated_layers, n_layer);
+    calculated_layers = std::max(calculated_layers, (int32_t)0);
+
+    LOG_INF("%s: model has %d layers, estimated %.1f MB per layer\n",
+            __func__, n_layer, per_layer_total / (1024.0 * 1024.0));
+    LOG_INF("%s: total GPU memory: %.1f GB, target usage (%.0f%%): %.1f GB\n",
+            __func__, total_gpu_memory / (1024.0 * 1024.0 * 1024.0),
+            gpu_memory_pct, target_memory / (1024.0 * 1024.0 * 1024.0));
+    LOG_INF("%s: calculated optimal GPU layers: %d (of %d total)\n",
+            __func__, calculated_layers, n_layer);
+
+    return calculated_layers;
+}
+
 struct common_init_result::impl {
     impl() = default;
     ~impl() = default;
@@ -1088,6 +1293,46 @@ struct common_init_result::impl {
 
 common_init_result::common_init_result(common_params & params) :
     pimpl(new impl{}) {
+
+    // Calculate optimal GPU layers from memory percentage if specified
+    if (params.gpu_memory_pct > 0.0f) {
+        int32_t calculated_layers = calculate_gpu_layers_from_memory_pct(
+            params.model.path,
+            params.gpu_memory_pct,
+            params.n_ctx > 0 ? params.n_ctx : 2048,  // Use default if not specified
+            params.cache_type_k,
+            params.cache_type_v
+        );
+
+        if (calculated_layers >= 0) {
+            // Direct calculation worked (non-MoE model)
+            params.n_gpu_layers = calculated_layers;
+            params.fit_params = false;  // Disable fit since we calculated layers ourselves
+            LOG_INF("%s: using --gpu-memory-pct %.0f%%, setting n_gpu_layers to %d\n",
+                    __func__, params.gpu_memory_pct, calculated_layers);
+        } else {
+            // MoE model or calculation failed - use fit algorithm with percentage-based target
+            // Calculate target margin from percentage
+            size_t total_gpu_memory = 0;
+            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+                    size_t free, total;
+                    ggml_backend_dev_memory(dev, &free, &total);
+                    total_gpu_memory = std::max(total_gpu_memory, total);  // Use largest GPU
+                }
+            }
+            if (total_gpu_memory > 0) {
+                // Convert percentage to margin: 80% usage = 20% margin
+                float leave_free_pct = (100.0f - params.gpu_memory_pct) / 100.0f;
+                params.fit_params_target = static_cast<size_t>(total_gpu_memory * leave_free_pct);
+                params.fit_params = true;
+                LOG_INF("%s: using --gpu-memory-pct %.0f%% with fit algorithm, margin = %zu MiB\n",
+                        __func__, params.gpu_memory_pct, params.fit_params_target / (1024 * 1024));
+            }
+        }
+    }
+
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
@@ -1265,6 +1510,21 @@ common_init_result_ptr common_init_from_params(common_params & params) {
         common_set_adapter_lora(lctx, params.lora_adapters);
     }
 
+    // MoE expert profiling setup
+    if (!params.moe_profile_path.empty()) {
+        // Try to load existing profile first
+        if (llama_load_moe_profile(lctx, params.moe_profile_path.c_str())) {
+            LOG_INF("%s: loaded MoE profile from %s\n", __func__, params.moe_profile_path.c_str());
+            // Apply placement analysis with configured GPU fraction
+            llama_analyze_moe_profile(lctx, params.moe_gpu_fraction);
+            llama_print_moe_profile(lctx);
+        } else if (params.moe_warmup_tokens > 0) {
+            // Enable profiling mode for warmup
+            LOG_INF("%s: enabling MoE profiling for %d warmup tokens\n", __func__, params.moe_warmup_tokens);
+            llama_set_moe_profiling(lctx, true);
+        }
+    }
+
     if (params.warmup) {
         LOG_WRN("%s: warming up the model with an empty run - please wait ... (--no-warmup to disable)\n", __func__);
 
@@ -1332,6 +1592,33 @@ void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adap
     }
 }
 
+void common_moe_profile_finish(struct llama_context * ctx, const common_params & params) {
+    if (params.moe_profile_path.empty() || params.moe_warmup_tokens == 0) {
+        // No profiling was requested or profile was just loaded (not generated)
+        return;
+    }
+
+    // Check if we have profile data to save
+    if (!llama_has_moe_profile(ctx)) {
+        LOG_WRN("%s: no MoE profile data collected\n", __func__);
+        return;
+    }
+
+    // Disable profiling
+    llama_set_moe_profiling(ctx, false);
+
+    // Analyze and print summary
+    llama_analyze_moe_profile(ctx, params.moe_gpu_fraction);
+    llama_print_moe_profile(ctx);
+
+    // Print recommended CLI override for profile-guided placement
+    llama_print_moe_override_cli(ctx);
+
+    // Save profile to file
+    llama_save_moe_profile(ctx, params.moe_profile_path.c_str());
+    LOG_INF("%s: saved MoE profile to %s\n", __func__, params.moe_profile_path.c_str());
+}
+
 struct llama_model_params common_model_params_to_llama(common_params & params) {
     auto mparams = llama_model_default_params();
 
@@ -1351,6 +1638,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.check_tensors   = params.check_tensors;
     mparams.use_extra_bufts = !params.no_extra_bufts;
     mparams.no_host         = params.no_host;
+    mparams.lazy_moe        = params.lazy_moe;
 
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;

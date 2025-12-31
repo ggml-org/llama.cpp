@@ -31,6 +31,8 @@
 #include "ggml-sycl.h"
 #include "presets.hpp"
 #include "sycl_hw.hpp"
+#include "unified-cache.hpp"
+#include "kv-offload.hpp"
 
 
 #if GGML_SYCL_DNNL
@@ -100,6 +102,22 @@ extern thread_local bool g_ggml_sycl_graph_recording;
         if (UNLIKELY(g_ggml_sycl_tp_debug))  \
             fprintf(stderr, __VA_ARGS__);    \
     } while (0)
+
+// Kernel trace - compile-time toggle for tracing kernel execution flow
+// Enable by uncommenting the define below or adding -DGGML_SYCL_KERNEL_TRACE=1
+// #define GGML_SYCL_KERNEL_TRACE 1
+
+#ifdef GGML_SYCL_KERNEL_TRACE
+#define GGML_SYCL_KTRACE(kernel_name, ...)                                      \
+    do {                                                                        \
+        fprintf(stderr, "[KTRACE] %s", kernel_name);                            \
+        fprintf(stderr, __VA_ARGS__);                                           \
+        fprintf(stderr, "\n");                                                  \
+        fflush(stderr);                                                         \
+    } while (0)
+#else
+#define GGML_SYCL_KTRACE(kernel_name, ...) ((void)0)
+#endif
 
 #define CHECK_TRY_ERROR(expr)                                            \
   [&]() {                                                                \
@@ -277,9 +295,122 @@ inline dpct::err0 ggml_sycl_set_device(const int device) try {
 }
 
 //////////////////////
+enum class reorder_mode : uint8_t {
+    NONE = 0,       // Original AoS layout (Array of Structures)
+    SOA = 1,        // SoA layout: all qs bytes contiguous, then all d values
+    COALESCED = 2,  // Tile-based layout for better cache line utilization (requires SOA first)
+};
+
+// =============================================================================
+// UNIFIED REORDER API - The ONLY way to change tensor reorder state
+// =============================================================================
+// These functions atomically perform BOTH:
+//   1. Data transformation (AoS→SoA, SoA→COALESCED)
+//   2. Flag update (reorder_mode state)
+//
+// CRITICAL: Never expose set_reorder_mode_() or any direct flag setter!
+// The flag MUST always reflect actual data layout. Any desync causes garbage output.
+//
+// reorder_tensor_to_soa:      Defined in ggml-sycl.cpp (SOA transform code there)
+// convert_tensor_to_coalesced: Defined in mmvq.cpp (COALESCED transform code there)
+//
+// For MoE cached experts (data already transformed by cache_moe_expert_with_reorder):
+//   Use the explicit constructor: optimize_feature(reorder_mode::SOA)
+//   This creates a new instance with the mode set - no mutation after creation.
+// =============================================================================
+struct ggml_tensor;
+bool reorder_tensor_to_soa(const ggml_tensor* tensor, dpct::queue_ptr stream, const char* caller);
+bool convert_tensor_to_coalesced(const ggml_tensor* tensor, dpct::queue_ptr stream, const char* caller);
+
 struct optimize_feature {
-    bool reorder=false;
-    bool coalesced=false;  // Q4_0 weights converted to warp-coalesced layout
+    // ==========================================================================
+    // INVARIANT: reorder_ flag MUST always match actual data layout.
+    // NEVER add a public setter for reorder_! The friend functions below are
+    // the ONLY authorized way to change state because they ensure the data
+    // transformation happens atomically with the flag update.
+    //
+    // For pre-transformed cached data (MoE experts), use the explicit constructor
+    // to create a new instance with the correct mode already set.
+    // ==========================================================================
+    friend bool reorder_tensor_to_soa(const ggml_tensor*, dpct::queue_ptr, const char*);
+    friend bool convert_tensor_to_coalesced(const ggml_tensor*, dpct::queue_ptr, const char*);
+
+    // Default: NONE (original AoS layout)
+    optimize_feature() = default;
+
+    // Explicit constructor for pre-transformed cached data (MoE experts)
+    // Use this ONLY when the data is already in the specified layout.
+    explicit optimize_feature(reorder_mode mode) : reorder_(mode) {}
+
+private:
+    reorder_mode reorder_ = reorder_mode::NONE;
+
+    // For view tensors: pointer to the data owner's optimize_feature.
+    // Views share data with their parent, so reorder state comes from there.
+    // nullptr means this tensor owns its own data (not a view).
+    optimize_feature* data_owner_ = nullptr;
+
+    // PRIVATE: Only callable by friend functions!
+    // This ONLY sets the flag - does NOT transform data.
+    // The friend functions MUST transform data BEFORE calling this.
+    void set_reorder_mode_(reorder_mode new_mode, const char* tensor_name, const char* caller) {
+        if (new_mode == reorder_) {
+            return;  // No change
+        }
+
+        bool valid = false;
+        if (reorder_ == reorder_mode::NONE && new_mode == reorder_mode::SOA) {
+            valid = true;  // NONE → SOA
+        } else if (reorder_ == reorder_mode::SOA && new_mode == reorder_mode::COALESCED) {
+            valid = true;  // SOA → COALESCED
+        }
+
+        if (!valid) {
+            fprintf(stderr, "[SYCL WARNING] Invalid reorder transition %d → %d for tensor '%s'. "
+                    "Valid: NONE→SOA, SOA→COALESCED\n",
+                    (int)reorder_, (int)new_mode, tensor_name ? tensor_name : "?");
+        }
+
+        reorder_ = new_mode;
+    }
+
+public:
+    // Reset reorder mode to NONE when new AoS data is written to the tensor
+    // This is called by set_tensor to invalidate any prior reordering
+    void reset_reorder(const char* tensor_name) {
+        if (reorder_ != reorder_mode::NONE) {
+            fprintf(stderr, "[REORDER-RESET] %d → 0 for '%s' (data overwritten)\n",
+                    (int)reorder_, tensor_name ? tensor_name : "?");
+            reorder_ = reorder_mode::NONE;
+        }
+    }
+
+    // Mark as SoA when data was transformed on CPU before upload (faster than GPU transform)
+    // ONLY call this when the data in device memory is already in SoA layout!
+    void mark_soa_pretransformed(const char* tensor_name) {
+        reorder_ = reorder_mode::SOA;
+        GGML_UNUSED(tensor_name);
+    }
+
+    // Set the data owner for view tensors. Call this when creating a view.
+    void set_data_owner(optimize_feature* owner) { data_owner_ = owner; }
+
+    // Exact mode checks - use these for kernel dispatch
+    bool is_none() const { return get_reorder() == reorder_mode::NONE; }
+    bool is_soa() const { return get_reorder() == reorder_mode::SOA; }
+    bool is_coalesced() const { return get_reorder() == reorder_mode::COALESCED; }
+
+    // Check if ANY reorder was applied - use for "skip if already reordered" logic
+    bool is_reordered() const { return get_reorder() != reorder_mode::NONE; }
+
+    // Get current mode - for views, returns the data owner's mode
+    reorder_mode get_reorder() const {
+        if (data_owner_ != nullptr) {
+            return data_owner_->get_reorder();
+        }
+        return reorder_;
+    }
+
 };
 
 struct sycl_device_info {
@@ -291,7 +422,7 @@ struct sycl_device_info {
     bool    vmm;                // virtual memory support
     size_t  total_vram;
     //sycl_hw_info hw_info;     \\ device id and aarch, currently not used
-    optimize_feature opt_feature;
+    bool    supports_soa_reorder = false;  // Device capability: can use SoA weight layout
 };
 
 
@@ -838,7 +969,7 @@ struct ggml_tensor_extra_gpu {
                                        // tensors
   dpct::event_ptr events[GGML_SYCL_MAX_DEVICES]
                         [GGML_SYCL_MAX_STREAMS]; // events for synchronizing multiple GPUs
-  optimize_feature optimized_feature;
+  optimize_feature optimized_feature = {};  // Must have = {} to ensure default member initializers apply
   tp_layer_type tp_type = tp_layer_type::TP_NONE;  // Cached TP type (set once, avoids string compare)
   bool tp_type_cached = false;  // Whether tp_type has been computed
 
@@ -852,6 +983,7 @@ struct ggml_tensor_extra_gpu {
   int tp_rank = 0;                // Which rank this shard belongs to
   int tp_world_size = 1;          // Total number of ranks
 };
+
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams={});
 
@@ -910,15 +1042,20 @@ namespace sycl_ex = sycl::ext::oneapi::experimental;
 struct ggml_backend_sycl_context {
     int device;
     std::string name;
-    optimize_feature opt_feature;
+    // Device capability: does this device support SoA weight layout optimization?
+    // This is NOT tensor state - it's a static capability of the GPU.
+    // Tensor state is tracked per-tensor in ggml_tensor_extra_gpu::optimized_feature
+    bool supports_soa_reorder;
 
     queue_ptr qptrs[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS] = { { nullptr } };
 
     explicit ggml_backend_sycl_context(int device) :
         device(device),
-        name(GGML_SYCL_NAME + std::to_string(device)) {
-        opt_feature = ggml_sycl_info().devices[device].opt_feature;
+        name(GGML_SYCL_NAME + std::to_string(device)),
+        supports_soa_reorder(ggml_sycl_info().devices[device].supports_soa_reorder) {
     }
+
+    ~ggml_backend_sycl_context();
 
     queue_ptr stream(int device, int stream) {
         // In TP mode, ALWAYS use the shared-context queue so all devices can access
@@ -1054,6 +1191,7 @@ struct ggml_backend_sycl_context {
     bool exec_graph_is_decode = false;  // Track which phase the cached graph was recorded for
     int warmup_decode_n_nodes = 0;   // Track which decode graph has been warmed up
     int warmup_prompt_n_nodes = 0;   // Track which prompt graph has been warmed up
+    bool moe_graphs_disabled = false; // Set when MoE preload fails; disables graphs for all splits
 
     // Pre-allocated buffers for MoE graph recording
     // MUL_MAT_ID needs Q8_1 quantization buffers which cannot be allocated during graph recording
@@ -1097,6 +1235,49 @@ struct ggml_backend_sycl_context {
         }
     } moe_buffers;
 
+    // Pre-allocated buffers for SoA MMVQ graph recording
+    // MUL_MAT with SoA reorder flag needs Q8_1 quantization buffers which cannot be
+    // allocated from pool during graph recording (pointer would change on replay)
+    struct mmvq_soa_buffers_t {
+        // Q8_1 quantization buffers (one per SoA MUL_MAT in decode phase)
+        std::vector<void*> src1_ddq_buffers;
+        std::vector<size_t> src1_ddq_sizes;
+
+        // Buffer usage tracking
+        int current_buffer_idx = 0;
+        bool initialized = false;
+
+        // Max dimensions seen (for reallocation check)
+        int64_t max_ne10 = 0;      // Max input dimension
+        int64_t max_nrows = 0;     // Max rows
+
+        void reset_usage() { current_buffer_idx = 0; }
+
+        void* get_next_buffer(size_t required_size) {
+            if (current_buffer_idx >= (int)src1_ddq_buffers.size()) {
+                return nullptr;  // Fall back to pool alloc
+            }
+            if (required_size > src1_ddq_sizes[current_buffer_idx]) {
+                return nullptr;  // Buffer too small
+            }
+            return src1_ddq_buffers[current_buffer_idx++];
+        }
+
+        void free_buffers(queue_ptr stream) {
+            for (size_t i = 0; i < src1_ddq_buffers.size(); i++) {
+                if (src1_ddq_buffers[i]) {
+                    sycl::free(src1_ddq_buffers[i], *stream);
+                }
+            }
+            src1_ddq_buffers.clear();
+            src1_ddq_sizes.clear();
+            initialized = false;
+            current_buffer_idx = 0;
+            max_ne10 = 0;
+            max_nrows = 0;
+        }
+    } mmvq_soa_buffers;
+
     // Q8_1 quantization cache for MoE: avoids re-quantizing same input across gate/up/down
     // In MoE layers, the same input is used for all projections - caching saves 3x quantization
     struct moe_quant_cache {
@@ -1135,6 +1316,21 @@ struct ggml_backend_sycl_context {
     }
 
     ggml_sycl_pool & host_pool() { return host_pool(device); }
+
+    // Flag to disable graphs when weight streaming is active
+    bool weight_streaming_graphs_disabled = false;
+
+    // KV offload manager for long context support (initialized lazily when enabled)
+    std::unique_ptr<ggml_sycl::kv_offload_manager> kv_offload_mgr_;
+
+    // Initialize KV offload manager with given configuration
+    void init_kv_offload(const ggml_sycl::kv_offload_config& config);
+
+    // Check if KV offload is initialized
+    bool has_kv_offload() const { return kv_offload_mgr_ != nullptr; }
+
+    // Get the KV offload manager (must be initialized first)
+    ggml_sycl::kv_offload_manager* kv_offload() { return kv_offload_mgr_.get(); }
 };
 
 // GGML_OP_ALL_REDUCE_SUM handler for SYCL backend

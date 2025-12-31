@@ -228,6 +228,7 @@ static void soft_max_f32_sycl(const float *x, const T *mask,
                               const float *sinks, float *dst,
                               const soft_max_params &params,
                               dpct::queue_ptr stream, int device) {
+    GGML_SYCL_KTRACE("soft_max_f32", " ncols=%lld nrows=%lld", (long long)params.ncols, (long long)params.nrows_x);
     int nth = WARP_SIZE;
     int max_block_size = ggml_sycl_info().max_work_group_sizes[device];
     const int64_t ncols_x = params.ncols;

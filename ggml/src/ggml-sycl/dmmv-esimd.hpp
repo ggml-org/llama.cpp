@@ -196,6 +196,12 @@ inline bool launch_dmmv_q4_0_esimd(
 
                     for (int i = 0; i < ncols; i += iter_stride) {
                         const int col = i + vals_per_iter * tid;
+
+                        // Bounds check: skip if this thread's column is out of range
+                        if (col >= ncols) {
+                            continue;
+                        }
+
                         const int ib = (row * ncols + col) / qk;  // block index
                         const int iqs = (col % qk) / qr;  // quant index (0-15)
                         const int iybs = col - col % qk;  // y block start

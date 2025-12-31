@@ -28,6 +28,7 @@ add_library(llama
             llama-memory-recurrent.cpp
             llama-pp-scheduler.cpp
             llama-mmap.cpp
+            llama-moe-profile.cpp
             llama-model-loader.cpp
             llama-model-saver.cpp
             llama-model.cpp

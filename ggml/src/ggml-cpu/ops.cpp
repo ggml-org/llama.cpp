@@ -4601,6 +4601,8 @@ static void ggml_compute_forward_get_rows_q(
     const ggml_type type = src0->type;
     ggml_to_float_t const dequantize_row_q = ggml_get_type_traits(type)->to_float;
 
+    GGML_UNUSED(src1);
+
     assert(ne0  == nc);
     assert(ne02 == ne11);
     assert(nb00 == ggml_type_size(type));

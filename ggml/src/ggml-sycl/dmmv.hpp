@@ -24,4 +24,16 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
     const int64_t src1_ncols, const int64_t src1_padded_row_size,
     const dpct::queue_ptr &stream);
 
+// Q6_K DMMV kernel dispatch functions (for unit testing)
+void dequantize_mul_mat_vec_q6_K_sycl(const void *vx, const float *y,
+                                      float *dst, const int ncols,
+                                      const int nrows,
+                                      dpct::queue_ptr stream);
+
+void dequantize_mul_mat_vec_q6_K_sycl_soa(const void *vx, const float *y,
+                                          float *dst, const int ncols,
+                                          const int nrows, const int64_t ne01,
+                                          const int row_low,
+                                          dpct::queue_ptr stream);
+
 #endif // GGML_SYCL_DMMV_HPP

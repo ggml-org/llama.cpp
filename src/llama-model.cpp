@@ -2418,16 +2418,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     };
 
     // assign the input layer
-    // For tensor parallelism, input tensors MUST be on GPU because:
-    // 1. Intel Arc GPUs don't support efficient P2P memory access
-    // 2. Host memory is 30-50x slower for kernel access than device memory
-    // 3. The embedding table needs to be replicated on all TP devices
-    if (split_mode == LLAMA_SPLIT_MODE_TENSOR_PARALLEL && !devices.empty()) {
-        auto * dev = devices.at(0);  // Main TP device
-        LLAMA_LOG_DEBUG("load_tensors: input layer assigned to GPU for tensor parallelism\n");
+    // Offload to GPU when any GPU layers are requested
+    if (!devices.empty() && n_gpu_layers > 0) {
+        auto * dev = devices.at(0);
+        LLAMA_LOG_DEBUG("load_tensors: input layer assigned to GPU (n_gpu_layers=%d)\n", n_gpu_layers);
         pimpl->dev_input = {dev, &pimpl->gpu_buft_list.at(dev)};
     } else {
-        // there is very little benefit to offloading the input layer, so always keep it on the CPU
         pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
     }
 
@@ -2518,12 +2514,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         const int TP_COL = tp_world_size > 1 ? llama_model_loader::TENSOR_TP_COL_PARALLEL : 0;
         const int TP_ROW = tp_world_size > 1 ? llama_model_loader::TENSOR_TP_ROW_PARALLEL : 0;
 
-        // Debug: print TP dimensions during model loading
-        LLAMA_LOG_INFO("[TP MODEL] tp_world_size=%lld, n_head=%u, n_head_kv=%u, n_embd_head_k=%u, n_embd_k_gqa=%lld\n",
-                       (long long)tp_world_size, n_head, n_head_kv, n_embd_head_k, (long long)n_embd_k_gqa);
-        LLAMA_LOG_INFO("[TP MODEL] tp_n_head=%lld, tp_n_embd_k_gqa=%lld, tp_n_embd_head_k_x_n_head=%lld\n",
-                       (long long)tp_n_head, (long long)tp_n_embd_k_gqa, (long long)tp_n_embd_head_k_x_n_head);
-
         if (n_expert > 0 && hparams.n_expert_used == 0) {
             throw std::runtime_error("model has expert layers but no expert layers are used");
         }
@@ -2609,7 +2599,45 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     GGML_ABORT("invalid layer %d for tensor %s", info.layer, tn.str().c_str());
             }
 
+            // lazy MoE: force expert weight tensors to SYCL-accessible host memory
+            // This keeps ops on GPU backend while data stays in host memory for lazy caching
+            bool is_expert_tensor = (tn_tensor == LLM_TENSOR_FFN_GATE_EXPS ||
+                                     tn_tensor == LLM_TENSOR_FFN_DOWN_EXPS ||
+                                     tn_tensor == LLM_TENSOR_FFN_UP_EXPS ||
+                                     tn_tensor == LLM_TENSOR_FFN_NORM_EXPS ||
+                                     tn_tensor == LLM_TENSOR_FFN_GATE_CHEXPS ||
+                                     tn_tensor == LLM_TENSOR_FFN_DOWN_CHEXPS ||
+                                     tn_tensor == LLM_TENSOR_FFN_UP_CHEXPS);
+
             ggml_backend_buffer_type_t buft = nullptr;
+            bool is_lazy_moe_tensor = false;
+
+            // For lazy_moe, use CPU buffer type (mmap) instead of GPU host buffer:
+            // 1. Avoids large pinned memory allocations that crash the system
+            // 2. Uses OS lazy paging - pages only loaded when accessed
+            // 3. Expert cache streams data through small staging buffer to GPU
+            // SYCL backend auto-detects non-device memory via sycl::get_pointer_type()
+            static bool lazy_moe_debug_once = true;
+            if (lazy_moe_debug_once && is_expert_tensor) {
+                LLAMA_LOG_DEBUG("lazy_moe check: lazy_moe=%d is_expert=%d layer=%d tn=%s\n",
+                               (int)params.lazy_moe, (int)is_expert_tensor, (int)info.layer, tn.str().c_str());
+                lazy_moe_debug_once = false;
+            }
+            if (params.lazy_moe && is_expert_tensor && info.layer == LLM_TENSOR_LAYER_REPEATING) {
+                // Use CPU buffer type to leverage mmap
+                auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+                if (cpu_dev) {
+                    buft = ggml_backend_dev_buffer_type(cpu_dev);
+                    is_lazy_moe_tensor = true;
+                    static bool first_lazy_moe = true;
+                    if (first_lazy_moe) {
+                        LLAMA_LOG_INFO("lazy_moe: using mmap for expert tensors (per-expert GPU caching)\n");
+                        first_lazy_moe = false;
+                    }
+                } else {
+                    LLAMA_LOG_WARN("lazy_moe: no CPU backend found, expert caching disabled\n");
+                }
+            }
 
             // check overrides
             if (ml.tensor_buft_overrides) {
@@ -2641,6 +2669,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             }
 
             // avoid using a host buffer when using mmap
+            // (lazy_moe tensors already use CPU buffer, so they won't match host buffer check)
             auto * buft_dev = ggml_backend_buft_get_device(buft);
             if (ml.use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
                 auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
@@ -2701,15 +2730,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         // TP: wq, wk, wv are column-parallel (output dim sharded)
                         // TP: wo is row-parallel (input dim sharded)
-                        if (i == 0) {
-                            LLAMA_LOG_INFO("[TP CREATE] layer 0: creating wq with dims {%lld, %lld}, TP_COL=%d\n",
-                                          (long long)n_embd, (long long)tp_n_embd_head_k_x_n_head, TP_COL);
-                        }
                         layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, tp_n_embd_head_k_x_n_head}, TP_COL);
-                        if (i == 0 && layer.wq) {
-                            LLAMA_LOG_INFO("[TP CREATE] layer 0: wq @ %p created with actual dims [%lld, %lld]\n",
-                                          (void*)layer.wq, (long long)layer.wq->ne[0], (long long)layer.wq->ne[1]);
-                        }
                         layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, tp_n_embd_k_gqa}, TP_COL);
                         layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, tp_n_embd_v_gqa}, TP_COL);
                         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {tp_n_embd_head_k_x_n_head, n_embd}, TP_ROW);
@@ -7749,6 +7770,7 @@ llama_model_params llama_model_default_params() {
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
+        /*.lazy_moe                    =*/ false,
     };
 
     return result;

@@ -70,6 +70,7 @@
 #include "ggml-sycl/cont-batching.hpp"
 #include "ggml-sycl/quantized-comm.hpp"
 #include "ggml-sycl/sycl-profiling.hpp"
+#include "ggml-sycl/unified-cache.hpp"
 #include "ggml.h"
 
 static bool g_sycl_loaded = false;
@@ -86,6 +87,21 @@ int g_ggml_sycl_use_xmx_gemm = 0;  // Enable XMX-accelerated GEMM (experimental,
 int g_ggml_sycl_xmx_threshold = 1024; // Max batch size for XMX (XMX faster for N < threshold)
 #endif
 thread_local bool g_ggml_sycl_graph_recording = false;  // True when SYCL graph is recording
+
+// Model load phase flag - when true, skip weight caching to avoid OOM during load
+static std::atomic<bool> g_sycl_in_model_load{false};
+
+void ggml_backend_sycl_set_model_loading(bool loading) {
+    g_sycl_in_model_load.store(loading, std::memory_order_release);
+}
+
+// Cross-device staging cache for multi-GPU (Intel Arc has no P2P)
+// Key: (slot_idx << 32 | target_device) -> staged pointer
+std::unordered_map<uint64_t, void*> g_expert_staging;
+std::mutex g_expert_staging_mutex;
+
+// Forward declaration for layer number extraction
+static int extract_layer_number(const char * name);
 
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
@@ -119,7 +135,9 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.devices[i].cc =
             100 * prop.get_major_version() + 10 * prop.get_minor_version();
         info.devices[i].nsm = prop.get_max_compute_units();
-        info.devices[i].opt_feature.reorder = device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
+        // Device-level capability: Intel GPUs support SoA weight reordering optimizations
+        info.devices[i].supports_soa_reorder =
+            device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
         info.devices[i].smpbo = prop.get_local_mem_size();
 
         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
@@ -176,7 +194,7 @@ static void print_device_opt_feature(int device_count) {
       std::string device_type_s = device_type.str();
       device_type_s = std::regex_replace(device_type_s, std::regex("ext_oneapi_"), "");
       GGML_LOG_INFO("|%2d|%19s|%7s|\n", id, device_type_s.c_str(),
-        ggml_sycl_info().devices[id].opt_feature.reorder ? "Y": "N");
+        ggml_sycl_info().devices[id].supports_soa_reorder ? "Y": "N");
     }
 
 }
@@ -357,8 +375,9 @@ struct ggml_backend_sycl_buffer_context {
     void * dev_ptr = nullptr;
     queue_ptr stream;
     std::string name;
-    optimize_feature opt_feature;
-    std::vector<ggml_tensor_extra_gpu *> tensor_extras;
+    bool supports_soa_reorder;  // Device capability (not tensor state)
+    // Track both tensor and extra so we can null tensor->extra on reset
+    std::vector<std::pair<ggml_tensor *, ggml_tensor_extra_gpu *>> tensor_extras;
 
     // TP compute buffer support: per-device pointers
     // For TP compute buffers, we allocate on ALL TP devices and track base pointers here
@@ -367,10 +386,10 @@ struct ggml_backend_sycl_buffer_context {
     queue_ptr tp_streams[GGML_SYCL_MAX_DEVICES] = {nullptr};
 
     ggml_backend_sycl_buffer_context(int device, void * dev_ptr, queue_ptr stream) :
-        device(device), dev_ptr(dev_ptr), stream(stream) {
+        device(device), dev_ptr(dev_ptr), stream(stream),
+        supports_soa_reorder(ggml_sycl_info().devices[device].supports_soa_reorder) {
             check_allow_gpu_index(device);
             name = (GGML_SYCL_NAME + std::to_string(device));
-            opt_feature = ggml_sycl_info().devices[device].opt_feature;
         }
 
     ~ggml_backend_sycl_buffer_context() {
@@ -387,14 +406,60 @@ struct ggml_backend_sycl_buffer_context {
             SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(dev_ptr, *stream)));
         }
 
-        // Release extra used by tensors
-        for (ggml_tensor_extra_gpu * extra : tensor_extras) {
+        // Release extra used by tensors and null tensor->extra to avoid dangling pointers
+        for (auto & [tensor, extra] : tensor_extras) {
+            if (tensor != nullptr) {
+                tensor->extra = nullptr;
+            }
             release_extra_gpu(extra);
         }
     }
 };
 
 static const char * ggml_backend_sycl_buffer_type_get_name(ggml_backend_buffer_type_t buft);
+
+// ============================================================================
+// Weight Streaming: Uses unified cache for all weight caching (dense + MoE)
+// On first access: staging (mmap → host → device cache via unified cache)
+// On subsequent access: fast D2D copy (device cache → tensor)
+// ============================================================================
+
+// Get or create cached device copy of mmap'd weight data
+// Returns cached device pointer, or nullptr if caching not needed/failed
+// key_ptr: stable identifier (tensor->data) that doesn't change across set_tensor calls
+// src_ptr: source data pointer (may change if data is overwritten)
+static void* get_or_cache_weight(const void* key_ptr, const void* src_ptr, size_t size, int device, sycl::queue* stream) {
+    (void)device;  // Unified cache handles device selection
+
+    // Check if weight streaming is enabled
+    if (!ggml_sycl::unified_cache_enabled() || key_ptr == nullptr || src_ptr == nullptr || size == 0) {
+        return nullptr;
+    }
+
+    // Skip caching during model load phase to avoid OOM on large models
+    if (g_sycl_in_model_load.load(std::memory_order_acquire)) {
+        return nullptr;
+    }
+
+    // Use unified cache for coordinated memory management
+    ggml_sycl::unified_cache* cache = ggml_sycl::get_unified_cache(*stream);
+    if (!cache) {
+        return nullptr;
+    }
+
+    // Try to cache with unified cache (handles eviction automatically)
+    // Uses key_ptr (tensor->data) as stable key, src_ptr as data source
+    // If src_ptr changed since last cache, data will be re-uploaded
+    void* cached_ptr = cache->ensure_cached(key_ptr, src_ptr, size,
+                                             ggml_sycl::cache_entry_type::DENSE_WEIGHT,
+                                             -1, -1);  // layer=-1, expert=-1 for dense weights
+
+    if (cached_ptr) {
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cached dense weight: key=%p src=%p, %zu bytes\n", key_ptr, src_ptr, size);
+    }
+
+    return cached_ptr;
+}
 
 bool ggml_backend_buffer_is_sycl(ggml_backend_buffer_t buffer) {
     return buffer->buft->iface.get_name == ggml_backend_sycl_buffer_type_get_name;
@@ -433,7 +498,7 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
             if (extra == nullptr) {
                 extra = new ggml_tensor_extra_gpu{};
                 tensor->extra = extra;
-                ctx->tensor_extras.push_back(extra);
+                ctx->tensor_extras.push_back({tensor, extra});
             }
 
             // Calculate offset of this VIEW tensor within the buffer
@@ -461,7 +526,7 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
         if (extra == nullptr) {
             extra = new ggml_tensor_extra_gpu{};
             tensor->extra = extra;
-            ctx->tensor_extras.push_back(extra);
+            ctx->tensor_extras.push_back({tensor, extra});
         }
 
         // Calculate offset of this tensor within the buffer
@@ -483,7 +548,10 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
         !g_ggml_sycl_disable_optimize) {
         ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
         tensor->extra                 = extra;
-        ctx->tensor_extras.push_back(extra);  //used to release it when destroy ctx.
+        ctx->tensor_extras.push_back({tensor, extra});  //used to release it when destroy ctx.
+        GGML_SYCL_DEBUG("[SOA-DEBUG] init_tensor: %s type=%d allocated extra=%p reorder_mode=%d (total=%zu)\n",
+                       tensor->name, tensor->type, (void*)extra,
+                       (int)extra->optimized_feature.get_reorder(), ctx->tensor_extras.size());
     }
 
     if (ggml_is_quantized(tensor->type)) {
@@ -505,6 +573,13 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+// Forward declarations for CPU-side SoA reorder functions (defined later in file)
+static void reorder_q4_0_cpu(void* dst_soa, const void* src_aos, int ncols, int nrows);
+static void reorder_q8_0_cpu(void* dst_soa, const void* src_aos, int ncols, int nrows);
+static void reorder_q4_k_cpu(void* dst_soa, const void* src_aos, size_t nblocks);
+static void reorder_q6_k_cpu(void* dst_soa, const void* src_aos, size_t nblocks);
+static void reorder_mxfp4_cpu(void* dst_soa, const void* src_aos, int ncols, int nrows);
+
 static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                 ggml_tensor *tensor,
                                                 const void *data, size_t offset,
@@ -517,16 +592,148 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     // Use the buffer's stream for proper queue synchronization with compute operations
     auto stream = ctx->stream ? ctx->stream : &(dpct::dev_mgr::instance().get_device(ctx->device).default_queue());
     SYCL_CHECK(CHECK_TRY_ERROR(dpct::dev_mgr::instance().get_device(ctx->device).queues_wait_and_throw()));
+
+    // Reset reorder flag when new data is written - data is now in AoS format
+    // This is critical for correctness: if tensor was previously reordered to SoA,
+    // the new AoS data would be misinterpreted as SoA without this reset
+    ggml_tensor_extra_gpu* extra = (ggml_tensor_extra_gpu*)tensor->extra;
+    if (extra) {
+        extra->optimized_feature.reset_reorder(tensor->name);
+    }
+
+    // Determine if we should do CPU-side SoA reordering during upload
+    // This is faster than GPU-side reorder: no kernel launch, data already in cache
+    // Check this FIRST before cache path, because cache stores AoS and we need SoA
+    //
+    // NOTE: We no longer exclude token_embd by name because:
+    // 1. When tied weights are used, output tensors share the name "token_embd.weight"
+    //    but need SoA layout for MUL_MAT operations
+    // 2. GET_ROWS for Q4_0/Q8_0 already handles SoA layout via is_soa() check
+    // 3. GET_ROWS for Q6_K is not supported on GPU (falls back to CPU)
+    bool do_cpu_reorder = false;
+    bool type_ok = (tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q8_0 ||
+                    tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q6_K ||
+                    tensor->type == GGML_TYPE_MXFP4);
+    bool dims_ok = tensor->ne[0] > 0 && tensor->ne[1] > 0;
+    bool full_tensor = (offset == 0 && size == ggml_nbytes(tensor));
+
+    if (type_ok && !g_ggml_sycl_disable_optimize && ctx->supports_soa_reorder && dims_ok && full_tensor) {
+        do_cpu_reorder = true;
+    }
+
+    // Debug: trace CPU reorder decision for MXFP4
+    if (tensor->type == GGML_TYPE_MXFP4) {
+        if (false) fprintf(stderr, "[SET_TENSOR-DEBUG] MXFP4: %s type_ok=%d disable_opt=%d soa_reorder=%d dims_ok=%d full=%d -> do_cpu_reorder=%d\n",
+                tensor->name, type_ok, g_ggml_sycl_disable_optimize, ctx->supports_soa_reorder, dims_ok, full_tensor, do_cpu_reorder);
+    }
+
+    // === CPU-side SoA reorder (if needed) ===
+    // Do this FIRST so we can cache the already-reordered data.
+    // Cache then stores SoA, and future D2D copies from cache are already reordered.
+    char* reorder_buf = nullptr;
+    const void* src_for_upload = data;
+
+    if (do_cpu_reorder) {
+        reorder_buf = (char*) malloc(size);
+        const int64_t ncols = tensor->ne[0];
+        // Use ggml_nrows to handle 3D tensors (e.g., MoE expert weights: [hidden, ffn, n_experts])
+        const int64_t nrows = ggml_nrows(tensor);
+        switch (tensor->type) {
+            case GGML_TYPE_Q4_0:
+                reorder_q4_0_cpu(reorder_buf, data, ncols, nrows);
+                GGML_SYCL_DEBUG("[CPU-REORDER] Q4_0 AoS→SoA: %s ncols=%lld nrows=%lld\n",
+                                tensor->name, ncols, nrows);
+                break;
+            case GGML_TYPE_Q8_0:
+                reorder_q8_0_cpu(reorder_buf, data, ncols, nrows);
+                GGML_SYCL_DEBUG("[CPU-REORDER] Q8_0 AoS→SoA: %s ncols=%lld nrows=%lld\n",
+                                tensor->name, ncols, nrows);
+                break;
+            case GGML_TYPE_Q4_K: {
+                const size_t nblocks = size / sizeof(block_q4_K);
+                reorder_q4_k_cpu(reorder_buf, data, nblocks);
+                GGML_SYCL_DEBUG("[CPU-REORDER] Q4_K AoS→SoA: %s nblocks=%zu\n",
+                                tensor->name, nblocks);
+                break;
+            }
+            case GGML_TYPE_Q6_K: {
+                const size_t nblocks = size / sizeof(block_q6_K);
+                reorder_q6_k_cpu(reorder_buf, data, nblocks);
+                GGML_SYCL_DEBUG("[CPU-REORDER] Q6_K AoS→SoA: %s nblocks=%zu\n",
+                                tensor->name, nblocks);
+                break;
+            }
+            case GGML_TYPE_MXFP4:
+                reorder_mxfp4_cpu(reorder_buf, data, ncols, nrows);
+                GGML_SYCL_DEBUG("[CPU-REORDER] MXFP4 AoS→SoA: %s ncols=%lld nrows=%lld\n",
+                                tensor->name, ncols, nrows);
+                break;
+            default:
+                // Shouldn't reach here due to type check above
+                memcpy(reorder_buf, data, size);
+                break;
+        }
+        src_for_upload = reorder_buf;
+    }
+
+    // === Weight streaming: cache (already reordered) weights ===
+    // First access: staging (mmap → host reorder → device cache)
+    // Subsequent: fast D2D copy (device cache → tensor)
+    // Cache stores SoA data if reordering was done above.
+    static bool cache_disabled = (std::getenv("GGML_SYCL_WEIGHT_CACHE_DISABLE") != nullptr);
+    bool is_weight_buffer = (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    if (!cache_disabled && is_weight_buffer) {
+        // Use tensor->data as stable key (doesn't change across set_tensor calls)
+        // Use src_for_upload as source (may be reordered data)
+        // Cache stores whatever we give it (AoS or SoA depending on reorder)
+        void* cached_ptr = get_or_cache_weight(tensor->data, src_for_upload, size, ctx->device, stream);
+        if (cached_ptr != nullptr) {
+            // Fast path: D2D copy from cached device memory
+            GGML_SYCL_DEBUG("[WEIGHT-CACHE] D2D copy: %zu bytes from %p to %p+%zu%s\n",
+                            size, cached_ptr, tensor->data, offset,
+                            do_cpu_reorder ? " (SoA cached)" : "");
+            SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, cached_ptr, size).wait()));
+            if (reorder_buf) free(reorder_buf);
+            // Mark tensor as reordered if we did CPU-side reorder
+            if (do_cpu_reorder && extra) {
+                extra->optimized_feature.mark_soa_pretransformed(tensor->name);
+            } else if (do_cpu_reorder && !extra) {
+                fprintf(stderr, "[SET_TENSOR-ERROR] CPU reorder done but extra is NULL: %s\n", tensor->name);
+            }
+            return;
+        }
+    }
+
+    // === Direct upload path (cache miss or cache disabled) ===
 #ifndef _WIN32
-    // Note: Use host buffer to save the data from mmap(), then copy to device. It's workaround for mmap() issue on PVC GPU.
-    // This function will be called during load model from disk. Use memory buffer replace dynamic won't save more time and brings potential memory leak risk here.
-    char * host_buf = (char *) malloc(size);
-    memcpy(host_buf, data, size);
-    SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, host_buf, size).wait()));
-    free(host_buf);
+    // Note: Use host buffer to save the data from mmap(), then copy to device.
+    // This function will be called during load model from disk.
+    if (reorder_buf) {
+        // Already have reordered data in reorder_buf
+        SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, reorder_buf, size).wait()));
+        free(reorder_buf);
+    } else {
+        // No reorder needed - use staging buffer for mmap workaround
+        char * host_buf = (char *) malloc(size);
+        memcpy(host_buf, data, size);
+        SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, host_buf, size).wait()));
+        free(host_buf);
+    }
 #else
-    SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, data, size).wait()));
+    if (reorder_buf) {
+        SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, reorder_buf, size).wait()));
+        free(reorder_buf);
+    } else {
+        SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, data, size).wait()));
+    }
 #endif
+
+    // Mark tensor as reordered if we did CPU-side reorder
+    if (do_cpu_reorder && extra) {
+        extra->optimized_feature.mark_soa_pretransformed(tensor->name);
+    } else if (do_cpu_reorder && !extra) {
+        fprintf(stderr, "[SET_TENSOR-ERROR] CPU reorder done but extra is NULL: %s\n", tensor->name);
+    }
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -732,7 +939,15 @@ static void ggml_backend_sycl_buffer_reset(ggml_backend_buffer_t buffer) {
     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
 
     if (ctx != nullptr) {
-        for (ggml_tensor_extra_gpu * extra : ctx->tensor_extras) {
+        GGML_SYCL_DEBUG("[SOA-DEBUG] buffer_reset: freeing %zu extras (buffer=%p)\n",
+                       ctx->tensor_extras.size(), (void*)buffer);
+        for (auto & [tensor, extra] : ctx->tensor_extras) {
+            GGML_SYCL_DEBUG("[SOA-DEBUG] buffer_reset: releasing extra=%p for tensor=%s\n",
+                           (void*)extra, tensor ? tensor->name : "null");
+            // Null tensor->extra BEFORE releasing to avoid dangling pointer
+            if (tensor != nullptr) {
+                tensor->extra = nullptr;
+            }
             release_extra_gpu(extra);
         }
         ctx->tensor_extras.clear();  // reset the tensor_extras vector
@@ -1489,6 +1704,18 @@ static enum ggml_status ggml_backend_sycl_tp_buffer_init_tensor(
             extra->tp_world_size = parent_extra->tp_world_size;
             extra->tp_type = parent_extra->tp_type;
             extra->tp_type_cached = true;
+
+            // Find the root data owner (not an intermediate view)
+            // and point to its optimized_feature so get_reorder() returns current state
+            ggml_tensor_extra_gpu* root_extra = parent_extra;
+            ggml_tensor* root = tensor->view_src;
+            while (root->view_src != nullptr) {
+                root = root->view_src;
+                if (root->extra) {
+                    root_extra = static_cast<ggml_tensor_extra_gpu*>(root->extra);
+                }
+            }
+            extra->optimized_feature.set_data_owner(&root_extra->optimized_feature);
 
             // Calculate offset from parent to this view
             // tensor->data and tensor->view_src->data are both host pointers during graph build
@@ -3391,6 +3618,11 @@ static ggml_backend_buffer_t ggml_backend_sycl_host_buffer_type_alloc_buffer(ggm
 
     if (ptr == nullptr) {
         // fallback to cpu buffer
+        // WARNING: This breaks lazy_moe! The returned buffer won't be SYCL-accessible.
+        // This typically happens when trying to allocate too much pinned memory.
+        GGML_LOG_WARN("[SYCL] sycl::malloc_host(%.1f MB) failed, falling back to CPU buffer. "
+                      "lazy_moe will NOT work - expert weights won't be accessible from GPU.\n",
+                      size / (1024.0f * 1024.0f));
         return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
     }
 
@@ -3742,12 +3974,35 @@ std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_host(que
     return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_host(qptr, device));
 }
 
+ggml_backend_sycl_context::~ggml_backend_sycl_context() = default;
+
 std::unique_ptr<ggml_sycl_pool> ggml_backend_sycl_context::new_pool_for_device(queue_ptr qptr, int device) {
     // TBD: NO VMM support
     // if (ggml_sycl_info().devices[device].vmm) {
     //     return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_vmm(device));
     // }
    return std::unique_ptr<ggml_sycl_pool>(new ggml_sycl_pool_leg(qptr, device));
+}
+
+void ggml_backend_sycl_context::init_kv_offload(const ggml_sycl::kv_offload_config& config) {
+    if (kv_offload_mgr_) {
+        GGML_LOG_DEBUG("kv_offload: already initialized\n");
+        return;
+    }
+
+    if (config.gpu_kv_budget == 0) {
+        GGML_LOG_WARN("kv_offload: invalid gpu_kv_budget (0)\n");
+        return;
+    }
+
+    try {
+        kv_offload_mgr_ = std::make_unique<ggml_sycl::kv_offload_manager>(*stream(), config);
+        GGML_LOG_INFO("[KV-OFFLOAD] Initialized: threshold=%d, gpu_budget=%.1f MB, block_size=%d\n",
+                      config.offload_threshold, config.gpu_kv_budget / (1024.0f * 1024.0f), config.block_size);
+    } catch (const sycl::exception& e) {
+        GGML_LOG_ERROR("kv_offload: failed to initialize: %s\n", e.what());
+        kv_offload_mgr_.reset();
+    }
 }
 
 // TBD pool with virtual memory management
@@ -4557,7 +4812,9 @@ inline void ggml_sycl_op_mul_mat_sycl(
         if (src0->type != GGML_TYPE_F32) {
             scope_op_debug_print scope_dbg_print(__func__, "/to_fp32_sycl", dst, /*num_src=*/2,
                                                  " : converting src0 to fp32");
-            const to_fp32_sycl_t to_fp32_sycl = ggml_get_to_fp32_sycl(src0->type, dst);
+            // SoA reorder kernels require full tensor (they compute d_offset from k)
+            const bool src0_full_tensor = (row_diff == src0->ne[1]);
+            const to_fp32_sycl_t to_fp32_sycl = ggml_get_to_fp32_sycl(src0->type, dst, src0_full_tensor);
             GGML_ASSERT(to_fp32_sycl != nullptr);
             src0_ddq_as_f32.alloc(row_diff*ne00);
             to_fp32_sycl(src0_dd_i, src0_ddq_as_f32.get(), row_diff*ne00, stream);
@@ -4565,7 +4822,8 @@ inline void ggml_sycl_op_mul_mat_sycl(
         if (src1->type != GGML_TYPE_F32) {
             scope_op_debug_print scope_dbg_print(__func__, "/to_fp32_sycl", dst, /*num_src=*/2,
                                                  " : converting src1 to fp32");
-            const to_fp32_sycl_t to_fp32_sycl = ggml_get_to_fp32_sycl(src1->type, dst);
+            // src1 is not reordered, full_tensor flag doesn't matter
+            const to_fp32_sycl_t to_fp32_sycl = ggml_get_to_fp32_sycl(src1->type, dst, true);
             GGML_ASSERT(to_fp32_sycl != nullptr);
             src1_ddq_as_f32.alloc(src1_ncols*ne10);
             to_fp32_sycl(src1_ddf_i, src1_ddq_as_f32.get(), src1_ncols*ne10, stream);
@@ -4855,7 +5113,9 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
     const bool src0_is_contiguous = ggml_is_contiguous(src0);
     const bool src1_is_contiguous = ggml_is_contiguous(src1);
 
-    int64_t src1_padded_col_size = GGML_PAD(ne10, MATRIX_ROW_PADDING);
+    // ne10 = K dimension = number of rows in Y matrix (each column has ne10 elements)
+    // This is the padded row size, used for stride calculations in quantized buffers
+    int64_t src1_padded_row_size = GGML_PAD(ne10, MATRIX_ROW_PADDING);
 
     const bool split = ggml_backend_buffer_is_sycl_split(src0->buffer);
     GGML_ASSERT(!(split && ne02 > 1));
@@ -4939,10 +5199,32 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                 GGML_SYCL_DEBUG("[MUL_MAT] TP buffer src0 device=%d ptr=%p (tensor=%s)\n",
                                 i, (void*)dev[i].src0_dd, src0->name);
             } else {
-                // Use ggml_sycl_get_data_ptr which handles staging mmap'd data for TP mode
-                dev[i].src0_dd = (char *) ggml_sycl_get_data_ptr(src0, i);
-                GGML_SYCL_DEBUG("[MUL_MAT] non-TP buffer src0 device=%d ptr=%p (tensor=%s)\n",
-                                i, (void*)dev[i].src0_dd, src0->name);
+                // Weight streaming: cache CPU weights to GPU on-demand via unified cache
+                if (ggml_sycl::unified_cache_enabled() && src0->buffer &&
+                    !ggml_backend_buffer_is_sycl(src0->buffer)) {
+                    // src0 is on CPU (mmap'd) - stream to GPU cache
+                    sycl::queue& stream = *ctx.stream(i, 0);
+                    // For mmap'd weights, use same pointer for key and source
+                    // (mmap pointers are stable and content doesn't change)
+                    void* cached_ptr = ggml_sycl::get_unified_cache(stream)->ensure_cached(
+                        src0->data, src0->data, ggml_nbytes(src0),
+                        ggml_sycl::cache_entry_type::DENSE_WEIGHT,
+                        extract_layer_number(src0->name), -1);
+                    if (cached_ptr) {
+                        dev[i].src0_dd = (char *) cached_ptr;
+                        GGML_SYCL_DEBUG("[MUL_MAT] weight streaming: cached tensor=%s ptr=%p\n",
+                                        src0->name, (void*)dev[i].src0_dd);
+                    } else {
+                        // Cache full - fall back to staging transfer
+                        GGML_LOG_WARN("[MUL_MAT] unified cache full, fallback for tensor=%s\n", src0->name);
+                        dev[i].src0_dd = (char *) ggml_sycl_get_data_ptr(src0, i);
+                    }
+                } else {
+                    // Use ggml_sycl_get_data_ptr which handles staging mmap'd data for TP mode
+                    dev[i].src0_dd = (char *) ggml_sycl_get_data_ptr(src0, i);
+                    GGML_SYCL_DEBUG("[MUL_MAT] non-TP buffer src0 device=%d ptr=%p (tensor=%s)\n",
+                                    i, (void*)dev[i].src0_dd, src0->name);
+                }
             }
         } else {
             dev[i].src0_dd = dev[i].src0_dd_alloc.alloc(ctx.pool(i), ggml_nbytes(src0));
@@ -4958,14 +5240,133 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
             dev[i].src1_ddf = dev[i].src1_ddf_alloc.alloc(ctx.pool(i), ggml_nelements(src1));
         }
 
-        if constexpr(quantize_enabled) {
-            dev[i].src1_ddq = dev[i].src1_ddq_alloc.alloc(ctx.pool(i), nrows1*src1_padded_col_size*q8_1_ts/q8_1_bs);
+        // Debug: Sample src1_ddf content at MUL_MAT entry (before quantization)
+        static bool mulmat_entry_debug_checked = false;
+        static bool do_mulmat_entry_debug = false;
+        if (!mulmat_entry_debug_checked) {
+            do_mulmat_entry_debug = (getenv("GGML_SYCL_RMS_DEBUG") != nullptr);
+            mulmat_entry_debug_checked = true;
+        }
+        if (do_mulmat_entry_debug && src1_on_device && src1_is_contiguous) {
+            main_stream->wait();
+            float sample[4];
+            main_stream->memcpy(sample, dev[i].src1_ddf, 4 * sizeof(float)).wait();
+            bool is_zeros = (sample[0] == 0.0f && sample[1] == 0.0f && sample[2] == 0.0f && sample[3] == 0.0f);
+            fprintf(stderr, "[MUL_MAT_ENTRY] src1=%s src0=%s src1_ddf=%p first4=[%.4f, %.4f, %.4f, %.4f] is_zeros=%d is_soa=%d\n",
+                    src1->name, src0->name, (void*)dev[i].src1_ddf,
+                    sample[0], sample[1], sample[2], sample[3], is_zeros ? 1 : 0,
+                    src0_extra ? src0_extra->optimized_feature.is_soa() : 0);
+        }
 
-            // Zero padding blocks to prevent garbage in MMQ when ne10 < src1_padded_col_size
+        if constexpr(quantize_enabled) {
+            const size_t required_size = nrows1*src1_padded_row_size*q8_1_ts/q8_1_bs;
+
+            // Buffer aliasing debug - check if src1_ddf overlaps with any pre-allocated buffers
+            static bool buffer_alias_debug_checked = false;
+            static bool do_buffer_alias_debug = false;
+            if (!buffer_alias_debug_checked) {
+                do_buffer_alias_debug = (getenv("GGML_SYCL_BUFFER_ALIAS_DEBUG") != nullptr);
+                buffer_alias_debug_checked = true;
+            }
+
+            if (do_buffer_alias_debug) {
+                const uintptr_t src1_ddf_addr = reinterpret_cast<uintptr_t>(dev[i].src1_ddf);
+                const size_t src1_ddf_size = ggml_nelements(src1) * sizeof(float);
+                const uintptr_t src1_ddf_end = src1_ddf_addr + src1_ddf_size;
+
+                // Print src1 tensor info to understand data source
+                fprintf(stderr, "[BUFFER_ALIAS] src1='%s' src0='%s' is_view=%d src1_src=%s\n",
+                        src1->name, src0->name,
+                        src1->view_src ? 1 : 0,
+                        src1->src[0] ? src1->src[0]->name : "(null)");
+
+                fprintf(stderr, "[BUFFER_ALIAS] ne10=%lld src1_ddf=%p size=%zu end=%p is_soa=%d\n",
+                        (long long)ne10, (void*)src1_ddf_addr, src1_ddf_size, (void*)src1_ddf_end,
+                        src0_extra ? src0_extra->optimized_feature.is_soa() : 0);
+
+                // Check overlap with pre-allocated mmvq_soa_buffers
+                if (ctx.mmvq_soa_buffers.initialized) {
+                    for (size_t buf_idx = 0; buf_idx < ctx.mmvq_soa_buffers.src1_ddq_buffers.size(); buf_idx++) {
+                        const uintptr_t prealloc_addr = reinterpret_cast<uintptr_t>(ctx.mmvq_soa_buffers.src1_ddq_buffers[buf_idx]);
+                        const size_t prealloc_size = ctx.mmvq_soa_buffers.src1_ddq_sizes[buf_idx];
+                        const uintptr_t prealloc_end = prealloc_addr + prealloc_size;
+
+                        // Check for overlap: [A_start, A_end) overlaps [B_start, B_end) if A_start < B_end && B_start < A_end
+                        bool overlaps = (src1_ddf_addr < prealloc_end) && (prealloc_addr < src1_ddf_end);
+                        if (overlaps) {
+                            fprintf(stderr, "[BUFFER_ALIAS] *** OVERLAP DETECTED *** src1_ddf [%p-%p] overlaps prealloc[%zu] [%p-%p]\n",
+                                    (void*)src1_ddf_addr, (void*)src1_ddf_end,
+                                    buf_idx, (void*)prealloc_addr, (void*)prealloc_end);
+                        }
+                    }
+                }
+            }
+
+            // Check if we should use pre-allocated buffer for reordered MMVQ (both SOA and COALESCED).
+            // CRITICAL: Use pre-allocated buffers for BOTH warmup AND recording.
+            // During graph recording, kernel lambdas capture pointers by value.
+            // If warmup uses pool (different pointer) and recording uses pre-alloc,
+            // the graph replays with stale pointers -> garbage output.
+            // NOTE: Both SOA and COALESCED modes use the same SoA-format quantization,
+            // so we check is_reordered() (any reorder) not is_soa() (only SOA mode).
+            const bool use_reordered_prealloc = src0_extra && src0_extra->optimized_feature.is_reordered() &&
+                                                ctx.mmvq_soa_buffers.initialized;
+
+            if (use_reordered_prealloc) {
+                // Use pre-allocated buffer for consistent pointer across warmup/recording/replay
+                void* preallocated = ctx.mmvq_soa_buffers.get_next_buffer(required_size);
+                if (preallocated) {
+                    dev[i].src1_ddq = static_cast<char*>(preallocated);
+                    GGML_SYCL_DEBUG("[MMVQ-SOA] Using pre-allocated buffer %d: %p (size=%zu, recording=%d)\n",
+                                   ctx.mmvq_soa_buffers.current_buffer_idx - 1, preallocated, required_size,
+                                   g_ggml_sycl_graph_recording ? 1 : 0);
+                } else {
+                    // Fallback to pool allocation if pre-allocated buffer not available
+                    dev[i].src1_ddq = dev[i].src1_ddq_alloc.alloc(ctx.pool(i), required_size);
+                    GGML_SYCL_DEBUG("[MMVQ-SOA] Pre-allocated buffer exhausted, using pool\n");
+                }
+            } else {
+                // Standard pool allocation
+                dev[i].src1_ddq = dev[i].src1_ddq_alloc.alloc(ctx.pool(i), required_size);
+            }
+
+            // Debug: check if src1_ddq overlaps with src1_ddf
+            if (do_buffer_alias_debug) {
+                const uintptr_t src1_ddq_addr = reinterpret_cast<uintptr_t>(dev[i].src1_ddq);
+                const uintptr_t src1_ddq_end = src1_ddq_addr + required_size;
+                const uintptr_t src1_ddf_addr = reinterpret_cast<uintptr_t>(dev[i].src1_ddf);
+                const size_t src1_ddf_size = ggml_nelements(src1) * sizeof(float);
+                const uintptr_t src1_ddf_end = src1_ddf_addr + src1_ddf_size;
+
+                bool ddq_ddf_overlap = (src1_ddq_addr < src1_ddf_end) && (src1_ddf_addr < src1_ddq_end);
+                if (ddq_ddf_overlap) {
+                    fprintf(stderr, "[BUFFER_ALIAS] *** DDQ/DDF OVERLAP *** src1_ddf [%p-%p] vs src1_ddq [%p-%p]\n",
+                            (void*)src1_ddf_addr, (void*)src1_ddf_end,
+                            (void*)src1_ddq_addr, (void*)src1_ddq_end);
+                }
+
+                fprintf(stderr, "[BUFFER_ALIAS] src1_ddq=%p size=%zu prealloc=%d\n",
+                        (void*)src1_ddq_addr, required_size, use_reordered_prealloc ? 1 : 0);
+
+                // Verify src1_ddf content is not all zeros (sync first to ensure data is ready)
+                stream->wait();
+                std::vector<float> first_vals(4);
+                stream->memcpy(first_vals.data(), dev[i].src1_ddf, 4 * sizeof(float)).wait();
+                float abs_sum = 0.0f;
+                for (int k = 0; k < 4; k++) abs_sum += std::fabs(first_vals[k]);
+                bool is_zeros = (abs_sum == 0.0f);
+                fprintf(stderr, "[BUFFER_ALIAS] src1_ddf content: first4=[%.4f, %.4f, %.4f, %.4f] is_zeros=%d\n",
+                        first_vals[0], first_vals[1], first_vals[2], first_vals[3], is_zeros ? 1 : 0);
+                if (is_zeros && ne10 == 4096) {
+                    fprintf(stderr, "[BUFFER_ALIAS] *** WARNING: ne10=4096 has zeros - possible aliasing ***\n");
+                }
+            }
+
+            // Zero padding blocks to prevent garbage in MMQ when ne10 < src1_padded_row_size
             // Bug: quantize_row_q8_1_sycl only fills ne10/QK8_1 blocks per row, but MMQ reads
-            // src1_padded_col_size/QK8_1 blocks per row. The padding blocks must be zeroed.
-            if (ne10 != src1_padded_col_size) {
-                stream->memset(dev[i].src1_ddq, 0, nrows1*src1_padded_col_size*q8_1_ts/q8_1_bs);
+            // src1_padded_row_size/QK8_1 blocks per row. The padding blocks must be zeroed.
+            if (ne10 != src1_padded_row_size) {
+                stream->memset(dev[i].src1_ddq, 0, required_size);
             }
 
             if (src1_on_device && src1_is_contiguous) {
@@ -4975,8 +5376,9 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                 GGML_SYCL_DEBUG("[QUANTIZE DEBUG] device=%d src1_ddf=%p src1_ddq=%p stream_device=%s\n",
                                 i, (void*)dev[i].src1_ddf, (void*)dev[i].src1_ddq,
                                 stream->get_device().get_info<sycl::info::device::name>().c_str());
+
                 try {
-                    quantize_row_q8_1_sycl<quantize_f>(dev[i].src1_ddf, dev[i].src1_ddq, ne10, nrows1, src1_padded_col_size, stream);
+                    quantize_row_q8_1_sycl<quantize_f>(dev[i].src1_ddf, dev[i].src1_ddq, ne10, nrows1, src1_padded_row_size, stream);
                 } catch (sycl::exception const &exc) {
                     std::cerr << "Quantize_row_q8_1_sycl error" << exc.what() << "Exception caught at file:" << __FILE__
                               << ", line:" << __LINE__ << std::endl;
@@ -5031,7 +5433,7 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                 const int64_t i03 = i0 / ne12;
                 const int64_t i02 = i0 % ne12;
 
-                const size_t src1_ddq_i_offset = (i0*ne11 + src1_col_0) * src1_padded_col_size*q8_1_ts/q8_1_bs;
+                const size_t src1_ddq_i_offset = (i0*ne11 + src1_col_0) * src1_padded_row_size*q8_1_ts/q8_1_bs;
 
                 // for split tensors the data begins at i0 == i0_offset_low
                 char  *  src0_dd_i =  dev[i].src0_dd + (i0/i02_divisor) * (ne01*ne00*src0_ts)/src0_bs;
@@ -5053,7 +5455,7 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                             SYCL_CHECK(
                                 CHECK_TRY_ERROR(stream
                                                     ->memcpy(src1_ddq_i, src1_ddq_i_source,
-                                                             src1_ncols * src1_padded_col_size * q8_1_ts / q8_1_bs)
+                                                             src1_ncols * src1_padded_row_size * q8_1_ts / q8_1_bs)
                                                     .wait()));
                         } else {
                             float * src1_ddf_i_source = (float *) src1_extra->data_device[ctx.device];
@@ -5076,8 +5478,8 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                         scope_op_debug_print scope_dbg_print(__func__, "/quantize_row_q8_1_sycl", dst,
                                                              /*num_src=*/2, " : converting src1 to Q8_1");
                         try {
-                            quantize_row_q8_1_sycl<quantize_q8_1>(src1_ddf_i, src1_ddq_i, ne10, src1_ncols,
-                                                                  src1_padded_col_size, stream);
+                            quantize_row_q8_1_sycl<quantize_f>(src1_ddf_i, src1_ddq_i, ne10, src1_ncols,
+                                                                  src1_padded_row_size, stream);
                         } catch (const sycl::exception & exc) {
                             std::cerr << "Quantize_row_q8_1_sycl error" << exc.what()
                                       << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
@@ -5090,11 +5492,11 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                     SYCL_CHECK(ggml_sycl_cpy_tensor_2d(src0_dd_i, src0, i03, i02/i02_divisor, dev[i].row_low, dev[i].row_high, stream));
                 }
                 if (src1->type == GGML_TYPE_F16) {
-                    src1_padded_col_size = (i0 * ne11 + src1_col_0) * ne10;
+                    src1_padded_row_size = (i0 * ne11 + src1_col_0) * ne10;
                 }
                 // do the computation
                 SYCL_CHECK(CHECK_TRY_ERROR(op(ctx, src0, src1, dst, src0_dd_i, src1_ddf_i, src1_ddq_i, dst_dd_i,
-                    dev[i].row_low, dev[i].row_high, src1_ncols, src1_padded_col_size, stream)));
+                    dev[i].row_low, dev[i].row_high, src1_ncols, src1_padded_row_size, stream)));
 
                 // copy dst to host or other device if necessary
                 if (!dst_on_device) {
@@ -5456,13 +5858,22 @@ static void tp_device1_worker_thread_func() {
         fake_dst_out.ne[1] = work.batch;
 
         // Step 1: Quantize input to Q8_1
+        // Use SoA quantizer if weights are in SoA layout (reordered kernels expect SoA Y)
         if (g_ggml_sycl_tp_debug) {
             fprintf(stderr, "SYCL TP WORKER: Step 1 - Quantizing input\n");
             fflush(stderr);
         }
-        quantize_row_q8_1_sycl<quantize_q8_1>(
-            work.input_dev1, input_q8_dev,
-            work.K_full, work.batch, K_full_padded, stream);
+        ggml_tensor_extra_gpu * gate_extra_worker = static_cast<ggml_tensor_extra_gpu *>(work.weights.gate->extra);
+        const bool use_soa_input = gate_extra_worker && gate_extra_worker->optimized_feature.is_reordered();
+        if (use_soa_input) {
+            quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
+                work.input_dev1, input_q8_dev,
+                work.K_full, work.batch, K_full_padded, stream);
+        } else {
+            quantize_row_q8_1_sycl<quantize_q8_1>(
+                work.input_dev1, input_q8_dev,
+                work.K_full, work.batch, K_full_padded, stream);
+        }
         stream->wait();  // Add wait to catch any async errors
 
         // Step 2-3: Gate and Up matmuls
@@ -5508,9 +5919,18 @@ static void tp_device1_worker_thread_func() {
             });
 
         // Step 5: Quantize hidden for down matmul
-        quantize_row_q8_1_sycl<quantize_q8_1>(
-            hidden_out, hidden_q8_dev,
-            N_hidden_shard, work.batch, N_hidden_shard_padded, stream);
+        // Use SoA quantizer if down weight is in SoA layout
+        ggml_tensor_extra_gpu * down_extra_worker = static_cast<ggml_tensor_extra_gpu *>(work.weights.down->extra);
+        const bool use_soa_hidden = down_extra_worker && down_extra_worker->optimized_feature.is_reordered();
+        if (use_soa_hidden) {
+            quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
+                hidden_out, hidden_q8_dev,
+                N_hidden_shard, work.batch, N_hidden_shard_padded, stream);
+        } else {
+            quantize_row_q8_1_sycl<quantize_q8_1>(
+                hidden_out, hidden_q8_dev,
+                N_hidden_shard, work.batch, N_hidden_shard_padded, stream);
+        }
 
         // Step 6: Down matmul
         stream->memset(partial_out, 0, output_size);
@@ -6284,12 +6704,19 @@ static void ggml_sycl_mul_mat_tp_column_parallel_post(ggml_backend_sycl_context 
         }
 
         // Quantize src1 to Q8_1 on target device
+        // Use SoA quantizer if weight is reordered
         {
             ggml_sycl_set_device(device);
             stream = ctx.stream(device, 0);
 
-            quantize_row_q8_1_sycl<quantize_q8_1>(src1_ddf_dev, src1_ddq_dev,
-                                                  K, batch, K_padded, stream);
+            const bool use_soa_col_parallel = src0_extra && src0_extra->optimized_feature.is_reordered();
+            if (use_soa_col_parallel) {
+                quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(src1_ddf_dev, src1_ddq_dev,
+                                                      K, batch, K_padded, stream);
+            } else {
+                quantize_row_q8_1_sycl<quantize_q8_1>(src1_ddf_dev, src1_ddq_dev,
+                                                      K, batch, K_padded, stream);
+            }
             stream->wait();
         }
 
@@ -6443,9 +6870,18 @@ void ggml_sycl_tp_launch_async_ffn(
     fake_dst_out.ne[1] = batch;
 
     // Step 1: Quantize input to Q8_1
-    quantize_row_q8_1_sycl<quantize_q8_1>(
-        input_dev1, input_q8_dev,
-        K_full, batch, K_full_padded, stream);
+    // Use SoA quantizer if weights are in SoA layout (reordered kernels expect SoA Y)
+    ggml_tensor_extra_gpu * gate_extra_async = static_cast<ggml_tensor_extra_gpu *>(weights.gate->extra);
+    const bool use_soa_input_async = gate_extra_async && gate_extra_async->optimized_feature.is_reordered();
+    if (use_soa_input_async) {
+        quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
+            input_dev1, input_q8_dev,
+            K_full, batch, K_full_padded, stream);
+    } else {
+        quantize_row_q8_1_sycl<quantize_q8_1>(
+            input_dev1, input_q8_dev,
+            K_full, batch, K_full_padded, stream);
+    }
 
     // Step 2-3: Gate and Up matmuls (sequential on same queue)
     stream->memset(gate_out, 0, hidden_size);
@@ -6478,9 +6914,18 @@ void ggml_sycl_tp_launch_async_ffn(
         });
 
     // Step 5: Quantize hidden for down matmul
-    quantize_row_q8_1_sycl<quantize_q8_1>(
-        hidden_out, hidden_q8_dev,
-        N_hidden_shard, batch, N_hidden_shard_padded, stream);
+    // Use SoA quantizer if down weight is in SoA layout
+    ggml_tensor_extra_gpu * down_extra_async = static_cast<ggml_tensor_extra_gpu *>(weights.down->extra);
+    const bool use_soa_hidden_async = down_extra_async && down_extra_async->optimized_feature.is_reordered();
+    if (use_soa_hidden_async) {
+        quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
+            hidden_out, hidden_q8_dev,
+            N_hidden_shard, batch, N_hidden_shard_padded, stream);
+    } else {
+        quantize_row_q8_1_sycl<quantize_q8_1>(
+            hidden_out, hidden_q8_dev,
+            N_hidden_shard, batch, N_hidden_shard_padded, stream);
+    }
 
     // Step 6: Down matmul
     stream->memset(partial_out, 0, output_size);
@@ -6871,9 +7316,17 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                             }
 
                             // Step 1: Quantize FFN input to Q8_1
-                            quantize_row_q8_1_sycl<quantize_q8_1>(
-                                (const float *)ffn_input.data, input_q8_dev,
-                                K_full, batch, K_full_padded, stream);
+                            // Use SoA quantizer if weights are in SoA layout
+                            const bool use_soa_ffn_input = gate_extra && gate_extra->optimized_feature.is_reordered();
+                            if (use_soa_ffn_input) {
+                                quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
+                                    (const float *)ffn_input.data, input_q8_dev,
+                                    K_full, batch, K_full_padded, stream);
+                            } else {
+                                quantize_row_q8_1_sycl<quantize_q8_1>(
+                                    (const float *)ffn_input.data, input_q8_dev,
+                                    K_full, batch, K_full_padded, stream);
+                            }
                             // Note: No wait needed - same queue operations are serialized
 
                             // Create fake tensors with correct output dimensions for gate/up
@@ -6967,9 +7420,17 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                                         layer, hidden_sum, hidden_min, hidden_max);
                             }
 
-                            quantize_row_q8_1_sycl<quantize_q8_1>(
-                                hidden_out, hidden_q8_dev,
-                                N_hidden_shard, batch, N_hidden_shard_padded, stream);
+                            // Use SoA quantizer if down weights are reordered
+                            const bool use_soa_hidden_ffn = down_extra && down_extra->optimized_feature.is_reordered();
+                            if (use_soa_hidden_ffn) {
+                                quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
+                                    hidden_out, hidden_q8_dev,
+                                    N_hidden_shard, batch, N_hidden_shard_padded, stream);
+                            } else {
+                                quantize_row_q8_1_sycl<quantize_q8_1>(
+                                    hidden_out, hidden_q8_dev,
+                                    N_hidden_shard, batch, N_hidden_shard_padded, stream);
+                            }
                             // No wait - memset+matmul on same queue will serialize
 
                             // Step 6: Down matmul - hidden_out @ W_down_1 -> partial_out
@@ -7355,9 +7816,17 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                             if (partial_out) sycl::free(partial_out, *stream);
                         } else {
                             // Step 1: Quantize attention input to Q8_1
-                            quantize_row_q8_1_sycl<quantize_q8_1>(
-                                (const float *)attn_input.data, input_q8_dev,
-                                n_embd, batch, n_embd_padded, stream);
+                            // Use SoA quantizer if Q weight is reordered (Q/K/V share same quantization format)
+                            const bool use_soa_attn_input = q_extra && q_extra->optimized_feature.is_reordered();
+                            if (use_soa_attn_input) {
+                                quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
+                                    (const float *)attn_input.data, input_q8_dev,
+                                    n_embd, batch, n_embd_padded, stream);
+                            } else {
+                                quantize_row_q8_1_sycl<quantize_q8_1>(
+                                    (const float *)attn_input.data, input_q8_dev,
+                                    n_embd, batch, n_embd_padded, stream);
+                            }
                             stream->wait();
 
                             // Create temporary tensors with correct dimensions for MMVQ
@@ -7619,9 +8088,17 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
                             }
 
                             // Step 6: Quantize attention output for O projection
-                            quantize_row_q8_1_sycl<quantize_q8_1>(
-                                attn_out, attn_q8_dev,
-                                n_embd_q_shard, batch, n_embd_q_shard_padded, stream);
+                            // Use SoA quantizer if O weight is reordered
+                            const bool use_soa_attn_output = o_extra && o_extra->optimized_feature.is_reordered();
+                            if (use_soa_attn_output) {
+                                quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(
+                                    attn_out, attn_q8_dev,
+                                    n_embd_q_shard, batch, n_embd_q_shard_padded, stream);
+                            } else {
+                                quantize_row_q8_1_sycl<quantize_q8_1>(
+                                    attn_out, attn_q8_dev,
+                                    n_embd_q_shard, batch, n_embd_q_shard_padded, stream);
+                            }
                             stream->wait();
 
                             // Step 7: O projection - attn_out @ W_o1 -> partial_out
@@ -7897,12 +8374,19 @@ static void ggml_sycl_mul_mat_tp_row_parallel_post(ggml_backend_sycl_context & c
         }
 
         // Quantize src1 float to Q8_1 on target device
+        // Use SoA quantizer if weight is reordered
         {
             ggml_sycl_set_device(device);
             stream = ctx.stream(device, 0);
 
-            quantize_row_q8_1_sycl<quantize_q8_1>(src1_ddf_dev, src1_ddq_dev,
-                                                  K_shard, ne11, K_shard_padded, stream);
+            const bool use_soa_row_parallel = extra && extra->optimized_feature.is_reordered();
+            if (use_soa_row_parallel) {
+                quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(src1_ddf_dev, src1_ddq_dev,
+                                                      K_shard, ne11, K_shard_padded, stream);
+            } else {
+                quantize_row_q8_1_sycl<quantize_q8_1>(src1_ddf_dev, src1_ddq_dev,
+                                                      K_shard, ne11, K_shard_padded, stream);
+            }
             stream->wait();
         }
 
@@ -8312,6 +8796,7 @@ enum class mul_mat_algo {
     DMMV         = 0,
     MMVQ         = 1,
     MUL_MAT_SYCL = 2,
+    MMQ          = 3,
 };
 
 inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
@@ -8336,6 +8821,7 @@ inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
 inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q8_0:
             return true;
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q6_K:
@@ -8367,6 +8853,18 @@ inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
     }
 }
 
+inline bool ggml_sycl_supports_reorder_mmq(enum ggml_type type) {
+    // MMQ SoA supports the same types as MMVQ SoA
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q8_0:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
@@ -8384,6 +8882,155 @@ static bool ggml_sycl_supports_dmmv(enum ggml_type type) {
         default:
             return false;
     }
+}
+
+// ============================================================================
+// CPU-side Q4_0 AoS → SoA reorder (performed during upload staging)
+// This is faster than GPU-side reorder because:
+// 1. No GPU kernel launch overhead
+// 2. Data is already in L1/L2 cache from memcpy
+// 3. Single pass through memory instead of extra GPU allocation + copy
+// ============================================================================
+static void reorder_q4_0_cpu(void* dst_soa, const void* src_aos, int ncols, int nrows) {
+    const size_t blocks_per_row = ncols / QK4_0;
+    const size_t nblocks = blocks_per_row * nrows;
+
+    // AoS layout: [d:2][qs:16] per block = 18 bytes
+    // SoA layout: all qs first (nblocks * 16), then all d (nblocks * 2)
+    const uint8_t* aos = (const uint8_t*)src_aos;
+    uint8_t* soa_qs = (uint8_t*)dst_soa;
+    uint8_t* soa_d = soa_qs + nblocks * (QK4_0 / 2);  // d values start after all qs
+
+    for (size_t ib = 0; ib < nblocks; ib++) {
+        const uint8_t* block_aos = aos + ib * sizeof(block_q4_0);
+
+        // Copy qs (16 bytes at offset 2 in AoS block)
+        memcpy(soa_qs + ib * (QK4_0 / 2), block_aos + sizeof(ggml_half), QK4_0 / 2);
+
+        // Copy d (2 bytes at offset 0 in AoS block)
+        memcpy(soa_d + ib * sizeof(ggml_half), block_aos, sizeof(ggml_half));
+    }
+}
+
+// Q8_0: [d:2][qs:32] = 34 bytes per block
+// SoA: [all qs][all d]
+static void reorder_q8_0_cpu(void* dst_soa, const void* src_aos, int ncols, int nrows) {
+    const size_t blocks_per_row = ncols / QK8_0;
+    const size_t nblocks = blocks_per_row * nrows;
+
+    const uint8_t* aos = (const uint8_t*)src_aos;
+    uint8_t* soa_qs = (uint8_t*)dst_soa;
+    uint8_t* soa_d = soa_qs + nblocks * QK8_0;  // d values start after all qs
+
+    for (size_t ib = 0; ib < nblocks; ib++) {
+        const uint8_t* block_aos = aos + ib * sizeof(block_q8_0);
+
+        // Copy qs (32 bytes at offset 2 in AoS block)
+        memcpy(soa_qs + ib * QK8_0, block_aos + sizeof(ggml_half), QK8_0);
+
+        // Copy d (2 bytes at offset 0 in AoS block)
+        memcpy(soa_d + ib * sizeof(ggml_half), block_aos, sizeof(ggml_half));
+    }
+}
+
+// Q4_K: [dm:4][scales:12][qs:128] = 144 bytes per block (QK_K=256)
+// SoA: [all qs][all scales][all dm]
+static void reorder_q4_k_cpu(void* dst_soa, const void* src_aos, size_t nblocks) {
+    const uint8_t* aos = (const uint8_t*)src_aos;
+    uint8_t* soa_qs = (uint8_t*)dst_soa;
+    uint8_t* soa_scales = soa_qs + nblocks * (QK_K / 2);
+    uint8_t* soa_dm = soa_scales + nblocks * K_SCALE_SIZE;
+
+    for (size_t ib = 0; ib < nblocks; ib++) {
+        const uint8_t* block_aos = aos + ib * sizeof(block_q4_K);
+
+        // AoS layout: [dm:4][scales:12][qs:128]
+        // Copy qs (128 bytes at offset 16 in AoS block)
+        memcpy(soa_qs + ib * (QK_K / 2), block_aos + 4 + K_SCALE_SIZE, QK_K / 2);
+
+        // Copy scales (12 bytes at offset 4 in AoS block)
+        memcpy(soa_scales + ib * K_SCALE_SIZE, block_aos + 4, K_SCALE_SIZE);
+
+        // Copy dm (4 bytes at offset 0 in AoS block)
+        memcpy(soa_dm + ib * 4, block_aos, 4);
+    }
+}
+
+// Q6_K: [ql:128][qh:64][scales:16][d:2] = 210 bytes per block (QK_K=256)
+// SoA: [all ql][all qh][all scales][all d]
+static void reorder_q6_k_cpu(void* dst_soa, const void* src_aos, size_t nblocks) {
+    const uint8_t* aos = (const uint8_t*)src_aos;
+    uint8_t* soa_ql = (uint8_t*)dst_soa;
+    uint8_t* soa_qh = soa_ql + nblocks * (QK_K / 2);
+    uint8_t* soa_scales = soa_qh + nblocks * (QK_K / 4);
+    uint8_t* soa_d = soa_scales + nblocks * (QK_K / 16);
+
+    for (size_t ib = 0; ib < nblocks; ib++) {
+        const uint8_t* block_aos = aos + ib * sizeof(block_q6_K);
+
+        // AoS layout: [ql:128][qh:64][scales:16][d:2]
+        // Copy ql (128 bytes at offset 0)
+        memcpy(soa_ql + ib * (QK_K / 2), block_aos, QK_K / 2);
+
+        // Copy qh (64 bytes at offset 128)
+        memcpy(soa_qh + ib * (QK_K / 4), block_aos + (QK_K / 2), QK_K / 4);
+
+        // Copy scales (16 bytes at offset 192)
+        memcpy(soa_scales + ib * (QK_K / 16), block_aos + (QK_K / 2) + (QK_K / 4), QK_K / 16);
+
+        // Copy d (2 bytes at offset 208)
+        memcpy(soa_d + ib * sizeof(ggml_half), block_aos + (QK_K / 2) + (QK_K / 4) + (QK_K / 16), sizeof(ggml_half));
+    }
+}
+
+// MXFP4: [e:1][qs:16] = 17 bytes per block (QK_MXFP4=32)
+// SoA: [all qs][all e]
+static void reorder_mxfp4_cpu(void* dst_soa, const void* src_aos, int ncols, int nrows) {
+    const size_t blocks_per_row = ncols / QK_MXFP4;
+    const size_t nblocks = blocks_per_row * nrows;
+
+    const uint8_t* aos = (const uint8_t*)src_aos;
+    uint8_t* soa_qs = (uint8_t*)dst_soa;
+    uint8_t* soa_e = soa_qs + nblocks * (QK_MXFP4 / 2);  // e values start after all qs
+
+    for (size_t ib = 0; ib < nblocks; ib++) {
+        const block_mxfp4* block = (const block_mxfp4*)(aos + ib * sizeof(block_mxfp4));
+
+        // Copy qs array (16 bytes)
+        memcpy(soa_qs + ib * (QK_MXFP4 / 2), block->qs, QK_MXFP4 / 2);
+
+        // Copy e (scale) value (1 byte)
+        soa_e[ib] = block->e;
+    }
+}
+
+// Check if tensor is eligible for CPU-side SoA reorder during upload
+static bool should_cpu_reorder(const ggml_tensor* tensor, const ggml_backend_sycl_buffer_context* ctx) {
+    // Supported quantized types for CPU-side SoA reorder
+    if (tensor->type != GGML_TYPE_Q4_0 &&
+        tensor->type != GGML_TYPE_Q8_0 &&
+        tensor->type != GGML_TYPE_Q4_K &&
+        tensor->type != GGML_TYPE_Q6_K &&
+        tensor->type != GGML_TYPE_MXFP4) {
+        return false;
+    }
+
+    // Check if reordering is disabled globally
+    if (g_ggml_sycl_disable_optimize) {
+        return false;
+    }
+
+    // Need tensor dimensions
+    if (tensor->ne[0] == 0 || tensor->ne[1] == 0) {
+        return false;
+    }
+
+    // NOTE: token_embd is no longer excluded because:
+    // 1. When tied weights are used, output tensors share "token_embd.weight" name
+    // 2. GET_ROWS for Q4_0/Q8_0 already handles SoA layout via is_soa() check
+    // 3. User explicitly requested GPU loading for token_embd
+
+    return ctx->supports_soa_reorder;
 }
 
 // Helper functions to unify device memory allocation for both async and sync paths
@@ -8416,6 +9063,8 @@ static inline void sycl_ext_free(dpct::queue_ptr stream, void * ptr) {
 
 static void reorder_qw_q4_0(uint8_t * data_device, const int ncols, const int nrows, size_t size, size_t offset,
                             dpct::queue_ptr stream) {
+    GGML_SYCL_KTRACE("reorder_qw_q4_0", " ncols=%d nrows=%d size=%zu offset=%zu nblocks=%zu",
+                     ncols, nrows, size, offset, size / sizeof(block_q4_0));
     uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size));
 
     sycl::event copy_event;
@@ -8427,8 +9076,10 @@ static void reorder_qw_q4_0(uint8_t * data_device, const int ncols, const int nr
     GGML_ASSERT((size % sizeof(block_q4_0) == 0));
     GGML_ASSERT((offset % sizeof(block_q4_0) == 0));
     int offset_blks = offset / sizeof(block_q4_0);
+    size_t nblocks = size / sizeof(block_q4_0);
     auto qs_ptr      = data_device + offset_blks * QK4_0 / 2;
-    auto d_ptr = (sycl::half*)(qs_ptr + ncols * nrows / 2) + offset_blks;
+    size_t d_byte_offset = ncols * nrows / 2;  // where d values start in SoA
+    auto d_ptr = (sycl::half*)(qs_ptr + d_byte_offset) + offset_blks;
 
     auto reorder_event = stream->parallel_for(
         size / sizeof(block_q4_0),
@@ -8445,6 +9096,7 @@ static void reorder_qw_q4_0(uint8_t * data_device, const int ncols, const int nr
     if (!g_ggml_sycl_use_async_mem_op) {
         reorder_event.wait_and_throw();
     }
+
     sycl_ext_free(stream, tmp_buf);
 }
 
@@ -8572,6 +9224,11 @@ static void reorder_qw_q8_0(uint8_t * data_device, const int ncols, const int nr
 
 // MXFP4: 16 packed bytes (32 4-bit elements) + 1 byte E8M0 exponent = 17 bytes per block
 // Reordered layout: [qs0..qsN] [scale0..scaleN]
+//
+// Optimized for coalesced memory access:
+// - Uses vectorized 4-byte writes (4 ints per block) instead of byte-by-byte
+// - Tiled approach: work-group processes BLOCKS_PER_TILE blocks together
+// - Adjacent threads write to adjacent memory addresses within a tile
 static void reorder_qw_mxfp4(uint8_t * data_device, const int ncols, const int nrows, size_t size, size_t offset,
                              dpct::queue_ptr stream) {
     uint8_t * tmp_buf = static_cast<uint8_t *>(sycl_ext_malloc_device(stream, size));
@@ -8584,30 +9241,56 @@ static void reorder_qw_mxfp4(uint8_t * data_device, const int ncols, const int n
 
     GGML_ASSERT((size % sizeof(block_mxfp4) == 0));
     GGML_ASSERT((offset % sizeof(block_mxfp4) == 0));
-    int offset_blks = offset / sizeof(block_mxfp4);
-    auto qs_ptr = data_device + offset_blks * (QK_MXFP4 / 2);
-    auto scale_ptr = qs_ptr + (ncols / 2) * nrows + offset_blks;
+
+    const size_t num_blocks = size / sizeof(block_mxfp4);
+    const int offset_blks = offset / sizeof(block_mxfp4);
+    uint8_t* qs_out = data_device + offset_blks * (QK_MXFP4 / 2);
+    uint8_t* scale_out = qs_out + (ncols / 2) * nrows + offset_blks;
+
+    // Constants for tiled processing
+    constexpr int BYTES_PER_BLOCK = QK_MXFP4 / 2;  // 16 bytes of qs per block
+    constexpr int INTS_PER_BLOCK = BYTES_PER_BLOCK / 4;  // 4 ints per block
+    constexpr int BLOCKS_PER_TILE = WARP_SIZE;  // Process 32 blocks per work-group
+
+    // Calculate grid dimensions
+    // Each work-group has BLOCKS_PER_TILE threads, each handling one block
+    const size_t num_tiles = (num_blocks + BLOCKS_PER_TILE - 1) / BLOCKS_PER_TILE;
 
     auto reorder_event = stream->parallel_for(
-        size / sizeof(block_mxfp4),
-            [=](auto i) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            const block_mxfp4* x = (const block_mxfp4*)tmp_buf;
-            const int ib = i;
+        sycl::nd_range<1>(
+            sycl::range<1>(num_tiles * BLOCKS_PER_TILE),
+            sycl::range<1>(BLOCKS_PER_TILE)
+        ),
+        [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+            const block_mxfp4* src = (const block_mxfp4*)tmp_buf;
 
-            // Copy 16 packed bytes (32 4-bit elements)
-            for (int j = 0; j < QK_MXFP4 / 2; j++) {
-                *(qs_ptr + ib * (QK_MXFP4 / 2) + j) = x[ib].qs[j];
+            const size_t block_idx = item.get_global_id(0);
+            if (block_idx >= num_blocks) return;
+
+            // Use 4-byte vectorized writes for the 16-byte qs array
+            // This reduces memory operations from 16 to 4 per block
+            const uint32_t* src_qs = reinterpret_cast<const uint32_t*>(src[block_idx].qs);
+            uint32_t* dst_qs = reinterpret_cast<uint32_t*>(qs_out + block_idx * BYTES_PER_BLOCK);
+
+            // Vectorized write: 4 ints (16 bytes) per block
+            #pragma unroll
+            for (int i = 0; i < INTS_PER_BLOCK; i++) {
+                dst_qs[i] = src_qs[i];
             }
-            // Copy 1-byte E8M0 exponent
-            *(scale_ptr + ib) = x[ib].e;
+
+            // Single byte write for scale
+            scale_out[block_idx] = src[block_idx].e;
         });
+
     if (!g_ggml_sycl_use_async_mem_op) {
         reorder_event.wait_and_throw();
     }
     sycl_ext_free(stream, tmp_buf);
 }
 
-static void reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
+// INTERNAL: Do NOT call directly - use reorder_tensor_to_soa() instead!
+// This only transforms data, does NOT set the flag.
+static void reorder_data_internal_(const ggml_tensor * src0, dpct::queue_ptr stream) {
     uint8_t * data_device = (uint8_t *) src0->data;
     size_t ncols = src0->ne[0];
     // Use ggml_nrows to handle tensors with >2 dimensions (e.g., MoE expert weights)
@@ -8632,16 +9315,99 @@ static void reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
             reorder_qw_mxfp4(data_device, ncols, nrows, size, 0, stream);
             break;
         default:
-            GGML_ABORT("reorder_qw() called with unsupported type");
+            GGML_ABORT("reorder_data_internal_() called with unsupported type");
             break;
     }
 }
 
+// =============================================================================
+// UNIFIED REORDER FUNCTION - Single point of truth for SoA transformation
+// This function ALWAYS does both:
+//   1. Transform data from AoS to SoA layout (reorder_qw)
+//   2. Set the reorder flag on the tensor (set_reorder)
+// This ensures data and flag are ALWAYS in sync.
+// Declared in common.hpp as friend of optimize_feature
+// =============================================================================
+bool reorder_tensor_to_soa(const ggml_tensor * tensor, dpct::queue_ptr stream, const char* caller) {
+    if (!tensor || !tensor->extra) {
+        fprintf(stderr, "[REORDER-UNIFIED] ERROR: tensor=%p extra=%p - cannot reorder\n",
+                (void*)tensor, tensor ? (void*)tensor->extra : nullptr);
+        return false;
+    }
+
+    ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+
+    // Check if already reordered
+    if (extra->optimized_feature.get_reorder() == reorder_mode::SOA) {
+        // Already in SoA - no-op
+        return true;
+    }
+
+    // Check if in unexpected state
+    if (extra->optimized_feature.get_reorder() != reorder_mode::NONE) {
+        fprintf(stderr, "[REORDER-UNIFIED] ERROR: tensor '%s' in mode %d, expected NONE(0) for SoA reorder\n",
+                tensor->name, (int)extra->optimized_feature.get_reorder());
+        return false;
+    }
+
+    // Check if type is supported
+    switch (tensor->type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_MXFP4:
+            break;  // Supported
+        default:
+            fprintf(stderr, "[REORDER-UNIFIED] ERROR: tensor '%s' type %d not supported for SoA\n",
+                    tensor->name, tensor->type);
+            return false;
+    }
+
+    // DO THE REORDER - transform data from AoS to SoA
+    reorder_data_internal_(tensor, stream);
+
+    // SET THE FLAG - mark tensor as SoA (using private method via friend access)
+    extra->optimized_feature.set_reorder_mode_(reorder_mode::SOA, tensor->name, caller);
+
+    return true;
+}
+
+// Callback wrapper for expert cache SoA reordering (MXFP4)
+// This matches the ggml_sycl::reorder_callback_fn signature
+static void reorder_callback_mxfp4(uint8_t* data_device, int ncols, int nrows,
+                                    size_t size, sycl::queue* stream) {
+    reorder_qw_mxfp4(data_device, ncols, nrows, size, 0, stream);
+}
+
+// Check if tensor is eligible for reordering (regardless of batch size)
+// Used by opt_for_reorder() to decide whether to reorder on first use
+static bool can_reorder_tensor(ggml_backend_sycl_context& ctx, const ggml_tensor * dst) {
+    bool result = !g_ggml_sycl_disable_optimize && //allow optimize, controlled by $GGML_SYCL_DISABLE_OPT
+            ctx.supports_soa_reorder &&  //device capability: GPU supports SoA optimization
+            (dst->op == GGML_OP_MUL_MAT || dst->op == GGML_OP_MUL_MAT_ID);  //MUL_MAT or MoE
+    if (g_ggml_sycl_debug >= 2) {
+        fprintf(stderr, "[REORDER-DBG] can_reorder: disable_opt=%d device_supports_soa=%d op=%d result=%d\n",
+                (int)g_ggml_sycl_disable_optimize, (int)ctx.supports_soa_reorder,
+                dst->op, (int)result);
+    }
+    return result;
+}
+
+// Check if we should USE the SoA kernel for this operation (requires batch=1)
+// The tensor may already be reordered, but we only use SoA kernel for decode (batch=1)
 static bool should_reorder_tensor(ggml_backend_sycl_context& ctx, const ggml_tensor * dst) {
-    return !g_ggml_sycl_disable_optimize && //allow optimize, controlled by $GGML_SYCL_DISABLE_OPT
-            ctx.opt_feature.reorder &&      //allow this device due to good perf, skip the devices with bad perf.
+    bool result = !g_ggml_sycl_disable_optimize && //allow optimize, controlled by $GGML_SYCL_DISABLE_OPT
+            ctx.supports_soa_reorder &&  //device capability: GPU supports SoA optimization
             dst->op == GGML_OP_MUL_MAT &&   //limit to some supported cases of Q4_0, to do for more cases.
             dst->src[1]->ne[1]==1 && dst->src[1]->ne[2]==1 && dst->src[1]->ne[3]==1;
+    if (g_ggml_sycl_debug) {
+        fprintf(stderr, "[REORDER-DBG] should_reorder: disable_opt=%d device_supports_soa=%d op=%d src1_dims=[%lld,%lld,%lld] result=%d\n",
+                (int)g_ggml_sycl_disable_optimize, (int)ctx.supports_soa_reorder,
+                dst->op, (long long)dst->src[1]->ne[1], (long long)dst->src[1]->ne[2], (long long)dst->src[1]->ne[3],
+                (int)result);
+    }
+    return result;
 }
 
 // Check if a specific tensor needs reordering (not yet reordered)
@@ -8655,7 +9421,7 @@ static bool tensor_needs_reorder(ggml_backend_sycl_context& ctx, const ggml_tens
     }
     const ggml_tensor_extra_gpu * extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
     // If not yet reordered and supported type, reordering will happen
-    if (!extra->optimized_feature.reorder) {
+    if (!extra->optimized_feature.is_reordered()) {
         // Check if type supports reorder
         if (ggml_sycl_supports_reorder_mmvq(src0->type) ||
             ggml_sycl_supports_reorder_dmmv(src0->type) ||
@@ -8670,8 +9436,8 @@ static bool tensor_needs_reorder(ggml_backend_sycl_context& ctx, const ggml_tens
 // NOTE: We don't check activation dimensions (ne[1]) because we want to pre-reorder ALL weights
 // during prompt phase, so decode phase graphs don't get blocked.
 static bool graph_needs_reorder(ggml_backend_sycl_context& ctx, ggml_cgraph * cgraph) {
-    // Skip if optimize is disabled globally
-    if (g_ggml_sycl_disable_optimize || !ctx.opt_feature.reorder) {
+    // Skip if optimize is disabled globally or device doesn't support reordering
+    if (g_ggml_sycl_disable_optimize || !ctx.supports_soa_reorder) {
         return false;
     }
 
@@ -8687,7 +9453,7 @@ static bool graph_needs_reorder(ggml_backend_sycl_context& ctx, ggml_cgraph * cg
         }
         const ggml_tensor_extra_gpu * extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
         // Check if weight tensor is NOT yet reordered and supports reorder
-        if (!extra->optimized_feature.reorder &&
+        if (!extra->optimized_feature.is_reordered() &&
             extra->tp_type == tp_layer_type::TP_NONE &&
             (ggml_sycl_supports_reorder_mmvq(src0->type) ||
              ggml_sycl_supports_reorder_dmmv(src0->type) ||
@@ -8737,13 +9503,274 @@ static void graph_convert_to_coalesced(ggml_backend_sycl_context& ctx, ggml_cgra
     }
 }
 
+// Helper to parse layer ID from tensor name like "blk.5.ffn_gate_exps.weight"
+static int parse_layer_id_from_name(const char* name) {
+    if (!name) return -1;
+    const char* blk_pos = strstr(name, "blk.");
+    if (!blk_pos) return -1;
+    return atoi(blk_pos + 4);  // Skip "blk."
+}
+
+// Pre-load all MoE experts into unified cache before graph recording
+// This ensures stable cache pointers during graph execution
+// Returns true if all experts were successfully pre-loaded and pinned
+static bool graph_preload_moe_experts(ggml_backend_sycl_context& ctx, ggml_cgraph * cgraph) {
+    // Unified cache handles all expert caching now
+    if (!ggml_sycl::unified_cache_enabled()) {
+        GGML_SYCL_DEBUG("[GRAPH-PRELOAD] Unified cache disabled, skipping preload\n");
+        return true;  // No caching, but allow graphs to proceed
+    }
+
+    // First pass: find MoE nodes and count experts needed
+    const ggml_tensor * first_moe_src0 = nullptr;
+    size_t total_experts_needed = 0;
+    int moe_nodes_found = 0;
+    int moe_nodes_skipped_sycl = 0;
+
+    GGML_SYCL_DEBUG("[GRAPH-PRELOAD] Scanning graph with %d nodes for device %d\n",
+                    cgraph->n_nodes, ctx.device);
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        if (node->op != GGML_OP_MUL_MAT_ID) continue;
+
+        moe_nodes_found++;
+        const ggml_tensor * src0 = node->src[0];
+        if (!src0 || !src0->buffer) continue;
+
+        bool is_sycl_buf = ggml_backend_buffer_is_sycl(src0->buffer);
+        if (is_sycl_buf) {
+            moe_nodes_skipped_sycl++;
+            GGML_SYCL_DEBUG("[GRAPH-PRELOAD] Skipping MoE tensor '%s' (already on SYCL device)\n", src0->name);
+            continue;  // Already on device
+        }
+
+        if (!first_moe_src0) {
+            first_moe_src0 = src0;
+        }
+        total_experts_needed += static_cast<size_t>(src0->ne[2]);
+    }
+
+    GGML_SYCL_DEBUG("[GRAPH-PRELOAD] Found %d MoE nodes, %d skipped (on device), %zu experts need caching\n",
+                    moe_nodes_found, moe_nodes_skipped_sycl, total_experts_needed);
+
+    if (!first_moe_src0) {
+        return true;  // No MoE nodes with mmap'd weights
+    }
+
+    // Set SoA reorder callback for MXFP4 (applied on cache miss)
+    if (first_moe_src0->type == GGML_TYPE_MXFP4) {
+        ggml_sycl::set_moe_reorder_callback(reorder_callback_mxfp4);
+    }
+
+    // Get unified cache and check if it has enough capacity
+    sycl::queue* stream = ctx.stream();
+    ggml_sycl::unified_cache* cache = ggml_sycl::get_unified_cache(*stream);
+    if (!cache) {
+        GGML_LOG_ERROR("[GRAPH-PRELOAD] Failed to get unified cache\n");
+        return false;
+    }
+
+    // Check available memory vs needed
+    const int64_t expert_size = ggml_row_size(first_moe_src0->type, first_moe_src0->ne[0]) * first_moe_src0->ne[1];
+    size_t needed_bytes = total_experts_needed * static_cast<size_t>(expert_size);
+
+    if (cache->available() < needed_bytes && cache->used() == 0) {
+        // Fresh cache with insufficient budget - warn and disable graphs
+        GGML_LOG_WARN("[GRAPH-PRELOAD] Unified cache budget %.1f MB < %.1f MB needed for %zu experts, disabling graphs\n",
+                     cache->budget() / (1024.0f * 1024.0f),
+                     needed_bytes / (1024.0f * 1024.0f),
+                     total_experts_needed);
+        return false;
+    }
+
+    int preload_count = 0;
+    int pin_count = 0;
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        if (node->op != GGML_OP_MUL_MAT_ID) {
+            continue;
+        }
+
+        const ggml_tensor * src0 = node->src[0];
+        if (!src0 || !src0->buffer) {
+            continue;
+        }
+
+        // Only process mmap'd/host buffers (lazy-moe case)
+        bool is_sycl_buf = ggml_backend_buffer_is_sycl(src0->buffer);
+        if (is_sycl_buf) {
+            continue;  // Already on device, no caching needed
+        }
+
+        const int64_t n_experts = src0->ne[2];
+        const int64_t expert_sz = ggml_row_size(src0->type, src0->ne[0]) * src0->ne[1];
+        const char* src0_data = static_cast<const char*>(src0->data);
+
+        // Extract layer_id from tensor name (e.g., "blk.5.ffn_gate_exps")
+        int layer_id = parse_layer_id_from_name(src0->name);
+        if (layer_id < 0) {
+            GGML_LOG_WARN("[GRAPH-PRELOAD] Could not parse layer_id from tensor '%s'\n", src0->name);
+            continue;
+        }
+
+        GGML_SYCL_DEBUG("[GRAPH-PRELOAD] Pre-loading layer %d: %ld experts x %.1f MB\n",
+                        layer_id, (long)n_experts, expert_sz / (1024.0f * 1024.0f));
+
+        // Pre-load all experts for this layer via unified cache
+        for (int64_t expert_id = 0; expert_id < n_experts; expert_id++) {
+            const void* expert_ptr = src0_data + expert_id * expert_sz;
+
+            void* cached_ptr;
+            if (src0->type == GGML_TYPE_MXFP4) {
+                cached_ptr = ggml_sycl::cache_moe_expert_with_reorder(
+                    *stream, expert_ptr, static_cast<size_t>(expert_sz),
+                    layer_id, static_cast<int>(expert_id),
+                    static_cast<int>(src0->ne[0]), static_cast<int>(src0->ne[1]));
+            } else {
+                cached_ptr = ggml_sycl::cache_moe_expert(
+                    *stream, expert_ptr, static_cast<size_t>(expert_sz),
+                    layer_id, static_cast<int>(expert_id));
+            }
+
+            if (!cached_ptr) {
+                GGML_LOG_ERROR("[GRAPH-PRELOAD] Failed to cache expert L%d:E%ld\n",
+                               layer_id, (long)expert_id);
+                return false;
+            }
+
+            // Pin the entry to prevent eviction during graph execution
+            ggml_sycl::pin_expert(expert_ptr);
+            pin_count++;
+            preload_count++;
+        }
+    }
+
+    if (preload_count > 0) {
+        GGML_LOG_INFO("[GRAPH-PRELOAD] Pre-loaded %d experts, pinned %d entries (%.1f%% hit rate)\n",
+                      preload_count, pin_count, cache->hit_rate() * 100.0f);
+    }
+
+    return true;
+}
+
+// Unpin all expert cache slots after graph execution
+static void graph_unpin_moe_experts([[maybe_unused]] ggml_backend_sycl_context* ctx = nullptr) {
+    // Unified cache handles all expert caching
+    ggml_sycl::unpin_all_experts();
+    GGML_SYCL_DEBUG("[GRAPH-UNPIN] Unpinned unified cache entries\n");
+}
+
+// Pre-load all dense weights into unified cache before graph recording (weight streaming mode)
+// This ensures stable cache pointers during graph execution
+// Returns true if all weights were successfully pre-loaded and pinned
+static bool graph_preload_weights(ggml_backend_sycl_context& ctx, ggml_cgraph * cgraph) {
+    // Check if weight streaming is enabled via env var
+    static bool weight_streaming_enabled = (std::getenv("GGML_SYCL_WEIGHT_STREAMING") != nullptr);
+
+    // Skip entirely if streaming not enabled or unified cache disabled
+    if (!weight_streaming_enabled || !ggml_sycl::unified_cache_enabled()) {
+        return true;
+    }
+
+    // Collect all MUL_MAT nodes with CPU buffers that need streaming
+    std::vector<const ggml_tensor*> cpu_weights;
+    size_t total_weight_bytes = 0;
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        if (node->op != GGML_OP_MUL_MAT) continue;
+
+        const ggml_tensor * src0 = node->src[0];
+        if (!src0 || !src0->buffer) continue;
+
+        // Only process CPU (mmap'd) buffers
+        if (ggml_backend_buffer_is_sycl(src0->buffer)) continue;
+
+        cpu_weights.push_back(src0);
+        total_weight_bytes += ggml_nbytes(src0);
+    }
+
+    if (cpu_weights.empty()) {
+        GGML_SYCL_DEBUG("[GRAPH-PRELOAD-WEIGHTS] No CPU MUL_MAT weights found in graph\n");
+        return true;
+    }
+
+    GGML_SYCL_DEBUG("[GRAPH-PRELOAD-WEIGHTS] Found %zu CPU weights (%.1f MB)\n",
+                    cpu_weights.size(), total_weight_bytes / (1024.0f * 1024.0f));
+
+    // Get unified cache
+    sycl::queue* stream = ctx.stream();
+    ggml_sycl::unified_cache* cache = ggml_sycl::get_unified_cache(*stream);
+    if (!cache) {
+        GGML_LOG_WARN("[GRAPH-PRELOAD-WEIGHTS] Unified cache not available\n");
+        return true;
+    }
+
+    // Check if we have enough space
+    if (cache->available() < total_weight_bytes) {
+        // Try to evict to make room
+        cache->evict(total_weight_bytes - cache->available());
+        if (cache->available() < total_weight_bytes) {
+            GGML_LOG_WARN("[GRAPH-PRELOAD-WEIGHTS] Insufficient cache space: need %.1f MB, have %.1f MB\n",
+                          total_weight_bytes / (1024.0f * 1024.0f), cache->available() / (1024.0f * 1024.0f));
+            ctx.weight_streaming_graphs_disabled = true;
+            return false;
+        }
+    }
+
+    // Pre-load and pin all weights
+    size_t loaded = 0;
+    for (const ggml_tensor* weight : cpu_weights) {
+        int layer_id = extract_layer_number(weight->name);
+        // For mmap'd weights, use same pointer for key and source
+        // (mmap pointers are stable and content doesn't change)
+        void* cached_ptr = cache->ensure_cached(
+            weight->data, weight->data, ggml_nbytes(weight),
+            ggml_sycl::cache_entry_type::DENSE_WEIGHT,
+            layer_id, -1);
+
+        if (cached_ptr) {
+            cache->pin(weight->data);
+            loaded++;
+        } else {
+            GGML_LOG_WARN("[GRAPH-PRELOAD-WEIGHTS] Failed to cache weight: %s\n", weight->name);
+            ctx.weight_streaming_graphs_disabled = true;
+            return false;
+        }
+    }
+
+    GGML_SYCL_DEBUG("[GRAPH-PRELOAD-WEIGHTS] Pre-loaded and pinned %zu weights\n", loaded);
+    return true;
+}
+
+// Unpin all dense weights after graph execution
+static void graph_unpin_weights(ggml_backend_sycl_context* ctx) {
+    // Unified cache handles unpinning via unpin_all()
+    // Called during graph invalidation to allow eviction
+    GGML_SYCL_DEBUG("[GRAPH-UNPIN-WEIGHTS] Unpin request (unified cache handles via unpin_all)\n");
+}
+
 // Pre-reorder ALL eligible weight tensors in the graph
 // This ensures subsequent graph recordings don't get blocked by incremental reordering
 // NOTE: We don't check should_reorder_tensor() because that requires ne[1]==1 (decode mode).
 // We want to pre-reorder during prompt phase (ne[1]>1) to avoid blocking decode phase graphs.
 static void graph_pre_reorder_all(ggml_backend_sycl_context& ctx, ggml_cgraph * cgraph) {
-    // Skip if optimize is disabled globally
-    if (g_ggml_sycl_disable_optimize || !ctx.opt_feature.reorder) {
+    // Skip if optimize is disabled globally or device doesn't support reordering
+    if (g_ggml_sycl_disable_optimize || !ctx.supports_soa_reorder) {
+        return;
+    }
+
+    // Skip graph pre-reorder when weight streaming is enabled
+    // With weight streaming, weights are copied to compute buffer on-demand.
+    // Reordering the compute buffer copy would:
+    // 1. Allocate extra GPU memory (OOM on large models)
+    // 2. Only reorder the temporary copy (original mmap'd data stays unchanged)
+    // 3. Be wasteful since reordering should happen during caching (Phase 3)
+    static bool weight_streaming_enabled = (std::getenv("GGML_SYCL_WEIGHT_STREAMING") != nullptr);
+    if (weight_streaming_enabled) {
+        GGML_SYCL_DEBUG("[SYCL-GRAPH] weight streaming enabled, skipping pre-reorder\n");
         return;
     }
 
@@ -8771,11 +9798,32 @@ static void graph_pre_reorder_all(ggml_backend_sycl_context& ctx, ggml_cgraph * 
             }
         }
         ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-        if (extra->optimized_feature.reorder) {
+        if (extra->optimized_feature.is_reordered()) {
             if (g_ggml_sycl_debug >= 2 && node->op == GGML_OP_MUL_MAT_ID && moe_tensor_count <= 3) {
-                fprintf(stderr, "[SYCL-GRAPH] MUL_MAT_ID src0='%s' - already reordered\n", src0->name);
+                fprintf(stderr, "[SYCL-GRAPH] MUL_MAT_ID src0='%s' - already reordered (mode=%d)\n",
+                        src0->name, (int)extra->optimized_feature.get_reorder());
             }
             continue;  // Already reordered
+        }
+        // Skip CPU-resident tensors (weight streaming: weights on CPU are copied on-demand)
+        // Reordering requires GPU-resident data; CPU tensors will be reordered after caching
+        if (src0->buffer) {
+            bool is_sycl = ggml_backend_buffer_is_sycl(src0->buffer);
+            if (!is_sycl) {
+                if (g_ggml_sycl_debug >= 2) {
+                    fprintf(stderr, "[SYCL-GRAPH] src0='%s' - CPU buffer, skip reorder\n", src0->name);
+                }
+                continue;
+            }
+        } else {
+            // No buffer means tensor data is not from a ggml buffer (e.g., view or direct allocation)
+            // For weight streaming with mmap, weights may have buffer=NULL if they haven't been
+            // transferred to a ggml buffer yet. Skip reordering for such tensors.
+            if (g_ggml_sycl_debug >= 2) {
+                fprintf(stderr, "[SYCL-GRAPH] src0='%s' - no buffer, skip reorder (data=%p)\n",
+                        src0->name, src0->data);
+            }
+            continue;
         }
         // Skip TP-sharded tensors
         if (extra->tp_type != tp_layer_type::TP_NONE) {
@@ -8798,14 +9846,14 @@ static void graph_pre_reorder_all(ggml_backend_sycl_context& ctx, ggml_cgraph * 
             fprintf(stderr, "[SYCL-GRAPH] MUL_MAT_ID src0='%s' type=%s - will reorder\n",
                     src0->name, ggml_type_name(src0->type));
         }
-        // Perform reorder
-        reorder_qw(src0, ctx.stream());
-        extra->optimized_feature.reorder = true;
-        if (g_ggml_sycl_debug && node->op == GGML_OP_MUL_MAT_ID) {
-            fprintf(stderr, "[SYCL-GRAPH] SET reorder=true: src0='%s' extra=%p reorder_after=%d\n",
-                    src0->name, (void*)extra, extra->optimized_feature.reorder);
+        // Perform reorder using unified function (does both transform + set flag)
+        if (reorder_tensor_to_soa(src0, ctx.stream(), "GRAPH_PRE_REORDER")) {
+            if (g_ggml_sycl_debug && node->op == GGML_OP_MUL_MAT_ID) {
+                fprintf(stderr, "[SYCL-GRAPH] SET reorder=SOA: src0='%s' extra=%p reorder_mode=%d\n",
+                        src0->name, (void*)extra, (int)extra->optimized_feature.get_reorder());
+            }
+            reorder_count++;
         }
-        reorder_count++;
     }
     if (reorder_count > 0) {
         // Wait for all reorders to complete before proceeding
@@ -8818,13 +9866,90 @@ static void graph_pre_reorder_all(ggml_backend_sycl_context& ctx, ggml_cgraph * 
 
 static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor * src0, const ggml_tensor * /* src1 */,
                             ggml_tensor * dst, mul_mat_algo mm_algorithm) {
-    if (!should_reorder_tensor(*ctx, dst)) {
+    // Use can_reorder_tensor() instead of should_reorder_tensor()
+    // We want to reorder on FIRST USE regardless of batch size (prompt or decode).
+    // The batch=1 check in should_reorder_tensor() only determines which kernel to use,
+    // not whether to reorder. Reordering must happen before any SoA kernel can be used.
+    if (!can_reorder_tensor(*ctx, dst)) {
+        if (g_ggml_sycl_debug) {
+            fprintf(stderr, "[REORDER-DBG] opt_for_reorder: can_reorder=false, skipping\n");
+        }
         return;
     }
 
     ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-    if (!extra || extra->optimized_feature.reorder) {
-        return;  // Skip permutations and already reordered tensors
+    if (!extra) {
+        if (g_ggml_sycl_debug) {
+            fprintf(stderr, "[REORDER-DBG] opt_for_reorder: extra=NULL - skipping\n");
+        }
+        return;  // Skip tensors without extra (e.g., permutations)
+    }
+
+    // Check if already reordered to the required format (currently all paths use SOA)
+    const reorder_mode required_mode = reorder_mode::SOA;
+    if (g_ggml_sycl_debug) {
+        fprintf(stderr, "[REORDER-DBG] opt_for_reorder: tensor='%s' extra=%p current_mode=%d required_mode=%d\n",
+                src0->name, (void*)extra, (int)extra->optimized_feature.get_reorder(), (int)required_mode);
+    }
+    if (extra->optimized_feature.get_reorder() == required_mode) {
+        if (g_ggml_sycl_debug) {
+            fprintf(stderr, "[REORDER-DBG] opt_for_reorder: already in required mode %d - skipping\n",
+                    (int)required_mode);
+
+            // VERIFY: Read first bytes to confirm data is actually in SoA layout
+            // For Q4_0 SoA: first bytes should be quants (0x00-0xFF), NOT fp16 scales
+            // For Q4_0 AoS: first 2 bytes would be fp16 scale (typically ~0.001-0.1 range)
+            // Use src0->data (which may come from tensor->data fallback, not extra->data_device)
+            const void * data_ptr = src0->data ? src0->data : extra->data_device[ctx->device];
+            if (src0->type == GGML_TYPE_Q4_0 && data_ptr) {
+                uint8_t first_bytes[20];
+                ctx->stream()->memcpy(first_bytes, data_ptr, 20).wait();
+
+                // In AoS: bytes 0-1 are fp16 scale, bytes 2-17 are quants
+                // In SoA: bytes 0-15 are quants from first block, bytes 16-17 are quants from second block
+                sycl::half aos_scale;
+                memcpy(&aos_scale, first_bytes, sizeof(sycl::half));
+                float aos_scale_f = (float)aos_scale;
+
+                // Calculate where scales would be in SoA layout
+                const int64_t nblocks = (src0->ne[0] / QK4_0) * src0->ne[1];
+                const size_t qs_section_size = nblocks * 16;  // 16 bytes per block for quants
+
+                // Read what should be scales in SoA layout
+                sycl::half soa_scale;
+                if (qs_section_size < ggml_nbytes(src0)) {
+                    ctx->stream()->memcpy(&soa_scale, (const uint8_t*)data_ptr + qs_section_size, sizeof(sycl::half)).wait();
+                    float soa_scale_f = (float)soa_scale;
+
+                    // SoA check: first 2 bytes as fp16 should NOT be a valid scale (would be quant bytes)
+                    // Valid scales are typically 0.001-0.5, quant bytes as fp16 would be ~denorm or large
+                    bool looks_like_soa = (aos_scale_f < 0.0001f || aos_scale_f > 1.0f || std::isnan(aos_scale_f) || std::isinf(aos_scale_f));
+                    bool scale_at_offset_valid = (soa_scale_f > 0.0001f && soa_scale_f < 1.0f && !std::isnan(soa_scale_f));
+
+                    fprintf(stderr, "[SOA-VERIFY] tensor='%s' nblocks=%lld qs_offset=%zu\n",
+                            src0->name, (long long)nblocks, qs_section_size);
+                    fprintf(stderr, "[SOA-VERIFY]   first_bytes[0..3]=0x%02x%02x%02x%02x (as fp16 scale=%.6f)\n",
+                            first_bytes[0], first_bytes[1], first_bytes[2], first_bytes[3], aos_scale_f);
+                    fprintf(stderr, "[SOA-VERIFY]   scale_at_offset=%.6f looks_like_soa=%d scale_valid=%d\n",
+                            soa_scale_f, (int)looks_like_soa, (int)scale_at_offset_valid);
+
+                    if (!looks_like_soa || !scale_at_offset_valid) {
+                        fprintf(stderr, "[SOA-VERIFY] *** WARNING: Data may NOT be in SoA layout! ***\n");
+                    }
+                }
+            }
+        }
+        return;  // Already in correct format
+    }
+
+    // If reordered to a DIFFERENT format, warn and skip (re-reordering not yet supported)
+    if (extra->optimized_feature.is_reordered()) {
+        static int reorder_mismatch_warn = 0;
+        if (reorder_mismatch_warn++ < 5) {
+            fprintf(stderr, "[REORDER-WARN] opt_for_reorder: tensor '%s' is in mode %d but needs %d - re-reorder not supported\n",
+                    src0->name, (int)extra->optimized_feature.get_reorder(), (int)required_mode);
+        }
+        return;  // Cannot re-reorder (would need reverse transform)
     }
 
     // CRITICAL: Skip reorder for TP-sharded tensors - reorder corrupts memory in TP mode!
@@ -8854,10 +9979,80 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
                 return;
             }
             break;
+        case mul_mat_algo::MMQ:
+            if (!ggml_sycl_supports_reorder_mmq(src0->type)) {
+                return;
+            }
+            break;
     }
 
-    reorder_qw(src0, ctx->stream());
-    extra->optimized_feature.reorder = true;  // Used to decode/dequan in next steps and avoid re-reordering
+    static bool do_soa_layout_debug = std::getenv("GGML_SYCL_SOA_LAYOUT_DEBUG") != nullptr;
+    static int reorder_call_count = 0;
+
+    if (g_ggml_sycl_debug || do_soa_layout_debug) {
+        fprintf(stderr, "[REORDER-DBG] opt_for_reorder: CALLING reorder_qw for src0=%s type=%d data=%p\n",
+                src0->name, src0->type, src0->data);
+    }
+
+    // Debug: dump data BEFORE and AFTER reorder
+    uint8_t before_bytes[36] = {0};
+    bool do_layout_compare = do_soa_layout_debug;  // No limit - pipe to file
+    if (do_layout_compare) {
+        reorder_call_count++;
+        ctx->stream()->wait();
+        ctx->stream()->memcpy(before_bytes, src0->data, 36).wait();
+        sycl::half d0_before, d1_before;
+        memcpy(&d0_before, &before_bytes[0], 2);
+        memcpy(&d1_before, &before_bytes[18], 2);
+        fprintf(stderr, "[REORDER-DBG] BEFORE reorder_qw (tensor=%s):\n", src0->name);
+        fprintf(stderr, "[REORDER-DBG]   Raw bytes: ");
+        for (int i = 0; i < 36; i++) {
+            fprintf(stderr, "%02x ", before_bytes[i]);
+            if (i == 17) fprintf(stderr, "| ");
+        }
+        fprintf(stderr, "\n");
+        fprintf(stderr, "[REORDER-DBG]   IF AoS: d[0]=%.6f d[1]=%.6f\n", (float)d0_before, (float)d1_before);
+    }
+
+    // Use unified function (does both transform + set flag)
+    reorder_tensor_to_soa(src0, ctx->stream(), "OPT_FOR_REORDER");
+
+    if (do_layout_compare) {
+        ctx->stream()->wait();
+        uint8_t after_bytes[36];
+        ctx->stream()->memcpy(after_bytes, src0->data, 36).wait();
+        sycl::half d0_after, d1_after;
+        memcpy(&d0_after, &after_bytes[0], 2);
+        memcpy(&d1_after, &after_bytes[18], 2);
+        fprintf(stderr, "[REORDER-DBG] AFTER reorder_qw (tensor=%s):\n", src0->name);
+        fprintf(stderr, "[REORDER-DBG]   Raw bytes: ");
+        for (int i = 0; i < 36; i++) {
+            fprintf(stderr, "%02x ", after_bytes[i]);
+            if (i == 17) fprintf(stderr, "| ");
+        }
+        fprintf(stderr, "\n");
+        fprintf(stderr, "[REORDER-DBG]   IF AoS: d[0]=%.6f d[1]=%.6f (should be garbage if reordered)\n",
+                (float)d0_after, (float)d1_after);
+
+        // Read d values from expected SoA location
+        int64_t ncols = src0->ne[0];
+        int64_t nrows = src0->ne[1];
+        int64_t d_offset = nrows * ncols / 2;
+        sycl::half soa_d[2];
+        ctx->stream()->memcpy(soa_d, (const uint8_t*)src0->data + d_offset, 4).wait();
+        fprintf(stderr, "[REORDER-DBG]   IF SoA: d[0]=%.6f d[1]=%.6f (at d_offset=%lld)\n",
+                (float)soa_d[0], (float)soa_d[1], (long long)d_offset);
+
+        bool bytes_changed = memcmp(after_bytes, before_bytes, 36) != 0;
+        fprintf(stderr, "[REORDER-DBG]   *** DATA CHANGED: %s *** (call #%d)\n\n",
+                bytes_changed ? "YES (reorder happened)" : "NO (BUG - reorder didn't change data!)",
+                reorder_call_count);
+        fflush(stderr);
+    }
+
+    if (g_ggml_sycl_debug) {
+        fprintf(stderr, "[REORDER-DBG] opt_for_reorder: DONE reorder_qw, set reorder=SOA\n");
+    }
 }
 
 // Pre-reorder all weight tensors that would be reordered during decode.
@@ -8866,7 +10061,8 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
 // Without this, the first decode token uses non-reordered kernels while
 // subsequent tokens use reordered kernels, causing different results.
 static void pre_reorder_all_tensors(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
-    if (g_ggml_sycl_disable_optimize || !sycl_ctx->opt_feature.reorder) {
+    // Skip if optimize is disabled globally or device doesn't support reordering
+    if (g_ggml_sycl_disable_optimize || !sycl_ctx->supports_soa_reorder) {
         return;
     }
 
@@ -8887,7 +10083,7 @@ static void pre_reorder_all_tensors(ggml_backend_sycl_context * sycl_ctx, ggml_c
 
         ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
 
-        if (extra->optimized_feature.reorder) {
+        if (extra->optimized_feature.is_reordered()) {
             continue;  // Already reordered
         }
 
@@ -8898,15 +10094,55 @@ static void pre_reorder_all_tensors(ggml_backend_sycl_context * sycl_ctx, ggml_c
             continue;
         }
 
-        // Reorder the weight tensor
-        reorder_qw(src0, sycl_ctx->stream());
-        extra->optimized_feature.reorder = true;
-        reordered_count++;
+        // Debug: dump data BEFORE and AFTER reorder
+        static bool do_soa_layout_debug = std::getenv("GGML_SYCL_SOA_LAYOUT_DEBUG") != nullptr;
+        uint8_t before_bytes[36] = {0};
+        if (do_soa_layout_debug && reordered_count < 5) {
+            sycl_ctx->stream()->wait();
+            sycl_ctx->stream()->memcpy(before_bytes, src0->data, 36).wait();
+            sycl::half d0_before;
+            memcpy(&d0_before, &before_bytes[0], 2);
+            fprintf(stderr, "[PRE-REORDER] BEFORE tensor=%s: bytes[0-5]=%02x %02x %02x %02x %02x %02x d[0]=%.6f\n",
+                    src0->name, before_bytes[0], before_bytes[1], before_bytes[2], before_bytes[3],
+                    before_bytes[4], before_bytes[5], (float)d0_before);
+        }
+
+        // Reorder using unified function (does both transform + set flag)
+        if (reorder_tensor_to_soa(src0, sycl_ctx->stream(), "PRE_REORDER_ALL")) {
+            reordered_count++;
+        }
+
+        // Debug: verify data changed
+        if (do_soa_layout_debug && reordered_count <= 5) {
+            sycl_ctx->stream()->wait();
+            uint8_t after_bytes[36];
+            sycl_ctx->stream()->memcpy(after_bytes, src0->data, 36).wait();
+            bool changed = memcmp(before_bytes, after_bytes, 36) != 0;
+
+            // Read d values from expected SoA location
+            int64_t ncols = src0->ne[0];
+            int64_t nrows = src0->ne[1];
+            int64_t d_offset = nrows * ncols / 2;
+            sycl::half soa_d[2];
+            sycl_ctx->stream()->memcpy(soa_d, (const uint8_t*)src0->data + d_offset, 4).wait();
+
+            fprintf(stderr, "[PRE-REORDER] AFTER tensor=%s: bytes[0-5]=%02x %02x %02x %02x %02x %02x\n",
+                    src0->name, after_bytes[0], after_bytes[1], after_bytes[2], after_bytes[3],
+                    after_bytes[4], after_bytes[5]);
+            fprintf(stderr, "[PRE-REORDER]   d_offset=%lld SoA_d[0]=%.6f SoA_d[1]=%.6f\n",
+                    (long long)d_offset, (float)soa_d[0], (float)soa_d[1]);
+            fprintf(stderr, "[PRE-REORDER]   *** DATA CHANGED: %s ***\n\n",
+                    changed ? "YES (reorder worked)" : "NO (BUG!)");
+            fflush(stderr);
+        }
     }
 
     if (reordered_count > 0) {
         // Wait for all reordering to complete before proceeding
         sycl_ctx->stream()->wait();
+        if (std::getenv("GGML_SYCL_SOA_LAYOUT_DEBUG")) {
+            fprintf(stderr, "[PRE-REORDER] Completed reordering %d tensors\n", reordered_count);
+        }
     }
 }
 
@@ -9035,6 +10271,19 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     bool use_mul_mat_q =  ggml_sycl_supports_mmq(src0->type)
         && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 
+    // Force specific kernel paths for isolated debugging
+    // GGML_SYCL_FORCE_MMQ: Route all ops through MMQ (works for any batch size)
+    // GGML_SYCL_FORCE_DMMV: Route batch=1 ops through DMMV (disables MMVQ)
+    static bool force_mmq = (getenv("GGML_SYCL_FORCE_MMQ") != nullptr);
+    static bool force_dmmv = (getenv("GGML_SYCL_FORCE_DMMV") != nullptr);
+    if (force_mmq && use_mul_mat_q) {
+        use_dequantize_mul_mat_vec = false;
+        use_mul_mat_vec_q = false;
+    }
+    if (force_dmmv && use_dequantize_mul_mat_vec) {
+        use_mul_mat_vec_q = false;  // DMMV takes priority over MMVQ for batch=1
+    }
+
 #ifdef GGML_SYCL_XMX_GEMM
     // XMX GEMM path (experimental, known to be 5-11x slower for quantized models)
     bool use_xmx_gemm = g_ggml_sycl_use_xmx_gemm ? true : false;
@@ -9135,37 +10384,68 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         if (src0->ne[3] == 1 && src1->ne[3] == 1) {
             // KQ single-batch
             // mmv p021 was specific for these dimensions
+            GGML_SYCL_KTRACE("mul_mat_f16_kq_single", " ne3=%lld", (long long)src0->ne[3]);
             ggml_sycl_mul_mat_vec_p021(ctx, src0, src1, dst);
         } else {
             // The kernel from the if path is faster for that specific case, but does not support all mul mats.
+            GGML_SYCL_KTRACE("mul_mat_f16_batched", " ne3=%lld", (long long)src0->ne[3]);
             ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
         }
     } else if (!split && src0->type == GGML_TYPE_F16 && !ggml_is_contiguous(src0) && !ggml_is_transposed(src1) && src1->ne[1] == 1 && src1->ne[3] == 1) {
         // KQV single-batch
+        GGML_SYCL_KTRACE("mul_mat_f16_kqv_single", " ne1=%lld", (long long)src1->ne[1]);
         ggml_sycl_mul_mat_vec_nc(ctx, src0, src1, dst);
     } else if (!split && src0->type == GGML_TYPE_F16 && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2] * src1->ne[3] > 1) {
         // KQ + KQV multi-batch
+        GGML_SYCL_KTRACE("mul_mat_f16_kqkv_multi", " batches=%lld", (long long)(src1->ne[2] * src1->ne[3]));
         ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
     } else if (use_dequantize_mul_mat_vec) {
+        GGML_SYCL_KTRACE("mul_mat_dispatch_dmmv", " type=%d ne1=%lld", src0->type, (long long)src1->ne[1]);
         opt_for_reorder(&ctx, src0, src1, dst, mul_mat_algo::DMMV);
         ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_dequantize_mul_mat_vec);
     } else if (use_mul_mat_vec_q) {
         opt_for_reorder(&ctx, src0, src1, dst, mul_mat_algo::MMVQ);
         ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-        if (extra && extra->optimized_feature.reorder) {
+        if (extra && extra->optimized_feature.is_reordered()) {
+            // Both SOA and COALESCED use the SoA quantization path - MMVQ handles coalesced internally
+            GGML_SYCL_KTRACE("mul_mat_dispatch_mmvq_reordered", " type=%d ne1=%lld mode=%d", src0->type, (long long)src1->ne[1], (int)extra->optimized_feature.get_reorder());
             ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q);
         } else {
+            GGML_SYCL_KTRACE("mul_mat_dispatch_mmvq_aos", " type=%d ne1=%lld", src0->type, (long long)src1->ne[1]);
             ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_vec_q);
         }
 #if defined(GGML_SYCL_XMX_GEMM) && defined(GGML_SYCL_MMQ_XMX)
     } else if (use_xmx_gemm) {
         // XMX-accelerated quantized GEMM (experimental, known to be 5-11x slower)
+        GGML_SYCL_KTRACE("mul_mat_dispatch_mmq_xmx", " type=%d ne1=%lld", src0->type, (long long)src1->ne[1]);
         ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q_xmx);
 #endif
     } else if (use_mul_mat_q) {
         // Standard MMQ path (with optional ESIMD acceleration for Q4_0)
-        ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q);
+        // MMQ SoA kernels use SoA for both X (weights) and Y (activations)
+        opt_for_reorder(&ctx, src0, src1, dst, mul_mat_algo::MMQ);
+        ggml_tensor_extra_gpu * mmq_extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+
+        // DEBUG: SoA investigation - trace kernel dispatch decision
+        if (g_ggml_sycl_debug) {
+            static int mmq_dbg_count = 0;
+            if (mmq_dbg_count++ < 10) {
+                fprintf(stderr, "[MMQ-DISPATCH] src0=%s type=%d extra=%p is_soa=%d batch=%lld\n",
+                        src0->name, src0->type, (void*)mmq_extra,
+                        mmq_extra ? mmq_extra->optimized_feature.is_soa() : -1,
+                        (long long)src1->ne[1]);
+            }
+        }
+
+        if (mmq_extra && mmq_extra->optimized_feature.is_soa()) {
+            GGML_SYCL_KTRACE("mul_mat_dispatch_mmq_soa", " type=%d ne1=%lld", src0->type, (long long)src1->ne[1]);
+            ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_soa>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q);
+        } else {
+            GGML_SYCL_KTRACE("mul_mat_dispatch_mmq_aos", " type=%d ne1=%lld", src0->type, (long long)src1->ne[1]);
+            ggml_sycl_op_mul_mat<quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_q);
+        }
     } else {
+        GGML_SYCL_KTRACE("mul_mat_dispatch_onednn", " type=%d ne1=%lld", src0->type, (long long)src1->ne[1]);
         ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_sycl);
     }
 
@@ -9385,6 +10665,18 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
 
     const queue_ptr stream = ctx.stream();
 
+    // Check if expert weights are in host memory
+    // Fused kernel requires contiguous device memory for all experts
+    // Fall back to MMVQ which has per-expert caching support
+    {
+        sycl::usm::alloc ptr_type = sycl::get_pointer_type(src0->data, stream->get_context());
+        if (ptr_type == sycl::usm::alloc::unknown || ptr_type == sycl::usm::alloc::host) {
+            GGML_SYCL_DEBUG("[MoE FUSED] Weights in host memory (type=%d), falling back to MMVQ for caching\n",
+                            (int)ptr_type);
+            return false;  // Let MMVQ handle with expert caching
+        }
+    }
+
     // Calculate parameters
     const int64_t num_experts = ne02;          // Number of experts
     const int64_t nrows = ne01;                // Output rows per expert
@@ -9424,16 +10716,16 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
         GGML_SYCL_DEBUG("[MoE FUSED] Q8_0 kernel launched\n");
         return true;
     } else if (src0->type == GGML_TYPE_MXFP4) {
-        // Check if weights are reordered to SoA layout
+        // Check if weights are reordered to SoA layout (MXFP4 MoE only has SOA kernel)
         auto * src0_extra = (ggml_tensor_extra_gpu *) src0->extra;
-        const bool use_soa = src0_extra && src0_extra->optimized_feature.reorder;
+        const bool use_soa = src0_extra && src0_extra->optimized_feature.is_soa();
 
         // Debug: understand why use_soa might be false
         if (g_ggml_sycl_debug) {
             fprintf(stderr, "[MoE FUSED] MXFP4 check: src0='%s' extra=%p use_soa=%d reorder=%d\n",
                     src0->name, (void*)src0_extra,
                     use_soa,
-                    src0_extra ? src0_extra->optimized_feature.reorder : -1);
+                    src0_extra ? (int)src0_extra->optimized_feature.get_reorder() : -1);
         }
 
         if (use_soa) {
@@ -9608,6 +10900,40 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
     char *src1_original = (char *)src1->data;
     char *dst_original = (char *)dst->data;
 
+    // Check if expert weights need to be cached (mmap or host memory)
+    // For lazy MoE: weights are in mmap'd memory and need per-expert caching to GPU
+    bool use_expert_cache = false;
+    int layer_id = -1;
+    const size_t expert_size = nb02;  // Bytes per expert
+    {
+        // Check buffer metadata first - authoritative source of truth for memory location
+        // ggml_backend_buffer_is_host() returns true for CPU/mmap buffers
+        // This is more reliable than sycl::get_pointer_type() which may return incorrect
+        // values (e.g., "shared") for mmap'd memory on Intel systems
+        bool is_host_buffer = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+
+        // Also check ptr_type as fallback for edge cases
+        sycl::usm::alloc ptr_type = sycl::get_pointer_type(src0->data, stream->get_context());
+
+        // Use expert cache if: host buffer (mmap/CPU) OR non-device SYCL memory
+        if (is_host_buffer || ptr_type != sycl::usm::alloc::device) {
+            use_expert_cache = true;
+            layer_id = ggml_sycl_tp_extract_layer_number(src0->name);
+            if (layer_id < 0) {
+                layer_id = static_cast<int>(reinterpret_cast<uintptr_t>(src0->data) & 0x7FFFFFFF);
+            }
+            GGML_SYCL_DEBUG("[MoE] Using expert cache for %s (layer=%d, host_buf=%d, ptr_type=%d)\n",
+                            src0->name, layer_id, is_host_buffer, (int)ptr_type);
+
+            // Unified cache: set reorder callback for MXFP4 (applied on cache miss)
+            if (src0->type == GGML_TYPE_MXFP4) {
+                ggml_sycl::set_moe_reorder_callback(reorder_callback_mxfp4);
+                GGML_SYCL_DEBUG("[UNIFIED-CACHE] Set MXFP4 reorder callback\n");
+            }
+            // Experts are cached on-demand in the loop below via unified cache API
+        }
+    }
+
     src0_row.ne[2] = 1;
     src0_row.ne[3] = 1;
     src0_row.nb[3] = nb02;
@@ -9624,6 +10950,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
     dst_row.nb[2] = nb1;
     dst_row.nb[3] = nb1;
     if (ne12 == 1) {
+        // Thread-local extra for reordered cached experts
+        static thread_local ggml_tensor_extra_gpu cached_extra = {};
+
         for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
             for (int64_t id = 0; id < n_ids; id++) {
                 const int32_t i02 = *(const int32_t *) (ids_host.data() + iid1*ids->nb[1] + id*ids->nb[0]);
@@ -9635,7 +10964,40 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
                 const int64_t i1 = id;
                 const int64_t i2 = i12;
 
-            src0_row.data = src0_original + i02*nb02;
+            // Get expert data - from cache if using mmap/host, or directly if on device
+            const void* expert_mmap_ptr = src0_original + i02 * nb02;
+
+            if (use_expert_cache) {
+                // Unified cache: single cache for all weights (dense + MoE)
+                void* cached_ptr;
+                if (src0->type == GGML_TYPE_MXFP4) {
+                    cached_ptr = ggml_sycl::cache_moe_expert_with_reorder(
+                        *stream, expert_mmap_ptr, expert_size,
+                        layer_id, i02, static_cast<int>(ne00), static_cast<int>(ne01));
+                } else {
+                    cached_ptr = ggml_sycl::cache_moe_expert(
+                        *stream, expert_mmap_ptr, expert_size, layer_id, i02);
+                }
+
+                if (cached_ptr) {
+                    src0_row.data = cached_ptr;
+
+                    // Set up extra with reorder flag if SoA layout was applied
+                    // MXFP4 uses cache_moe_expert_with_reorder() which applies SoA
+                    if (src0->type == GGML_TYPE_MXFP4) {
+                        cached_extra.optimized_feature = optimize_feature(reorder_mode::SOA);
+                        cached_extra.tp_sharded = false;
+                        src0_row.extra = &cached_extra;
+                    } else {
+                        src0_row.extra = nullptr;
+                    }
+                } else {
+                    GGML_LOG_ERROR("[UNIFIED-CACHE] Failed to cache expert L%d:E%d\n", layer_id, i02);
+                    src0_row.data = src0_original + i02*nb02;  // Fallback (will likely fail)
+                }
+            } else {
+                src0_row.data = src0_original + i02*nb02;
+            }
             src1_row.data = src1_original + i11*nb11 + i12*nb12;
             dst_row.data = dst_original + i1*nb1 + i2*nb2;
 
@@ -9647,8 +11009,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
         // This eliminates the gather/scatter overhead (96 kernels -> 1 kernel)
 #if SYCL_ESIMD_MOE_AVAILABLE
         static bool fused_moe_disabled = (std::getenv("GGML_SYCL_DISABLE_FUSED_MOE") != nullptr);
-        const bool use_fused_moe = !fused_moe_disabled && fused_moe_esimd_available() &&  // Enabled for MXFP4
-                                   (src0->type == GGML_TYPE_MXFP4) &&  // Only MXFP4 - Q8_0 models also use MXFP4 for MoE
+        // Note: Fused kernel requires contiguous device memory for all experts
+        // Cannot use when weights are in mmap (use_expert_cache is true)
+        const bool use_fused_moe = !fused_moe_disabled && fused_moe_esimd_available() &&
+                                   !use_expert_cache &&  // Cannot use with mmap weights
+                                   (src0->type == GGML_TYPE_MXFP4) &&
                                    src1->type == GGML_TYPE_F32;
 
         if (use_fused_moe) {
@@ -9762,7 +11127,42 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
                 });
             }
 
-            src0_row.data = src0_original + i02*nb02;
+            // Get expert data - from cache if using mmap/host, or directly if on device
+            // Thread-local extra for reordered cached experts (batched path)
+            static thread_local ggml_tensor_extra_gpu cached_extra_batch = {};
+            const void* expert_mmap_ptr_batch = src0_original + i02 * nb02;
+
+            if (use_expert_cache) {
+                // Unified cache: single cache for all weights (dense + MoE)
+                void* cached_ptr;
+                if (src0->type == GGML_TYPE_MXFP4) {
+                    cached_ptr = ggml_sycl::cache_moe_expert_with_reorder(
+                        *stream, expert_mmap_ptr_batch, expert_size,
+                        layer_id, i02, static_cast<int>(ne00), static_cast<int>(ne01));
+                } else {
+                    cached_ptr = ggml_sycl::cache_moe_expert(
+                        *stream, expert_mmap_ptr_batch, expert_size, layer_id, i02);
+                }
+
+                if (cached_ptr) {
+                    src0_row.data = cached_ptr;
+
+                    // Set up extra with reorder flag if SoA layout was applied
+                    // MXFP4 uses cache_moe_expert_with_reorder() which applies SoA
+                    if (src0->type == GGML_TYPE_MXFP4) {
+                        cached_extra_batch.optimized_feature = optimize_feature(reorder_mode::SOA);
+                        cached_extra_batch.tp_sharded = false;
+                        src0_row.extra = &cached_extra_batch;
+                    } else {
+                        src0_row.extra = nullptr;
+                    }
+                } else {
+                    GGML_LOG_ERROR("[UNIFIED-CACHE] Failed to cache expert L%d:E%d (batch)\n", layer_id, i02);
+                    src0_row.data = src0_original + i02*nb02;  // Fallback
+                }
+            } else {
+                src0_row.data = src0_original + i02*nb02;
+            }
 
             GGML_ASSERT(nb11 == sizeof(float)*ne10);
             GGML_ASSERT(nb1 == sizeof(float)*ne0);
@@ -10488,8 +11888,10 @@ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t backend,
     GGML_ASSERT((buf->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) ||
                  buf->buft == ggml_backend_sycl_host_compute_buffer_type(sycl_ctx->device)) &&
                 "unsupported buffer type");
+
+    // Use backend's stream for the async memcpy
     const queue_ptr stream = sycl_ctx->stream(sycl_ctx->device, 0);
-    SYCL_CHECK(CHECK_TRY_ERROR((stream)->memcpy(
+    SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(
         data, (const char *)tensor->data + offset, size)));
 }
 catch (sycl::exception const &exc) {
@@ -11015,7 +12417,14 @@ static void execute_ffn_fusion(
     }
 #endif
 
-    quantize_row_q8_1_sycl<quantize_q8_1>(input_f32, input_q8, K, batch, K_padded, stream);
+    // Use SoA quantizer if gate weights are reordered
+    ggml_tensor_extra_gpu * gate_extra_fusion = static_cast<ggml_tensor_extra_gpu *>(W_gate->extra);
+    const bool use_soa_ffn_fusion = gate_extra_fusion && gate_extra_fusion->optimized_feature.is_reordered();
+    if (use_soa_ffn_fusion) {
+        quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(input_f32, input_q8, K, batch, K_padded, stream);
+    } else {
+        quantize_row_q8_1_sycl<quantize_q8_1>(input_f32, input_q8, K, batch, K_padded, stream);
+    }
 
     // Get weight and output pointers
     const void * W_gate_data = W_gate->data;
@@ -11440,6 +12849,35 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
     // device's split, so SYCL graphs work correctly for pipeline parallelism.
     // TP mode is disabled via separate check (g_sycl_tp_config.enabled).
 
+    // First pass: count total experts needed for lazy-moe graph preload.
+    // Each MUL_MAT_ID node with mmap'd weights contributes its experts to the total.
+    // graph_preload_moe_experts will try to cache ALL of them, so we need enough slots.
+    size_t total_experts_needed = 0;
+    int moe_node_count = 0;
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        if (cgraph->nodes[i]->op != GGML_OP_MUL_MAT_ID) continue;
+        const ggml_tensor * src0 = cgraph->nodes[i]->src[0];
+        if (!src0 || !src0->buffer) continue;
+        bool is_sycl_buf = ggml_backend_buffer_is_sycl(src0->buffer);
+        if (!is_sycl_buf) {
+            total_experts_needed += static_cast<size_t>(src0->ne[2]);
+            moe_node_count++;
+        }
+    }
+
+    // Check if unified cache is enabled for lazy-moe
+    // Graph preloading will handle the actual capacity check and caching
+    if (total_experts_needed > 0) {
+        if (!ggml_sycl::unified_cache_enabled()) {
+            GGML_SYCL_DEBUG("[GRAPH-CHECK] lazy-moe: unified cache disabled, graphs allowed (%zu experts)\n",
+                            total_experts_needed);
+        } else {
+            GGML_SYCL_DEBUG("[GRAPH-CHECK] lazy-moe: unified cache enabled, %zu experts from %d nodes\n",
+                            total_experts_needed, moe_node_count);
+        }
+        // Continue - graph_preload_moe_experts() will do detailed capacity check
+    }
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         const ggml_op node_op = cgraph->nodes[i]->op;
         switch (node_op) {
@@ -11461,6 +12899,16 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
                     const ggml_tensor * src0 = node->src[0];
                     const ggml_tensor * src1 = node->src[1];
                     const int64_t ne12 = src1 ? src1->ne[2] : 1;
+
+                    // Check if expert weights are in device memory
+                    // Total expert capacity check was already done above for lazy-moe
+                    bool is_sycl_buf = src0->buffer && ggml_backend_buffer_is_sycl(src0->buffer);
+                    GGML_SYCL_DEBUG("[GRAPH-CHECK] MUL_MAT_ID: src0=%s buffer=%p is_sycl=%d\n",
+                                    src0->name, (void*)src0->buffer, is_sycl_buf);
+                    if (!src0->buffer) {
+                        GGML_LOG_INFO("%s: WARNING: MUL_MAT_ID src0 has NULL buffer (tensor=%s)\n",
+                                      __func__, src0->name);
+                    }
 
                     bool graph_compatible = false;
                     if (ggml_is_quantized(src0->type)) {
@@ -11514,16 +12962,151 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
     }
     return true;
 }
+
+// Pre-allocate Q8_1 buffers for SoA MMVQ operations before graph recording.
+// MUL_MAT with SoA reorder flag needs Q8_1 quantization buffers which cannot be
+// allocated from pool during graph recording (pointer would change on replay).
+static void ggml_sycl_mmvq_soa_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph) {
+    // Skip if already initialized with sufficient buffers
+    if (ctx.mmvq_soa_buffers.initialized) {
+        ctx.mmvq_soa_buffers.reset_usage();
+        return;
+    }
+
+    queue_ptr stream = ctx.stream();
+
+    // Count MUL_MAT nodes with SoA reorder flag and find max dimensions
+    int soa_mmvq_count = 0;
+    int64_t max_ne10 = 0;
+    int64_t max_nrows = 0;
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+        if (node->op != GGML_OP_MUL_MAT) {
+            continue;
+        }
+
+        const ggml_tensor * src0 = node->src[0];  // Weights
+        const ggml_tensor * src1 = node->src[1];  // Activations
+
+        // Check for any reorder optimization (count all reordered tensors)
+        ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+        if (!extra || !extra->optimized_feature.is_reordered()) {
+            continue;
+        }
+
+        // Only count quantized types that go through MMVQ path
+        if (!ggml_is_quantized(src0->type)) continue;
+
+        // Check if this would use MMVQ (batch=1 decode phase)
+        const int64_t ne11 = src1->ne[1];
+        if (ne11 != 1) continue;  // MMVQ only for batch=1
+
+        soa_mmvq_count++;
+
+        // Track max dimensions
+        const int64_t ne10 = src1->ne[0];
+        const int64_t nrows = src1->ne[1] * src1->ne[2];
+
+        if (ne10 > max_ne10) max_ne10 = ne10;
+        if (nrows > max_nrows) max_nrows = nrows;
+    }
+
+    if (soa_mmvq_count == 0) {
+        return;  // No SoA MMVQ operations
+    }
+
+    // Calculate buffer size (use max dimensions for all buffers)
+    // Q8_1 format: 32 int8 quants + 2 half2 scales per block
+    const int64_t ne10_padded = GGML_PAD(max_ne10, MATRIX_ROW_PADDING);
+    const int64_t q8_1_row_size = ne10_padded * sizeof(block_q8_1) / QK8_1;
+    const size_t buffer_size = max_nrows * q8_1_row_size;
+
+    GGML_SYCL_DEBUG("[MMVQ-SOA-GRAPH] Pre-allocating %d Q8_1 buffers, %zu bytes each (ne10=%lld, nrows=%lld)\n",
+                   soa_mmvq_count, buffer_size, (long long)max_ne10, (long long)max_nrows);
+
+    // Allocate buffers
+    ctx.mmvq_soa_buffers.src1_ddq_buffers.resize(soa_mmvq_count);
+    ctx.mmvq_soa_buffers.src1_ddq_sizes.resize(soa_mmvq_count);
+
+    for (int i = 0; i < soa_mmvq_count; i++) {
+        ctx.mmvq_soa_buffers.src1_ddq_buffers[i] = sycl::malloc_device(buffer_size, *stream);
+        ctx.mmvq_soa_buffers.src1_ddq_sizes[i] = buffer_size;
+
+        if (!ctx.mmvq_soa_buffers.src1_ddq_buffers[i]) {
+            GGML_LOG_ERROR("[MMVQ-SOA-GRAPH] Failed to allocate Q8_1 buffer %d\n", i);
+            // Cleanup and abort
+            for (int j = 0; j < i; j++) {
+                sycl::free(ctx.mmvq_soa_buffers.src1_ddq_buffers[j], *stream);
+            }
+            ctx.mmvq_soa_buffers.src1_ddq_buffers.clear();
+            ctx.mmvq_soa_buffers.src1_ddq_sizes.clear();
+            return;
+        }
+    }
+
+    ctx.mmvq_soa_buffers.max_ne10 = max_ne10;
+    ctx.mmvq_soa_buffers.max_nrows = max_nrows;
+    ctx.mmvq_soa_buffers.initialized = true;
+    ctx.mmvq_soa_buffers.reset_usage();
+
+    // Wait for allocations to complete
+    stream->wait();
+
+    GGML_SYCL_DEBUG("[MMVQ-SOA-GRAPH] Pre-allocated %d buffers successfully\n", soa_mmvq_count);
+
+    // Buffer aliasing debug - print all pre-allocated buffer addresses
+    if (getenv("GGML_SYCL_BUFFER_ALIAS_DEBUG") != nullptr) {
+        fprintf(stderr, "[BUFFER_ALIAS] Pre-allocated %d Q8_1 buffers:\n", soa_mmvq_count);
+        for (int i = 0; i < soa_mmvq_count; i++) {
+            const uintptr_t addr = reinterpret_cast<uintptr_t>(ctx.mmvq_soa_buffers.src1_ddq_buffers[i]);
+            const size_t size = ctx.mmvq_soa_buffers.src1_ddq_sizes[i];
+            fprintf(stderr, "[BUFFER_ALIAS]   prealloc[%d]: %p - %p (size=%zu)\n",
+                    i, (void*)addr, (void*)(addr + size), size);
+        }
+    }
+}
 #endif
 
 static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     auto * sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
 
-    // Pre-reorder disabled for now - Q8_0 doesn't use reordering anyway
-    // pre_reorder_all_tensors(sycl_ctx, cgraph);
+    // Enable SoA reordering for optimized MMQ kernels
+    pre_reorder_all_tensors(sycl_ctx, cgraph);
+
+    // SoA reordering support when graphs are disabled.
+    // This enables proper comparison between graph/non-graph paths for debugging.
+    // Check if GGML_SYCL_SOA_PROMPT is set (used for both prompt and decode phases when enabled).
+    static bool soa_always_enabled = (std::getenv("GGML_SYCL_SOA_PROMPT") != nullptr);
+    if (soa_always_enabled && g_ggml_sycl_disable_graph) {
+        // Detect if this is decode phase (single token) or prompt phase
+        bool is_decode = false;
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT) {
+                const ggml_tensor * src1 = cgraph->nodes[i]->src[1];
+                if (src1 && src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1) {
+                    is_decode = true;
+                }
+                break;
+            }
+        }
+
+        // For non-graph mode with SOA enabled, still do pre-reordering
+        static bool first_reorder_log = true;
+        if (first_reorder_log && (is_decode || soa_always_enabled)) {
+            GGML_SYCL_DEBUG("[SYCL-SOA] SoA reordering enabled without graphs (GGML_SYCL_SOA_PROMPT=%d, phase=%s)\n",
+                           soa_always_enabled ? 1 : 0, is_decode ? "decode" : "prompt");
+            first_reorder_log = false;
+        }
+
+        // Reorder tensors for SoA layout
+        graph_pre_reorder_all(*sycl_ctx, cgraph);
+    }
 
 #ifdef GGML_SYCL_GRAPH
     // Disable SYCL graph for TP mode - we need our handlers to run every pass for caching
+    // Note: multi-GPU lazy-moe with global expert cache is now supported via pre-loading.
+    // check_graph_compatibility() validates that cache can hold all layer experts.
     bool use_sycl_graph = !g_ggml_sycl_disable_graph && check_graph_compatibility(cgraph) &&
                           !(g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1);
 
@@ -11535,6 +13118,12 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                 graph_call_count, use_sycl_graph, g_ggml_sycl_use_async_mem_op, cgraph->n_nodes,
                 sycl_ctx->exec_graph ? 1 : 0);
         fflush(stderr);
+    }
+
+    // Check if graphs were disabled due to MoE preload failure (persists until model reload)
+    if (sycl_ctx->moe_graphs_disabled) {
+        GGML_SYCL_DEBUG("[SYCL-GRAPH] graphs disabled due to MoE preload failure\n");
+        use_sycl_graph = false;
     }
 
     if (use_sycl_graph) {
@@ -11622,16 +13211,22 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             if (invalidate) {
                 sycl_ctx->exec_graph.reset();
                 sycl_ctx->exec_graph_n_nodes = 0;
+                // Unpin expert cache slots when graph is invalidated
+                // This allows slots to be evicted for the new graph recording
+                graph_unpin_moe_experts(sycl_ctx);
+                graph_unpin_weights(sycl_ctx);
             }
         }
 
-        // Pre-reorder ALL tensors before graph recording (first time only).
+        // Pre-reorder ALL tensors before graph recording (decode phase only by default).
         // This ensures we don't have incremental reordering blocking graph reuse.
-        // Run for BOTH prompt and decode phases to enable SoA optimization for all MoE operations.
+        // NOTE: With GGML_SYCL_SOA_PROMPT=1, SoA reordering is also enabled for prompt phase.
+        // This works because MMQ now has SoA-aware kernels for Q4_0 (and potentially other types).
         // Only run when exec_graph is null (before graph recording or after invalidation).
-        if (!sycl_ctx->exec_graph && graph_needs_reorder(*sycl_ctx, cgraph)) {
-            GGML_SYCL_DEBUG("[SYCL-GRAPH] pre-reordering all tensors before graph recording (%s phase)\n",
-                           is_decode_phase ? "decode" : "prompt");
+        static bool soa_prompt_enabled = (std::getenv("GGML_SYCL_SOA_PROMPT") != nullptr);
+        const bool should_reorder = (is_decode_phase || soa_prompt_enabled) && !sycl_ctx->exec_graph && graph_needs_reorder(*sycl_ctx, cgraph);
+        if (should_reorder) {
+            GGML_SYCL_DEBUG("[SYCL-GRAPH] pre-reordering all tensors before graph recording (%s phase)\n", is_decode_phase ? "decode" : "prompt");
             graph_pre_reorder_all(*sycl_ctx, cgraph);
         }
 
@@ -11654,10 +13249,46 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             ggml_sycl_moe_pre_allocate_buffers(*sycl_ctx, cgraph);
         }
 
+        // Pre-allocate SoA MMVQ Q8_1 buffers before graph recording.
+        // MUL_MAT with SoA reorder normally allocates from pool, which returns different pointers on replay.
+        if (is_decode_phase && !sycl_ctx->exec_graph) {
+            ggml_sycl_mmvq_soa_pre_allocate_buffers(*sycl_ctx, cgraph);
+        }
+
+        // Pre-load and pin all MoE experts before graph recording (lazy-moe with mmap'd weights).
+        // This ensures stable cache slot pointers during graph execution.
+        // Slots remain pinned until graph is invalidated.
+        if (!sycl_ctx->exec_graph) {
+            if (!graph_preload_moe_experts(*sycl_ctx, cgraph)) {
+                GGML_LOG_WARN("[SYCL-GRAPH] Expert pre-load failed, disabling graphs for all splits\n");
+                sycl_ctx->moe_graphs_disabled = true;  // Disable graphs for all subsequent splits
+                graph_unpin_moe_experts(sycl_ctx);  // Clean up any partial pins
+                ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+                return GGML_STATUS_SUCCESS;
+            }
+        }
+
+        // Pre-load and pin all dense weights before graph recording (weight streaming mode).
+        // This ensures stable cache slot pointers during graph execution.
+        if (!sycl_ctx->exec_graph && !sycl_ctx->weight_streaming_graphs_disabled) {
+            if (!graph_preload_weights(*sycl_ctx, cgraph)) {
+                GGML_LOG_WARN("[SYCL-GRAPH] Weight pre-load failed, disabling graphs for weight streaming\n");
+                graph_unpin_weights(sycl_ctx);  // Clean up any partial pins
+                ggml_backend_sycl_graph_compute_impl(sycl_ctx, cgraph);
+                return GGML_STATUS_SUCCESS;
+            }
+        }
+
         // Reset MoE buffer usage counter at start of each graph execution.
         // This ensures buffers are reused in the same order each time.
         if (sycl_ctx->moe_buffers.initialized) {
             sycl_ctx->moe_buffers.reset_usage();
+        }
+
+        // Reset SoA MMVQ buffer usage counter at start of each graph execution.
+        // This ensures buffers are reused in the same order each time.
+        if (sycl_ctx->mmvq_soa_buffers.initialized) {
+            sycl_ctx->mmvq_soa_buffers.reset_usage();
         }
 
         // Invalidate Q8_1 quantization cache at start of each graph execution.
@@ -12274,6 +13905,32 @@ static int64_t get_op_batch_size(const ggml_tensor * op) {
 }
 
 static bool ggml_backend_sycl_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    // Weight streaming mode: offload ALL ops to keep data flow on GPU
+    // Without this, MUL_MAT runs on GPU but RMS_NORM/MUL/ADD stay on CPU = data mismatch
+    static bool weight_streaming = (std::getenv("GGML_SYCL_WEIGHT_STREAMING") != nullptr);
+    if (weight_streaming) {
+        // Offload everything SYCL can handle - ensures consistent GPU-side execution
+        return true;
+    }
+
+    // For MUL_MAT_ID with types that CPU can't handle (like MXFP4), always offload
+    // This is critical for lazy MoE where weights are in mmap (CPU_Mapped buffer)
+    // but require GPU kernels for computation
+    if (op->op == GGML_OP_MUL_MAT_ID && op->src[0]) {
+        ggml_type src_type = op->src[0]->type;
+        // MXFP4 requires GPU (CPU doesn't support it)
+        if (src_type == GGML_TYPE_MXFP4) {
+            return true;
+        }
+    }
+
+    // ADD_ID is used for MoE output scatter - must match MUL_MAT_ID's backend
+    // If we offload MUL_MAT_ID, we must also offload ADD_ID to avoid
+    // tensor buffer mismatches between SYCL and CPU backends
+    if (op->op == GGML_OP_ADD_ID) {
+        return true;
+    }
+
     const int min_batch_size = 32;
     return get_op_batch_size(op) >= min_batch_size;
     GGML_UNUSED(dev);

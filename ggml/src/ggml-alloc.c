@@ -87,6 +87,7 @@ enum ggml_status ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_te
     }
 
     void * addr = (char *)ggml_backend_buffer_get_base(talloc->buffer) + talloc->offset;
+    size_t prev_offset = talloc->offset;
     talloc->offset += size;
 
     assert(((uintptr_t)addr % talloc->alignment) == 0);

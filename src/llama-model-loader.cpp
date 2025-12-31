@@ -1094,6 +1094,15 @@ bool llama_model_loader::load_all_data(
         void * progress_callback_user_data) {
     GGML_ASSERT(size_data != 0 && "call init_mappings() first");
 
+#ifdef GGML_USE_SYCL
+    // Signal SYCL backend that we're in model load phase
+    // This disables weight caching to avoid OOM on large models
+    ggml_backend_sycl_set_model_loading(true);
+    struct sycl_load_guard {
+        ~sycl_load_guard() { ggml_backend_sycl_set_model_loading(false); }
+    } guard;
+#endif
+
     std::vector<no_init<uint8_t>> read_buf;
     std::vector<std::future<std::pair<ggml_tensor *, bool>>> validation_result;
 

@@ -335,6 +335,25 @@ struct common_params {
     bool    fit_params         = true;             // whether to fit unset model/context parameters to free device memory
     size_t  fit_params_target  = 1024 * 1024*1024; // margin per device in bytes for fitting parameters to free memory
     int32_t fit_params_min_ctx = 4096;             // minimum context size to set when trying to reduce memory use
+    float   gpu_memory_pct     = 0.0f;             // percentage of GPU memory to use (0 = use fit_params_target instead)
+
+    // MoE expert profiling and placement
+    std::string moe_profile_path = "";              // path to save/load MoE expert usage profile
+    int32_t moe_warmup_tokens    = 0;               // tokens to process for profiling (0 = disabled)
+    float   moe_gpu_fraction     = 1.0f;            // fraction of experts to keep on GPU (0.0-1.0), 1.0 = all on GPU
+    int32_t expert_cache_size_mb = 0;               // expert cache size in MB (0 = auto, 50% of free VRAM)
+    bool    lazy_moe             = false;            // lazy load MoE experts on-demand (keep in host memory, cache to GPU)
+
+    // Weight streaming parameters
+    bool    weight_streaming     = false;            // enable weight streaming for limited VRAM
+    float   weight_cache_pct     = 50.0f;            // percentage of remaining VRAM for weight cache
+    int32_t weight_granularity   = 0;                // cache granularity: 0=layer, 1=tensor, 2=layer_group
+    int32_t layer_group_size     = 2;                // layers per group when granularity=2
+
+    // KV cache offload parameters
+    bool    kv_offload           = false;            // enable KV cache offload to CPU for long contexts
+    int32_t kv_offload_threshold = 4096;             // context length to trigger KV offload
+    float   kv_gpu_pct           = 70.0f;            // percentage of KV cache to keep on GPU
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
 
@@ -717,6 +736,10 @@ struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const cpu_p
 
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
+
+// MoE expert profiling helpers
+// Call after warmup tokens to save profile and apply placement analysis
+void common_moe_profile_finish(struct llama_context * ctx, const common_params & params);
 
 std::string                   get_model_endpoint();
 

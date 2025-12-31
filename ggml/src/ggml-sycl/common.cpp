@@ -266,6 +266,16 @@ void* ggml_sycl_host_malloc(size_t size) try {
     return nullptr;
   }
 
+  // Safety limit: don't try to allocate more than 4GB of pinned memory in a single call
+  // Large pinned allocations can crash the system before error handling kicks in
+  constexpr size_t MAX_PINNED_ALLOC = 4ULL * 1024 * 1024 * 1024; // 4GB
+  if (size > MAX_PINNED_ALLOC) {
+    GGML_LOG_WARN("[SYCL] Refusing to allocate %.1f GB of pinned memory (limit: 4GB). "
+                  "Use regular memory instead. lazy_moe requires chunked allocation.\n",
+                  size / (1024.0 * 1024.0 * 1024.0));
+    return nullptr;
+  }
+
   void* ptr = nullptr;
 
   // For TP mode: use a shared context so memory is accessible from all devices

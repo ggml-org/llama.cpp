@@ -1247,8 +1247,13 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
                         int src_backend_id = tensor_backend_id(src);
                         if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id)) {
-                            need_new_split = true;
-                            break;
+                            // Skip for MoE expert weights in host memory - GPU handles via expert cache
+                            bool is_moe_expert = (node->op == GGML_OP_MUL_MAT_ID && j == 0 &&
+                                                  ggml_backend_buffer_is_host(src->buffer));
+                            if (!is_moe_expert) {
+                                need_new_split = true;
+                                break;
+                            }
                         }
                     }
                     // check if the split has too many inputs
@@ -1315,24 +1320,37 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 }
 
                 if (src_backend_id != cur_backend_id && !ggml_backend_sched_buffer_supported(sched, src, cur_backend_id)) {
-                    // create a copy of the input in the split's backend
-                    if (tensor_id_copy(src_id, cur_backend_id, 0) == NULL) {
-                        ggml_backend_t backend = sched->backends[cur_backend_id];
-                        for (int c = 0; c < sched->n_copies; c++) {
-                            struct ggml_tensor * tensor_copy = ggml_dup_tensor_layout(sched->ctx, src);
-                            ggml_format_name(tensor_copy, "%s#%s#%d", ggml_backend_name(backend), src->name, c);
-                            if (sched->n_copies > 1) {
-                                ggml_set_input(tensor_copy);
-                                ggml_set_output(tensor_copy); // prevent ggml-alloc from overwriting the tensor
-                            }
-                            tensor_id_copy(src_id, cur_backend_id, c) = tensor_copy;
-                            SET_CAUSE(tensor_copy, "4.cpy");
-                        }
-                        int n_inputs = split->n_inputs++;
-                        GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
-                        split->inputs[n_inputs] = src;
+                    // Special case: MoE expert weights in host memory can stay in place
+                    // GPU backends handle them via per-expert caching (lazy loading)
+                    // This avoids copying all experts upfront which is memory-inefficient for large MoE models
+                    bool skip_copy = false;
+                    if (node->op == GGML_OP_MUL_MAT_ID && j == 0 &&  // Expert weights are src[0]
+                        src->buffer && ggml_backend_buffer_is_host(src->buffer) &&
+                        ggml_backend_buffer_get_usage(src->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+                        // GPU backend will handle this via expert cache - don't copy
+                        skip_copy = true;
                     }
-                    node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
+
+                    if (!skip_copy) {
+                        // create a copy of the input in the split's backend
+                        if (tensor_id_copy(src_id, cur_backend_id, 0) == NULL) {
+                            ggml_backend_t backend = sched->backends[cur_backend_id];
+                            for (int c = 0; c < sched->n_copies; c++) {
+                                struct ggml_tensor * tensor_copy = ggml_dup_tensor_layout(sched->ctx, src);
+                                ggml_format_name(tensor_copy, "%s#%s#%d", ggml_backend_name(backend), src->name, c);
+                                if (sched->n_copies > 1) {
+                                    ggml_set_input(tensor_copy);
+                                    ggml_set_output(tensor_copy); // prevent ggml-alloc from overwriting the tensor
+                                }
+                                tensor_id_copy(src_id, cur_backend_id, c) = tensor_copy;
+                                SET_CAUSE(tensor_copy, "4.cpy");
+                            }
+                            int n_inputs = split->n_inputs++;
+                            GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
+                            split->inputs[n_inputs] = src;
+                        }
+                        node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
+                    }
                 }
             }
         }
@@ -1652,13 +1670,26 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                         ggml_backend_synchronize(ids_backend);
 
                         // find the used experts
+                        // validate that all IDs are in range - if not, the tensor data may not be computed yet
+                        // (e.g., during first forward pass where router hasn't run)
+                        bool ids_valid = true;
                         used_ids.clear();
                         used_ids.resize(ggml_bitset_size(n_expert));
-                        for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
-                            for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
+                        for (int64_t i1 = 0; i1 < ids_tensor->ne[1] && ids_valid; i1++) {
+                            for (int64_t i0 = 0; i0 < ids_tensor->ne[0] && ids_valid; i0++) {
                                 int32_t id = ids[i1 * ids_tensor->nb[1]/sizeof(int32_t) + i0 * ids_tensor->nb[0]/sizeof(int32_t)];
-                                GGML_ASSERT(id >= 0 && id < n_expert);
-                                ggml_bitset_set(used_ids.data(), id);
+                                if (id < 0 || id >= n_expert) {
+                                    // Invalid ID - fall back to copying all experts
+                                    ids_valid = false;
+                                    used_ids.clear();
+                                    used_ids.resize(ggml_bitset_size(n_expert));
+                                    // Mark all experts as used
+                                    for (int64_t e = 0; e < n_expert; e++) {
+                                        ggml_bitset_set(used_ids.data(), e);
+                                    }
+                                } else {
+                                    ggml_bitset_set(used_ids.data(), id);
+                                }
                             }
                         }
 

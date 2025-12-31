@@ -785,6 +785,7 @@ static void group_norm_f32_sycl(const float* x, float* dst,
 static void rms_norm_f32_sycl(const float* x, float* dst, const int ncols, const int nrows, const int nchannels, const int nsamples,
         const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample, const float eps, queue_ptr stream, int device) {
     GGML_ASSERT(ncols % WARP_SIZE == 0);
+    GGML_SYCL_KTRACE("rms_norm_f32", " ncols=%d nrows=%d nch=%d", ncols, nrows, nchannels);
     // printf("%s ncols=%d, nrows=%d, WARP_SIZE=%d\n", __func__, ncols, nrows, WARP_SIZE);
 
     const sycl::range<3> global_dims(nsamples, nchannels, nrows);
@@ -1157,42 +1158,17 @@ void ggml_sycl_op_rms_norm(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t s02 = nb02 / ts0;
     const int64_t s03 = nb03 / ts0;
 
-    // DEBUG: Check hidden state at result_norm (final layer before lm_head)
-    bool is_result_norm = dst->name && strstr(dst->name, "result_norm");
-    static int result_norm_dbg = 0;
-    if (is_result_norm && result_norm_dbg++ < 3) {
-        std::vector<float> input_host(8);
-        main_stream->memcpy(input_host.data(), src0_dd, 8*sizeof(float)).wait();
-        float sum = 0, sum_sq = 0;
-        for (int i = 0; i < 8; i++) {
-            sum += input_host[i];
-            sum_sq += input_host[i] * input_host[i];
-        }
-        bool has_nan = std::isnan(sum) || std::isnan(sum_sq);
-        bool all_zero = (sum == 0 && sum_sq == 0);
-        fprintf(stderr, "TP DEBUG result_norm INPUT[0..7]: [%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f] sum=%.4f nan=%d zero=%d ne01=%lld\n",
-                input_host[0], input_host[1], input_host[2], input_host[3],
-                input_host[4], input_host[5], input_host[6], input_host[7],
-                sum, has_nan, all_zero, (long long)ne01);
-    }
-
     rms_norm_f32_sycl(src0_dd, dst_dd, ne00, ne01, ne02, ne03, s01, s02, s03, eps, main_stream, ctx.device);
 
-    // DEBUG: Check output after result_norm
-    if (is_result_norm && result_norm_dbg <= 3) {
+    // Debug: check RMS_NORM output for zeros (buffer aliasing investigation)
+    static bool rms_debug_enabled = getenv("GGML_SYCL_RMS_DEBUG") != nullptr;
+    if (rms_debug_enabled) {
         main_stream->wait();
-        std::vector<float> output_host(8);
-        main_stream->memcpy(output_host.data(), dst_dd, 8*sizeof(float)).wait();
-        float sum = 0;
-        bool has_nan = false;
-        for (int i = 0; i < 8; i++) {
-            sum += output_host[i];
-            if (std::isnan(output_host[i])) has_nan = true;
-        }
-        fprintf(stderr, "TP DEBUG result_norm OUTPUT[0..7]: [%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f] sum=%.4f nan=%d\n",
-                output_host[0], output_host[1], output_host[2], output_host[3],
-                output_host[4], output_host[5], output_host[6], output_host[7],
-                sum, has_nan);
+        float sample[4];
+        main_stream->memcpy(sample, dst_dd, 4 * sizeof(float)).wait();
+        bool is_zeros = (sample[0] == 0.0f && sample[1] == 0.0f && sample[2] == 0.0f && sample[3] == 0.0f);
+        fprintf(stderr, "[RMS_NORM_OUT] dst=%s dst_dd=%p first4=[%.4f, %.4f, %.4f, %.4f] is_zeros=%d\n",
+                dst->name, (void*)dst_dd, sample[0], sample[1], sample[2], sample[3], is_zeros ? 1 : 0);
     }
 }
 
@@ -1212,6 +1188,17 @@ void ggml_sycl_op_rms_norm_fused(ggml_backend_sycl_context & ctx, ggml_tensor * 
     // Use device-specific data pointers for TP support
     const float * src0_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(rms_norm_src, ctx.device));
     float * mul_dst_dd = static_cast<float *>(ggml_sycl_get_data_ptr(mul_tensor, ctx.device));
+
+    // Debug: Check RMS_NORM input BEFORE kernel
+    static bool rms_fused_debug = getenv("GGML_SYCL_RMS_DEBUG") != nullptr;
+    if (rms_fused_debug) {
+        main_stream->wait();
+        float sample[4];
+        main_stream->memcpy(sample, src0_dd, 4 * sizeof(float)).wait();
+        bool is_zeros = (sample[0] == 0.0f && sample[1] == 0.0f && sample[2] == 0.0f && sample[3] == 0.0f);
+        fprintf(stderr, "[RMS_NORM_MUL_IN] src=%s src0_dd=%p first4=[%.4f, %.4f, %.4f, %.4f] is_zeros=%d\n",
+                rms_norm_src->name, (void*)src0_dd, sample[0], sample[1], sample[2], sample[3], is_zeros ? 1 : 0);
+    }
 
     float eps;
     memcpy(&eps, dst->op_params, sizeof(float));
@@ -1265,6 +1252,16 @@ void ggml_sycl_op_rms_norm_fused(ggml_backend_sycl_context & ctx, ggml_tensor * 
                           dst_s01, dst_s02, dst_s03,
                           mul_ncols, mul_nrows, mul_nchannels, mul_nsamples,
                           eps, main_stream, ctx.device);
+
+    // Debug: check fused RMS_NORM+MUL output for zeros
+    if (rms_fused_debug) {
+        main_stream->wait();
+        float sample[4];
+        main_stream->memcpy(sample, mul_dst_dd, 4 * sizeof(float)).wait();
+        bool is_zeros = (sample[0] == 0.0f && sample[1] == 0.0f && sample[2] == 0.0f && sample[3] == 0.0f);
+        fprintf(stderr, "[RMS_NORM_MUL_OUT] mul_tensor=%s mul_dst_dd=%p first4=[%.4f, %.4f, %.4f, %.4f] is_zeros=%d\n",
+                mul_tensor->name, (void*)mul_dst_dd, sample[0], sample[1], sample[2], sample[3], is_zeros ? 1 : 0);
+    }
 }
 
 // Fused RMS norm + element-wise multiply + add dispatch function
@@ -1571,6 +1568,23 @@ void ggml_sycl_op_add_rms_norm_fused(ggml_backend_sycl_context & ctx, ggml_tenso
     float * add_dst_dd = static_cast<float *>(ggml_sycl_get_data_ptr(add_tensor, ctx.device));  // ADD output (for other consumers)
     float * rms_dst_dd = static_cast<float *>(ggml_sycl_get_data_ptr(rms_norm_tensor, ctx.device));  // RMS_NORM output
 
+    // Debug: Check ADD+RMS_NORM inputs BEFORE kernel
+    static bool add_rms_debug = getenv("GGML_SYCL_RMS_DEBUG") != nullptr;
+    if (add_rms_debug) {
+        main_stream->wait();
+        float sample_x[4], sample_add[4];
+        main_stream->memcpy(sample_x, x_dd, 4 * sizeof(float)).wait();
+        main_stream->memcpy(sample_add, add_dd, 4 * sizeof(float)).wait();
+        bool x_zeros = (sample_x[0] == 0.0f && sample_x[1] == 0.0f && sample_x[2] == 0.0f && sample_x[3] == 0.0f);
+        bool add_zeros = (sample_add[0] == 0.0f && sample_add[1] == 0.0f && sample_add[2] == 0.0f && sample_add[3] == 0.0f);
+        fprintf(stderr, "[ADD_RMS_NORM_IN] x_src=%s add_src=%s x_dd=%p add_dd=%p\n",
+                add_src0->name, add_src1->name, (void*)x_dd, (void*)add_dd);
+        fprintf(stderr, "[ADD_RMS_NORM_IN]   x_first4=[%.4f, %.4f, %.4f, %.4f] is_zeros=%d\n",
+                sample_x[0], sample_x[1], sample_x[2], sample_x[3], x_zeros ? 1 : 0);
+        fprintf(stderr, "[ADD_RMS_NORM_IN]   add_first4=[%.4f, %.4f, %.4f, %.4f] is_zeros=%d\n",
+                sample_add[0], sample_add[1], sample_add[2], sample_add[3], add_zeros ? 1 : 0);
+    }
+
     float eps;
     memcpy(&eps, rms_norm_tensor->op_params, sizeof(float));
 
@@ -1619,4 +1633,14 @@ void ggml_sycl_op_add_rms_norm_fused(ggml_backend_sycl_context & ctx, ggml_tenso
                           add_dst_s01, add_dst_s02, add_dst_s03,
                           dst_s01, dst_s02, dst_s03,
                           eps, main_stream, ctx.device);
+
+    // Debug: check fused ADD+RMS_NORM output for zeros
+    if (add_rms_debug) {
+        main_stream->wait();
+        float sample[4];
+        main_stream->memcpy(sample, rms_dst_dd, 4 * sizeof(float)).wait();
+        bool is_zeros = (sample[0] == 0.0f && sample[1] == 0.0f && sample[2] == 0.0f && sample[3] == 0.0f);
+        fprintf(stderr, "[ADD_RMS_NORM_OUT] rms_norm=%s rms_dst_dd=%p first4=[%.4f, %.4f, %.4f, %.4f] is_zeros=%d\n",
+                rms_norm_tensor->name, (void*)rms_dst_dd, sample[0], sample[1], sample[2], sample[3], is_zeros ? 1 : 0);
+    }
 }

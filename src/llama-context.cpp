@@ -503,6 +503,9 @@ llama_context::llama_context(
             }
         }
 
+        // Initialize MoE profiler data structures (for MoE models)
+        moe_profiler.init(hparams);
+
         cross.v_embd.clear();
 
         // avoid reserving graphs with zero outputs - assume one output per sequence
@@ -796,6 +799,41 @@ void llama_context::sync_logits_to_host() {
     }
 }
 
+//
+// MoE expert profiling
+//
+
+void llama_context::set_moe_profiling(bool enable) {
+    moe_profiler.enabled = enable;
+    if (enable) {
+        moe_profiler.profile.reset();
+    }
+}
+
+void llama_context::save_moe_profile(const std::string & path) const {
+    moe_profiler.profile.save(path);
+}
+
+bool llama_context::load_moe_profile(const std::string & path) {
+    return moe_profiler.profile.load(path);
+}
+
+void llama_context::analyze_moe_profile(float gpu_fraction) {
+    moe_profiler.profile.analyze(gpu_fraction);
+}
+
+void llama_context::print_moe_profile() const {
+    moe_profiler.profile.print_summary();
+}
+
+void llama_context::print_moe_override_cli() const {
+    moe_profiler.profile.print_override_cli();
+}
+
+bool llama_context::has_moe_profile() const {
+    return moe_profiler.profile.total_tokens_profiled > 0;
+}
+
 float * llama_context::get_logits_ith(int32_t i) {
     int64_t j = -1;
 
@@ -1087,6 +1125,13 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 #else
     ggml_backend_sched_synchronize(sched.get());
 #endif
+
+    // Flush MoE profiling data (reads expert_ids from GPU after computation)
+    if (moe_profiler.enabled && !moe_profiler.pending_reads.empty()) {
+        // Need to fully sync before reading back tensor data
+        ggml_backend_sched_synchronize(sched.get());
+        moe_profiler.flush(nullptr);
+    }
 
     ret = GGML_STATUS_SUCCESS;
 
@@ -1912,6 +1957,11 @@ llm_graph_cb llama_context::graph_get_cb() const {
                     }
                 }
             }
+        }
+
+        // MoE expert profiling: capture expert selection tensor for later reading
+        if (moe_profiler.enabled && il >= 0 && strcmp(name, "ffn_moe_topk") == 0) {
+            moe_profiler.schedule_capture(il, cur, ubatch.n_tokens, model.hparams.n_expert_used);
         }
     };
 }
@@ -2928,6 +2978,36 @@ void llama_set_logits_device(llama_context * ctx, bool enable) {
 
 void llama_sync_logits_to_host(llama_context * ctx) {
     ctx->sync_logits_to_host();
+}
+
+// MoE expert profiling API
+
+void llama_set_moe_profiling(llama_context * ctx, bool enable) {
+    ctx->set_moe_profiling(enable);
+}
+
+void llama_save_moe_profile(llama_context * ctx, const char * path) {
+    ctx->save_moe_profile(path);
+}
+
+bool llama_load_moe_profile(llama_context * ctx, const char * path) {
+    return ctx->load_moe_profile(path);
+}
+
+void llama_analyze_moe_profile(llama_context * ctx, float gpu_fraction) {
+    ctx->analyze_moe_profile(gpu_fraction);
+}
+
+void llama_print_moe_profile(llama_context * ctx) {
+    ctx->print_moe_profile();
+}
+
+void llama_print_moe_override_cli(llama_context * ctx) {
+    ctx->print_moe_override_cli();
+}
+
+bool llama_has_moe_profile(llama_context * ctx) {
+    return ctx->has_moe_profile();
 }
 
 float * llama_get_embeddings(llama_context * ctx) {

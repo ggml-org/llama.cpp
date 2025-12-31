@@ -26,6 +26,8 @@ ggml_add_backend_library(ggml-sycl
 file(GLOB   GGML_HEADERS_SYCL "*.hpp")
 option(GGML_SYCL_MMQ_XMX "Enable experimental XMX MMQ kernels for SYCL backend" OFF)
 option(GGML_SYCL_XMX_GEMM "Enable experimental XMX GEMM for quantized matmul (known to be slower)" OFF)
+option(GGML_SYCL_DEBUG_SOA_LAYOUT "Enable SoA layout verification debug checks" OFF)
+option(GGML_SYCL_QUANTIZER_DEBUG "Enable quantizer kernel debug output" OFF)
 
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
 list(FILTER GGML_SOURCES_SYCL EXCLUDE REGEX "test_joint_matrix.*\\.cpp$")
@@ -35,6 +37,16 @@ if (GGML_SYCL_MMQ_XMX)
     message(STATUS "Compiling with experimental GGML_SYCL_MMQ_XMX kernels.")
     list(APPEND GGML_SOURCES_SYCL mmq_xmx.cpp)
     list(APPEND GGML_HEADERS_SYCL mmq_xmx.hpp)
+endif()
+
+if (GGML_SYCL_DEBUG_SOA_LAYOUT)
+    message(STATUS "Compiling with GGML_SYCL_DEBUG_SOA_LAYOUT enabled - will verify SoA layout at runtime.")
+    add_compile_definitions(GGML_SYCL_DEBUG_SOA_LAYOUT=1)
+endif()
+
+if (GGML_SYCL_QUANTIZER_DEBUG)
+    message(STATUS "Compiling with GGML_SYCL_QUANTIZER_DEBUG enabled - will print quantizer d values.")
+    add_compile_definitions(GGML_SYCL_QUANTIZER_DEBUG=1)
 endif()
 
 target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})

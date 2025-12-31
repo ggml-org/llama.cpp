@@ -317,6 +317,7 @@ extern "C" {
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
+        bool lazy_moe;        // keep MoE expert weights in host memory, cache to GPU on-demand
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -1059,6 +1060,36 @@ extern "C" {
     // Only needed if llama_set_logits_device() was called with enable=true
     // and you need to access logits via llama_get_logits()
     LLAMA_API void llama_sync_logits_to_host(struct llama_context * ctx);
+
+    //
+    // MoE expert profiling
+    // Track which experts are frequently used ("hot") vs rarely used ("cold")
+    // to enable profile-guided expert placement (hot experts on GPU, cold on CPU)
+    //
+
+    // Enable/disable MoE expert usage profiling
+    // When enabled, expert selections are tracked during decode()
+    LLAMA_API void llama_set_moe_profiling(struct llama_context * ctx, bool enable);
+
+    // Save MoE expert usage profile to file
+    LLAMA_API void llama_save_moe_profile(struct llama_context * ctx, const char * path);
+
+    // Load MoE expert usage profile from file
+    // Returns true on success
+    LLAMA_API bool llama_load_moe_profile(struct llama_context * ctx, const char * path);
+
+    // Analyze profile and mark experts for GPU/CPU placement
+    // gpu_fraction: fraction of experts to keep on GPU (0.0-1.0)
+    LLAMA_API void llama_analyze_moe_profile(struct llama_context * ctx, float gpu_fraction);
+
+    // Print MoE expert usage summary to log
+    LLAMA_API void llama_print_moe_profile(struct llama_context * ctx);
+
+    // Print recommended CLI override string for profile-guided placement
+    LLAMA_API void llama_print_moe_override_cli(struct llama_context * ctx);
+
+    // Check if MoE profile data has been collected
+    LLAMA_API bool llama_has_moe_profile(struct llama_context * ctx);
 
     // Get all output token embeddings.
     // when pooling_type == LLAMA_POOLING_TYPE_NONE or when using a generative model,

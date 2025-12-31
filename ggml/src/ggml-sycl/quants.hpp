@@ -52,7 +52,12 @@ template <> struct block_q_t<GGML_TYPE_Q4_0> {
     }
 
     static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
-        return { (ncols / QR4_0 * nrows) + block_index * sizeof(ggml_half), 0 };
+        // Q4_0: 32 4-bit quants = 16 bytes per block
+        // Memory layout: [qs: nblocks * 16 bytes][d: nblocks * 2 bytes]
+        auto nblocks = (nrows * (ncols / traits::qk));  // nrows * (ncols / 32)
+        auto total_qs_bytes = nblocks * (traits::qk / 2);  // nblocks * 16
+        auto d_offset = total_qs_bytes + block_index * sizeof(ggml_half);
+        return { d_offset, 0 };
     }
 
     static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
@@ -120,9 +125,14 @@ template <> struct block_q_t<GGML_TYPE_Q8_0> {
         return { block_index * QK8_0, 0 };
     }
 
-    // Scale offset: after all quants (ncols bytes per row)
+    // Scale offset: after all quants
     static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
-        return { (ncols * nrows) + block_index * sizeof(ggml_half), 0 };
+        // Q8_0: 32 int8 quants = 32 bytes per block
+        // Memory layout: [qs: nblocks * 32 bytes][d: nblocks * 2 bytes]
+        auto nblocks = (nrows * (ncols / traits::qk));  // nrows * (ncols / 32)
+        auto total_qs_bytes = nblocks * traits::qk;  // nblocks * 32
+        auto d_offset = total_qs_bytes + block_index * sizeof(ggml_half);
+        return { d_offset, 0 };
     }
 
     static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }

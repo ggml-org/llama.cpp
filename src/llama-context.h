@@ -4,6 +4,7 @@
 #include "llama-cparams.h"
 #include "llama-graph.h"
 #include "llama-adapter.h"
+#include "llama-moe-profile.h"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
@@ -340,6 +341,9 @@ private:
     // Track if the last decode had multiple ubatches (GPU logits are in accumulated buffer)
     bool multi_ubatch_decode = false;
 
+    // MoE expert profiling
+    mutable llama_moe_profiler moe_profiler;
+
 public:
     // Get the last logits tensor (on GPU, before host copy)
     // For single-ubatch: returns the compute graph's logits tensor
@@ -372,4 +376,13 @@ public:
 
     // Manually sync logits from device to host memory
     void sync_logits_to_host();
+
+    // MoE expert profiling API
+    void set_moe_profiling(bool enable);
+    void save_moe_profile(const std::string & path) const;
+    bool load_moe_profile(const std::string & path);
+    void analyze_moe_profile(float gpu_fraction);
+    void print_moe_profile() const;
+    void print_moe_override_cli() const;
+    bool has_moe_profile() const;
 };

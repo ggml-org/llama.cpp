@@ -1147,6 +1147,9 @@ int main(int argc, char ** argv) {
     LOG("\n\n");
     common_perf_print(ctx, smpl);
 
+    // Save MoE expert profile if profiling was enabled
+    common_moe_profile_finish(ctx, params);
+
     // Check if pipeline profiling is enabled and print stats
     ggml_backend_sched_t sched = ctx->get_sched();
     if (sched && ggml_backend_sched_is_profiling_enabled(sched)) {

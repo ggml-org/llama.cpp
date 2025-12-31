@@ -481,6 +481,16 @@ GGML_BACKEND_API void ggml_backend_sycl_submit_barrier(ggml_backend_t backend);
 // Returns immediately if no barrier was submitted.
 GGML_BACKEND_API void ggml_backend_sycl_wait_barrier(ggml_backend_t backend);
 
+// ===========================================================================
+// Weight Streaming Control API
+// ===========================================================================
+
+// Signal model load phase to SYCL backend
+// When loading=true: weight caching is disabled to avoid OOM on large models
+// When loading=false: weight caching is enabled for inference
+// Use this to bracket model loading to prevent cache allocation during load
+GGML_BACKEND_API void ggml_backend_sycl_set_model_loading(bool loading);
+
 #ifdef  __cplusplus
 }
 #endif

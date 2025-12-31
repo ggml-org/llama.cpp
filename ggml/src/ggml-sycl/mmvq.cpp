@@ -15,9 +15,15 @@ template <int qtype> class mmvq_reorder_slm_kernel_name;
 template <int qtype> class mmvq_coalesced_kernel_name;
 template <int qtype> class mmvq_id_kernel_name;
 
+// SoA MMVQ kernel template
+// Note: total_nrows is the full tensor row count (ne01), used for SoA offset calculations
+//       nrows is the number of rows to process (row_diff), used for bounds checking
+//       row_low is the starting row offset for this slice (for split tensor support)
+// This distinction is critical because SoA layout is created with full tensor dimensions,
+// but MMVQ may process only a subset of rows starting at row_low.
 template <typename reorder_vec_dot_q_sycl>
 static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
-                                  const int ncols, const int nrows, const sycl::nd_item<3> & nd_item) {
+                                  const int ncols, const int nrows, const int total_nrows, const int row_low, const sycl::nd_item<3> & nd_item) {
     using block_type   = ggml_sycl_reordered::block_q_t<reorder_vec_dot_q_sycl::gtype>;
     using block_traits = typename block_type::traits;
 
@@ -34,17 +40,20 @@ static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __r
     const int     blocks_per_row              = ncols / block_traits::qk;
     constexpr int blocks_per_subgroup         = ceil_div(block_traits::vdr_mmvq * WARP_SIZE, block_traits::qi);
     constexpr int block_elements_per_subgroup = block_traits::qi / block_traits::vdr_mmvq;
-    const int     nblocks                     = nrows * (ncols / block_traits::qk);
+    // Use total_nrows (full tensor size) for SoA offset calculations, NOT nrows (slice size)
+    const int     nblocks                     = total_nrows * (ncols / block_traits::qk);
 
     static_assert(blocks_per_subgroup > 0);
     static_assert(block_elements_per_subgroup > 0);
 
     float partial_sum = 0.0f;
     for (int i = sg.get_local_linear_id() / block_elements_per_subgroup; i < blocks_per_row; i += blocks_per_subgroup) {
-        const int ibx = row * blocks_per_row + i;  // x block index
+        // For SoA layout, use global row index (row_low + row) for block indexing
+        // because SoA offsets are calculated based on full tensor dimensions
+        const int ibx = (row_low + row) * blocks_per_row + i;  // x block index (global)
 
         const auto         bx_offset      = block_type::get_block_offset(ibx, nblocks);
-        const auto         d_offset       = block_type::get_d_offset(nrows, ncols, ibx);
+        const auto         d_offset       = block_type::get_d_offset(total_nrows, ncols, ibx);
         // Y block index that aligns with ibx
         const int iby = i * block_type::block_to_q8_1_ratio();
         const int8_t* q8_1_quant_ptr = (const int8_t*)vy + iby * QK8_1;
@@ -68,9 +77,11 @@ static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __r
 
 // Multi-row reordered kernel with SLM Y-vector sharing
 // All subgroups in the work-group share Y-vector cached in SLM
+// Note: total_nrows is the full tensor row count (ne01), used for SoA offset calculations
+//       row_low is the starting row offset for this slice (for split tensor support)
 template <typename reorder_vec_dot_q_sycl>
 static void mul_mat_vec_q_reorder_slm(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
-                                      const int ncols, const int nrows, const sycl::nd_item<3> & nd_item,
+                                      const int ncols, const int nrows, const int total_nrows, const int row_low, const sycl::nd_item<3> & nd_item,
                                       int8_t * __restrict__ slm_y_qs, sycl::half2 * __restrict__ slm_y_ds) {
     using block_type   = ggml_sycl_reordered::block_q_t<reorder_vec_dot_q_sycl::gtype>;
     using block_traits = typename block_type::traits;
@@ -109,17 +120,20 @@ static void mul_mat_vec_q_reorder_slm(const void * __restrict__ vx, const void *
 
     constexpr int blocks_per_subgroup         = ceil_div(block_traits::vdr_mmvq * WARP_SIZE, block_traits::qi);
     constexpr int block_elements_per_subgroup = block_traits::qi / block_traits::vdr_mmvq;
-    const int     nblocks                     = nrows * blocks_per_row;
+    // Use total_nrows (full tensor size) for SoA offset calculations, NOT nrows (slice size)
+    const int     nblocks                     = total_nrows * blocks_per_row;
 
     static_assert(blocks_per_subgroup > 0);
     static_assert(block_elements_per_subgroup > 0);
 
     float partial_sum = 0.0f;
     for (int i = lane_id / block_elements_per_subgroup; i < blocks_per_row; i += blocks_per_subgroup) {
-        const int ibx = row * blocks_per_row + i;  // x block index
+        // For SoA layout, use global row index (row_low + row) for block indexing
+        // because SoA offsets are calculated based on full tensor dimensions
+        const int ibx = (row_low + row) * blocks_per_row + i;  // x block index (global)
 
         const auto bx_offset = block_type::get_block_offset(ibx, nblocks);
-        const auto d_offset  = block_type::get_d_offset(nrows, ncols, ibx);
+        const auto d_offset  = block_type::get_d_offset(total_nrows, ncols, ibx);
 
         // Y block index that aligns with ibx
         const int iby = i * block_type::block_to_q8_1_ratio();
@@ -978,8 +992,10 @@ static void mul_mat_vec_q_iq4_xs_q8_1(const void *__restrict__ vx,
     }
 }
 
+// Note: total_nrows is the full tensor row count (ne01), nrows is the slice size (row_diff)
+//       row_low is the starting row offset for this slice (for split tensor support)
 static void reorder_mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
-                                                    const int nrows, dpct::queue_ptr stream) {
+                                                    const int nrows, const int total_nrows, const int row_low, dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK4_0 == 0);
     const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
     constexpr size_t num_subgroups = 16;
@@ -988,18 +1004,32 @@ static void reorder_mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * vy,
     const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y * WARP_SIZE));
     const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
 
+    // Calculate SLM sizes for Y-vector caching (same as regular MMVQ)
+    const int blocks_per_row = ncols / QK4_0;
+    const int slm_y_qs_size = blocks_per_row * QK8_1;  // Q8_1 quants per block
+    const int slm_y_ds_size = blocks_per_row + 1;      // half2 scales + padding
+
     stream->submit([&](sycl::handler & cgh) {
+        // Allocate SLM for Y-vector (ensures proper graph recording with accessors)
+        sycl::local_accessor<int8_t, 1> slm_y_qs(slm_y_qs_size, cgh);
+        sycl::local_accessor<sycl::half2, 1> slm_y_ds(slm_y_ds_size, cgh);
+
         cgh.parallel_for<mmvq_reorder_kernel_name<GGML_TYPE_Q4_0>>(sycl::nd_range<3>(global_size, workgroup_size),
                          [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              mul_mat_vec_q_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0>>(vx, vy, dst, ncols, nrows,
-                                                                                           nd_item);
+                                                                                           total_nrows, row_low, nd_item);
+                             // Touch SLM to ensure accessor is not optimized away
+                             (void)slm_y_qs[0];
+                             (void)slm_y_ds[0];
                          });
     });
 }
 
 // Q8_0 reorder MMVQ dispatch function
+// Note: total_nrows is the full tensor row count (ne01), nrows is the slice size (row_diff)
+//       row_low is the starting row offset for this slice (for split tensor support)
 static void reorder_mul_mat_vec_q8_0_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
-                                                const int nrows, dpct::queue_ptr stream) {
+                                                const int nrows, const int total_nrows, const int row_low, dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK8_0 == 0);
     const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
     constexpr size_t num_subgroups = 16;
@@ -1012,14 +1042,16 @@ static void reorder_mul_mat_vec_q8_0_q8_1_sycl(const void * vx, const void * vy,
         cgh.parallel_for<mmvq_reorder_kernel_name<GGML_TYPE_Q8_0>>(sycl::nd_range<3>(global_size, workgroup_size),
                          [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              mul_mat_vec_q_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_Q8_0>>(vx, vy, dst, ncols, nrows,
-                                                                                           nd_item);
+                                                                                           total_nrows, row_low, nd_item);
                          });
     });
 }
 
 // MXFP4 reorder MMVQ dispatch function
+// Note: total_nrows is the full tensor row count (ne01), nrows is the slice size (row_diff)
+//       row_low is the starting row offset for this slice (for split tensor support)
 static void reorder_mul_mat_vec_mxfp4_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
-                                                 const int nrows, dpct::queue_ptr stream) {
+                                                 const int nrows, const int total_nrows, const int row_low, dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_MXFP4 == 0);
     const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
     constexpr size_t num_subgroups = 16;
@@ -1032,7 +1064,7 @@ static void reorder_mul_mat_vec_mxfp4_q8_1_sycl(const void * vx, const void * vy
         cgh.parallel_for<mmvq_reorder_kernel_name<GGML_TYPE_MXFP4>>(sycl::nd_range<3>(global_size, workgroup_size),
                          [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              mul_mat_vec_q_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_MXFP4>>(vx, vy, dst, ncols, nrows,
-                                                                                            nd_item);
+                                                                                            total_nrows, row_low, nd_item);
                          });
     });
 }
@@ -1126,50 +1158,102 @@ static void convert_q4_0_to_coalesced_sycl(void * data, const int ncols, const i
     });
 }
 
-// Public API for coalesced conversion - call at model load time, after reorder
-bool ggml_sycl_convert_to_coalesced_q4_0(const ggml_tensor * tensor, dpct::queue_ptr stream) {
-    // Check if coalesced mode is enabled
-    static bool coalesced_enabled = (std::getenv("GGML_SYCL_MMVQ_COALESCED") != nullptr);
-    if (!coalesced_enabled) {
+// Forward declarations for type-specific coalesced conversion functions
+static void convert_q8_0_to_coalesced_sycl(void * data, const int ncols, const int nrows, dpct::queue_ptr stream);
+static void convert_mxfp4_to_coalesced_sycl(void * data, const int ncols, const int nrows, dpct::queue_ptr stream);
+
+// =============================================================================
+// UNIFIED COALESCED REORDER FUNCTION
+// This is the friend function declared in common.hpp - the ONLY way to set
+// COALESCED mode. Atomically transforms data AND sets flag.
+// Supports Q4_0, Q8_0, and MXFP4 tensor types.
+// =============================================================================
+bool convert_tensor_to_coalesced(const ggml_tensor* tensor, dpct::queue_ptr stream, const char* caller) {
+    if (!tensor || !tensor->extra) {
+        fprintf(stderr, "[COALESCED-UNIFIED] ERROR: tensor=%p extra=%p - cannot convert\n",
+                (void*)tensor, tensor ? (void*)tensor->extra : nullptr);
         return false;
     }
 
-    // Only for Q4_0 type
-    if (tensor->type != GGML_TYPE_Q4_0) {
-        return false;
+    ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
+
+    // Check if already coalesced
+    if (extra->optimized_feature.get_reorder() == reorder_mode::COALESCED) {
+        return true;  // Already done
     }
 
-    // Check if already converted
-    ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *)tensor->extra;
-    if (!extra || extra->optimized_feature.coalesced) {
-        return false;
-    }
-
-    // Must be reordered first
-    if (!extra->optimized_feature.reorder) {
-        return false;
-    }
-
-    // Skip TP-sharded tensors
-    if (extra->tp_sharded) {
+    // COALESCED requires SOA first
+    if (extra->optimized_feature.get_reorder() != reorder_mode::SOA) {
+        fprintf(stderr, "[COALESCED-UNIFIED] ERROR: tensor '%s' not in SOA mode (mode=%d). "
+                "COALESCED requires SOA first.\n",
+                tensor->name ? tensor->name : "?", (int)extra->optimized_feature.get_reorder());
         return false;
     }
 
     const int64_t ncols = tensor->ne[0];
     const int64_t nrows = tensor->ne[1];
 
-    // Check if tensor dimensions are compatible with coalesced kernel
-    if ((ncols / QK4_0) % MMVQ_COALESCED_TILE_BLOCKS != 0) {
+    // Type-specific transform and tile alignment check
+    int block_size = 0;
+    switch (tensor->type) {
+        case GGML_TYPE_Q4_0:
+            block_size = QK4_0;
+            if ((ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS != 0) {
+                return false;  // Not tile-aligned
+            }
+            convert_q4_0_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+            break;
+
+        case GGML_TYPE_Q8_0:
+            block_size = QK8_0;
+            if ((ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS != 0) {
+                return false;  // Not tile-aligned
+            }
+            convert_q8_0_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+            break;
+
+        case GGML_TYPE_MXFP4:
+            block_size = QK_MXFP4;
+            if ((ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS != 0) {
+                return false;  // Not tile-aligned
+            }
+            convert_mxfp4_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+            break;
+
+        default:
+            fprintf(stderr, "[COALESCED-UNIFIED] ERROR: tensor '%s' type %d not supported\n",
+                    tensor->name ? tensor->name : "?", tensor->type);
+            return false;
+    }
+
+    // SET THE FLAG - mark tensor as COALESCED (via private friend access)
+    extra->optimized_feature.set_reorder_mode_(reorder_mode::COALESCED, tensor->name, caller);
+
+    GGML_SYCL_DEBUG("[COALESCED-UNIFIED] Converted '%s' (%lldx%lld) type=%d caller=%s\n",
+            tensor->name ? tensor->name : "?", (long long)ncols, (long long)nrows,
+            tensor->type, caller ? caller : "UNKNOWN");
+
+    return true;
+}
+
+// Public API for coalesced conversion - call at model load time, after reorder
+// This is a convenience wrapper that checks policy (env var, TP sharding) then
+// calls the unified convert_tensor_to_coalesced() function.
+bool ggml_sycl_convert_to_coalesced_q4_0(const ggml_tensor * tensor, dpct::queue_ptr stream) {
+    // Check if coalesced mode is enabled via env var
+    static bool coalesced_enabled = (std::getenv("GGML_SYCL_MMVQ_COALESCED") != nullptr);
+    if (!coalesced_enabled) {
         return false;
     }
 
-    GGML_SYCL_DEBUG("Converting Q4_0 tensor to coalesced layout at model load: %s\n", tensor->name);
+    // Skip TP-sharded tensors (policy decision for this API)
+    ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *)tensor->extra;
+    if (extra && extra->tp_sharded) {
+        return false;
+    }
 
-    // Use tensor->data directly (same as reorder_qw does - this is the device pointer at load time)
-    convert_q4_0_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
-    extra->optimized_feature.coalesced = true;
-
-    return true;
+    // Use the unified function - it handles all validation and atomic transform+flag
+    return convert_tensor_to_coalesced(tensor, stream, "ggml_sycl_convert_to_coalesced_q4_0");
 }
 
 // Dispatch function for coalesced Q4_0 MMVQ kernel
@@ -1387,50 +1471,20 @@ static void convert_q8_0_to_coalesced_sycl(void * data, const int ncols, const i
 
 // Public API for Q8_0 coalesced conversion - call at model load time, after reorder
 bool ggml_sycl_convert_to_coalesced_q8_0(const ggml_tensor * tensor, dpct::queue_ptr stream) {
-    // Check if coalesced mode is enabled
+    // Check if coalesced mode is enabled via env var
     static bool coalesced_enabled = (std::getenv("GGML_SYCL_MMVQ_COALESCED") != nullptr);
     if (!coalesced_enabled) {
         return false;
     }
 
-    // Only for Q8_0 type
-    if (tensor->type != GGML_TYPE_Q8_0) {
-        return false;
-    }
-
-    // Check if already converted
+    // Skip TP-sharded tensors (policy decision for this API)
     ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *)tensor->extra;
-    if (!extra || extra->optimized_feature.coalesced) {
+    if (extra && extra->tp_sharded) {
         return false;
     }
 
-    // Must be reordered first
-    if (!extra->optimized_feature.reorder) {
-        return false;
-    }
-
-    // Skip TP-sharded tensors
-    if (extra->tp_sharded) {
-        return false;
-    }
-
-    const int64_t ncols = tensor->ne[0];
-    const int64_t nrows = tensor->ne[1];
-
-    // Check if tensor dimensions are compatible with coalesced kernel
-    if ((ncols / QK8_0) % MMVQ_COALESCED_TILE_BLOCKS != 0) {
-        GGML_SYCL_DEBUG("Q8_0 coalesced SKIP %s: ncols=%ld, blocks=%ld, mod=%ld\n",
-                        tensor->name, (long)ncols, (long)(ncols / QK8_0),
-                        (long)((ncols / QK8_0) % MMVQ_COALESCED_TILE_BLOCKS));
-        return false;
-    }
-
-    GGML_SYCL_DEBUG("Converting Q8_0 tensor to coalesced layout at model load: %s (ncols=%ld)\n", tensor->name, (long)ncols);
-
-    convert_q8_0_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
-    extra->optimized_feature.coalesced = true;
-
-    return true;
+    // Use the unified function - it handles all validation and atomic transform+flag
+    return convert_tensor_to_coalesced(tensor, stream, "ggml_sycl_convert_to_coalesced_q8_0");
 }
 
 // Dispatch function for coalesced Q8_0 MMVQ kernel
@@ -1626,44 +1680,20 @@ static void convert_mxfp4_to_coalesced_sycl(void * data, const int ncols, const 
 
 // Public API for MXFP4 coalesced conversion
 bool ggml_sycl_convert_to_coalesced_mxfp4(const ggml_tensor * tensor, dpct::queue_ptr stream) {
+    // Check if coalesced mode is enabled via env var
     static bool coalesced_enabled = (std::getenv("GGML_SYCL_MMVQ_COALESCED") != nullptr);
     if (!coalesced_enabled) {
         return false;
     }
 
-    if (tensor->type != GGML_TYPE_MXFP4) {
-        return false;
-    }
-
+    // Skip TP-sharded tensors (policy decision for this API)
     ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *)tensor->extra;
-    if (!extra || extra->optimized_feature.coalesced) {
+    if (extra && extra->tp_sharded) {
         return false;
     }
 
-    if (!extra->optimized_feature.reorder) {
-        return false;
-    }
-
-    if (extra->tp_sharded) {
-        return false;
-    }
-
-    const int64_t ncols = tensor->ne[0];
-    const int64_t nrows = tensor->ne[1];
-
-    if ((ncols / QK_MXFP4) % MMVQ_COALESCED_TILE_BLOCKS != 0) {
-        GGML_SYCL_DEBUG("MXFP4 coalesced SKIP %s: ncols=%ld, blocks=%ld, mod=%ld\n",
-                        tensor->name, (long)ncols, (long)(ncols / QK_MXFP4),
-                        (long)((ncols / QK_MXFP4) % MMVQ_COALESCED_TILE_BLOCKS));
-        return false;
-    }
-
-    GGML_SYCL_DEBUG("Converting MXFP4 tensor to coalesced layout at model load: %s (ncols=%ld)\n", tensor->name, (long)ncols);
-
-    convert_mxfp4_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
-    extra->optimized_feature.coalesced = true;
-
-    return true;
+    // Use the unified function - it handles all validation and atomic transform+flag
+    return convert_tensor_to_coalesced(tensor, stream, "ggml_sycl_convert_to_coalesced_mxfp4");
 }
 
 // Dispatch function for coalesced MXFP4 MMVQ kernel
@@ -1963,8 +1993,10 @@ static void mul_mat_vec_q4_K_q8_1_sycl(const void *vx, const void *vy,
     }
 }
 
+// Note: total_nrows is the full tensor row count (ne01), nrows is the slice size (row_diff)
+//       row_low is the starting row offset for this slice (for split tensor support)
 static void reorder_mul_mat_vec_q4_k_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
-    const int nrows, dpct::queue_ptr stream) {
+    const int nrows, const int total_nrows, const int row_low, dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
 
     const int block_num_y = ceil_div(nrows, GGML_SYCL_MMV_Y);
@@ -1978,7 +2010,7 @@ static void reorder_mul_mat_vec_q4_k_q8_1_sycl(const void * vx, const void * vy,
         cgh.parallel_for<mmvq_reorder_kernel_name<GGML_TYPE_Q4_K>>(sycl::nd_range<3>(global_size, workgroup_size),
                             [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                                 mul_mat_vec_q_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_Q4_K>>(vx, vy, dst, ncols,
-                                                                                            nrows, nd_item);
+                                                                                            nrows, total_nrows, row_low, nd_item);
                             });
     });
 }
@@ -2008,8 +2040,10 @@ static void mul_mat_vec_q5_K_q8_1_sycl(const void *vx, const void *vy,
     }
 }
 
+// Note: total_nrows is the full tensor row count (ne01), nrows is the slice size (row_diff)
+//       row_low is the starting row offset for this slice (for split tensor support)
 static void reorder_mul_mat_vec_q6_k_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
-                                               const int nrows, dpct::queue_ptr stream) {
+                                               const int nrows, const int total_nrows, const int row_low, dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
     const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
     constexpr size_t num_subgroups = 16;
@@ -2022,7 +2056,7 @@ static void reorder_mul_mat_vec_q6_k_q8_1_sycl(const void * vx, const void * vy,
         cgh.parallel_for<mmvq_reorder_kernel_name<GGML_TYPE_Q6_K>>(sycl::nd_range<3>(global_size, workgroup_size),
                          [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              mul_mat_vec_q_reorder<reorder_vec_dot_q_sycl<GGML_TYPE_Q6_K>>(vx, vy, dst, ncols, nrows,
-                                                                                           nd_item);
+                                                                                           total_nrows, row_low, nd_item);
                          });
     });
 }
@@ -2336,18 +2370,20 @@ static void mul_mat_vec_mxfp4_q8_1_id_sycl(const void * vx, const void * vy, flo
 }
 
 // MoE dispatch: MXFP4 with SoA layout (reordered weights) + expert routing
-// SoA layout: [all qs for all experts][all scales for all experts]
+// SoA layout for weights: [all qs for all experts][all scales for all experts]
+// SoA layout for Q8_1: per row [quants: ncols_y bytes][ds: nblocks * sizeof(half2)]
 // After reorder_qw_mxfp4: qs at offset 0, scales at offset (ncols/2)*total_rows
 static void mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
-    const uint8_t * __restrict__ vx,      // Base pointer to reordered tensor
-    const block_q8_1 * __restrict__ vy,
+    const uint8_t * __restrict__ vx,      // Base pointer to reordered MXFP4 tensor (SoA layout)
+    const void * __restrict__ vy,         // Base pointer to Q8_1 tensor (SoA layout)
     float * __restrict__ dst,
     const int32_t * __restrict__ ids,
-    const int ncols,
+    const int ncols,                      // MXFP4 tensor columns
+    const int ncols_y,                    // Q8_1 row size (for SoA ds offset)
     const int nrows_per_expert,
     const int n_ids,
     const int ne11,
-    const int64_t total_qs_size,          // Offset to scale region
+    const int64_t total_qs_size,          // Offset to MXFP4 scale region
     const int64_t ids_nb0,
     const int64_t ids_nb1,
     const int64_t nb11,
@@ -2378,7 +2414,7 @@ static void mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
 
     const int blocks_per_row = ncols / QK_MXFP4;
 
-    // SoA layout: compute absolute row offset for this expert
+    // SoA layout for MXFP4: compute absolute row offset for this expert
     // total_rows = nrows_per_expert * num_experts, flattened during reorder
     const int64_t abs_row = expert_id * nrows_per_expert + row;
     const int64_t row_qs_offset = abs_row * blocks_per_row * (QK_MXFP4 / 2);  // 16 bytes per block
@@ -2387,8 +2423,8 @@ static void mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
     const uint8_t * qs_row = vx + row_qs_offset;
     const uint8_t * scale_row = vx + row_scale_offset;
 
-    // Input: Q8_1 quantized
-    const block_q8_1 * y = (const block_q8_1 *)((const char*)vy + i11 * nb11 + i12 * nb12);
+    // Q8_1 input: base pointer for this token (SoA layout)
+    const char * y_base = (const char*)vy + i11 * nb11 + i12 * nb12;
 
     const int lane_id = item_ct1.get_local_id(2);
     constexpr int blocks_per_warp = WARP_SIZE;  // Each thread handles one block
@@ -2396,15 +2432,16 @@ static void mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
     float acc = 0.0f;
 
     for (int b = lane_id; b < blocks_per_row; b += blocks_per_warp) {
-        // Load E8M0 scale for this block from SoA scale region
+        // Load E8M0 scale for this block from MXFP4 SoA scale region
         const uint8_t e8m0 = scale_row[b];
         const float d = ggml_sycl_e8m0_to_fp32(e8m0) * 0.5f;
 
-        // Load Q8_1 block
-        const block_q8_1 * q8_blk = &y[b];
-        const float d8 = (*q8_blk).ds[0];
+        // Load Q8_1 data (SoA layout: quants first, then ds values)
+        const int * q8_qs = (const int*)(y_base + b * QK8_1);
+        const sycl::half2 * q8_ds = (const sycl::half2*)(y_base + ncols_y + b * sizeof(sycl::half2));
+        const float d8 = (float)(*q8_ds)[0];
 
-        // Load 16 packed bytes (32 4-bit values) from SoA qs region
+        // Load 16 packed bytes (32 4-bit values) from MXFP4 SoA qs region
         const uint8_t * qs = qs_row + b * (QK_MXFP4 / 2);
 
         int sumi = 0;
@@ -2415,8 +2452,8 @@ static void mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
             const sycl::int2 v = get_int_from_table_16(aux_q4, kvalues_mxfp4);
 
             // DP4A: 4-way int8 dot product
-            sumi = ggml_sycl_dp4a(v.x(), ((const int*)q8_blk->qs)[i/4], sumi);
-            sumi = ggml_sycl_dp4a(v.y(), ((const int*)q8_blk->qs)[i/4 + 4], sumi);
+            sumi = ggml_sycl_dp4a(v.x(), q8_qs[i/4], sumi);
+            sumi = ggml_sycl_dp4a(v.y(), q8_qs[i/4 + 4], sumi);
         }
 
         acc += d * d8 * sumi;
@@ -2435,12 +2472,14 @@ static void mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
 }
 
 // MoE dispatch: MXFP4 SoA layout with expert routing
+// Both MXFP4 weights and Q8_1 inputs must be in SoA layout
 static void reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(
     const void * vx,
     const void * vy,
     float * dst,
     const int32_t * ids,
     const int ncols,
+    const int ncols_y,                    // Q8_1 row size (for SoA ds offset)
     const int nrows_per_expert,
     const int num_experts,
     const int total_batches,
@@ -2459,7 +2498,7 @@ static void reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(
     const sycl::range<3> block_nums(1, total_batches, block_num_z);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
 
-    // SoA layout: qs_size = (ncols / 2) * total_rows
+    // SoA layout for MXFP4: qs_size = (ncols / 2) * total_rows
     const int64_t total_rows = (int64_t)nrows_per_expert * num_experts;
     const int64_t total_qs_size = (ncols / 2) * total_rows;
 
@@ -2468,8 +2507,8 @@ static void reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
                                  (const uint8_t *)vx,
-                                 (const block_q8_1 *)vy,
-                                 dst, ids, ncols, nrows_per_expert,
+                                 vy,
+                                 dst, ids, ncols, ncols_y, nrows_per_expert,
                                  n_ids, ne11, total_qs_size,
                                  ids_nb0, ids_nb1, nb11, nb12, nb1, nb2,
                                  item_ct1);
@@ -2618,6 +2657,31 @@ bool ggml_sycl_mul_mat_id_vec_q(
     const int32_t * ids_d = (const int32_t *)ids->data;
     float * dst_d = (float *)dst->data;
 
+    // Check if weights are in host/mmap memory - need to fall back to host-side dispatch
+    // which handles per-expert caching properly. MMVQ kernel requires all experts in
+    // contiguous GPU memory, which doesn't work with per-expert caching.
+    {
+        // Check buffer metadata first - authoritative source of truth for memory location
+        // ggml_backend_buffer_is_host() returns true for CPU/mmap buffers
+        // This is more reliable than sycl::get_pointer_type() which may return incorrect
+        // values (e.g., "shared") for mmap'd memory on Intel systems
+        if (src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
+            GGML_SYCL_DEBUG("[MMVQ] Host buffer for %s, using expert cache path\n", src0->name);
+            return false;  // Use host-side dispatch with expert cache
+        }
+
+        // For SYCL buffers, also check ptr_type as safety fallback
+        sycl::usm::alloc ptr_type = sycl::get_pointer_type(src0_d, stream->get_context());
+        GGML_SYCL_DEBUG("[MMVQ] ptr_type for %s: type=%d (0=unknown, 1=device, 2=host, 3=shared)\n",
+                        src0->name, (int)ptr_type);
+
+        if (ptr_type != sycl::usm::alloc::device) {
+            GGML_SYCL_DEBUG("[MMVQ] %s non-device ptr_type=%d, fallback to host-side dispatch\n",
+                            src0->name, (int)ptr_type);
+            return false;  // Let host-side handle per-expert caching
+        }
+    }
+
     // Check Q8_1 quantization cache - MoE uses same input for gate/up/down projections
     void* q8_1_buffer = nullptr;
     bool using_cached = false;
@@ -2655,7 +2719,16 @@ bool ggml_sycl_mul_mat_id_vec_q(
         }
 
         // Quantize all rows to Q8_1
-        quantize_row_q8_1_sycl<quantize_q8_1>(src1_d, (char*)q8_1_buffer, ne10, total_src1_rows, ne10_padded, stream);
+        // Use SoA quantizer if weights are in SoA layout (SoA kernels expect SoA Y)
+        ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+        const bool y_soa = extra && extra->optimized_feature.is_soa();
+        if (y_soa) {
+            GGML_SYCL_DEBUG("[MoE-Q8_1] Quantizing Y to SoA layout (X is_soa=%d)\n", y_soa);
+            quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(src1_d, (char*)q8_1_buffer, ne10, total_src1_rows, ne10_padded, stream);
+        } else {
+            GGML_SYCL_DEBUG("[MoE-Q8_1] Quantizing Y to AoS layout (X is_soa=%d)\n", y_soa);
+            quantize_row_q8_1_sycl<quantize_q8_1>(src1_d, (char*)q8_1_buffer, ne10, total_src1_rows, ne10_padded, stream);
+        }
 
 #ifdef GGML_SYCL_GRAPH
         // Cache the quantized result for subsequent gate/up/down calls
@@ -2722,17 +2795,63 @@ bool ggml_sycl_mul_mat_id_vec_q(
             break;
         case GGML_TYPE_MXFP4:
             {
-                // Check if weights are reordered to SoA layout
+                // Check if weights are in SoA layout (CPU reorder sets this during upload)
                 auto * extra = (ggml_tensor_extra_gpu *)src0->extra;
-                bool use_soa = extra && extra->optimized_feature.reorder;
+                const bool x_is_soa = extra && extra->optimized_feature.is_soa();
+                const bool x_is_reordered = extra && extra->optimized_feature.is_reordered();
 
-                GGML_SYCL_DEBUG("[MMVQ-MXFP4] use_soa=%d extra=%p\n", use_soa, extra);
+                GGML_SYCL_DEBUG("[MMVQ-MXFP4] X: is_soa=%d is_reordered=%d extra=%p tensor=%s\n",
+                               x_is_soa, x_is_reordered, extra, src0->name ? src0->name : "null");
 
-                if (use_soa) {
-                    // SoA layout - use reordered kernel
+                if (x_is_soa) {
+                    // SoA layout - both MXFP4 weights and Q8_1 input must be in SoA format
+                    // Verify: is_soa should imply is_reordered
+                    GGML_ASSERT(x_is_reordered && "X is_soa but not is_reordered - flag inconsistency");
+
+                    // DEBUG: Verify actual data layout on GPU
+                    if (g_ggml_sycl_debug >= 2) {
+                        // For MXFP4 SoA: qs region at offset 0, scales at offset (ncols/2)*total_rows
+                        // For Q8_1 SoA: quants at offset 0..ne10-1, ds at offset ne10
+                        const int64_t total_x_rows = ne01 * ne02;
+                        const int64_t x_qs_size = (ne00 / 2) * total_x_rows;  // 16 bytes per block, ncols/QK_MXFP4 blocks
+
+                        // Read first bytes of X to verify layout
+                        uint8_t x_sample[32];
+                        stream->memcpy(x_sample, src0_d, 32).wait();
+                        fprintf(stderr, "[VERIFY-X] First 16 bytes (should be qs): %02x %02x %02x %02x %02x %02x %02x %02x...\n",
+                               x_sample[0], x_sample[1], x_sample[2], x_sample[3],
+                               x_sample[4], x_sample[5], x_sample[6], x_sample[7]);
+
+                        // Read scale region (at offset x_qs_size)
+                        uint8_t x_scale_sample[8];
+                        stream->memcpy(x_scale_sample, (const uint8_t*)src0_d + x_qs_size, 8).wait();
+                        fprintf(stderr, "[VERIFY-X] First 8 scales at offset %lld: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                               (long long)x_qs_size,
+                               x_scale_sample[0], x_scale_sample[1], x_scale_sample[2], x_scale_sample[3],
+                               x_scale_sample[4], x_scale_sample[5], x_scale_sample[6], x_scale_sample[7]);
+
+                        // Read first bytes of Y (Q8_1) to verify layout
+                        int8_t y_quant_sample[32];
+                        stream->memcpy(y_quant_sample, q8_1_buffer, 32).wait();
+                        fprintf(stderr, "[VERIFY-Y] First 32 quants: %d %d %d %d %d %d %d %d...\n",
+                               y_quant_sample[0], y_quant_sample[1], y_quant_sample[2], y_quant_sample[3],
+                               y_quant_sample[4], y_quant_sample[5], y_quant_sample[6], y_quant_sample[7]);
+
+                        // Read ds values (at offset ne10)
+                        sycl::half2 y_ds_sample[4];
+                        stream->memcpy(y_ds_sample, (const char*)q8_1_buffer + ne10, sizeof(y_ds_sample)).wait();
+                        fprintf(stderr, "[VERIFY-Y] First 4 ds at offset %lld: d0=%.4f s0=%.4f, d1=%.4f s1=%.4f\n",
+                               (long long)ne10,
+                               (float)y_ds_sample[0][0], (float)y_ds_sample[0][1],
+                               (float)y_ds_sample[1][0], (float)y_ds_sample[1][1]);
+                    }
+
+                    GGML_SYCL_DEBUG("[MMVQ-MXFP4-SoA] X=SoA Y=SoA ne00=%lld ne10=%lld ne01=%lld ne02=%lld\n",
+                                   (long long)ne00, (long long)ne10, (long long)ne01, (long long)ne02);
                     reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(
                         src0_d, q8_1_buffer, dst_d, ids_d,
-                        ne00,  // ncols
+                        ne00,  // ncols (MXFP4)
+                        ne10,  // ncols_y (Q8_1 row size for SoA ds offset)
                         ne01,  // nrows_per_expert
                         ne02,  // num_experts
                         total_batches,
@@ -2776,6 +2895,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
     GGML_ASSERT(ne10 % QK8_1 == 0);
 
     const int64_t ne00     = src0->ne[0];
+    const int64_t ne01     = src0->ne[1];  // Total tensor rows, needed for SoA offset calculations
     const int64_t row_diff = row_high - row_low;
 
     // DEBUG: Check dimensions and src1 values for layer 0 projections
@@ -2959,60 +3079,121 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
         switch (src0->type) {
             case GGML_TYPE_Q4_0:
                 {
-                    // Use src0->extra for reorder check since src0 is the actual weight tensor being used
-                    // This is important for TP where we may pass different tensors than dst->src[0]
                     auto * src0_extra = (ggml_tensor_extra_gpu *) src0->extra;
-                    bool use_reorder = src0_extra && src0_extra->optimized_feature.reorder;
-
-                    // For TP: DISABLE reorder completely to rule out issues
-                    if (src0_extra && src0_extra->tp_sharded) {
-                        use_reorder = false;
+                    // Determine reorder mode, respecting TP-sharding (TP-sharded tensors use AoS)
+                    reorder_mode mode = reorder_mode::NONE;
+                    if (src0_extra && !src0_extra->tp_sharded) {
+                        mode = src0_extra->optimized_feature.get_reorder();
                     }
 
-                    // Check if tensor was converted to coalesced layout at model load time
-                    // (conversion happens in ggml_sycl_reorder_weights when GGML_SYCL_MMVQ_COALESCED is set)
-                    bool use_coalesced = src0_extra && src0_extra->optimized_feature.coalesced;
-
-                    if (use_coalesced) {
-                        GGML_SYCL_DEBUG("Calling coalesced_mul_mat_vec_q4_0_q8_1_sycl\n");
+                    if (mode == reorder_mode::COALESCED) {
+                        GGML_SYCL_KTRACE("mmvq_q4_0_coalesced", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                         coalesced_mul_mat_vec_q4_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
-                    } else if (use_reorder) {
-                        GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_q4_0_q8_1_sycl\n");
-                        reorder_mul_mat_vec_q4_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                    } else if (mode == reorder_mode::SOA) {
+                        GGML_SYCL_KTRACE("mmvq_q4_0_soa", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld", (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
+                        const void * soa_base = ggml_sycl_get_data_ptr(src0, ctx.device);
+                        reorder_mul_mat_vec_q4_0_q8_1_sycl(soa_base, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, ne01, row_low, stream);
                     } else {
-                        GGML_SYCL_DEBUG("Calling mul_mat_vec_q4_0_q8_1_sycl\n");
+                        GGML_SYCL_KTRACE("mmvq_q4_0_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                         mul_mat_vec_q4_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                     }
                 }
                 break;
             case GGML_TYPE_Q4_1:
+                GGML_SYCL_KTRACE("mmvq_q4_1", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_q4_1_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_Q5_0:
+                GGML_SYCL_KTRACE("mmvq_q5_0", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_q5_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_Q5_1:
+                GGML_SYCL_KTRACE("mmvq_q5_1", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_q5_1_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_Q8_0:
                 {
                     auto * src0_extra = (ggml_tensor_extra_gpu *) src0->extra;
-                    bool use_reorder = src0_extra && src0_extra->optimized_feature.reorder;
-                    bool use_coalesced = src0_extra && src0_extra->optimized_feature.coalesced;
-
-                    // Disable optimized paths for TP-sharded tensors
-                    if (src0_extra && src0_extra->tp_sharded) {
-                        use_reorder = false;
-                        use_coalesced = false;
+                    // Determine reorder mode, respecting TP-sharding (TP-sharded tensors use AoS)
+                    reorder_mode mode = reorder_mode::NONE;
+                    if (src0_extra && !src0_extra->tp_sharded) {
+                        mode = src0_extra->optimized_feature.get_reorder();
                     }
 
-                    if (use_coalesced) {
+                    // Debug: trace dispatch decision AND verify actual data layout
+                    static int q8_0_dispatch_count = 0;
+                    if (false && q8_0_dispatch_count < 3) {  // DISABLED for testing
+                        const void * data_ptr = ggml_sycl_get_data_ptr(src0, ctx.device);
+                        const size_t nblocks = (ne00 / QK8_0) * ne01;
+
+                        // Read first 64 bytes from GPU to check layout
+                        uint8_t header[64];
+                        stream->memcpy(header, data_ptr, sizeof(header)).wait();
+
+                        // AoS expects: [d0:2][qs0:32][d1:2][qs1:32]...
+                        // SoA expects: [qs0:32][qs1:32]...[d0:2][d1:2]...
+
+                        // Read d from AoS position (offset 0) and SoA position (offset nblocks*32)
+                        ggml_half d_aos = *(ggml_half*)&header[0];
+
+                        // Also check what's at SoA d position (if within buffer)
+                        const size_t soa_d_offset = nblocks * QK8_0;
+                        uint8_t soa_d_bytes[4] = {0};
+                        if (soa_d_offset < ggml_nbytes(src0)) {
+                            stream->memcpy(soa_d_bytes, (const uint8_t*)data_ptr + soa_d_offset, 4).wait();
+                        }
+                        ggml_half d_soa = *(ggml_half*)&soa_d_bytes[0];
+
+                        fprintf(stderr, "[MMVQ-Q8_0-VALIDATE] %s mode=%d nblocks=%zu\n", src0->name, (int)mode, nblocks);
+                        fprintf(stderr, "  Header bytes[0-7]: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                header[0], header[1], header[2], header[3], header[4], header[5], header[6], header[7]);
+                        fprintf(stderr, "  d_aos (offset 0)=%.6f, d_soa (offset %zu)=%.6f\n",
+                                (float)d_aos, soa_d_offset, (float)d_soa);
+                        fprintf(stderr, "  If mode=SOA, d_soa should be valid (~0.001-1.0), d_aos should be garbage\n");
+
+                        // Also validate Y (Q8_1) data layout
+                        // Y SoA layout: [quants: 0..ne00-1][ds: ne00..ne00+nblocks_y*4-1]
+                        // Note: ne00 (X cols) should equal ne10 (Y cols) for valid matmul
+                        fprintf(stderr, "  Y validation: ne00=%lld (X cols), ne10=%lld (Y cols), src1_padded=%lld\n",
+                                (long long)ne00, (long long)ne10, (long long)src1_padded_col_size);
+
+                        // Read first 8 bytes of Y (should be quant values, int8 in range -127 to 127)
+                        uint8_t y_header[8] = {0};
+                        stream->memcpy(y_header, src1_ddq_i_bs, sizeof(y_header)).wait();
+                        fprintf(stderr, "  Y quants[0-7]: %d %d %d %d %d %d %d %d\n",
+                                (int)(int8_t)y_header[0], (int)(int8_t)y_header[1],
+                                (int)(int8_t)y_header[2], (int)(int8_t)y_header[3],
+                                (int)(int8_t)y_header[4], (int)(int8_t)y_header[5],
+                                (int)(int8_t)y_header[6], (int)(int8_t)y_header[7]);
+
+                        // Read ds at Y SoA position (offset ne00 for first ds)
+                        uint8_t y_ds_bytes[4] = {0};
+                        stream->memcpy(y_ds_bytes, (const uint8_t*)src1_ddq_i_bs + ne00, 4).wait();
+                        sycl::half2 y_ds = *(sycl::half2*)y_ds_bytes;
+                        fprintf(stderr, "  Y ds at offset ne00=%lld: d=%.6f, s=%.6f\n",
+                                (long long)ne00, (float)y_ds.x(), (float)y_ds.y());
+
+                        // Compare with AoS position (first 4 bytes would be ds if AoS)
+                        sycl::half2 y_ds_aos = *(sycl::half2*)y_header;
+                        fprintf(stderr, "  Y ds at offset 0 (AoS): d=%.6f, s=%.6f\n",
+                                (float)y_ds_aos.x(), (float)y_ds_aos.y());
+                        fprintf(stderr, "  If Y is SoA: ds at ne00 should be valid, ds at 0 should be garbage\n");
+
+                        q8_0_dispatch_count++;
+                    }
+
+                    if (mode == reorder_mode::COALESCED) {
                         GGML_SYCL_DEBUG("Calling coalesced_mul_mat_vec_q8_0_q8_1_sycl\n");
+                        GGML_SYCL_KTRACE("mmvq_q8_0_coalesced", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                         coalesced_mul_mat_vec_q8_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
-                    } else if (use_reorder) {
+                    } else if (mode == reorder_mode::SOA) {
                         GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_q8_0_q8_1_sycl\n");
-                        reorder_mul_mat_vec_q8_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                        GGML_SYCL_KTRACE("mmvq_q8_0_soa", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld", (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
+                        // For SoA layout, use base pointer (not pre-offset src0_dd_i) and pass row_low for correct block indexing
+                        const void * soa_base = ggml_sycl_get_data_ptr(src0, ctx.device);
+                        reorder_mul_mat_vec_q8_0_q8_1_sycl(soa_base, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, ne01, row_low, stream);
                     } else {
+                        GGML_SYCL_KTRACE("mmvq_q8_0_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                         mul_mat_vec_q8_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                     }
                 }
@@ -3020,82 +3201,157 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
             case GGML_TYPE_MXFP4:
                 {
                     auto * src0_extra = (ggml_tensor_extra_gpu *) src0->extra;
-                    bool use_reorder = src0_extra && src0_extra->optimized_feature.reorder;
-                    bool use_coalesced = src0_extra && src0_extra->optimized_feature.coalesced;
-
-                    // Disable optimized paths for TP-sharded tensors
-                    if (src0_extra && src0_extra->tp_sharded) {
-                        use_reorder = false;
-                        use_coalesced = false;
+                    // Determine reorder mode, respecting TP-sharding (TP-sharded tensors use AoS)
+                    reorder_mode mode = reorder_mode::NONE;
+                    if (src0_extra && !src0_extra->tp_sharded) {
+                        mode = src0_extra->optimized_feature.get_reorder();
                     }
 
-                    if (use_coalesced) {
+                    if (mode == reorder_mode::COALESCED) {
                         GGML_SYCL_DEBUG("Calling coalesced_mul_mat_vec_mxfp4_q8_1_sycl\n");
+                        GGML_SYCL_KTRACE("mmvq_mxfp4_coalesced", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                         coalesced_mul_mat_vec_mxfp4_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
-                    } else if (use_reorder) {
+                    } else if (mode == reorder_mode::SOA) {
                         GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_mxfp4_q8_1_sycl\n");
-                        reorder_mul_mat_vec_mxfp4_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                        GGML_SYCL_KTRACE("mmvq_mxfp4_soa", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld", (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
+                        // For SoA layout, use base pointer (not pre-offset src0_dd_i) and pass row_low for correct block indexing
+                        const void * soa_base = ggml_sycl_get_data_ptr(src0, ctx.device);
+                        reorder_mul_mat_vec_mxfp4_q8_1_sycl(soa_base, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, ne01, row_low, stream);
                     } else {
+                        GGML_SYCL_KTRACE("mmvq_mxfp4_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                         mul_mat_vec_mxfp4_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                     }
                 }
                 break;
             case GGML_TYPE_Q2_K:
+                GGML_SYCL_KTRACE("mmvq_q2_k", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_q2_K_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_Q3_K:
+                GGML_SYCL_KTRACE("mmvq_q3_k", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_q3_K_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_Q4_K:
-                if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
-                    ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
-                    GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_q4_k_q8_1_sycl\n");
-                    reorder_mul_mat_vec_q4_k_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
-                } else {
-                    GGML_SYCL_DEBUG("Calling mul_mat_vec_q4_K_q8_1_sycl\n");
-                    mul_mat_vec_q4_K_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                {
+                    // Q4_K only has SOA kernel (no COALESCED version) - check is_soa() specifically
+                    auto * extra = (ggml_tensor_extra_gpu *) dst->src[0]->extra;
+                    if (extra && extra->optimized_feature.is_soa()) {
+                        GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_q4_k_q8_1_sycl\n");
+                        GGML_SYCL_KTRACE("mmvq_q4_k_soa", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld", (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
+                        // For SoA layout, use base pointer (not pre-offset src0_dd_i) and pass row_low for correct block indexing
+                        const void * soa_base = ggml_sycl_get_data_ptr(src0, ctx.device);
+                        reorder_mul_mat_vec_q4_k_q8_1_sycl(soa_base, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, ne01, row_low, stream);
+                    } else if (extra && extra->optimized_feature.is_coalesced()) {
+                        // COALESCED layout not implemented for Q4_K
+                        GGML_ABORT("mmvq Q4_K: COALESCED layout not implemented");
+                    } else {
+                        GGML_SYCL_DEBUG("Calling mul_mat_vec_q4_K_q8_1_sycl\n");
+                        GGML_SYCL_KTRACE("mmvq_q4_k_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+                        mul_mat_vec_q4_K_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                    }
                 }
                 break;
             case GGML_TYPE_Q5_K:
+                GGML_SYCL_KTRACE("mmvq_q5_k", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_q5_K_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_Q6_K:
-                if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
-                    ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
-                    GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_q6_k_q8_1_sycl\n");
-                    reorder_mul_mat_vec_q6_k_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
-                } else {
-                    GGML_SYCL_DEBUG("Calling mul_mat_vec_q6_k_q8_1_sycl\n");
-                    mul_mat_vec_q6_K_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                {
+                    // Q6_K only has SOA kernel (no COALESCED version) - check is_soa() specifically
+                    auto * extra = (ggml_tensor_extra_gpu *) dst->src[0]->extra;
+
+#ifdef GGML_SYCL_Q6K_Y_DEBUG
+                    // Debug: Verify Y (src1_ddq_i_bs) layout - should be block_q8_1 AoS format
+                    // block_q8_1 layout: ds (half2 = 4 bytes) + qs[32] (32 bytes) = 36 bytes per block
+                    static int q6k_debug_count = 0;
+                    if (q6k_debug_count < 3) {
+                        q6k_debug_count++;
+                        struct block_q8_1_debug {
+                            sycl::half d;
+                            sycl::half s;
+                            int8_t qs[32];
+                        };
+
+                        // Read first 2 blocks of Y
+                        block_q8_1_debug y_blocks[2];
+                        stream->memcpy(y_blocks, src1_ddq_i_bs, sizeof(y_blocks)).wait();
+
+                        fprintf(stderr, "\n[Q6K_Y_DEBUG #%d] ne00=%lld row_diff=%lld is_soa=%d\n",
+                                q6k_debug_count, (long long)ne00, (long long)row_diff,
+                                extra && extra->optimized_feature.is_soa() ? 1 : 0);
+
+                        for (int blk = 0; blk < 2; blk++) {
+                            float d_val = static_cast<float>(y_blocks[blk].d);
+                            float s_val = static_cast<float>(y_blocks[blk].s);
+                            fprintf(stderr, "  Y block[%d]: d=%.6f s=%.6f qs[0..7]=[%d,%d,%d,%d,%d,%d,%d,%d]\n",
+                                    blk, d_val, s_val,
+                                    y_blocks[blk].qs[0], y_blocks[blk].qs[1], y_blocks[blk].qs[2], y_blocks[blk].qs[3],
+                                    y_blocks[blk].qs[4], y_blocks[blk].qs[5], y_blocks[blk].qs[6], y_blocks[blk].qs[7]);
+                        }
+
+                        // Also check if Y looks like SoA format (all quants first, then all ds)
+                        // If SoA, first 64 bytes would be all qs values (no ds embedded)
+                        uint8_t raw_bytes[72];
+                        stream->memcpy(raw_bytes, src1_ddq_i_bs, sizeof(raw_bytes)).wait();
+                        fprintf(stderr, "  Raw Y[0..35]: ");
+                        for (int i = 0; i < 36; i++) fprintf(stderr, "%02x ", raw_bytes[i]);
+                        fprintf(stderr, "\n  Raw Y[36..71]: ");
+                        for (int i = 36; i < 72; i++) fprintf(stderr, "%02x ", raw_bytes[i]);
+                        fprintf(stderr, "\n");
+                    }
+#endif
+
+                    if (extra && extra->optimized_feature.is_soa()) {
+                        GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_q6_k_q8_1_sycl\n");
+                        GGML_SYCL_KTRACE("mmvq_q6_k_soa", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld", (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
+                        // For SoA layout, use base pointer (not pre-offset src0_dd_i) and pass row_low for correct block indexing
+                        const void * soa_base = ggml_sycl_get_data_ptr(src0, ctx.device);
+                        reorder_mul_mat_vec_q6_k_q8_1_sycl(soa_base, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, ne01, row_low, stream);
+                    } else if (extra && extra->optimized_feature.is_coalesced()) {
+                        // COALESCED layout not implemented for Q6_K
+                        GGML_ABORT("mmvq Q6_K: COALESCED layout not implemented");
+                    } else {
+                        GGML_SYCL_DEBUG("Calling mul_mat_vec_q6_k_q8_1_sycl\n");
+                        GGML_SYCL_KTRACE("mmvq_q6_k_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+                        mul_mat_vec_q6_K_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                    }
                 }
                 break;
             case GGML_TYPE_IQ1_S:
+                GGML_SYCL_KTRACE("mmvq_iq1_s", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_iq1_s_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_IQ1_M:
+                GGML_SYCL_KTRACE("mmvq_iq1_m", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_iq1_m_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_IQ2_XXS:
+                GGML_SYCL_KTRACE("mmvq_iq2_xxs", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_iq2_xxs_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_IQ2_XS:
+                GGML_SYCL_KTRACE("mmvq_iq2_xs", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_iq2_xs_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_IQ2_S:
+                GGML_SYCL_KTRACE("mmvq_iq2_s", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_iq2_s_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_IQ3_XXS:
+                GGML_SYCL_KTRACE("mmvq_iq3_xxs", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_iq3_xxs_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_IQ3_S:
+                GGML_SYCL_KTRACE("mmvq_iq3_s", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_iq3_s_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_IQ4_NL:
+                GGML_SYCL_KTRACE("mmvq_iq4_nl", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_iq4_nl_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                 break;
             case GGML_TYPE_IQ4_XS:
+                GGML_SYCL_KTRACE("mmvq_iq4_xs", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_iq4_xs_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
-                break;
             default:
                 GGML_ABORT("fatal error");
         }

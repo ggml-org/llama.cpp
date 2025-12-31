@@ -162,6 +162,29 @@ static __dpct_inline__ void dequantize_q8_0(const void *vx, const int64_t ib,
 #endif // GGML_SYCL_F16
 }
 
+// Q8_0 SoA (Structure of Arrays) dequantization
+// In SoA layout: all qs values first (nblocks * 32 bytes), then all d values (nblocks * 2 bytes)
+// d_ptr: pointer to the start of d values section
+// qs: pointer to the qs values for this block (already offset)
+// ib: block index (used to index into d values)
+// iqs: index within the block's qs array (0 to 30, stepping by 2)
+static __dpct_inline__ void dequantize_q8_0_reorder(const void *d_ptr, const int64_t ib, const void *qs,
+                                            const int iqs, dfloat2 &v) {
+    const dfloat d = (const dfloat)*((const sycl::half*)d_ptr + ib);
+
+    const int8_t* qs_ptr = (const int8_t*)qs;
+    v.x() = qs_ptr[iqs + 0];
+    v.y() = qs_ptr[iqs + 1];
+
+#ifdef GGML_SYCL_F16
+    v.s0() *= d;
+    v.s1() *= d;
+#else
+    v.x() *= d;
+    v.y() *= d;
+#endif // GGML_SYCL_F16
+}
+
 template<typename dst_t>
 static void dequantize_block_q4_0(const void * __restrict__ vx, dst_t * __restrict__ yy, int64_t nb32,
                                   const sycl::nd_item<3> &item_ct1) {
