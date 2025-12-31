@@ -469,7 +469,7 @@ llama_model::llama_model(const llama_model_params & params) : params(params), pi
 
 llama_model::~llama_model() {
     for (auto * lora : loras) {
-        llama_adapter_lora_free(lora);
+        delete lora;
     }
 }
 
