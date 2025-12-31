@@ -9304,6 +9304,7 @@ class AudioFlamingo3WhisperEncoderModel(WhisperEncoderModel):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
+
 @ModelBase.register("FalconH1ForCausalLM")
 class FalconH1Model(Mamba2Model):
     model_arch = gguf.MODEL_ARCH.FALCON_H1
