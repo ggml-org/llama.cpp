@@ -268,6 +268,142 @@ static void mul_mat_vec_q4_0_coalesced(
     }
 }
 
+// Q6_K coalesced kernel - processes 16 blocks per tile with word-major layout
+// Q6_K block: 256 elements, ql[128] + qh[64] + scales[16] + d[2] = 210 bytes
+// Coalesced tile: [ql: 2048 bytes][qh: 1024 bytes][scales: 256 bytes] = 3328 bytes
+static void mul_mat_vec_q6_k_coalesced(
+    const void * __restrict__ vx,
+    const void * __restrict__ vy,
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const sycl::nd_item<3> & nd_item)
+{
+    const auto sg = nd_item.get_sub_group();
+    const int sg_range = sg.get_group_linear_range();
+    const int workgroup_id = nd_item.get_group_linear_id();
+    const int sg_id = sg.get_group_linear_id();
+    const int lane_id = sg.get_local_linear_id();
+    const int row = workgroup_id * sg_range + sg_id;
+
+    if (row >= nrows) {
+        return;
+    }
+
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16
+    const int blocks_per_row = ncols / QK_K;
+    const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
+
+    // Thread mapping: 32 threads per warp
+    // Threads 0-15: blocks 0-15, first set of sub-blocks
+    // Threads 16-31: blocks 0-15, second set of sub-blocks
+    const int block_in_tile = lane_id % TILE_BLOCKS;
+    const int thread_half = lane_id / TILE_BLOCKS;  // 0 or 1
+
+    // Tile layout sizes
+    constexpr int ql_tile_bytes = TILE_BLOCKS * (QK_K / 2);   // 2048
+    constexpr int qh_tile_bytes = TILE_BLOCKS * (QK_K / 4);   // 1024
+    constexpr int sc_tile_bytes = TILE_BLOCKS * (QK_K / 16);  // 256
+    constexpr int tile_total = ql_tile_bytes + qh_tile_bytes + sc_tile_bytes;
+
+    // X base pointers (coalesced layout)
+    const uint8_t * x_base = (const uint8_t *)vx;
+    const int x_row_stride = tiles_per_row * tile_total;
+
+    // D values are after all coalesced quant data
+    const ggml_half * x_d = (const ggml_half *)(x_base + nrows * x_row_stride);
+
+    // Y pointers (standard Q8_1 format)
+    const block_q8_1 * y = (const block_q8_1 *)vy;
+
+    float partial_sum = 0.0f;
+
+    for (int tile = 0; tile < tiles_per_row; tile++) {
+        const int tile_base = row * x_row_stride + tile * tile_total;
+
+        // Pointers to this tile's arrays
+        const uint8_t * tile_ql = x_base + tile_base;
+        const uint8_t * tile_qh = tile_ql + ql_tile_bytes;
+        const int8_t * tile_sc = (const int8_t *)(tile_qh + qh_tile_bytes);
+
+        // Get super-block scale for this block
+        const int block_idx = row * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
+        const float d = x_d[block_idx];
+
+        // Process 8 Q8_1 sub-blocks per Q6_K block (256/32 = 8)
+        // Thread half determines which 4 sub-blocks to process
+        const int sub_start = thread_half * 4;
+
+        int sumi = 0;
+
+        for (int sub = 0; sub < 4; sub++) {
+            const int sub_idx = sub_start + sub;
+            const int y_block_idx = (tile * TILE_BLOCKS + block_in_tile) * 8 + sub_idx;
+
+            // Load Y data
+            const block_q8_1 * y_blk = &y[y_block_idx];
+
+            // Each sub-block covers 32 elements = 8 words of ql, 4 words of qh
+            // ql: 16 bytes (4 words) per sub-block position
+            const int ql_sub_offset = sub_idx * 16;  // 16 bytes per sub-block
+            const int qh_sub_offset = sub_idx * 8;   // 8 bytes per sub-block
+
+            // Load 16 bytes of ql for this sub-block (4 coalesced int loads)
+            int ql_vals[4];
+            for (int w = 0; w < 4; w++) {
+                const int word_idx = ql_sub_offset / 4 + w;
+                const int ql_offset = word_idx * (TILE_BLOCKS * 4) + block_in_tile * 4;
+                ql_vals[w] = *((const int *)(tile_ql + ql_offset));
+            }
+
+            // Load 8 bytes of qh for this sub-block (2 coalesced int loads)
+            int qh_vals[2];
+            for (int w = 0; w < 2; w++) {
+                const int word_idx = qh_sub_offset / 4 + w;
+                const int qh_offset = word_idx * (TILE_BLOCKS * 4) + block_in_tile * 4;
+                qh_vals[w] = *((const int *)(tile_qh + qh_offset));
+            }
+
+            // Load scale for this sub-block
+            // scales: 16 bytes total per block, divided by 16 sub-positions
+            const int sc_word_idx = sub_idx / 4;  // 0 or 1 for this half
+            const int sc_byte_pos = sub_idx % 4;
+            const int sc_offset = sc_word_idx * (TILE_BLOCKS * 4) + block_in_tile * 4 + sc_byte_pos;
+            const int8_t sc = tile_sc[sc_offset];
+
+            // Process 32 elements (4 ql words)
+            for (int j = 0; j < 32; j++) {
+                // Get ql nibble (4 bits)
+                const int ql_word = j / 8;
+                const int ql_byte = (j % 8) / 2;
+                const int ql_nibble_pos = j % 2;
+                const int ql_byte_val = (ql_vals[ql_word] >> (ql_byte * 8)) & 0xFF;
+                const int ql_4bit = (ql_byte_val >> (ql_nibble_pos * 4)) & 0x0F;
+
+                // Get qh bits (2 bits)
+                const int qh_word = j / 16;
+                const int qh_bit_pos = (j % 16) * 2;
+                const int qh_2bit = (qh_vals[qh_word] >> qh_bit_pos) & 0x03;
+
+                // Combine to 6-bit signed value
+                const int q6 = (ql_4bit | (qh_2bit << 4)) - 32;
+
+                // Accumulate with Y
+                sumi += q6 * y_blk->qs[j];
+            }
+        }
+
+        // Apply scale
+        partial_sum += d * sumi;
+    }
+
+    // Warp reduction
+    auto sum = sycl::reduce_over_group(sg, partial_sum, std::plus<>());
+
+    if (sg.leader()) {
+        dst[row] = sum;
+    }
+}
+
 template <int qk, int qi, typename block_q_t, int vdr, vec_dot_q_sycl_t vec_dot_q_sycl>
 static void mul_mat_vec_q(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
                           const int ncols, const int nrows, const sycl::nd_item<3> & item_ct1) {
