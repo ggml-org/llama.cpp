@@ -126,6 +126,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_31B_A3_5B:     return "31B.A3.5B";
         case LLM_TYPE_80B_A3B:       return "80B.A3B";
         case LLM_TYPE_100B_A6B:      return "100B.A6B";
+        case LLM_TYPE_102B_A12B:     return "102B.A12B";
         case LLM_TYPE_106B_A12B:     return "106B.A12B";
         case LLM_TYPE_230B_A10B:     return "230B.A10B";
         case LLM_TYPE_235B_A22B:     return "235B.A22B";
@@ -1778,6 +1779,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 switch (hparams.n_layer) {
                     case 47: type = LLM_TYPE_106B_A12B; break; // GLM-4.5-Air (46 layers + 1 NextN layer)
+                    case 48: type = LLM_TYPE_102B_A12B; break; // Solar Open
                     case 93: type = LLM_TYPE_355B_A32B; break; // GLM-4.5 (92 layers + 1 NextN layer)
                     default: type = LLM_TYPE_UNKNOWN;
                 }
@@ -3320,7 +3322,14 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.attn_norm_2_b = create_tensor(tn(LLM_TENSOR_ATTN_NORM_2, "bias",   i), {n_embd}, TENSOR_NOT_REQUIRED);
 
                         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, TENSOR_NOT_REQUIRED);
-                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, layer.ffn_gate ? n_ff : n_ff * 2}, 0);
+
+                        const auto tn_ffn_up_weight = tn(LLM_TENSOR_FFN_UP, "weight", i);
+                        ggml_tensor * t_ffn_up = ml.get_tensor_meta(tn_ffn_up_weight.str().c_str());
+                        const int64_t n_ffn_up = t_ffn_up ? t_ffn_up->ne[1] : n_ff;
+
+                        GGML_ASSERT(n_ffn_up == n_ff || n_ffn_up == n_ff * 2);
+                        layer.ffn_up   = create_tensor(tn_ffn_up_weight, {n_embd, n_ffn_up}, 0);
+                        layer.ffn_up_b = create_tensor(tn(LLM_TENSOR_FFN_UP, "bias", i), {n_ffn_up}, TENSOR_NOT_REQUIRED);
 
                         layer.ffn_down   = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
                         layer.ffn_down_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias",   i), {n_embd}, 0);
@@ -5206,9 +5215,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", i), { n_embd, n_embd_head_k * n_head }, flags);
                         layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", i), { n_embd, n_embd_k_gqa }, flags);
                         layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight", i), { n_embd, n_embd_v_gqa }, flags);
-                        layer.bq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "bias", i), { n_embd_head_k * n_head }, flags);
-                        layer.bk = create_tensor(tn(LLM_TENSOR_ATTN_K, "bias", i), { n_embd_k_gqa }, flags);
-                        layer.bv = create_tensor(tn(LLM_TENSOR_ATTN_V, "bias", i), { n_embd_v_gqa }, flags);
+                        layer.bq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "bias", i), { n_embd_head_k * n_head }, TENSOR_NOT_REQUIRED | flags);
+                        layer.bk = create_tensor(tn(LLM_TENSOR_ATTN_K, "bias", i), { n_embd_k_gqa }, TENSOR_NOT_REQUIRED | flags);
+                        layer.bv = create_tensor(tn(LLM_TENSOR_ATTN_V, "bias", i), { n_embd_v_gqa }, TENSOR_NOT_REQUIRED | flags);
 
                         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, flags);
 

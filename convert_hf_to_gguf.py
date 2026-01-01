@@ -1062,6 +1062,9 @@ class TextModel(ModelBase):
         if chkhsh == "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273":
             # ref: https://huggingface.co/alvarobartt/grok-2-tokenizer
             res = "grok-2"
+        if chkhsh == "b3d1dd861f1d4c5c0d2569ce36baf3f90fe8a102db3de50dd71ff860d91be3df":
+            # ref: https://huggingface.co/aari1995/German_Semantic_V3
+            res = "jina-v2-de"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -1230,6 +1233,9 @@ class TextModel(ModelBase):
         if chkhsh == "4a2e2abae11ca2b86d570fc5b44be4d5eb5e72cc8f22dd136a94b37da83ab665":
             # ref: https://huggingface.co/KORMo-Team/KORMo-tokenizer
             res = "kormo"
+        if chkhsh == "16389f0a1f51ee53e562ffd51c371dc508639ab0e4261502071836e50e223e91":
+            # ref: https://huggingface.co/upstage/Solar-Open-100B
+            res = "solar-open"
 
         if res is None:
             logger.warning("\n")
@@ -2486,6 +2492,7 @@ class StableLMModel(TextModel):
     "VLlama3ForCausalLM",
     "LlavaForConditionalGeneration",
     "VoxtralForConditionalGeneration",
+    "IQuestCoderForCausalLM",
     "LlamaModel")
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
@@ -3503,7 +3510,7 @@ class QwenModel(TextModel):
         self._set_vocab_qwen()
 
 
-@ModelBase.register("Qwen2Model", "Qwen2ForCausalLM", "Qwen2AudioForConditionalGeneration", "KORMoForCausalLM")
+@ModelBase.register("Qwen2Model", "Qwen2ForCausalLM", "Qwen2AudioForConditionalGeneration", "KORMoForCausalLM", "AudioFlamingo3ForConditionalGeneration")
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
@@ -5284,13 +5291,14 @@ class BertModel(TextModel):
         self.gguf_writer.add_token_type_count(self.hparams.get("type_vocab_size", 1))
 
         # convert to phantom space vocab
-        def phantom(tok):
-            if tok.startswith("[") and tok.endswith("]"):
+        def phantom(tok, toktype):
+            if toktype == gguf.TokenType.CONTROL:
                 return tok
             if tok.startswith("##"):
                 return tok[2:]
             return "\u2581" + tok
-        tokens = list(map(phantom, tokens))
+        assert len(tokens) == len(toktypes)
+        tokens = list(map(phantom, tokens, toktypes))
 
         # add vocab to gguf
         self.gguf_writer.add_tokenizer_model("bert")
@@ -9292,6 +9300,19 @@ class VoxtralWhisperEncoderModel(WhisperEncoderModel):
         self.gguf_writer.add_audio_stack_factor(4) # == intermediate_size // hidden_size
 
 
+@ModelBase.register("AudioFlamingo3ForConditionalGeneration")
+class AudioFlamingo3WhisperEncoderModel(WhisperEncoderModel):
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MUSIC_FLAMINGO)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".conv" in name and ".weight" in name:
+            # Was trained in BF16, being safe, avoiding quantizing to FP16
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+
 @ModelBase.register("FalconH1ForCausalLM")
 class FalconH1Model(Mamba2Model):
     model_arch = gguf.MODEL_ARCH.FALCON_H1
@@ -10602,6 +10623,26 @@ class JanusProVisionModel(MmprojModel):
             return [(self.map_tensor_name(name), data_torch)]
 
         return []
+
+
+@ModelBase.register("SolarOpenForCausalLM")
+class SolarOpenModel(Glm4MoeModel):
+    model_arch = gguf.MODEL_ARCH.GLM4_MOE
+
+    def set_vocab(self):
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        tokens, toktypes, tokpre = self.get_vocab_base()
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|endoftext|>"])
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<unk>"])
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|startoftext|>"])
+        special_vocab.add_to_gguf(self.gguf_writer)
 
 
 ###### CONVERSION LOGIC ######

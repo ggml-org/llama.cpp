@@ -355,6 +355,7 @@ struct llm_tokenizer_bpe : llm_tokenizer {
             case LLAMA_VOCAB_PRE_TYPE_STABLELM2:
             case LLAMA_VOCAB_PRE_TYPE_QWEN2:
             case LLAMA_VOCAB_PRE_TYPE_HUNYUAN:
+            case LLAMA_VOCAB_PRE_TYPE_SOLAR_OPEN:
                 regex_exprs = {
                     // original regex from tokenizer.json
                     // "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
@@ -2015,6 +2016,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 tokenizer_pre == "minimax-m2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_MINIMAX_M2;
                 clean_spaces = false;
+            } else if (
+                tokenizer_pre == "solar-open") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_SOLAR_OPEN;
+                clean_spaces = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
@@ -2358,6 +2363,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     || t.first == "<|end|>"
                     || t.first == "<|return|>" // o200k_harmony
                     || t.first == "<|call|>"   // o200k_harmony
+                    || t.first == "<|flush|>"  // solar-open
+                    || t.first == "<|calls|>"  // solar-open
                     || t.first == "<end_of_turn>"
                     || t.first == "<|endoftext|>"
                     || t.first == "<|eom_id|>"
@@ -2404,13 +2411,14 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             LLAMA_LOG_WARN("%s: special_eom_id is not in special_eog_ids - the tokenizer config may be incorrect\n", __func__);
         }
 
-        // TODO: workaround for o200k_harmony tokenizer: the "<|end|>" token should not be EOG
-        //       we don't have a good way to detect this, so for now, if we have "<|return|>" and "<|call|>" tokens,
+        // TODO: workaround for o200k_harmony and solar-open tokenizer: the "<|end|>" token should not be EOG
+        //       we don't have a good way to detect this, so for now, if we have "<|return|>" and "<|call|>" tokens ("<|calls|>" and "<|flush|>" for solar-open),
         //       we remove the "<|end|>" token from the EOG list
         {
             bool has_return = false;
             bool has_call   = false;
             bool has_end    = false;
+            bool has_flush  = false;
 
             llama_token end_id = LLAMA_TOKEN_NULL;
 
@@ -2420,18 +2428,20 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
                 if (id_to_token[tid].text == "<|return|>") {
                     has_return = true;
-                } else if (id_to_token[tid].text == "<|call|>") {
+                } else if (id_to_token[tid].text == "<|call|>" || id_to_token[tid].text == "<|calls|>") {
                     has_call = true;
+                } else if (id_to_token[tid].text == "<|flush|>") {
+                    has_flush = true;
                 } else if (id_to_token[tid].text == "<|end|>") {
                     has_end = true;
                     end_id = tid;
                 }
             }
 
-            if (has_return && has_call && has_end) {
+            if ((has_return && has_call && has_end) || (has_call && has_flush && has_end)) {
                 special_eog_ids.erase(end_id);
                 id_to_token[end_id].attr = LLAMA_TOKEN_ATTR_USER_DEFINED;
-                LLAMA_LOG_WARN("%s: special_eog_ids contains both '<|return|>' and '<|call|>' tokens, removing '<|end|>' token from EOG list\n", __func__);
+                LLAMA_LOG_WARN("%s: special_eog_ids contains both '<|return|>' and '<|call|>', or '<|calls|>' and '<|flush|>' tokens, removing '<|end|>' token from EOG list\n", __func__);
             }
         }
     }

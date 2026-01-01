@@ -1158,6 +1158,7 @@ struct test_case {
     }
 
     virtual bool run_whole_graph() { return false; }
+    virtual std::vector<ggml_tensor *> fusion_test_nodes() { return {}; }
 
     ggml_cgraph * gf = nullptr;
     ggml_cgraph * gb = nullptr;
@@ -1391,7 +1392,13 @@ struct test_case {
             GGML_UNUSED(index);
         };
 
-        const bool cmp_ok = ggml_backend_compare_graph_backend(backend1, backend2, gf, callback, &ud, run_whole_graph() ? out : nullptr);
+        std::vector<ggml_tensor *> fused_nodes_to_verify = fusion_test_nodes();
+        if (fused_nodes_to_verify.size() == 0 && run_whole_graph()) {
+            fused_nodes_to_verify.push_back(out);
+        }
+        const bool cmp_ok = ggml_backend_compare_graph_backend(backend1, backend2, gf, callback, &ud,
+                                                               run_whole_graph() ? fused_nodes_to_verify.data() : nullptr,
+                                                               fused_nodes_to_verify.size());
 
         ggml_backend_buffer_free(buf);
 
@@ -5180,6 +5187,8 @@ struct test_topk_moe : public test_case {
     const bool bias_probs;
     const MoeGatingFunc gating_func;
     const float scale_w;
+    ggml_tensor * weights {};
+    ggml_tensor * selected_experts {};
 
     test_topk_moe(std::array<int64_t, 4> ne              = { 10, 5, 1, 1 },
                   int                    n_expert_used   = 1,
@@ -5217,16 +5226,16 @@ struct test_topk_moe : public test_case {
 
         ggml_tensor * selection_probs = probs;
         if (bias_probs) {
-            ggml_tensor * exp_probs_b = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne.data());
+            ggml_tensor * exp_probs_b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]);
             ggml_set_name(exp_probs_b, "exp_probs_b");
             selection_probs = ggml_add(ctx, probs, exp_probs_b);
             ggml_set_name(selection_probs, "selection_probs");
         }
 
-        ggml_tensor * selected_experts = ggml_argsort_top_k(ctx, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
+        selected_experts = ggml_argsort_top_k(ctx, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
         ggml_set_name(selected_experts, "selected_experts");
 
-        ggml_tensor * weights = ggml_get_rows(ctx, ggml_reshape_3d(ctx, probs, 1, n_expert, n_tokens), selected_experts); // [1, n_expert_used, n_tokens]
+        weights = ggml_get_rows(ctx, ggml_reshape_3d(ctx, probs, 1, n_expert, n_tokens), selected_experts); // [1, n_expert_used, n_tokens]
         ggml_set_name(weights, "weights");
 
         if (gating_func == GATING_FUNC_SOFTMAX_WEIGHT) {
@@ -5251,6 +5260,21 @@ struct test_topk_moe : public test_case {
 
         ggml_set_name(weights, "weights");
         return weights;
+    }
+    // Verify two outputs
+    std::vector<ggml_tensor *> fusion_test_nodes() override { return { selected_experts, weights }; }
+
+    // allow output in arbitrary order
+    double err(const float * a, const float * b, size_t n) override {
+        std::vector<float> a2(n);
+        std::vector<float> b2(n);
+        for (size_t i = 0; i < n; ++i) {
+            a2[i] = a[i];
+            b2[i] = b[i];
+        }
+        std::sort(a2.begin(), a2.end());
+        std::sort(b2.begin(), b2.end());
+        return nmse(a2.data(), b2.data(), n);
     }
 };
 
