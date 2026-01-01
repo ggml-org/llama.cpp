@@ -2281,6 +2281,146 @@ template [[host_name("kernel_soft_max_f32")]]   kernel kernel_soft_max_t   kerne
 template [[host_name("kernel_soft_max_f16_4")]] kernel kernel_soft_max_4_t kernel_soft_max_4<half4>;
 template [[host_name("kernel_soft_max_f32_4")]] kernel kernel_soft_max_4_t kernel_soft_max_4<float4>;
 
+template <typename T>
+kernel void kernel_cross_entropy_loss(
+        constant ggml_metal_kargs_cross_entropy_loss & args,
+        device const float * logits,
+        device const float * labels,
+        device       float * dst,
+        threadgroup  float * buf [[threadgroup(0)]],
+        uint tgpig[[threadgroup_position_in_grid]],
+        uint tpitg[[thread_position_in_threadgroup]],
+        uint  sgitg[[simdgroup_index_in_threadgroup]],
+        uint  tiisg[[thread_index_in_simdgroup]],
+        uint  tptg[[threads_per_threadgroup]]) {
+
+    const int row = tgpig;
+    device const float * logits_row = logits + row * args.ne00;
+    device const float * labels_row = labels + row * args.ne00;
+
+    float lmax = - INFINITY;
+    for (int i = tpitg; i < args.ne00; i+= tptg){
+        lmax = MAX(lmax, logits_row[i]);
+    }
+    float max_val = simd_max(lmax);
+    if (tptg > N_SIMDWIDTH) {
+        if (sgitg == 0) buf[tiisg] = -INFINITY;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (tiisg == 0) buf[sgitg] = max_val;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        max_val = buf[tiisg];
+        max_val = simd_max(max_val);
+    }
+
+    float lsum = 0.0f;
+    for (int i = tpitg; i < args.ne00; i += tptg){
+        const float exp_val = exp(logits_row[i] - max_val);
+        lsum += exp_val;
+        dst[i] = exp_val;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float sum = simd_sum(lsum);
+    if (tptg > N_SIMDWIDTH){
+        if (sgitg == 0) buf[tiisg] = 0.0f;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (tiisg == 0) buf[sgitg] = sum;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        sum = buf[tiisg];
+        sum = simd_sum(sum);
+    }
+    const float log_sum = log(sum);
+    float lloss = 0.0f;
+    for (int i = tpitg; i < args.ne00; i += tptg){
+        const float log_softmax_i = logits_row[i] - max_val - log_sum;
+        lloss += log_softmax_i * logits_row[i];
+    }
+
+    float loss = simd_sum(lloss);
+    if (tptg > N_SIMDWIDTH) {
+        if (sgitg == 0) buf[tiisg] = 0.0f;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (tiisg == 0) buf[sgitg] = loss;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        loss = buf[tiisg];
+        loss = simd_sum(loss);
+    }
+    if (tpitg == 0) {
+        dst[row] = -loss / args.nrows;
+    }
+}
+
+
+template <typename T>
+kernel void kernel_cross_entropy_loss_back(
+        constant ggml_metal_kargs_cross_entropy_loss_back & args,
+        device const float * grad,
+        device const float * logits, // src0
+        device const float * labels, // src1
+        device       float * dst,    // output
+        threadgroup  float * buf [[threadgroup(0)]],
+        uint tgpig[[threadgroup_position_in_grid]],
+        uint tpitg[[thread_position_in_threadgroup]],
+        uint sgitg[[simdgroup_index_in_threadgroup]],
+        uint tiisg[[thread_index_in_simdgroup]],
+        uint tptg[[threads_per_threadgroup]]){
+
+    const int row = tpitg;
+
+    device const float * logits_row = logits + row * args.ne00;
+    device const float * labels_row = labels + row * args.ne00;
+    device       float * dst_row    = dst    + row * args.ne00;
+
+    // find max
+
+    float lmax = - INFINITY;
+    for (int i = tpitg; i < args.ne00; i+= tptg){
+        lmax = MAX(lmax, logits_row[i]);
+    }
+    float max_val = simd_max(lmax);
+    if (tptg > N_SIMDWIDTH) {
+        if (sgitg == 0) buf[tiisg] = -INFINITY;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (tiisg == 0) buf[sgitg] = max_val;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        max_val = buf[tiisg];
+        max_val = simd_max(max_val);
+    }
+
+    float lsum = 0.0f;
+    for (int i = tpitg; i < args.ne00; i += tptg){
+        const float exp_val = exp(logits_row[i] - max_val);
+        lsum += exp_val;
+        dst_row[i] = exp_val;
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    float sum = simd_sum(lsum);
+    if (tptg > N_SIMDWIDTH){
+        if (sgitg == 0) buf[tiisg] = 0.0f;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        if (tiisg == 0) buf[sgitg] = sum;
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        sum = buf[tiisg];
+        sum = simd_sum(sum);
+    }
+    const float inv_sum = 1.0f / sum;
+    const float d_by_nrows = grad[0] / args.nrows;
+
+    for (int i = tpitg; i < args.ne00; i += tptg){
+        const float softmax_i = dst_row[i] * inv_sum; // exp(logits - max)/ sum(exp(logits - val))
+        dst_row[i] = (softmax_i - labels_row[i]) * d_by_nrows;
+    }
+
+}
+
+typedef decltype(kernel_cross_entropy_loss<float>)      kernel_cross_entropy_loss_t;
+typedef decltype(kernel_cross_entropy_loss_back<float>) kernel_cross_entropy_loss_back_t;
+
+template [[host_name("kernel_cross_entropy_loss_f32")]]
+kernel kernel_cross_entropy_loss_t kernel_cross_entropy_loss<float>;
+
+template [[host_name("kernel_cross_entropy_loss_back_f32")]]
+kernel kernel_cross_entropy_loss_back_t kernel_cross_entropy_loss_back<float>;
+
 // ref: ggml.c:ggml_compute_forward_ssm_conv_f32
 kernel void kernel_ssm_conv_f32_f32(
         constant ggml_metal_kargs_ssm_conv & args,
