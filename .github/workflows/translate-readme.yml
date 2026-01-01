@@ -1,0 +1,87 @@
+name: Translate Readme
+
+on:
+  workflow_dispatch:
+    inputs:
+      languages:
+        description: 'Languages to translate (comma-separated)'
+        required: false
+        default: 'fr,de,es,ja,zh,ru,pt,ko,hi'
+  push:
+    paths:
+      - 'README.md'
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            LANGS="${{ github.event.inputs.languages }}"
+          else
+            LANGS="fr,de,es,ja,zh,ru,pt,ko,hi"
+          fi
+          # Create JSON array for matrix
+          echo "matrix=$(echo $LANGS | jq -R -c 'split(",")')" >> $GITHUB_OUTPUT
+
+  translate:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        lang: ${{ fromJson(needs.prepare.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run README Translator
+      # Use @latest for the most up-to-date release, or @main for the bleeding edge
+        uses: DataBoySu/databoysu-readme-translator@latest
+        with:
+          lang: ${{ matrix.lang }}
+
+      - name: Uploading Translation Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: locale-${{ matrix.lang }}
+          path: locales/README.${{ matrix.lang }}.md
+
+  commit:
+    needs: translate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref || github.ref_name }}
+          token: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Pull latest changes
+        run: git pull origin ${{ github.head_ref || github.ref_name }} --rebase
+
+      - name: Download Translations
+        uses: actions/download-artifact@v4
+        with:
+          pattern: locale-*
+          path: locales
+          merge-multiple: true
+
+      - name: Navigation Bar
+        uses: DataBoySu/databoysu-readme-translator@latest
+        with:
+          mode: navbar
+
+      - name: Commit Changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "✨💖 docs: updated translations & navbar! 🌸✨"
+          # To use your own avatar, uncomment and set your name/email:
+          # commit_author: "Your Name <your-email@example.com>"
+          file_pattern: 'README.md locales/*.md'
