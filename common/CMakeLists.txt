@@ -99,17 +99,13 @@ if (LLAMA_CURL)
     # Use curl to download model url
     find_package(CURL)
     if (NOT CURL_FOUND)
-        message(WARNING "Could NOT find CURL. Falling back to cpp-httplib. Hint: to explicitly disable CURL, set -DLLAMA_CURL=OFF")
-        set(LLAMA_CURL OFF)
-    else()
-        target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_CURL)
-        include_directories(${CURL_INCLUDE_DIRS})
-        set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} ${CURL_LIBRARIES})
+        message(FATAL_ERROR "Could NOT find CURL. Hint: to disable this feature, set -DLLAMA_CURL=OFF")
     endif()
-endif()
-
-if (NOT LLAMA_CURL AND LLAMA_HTTPLIB)
-    # Use cpp-httplib if CURL is disabled or not found
+    target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_CURL)
+    include_directories(${CURL_INCLUDE_DIRS})
+    set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} ${CURL_LIBRARIES})
+elseif (LLAMA_HTTPLIB)
+    # otherwise, use cpp-httplib
     target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_HTTPLIB)
     set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} cpp-httplib)
 endif()
