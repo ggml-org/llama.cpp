@@ -1,6 +1,5 @@
-#include "chat-auto-parser.h"
 #include "chat-auto-parser-helpers.h"
-
+#include "chat-auto-parser.h"
 #include "log.h"
 
 #include <minja/chat-template.hpp>
@@ -29,10 +28,10 @@ TemplateAnalysisResult TemplateAnalyzer::analyze_template(const minja::chat_temp
         // Known reasoning end marker patterns that might be embedded in tool_section_start
         std::vector<std::pair<std::string, std::string>> reasoning_patterns = {
             { "<|START_THINKING|>", "<|END_THINKING|>" },
-            { "<|START_THOUGHT|>", "<|END_THOUGHT|>" },
-            { "<|START_REASON|>", "<|END_REASON|>" },
-            { "<think>", "</think>" },
-            { "<thinking>", "</thinking>" },
+            { "<|START_THOUGHT|>",  "<|END_THOUGHT|>"  },
+            { "<|START_REASON|>",   "<|END_REASON|>"   },
+            { "<think>",            "</think>"         },
+            { "<thinking>",         "</thinking>"      },
         };
 
         for (const auto & [start_marker, end_marker] : reasoning_patterns) {
@@ -41,23 +40,23 @@ TemplateAnalysisResult TemplateAnalyzer::analyze_template(const minja::chat_temp
                 // Found reasoning end marker in tool_section_start
                 // Extract it and clean up tool_section_start
                 result.content.reasoning_start = start_marker;
-                result.content.reasoning_end = end_marker;
-                result.content.reasoning_mode = ContentStructure::REASONING_OPTIONAL;
+                result.content.reasoning_end   = end_marker;
+                result.content.reasoning_mode  = ContentStructure::REASONING_OPTIONAL;
 
                 // Clean up tool_section_start: remove everything before and including the end marker
                 size_t after_end = end_pos + end_marker.length();
                 if (after_end < result.tools.tool_section_start.length()) {
                     result.tools.tool_section_start = result.tools.tool_section_start.substr(after_end);
                     // Trim leading whitespace
-                    size_t first_non_ws = result.tools.tool_section_start.find_first_not_of(" \t\n\r");
+                    size_t first_non_ws             = result.tools.tool_section_start.find_first_not_of(" \t\n\r");
                     if (first_non_ws != std::string::npos && first_non_ws > 0) {
                         result.tools.tool_section_start = result.tools.tool_section_start.substr(first_non_ws);
                     }
                 }
 
                 LOG_DBG("Post-processing: Extracted reasoning markers from tool_section_start\n");
-                LOG_DBG("  reasoning_start: '%s', reasoning_end: '%s'\n",
-                        result.content.reasoning_start.c_str(), result.content.reasoning_end.c_str());
+                LOG_DBG("  reasoning_start: '%s', reasoning_end: '%s'\n", result.content.reasoning_start.c_str(),
+                        result.content.reasoning_end.c_str());
                 LOG_DBG("  cleaned tool_section_start: '%s'\n", result.tools.tool_section_start.c_str());
                 break;
             }
@@ -103,9 +102,9 @@ ContentStructure TemplateAnalyzer::analyze_content_structure(const minja::chat_t
     // Step 3: Determine reasoning mode (NONE, OPTIONAL, FORCED_OPEN)
     minja::chat_template_inputs inputs;
     inputs.messages = {
-        {{ "role", "user" }, { "content", "Hello" }}
+        { { "role", "user" }, { "content", "Hello" } }
     };
-    inputs.add_generation_prompt = true;
+    inputs.add_generation_prompt            = true;
     inputs.extra_context["enable_thinking"] = true;
 
     std::string prompt;
@@ -118,8 +117,8 @@ ContentStructure TemplateAnalyzer::analyze_content_structure(const minja::chat_t
 
     cs.reasoning_mode = detect_reasoning_mode(tmpl, cs, prompt);
 
-    LOG_DBG("Phase 1 complete: reasoning_mode=%d, content_mode=%d\n",
-            static_cast<int>(cs.reasoning_mode), static_cast<int>(cs.content_mode));
+    LOG_DBG("Phase 1 complete: reasoning_mode=%d, content_mode=%d\n", static_cast<int>(cs.reasoning_mode),
+            static_cast<int>(cs.content_mode));
 
     return cs;
 }
@@ -129,13 +128,13 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
 
     // Method 1: Compare outputs with reasoning_content field present vs absent
     json reasoning_msg = {
-        { "role",              "assistant" },
+        { "role",              "assistant"      },
         { "content",           "CONTENT_MARKER" },
         { "reasoning_content", "THOUGHT_MARKER" }
     };
 
     json base_msg = {
-        { "role",    "assistant" },
+        { "role",    "assistant"      },
         { "content", "CONTENT_MARKER" }
     };
 
@@ -167,7 +166,7 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
         if (thought_pos != std::string::npos && content_pos != std::string::npos && content_pos > thought_pos) {
             // Extract what's between THOUGHT_MARKER and CONTENT_MARKER as the end marker
             size_t thought_end = thought_pos + strlen("THOUGHT_MARKER");
-            cs.reasoning_end = reasoning_output.substr(thought_end, content_pos - thought_end);
+            cs.reasoning_end   = reasoning_output.substr(thought_end, content_pos - thought_end);
 
             // Find what's before THOUGHT_MARKER by comparing with base_output
             size_t diff_start = 0;
@@ -193,12 +192,12 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
         LOG_DBG("Method 1 failed, trying Method 2 (enable_thinking toggle)\n");
 
         json user_msg = {
-            { "role", "user" },
+            { "role",    "user"  },
             { "content", "Hello" }
         };
 
         minja::chat_template_inputs inputs_prompt;
-        inputs_prompt.messages = { user_msg };
+        inputs_prompt.messages              = { user_msg };
         inputs_prompt.add_generation_prompt = true;
 
         inputs_prompt.extra_context["enable_thinking"] = false;
@@ -230,7 +229,7 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
             // Only use if it looks like a tag
             if (diff.find('<') != std::string::npos || diff.find('[') != std::string::npos) {
                 cs.reasoning_start = diff;
-                cs.reasoning_end = create_closing_tag(diff);
+                cs.reasoning_end   = create_closing_tag(diff);
                 trim_whitespace(cs.reasoning_start);
                 trim_whitespace(cs.reasoning_end);
 
@@ -245,13 +244,13 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
         LOG_DBG("Method 2 failed, trying Method 3 (prompt ending with open tag)\n");
 
         json user_msg = {
-            { "role", "user" },
+            { "role",    "user"  },
             { "content", "Hello" }
         };
 
         minja::chat_template_inputs inputs_prompt;
-        inputs_prompt.messages = { user_msg };
-        inputs_prompt.add_generation_prompt = true;
+        inputs_prompt.messages                         = { user_msg };
+        inputs_prompt.add_generation_prompt            = true;
         inputs_prompt.extra_context["enable_thinking"] = true;
 
         std::string prompt;
@@ -264,7 +263,7 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
         if (!prompt.empty()) {
             // Save trailing whitespace before trimming
             std::string trailing_ws;
-            size_t end_pos = prompt.length();
+            size_t      end_pos = prompt.length();
             while (end_pos > 0 && (prompt[end_pos - 1] == '\n' || prompt[end_pos - 1] == '\r')) {
                 trailing_ws = prompt[end_pos - 1] + trailing_ws;
                 end_pos--;
@@ -273,7 +272,7 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
             trim_trailing_newlines(prompt);
 
             // Find the last tag in the prompt
-            size_t last_open_angle = prompt.rfind('<');
+            size_t last_open_angle  = prompt.rfind('<');
             size_t last_close_angle = prompt.rfind('>');
 
             // Check for closed tags at the end
@@ -283,10 +282,10 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
 
                 // Check if this looks like a reasoning tag (not a role marker)
                 std::vector<std::string> blacklisted_tags = {
-                    "<|CHATBOT_TOKEN|>", "<|SYSTEM_TOKEN|>", "<|USER_TOKEN|>", "<|ASSISTANT_TOKEN|>",
-                    "<|im_start|>", "<|im_end|>", "<|start_of_role|>", "<|end_of_role|>",
-                    "<|end_of_text|>", "<|end|>", "<|assistant|>", "<|user|>", "<|system|>",
-                    "<assistant>", "<user>", "<system>"
+                    "<|CHATBOT_TOKEN|>", "<|SYSTEM_TOKEN|>",  "<|USER_TOKEN|>",  "<|ASSISTANT_TOKEN|>", "<|im_start|>",
+                    "<|im_end|>",        "<|start_of_role|>", "<|end_of_role|>", "<|end_of_text|>",     "<|end|>",
+                    "<|assistant|>",     "<|user|>",          "<|system|>",      "<assistant>",         "<user>",
+                    "<system>"
                 };
 
                 bool is_blacklisted = false;
@@ -301,8 +300,8 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
                 std::string lower_tag = tag;
                 std::transform(lower_tag.begin(), lower_tag.end(), lower_tag.begin(), ::tolower);
                 bool looks_like_reasoning = lower_tag.find("think") != std::string::npos ||
-                                           lower_tag.find("reason") != std::string::npos ||
-                                           lower_tag.find("thought") != std::string::npos;
+                                            lower_tag.find("reason") != std::string::npos ||
+                                            lower_tag.find("thought") != std::string::npos;
 
                 if (!is_blacklisted && looks_like_reasoning) {
                     // Check if the detected tag is a close tag (starts with </)
@@ -314,10 +313,10 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
                         // Derive the open tag by removing the '/'
                         std::string tag_name = extract_tag_name(tag);  // Returns "/think" for </think>
                         if (!tag_name.empty() && tag_name[0] == '/') {
-                            tag_name = tag_name.substr(1);  // Remove leading '/'
+                            tag_name = tag_name.substr(1);             // Remove leading '/'
                         }
                         cs.reasoning_start = "<" + tag_name + ">";
-                        cs.reasoning_end = tag;
+                        cs.reasoning_end   = tag;
                         trim_whitespace(cs.reasoning_start);
                         trim_whitespace(cs.reasoning_end);
 
@@ -331,7 +330,7 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
                     } else {
                         // Standard case: open tag at the end (e.g., <think>)
                         cs.reasoning_start = tag + trailing_ws;
-                        cs.reasoning_end = create_closing_tag(tag) + trailing_ws;
+                        cs.reasoning_end   = create_closing_tag(tag) + trailing_ws;
                         trim_whitespace(cs.reasoning_start);
                         trim_whitespace(cs.reasoning_end);
 
@@ -349,13 +348,13 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
         LOG_DBG("Method 3 failed, trying Method 4 (adjacent tag pairs with common content)\n");
 
         json user_msg = {
-            { "role", "user" },
+            { "role",    "user"  },
             { "content", "Hello" }
         };
 
         minja::chat_template_inputs inputs_prompt;
-        inputs_prompt.messages = { user_msg };
-        inputs_prompt.add_generation_prompt = true;
+        inputs_prompt.messages                         = { user_msg };
+        inputs_prompt.add_generation_prompt            = true;
         // Try with thinking disabled - templates may output empty thinking blocks
         inputs_prompt.extra_context["enable_thinking"] = false;
 
@@ -377,58 +376,71 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
             // Pattern: opening tag followed by closing tag with same keyword
             std::vector<std::tuple<std::string, std::string, std::string>> tag_patterns = {
                 // (opening pattern, closing pattern, keyword to match)
-                { "<|START_", "<|END_", "THINKING" },
-                { "<|START_", "<|END_", "THOUGHT" },
-                { "<|START_", "<|END_", "REASON" },
-                { "<think>", "</think>", "" },
-                { "<Think>", "</Think>", "" },
-                { "<THINK>", "</THINK>", "" },
-                { "[think]", "[/think]", "" },
-                { "[THINK]", "[/THINK]", "" },
-                { "<thinking>", "</thinking>", "" },
-                { "<THINKING>", "</THINKING>", "" },
-                { "<|think|>", "<|/think|>", "" },
+                { "<|START_",   "<|END_",      "THINKING" },
+                { "<|START_",   "<|END_",      "THOUGHT"  },
+                { "<|START_",   "<|END_",      "REASON"   },
+                { "<think>",    "</think>",    ""         },
+                { "<Think>",    "</Think>",    ""         },
+                { "<THINK>",    "</THINK>",    ""         },
+                { "[think]",    "[/think]",    ""         },
+                { "[THINK]",    "[/THINK]",    ""         },
+                { "<thinking>", "</thinking>", ""         },
+                { "<THINKING>", "</THINKING>", ""         },
+                { "<|think|>",  "<|/think|>",  ""         },
             };
 
             for (const auto & [open_prefix, close_prefix, keyword] : tag_patterns) {
                 size_t open_pos = prompt.find(open_prefix);
-                if (open_pos == std::string::npos) continue;
+                if (open_pos == std::string::npos) {
+                    continue;
+                }
 
                 std::string start_tag, end_tag;
 
                 if (!keyword.empty()) {
                     // Pattern like <|START_THINKING|><|END_THINKING|>
-                    std::string full_open = open_prefix + keyword;
-                    size_t full_open_pos = prompt.find(full_open);
-                    if (full_open_pos == std::string::npos) continue;
+                    std::string full_open     = open_prefix + keyword;
+                    size_t      full_open_pos = prompt.find(full_open);
+                    if (full_open_pos == std::string::npos) {
+                        continue;
+                    }
 
                     // Find the end of this tag (look for |> or >)
                     size_t tag_end = prompt.find("|>", full_open_pos + full_open.length());
                     if (tag_end == std::string::npos) {
                         tag_end = prompt.find(">", full_open_pos + full_open.length());
                     }
-                    if (tag_end == std::string::npos) continue;
+                    if (tag_end == std::string::npos) {
+                        continue;
+                    }
 
-                    start_tag = prompt.substr(full_open_pos, tag_end - full_open_pos + (prompt[tag_end] == '|' ? 2 : 1));
+                    start_tag =
+                        prompt.substr(full_open_pos, tag_end - full_open_pos + (prompt[tag_end] == '|' ? 2 : 1));
 
                     // Look for the corresponding end tag
                     std::string expected_close = close_prefix + keyword;
-                    size_t close_pos = prompt.find(expected_close, tag_end);
-                    if (close_pos == std::string::npos) continue;
+                    size_t      close_pos      = prompt.find(expected_close, tag_end);
+                    if (close_pos == std::string::npos) {
+                        continue;
+                    }
 
                     // Find end of close tag
                     size_t close_end = prompt.find("|>", close_pos + expected_close.length());
                     if (close_end == std::string::npos) {
                         close_end = prompt.find(">", close_pos + expected_close.length());
                     }
-                    if (close_end == std::string::npos) continue;
+                    if (close_end == std::string::npos) {
+                        continue;
+                    }
 
                     end_tag = prompt.substr(close_pos, close_end - close_pos + (prompt[close_end] == '|' ? 2 : 1));
                 } else {
                     // Simple pattern like <think></think>
-                    start_tag = open_prefix;
+                    start_tag        = open_prefix;
                     size_t close_pos = prompt.find(close_prefix, open_pos + start_tag.length());
-                    if (close_pos == std::string::npos) continue;
+                    if (close_pos == std::string::npos) {
+                        continue;
+                    }
                     end_tag = close_prefix;
                 }
 
@@ -436,9 +448,9 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
                 size_t start_end_pos = prompt.find(start_tag) + start_tag.length();
                 size_t end_start_pos = prompt.find(end_tag, start_end_pos);
                 if (end_start_pos != std::string::npos) {
-                    std::string between = prompt.substr(start_end_pos, end_start_pos - start_end_pos);
+                    std::string between         = prompt.substr(start_end_pos, end_start_pos - start_end_pos);
                     // Allow only whitespace between the tags (empty thinking block)
-                    bool only_whitespace = true;
+                    bool        only_whitespace = true;
                     for (char c : between) {
                         if (!std::isspace(static_cast<unsigned char>(c))) {
                             only_whitespace = false;
@@ -448,7 +460,7 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
 
                     if (only_whitespace) {
                         cs.reasoning_start = start_tag;
-                        cs.reasoning_end = end_tag;
+                        cs.reasoning_end   = end_tag;
                         LOG_DBG("Method 4: Found reasoning markers via adjacent tag pairs\n");
                         LOG_DBG("  start: '%s', end: '%s'\n", cs.reasoning_start.c_str(), cs.reasoning_end.c_str());
                         break;
@@ -468,18 +480,18 @@ void TemplateAnalyzer::detect_content_markers(const minja::chat_template & tmpl,
 
     // Render template with a unique content marker
     json user_msg = {
-        { "role", "user" },
+        { "role",    "user"  },
         { "content", "Hello" }
     };
     json assistant_msg = {
-        { "role", "assistant" },
+        { "role",    "assistant"            },
         { "content", "UNIQUE_CONTENT_12345" }
     };
 
     minja::chat_template_inputs inputs;
-    inputs.messages = { user_msg, assistant_msg };
+    inputs.messages                         = { user_msg, assistant_msg };
     // Try with thinking enabled first (some templates only wrap content when reasoning is present)
-    inputs.extra_context["thinking"] = true;
+    inputs.extra_context["thinking"]        = true;
     inputs.extra_context["enable_thinking"] = true;
 
     std::string output_with_thinking;
@@ -490,7 +502,7 @@ void TemplateAnalyzer::detect_content_markers(const minja::chat_template & tmpl,
     }
 
     // Also render without thinking
-    inputs.extra_context["thinking"] = false;
+    inputs.extra_context["thinking"]        = false;
     inputs.extra_context["enable_thinking"] = false;
 
     std::string output_no_thinking;
@@ -504,32 +516,32 @@ void TemplateAnalyzer::detect_content_markers(const minja::chat_template & tmpl,
     auto find_content_markers = [&](const std::string & output) -> std::pair<std::string, std::string> {
         size_t marker_pos = output.find("UNIQUE_CONTENT_12345");
         if (marker_pos == std::string::npos) {
-            return {"", ""};
+            return { "", "" };
         }
 
         // Known content marker patterns
         std::vector<std::pair<std::string, std::string>> patterns = {
             { "<|START_RESPONSE|>", "<|END_RESPONSE|>" },
-            { "<|response|>", "<|/response|>" },
-            { "<response>", "</response>" },
-            { "<output>", "</output>" },
-            { "<answer>", "</answer>" },
+            { "<|response|>",       "<|/response|>"    },
+            { "<response>",         "</response>"      },
+            { "<output>",           "</output>"        },
+            { "<answer>",           "</answer>"        },
         };
 
         for (const auto & [start_pattern, end_pattern] : patterns) {
             size_t start_pos = output.rfind(start_pattern, marker_pos);
             if (start_pos != std::string::npos) {
                 // Check that there's only whitespace between the start pattern and our marker
-                std::string between = output.substr(start_pos + start_pattern.length(),
-                                                    marker_pos - start_pos - start_pattern.length());
+                std::string between =
+                    output.substr(start_pos + start_pattern.length(), marker_pos - start_pos - start_pattern.length());
                 size_t first_non_ws = between.find_first_not_of(" \t\n\r");
                 if (first_non_ws == std::string::npos) {
                     // Found valid start marker, look for end marker
                     size_t marker_end = marker_pos + strlen("UNIQUE_CONTENT_12345");
-                    size_t end_pos = output.find(end_pattern, marker_end);
+                    size_t end_pos    = output.find(end_pattern, marker_end);
                     if (end_pos != std::string::npos) {
-                        std::string after = output.substr(marker_end, end_pos - marker_end);
-                        size_t first_non_ws_after = after.find_first_not_of(" \t\n\r");
+                        std::string after              = output.substr(marker_end, end_pos - marker_end);
+                        size_t      first_non_ws_after = after.find_first_not_of(" \t\n\r");
                         if (first_non_ws_after == std::string::npos) {
                             return { start_pattern, end_pattern };
                         }
@@ -538,29 +550,29 @@ void TemplateAnalyzer::detect_content_markers(const minja::chat_template & tmpl,
             }
         }
 
-        return {"", ""};
+        return { "", "" };
     };
 
     auto [start_with_thinking, end_with_thinking] = find_content_markers(output_with_thinking);
-    auto [start_no_thinking, end_no_thinking] = find_content_markers(output_no_thinking);
+    auto [start_no_thinking, end_no_thinking]     = find_content_markers(output_no_thinking);
 
     if (!start_with_thinking.empty() && !start_no_thinking.empty()) {
         // Content is always wrapped
-        cs.content_mode = ContentStructure::CONTENT_ALWAYS_WRAPPED;
+        cs.content_mode  = ContentStructure::CONTENT_ALWAYS_WRAPPED;
         cs.content_start = start_with_thinking;
-        cs.content_end = end_with_thinking;
+        cs.content_end   = end_with_thinking;
         LOG_DBG("Content markers found in both thinking modes (ALWAYS_WRAPPED)\n");
     } else if (!start_with_thinking.empty() && start_no_thinking.empty()) {
         // Content is wrapped only when reasoning is present
-        cs.content_mode = ContentStructure::CONTENT_WRAPPED_WITH_REASONING;
+        cs.content_mode  = ContentStructure::CONTENT_WRAPPED_WITH_REASONING;
         cs.content_start = start_with_thinking;
-        cs.content_end = end_with_thinking;
+        cs.content_end   = end_with_thinking;
         LOG_DBG("Content markers found only with thinking enabled (WRAPPED_WITH_REASONING)\n");
     } else if (!start_no_thinking.empty()) {
         // Unusual: content wrapped without thinking but not with? Use what we found
-        cs.content_mode = ContentStructure::CONTENT_ALWAYS_WRAPPED;
+        cs.content_mode  = ContentStructure::CONTENT_ALWAYS_WRAPPED;
         cs.content_start = start_no_thinking;
-        cs.content_end = end_no_thinking;
+        cs.content_end   = end_no_thinking;
         LOG_DBG("Content markers found only without thinking (treating as ALWAYS_WRAPPED)\n");
     } else {
         cs.content_mode = ContentStructure::CONTENT_PLAIN;
@@ -570,12 +582,10 @@ void TemplateAnalyzer::detect_content_markers(const minja::chat_template & tmpl,
     LOG_DBG("Content markers: start='%s', end='%s'\n", cs.content_start.c_str(), cs.content_end.c_str());
 }
 
-ContentStructure::ReasoningMode TemplateAnalyzer::detect_reasoning_mode(
-    const minja::chat_template & tmpl,
-    const ContentStructure & cs,
-    const std::string & prompt) {
-
-    (void)tmpl;  // Unused for now
+ContentStructure::ReasoningMode TemplateAnalyzer::detect_reasoning_mode(const minja::chat_template & tmpl,
+                                                                        const ContentStructure &     cs,
+                                                                        const std::string &          prompt) {
+    (void) tmpl;  // Unused for now
 
     LOG_DBG("=== DETECTING REASONING MODE ===\n");
 
@@ -606,11 +616,9 @@ ContentStructure::ReasoningMode TemplateAnalyzer::detect_reasoning_mode(
 // PHASE 2: Tool Call Structure Analysis
 // ============================================================================
 
-ToolCallStructure TemplateAnalyzer::analyze_tool_structure(
-    const minja::chat_template & tmpl,
-    const ContentStructure & content) {
-
-    (void)content;  // May be used in future for better tool detection
+ToolCallStructure TemplateAnalyzer::analyze_tool_structure(const minja::chat_template & tmpl,
+                                                           const ContentStructure &     content) {
+    (void) content;  // May be used in future for better tool detection
 
     LOG_DBG("=== PHASE 2: ANALYZING TOOL STRUCTURE ===\n");
 
@@ -622,7 +630,7 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(
     // 2. Tool definitions + content + tool calls
     // If outputs are identical, the template doesn't support tool calls
     auto discovered = analyze_by_differential(tmpl);
-    auto format = determine_format_from_patterns(discovered);
+    auto format     = determine_format_from_patterns(discovered);
 
     if (format == FORMAT_UNKNOWN) {
         LOG_DBG("Template does not support tool calls (differential analysis returned no patterns)\n");
@@ -637,14 +645,22 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(
     }
 
     if (format == FORMAT_JSON_NATIVE) {
-        ts.supports_tools = true;
-        ts.function_format = ToolCallStructure::FUNC_JSON_OBJECT;
-        ts.argument_format = ToolCallStructure::ARGS_JSON;
+        ts.supports_tools     = true;
+        ts.function_format    = ToolCallStructure::FUNC_JSON_OBJECT;
+        ts.argument_format    = ToolCallStructure::ARGS_JSON;
         ts.tool_section_start = discovered.tool_call_start_marker;
-        ts.tool_section_end = discovered.tool_call_end_marker;
-        ts.name_field = discovered.tool_name_field;
-        ts.args_field = discovered.tool_args_field;
-        ts.id_field = discovered.tool_id_field;
+        ts.tool_section_end   = discovered.tool_call_end_marker;
+        ts.name_field         = discovered.tool_name_field;
+        ts.args_field         = discovered.tool_args_field;
+        ts.id_field           = discovered.tool_id_field;
+
+        // Check for FUNC_NAME_AS_KEY format (e.g. Apertus: {"function_name": args})
+        // This is characterized by the opener ending in {" and no explicit name field found yet
+        if (!discovered.tool_call_opener.empty() && discovered.tool_call_opener.length() >= 2 &&
+            discovered.tool_call_opener.substr(discovered.tool_call_opener.length() - 2) == "{\"") {
+            LOG_DBG("Detected FUNC_NAME_AS_KEY format from tool_call_opener ending in '{\"' \n");
+            ts.function_format = ToolCallStructure::FUNC_NAME_AS_KEY;
+        }
 
         // For JSON_NATIVE format, clean up tool_section_end to only include the closing tag
         // The differential analysis may include JSON closing braces (e.g., "}}\n</tool_call>")
@@ -674,10 +690,10 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(
             }
         }
     } else if (format == FORMAT_XML_CONSTRUCTED) {
-        ts.supports_tools = true;
-        ts.function_format = ToolCallStructure::FUNC_TAG_WITH_NAME;
+        ts.supports_tools     = true;
+        ts.function_format    = ToolCallStructure::FUNC_TAG_WITH_NAME;
         ts.tool_section_start = discovered.tool_call_start_marker;
-        ts.tool_section_end = discovered.tool_call_end_marker;
+        ts.tool_section_end   = discovered.tool_call_end_marker;
 
         // Extract function tag patterns
         if (!discovered.function_opener.empty()) {
@@ -687,24 +703,65 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(
                 // Function name follows prefix directly, ends with newline
                 ts.function_prefix = discovered.function_opener;
                 ts.function_suffix = "\n";  // Function name typically ends with newline
-                ts.function_close = "";      // No closing tag for prefix formats
+                ts.function_close  = "";    // No closing tag for prefix formats
             } else {
                 size_t eq_pos = discovered.function_opener.find('=');
                 if (eq_pos != std::string::npos) {
                     ts.function_prefix = discovered.function_opener.substr(0, eq_pos + 1);
                     ts.function_suffix = discovered.function_name_suffix;
-                    ts.function_close = discovered.function_closer;
+                    ts.function_close  = discovered.function_closer;
+                } else if (!discovered.function_opener.empty() && discovered.function_opener[0] == '<') {
+                    // Formats like <|tool_call_begin|>name (Kimi)
+                    // The whole opener is the prefix
+                    ts.function_prefix = discovered.function_opener;
+                    ts.function_suffix = discovered.function_name_suffix;
+                    ts.function_close  = discovered.function_closer;
                 }
             }
         }
 
+        // Fix for templates where tool_section_start matches function_prefix (double wrapping)
+        // e.g. Functionary: tool_section_start="<function=", function_prefix="<function="
+        if (!ts.tool_section_start.empty() && !ts.function_prefix.empty() &&
+            ts.tool_section_start == ts.function_prefix) {
+            LOG_DBG("tool_section_start matches function_prefix, clearing section start to avoid double wrapping\n");
+            ts.tool_section_start = "";
+        }
+
+        // Similar check for tool_section_end matching function_close
+        if (!ts.tool_section_end.empty() && !ts.function_close.empty() && ts.tool_section_end == ts.function_close) {
+            LOG_DBG("tool_section_end matches function_close, clearing section end to avoid double wrapping\n");
+            ts.tool_section_end = "";
+        }
+
         // Determine argument format
-        if (!discovered.parameter_key_prefix.empty() && discovered.parameter_key_prefix.find('<') != std::string::npos) {
+        if (!discovered.parameter_key_prefix.empty() &&
+            discovered.parameter_key_prefix.find('<') != std::string::npos) {
             ts.argument_format = ToolCallStructure::ARGS_TAGGED;
-            ts.arg_prefix = discovered.parameter_key_prefix;
-            ts.arg_suffix = discovered.parameter_key_suffix;
-            ts.arg_close = discovered.parameter_closer;
-            ts.arg_separator = discovered.argument_separator;
+            ts.arg_prefix      = discovered.parameter_key_prefix;
+            ts.arg_suffix      = discovered.parameter_key_suffix;
+            ts.arg_close       = discovered.parameter_closer;
+            ts.arg_separator   = discovered.argument_separator;
+
+            // Check for specific GLM-4 style key-value tags
+            // Format: <arg_key>key</arg_key>\n<arg_value>value</arg_value>
+            // Analyzer detects suffix as: </arg_key>\n<arg_value>
+            if (ts.arg_suffix.find("<arg_value>") != std::string::npos) {
+                ts.argument_format = ToolCallStructure::ARGS_KEY_VALUE_TAGS;
+
+                // Clean up suffix to be just the key closer
+                size_t val_opener = ts.arg_suffix.find("<arg_value>");
+                if (val_opener != std::string::npos) {
+                    // Extract just the </arg_key> part (trimming whitespace/newlines before <arg_value>)
+                    std::string key_closer = ts.arg_suffix.substr(0, val_opener);
+                    // Trim trailing whitespace/newlines
+                    while (!key_closer.empty() &&
+                           (key_closer.back() == '\n' || key_closer.back() == '\r' || key_closer.back() == ' ')) {
+                        key_closer.pop_back();
+                    }
+                    ts.arg_suffix = key_closer;
+                }
+            }
         } else {
             ts.argument_format = ToolCallStructure::ARGS_JSON;
         }
