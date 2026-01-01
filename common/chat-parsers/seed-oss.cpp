@@ -35,28 +35,19 @@ common_chat_params common_chat_params_init_seed_oss_peg(const common_chat_templa
 
     auto parser = build_chat_peg_parser([&](auto & p) {
         using Tag = common_chat_peg_tag;
-        auto newline = p.choice({p.literal("\r\n"), p.literal("\n")});
-        // Limit newlines around <seed:eos> to prevent grammar from accepting unlimited newlines
-        auto eos = p.optional(p.repeat(newline, 0, 2) + p.literal("<seed:eos>") + p.repeat(newline, 0, 2));
-        auto reasoning = p.eps();
+
+        auto eos = p.space() + p.optional(p.literal("<seed:eos>")) + p.space();
+
         auto reasoning_block = p.literal("<seed:think>")
             + p.tag(Tag::REASONING, p.until("</seed:think>"))
             + (p.literal("</seed:think>") | p.end());
-        if (extract_reasoning) {
-            if (inputs.enable_thinking && data.thinking_forced_open) {
-                reasoning = reasoning_block;
-            } else if (inputs.enable_thinking) {
-                reasoning = p.optional(reasoning_block);
-            } else {
-                reasoning = p.optional(reasoning_block);
-            }
-        } else {
-            reasoning = p.optional(reasoning_block);
-        }
+        auto reasoning = extract_reasoning && inputs.enable_thinking && data.thinking_forced_open
+            ? reasoning_block
+            : p.optional(reasoning_block);
 
         // Response format parser
         if (inputs.json_schema.is_object() && !inputs.json_schema.empty()) {
-            return reasoning << p.tag(Tag::CONTENT, p.schema(p.json(), "response-format", inputs.json_schema));
+            return reasoning << p.tag(Tag::CONTENT, p.schema(p.json(), "response-format", inputs.json_schema)) << p.space();
         }
 
         // Tool call parser
@@ -76,31 +67,32 @@ common_chat_params common_chat_params_init_seed_oss_peg(const common_chat_templa
             format.param_ends = { "</parameter>\n", "</parameter>" };
             auto tool_calls = build_generic_tool_calls_peg_parser(p, inputs, format);
 
-            auto stop_before = std::vector<std::string> {
+            // Use original until_one_of patterns to avoid capturing trailing newlines in content
+            auto content_before = p.optional(p.tag(Tag::CONTENT, p.until_one_of({
                 "\r\n\r\n<seed:tool_call>", "\n\n<seed:tool_call>",
-                "\r\n<seed:tool_call>", "\n<seed:tool_call>", "<seed:tool_call>",
-                "\r\n\r\n<seed:toolcall>", "\n\n<seed:toolcall>",
-                "\r\n<seed:toolcall>", "\n<seed:toolcall>", "<seed:toolcall>",
-            };
-            auto content_before = p.optional(p.tag(Tag::CONTENT, p.until_one_of(stop_before)));
-            // After tool calls, only allow limited trailing whitespace (not arbitrary content)
-            // to prevent the grammar from allowing unlimited newlines
-            auto post_tool_gap = p.repeat(newline, 0, 2);
-            auto pre_calls_gap = p.repeat(newline, 0, -1);
+                "\r\n<seed:tool_call>", "\n<seed:tool_call>", "<seed:tool_call>"
+            })));
             if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
-                return reasoning << pre_calls_gap << tool_calls << post_tool_gap << eos;
+                return reasoning << p.space() << tool_calls << eos;
             }
-            return reasoning << content_before << pre_calls_gap << tool_calls << post_tool_gap << eos;
+            auto with_tools = content_before << p.space() << tool_calls << eos;
+            // Content-only fallback: optional content until eos, then optional rest
+            auto content_until_eos = p.optional(p.tag(Tag::CONTENT, p.until_one_of({
+                "\r\n\r\n<seed:eos>", "\n\n<seed:eos>",
+                "\r\n<seed:eos>", "\n<seed:eos>", "<seed:eos>"
+            })));
+            auto content_rest = p.optional(p.tag(Tag::CONTENT, p.rest()));
+            auto content_only = content_until_eos << content_rest << eos;
+            return reasoning << p.choice({with_tools, content_only});
         }
 
-        // Content only parser
-        auto content_tail = p.optional(p.tag(Tag::CONTENT, p.until_one_of({
+        // Content only parser: optional content until eos, then optional rest
+        auto content_until_eos = p.optional(p.tag(Tag::CONTENT, p.until_one_of({
             "\r\n\r\n<seed:eos>", "\n\n<seed:eos>",
             "\r\n<seed:eos>", "\n<seed:eos>", "<seed:eos>"
         })));
-        // Limit trailing newlines before eos to prevent grammar from accepting unlimited newlines
-        auto pre_eos_gap = p.repeat(newline, 0, 2);
-        return reasoning << content_tail << pre_eos_gap << eos;
+        auto content_rest = p.optional(p.tag(Tag::CONTENT, p.rest()));
+        return reasoning << content_until_eos << content_rest << eos;
     });
 
     common_chat_build_peg_grammar(inputs, parser, data);

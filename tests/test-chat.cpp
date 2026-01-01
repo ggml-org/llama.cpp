@@ -1448,8 +1448,7 @@ static void test_chat_parsers()
     test_chat_parser(test_status::Enabled, "qwen3_coder_xml", chat_parser_impl::EXPERIMENTAL, test_qwen3_coder_xml_parser);
 
     test_chat_parser(test_status::Enabled, "seed_oss", chat_parser_impl::LEGACY, test_seed_oss_parser);
-    // TODO(ochafik): debug (not sure why we have an experimental-only section, it explodes)
-    test_chat_parser(test_status::Disabled, "seed_oss", chat_parser_impl::EXPERIMENTAL, test_seed_oss_parser);
+    test_chat_parser(test_status::Enabled, "seed_oss", chat_parser_impl::EXPERIMENTAL, test_seed_oss_parser);
 
     test_chat_parser(test_status::Enabled, "xiaomi_mimo", chat_parser_impl::LEGACY, test_xiaomi_mimo_parser);
     test_chat_parser(test_status::Enabled, "xiaomi_mimo", chat_parser_impl::EXPERIMENTAL, test_xiaomi_mimo_parser);
