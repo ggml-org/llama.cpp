@@ -47,13 +47,36 @@ Finally, after the response is written, include a numbered list of sentences fro
               {%- endfor %}
  {%- endif %}
  {%- for message in loop_messages %}
-     {{- '<|start_of_role|>' + message['role'] + '<|end_of_role|>' + message['content'] + '<|end_of_text|>
+    {{- '<|start_of_role|>' + message['role'] + '<|end_of_role|>' }}
+    {%- if message['role'] == 'assistant' and message.tool_calls is defined and message.tool_calls %}
+        {%- if message['content'] %}{{ message['content'] }}{%- endif %}
+        {{- '<|tool_call|>[' }}
+        {%- for tool_call in message.tool_calls %}
+            {%- if tool_call.function is defined %}
+                {%- set tc = tool_call.function %}
+            {%- else %}
+                {%- set tc = tool_call %}
+            {%- endif %}
+            {{- '{"name": "' + tc.name + '", "arguments": ' }}
+            {%- if tc.arguments is string %}
+                {{- tc.arguments }}
+            {%- else %}
+                {{- tc.arguments | tojson }}
+            {%- endif %}
+            {{- '}' }}
+            {%- if not loop.last %}, {% endif %}
+        {%- endfor %}
+        {{- ']' }}
+    {%- else %}
+        {{- message['content'] }}
+    {%- endif %}
+    {{- '<|end_of_text|>
 ' }}
-     {%- if loop.last and add_generation_prompt %}
-         {{- '<|start_of_role|>assistant' }}
-             {%- if controls %}
-                 {{- ' ' + controls | tojson()}}
-             {%- endif %}
-         {{- '<|end_of_role|>' }}
-     {%- endif %}
- {%- endfor %}
+    {%- if loop.last and add_generation_prompt %}
+        {{- '<|start_of_role|>assistant' }}
+        {%- if controls %}
+            {{- ' ' + controls | tojson()}}
+        {%- endif %}
+        {{- '<|end_of_role|>' }}
+    {%- endif %}
+{%- endfor %}

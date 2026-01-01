@@ -148,7 +148,34 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-grammar-parser.cpp)
     llama_build_and_test(test-grammar-integration.cpp)
     llama_build_and_test(test-llama-grammar.cpp)
-    llama_build_and_test(test-chat.cpp)
+    llama_build_and_test(
+        test-chat.cpp
+        chat-parsers/test-apertus.cpp
+        chat-parsers/test-apriel-1-5.cpp
+        chat-parsers/test-command-r7b.cpp
+        chat-parsers/test-deepseek-r1.cpp
+        chat-parsers/test-deepseek-v3-1.cpp
+        chat-parsers/test-firefunction-v2.cpp
+        chat-parsers/test-functionary-v3-1-llama-3-1.cpp
+        chat-parsers/test-functionary-v3-2.cpp
+        chat-parsers/test-generic.cpp
+        chat-parsers/test-glm-4-5.cpp
+        chat-parsers/test-gpt-oss.cpp
+        chat-parsers/test-granite.cpp
+        chat-parsers/test-hermes-2-pro.cpp
+        chat-parsers/test-kimi-k2.cpp
+        chat-parsers/test-lfm2.cpp
+        chat-parsers/test-llama-3-x.cpp
+        chat-parsers/test-magistral.cpp
+        chat-parsers/test-minimax-m2.cpp
+        chat-parsers/test-ministral-3.cpp
+        chat-parsers/test-mistral-nemo.cpp
+        chat-parsers/test-nemotron-v2.cpp
+        chat-parsers/test-nemotron-v3.cpp
+        chat-parsers/test-qwen3-coder-xml.cpp
+        chat-parsers/test-seed-oss.cpp
+        chat-parsers/test-xiaomi-mimo.cpp
+    )
     # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
     if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
         llama_build_and_test(test-json-schema-to-grammar.cpp   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})

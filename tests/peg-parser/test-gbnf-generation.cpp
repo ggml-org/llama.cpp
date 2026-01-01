@@ -25,7 +25,7 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "hello"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf);
     });
 
@@ -40,7 +40,7 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= [a-z]
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf);
     });
 
@@ -55,7 +55,7 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "hello" " " "world"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf);
     });
 
@@ -70,7 +70,7 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "cat" | "dog"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf);
     });
 
@@ -85,7 +85,7 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "a"+
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf);
     });
 
@@ -100,7 +100,7 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "a"*
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf);
     });
 
@@ -115,7 +115,7 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "hello" " world"?
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf);
     });
 
@@ -130,7 +130,7 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= ([^<] | "<" [^/] | "</" [^t] | "</t" [^a] | "</ta" [^g] | "</tag" [^>])*
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf);
     });
 
@@ -145,7 +145,7 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= ("a" | "b")+
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf);
     });
 
@@ -162,7 +162,7 @@ void test_gbnf_generation(testing &t) {
         assert_gbnf_equal(t, R"""(
             digit ::= [0-9]
             root ::= digit+
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf);
     });
 
@@ -177,7 +177,7 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "hello\nworld\n!"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf);
     });
 
@@ -192,7 +192,7 @@ void test_gbnf_generation(testing &t) {
 
         assert_gbnf_equal(t, R"""(
             root ::= "hello" space "world"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf);
     });
 
@@ -209,7 +209,7 @@ void test_gbnf_generation(testing &t) {
         assert_gbnf_equal(t, R"""(
             child ::= " world"
             root ::= "hello" child
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf);
     });
 
@@ -232,7 +232,7 @@ void test_gbnf_generation(testing &t) {
             rule-2 ::= "b" rule-3
             rule-3 ::= "c" rule-4
             rule-4 ::= "d"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf);
 
         auto gbnf_lazy = build_grammar([&](const common_grammar_builder & builder) {
@@ -244,7 +244,31 @@ void test_gbnf_generation(testing &t) {
             rule-2 ::= "b" rule-3
             rule-3 ::= "c" rule-4
             rule-4 ::= "d"
-            space ::= | " " | "\n"{1,2} [ \t]{0,20}
+            space ::= ( " " | "\n"{1,2} [ \t]{0,20} )?
         )""", gbnf_lazy);
+    });
+
+    t.test("until_max grammar with length limit", [](testing &t) {
+        auto parser = build_peg_parser([](common_peg_parser_builder & p) {
+            return p.until_max("</p>", 3);
+        });
+
+        auto gbnf = build_grammar([&](const common_grammar_builder & builder) {
+            parser.build_grammar(builder);
+        });
+
+        // until_max generates O(max_length) rules that exclude delimiter and limit length
+        // Verify that the grammar contains expected patterns:
+        // - Rules for lengths 0,1,2,3
+        // - Character exclusion patterns like [^<] and "<" [^/] and "</" [^p]
+        t.assert_true("contains until rule reference", gbnf.find("root ::= until-") != std::string::npos);
+        t.assert_true("contains empty base rule", gbnf.find("-0 ::= \"\"") != std::string::npos);
+        t.assert_true("contains single char exclusion", gbnf.find("[^<]") != std::string::npos);
+        t.assert_true("contains prefix exclusion", gbnf.find("\"<\" [^/]") != std::string::npos);
+        t.assert_true("contains two-char prefix exclusion", gbnf.find("\"</\" [^p]") != std::string::npos);
+        // Verify there are 4 rules (0, 1, 2, 3)
+        t.assert_true("contains -1 rule", gbnf.find("-1 ::=") != std::string::npos);
+        t.assert_true("contains -2 rule", gbnf.find("-2 ::=") != std::string::npos);
+        t.assert_true("contains -3 rule", gbnf.find("-3 ::=") != std::string::npos);
     });
 }

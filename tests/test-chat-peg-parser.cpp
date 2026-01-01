@@ -161,15 +161,16 @@ static void test_example_native(testing & t) {
     };
 
     auto build_parser = [](const test_case & tc) {
-        return build_chat_peg_native_parser([&](common_chat_peg_native_builder & p) {
+        return build_chat_peg_parser([&](auto & p) {
+            using Tag = common_chat_peg_tag;
             auto reasoning_in_content = (tc.reasoning_format == COMMON_REASONING_FORMAT_NONE);
             auto reasoning = p.eps();
             if (tc.thinking_forced_open) {
                 // If thinking is forced open, expect a closing tag
-                reasoning = p.reasoning(p.until("</think>")) + "</think>" + p.space();
+                reasoning = p.tag(Tag::REASONING, p.until("</think>")) + "</think>" + p.space();
             } else {
                 // Otherwise, optionally accept thinking wrapped in tags
-                reasoning = p.optional("<think>" + p.reasoning(p.until("</think>")) + "</think>" + p.space());
+                reasoning = p.optional("<think>" + p.tag(Tag::REASONING, p.until("</think>")) + "</think>" + p.space());
             }
 
             // tool calling parser
@@ -180,10 +181,10 @@ static void test_example_native(testing & t) {
                     std::string name = function.at("name");
                     const auto & schema = function.at("parameters");
 
-                    auto tool_name = p.json_member("name", "\"" + p.tool_name(p.literal(name)) + "\"");
-                    auto tool_args = p.json_member("arguments", p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)));
+                    auto tool_name = p.json_member("name", "\"" + p.atomic_tag(Tag::TOOL_NAME, p.literal(name)) + "\"");
+                    auto tool_args = p.json_member("arguments", p.tag(Tag::TOOL_ARGS, p.schema(p.json(), "tool-" + name + "-schema", schema)));
 
-                    tools |= p.rule("tool-" + name, p.tool_open(p.literal("{")) << tool_name << "," << tool_args << "}");
+                    tools |= p.rule("tool-" + name, p.atomic_tag(Tag::TOOL_OPEN, p.literal("{")) << tool_name << "," << tool_args << "}");
                 };
 
                 auto parallel_calls = p.eps();
@@ -202,7 +203,7 @@ static void test_example_native(testing & t) {
 
                 return p.sequence({
                     (reasoning_in_content ? p.eps() : reasoning),
-                    p.content(p.until("<tool_call>")),
+                    p.tag(Tag::CONTENT, p.until("<tool_call>")),
                     p.optional(p.space() + tool_call),
                     p.space(),
                     p.end()
@@ -213,7 +214,7 @@ static void test_example_native(testing & t) {
             if (tc.json_schema.is_object() && !tc.json_schema.empty()) {
                 return p.sequence({
                     (reasoning_in_content ? p.eps() : reasoning),
-                    p.content(p.schema(p.json(), "response-output", tc.json_schema)),
+                    p.tag(Tag::CONTENT, p.schema(p.json(), "response-output", tc.json_schema)),
                     p.space(),
                     p.end()
                 });
@@ -222,7 +223,7 @@ static void test_example_native(testing & t) {
             // Content-only parser
             return p.sequence({
                 (reasoning_in_content ? p.eps() : reasoning),
-                p.content(p.rest()),
+                p.tag(Tag::CONTENT, p.rest()),
                 p.end()
             });
         });
@@ -416,7 +417,7 @@ static void test_example_native(testing & t) {
             t.assert_true("success", result.success());
 
             common_chat_msg msg;
-            auto mapper = common_chat_peg_native_mapper(msg);
+            common_chat_peg_native_mapper mapper(msg);
             mapper.from_ast(ctx.ast, result);
 
             t.assert_equal("content equal", tc.expect_content, msg.content);
@@ -432,8 +433,9 @@ static void test_example_native(testing & t) {
 
 static void test_example_qwen3_coder(testing & t) {
     auto tools = create_tools();
-    auto parser = build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
-        auto content = p.rule("content", p.content(p.until("<tool_call>")));
+    auto parser = build_chat_peg_parser([&](auto & p) {
+        using Tag = common_chat_peg_tag;
+        auto content = p.rule("content", p.tag(Tag::CONTENT, p.until("<tool_call>")));
 
         std::vector<common_peg_parser> tool_parsers;
         for (auto const & def : tools) {
@@ -452,10 +454,10 @@ static void test_example_qwen3_coder(testing & t) {
                 bool is_required = required_properties.find(param_name) != required_properties.end();
                 auto type = param_schema.value("type", "object");
 
-                auto arg = p.tool_arg(p.sequence({
-                    p.tool_arg_open("<parameter=" + p.tool_arg_name(p.literal(param_name)) + ">"),
+                auto arg = p.tag(Tag::TOOL_ARG, p.sequence({
+                    p.atomic_tag(Tag::TOOL_ARG_OPEN, "<parameter=" + p.atomic_tag(Tag::TOOL_ARG_NAME, p.literal(param_name)) + ">"),
                     (type == "string" ?
-                        p.tool_arg_string_value(
+                        p.tag(Tag::TOOL_ARG_STRING_VALUE,
                             p.schema(
                                 p.until_one_of({
                                     "</parameter>\n<parameter=",
@@ -465,7 +467,7 @@ static void test_example_qwen3_coder(testing & t) {
                                 param_schema,
                                 true
                             )
-                        ) : p.tool_arg_json_value(
+                        ) : p.tag(Tag::TOOL_ARG_JSON_VALUE,
                             p.schema(
                                 p.json(),
                                 "tool-" + name + "-arg-" + param_name + "-schema",
@@ -473,7 +475,7 @@ static void test_example_qwen3_coder(testing & t) {
                             )
                         )
                     ),
-                    p.tool_arg_close(
+                    p.atomic_tag(Tag::TOOL_ARG_CLOSE,
                         "</parameter>\n" +
                         p.peek(p.literal("<parameter=") | p.literal("</function>"))
                     )
@@ -485,9 +487,9 @@ static void test_example_qwen3_coder(testing & t) {
             }
 
             tool_parsers.push_back(p.rule("tool-" + name,
-                p.tool_open("<function=" + p.tool_name(p.literal(name)) + ">")
+                p.atomic_tag(Tag::TOOL_OPEN, "<function=" + p.atomic_tag(Tag::TOOL_NAME, p.literal(name)) + ">")
                 << p.sequence(arg_parsers)
-                << p.tool_close(p.literal("</function>"))
+                << p.atomic_tag(Tag::TOOL_CLOSE, p.literal("</function>"))
             ));
         };
 
@@ -538,7 +540,7 @@ static void test_example_qwen3_coder(testing & t) {
             }
 
             common_chat_msg msg;
-            auto mapper = common_chat_peg_constructed_mapper(msg);
+            common_chat_peg_constructed_mapper mapper(msg);
             mapper.from_ast(ctx.ast, result);
 
             //t.log("Input: " + input);
@@ -565,22 +567,23 @@ static void test_example_qwen3_coder(testing & t) {
 }
 
 void test_command7_parser_compare(testing & t) {
-    auto parser = build_chat_peg_native_parser([](common_chat_peg_native_builder & p) {
-        auto thinking = p.reasoning_block(
-            "<|START_THINKING|>" << p.reasoning(p.until("<|END_THINKING|>")) << "<|END_THINKING|>");
+    auto parser = build_chat_peg_parser([](auto & p) {
+        using Tag = common_chat_peg_tag;
+        auto thinking = p.tag(Tag::REASONING_BLOCK,
+            "<|START_THINKING|>" << p.tag(Tag::REASONING, p.until("<|END_THINKING|>")) << "<|END_THINKING|>");
 
-        auto response = "<|START_RESPONSE|>" << p.content(p.until("<|END_RESPONSE|>")) << "<|END_RESPONSE|>";
+        auto response = "<|START_RESPONSE|>" << p.tag(Tag::CONTENT, p.until("<|END_RESPONSE|>")) << "<|END_RESPONSE|>";
 
-        auto tool_call_id = p.atomic("\"tool_call_id\"" << (":" << ("\"" + p.tool_id(p.json_string_content()) + "\"")));
-        auto tool_call_name = p.atomic("\"tool_name\"" << (":" << ("\"" + p.tool_name(p.json_string_content()) + "\"")));
-        auto tool_call_args = "\"parameters\"" << (":" << p.tool_args(p.json()));
+        auto tool_call_id = p.atomic("\"tool_call_id\"" << (":" << ("\"" + p.atomic_tag(Tag::TOOL_ID, p.json_string_content()) + "\"")));
+        auto tool_call_name = p.atomic("\"tool_name\"" << (":" << ("\"" + p.atomic_tag(Tag::TOOL_NAME, p.json_string_content()) + "\"")));
+        auto tool_call_args = "\"parameters\"" << (":" << p.tag(Tag::TOOL_ARGS, p.json()));
 
         auto tool_call_fields = p.rule("tool-call-fields", tool_call_id | tool_call_name | tool_call_args);
-        auto tool_call = p.rule("tool-call", p.tool(
-            p.tool_open(p.literal("{"))
+        auto tool_call = p.rule("tool-call", p.tag(Tag::TOOL,
+            p.atomic_tag(Tag::TOOL_OPEN, p.literal("{"))
             << tool_call_fields
             << p.zero_or_more( p.literal(",") << tool_call_fields)
-            << p.tool_close(p.literal("}"))
+            << p.atomic_tag(Tag::TOOL_CLOSE, p.literal("}"))
         ));
 
         auto tool_calls = p.rule("tool-calls",
@@ -596,7 +599,7 @@ void test_command7_parser_compare(testing & t) {
         auto result = p.parse(ctx);
 
         common_chat_msg msg;
-        auto mapper = common_chat_peg_native_mapper(msg);
+        common_chat_peg_native_mapper mapper(msg);
         mapper.from_ast(ctx.ast, result);
 
         if (print_results) {

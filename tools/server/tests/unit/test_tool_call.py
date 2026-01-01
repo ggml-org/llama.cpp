@@ -54,7 +54,8 @@ PYTHON_TOOL = {
             "properties": {
                 "code": {
                     "type": "string",
-                    "description": "The code to run in the ipython interpreter."
+                    "description": "The code to run in the ipython interpreter.",
+                    "maxLength": 20
                 }
             },
             "required": ["code"]
@@ -168,6 +169,90 @@ def test_completion_with_required_tool_tiny_slow(template_name: str, tool: dict,
     server.jinja = True
     server.n_predict = n_predict
     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
+    do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED)
+
+
+# Templates with known issues in experimental parsers that need to be excluded from new_parsers test
+# Key: template file, Value: set of tool names to exclude (or None to exclude all tools)
+NEW_PARSERS_UNSUPPORTED = {
+    # LFM2: requires "force json schema." marker in system message (experimental parser disabled in test-chat.cpp)
+    "models/templates/llama-cpp-lfm2.jinja": None,
+    # Llama 3.x: needs custom mapper for builtin tools (TOOL_ARG_NAME tags not handled by PEG_NATIVE mapper)
+    "models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja": {"python"},
+    "models/templates/meta-llama-Llama-3.3-70B-Instruct.jinja": {"python"},
+    # Functionary v3.2: special python handling allows raw code fallback (causes issues with tiny model)
+    "models/templates/meetkai-functionary-medium-v3.2.jinja": {"python"},
+    # Nemotron v3: peg-constructed format - tiny model generates tags but invalid parameter structure
+    "models/templates/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.jinja": None,
+    # GPT-OSS: peg-native format but tiny model generates content that fails to parse
+    "models/templates/openai-gpt-oss-120b.jinja": None,
+    # Kimi K2: tiny model generates valid format but parser fails (needle tests pass with proper model)
+    "models/templates/Kimi-K2-Thinking.jinja": None,
+    "models/templates/moonshotai-Kimi-K2.jinja": None,
+}
+
+@pytest.mark.slow
+@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+@pytest.mark.parametrize("tool,argument_key", [(TEST_TOOL, "success"), (PYTHON_TOOL, "code")])
+@pytest.mark.parametrize("template_file", [
+    "models/templates/Qwen3-Coder.jinja",
+    "models/templates/Apertus-8B-Instruct.jinja",
+    "models/templates/ByteDance-Seed-OSS.jinja",
+    # "models/templates/CohereForAI-c4ai-command-r-plus-tool_use.jinja",
+    # "models/templates/CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja",
+    "models/templates/deepseek-ai-DeepSeek-R1-Distill-Llama-8B.jinja",
+    "models/templates/deepseek-ai-DeepSeek-R1-Distill-Qwen-32B.jinja",
+    "models/templates/deepseek-ai-DeepSeek-V3.1.jinja",
+    "models/templates/fireworks-ai-llama-3-firefunction-v2.jinja",
+    "models/templates/GLM-4.6.jinja",
+    "models/templates/google-gemma-2-2b-it.jinja",
+    "models/templates/llama-cpp-ibm-granite-granite-3.3-2B-Instruct.jinja",
+    "models/templates/Kimi-K2-Instruct.jinja",
+    "models/templates/Kimi-K2-Thinking.jinja",
+    "models/templates/llama-cpp-deepseek-r1.jinja",
+    "models/templates/llama-cpp-lfm2.jinja",
+    "models/templates/llama-cpp-rwkv-world.jinja",
+    "models/templates/meetkai-functionary-medium-v3.1.jinja",
+    "models/templates/meetkai-functionary-medium-v3.2.jinja",
+    "models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja",
+    "models/templates/meta-llama-Llama-3.2-3B-Instruct.jinja",
+    "models/templates/meta-llama-Llama-3.3-70B-Instruct.jinja",
+    "models/templates/microsoft-Phi-3.5-mini-instruct.jinja",
+    "models/templates/MiMo-VL.jinja",
+    "models/templates/MiniMax-M2.jinja",
+    "models/templates/Mistral-Small-3.2-24B-Instruct-2506.jinja",
+    "models/templates/mistralai-Ministral-3-14B-Reasoning-2512.jinja",
+    "models/templates/mistralai-Mistral-Nemo-Instruct-2407.jinja",
+    "models/templates/moonshotai-Kimi-K2.jinja",
+    "models/templates/NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja",
+    "models/templates/NousResearch-Hermes-3-Llama-3.1-8B-tool_use.jinja",
+    "models/templates/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.jinja",
+    "models/templates/NVIDIA-Nemotron-Nano-v2.jinja",
+    "models/templates/openai-gpt-oss-120b.jinja",
+    "models/templates/Qwen-Qwen2.5-7B-Instruct.jinja",
+    "models/templates/Qwen-Qwen3-0.6B.jinja",
+    "models/templates/Qwen-QwQ-32B.jinja",
+    "models/templates/unsloth-Apriel-1.5.jinja",
+    "models/templates/unsloth-mistral-Devstral-Small-2507.jinja",
+])
+def test_completion_with_required_tool_tiny_new_parsers(template_file: str, tool: dict, argument_key: str | None, stream: CompletionMode):
+    # Check if this template/tool combination is unsupported
+    if template_file in NEW_PARSERS_UNSUPPORTED:
+        unsupported_tools = NEW_PARSERS_UNSUPPORTED[template_file]
+        tool_name = tool["function"]["name"]
+        if unsupported_tools is None or tool_name in unsupported_tools:
+            pytest.skip(f"Template {template_file} with tool {tool_name} not supported in experimental new parsers")
+
+    global server
+    n_predict = 4096
+    server.n_ctx = 8192
+    # server = ServerPreset.stories15m_moe()
+    server.jinja = True
+    server.experimental_new_parsers = True
+    server.n_predict = n_predict
+    server.reasoning_budget = 0  # Disable thinking to prevent gibberish being captured as reasoning
+    server.chat_template_file = f'../../../{template_file}'
     server.start(timeout_seconds=TIMEOUT_START_SLOW)
     do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED)
 

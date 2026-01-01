@@ -42,6 +42,11 @@ enum llama_gretype {
 
     // inverse token (!<[token-id]>)
     LLAMA_GRETYPE_TOKEN_NOT      = 9,
+
+    // token literal: @"..." - matches as token if possible, falls back to text
+    // value encoding: if high bit is 0, lower 31 bits = token ID (single token mode)
+    //                 if high bit is 1, lower 31 bits = index into token_literal_data
+    LLAMA_GRETYPE_TOKEN_LITERAL  = 10,
 };
 
 typedef struct llama_grammar_element {
@@ -68,6 +73,11 @@ using llama_grammar_rules      = std::vector<llama_grammar_rule>;
 using llama_grammar_stacks     = std::vector<llama_grammar_stack>;
 using llama_grammar_candidates = std::vector<llama_grammar_candidate>;
 
+// Fallback data for @"..." token literals that don't resolve to a single token
+struct llama_grammar_token_literal_data {
+    std::vector<uint32_t> code_points;  // UTF-32 code points for text matching
+};
+
 // TODO: remove, needed for tests atm
 const llama_grammar_rules  & llama_grammar_get_rules (const struct llama_grammar * grammar);
       llama_grammar_stacks & llama_grammar_get_stacks(      struct llama_grammar * grammar);
@@ -88,6 +98,9 @@ struct llama_grammar_parser {
     std::map<std::string, uint32_t> symbol_ids;
 
     llama_grammar_rules rules;
+
+    // Fallback data for @"..." token literals (indexed by value & 0x7FFFFFFF when high bit is set)
+    std::vector<llama_grammar_token_literal_data> token_literal_data;
 
     llama_grammar_parser(const struct llama_vocab * vocab = nullptr) : vocab(vocab) {}
 
@@ -130,6 +143,9 @@ struct llama_grammar {
 
     const llama_grammar_rules  rules;  // TODO: shared ptr
           llama_grammar_stacks stacks;
+
+    // Fallback data for @"..." token literals (indexed by value & 0x7FFFFFFF when high bit is set)
+    std::vector<llama_grammar_token_literal_data> token_literal_data;
 
     // buffer for partially generated UTF-8 sequence from accepted tokens
     llama_partial_utf8 partial_utf8;

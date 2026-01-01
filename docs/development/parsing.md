@@ -180,62 +180,64 @@ mappers that help create parsers and visitors/extractors for these types. They
 require parsers to tag nodes to conform to an AST "shape". This normalization
 makes it easy to extract information and generalize parsing.
 
+### Tag Enum
+
+All tags are defined in the `common_chat_peg_tag` enum for type-safe, switch-based dispatch:
+
+```cpp
+enum class common_chat_peg_tag : int {
+    NONE = 0,
+    REASONING_BLOCK, REASONING, CONTENT,
+    TOOL, TOOL_OPEN, TOOL_CLOSE, TOOL_ID, TOOL_NAME, TOOL_ARGS,
+    TOOL_ARG, TOOL_ARG_OPEN, TOOL_ARG_CLOSE, TOOL_ARG_NAME,
+    TOOL_ARG_STRING_VALUE, TOOL_ARG_JSON_VALUE,
+};
+```
+
+Use `p.tag(Tag::XXX, parser)` or `p.atomic_tag(Tag::XXX, parser)` to tag nodes.
+
 ### Simple
 
 The `common_chat_peg_builder` builds a `simple` parser that supports
 content-only models with optional reasoning.
 
-- **`reasoning(p)`** - Tag node for extracting `reasoning_content`
-- **`content(p)`** - Tag node for extracting `content`
-
 ```cpp
-build_chat_peg_parser([&](common_chat_peg_parser & p) {
+build_chat_peg_parser([&](auto & p) {
+    using Tag = common_chat_peg_tag;
     return p.sequence({
-        p.optional("<think>" + p.reasoning(p.until("</think>")) + "</think>"),
-        p.content(p.until("<tool_call>")),
+        p.optional("<think>" + p.tag(Tag::REASONING, p.until("</think>")) + "</think>"),
+        p.tag(Tag::CONTENT, p.until("<tool_call>")),
         p.end()
     });
 });
 ```
 
-Use `common_chat_peg_mapper` to extract the content. Note that this is already
-done for you in `common_chat_peg_parser` when
-`chat_format == COMMON_CHAT_FORMAT_PEG_SIMPLE`.
+Use `apply_chat_peg_mapper` with `common_chat_peg_base_mapper()` to extract the content.
 
 ```cpp
 auto result = parser.parse(ctx);
 
 common_chat_msg msg;
-auto mapper = common_chat_peg_mapper(msg);
-mapper.from_ast(ctx.ast, result);
+apply_chat_peg_mapper(common_chat_peg_base_mapper(), ctx.ast, result, msg);
 ```
 
 ### Native
 
-The `common_chat_peg_native_builder` builds a `native` parser suitable for
-models that emit tool arguments as a direct JSON object.
-
-- **`reasoning(p)`** - Tag node for `reasoning_content`
-- **`content(p)`** - Tag node for `content`
-- **`tool(p)`** - Tag entirety of a single tool call
-- **`tool_open(p)`** - Tag start of a tool call
-- **`tool_close(p)`** - Tag end of a tool call
-- **`tool_id(p)`** - Tag the tool call ID (optional)
-- **`tool_name(p)`** - Tag the tool name
-- **`tool_args(p)`** - Tag the tool arguments
+The `native` parser is for models that emit tool arguments as a direct JSON object.
 
 ```cpp
-build_chat_peg_native_parser([&](common_chat_peg_native_parser & p) {
-    auto get_weather_tool = p.tool(p.sequence({
-        p.tool_open(p.literal("{")),
-        p.json_member("name", "\"" + p.tool_name(p.literal("get_weather")) + "\""),
+build_chat_peg_native_parser([&](auto & p) {
+    using Tag = common_chat_peg_tag;
+    auto get_weather_tool = p.tag(Tag::TOOL, p.sequence({
+        p.atomic_tag(Tag::TOOL_OPEN, p.literal("{")),
+        p.json_member("name", "\"" + p.atomic_tag(Tag::TOOL_NAME, p.literal("get_weather")) + "\""),
         p.literal(","),
-        p.json_member("arguments", p.tool_args(p.json())),
-        p.tool_close(p.literal("}"))
+        p.json_member("arguments", p.tag(Tag::TOOL_ARGS, p.json())),
+        p.atomic_tag(Tag::TOOL_CLOSE, p.literal("}"))
     }));
 
     return p.sequence({
-        p.content(p.until("<tool_call>")),
+        p.tag(Tag::CONTENT, p.until("<tool_call>")),
         p.literal("<tool_call>"),
         get_weather_tool,
         p.literal("</tool_call>"),
@@ -244,41 +246,27 @@ build_chat_peg_native_parser([&](common_chat_peg_native_parser & p) {
 });
 ```
 
-### Constructed
+### Nemotron V3 (Constructed Arguments)
 
-The `common_chat_peg_constructed_builder` builds a `constructed` parser
-suitable for models that emit tool arguments as separate entities, such as XML
-tags.
-
-- **`reasoning(p)`** - Tag node for `reasoning_content`
-- **`content(p)`** - Tag node for `content`
-- **`tool(p)`** - Tag entirety of a single tool call
-- **`tool_open(p)`** - Tag start of a tool call
-- **`tool_close(p)`** - Tag end of a tool call
-- **`tool_name(p)`** - Tag the tool name
-- **`tool_arg(p)`** - Tag a complete tool argument (name + value)
-- **`tool_arg_open(p)`** - Tag start of a tool argument
-- **`tool_arg_close(p)`** - Tag end of a tool argument
-- **`tool_arg_name(p)`** - Tag the argument name
-- **`tool_arg_string_value(p)`** - Tag string value for the argument
-- **`tool_arg_json_value(p)`** - Tag JSON value for the argument
+The Nemotron V3 parser is for models that emit tool arguments as separate entities (e.g., XML tags like `<function=name><parameter=key>value</parameter></function>`).
 
 ```cpp
-build_chat_peg_constructed_parser([&](common_chat_peg_constructed_builder & p) {
-    auto location_arg = p.tool_arg(
-        p.tool_arg_open("<parameter name=\"" + p.tool_arg_name(p.literal("location")) + "\">"),
-        p.tool_arg_string_value(p.until("</parameter>")),
-        p.tool_arg_close(p.literal("</parameter>"))
-    );
+build_chat_peg_nemotron_v3_parser([&](auto & p) {
+    using Tag = common_chat_peg_tag;
+    auto location_arg = p.tag(Tag::TOOL_ARG, p.sequence({
+        p.atomic_tag(Tag::TOOL_ARG_OPEN, "<parameter name=\"" + p.atomic_tag(Tag::TOOL_ARG_NAME, p.literal("location")) + "\">"),
+        p.tag(Tag::TOOL_ARG_STRING_VALUE, p.until("</parameter>")),
+        p.atomic_tag(Tag::TOOL_ARG_CLOSE, p.literal("</parameter>"))
+    }));
 
-    auto get_weather_tool = p.tool(p.sequence({
-        p.tool_open("<function name=\"" + p.tool_name(p.literal("get_weather")) + "\">"),
+    auto get_weather_tool = p.tag(Tag::TOOL, p.sequence({
+        p.atomic_tag(Tag::TOOL_OPEN, "<function name=\"" + p.atomic_tag(Tag::TOOL_NAME, p.literal("get_weather")) + "\">"),
         location_arg,
-        p.tool_close(p.literal("</function>"))
+        p.atomic_tag(Tag::TOOL_CLOSE, p.literal("</function>"))
     }));
 
     return p.sequence({
-        p.content(p.until("<tool_call>")),
+        p.tag(Tag::CONTENT, p.until("<tool_call>")),
         p.literal("<tool_call>"),
         get_weather_tool,
         p.literal("</tool_call>"),

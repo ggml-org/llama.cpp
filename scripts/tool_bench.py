@@ -11,7 +11,7 @@
 
         export LLAMA_SERVER_BIN_PATH=$PWD/build/bin/llama-server
         export LLAMA_CACHE=${LLAMA_CACHE:-$HOME/Library/Caches/llama.cpp}
-
+        
         ./scripts/tool_bench.py run --n 10 --temp -1 --temp 0 --temp 1 --temp 2 --temp 5 --llama-baseline $PWD/buildMaster/bin/llama-server --output qwen14b.jsonl --hf bartowski/Qwen2.5-14B-Instruct-GGUF:Q4_K_L
         ./scripts/tool_bench.py run --n 30 --temp -1 --temp 0 --temp 1 --model "Qwen 2.5 1.5B Q4_K_M"      --output qwen1.5b.jsonl  --hf bartowski/Qwen2.5-1.5B-Instruct-GGUF      --ollama qwen2.5:1.5b-instruct-q4_K_M
         ./scripts/tool_bench.py run --n 30 --temp -1 --temp 0 --temp 1 --model "Qwen 2.5 Coder 7B Q4_K_M"  --output qwenc7b.jsonl   --hf bartowski/Qwen2.5-Coder-7B-Instruct-GGUF  --ollama qwen2.5-coder:7b
@@ -220,6 +220,7 @@ def run(
     port: Annotated[int, typer.Option(help="llama-server port")] = 8084,
     force: Annotated[bool, typer.Option(help="Force overwrite of output file")] = False,
     append: Annotated[bool, typer.Option(help="Append to output file")] = False,
+    experimental_new_parsers: Annotated[bool, typer.Option(help="Use experimental new parsers")] = True,
 
     test_hello_world: Annotated[bool, typer.Option(help="Whether to run the hello world test")] = True,
     test_weather: Annotated[bool, typer.Option(help="Whether to run the weather test")] = True,
@@ -319,6 +320,7 @@ def run(
                 for server_name, server_path in servers:
                     server = ServerProcess()
                     server.n_ctx = n_ctx
+                    server.experimental_new_parsers = experimental_new_parsers
                     server.n_slots = 1
                     server.jinja = True
                     server.ctk = ctk

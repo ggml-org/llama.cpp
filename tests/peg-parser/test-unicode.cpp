@@ -446,4 +446,85 @@ void test_unicode(testing &t) {
             }
         });
     });
+
+    // Test DeepSeek R1 style tool call format with Unicode tokens
+    t.test("deepseek r1 tool format", [](testing &t) {
+        // The Unicode characters used in DeepSeek R1 tokens:
+        // ｜ = U+FF5C (fullwidth vertical line) = EF BD 9C in UTF-8
+        // ▁ = U+2581 (lower one eighth block) = E2 96 81 in UTF-8
+
+        const std::string tool_calls_begin = "<\xEF\xBD\x9C" "tool\xE2\x96\x81" "calls\xE2\x96\x81" "begin\xEF\xBD\x9C>";  // <｜tool▁calls▁begin｜>
+        const std::string tool_call_begin = "<\xEF\xBD\x9C" "tool\xE2\x96\x81" "call\xE2\x96\x81" "begin\xEF\xBD\x9C>";   // <｜tool▁call▁begin｜>
+        const std::string tool_sep = "<\xEF\xBD\x9C" "tool\xE2\x96\x81" "sep\xEF\xBD\x9C>";                                // <｜tool▁sep｜>
+        const std::string tool_call_end = "<\xEF\xBD\x9C" "tool\xE2\x96\x81" "call\xE2\x96\x81" "end\xEF\xBD\x9C>";       // <｜tool▁call▁end｜>
+        const std::string tool_calls_end = "<\xEF\xBD\x9C" "tool\xE2\x96\x81" "calls\xE2\x96\x81" "end\xEF\xBD\x9C>";     // <｜tool▁calls▁end｜>
+
+        t.test("match unicode tool_calls_begin literal", [&](testing &t) {
+            auto parser = build_peg_parser([&](common_peg_parser_builder & p) {
+                return p.literal(tool_calls_begin);
+            });
+
+            common_peg_parse_context ctx(tool_calls_begin, false);
+            auto result = parser.parse(ctx);
+            t.assert_equal("match unicode literal", true, result.success());
+        });
+
+        t.test("match unicode tool_call_begin literal", [&](testing &t) {
+            auto parser = build_peg_parser([&](common_peg_parser_builder & p) {
+                return p.literal(tool_call_begin);
+            });
+
+            common_peg_parse_context ctx(tool_call_begin, false);
+            auto result = parser.parse(ctx);
+            t.assert_equal("match unicode literal", true, result.success());
+        });
+
+        t.test("sequence: space + tool_calls_begin + tool_call_begin", [&](testing &t) {
+            auto parser = build_peg_parser([&](common_peg_parser_builder & p) {
+                return p.space() + p.literal(tool_calls_begin) + p.literal(tool_call_begin + "function" + tool_sep);
+            });
+
+            std::string input = "  " + tool_calls_begin + tool_call_begin + "function" + tool_sep + "test";
+            common_peg_parse_context ctx(input, false);
+            auto result = parser.parse(ctx);
+            t.assert_equal("sequence with unicode", true, result.success());
+        });
+
+        t.test("full tool call format with serialization", [&](testing &t) {
+            // Build parser similar to DeepSeek R1 format
+            // Note: JSON object/array don't include trailing space(), only primitives do
+            // So we need space() after json() to consume whitespace before close literal
+            auto arena = build_peg_parser([&](common_peg_parser_builder & p) {
+                auto tool_open_literal = tool_call_begin + "function" + tool_sep;
+                // Close literal without leading \n since space() eats whitespace including \n
+                auto tool_close_literal = "```" + tool_call_end;
+
+                auto tool_rule = p.rule("tool-test",
+                    p.literal(tool_open_literal)
+                    + p.literal("test")
+                    + p.literal("\n```json\n")
+                    + p.json()
+                    + p.space()  // Consume trailing whitespace (space + newline)
+                    + p.literal(tool_close_literal)
+                );
+
+                return p.space()
+                    + p.literal(tool_calls_begin)
+                    + tool_rule;
+            });
+
+            // Serialize and deserialize (like server does)
+            std::string serialized = arena.save();
+            common_peg_arena loaded;
+            loaded.load(serialized);
+
+            // Test input matching what the model might output
+            // Input has: JSON + space + newline + backticks. space() eats " \n", then literal matches "```..."
+            std::string input = " \n                    " + tool_calls_begin + tool_call_begin + "function" + tool_sep + "test\n```json\n{\"success\":true} \n```" + tool_call_end;
+
+            common_peg_parse_context ctx(input, false);
+            auto result = loaded.parse(ctx);
+            t.assert_equal("full format parse success", true, result.success());
+        });
+    });
 }

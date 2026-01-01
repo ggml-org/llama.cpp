@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 #include "llama-vocab.h"
 #include "llama-sampling.h"
+#include "unicode.h"
 
 #include <cmath>
 #include <algorithm>
@@ -260,6 +261,7 @@ static void print_rule_binary(FILE * file, const llama_grammar_rule & rule) {
             case LLAMA_GRETYPE_CHAR_ANY:       fprintf(file, "CHAR_ANY");       break;
             case LLAMA_GRETYPE_TOKEN:          fprintf(file, "TOKEN");          break;
             case LLAMA_GRETYPE_TOKEN_NOT:      fprintf(file, "TOKEN_NOT");      break;
+            case LLAMA_GRETYPE_TOKEN_LITERAL:  fprintf(file, "TOKEN_LITERAL");  break;
         }
         switch (elem.type) {
             case LLAMA_GRETYPE_END:
@@ -286,6 +288,13 @@ static void print_rule_binary(FILE * file, const llama_grammar_rule & rule) {
                 fprintf(file, "<[");
                 fprintf(file, "%u", elem.value);
                 fprintf(file, "]> ");
+                break;
+            case LLAMA_GRETYPE_TOKEN_LITERAL:
+                if (elem.value & 0x80000000u) {
+                    fprintf(file, "@\"<fallback:%u>\" ", elem.value & 0x7FFFFFFFu);
+                } else {
+                    fprintf(file, "@\"<[%u]>\" ", elem.value);
+                }
                 break;
         }
     }
@@ -353,6 +362,13 @@ static void print_rule(
                 fprintf(file, "<[");
                 fprintf(file, "%u", elem.value);
                 fprintf(file, "]> ");
+                break;
+            case LLAMA_GRETYPE_TOKEN_LITERAL:
+                if (elem.value & 0x80000000u) {
+                    fprintf(file, "@\"<fallback:%u>\" ", elem.value & 0x7FFFFFFFu);
+                } else {
+                    fprintf(file, "@\"<[%u]>\" ", elem.value);
+                }
                 break;
         }
         if (is_char_element(elem)) {
@@ -473,7 +489,54 @@ const char * llama_grammar_parser::parse_sequence(
     };
 
     while (*pos) {
-        if (*pos == '"') { // literal string
+        if (*pos == '@' && pos[1] == '"') { // token-aware literal @"..."
+            pos += 2; // skip @"
+            last_sym_start = rule.size();
+            std::vector<uint32_t> code_points;
+            while (*pos != '"') {
+                if (!*pos) {
+                    throw std::runtime_error("unexpected end of input");
+                }
+                auto char_pair = parse_char(pos);
+                     pos       = char_pair.second;
+                code_points.push_back(char_pair.first);
+            }
+            pos = parse_space(pos + 1, is_nested);
+
+            // Convert code points to UTF-8 string for tokenization
+            std::string literal_text;
+            for (uint32_t cp : code_points) {
+                literal_text += unicode_cpt_to_utf8(cp);
+            }
+
+            // Try to tokenize if we have a vocabulary
+            if (vocab != nullptr) {
+                std::vector<llama_token> tokens(literal_text.size() + 1);
+                int32_t n_tokens = vocab->tokenize(
+                    literal_text.c_str(),
+                    static_cast<int32_t>(literal_text.size()),
+                    tokens.data(),
+                    static_cast<int32_t>(tokens.size()),
+                    false,  // no special prefix
+                    true    // parse special tokens (for <escape>, etc.)
+                );
+
+                if (n_tokens == 1) {
+                    // Single token mode: store token ID directly
+                    rule.push_back({LLAMA_GRETYPE_TOKEN_LITERAL, static_cast<uint32_t>(tokens[0])});
+                } else {
+                    // Multi-token: expand to character sequence (same as regular string literal)
+                    for (uint32_t cp : code_points) {
+                        rule.push_back({LLAMA_GRETYPE_CHAR, cp});
+                    }
+                }
+            } else {
+                // No vocab: expand to character sequence (same as regular string literal)
+                for (uint32_t cp : code_points) {
+                    rule.push_back({LLAMA_GRETYPE_CHAR, cp});
+                }
+            }
+        } else if (*pos == '"') { // literal string
             pos++;
             last_sym_start = rule.size();
             while (*pos != '"') {
@@ -772,13 +835,15 @@ static bool llama_grammar_match_partial_char(
     return !is_positive_char;
 }
 
-// returns true iff token matches the rule at pos (regular or inverse)
+// returns true iff token matches the rule at pos (regular, inverse, or token literal)
 // asserts that pos is pointing to a token element
 static bool llama_grammar_match_token(
     const llama_grammar_element * pos,
     const llama_token             token) {
-    GGML_ASSERT(pos->type == LLAMA_GRETYPE_TOKEN || pos->type == LLAMA_GRETYPE_TOKEN_NOT);
-    if (pos->type == LLAMA_GRETYPE_TOKEN) {
+    GGML_ASSERT(pos->type == LLAMA_GRETYPE_TOKEN ||
+                pos->type == LLAMA_GRETYPE_TOKEN_NOT ||
+                pos->type == LLAMA_GRETYPE_TOKEN_LITERAL);
+    if (pos->type == LLAMA_GRETYPE_TOKEN || pos->type == LLAMA_GRETYPE_TOKEN_LITERAL) {
         return pos->value == static_cast<uint32_t>(token);
     }
     if (pos->type == LLAMA_GRETYPE_TOKEN_NOT) {
@@ -836,6 +901,7 @@ static void llama_grammar_advance_stack(
         case LLAMA_GRETYPE_CHAR_ANY:
         case LLAMA_GRETYPE_TOKEN:
         case LLAMA_GRETYPE_TOKEN_NOT:
+        case LLAMA_GRETYPE_TOKEN_LITERAL:
             if (std::find(new_stacks.begin(), new_stacks.end(), stack) == new_stacks.end()) {
                 // only add the stack if it's not a duplicate of one we already have
                 new_stacks.emplace_back(stack);
@@ -941,7 +1007,9 @@ static void llama_grammar_accept_chr(
     const llama_grammar_element * pos = stack.back();
 
     // ignore if this turns into a token
-    if (pos->type == LLAMA_GRETYPE_TOKEN || pos->type == LLAMA_GRETYPE_TOKEN_NOT) {
+    if (pos->type == LLAMA_GRETYPE_TOKEN ||
+        pos->type == LLAMA_GRETYPE_TOKEN_NOT ||
+        pos->type == LLAMA_GRETYPE_TOKEN_LITERAL) {
         return;
     }
 
@@ -986,7 +1054,9 @@ llama_grammar_candidates llama_grammar_reject_candidates_for_stack(
     const llama_grammar_element * stack_pos = stack.back();
 
     // if the top of the stack is a token rule, then we only need to check the token id
-    if (stack_pos->type == LLAMA_GRETYPE_TOKEN || stack_pos->type == LLAMA_GRETYPE_TOKEN_NOT) {
+    if (stack_pos->type == LLAMA_GRETYPE_TOKEN ||
+        stack_pos->type == LLAMA_GRETYPE_TOKEN_NOT ||
+        stack_pos->type == LLAMA_GRETYPE_TOKEN_LITERAL) {
         for (const auto & tok : candidates) {
             if (*tok.code_points == 0) {
                 // reached the end of a token consumed by char rules, reject iff it ended
@@ -1098,6 +1168,7 @@ struct llama_grammar * llama_grammar_init_impl(
         vocab,
         std::move(vec_rules),
         std::move(stacks),
+        /* .token_literal_data = */       {},
         /* .partial_utf8 = */             {},
         /* .lazy = */                     false,
         /* .awaiting_trigger = */         false,
@@ -1204,6 +1275,7 @@ struct llama_grammar * llama_grammar_init_impl(
         vocab,
         std::move(vec_rules),
         std::move(stacks),
+        std::move(parser.token_literal_data),
         /* .partial_utf8 = */             {},
         /* .lazy = */                     lazy,
         /* .awaiting_trigger = */         lazy,
@@ -1227,6 +1299,7 @@ struct llama_grammar * llama_grammar_clone_impl(const struct llama_grammar & gra
         grammar.vocab,
         grammar.rules,
         grammar.stacks,
+        grammar.token_literal_data,
         grammar.partial_utf8,
         grammar.lazy,
         grammar.awaiting_trigger,
@@ -1395,7 +1468,9 @@ void llama_grammar_accept_token(struct llama_grammar & grammar, llama_token toke
 
         const llama_grammar_element * pos = stack.back();
 
-        if (pos->type == LLAMA_GRETYPE_TOKEN || pos->type == LLAMA_GRETYPE_TOKEN_NOT) {
+        if (pos->type == LLAMA_GRETYPE_TOKEN ||
+            pos->type == LLAMA_GRETYPE_TOKEN_NOT ||
+            pos->type == LLAMA_GRETYPE_TOKEN_LITERAL) {
             if (llama_grammar_match_token(pos, token)) {
                 llama_grammar_stack new_stack(stack.begin(), stack.end() - 1);
                 if (!llama_grammar_is_end_of_sequence(pos + 1)) {

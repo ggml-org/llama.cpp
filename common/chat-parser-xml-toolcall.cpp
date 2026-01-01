@@ -1,3 +1,5 @@
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
+#include "chat-parser-xml-toolcall.h"
 #include "chat.h"
 #include "chat-parser.h"
 #include "common.h"

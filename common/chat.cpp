@@ -1,11 +1,10 @@
 #include "chat.h"
-#include "chat-parser.h"
+#include "chat-parser-xml-toolcall.h"
 #include "chat-peg-parser.h"
+#include "chat-parsers-internal.h"
 #include "common.h"
-#include "json-partial.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
-#include "regex-partial.h"
 
 #include <minja/chat-template.hpp>
 #include <minja/minja.hpp>
@@ -15,22 +14,12 @@
 #include <cctype>
 #include <exception>
 #include <functional>
-#include <iostream>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 using json = nlohmann::ordered_json;
-
-static std::string format_time(const std::chrono::system_clock::time_point & now, const std::string & format) {
-    auto time = std::chrono::system_clock::to_time_t(now);
-    auto local_time = *std::localtime(&time);
-    std::ostringstream ss;
-    ss << std::put_time(&local_time, format.c_str());
-    auto res = ss.str();
-    return res;
-}
 
 static std::string string_diff(const std::string & last, const std::string & current) {
     if (last.empty()) {
@@ -145,24 +134,6 @@ struct common_chat_templates {
     std::unique_ptr<common_chat_template> template_tool_use;
 };
 
-struct templates_params {
-    json messages;
-    json tools;
-    common_chat_tool_choice tool_choice;
-    json json_schema;
-    bool parallel_tool_calls;
-    common_reasoning_format reasoning_format;
-    bool stream;
-    std::string grammar;
-    bool add_generation_prompt = true;
-    bool enable_thinking = true;
-    std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
-    json extra_context;
-    bool add_bos;
-    bool add_eos;
-    bool is_inference = true;
-};
-
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
     if (tool_choice == "auto") {
         return COMMON_CHAT_TOOL_CHOICE_AUTO;
@@ -187,6 +158,14 @@ bool common_chat_templates_support_enable_thinking(const common_chat_templates *
     dummy_inputs.enable_thinking = true;
     const auto rendered_with_thinking = common_chat_templates_apply(chat_templates, dummy_inputs);
     return rendered_no_thinking.prompt != rendered_with_thinking.prompt;
+}
+
+bool common_chat_templates_support_parallel_tool_calls(const common_chat_templates * chat_templates) {
+    // Check the template that would be used for tools (tool_use variant if available, otherwise default)
+    const auto & tmpl = chat_templates->template_tool_use
+        ? *chat_templates->template_tool_use
+        : *chat_templates->template_default;
+    return tmpl.original_caps().supports_parallel_tool_calls;
 }
 
 template <>
@@ -648,6 +627,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_GENERIC: return "Generic";
         case COMMON_CHAT_FORMAT_MISTRAL_NEMO: return "Mistral Nemo";
         case COMMON_CHAT_FORMAT_MAGISTRAL: return "Magistral";
+        case COMMON_CHAT_FORMAT_MINISTRAL_3: return "Ministral 3";
         case COMMON_CHAT_FORMAT_LLAMA_3_X: return "Llama 3.x";
         case COMMON_CHAT_FORMAT_LLAMA_3_X_WITH_BUILTIN_TOOLS: return "Llama 3.x with builtin tools";
         case COMMON_CHAT_FORMAT_DEEPSEEK_R1: return "DeepSeek R1";
@@ -701,73 +681,11 @@ common_reasoning_format common_reasoning_format_from_name(const std::string & fo
     throw std::runtime_error("Unknown reasoning format: " + format);
 }
 
-static void foreach_function(const json & tools, const std::function<void(const json &)> & fn) {
-    for (const auto & tool : tools) {
-        if (!tool.contains("type") || tool.at("type") != "function" || !tool.contains("function")) {
-            LOG_INF("Skipping tool without function: %s", tool.dump(2).c_str());
-            continue;
-        }
-        fn(tool);
-    }
-}
-
-static void foreach_parameter(const json & function, const std::function<void(const std::string &, const json &, bool)> & fn) {
-    if (!function.contains("parameters") || !function.at("parameters").is_object()) {
-        return;
-    }
-    const auto & params = function.at("parameters");
-    if (!params.contains("properties") || !params.at("properties").is_object()) {
-        return;
-    }
-    const auto & props = params.at("properties");
-    std::set<std::string> required;
-    if (params.contains("required") && params.at("required").is_array()) {
-        params.at("required").get_to(required);
-    }
-    for (const auto & [name, prop] : props.items()) {
-        bool is_required = (required.find(name) != required.end());
-        fn(name, prop, is_required);
-    }
-}
-
-static std::string apply(
-    const common_chat_template & tmpl,
-    const struct templates_params & inputs,
-    const std::optional<json> & messages_override = std::nullopt,
-    const std::optional<json> & tools_override = std::nullopt,
-    const std::optional<json> & additional_context = std::nullopt)
-{
-    minja::chat_template_inputs tmpl_inputs;
-    tmpl_inputs.messages = messages_override ? *messages_override : inputs.messages;
-    if (tools_override) {
-        tmpl_inputs.tools = *tools_override;
-    } else {
-        tmpl_inputs.tools = inputs.tools.empty() ? json() : inputs.tools;
-    }
-    tmpl_inputs.add_generation_prompt = inputs.add_generation_prompt;
-    tmpl_inputs.extra_context = inputs.extra_context;
-    tmpl_inputs.extra_context["enable_thinking"] = inputs.enable_thinking;
-    if (additional_context) {
-        tmpl_inputs.extra_context.merge_patch(*additional_context);
-    }
-    // TODO: add flag to control date/time, if only for testing purposes.
-    // tmpl_inputs.now = std::chrono::system_clock::now();
-
-    minja::chat_template_options tmpl_opts;
-    // To avoid double BOS / EOS tokens, we're manually removing begining / trailing tokens
-    // instead of using `chat_template_options.use_bos_token = false`, since these tokens
-    // may be needed inside the template / between messages too.
-    auto result = tmpl.apply(tmpl_inputs, tmpl_opts);
-    if (inputs.add_bos && string_starts_with(result, tmpl.bos_token())) {
-        result = result.substr(tmpl.bos_token().size());
-    }
-    if (inputs.add_eos && string_ends_with(result, tmpl.eos_token())) {
-        result = result.substr(0, result.size() - tmpl.eos_token().size());
-    }
-    return result;
-}
-
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_generic(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_generic_peg(tmpl, inputs);
+    }
     common_chat_params data;
 
     auto tool_call_schemas = json::array();
@@ -853,7 +771,11 @@ static common_chat_params common_chat_params_init_generic(const common_chat_temp
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_mistral_nemo(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_mistral_nemo_peg(tmpl, inputs);
+    }
     common_chat_params data;
     data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
     data.grammar = build_grammar([&](const common_grammar_builder & builder) {
@@ -909,7 +831,11 @@ static size_t ifind_string(const std::string & haystack, const std::string & nee
     return (it == haystack.end()) ? std::string::npos : std::distance(haystack.begin(), it);
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_lfm2(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_lfm2_peg(tmpl, inputs);
+    }
     common_chat_params data;
     const auto is_json_schema_provided = !inputs.json_schema.is_null();
     const auto is_grammar_provided = !inputs.grammar.empty();
@@ -1018,7 +944,11 @@ static common_chat_params common_chat_params_init_lfm2(const common_chat_templat
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_ministral_3(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_ministral_3_peg(tmpl, inputs);
+    }
     common_chat_params data;
 
     // Build up messages to follow the format: https://huggingface.co/mistralai/Ministral-3-14B-Reasoning-2512/blob/main/chat_template.jinja
@@ -1130,7 +1060,11 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_magistral(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_magistral_peg(tmpl, inputs);
+    }
     common_chat_params data;
     data.prompt = apply(tmpl, inputs);
     data.format = COMMON_CHAT_FORMAT_MAGISTRAL;
@@ -1188,7 +1122,11 @@ static common_chat_params common_chat_params_init_magistral(const common_chat_te
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_command_r7b(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_command_r7b_peg(tmpl, inputs);
+    }
     common_chat_params data;
 
     auto adjusted_messages = json::array();
@@ -1287,7 +1225,12 @@ static void expect_tool_parameters(const std::string & name, const json & parame
     }
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_llama_3_x(const common_chat_template & tmpl, const struct templates_params & inputs, bool allow_python_tag_builtin_tools) {
+    // TODO(ochafik): this peg parser needs both TOOL_ARG_NAME (builtins) and TOOL_ARGS (regular) so will need its own mapper
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_llama_3_x_peg(tmpl, inputs, allow_python_tag_builtin_tools);
+    }
     auto builtin_tools = json::array();
     common_chat_params data;
     if (!inputs.tools.is_null()) {
@@ -1367,7 +1310,11 @@ static common_chat_params common_chat_params_init_llama_3_x(const common_chat_te
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_nemotron_v2_peg(tmpl, inputs);
+    }
     common_chat_params data;
 
     // Generate the prompt using the apply() function with the template
@@ -1428,7 +1375,11 @@ static common_chat_params common_chat_params_init_nemotron_v2(const common_chat_
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_nemotron_v3(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_nemotron_v3_peg(tmpl, inputs);
+    }
     common_chat_params data;
 
     data.prompt = apply(tmpl, inputs);
@@ -1488,7 +1439,7 @@ static common_chat_params common_chat_params_init_nemotron_v3(const common_chat_
                     "\n</function>"
                 }));
 
-                foreach_parameter(function, [&](const auto & param_name, const json & param_schema, bool is_required) {
+                foreach_parameter_legacy(function, [&](const auto & param_name, const json & param_schema, bool is_required) {
                     auto rule_name = "tool-" + name + "-arg-" + param_name;
 
                     auto arg_open = "<parameter=" + p.tool_arg_name(p.literal(param_name)) + ">\n";
@@ -1514,6 +1465,9 @@ static common_chat_params common_chat_params_init_nemotron_v3(const common_chat_
             auto tool_call = p.rule("tool-call", "<tool_call>\n" + tool_choice + "</tool_call>" + p.space());
             auto tool_calls = p.trigger_rule("tool-call-root", p.repeat(tool_call, /* min = */ min_calls, /* max = */ max_calls));
 
+            // if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
+            //     return reasoning << tool_calls;    
+            // }
             return reasoning << p.content(p.until("<tool_call>")) << tool_calls;
         }
 
@@ -1545,7 +1499,11 @@ static common_chat_params common_chat_params_init_nemotron_v3(const common_chat_
 }
 
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_apertus(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_apertus_peg(tmpl, inputs);
+    }
     common_chat_params data;
 
     // Generate the prompt using the apply() function with the template
@@ -1614,7 +1572,11 @@ static common_chat_params common_chat_params_init_apertus(const common_chat_temp
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_deepseek_r1(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_deepseek_r1_peg(tmpl, inputs);
+    }
     common_chat_params data;
     auto prompt = apply(tmpl, inputs);
 
@@ -1688,7 +1650,11 @@ static common_chat_params common_chat_params_init_deepseek_r1(const common_chat_
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_deepseek_v3_1(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_deepseek_v3_1_peg(tmpl, inputs);
+    }
     common_chat_params data;
 
     // Pass thinking context for DeepSeek V3.1 template
@@ -1753,6 +1719,9 @@ static common_chat_params common_chat_params_init_deepseek_v3_1(const common_cha
 }
 
 static common_chat_params common_chat_params_init_minimax_m2(const common_chat_template & tmpl, const struct templates_params & params) {
+    if (params.experimental_new_parsers) {
+        return common_chat_params_init_minimax_m2_peg(tmpl, params);
+    }
     common_chat_params data;
     data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
@@ -1795,6 +1764,9 @@ static common_chat_params common_chat_params_init_minimax_m2(const common_chat_t
 }
 
 static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_chat_template & tmpl, const struct templates_params & params) {
+    if (params.experimental_new_parsers) {
+        return common_chat_params_init_qwen3_coder_xml_peg(tmpl, params);
+    }
     common_chat_params data;
     data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
@@ -1827,6 +1799,9 @@ static common_chat_params common_chat_params_init_qwen3_coder_xml(const common_c
 }
 
 static common_chat_params common_chat_params_init_kimi_k2(const common_chat_template & tmpl, const struct templates_params & params) {
+    if (params.experimental_new_parsers) {
+        return common_chat_params_init_kimi_k2_peg(tmpl, params);
+    }
     common_chat_params data;
     data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
@@ -1871,6 +1846,9 @@ static common_chat_params common_chat_params_init_kimi_k2(const common_chat_temp
 }
 
 static common_chat_params common_chat_params_init_apriel_1_5(const common_chat_template & tmpl, const struct templates_params & params) {
+    if (params.experimental_new_parsers) {
+        return common_chat_params_init_apriel_1_5_peg(tmpl, params);
+    }
     common_chat_params data;
     data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
@@ -1906,6 +1884,9 @@ static common_chat_params common_chat_params_init_apriel_1_5(const common_chat_t
 }
 
 static common_chat_params common_chat_params_init_xiaomi_mimo(const common_chat_template & tmpl, const struct templates_params & params) {
+    if (params.experimental_new_parsers) {
+        return common_chat_params_init_xiaomi_mimo_peg(tmpl, params);
+    }
     common_chat_params data;
     data.grammar_lazy = params.tools.is_array() && !params.tools.empty() && params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
@@ -1937,7 +1918,11 @@ static common_chat_params common_chat_params_init_xiaomi_mimo(const common_chat_
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_gpt_oss_peg(tmpl, inputs);
+    }
     common_chat_params data;
 
     // Copy reasoning to the "thinking" field as expected by the gpt-oss template
@@ -2084,7 +2069,11 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_glm_4_5(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_glm_4_5_peg(tmpl, inputs);
+    }
     common_chat_params data;
     data.grammar_lazy = inputs.tools.is_array() && !inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
 
@@ -2163,7 +2152,11 @@ static common_chat_params common_chat_params_init_glm_4_5(const common_chat_temp
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_firefunction_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_firefunction_v2_peg(tmpl, inputs);
+    }
     LOG_DBG("%s\n", __func__);
     common_chat_params data;
     const std::optional<json> tools_override = json();
@@ -2187,7 +2180,7 @@ static common_chat_params common_chat_params_init_firefunction_v2(const common_c
                         }},
                         {"arguments", function.at("parameters")},
                     }},
-                    {"required", json::array({"name", "arguments", "id"})},
+                    {"required", json::array({"name", "arguments"})},
                 });
             });
             auto schema = json {
@@ -2211,7 +2204,11 @@ static common_chat_params common_chat_params_init_firefunction_v2(const common_c
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_functionary_v3_2(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_functionary_v3_2_peg(tmpl, inputs);
+    }
     // >>>all\nlet's call functions>>>fn1\n{"arg1": 1...}\n>>>fn2\n{"arg1": 1...}...
     // Using ">>>f1\n", ">>>f2\n"... as trigger words for the grammar
     // If the function is python, we also allow raw python code (if the line after `python\n` doesn't start w/ opening `{`), which the model seems to prefer for multiline code.
@@ -2261,7 +2258,11 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_functionary_v3_1_llama_3_1(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_functionary_v3_1_llama_3_1_peg(tmpl, inputs);
+    }
     // https://github.com/MeetKai/functionary/blob/main/tests/prompt_test_v3-llama3.1.txt
     common_chat_params data;
 
@@ -2320,7 +2321,11 @@ static common_chat_params common_chat_params_init_functionary_v3_1_llama_3_1(con
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_hermes_2_pro_peg(tmpl, inputs);
+    }
     common_chat_params data;
 
     json extra_context = json {
@@ -2436,7 +2441,11 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_granite(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    if (inputs.experimental_new_parsers) {
+        return common_chat_params_init_granite_peg(tmpl, inputs);
+    }
     common_chat_params data;
 
     // Pass thinking context for Granite template
@@ -2517,6 +2526,7 @@ static common_chat_params common_chat_params_init_granite(const common_chat_temp
     return data;
 }
 
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_without_tools(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
     data.prompt = apply(tmpl, inputs);
@@ -2530,19 +2540,33 @@ static common_chat_params common_chat_params_init_without_tools(const common_cha
     } else {
         data.grammar = inputs.grammar;
     }
+
+    // Build a basic content-only parser (use new parsers if flag is set)
+    if (inputs.experimental_new_parsers) {
+        auto parser = build_chat_peg_parser([&](auto & p) {
+            using Tag = common_chat_peg_tag;
+            return p.tag(Tag::CONTENT, p.rest());
+        });
+        data.parser = parser.save();
+    }
+
     return data;
 }
 
+
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 static common_chat_params common_chat_params_init_seed_oss(
     const common_chat_template         & tmpl,
-    templates_params                   & params,
-    const common_chat_templates_inputs & inputs)
+    templates_params                   & params)
 {
+    if (params.experimental_new_parsers) {
+        return common_chat_params_init_seed_oss_peg(tmpl, params);
+    }
     common_chat_params data;
     data.prompt = apply(tmpl, params);
     data.format = COMMON_CHAT_FORMAT_SEED_OSS;
     if (string_ends_with(data.prompt, "<seed:think>")) {
-        if (!inputs.enable_thinking) {
+        if (!params.enable_thinking) {
             data.prompt += "</seed:think>";
         } else {
             data.thinking_forced_open = true;
@@ -2550,7 +2574,7 @@ static common_chat_params common_chat_params_init_seed_oss(
     }
 
     if (params.tools.is_array() && !params.tools.empty()) {
-        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar_lazy = params.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
             std::vector<std::string> tool_rules;
             foreach_function(params.tools, [&](const json & tool) {
@@ -2607,6 +2631,7 @@ static common_chat_params common_chat_templates_apply_jinja(
     params.now = inputs.now;
     params.add_bos = tmpls->add_bos;
     params.add_eos = tmpls->add_eos;
+    params.experimental_new_parsers = inputs.experimental_new_parsers;
 
     params.extra_context = json::object();
     for (auto el : inputs.chat_template_kwargs) {
@@ -2635,17 +2660,17 @@ static common_chat_params common_chat_templates_apply_jinja(
 
     // DeepSeek V3.1: detect based on specific patterns in the template
     if (src.find("message['prefix'] is defined and message['prefix'] and thinking") != std::string::npos &&
-        params.json_schema.is_null()) {
+        (params.json_schema.is_null() || inputs.experimental_new_parsers)) {
         return common_chat_params_init_deepseek_v3_1(tmpl, params);
     }
 
     // DeepSeek R1: use handler in all cases except json schema (thinking / tools).
-    if (src.find("<｜tool▁calls▁begin｜>") != std::string::npos && params.json_schema.is_null()) {
+    if (src.find("<｜tool▁calls▁begin｜>") != std::string::npos && (params.json_schema.is_null() || inputs.experimental_new_parsers)) {
         return common_chat_params_init_deepseek_r1(tmpl, params);
     }
 
     // Command R7B: : use handler in all cases except json schema (thinking / tools).
-    if (src.find("<|END_THINKING|><|START_ACTION|>") != std::string::npos && params.json_schema.is_null()) {
+    if (src.find("<|END_THINKING|><|START_ACTION|>") != std::string::npos && (params.json_schema.is_null() || inputs.experimental_new_parsers)) {
         return common_chat_params_init_command_r7b(tmpl, params);
     }
 
@@ -2658,7 +2683,7 @@ static common_chat_params common_chat_templates_apply_jinja(
     if (src.find("[gMASK]<sop>") != std::string::npos &&
         src.find("<arg_key>") != std::string::npos &&
         src.find("<arg_value>") != std::string::npos &&
-        params.json_schema.is_null()) {
+        (params.json_schema.is_null() || inputs.experimental_new_parsers)) {
         return common_chat_params_init_glm_4_5(tmpl, params);
     }
 
@@ -2678,17 +2703,25 @@ static common_chat_params common_chat_templates_apply_jinja(
     }
 
     // Xiaomi MiMo format detection (must come before Hermes 2 Pro)
-    if (src.find("<tools>") != std::string::npos &&
-        src.find("# Tools") != std::string::npos &&
-        src.find("</tools>") != std::string::npos &&
-        src.find("<tool_calls>") != std::string::npos &&
-        src.find("</tool_calls>") != std::string::npos &&
-        src.find("<tool_response>") != std::string::npos) {
+    // Template uses singular <tool_call>/<tool_call> not plural <tool_calls>
+    if (src.find("MiMo, an AI assistant developed by Xiaomi") != std::string::npos &&
+        src.find("<tools>") != std::string::npos && src.find("<tool_call>") != std::string::npos) {
         return common_chat_params_init_xiaomi_mimo(tmpl, params);
     }
 
+    // Apriel 1.5 format detection (must come before Hermes since template contains <tool_call> instructional text)
+    if (src.find("<thinking>") != std::string::npos &&
+        src.find("</thinking>") != std::string::npos &&
+        src.find("<available_tools>") != std::string::npos &&
+        src.find("<|assistant|>") != std::string::npos &&
+        src.find("<|tool_result|>") != std::string::npos &&
+        src.find("<tool_calls>[") != std::string::npos &&
+        src.find("]</tool_calls>") != std::string::npos) {
+        return common_chat_params_init_apriel_1_5(tmpl, params);
+    }
+
     // Hermes 2/3 Pro, Qwen 2.5 Instruct (w/ tools)
-    if (src.find("<tool_call>") != std::string::npos && params.json_schema.is_null()) {
+    if (src.find("<tool_call>") != std::string::npos && (params.json_schema.is_null() || inputs.experimental_new_parsers)) {
         return common_chat_params_init_hermes_2_pro(tmpl, params);
     }
 
@@ -2699,7 +2732,7 @@ static common_chat_params common_chat_templates_apply_jinja(
 
     // Seed-OSS
     if (src.find("<seed:think>") != std::string::npos) {
-        return common_chat_params_init_seed_oss(tmpl, params, inputs);
+        return common_chat_params_init_seed_oss(tmpl, params);
     }
 
     // Nemotron v2
@@ -2730,20 +2763,8 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_kimi_k2(tmpl, params);
     }
 
-    // Apriel 1.5 format detection
-    if (src.find("<thinking>") != std::string::npos &&
-        src.find("</thinking>") != std::string::npos &&
-        src.find("<available_tools>") != std::string::npos &&
-        src.find("<|assistant|>") != std::string::npos &&
-        src.find("<|tool_result|>") != std::string::npos &&
-        src.find("<tool_calls>[") != std::string::npos &&
-        src.find("]</tool_calls>") != std::string::npos) {
-        return common_chat_params_init_apriel_1_5(tmpl, params);
-    }
-
-    // Use generic handler when mixing tools + JSON schema.
-    // TODO: support that mix in handlers below.
-    if ((params.tools.is_array() && params.json_schema.is_object())) {
+    // Use generic handler when mixing tools + JSON schema (except for experimental_new_parsers which all support json_schema)
+    if ((params.tools.is_array() && params.json_schema.is_object()) && !inputs.experimental_new_parsers) {
         return common_chat_params_init_generic(tmpl, params);
     }
 
@@ -2769,6 +2790,12 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_llama_3_x(tmpl, params, allow_python_tag_builtin_tools);
     }
 
+    // Magistral (Unsloth variant with [THINK]...[/THINK] tags) - check before ministral_3 since both have [TOOL_CALLS][ARGS]
+    if (src.find("Unsloth") != std::string::npos &&
+        src.find("[THINK]") != std::string::npos && src.find("[/THINK]") != std::string::npos) {
+        return common_chat_params_init_magistral(tmpl, params);
+    }
+
     // Ministral/Mistral Large 3
     if (src.find("[SYSTEM_PROMPT]") != std::string::npos &&
         src.find("[TOOL_CALLS]") != std::string::npos &&
@@ -2776,12 +2803,8 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_ministral_3(tmpl, params);
     }
 
-    if (src.find("[THINK]") != std::string::npos && src.find("[/THINK]") != std::string::npos) {
-        return common_chat_params_init_magistral(tmpl, params);
-    }
-
     // Plain handler (no tools)
-    if (params.tools.is_null() || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+    if ((params.tools.is_null() || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) && !inputs.experimental_new_parsers) {
         return common_chat_params_init_without_tools(tmpl, params);
     }
 

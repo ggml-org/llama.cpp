@@ -25,7 +25,7 @@ class common_schema_info {
     common_schema_info & operator=(common_schema_info &&) noexcept;
 
     void resolve_refs(nlohmann::ordered_json & schema);
-    bool resolves_to_string(const nlohmann::ordered_json & schema);
+    bool resolves_to_string(const nlohmann::ordered_json & schema) const;
 };
 
 struct common_grammar_builder {

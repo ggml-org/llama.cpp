@@ -1,4 +1,5 @@
 import pytest
+import os
 from utils import *
 
 
@@ -18,4 +19,7 @@ def stop_server_after_each_test():
 @pytest.fixture(scope="module", autouse=True)
 def do_something():
     # this will be run once per test session, before any tests
+    # Skip if SKIP_LOAD_ALL is set (e.g., when models are already cached)
+    if os.environ.get("SKIP_LOAD_ALL"):
+        return
     ServerPreset.load_all()

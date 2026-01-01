@@ -1,3 +1,4 @@
+// TODO(ochafik): remove once --experimental-new-parsers graduates.
 #pragma once
 
 #include "chat.h"
