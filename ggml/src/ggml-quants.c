@@ -304,6 +304,114 @@ void quantize_row_mxfp4_ref(const float * GGML_RESTRICT x, block_mxfp4 * GGML_RE
     }
 }
 
+static inline int best_index_mxfp6_e3m2(float x, float e) {
+    int best_index = 0;
+    float best_err = fabsf(kvalues_mxfp6_e3m2[0]*e - x);
+    for (int i = 1; i < 64; i++) {
+        float err = fabsf(kvalues_mxfp6_e3m2[i]*e - x);
+        if (err < best_err) {
+            best_index = i;
+            best_err = err;
+        }
+    }
+    return best_index;
+}
+
+void quantize_row_mxfp6_e3m2_ref(const float * GGML_RESTRICT x, block_mxfp6_e3m2 * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_MXFP6_E3M2;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        float amax = 0.0f; // absolute max
+
+        for (int j = 0; j < qk; j++) {
+            const float v = x[i*qk + j];
+
+            if (amax < fabsf(v)) {
+                amax = fabsf(v);
+            }
+        }
+
+        const uint8_t e = amax > 0.0f ? (uint8_t) (floorf(log2f(amax)) - 3 + 127) : 0;
+
+        const float d = GGML_E8M0_TO_FP32_ANY(e, 4);
+
+        y[i].e = e;
+
+        // 4 * 6bit quant -> 3 bytes
+        for (int j = 0; j < qk / 4; ++j) {
+            const uint8_t x0 = best_index_mxfp6_e3m2(x[i*qk + 4*j + 0], d);
+            const uint8_t x1 = best_index_mxfp6_e3m2(x[i*qk + 4*j + 1], d);
+            const uint8_t x2 = best_index_mxfp6_e3m2(x[i*qk + 4*j + 2], d);
+            const uint8_t x3 = best_index_mxfp6_e3m2(x[i*qk + 4*j + 3], d);
+
+            // 1100 0000
+            y[i].qs[3*j] = x0 | ((x1 & 0x03) << 6);
+            // 2222 1111
+            y[i].qs[3*j+1] = (x1 >> 2) | ((x2 & 0x0F) << 4);
+            // 3333 3322
+            y[i].qs[3*j+2] = (x2 >> 4) | (x3 << 2);
+        }
+    }
+}
+
+static inline int best_index_mxfp6_e2m3(float x, float e) {
+    int best_index = 0;
+    float best_err = fabsf(kvalues_mxfp6_e2m3[0]*e - x);
+    for (int i = 1; i < 64; i++) {
+        float err = fabsf(kvalues_mxfp6_e2m3[i]*e - x);
+        if (err < best_err) {
+            best_index = i;
+            best_err = err;
+        }
+    }
+    return best_index;
+}
+
+void quantize_row_mxfp6_e2m3_ref(const float * GGML_RESTRICT x, block_mxfp6_e2m3 * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_MXFP6_E2M3;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        float amax = 0.0f; // absolute max
+
+        for (int j = 0; j < qk; j++) {
+            const float v = x[i*qk + j];
+
+            if (amax < fabsf(v)) {
+                amax = fabsf(v);
+            }
+        }
+
+        const uint8_t e = amax > 0.0f ? (uint8_t) (floorf(log2f(amax)) - 1 + 127) : 0;
+
+        const float d = GGML_E8M0_TO_FP32_ANY(e, 3);
+
+        y[i].e = e;
+
+        // 4 * 6bit quant -> 3 bytes
+        for (int j = 0; j < qk / 4; ++j) {
+            const uint8_t x0 = best_index_mxfp6_e2m3(x[i*qk + 4*j + 0], d);
+            const uint8_t x1 = best_index_mxfp6_e2m3(x[i*qk + 4*j + 1], d);
+            const uint8_t x2 = best_index_mxfp6_e2m3(x[i*qk + 4*j + 2], d);
+            const uint8_t x3 = best_index_mxfp6_e2m3(x[i*qk + 4*j + 3], d);
+
+            // 1100 0000
+            y[i].qs[3*j] = x0 | ((x1 & 0x03) << 6);
+            // 2222 1111
+            y[i].qs[3*j+1] = (x1 >> 2) | ((x2 & 0x0F) << 4);
+            // 3333 3322
+            y[i].qs[3*j+2] = (x2 >> 4) | (x3 << 2);
+        }
+    }
+}
+
 void dequantize_row_q4_0(const block_q4_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK4_0;
 
@@ -430,6 +538,54 @@ void dequantize_row_mxfp4(const block_mxfp4 * GGML_RESTRICT x, float * GGML_REST
 
             y[i*qk + j + 0   ] = x0*d;
             y[i*qk + j + qk/2] = x1*d;
+        }
+    }
+}
+
+void dequantize_row_mxfp6_e3m2(const block_mxfp6_e3m2 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_MXFP6_E3M2;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_E8M0_TO_FP32_ANY(x[i].e, 4);
+
+        for (int j = 0; j < qk / 4; ++j) {
+            const int16_t x0 = kvalues_mxfp6_e3m2[x[i].qs[3 * j] & 0x3F];
+            const int16_t x1 = kvalues_mxfp6_e3m2[(x[i].qs[3 * j] >> 6) | ((x[i].qs[3 * j + 1] & 0x0F) << 2)];
+            const int16_t x2 = kvalues_mxfp6_e3m2[(x[i].qs[3 * j + 1] >> 4) | ((x[i].qs[3 * j + 2] & 0x03) << 4)];
+            const int16_t x3 = kvalues_mxfp6_e3m2[x[i].qs[3 * j + 2] >> 2];
+
+            y[i*qk + 4 * j + 0] = x0*d;
+            y[i*qk + 4 * j + 1] = x1*d;
+            y[i*qk + 4 * j + 2] = x2*d;
+            y[i*qk + 4 * j + 3] = x3*d;
+        }
+    }
+}
+
+void dequantize_row_mxfp6_e2m3(const block_mxfp6_e2m3 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_MXFP6_E2M3;
+
+    assert(k % qk == 0);
+
+    const int nb = k / qk;
+
+    for (int i = 0; i < nb; i++) {
+        const float d = GGML_E8M0_TO_FP32_ANY(x[i].e, 3);
+
+        for (int j = 0; j < qk / 4; ++j) {
+            const int16_t x0 = kvalues_mxfp6_e2m3[x[i].qs[3 * j] & 0x3F];
+            const int16_t x1 = kvalues_mxfp6_e2m3[(x[i].qs[3 * j] >> 6) | ((x[i].qs[3 * j + 1] & 0x0F) << 2)];
+            const int16_t x2 = kvalues_mxfp6_e2m3[(x[i].qs[3 * j + 1] >> 4) | ((x[i].qs[3 * j + 2] & 0x03) << 4)];
+            const int16_t x3 = kvalues_mxfp6_e2m3[x[i].qs[3 * j + 2] >> 2];
+
+            y[i*qk + 4 * j + 0] = x0*d;
+            y[i*qk + 4 * j + 1] = x1*d;
+            y[i*qk + 4 * j + 2] = x2*d;
+            y[i*qk + 4 * j + 3] = x3*d;
         }
     }
 }
@@ -2096,6 +2252,18 @@ size_t quantize_mxfp4(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst,
     GGML_UNUSED(quant_weights);
     quantize_row_mxfp4_ref(src, dst, (int64_t)nrow*n_per_row);
     return nrow * ggml_row_size(GGML_TYPE_MXFP4, n_per_row);
+}
+
+size_t quantize_mxfp6_e3m2(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    GGML_UNUSED(quant_weights);
+    quantize_row_mxfp6_e3m2_ref(src, dst, (int64_t)nrow*n_per_row);
+    return nrow * ggml_row_size(GGML_TYPE_MXFP6_E3M2, n_per_row);
+}
+
+size_t quantize_mxfp6_e2m3(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    GGML_UNUSED(quant_weights);
+    quantize_row_mxfp6_e2m3_ref(src, dst, (int64_t)nrow*n_per_row);
+    return nrow * ggml_row_size(GGML_TYPE_MXFP6_E2M3, n_per_row);
 }
 
 // ====================== Ternary (de)-quantization (BitNet b1.58 and TriLMs)
@@ -5224,6 +5392,14 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_MXFP4:
             {
                 VALIDATE_ROW_DATA_E_E8M0_IMPL(block_mxfp4, data, nb);
+            } break;
+        case GGML_TYPE_MXFP6_E3M2:
+            {
+                VALIDATE_ROW_DATA_E_E8M0_IMPL(block_mxfp6_e3m2, data, nb);
+            } break;
+        case GGML_TYPE_MXFP6_E2M3:
+            {
+                VALIDATE_ROW_DATA_E_E8M0_IMPL(block_mxfp6_e2m3, data, nb);
             } break;
         case GGML_TYPE_Q2_K:
             {
