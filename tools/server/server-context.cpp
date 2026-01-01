@@ -258,8 +258,9 @@ struct server_slot {
         return state != SLOT_STATE_IDLE;
     }
 
+    // Checks if a draft model is active or self-speculation using context-tokens
     bool can_speculate() const {
-        return ctx_dft;
+        return ctx_dft || task->params.speculative.use_self;
     }
 
     void add_token(const completion_token_output & token) {
@@ -274,7 +275,7 @@ struct server_slot {
     int get_n_draft_max() const {
         GGML_ASSERT(task);
 
-        if (!can_speculate() && !task->params.speculative.use_self) {
+        if (!can_speculate()) {
             return 0;
         }
 
