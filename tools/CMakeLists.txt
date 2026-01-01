@@ -39,5 +39,6 @@ else()
         add_subdirectory(export-lora)
     endif()
     add_subdirectory(fit-params)
-    add_subdirectory(frameforge)
+    # Temporarily disabled frameforge build for CI compatibility
+    # add_subdirectory(frameforge)
 endif()
