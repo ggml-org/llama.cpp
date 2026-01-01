@@ -27,6 +27,7 @@ target_link_libraries(${TARGET} PRIVATE
 if(EXISTS ${CMAKE_SOURCE_DIR}/external/whisper/CMakeLists.txt)
     add_subdirectory(${CMAKE_SOURCE_DIR}/external/whisper ${CMAKE_BINARY_DIR}/whisper EXCLUDE_FROM_ALL)
     target_link_libraries(${TARGET} PRIVATE whisper)
+    target_compile_definitions(${TARGET} PRIVATE FRAMEFORGE_WHISPER_SUPPORT)
 else()
     message(WARNING "Whisper not found at ${CMAKE_SOURCE_DIR}/external/whisper, frameforge-sidecar will build without Whisper support")
 endif()
