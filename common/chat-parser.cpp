@@ -1396,7 +1396,7 @@ static void common_chat_parse_seed_oss(common_chat_msg_parser & builder) {
 }
 
 static void common_chat_parse_solar_open(common_chat_msg_parser & builder) {
-    builder.try_parse_reasoning("<|think|>", "<|end|>assistant");
+    builder.try_parse_reasoning("<|think|>", "<|end|><|begin|>assistant<|content|>");
 
     // TODO: Tool calling
 

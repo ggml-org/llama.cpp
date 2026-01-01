@@ -2529,6 +2529,8 @@ static common_chat_params common_chat_params_init_solar_open(const common_chat_t
 
     data.preserved_tokens = {
         "<|think|>",
+        "<|content|>",
+        "<|begin|>",
         "<|end|>",
     };
 
