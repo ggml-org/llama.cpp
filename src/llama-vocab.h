@@ -52,6 +52,7 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_MINIMAX_M2      = 41,
     LLAMA_VOCAB_PRE_TYPE_AFMOE           = 42,
     LLAMA_VOCAB_PRE_TYPE_YOUTU           = 43,
+    LLAMA_VOCAB_PRE_TYPE_SOLAR_OPEN      = 43,
 };
 
 struct LLM_KV;
