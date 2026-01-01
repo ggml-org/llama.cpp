@@ -8203,7 +8203,6 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
             }
 
             S = S*ms + vs; // scale and increment sum with partial sum
-
         }
 
         if (v->type == GGML_TYPE_F16) {
@@ -8232,6 +8231,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         // V /= S
         const float S_inv = S == 0.0f ? 0.0f : 1.0f/S;
         ggml_vec_scale_f32(DV, VKQ32, S_inv);
+
         // dst indices
         const int i1 = iq1;
         const int i2 = iq2;

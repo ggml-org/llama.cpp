@@ -15,17 +15,11 @@
 #    include <emscripten/emscripten.h>
 #endif
 
-#ifdef __EMSCRIPTEN__
-#    include <emscripten/emscripten.h>
-#endif
-
 #include <webgpu/webgpu_cpp.h>
 
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
-#include <functional>
-#include <iomanip>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -118,6 +112,20 @@
 
 /* End Constants */
 
+// This is a "fake" base pointer, since WebGPU buffers do not have pointers to their locations.
+static void * const webgpu_ptr_base = (void *) (uintptr_t) 0x1000;  // NOLINT
+
+// Always returns the base offset of a tensor, regardless of views.
+static uint64_t webgpu_tensor_offset(const ggml_tensor * tensor) {
+    if (tensor->view_src) {
+        return (uint8_t *) tensor->view_src->data - (uint8_t *) webgpu_ptr_base;
+    }
+    return (uint8_t *) tensor->data - (uint8_t *) webgpu_ptr_base;
+}
+
+/* Struct definitions */
+
+// Forward reference
 void ggml_webgpu_create_buffer(wgpu::Device &    device,
                                wgpu::Buffer &    buffer,
                                size_t            size,
@@ -245,7 +253,7 @@ struct webgpu_gpu_profile_buf_pool {
 struct webgpu_pipeline {
     wgpu::ComputePipeline pipeline;
     std::string           name;
-    void *                user_data = nullptr;
+    void *                context = nullptr;
 };
 
 struct webgpu_command {
@@ -264,19 +272,18 @@ struct flash_attn_pipeline_key {
     int      dst_type;
     uint32_t head_dim_qk;
     uint32_t head_dim_v;
-    uint32_t n_heads;
     bool     has_mask;
     bool     has_sinks;
     bool     uses_logit_softcap;
 
     bool operator==(const flash_attn_pipeline_key & other) const {
         return q_type == other.q_type && kv_type == other.kv_type && dst_type == other.dst_type &&
-               head_dim_qk == other.head_dim_qk && head_dim_v == other.head_dim_v && n_heads == other.n_heads &&
-               has_mask == other.has_mask && has_sinks == other.has_sinks &&
-               uses_logit_softcap == other.uses_logit_softcap;
+               head_dim_qk == other.head_dim_qk && head_dim_v == other.head_dim_v && has_mask == other.has_mask &&
+               has_sinks == other.has_sinks && uses_logit_softcap == other.uses_logit_softcap;
     }
 };
 
+// Same hash combine function as in boost
 template <typename T> inline void ggml_webgpu_hash_combine(size_t & seed, const T & value) {
     seed ^= std::hash<T>{}(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 }
@@ -289,7 +296,6 @@ struct flash_attn_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.dst_type);
         ggml_webgpu_hash_combine(seed, key.head_dim_qk);
         ggml_webgpu_hash_combine(seed, key.head_dim_v);
-        ggml_webgpu_hash_combine(seed, key.n_heads);
         ggml_webgpu_hash_combine(seed, key.has_mask);
         ggml_webgpu_hash_combine(seed, key.has_sinks);
         ggml_webgpu_hash_combine(seed, key.uses_logit_softcap);
@@ -369,7 +375,7 @@ struct webgpu_context_struct {
 #endif
 };
 
-using webgpu_context = std::shared_ptr<webgpu_context_struct>;
+typedef std::shared_ptr<webgpu_context_struct> webgpu_context;
 
 struct ggml_backend_webgpu_reg_context {
     webgpu_context webgpu_ctx;
@@ -398,17 +404,6 @@ struct ggml_backend_webgpu_buffer_context {
         buffer(std::move(buf)),
         label(std::move(lbl)) {}
 };
-
-// This is a "fake" base pointer, since WebGPU buffers do not have pointers to their locations.
-static void * const webgpu_ptr_base = (void *) (uintptr_t) 0x1000;  // NOLINT
-
-// Always returns the base offset of a tensor, regardless of views.
-static uint64_t webgpu_tensor_offset(const ggml_tensor * tensor) {
-    if (tensor->view_src) {
-        return (uint8_t *) tensor->view_src->data - (uint8_t *) webgpu_ptr_base;
-    }
-    return (uint8_t *) tensor->data - (uint8_t *) webgpu_ptr_base;
-}
 
 /* WebGPU object initializations */
 
@@ -763,8 +758,8 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
 #endif
 
     for (auto & kv : ctx->webgpu_ctx->flash_attn_pipelines) {
-        delete static_cast<ggml_webgpu_flash_attn_shader_decisions *>(kv.second.user_data);
-        kv.second.user_data = nullptr;
+        delete static_cast<ggml_webgpu_flash_attn_shader_decisions *>(kv.second.context);
+        kv.second.context = nullptr;
     }
 }
 
@@ -1138,52 +1133,48 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     //         .offset  = 0,
     //         .size    = ctx->debug_dev_buf.GetSize() });
 
-    GGML_ASSERT(K->type == V->type);
-
     flash_attn_pipeline_key key = {
         .q_type             = Q->type,
         .kv_type            = K->type,
         .dst_type           = dst->type,
         .head_dim_qk        = (uint32_t) Q->ne[0],
         .head_dim_v         = (uint32_t) V->ne[0],
-        .n_heads            = (uint32_t) Q->ne[2],
         .has_mask           = mask != nullptr,
         .has_sinks          = sinks != nullptr,
         .uses_logit_softcap = logit_softcap != 0.0f,
     };
 
-    webgpu_pipeline pipeline;
+    webgpu_pipeline                         pipeline;
     ggml_webgpu_flash_attn_shader_decisions decisions = {};
-    auto            it = ctx->flash_attn_pipelines.find(key);
 
+    auto it = ctx->flash_attn_pipelines.find(key);
     if (it != ctx->flash_attn_pipelines.end()) {
-        pipeline = it->second;
-        decisions = *static_cast<ggml_webgpu_flash_attn_shader_decisions *>(pipeline.user_data);
+        pipeline  = it->second;
+        decisions = *static_cast<ggml_webgpu_flash_attn_shader_decisions *>(pipeline.context);
     } else {
         std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
         it = ctx->flash_attn_pipelines.find(key);
         if (it != ctx->flash_attn_pipelines.end()) {
-            pipeline = it->second;
-            decisions = *static_cast<ggml_webgpu_flash_attn_shader_decisions *>(pipeline.user_data);
+            pipeline  = it->second;
+            decisions = *static_cast<ggml_webgpu_flash_attn_shader_decisions *>(pipeline.context);
         } else {
-            ggml_webgpu_flash_attn_shader_lib_context shader_lib_ctx = {
-                .kv_type            = ggml_type_name(K->type),
-                .head_dim_qk        = (uint32_t) Q->ne[0],
-                .head_dim_v         = (uint32_t) V->ne[0],
-                .has_mask           = mask != nullptr,
-                .has_sinks          = sinks != nullptr,
-                .uses_logit_softcap = logit_softcap != 0.0f,
-                .sg_mat_m           = ctx->subgroup_matrix_config.M,
-                .sg_mat_n           = ctx->subgroup_matrix_config.N,
-                .sg_mat_k           = ctx->subgroup_matrix_config.K,
-                .wg_mem_limit_bytes = ctx->limits.maxComputeWorkgroupStorageSize,
-                .max_subgroup_size  = ctx->max_subgroup_size
-            };
-            ggml_webgpu_processed_shader processed =
+            ggml_webgpu_flash_attn_shader_lib_context shader_lib_ctx = { .kv_type            = K->type,
+                                                                         .head_dim_qk        = (uint32_t) Q->ne[0],
+                                                                         .head_dim_v         = (uint32_t) V->ne[0],
+                                                                         .has_mask           = mask != nullptr,
+                                                                         .has_sinks          = sinks != nullptr,
+                                                                         .uses_logit_softcap = logit_softcap != 0.0f,
+                                                                         .sg_mat_m = ctx->subgroup_matrix_config.M,
+                                                                         .sg_mat_n = ctx->subgroup_matrix_config.N,
+                                                                         .sg_mat_k = ctx->subgroup_matrix_config.K,
+                                                                         .wg_mem_limit_bytes =
+                                                                             ctx->limits.maxComputeWorkgroupStorageSize,
+                                                                         .max_subgroup_size = ctx->max_subgroup_size };
+            ggml_webgpu_processed_shader              processed =
                 ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn, shader_lib_ctx);
 
             pipeline = ggml_webgpu_create_pipeline(ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
-            pipeline.user_data = new ggml_webgpu_flash_attn_shader_decisions(processed.decisions);
+            pipeline.context = new ggml_webgpu_flash_attn_shader_decisions(processed.decisions);
             ctx->flash_attn_pipelines.emplace(key, pipeline);
             decisions = processed.decisions;
         }
@@ -1191,7 +1182,6 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
 
     uint32_t wg_per_head = CEIL_DIV(Q->ne[1], decisions.q_tile);
     uint32_t wg_x        = wg_per_head * Q->ne[2] * Q->ne[3];  // wg per head * number of heads * number of batches
-    //std::cout << "ggml_webgpu_flash_attn: wg_x: " << wg_x << "\n";
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
 }
 
@@ -2708,22 +2698,18 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 }
                 // Head dimensions must fit in workgroup memory with minimum tile sizes
                 size_t       limit_bytes = webgpu_ctx->limits.maxComputeWorkgroupStorageSize;
-                const bool   has_mask = op->src[3] != nullptr;
-                const size_t min_bytes =
-                    ggml_webgpu_flash_attn_wg_mem_bytes(webgpu_ctx->subgroup_matrix_config.M,
-                                                        webgpu_ctx->subgroup_matrix_config.N,
-                                                        (uint32_t) src0->ne[0],
-                                                        (uint32_t) src2->ne[0],
-                                                        has_mask);
+                const bool   has_mask    = op->src[3] != nullptr;
+                const size_t min_bytes   = ggml_webgpu_flash_attn_wg_mem_bytes(
+                    webgpu_ctx->subgroup_matrix_config.M, webgpu_ctx->subgroup_matrix_config.N, (uint32_t) src0->ne[0],
+                    (uint32_t) src2->ne[0], has_mask);
                 if (min_bytes > limit_bytes) {
                     break;
                 }
 
-                supports_op = true;
-                // Q-type
-                supports_op &= src0->type == GGML_TYPE_F32;
-                // KV-type
-                supports_op &= src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16;
+                supports_op = src0->type == GGML_TYPE_F32 &&
+                              (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16 ||
+                               src1->type == GGML_TYPE_Q4_0 || src1->type == GGML_TYPE_Q8_0) &&
+                              src2->type == src1->type && op->type == GGML_TYPE_F32;
                 break;
             }
         case GGML_OP_RMS_NORM:

@@ -246,11 +246,8 @@ bool ggml_backend_is_cpu(ggml_backend_t backend) {
 void ggml_backend_cpu_set_n_threads(ggml_backend_t backend_cpu, int n_threads) {
     GGML_ASSERT(ggml_backend_is_cpu(backend_cpu));
 
-// For single-thread WASM builds, do not allow changing the number of threads
-#if !defined(_EMSCRIPTEN_) || defined(__EMSCRIPTEN_PTHREADS__)
     struct ggml_backend_cpu_context * ctx = (struct ggml_backend_cpu_context *)backend_cpu->context;
     ctx->n_threads = n_threads;
-#endif
 }
 
 void ggml_backend_cpu_set_threadpool(ggml_backend_t backend_cpu, ggml_threadpool_t threadpool) {
@@ -630,13 +627,10 @@ static ggml_backend_feature * ggml_backend_cpu_get_features(ggml_backend_reg_t r
 
 static void * ggml_backend_cpu_get_proc_address(ggml_backend_reg_t reg, const char * name) {
 
-// For single-thread WASM builds, do not expose a set_n_threads function
-#if !defined(__EMSCRIPTEN__) || defined(__EMSCRIPTEN_PTHREADS__)
     if (strcmp(name, "ggml_backend_set_n_threads") == 0) {
         ggml_backend_set_n_threads_t fct = ggml_backend_cpu_set_n_threads;
         return (void *)fct;
     }
-#endif
     if (strcmp(name, "ggml_backend_dev_get_extra_bufts") == 0) {
         ggml_backend_dev_get_extra_bufts_t fct = ggml_backend_cpu_device_get_extra_buffers_type;
         return (void *)fct;

@@ -19,6 +19,32 @@ enable chromium_experimental_subgroup_matrix;
 #define SG_MAT_N 8
 #define SG_MAT_K 8
 
+// Quantization constants/helpers
+#define BLOCK_SIZE 32
+#define BLOCKS_K ((HEAD_DIM_QK + BLOCK_SIZE - 1) / BLOCK_SIZE)
+#define BLOCKS_V ((HEAD_DIM_V + BLOCK_SIZE - 1) / BLOCK_SIZE)
+// number of quantized elements processed per thread
+#if defined(KV_Q4_0)
+#define NQ 16
+// Q4_0 has 32 elements, 1 f16 for scale, 8 f16 for 4-bit weights
+#define F16_PER_BLOCK 9
+#define WEIGHTS_PER_F16 4
+#elif defined(KV_Q8_0)
+#define NQ 8
+// Q8_0 has 32 elements, 1 f16 for scale, 16 f16 for 8-bit weights
+#define F16_PER_BLOCK 17
+#define WEIGHTS_PER_F16 2
+#endif
+#define F16_PER_THREAD (NQ / WEIGHTS_PER_F16)
+
+fn get_byte(value: u32, index: u32) -> u32 {
+    return (value >> (index * 8)) & 0xFF;
+}
+
+fn get_byte_i32(value: u32, index: u32) -> i32 {
+    return bitcast<i32>(((value >> (index * 8)) & 0xFF) << 24) >> 24;
+}
+
 struct Params {
     offset_q: u32,
     offset_k: u32,
@@ -195,7 +221,63 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     }
 
     for (var kv_tile = 0u; kv_tile < params.seq_len_kv; kv_tile += KV_TILE) {
+
       // load k tile into shared memory
+#if defined(KV_Q4_0)
+      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * params.head_dim_qk; elem_idx += WG_SIZE * NQ) {
+          let blck_idx = elem_idx / BLOCK_SIZE;
+          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
+          let k_row = blck_idx / BLOCKS_K;
+          let global_k_row = kv_tile + k_row;
+          let block_k = blck_idx % BLOCKS_K;
+          let row_offset = k_row * params.head_dim_qk;
+
+          if (global_k_row < params.seq_len_kv) {
+              let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
+              let base_idx = global_block_idx * F16_PER_BLOCK;
+              let d = K[base_idx]; // scale
+              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
+                  let q_0 = K[base_idx + 1u + block_offset + j];
+                  let q_1 = K[base_idx + 1u + block_offset + j + 1];
+                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
+                  for (var k = 0u; k < 4u; k++) {
+                      let q_byte = get_byte(q_packed, k);
+                      let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
+                      let q_lo = (f16(q_byte & 0xF) - 8.0) * d;
+                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
+                      kv_shmem[row_offset + idx] = q_lo;
+                      kv_shmem[row_offset + idx + 16u] = q_hi;
+                  }
+              }
+          }
+      }
+#elif defined(KV_Q8_0)
+      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * params.head_dim_qk; elem_idx += WG_SIZE * NQ) {
+          let blck_idx = elem_idx / BLOCK_SIZE;
+          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
+          let k_row = blck_idx / BLOCKS_K;
+          let global_k_row = kv_tile + k_row;
+          let block_k = blck_idx % BLOCKS_K;
+          let row_offset = k_row * params.head_dim_qk;
+
+          if (global_k_row < params.seq_len_kv) {
+              let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
+              let base_idx = global_block_idx * F16_PER_BLOCK;
+              let d = K[base_idx]; // scale
+              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
+                  let q_0 = K[base_idx + 1u + block_offset + j];
+                  let q_1 = K[base_idx + 1u + block_offset + j + 1];
+                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
+                  for (var k = 0u; k < 4u; k++) {
+                      let q_byte = get_byte_i32(q_packed, k);
+                      let q_val = f16(q_byte) * d;
+                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
+                      kv_shmem[row_offset + idx] = q_val;
+                  }
+              }
+          }
+      }
+#else
       for (var elem_idx = local_id.x; elem_idx < KV_TILE * params.head_dim_qk; elem_idx += WG_SIZE) {
           let k_row = elem_idx / params.head_dim_qk;
           let k_col = elem_idx % params.head_dim_qk;
@@ -206,6 +288,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
               K[global_k_row_offset + k_col],
               global_k_row < params.seq_len_kv && k_col < params.head_dim_qk));
       }
+#endif
 
       workgroupBarrier();
 
@@ -313,6 +396,61 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
       }
 
       // load v tile into shared memory
+#if defined(KV_Q4_0)
+      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * params.head_dim_v; elem_idx += WG_SIZE * NQ) {
+          let blck_idx = elem_idx / BLOCK_SIZE;
+          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
+          let v_row = blck_idx / BLOCKS_V;
+          let global_v_row = kv_tile + v_row;
+          let block_k = blck_idx % BLOCKS_V;
+          let row_offset = v_row * params.head_dim_v;
+
+          if (global_v_row < params.seq_len_kv) {
+              let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
+              let base_idx = global_block_idx * F16_PER_BLOCK;
+              let d = V[base_idx]; // scale
+              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
+                  let q_0 = V[base_idx + 1u + block_offset + j];
+                  let q_1 = V[base_idx + 1u + block_offset + j + 1];
+                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
+                  for (var k = 0u; k < 4u; k++) {
+                      let q_byte = get_byte(q_packed, k);
+                      let q_hi = (f16((q_byte >> 4) & 0xF) - 8.0) * d;
+                      let q_lo = (f16(q_byte & 0xF) - 8.0) * d;
+                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
+                      kv_shmem[row_offset + idx] = q_lo;
+                      kv_shmem[row_offset + idx + 16u] = q_hi;
+                  }
+              }
+          }
+      }
+#elif defined(KV_Q8_0)
+      for (var elem_idx = local_id.x * NQ; elem_idx < KV_TILE * params.head_dim_v; elem_idx += WG_SIZE * NQ) {
+          let blck_idx = elem_idx / BLOCK_SIZE;
+          let block_offset = (elem_idx % BLOCK_SIZE) / WEIGHTS_PER_F16;
+          let v_row = blck_idx / BLOCKS_V;
+          let global_v_row = kv_tile + v_row;
+          let block_k = blck_idx % BLOCKS_V;
+          let row_offset = v_row * params.head_dim_v;
+
+          if (global_v_row < params.seq_len_kv) {
+              let global_block_idx = v_head_offset + global_v_row * params.stride_v1 + block_k;
+              let base_idx = global_block_idx * F16_PER_BLOCK;
+              let d = V[base_idx]; // scale
+              for (var j = 0u; j < F16_PER_THREAD; j += 2) {
+                  let q_0 = V[base_idx + 1u + block_offset + j];
+                  let q_1 = V[base_idx + 1u + block_offset + j + 1];
+                  let q_packed = bitcast<u32>(vec2(q_0, q_1));
+                  for (var k = 0u; k < 4u; k++) {
+                      let q_byte = get_byte_i32(q_packed, k);
+                      let q_val = f16(q_byte) * d;
+                      let idx = block_k * BLOCK_SIZE + block_offset * 2u + j * 2u + k;
+                      kv_shmem[row_offset + idx] = q_val;
+                  }
+              }
+          }
+      }
+#else
       for (var elem_idx = local_id.x; elem_idx < KV_TILE * params.head_dim_v; elem_idx += WG_SIZE) {
           let v_row = elem_idx / params.head_dim_v;
           let v_col = elem_idx % params.head_dim_v;
@@ -323,6 +461,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
               V[global_v_row_offset + v_col],
               global_v_row < params.seq_len_kv && v_col < params.head_dim_v));
       }
+#endif
 
       workgroupBarrier();
 

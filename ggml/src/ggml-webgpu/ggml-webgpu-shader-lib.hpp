@@ -1,6 +1,7 @@
 #ifndef GGML_WEBGPU_SHADER_LIB_HPP
 #define GGML_WEBGPU_SHADER_LIB_HPP
 
+#include "ggml.h"
 #include "pre_wgsl.hpp"
 
 #include <string>
@@ -10,7 +11,7 @@
 #define GGML_WEBGPU_FLASH_ATTN_PREFERRED_WG_SIZE 64u
 
 struct ggml_webgpu_flash_attn_shader_lib_context {
-    const char * kv_type;
+    ggml_type    kv_type;
     uint32_t     head_dim_qk;
     uint32_t     head_dim_v;
     bool         has_mask;
@@ -100,6 +101,18 @@ static std::pair<uint32_t, uint32_t> ggml_webgpu_flash_attn_tile_sizes(
     return best_pair;
 }
 
+static const char * kv_shader_type(ggml_type kv_type) {
+    switch (kv_type) {
+        case GGML_TYPE_F32: return "f32";
+        case GGML_TYPE_F16: return "f16";
+        case GGML_TYPE_Q4_0: return "f16";
+        case GGML_TYPE_Q8_0: return "f16";
+        default:
+            GGML_ABORT("Unsupported KV type for flash attention shader");
+            return "";
+    }
+}
+
 inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
     pre_wgsl::Preprocessor &                          preprocessor,
     const char *                                      shader_src,
@@ -107,8 +120,14 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
     std::vector<std::string> defines;
     std::string              variant = "flash_attn";
 
-    defines.push_back(std::string("KV_TYPE=") + context.kv_type);
-    variant += std::string("_") + context.kv_type;
+    defines.push_back(std::string("KV_TYPE=") + kv_shader_type(context.kv_type));
+    variant += std::string("_") + ggml_type_name(context.kv_type);
+
+    if (context.kv_type == GGML_TYPE_Q4_0) {
+        defines.push_back("KV_Q4_0");
+    } else if (context.kv_type == GGML_TYPE_Q8_0) {
+        defines.push_back("KV_Q8_0");
+    }
 
     if (context.has_mask) {
         defines.push_back("MASK");
