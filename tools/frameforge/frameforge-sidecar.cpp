@@ -1,5 +1,7 @@
 #include "../../common/common.h"
+#ifdef FRAMEFORGE_WHISPER_SUPPORT
 #include "../../external/whisper/include/whisper.h"
+#endif
 #include "frameforge-ipc.h"
 #include "frameforge-json.h"
 #include "frameforge-schema.h"
@@ -67,7 +69,9 @@ Important rules:
 Do not include explanations, only the JSON object.)";
 
 struct frameforge_params {
+#ifdef FRAMEFORGE_WHISPER_SUPPORT
     std::string whisper_model;
+#endif
     std::string llama_model;
     std::string audio_file;
     std::string pipe_name = "frameforge_pipe";
@@ -79,7 +83,9 @@ struct frameforge_params {
 static void print_usage(const char * argv0) {
     fprintf(stderr, "Usage: %s [options]\n", argv0);
     fprintf(stderr, "Options:\n");
+#ifdef FRAMEFORGE_WHISPER_SUPPORT
     fprintf(stderr, "  -wm, --whisper-model FNAME  Path to Whisper model file\n");
+#endif
     fprintf(stderr, "  -lm, --llama-model FNAME    Path to Llama model file\n");
     fprintf(stderr, "  -a,  --audio FILE           Audio file to transcribe (for testing)\n");
     fprintf(stderr, "  -p,  --pipe NAME            Named pipe name (default: frameforge_pipe)\n");
@@ -93,6 +99,7 @@ static bool parse_params(int argc, char ** argv, frameforge_params & params) {
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         
+#ifdef FRAMEFORGE_WHISPER_SUPPORT
         if (arg == "-wm" || arg == "--whisper-model") {
             if (i + 1 < argc) {
                 params.whisper_model = argv[++i];
@@ -100,7 +107,9 @@ static bool parse_params(int argc, char ** argv, frameforge_params & params) {
                 fprintf(stderr, "Error: Missing value for %s\n", arg.c_str());
                 return false;
             }
-        } else if (arg == "-lm" || arg == "--llama-model") {
+        } else
+#endif
+        if (arg == "-lm" || arg == "--llama-model") {
             if (i + 1 < argc) {
                 params.llama_model = argv[++i];
             } else {
@@ -147,10 +156,12 @@ static bool parse_params(int argc, char ** argv, frameforge_params & params) {
         }
     }
     
+#ifdef FRAMEFORGE_WHISPER_SUPPORT
     if (params.whisper_model.empty()) {
         fprintf(stderr, "Error: Whisper model path is required\n");
         return false;
     }
+#endif
     
     if (params.llama_model.empty()) {
         fprintf(stderr, "Error: Llama model path is required\n");
@@ -201,6 +212,7 @@ static bool read_wav(const std::string & fname, std::vector<float> & pcmf32, int
     return true;
 }
 
+#ifdef FRAMEFORGE_WHISPER_SUPPORT
 // Transcribe audio using Whisper
 static std::string transcribe_audio(whisper_context * wctx, const std::vector<float> & pcmf32, bool verbose) {
     if (!wctx) {
@@ -229,6 +241,7 @@ static std::string transcribe_audio(whisper_context * wctx, const std::vector<fl
     
     return text;
 }
+#endif
 
 // Classify intent using Llama
 static std::string classify_intent(llama_context * lctx, llama_model * model, const std::string & user_input, bool verbose) {
@@ -329,6 +342,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "No verb definitions file specified, using hard-coded defaults\n");
     }
     
+#ifdef FRAMEFORGE_WHISPER_SUPPORT
     // Initialize Whisper
     fprintf(stderr, "Loading Whisper model: %s\n", params.whisper_model.c_str());
     whisper_context_params cparams = whisper_context_default_params();
@@ -337,6 +351,10 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "Error: Failed to load Whisper model\n");
         return 1;
     }
+#else
+    fprintf(stderr, "Note: Whisper support not available (not compiled with FRAMEFORGE_WHISPER_SUPPORT)\n");
+    void * wctx = nullptr;  // Placeholder for conditional code paths
+#endif
     
     // Initialize Llama
     fprintf(stderr, "Loading Llama model: %s\n", params.llama_model.c_str());
@@ -344,7 +362,9 @@ int main(int argc, char ** argv) {
     llama_model *      model        = llama_model_load_from_file(params.llama_model.c_str(), model_params);
     if (!model) {
         fprintf(stderr, "Error: Failed to load Llama model\n");
+#ifdef FRAMEFORGE_WHISPER_SUPPORT
         whisper_free(wctx);
+#endif
         return 1;
     }
     
@@ -355,7 +375,9 @@ int main(int argc, char ** argv) {
     if (!lctx) {
         fprintf(stderr, "Error: Failed to create Llama context\n");
         llama_model_free(model);
+#ifdef FRAMEFORGE_WHISPER_SUPPORT
         whisper_free(wctx);
+#endif
         return 1;
     }
     
@@ -366,6 +388,7 @@ int main(int argc, char ** argv) {
     if (!params.audio_file.empty()) {
         fprintf(stderr, "Processing audio file: %s\n", params.audio_file.c_str());
         
+#ifdef FRAMEFORGE_WHISPER_SUPPORT
         std::vector<float> pcmf32;
         int sample_rate = 0;
         if (!read_wav(params.audio_file, pcmf32, sample_rate)) {
@@ -378,9 +401,19 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "Transcribing audio...\n");
         std::string transcription = transcribe_audio(wctx, pcmf32, params.verbose);
         fprintf(stderr, "Transcription: %s\n", transcription.c_str());
+#else
+        fprintf(stderr, "Error: Audio transcription requires Whisper support (not compiled)\n");
+        llama_free(lctx);
+        llama_model_free(model);
+        return 1;
+#endif
         
         fprintf(stderr, "Classifying intent...\n");
+#ifdef FRAMEFORGE_WHISPER_SUPPORT
         std::string llm_response = classify_intent(lctx, model, transcription, params.verbose);
+#else
+        std::string llm_response = "";  // Unreachable due to error above
+#endif
         fprintf(stderr, "LLM Response: %s\n", llm_response.c_str());
         
         // Validate the command
@@ -398,7 +431,9 @@ int main(int argc, char ** argv) {
         
         llama_free(lctx);
         llama_model_free(model);
+#ifdef FRAMEFORGE_WHISPER_SUPPORT
         whisper_free(wctx);
+#endif
         return 0;
     }
     
@@ -410,7 +445,9 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "Error: Failed to start IPC server\n");
         llama_free(lctx);
         llama_model_free(model);
+#ifdef FRAMEFORGE_WHISPER_SUPPORT
         whisper_free(wctx);
+#endif
         return 1;
     }
     
@@ -433,7 +470,9 @@ int main(int argc, char ** argv) {
     ipc_server.stop();
     llama_free(lctx);
     llama_model_free(model);
+#ifdef FRAMEFORGE_WHISPER_SUPPORT
     whisper_free(wctx);
+#endif
     
     return 0;
 }
