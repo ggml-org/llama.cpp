@@ -47,12 +47,6 @@
 #   define N_THREADS std::thread::hardware_concurrency()
 #endif
 
-#ifdef __EMSCRIPTEN__
-#   define N_THREADS 1
-#else
-#   define N_THREADS std::thread::hardware_concurrency()
-#endif
-
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     size_t nels = ggml_nelements(tensor);
     std::vector<float> data(nels);

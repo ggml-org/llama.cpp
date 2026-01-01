@@ -126,11 +126,11 @@ static uint64_t webgpu_tensor_offset(const ggml_tensor * tensor) {
 /* Struct definitions */
 
 // Forward reference
-void ggml_webgpu_create_buffer(wgpu::Device &    device,
-                               wgpu::Buffer &    buffer,
-                               size_t            size,
-                               wgpu::BufferUsage usage,
-                               const char *      label);
+static void ggml_webgpu_create_buffer(wgpu::Device &    device,
+                                      wgpu::Buffer &    buffer,
+                                      size_t            size,
+                                      wgpu::BufferUsage usage,
+                                      const char *      label);
 
 struct webgpu_pool_bufs {
     wgpu::Buffer host_buf;
@@ -407,21 +407,6 @@ struct ggml_backend_webgpu_buffer_context {
 
 /* WebGPU object initializations */
 
-void ggml_webgpu_create_buffer(wgpu::Device &    device,
-                               wgpu::Buffer &    buffer,
-                               size_t            size,
-                               wgpu::BufferUsage usage,
-                               const char *      label) {
-    wgpu::BufferDescriptor buffer_desc;
-    buffer_desc.size             = size;
-    buffer_desc.usage            = usage;
-    buffer_desc.label            = label;
-    buffer_desc.mappedAtCreation = false;
-
-    // TODO: error handling
-    buffer = device.CreateBuffer(&buffer_desc);
-}
-
 // Process a WGSL shader string, replacing tokens of the form {{KEY}} with
 // the corresponding values provided in `repls`.
 static std::string ggml_webgpu_process_shader_repls(const char *                               src,
@@ -463,6 +448,21 @@ static webgpu_pipeline ggml_webgpu_create_pipeline(wgpu::Device &               
         pipeline_desc.compute.constantCount = constants.size();
     }
     return { device.CreateComputePipeline(&pipeline_desc), label };
+}
+
+static void ggml_webgpu_create_buffer(wgpu::Device &    device,
+                                      wgpu::Buffer &    buffer,
+                                      size_t            size,
+                                      wgpu::BufferUsage usage,
+                                      const char *      label) {
+    wgpu::BufferDescriptor buffer_desc;
+    buffer_desc.size             = size;
+    buffer_desc.usage            = usage;
+    buffer_desc.label            = label;
+    buffer_desc.mappedAtCreation = false;
+
+    // TODO: error handling
+    buffer = device.CreateBuffer(&buffer_desc);
 }
 
 /** End WebGPU object initializations */
@@ -1050,20 +1050,6 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     const int has_mask  = (mask != nullptr);
     const int has_sinks = (sinks != nullptr);
 
-    // print type and dimensions of Q/K/V/mask/sinks/dst
-    //        std::cout << "ggml_webgpu_flash_attn: Q type: " << ggml_type_name(Q->type) << ", ne: [" << Q->ne[0] << ", " << Q->ne[1] << ", " << Q->ne[2]
-    //                  << ", " << Q->ne[3] << "]\n";
-    //        std::cout << "ggml_webgpu_flash_attn: K type: " << ggml_type_name(K->type) << ", ne: [" << K->ne[0] << ", " << K->ne[1] << ", " << K->ne[2]
-    //                  << ", " << K->ne[3] << "]\n";
-    //        std::cout << "ggml_webgpu_flash_attn: V type: " << ggml_type_name(V->type) << ", ne: [" << V->ne[0] << ", " << V->ne[1] << ", " << V->ne[2]
-    //                  << ", " << V->ne[3] << "]\n";
-    //        std::cout << "ggml_webgpu_flash_attn: mask type: " << ggml_type_name(mask->type) << ", ne: [" << mask->ne[0] << ", " << mask->ne[1] << ", " << mask->ne[2]
-    //                  << ", " << mask->ne[3] << "]\n";
-    //        std::cout << "ggml_webgpu_flash_attn: sinks type: " << ggml_type_name(sinks->type) << ", ne: [" << sinks->ne[0] << ", " << sinks->ne[1] << ", " << sinks->ne[2]
-    //                  << ", " << sinks->ne[3] << "]\n";
-    //        std::cout << "ggml_webgpu_flash_attn: dst type: " << ggml_type_name(dst->type) << ", ne: [" << dst->ne[0] << ", " << dst->ne[1] << ", " << dst->ne[2]
-    //                  << ", " << dst->ne[3] << "]\n";
-
     std::vector<uint32_t> params = {
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, Q) / ggml_type_size(Q->type)),
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, K) / ggml_type_size(K->type)),
@@ -1126,12 +1112,6 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
                         .buffer  = ggml_webgpu_tensor_buf(dst),
                         .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
                         .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
-    // Debug buffer binding (for development only)
-    // entries.push_back(
-    //         { .binding = binding_index,
-    //         .buffer  = ctx->debug_dev_buf,
-    //         .offset  = 0,
-    //         .size    = ctx->debug_dev_buf.GetSize() });
 
     flash_attn_pipeline_key key = {
         .q_type             = Q->type,
@@ -1170,9 +1150,9 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
                                                                          .wg_mem_limit_bytes =
                                                                              ctx->limits.maxComputeWorkgroupStorageSize,
                                                                          .max_subgroup_size = ctx->max_subgroup_size };
-            ggml_webgpu_processed_shader              processed =
-                ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn, shader_lib_ctx);
 
+            ggml_webgpu_processed_shader processed =
+                ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn, shader_lib_ctx);
             pipeline = ggml_webgpu_create_pipeline(ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
             pipeline.context = new ggml_webgpu_flash_attn_shader_decisions(processed.decisions);
             ctx->flash_attn_pipelines.emplace(key, pipeline);
@@ -1647,12 +1627,8 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
 
     std::vector<webgpu_command>            commands;
     std::vector<webgpu_submission_futures> futures;
-    bool                                   contains_flash_attn = false;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (auto cmd = ggml_webgpu_encode_node(ctx, cgraph->nodes[i])) {
-            if (cgraph->nodes[i]->op == GGML_OP_FLASH_ATTN_EXT) {
-                contains_flash_attn = true;
-            }
             commands.push_back(*cmd);
         }
         // compute the batch size based on the number of inflight threads
@@ -1671,12 +1647,6 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
         webgpu_submission_futures new_futures = ggml_backend_webgpu_submit(ctx, commands);
         futures.push_back(new_futures);
     }
-
-#ifdef GGML_WEBGPU_DEBUG
-    if (contains_flash_attn) {
-        ggml_backend_webgpu_debug(ctx);
-    }
-#endif
 
     ggml_backend_webgpu_wait(ctx, futures);
     ctx->inflight_threads--;

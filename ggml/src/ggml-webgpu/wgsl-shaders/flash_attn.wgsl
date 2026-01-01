@@ -107,7 +107,6 @@ struct Params {
 #endif
 
 @group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<f32>;
-//@group(0) @binding(6) var<storage, read_write> debug: array<f32>;
 @group(0) @binding(PARAMS_BINDING) var<uniform> params: Params;
 
 const FLOAT_MIN: f16 = -65504.0;
@@ -162,8 +161,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         @builtin(subgroup_size) subgroup_size: u32,
         @builtin(num_subgroups) num_subgroups: u32,
         @builtin(subgroup_invocation_id) sg_inv_id: u32) {
-
-    //debug[0] = 42;
 
     // initialize row max for online softmax
     for (var i = local_id.x; i < Q_TILE; i += WG_SIZE) {
@@ -523,7 +520,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             var prev_max = select(0.0, row_max_shmem[q_tile_row], sg_inv_id == 0);
             prev_max = subgroupBroadcastFirst(prev_max);
 
-            // for non-sink threads, exp(-65504) effectively zeroes out their contrinbution to the sum
+            // for non-sink threads, exp(-65504) effectively zeroes out their contribution to the sum
             let sink_val = select(FLOAT_MIN, f16(sinks[params.offset_sinks + head_idx]), sg_inv_id == 0);
             let new_max = subgroupMax(max(prev_max, sink_val));
             let max_exp = exp(prev_max - new_max);
