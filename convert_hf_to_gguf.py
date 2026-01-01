@@ -10611,9 +10611,6 @@ class JanusProVisionModel(MmprojModel):
 class SolarOpenModel(Glm4MoeModel):
     model_arch = gguf.MODEL_ARCH.GLM4_MOE
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     def set_vocab(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
@@ -10623,7 +10620,6 @@ class SolarOpenModel(Glm4MoeModel):
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
-        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])
         special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|endoftext|>"])
         special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<unk>"])
