@@ -1440,8 +1440,7 @@ static void test_chat_parsers()
     test_chat_parser(test_status::Enabled, "mistral_nemo", chat_parser_impl::EXPERIMENTAL, test_mistral_nemo_parser);
 
     test_chat_parser(test_status::Enabled, "nemotron_v2", chat_parser_impl::LEGACY, test_nemotron_v2_parser);
-    // TODO(ochafik): debug: content-with-reasoning failed for Nemotron V3: Content: Never saw NEEDLE1
-    test_chat_parser(test_status::Disabled, "nemotron_v2", chat_parser_impl::EXPERIMENTAL, test_nemotron_v2_parser);
+    test_chat_parser(test_status::Enabled, "nemotron_v2", chat_parser_impl::EXPERIMENTAL, test_nemotron_v2_parser);
 
     test_chat_parser(test_status::Enabled, "nemotron_v3", chat_parser_impl::LEGACY, test_nemotron_v3_parser);
     test_chat_parser(test_status::Enabled, "nemotron_v3", chat_parser_impl::EXPERIMENTAL, test_nemotron_v3_parser);

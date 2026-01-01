@@ -22,7 +22,9 @@ void test_nemotron_v2_parser(chat_parser_impl impl)
     template_caps.think_close_tag = "</think>";
     template_caps.reasoning_requires_tools = ReasoningRequiresTools::No;
     template_caps.tools_emit_content_with_calls = ToolsEmitContentWithCalls::Yes;
-    template_caps.inject_reasoning_after_format = InjectReasoningAfterFormat::No;
+    // The template strips reasoning from assistant messages (content after </think>),
+    // so we need to inject reasoning content after format application
+    template_caps.inject_reasoning_after_format = InjectReasoningAfterFormat::Yes;
     template_caps.supports_disable_thinking = SupportsDisableThinking::No;
     template_caps.supports_reasoning_only = SupportsReasoningOnly::No;
     template_caps.end_tokens = { "<SPECIAL_12>" };
