@@ -851,44 +851,69 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
 
 json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     json server_sent_events = json::array();
+    json output = json::array();
 
-    server_sent_events.push_back(json {
-        {"event", "response.output_text.done"},
-        {"data", json {
-            {"type", "response.output_text.done"},
-            {"text", oaicompat_msg.content}
-        }}
-    });
+    for (const common_chat_tool_call & tool_call : oaicompat_msg.tool_calls) {
+        server_sent_events.push_back(json {
+            {"event", "response.output_item.done"},
+            {"data", json {
+                {"type", "response.output_item.done"},
+                {"item", json {
+                    {"type",      "function_call"},
+                    {"status",    "completed"},
+                    {"arguments", tool_call.arguments},
+                    {"call_id",   "call_dummy_id"},
+                    {"name",      tool_call.name}
+                }}
+            }}
+        });
+        output.push_back({
+            {"type",      "function_call"},
+            {"status",    "completed"},
+            {"arguments", tool_call.arguments},
+            {"name",      tool_call.name}
+        });
+    }
 
-    const json part = {
-        {"type",        "output_text"},
-        {"annotations", json::array()},
-        {"logprobs",    json::array()},
-        {"text",        oaicompat_msg.content}
-    };
+    if (oaicompat_msg.content != "") {
+        server_sent_events.push_back(json {
+            {"event", "response.output_text.done"},
+            {"data", json {
+                {"type", "response.output_text.done"},
+                {"text", oaicompat_msg.content}
+            }}
+        });
 
-    server_sent_events.push_back(json {
-        {"event", "response.content_part.done"},
-        {"data", json {
-            {"type", "response.content_part.done"},
-            {"part", part}
-        }}
-    });
+        const json part = {
+            {"type",        "output_text"},
+            {"annotations", json::array()},
+            {"logprobs",    json::array()},
+            {"text",        oaicompat_msg.content}
+        };
 
-    const json item = {
-        {"type",    "message"},
-        {"status",  "completed"},
-        {"content", json::array({part})},
-        {"role",    "assistant"}
-    };
+        server_sent_events.push_back(json {
+            {"event", "response.content_part.done"},
+            {"data", json {
+                {"type", "response.content_part.done"},
+                {"part", part}
+            }}
+        });
+        const json item = {
+            {"type",    "message"},
+            {"status",  "completed"},
+            {"content", json::array({part})},
+            {"role",    "assistant"}
+        };
 
-    server_sent_events.push_back(json {
-        {"event", "response.output_item.done"},
-        {"data", json {
-            {"type", "response.output_item.done"},
-            {"item", item}
-        }}
-    });
+        server_sent_events.push_back(json {
+            {"event", "response.output_item.done"},
+            {"data", json {
+                {"type", "response.output_item.done"},
+                {"item", item}
+            }}
+        });
+        output.push_back(item);
+    }
 
     std::time_t t = std::time(0);
     server_sent_events.push_back(json {
@@ -896,11 +921,12 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
         {"data", json {
             {"type", "response.completed"},
             {"response", json {
+                {"id",         "resp_dummy_id"},
                 {"object",     "response"},
                 {"created_at", t},
                 {"status",     "completed"},
                 {"model",      oaicompat_model},
-                {"output",     json::array({item})},
+                {"output",     output},
                 {"usage",      json {
                     {"input_tokens",  n_prompt_tokens},
                     {"output_tokens", n_decoded},
@@ -1188,6 +1214,28 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                 {"data", json {
                     {"type",  "response.reasoning_text.delta"},
                     {"delta", diff.reasoning_content_delta}
+                }}
+            });
+        }
+        if (!diff.tool_call_delta.name.empty()) {
+            deltas.push_back(json {
+                {"event", "response.output_item.added"},
+                {"data", json {
+                    {"type",  "response.output_item.added"},
+                    {"item", json {
+                        {"type",   "function_call"},
+                        {"status", "in_progress"},
+                        {"name",   diff.tool_call_delta.name}
+                    }}
+                }}
+            });
+        }
+        if (!diff.tool_call_delta.arguments.empty()) {
+            deltas.push_back(json {
+                {"event", "response.function_call_arguments.delta"},
+                {"data", json {
+                    {"type",  "response.function_call_arguments.delta"},
+                    {"delta", diff.tool_call_delta.arguments}
                 }}
             });
         }
