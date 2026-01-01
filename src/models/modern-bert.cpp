@@ -113,7 +113,3 @@ llm_build_modern_bert::llm_build_modern_bert(const llama_model & model, const ll
     res->t_embd = cur;
     ggml_build_forward_expand(gf, cur);
 }
-
-// Explicit template instantiations
-template struct llm_build_modern_bert<false>;
-template struct llm_build_modern_bert<true>;
