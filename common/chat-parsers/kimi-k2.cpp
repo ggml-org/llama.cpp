@@ -60,20 +60,16 @@ common_chat_params common_chat_params_init_kimi_k2_peg(const common_chat_templat
             auto tool_choice = p.choice();
 
             foreach_function(inputs.tools, [&](const auto &, const auto & name, const auto & parameters, const auto &) {
-                // Match: functions.{name}:{id}
-                // Counter must be one or more digits (matching original [0-9]+ pattern)
-                // Use atomic_tag to ensure tool calls are only created when fully matched
-                auto tool_open = p.literal("<|tool_call_begin|>")
-                    + "functions." + p.literal_tag(Tag::TOOL_NAME, name) + ":"
-                    + p.tag(Tag::TOOL_ID, p.chars("[0-9]", 1, 10))
-                    + "<|tool_call_argument_begin|>";
-                auto tool_close = p.literal("<|tool_call_end|>");
-                auto tool_args = p.tag(Tag::TOOL_ARGS, p.schema(p.json(), "tool-" + name + "-args", parameters));
-
                 tool_choice |= p.rule("tool-" + name,
-                    p.atomic_tag(Tag::TOOL_OPEN, tool_open)
-                    + tool_args
-                    + p.atomic_tag(Tag::TOOL_CLOSE, tool_close));
+                    p.atomic_tag(Tag::TOOL_OPEN,
+                        p.literal("<|tool_call_begin|>")
+                        // Match: functions.{name}:{id}
+                        + "functions." + p.literal_tag(Tag::TOOL_NAME, name) + ":"
+                        // Counter can be any number of digits (models may generate large IDs like 5000000000)
+                        + p.tag(Tag::TOOL_ID, p.chars("[0-9]", 1, 20))
+                        + "<|tool_call_argument_begin|>"))
+                    + p.tag(Tag::TOOL_ARGS, p.schema(p.json(), "tool-" + name + "-args", parameters))
+                    << p.atomic_tag(Tag::TOOL_CLOSE, p.literal("<|tool_call_end|>"));
             });
 
             auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;

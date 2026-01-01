@@ -187,9 +187,6 @@ NEW_PARSERS_UNSUPPORTED = {
     "models/templates/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.jinja": None,
     # GPT-OSS: peg-native format but tiny model generates content that fails to parse
     "models/templates/openai-gpt-oss-120b.jinja": None,
-    # Kimi K2: tiny model generates valid format but parser fails (needle tests pass with proper model)
-    "models/templates/Kimi-K2-Thinking.jinja": None,
-    "models/templates/moonshotai-Kimi-K2.jinja": None,
 }
 
 @pytest.mark.slow
