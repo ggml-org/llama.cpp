@@ -5285,7 +5285,7 @@ class BertModel(TextModel):
 
         # convert to phantom space vocab
         def phantom(tok, toktype):
-            if toktype != gguf.TokenType.NORMAL:
+            if toktype == gguf.TokenType.CONTROL:
                 return tok
             if tok.startswith("##"):
                 return tok[2:]
