@@ -51,35 +51,35 @@ if (CUDAToolkit_FOUND)
             endif()
         endif()
     endif()
-    message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
 
     enable_language(CUDA)
 
-    # Replace any 12x-real architectures with 12x{a}-real. FP4 ptx instructions are not available in just 12x
-    if (GGML_NATIVE)
-        set(PROCESSED_ARCHITECTURES "")
-        if (CMAKE_CUDA_ARCHITECTURES_NATIVE)
-            set(ARCH_LIST ${CMAKE_CUDA_ARCHITECTURES_NATIVE})
-        else()
-            set(ARCH_LIST ${CMAKE_CUDA_ARCHITECTURES})
-        endif()
-        foreach(ARCH ${ARCH_LIST})
+    # Replace any plain 12X CUDA architectures with their "architecture-specific" equivalents 12Xa.
+    # 12X is forwards-compatible, 12Xa is not.
+    # Notably the Blackwell FP4 tensor core instructions are not forwards compatible and therefore need 12Xa.
+    # But while 12X vs. 12Xa can be checked in device code there is (to my knowledge) no easy way to do the same check in host code.
+    # So for now just replace all instances of 12X with 12Xa, this should be fine until Rubin is released.
+    foreach(ARCHS IN ITEMS CMAKE_CUDA_ARCHITECTURES CMAKE_CUDA_ARCHITECTURES_NATIVE)
+        set(FIXED_ARCHS "")
+        foreach(ARCH IN LISTS ${ARCHS})
             if (ARCH MATCHES "^12[0-9](-real|-virtual)?$")
-                string(REGEX REPLACE "^(12[0-9]).*$" "\\1" BASE_ARCH ${ARCH})
-                message(STATUS "Replacing ${ARCH} with ${BASE_ARCH}a-real")
-                list(APPEND PROCESSED_ARCHITECTURES "${BASE_ARCH}a-real")
+                string(REGEX REPLACE "^(12[0-9])((-real|-virtual)?)$" "\\1a\\2" FIXED_ARCH ${ARCH})
+                message(STATUS "Replacing ${ARCH} in ${ARCHS} with ${FIXED_ARCH}")
+                list(APPEND FIXED_ARCHS "${FIXED_ARCH}")
             else()
-                list(APPEND PROCESSED_ARCHITECTURES ${ARCH})
+                list(APPEND FIXED_ARCHS "${ARCH}")
             endif()
         endforeach()
-        set(CMAKE_CUDA_ARCHITECTURES ${PROCESSED_ARCHITECTURES})
-    else()
-        foreach(ARCH ${CMAKE_CUDA_ARCHITECTURES})
-            if(ARCH MATCHES "^12[0-9](-real|-virtual)?$")
-                message(FATAL_ERROR "Compute capability ${ARCH} used, use ${ARCH}a or ${ARCH}f for Blackwell-specific optimizations")
-            endif()
-        endforeach()
+        set(${ARCHS} ${FIXED_ARCHS})
+    endforeach()
+
+    # If we try to compile a "native" build it will use the 12X architectures and fail.
+    # So we should instead use the native architectures as determined by CMake after replacing 12X with 12Xa.
+    # But if at the time of the build no GPUs are connected at all CMAKE_CUDA_ARCHITECTURES will contain garbage that we should not use.
+    if (CMAKE_CUDA_ARCHITECTURES STREQUAL "native" AND CMAKE_CUDA_ARCHITECTURES_NATIVE MATCHES "^[0-9]+(a|f)?(-real|-virtual)?(;[0-9]+(a|f)?(-real|-virtual)?|;)*$")
+        set(CMAKE_CUDA_ARCHITECTURES ${CMAKE_CUDA_ARCHITECTURES_NATIVE})
     endif()
+    message(STATUS "Using CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES} CMAKE_CUDA_ARCHITECTURES_NATIVE=${CMAKE_CUDA_ARCHITECTURES_NATIVE}")
 
     file(GLOB   GGML_HEADERS_CUDA "*.cuh")
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")

@@ -157,7 +157,7 @@ tokenizer.save_pretrained(LLM_EXPORT_PATH)
 model.language_model.save_pretrained(LLM_EXPORT_PATH)
 ```
 
-Now you can convert the exported LLM to GGUF with the normal converter in the root of the llama cpp project.
+Now you can convert the exported LLM to GGUF with the normal converter in the root of the llama.cpp project.
 ```bash
 $ LLM_GGUF_PATH=$LLM_EXPORT_PATH/granite_llm.gguf
 ...
@@ -175,8 +175,8 @@ $ LLM_GGUF_PATH=$LLM_EXPORT_PATH/granite_llm_q4_k_m.gguf
 Note that currently you cannot quantize the visual encoder because granite vision models use SigLIP as the visual encoder, which has tensor dimensions that are not divisible by 32.
 
 
-### 5. Running the Model in Llama cpp
-Build llama cpp normally; you should have a target binary named `llama-mtmd-cli`, which you can pass two binaries to. As an example, we pass the the llama.cpp banner.
+### 5. Running the Model in llama.cpp
+Build llama.cpp normally; you should have a target binary named `llama-mtmd-cli`, which you can pass two binaries to. As an example, we pass the llama.cpp banner.
 
 ```bash
 $ ./build/bin/llama-mtmd-cli -m $LLM_GGUF_PATH \

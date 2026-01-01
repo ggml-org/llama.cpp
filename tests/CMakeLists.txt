@@ -248,5 +248,33 @@ get_filename_component(TEST_TARGET test-c.c NAME_WE)
 add_executable(${TEST_TARGET} test-c.c)
 target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
+# FrameForge validator tests
+add_executable(test-frameforge-validator test-frameforge-validator.cpp
+    ${CMAKE_SOURCE_DIR}/tools/frameforge/frameforge-schema.cpp
+    ${CMAKE_SOURCE_DIR}/tools/frameforge/frameforge-validator.cpp
+    ${CMAKE_SOURCE_DIR}/tools/frameforge/frameforge-json.cpp)
+target_include_directories(test-frameforge-validator PRIVATE ${CMAKE_SOURCE_DIR}/tools/frameforge ${CMAKE_SOURCE_DIR}/vendor)
+target_link_libraries(test-frameforge-validator PRIVATE common)
+add_test(NAME test-frameforge-validator COMMAND $<TARGET_FILE:test-frameforge-validator>)
+set_property(TEST test-frameforge-validator PROPERTY LABELS "main")
+
+# FrameForge JSON loader tests
+add_executable(test-frameforge-json-loader test-frameforge-json-loader.cpp
+    ${CMAKE_SOURCE_DIR}/tools/frameforge/frameforge-schema.cpp)
+target_include_directories(test-frameforge-json-loader PRIVATE ${CMAKE_SOURCE_DIR}/tools/frameforge ${CMAKE_SOURCE_DIR}/vendor)
+target_link_libraries(test-frameforge-json-loader PRIVATE common)
+add_test(NAME test-frameforge-json-loader COMMAND $<TARGET_FILE:test-frameforge-json-loader> WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests)
+set_property(TEST test-frameforge-json-loader PROPERTY LABELS "main")
+
+# FrameForge new features tests (master verbs, timestamp, etc.)
+add_executable(test-frameforge-new-features test-frameforge-new-features.cpp
+    ${CMAKE_SOURCE_DIR}/tools/frameforge/frameforge-schema.cpp
+    ${CMAKE_SOURCE_DIR}/tools/frameforge/frameforge-validator.cpp
+    ${CMAKE_SOURCE_DIR}/tools/frameforge/frameforge-json.cpp)
+target_include_directories(test-frameforge-new-features PRIVATE ${CMAKE_SOURCE_DIR}/tools/frameforge ${CMAKE_SOURCE_DIR}/vendor)
+target_link_libraries(test-frameforge-new-features PRIVATE common)
+add_test(NAME test-frameforge-new-features COMMAND $<TARGET_FILE:test-frameforge-new-features> WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/tests)
+set_property(TEST test-frameforge-new-features PROPERTY LABELS "main")
+
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
