@@ -1,6 +1,6 @@
 #include "chat-auto-parser-helpers.h"
-#include "chat-auto-parser.h"
 
+#include "chat-auto-parser.h"
 #include "log.h"
 
 #include <minja/chat-template.hpp>
@@ -28,7 +28,7 @@ void trim_whitespace(std::string & str) {
         return;
     }
     size_t last = str.find_last_not_of(" \n\t\r");
-    str = str.substr(first, (last - first + 1));
+    str         = str.substr(first, (last - first + 1));
 }
 
 void trim_trailing_newlines(std::string & str) {
@@ -66,8 +66,8 @@ std::string extract_tag_name(const std::string & tag) {
     if (tag.empty() || tag[0] != '<') {
         return "";
     }
-    std::string tag_name = tag.substr(1);
-    size_t end_bracket = tag_name.find_first_of(" >");
+    std::string tag_name    = tag.substr(1);
+    size_t      end_bracket = tag_name.find_first_of(" >");
     if (end_bracket != std::string::npos) {
         tag_name = tag_name.substr(0, end_bracket);
     }
@@ -131,7 +131,7 @@ std::string find_common_suffix_generic(const std::vector<std::string> & strings)
         std::string         temp_common;
         size_t              min_len = std::min(common.length(), current.length());
         for (size_t j = 0; j < min_len; ++j) {
-            size_t pos_common = common.length() - j - 1;
+            size_t pos_common  = common.length() - j - 1;
             size_t pos_current = current.length() - j - 1;
             if (common[pos_common] == current[pos_current]) {
                 temp_common = common[pos_common] + temp_common;
@@ -145,7 +145,8 @@ std::string find_common_suffix_generic(const std::vector<std::string> & strings)
 }
 
 std::string find_common_substring_limited(const std::vector<std::string> & strings,
-                                           size_t max_length, const std::string & delimiters) {
+                                          size_t                           max_length,
+                                          const std::string &              delimiters) {
     std::string common = find_common_prefix(strings);
     if (common.length() > max_length) {
         size_t pos = find_last_of_any(common, delimiters, common.length() - 1);
@@ -162,10 +163,10 @@ std::string find_common_substring_limited(const std::vector<std::string> & strin
 // ============================================================================
 
 std::string apply_template(const minja::chat_template &    tmpl,
-                         const struct templates_params & inputs,
-                         const std::optional<json> &     messages_override,
-                         const std::optional<json> &     tools_override,
-                         const std::optional<json> &     additional_context) {
+                           const struct templates_params & inputs,
+                           const std::optional<json> &     messages_override,
+                           const std::optional<json> &     tools_override,
+                           const std::optional<json> &     additional_context) {
     minja::chat_template_inputs tmpl_inputs;
     tmpl_inputs.messages = messages_override ? *messages_override : inputs.messages;
     if (tools_override) {
@@ -206,7 +207,7 @@ std::string adjust_to_token_boundary(const std::string & str) {
     // Find the last <| in the string
     size_t last_open = str.rfind("<|");
     if (last_open == std::string::npos) {
-        return str; // No special tokens
+        return str;  // No special tokens
     }
 
     // Find if there's a |> after the last <|
@@ -241,8 +242,9 @@ std::string find_string_difference(const std::string & base, const std::string &
     return extended.substr(common_prefix);
 }
 
-std::string extract_json_field_name(const std::string & opener, const std::string & default_name,
-                                     const std::vector<std::string> & candidates) {
+std::string extract_json_field_name(const std::string &              opener,
+                                    const std::string &              default_name,
+                                    const std::vector<std::string> & candidates) {
     for (const auto & candidate : candidates) {
         std::string pattern = "\"" + candidate + "\"";
         if (opener.find(pattern) != std::string::npos) {
@@ -257,7 +259,7 @@ std::string find_closing_pattern(const std::string & diff, size_t func_pos) {
     std::vector<std::string> closers = { "</", "}", "]", ">", " " };
 
     std::string best_pattern;
-    size_t best_pos = std::string::npos;
+    size_t      best_pos = std::string::npos;
 
     for (const auto & pattern : closers) {
         size_t pos = diff.find(pattern, func_pos);
@@ -267,11 +269,11 @@ std::string find_closing_pattern(const std::string & diff, size_t func_pos) {
                     size_t end_pos = diff.find('>', pos);
                     if (end_pos != std::string::npos) {
                         best_pattern = diff.substr(pos, end_pos - pos + 1);
-                        best_pos = pos;
+                        best_pos     = pos;
                     }
                 } else {
                     best_pattern = pattern;
-                    best_pos = pos;
+                    best_pos     = pos;
                 }
             }
         }
@@ -291,7 +293,7 @@ std::string find_tool_call_start(const std::string & diff) {
                 }
             }
             if (pattern == "[" || pattern == "{") {
-                size_t chunk_len = std::min(diff.length() - pos, (size_t)60);
+                size_t chunk_len = std::min(diff.length() - pos, (size_t) 60);
                 return diff.substr(pos, chunk_len);
             }
 
@@ -309,17 +311,17 @@ std::string find_tool_call_start(const std::string & diff) {
 }
 
 std::string find_tool_call_end(const std::string & diff, size_t func_pos) {
-    char opener_char = 0;
+    char        opener_char = 0;
     std::string start_tag_name;
 
-    std::string openers = "[{<";
-    size_t last_opener_pos = std::string::npos;
+    std::string openers         = "[{<";
+    size_t      last_opener_pos = std::string::npos;
     for (char c : openers) {
         size_t p = diff.rfind(c, func_pos);
         if (p != std::string::npos) {
             if (last_opener_pos == std::string::npos || p > last_opener_pos) {
                 last_opener_pos = p;
-                opener_char = c;
+                opener_char     = c;
             }
         }
     }
@@ -346,7 +348,7 @@ std::string find_tool_call_end(const std::string & diff, size_t func_pos) {
 
     if (!start_tag_name.empty()) {
         std::string expected_closer = "</" + start_tag_name + ">";
-        size_t pos = diff.find(expected_closer, func_pos);
+        size_t      pos             = diff.find(expected_closer, func_pos);
         if (pos != std::string::npos) {
             if (opener_char == '[') {
                 size_t bracket_pos = diff.rfind(']', pos);
@@ -359,8 +361,8 @@ std::string find_tool_call_end(const std::string & diff, size_t func_pos) {
     }
 
     std::vector<std::string> end_patterns = { "</", "]", "}", ">", "\n", " " };
-    std::string best_pattern;
-    size_t best_pos = std::string::npos;
+    std::string              best_pattern;
+    size_t                   best_pos = std::string::npos;
 
     auto is_structural = [](const std::string & s) {
         if (s.empty()) {
@@ -376,7 +378,7 @@ std::string find_tool_call_end(const std::string & diff, size_t func_pos) {
         }
 
         bool current_is_struct = is_structural(pattern);
-        bool best_is_struct = is_structural(best_pattern);
+        bool best_is_struct    = is_structural(best_pattern);
 
         bool better = false;
         if (best_pattern.empty()) {
@@ -397,7 +399,7 @@ std::string find_tool_call_end(const std::string & diff, size_t func_pos) {
 
         if (better) {
             best_pattern = pattern;
-            best_pos = pos;
+            best_pos     = pos;
 
             if (current_is_struct && (pattern == "]" || pattern == "}")) {
                 size_t tag_start = diff.find('<', best_pos + pattern.length());
@@ -414,28 +416,26 @@ std::string find_tool_call_end(const std::string & diff, size_t func_pos) {
     return best_pattern;
 }
 
-std::string infer_tool_call_opener(const std::string & diff1, const std::string & diff2,
-                                    const std::string & diff3) {
+std::string infer_tool_call_opener(const std::string & diff1, const std::string & diff2, const std::string & diff3) {
     std::vector<std::string> differences = { diff1, diff2, diff3 };
     return find_common_prefix(differences);
 }
 
-std::string infer_tool_call_closer(const std::string & diff1, const std::string & diff2,
-                                    const std::string & diff3) {
+std::string infer_tool_call_closer(const std::string & diff1, const std::string & diff2, const std::string & diff3) {
     std::vector<std::string> differences = { diff1, diff2, diff3 };
     return find_common_suffix_generic(differences);
 }
 
 InternalDiscoveredPattern extract_patterns_from_differences(const std::string & tool1_diff,
-                                                              const std::string & tool2_diff,
-                                                              const std::string & tool3_diff,
-                                                              const std::string & tool1_full) {
+                                                            const std::string & tool2_diff,
+                                                            const std::string & tool3_diff,
+                                                            const std::string & tool1_full) {
     LOG_DBG("=== EXTRACTING PATTERNS FROM DIFFERENCES ===\n");
 
     InternalDiscoveredPattern patterns;
 
-    size_t func1_pos = tool1_diff.find("test_function_name");
-    size_t func2_pos = tool2_diff.find("test_function_name");
+    size_t func1_pos = tool1_diff.rfind("test_function_name");
+    size_t func2_pos = tool2_diff.rfind("test_function_name");
 
     if (func1_pos != std::string::npos && func2_pos != std::string::npos) {
         LOG_DBG("Found function names, extracting patterns...\n");
@@ -473,9 +473,9 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
 
                 // Extract the prefix if we found something meaningful
                 if (prefix_start < prefix_end) {
-                    std::string prefix = tool1_full.substr(prefix_start, prefix_end - prefix_start);
+                    std::string prefix      = tool1_full.substr(prefix_start, prefix_end - prefix_start);
                     // Validate: prefix should contain non-whitespace and be reasonable length
-                    bool has_content = false;
+                    bool        has_content = false;
                     for (char c : prefix) {
                         if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
                             has_content = true;
@@ -484,7 +484,7 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
                     }
                     if (has_content && prefix.length() >= 2 && prefix.length() <= 20) {
                         LOG_DBG("Found prefix pattern in full output: '%s'\n", prefix.c_str());
-                        patterns.function_opener = prefix;
+                        patterns.function_opener        = prefix;
                         patterns.tool_call_start_marker = prefix;
                     }
                 }
@@ -492,20 +492,20 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
         }
 
         patterns.tool_name_field = extract_json_field_name(patterns.tool_call_opener, "name",
-                                                            { "tool_name", "name", "function_name", "function" });
+                                                           { "tool_name", "name", "function_name", "function" });
 
-        patterns.tool_args_field = extract_json_field_name(patterns.tool_call_opener + tool1_diff.substr(func1_pos),
-                                                            "arguments",
-                                                            { "parameters", "arguments", "args", "params", "input" });
+        patterns.tool_args_field =
+            extract_json_field_name(patterns.tool_call_opener + tool1_diff.substr(func1_pos), "arguments",
+                                    { "parameters", "arguments", "args", "params", "input" });
 
-        patterns.tool_id_field = extract_json_field_name(patterns.tool_call_opener, "",
-                                                          { "tool_call_id", "tool_id", "id", "call_id" });
+        patterns.tool_id_field =
+            extract_json_field_name(patterns.tool_call_opener, "", { "tool_call_id", "tool_id", "id", "call_id" });
 
         // Extract parameter patterns from tool2_diff
-        size_t param1_pos = tool2_diff.find("\"param1\"");
-        bool param_has_quotes = (param1_pos != std::string::npos);
-        size_t param2_pos = tool2_diff.find("\"param2\"");
-        size_t value1_pos = tool2_diff.find("\"value1\"");
+        size_t param1_pos       = tool2_diff.find("\"param1\"");
+        bool   param_has_quotes = (param1_pos != std::string::npos);
+        size_t param2_pos       = tool2_diff.find("\"param2\"");
+        size_t value1_pos       = tool2_diff.find("\"value1\"");
 
         if (param1_pos == std::string::npos) {
             param1_pos = tool2_diff.find("param1");
@@ -527,8 +527,8 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
         }
 
         if (param1_pos != std::string::npos && value1_pos != std::string::npos) {
-            size_t search_start = (param1_pos > 20) ? param1_pos - 20 : 0;
-            std::string pre_param = tool2_diff.substr(search_start, param1_pos - search_start);
+            size_t      search_start = (param1_pos > 20) ? param1_pos - 20 : 0;
+            std::string pre_param    = tool2_diff.substr(search_start, param1_pos - search_start);
 
             size_t delim_pos = pre_param.find_last_of('\n');
             if (delim_pos == std::string::npos) {
@@ -570,7 +570,7 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
 
         // Extract function opener/closer
         const std::string & func_context = tool1_diff;
-        size_t open_pos = func_context.rfind('<', func1_pos);
+        size_t              open_pos     = func_context.rfind('<', func1_pos);
         if (open_pos != std::string::npos && open_pos < func1_pos) {
             size_t close_pos = func_context.find('>', open_pos);
             if (close_pos != std::string::npos && close_pos < func1_pos) {
@@ -584,7 +584,8 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
             if (func1_pos > 0 && patterns.function_opener.empty()) {
                 size_t prefix_end = func1_pos;
                 // Skip whitespace immediately before function name
-                while (prefix_end > 0 && (func_context[prefix_end - 1] == ' ' || func_context[prefix_end - 1] == '\t')) {
+                while (prefix_end > 0 &&
+                       (func_context[prefix_end - 1] == ' ' || func_context[prefix_end - 1] == '\t')) {
                     prefix_end--;
                 }
 
@@ -603,8 +604,8 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
                 }
 
                 if (prefix_start < prefix_end) {
-                    std::string prefix = func_context.substr(prefix_start, prefix_end - prefix_start);
-                    bool has_content = false;
+                    std::string prefix      = func_context.substr(prefix_start, prefix_end - prefix_start);
+                    bool        has_content = false;
                     for (char c : prefix) {
                         if (c != ' ' && c != '\t') {
                             has_content = true;
@@ -612,7 +613,7 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
                         }
                     }
                     if (has_content && prefix.length() >= 2 && prefix.length() <= 20) {
-                        patterns.function_opener = prefix;
+                        patterns.function_opener        = prefix;
                         patterns.tool_call_start_marker = prefix;
                     }
                 }
@@ -620,7 +621,7 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
 
             // Fallback: look for standard delimiters
             if (patterns.function_opener.empty()) {
-                for (int i = (int)func1_pos - 1; i >= 0; i--) {
+                for (int i = (int) func1_pos - 1; i >= 0; i--) {
                     if (func_context[i] == '{' || func_context[i] == '[' || func_context[i] == '(' ||
                         func_context[i] == '<') {
                         patterns.function_opener = func_context.substr(i, func1_pos - i);
@@ -642,6 +643,13 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
                 } else {
                     patterns.function_name_suffix = "\"";
                 }
+            } else if (next_char == '<') {
+                // Check if it's an XML-like tag suffix (e.g. <|tool_call_argument_begin|>)
+                size_t tag_close = func_context.find('>', func_name_end);
+                if (tag_close != std::string::npos) {
+                    // It seems to be a tag, use it as suffix
+                    patterns.function_name_suffix = func_context.substr(func_name_end, tag_close - func_name_end + 1);
+                }
             }
         }
 
@@ -657,9 +665,9 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
             patterns.tool_call_opener.length() > patterns.function_opener.length()) {
             size_t opener_start = patterns.tool_call_opener.length() - patterns.function_opener.length();
             if (opener_start > 0) {
-                std::string before_func = patterns.tool_call_opener.substr(0, opener_start);
-                size_t last_bracket = before_func.find_last_of('[');
-                size_t tool_obj_brace = std::string::npos;
+                std::string before_func    = patterns.tool_call_opener.substr(0, opener_start);
+                size_t      last_bracket   = before_func.find_last_of('[');
+                size_t      tool_obj_brace = std::string::npos;
                 if (last_bracket != std::string::npos && last_bracket + 1 < before_func.length()) {
                     tool_obj_brace = before_func.find('{', last_bracket + 1);
                 }
@@ -692,7 +700,7 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
         // Trim whitespace
         if (!patterns.tool_call_end_marker.empty()) {
             size_t first = patterns.tool_call_end_marker.find_first_not_of(" \n\t");
-            size_t last = patterns.tool_call_end_marker.find_last_not_of(" \n\t");
+            size_t last  = patterns.tool_call_end_marker.find_last_not_of(" \n\t");
             if (first != std::string::npos && last != std::string::npos) {
                 patterns.tool_call_end_marker = patterns.tool_call_end_marker.substr(first, (last - first + 1));
             }
@@ -708,21 +716,29 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
                 if (close_start != std::string::npos) {
                     size_t close_end = patterns.tool_call_closer.find('>', close_start);
                     if (close_end != std::string::npos) {
-                        patterns.tool_call_end_marker = patterns.tool_call_closer.substr(close_start, close_end - close_start + 1);
+                        patterns.tool_call_end_marker =
+                            patterns.tool_call_closer.substr(close_start, close_end - close_start + 1);
                     }
                 }
+            }
+        } else if (patterns.tool_call_end_marker == ">" && !patterns.tool_call_closer.empty() &&
+                   patterns.tool_call_closer.length() > 3) {
+            // If the specific end marker is just ">", but the common suffix (tool_call_closer) is substantial (e.g. <|tool_calls_section_end|>)
+            // then prefer the common suffix, as finding ">" might just be hitting the end of the last function call
+            if (patterns.tool_call_closer.find(patterns.tool_call_end_marker) != std::string::npos) {
+                patterns.tool_call_end_marker = patterns.tool_call_closer;
             }
         }
 
         if (patterns.tool_call_start_marker.empty()) {
-            std::vector<std::string> diffs = { tool1_diff, tool2_diff, tool3_diff };
+            std::vector<std::string> diffs  = { tool1_diff, tool2_diff, tool3_diff };
             patterns.tool_call_start_marker = find_common_substring_limited(diffs, 20, " \n\t<[{");
         }
 
         // Truncate if needed, but skip if func_pos is 0 (marker found via full output)
         if (func1_pos != std::string::npos && func1_pos > 0 && patterns.tool_call_start_marker.length() > func1_pos) {
-            std::string candidate = patterns.tool_call_start_marker.substr(0, func1_pos);
-            size_t last_opener = candidate.find_last_of("{[");
+            std::string candidate   = patterns.tool_call_start_marker.substr(0, func1_pos);
+            size_t      last_opener = candidate.find_last_of("{[");
             if (last_opener != std::string::npos) {
                 patterns.tool_call_start_marker = candidate.substr(0, last_opener);
             } else {
@@ -732,12 +748,12 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
 
         // Ensure we don't truncate in the middle of <|...|> tokens
         patterns.tool_call_start_marker = adjust_to_token_boundary(patterns.tool_call_start_marker);
-        patterns.tool_call_end_marker = adjust_to_token_boundary(patterns.tool_call_end_marker);
+        patterns.tool_call_end_marker   = adjust_to_token_boundary(patterns.tool_call_end_marker);
 
         // Final trim
         if (!patterns.tool_call_start_marker.empty()) {
             size_t first = patterns.tool_call_start_marker.find_first_not_of(" \n\t\r");
-            size_t last = patterns.tool_call_start_marker.find_last_not_of(" \n\t\r");
+            size_t last  = patterns.tool_call_start_marker.find_last_not_of(" \n\t\r");
             if (first != std::string::npos && last != std::string::npos) {
                 patterns.tool_call_start_marker = patterns.tool_call_start_marker.substr(first, (last - first + 1));
             }
@@ -797,8 +813,8 @@ InternalToolFormat determine_format_from_patterns(const InternalDiscoveredPatter
 
     if (!patterns.tool_call_start_marker.empty() &&
         (patterns.tool_call_start_marker.find('<') == 0 || patterns.tool_call_start_marker.find('[') == 0)) {
-        bool is_prefix_marker = patterns.tool_call_start_marker.find("<|") == 0 ||
-                                patterns.tool_call_start_marker.find("[|") == 0;
+        bool is_prefix_marker =
+            patterns.tool_call_start_marker.find("<|") == 0 || patterns.tool_call_start_marker.find("[|") == 0;
         if (is_prefix_marker) {
             LOG_DBG("Detected JSON_NATIVE format from tool_call_start_marker (instruction-based)\n");
             return FORMAT_JSON_NATIVE;
@@ -833,7 +849,7 @@ InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & t
     try {
         LOG_DBG("=== STARTING TEMPLATE DIFFERENTIAL ANALYSIS ===\n");
 
-        auto caps = tmpl.original_caps();
+        auto caps                      = tmpl.original_caps();
         bool minja_supports_tool_calls = caps.supports_tool_calls;
         if (!minja_supports_tool_calls) {
             LOG_DBG("Template doesn't support standard tool calls (per minja caps detection)\n");
@@ -859,42 +875,44 @@ InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & t
                     { { "type", "object" },
                       { "properties",
                         { { "param1", { { "type", "string" }, { "description", "First parameter" } } } } },
-                      { "required", json::array({ "param1" }) } } } } } }
+                      { "required", json::array({ "param1" }) } } } } }           }
         };
 
         // Test payload 1: Tool definitions + user + assistant with content only (no tool calls)
         json user_msg = {
-            { "role", "user" },
+            { "role",    "user"                        },
             { "content", "Please help me with a task." }
         };
 
         json assistant_content_only = {
-            { "role", "assistant" },
+            { "role",    "assistant"                                },
             { "content", "I'll help you with that task right away." }
         };
 
         // Test payload 2: Tool definitions + user + assistant with content + tool calls
         json assistant_content_with_tool = {
-            { "role", "assistant" },
-            { "content", "I'll help you with that task right away." },
+            { "role",       "assistant"                                                                              },
+            { "content",    "I'll help you with that task right away."                                               },
             { "tool_calls",
-             json::array({ { { "id", "call_0001" },
-                            { "type", "function" },
-                            { "function",
-                              { { "name", "test_function_name" },
-                                { "arguments", json::object({ { "param1", "value1" }, { "param2", "value2" } }) } } } } }) }
+             json::array(
+                  { { { "id", "call_0001" },
+                      { "type", "function" },
+                      { "function",
+                        { { "name", "test_function_name" },
+                          { "arguments", json::object({ { "param1", "value1" }, { "param2", "value2" } }) } } } } }) }
         };
 
         // Also test with content = null + tool calls (some templates check for this)
         json assistant_null_content_with_tool = {
-            { "role", "assistant" },
-            { "content", nullptr },
+            { "role",       "assistant"                                                                              },
+            { "content",    nullptr                                                                                  },
             { "tool_calls",
-             json::array({ { { "id", "call_0001" },
-                            { "type", "function" },
-                            { "function",
-                              { { "name", "test_function_name" },
-                                { "arguments", json::object({ { "param1", "value1" }, { "param2", "value2" } }) } } } } }) }
+             json::array(
+                  { { { "id", "call_0001" },
+                      { "type", "function" },
+                      { "function",
+                        { { "name", "test_function_name" },
+                          { "arguments", json::object({ { "param1", "value1" }, { "param2", "value2" } }) } } } } }) }
         };
 
         minja::chat_template_inputs inputs;
@@ -905,15 +923,15 @@ InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & t
         opts.apply_polyfills = false;
 
         // Helper function to safely render template, handling null content issues
-        auto safe_render = [&](const json& messages) -> std::string {
+        auto safe_render = [&](const json & messages) -> std::string {
             try {
                 // First try with the original messages
                 inputs.messages = messages;
                 return tmpl.apply(inputs, opts);
-            } catch (const std::exception& e) {
+            } catch (const std::exception & e) {
                 // If it fails, try replacing null content with empty string
                 json fixed_messages = messages;
-                for (auto& msg : fixed_messages) {
+                for (auto & msg : fixed_messages) {
                     if (msg.contains("content") && msg["content"].is_null()) {
                         msg["content"] = "";
                     }
@@ -943,7 +961,7 @@ InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & t
         // Check if the template renders tool calls in any scenario
         // Test 1: content vs content+tool_calls (for templates that render both)
         // Test 2: content vs null+tool_calls (for templates that only render tools when content is null)
-        bool renders_tool_calls_with_content = (output_content_only != output_content_with_tool);
+        bool renders_tool_calls_with_content    = (output_content_only != output_content_with_tool);
         bool renders_tool_calls_without_content = (output_content_only != output_null_content_with_tool);
 
         if (!renders_tool_calls_with_content && !renders_tool_calls_without_content) {
@@ -964,47 +982,50 @@ InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & t
         // Use nullptr for content to trigger tool_calls branch in templates that check "content is none"
         // Include "id" field as some templates (e.g., Mistral Nemo) require it
         json tool_msg1 = {
-            { "role",       "assistant" },
-            { "content",    nullptr     },
+            { "role",       "assistant"                                                                          },
+            { "content",    nullptr                                                                              },
             { "tool_calls",
-             json::array({ { { "id", "call_0001" },
-                            { "type", "function" },
-                            { "function", { { "name", "test_function_name" }, { "arguments", json::object() } } } } }) }
+             json::array(
+                  { { { "id", "call_0001" },
+                      { "type", "function" },
+                      { "function", { { "name", "test_function_name" }, { "arguments", json::object() } } } } }) }
         };
 
         json tool_msg2 = {
-            { "role",       "assistant" },
-            { "content",    nullptr     },
+            { "role",       "assistant"                                                                              },
+            { "content",    nullptr                                                                                  },
             { "tool_calls",
-             json::array({ { { "id", "call_0001" },
-                            { "type", "function" },
-                            { "function",
-                              { { "name", "test_function_name" },
-                                { "arguments", json::object({ { "param1", "value1" }, { "param2", "value2" } }) } } } } }) }
+             json::array(
+                  { { { "id", "call_0001" },
+                      { "type", "function" },
+                      { "function",
+                        { { "name", "test_function_name" },
+                          { "arguments", json::object({ { "param1", "value1" }, { "param2", "value2" } }) } } } } }) }
         };
 
         json tool_msg3 = {
-            { "role",       "assistant" },
-            { "content",    nullptr     },
+            { "role",       "assistant"                                                                             },
+            { "content",    nullptr                                                                                 },
             { "tool_calls",
-             json::array({ { { "id", "call_0001" },
-                            { "type", "function" },
-                            { "function", { { "name", "test_function_name" }, { "arguments", json::object() } } } },
-                          { { "id", "call_0002" },
-                            { "type", "function" },
-                            { "function", { { "name", "another_test_function" }, { "arguments", json::object() } } } } }) }
+             json::array(
+                  { { { "id", "call_0001" },
+                      { "type", "function" },
+                      { "function", { { "name", "test_function_name" }, { "arguments", json::object() } } } },
+                    { { "id", "call_0002" },
+                      { "type", "function" },
+                      { "function", { { "name", "another_test_function" }, { "arguments", json::object() } } } } }) }
         };
 
-        inputs.messages = { user_msg, base_msg };
+        inputs.messages  = { user_msg, base_msg };
         auto base_output = safe_render({ user_msg, base_msg });
 
-        inputs.messages = { user_msg, tool_msg1 };
+        inputs.messages   = { user_msg, tool_msg1 };
         auto tool1_output = safe_render({ user_msg, tool_msg1 });
 
-        inputs.messages = { user_msg, tool_msg2 };
+        inputs.messages   = { user_msg, tool_msg2 };
         auto tool2_output = safe_render({ user_msg, tool_msg2 });
 
-        inputs.messages = { user_msg, tool_msg3 };
+        inputs.messages   = { user_msg, tool_msg3 };
         auto tool3_output = safe_render({ user_msg, tool_msg3 });
 
         std::string tool1_diff = find_string_difference(base_output, tool1_output);
@@ -1019,25 +1040,25 @@ InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & t
             LOG_DBG("All diffs are empty - trying without add_generation_prompt\n");
             // Try with add_generation_prompt variations
             json alternative_base_msg = {
-                { "role", "assistant" },
-                { "content", "MARKER" }
+                { "role",    "assistant" },
+                { "content", "MARKER"    }
             };
 
             minja::chat_template_inputs alt_inputs;
-            alt_inputs.tools = tools;
-            alt_inputs.messages = { user_msg, alternative_base_msg };
+            alt_inputs.tools                 = tools;
+            alt_inputs.messages              = { user_msg, alternative_base_msg };
             alt_inputs.add_generation_prompt = false;
-            auto alt_base = tmpl.apply(alt_inputs, opts);
+            auto alt_base                    = tmpl.apply(alt_inputs, opts);
 
             alt_inputs.messages = { user_msg, tool_msg1 };
-            auto alt_tool1 = tmpl.apply(alt_inputs, opts);
+            auto alt_tool1      = tmpl.apply(alt_inputs, opts);
 
             tool1_diff = find_string_difference(alt_base, alt_tool1);
             if (!tool1_diff.empty()) {
                 alt_inputs.messages = { user_msg, tool_msg2 };
-                tool2_diff = find_string_difference(alt_base, tmpl.apply(alt_inputs, opts));
+                tool2_diff          = find_string_difference(alt_base, tmpl.apply(alt_inputs, opts));
                 alt_inputs.messages = { user_msg, tool_msg3 };
-                tool3_diff = find_string_difference(alt_base, tmpl.apply(alt_inputs, opts));
+                tool3_diff          = find_string_difference(alt_base, tmpl.apply(alt_inputs, opts));
             }
         }
 
