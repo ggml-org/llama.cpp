@@ -10613,7 +10613,7 @@ class SolarOpenModel(Glm4MoeModel):
 
     def set_vocab(self):
         from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         tokens, toktypes, tokpre = self.get_vocab_base()
         self.gguf_writer.add_tokenizer_model("gpt2")
