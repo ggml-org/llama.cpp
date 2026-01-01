@@ -522,10 +522,33 @@ struct llm_tokenizer_bpe_session {
             int index = 0;
             size_t offset = 0;
 
-            //if (vocab.tokenizer_ignore_merges && vocab.token_to_id.find(word) != vocab.token_to_id.end()) {
-            if (vocab.get_ignore_merges() && vocab.text_to_token(word) != LLAMA_TOKEN_NULL) {
-                symbols.emplace_back(llm_symbol{-1, -1, word.c_str(), word.size()});
-                offset = word.size();
+            // For tokenizers that ignore merges (like TikToken-based Kimi-K2),
+            // use greedy matching to find the longest token in vocab
+            if (vocab.get_ignore_merges()) {
+                const int n = word.size();
+                for (int i = 0; i < n; ) {
+                    bool match = false;
+                    // Try to find the longest matching token starting at position i
+                    for (int j = std::min(n, i + vocab.max_token_len()); j > i; j--) {
+                        auto id = vocab.text_to_token(word.substr(i, j - i));
+                        if (id != LLAMA_TOKEN_NULL) {
+                            output.push_back(id);
+                            match = true;
+                            i = j;
+                            break;
+                        }
+                    }
+                    if (!match) {
+                        // Fallback to byte token
+                        std::string byte_str = unicode_byte_to_utf8(static_cast<uint8_t>(word[i]));
+                        auto token_byte = vocab.text_to_token(byte_str);
+                        if (token_byte != LLAMA_TOKEN_NULL) {
+                            output.push_back(token_byte);
+                        }
+                        i++;
+                    }
+                }
+                continue;  // Skip the rest of BPE processing for this word
             }
 
             while (offset < word.size()) {
@@ -601,7 +624,9 @@ struct llm_tokenizer_bpe_session {
 
                 if (token == LLAMA_TOKEN_NULL) {
                     for (auto j = str.begin(); j != str.end(); ++j) {
-                        std::string byte_str(1, *j);
+                        // For BPE tokenizers using GPT-2 style byte encoding,
+                        // convert raw bytes to their unicode representation
+                        std::string byte_str = unicode_byte_to_utf8(static_cast<uint8_t>(*j));
                         auto token_multibyte = vocab.text_to_token(byte_str);
                         if (token_multibyte != LLAMA_TOKEN_NULL) {
                             output.push_back(token_multibyte);
