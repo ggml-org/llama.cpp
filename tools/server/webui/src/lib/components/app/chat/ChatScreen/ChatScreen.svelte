@@ -29,7 +29,7 @@
 		activeMessages,
 		activeConversation
 	} from '$lib/stores/conversations.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { serverLoading, serverError, serverStore, isRouterMode } from '$lib/stores/server.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isFileTypeSupported, filterFilesByModalities } from '$lib/utils';
@@ -41,7 +41,7 @@
 
 	let { showCenteredEmpty = false } = $props();
 
-	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll));
+	let disableAutoScroll = $derived(settingsStore.getConfig('disableAutoScroll'));
 	let autoScrollEnabled = $state(true);
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
 	let dragCounter = $state(0);

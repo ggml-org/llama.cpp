@@ -87,7 +87,7 @@ export { normalizeModelName, isValidModelName } from './model-names';
 export { portalToBody } from './portal-to-body';
 
 // Precision utilities
-export { normalizeFloatingPoint, normalizeNumber } from './precision';
+export { normalizeFloatingPoint, normalizeNumber, normalizeComparisonValue } from './precision';
 
 // Syntax highlighting utilities
 export { getLanguageFromFilename } from './syntax-highlight-language';

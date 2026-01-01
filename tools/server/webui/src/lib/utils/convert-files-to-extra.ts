@@ -2,7 +2,7 @@ import { convertPDFToImage, convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
 import { FileTypeCategory, AttachmentType } from '$lib/enums';
-import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { getFileTypeCategory } from '$lib/utils';
 import { readFileAsText, isLikelyTextFile } from './text-files';
@@ -80,17 +80,16 @@ export async function parseFilesToMessageExtras(
 			try {
 				// Always get base64 data for preview functionality
 				const base64Data = await readFileAsBase64(file.file);
-				const currentConfig = config();
 				// Use per-model vision check for router mode
 				const hasVisionSupport = activeModelId
 					? modelsStore.modelSupportsVision(activeModelId)
 					: false;
 
 				// Force PDF-to-text for non-vision models
-				let shouldProcessAsImages = Boolean(currentConfig.pdfAsImage) && hasVisionSupport;
+				let shouldProcessAsImages = settingsStore.getConfig('pdfAsImage') && hasVisionSupport;
 
 				// If user had pdfAsImage enabled but model doesn't support vision, update setting and notify
-				if (currentConfig.pdfAsImage && !hasVisionSupport) {
+				if (settingsStore.getConfig('pdfAsImage') && !hasVisionSupport) {
 					console.log('Non-vision model detected: forcing PDF-to-text mode and updating settings');
 
 					// Update the setting in localStorage

@@ -32,8 +32,8 @@
  */
 
 import { browser } from '$app/environment';
-import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-import { ParameterSyncService } from '$lib/services/parameter-sync';
+import { ParameterSyncService, SYNCABLE_PARAMETERS } from '$lib/services/parameter-sync';
+import { modelsStore } from '$lib/stores/models.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import {
 	configToParameterRecord,
@@ -51,10 +51,19 @@ class SettingsStore {
 	// State
 	// ─────────────────────────────────────────────────────────────────────────────
 
-	config = $state<SettingsConfigType>({ ...SETTING_CONFIG_DEFAULT });
-	theme = $state<string>('auto');
+	config = $state<SettingsConfigType>({});
+	theme = $state<string>('system');
 	isInitialized = $state(false);
 	userOverrides = $state<Set<string>>(new Set());
+
+	get currentModelPresets(): Record<string, string | number | boolean> | null {
+		const modelId = modelsStore.selectedModelName ?? modelsStore.singleModelName;
+		if (!modelId) return null;
+
+		const props = modelsStore.getModelProps(modelId);
+
+		return props?.default_generation_settings?.params ?? null;
+	}
 
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Utilities (private helpers)
@@ -103,12 +112,10 @@ class SettingsStore {
 		try {
 			const storedConfigRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
 			const savedVal = JSON.parse(storedConfigRaw || '{}');
-
-			// Merge with defaults to prevent breaking changes
-			this.config = {
-				...SETTING_CONFIG_DEFAULT,
-				...savedVal
-			};
+			this.config =
+				savedVal && typeof savedVal === 'object' && !Array.isArray(savedVal)
+					? { ...(savedVal as Record<string, SettingsConfigValue>) }
+					: {};
 
 			// Load user overrides
 			const savedOverrides = JSON.parse(
@@ -116,8 +123,8 @@ class SettingsStore {
 			);
 			this.userOverrides = new Set(savedOverrides);
 		} catch (error) {
-			console.warn('Failed to parse config from localStorage, using defaults:', error);
-			this.config = { ...SETTING_CONFIG_DEFAULT };
+			console.warn('Failed to parse config from localStorage, using empty config:', error);
+			this.config = {};
 			this.userOverrides = new Set();
 		}
 	}
@@ -128,7 +135,7 @@ class SettingsStore {
 	private loadTheme() {
 		if (!browser) return;
 
-		this.theme = localStorage.getItem('theme') || 'auto';
+		this.theme = localStorage.getItem('theme') || 'system';
 	}
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Config Updates
@@ -146,7 +153,17 @@ class SettingsStore {
 			const propsDefaults = this.getServerDefaults();
 			const propsDefault = propsDefaults[key as string];
 
+			// Treat only empty-string/undefined as unset for server-synced parameters
+			const isUnset = value === '' || value === undefined;
+
 			if (propsDefault !== undefined) {
+				if (isUnset) {
+					this.userOverrides.delete(key as string);
+					this.saveConfig();
+
+					return;
+				}
+
 				const normalizedValue = normalizeFloatingPoint(value);
 				const normalizedDefault = normalizeFloatingPoint(propsDefault);
 
@@ -174,7 +191,15 @@ class SettingsStore {
 			if (ParameterSyncService.canSyncParameter(key)) {
 				const propsDefault = propsDefaults[key];
 
+				const isUnset = value === '' || value === undefined;
+
 				if (propsDefault !== undefined) {
+					if (isUnset) {
+						this.userOverrides.delete(key);
+
+						continue;
+					}
+
 					const normalizedValue = normalizeFloatingPoint(value);
 					const normalizedDefault = normalizeFloatingPoint(propsDefault);
 
@@ -224,7 +249,7 @@ class SettingsStore {
 		if (!browser) return;
 
 		try {
-			if (this.theme === 'auto') {
+			if (this.theme === 'system') {
 				localStorage.removeItem('theme');
 			} else {
 				localStorage.setItem('theme', this.theme);
@@ -242,15 +267,16 @@ class SettingsStore {
 	 * Reset configuration to defaults
 	 */
 	resetConfig() {
-		this.config = { ...SETTING_CONFIG_DEFAULT };
+		// Defaults are now sourced from server-provided webui settings.
+		this.config = { ...this.getServerDefaults() };
 		this.saveConfig();
 	}
 
 	/**
-	 * Reset theme to auto
+	 * Reset theme to system
 	 */
 	resetTheme() {
-		this.theme = 'auto';
+		this.theme = 'system';
 		this.saveTheme();
 	}
 
@@ -274,11 +300,7 @@ class SettingsStore {
 			this.config[key as keyof SettingsConfigType] =
 				value as SettingsConfigType[keyof SettingsConfigType];
 		} else {
-			if (key in SETTING_CONFIG_DEFAULT) {
-				const defaultValue = getConfigValue(SETTING_CONFIG_DEFAULT, key);
-
-				setConfigValue(this.config, key, defaultValue);
-			}
+			delete (this.config as Record<string, SettingsConfigValue>)[key];
 		}
 
 		this.userOverrides.delete(key);
@@ -304,6 +326,15 @@ class SettingsStore {
 
 		for (const [key, propsValue] of Object.entries(propsDefaults)) {
 			const currentValue = getConfigValue(this.config, key);
+
+			const isUnset = currentValue === undefined || currentValue === '';
+
+			if (isUnset) {
+				this.userOverrides.delete(key);
+
+				setConfigValue(this.config, key, propsValue);
+				continue;
+			}
 
 			const normalizedCurrent = normalizeFloatingPoint(currentValue);
 			const normalizedDefault = normalizeFloatingPoint(propsValue);
@@ -336,11 +367,7 @@ class SettingsStore {
 
 				setConfigValue(this.config, key, normalizedValue);
 			} else {
-				if (key in SETTING_CONFIG_DEFAULT) {
-					const defaultValue = getConfigValue(SETTING_CONFIG_DEFAULT, key);
-
-					setConfigValue(this.config, key, defaultValue);
-				}
+				delete (this.config as Record<string, SettingsConfigValue>)[key];
 			}
 
 			this.userOverrides.delete(key);
@@ -354,12 +381,23 @@ class SettingsStore {
 	// ─────────────────────────────────────────────────────────────────────────────
 
 	/**
-	 * Get a specific configuration value
+	 * Get a specific configuration value with intelligent type-based fallback
 	 * @param key - The configuration key to get
-	 * @returns The configuration value
+	 * @returns The configuration value with safe defaults
 	 */
 	getConfig<K extends keyof SettingsConfigType>(key: K): SettingsConfigType[K] {
-		return this.config[key];
+		// Return value if exists (user override or server default from sync)
+		if (this.config[key] !== undefined) return this.config[key];
+
+		// Type-safe fallback based on SYNCABLE_PARAMETERS
+		const param = SYNCABLE_PARAMETERS.find((p) => p.key === key);
+		if (param) {
+			if (param.type === 'boolean') return false as SettingsConfigType[K];
+			if (param.type === 'string') return '' as SettingsConfigType[K];
+			// number → undefined (server decides for sampling params)
+		}
+
+		return undefined as SettingsConfigType[K];
 	}
 
 	/**
@@ -390,6 +428,24 @@ class SettingsStore {
 	}
 
 	/**
+	 * Get placeholder value for a given parameter, prioritizing model presets
+	 */
+	getParameterPlaceholder(key: string): string {
+		const modelPreset = this.currentModelPresets?.[key];
+		if (modelPreset !== undefined) {
+			return String(normalizeFloatingPoint(modelPreset));
+		}
+
+		const serverDefaults = this.getServerDefaults();
+		const serverDefault = serverDefaults[key];
+		if (serverDefault !== undefined) {
+			return String(normalizeFloatingPoint(serverDefault));
+		}
+
+		return 'none';
+	}
+
+	/**
 	 * Get diff between current settings and server defaults
 	 */
 	getParameterDiff() {
@@ -416,6 +472,5 @@ class SettingsStore {
 
 export const settingsStore = new SettingsStore();
 
-export const config = () => settingsStore.config;
 export const theme = () => settingsStore.theme;
 export const isInitialized = () => settingsStore.isInitialized;

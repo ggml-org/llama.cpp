@@ -130,8 +130,8 @@ export class ChatService {
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		if (max_tokens !== undefined) {
-			// Set max_tokens to -1 (infinite) when explicitly configured as 0 or null
-			requestBody.max_tokens = max_tokens !== null && max_tokens !== 0 ? max_tokens : -1;
+			// Set max_tokens to -1 (infinite) when explicitly configured as 0
+			requestBody.max_tokens = max_tokens !== 0 ? max_tokens : -1;
 		}
 
 		if (dynatemp_range !== undefined) requestBody.dynatemp_range = dynatemp_range;

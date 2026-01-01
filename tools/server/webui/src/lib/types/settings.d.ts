@@ -1,4 +1,3 @@
-import type { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 import type { ChatMessageTimings } from './chat';
 
 export type SettingsConfigValue = string | number | boolean;
@@ -61,6 +60,4 @@ export interface SettingsChatServiceOptions {
 	onError?: (error: Error) => void;
 }
 
-export type SettingsConfigType = typeof SETTING_CONFIG_DEFAULT & {
-	[key: string]: SettingsConfigValue;
-};
+export type SettingsConfigType = Record<string, SettingsConfigValue>;

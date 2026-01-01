@@ -29,7 +29,6 @@ export interface SyncableParameter {
 	key: string;
 	serverKey: string;
 	type: 'number' | 'string' | 'boolean';
-	canSync: boolean;
 }
 
 /**
@@ -37,72 +36,85 @@ export interface SyncableParameter {
  * Only parameters that should be synced from server are included
  */
 export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
-	{ key: 'temperature', serverKey: 'temperature', type: 'number', canSync: true },
-	{ key: 'top_k', serverKey: 'top_k', type: 'number', canSync: true },
-	{ key: 'top_p', serverKey: 'top_p', type: 'number', canSync: true },
-	{ key: 'min_p', serverKey: 'min_p', type: 'number', canSync: true },
-	{ key: 'dynatemp_range', serverKey: 'dynatemp_range', type: 'number', canSync: true },
-	{ key: 'dynatemp_exponent', serverKey: 'dynatemp_exponent', type: 'number', canSync: true },
-	{ key: 'xtc_probability', serverKey: 'xtc_probability', type: 'number', canSync: true },
-	{ key: 'xtc_threshold', serverKey: 'xtc_threshold', type: 'number', canSync: true },
-	{ key: 'typ_p', serverKey: 'typ_p', type: 'number', canSync: true },
-	{ key: 'repeat_last_n', serverKey: 'repeat_last_n', type: 'number', canSync: true },
-	{ key: 'repeat_penalty', serverKey: 'repeat_penalty', type: 'number', canSync: true },
-	{ key: 'presence_penalty', serverKey: 'presence_penalty', type: 'number', canSync: true },
-	{ key: 'frequency_penalty', serverKey: 'frequency_penalty', type: 'number', canSync: true },
-	{ key: 'dry_multiplier', serverKey: 'dry_multiplier', type: 'number', canSync: true },
-	{ key: 'dry_base', serverKey: 'dry_base', type: 'number', canSync: true },
-	{ key: 'dry_allowed_length', serverKey: 'dry_allowed_length', type: 'number', canSync: true },
-	{ key: 'dry_penalty_last_n', serverKey: 'dry_penalty_last_n', type: 'number', canSync: true },
-	{ key: 'max_tokens', serverKey: 'max_tokens', type: 'number', canSync: true },
-	{ key: 'samplers', serverKey: 'samplers', type: 'string', canSync: true },
+	{ key: 'apiKey', serverKey: 'apiKey', type: 'string' },
+	{ key: 'systemMessage', serverKey: 'systemMessage', type: 'string' },
+	{ key: 'showSystemMessage', serverKey: 'showSystemMessage', type: 'boolean' },
+	{ key: 'theme', serverKey: 'theme', type: 'string' },
+	{ key: 'temperature', serverKey: 'temperature', type: 'number' },
+	{ key: 'top_k', serverKey: 'top_k', type: 'number' },
+	{ key: 'top_p', serverKey: 'top_p', type: 'number' },
+	{ key: 'min_p', serverKey: 'min_p', type: 'number' },
+	{ key: 'dynatemp_range', serverKey: 'dynatemp_range', type: 'number' },
+	{ key: 'dynatemp_exponent', serverKey: 'dynatemp_exponent', type: 'number' },
+	{ key: 'xtc_probability', serverKey: 'xtc_probability', type: 'number' },
+	{ key: 'xtc_threshold', serverKey: 'xtc_threshold', type: 'number' },
+	{ key: 'typ_p', serverKey: 'typ_p', type: 'number' },
+	{ key: 'repeat_last_n', serverKey: 'repeat_last_n', type: 'number' },
+	{ key: 'repeat_penalty', serverKey: 'repeat_penalty', type: 'number' },
+	{ key: 'presence_penalty', serverKey: 'presence_penalty', type: 'number' },
+	{ key: 'frequency_penalty', serverKey: 'frequency_penalty', type: 'number' },
+	{ key: 'dry_multiplier', serverKey: 'dry_multiplier', type: 'number' },
+	{ key: 'dry_base', serverKey: 'dry_base', type: 'number' },
+	{ key: 'dry_allowed_length', serverKey: 'dry_allowed_length', type: 'number' },
+	{ key: 'dry_penalty_last_n', serverKey: 'dry_penalty_last_n', type: 'number' },
+	{ key: 'max_tokens', serverKey: 'max_tokens', type: 'number' },
+	{ key: 'samplers', serverKey: 'samplers', type: 'string' },
 	{
 		key: 'pasteLongTextToFileLen',
 		serverKey: 'pasteLongTextToFileLen',
-		type: 'number',
-		canSync: true
+		type: 'number'
 	},
-	{ key: 'pdfAsImage', serverKey: 'pdfAsImage', type: 'boolean', canSync: true },
+	{
+		key: 'copyTextAttachmentsAsPlainText',
+		serverKey: 'copyTextAttachmentsAsPlainText',
+		type: 'boolean'
+	},
+	{ key: 'pdfAsImage', serverKey: 'pdfAsImage', type: 'boolean' },
 	{
 		key: 'showThoughtInProgress',
 		serverKey: 'showThoughtInProgress',
-		type: 'boolean',
-		canSync: true
+		type: 'boolean'
 	},
-	{ key: 'showToolCalls', serverKey: 'showToolCalls', type: 'boolean', canSync: true },
+	{ key: 'showToolCalls', serverKey: 'showToolCalls', type: 'boolean' },
 	{
 		key: 'disableReasoningFormat',
 		serverKey: 'disableReasoningFormat',
-		type: 'boolean',
-		canSync: true
+		type: 'boolean'
 	},
-	{ key: 'keepStatsVisible', serverKey: 'keepStatsVisible', type: 'boolean', canSync: true },
-	{ key: 'showMessageStats', serverKey: 'showMessageStats', type: 'boolean', canSync: true },
+	{
+		key: 'alwaysShowSidebarOnDesktop',
+		serverKey: 'alwaysShowSidebarOnDesktop',
+		type: 'boolean'
+	},
+	{
+		key: 'autoShowSidebarOnNewChat',
+		serverKey: 'autoShowSidebarOnNewChat',
+		type: 'boolean'
+	},
+	{ key: 'keepStatsVisible', serverKey: 'keepStatsVisible', type: 'boolean' },
+	{ key: 'showMessageStats', serverKey: 'showMessageStats', type: 'boolean' },
 	{
 		key: 'askForTitleConfirmation',
 		serverKey: 'askForTitleConfirmation',
-		type: 'boolean',
-		canSync: true
+		type: 'boolean'
 	},
-	{ key: 'disableAutoScroll', serverKey: 'disableAutoScroll', type: 'boolean', canSync: true },
+	{ key: 'disableAutoScroll', serverKey: 'disableAutoScroll', type: 'boolean' },
 	{
 		key: 'renderUserContentAsMarkdown',
 		serverKey: 'renderUserContentAsMarkdown',
-		type: 'boolean',
-		canSync: true
+		type: 'boolean'
 	},
-	{ key: 'autoMicOnEmpty', serverKey: 'autoMicOnEmpty', type: 'boolean', canSync: true },
+	{ key: 'autoMicOnEmpty', serverKey: 'autoMicOnEmpty', type: 'boolean' },
+	{ key: 'custom', serverKey: 'custom', type: 'string' },
 	{
 		key: 'pyInterpreterEnabled',
 		serverKey: 'pyInterpreterEnabled',
-		type: 'boolean',
-		canSync: true
+		type: 'boolean'
 	},
 	{
 		key: 'enableContinueGeneration',
 		serverKey: 'enableContinueGeneration',
-		type: 'boolean',
-		canSync: true
+		type: 'boolean'
 	}
 ];
 
@@ -129,7 +141,7 @@ export class ParameterSyncService {
 
 		if (serverParams) {
 			for (const param of SYNCABLE_PARAMETERS) {
-				if (param.canSync && param.serverKey in serverParams) {
+				if (param.serverKey in serverParams) {
 					const value = (serverParams as unknown as Record<string, ParameterValue>)[
 						param.serverKey
 					];
@@ -148,7 +160,7 @@ export class ParameterSyncService {
 
 		if (webuiSettings) {
 			for (const param of SYNCABLE_PARAMETERS) {
-				if (param.canSync && param.serverKey in webuiSettings) {
+				if (param.serverKey in webuiSettings) {
 					const value = webuiSettings[param.serverKey];
 					if (value !== undefined) {
 						extracted[param.key] = this.roundFloatingPoint(value);
@@ -216,14 +228,14 @@ export class ParameterSyncService {
 	 * Check if a parameter can be synced from server
 	 */
 	static canSyncParameter(key: string): boolean {
-		return SYNCABLE_PARAMETERS.some((param) => param.key === key && param.canSync);
+		return SYNCABLE_PARAMETERS.some((param) => param.key === key);
 	}
 
 	/**
 	 * Get all syncable parameter keys
 	 */
 	static getSyncableParameterKeys(): string[] {
-		return SYNCABLE_PARAMETERS.filter((param) => param.canSync).map((param) => param.key);
+		return SYNCABLE_PARAMETERS.map((param) => param.key);
 	}
 
 	/**

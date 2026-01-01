@@ -9,7 +9,7 @@
 	} from '$lib/components/app';
 	import { FileTypeCategory } from '$lib/enums';
 	import { getFileTypeCategory } from '$lib/utils';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
@@ -42,7 +42,6 @@
 		onStop
 	}: Props = $props();
 
-	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 
 	let conversationModel = $derived(
@@ -117,7 +116,10 @@
 		uploadedFiles.some((file) => getFileTypeCategory(file.type) === FileTypeCategory.AUDIO)
 	);
 	let shouldShowRecordButton = $derived(
-		hasAudioModality && !hasText && !hasAudioAttachments && currentConfig.autoMicOnEmpty
+		hasAudioModality &&
+			!hasText &&
+			!hasAudioAttachments &&
+			settingsStore.getConfig('autoMicOnEmpty')
 	);
 
 	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());

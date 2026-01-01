@@ -1,6 +1,6 @@
 import { DatabaseService, ChatService } from '$lib/services';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import {
 	selectedModelName,
@@ -300,8 +300,7 @@ class ChatStore {
 			| undefined;
 
 		const contextTotal = this.getContextTotal();
-		const currentConfig = config();
-		const outputTokensMax = currentConfig.max_tokens || -1;
+		const outputTokensMax = settingsStore.getConfig('max_tokens') || -1;
 
 		// Note: for timings data, the n_prompt does NOT include cache tokens
 		const contextUsed = promptTokens + cacheTokens + predictedTokens;
@@ -326,9 +325,6 @@ class ChatStore {
 			outputTokensMax,
 			hasNextToken: predictedTokens > 0,
 			tokensPerSecond,
-			temperature: currentConfig.temperature ?? 0.8,
-			topP: currentConfig.top_p ?? 0.95,
-			speculative: false,
 			progressPercent,
 			promptProgress,
 			promptTokens,
@@ -659,8 +655,7 @@ class ChatStore {
 		try {
 			if (isNewConversation) {
 				const rootId = await DatabaseService.createRootMessage(currentConv.id);
-				const currentConfig = config();
-				const systemPrompt = currentConfig.systemMessage?.toString().trim();
+				const systemPrompt = settingsStore.getConfig('systemMessage')?.toString().trim();
 
 				if (systemPrompt) {
 					const systemMessage = await DatabaseService.createSystemMessage(
@@ -1413,7 +1408,6 @@ class ChatStore {
 	// ─────────────────────────────────────────────────────────────────────────────
 
 	private getApiOptions(): Record<string, unknown> {
-		const currentConfig = config();
 		const hasValue = (value: unknown): boolean =>
 			value !== undefined && value !== null && value !== '';
 
@@ -1425,43 +1419,47 @@ class ChatStore {
 			if (modelName) apiOptions.model = modelName;
 		}
 
-		// Config options needed by ChatService
-		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
-		if (currentConfig.disableReasoningFormat) apiOptions.disableReasoningFormat = true;
+		// Numeric sampling parameters
+		const numericParams = [
+			'temperature',
+			'dynatemp_range',
+			'dynatemp_exponent',
+			'top_k',
+			'top_p',
+			'min_p',
+			'xtc_probability',
+			'xtc_threshold',
+			'typ_p',
+			'repeat_last_n',
+			'repeat_penalty',
+			'presence_penalty',
+			'frequency_penalty',
+			'dry_multiplier',
+			'dry_base',
+			'dry_allowed_length',
+			'dry_penalty_last_n',
+			'max_tokens'
+		] as const;
 
-		if (hasValue(currentConfig.temperature))
-			apiOptions.temperature = Number(currentConfig.temperature);
-		if (hasValue(currentConfig.max_tokens))
-			apiOptions.max_tokens = Number(currentConfig.max_tokens);
-		if (hasValue(currentConfig.dynatemp_range))
-			apiOptions.dynatemp_range = Number(currentConfig.dynatemp_range);
-		if (hasValue(currentConfig.dynatemp_exponent))
-			apiOptions.dynatemp_exponent = Number(currentConfig.dynatemp_exponent);
-		if (hasValue(currentConfig.top_k)) apiOptions.top_k = Number(currentConfig.top_k);
-		if (hasValue(currentConfig.top_p)) apiOptions.top_p = Number(currentConfig.top_p);
-		if (hasValue(currentConfig.min_p)) apiOptions.min_p = Number(currentConfig.min_p);
-		if (hasValue(currentConfig.xtc_probability))
-			apiOptions.xtc_probability = Number(currentConfig.xtc_probability);
-		if (hasValue(currentConfig.xtc_threshold))
-			apiOptions.xtc_threshold = Number(currentConfig.xtc_threshold);
-		if (hasValue(currentConfig.typ_p)) apiOptions.typ_p = Number(currentConfig.typ_p);
-		if (hasValue(currentConfig.repeat_last_n))
-			apiOptions.repeat_last_n = Number(currentConfig.repeat_last_n);
-		if (hasValue(currentConfig.repeat_penalty))
-			apiOptions.repeat_penalty = Number(currentConfig.repeat_penalty);
-		if (hasValue(currentConfig.presence_penalty))
-			apiOptions.presence_penalty = Number(currentConfig.presence_penalty);
-		if (hasValue(currentConfig.frequency_penalty))
-			apiOptions.frequency_penalty = Number(currentConfig.frequency_penalty);
-		if (hasValue(currentConfig.dry_multiplier))
-			apiOptions.dry_multiplier = Number(currentConfig.dry_multiplier);
-		if (hasValue(currentConfig.dry_base)) apiOptions.dry_base = Number(currentConfig.dry_base);
-		if (hasValue(currentConfig.dry_allowed_length))
-			apiOptions.dry_allowed_length = Number(currentConfig.dry_allowed_length);
-		if (hasValue(currentConfig.dry_penalty_last_n))
-			apiOptions.dry_penalty_last_n = Number(currentConfig.dry_penalty_last_n);
-		if (currentConfig.samplers) apiOptions.samplers = currentConfig.samplers;
-		if (currentConfig.custom) apiOptions.custom = currentConfig.custom;
+		for (const param of numericParams) {
+			const value = settingsStore.getConfig(param as keyof SettingsConfigType);
+			if (hasValue(value)) apiOptions[param] = Number(value);
+		}
+
+		// String parameters
+		const samplers = settingsStore.getConfig('samplers');
+		if (samplers) apiOptions.samplers = samplers;
+
+		const custom = settingsStore.getConfig('custom');
+		if (custom) apiOptions.custom = custom;
+
+		const systemMessage = settingsStore.getConfig('systemMessage');
+		if (systemMessage) apiOptions.systemMessage = systemMessage;
+
+		// Boolean parameters
+		if (settingsStore.getConfig('disableReasoningFormat')) {
+			apiOptions.disableReasoningFormat = true;
+		}
 
 		return apiOptions;
 	}

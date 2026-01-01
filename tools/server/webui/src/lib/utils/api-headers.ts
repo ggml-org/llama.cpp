@@ -1,12 +1,11 @@
-import { config } from '$lib/stores/settings.svelte';
+import { settingsStore } from '$lib/stores/settings.svelte';
 
 /**
  * Get authorization headers for API requests
  * Includes Bearer token if API key is configured
  */
 export function getAuthHeaders(): Record<string, string> {
-	const currentConfig = config();
-	const apiKey = currentConfig.apiKey?.toString().trim();
+	const apiKey = settingsStore.getConfig('apiKey')?.toString().trim();
 
 	return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
 }

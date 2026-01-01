@@ -1,7 +1,7 @@
 import { base } from '$app/paths';
+import { settingsStore } from '$lib/stores/settings.svelte';
 import { error } from '@sveltejs/kit';
 import { browser } from '$app/environment';
-import { config } from '$lib/stores/settings.svelte';
 
 /**
  * Validates API key by making a request to the server props endpoint
@@ -13,7 +13,7 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 	}
 
 	try {
-		const apiKey = config().apiKey;
+		const apiKey = settingsStore.getConfig('apiKey');
 
 		const headers: Record<string, string> = {
 			'Content-Type': 'application/json'

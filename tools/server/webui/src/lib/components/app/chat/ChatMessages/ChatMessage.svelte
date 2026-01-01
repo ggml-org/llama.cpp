@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { copyToClipboard, isIMEComposing, formatMessageForClipboard } from '$lib/utils';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
@@ -108,7 +108,7 @@
 	}
 
 	async function handleCopy() {
-		const asPlainText = Boolean(config().copyTextAttachmentsAsPlainText);
+		const asPlainText = settingsStore.getConfig('copyTextAttachmentsAsPlainText');
 		const clipboardContent = formatMessageForClipboard(message.content, message.extra, asPlainText);
 		await copyToClipboard(clipboardContent, 'Message copied to clipboard');
 		onCopy?.(message);

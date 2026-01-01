@@ -4,9 +4,8 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { ChatAttachmentsList, DialogConfirmation, ModelsSelector } from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
-	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 	import { AttachmentType, FileTypeCategory, MimeTypeText } from '$lib/enums';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { setEditModeActive, clearEditMode } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
@@ -59,12 +58,18 @@
 	let saveWithoutRegenerate = $state(false);
 	let showDiscardDialog = $state(false);
 	let isRouter = $derived(isRouterMode());
-	let currentConfig = $derived(config());
 
 	let pasteLongTextToFileLength = $derived.by(() => {
-		const n = Number(currentConfig.pasteLongTextToFileLen);
+		const n = Number(settingsStore.getConfig('pasteLongTextToFileLen'));
 
-		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
+		if (!Number.isNaN(n)) {
+			return n;
+		}
+
+		const placeholder = settingsStore.getParameterPlaceholder('pasteLongTextToFileLen');
+		const placeholderNumber = Number(placeholder);
+
+		return Number.isNaN(placeholderNumber) ? 0 : placeholderNumber;
 	});
 
 	let hasUnsavedChanges = $derived.by(() => {

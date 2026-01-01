@@ -109,8 +109,7 @@ export async function processFilesToChatUploaded(
 				const hasVisionSupport = activeModelId
 					? modelsStore.modelSupportsVision(activeModelId)
 					: false;
-				const currentConfig = settingsStore.config;
-				if (hasVisionSupport && !currentConfig.pdfAsImage) {
+				if (hasVisionSupport && !settingsStore.getConfig('pdfAsImage')) {
 					toast.info(`You can enable parsing PDF as images with vision models.`, {
 						duration: 8000,
 						action: {

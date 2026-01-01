@@ -18,7 +18,7 @@
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import Label from '$lib/components/ui/label/label.svelte';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 
@@ -90,7 +90,6 @@
 
 	const processingState = useProcessingState();
 
-	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 	let displayedModel = $derived((): string | null => {
 		if (message.model) {
@@ -238,7 +237,7 @@
 			</div>
 		</div>
 	{:else if message.role === 'assistant'}
-		{#if config().disableReasoningFormat}
+		{#if settingsStore.getConfig('disableReasoningFormat')}
 			<pre class="raw-output">{messageContent || ''}</pre>
 		{:else}
 			<MarkdownContent content={messageContent || ''} />
@@ -263,14 +262,14 @@
 					<ModelBadge model={displayedModel() || undefined} onclick={handleCopyModel} />
 				{/if}
 
-				{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
+				{#if settingsStore.getConfig('showMessageStats') && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
 					<ChatMessageStatistics
 						promptTokens={message.timings.prompt_n}
 						promptMs={message.timings.prompt_ms}
 						predictedTokens={message.timings.predicted_n}
 						predictedMs={message.timings.predicted_ms}
 					/>
-				{:else if isLoading() && currentConfig.showMessageStats}
+				{:else if isLoading() && settingsStore.getConfig('showMessageStats')}
 					{@const liveStats = processingState.getLiveProcessingStats()}
 					{@const genStats = processingState.getLiveGenerationStats()}
 					{@const promptProgress = processingState.processingState?.promptProgress}
@@ -291,7 +290,7 @@
 			</div>
 		{/if}
 
-		{#if config().showToolCalls}
+		{#if settingsStore.getConfig('showToolCalls')}
 			{#if (toolCalls && toolCalls.length > 0) || fallbackToolCalls}
 				<span class="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
 					<span class="inline-flex items-center gap-1">
@@ -345,7 +344,7 @@
 			{onCopy}
 			{onEdit}
 			{onRegenerate}
-			onContinue={currentConfig.enableContinueGeneration && !thinkingContent
+			onContinue={settingsStore.getConfig('enableContinueGeneration') && !thinkingContent
 				? onContinue
 				: undefined}
 			{onDelete}

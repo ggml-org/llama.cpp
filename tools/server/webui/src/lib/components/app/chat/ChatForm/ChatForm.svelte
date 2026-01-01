@@ -8,8 +8,7 @@
 		ChatFormTextarea
 	} from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
-	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-	import { config } from '$lib/stores/settings.svelte';
+	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
@@ -60,14 +59,20 @@
 
 	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
-	let currentConfig = $derived(config());
 	let fileAcceptString = $state<string | undefined>(undefined);
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
 	let isRecording = $state(false);
 	let message = $state('');
 	let pasteLongTextToFileLength = $derived.by(() => {
-		const n = Number(currentConfig.pasteLongTextToFileLen);
-		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
+		const n = Number(settingsStore.getConfig('pasteLongTextToFileLen'));
+		if (!Number.isNaN(n)) {
+			return n;
+		}
+
+		const placeholder = settingsStore.getParameterPlaceholder('pasteLongTextToFileLen');
+		const placeholderNumber = Number(placeholder);
+
+		return Number.isNaN(placeholderNumber) ? 0 : placeholderNumber;
 	});
 	let previousIsLoading = $state(isLoading);
 	let recordingSupported = $state(false);
