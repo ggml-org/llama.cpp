@@ -1168,7 +1168,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     if (!weight_before_ffn) {
         experts = ggml_mul(ctx0, experts, weights);
-        cb(cur, "ffn_moe_weighted", il);
+        cb(experts, "ffn_moe_weighted", il);
     }
 
     ggml_tensor * cur_experts[LLAMA_MAX_EXPERTS] = { nullptr };
