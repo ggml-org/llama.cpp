@@ -37,9 +37,8 @@ static bool is_hex_digit(const char c) {
 // This is used in common_peg_until_parser and to build a GBNF exclusion grammar
 struct trie {
     struct node {
-        size_t                          depth = 0;
-        std::map<unsigned char, size_t> children;
-        bool                            is_word;
+        std::map<uint32_t, size_t> children;
+        bool                       is_word = false;
     };
 
     std::vector<node> nodes;
@@ -59,14 +58,19 @@ struct trie {
         size_t pos     = start_pos;
 
         while (pos < sv.size()) {
-            auto it = nodes[current].children.find(sv[pos]);
+            auto result = parse_utf8_codepoint(sv, pos);
+            if (result.status != utf8_parse_result::SUCCESS) {
+                break;
+            }
+
+            auto it = nodes[current].children.find(result.codepoint);
             if (it == nodes[current].children.end()) {
                 // Can't continue matching
                 return match_result{ match_result::NO_MATCH };
             }
 
             current = it->second;
-            pos++;
+            pos += result.bytes_consumed;
 
             // Check if we've matched a complete word
             if (nodes[current].is_word) {
@@ -85,22 +89,22 @@ struct trie {
     }
 
     struct prefix_and_next {
-        std::string prefix;
-        std::string next_chars;
+        std::vector<uint32_t> prefix;
+        std::vector<uint32_t> next_chars;
     };
 
     std::vector<prefix_and_next> collect_prefix_and_next() {
-        std::string                  prefix;
+        std::vector<uint32_t>        prefix;
         std::vector<prefix_and_next> result;
         collect_prefix_and_next(0, prefix, result);
         return result;
     }
 
   private:
-    void collect_prefix_and_next(size_t index, std::string & prefix, std::vector<prefix_and_next> & out) {
+    void collect_prefix_and_next(size_t index, std::vector<uint32_t> & prefix, std::vector<prefix_and_next> & out) {
         if (!nodes[index].is_word) {
             if (!nodes[index].children.empty()) {
-                std::string chars;
+                std::vector<uint32_t> chars;
                 chars.reserve(nodes[index].children.size());
                 for (const auto & p : nodes[index].children) {
                     chars.push_back(p.first);
@@ -110,8 +114,8 @@ struct trie {
         }
 
         for (const auto & p : nodes[index].children) {
-            unsigned char ch    = p.first;
-            auto          child = p.second;
+            uint32_t ch    = p.first;
+            auto     child = p.second;
             prefix.push_back(ch);
             collect_prefix_and_next(child, prefix, out);
             prefix.pop_back();
@@ -126,11 +130,19 @@ struct trie {
 
     void insert(const std::string & word) {
         size_t current = 0;
-        for (unsigned char ch : word) {
+        size_t pos     = 0;
+        while (pos < word.length()) {
+            auto result = parse_utf8_codepoint(word, pos);
+            if (result.status != utf8_parse_result::SUCCESS) {
+                break;
+            }
+
+            uint32_t ch = result.codepoint;
+            pos += result.bytes_consumed;
+
             auto it = nodes[current].children.find(ch);
             if (it == nodes[current].children.end()) {
                 size_t child                = create_node();
-                nodes[child].depth          = nodes[current].depth + 1;
                 nodes[current].children[ch] = child;
                 current                     = child;
             } else {
@@ -322,10 +334,12 @@ struct parser_executor {
             if (pos >= ctx.input.size()) {
                 if (!ctx.is_partial) {
                     if (ctx.input.size() > pos && ctx.input[pos] == '<') {
-                         fprintf(stderr, "Check literal '%s' against '%s'\n", p.literal.c_str(), ctx.input.substr(pos, 20).c_str());
+                        fprintf(stderr, "Check literal '%s' against '%s'\n", p.literal.c_str(),
+                                ctx.input.substr(pos, 20).c_str());
                     }
                     if (p.literal == "<think>") {
-                         fprintf(stderr, "Literal match failed: expected '%s', got '%c' (0x%02x) at pos %zu\n", p.literal.c_str(), ctx.input[pos], (unsigned char)ctx.input[pos], pos);
+                        fprintf(stderr, "Literal match failed: expected '%s', got '%c' (0x%02x) at pos %zu\n",
+                                p.literal.c_str(), ctx.input[pos], (unsigned char) ctx.input[pos], pos);
                     }
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                 }
@@ -700,7 +714,7 @@ struct parser_executor {
 
     common_peg_parse_result operator()(const common_peg_rule_parser & p) {
         if (!ctx.is_partial) {
-             fprintf(stderr, "Enter rule '%s' at pos %zu\n", p.name.c_str(), start_pos);
+            fprintf(stderr, "Enter rule '%s' at pos %zu\n", p.name.c_str(), start_pos);
         }
         // Parse the child
         auto result = arena.parse(p.child, ctx, start_pos);
@@ -1152,23 +1166,76 @@ common_peg_parser common_peg_parser_builder::json_member(const std::string & key
     });
 }
 
-static std::string gbnf_escape_char_class(char c) {
-    switch (c) {
-        case '\n':
-            return "\\n";
-        case '\t':
-            return "\\t";
-        case '\r':
-            return "\\r";
-        case '\\':
-            return "\\\\";
-        case ']':
-            return "\\]";
-        case '[':
-            return "\\[";
-        default:
-            return std::string(1, c);
+static std::string gbnf_escape_char_class(uint32_t c) {
+    if (c == '-' || c == ']' || c == '[' || c == '\\') {
+        return "\\" + std::string(1, (char) c);
     }
+    // Escape whitespace control characters
+    if (c == '\n') {
+        return "\\n";
+    }
+    if (c == '\t') {
+        return "\\t";
+    }
+    if (c == '\r') {
+        return "\\r";
+    }
+
+    // Printable ASCII
+    if (c >= 0x20 && c <= 0x7E) {
+        return std::string(1, (char) c);
+    }
+
+    // Hex escape
+    char         buf[16];
+    const char * hex = "0123456789ABCDEF";
+
+    if (c <= 0xFF) {
+        buf[0] = '\\';
+        buf[1] = 'x';
+        buf[2] = hex[(c >> 4) & 0xF];
+        buf[3] = hex[c & 0xF];
+        buf[4] = '\0';
+    } else if (c <= 0xFFFF) {
+        buf[0] = '\\';
+        buf[1] = 'u';
+        buf[2] = hex[(c >> 12) & 0xF];
+        buf[3] = hex[(c >> 8) & 0xF];
+        buf[4] = hex[(c >> 4) & 0xF];
+        buf[5] = hex[c & 0xF];
+        buf[6] = '\0';
+    } else {
+        buf[0] = '\\';
+        buf[1] = 'U';
+        for (int i = 0; i < 8; i++) {
+            buf[2 + i] = hex[(c >> ((7 - i) * 4)) & 0xF];
+        }
+        buf[10] = '\0';
+    }
+
+    return std::string(buf);
+}
+
+static std::string codepoints_to_utf8(const std::vector<uint32_t> & cps) {
+    std::string s;
+    for (uint32_t cp : cps) {
+        if (cp < 0x80) {
+            s += (char) cp;
+        } else if (cp < 0x800) {
+            s += (char) (0xC0 | (cp >> 6));
+            s += (char) (0x80 | (cp & 0x3F));
+        } else if (cp < 0x10000) {
+            s += (char) (0xE0 | (cp >> 12));
+            s += (char) (0x80 | ((cp >> 6) & 0x3F));
+            s += (char) (0x80 | (cp & 0x3F));
+        } else {
+            s += (char) (0xF0 | (cp >> 18));
+            s += (char) (0x80 | ((cp >> 12) & 0x3F));
+            s += (char) (0x80 | ((cp >> 6) & 0x3F));
+            s += (char) (0x80 | (cp & 0x3F));
+        }
+    }
+    return s;
 }
 
 static std::string gbnf_excluding_pattern(const std::vector<std::string> & strings) {
@@ -1185,13 +1252,13 @@ static std::string gbnf_excluding_pattern(const std::vector<std::string> & strin
         const auto & chars = pieces[i].next_chars;
 
         std::string cls;
-        cls.reserve(chars.size());
-        for (const auto & ch : chars) {
+        cls.reserve(chars.size() * 4);
+        for (uint32_t ch : chars) {
             cls += gbnf_escape_char_class(ch);
         }
 
         if (!pre.empty()) {
-            pattern += gbnf_format_literal(pre) + " [^" + cls + "]";
+            pattern += gbnf_format_literal(codepoints_to_utf8(pre)) + " [^" + cls + "]";
         } else {
             pattern += "[^" + cls + "]";
         }
