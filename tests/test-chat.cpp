@@ -1420,8 +1420,7 @@ static void test_chat_parsers()
     test_chat_parser(test_status::Enabled, "kimi_k2", chat_parser_impl::EXPERIMENTAL, test_kimi_k2_parser);
 
     test_chat_parser(test_status::Enabled, "lfm2", chat_parser_impl::LEGACY, test_lfm2_parser);
-    // TODO
-    test_chat_parser(test_status::Disabled, "lfm2", chat_parser_impl::EXPERIMENTAL, test_lfm2_parser);
+    test_chat_parser(test_status::Enabled, "lfm2", chat_parser_impl::EXPERIMENTAL, test_lfm2_parser);
 
     test_chat_parser(test_status::Enabled, "llama_3_x", chat_parser_impl::LEGACY, test_llama_3_x_parser);
     // TODO(ochafik): this peg parser needs both TOOL_ARG_NAME (builtins) and TOOL_ARGS (regular) so will need its own mapper

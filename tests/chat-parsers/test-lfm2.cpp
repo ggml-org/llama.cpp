@@ -18,7 +18,9 @@ void test_lfm2_parser(chat_parser_impl impl)
     template_capabilities template_caps;
     template_caps.name = "LFM2";
     template_caps.jinja_path = "models/templates/llama-cpp-lfm2.jinja";
-    template_caps.legacy_format = COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS;
+    // Legacy: without "force json schema" marker, LFM2 returns CONTENT_ONLY with tools
+    // Experimental: the marker is injected automatically, so it returns PEG_NATIVE
+    template_caps.legacy_format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
     template_caps.experimental_format = COMMON_CHAT_FORMAT_PEG_NATIVE;
     template_caps.supports_thinking = ThinkingSupport::No;
     template_caps.think_open_tag = nullptr;
@@ -33,11 +35,10 @@ void test_lfm2_parser(chat_parser_impl impl)
     
     auto tmpls = read_templates(template_caps.jinja_path);
 
-    // Skip needle test suite for legacy - legacy parser requires "force json schema." marker in system message
-    if (impl != chat_parser_impl::LEGACY) {
+    // Only run needle test suite for experimental - legacy mode returns CONTENT_ONLY which skips tool parsing
+    if (impl == chat_parser_impl::EXPERIMENTAL) {
         run_template_test_suite(impl, template_caps, tmpls);
     }
-    
 
     auto inputs_tools_forced_json_schema = std::invoke([&]() -> common_chat_templates_inputs {
         common_chat_templates_inputs inputs;
@@ -178,7 +179,4 @@ Hey there!<|im_end|>
             {COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS}));
 
     // Note: LFM2 uses JSON format for tool calls: [{"name": "...", "arguments": {...}}]
-    // Unlike other formats, LFM2 template does not render tool calls in conversation history,
-    // so we don't use test() for tool call generation. Instead, the parsing tests
-    // above verify edge cases and format variations for the tool call output format.
 }

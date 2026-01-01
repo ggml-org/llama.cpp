@@ -22,6 +22,29 @@ common_chat_params common_chat_params_init_lfm2_peg(const common_chat_template &
     // The logic requires potentially modifying the messages
     auto tweaked_messages = inputs.messages;
 
+    // For experimental parsers with tools, inject "force json schema" marker automatically
+    // This ensures tool call grammar is generated without requiring explicit user prompting
+    // (similar to how nemotron_v2 injects /think or /nothink based on enable_thinking)
+    if (are_tools_provided && inputs.experimental_new_parsers) {
+        // Check if first message is a system message
+        if (tweaked_messages.empty() || tweaked_messages.at(0).at("role") != "system") {
+            // Prepend a synthetic system message with the marker
+            tweaked_messages = json::array({
+                json {
+                    {"role", "system"},
+                    {"content", "force json schema.\n"},
+                }
+            });
+            for (const auto & msg : inputs.messages) {
+                tweaked_messages.push_back(msg);
+            }
+        } else {
+            // Prepend the marker to the existing system message
+            std::string content = tweaked_messages.at(0).at("content");
+            tweaked_messages.at(0).at("content") = "force json schema.\n" + content;
+        }
+    }
+
     auto replace_json_schema_marker = [](json & messages) -> bool {
         static std::string marker1 = "force json schema.\n";
         static std::string marker2 = "force json schema.";
@@ -109,9 +132,15 @@ common_chat_params common_chat_params_init_lfm2_peg(const common_chat_template &
             auto tool_calls = p.trigger_rule("tool-call-root", tool_calls_parser);
 
             if (inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED) {
-                return tool_calls;
+                return tool_calls + p.tag(Tag::CONTENT, p.rest());
             }
-            return p.tag(Tag::CONTENT, p.until("<|tool_call_start|>")) << tool_calls;
+            // Content before tool calls, tool calls, then content after
+            auto content_before = p.tag(Tag::CONTENT, p.until("<|tool_call_start|>"));
+            auto content_after = p.tag(Tag::CONTENT, p.rest());
+            auto with_tools = content_before << tool_calls << content_after;
+            // Content-only fallback when tools are provided but not called
+            auto content_only = p.tag(Tag::CONTENT, p.rest());
+            return p.choice({with_tools, content_only});
         });
 
         common_chat_build_peg_grammar(inputs, parser, data);
@@ -119,24 +148,36 @@ common_chat_params common_chat_params_init_lfm2_peg(const common_chat_template &
 
         // Trigger lazy grammar activation on <|tool_call_start|>[ pattern
         data.grammar_triggers = {{COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL, "\\s*<\\|tool_call_start\\|>\\s*\\["}};
-    } else if (are_tools_provided) {
-        // Branch 3: Tools without marker - no grammar, just preserved_tokens
+    } else if (are_tools_provided && !inputs.experimental_new_parsers) {
+        // Branch 3: Tools without marker (legacy mode) - no grammar, just preserved_tokens
         // The model can generate unconstrained tool calls (validated at runtime)
         // LOG_INF("%s: Using tools without json schema or grammar\n", __func__);
         data.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
         data.preserved_tokens = {"<|tool_call_start|>", "<|tool_call_end|>"};
     } else if (is_json_schema_provided) {
-        // Branch 4: json_schema passthrough
-        // LOG_INF("%s: Using provided json schema to build a grammar\n", __func__);
-        data.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
-        data.grammar = json_schema_to_grammar(inputs.json_schema);
+        // Branch 4: json_schema - build PEG parser with schema validation
+        auto parser = build_chat_peg_parser([&](auto & p) {
+            using Tag = common_chat_peg_tag;
+            return p.tag(Tag::CONTENT, p.schema(p.json(), "response-format", inputs.json_schema));
+        });
+        common_chat_build_peg_grammar(inputs, parser, data);
+        data.format = COMMON_CHAT_FORMAT_PEG_CONSTRUCTED;
     } else if (is_grammar_provided) {
         // Branch 5: grammar passthrough
         // LOG_INF("%s: Using provided grammar\n", __func__);
         data.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
         data.grammar = inputs.grammar;
+    } else if (inputs.experimental_new_parsers) {
+        // Branch 6a: Plain content with experimental parsers - build a simple content parser
+        // This allows needle tests and PEG-based content parsing to work
+        auto parser = build_chat_peg_parser([&](auto & p) {
+            using Tag = common_chat_peg_tag;
+            return p.tag(Tag::CONTENT, p.rest());
+        });
+        common_chat_build_peg_grammar(inputs, parser, data);
+        data.format = COMMON_CHAT_FORMAT_PEG_CONSTRUCTED;
     } else {
-        // Branch 6: Plain content (no tools, no schema, no grammar)
+        // Branch 6b: Plain content (legacy mode - no tools, no schema, no grammar)
         // LOG_INF("%s: Using content relying on the template\n", __func__);
         data.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
     }

@@ -23,12 +23,29 @@
 {%- endif -%}
 {%- for message in messages -%}
 	{{- "<|im_start|>" + message["role"] + "\n" -}}
-	{%- set content = message["content"] -%}
+	{%- set content = message["content"] if message["content"] else "" -%}
 	{%- if content is not string -%}
 		{%- set content = content | tojson -%}
 	{%- endif -%}
 	{%- if message["role"] == "tool" -%}
 		{%- set content = "<|tool_response_start|>" + content + "<|tool_response_end|>" -%}
+	{%- elif message["role"] == "assistant" and "tool_calls" in message and message["tool_calls"] -%}
+		{%- set ns_tc = namespace(result="") -%}
+		{%- for tc in message["tool_calls"] -%}
+			{%- if not loop.first -%}{%- set ns_tc.result = ns_tc.result + ", " -%}{%- endif -%}
+			{%- set args = tc["function"]["arguments"] -%}
+			{%- set ns_tc.result = ns_tc.result + '{"name": "' + tc["function"]["name"] + '", "arguments": ' -%}
+			{%- if args is string -%}
+				{%- set ns_tc.result = ns_tc.result + args -%}
+			{%- else -%}
+				{%- set ns_tc.result = ns_tc.result + (args | tojson) -%}
+			{%- endif -%}
+			{%- if tc.get("id") -%}
+				{%- set ns_tc.result = ns_tc.result + ', "id": "' + tc["id"] + '"' -%}
+			{%- endif -%}
+			{%- set ns_tc.result = ns_tc.result + "}" -%}
+		{%- endfor -%}
+		{%- set content = "<|tool_call_start|>[" + ns_tc.result + "]<|tool_call_end|>" + content -%}
 	{%- endif -%}
 	{{- content + "<|im_end|>\n" -}}
 {%- endfor -%}
