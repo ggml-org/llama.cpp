@@ -5,6 +5,7 @@
 #include "ggml-cuda.h"
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 
 #if defined(GGML_USE_HIP)
@@ -1218,6 +1219,104 @@ struct ggml_cuda_stream_context {
     }
 };
 
+// cache to extend lifetimes of ggml_cuda_pool_alloc, ggml_cuda_pool expects memory to allocated in a LIFO order
+// hence this cache works like a stack
+struct ggml_cuda_cache {
+    struct pool_alloc {
+        ggml_cuda_pool * pool;
+        void * ptr;
+        size_t actual_size;
+
+        pool_alloc():
+         pool{nullptr}
+        , ptr{nullptr}
+        , actual_size{0}
+        {}
+
+        template<typename T>
+        pool_alloc(ggml_cuda_pool_alloc<T> && other) {
+            pool = other.pool;
+            ptr = (void *)other.ptr;
+            actual_size = other.actual_size;
+
+            other.ptr = nullptr;
+            other.pool = nullptr;
+            other.actual_size = 0;
+        }
+
+        pool_alloc(pool_alloc && other) {
+            pool = other.pool;
+            ptr  = (void *) other.ptr;
+            actual_size = other.actual_size;
+            other.ptr = nullptr;
+            other.pool = nullptr;
+            other.actual_size = 0;
+        }
+
+        ~pool_alloc() {
+            if (ptr != nullptr) {
+                pool->free(ptr, actual_size);
+            }
+        }
+    };
+
+    struct cache_entry {
+        int layout;  // mmq_q8_1_ds_layout value
+        std::vector<pool_alloc> pool_ptrs;
+        size_t ttl_nodes{};
+
+        cache_entry() = default;
+
+        cache_entry(cache_entry && other) = default;
+        cache_entry& operator=(cache_entry && other) = default;
+
+        cache_entry(const cache_entry &) = delete;
+        cache_entry& operator=(const cache_entry &) = delete;
+
+        ~cache_entry() {
+            // Free pool allocations in reverse order (LIFO)
+            while (!pool_ptrs.empty()) {
+                pool_ptrs.pop_back();
+            }
+        }
+    };
+
+    void clear_cache() {
+        remove_expired(std::numeric_limits<size_t>::max());
+        entries.clear();
+    }
+
+    void remove_expired(size_t node_count) {
+        // max lifetime of cache entry - 10 nodes after
+        while (!entries.empty() && entries.back().second.ttl_nodes + 10 <= node_count) {
+            entries.pop_back();
+        }
+    }
+
+    cache_entry * find(const ggml_tensor * node, int layout) {
+        for (auto & entry: entries) {
+            if (entry.first == node && entry.second.layout == layout) {
+                return &entry.second;
+            }
+        }
+        return nullptr;
+    }
+
+    ~ggml_cuda_cache() {
+        while (!entries.empty()) {
+            entries.pop_back();
+        }
+    }
+
+    void add_entry(const ggml_tensor * node, cache_entry && entry) {
+        entries.emplace_back(node, std::move(entry));
+    }
+
+    std::vector<std::pair<const ggml_tensor *, cache_entry>> entries;
+};
+
+
+
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
@@ -1229,6 +1328,7 @@ struct ggml_backend_cuda_context {
     std::unique_ptr<ggml_cuda_graph> cuda_graph;
 
     int curr_stream_no = 0;
+    size_t node_count = 0;
 
     explicit ggml_backend_cuda_context(int device) :
         device(device),
@@ -1266,6 +1366,7 @@ struct ggml_backend_cuda_context {
 
     // pool
     std::unique_ptr<ggml_cuda_pool> pools[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS];
+    std::unique_ptr<ggml_cuda_cache> caches[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS]{{}};
 
     static std::unique_ptr<ggml_cuda_pool> new_pool_for_device(int device, int stream_no);
 
@@ -1274,6 +1375,27 @@ struct ggml_backend_cuda_context {
             pools[device][curr_stream_no] = new_pool_for_device(device, curr_stream_no);
         }
         return *pools[device][curr_stream_no];
+    }
+
+    ggml_cuda_cache & cache(int device, int stream) {
+        if (caches[device][stream] == nullptr) {
+            caches[device][stream] = std::unique_ptr<ggml_cuda_cache>(new ggml_cuda_cache());
+        }
+        return *caches[device][stream];
+    }
+
+    ggml_cuda_cache & cache() {
+        return cache(device, curr_stream_no);
+    }
+
+    void clear_cache() {
+        for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
+            for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
+                if (caches[i][j]) {
+                    caches[i][j]->clear_cache();
+                }
+            }
+        }
     }
 
     ggml_cuda_pool & pool() {
