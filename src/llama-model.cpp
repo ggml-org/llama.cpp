@@ -7457,7 +7457,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_MODERN_BERT:
             {
-                llm = std::make_unique<llm_build_modern_bert<true>>(*this, params);
+                llm = std::make_unique<llm_build_modern_bert>(*this, params);
             } break;
         case LLM_ARCH_NEO_BERT:
             {
