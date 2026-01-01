@@ -53,15 +53,6 @@
 
 bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor);
 
-template <typename... _TArgs> static inline void set_kernel_args(cl_kernel kernel, _TArgs... args) {
-    size_t index = 0;
-    (
-        [&] {
-            CL_CHECK(clSetKernelArg(kernel, index++, sizeof(args), &args));
-        }(),
-        ...);
-}
-
 // See https://gmplib.org/~tege/divcnst-pldi94.pdf figure 4.1.
 // Precompute mp (m' in the paper) and L such that division
 // can be computed using a multiply (high 32b of 64b result)
@@ -2687,6 +2678,49 @@ struct ggml_tensor_extra_cl {
     }
 };
 
+template <typename _TData> struct ocl_kernel_arg_setter {};
+
+template <> struct ocl_kernel_arg_setter<int> {
+    static size_t set_arg(cl_kernel kernel, size_t index, int arg) {
+        CL_CHECK(clSetKernelArg(kernel, index, sizeof(arg), &arg));
+        return index + 1;
+    }
+};
+
+template <> struct ocl_kernel_arg_setter<cl_ulong> {
+    static size_t set_arg(cl_kernel kernel, size_t index, cl_ulong arg) {
+        CL_CHECK(clSetKernelArg(kernel, index, sizeof(arg), &arg));
+        return index + 1;
+    }
+};
+
+template <> struct ocl_kernel_arg_setter<const ggml_tensor *> {
+    static size_t set_arg(cl_kernel kernel, size_t index, const ggml_tensor * t) {
+        ggml_tensor_extra_cl * extra = (ggml_tensor_extra_cl *) t->extra;
+        static_assert(std::is_same_v<decltype(extra->data_device), cl_mem>, "data_device type mismatch");
+
+        cl_ulong offset = extra->offset + t->view_offs;
+        CL_CHECK(clSetKernelArg(kernel, index, sizeof(cl_mem), &extra->data_device));
+        CL_CHECK(clSetKernelArg(kernel, index + 1, sizeof(cl_ulong), &offset));
+        return index + 2;
+    }
+};
+
+template <> struct ocl_kernel_arg_setter<ggml_tensor *> {
+    static size_t set_arg(cl_kernel kernel, size_t index, const ggml_tensor * t) {
+        return ocl_kernel_arg_setter<const ggml_tensor *>::set_arg(kernel, index, t);
+    }
+};
+
+template <typename... _TArgs> static inline void set_kernel_args(cl_kernel kernel, _TArgs... args) {
+    size_t index = 0;
+    (
+        [&] {
+            index = ocl_kernel_arg_setter<decltype(args)>::set_arg(kernel, index, args);
+        }(),
+        ...);
+}
+
 // Additional tensor extra structs for quantized tensors.
 // These tensors are loaded from files and should not be allocated in scratch --
 // they should always be allocated from the pool. Hence, they do not have an
@@ -5081,14 +5115,6 @@ static void ggml_cl_mul(ggml_backend_t backend, const ggml_tensor * src0, const 
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
-    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
-    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
-    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
-
-    cl_ulong offset0 = extra0->offset + src0->view_offs;
-    cl_ulong offset1 = extra1->offset + src1->view_offs;
-    cl_ulong offsetd = extrad->offset + dst->view_offs;
-
     bool bcast_row = false;
     cl_kernel kernel;
 
@@ -5107,16 +5133,7 @@ static void ggml_cl_mul(ggml_backend_t backend, const ggml_tensor * src0, const 
             kernel = backend_ctx->kernel_mul_row_f16;
         }
 
-        set_kernel_args(
-            kernel,
-            extra0->data_device,
-            offset0,
-            extra1->data_device,
-            offset1,
-            extrad->data_device,
-            offsetd,
-            ne
-        );
+        set_kernel_args(kernel, src0, src1, dst, ne);
     } else {
         if (src0->type == GGML_TYPE_F32) {
             kernel = backend_ctx->kernel_mul;
@@ -5126,12 +5143,9 @@ static void ggml_cl_mul(ggml_backend_t backend, const ggml_tensor * src0, const 
 
         set_kernel_args(
             kernel,
-            extra0->data_device,
-            offset0,
-            extra1->data_device,
-            offset1,
-            extrad->data_device,
-            offsetd,
+            src0,
+            src1,
+            dst,
             ne00,
             ne01,
             ne02,
