@@ -1181,7 +1181,7 @@ private:
 
         // initialize draft batch
         // TODO: rework speculative decoding [TAG_SERVER_SPEC_REWORK]
-        if (slot.ctx_dft || task.params.speculative.use_self) {
+        if (can_speculate()) {
             llama_batch_free(slot.batch_spec);
 
             slot.batch_spec = llama_batch_init(task.params.speculative.n_max + 1, 0, 1);
