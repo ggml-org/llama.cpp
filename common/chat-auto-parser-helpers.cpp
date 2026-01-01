@@ -438,9 +438,18 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
     size_t func2_pos = tool2_diff.rfind("test_function_name");
 
     if (func1_pos != std::string::npos && func2_pos != std::string::npos) {
-        LOG_DBG("Found function names, extracting patterns...\n");
-
         patterns.tool_call_opener = tool1_diff.substr(0, func1_pos);
+
+        // Check for swallowed '<' (common in templates where content ends with <|endoftext|>)
+        // This happens when the content output shares the same starting character '<' as the tool call marker
+        if (tool1_full.length() >= tool1_diff.length()) {
+            size_t diff_start = tool1_full.length() - tool1_diff.length();
+
+            if (diff_start > 0 && tool1_full[diff_start - 1] == '<' && !patterns.tool_call_opener.empty() &&
+                patterns.tool_call_opener[0] != '<') {
+                patterns.tool_call_opener = "<" + patterns.tool_call_opener;
+            }
+        }
 
         // If function name is at position 0 in diff, look in full output for prefix
         // This handles cases where the prefix is shared between content and tool calls
@@ -522,7 +531,9 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
         if (value1_pos == std::string::npos) {
             value1_pos = tool2_diff.find("value1");
         }
-        if (param_has_quotes && value1_pos != std::string::npos) {
+        // Only skip quote if value was actually found quoted
+        bool value_has_quotes = (value1_pos != std::string::npos && tool2_diff[value1_pos] == '"');
+        if (value_has_quotes) {
             value1_pos++;
         }
 
@@ -574,59 +585,60 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
         if (open_pos != std::string::npos && open_pos < func1_pos) {
             size_t close_pos = func_context.find('>', open_pos);
             if (close_pos != std::string::npos && close_pos < func1_pos) {
-                patterns.function_opener = func_context.substr(open_pos, close_pos - open_pos + 1);
+                // Check if XML tag is adjacent to function name (ignoring whitespace)
+                // This prevents false positives where an earlier XML tag is part of the tool section
+                // but not the immediate function opener (e.g. <|tools_prefix|>[{"func_name")
+                bool is_adjacent = true;
+                for (size_t k = close_pos + 1; k < func1_pos; ++k) {
+                    char c = func_context[k];
+                    if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+                        is_adjacent = false;
+                        break;
+                    }
+                }
+                if (is_adjacent) {
+                    patterns.function_opener = func_context.substr(open_pos, close_pos - open_pos + 1);
+                }
             } else {
                 patterns.function_opener = func_context.substr(open_pos, func1_pos - open_pos);
             }
-        } else {
-            // Look for non-XML prefix patterns (e.g., ">>>", "##", etc.)
-            // Search backwards from function name for a non-alphanumeric prefix
-            if (func1_pos > 0 && patterns.function_opener.empty()) {
-                size_t prefix_end = func1_pos;
-                // Skip whitespace immediately before function name
-                while (prefix_end > 0 &&
-                       (func_context[prefix_end - 1] == ' ' || func_context[prefix_end - 1] == '\t')) {
-                    prefix_end--;
-                }
+        }
 
-                // Find prefix start - look for newline or alphanumeric boundary
-                size_t prefix_start = prefix_end;
-                while (prefix_start > 0) {
-                    char c = func_context[prefix_start - 1];
-                    if (c == '\n' || c == '\r') {
-                        break;
-                    }
-                    if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
-                        prefix_start = prefix_end;  // Reset - no valid prefix
-                        break;
-                    }
-                    prefix_start--;
-                }
-
-                if (prefix_start < prefix_end) {
-                    std::string prefix      = func_context.substr(prefix_start, prefix_end - prefix_start);
-                    bool        has_content = false;
-                    for (char c : prefix) {
-                        if (c != ' ' && c != '\t') {
-                            has_content = true;
-                            break;
-                        }
-                    }
-                    if (has_content && prefix.length() >= 2 && prefix.length() <= 20) {
-                        patterns.function_opener        = prefix;
-                        patterns.tool_call_start_marker = prefix;
-                    }
-                }
+        // Look for non-XML prefix patterns (e.g., ">>>", "##", etc.)
+        // Search backwards from function name for a non-alphanumeric prefix
+        if (func1_pos > 0 && patterns.function_opener.empty()) {
+            size_t prefix_end = func1_pos;
+            // Skip whitespace immediately before function name
+            while (prefix_end > 0 && (func_context[prefix_end - 1] == ' ' || func_context[prefix_end - 1] == '\t')) {
+                prefix_end--;
             }
 
-            // Fallback: look for standard delimiters
-            if (patterns.function_opener.empty()) {
-                for (int i = (int) func1_pos - 1; i >= 0; i--) {
-                    if (func_context[i] == '{' || func_context[i] == '[' || func_context[i] == '(' ||
-                        func_context[i] == '<') {
-                        patterns.function_opener = func_context.substr(i, func1_pos - i);
-                        break;
-                    }
+            // Find prefix start - look for newline or alphanumeric boundary
+            size_t prefix_start = prefix_end;
+            while (prefix_start > 0) {
+                char c = func_context[prefix_start - 1];
+                if (c == '\n' || c == '\r') {
+                    break;
+                }
+                if (std::isalnum(static_cast<unsigned char>(c)) || c == '_') {
+                    prefix_start = prefix_end;  // Reset - no valid prefix
+                    break;
+                }
+                prefix_start--;
+            }
+
+            if (prefix_start < prefix_end) {
+                // ...
+            }
+        }
+
+        // Fallback: look for standard delimiters
+        if (patterns.function_opener.empty()) {
+            for (int i = (int) func1_pos - 1; i >= 0; i--) {
+                if (func_context[i] == '{' || func_context[i] == '[' || func_context[i] == '(' ||
+                    func_context[i] == '<') {
+                    patterns.function_opener = func_context.substr(i, func1_pos - i);
+                    break;
                 }
             }
         }
@@ -1055,6 +1067,10 @@ InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & t
 
             tool1_diff = find_string_difference(alt_base, alt_tool1);
             if (!tool1_diff.empty()) {
+                // If we found a diff using the alternative approach, we must use the corresponding
+                // full output for pattern extraction (otherwise diff indices will be invalid)
+                tool1_output = alt_tool1;
+
                 alt_inputs.messages = { user_msg, tool_msg2 };
                 tool2_diff          = find_string_difference(alt_base, tmpl.apply(alt_inputs, opts));
                 alt_inputs.messages = { user_msg, tool_msg3 };

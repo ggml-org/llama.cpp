@@ -161,6 +161,8 @@ The unified builder (`common_chat_peg_unified_builder`) provides high-level meth
 - **Command-R7B** - `<|START_THINKING|>`/`<|START_RESPONSE|>` + `<|START_ACTION|>` tools
 - **DeepSeek R1** - Forced thinking + complex tools
 - **Mistral Nemo** - `[TOOL_CALLS]` wrapper
+- **MiniMax** - `<minimax:tool_call>` wrapper with XML tools
+- **GLM-4.6** - `<think></think>` + `<tool_call>name\n<arg_key>...<arg_value>...` format
 
 ## Files
 
@@ -177,9 +179,10 @@ The unified builder (`common_chat_peg_unified_builder`) provides high-level meth
 
 ### Phase 1: Reasoning Detection
 
-1. **Method 1**: Render template with `reasoning_content` field present vs absent, compare outputs
-2. **Method 2**: Toggle `enable_thinking` context variable, detect differences in prompt
+1. **Method 1**: Render template with `reasoning_content` field present vs absent, compare outputs. If only the closing tag is found, derive the opening tag (e.g., `</think>` → `<think>`).
+2. **Method 2**: Toggle `enable_thinking` context variable, detect differences in prompt. Handles both directions: templates that add content when thinking is enabled (normal) AND templates that add content when thinking is disabled (e.g., GLM-4.6 adds `<think></think>`).
 3. **Method 3**: Check if prompt ends with an unclosed reasoning tag
+4. **Method 4**: Look for adjacent opening/closing tag pairs in the prompt (e.g., `<think></think>`)
 
 ### Phase 1: Content Detection
 
@@ -240,28 +243,28 @@ To support a new template format:
 2. **Ambiguous Content**: Templates that mix content and tool calls without clear delimiters can be tricky. The analyzer tries to find "common" start/end patterns across multiple examples to be robust.
 4. **Double Wrapping**: Some templates (e.g., Functionary) use the same string for both the tool section start and the function prefix (e.g., `<function=`). The analyzer detects this overlap and prevents double-wrapping in the generated parser.
 
-## State of the Autoparser (Dec 2025)
+## State of the Autoparser (Jan 2026)
 
-As of December 2025, the unified auto-parser successfully handles major template families including DeepSeek V3, Llama 3 (native JSON), GLM-4, and standard XML/JSON formats. It also supports Functionary v3.x and Mistral Nemo.
+As of January 2026, the unified auto-parser successfully handles major template families including DeepSeek V3, Llama 3 (native JSON), GLM-4, GLM-4.6, and standard XML/JSON formats. It also supports Functionary v3.x and Mistral Nemo.
 
 ### Currently Unsupported Templates
 
 | Template Family | Model / Variant | Issue Description |
 |----------------|-----------------|-------------------|
-
-| **MiniMax** | `MiniMax-M2` | **XML Variant**: Uses `<minimax:tool_call><invoke>` which is not currently detected by the XML analyzer hooks. |
-| **Nemotron** | `Nano-v2` | **Streaming Regression**: Tests fail with "invalid diff" errors during streaming parsing, suggesting mismatch in incremental state updates. |
-| **DeepSeek** | `R1 Distill` | **Marker Handling**: Specific issues with reasoning marker stripping and `enable_thinking` logic for distillation variants. |
-| **Cohere** | `Command R+` | **Marker Stripping**: `<|START_RESPONSE|>` markers are leaking into the parsed content. |
 | **OpenAI** | `GPT-OSS` | **Channel Markers**: Complex `<|channel|>` marker structure confuses the content/tool separation. |
-| **Phi** | `3.5 Mini` | **Detection Failure**: Autoparser fails to detect that the template supports tools at all. |
+
+### Templates Without Tool Support
+
+Some templates genuinely don't support tool calls (this is not a detection bug):
+
+- **Phi 3.5 Mini** - The official template has no tool handling. Use Phi-4-mini-instruct for function calling, or community fine-tuned versions.
 
 ### TODO / Roadmap
 
-- [x] **Fix GLM-4.6**: Debug `common_chat_peg_unified_builder::build_arguments` for `ARGS_KEY_VALUE_TAGS`.
+- [x] **Fix GLM-4.6**: Fixed reasoning detection (Method 1 derivation from closing tag, Method 2 reverse case handling). Tool format uses `ARGS_KEY_VALUE_TAGS`.
 - [x] **Fix Kimi/Apertus**: Implemented `FUNC_TAG_WITH_NAME` (no-equals) detection for Kimi and `FUNC_NAME_AS_KEY` for Apertus.
-- [ ] **Add MiniMax Support**: Add detection logic for namespaced XML tags (`minimax:tool_call`).
-- [ ] **Fix Nemotron Streaming**: Debug `test_parser_with_streaming` for Nemotron's JSON array format.
-- [ ] **Refine DeepSeek R1**: Audit marker configuration for R1 distillations to ensure consistency with V3.1 fix.
-- [ ] **Fix Cohere Markers**: Add Cohere's structural markers to the ignored/skipped token list in the parser.
+- [x] **Add MiniMax Support**: Verified dynamic detection handles namespaced tags; fixed `arg_suffix` extraction for unquoted values.
+- [x] **Fix Nemotron Streaming**: Nemotron Nano-v2 now works with streaming parsing.
+- [x] **Refine DeepSeek R1**: Fixed GBNF generation for non-ASCII/multi-byte markers strings to support `R1` distillation templates.
+- [x] **Fix Cohere Markers**: Add Cohere's structural markers to the detected content patterns to correctly determine content boundaries.
 - [x] **Fix Mistral/Functionary**: Implemented robust detection logic (`rfind` for names, overlap detection for markers).

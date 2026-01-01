@@ -1,4 +1,5 @@
 #include "chat-peg-parser.h"
+
 #include "chat-auto-parser.h"  // For ContentStructure, ToolCallStructure
 
 #include <map>
@@ -59,11 +60,9 @@ common_peg_parser common_chat_peg_builder::tag_with_safe_content(const std::stri
 // Unified Builder Implementation
 // ============================================================================
 
-common_peg_parser common_chat_peg_unified_builder::build_reasoning_block(
-    const ContentStructure & cs,
-    common_reasoning_format  reasoning_format,
-    bool                     thinking_forced_open) {
-
+common_peg_parser common_chat_peg_unified_builder::build_reasoning_block(const ContentStructure & cs,
+                                                                         common_reasoning_format  reasoning_format,
+                                                                         bool thinking_forced_open) {
     // If reasoning is explicitly disabled, return empty
     if (reasoning_format == COMMON_REASONING_FORMAT_NONE) {
         return eps();
@@ -71,7 +70,7 @@ common_peg_parser common_chat_peg_unified_builder::build_reasoning_block(
 
     // Get reasoning markers - use from ContentStructure or fallback for DEEPSEEK format
     std::string reason_start = cs.reasoning_start;
-    std::string reason_end = cs.reasoning_end;
+    std::string reason_end   = cs.reasoning_end;
 
     // If DEEPSEEK format is specified but markers weren't detected, use fallback markers
     if ((reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK ||
@@ -93,19 +92,17 @@ common_peg_parser common_chat_peg_unified_builder::build_reasoning_block(
 
     if (thinking_forced_open) {
         // Mandatory reasoning: parse from current position to end marker
-        return rule("reasoning",
-                    reasoning_block(reasoning(until(reason_end)) + literal(reason_end)));
+        return rule("reasoning", reasoning_block(reasoning(until(reason_end)) + literal(reason_end)));
     } else {
         // Optional reasoning: may or may not appear
         // Also try <|START_THINKING|> style markers if standard markers don't match
-        auto standard_reasoning = reasoning_block(literal(reason_start) + reasoning(until(reason_end)) +
-                                                   literal(reason_end));
+        auto standard_reasoning =
+            reasoning_block(literal(reason_start) + reasoning(until(reason_end)) + literal(reason_end));
 
         // For templates that use <|START_THINKING|> style markers
         if (reason_start == "<think>" && reason_end == "</think>") {
-            auto alt_reasoning = reasoning_block(literal("<|START_THINKING|>") +
-                                                  reasoning(until("<|END_THINKING|>")) +
-                                                  literal("<|END_THINKING|>"));
+            auto alt_reasoning = reasoning_block(literal("<|START_THINKING|>") + reasoning(until("<|END_THINKING|>")) +
+                                                 literal("<|END_THINKING|>"));
             return optional(rule("reasoning", choice({ standard_reasoning, alt_reasoning })));
         }
 
@@ -113,12 +110,10 @@ common_peg_parser common_chat_peg_unified_builder::build_reasoning_block(
     }
 }
 
-common_peg_parser common_chat_peg_unified_builder::build_content_block(
-    const ContentStructure & cs,
-    common_reasoning_format  reasoning_format) {
-
+common_peg_parser common_chat_peg_unified_builder::build_content_block(const ContentStructure & cs,
+                                                                       common_reasoning_format  reasoning_format) {
     std::string content_start = cs.content_start;
-    std::string content_end = cs.content_end;
+    std::string content_end   = cs.content_end;
 
     // Add fallback content markers for DEEPSEEK format if not detected
     // Some templates use <response> tags for content when reasoning is enabled
@@ -126,7 +121,7 @@ common_peg_parser common_chat_peg_unified_builder::build_content_block(
          reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY) &&
         (content_start.empty() || content_end.empty())) {
         content_start = "<response>";
-        content_end = "</response>";
+        content_end   = "</response>";
     }
 
     // Handle content markers
@@ -138,13 +133,16 @@ common_peg_parser common_chat_peg_unified_builder::build_content_block(
             // This applies even if reasoning markers weren't detected by the analyzer.
             auto with_markers = content(until(cs.content_start)) + literal(cs.content_start) +
                                 content(until(cs.content_end)) + literal(cs.content_end);
-            auto without_markers = content(rest());
-            return choice({ with_markers, without_markers });
+            // Fallback: content wrapped in end marker only (start marker might be in prompt)
+            auto implicit_markers = content(until(cs.content_end)) + literal(cs.content_end);
+            auto without_markers  = content(rest());
+            return choice({ with_markers, implicit_markers, without_markers });
         } else {
             // When reasoning is parsed separately, content starts directly after reasoning block
-            auto with_markers    = literal(cs.content_start) + content(until(cs.content_end)) + literal(cs.content_end);
-            auto without_markers = content(rest());
-            return choice({ with_markers, without_markers });
+            auto with_markers = literal(cs.content_start) + content(until(cs.content_end)) + literal(cs.content_end);
+            auto implicit_markers = content(until(cs.content_end)) + literal(cs.content_end);
+            auto without_markers  = content(rest());
+            return choice({ with_markers, implicit_markers, without_markers });
         }
     }
 
@@ -159,12 +157,10 @@ common_peg_parser common_chat_peg_unified_builder::build_content_block(
     return content(rest());
 }
 
-common_peg_parser common_chat_peg_unified_builder::build_tool_section(
-    const ToolCallStructure & ts,
-    const nlohmann::json &    tools,
-    bool                      parallel_tool_calls,
-    bool                      force_tool_calls) {
-
+common_peg_parser common_chat_peg_unified_builder::build_tool_section(const ToolCallStructure & ts,
+                                                                      const nlohmann::json &    tools,
+                                                                      bool                      parallel_tool_calls,
+                                                                      bool                      force_tool_calls) {
     if (!ts.supports_tools || !tools.is_array() || tools.empty()) {
         return eps();
     }
@@ -176,8 +172,8 @@ common_peg_parser common_chat_peg_unified_builder::build_tool_section(
         if (!tool_def.contains("function")) {
             continue;
         }
-        const auto & function = tool_def.at("function");
-        std::string  name     = function.at("name");
+        const auto &   function = tool_def.at("function");
+        std::string    name     = function.at("name");
         nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
 
         tool_choices |= rule("tool-" + name, build_function(ts, name, params));
@@ -202,7 +198,7 @@ common_peg_parser common_chat_peg_unified_builder::build_tool_section(
                 // FUNC_NAME_AS_KEY uses comma-separated JSON objects in an array
                 // Format: [{"func1": args}, {"func2": args}]
                 // The brackets are included in section markers
-                auto tool_call = trigger_rule("tool-call", tool_choices);
+                auto tool_call  = trigger_rule("tool-call", tool_choices);
                 auto tool_calls = tool_call;
                 if (parallel_tool_calls) {
                     tool_calls = tool_call + zero_or_more(space() + literal(",") + space() + tool_call);
@@ -215,8 +211,8 @@ common_peg_parser common_chat_peg_unified_builder::build_tool_section(
                 // DeepSeek pattern: function_prefix = "<｜tool▁call▁begin｜>function<｜tool▁sep｜>"
                 // Nemotron pattern: function_prefix = "<function="
                 bool prefix_has_call_marker = ts.function_prefix.find("call") != std::string::npos &&
-                                             (ts.function_prefix.find("begin") != std::string::npos ||
-                                              ts.function_prefix.find("start") != std::string::npos);
+                                              (ts.function_prefix.find("begin") != std::string::npos ||
+                                               ts.function_prefix.find("start") != std::string::npos);
                 if (prefix_has_call_marker) {
                     has_separate_section_and_call_markers = true;
                 }
@@ -224,15 +220,14 @@ common_peg_parser common_chat_peg_unified_builder::build_tool_section(
             if (has_separate_section_and_call_markers) {
                 // Section markers wrap all calls, per-call markers are in function_prefix/close
                 // Format: <section_start> <call1> <call2> ... <section_end>
-                auto tool_call = trigger_rule("tool-call", tool_choices);
-                auto tool_calls = parallel_tool_calls ?
-                    one_or_more(tool_call + space()) : tool_call;
+                auto tool_call  = trigger_rule("tool-call", tool_choices);
+                auto tool_calls = parallel_tool_calls ? one_or_more(tool_call + space()) : tool_call;
                 return literal(ts.tool_section_start) + space() + tool_calls + space() + literal(ts.tool_section_end);
             } else {
                 // Each tool call has its own wrapper: <tool_call>tool</tool_call>
-                auto single_tool_section = trigger_rule("tool-call",
-                                                         literal(ts.tool_section_start) + space() + tool_choices + space() +
-                                                             literal(ts.tool_section_end));
+                auto single_tool_section =
+                    trigger_rule("tool-call", literal(ts.tool_section_start) + space() + tool_choices + space() +
+                                                  literal(ts.tool_section_end));
                 if (parallel_tool_calls) {
                     // Multiple wrapped tool calls
                     return one_or_more(single_tool_section + space());
@@ -272,158 +267,147 @@ common_peg_parser common_chat_peg_unified_builder::build_tool_section(
     return section;
 }
 
-common_peg_parser common_chat_peg_unified_builder::build_function(
-    const ToolCallStructure & ts,
-    const std::string &       name,
-    const nlohmann::json &    params) {
-
+common_peg_parser common_chat_peg_unified_builder::build_function(const ToolCallStructure & ts,
+                                                                  const std::string &       name,
+                                                                  const nlohmann::json &    params) {
     auto args = build_arguments(ts, params);
 
     switch (ts.function_format) {
-        case ToolCallStructure::FUNC_JSON_OBJECT: {
-            // Build JSON object parser that accepts id field in either position:
-            // - Before name: {"id": "...", "name": "X", "arguments": {...}} (R7B style)
-            // - After args:  {"name": "X", "arguments": {...}, "id": "..."} (Mistral style)
-            auto tool_name_ = json_member(ts.name_field, "\"" + tool_name(literal(name)) + "\"");
-            auto tool_args_ = json_member(ts.args_field, tool_args(args));
+        case ToolCallStructure::FUNC_JSON_OBJECT:
+            {
+                // Build JSON object parser that accepts id field in either position:
+                // - Before name: {"id": "...", "name": "X", "arguments": {...}} (R7B style)
+                // - After args:  {"name": "X", "arguments": {...}, "id": "..."} (Mistral style)
+                auto tool_name_ = json_member(ts.name_field, "\"" + tool_name(literal(name)) + "\"");
+                auto tool_args_ = json_member(ts.args_field, tool_args(args));
 
-            // id can appear before name or after args
-            auto id_member = json_member(ts.id_field, tool_id(json_string()));
-            auto id_before = ts.id_field.empty() ? eps() :
-                             optional(id_member << space() << "," << space());
-            auto id_after  = ts.id_field.empty() ? eps() :
-                             optional(space() << "," << space() << id_member);
+                // id can appear before name or after args
+                auto id_member = json_member(ts.id_field, tool_id(json_string()));
+                auto id_before = ts.id_field.empty() ? eps() : optional(id_member << space() << "," << space());
+                auto id_after  = ts.id_field.empty() ? eps() : optional(space() << "," << space() << id_member);
 
-            return tool(tool_open(literal("{")) << space()
-                                                << id_before  // optional id before name (R7B style)
-                                                << tool_name_ << space() << "," << space()
-                                                << tool_args_
-                                                << id_after   // optional id after args (Mistral style)
-                                                << zero_or_more(space() << "," << space() << json_string() << space()
-                                                                        << ":" << space() << json())
-                                                << space() << "}");
-        }
+                return tool(tool_open(literal("{")) << space() << id_before  // optional id before name (R7B style)
+                                                    << tool_name_ << space() << "," << space() << tool_args_
+                                                    << id_after              // optional id after args (Mistral style)
+                                                    << zero_or_more(space() << "," << space() << json_string()
+                                                                            << space() << ":" << space() << json())
+                                                    << space() << "}");
+            }
 
-        case ToolCallStructure::FUNC_TAG_WITH_NAME: {
-            // Build tag parser: <function=X>{...}</function>
-            // Combine prefix + name + suffix into tool_open to ensure the tool is only created
-            // when the FULL opening tag is confirmed. This prevents partial name matches during
-            // incremental parsing (e.g., matching "special_function" when input is "special_function_")
-            auto opening = literal(ts.function_prefix) + tool_name(literal(name)) + literal(ts.function_suffix);
-            // Note: No space() before tool_close because function_close may start with newline
-            // (e.g., "\n```<close_tag>") and space() would consume it, preventing the literal match
-            return tool(tool_open(opening) + space() + tool_args(args) +
-                        tool_close(literal(ts.function_close)));
-        }
+        case ToolCallStructure::FUNC_TAG_WITH_NAME:
+            {
+                // Build tag parser: <function=X>{...}</function>
+                // Combine prefix + name + suffix into tool_open to ensure the tool is only created
+                // when the FULL opening tag is confirmed. This prevents partial name matches during
+                // incremental parsing (e.g., matching "special_function" when input is "special_function_")
+                auto opening = literal(ts.function_prefix) + tool_name(literal(name)) + literal(ts.function_suffix);
+                // Note: No space() before tool_close because function_close may start with newline
+                // (e.g., "\n```<close_tag>") and space() would consume it, preventing the literal match
+                return tool(tool_open(opening) + space() + tool_args(args) + tool_close(literal(ts.function_close)));
+            }
 
-        case ToolCallStructure::FUNC_TAG_NAME_ONLY: {
-            // Build tag parser: <X>...</X>
-            // Combine < + name + > into tool_open to prevent partial matches
-            auto opening = literal("<") + tool_name(literal(name)) + literal(">");
-            return tool(tool_open(opening) + space() + tool_args(args) +
-                        space() + tool_close(literal("</" + name + ">")));
-        }
+        case ToolCallStructure::FUNC_TAG_NAME_ONLY:
+            {
+                // Build tag parser: <X>...</X>
+                // Combine < + name + > into tool_open to prevent partial matches
+                auto opening = literal("<") + tool_name(literal(name)) + literal(">");
+                return tool(tool_open(opening) + space() + tool_args(args) + space() +
+                            tool_close(literal("</" + name + ">")));
+            }
 
-        case ToolCallStructure::FUNC_PREFIXED_INDEXED: {
-            // Build prefixed-indexed parser (e.g., Kimi-K2):
-            // <|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{...}<|tool_call_end|>
-            // The index number after : is ignored (we use zero_or_more(digit) to skip it)
-            auto opening = literal(ts.per_call_start) +
-                           literal(ts.function_namespace) +
-                           tool_name(literal(name)) +
-                           literal(":") +
-                           zero_or_more(chars("0-9", 1, 1)) +  // Skip the index
-                           literal(ts.args_marker);
-            return tool(tool_open(opening) + space() + tool_args(args) +
-                        space() + tool_close(literal(ts.per_call_end)));
-        }
+        case ToolCallStructure::FUNC_PREFIXED_INDEXED:
+            {
+                // Build prefixed-indexed parser (e.g., Kimi-K2):
+                // <|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{...}<|tool_call_end|>
+                // The index number after : is ignored (we use zero_or_more(digit) to skip it)
+                auto opening = literal(ts.per_call_start) + literal(ts.function_namespace) + tool_name(literal(name)) +
+                               literal(":") + zero_or_more(chars("0-9", 1, 1)) +  // Skip the index
+                               literal(ts.args_marker);
+                return tool(tool_open(opening) + space() + tool_args(args) + space() +
+                            tool_close(literal(ts.per_call_end)));
+            }
 
-        case ToolCallStructure::FUNC_NAME_AS_KEY: {
-            // Build name-as-key parser (e.g., Apertus):
-            // {"function_name": {...arguments...}}
-            // The function name IS the JSON key, and arguments are the value directly
-            auto opening = literal("{\"") + tool_name(literal(name)) + literal("\":");
-            return tool(tool_open(opening) + space() + tool_args(args) + space() + literal("}"));
-        }
+        case ToolCallStructure::FUNC_NAME_AS_KEY:
+            {
+                // Build name-as-key parser (e.g., Apertus):
+                // {"function_name": {...arguments...}}
+                // The function name IS the JSON key, and arguments are the value directly
+                auto opening = literal("{\"") + tool_name(literal(name)) + literal("\":");
+                return tool(tool_open(opening) + space() + tool_args(args) + space() + literal("}"));
+            }
     }
 
     return eps();
 }
 
-common_peg_parser common_chat_peg_unified_builder::build_arguments(
-    const ToolCallStructure & ts,
-    const nlohmann::json &    params) {
-
+common_peg_parser common_chat_peg_unified_builder::build_arguments(const ToolCallStructure & ts,
+                                                                   const nlohmann::json &    params) {
     switch (ts.argument_format) {
-        case ToolCallStructure::ARGS_JSON: {
-            // Standard JSON object arguments
-            if (params.is_object()) {
-                return schema(json(), "args", params);
-            }
-            return json();
-        }
-
-        case ToolCallStructure::ARGS_TAGGED: {
-            // Tagged arguments: <param=key>value</param>
-            if (!params.contains("properties") || params.at("properties").empty()) {
-                return eps();
+        case ToolCallStructure::ARGS_JSON:
+            {
+                // Standard JSON object arguments
+                if (params.is_object()) {
+                    return schema(json(), "args", params);
+                }
+                return json();
             }
 
-            auto arg_choice = choice();
-            for (const auto & el : params.at("properties").items()) {
-                const std::string & prop_name = el.key();
+        case ToolCallStructure::ARGS_TAGGED:
+            {
+                // Tagged arguments: <param=key>value</param>
+                if (!params.contains("properties") || params.at("properties").empty()) {
+                    return eps();
+                }
 
-                auto arg_name_parser =
-                    choice({ literal(prop_name), literal("\"" + prop_name + "\""), literal("'" + prop_name + "'") });
+                auto arg_choice = choice();
+                for (const auto & el : params.at("properties").items()) {
+                    const std::string & prop_name = el.key();
 
-                auto arg_rule = tool_arg(tool_arg_open(literal(ts.arg_prefix)) + tool_arg_name(arg_name_parser) +
-                                         literal(ts.arg_suffix) + tool_arg_value(until(ts.arg_close)) +
-                                         tool_arg_close(literal(ts.arg_close)) +
-                                         (ts.arg_separator.empty() ? eps() : optional(literal(ts.arg_separator))));
-                arg_choice |= arg_rule;
+                    auto arg_name_parser = choice(
+                        { literal(prop_name), literal("\"" + prop_name + "\""), literal("'" + prop_name + "'") });
+
+                    auto arg_rule = tool_arg(tool_arg_open(literal(ts.arg_prefix)) + tool_arg_name(arg_name_parser) +
+                                             literal(ts.arg_suffix) + tool_arg_value(until(ts.arg_close)) +
+                                             tool_arg_close(literal(ts.arg_close)) +
+                                             (ts.arg_separator.empty() ? eps() : optional(literal(ts.arg_separator))));
+                    arg_choice |= arg_rule;
+                }
+                return zero_or_more(arg_choice + space());
             }
-            return zero_or_more(arg_choice + space());
-        }
 
-        case ToolCallStructure::ARGS_KEY_VALUE_TAGS: {
-            // Key-value tag arguments (GLM-4.6 style):
-            // <arg_key>key</arg_key>
-            // <arg_value>value</arg_value>
-            if (!params.contains("properties") || params.at("properties").empty()) {
-                return eps();
+        case ToolCallStructure::ARGS_KEY_VALUE_TAGS:
+            {
+                // Key-value tag arguments (GLM-4.6 style):
+                // <arg_key>key</arg_key>
+                // <arg_value>value</arg_value>
+                if (!params.contains("properties") || params.at("properties").empty()) {
+                    return eps();
+                }
+
+                auto arg_choice = choice();
+                for (const auto & el : params.at("properties").items()) {
+                    const std::string & prop_name = el.key();
+
+                    // Parse: <arg_key>key</arg_key>\n<arg_value>value</arg_value>
+                    // ts.arg_prefix = "<arg_key>", ts.arg_suffix = "</arg_key>", ts.arg_close = "</arg_value>"
+                    auto arg_rule = tool_arg(tool_arg_open(literal(ts.arg_prefix)) + tool_arg_name(literal(prop_name)) +
+                                             literal(ts.arg_suffix) +  // </arg_key>
+                                             space() + literal("<arg_value>") + tool_arg_value(until(ts.arg_close)) +
+                                             tool_arg_close(literal(ts.arg_close)));
+                    arg_choice |= arg_rule;
+                }
+                return zero_or_more(arg_choice + space());
             }
-
-            auto arg_choice = choice();
-            for (const auto & el : params.at("properties").items()) {
-                const std::string & prop_name = el.key();
-
-                // Parse: <arg_key>key</arg_key>\n<arg_value>value</arg_value>
-                // ts.arg_prefix = "<arg_key>", ts.arg_suffix = "</arg_key>", ts.arg_close = "</arg_value>"
-                auto arg_rule = tool_arg(
-                    tool_arg_open(literal(ts.arg_prefix)) +
-                    tool_arg_name(literal(prop_name)) +
-                    literal(ts.arg_suffix) +  // </arg_key>
-                    space() +
-                    literal("<arg_value>") +
-                    tool_arg_value(until(ts.arg_close)) +
-                    tool_arg_close(literal(ts.arg_close))
-                );
-                arg_choice |= arg_rule;
-            }
-            return zero_or_more(arg_choice + space());
-        }
     }
 
     return eps();
 }
 
-common_peg_parser common_chat_peg_unified_builder::standard_json_tools(
-    const std::string &    section_start,
-    const std::string &    section_end,
-    const nlohmann::json & tools,
-    bool                   parallel_tool_calls,
-    bool                   force_tool_calls) {
-
+common_peg_parser common_chat_peg_unified_builder::standard_json_tools(const std::string &    section_start,
+                                                                       const std::string &    section_end,
+                                                                       const nlohmann::json & tools,
+                                                                       bool                   parallel_tool_calls,
+                                                                       bool                   force_tool_calls) {
     if (!tools.is_array() || tools.empty()) {
         return eps();
     }
@@ -435,31 +419,29 @@ common_peg_parser common_chat_peg_unified_builder::standard_json_tools(
         if (!tool_def.contains("function")) {
             continue;
         }
-        const auto & function = tool_def.at("function");
-        std::string  name     = function.at("name");
+        const auto &   function = tool_def.at("function");
+        std::string    name     = function.at("name");
         nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
 
         // Build JSON object parser: {"name": "X", "arguments": {...}}
         auto tool_name_ = json_member("name", "\"" + tool_name(literal(name)) + "\"");
         auto tool_args_ = json_member("arguments", tool_args(schema(json(), "tool-" + name + "-schema", params)));
 
-        auto tool_parser = tool(tool_open(literal("{")) << space() << tool_name_ << space() << "," << space()
-                                                        << tool_args_
-                                                        << zero_or_more(space() << "," << space() << json_string() << space()
-                                                                                << ":" << space() << json())
-                                                        << space() << "}");
+        auto tool_parser =
+            tool(tool_open(literal("{")) << space() << tool_name_ << space() << "," << space() << tool_args_
+                                         << zero_or_more(space() << "," << space() << json_string() << space() << ":"
+                                                                 << space() << json())
+                                         << space() << "}");
 
         tool_choices |= rule("tool-" + name, tool_parser);
     }
 
     // Build the section with markers
-    auto section = parallel_tool_calls
-        ? trigger_rule("tool-call",
-                      literal(section_start) + space() + one_or_more(tool_choices + space()) +
-                          literal(section_end))
-        : trigger_rule("tool-call",
-                      literal(section_start) + space() + tool_choices + space() +
-                          literal(section_end));
+    auto section =
+        parallel_tool_calls ?
+            trigger_rule("tool-call", literal(section_start) + space() + one_or_more(tool_choices + space()) +
+                                          literal(section_end)) :
+            trigger_rule("tool-call", literal(section_start) + space() + tool_choices + space() + literal(section_end));
 
     return force_tool_calls ? section : optional(section);
 }
@@ -469,7 +451,6 @@ common_peg_parser common_chat_peg_unified_builder::standard_constructed_tools(
     const nlohmann::json &                     tools,
     bool                                       parallel_tool_calls,
     bool                                       force_tool_calls) {
-
     if (!tools.is_array() || tools.empty()) {
         return eps();
     }
@@ -480,14 +461,14 @@ common_peg_parser common_chat_peg_unified_builder::standard_constructed_tools(
         return it != markers.end() ? it->second : default_val;
     };
 
-    std::string section_start     = get_marker("tool_call_start_marker", "<tool_call>");
-    std::string section_end       = get_marker("tool_call_end_marker", "</tool_call>");
-    std::string func_opener       = get_marker("function_opener", "<function=");
-    std::string func_name_suffix  = get_marker("function_name_suffix", ">");
-    std::string func_closer       = get_marker("function_closer", "</function>");
-    std::string param_key_prefix  = get_marker("parameter_key_prefix", "<param=");
-    std::string param_key_suffix  = get_marker("parameter_key_suffix", ">");
-    std::string param_closer      = get_marker("parameter_closer", "</param>");
+    std::string section_start    = get_marker("tool_call_start_marker", "<tool_call>");
+    std::string section_end      = get_marker("tool_call_end_marker", "</tool_call>");
+    std::string func_opener      = get_marker("function_opener", "<function=");
+    std::string func_name_suffix = get_marker("function_name_suffix", ">");
+    std::string func_closer      = get_marker("function_closer", "</function>");
+    std::string param_key_prefix = get_marker("parameter_key_prefix", "<param=");
+    std::string param_key_suffix = get_marker("parameter_key_suffix", ">");
+    std::string param_closer     = get_marker("parameter_closer", "</param>");
 
     // Build tool choices for tagged format
     auto tool_choices = choice();
@@ -496,8 +477,8 @@ common_peg_parser common_chat_peg_unified_builder::standard_constructed_tools(
         if (!tool_def.contains("function")) {
             continue;
         }
-        const auto & function = tool_def.at("function");
-        std::string  name     = function.at("name");
+        const auto &   function = tool_def.at("function");
+        std::string    name     = function.at("name");
         nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
 
         // Build argument parsers
@@ -520,20 +501,17 @@ common_peg_parser common_chat_peg_unified_builder::standard_constructed_tools(
 
         // Build function parser: <function=name>args</function>
         auto tool_parser = tool(tool_open(literal(func_opener) + tool_name(literal(name)) + literal(func_name_suffix)) +
-                               space() + tool_args(args) + space() +
-                               tool_close(literal(func_closer)));
+                                space() + tool_args(args) + space() + tool_close(literal(func_closer)));
 
         tool_choices |= rule("tool-" + name, tool_parser);
     }
 
     // Build the section with markers
-    auto section = parallel_tool_calls
-        ? trigger_rule("tool-call",
-                      literal(section_start) + space() + one_or_more(tool_choices + space()) +
-                          literal(section_end))
-        : trigger_rule("tool-call",
-                      literal(section_start) + space() + tool_choices + space() +
-                          literal(section_end));
+    auto section =
+        parallel_tool_calls ?
+            trigger_rule("tool-call", literal(section_start) + space() + one_or_more(tool_choices + space()) +
+                                          literal(section_end)) :
+            trigger_rule("tool-call", literal(section_start) + space() + tool_choices + space() + literal(section_end));
 
     return force_tool_calls ? section : optional(section);
 }
@@ -547,15 +525,15 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
     common_chat_peg_mapper::map(node);
 
     // Handle tool-related tags (unified version supporting both JSON and tagged formats)
-    bool is_tool_open   = node.tag == common_chat_peg_unified_builder::TOOL_OPEN;
-    bool is_tool_close  = node.tag == common_chat_peg_unified_builder::TOOL_CLOSE;
-    bool is_tool_name   = node.tag == common_chat_peg_unified_builder::TOOL_NAME;
-    bool is_tool_id     = node.tag == common_chat_peg_unified_builder::TOOL_ID;
-    bool is_tool_args   = node.tag == common_chat_peg_unified_builder::TOOL_ARGS;
-    bool is_arg_open    = node.tag == common_chat_peg_unified_builder::TOOL_ARG_OPEN;
-    bool is_arg_close   = node.tag == common_chat_peg_unified_builder::TOOL_ARG_CLOSE;
-    bool is_arg_name    = node.tag == common_chat_peg_unified_builder::TOOL_ARG_NAME;
-    bool is_arg_value   = node.tag == common_chat_peg_unified_builder::TOOL_ARG_VALUE;
+    bool is_tool_open  = node.tag == common_chat_peg_unified_builder::TOOL_OPEN;
+    bool is_tool_close = node.tag == common_chat_peg_unified_builder::TOOL_CLOSE;
+    bool is_tool_name  = node.tag == common_chat_peg_unified_builder::TOOL_NAME;
+    bool is_tool_id    = node.tag == common_chat_peg_unified_builder::TOOL_ID;
+    bool is_tool_args  = node.tag == common_chat_peg_unified_builder::TOOL_ARGS;
+    bool is_arg_open   = node.tag == common_chat_peg_unified_builder::TOOL_ARG_OPEN;
+    bool is_arg_close  = node.tag == common_chat_peg_unified_builder::TOOL_ARG_CLOSE;
+    bool is_arg_name   = node.tag == common_chat_peg_unified_builder::TOOL_ARG_NAME;
+    bool is_arg_value  = node.tag == common_chat_peg_unified_builder::TOOL_ARG_VALUE;
 
     if (is_tool_open) {
         result.tool_calls.emplace_back();

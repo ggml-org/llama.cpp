@@ -182,8 +182,38 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
             trim_whitespace(cs.reasoning_start);
             trim_whitespace(cs.reasoning_end);
 
-            LOG_DBG("Method 1: Found reasoning markers via reasoning_content field\n");
-            LOG_DBG("  start: '%s', end: '%s'\n", cs.reasoning_start.c_str(), cs.reasoning_end.c_str());
+            // If we found reasoning_end but not reasoning_start, try to derive it from reasoning_end
+            // For example: </think> -> <think>, </|END_THINKING|> -> <|START_THINKING|>
+            if (cs.reasoning_start.empty() && !cs.reasoning_end.empty()) {
+                // First, try to derive directly from the closing tag format
+                if (cs.reasoning_end.length() > 3 && cs.reasoning_end[0] == '<' && cs.reasoning_end[1] == '/') {
+                    // Standard XML closing tag like </think> -> <think>
+                    size_t tag_end_pos = cs.reasoning_end.find('>');
+                    if (tag_end_pos != std::string::npos) {
+                        std::string tag_name = cs.reasoning_end.substr(2, tag_end_pos - 2);
+                        cs.reasoning_start   = "<" + tag_name + ">";
+                        LOG_DBG("Method 1: Derived reasoning_start from closing tag format\n");
+                        LOG_DBG("  start: '%s', end: '%s'\n", cs.reasoning_start.c_str(), cs.reasoning_end.c_str());
+                    }
+                } else if (cs.reasoning_end.find("<|END_") == 0 || cs.reasoning_end.find("<|/") == 0) {
+                    // Special token format like <|END_THINKING|> -> <|START_THINKING|>
+                    // or <|/think|> -> <|think|>
+                    if (cs.reasoning_end.find("<|END_") == 0) {
+                        std::string core = cs.reasoning_end.substr(6);  // Remove "<|END_"
+                        cs.reasoning_start = "<|START_" + core;
+                    } else {
+                        std::string core   = cs.reasoning_end.substr(3);  // Remove "<|/"
+                        cs.reasoning_start = "<|" + core;
+                    }
+                    LOG_DBG("Method 1: Derived reasoning_start from special token format\n");
+                    LOG_DBG("  start: '%s', end: '%s'\n", cs.reasoning_start.c_str(), cs.reasoning_end.c_str());
+                }
+            }
+
+            if (!cs.reasoning_start.empty()) {
+                LOG_DBG("Method 1: Found reasoning markers via reasoning_content field\n");
+                LOG_DBG("  start: '%s', end: '%s'\n", cs.reasoning_start.c_str(), cs.reasoning_end.c_str());
+            }
         }
     }
 
@@ -224,17 +254,63 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
                 diff_pos++;
             }
 
-            std::string diff = prompt_think.substr(diff_pos);
+            // Check which direction has extra content
+            if (prompt_think.length() > prompt_no_think.length()) {
+                // Normal case: enable_thinking=true adds content (e.g., <think> at the end)
+                std::string diff = prompt_think.substr(diff_pos);
 
-            // Only use if it looks like a tag
-            if (diff.find('<') != std::string::npos || diff.find('[') != std::string::npos) {
-                cs.reasoning_start = diff;
-                cs.reasoning_end   = create_closing_tag(diff);
-                trim_whitespace(cs.reasoning_start);
-                trim_whitespace(cs.reasoning_end);
+                // Only use if it looks like a tag
+                if (diff.find('<') != std::string::npos || diff.find('[') != std::string::npos) {
+                    cs.reasoning_start = diff;
+                    cs.reasoning_end   = create_closing_tag(diff);
+                    trim_whitespace(cs.reasoning_start);
+                    trim_whitespace(cs.reasoning_end);
 
-                LOG_DBG("Method 2: Found reasoning markers via enable_thinking toggle\n");
-                LOG_DBG("  start: '%s', end: '%s'\n", cs.reasoning_start.c_str(), cs.reasoning_end.c_str());
+                    LOG_DBG("Method 2: Found reasoning markers via enable_thinking toggle\n");
+                    LOG_DBG("  start: '%s', end: '%s'\n", cs.reasoning_start.c_str(), cs.reasoning_end.c_str());
+                }
+            } else {
+                // Reverse case: enable_thinking=false adds content (e.g., GLM-4.6 adds <think></think>)
+                // This means the template adds an empty thinking block when thinking is disabled
+                std::string diff = prompt_no_think.substr(diff_pos);
+
+                // Look for adjacent opening and closing tags like <think></think>
+                size_t open_start = diff.find('<');
+                if (open_start != std::string::npos) {
+                    size_t open_end = diff.find('>', open_start);
+                    if (open_end != std::string::npos) {
+                        std::string opening_tag = diff.substr(open_start, open_end - open_start + 1);
+                        // Skip if it looks like a role marker
+                        if (opening_tag.find("assistant") == std::string::npos &&
+                            opening_tag.find("user") == std::string::npos &&
+                            opening_tag.find("system") == std::string::npos) {
+                            std::string expected_close = create_closing_tag(opening_tag);
+                            // Check if the closing tag follows immediately (empty thinking block)
+                            size_t close_pos = diff.find(expected_close, open_end + 1);
+                            if (close_pos != std::string::npos) {
+                                // Verify only whitespace between tags
+                                std::string between = diff.substr(open_end + 1, close_pos - open_end - 1);
+                                bool        only_ws = true;
+                                for (char c : between) {
+                                    if (!std::isspace(static_cast<unsigned char>(c))) {
+                                        only_ws = false;
+                                        break;
+                                    }
+                                }
+                                if (only_ws) {
+                                    cs.reasoning_start = opening_tag;
+                                    cs.reasoning_end   = expected_close;
+                                    trim_whitespace(cs.reasoning_start);
+                                    trim_whitespace(cs.reasoning_end);
+
+                                    LOG_DBG("Method 2: Found reasoning markers via enable_thinking toggle (reverse)\n");
+                                    LOG_DBG("  start: '%s', end: '%s'\n", cs.reasoning_start.c_str(),
+                                            cs.reasoning_end.c_str());
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -521,11 +597,12 @@ void TemplateAnalyzer::detect_content_markers(const minja::chat_template & tmpl,
 
         // Known content marker patterns
         std::vector<std::pair<std::string, std::string>> patterns = {
-            { "<|START_RESPONSE|>", "<|END_RESPONSE|>" },
-            { "<|response|>",       "<|/response|>"    },
-            { "<response>",         "</response>"      },
-            { "<output>",           "</output>"        },
-            { "<answer>",           "</answer>"        },
+            { "<|START_RESPONSE|>", "<|END_RESPONSE|>"      },
+            { "<|response|>",       "<|/response|>"         },
+            { "<response>",         "</response>"           },
+            { "<output>",           "</output>"             },
+            { "<answer>",           "</answer>"             },
+            { "<|CHATBOT_TOKEN|>",  "<|END_OF_TURN_TOKEN|>" },
         };
 
         for (const auto & [start_pattern, end_pattern] : patterns) {
@@ -670,7 +747,14 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(const minja::chat_tem
             if (tag_start != std::string::npos) {
                 size_t tag_end = ts.tool_section_end.find('>', tag_start);
                 if (tag_end != std::string::npos) {
-                    ts.tool_section_end = ts.tool_section_end.substr(tag_start, tag_end - tag_start + 1);
+                    // Check if there is a closing bracket ']' before the tag
+                    size_t bracket_pos = ts.tool_section_end.rfind(']', tag_start);
+                    if (bracket_pos != std::string::npos) {
+                        // Include the bracket
+                        ts.tool_section_end = ts.tool_section_end.substr(bracket_pos, tag_end - bracket_pos + 1);
+                    } else {
+                        ts.tool_section_end = ts.tool_section_end.substr(tag_start, tag_end - tag_start + 1);
+                    }
                 }
             } else {
                 // Try other closing patterns like ]<|END_ACTION|>
@@ -707,7 +791,14 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(const minja::chat_tem
             } else {
                 size_t eq_pos = discovered.function_opener.find('=');
                 if (eq_pos != std::string::npos) {
-                    ts.function_prefix = discovered.function_opener.substr(0, eq_pos + 1);
+                    // Check if there's a quote after the equals sign
+                    if (eq_pos + 1 < discovered.function_opener.length() &&
+                        (discovered.function_opener[eq_pos + 1] == '"' ||
+                         discovered.function_opener[eq_pos + 1] == '\'')) {
+                        ts.function_prefix = discovered.function_opener.substr(0, eq_pos + 2);
+                    } else {
+                        ts.function_prefix = discovered.function_opener.substr(0, eq_pos + 1);
+                    }
                     ts.function_suffix = discovered.function_name_suffix;
                     ts.function_close  = discovered.function_closer;
                 } else if (!discovered.function_opener.empty() && discovered.function_opener[0] == '<') {
