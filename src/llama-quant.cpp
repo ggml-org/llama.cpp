@@ -695,7 +695,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     constexpr double epsilon = 1e-12;
     constexpr double infinity = std::numeric_limits<double>::infinity();
-    constexpr uint32_t file_magic = 0x4d534531;  // MSE1
+    constexpr uint32_t file_magic = 0x4d534531; // MSE1
     constexpr uint64_t arbitrary_magic = 0xeabada55cafed00d;
     const char * func = __func__;
 
@@ -785,7 +785,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     std::replace(gen_name.begin(), gen_name.end(), ' ', '_');
 
     gen_name.empty() ? checkpoint_file = ml.arch_name : checkpoint_file = gen_name;
-    checkpoint_file += "-" + std::string(hex) + ".bpw_state";
+    checkpoint_file += "-" + std::string(hex) + "-mse.bpw_state";
 
     if (params->keep_bpw_state && params->bpw_state) {
         const auto * filename = static_cast<const char*>(params->bpw_state);
