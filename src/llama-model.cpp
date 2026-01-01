@@ -5688,7 +5688,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         try {
                             layer.time_mix_lerp_fused = create_tensor(tn(LLM_TENSOR_TIME_MIX_LERP_FUSED, "weight", i), {n_embd, 1, 1, 6}, 0);
-                        } catch(std::runtime_error & e) {
+                        } catch(std::runtime_error &e) {
                             // ARWKV models may not have gate tensors
                             layer.time_mix_lerp_fused = create_tensor(tn(LLM_TENSOR_TIME_MIX_LERP_FUSED, "weight", i), {n_embd, 1, 1, 5}, 0);
                         }
