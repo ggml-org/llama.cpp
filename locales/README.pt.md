@@ -1,6 +1,6 @@
 <!--START_SECTION:navbar-->
 <div align="center">
-  <a href="../README.md">🇺🇸 English</a> | <a href="README.de.md">🇩🇪 Deutsch</a> | <a href="README.fr.md">🇫🇷 Français</a> | <a href="README.hi.md">🇮🇳 हिंदी</a> | <a href="README.ja.md">🇯🇵 日本語</a> | <a href="README.ko.md">🇰🇷 한국어</a> | <a href="README.pt.md">🇵🇹 Português</a> | <a href="README.ru.md">🇷🇺 Русский</a> | <a href="README.zh.md">🇨🇳 中文</a>
+  <a href="../README.md">🇺🇸 English</a> | <a href="README.de.md">🇩🇪 Deutsch</a> | <a href="README.es.md">🇪🇸 Español</a> | <a href="README.fr.md">🇫🇷 Français</a> | <a href="README.hi.md">🇮🇳 हिंदी</a> | <a href="README.ja.md">🇯🇵 日本語</a> | <a href="README.ko.md">🇰🇷 한국어</a> | <a href="README.pt.md">🇵🇹 Português</a> | <a href="README.ru.md">🇷🇺 Русский</a> | <a href="README.zh.md">🇨🇳 中文</a>
 </div>
 <!--END_SECTION:navbar-->
 
@@ -550,9 +550,9 @@ Para aprender mais sobre a quantização de modelos, [leia esta documentação](
 - [Dicas de solução de problemas de desempenho](../docs/development/token_generation_performance_tips.md)
 - [Dicas e truques do GGML](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
 
-#### Seminal papers and background on the models
+#### Papers fundamentais e contexto sobre os modelos
 
-If your issue is with model generation quality, then please at least scan the following links and papers to understand the limitations of LLaMA models. This is especially important when choosing an appropriate model size and appreciating both the significant and subtle differences between LLaMA models and ChatGPT:
+Se seu problema está relacionado à qualidade de geração do modelo, então por favor, pelo menos, examine os seguintes links e papers para entender as limitações dos modelos LLaMA. Isso é especialmente importante ao escolher um tamanho de modelo apropriado e apreciar tanto as diferenças significativas quanto as sutis entre os modelos LLaMA e ChatGPT:
 - LLaMA:
     - [Introducing LLaMA: A foundational, 65-billion-parameter large language model](https://ai.facebook.com/blog/large-language-model-llama-meta-ai/)
     - [LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971)

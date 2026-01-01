@@ -1,6 +1,6 @@
 <!--START_SECTION:navbar-->
 <div align="center">
-  <a href="../README.md">🇺🇸 English</a> | <a href="README.de.md">🇩🇪 Deutsch</a> | <a href="README.fr.md">🇫🇷 Français</a> | <a href="README.hi.md">🇮🇳 हिंदी</a> | <a href="README.ja.md">🇯🇵 日本語</a> | <a href="README.ko.md">🇰🇷 한국어</a> | <a href="README.pt.md">🇵🇹 Português</a> | <a href="README.ru.md">🇷🇺 Русский</a> | <a href="README.zh.md">🇨🇳 中文</a>
+  <a href="../README.md">🇺🇸 English</a> | <a href="README.de.md">🇩🇪 Deutsch</a> | <a href="README.es.md">🇪🇸 Español</a> | <a href="README.fr.md">🇫🇷 Français</a> | <a href="README.hi.md">🇮🇳 हिंदी</a> | <a href="README.ja.md">🇯🇵 日本語</a> | <a href="README.ko.md">🇰🇷 한국어</a> | <a href="README.pt.md">🇵🇹 Português</a> | <a href="README.ru.md">🇷🇺 Русский</a> | <a href="README.zh.md">🇨🇳 中文</a>
 </div>
 <!--END_SECTION:navbar-->
 
@@ -24,13 +24,13 @@ LLM inference in C/C++
 ## 핫 토픽
 
 - **[가이드 : llama.cpp의 새 WebUI 사용법](https://github.com/ggml-org/llama.cpp/discussions/16938)**
-- [가이드 : gpt-oss를 llama.cpp로 실행](https://github.com/ggml-org/llama.cpp/discussions/15396)
+- [가이드 : gpt-oss를 llama.cpp로 실행하기](https://github.com/ggml-org/llama.cpp/discussions/15396)
 - [[피드백] llama.cpp의 더 나은 패키징으로 downstream consumers 지원 🤗](https://github.com/ggml-org/llama.cpp/discussions/15313)
 - `gpt-oss` 모델에 네이티브 MXFP4 형식 지원이 추가됨 | [PR](https://github.com/ggml-org/llama.cpp/pull/15091) | [NVIDIA와의 협업](https://blogs.nvidia.com/blog/rtx-ai-garage-openai-oss) | [댓글](https://github.com/ggml-org/llama.cpp/discussions/15095)
 - `llama-server`에 멀티모달 지원 도입됨: [#12898](https://github.com/ggml-org/llama.cpp/pull/12898) | [문서](.././docs/multimodal.md)
-- FIM 완성용 VS Code 확장 프로그램: https://github.com/ggml-org/llama.vscode
+- FIM 완성용 VS Code 확장: https://github.com/ggml-org/llama.vscode
 - FIM 완성용 Vim/Neovim 플러그인: https://github.com/ggml-org/llama.vim
-- Hugging Face Inference Endpoints가 GGUF를 기본적으로 지원합니다! https://github.com/ggml-org/llama.cpp/discussions/9669
+- Hugging Face Inference Endpoints가 GGUF를 기본 지원합니다! https://github.com/ggml-org/llama.cpp/discussions/9669
 - Hugging Face GGUF 편집기: [토론](https://github.com/ggml-org/llama.cpp/discussions/9268) | [도구](https://huggingface.co/spaces/CISCai/gguf-editor)
 
 ## 빠른 시작
@@ -38,11 +38,11 @@ LLM inference in C/C++
 llama.cpp를 사용하는 것은 간단합니다. 다음과 같은 방법으로 컴퓨터에 설치할 수 있습니다:
 
 - [brew, nix 또는 winget](../docs/install.md)을 사용하여 `llama.cpp`를 설치합니다.
-- Docker로 실행 - [Docker 문서](../docs/docker.md)를 참조하십시오.
+- Docker로 실행 - [Docker 문서](../docs/docker.md)를 참조하세요.
 - [릴리스 페이지](https://github.com/ggml-org/llama.cpp/releases)에서 사전 빌드된 바이너리를 다운로드합니다.
-- 이 저장소를 클로닝하여 소스에서 빌드 - [빌드 가이드](../docs/build.md)를 참조하십시오.
+- 이 저장소를 클로닝하여 소스에서 빌드 - [빌드 가이드](../docs/build.md)를 확인하세요.
 
-설치가 완료되면 사용할 모델이 필요합니다. 자세한 내용은 [모델을 얻고 양자화하는 방법](#obtaining-and-quantizing-models) 섹션을 참조하십시오.
+설치가 완료되면 사용할 모델이 필요합니다. 자세한 내용은 [모델을 얻고 양자화하는 방법](#obtaining-and-quantizing-models) 섹션을 참조하세요.
 
 예제 명령어:
 
@@ -59,7 +59,7 @@ llama-server -hf ggml-org/gemma-3-1b-it-GGUF
 
 ## 설명
 
-`llama.cpp`의 주요 목표는 넓은 범위의 하드웨어에서 - 로컬 및 클라우드에서 - 최소한의 설정과 최첨단 성능으로 LLM 추론을 가능하게 하는 것입니다.
+`llama.cpp`의 주요 목표는 넓은 범위의 하드웨어에서 최소한의 설정과 최첨단 성능으로 LLM 추론을 가능하게 하는 것입니다 - 로컬에서 클라우드까지.
 
 - 의존성 없이 순수 C/C++ 구현
 - Apple silicon은 일등 시민 - ARM NEON, Accelerate 및 Metal 프레임워크를 통해 최적화됨
@@ -68,7 +68,7 @@ llama-server -hf ggml-org/gemma-3-1b-it-GGUF
 - 더 빠른 추론과 메모리 사용 감소를 위한 1.5비트, 2비트, 3비트, 4비트, 5비트, 6비트 및 8비트 정수 양자화
 - NVIDIA GPU에서 LLM을 실행하기 위한 커스텀 CUDA 커널 (AMD GPU는 HIP을 통해, Moore Threads GPU는 MUSA를 통해 지원)
 - Vulkan 및 SYCL 백엔드 지원
-- 총 VRAM 용량보다 큰 모델을 부분적으로 가속화하기 위한 CPU+GPU 하이브리드 추론
+- 전체 VRAM 용량보다 큰 모델을 부분적으로 가속화하기 위한 CPU+GPU 하이브리드 추론
 
 `llama.cpp` 프로젝트는 [ggml](https://github.com/ggml-org/ggml) 라이브러리에 대한 새로운 기능 개발의 주요 실험장입니다.
 
@@ -268,25 +268,25 @@ Instructions for adding support for new models: [HOWTO-add-model.md](../docs/dev
 
 </details>
 
-## 지원되는 백엔드
+## 지원 가능한 백엔드
 
 | 백엔드 | 대상 장치 |
 | --- | --- |
 | [Metal](../docs/build.md#metal-build) | Apple Silicon |
-| [BLAS](../docs/build.md#blas-build) | 모든 장치 |
-| [BLIS](../docs/backend/BLIS.md) | 모든 장치 |
-| [SYCL](../docs/backend/SYCL.md) | 인텔 및 네비디아 GPU |
-| [MUSA](../docs/build.md#musa) | 모어스 스레드 GPU |
-| [CUDA](../docs/build.md#cuda) | 네비디아 GPU |
+| [BLAS](../docs/build.md#blas-build) | All |
+| [BLIS](../docs/backend/BLIS.md) | All |
+| [SYCL](../docs/backend/SYCL.md) | Intel 및 Nvidia GPU |
+| [MUSA](../docs/build.md#musa) | Moore Threads GPU |
+| [CUDA](../docs/build.md#cuda) | Nvidia GPU |
 | [HIP](../docs/build.md#hip) | AMD GPU |
 | [ZenDNN](../docs/build.md#zendnn) | AMD CPU |
 | [Vulkan](../docs/build.md#vulkan) | GPU |
-| [CANN](../docs/build.md#cann) | 아센드 NPU |
-| [OpenCL](../docs/backend/OPENCL.md) | 아드레노 GPU |
+| [CANN](../docs/build.md#cann) | Ascend NPU |
+| [OpenCL](../docs/backend/OPENCL.md) | Adreno GPU |
 | [IBM zDNN](../docs/backend/zDNN.md) | IBM Z & LinuxONE |
-| [WebGPU [진행 중]](../docs/build.md#webgpu) | 모든 장치 |
-| [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | 모든 장치 |
-| [Hexagon [진행 중]](../docs/backend/hexagon/README.md) | 스냅드래곤 |
+| [WebGPU [In Progress]](../docs/build.md#webgpu) | All |
+| [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
+| [Hexagon [In Progress]](../docs/backend/hexagon/README.md) | Snapdragon |
 
 ## 모델을 얻고 정량화하기
 
@@ -305,7 +305,7 @@ llama-cli -hf ggml-org/gemma-3-1b-it-GGUF
 
 모델을 다운로드한 후 CLI 도구를 사용하여 로컬에서 실행할 수 있습니다 - 아래를 참조하십시오.
 
-`llama.cpp`는 모델이 [GGUF](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md) 파일 형식에 저장되어 있어야 합니다. 다른 데이터 형식의 모델은 이 저장소의 `convert_*.py` 파이썬 스크립트를 사용하여 GGUF로 변환할 수 있습니다.
+`llama.cpp`은 모델이 [GGUF](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md) 파일 형식에 저장되어 있어야 합니다. 다른 데이터 형식의 모델은 이 저장소의 `convert_*.py` 파이썬 스크립트를 사용하여 GGUF로 변환할 수 있습니다.
 
 Hugging Face 플랫폼은 `llama.cpp`와 함께 모델을 변환, 양자화 및 호스팅하는 온라인 도구를 다양하게 제공합니다:
 
@@ -444,7 +444,7 @@ Hugging Face 플랫폼은 `llama.cpp`와 함께 모델을 변환, 양자화 및 
 
 ## [`llama-perplexity`](../tools/perplexity)
 
-#### 모델이 주어진 텍스트에 대해 [perplexity](../tools/perplexity/README.md) [^1] (및 기타 품질 지표)를 측정하는 도구.
+#### 주어진 텍스트에 대한 모델의 [perplexity](../tools/perplexity/README.md) [^1] (및 기타 품질 지표)를 측정하는 도구.
 
 
 <details open>
@@ -510,7 +510,7 @@ Hugging Face 플랫폼은 `llama.cpp`와 함께 모델을 변환, 양자화 및 
 
 ## [`llama-simple`](../examples/simple)
 
-#### `llama.cpp`을 사용하여 앱을 구현하는 가장 간단한 예제입니다. 개발자에게 유용합니다.
+#### `llama.cpp`를 사용하여 앱을 구현하는 최소한의 예제입니다. 개발자에게 유용합니다.
 
 
 <details>
@@ -550,17 +550,17 @@ Hugging Face 플랫폼은 `llama.cpp`와 함께 모델을 변환, 양자화 및 
 - [성능 문제 해결](../docs/development/token_generation_performance_tips.md)
 - [GGML 팁 및 기술](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
 
-#### 기초 논문 및 모델에 대한 배경
+#### 기초 논문 및 모델에 대한 배경 정보
 
 모델 생성 품질과 관련된 문제가 있다면, LLaMA 모델의 한계를 이해하기 위해 다음 링크와 논문을 최소한 스캔해 주세요. 이는 적절한 모델 크기를 선택하고, LLaMA 모델과 ChatGPT 사이의 중요한 차이점과 미묘한 차이점을 인식하는 데 특히 중요합니다:
 - LLaMA:
-    - [LLaMA 소개: 기초적인 650억 파라미터 대규모 언어 모델](https://ai.facebook.com/blog/large-language-model-llama-meta-ai/)
+    - [LLaMA 소개: 650억 파라미터를 갖는 기초 대형 언어 모델](https://ai.facebook.com/blog/large-language-model-llama-meta-ai/)
     - [LLaMA: 개방적이고 효율적인 기초 언어 모델](https://arxiv.org/abs/2302.13971)
 - GPT-3
-    - [언어 모델은 샘플 학습자입니다](https://arxiv.org/abs/2005.14165)
+    - [언어 모델은 샘플 학습을 수행한다](https://arxiv.org/abs/2005.14165)
 - GPT-3.5 / InstructGPT / ChatGPT:
-    - [언어 모델을 지시사항을 따르도록 정렬](https://openai.com/research/instruction-following)
-    - [인간 피드백을 통해 지시사항을 따르도록 언어 모델을 훈련](https://arxiv.org/abs/2203.02155)
+    - [언어 모델을 지시사항을 따르도록 정렬하기](https://openai.com/research/instruction-following)
+    - [인간 피드백을 사용하여 지시사항을 따르도록 언어 모델을 훈련시키기](https://arxiv.org/abs/2203.02155)
 
 ## XCFramework
 
@@ -608,11 +608,11 @@ $ echo "source ~/.llama-completion.bash" >> ~/.bashrc
 ## 의존성
 
 - [yhirose/cpp-httplib](https://github.com/yhirose/cpp-httplib) - 단일 헤더 HTTP 서버, `llama-server`에서 사용 - MIT 라이선스
-- [stb-image](https://github.com/nothings/stb) - 단일 헤더 이미지 형식 디코더, 다중 모달 하위 시스템에서 사용 - 공공 도메인
+- [stb-image](https://github.com/nothings/stb) - 단일 헤더 이미지 형식 디코더, 다중 모달 서브시스템에서 사용 - 공공 도메인
 - [nlohmann/json](https://github.com/nlohmann/json) - 단일 헤더 JSON 라이브러리, 다양한 도구/예제에서 사용 - MIT 라이선스
 - [minja](https://github.com/google/minja) - C++에서 사용하는 최소한의 Jinja 파서, 다양한 도구/예제에서 사용 - MIT 라이선스
 - [linenoise.cpp](.././tools/run/linenoise.cpp/linenoise.cpp) - C++ 라이브러리로 readline과 유사한 라인 편집 기능 제공, `llama-run`에서 사용 - BSD 2-Clause 라이선스
 - [curl](https://curl.se/) - 클라이언트 측 URL 전송 라이브러리, 다양한 도구/예제에서 사용 - [CURL 라이선스](https://curl.se/docs/copyright.html)
-- [miniaudio.h](https://github.com/mackron/miniaudio) - 단일 헤더 오디오 형식 디코더, 다중 모달 하위 시스템에서 사용 - 공공 도메인
-- [subprocess.h](https://github.com/sheredom/subprocess.h) - C 및 C++에서 사용하는 단일 헤더 프로세스 시작 솔루션 - 공공 도메인
+- [miniaudio.h](https://github.com/mackron/miniaudio) - 단일 헤더 오디오 형식 디코더, 다중 모달 서브시스템에서 사용 - 공공 도메인
+- [subprocess.h](https://github.com/sheredom/subprocess.h) - C 및 C++에서 사용하는 단일 헤더 프로세스 실행 솔루션 - 공공 도메인
 
