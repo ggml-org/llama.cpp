@@ -2498,27 +2498,6 @@ static bool ggml_backend_buft_is_cann(ggml_backend_buffer_type_t buft) {
 }
 
 /**
- * @brief Determines if a tensor operation should be offloaded to the CANN
- * backend.
- *
- * This function checks if a given tensor operation should be offloaded to the
- * CANN backend based on the operation type and the size of the tensor. It
- * returns true if the second dimension (ne[1]) of the tensor is greater than or
- * equal to the minimum batch size and the operation is not GGML_OP_GET_ROWS.
- *
- * @param backend Pointer to the CANN backend.
- * @param op Pointer to the tensor operation to check.
- * @return bool Returns true if the operation should be offloaded, otherwise
- * false.
- */
-struct ggml_backend_cann_device_context;
-static bool ggml_backend_cann_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-    ggml_backend_cann_device_context * dev_ctx = (ggml_backend_cann_device_context *)dev->context;
-
-    return op->ne[1] >= dev_ctx->op_offload_min_batch_size && op->op != GGML_OP_GET_ROWS;
-}
-
-/**
  * @brief Records an event on the CANN backend stream.
  *
  * This function records the given event on the ACL runtime stream associated
@@ -2668,6 +2647,26 @@ static ggml_backend_buffer_type_t ggml_backend_cann_device_get_buffer_type(ggml_
 static ggml_backend_buffer_type_t ggml_backend_cann_device_get_host_buffer_type(ggml_backend_dev_t dev) {
     GGML_UNUSED(dev);
     return ggml_backend_cann_host_buffer_type();
+}
+
+/**
+ * @brief Determines if a tensor operation should be offloaded to the CANN
+ * backend.
+ *
+ * This function checks if a given tensor operation should be offloaded to the
+ * CANN backend based on the operation type and the size of the tensor. It
+ * returns true if the second dimension (ne[1]) of the tensor is greater than or
+ * equal to the minimum batch size and the operation is not GGML_OP_GET_ROWS.
+ *
+ * @param backend Pointer to the CANN backend.
+ * @param op Pointer to the tensor operation to check.
+ * @return bool Returns true if the operation should be offloaded, otherwise
+ * false.
+ */
+static bool ggml_backend_cann_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    ggml_backend_cann_device_context * dev_ctx = (ggml_backend_cann_device_context *)dev->context;
+
+    return op->ne[1] >= dev_ctx->op_offload_min_batch_size && op->op != GGML_OP_GET_ROWS;
 }
 
 /**
