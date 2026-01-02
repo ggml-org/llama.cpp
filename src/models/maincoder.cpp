@@ -115,6 +115,3 @@ llm_build_maincoder::llm_build_maincoder(const llama_model & model, const llm_gr
 
     ggml_build_forward_expand(gf, cur);
 }
-
-
-
