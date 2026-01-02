@@ -379,6 +379,213 @@ static void mul_mat_vec_q6_k_coalesced(
     }
 }
 
+// =============================================================================
+// Q6_K VARIABLE TILE COALESCED KERNEL
+// Handles arbitrary block counts using power-of-2 tile decomposition
+// Each work-group processes one row, with multiple warps handling different tiles
+// Shared memory reduction combines partial sums from all tiles
+// =============================================================================
+static void mul_mat_vec_q6_k_variable_tile(
+    const void * __restrict__ vx,
+    const void * __restrict__ vy,
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const int blocks_per_row,
+    const int num_tiles,
+    const int row_quants_bytes,
+    float * __restrict__ shared_partials,
+    const sycl::nd_item<3> & nd_item)
+{
+    const auto sg = nd_item.get_sub_group();
+    const int warp_id = nd_item.get_local_id(2) / WARP_SIZE;
+    const int lane_id = sg.get_local_linear_id();
+    const int row = nd_item.get_group(2);
+
+    if (row >= nrows) return;
+
+    // Each warp processes one tile
+    if (warp_id >= num_tiles) {
+        // Extra warps wait at barrier
+        sycl::group_barrier(nd_item.get_group());
+        return;
+    }
+
+    // Get this warp's tile info using precomputed values
+    // We can't call tile_size_at in kernel, so we recompute locally
+    int tile_size = 0;
+    int tile_offset = 0;
+    {
+        int remaining = blocks_per_row;
+        int current_offset = 0;
+        for (int t = 0; t <= warp_id && remaining > 0; t++) {
+            int ts = 1;
+            while (ts * 2 <= remaining && ts < 32) {
+                ts *= 2;
+            }
+            if (t == warp_id) {
+                tile_size = ts;
+                tile_offset = current_offset;
+            }
+            current_offset += ts;
+            remaining -= ts;
+        }
+    }
+
+    // Compute byte offset to this tile within the row
+    int tile_byte_offset = 0;
+    {
+        int remaining = blocks_per_row;
+        int current_offset = 0;
+        for (int t = 0; t < warp_id && remaining > 0; t++) {
+            int ts = 1;
+            while (ts * 2 <= remaining && ts < 32) {
+                ts *= 2;
+            }
+            tile_byte_offset += ts * (128 + 64 + 16);
+            current_offset += ts;
+            remaining -= ts;
+        }
+    }
+
+    const int word_plane_stride = tile_size * 4;
+
+    // X pointers
+    const uint8_t * x_base = (const uint8_t *)vx;
+    const uint8_t * tile_base = x_base + row * row_quants_bytes + tile_byte_offset;
+
+    // Tile layout: [ql: tile_size * 128][qh: tile_size * 64][scales: tile_size * 16]
+    const uint8_t * tile_ql = tile_base;
+    const uint8_t * tile_qh = tile_ql + tile_size * 128;
+    const int8_t * tile_sc = (const int8_t *)(tile_qh + tile_size * 64);
+
+    // D values at end of tensor
+    const ggml_half * x_d = (const ggml_half *)(x_base + nrows * row_quants_bytes);
+
+    // Y pointers
+    const int8_t * y_qs = (const int8_t *)vy;
+    const sycl::half2 * y_ds = (const sycl::half2 *)((const char *)vy + ncols);
+
+    float partial_sum = 0.0f;
+
+    // Only active lanes process blocks
+    if (lane_id < tile_size) {
+        const int block_in_tile = lane_id;
+        const int global_block_idx = row * blocks_per_row + tile_offset + block_in_tile;
+        const float d = x_d[global_block_idx];
+
+        const int y_block_base = (tile_offset + block_in_tile) * 8;
+
+        for (int iqs = 0; iqs < QI6_K; ++iqs) {
+            const int vh_shift = 2 * ((iqs % (QI6_K / 2)) / (QI6_K / 4));
+            const int bq8_offset = 2 * QR6_K * (iqs / (QI6_K / 2)) + (iqs % (QI6_K / 2)) / (QI6_K / 4);
+            const int scale_offset = (QI6_K / 4) * (iqs / (QI6_K / 2)) + (iqs % (QI6_K / 2)) / (QI6_K / 8);
+            const int u_index = iqs % QI8_1;
+
+            const int ql_offset = iqs * word_plane_stride + block_in_tile * 4;
+            const int qh_word_idx = (QI6_K / 4) * (iqs / (QI6_K / 2)) + iqs % (QI6_K / 4);
+            const int qh_offset = qh_word_idx * word_plane_stride + block_in_tile * 4;
+            const int vl = *((const int *)(tile_ql + ql_offset));
+            const int vh_raw = *((const int *)(tile_qh + qh_offset));
+            const int vh = vh_raw >> vh_shift;
+
+            const int sc_idx0 = scale_offset;
+            const int sc_idx1 = scale_offset + 4;
+            const int sc_word0 = sc_idx0 / 4;
+            const int sc_byte0 = sc_idx0 % 4;
+            const int sc_word1 = sc_idx1 / 4;
+            const int sc_byte1 = sc_idx1 % 4;
+            const int sc_offset0 = sc_word0 * word_plane_stride + block_in_tile * 4 + sc_byte0;
+            const int sc_offset1 = sc_word1 * word_plane_stride + block_in_tile * 4 + sc_byte1;
+            const int8_t sc0 = tile_sc[sc_offset0];
+            const int8_t sc1 = tile_sc[sc_offset1];
+
+            const int y_block0 = y_block_base + bq8_offset;
+            const int y_block1 = y_block0 + 2;
+            const int u0 = get_int_from_int8_aligned(y_qs + y_block0 * QK8_1, u_index);
+            const int u1 = get_int_from_int8_aligned(y_qs + y_block1 * QK8_1, u_index);
+            const sycl::float2 ds0f = y_ds[y_block0].convert<float, sycl::rounding_mode::automatic>();
+            const sycl::float2 ds1f = y_ds[y_block1].convert<float, sycl::rounding_mode::automatic>();
+            const float d8_0 = ds0f.x();
+            const float d8_1 = ds1f.x();
+
+            float sumf = 0.0f;
+            const int vil0 = (vl >> 0) & 0x0F0F0F0F;
+            const int vih0 = ((vh >> 0) << 4) & 0x30303030;
+            const int vi0 = dpct::vectorized_binary<sycl::char4>((vil0 | vih0), 0x20202020, dpct::sub_sat());
+            sumf += d8_0 * (dpct::dp4a(vi0, u0, 0) * sc0);
+
+            const int vil1 = (vl >> 4) & 0x0F0F0F0F;
+            const int vih1 = ((vh >> 4) << 4) & 0x30303030;
+            const int vi1 = dpct::vectorized_binary<sycl::char4>((vil1 | vih1), 0x20202020, dpct::sub_sat());
+            sumf += d8_1 * (dpct::dp4a(vi1, u1, 0) * sc1);
+
+            partial_sum += d * sumf;
+        }
+    }
+
+    // Warp-level reduction
+    float warp_sum = sycl::reduce_over_group(sg, partial_sum, sycl::plus<float>());
+
+    // Write to shared memory
+    if (lane_id == 0) {
+        shared_partials[warp_id] = warp_sum;
+    }
+
+    sycl::group_barrier(nd_item.get_group());
+
+    // First warp reduces all partial sums
+    if (warp_id == 0) {
+        float val = (lane_id < num_tiles) ? shared_partials[lane_id] : 0.0f;
+        float final_sum = sycl::reduce_over_group(sg, val, sycl::plus<float>());
+        if (lane_id == 0) {
+            dst[row] = final_sum;
+        }
+    }
+}
+
+// Dispatch function for Q6_K variable tile kernel
+static void variable_tile_mul_mat_vec_q6_k_q8_1_sycl(
+    const void * vx, const void * vy, float * dst,
+    const int ncols, const int nrows,
+    sycl::queue & stream)
+{
+    const int blocks_per_row = ncols / QK_K;
+    const int num_tiles = tile_count(blocks_per_row);
+    const int threads_per_row = num_tiles * WARP_SIZE;
+
+    // Compute row stride
+    int row_quants_bytes = 0;
+    {
+        int remaining = blocks_per_row;
+        while (remaining > 0) {
+            int ts = 1;
+            while (ts * 2 <= remaining && ts < 32) {
+                ts *= 2;
+            }
+            row_quants_bytes += ts * (128 + 64 + 16);
+            remaining -= ts;
+        }
+    }
+
+    GGML_SYCL_DEBUG("[MMVQ] Q6_K variable tile: blocks_per_row=%d, num_tiles=%d, threads=%d\n",
+                   blocks_per_row, num_tiles, threads_per_row);
+
+    sycl::range<3> grid(1, 1, nrows);
+    sycl::range<3> block(1, 1, threads_per_row);
+
+    stream.submit([&](sycl::handler & cgh) {
+        sycl::local_accessor<float, 1> shared_partials(sycl::range<1>(num_tiles), cgh);
+
+        cgh.parallel_for(
+            sycl::nd_range<3>(grid * block, block),
+            [=](sycl::nd_item<3> nd_item) [[intel::reqd_sub_group_size(WARP_SIZE)]] {
+                mul_mat_vec_q6_k_variable_tile(
+                    vx, vy, dst, ncols, nrows, blocks_per_row, num_tiles,
+                    row_quants_bytes, shared_partials.get_pointer(), nd_item);
+            });
+    });
+}
+
 template <int qk, int qi, typename block_q_t, int vdr, vec_dot_q_sycl_t vec_dot_q_sycl>
 static void mul_mat_vec_q(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
                           const int ncols, const int nrows, const sycl::nd_item<3> & item_ct1) {
@@ -2035,33 +2242,14 @@ static void coalesced_mul_mat_vec_mxfp4_q8_1_sycl(const void * vx, const void * 
 }
 
 // Dispatch function for coalesced Q6_K MMVQ kernel
+// Now uses variable tile kernel which handles any block count
 static void coalesced_mul_mat_vec_q6_k_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
                                                   const int nrows, dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
-    const int nblocks = ncols / QK_K;
-    if (nblocks % MMVQ_COALESCED_TILE_BLOCKS != 0) {
-        fprintf(stderr, "\n=== Q6_K COALESCED ASSERTION FAILURE ===\n");
-        fprintf(stderr, "ncols=%d, nrows=%d, nblocks=%d, MMVQ_COALESCED_TILE_BLOCKS=%d\n",
-                ncols, nrows, nblocks, MMVQ_COALESCED_TILE_BLOCKS);
-        fprintf(stderr, "Remainder: %d %% %d = %d (expected 0)\n",
-                nblocks, MMVQ_COALESCED_TILE_BLOCKS, nblocks % MMVQ_COALESCED_TILE_BLOCKS);
-        fprintf(stderr, "==========================================\n\n");
-    }
-    GGML_ASSERT((ncols / QK_K) % MMVQ_COALESCED_TILE_BLOCKS == 0);
+    const int blocks_per_row = ncols / QK_K;
 
-    constexpr size_t num_subgroups = 16;
-    const int block_num_y = ceil_div(nrows, (int)num_subgroups);
-
-    const sycl::range<3> global_size(1, 1, block_num_y * num_subgroups * WARP_SIZE);
-    const sycl::range<3> workgroup_size(1, 1, num_subgroups * WARP_SIZE);
-
-    stream->submit([&](sycl::handler & cgh) {
-        cgh.parallel_for(
-            sycl::nd_range<3>(global_size, workgroup_size),
-            [=](sycl::nd_item<3> nd_item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                mul_mat_vec_q6_k_coalesced(vx, vy, dst, ncols, nrows, nd_item);
-            });
-    });
+    // Use variable tile kernel which handles arbitrary block counts
+    variable_tile_mul_mat_vec_q6_k_q8_1_sycl(vx, vy, dst, ncols, nrows, *stream);
 }
 
 static void mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols, const int nrows,
