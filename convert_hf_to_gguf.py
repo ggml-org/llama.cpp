@@ -6417,7 +6417,7 @@ class ARwkv7Model(Rwkv7Model):
 @ModelBase.register("MaincoderForCausalLM")
 class MaincoderModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MAINCODER
-    
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
