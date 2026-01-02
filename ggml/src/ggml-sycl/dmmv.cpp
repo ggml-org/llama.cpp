@@ -4,11 +4,69 @@
 #include "presets.hpp"
 #include "dmmv-esimd.hpp"
 #include "quants.hpp"
+#include "ggml-sycl/quantize.hpp"
+
+#include <cstdlib>
+#include <cstring>
 
 //============================================================================
 // Unified DMMV SoA kernels following Q6_K pattern
 // All quant types use the same structure: compute pointers directly in kernel
 //============================================================================
+
+struct ggml_sycl_q8_0_cache {
+    block_q8_0 * ptr = nullptr;
+    int ncols = 0;
+    int device = -1;
+};
+
+struct ggml_sycl_q8_1_cache {
+    block_q8_1 * ptr = nullptr;
+    int ncols = 0;
+    int device = -1;
+};
+
+static block_q8_0 * ggml_sycl_get_q8_0_cache(int ncols, int device, const dpct::queue_ptr & stream) {
+    static thread_local ggml_sycl_q8_0_cache cache;
+    const int blocks_per_row = ncols / QK8_0;
+
+    if (cache.ptr != nullptr && (cache.ncols != ncols || cache.device != device)) {
+        sycl::free(cache.ptr, *stream);
+        cache.ptr = nullptr;
+    }
+
+    if (cache.ptr == nullptr) {
+        cache.ptr = sycl::malloc_device<block_q8_0>(blocks_per_row, *stream);
+        if (!cache.ptr) {
+            GGML_ABORT("DMMV Q4_0: failed to allocate q8_0 cache buffer");
+        }
+        cache.ncols = ncols;
+        cache.device = device;
+    }
+
+    return cache.ptr;
+}
+
+static block_q8_1 * ggml_sycl_get_q8_1_cache(int ncols, int device, const dpct::queue_ptr & stream) {
+    static thread_local ggml_sycl_q8_1_cache cache;
+    const int blocks_per_row = ncols / QK8_1;
+
+    if (cache.ptr != nullptr && (cache.ncols != ncols || cache.device != device)) {
+        sycl::free(cache.ptr, *stream);
+        cache.ptr = nullptr;
+    }
+
+    if (cache.ptr == nullptr) {
+        cache.ptr = sycl::malloc_device<block_q8_1>(blocks_per_row, *stream);
+        if (!cache.ptr) {
+            GGML_ABORT("DMMV: failed to allocate q8_1 cache buffer");
+        }
+        cache.ncols = ncols;
+        cache.device = device;
+    }
+
+    return cache.ptr;
+}
 
 // Q4_0 SoA DMMV kernel - follows Q6_K pattern exactly
 // SoA layout: [all qs: nblocks * 16 bytes] [all d: nblocks * 2 bytes]
@@ -545,7 +603,7 @@ static void dequantize_mul_mat_vec_q8_0_reorder_kernel(const void * __restrict__
 
 // Coalesced DMMV kernel for Q4_0
 // Matches the coalesced MMVQ layout: word w of block b at tile_offset + w*64 + b*4
-// Tile = 16 blocks = 256 bytes quants
+// Tile = TILE_BLOCKS blocks of 16-byte quants
 // Scales are after all quants, block-sequential (not coalesced)
 //
 // Parameters for slicing support:
@@ -560,133 +618,712 @@ static void dequantize_mul_mat_vec_q4_0_coalesced(
     const int nrows_full, const int row_low,
     const sycl::nd_item<3> & nd_item)
 {
-    const auto sg = nd_item.get_sub_group();
-    const int sg_range = sg.get_group_linear_range();
-    const int workgroup_id = nd_item.get_group_linear_id();
-    const int sg_id = sg.get_group_linear_id();
-    const int lane_id = sg.get_local_linear_id();
-    const int row = workgroup_id * sg_range + sg_id;
+    const int row = nd_item.get_group(2) * nd_item.get_local_range(1) +
+                    nd_item.get_local_id(1);
+    const int lane_id = nd_item.get_local_id(2);
 
     if (row >= nrows) {
         return;
     }
 
-    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16 blocks per tile
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
     const int blocks_per_row = ncols / QK4_0;
-    const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
-
-    // Thread role: which block in tile and which half (lower=words 0,1 vs upper=words 2,3)
-    const int block_in_tile = lane_id % TILE_BLOCKS;  // 0-15
-    const int is_upper_half = lane_id / TILE_BLOCKS;   // 0 or 1
+    const int word_stride = TILE_BLOCKS * 4;
 
     // X base pointers (coalesced layout: quants first, then scales)
-    // vx is pre-offset to row_low, so row 0 in kernel = row_low in tensor
     const uint8_t * x_qs = (const uint8_t *)vx;
     const int x_row_stride = ncols / 2;  // bytes per row of quants
 
     // Scales are after all quants in the FULL tensor
-    // Scale offset from vx: (nrows_full - row_low) * x_row_stride
-    const sycl::half * x_d = (const sycl::half *)((const char *)vx + (nrows_full - row_low) * x_row_stride);
+    const sycl::half * x_d = (const sycl::half *)((const char *)vx + nrows_full * x_row_stride);
 
-    // Partial sum accumulator - use half2 for F16 builds to leverage vectorized operations
-#ifdef GGML_SYCL_F16
-    sycl::half2 partial_sum = {0.0f, 0.0f};
-#else
     float partial_sum = 0.0f;
-#endif
+    const int global_row = row_low + row;
+    const int row_quants_bytes = ncols / 2;
+    const int y_offset = QK4_0 / 2;
+    const int iter_stride = 2 * GGML_SYCL_DMMV_X;
+    const int vals_per_iter = iter_stride / WARP_SIZE;
 
-    for (int tile = 0; tile < tiles_per_row; tile++) {
-        // Base offset for this tile's quants (256 bytes per tile)
-        const int tile_base = row * x_row_stride + tile * MMVQ_COALESCED_TILE_BYTES;
-
-        // Coalesced load: word w of block b at offset w*64 + b*4
-        // Thread loads 2 words (8 bytes total) from its assigned block
-        // Lower half (is_upper_half=0): words 0,1 at offsets 0+b*4, 64+b*4
-        // Upper half (is_upper_half=1): words 2,3 at offsets 128+b*4, 192+b*4
-        const int word_base = is_upper_half * 128;  // 0 or 128
-        const int word0_offset = word_base + block_in_tile * 4;       // word 0 or 2
-        const int word1_offset = word_base + 64 + block_in_tile * 4;  // word 1 or 3
-
-        // Load 4 bytes (8 nibbles = 8 Q4 values) per word
-        const uint8_t * qs0 = x_qs + tile_base + word0_offset;
-        const uint8_t * qs1 = x_qs + tile_base + word1_offset;
-
-        // Get scale for this block
-        const int block_idx = row * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
-#ifdef GGML_SYCL_F16
-        const sycl::half2 d = {x_d[block_idx], x_d[block_idx]};
-#else
-        const float d = (float)x_d[block_idx];
-#endif
-
-        // Y base offset for this block
-        // Block processes elements: block_in_tile * QK4_0 + (is_upper_half ? 8 : 0)
-        const int y_base = (tile * TILE_BLOCKS + block_in_tile) * QK4_0;
-
-        // For Q4_0: byte i contains nibbles for elements i (low) and i+16 (high)
-        // In coalesced: word w contains bytes [w*4, w*4+3]
-        //   word 0: bytes 0-3, elements [0,1,2,3] low, [16,17,18,19] high
-        //   word 1: bytes 4-7, elements [4,5,6,7] low, [20,21,22,23] high
-        //   word 2: bytes 8-11, elements [8,9,10,11] low, [24,25,26,27] high
-        //   word 3: bytes 12-15, elements [12,13,14,15] low, [28,29,30,31] high
-
-#ifdef GGML_SYCL_F16
-        sycl::half2 block_sum = {0.0f, 0.0f};
-#else
-        float block_sum = 0.0f;
-#endif
-
-        // Process 4 bytes from each word (8 elements each)
-        #pragma unroll
-        for (int b = 0; b < 4; b++) {
-            const uint8_t q0 = qs0[b];  // from word 0 or 2
-            const uint8_t q1 = qs1[b];  // from word 1 or 3
-
-            // Low nibble elements
-            const int elem0_low = is_upper_half * 8 + b;         // word 0/2 low nibble
-            const int elem1_low = is_upper_half * 8 + 4 + b;     // word 1/3 low nibble
-
-            // High nibble elements (+16 from low)
-            const int elem0_high = elem0_low + 16;
-            const int elem1_high = elem1_low + 16;
-
-            // Dequantize nibbles to int (-8 to +7 range)
-            const int v0_low  = (q0 & 0xF) - 8;
-            const int v0_high = (q0 >> 4) - 8;
-            const int v1_low  = (q1 & 0xF) - 8;
-            const int v1_high = (q1 >> 4) - 8;
-
-#ifdef GGML_SYCL_F16
-            // Load Y pairs and use vectorized half2 multiply-add
-            sycl::half2 y0 = {y[y_base + elem0_low], y[y_base + elem0_high]};
-            sycl::half2 y1 = {y[y_base + elem1_low], y[y_base + elem1_high]};
-            sycl::half2 v0 = {(sycl::half)v0_low, (sycl::half)v0_high};
-            sycl::half2 v1 = {(sycl::half)v1_low, (sycl::half)v1_high};
-            block_sum += v0 * y0;
-            block_sum += v1 * y1;
-#else
-            // Scalar path for non-F16 builds
-            block_sum += v0_low  * y[y_base + elem0_low];
-            block_sum += v0_high * y[y_base + elem0_high];
-            block_sum += v1_low  * y[y_base + elem1_low];
-            block_sum += v1_high * y[y_base + elem1_high];
-#endif
+    for (int i = 0; i < ncols; i += iter_stride) {
+        const int col = i + vals_per_iter * lane_id;
+        if (col >= ncols) {
+            continue;
         }
 
-        partial_sum += d * block_sum;
+        const int ib = col / QK4_0;
+        const int iqs = (col % QK4_0) / 2;
+        const int iybs = col - col % QK4_0;
+
+        const int tile = ib / TILE_BLOCKS;
+        const int block_in_tile = ib % TILE_BLOCKS;
+        const int word_idx = iqs / 4;
+        const int byte_in_word = iqs % 4;
+
+        const int64_t row_base = (int64_t)global_row * row_quants_bytes;
+        const int64_t tile_base = row_base + (int64_t)tile * MMVQ_COALESCED_TILE_BYTES;
+        const int64_t qs_offset = tile_base + word_idx * word_stride + block_in_tile * 4 + byte_in_word;
+        const uint8_t qs_byte = x_qs[qs_offset];
+
+        const float d = (float)x_d[global_row * blocks_per_row + ib];
+        const float v0 = (float)((qs_byte & 0xF) - 8);
+        const float v1 = (float)((qs_byte >> 4) - 8);
+
+        partial_sum += d * (v0 * (float)y[iybs + iqs + 0] + v1 * (float)y[iybs + iqs + y_offset]);
     }
 
     // Warp reduction
-#ifdef GGML_SYCL_F16
-    float sum_f32 = partial_sum.x() + partial_sum.y();
-    auto sum = sycl::reduce_over_group(sg, sum_f32, std::plus<>());
-#else
-    auto sum = sycl::reduce_over_group(sg, partial_sum, std::plus<>());
-#endif
+    float sum = partial_sum;
+    const int mask_start = ncols > GGML_SYCL_DMMV_X ? WARP_SIZE >> 1 : WARP_SIZE >> 2;
+    for (int mask = mask_start; mask > 0; mask >>= 1) {
+        sum += dpct::permute_sub_group_by_xor(nd_item.get_sub_group(), sum, mask);
+    }
 
-    if (sg.leader()) {
+    if (lane_id == 0) {
         dst[row] = sum;
     }
+}
+
+// Q4_0 coalesced DMMV with Q8_0-quantized Y (CPU-backend parity)
+static void dequantize_mul_mat_vec_q4_0_coalesced_q8_0(
+    const void * __restrict__ vx,
+    const block_q8_0 * __restrict__ y,
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const int nrows_full, const int row_low,
+    const sycl::nd_item<3> & nd_item)
+{
+    const int row = nd_item.get_group(2) * nd_item.get_local_range(1) +
+                    nd_item.get_local_id(1);
+    const int lane_id = nd_item.get_local_id(2);
+
+    if (row >= nrows) {
+        return;
+    }
+
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
+    const int blocks_per_row = ncols / QK4_0;
+    const int word_stride = TILE_BLOCKS * 4;
+
+    const uint8_t * x_qs = (const uint8_t *)vx;
+    const int row_quants_bytes = ncols / 2;
+    const ggml_half * x_d = (const ggml_half *)((const char *)vx + nrows_full * row_quants_bytes);
+
+    const int global_row = row_low + row;
+    const int row_base = global_row * row_quants_bytes;
+
+    float tmp = 0.0f;
+    for (int block_in_row = lane_id; block_in_row < blocks_per_row; block_in_row += WARP_SIZE) {
+        const int tile = block_in_row / TILE_BLOCKS;
+        const int block_in_tile = block_in_row % TILE_BLOCKS;
+        const int tile_base = row_base + tile * MMVQ_COALESCED_TILE_BYTES;
+
+        int sumi = 0;
+        for (int j = 0; j < QK4_0 / 2; ++j) {
+            const int word_idx = j / 4;
+            const int byte_in_word = j % 4;
+            const int qs_offset = tile_base + word_idx * word_stride + block_in_tile * 4 + byte_in_word;
+            const uint8_t qs_byte = x_qs[qs_offset];
+
+            const int v0 = (qs_byte & 0xF) - 8;
+            const int v1 = (qs_byte >> 4) - 8;
+            const block_q8_0 * y_blk = y + block_in_row;
+            sumi += v0 * y_blk->qs[j];
+            sumi += v1 * y_blk->qs[j + QK4_0 / 2];
+        }
+
+        const int block_idx = global_row * blocks_per_row + block_in_row;
+        const float d = (float)x_d[block_idx];
+        const float yd = (float)y[block_in_row].d;
+        tmp += (float)sumi * d * yd;
+    }
+
+    const int mask_start = ncols > GGML_SYCL_DMMV_X ? WARP_SIZE >> 1 : WARP_SIZE >> 2;
+    for (int mask = mask_start; mask > 0; mask >>= 1) {
+        tmp += dpct::permute_sub_group_by_xor(nd_item.get_sub_group(), tmp, mask);
+    }
+
+    if (lane_id == 0) {
+        dst[row] = tmp;
+    }
+}
+
+static void dequantize_mul_mat_vec_q4_0_sycl_coalesced_q8_0(
+    const void *vx, const block_q8_0 *y, float *dst,
+    const int ncols, const int nrows,
+    const int nrows_full, const int row_low,
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT((ncols / QK4_0) % MMVQ_COALESCED_TILE_BLOCKS == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    stream->submit([&](sycl::handler &cgh) {
+        cgh.parallel_for<class dmmv_q4_0_coalesced_q8_0_kernel>(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec_q4_0_coalesced_q8_0(vx, y, dst, ncols, nrows, nrows_full, row_low, item_ct1);
+            });
+    });
+}
+
+static void dequantize_mul_mat_vec_q4_0_soa_q8_0(
+    const void * __restrict__ vx,
+    const block_q8_0 * __restrict__ y,
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const int64_t d_offset,
+    const int row_low,
+    const sycl::nd_item<3> & item_ct1)
+{
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
+                    item_ct1.get_local_id(1);
+    if (row >= nrows) {
+        return;
+    }
+
+    const int tid = item_ct1.get_local_id(2);
+    const int num_blocks_per_row = ncols / QK4_0;
+    const int global_row = row_low + row;
+    const int ib0 = global_row * num_blocks_per_row;
+
+    const uint8_t * qs_base = static_cast<const uint8_t *>(vx);
+    const ggml_half * d_base = reinterpret_cast<const ggml_half *>(
+        static_cast<const char *>(vx) + d_offset);
+
+    float tmp = 0.0f;
+
+    for (int block_in_row = tid; block_in_row < num_blocks_per_row; block_in_row += WARP_SIZE) {
+        const int block_idx = ib0 + block_in_row;
+        const uint8_t * qs = qs_base + block_idx * (QK4_0 / 2);
+        const block_q8_0 * y_blk = y + block_in_row;
+
+        int sumi = 0;
+        for (int j = 0; j < QK4_0 / 2; ++j) {
+            const uint8_t qs_byte = qs[j];
+            const int v0 = (qs_byte & 0xF) - 8;
+            const int v1 = (qs_byte >> 4) - 8;
+            sumi += v0 * y_blk->qs[j];
+            sumi += v1 * y_blk->qs[j + QK4_0 / 2];
+        }
+
+        const float d = (float)d_base[block_idx];
+        const float yd = (float)y_blk->d;
+        tmp += (float)sumi * d * yd;
+    }
+
+    for (int mask = WARP_SIZE >> 1; mask > 0; mask >>= 1) {
+        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (tid == 0) {
+        dst[row] = tmp;
+    }
+}
+
+static void dequantize_mul_mat_vec_q4_0_sycl_reorder_q8_0(
+    const void *vx, const block_q8_0 *y, float *dst,
+    const int ncols, const int nrows,
+    const int64_t d_offset, const int row_low,
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    stream->submit([&](sycl::handler &cgh) {
+        cgh.parallel_for<class dmmv_q4_0_soa_q8_0_kernel>(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec_q4_0_soa_q8_0(vx, y, dst, ncols, nrows, d_offset, row_low, item_ct1);
+            });
+    });
+}
+
+static void dequantize_mul_mat_vec_q4_0_aos_q8_0(
+    const void * __restrict__ vx,
+    const block_q8_0 * __restrict__ y,
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const sycl::nd_item<3> & item_ct1)
+{
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
+                    item_ct1.get_local_id(1);
+    if (row >= nrows) {
+        return;
+    }
+
+    const int tid = item_ct1.get_local_id(2);
+    const int num_blocks_per_row = ncols / QK4_0;
+    const block_q4_0 * x = (const block_q4_0 *)vx;
+
+    float tmp = 0.0f;
+
+    for (int block_in_row = tid; block_in_row < num_blocks_per_row; block_in_row += WARP_SIZE) {
+        const int block_idx = row * num_blocks_per_row + block_in_row;
+        const block_q4_0 * xb = x + block_idx;
+        const block_q8_0 * y_blk = y + block_in_row;
+
+        int sumi = 0;
+        for (int j = 0; j < QK4_0 / 2; ++j) {
+            const uint8_t qs_byte = xb->qs[j];
+            const int v0 = (qs_byte & 0xF) - 8;
+            const int v1 = (qs_byte >> 4) - 8;
+            sumi += v0 * y_blk->qs[j];
+            sumi += v1 * y_blk->qs[j + QK4_0 / 2];
+        }
+
+        const float d = (float)xb->d;
+        const float yd = (float)y_blk->d;
+        tmp += (float)sumi * d * yd;
+    }
+
+    for (int mask = WARP_SIZE >> 1; mask > 0; mask >>= 1) {
+        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (tid == 0) {
+        dst[row] = tmp;
+    }
+}
+
+static void dequantize_mul_mat_vec_q4_0_sycl_q8_0(
+    const void *vx, const block_q8_0 *y, float *dst,
+    const int ncols, const int nrows,
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    stream->submit([&](sycl::handler &cgh) {
+        cgh.parallel_for<class dmmv_q4_0_aos_q8_0_kernel>(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec_q4_0_aos_q8_0(vx, y, dst, ncols, nrows, item_ct1);
+            });
+    });
+}
+
+static void dequantize_mul_mat_vec_q4_1_q8_1(
+    const void * __restrict__ vx,
+    const block_q8_1 * __restrict__ y,
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const sycl::nd_item<3> & item_ct1)
+{
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
+                    item_ct1.get_local_id(1);
+    if (row >= nrows) {
+        return;
+    }
+
+    const int tid = item_ct1.get_local_id(2);
+    const int blocks_per_row = ncols / QK4_1;
+    const block_q4_1 * x = (const block_q4_1 *)vx;
+
+    float tmp = 0.0f;
+    for (int block_in_row = tid; block_in_row < blocks_per_row; block_in_row += WARP_SIZE) {
+        const int block_idx = row * blocks_per_row + block_in_row;
+        const block_q4_1 * xb = x + block_idx;
+        const block_q8_1 * yb = y + block_in_row;
+
+        int sumi = 0;
+        for (int j = 0; j < QK4_1 / 2; ++j) {
+            const int v0 = (xb->qs[j] & 0xF);
+            const int v1 = (xb->qs[j] >> 4);
+            sumi += v0 * yb->qs[j];
+            sumi += v1 * yb->qs[j + QK4_1 / 2];
+        }
+
+        const ggml_half2 xdm = xb->dm;
+        const ggml_half2 yds = yb->ds;
+        const float xd = (float)xdm.x();
+        const float xm = (float)xdm.y();
+        const float yd = (float)yds.x();
+        const float ys = (float)yds.y();
+        tmp += (xd * yd) * (float)sumi + xm * ys;
+    }
+
+    for (int mask = WARP_SIZE >> 1; mask > 0; mask >>= 1) {
+        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (tid == 0) {
+        dst[row] = tmp;
+    }
+}
+
+static void dequantize_mul_mat_vec_q4_1_sycl_q8_1(
+    const void *vx, const block_q8_1 *y, float *dst,
+    const int ncols, const int nrows,
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    stream->submit([&](sycl::handler &cgh) {
+        cgh.parallel_for<class dmmv_q4_1_aos_q8_1_kernel>(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec_q4_1_q8_1(vx, y, dst, ncols, nrows, item_ct1);
+            });
+    });
+}
+
+static void dequantize_mul_mat_vec_q5_0_q8_0(
+    const void * __restrict__ vx,
+    const block_q8_0 * __restrict__ y,
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const sycl::nd_item<3> & item_ct1)
+{
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
+                    item_ct1.get_local_id(1);
+    if (row >= nrows) {
+        return;
+    }
+
+    const int tid = item_ct1.get_local_id(2);
+    const int blocks_per_row = ncols / QK5_0;
+    const block_q5_0 * x = (const block_q5_0 *)vx;
+
+    float tmp = 0.0f;
+    for (int block_in_row = tid; block_in_row < blocks_per_row; block_in_row += WARP_SIZE) {
+        const int block_idx = row * blocks_per_row + block_in_row;
+        const block_q5_0 * xb = x + block_idx;
+        const block_q8_0 * yb = y + block_in_row;
+
+        uint32_t qh;
+        memcpy(&qh, xb->qh, sizeof(qh));
+
+        int sumi = 0;
+        for (int j = 0; j < QK5_0 / 2; ++j) {
+            const uint8_t xh_0 = ((qh & (1u << (j + 0))) >> (j + 0)) << 4;
+            const uint8_t xh_1 = ((qh & (1u << (j + 16))) >> (j + 12));
+
+            const int x0 = (int8_t)(((xb->qs[j] & 0x0F) | xh_0) - 16);
+            const int x1 = (int8_t)(((xb->qs[j] >> 4) | xh_1) - 16);
+
+            sumi += x0 * yb->qs[j];
+            sumi += x1 * yb->qs[j + QK5_0 / 2];
+        }
+
+        tmp += (float)sumi * (float)xb->d * (float)yb->d;
+    }
+
+    for (int mask = WARP_SIZE >> 1; mask > 0; mask >>= 1) {
+        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (tid == 0) {
+        dst[row] = tmp;
+    }
+}
+
+static void dequantize_mul_mat_vec_q5_0_sycl_q8_0(
+    const void *vx, const block_q8_0 *y, float *dst,
+    const int ncols, const int nrows,
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    stream->submit([&](sycl::handler &cgh) {
+        cgh.parallel_for<class dmmv_q5_0_aos_q8_0_kernel>(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec_q5_0_q8_0(vx, y, dst, ncols, nrows, item_ct1);
+            });
+    });
+}
+
+static void dequantize_mul_mat_vec_q5_1_q8_1(
+    const void * __restrict__ vx,
+    const block_q8_1 * __restrict__ y,
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const sycl::nd_item<3> & item_ct1)
+{
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
+                    item_ct1.get_local_id(1);
+    if (row >= nrows) {
+        return;
+    }
+
+    const int tid = item_ct1.get_local_id(2);
+    const int blocks_per_row = ncols / QK5_1;
+    const block_q5_1 * x = (const block_q5_1 *)vx;
+
+    float tmp = 0.0f;
+    for (int block_in_row = tid; block_in_row < blocks_per_row; block_in_row += WARP_SIZE) {
+        const int block_idx = row * blocks_per_row + block_in_row;
+        const block_q5_1 * xb = x + block_idx;
+        const block_q8_1 * yb = y + block_in_row;
+
+        uint32_t qh;
+        memcpy(&qh, xb->qh, sizeof(qh));
+
+        int sumi = 0;
+        for (int j = 0; j < QK5_1 / 2; ++j) {
+            const uint8_t xh_0 = ((qh >> (j + 0)) << 4) & 0x10;
+            const uint8_t xh_1 = ((qh >> (j + 12))     ) & 0x10;
+
+            const int x0 = (xb->qs[j] & 0xF) | xh_0;
+            const int x1 = (xb->qs[j] >> 4) | xh_1;
+
+            sumi += x0 * yb->qs[j];
+            sumi += x1 * yb->qs[j + QK5_1 / 2];
+        }
+
+        const ggml_half2 xdm = xb->dm;
+        const ggml_half2 yds = yb->ds;
+        const float xd = (float)xdm.x();
+        const float xm = (float)xdm.y();
+        const float yd = (float)yds.x();
+        const float ys = (float)yds.y();
+        tmp += (xd * yd) * (float)sumi + xm * ys;
+    }
+
+    for (int mask = WARP_SIZE >> 1; mask > 0; mask >>= 1) {
+        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (tid == 0) {
+        dst[row] = tmp;
+    }
+}
+
+static void dequantize_mul_mat_vec_q5_1_sycl_q8_1(
+    const void *vx, const block_q8_1 *y, float *dst,
+    const int ncols, const int nrows,
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    stream->submit([&](sycl::handler &cgh) {
+        cgh.parallel_for<class dmmv_q5_1_aos_q8_1_kernel>(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec_q5_1_q8_1(vx, y, dst, ncols, nrows, item_ct1);
+            });
+    });
+}
+
+static void dequantize_mul_mat_vec_q8_0_q8_0_aos(
+    const void * __restrict__ vx,
+    const block_q8_0 * __restrict__ y,
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const sycl::nd_item<3> & item_ct1)
+{
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
+                    item_ct1.get_local_id(1);
+    if (row >= nrows) {
+        return;
+    }
+
+    const int tid = item_ct1.get_local_id(2);
+    const int blocks_per_row = ncols / QK8_0;
+    const block_q8_0 * x = (const block_q8_0 *)vx;
+
+    float tmp = 0.0f;
+    for (int block_in_row = tid; block_in_row < blocks_per_row; block_in_row += WARP_SIZE) {
+        const int block_idx = row * blocks_per_row + block_in_row;
+        const block_q8_0 * xb = x + block_idx;
+        const block_q8_0 * yb = y + block_in_row;
+
+        int sumi = 0;
+        for (int j = 0; j < QK8_0; ++j) {
+            sumi += xb->qs[j] * yb->qs[j];
+        }
+
+        tmp += (float)sumi * (float)xb->d * (float)yb->d;
+    }
+
+    for (int mask = WARP_SIZE >> 1; mask > 0; mask >>= 1) {
+        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (tid == 0) {
+        dst[row] = tmp;
+    }
+}
+
+static void dequantize_mul_mat_vec_q8_0_sycl_q8_0(
+    const void *vx, const block_q8_0 *y, float *dst,
+    const int ncols, const int nrows,
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    stream->submit([&](sycl::handler &cgh) {
+        cgh.parallel_for<class dmmv_q8_0_aos_q8_0_kernel>(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec_q8_0_q8_0_aos(vx, y, dst, ncols, nrows, item_ct1);
+            });
+    });
+}
+
+static void dequantize_mul_mat_vec_q8_0_q8_0_soa(
+    const void * __restrict__ vx,
+    const block_q8_0 * __restrict__ y,
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const int64_t d_offset,
+    const int row_low,
+    const sycl::nd_item<3> & item_ct1)
+{
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
+                    item_ct1.get_local_id(1);
+    if (row >= nrows) {
+        return;
+    }
+
+    const int tid = item_ct1.get_local_id(2);
+    const int num_blocks_per_row = ncols / QK8_0;
+    const int global_row = row_low + row;
+    const int ib0 = global_row * num_blocks_per_row;
+
+    const int8_t * qs_base = static_cast<const int8_t *>(vx);
+    const ggml_half * d_base = reinterpret_cast<const ggml_half *>(
+        static_cast<const char *>(vx) + d_offset);
+
+    float tmp = 0.0f;
+    for (int block_in_row = tid; block_in_row < num_blocks_per_row; block_in_row += WARP_SIZE) {
+        const int block_idx = ib0 + block_in_row;
+        const int8_t * qs = qs_base + block_idx * QK8_0;
+        const block_q8_0 * yb = y + block_in_row;
+
+        int sumi = 0;
+        for (int j = 0; j < QK8_0; ++j) {
+            sumi += (int)qs[j] * yb->qs[j];
+        }
+
+        tmp += (float)sumi * (float)d_base[block_idx] * (float)yb->d;
+    }
+
+    for (int mask = WARP_SIZE >> 1; mask > 0; mask >>= 1) {
+        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (tid == 0) {
+        dst[row] = tmp;
+    }
+}
+
+static void dequantize_mul_mat_vec_q8_0_sycl_reorder_q8_0(
+    const void *vx, const block_q8_0 *y, float *dst,
+    const int ncols, const int nrows,
+    const int64_t d_offset, const int row_low,
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    stream->submit([&](sycl::handler &cgh) {
+        cgh.parallel_for<class dmmv_q8_0_soa_q8_0_kernel>(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec_q8_0_q8_0_soa(vx, y, dst, ncols, nrows, d_offset, row_low, item_ct1);
+            });
+    });
+}
+
+static void dequantize_mul_mat_vec_q8_0_q8_0_coalesced(
+    const void * __restrict__ vx,
+    const block_q8_0 * __restrict__ y,
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const int nrows_full, const int row_low,
+    const sycl::nd_item<3> & nd_item)
+{
+    const int row = nd_item.get_group(2) * nd_item.get_local_range(1) +
+                    nd_item.get_local_id(1);
+    const int lane_id = nd_item.get_local_id(2);
+
+    if (row >= nrows) {
+        return;
+    }
+
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
+    const int blocks_per_row = ncols / QK8_0;
+    const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
+    const int word_stride = TILE_BLOCKS * 4;
+
+    const uint8_t * x_qs = (const uint8_t *)vx;
+    const int x_row_stride = ncols;
+    const ggml_half * x_d = (const ggml_half *)((const char *)vx + nrows_full * x_row_stride);
+
+    float partial_sum = 0.0f;
+
+    for (int tile = 0; tile < tiles_per_row; tile++) {
+        const int tile_base = row * x_row_stride + tile * MMVQ_COALESCED_TILE_BYTES_Q8_0;
+
+        for (int block_in_tile = lane_id; block_in_tile < TILE_BLOCKS; block_in_tile += WARP_SIZE) {
+            const int block_idx = (row_low + row) * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
+            const float d = (float)x_d[block_idx];
+
+            const int y_block = tile * TILE_BLOCKS + block_in_tile;
+            const block_q8_0 * yb = y + y_block;
+
+            int sumi = 0;
+            for (int word = 0; word < 8; ++word) {
+                const int word_offset = word * word_stride + block_in_tile * 4;
+                const uint8_t * word_ptr = x_qs + tile_base + word_offset;
+                sumi += ((int8_t)word_ptr[0]) * yb->qs[word * 4 + 0];
+                sumi += ((int8_t)word_ptr[1]) * yb->qs[word * 4 + 1];
+                sumi += ((int8_t)word_ptr[2]) * yb->qs[word * 4 + 2];
+                sumi += ((int8_t)word_ptr[3]) * yb->qs[word * 4 + 3];
+            }
+
+            partial_sum += (float)sumi * d * (float)yb->d;
+        }
+    }
+
+    float sum = partial_sum;
+    for (int mask = WARP_SIZE >> 1; mask > 0; mask >>= 1) {
+        sum += dpct::permute_sub_group_by_xor(nd_item.get_sub_group(), sum, mask);
+    }
+
+    if (lane_id == 0) {
+        dst[row] = sum;
+    }
+}
+
+static void dequantize_mul_mat_vec_q8_0_sycl_coalesced_q8_0(
+    const void *vx, const block_q8_0 *y, float *dst,
+    const int ncols, const int nrows,
+    const int nrows_full, const int row_low,
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT((ncols / QK8_0) % MMVQ_COALESCED_TILE_BLOCKS == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    stream->submit([&](sycl::handler &cgh) {
+        cgh.parallel_for<class dmmv_q8_0_coalesced_q8_0_kernel>(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec_q8_0_q8_0_coalesced(vx, y, dst, ncols, nrows, nrows_full, row_low, item_ct1);
+            });
+    });
 }
 
 // Dispatch function for coalesced Q4_0 DMMV with slicing support
@@ -708,6 +1345,306 @@ static void dequantize_mul_mat_vec_q4_0_sycl_coalesced(
                 dequantize_mul_mat_vec_q4_0_coalesced(vx, y, dst, ncols, nrows, nrows_full, row_low, item_ct1);
             });
     });
+}
+
+// Coalesced DMMV kernel for Q8_0
+// Matches the coalesced MMVQ layout: word w of block b at tile_offset + w*stride + b*4
+// Scales are after all quants, block-sequential (not coalesced)
+static void dequantize_mul_mat_vec_q8_0_coalesced(
+    const void * __restrict__ vx,
+    const dfloat * __restrict__ y,
+    float * __restrict__ dst,
+    const int ncols, const int nrows,
+    const int nrows_full, const int row_low,
+    const sycl::nd_item<3> & nd_item)
+{
+    const int row = nd_item.get_group(2) * nd_item.get_local_range(1) +
+                    nd_item.get_local_id(1);
+    const int lane_id = nd_item.get_local_id(2);
+
+    if (row >= nrows) {
+        return;
+    }
+
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
+    const int blocks_per_row = ncols / QK8_0;
+    const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
+    const int word_stride = TILE_BLOCKS * 4;
+
+    // X base pointers (coalesced layout: quants first, then scales)
+    const uint8_t * x_qs = (const uint8_t *)vx;
+    const int x_row_stride = ncols;  // bytes per row of quants
+
+    // Scales are after all quants in the FULL tensor
+    const sycl::half * x_d = (const sycl::half *)((const char *)vx + nrows_full * x_row_stride);
+
+    float partial_sum = 0.0f;
+
+    for (int tile = 0; tile < tiles_per_row; tile++) {
+        const int tile_base = row * x_row_stride + tile * MMVQ_COALESCED_TILE_BYTES_Q8_0;
+
+        for (int block_in_tile = lane_id; block_in_tile < TILE_BLOCKS; block_in_tile += WARP_SIZE) {
+            const int block_idx = (row_low + row) * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
+            const float d = (float)x_d[block_idx];
+
+            const int y_base = (tile * TILE_BLOCKS + block_in_tile) * QK8_0;
+
+            uint8_t qs[QK8_0];
+#pragma unroll
+            for (int word = 0; word < 8; ++word) {
+                const int word_offset = word * word_stride + block_in_tile * 4;
+                const uint8_t * word_ptr = x_qs + tile_base + word_offset;
+                qs[word * 4 + 0] = word_ptr[0];
+                qs[word * 4 + 1] = word_ptr[1];
+                qs[word * 4 + 2] = word_ptr[2];
+                qs[word * 4 + 3] = word_ptr[3];
+            }
+
+            float block_sum = 0.0f;
+#pragma unroll
+            for (int j = 0; j < QK8_0; ++j) {
+                block_sum += (float)((int8_t)qs[j]) * (float)y[y_base + j];
+            }
+
+            partial_sum += d * block_sum;
+        }
+    }
+
+    float sum = partial_sum;
+    for (int mask = WARP_SIZE >> 1; mask > 0; mask >>= 1) {
+        sum += dpct::permute_sub_group_by_xor(nd_item.get_sub_group(), sum, mask);
+    }
+
+    if (lane_id == 0) {
+        dst[row] = sum;
+    }
+}
+
+static void dequantize_mul_mat_vec_q8_0_sycl_coalesced(
+    const void *vx, const dfloat *y, float *dst,
+    const int ncols, const int nrows,
+    const int nrows_full, const int row_low,
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT((ncols / QK8_0) % MMVQ_COALESCED_TILE_BLOCKS == 0);
+    const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    stream->submit([&](sycl::handler &cgh) {
+        cgh.parallel_for<class dmmv_q8_0_coalesced_kernel>(
+            sycl::nd_range<3>(block_nums * block_dims, block_dims),
+            [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                dequantize_mul_mat_vec_q8_0_coalesced(vx, y, dst, ncols, nrows, nrows_full, row_low, item_ct1);
+            });
+    });
+}
+
+__dpct_inline__ static uint8_t load_q6k_coalesced_byte(
+    const uint8_t * base,
+    const int64_t tile_base,
+    const int block_in_tile,
+    const int byte_index) {
+    const int word = byte_index / 4;
+    const int byte_in_word = byte_index % 4;
+    const int word_stride = MMVQ_COALESCED_TILE_BLOCKS * 4;
+    const int64_t offset = tile_base + word * word_stride + block_in_tile * 4 + byte_in_word;
+    return base[offset];
+}
+
+static void dequantize_mul_mat_vec_q6_k_coalesced(const void * __restrict__ vx,
+                                                  const float * __restrict__ yy,
+                                                  float * __restrict__ dst,
+                                                  const int ncols, int nrows,
+                                                  const int nrows_full,
+                                                  const int row_low,
+                                                  const sycl::nd_item<3> &item_ct1) {
+    static_assert(16 % K_QUANTS_PER_ITERATION == 0, "16 must be divisible by K_QUANTS_PER_ITERATION");
+
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
+                    item_ct1.get_local_id(1);
+    if (row >= nrows) return;
+
+    const int global_row = row_low + row;
+    const int blocks_per_row = ncols / QK_K;
+    const int tiles_per_row = blocks_per_row / MMVQ_COALESCED_TILE_BLOCKS;
+
+    constexpr int ql_tile_bytes = MMVQ_COALESCED_TILE_BLOCKS * (QK_K / 2);
+    constexpr int qh_tile_bytes = MMVQ_COALESCED_TILE_BLOCKS * (QK_K / 4);
+    constexpr int sc_tile_bytes = MMVQ_COALESCED_TILE_BLOCKS * (QK_K / 16);
+    constexpr int tile_total = ql_tile_bytes + qh_tile_bytes + sc_tile_bytes;
+
+    const uint8_t * base = static_cast<const uint8_t *>(vx);
+    const int64_t tile_row_base = static_cast<int64_t>(global_row) * tiles_per_row * tile_total;
+    const int64_t d_offset = static_cast<int64_t>(nrows_full) * tiles_per_row * tile_total;
+    const sycl::half * d_base = reinterpret_cast<const sycl::half *>(base + d_offset);
+
+#if QK_K == 256
+    const int tid = item_ct1.get_local_id(2) / K_QUANTS_PER_ITERATION;
+    const int ix = item_ct1.get_local_id(2) % K_QUANTS_PER_ITERATION;
+
+    const int step = 16 / K_QUANTS_PER_ITERATION;
+
+    const int im = tid / step;
+    const int in = tid - step * im;
+
+#if K_QUANTS_PER_ITERATION == 1
+    const int l0 = K_QUANTS_PER_ITERATION * in;
+    const int is = 0;
+#else
+    const int l0 = 4 * in;
+    const int is = in / 4;
+#endif
+    const int ql_offset_local = 64 * im + l0;
+    const int qh_offset_local = 32 * im + l0;
+    const int s_offset = 8 * im + is;
+    const int y_offset = 128 * im + l0;
+
+    float tmp = 0.0f;
+
+    for (int i = ix; i < blocks_per_row; i += K_QUANTS_PER_ITERATION) {
+        const int tile = i / MMVQ_COALESCED_TILE_BLOCKS;
+        const int block_in_tile = i % MMVQ_COALESCED_TILE_BLOCKS;
+        const int64_t ql_tile_base = tile_row_base + tile * tile_total;
+        const int64_t qh_tile_base = ql_tile_base + ql_tile_bytes;
+        const int64_t sc_tile_base = qh_tile_base + qh_tile_bytes;
+
+        const int block_idx = global_row * blocks_per_row + i;
+        const float d = static_cast<float>(d_base[block_idx]);
+        const float * y = yy + i * QK_K + y_offset;
+
+#if K_QUANTS_PER_ITERATION == 1
+        const uint8_t ql0 = load_q6k_coalesced_byte(base, ql_tile_base, block_in_tile, ql_offset_local + 0);
+        const uint8_t ql1 = load_q6k_coalesced_byte(base, ql_tile_base, block_in_tile, ql_offset_local + 16);
+        const uint8_t ql2 = load_q6k_coalesced_byte(base, ql_tile_base, block_in_tile, ql_offset_local + 32);
+        const uint8_t ql3 = load_q6k_coalesced_byte(base, ql_tile_base, block_in_tile, ql_offset_local + 48);
+
+        const uint8_t qh0 = load_q6k_coalesced_byte(base, qh_tile_base, block_in_tile, qh_offset_local + 0);
+        const uint8_t qh1 = load_q6k_coalesced_byte(base, qh_tile_base, block_in_tile, qh_offset_local + 16);
+
+        const int8_t s0 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, s_offset + 0));
+        const int8_t s1 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, s_offset + 1));
+        const int8_t s2 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, s_offset + 2));
+        const int8_t s3 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, s_offset + 3));
+        const int8_t s4 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, s_offset + 4));
+        const int8_t s5 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, s_offset + 5));
+        const int8_t s6 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, s_offset + 6));
+        const int8_t s7 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, s_offset + 7));
+
+        int8_t q0 = (int8_t)((ql0 & 0xF) | ((qh0 & 0x03) << 4)) - 32;
+        int8_t q1 = (int8_t)((ql1 & 0xF) | ((qh1 & 0x03) << 4)) - 32;
+        int8_t q2 = (int8_t)((ql2 & 0xF) | ((qh0 & 0x0c) << 2)) - 32;
+        int8_t q3 = (int8_t)((ql3 & 0xF) | ((qh1 & 0x0c) << 2)) - 32;
+        int8_t q4 = (int8_t)((ql0 >> 4) | ((qh0 & 0x30) >> 0)) - 32;
+        int8_t q5 = (int8_t)((ql1 >> 4) | ((qh1 & 0x30) >> 0)) - 32;
+        int8_t q6 = (int8_t)((ql2 >> 4) | ((qh0 & 0xc0) >> 2)) - 32;
+        int8_t q7 = (int8_t)((ql3 >> 4) | ((qh1 & 0xc0) >> 2)) - 32;
+
+        float sum = y[ 0] * s0 * d * q0
+                  + y[16] * s1 * d * q1
+                  + y[32] * s2 * d * q2
+                  + y[48] * s3 * d * q3
+                  + y[64] * s4 * d * q4
+                  + y[80] * s5 * d * q5
+                  + y[96] * s6 * d * q6
+                  + y[112] * s7 * d * q7;
+
+        tmp += sum;
+#else
+        float sum = 0.0f;
+        for (int l = 0; l < 4; ++l) {
+            const int ql0_idx = ql_offset_local + l;
+            const int ql1_idx = ql_offset_local + l + 32;
+            const int qh_idx = qh_offset_local + l;
+
+            const uint8_t ql0 = load_q6k_coalesced_byte(base, ql_tile_base, block_in_tile, ql0_idx);
+            const uint8_t ql1 = load_q6k_coalesced_byte(base, ql_tile_base, block_in_tile, ql1_idx);
+            const uint8_t qh = load_q6k_coalesced_byte(base, qh_tile_base, block_in_tile, qh_idx);
+
+            int8_t q0 = (int8_t)((ql0 & 0xF) | (((qh >> 0) & 3) << 4)) - 32;
+            int8_t q1 = (int8_t)((ql1 & 0xF) | (((qh >> 2) & 3) << 4)) - 32;
+            int8_t q2 = (int8_t)((ql0 >> 4) | (((qh >> 4) & 3) << 4)) - 32;
+            int8_t q3 = (int8_t)((ql1 >> 4) | (((qh >> 6) & 3) << 4)) - 32;
+
+            const int s_base = s_offset;
+            const int8_t s0 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, s_base + 0));
+            const int8_t s2 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, s_base + 2));
+            const int8_t s4 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, s_base + 4));
+            const int8_t s6 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, s_base + 6));
+
+            sum += y[l +  0] * s0 * d * q0
+                 + y[l + 32] * s2 * d * q1
+                 + y[l + 64] * s4 * d * q2
+                 + y[l + 96] * s6 * d * q3;
+        }
+        tmp += sum;
+#endif
+    }
+#else
+    const int tid = item_ct1.get_local_id(2) / (2 * K_QUANTS_PER_ITERATION);
+    const int ix = item_ct1.get_local_id(2) % (2 * K_QUANTS_PER_ITERATION);
+    const int step = tid * K_QUANTS_PER_ITERATION;
+
+    float tmp = 0.0f;
+    for (int i = ix; i < blocks_per_row; i += 2 * K_QUANTS_PER_ITERATION) {
+        const int tile = i / MMVQ_COALESCED_TILE_BLOCKS;
+        const int block_in_tile = i % MMVQ_COALESCED_TILE_BLOCKS;
+        const int64_t ql_tile_base = tile_row_base + tile * tile_total;
+        const int64_t qh_tile_base = ql_tile_base + ql_tile_bytes;
+        const int64_t sc_tile_base = qh_tile_base + qh_tile_bytes;
+
+        const int block_idx = global_row * blocks_per_row + i;
+        const float d = static_cast<float>(d_base[block_idx]);
+        const float * y = yy + i * QK_K + step;
+
+        float sum = 0.0f;
+        for (int j = 0; j < K_QUANTS_PER_ITERATION; ++j) {
+            const int ql0_idx = step + j;
+            const int ql1_idx = step + j + 16;
+            const int qh_idx = step + j;
+
+            const uint8_t ql0 = load_q6k_coalesced_byte(base, ql_tile_base, block_in_tile, ql0_idx);
+            const uint8_t ql1 = load_q6k_coalesced_byte(base, ql_tile_base, block_in_tile, ql1_idx);
+            const uint8_t qh = load_q6k_coalesced_byte(base, qh_tile_base, block_in_tile, qh_idx);
+
+            const int8_t s0 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, 0));
+            const int8_t s1 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, 1));
+            const int8_t s2 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, 2));
+            const int8_t s3 = static_cast<int8_t>(load_q6k_coalesced_byte(base, sc_tile_base, block_in_tile, 3));
+
+            sum += y[j +  0] * s0 * d * ((int8_t)((ql0 & 0xF) | ((qh & 0x03) << 4)) - 32)
+                 + y[j + 16] * s1 * d * ((int8_t)((ql1 & 0xF) | ((qh & 0x0c) << 2)) - 32)
+                 + y[j + 32] * s2 * d * ((int8_t)((ql0 >> 4) | ((qh & 0x30) >> 0)) - 32)
+                 + y[j + 48] * s3 * d * ((int8_t)((ql1 >> 4) | ((qh & 0xc0) >> 2)) - 32);
+        }
+        tmp += sum;
+    }
+#endif
+
+    for (int mask = QK_WARP_SIZE / 2; mask > 0; mask >>= 1) {
+        tmp += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
+    }
+
+    if (item_ct1.get_local_id(2) == 0) {
+        dst[row] = tmp;
+    }
+}
+
+static void dequantize_mul_mat_vec_q6_K_sycl_coalesced(
+    const void * vx, const float * y, float * dst,
+    const int ncols, const int nrows,
+    const int nrows_full, const int row_low,
+    dpct::queue_ptr stream) {
+    GGML_ASSERT((ncols / QK_K) % MMVQ_COALESCED_TILE_BLOCKS == 0);
+    const int ny = 2 / K_QUANTS_PER_ITERATION;
+    const int block_num_y = (nrows + ny - 1) / ny;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, ny, QK_WARP_SIZE);
+    stream->parallel_for(
+        sycl::nd_range<3>(block_nums * block_dims, block_dims),
+        [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(QK_WARP_SIZE)]] {
+            dequantize_mul_mat_vec_q6_k_coalesced(vx, y, dst, ncols, nrows, nrows_full, row_low, item_ct1);
+        });
 }
 
 static void convert_mul_mat_vec_f16_sycl(const void *vx, const dfloat *y,
@@ -1932,138 +2869,87 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                 // Both should be the same pointer, but src0 is passed directly from the graph node
                 ggml_tensor_extra_gpu* extra = (ggml_tensor_extra_gpu*)src0->extra;
                 reorder_mode mode = extra ? extra->optimized_feature.get_reorder() : reorder_mode::NONE;
-                bool esimd_enabled = dmmv_esimd_enabled();
-
                 // Unconditional debug for AOS path investigation
                 static int q4_0_dispatch_count = 0;
                 if (std::getenv("GGML_SYCL_AOS_DEBUG") && q4_0_dispatch_count++ < 50) {
-                    fprintf(stderr, "[Q4_0_DISPATCH] #%d tensor=%s mode=%d esimd=%d ne00=%lld row_diff=%lld extra=%p src0_dd_i=%p\n",
-                            q4_0_dispatch_count, src0->name ? src0->name : "?", (int)mode, esimd_enabled,
+                    fprintf(stderr, "[Q4_0_DISPATCH] #%d tensor=%s mode=%d ne00=%lld row_diff=%lld extra=%p src0_dd_i=%p\n",
+                            q4_0_dispatch_count, src0->name ? src0->name : "?", (int)mode,
                             (long long)ne00, (long long)row_diff, (void*)extra, (void*)src0_dd_i);
                     fflush(stderr);
                 }
 
-                if (mode == reorder_mode::COALESCED) {
-                    // Coalesced layout: tile-based memory layout for perfect cache line utilization
-                    const int64_t ne01 = src0->ne[1];  // full tensor rows
-                    GGML_SYCL_KTRACE("dmmv_q4_0_coalesced", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld",
-                                     (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
-                    dequantize_mul_mat_vec_q4_0_sycl_coalesced(src0_dd_i, src1_dfloat,
-                                                               dst_dd_i, ne00, row_diff, ne01, row_low, stream);
-                } else if (mode == reorder_mode::SOA) {
-                    // Standard SoA layout: all qs contiguous, then all d values
-                    // CRITICAL: Must use storage tensor dimensions for offset calculation, not view dimensions
-                    // SoA layout is NOT sliceable - the d values are stored after ALL qs in the storage tensor
-                    const ggml_tensor * storage = get_storage_tensor(src0);
-                    const int64_t storage_ne01 = storage->ne[1];  // storage tensor rows (not view rows!)
-                    const int64_t ncols = storage->ne[0];
-                    // Q4_0: explicit nblocks pattern (matches Q6_K)
-                    const int64_t nblocks = storage_ne01 * (ncols / QK4_0);
-                    const int64_t total_qs_bytes = nblocks * (QK4_0 / 2);  // 16 bytes per block
-                    const int64_t d_offset = total_qs_bytes;
-
-                    // Get storage tensor base pointer
-                    const void * storage_base = ggml_sycl_get_data_ptr(storage, ctx.device);
-
-                    // Calculate global row_low: row_low is relative to src0, need to add view offset
-                    int64_t view_row_offset = 0;
-                    if (src0->view_src != nullptr) {
-                        // src0 is a view - calculate its row offset within storage
-                        // Use nb[1] (row stride) to calculate row offset from byte offset
-                        view_row_offset = src0->view_offs / src0->nb[1];
+                if (std::getenv("GGML_SYCL_MMQ_DEBUG")) {
+                    static int q4_0_mode_debug = 0;
+                    if (q4_0_mode_debug++ < 10) {
+                        fprintf(stderr, "[DMMV] Q4_0 reorder mode=%d (0=NONE,1=SOA,2=COALESCED)\n",
+                                (int)mode);
                     }
-                    const int global_row_low = row_low + view_row_offset;
+                }
 
-                    GGML_SYCL_KTRACE("dmmv_q4_0_soa_reorder", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld d_offset=%lld",
-                                     (long long)ne00, (long long)row_diff, (long long)storage_ne01, (long long)global_row_low, (long long)d_offset);
-                    dequantize_mul_mat_vec_q4_0_sycl_reorder(storage_base, src1_dfloat, dst_dd_i, ne00, row_diff, d_offset, global_row_low, stream);
-                } else if (esimd_enabled) {
-                    GGML_SYCL_KTRACE("dmmv_q4_0_esimd", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-                    bool launched = launch_dmmv_q4_0_esimd(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, *stream);
-                    if (!launched) {
-                        GGML_SYCL_KTRACE("dmmv_q4_0_aos_fallback", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-                        dequantize_mul_mat_vec_q4_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
-                    }
-                } else {
-                    GGML_SYCL_KTRACE("dmmv_q4_0_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+                {
+                    block_q8_0 * src1_q8 = ggml_sycl_get_q8_0_cache(ne00, ctx.device, stream);
+                    quantize_row_q8_0_sycl(src1_ddf_i, src1_q8, ne00, 1, ne00, stream);
+                    stream->wait();
 
-                    // Manual AoS debug - only enabled with specific env var to avoid crashes
-                    if (std::getenv("GGML_SYCL_AOS_DEBUG")) {
-                        static int aos_manual_debug = 0;
-                        if (aos_manual_debug++ < 30) {
-                            stream->wait();
-                            // Read first 2 blocks (36 bytes each for block_q4_0 = 18 bytes)
-                            uint8_t h_blocks[36];  // 2 blocks * 18 bytes
-                            stream->memcpy(h_blocks, src0_dd_i, 36).wait();
+                    if (mode == reorder_mode::COALESCED) {
+                        const int64_t ne01 = src0->ne[1];
+                        GGML_SYCL_KTRACE("dmmv_q4_0_coalesced_q8_0", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld",
+                                         (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
+                        dequantize_mul_mat_vec_q4_0_sycl_coalesced_q8_0(src0_dd_i, src1_q8,
+                                                                       dst_dd_i, ne00, row_diff, ne01, row_low, stream);
+                    } else if (mode == reorder_mode::SOA) {
+                        const ggml_tensor * storage = get_storage_tensor(src0);
+                        const int64_t storage_ne01 = storage->ne[1];
+                        const int64_t ncols = storage->ne[0];
+                        const int64_t nblocks = storage_ne01 * (ncols / QK4_0);
+                        const int64_t total_qs_bytes = nblocks * (QK4_0 / 2);
+                        const int64_t d_offset = total_qs_bytes;
 
-                            fprintf(stderr, "[QDEBUG][dmmv_q4_0_aos_MANUAL] #%d src0_dd_i=%p ne00=%lld row_diff=%lld\n",
-                                    aos_manual_debug, (void*)src0_dd_i, (long long)ne00, (long long)row_diff);
-                            fprintf(stderr, "[QDEBUG][dmmv_q4_0_aos_MANUAL] Row 0 manual dequantize:\n");
-                            for (int blk = 0; blk < 2; blk++) {
-                                uint8_t* block = h_blocks + blk * 18;
-                                // block_q4_0: d (2 bytes fp16), then qs (16 bytes)
-                                sycl::half d_half;
-                                memcpy(&d_half, block, 2);
-                                float d = (float)d_half;
-                                uint8_t* qs = block + 2;
+                        const void * storage_base = ggml_sycl_get_data_ptr(storage, ctx.device);
 
-                                fprintf(stderr, "  Block %d: d=%.6g, qs_bytes=[%02x %02x %02x %02x]\n",
-                                        blk, d, qs[0], qs[1], qs[2], qs[3]);
-                                fprintf(stderr, "    Dequantized: ");
-                                for (int i = 0; i < 4; i++) {
-                                    uint8_t byte = qs[i];
-                                    float v0 = ((byte & 0xF) - 8) * d;
-                                    float v1 = ((byte >> 4) - 8) * d;
-                                    fprintf(stderr, "%.4g %.4g ", v0, v1);
-                                }
-                                fprintf(stderr, "\n");
-                            }
-                            fflush(stderr);
+                        int64_t view_row_offset = 0;
+                        if (src0->view_src != nullptr) {
+                            view_row_offset = src0->view_offs / src0->nb[1];
                         }
-                    }
+                        const int global_row_low = row_low + view_row_offset;
 
-                    // DEBUG: Check y input values and kernel output - only for TEST8_WEIGHT
-                    bool is_test8 = src0->name && strstr(src0->name, "TEST8");
-                    if (std::getenv("GGML_SYCL_AOS_DEBUG") && is_test8) {
-                        stream->wait();
-                        // Read first 8 y values
-                        float h_y[8];
-                        stream->memcpy(h_y, src1_dfloat, 8 * sizeof(float)).wait();
-                        fprintf(stderr, "[TEST8_KERNEL] Before kernel: y[0..7] = [%.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f]\n",
-                                h_y[0], h_y[1], h_y[2], h_y[3], h_y[4], h_y[5], h_y[6], h_y[7]);
-                        fprintf(stderr, "[TEST8_KERNEL] Tensor: %s, ne00=%lld, row_diff=%lld\n",
-                                src0->name, (long long)ne00, (long long)row_diff);
-                        fflush(stderr);
-                    }
-
-                    dequantize_mul_mat_vec_q4_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
-
-                    // DEBUG: Check kernel output - only for TEST8_WEIGHT
-                    if (std::getenv("GGML_SYCL_AOS_DEBUG") && is_test8) {
-                        stream->wait();
-                        // Read first 8 output values
-                        float h_dst[8];
-                        stream->memcpy(h_dst, dst_dd_i, 8 * sizeof(float)).wait();
-                        fprintf(stderr, "[TEST8_KERNEL] After kernel: dst[0..7] = [%.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f]\n",
-                                h_dst[0], h_dst[1], h_dst[2], h_dst[3], h_dst[4], h_dst[5], h_dst[6], h_dst[7]);
-                        fprintf(stderr, "[TEST8_KERNEL] Expected per row: %d blocks * 32 values * 7.0 = %.0f\n",
-                                (int)(ne00 / 32), (float)(ne00 / 32) * 32 * 7.0f);
-                        fflush(stderr);
+                        GGML_SYCL_KTRACE("dmmv_q4_0_soa_q8_0", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld d_offset=%lld",
+                                         (long long)ne00, (long long)row_diff, (long long)storage_ne01, (long long)global_row_low, (long long)d_offset);
+                        dequantize_mul_mat_vec_q4_0_sycl_reorder_q8_0(storage_base, src1_q8, dst_dd_i,
+                                                                     ne00, row_diff, d_offset, global_row_low, stream);
+                    } else {
+                        GGML_SYCL_KTRACE("dmmv_q4_0_aos_q8_0", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+                        dequantize_mul_mat_vec_q4_0_sycl_q8_0(src0_dd_i, src1_q8, dst_dd_i, ne00, row_diff, stream);
                     }
                 }
             }
             break;
         case GGML_TYPE_Q4_1:
-            GGML_SYCL_KTRACE("dmmv_q4_1", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-            dequantize_mul_mat_vec_q4_1_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            {
+                block_q8_1 * src1_q8 = ggml_sycl_get_q8_1_cache(ne00, ctx.device, stream);
+                quantize_row_q8_1_sycl<quantize_q8_1>(src1_ddf_i, src1_q8, ne00, 1, ne00, stream);
+                stream->wait();
+                GGML_SYCL_KTRACE("dmmv_q4_1_q8_1", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+                dequantize_mul_mat_vec_q4_1_sycl_q8_1(src0_dd_i, src1_q8, dst_dd_i, ne00, row_diff, stream);
+            }
             break;
         case GGML_TYPE_Q5_0:
-            GGML_SYCL_KTRACE("dmmv_q5_0", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-            dequantize_mul_mat_vec_q5_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            {
+                block_q8_0 * src1_q8 = ggml_sycl_get_q8_0_cache(ne00, ctx.device, stream);
+                quantize_row_q8_0_sycl(src1_ddf_i, src1_q8, ne00, 1, ne00, stream);
+                stream->wait();
+                GGML_SYCL_KTRACE("dmmv_q5_0_q8_0", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+                dequantize_mul_mat_vec_q5_0_sycl_q8_0(src0_dd_i, src1_q8, dst_dd_i, ne00, row_diff, stream);
+            }
             break;
         case GGML_TYPE_Q5_1:
-            GGML_SYCL_KTRACE("dmmv_q5_1", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-            dequantize_mul_mat_vec_q5_1_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            {
+                block_q8_1 * src1_q8 = ggml_sycl_get_q8_1_cache(ne00, ctx.device, stream);
+                quantize_row_q8_1_sycl<quantize_q8_1>(src1_ddf_i, src1_q8, ne00, 1, ne00, stream);
+                stream->wait();
+                GGML_SYCL_KTRACE("dmmv_q5_1_q8_1", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+                dequantize_mul_mat_vec_q5_1_sycl_q8_1(src0_dd_i, src1_q8, dst_dd_i, ne00, row_diff, stream);
+            }
             break;
         case GGML_TYPE_Q8_0:
             {
@@ -2073,11 +2959,21 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
 
                 // DEBUG: Track SoA dispatch for Q8_0
                 if (g_ggml_sycl_debug) {
-                    fprintf(stderr, "[DMMV-Q8_0-DBG] src0='%s' extra=%p mode=%d (0=NONE,1=SOA)\n",
+                    fprintf(stderr, "[DMMV-Q8_0-DBG] src0='%s' extra=%p mode=%d (0=NONE,1=SOA,2=COALESCED)\n",
                             src0->name ? src0->name : "?", extra, (int)mode);
                 }
 
-                if (mode == reorder_mode::SOA) {
+                block_q8_0 * src1_q8 = ggml_sycl_get_q8_0_cache(ne00, ctx.device, stream);
+                quantize_row_q8_0_sycl(src1_ddf_i, src1_q8, ne00, 1, ne00, stream);
+                stream->wait();
+
+                if (mode == reorder_mode::COALESCED) {
+                    const int64_t ne01 = src0->ne[1];
+                    GGML_SYCL_KTRACE("dmmv_q8_0_coalesced_q8_0", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld",
+                                     (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
+                    dequantize_mul_mat_vec_q8_0_sycl_coalesced_q8_0(src0_dd_i, src1_q8,
+                                                                   dst_dd_i, ne00, row_diff, ne01, row_low, stream);
+                } else if (mode == reorder_mode::SOA) {
                     // Q8_0 SoA layout: [all qs: nblocks * 32 bytes][all d: nblocks * 2 bytes]
                     // CRITICAL: Must use storage tensor dimensions for offset calculation, not view dimensions
                     const ggml_tensor * storage = get_storage_tensor(src0);
@@ -2100,12 +2996,13 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                     }
                     const int global_row_low = row_low + view_row_offset;
 
-                    GGML_SYCL_KTRACE("dmmv_q8_0_soa", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld d_offset=%lld",
+                    GGML_SYCL_KTRACE("dmmv_q8_0_soa_q8_0", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld d_offset=%lld",
                                      (long long)ne00, (long long)row_diff, (long long)storage_ne01, (long long)global_row_low, (long long)d_offset);
-                    dequantize_mul_mat_vec_q8_0_sycl_reorder(storage_base, src1_dfloat, dst_dd_i, ne00, row_diff, d_offset, global_row_low, stream);
+                    dequantize_mul_mat_vec_q8_0_sycl_reorder_q8_0(storage_base, src1_q8, dst_dd_i,
+                                                                  ne00, row_diff, d_offset, global_row_low, stream);
                 } else {
-                    GGML_SYCL_KTRACE("dmmv_q8_0_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-                    dequantize_mul_mat_vec_q8_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+                    GGML_SYCL_KTRACE("dmmv_q8_0_aos_q8_0", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+                    dequantize_mul_mat_vec_q8_0_sycl_q8_0(src0_dd_i, src1_q8, dst_dd_i, ne00, row_diff, stream);
                 }
             }
             break;
@@ -2139,7 +3036,23 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                 ggml_tensor_extra_gpu* extra = (ggml_tensor_extra_gpu*)src0->extra;
                 reorder_mode mode = extra ? extra->optimized_feature.get_reorder() : reorder_mode::NONE;
 
-                if (mode == reorder_mode::SOA) {
+                if (mode == reorder_mode::COALESCED) {
+                    const ggml_tensor * storage = get_storage_tensor(src0);
+                    const int64_t storage_ne01 = storage->ne[1];
+
+                    const void * storage_base = ggml_sycl_get_data_ptr(storage, ctx.device);
+
+                    int64_t view_row_offset = 0;
+                    if (src0->view_src != nullptr) {
+                        view_row_offset = src0->view_offs / src0->nb[1];
+                    }
+                    const int global_row_low = row_low + view_row_offset;
+
+                    GGML_SYCL_KTRACE("dmmv_q6_k_coalesced", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld",
+                                     (long long)ne00, (long long)row_diff, (long long)storage_ne01, (long long)global_row_low);
+                    dequantize_mul_mat_vec_q6_K_sycl_coalesced(storage_base, src1_ddf_i, dst_dd_i,
+                                                              ne00, row_diff, storage_ne01, global_row_low, stream);
+                } else if (mode == reorder_mode::SOA) {
                     // Q6_K SoA layout: [all ql] [all qh] [all scales] [all d]
                     // CRITICAL: Must use storage tensor dimensions for offset calculation, not view dimensions
                     const ggml_tensor * storage = get_storage_tensor(src0);
