@@ -539,14 +539,9 @@ static void convert_unary_sycl(const void * vx, dst_t * y, const int64_t k, dpct
 //   Blocks are stored contiguously: [block0][block1]...[blockN]
 //
 // Output layout (Coalesced):
-//   Tiles of WARP_SIZE (32) blocks where:
-//   - qs bytes are interleaved: byte[i] of block[b] at offset [tile * 512 + i * 32 + b]
-//   - d values grouped after qs: [tile * (512 + 64) + 512 + b * 2]
-//
-//   This ensures thread t accesses consecutive memory addresses:
-//   Thread 0: bytes 0, 32, 64, ...
-//   Thread 1: bytes 1, 33, 65, ...
-//   etc.
+//   Tiles of MMVQ_COALESCED_TILE_BLOCKS blocks where:
+//   - qs bytes are word-major: word w of block b at offset [row_base + tile * tile_qs_bytes + w*stride + b*4]
+//   - d values are stored AFTER ALL quants, block-sequential
 // =============================================================================
 
 // GPU kernel for Q4_0 AoS to Coalesced conversion
@@ -557,42 +552,47 @@ static void reorder_q4_0_aos_to_coalesced_kernel(
     const int nrows,
     const sycl::nd_item<2> & item)
 {
-    constexpr int TILE_BLOCKS = WARP_SIZE;  // 32 blocks per tile
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
     constexpr int QS_BYTES_PER_BLOCK = QK4_0 / 2;  // 16 bytes of qs per block
     constexpr int D_BYTES_PER_BLOCK = sizeof(sycl::half);  // 2 bytes for scale
+    constexpr int WORDS_PER_BLOCK = 4;
+    constexpr int WORD_PLANE_STRIDE = TILE_BLOCKS * 4;
 
     const int row = item.get_global_id(0);
-    const int tid = item.get_local_id(1);      // 0-31 within tile (thread in warp)
+    const int tid = item.get_local_id(1);      // thread within tile (warp lane)
     const int tile = item.get_group(1);        // Which tile
 
     if (row >= nrows) return;
 
-    const int block_idx = tile * TILE_BLOCKS + tid;
-    if (block_idx >= blocks_per_row) return;
+    // Layout sizes
+    constexpr int qs_bytes_per_tile = TILE_BLOCKS * QS_BYTES_PER_BLOCK;
 
-    // Source: AoS layout - each block_q4_0 is 18 bytes
-    const block_q4_0 * src_block = &src[row * blocks_per_row + block_idx];
-
-    // Calculate tile dimensions
-    const int tiles_per_row = (blocks_per_row + TILE_BLOCKS - 1) / TILE_BLOCKS;
-    constexpr int qs_bytes_per_tile = TILE_BLOCKS * QS_BYTES_PER_BLOCK;  // 512 bytes
-    constexpr int d_bytes_per_tile = TILE_BLOCKS * D_BYTES_PER_BLOCK;    // 64 bytes
-    constexpr int bytes_per_tile = qs_bytes_per_tile + d_bytes_per_tile; // 576 bytes
+    const int64_t row_quants_bytes = (int64_t)blocks_per_row * QS_BYTES_PER_BLOCK;
+    const int64_t total_quants_bytes = (int64_t)nrows * row_quants_bytes;
 
     // Destination offsets - use int64_t to avoid overflow for large tensors
-    const int64_t row_offset = (int64_t)row * tiles_per_row * bytes_per_tile;
-    const int64_t tile_qs_base = row_offset + (int64_t)tile * bytes_per_tile;
-    const int64_t tile_d_base = tile_qs_base + qs_bytes_per_tile;
+    const int64_t row_offset = (int64_t)row * row_quants_bytes;
+    const int64_t tile_qs_base = row_offset + (int64_t)tile * qs_bytes_per_tile;
+    const int64_t d_base = total_quants_bytes;
 
-    // Copy qs bytes - interleaved by thread index for coalesced access
-    // Thread tid writes its 16 qs bytes at positions [i * 32 + tid] for i in [0,15]
-    for (int i = 0; i < QS_BYTES_PER_BLOCK; i++) {
-        dst[tile_qs_base + i * TILE_BLOCKS + tid] = src_block->qs[i];
+    for (int block_in_tile = tid; block_in_tile < TILE_BLOCKS; block_in_tile += WARP_SIZE) {
+        const int block_idx = tile * TILE_BLOCKS + block_in_tile;
+        if (block_idx >= blocks_per_row) {
+            continue;
+        }
+
+        // Source: AoS layout - each block_q4_0 is 18 bytes
+        const block_q4_0 * src_block = &src[row * blocks_per_row + block_idx];
+
+        // Copy qs bytes in word-major order
+        for (int word = 0; word < WORDS_PER_BLOCK; ++word) {
+            const int64_t word_offset = tile_qs_base + word * WORD_PLANE_STRIDE + block_in_tile * 4;
+            memcpy(dst + word_offset, src_block->qs + word * 4, 4);
+        }
+
+        // Copy d value (scale) - contiguous after all quants
+        *(sycl::half *)(dst + d_base + ((int64_t)row * blocks_per_row + block_idx) * D_BYTES_PER_BLOCK) = src_block->d;
     }
-
-    // Copy d value (scale) - grouped at end of tile
-    // Thread tid writes its d at position [tile_d_base + tid * 2]
-    *(sycl::half *)(dst + tile_d_base + tid * D_BYTES_PER_BLOCK) = src_block->d;
 }
 
 // Host function to launch Q4_0 AoS to Coalesced reorder
@@ -607,21 +607,450 @@ void reorder_q4_0_aos_to_coalesced_sycl(
 
     const int blocks_per_row = ne00 / QK4_0;
     const int nrows = ne01;
-    const int tiles_per_row = (blocks_per_row + WARP_SIZE - 1) / WARP_SIZE;
+    const int tiles_per_row = (blocks_per_row + MMVQ_COALESCED_TILE_BLOCKS - 1) / MMVQ_COALESCED_TILE_BLOCKS;
+    const size_t total_blocks = (size_t)blocks_per_row * (size_t)nrows;
+    const size_t total_bytes = total_blocks * sizeof(block_q4_0);
 
-    // Launch kernel: one work-item per block, organized into warp-sized tiles
-    stream->parallel_for(
-        sycl::nd_range<2>(
-            sycl::range<2>(nrows, tiles_per_row * WARP_SIZE),
-            sycl::range<2>(1, WARP_SIZE)),
-        [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            reorder_q4_0_aos_to_coalesced_kernel(
-                (const block_q4_0 *)src,
-                (uint8_t *)dst,
-                blocks_per_row,
-                nrows,
-                item);
+    // Always use a temp buffer to support in-place conversion safely
+    uint8_t * temp = sycl::malloc_device<uint8_t>(total_bytes, *stream);
+    sycl::event copy_event = stream->memcpy(temp, src, total_bytes);
+
+    sycl::event convert_event = stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(copy_event);
+        cgh.parallel_for(
+            sycl::nd_range<2>(
+                sycl::range<2>(nrows, tiles_per_row * WARP_SIZE),
+                sycl::range<2>(1, WARP_SIZE)),
+            [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                reorder_q4_0_aos_to_coalesced_kernel(
+                    (const block_q4_0 *)temp,
+                    (uint8_t *)dst,
+                    blocks_per_row,
+                    nrows,
+                    item);
+            });
+    });
+
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(convert_event);
+        cgh.host_task([temp, stream]() {
+            sycl::free(temp, *stream);
         });
+    });
+}
+
+// =============================================================================
+// Q8_0 COALESCED REORDER KERNEL (AoS → Coalesced)
+// =============================================================================
+
+static void reorder_q8_0_aos_to_coalesced_kernel(
+    const block_q8_0 * __restrict__ src,
+    uint8_t * __restrict__ dst,
+    const int blocks_per_row,
+    const int nrows,
+    const sycl::nd_item<2> & item)
+{
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
+    constexpr int QS_BYTES_PER_BLOCK = QK8_0;  // 32 bytes
+    constexpr int D_BYTES_PER_BLOCK = sizeof(sycl::half);
+    constexpr int WORDS_PER_BLOCK = 8;
+    constexpr int WORD_PLANE_STRIDE = TILE_BLOCKS * 4;
+
+    const int row = item.get_global_id(0);
+    const int tid = item.get_local_id(1);
+    const int tile = item.get_group(1);
+
+    if (row >= nrows) return;
+
+    const int64_t row_quants_bytes = (int64_t)blocks_per_row * QS_BYTES_PER_BLOCK;
+    const int64_t total_quants_bytes = (int64_t)nrows * row_quants_bytes;
+    const int64_t tile_qs_base = (int64_t)row * row_quants_bytes +
+                                 (int64_t)tile * (TILE_BLOCKS * QS_BYTES_PER_BLOCK);
+
+    for (int block_in_tile = tid; block_in_tile < TILE_BLOCKS; block_in_tile += WARP_SIZE) {
+        const int block_idx = tile * TILE_BLOCKS + block_in_tile;
+        if (block_idx >= blocks_per_row) {
+            continue;
+        }
+
+        const block_q8_0 * src_block = &src[row * blocks_per_row + block_idx];
+
+        // Copy qs bytes in word-major order
+        for (int word = 0; word < WORDS_PER_BLOCK; ++word) {
+            const int64_t word_offset = tile_qs_base + word * WORD_PLANE_STRIDE + block_in_tile * 4;
+            memcpy(dst + word_offset, src_block->qs + word * 4, 4);
+        }
+
+        // Copy d value after all quants
+        *(sycl::half *)(dst + total_quants_bytes + ((int64_t)row * blocks_per_row + block_idx) * D_BYTES_PER_BLOCK) =
+            src_block->d;
+    }
+}
+
+void reorder_q8_0_aos_to_coalesced_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,
+    int64_t ne01,
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT(ne00 % QK8_0 == 0);
+    GGML_ASSERT((ne00 / QK8_0) % MMVQ_COALESCED_TILE_BLOCKS == 0);
+
+    const int blocks_per_row = ne00 / QK8_0;
+    const int nrows = ne01;
+    const int tiles_per_row = blocks_per_row / MMVQ_COALESCED_TILE_BLOCKS;
+    const size_t total_blocks = (size_t)blocks_per_row * (size_t)nrows;
+    const size_t total_bytes = total_blocks * sizeof(block_q8_0);
+
+    uint8_t * temp = sycl::malloc_device<uint8_t>(total_bytes, *stream);
+    sycl::event copy_event = stream->memcpy(temp, src, total_bytes);
+
+    sycl::event convert_event = stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(copy_event);
+        cgh.parallel_for(
+            sycl::nd_range<2>(
+                sycl::range<2>(nrows, tiles_per_row * WARP_SIZE),
+                sycl::range<2>(1, WARP_SIZE)),
+            [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                reorder_q8_0_aos_to_coalesced_kernel(
+                    (const block_q8_0 *)temp,
+                    (uint8_t *)dst,
+                    blocks_per_row,
+                    nrows,
+                    item);
+            });
+    });
+
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(convert_event);
+        cgh.host_task([temp, stream]() {
+            sycl::free(temp, *stream);
+        });
+    });
+}
+
+// =============================================================================
+// MXFP4 COALESCED REORDER KERNEL (AoS → Coalesced)
+// =============================================================================
+
+static void reorder_mxfp4_aos_to_coalesced_kernel(
+    const block_mxfp4 * __restrict__ src,
+    uint8_t * __restrict__ dst,
+    const int blocks_per_row,
+    const int nrows,
+    const sycl::nd_item<2> & item)
+{
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
+    constexpr int QS_BYTES_PER_BLOCK = QK_MXFP4 / 2;  // 16 bytes
+    constexpr int WORDS_PER_BLOCK = 4;
+    constexpr int WORD_PLANE_STRIDE = TILE_BLOCKS * 4;
+
+    const int row = item.get_global_id(0);
+    const int tid = item.get_local_id(1);
+    const int tile = item.get_group(1);
+
+    if (row >= nrows) return;
+
+    const int64_t row_quants_bytes = (int64_t)blocks_per_row * QS_BYTES_PER_BLOCK;
+    const int64_t total_quants_bytes = (int64_t)nrows * row_quants_bytes;
+    const int64_t tile_qs_base = (int64_t)row * row_quants_bytes +
+                                 (int64_t)tile * (TILE_BLOCKS * QS_BYTES_PER_BLOCK);
+
+    for (int block_in_tile = tid; block_in_tile < TILE_BLOCKS; block_in_tile += WARP_SIZE) {
+        const int block_idx = tile * TILE_BLOCKS + block_in_tile;
+        if (block_idx >= blocks_per_row) {
+            continue;
+        }
+
+        const block_mxfp4 * src_block = &src[row * blocks_per_row + block_idx];
+
+        // Copy qs bytes in word-major order
+        for (int word = 0; word < WORDS_PER_BLOCK; ++word) {
+            const int64_t word_offset = tile_qs_base + word * WORD_PLANE_STRIDE + block_in_tile * 4;
+            memcpy(dst + word_offset, src_block->qs + word * 4, 4);
+        }
+
+        // Copy exponent after all quants
+        dst[total_quants_bytes + (int64_t)row * blocks_per_row + block_idx] = src_block->e;
+    }
+}
+
+void reorder_mxfp4_aos_to_coalesced_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,
+    int64_t ne01,
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT(ne00 % QK_MXFP4 == 0);
+    GGML_ASSERT((ne00 / QK_MXFP4) % MMVQ_COALESCED_TILE_BLOCKS == 0);
+
+    const int blocks_per_row = ne00 / QK_MXFP4;
+    const int nrows = ne01;
+    const int tiles_per_row = blocks_per_row / MMVQ_COALESCED_TILE_BLOCKS;
+    const size_t total_blocks = (size_t)blocks_per_row * (size_t)nrows;
+    const size_t total_bytes = total_blocks * sizeof(block_mxfp4);
+
+    uint8_t * temp = sycl::malloc_device<uint8_t>(total_bytes, *stream);
+    sycl::event copy_event = stream->memcpy(temp, src, total_bytes);
+
+    sycl::event convert_event = stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(copy_event);
+        cgh.parallel_for(
+            sycl::nd_range<2>(
+                sycl::range<2>(nrows, tiles_per_row * WARP_SIZE),
+                sycl::range<2>(1, WARP_SIZE)),
+            [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                reorder_mxfp4_aos_to_coalesced_kernel(
+                    (const block_mxfp4 *)temp,
+                    (uint8_t *)dst,
+                    blocks_per_row,
+                    nrows,
+                    item);
+            });
+    });
+
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(convert_event);
+        cgh.host_task([temp, stream]() {
+            sycl::free(temp, *stream);
+        });
+    });
+}
+
+// =============================================================================
+// Q6_K COALESCED REORDER KERNEL (AoS → Coalesced)
+// =============================================================================
+
+static void reorder_q6_k_aos_to_coalesced_kernel(
+    const block_q6_K * __restrict__ src,
+    uint8_t * __restrict__ dst,
+    const int blocks_per_row,
+    const int nrows,
+    const int tiles_per_row,
+    const sycl::nd_item<2> & item)
+{
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
+    constexpr int WORD_PLANE_STRIDE = TILE_BLOCKS * 4;
+    constexpr int QL_WORDS = (QK_K / 2) / 4;   // 32 words
+    constexpr int QH_WORDS = (QK_K / 4) / 4;   // 16 words
+    constexpr int SC_WORDS = (QK_K / 16) / 4;  // 4 words
+
+    constexpr int QL_TILE_BYTES = TILE_BLOCKS * (QK_K / 2);
+    constexpr int QH_TILE_BYTES = TILE_BLOCKS * (QK_K / 4);
+    constexpr int SC_TILE_BYTES = TILE_BLOCKS * (QK_K / 16);
+    constexpr int TILE_TOTAL = QL_TILE_BYTES + QH_TILE_BYTES + SC_TILE_BYTES;
+
+    const int row = item.get_global_id(0);
+    const int tid = item.get_local_id(1);
+    const int tile = item.get_group(1);
+
+    if (row >= nrows) return;
+
+    const int64_t row_quants_bytes = (int64_t)tiles_per_row * TILE_TOTAL;
+    const int64_t total_quants_bytes = (int64_t)nrows * row_quants_bytes;
+
+    const int64_t tile_base = (int64_t)row * row_quants_bytes + (int64_t)tile * TILE_TOTAL;
+    const int64_t ql_base = tile_base;
+    const int64_t qh_base = ql_base + QL_TILE_BYTES;
+    const int64_t sc_base = qh_base + QH_TILE_BYTES;
+
+    for (int block_in_tile = tid; block_in_tile < TILE_BLOCKS; block_in_tile += WARP_SIZE) {
+        const int block_idx = tile * TILE_BLOCKS + block_in_tile;
+        if (block_idx >= blocks_per_row) {
+            continue;
+        }
+
+        const block_q6_K * src_block = &src[row * blocks_per_row + block_idx];
+
+        // ql (128 bytes)
+        for (int word = 0; word < QL_WORDS; ++word) {
+            const int64_t dst_offset = ql_base + word * WORD_PLANE_STRIDE + block_in_tile * 4;
+            memcpy(dst + dst_offset, src_block->ql + word * 4, 4);
+        }
+
+        // qh (64 bytes)
+        for (int word = 0; word < QH_WORDS; ++word) {
+            const int64_t dst_offset = qh_base + word * WORD_PLANE_STRIDE + block_in_tile * 4;
+            memcpy(dst + dst_offset, src_block->qh + word * 4, 4);
+        }
+
+        // scales (16 bytes)
+        for (int word = 0; word < SC_WORDS; ++word) {
+            const int64_t dst_offset = sc_base + word * WORD_PLANE_STRIDE + block_in_tile * 4;
+            memcpy(dst + dst_offset, src_block->scales + word * 4, 4);
+        }
+
+        // d after all quants
+        *(sycl::half *)(dst + total_quants_bytes + ((int64_t)row * blocks_per_row + block_idx) * sizeof(sycl::half)) =
+            src_block->d;
+    }
+}
+
+void reorder_q6_k_aos_to_coalesced_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,
+    int64_t ne01,
+    dpct::queue_ptr stream)
+{
+    GGML_ASSERT(ne00 % QK_K == 0);
+    GGML_ASSERT((ne00 / QK_K) % MMVQ_COALESCED_TILE_BLOCKS == 0);
+
+    const int blocks_per_row = ne00 / QK_K;
+    const int nrows = ne01;
+    const int tiles_per_row = blocks_per_row / MMVQ_COALESCED_TILE_BLOCKS;
+    const size_t total_blocks = (size_t)blocks_per_row * (size_t)nrows;
+    const size_t total_bytes = total_blocks * sizeof(block_q6_K);
+
+    uint8_t * temp = sycl::malloc_device<uint8_t>(total_bytes, *stream);
+    sycl::event copy_event = stream->memcpy(temp, src, total_bytes);
+
+    sycl::event convert_event = stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(copy_event);
+        cgh.parallel_for(
+            sycl::nd_range<2>(
+                sycl::range<2>(nrows, tiles_per_row * WARP_SIZE),
+                sycl::range<2>(1, WARP_SIZE)),
+            [=](sycl::nd_item<2> item) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                reorder_q6_k_aos_to_coalesced_kernel(
+                    (const block_q6_K *)temp,
+                    (uint8_t *)dst,
+                    blocks_per_row,
+                    nrows,
+                    tiles_per_row,
+                    item);
+            });
+    });
+
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.depends_on(convert_event);
+        cgh.host_task([temp, stream]() {
+            sycl::free(temp, *stream);
+        });
+    });
+}
+
+// =============================================================================
+// AoS -> SoA conversion (direct, non-coalesced)
+// =============================================================================
+
+void reorder_q4_0_aos_to_soa_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,
+    int64_t ne01,
+    dpct::queue_ptr stream) {
+    GGML_ASSERT(ne00 % QK4_0 == 0);
+    const int64_t blocks_per_row = ne00 / QK4_0;
+    const int64_t nblocks = blocks_per_row * ne01;
+
+    const block_q4_0 * x = (const block_q4_0 *)src;
+    uint8_t * qs_ptr = (uint8_t *)dst;
+    sycl::half * d_ptr = (sycl::half *)(qs_ptr + nblocks * (QK4_0 / 2));
+
+    stream->parallel_for(nblocks, [=](auto i) {
+        const int64_t ib = i;
+        for (int j = 0; j < QK4_0 / 2; ++j) {
+            qs_ptr[ib * (QK4_0 / 2) + j] = x[ib].qs[j];
+        }
+        d_ptr[ib] = x[ib].d;
+    });
+}
+
+void reorder_q8_0_aos_to_soa_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,
+    int64_t ne01,
+    dpct::queue_ptr stream) {
+    GGML_ASSERT(ne00 % QK8_0 == 0);
+    const int64_t blocks_per_row = ne00 / QK8_0;
+    const int64_t nblocks = blocks_per_row * ne01;
+
+    const block_q8_0 * x = (const block_q8_0 *)src;
+    uint8_t * qs_ptr = (uint8_t *)dst;
+    sycl::half * d_ptr = (sycl::half *)(qs_ptr + nblocks * QK8_0);
+
+    stream->parallel_for(nblocks, [=](auto i) {
+        const int64_t ib = i;
+        for (int j = 0; j < QK8_0; ++j) {
+            qs_ptr[ib * QK8_0 + j] = x[ib].qs[j];
+        }
+        d_ptr[ib] = x[ib].d;
+    });
+}
+
+void reorder_q4_k_aos_to_soa_sycl(
+    const void * src,
+    void * dst,
+    int64_t nblocks,
+    dpct::queue_ptr stream) {
+    const block_q4_K * x = (const block_q4_K *)src;
+    uint8_t * qs_ptr = (uint8_t *)dst;
+    uint8_t * scales_ptr = qs_ptr + (QK_K / 2) * nblocks;
+    sycl::half2 * dm_ptr = (sycl::half2 *)(scales_ptr + K_SCALE_SIZE * nblocks);
+
+    stream->parallel_for(nblocks, [=](auto i) {
+        const int64_t ib = i;
+        for (int j = 0; j < QK_K / 2; ++j) {
+            qs_ptr[ib * (QK_K / 2) + j] = x[ib].qs[j];
+        }
+        for (int j = 0; j < K_SCALE_SIZE; ++j) {
+            scales_ptr[ib * K_SCALE_SIZE + j] = x[ib].scales[j];
+        }
+        dm_ptr[ib] = x[ib].dm;
+    });
+}
+
+void reorder_q6_k_aos_to_soa_sycl(
+    const void * src,
+    void * dst,
+    int64_t nblocks,
+    dpct::queue_ptr stream) {
+    const block_q6_K * x = (const block_q6_K *)src;
+    uint8_t * ql_ptr = (uint8_t *)dst;
+    uint8_t * qh_ptr = ql_ptr + (QK_K / 2) * nblocks;
+    uint8_t * scales_ptr = qh_ptr + (QK_K / 4) * nblocks;
+    sycl::half * d_ptr = (sycl::half *)(scales_ptr + (QK_K / 16) * nblocks);
+
+    stream->parallel_for(nblocks, [=](auto i) {
+        const int64_t ib = i;
+        for (int j = 0; j < QK_K / 2; ++j) {
+            ql_ptr[ib * (QK_K / 2) + j] = x[ib].ql[j];
+        }
+        for (int j = 0; j < QK_K / 4; ++j) {
+            qh_ptr[ib * (QK_K / 4) + j] = x[ib].qh[j];
+        }
+        for (int j = 0; j < QK_K / 16; ++j) {
+            scales_ptr[ib * (QK_K / 16) + j] = x[ib].scales[j];
+        }
+        d_ptr[ib] = x[ib].d;
+    });
+}
+
+void reorder_mxfp4_aos_to_soa_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,
+    int64_t ne01,
+    dpct::queue_ptr stream) {
+    GGML_ASSERT(ne00 % QK_MXFP4 == 0);
+    const int64_t blocks_per_row = ne00 / QK_MXFP4;
+    const int64_t nblocks = blocks_per_row * ne01;
+
+    const block_mxfp4 * x = (const block_mxfp4 *)src;
+    uint8_t * qs_ptr = (uint8_t *)dst;
+    uint8_t * e_ptr = qs_ptr + nblocks * (QK_MXFP4 / 2);
+
+    stream->parallel_for(nblocks, [=](auto i) {
+        const int64_t ib = i;
+        for (int j = 0; j < QK_MXFP4 / 2; ++j) {
+            qs_ptr[ib * (QK_MXFP4 / 2) + j] = x[ib].qs[j];
+        }
+        e_ptr[ib] = x[ib].e;
+    });
 }
 
 // =============================================================================
@@ -638,9 +1067,11 @@ static void reorder_q4_0_coalesced_to_soa_kernel(
     const int nrows,
     const sycl::nd_item<2> & item)
 {
-    constexpr int TILE_BLOCKS = WARP_SIZE;
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
     constexpr int QS_BYTES_PER_BLOCK = QK4_0 / 2;
     constexpr int D_BYTES_PER_BLOCK = sizeof(sycl::half);
+    constexpr int WORDS_PER_BLOCK = 4;
+    constexpr int WORD_PLANE_STRIDE = TILE_BLOCKS * 4;
 
     const int row = item.get_global_id(0);
     const int tid = item.get_local_id(1);
@@ -648,32 +1079,32 @@ static void reorder_q4_0_coalesced_to_soa_kernel(
 
     if (row >= nrows) return;
 
-    const int block_idx = tile * TILE_BLOCKS + tid;
-    if (block_idx >= blocks_per_row) return;
+    // Coalesced layout: all quants first, then all d values
+    const int64_t row_quants_bytes = (int64_t)blocks_per_row * QS_BYTES_PER_BLOCK;
+    const int64_t total_quants_bytes = (int64_t)nrows * row_quants_bytes;
+    const int64_t tile_qs_base = (int64_t)row * row_quants_bytes +
+                                 (int64_t)tile * (TILE_BLOCKS * QS_BYTES_PER_BLOCK);
 
-    // Calculate tile dimensions (same as forward conversion)
-    const int tiles_per_row = (blocks_per_row + TILE_BLOCKS - 1) / TILE_BLOCKS;
-    constexpr int qs_bytes_per_tile = TILE_BLOCKS * QS_BYTES_PER_BLOCK;
-    constexpr int d_bytes_per_tile = TILE_BLOCKS * D_BYTES_PER_BLOCK;
-    constexpr int bytes_per_tile = qs_bytes_per_tile + d_bytes_per_tile;
+    for (int block_in_tile = tid; block_in_tile < TILE_BLOCKS; block_in_tile += WARP_SIZE) {
+        const int block_idx = tile * TILE_BLOCKS + block_in_tile;
+        if (block_idx >= blocks_per_row) {
+            continue;
+        }
 
-    // Source offsets (coalesced layout) - use int64_t to avoid overflow
-    const int64_t row_offset = (int64_t)row * tiles_per_row * bytes_per_tile;
-    const int64_t tile_qs_base = row_offset + (int64_t)tile * bytes_per_tile;
-    const int64_t tile_d_base = tile_qs_base + qs_bytes_per_tile;
+        // Destination: SoA layout - use int64_t for offsets
+        // qs: all quants contiguous, then all d values
+        const int64_t dst_qs_offset = (int64_t)row * blocks_per_row * QS_BYTES_PER_BLOCK + block_idx * QS_BYTES_PER_BLOCK;
+        const int64_t dst_d_idx = (int64_t)row * blocks_per_row + block_idx;
 
-    // Destination: SoA layout - use int64_t for offsets
-    // qs: all quants contiguous, then all d values
-    const int64_t dst_qs_offset = (int64_t)row * blocks_per_row * QS_BYTES_PER_BLOCK + block_idx * QS_BYTES_PER_BLOCK;
-    const int64_t dst_d_idx = (int64_t)row * blocks_per_row + block_idx;
+        // Read word-major qs and write to contiguous SoA
+        for (int word = 0; word < WORDS_PER_BLOCK; ++word) {
+            const int64_t word_offset = tile_qs_base + word * WORD_PLANE_STRIDE + block_in_tile * 4;
+            memcpy(dst_qs + dst_qs_offset + word * 4, src + word_offset, 4);
+        }
 
-    // Read interleaved qs and write to contiguous SoA
-    for (int i = 0; i < QS_BYTES_PER_BLOCK; i++) {
-        dst_qs[dst_qs_offset + i] = src[tile_qs_base + i * TILE_BLOCKS + tid];
+        // Read d value and write to d array
+        dst_d[dst_d_idx] = *(const sycl::half *)(src + total_quants_bytes + dst_d_idx * D_BYTES_PER_BLOCK);
     }
-
-    // Read d value and write to d array
-    dst_d[dst_d_idx] = *(const sycl::half *)(src + tile_d_base + tid * D_BYTES_PER_BLOCK);
 }
 
 // Host function to launch Q4_0 Coalesced to SoA conversion
@@ -688,7 +1119,7 @@ void reorder_q4_0_coalesced_to_soa_sycl(
 
     const int blocks_per_row = ne00 / QK4_0;
     const int nrows = ne01;
-    const int tiles_per_row = (blocks_per_row + WARP_SIZE - 1) / WARP_SIZE;
+    const int tiles_per_row = (blocks_per_row + MMVQ_COALESCED_TILE_BLOCKS - 1) / MMVQ_COALESCED_TILE_BLOCKS;
 
     // SoA layout: qs bytes first, then d values
     uint8_t * dst_qs = (uint8_t *)dst;
