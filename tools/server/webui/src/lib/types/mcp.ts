@@ -75,4 +75,10 @@ export type MCPServerSettingsEntry = {
 	enabled: boolean;
 	url: string;
 	requestTimeoutSeconds: number;
+	/** Optional custom HTTP headers (JSON string of key-value pairs). */
+	headers?: string;
+	/** Server name from metadata (fetched during health check). */
+	name?: string;
+	/** Server icon URL from metadata (fetched during health check). */
+	iconUrl?: string;
 };
