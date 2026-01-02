@@ -3789,14 +3789,14 @@ static void test_template_output_peg_parsers() {
 
         // Test basic message and reasoning_effort = low
         test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input = "<|begin|>assistant<|content|>Hello, world!\nWhat's up?";
+            t.input = "<|content|>Hello, world!\nWhat's up?";
             t.params.chat_template_kwargs["reasoning_effort"] = "\"low\"";
             t.expect = message_assist;
         });
 
         // Test tool call
         test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input = "<|begin|>assistant<|tool_calls|>"
+            t.input = "<|tool_calls|>"
                       "<|tool_call:begin|>123456789"
                       "<|tool_call:name|>special_function"
                       "<|tool_call:args|>{\"arg1\":1}"
@@ -3836,7 +3836,7 @@ static void test_template_output_peg_parsers() {
 
         // Test tool call without reasoning and tool_choice = required
         test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input = "<|begin|>assistant<|tool_calls|>"
+            t.input = "<|tool_calls|>"
                       "<|tool_call:begin|>0"
                       "<|tool_call:name|>special_function"
                       "<|tool_call:args|>{\"arg1\":1}"
@@ -3890,7 +3890,7 @@ static void test_template_output_peg_parsers() {
 
         // Test response format no reasoning
         test_peg_parser(tmpls.get(), [&](auto & t) {
-            t.input = "<|begin|>assistant<|content|>"
+            t.input = "<|content|>"
                       R"({"amount": 123.45, "date": "2025-12-03"})";
 
             t.params.chat_template_kwargs["reasoning_effort"] = "\"low\"";

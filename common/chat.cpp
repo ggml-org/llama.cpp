@@ -2568,9 +2568,6 @@ static common_chat_params common_chat_params_init_solar_open(const common_chat_t
         auto lit_end = p.atomic(p.literal("<|end|>"));
         auto parser_until_end = p.until("<|end|>");
 
-        // prefix <- "<|begin|>assistant"?
-        auto parser_prefix = p.optional(lit_assistant_begin);
-
         // reasoning <- "<|think|>" (!"<|end|>" .)*
         auto parser_reasoning = p.rule("reasoning", lit_think + p.reasoning(parser_until_end));
 
@@ -2601,7 +2598,7 @@ static common_chat_params common_chat_params_init_solar_open(const common_chat_t
         // Response format parser
         if (inputs.json_schema.is_object() && !inputs.json_schema.empty()) {
             auto parser_response_format = lit_content + p.content(p.schema(p.json(), "response-format", inputs.json_schema));
-            return parser_prefix + p.choice({
+            return p.choice({
                 wrap_seq({parser_reasoning, parser_response_format}),
                 wrap_seq({parser_response_format})
             });
@@ -2648,7 +2645,7 @@ static common_chat_params common_chat_params_init_solar_open(const common_chat_t
 
             if (min_calls == 1) {
                 // If required, then try any combination of the reasoning, content, and tool call
-                return parser_prefix + p.choice({
+                return p.choice({
                     wrap_seq({parser_reasoning, parser_content, parser_tool_calls}),
                     wrap_seq({parser_reasoning, parser_tool_calls}),
                     wrap_seq({parser_content, parser_tool_calls}),
@@ -2656,12 +2653,12 @@ static common_chat_params common_chat_params_init_solar_open(const common_chat_t
                 });
             }
 
-            return parser_prefix + wrap_choice({parser_reasoning, parser_content, parser_tool_calls});
+            return wrap_choice({parser_reasoning, parser_content, parser_tool_calls});
         }
 
         // Content only parser
         include_grammar = false;
-        return parser_prefix + wrap_choice({parser_reasoning, parser_content});
+        return wrap_choice({parser_reasoning, parser_content});
     });
 
     data.parser = parser.save();
