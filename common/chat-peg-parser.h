@@ -4,6 +4,7 @@
 #include "peg-parser.h"
 
 #include <map>
+#include <optional>
 
 // ============================================================================
 // Base PEG Builder for Chat Parsing
@@ -142,9 +143,12 @@ inline common_peg_arena build_chat_peg_unified_parser(
 // ============================================================================
 
 class common_chat_peg_unified_mapper : public common_chat_peg_mapper {
+    std::optional<common_chat_tool_call> pending_tool_call;  // Tool call waiting for name
     common_chat_tool_call * current_tool        = nullptr;
     int                     arg_count           = 0;
     bool                    needs_closing_quote = false;
+    std::string             args_buffer;  // Buffer to delay arguments until tool name is known
+    bool                    buffer_needs_closing_quote = false;  // Track quote state for buffered args
 
   public:
     common_chat_peg_unified_mapper(common_chat_msg & msg) : common_chat_peg_mapper(msg) {}

@@ -10,6 +10,9 @@
 #include <sstream>
 #include <string>
 
+#include "ggml.h"
+#include "gguf.h"
+
 using json = nlohmann::ordered_json;
 
 // ============================================================================
@@ -55,6 +58,36 @@ static std::string read_file(const std::string & path) {
     std::ostringstream buf;
     buf << fin.rdbuf();
     return buf.str();
+}
+
+static std::string read_gguf_chat_template(const std::string & path) {
+    struct gguf_init_params params = {
+        /*no_alloc =*/  true,  // We only need metadata, not tensor data
+        /*ctx=*/        nullptr
+    };
+
+    struct gguf_context * ctx = gguf_init_from_file(path.c_str(), params);
+    if (ctx == nullptr) {
+        throw std::runtime_error("Could not open GGUF file: " + path);
+    }
+
+    const char * key = "tokenizer.chat_template";
+    int64_t key_id = gguf_find_key(ctx, key);
+
+    if (key_id == -1) {
+        gguf_free(ctx);
+        throw std::runtime_error("GGUF file does not contain chat template key: " + std::string(key));
+    }
+
+    const char * template_str = gguf_get_val_str(ctx, key_id);
+    if (template_str == nullptr) {
+        gguf_free(ctx);
+        throw std::runtime_error("GGUF file contains chat template key but value is null");
+    }
+
+    std::string result = template_str;
+    gguf_free(ctx);
+    return result;
 }
 
 static void print_usage(const char * program_name) {
@@ -373,7 +406,13 @@ int main(int argc, char ** argv) {
 
     std::string template_source;
     try {
-        template_source = read_file(opts.template_path);
+        // Check if the file is a GGUF file
+        if (opts.template_path.size() >= 5 &&
+            opts.template_path.compare(opts.template_path.size() - 5, 5, ".gguf") == 0) {
+            template_source = read_gguf_chat_template(opts.template_path);
+        } else {
+            template_source = read_file(opts.template_path);
+        }
     } catch (const std::exception & e) {
         LOG_ERR("Error reading template: %s\n", e.what());
         return 1;

@@ -556,9 +556,15 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
     bool is_arg_value  = node.tag == common_chat_peg_unified_builder::TOOL_ARG_VALUE;
 
     if (is_tool_open) {
-        result.tool_calls.emplace_back();
-        current_tool = &result.tool_calls.back();
+        // Don't create tool call yet - wait for name to be known
+        // This prevents sending incomplete tool calls in streaming mode
+        pending_tool_call = common_chat_tool_call();
+        current_tool = &pending_tool_call.value();
         arg_count    = 0;
+        // Clear the arguments buffer for the new tool
+        args_buffer.clear();
+        needs_closing_quote = false;
+        buffer_needs_closing_quote = false;
     }
 
     if (is_tool_id && current_tool) {
@@ -571,9 +577,19 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
 
     if (is_tool_name && current_tool) {
         current_tool->name = std::string(trim_trailing_space(node.text));
-        // Initialize arguments if we're using tagged format
-        if (current_tool->arguments.empty()) {
+        // Now that we have the name, we can populate the arguments from the buffer
+        if (!args_buffer.empty()) {
+            current_tool->arguments = args_buffer;
+            args_buffer.clear();
+        } else if (current_tool->arguments.empty()) {
+            // Initialize arguments if we're using tagged format and no buffered args
             current_tool->arguments = "{";
+        }
+        // Now that we have the name, add the tool call to the result
+        if (pending_tool_call.has_value()) {
+            result.tool_calls.push_back(pending_tool_call.value());
+            pending_tool_call.reset();
+            current_tool = &result.tool_calls.back();
         }
     }
 
@@ -583,21 +599,42 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
         // Check if this looks like JSON (starts with {) vs tagged format (starts with <)
         auto text = trim_trailing_space(node.text);
         if (!text.empty() && text.front() == '{') {
-            current_tool->arguments = std::string(text);
+            // If we have the tool name, populate directly; otherwise buffer
+            if (!current_tool->name.empty()) {
+                current_tool->arguments = std::string(text);
+            } else {
+                args_buffer = std::string(text);
+            }
         }
         // If it's tagged format, we ignore this and let arg_name/arg_value build up the JSON
     }
 
     if (is_arg_open) {
-        needs_closing_quote = false;
+        // Reset for new argument
+        if (!current_tool->name.empty()) {
+            needs_closing_quote = false;
+        } else {
+            buffer_needs_closing_quote = false;
+        }
     }
 
     if (is_arg_name && current_tool) {
+        std::string arg_entry;
         if (arg_count > 0) {
-            current_tool->arguments += ",";
+            arg_entry = ",";
         }
-        current_tool->arguments += json(trim_trailing_space(node.text)).dump() + ":";
+        arg_entry += json(trim_trailing_space(node.text)).dump() + ":";
         ++arg_count;
+
+        // If we have the tool name, add directly; otherwise buffer
+        if (!current_tool->name.empty()) {
+            current_tool->arguments += arg_entry;
+        } else {
+            if (args_buffer.empty()) {
+                args_buffer = "{";
+            }
+            args_buffer += arg_entry;
+        }
     }
 
     if (is_arg_value && current_tool) {
@@ -623,6 +660,7 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
             value_content.pop_back();
         }
 
+        std::string value_to_add;
         if (!value_content.empty()) {
             // Try to parse as JSON value (number, bool, null, object, array)
             // For strings, we need special handling to support incremental parsing
@@ -636,18 +674,29 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
                     if (!escaped.empty() && escaped.back() == '"') {
                         escaped.pop_back();
                     }
-                    current_tool->arguments += escaped;
-                    needs_closing_quote = true;
+                    value_to_add = escaped;
+                    if (!current_tool->name.empty()) {
+                        needs_closing_quote = true;
+                    } else {
+                        buffer_needs_closing_quote = true;
+                    }
                 } else {
                     // For non-string values (number, bool, null, object, array), add complete value
-                    current_tool->arguments += parsed.dump();
+                    value_to_add = parsed.dump();
                 }
             } catch (...) {
                 // Not valid JSON - treat as string value
                 // Add opening quote if not already in a string
-                if (!needs_closing_quote) {
-                    current_tool->arguments += "\"";
-                    needs_closing_quote = true;
+                if (!current_tool->name.empty()) {
+                    if (!needs_closing_quote) {
+                        value_to_add = "\"";
+                        needs_closing_quote = true;
+                    }
+                } else {
+                    if (!buffer_needs_closing_quote) {
+                        value_to_add = "\"";
+                        buffer_needs_closing_quote = true;
+                    }
                 }
                 // Escape special characters in the string content
                 std::string escaped = json(value_content).dump();
@@ -655,26 +704,69 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
                 if (escaped.size() >= 2 && escaped.front() == '"' && escaped.back() == '"') {
                     escaped = escaped.substr(1, escaped.size() - 2);
                 }
-                current_tool->arguments += escaped;
+                value_to_add += escaped;
             }
+        }
+
+        // If we have the tool name, add directly; otherwise buffer
+        if (!current_tool->name.empty()) {
+            current_tool->arguments += value_to_add;
+        } else {
+            if (args_buffer.empty()) {
+                args_buffer = "{";
+            }
+            args_buffer += value_to_add;
         }
     }
 
     if (is_arg_close && current_tool) {
-        if (needs_closing_quote) {
-            current_tool->arguments += "\"";
-            needs_closing_quote = false;
+        if (!current_tool->name.empty()) {
+            if (needs_closing_quote) {
+                current_tool->arguments += "\"";
+                needs_closing_quote = false;
+            }
+        } else {
+            if (buffer_needs_closing_quote) {
+                if (args_buffer.empty()) {
+                    args_buffer = "{";
+                }
+                args_buffer += "\"";
+                buffer_needs_closing_quote = false;
+            }
         }
     }
 
     if (is_tool_close && current_tool) {
-        if (needs_closing_quote) {
-            current_tool->arguments += "\"";
-            needs_closing_quote = false;
+        if (!current_tool->name.empty()) {
+            if (needs_closing_quote) {
+                current_tool->arguments += "\"";
+                needs_closing_quote = false;
+            }
+            // Close the arguments object if using tagged format
+            if (!current_tool->arguments.empty() && current_tool->arguments.back() != '}') {
+                current_tool->arguments += "}";
+            }
+            // If we have a pending tool call that wasn't added yet, add it now
+            if (pending_tool_call.has_value()) {
+                result.tool_calls.push_back(pending_tool_call.value());
+                pending_tool_call.reset();
+            }
+        } else {
+            // We're closing a tool without a name - flush the buffer
+            if (!args_buffer.empty()) {
+                current_tool->arguments = args_buffer;
+                args_buffer.clear();
+            }
+            if (buffer_needs_closing_quote) {
+                current_tool->arguments += "\"";
+                buffer_needs_closing_quote = false;
+            }
+            // Close the arguments object if using tagged format
+            if (!current_tool->arguments.empty() && current_tool->arguments.back() != '}') {
+                current_tool->arguments += "}";
+            }
+            // Don't add to result if no name - this prevents incomplete tool calls
+            pending_tool_call.reset();
         }
-        // Close the arguments object if using tagged format
-        if (!current_tool->arguments.empty() && current_tool->arguments.back() != '}') {
-            current_tool->arguments += "}";
-        }
-    }
+}
 }
