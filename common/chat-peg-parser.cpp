@@ -168,6 +168,8 @@ common_peg_parser common_chat_peg_unified_builder::build_tool_section(const Tool
     // Build tool choices based on function format
     auto tool_choices = choice();
 
+    fprintf(stderr, "DEBUG build_tool_section: function_format=%d, tools count=%zu\n",
+            static_cast<int>(ts.function_format), tools.size());
     for (const auto & tool_def : tools) {
         if (!tool_def.contains("function")) {
             continue;
@@ -175,6 +177,7 @@ common_peg_parser common_chat_peg_unified_builder::build_tool_section(const Tool
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
         nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
+        fprintf(stderr, "DEBUG build_tool_section: building function '%s'\n", name.c_str());
 
         tool_choices |= rule("tool-" + name, build_function(ts, name, params));
     }
@@ -344,13 +347,17 @@ common_peg_parser common_chat_peg_unified_builder::build_function(const ToolCall
                 // per_call_start = "[TOOL_CALLS]"
                 // id_marker = "[CALL_ID]"
                 // args_marker = "[ARGS]"
+                fprintf(stderr, "DEBUG build_function BRACKET_TAG: name='%s' per_call_start='%s' id_marker='%s' args_marker='%s'\n",
+                        name.c_str(), ts.per_call_start.c_str(), ts.id_marker.c_str(), ts.args_marker.c_str());
                 auto opening = literal(ts.per_call_start) + tool_name(literal(name));
                 if (!ts.id_marker.empty()) {
                     // Add id_marker + id value (captured as tool_id)
                     opening = opening + literal(ts.id_marker) + tool_id(until(ts.args_marker));
+                    fprintf(stderr, "DEBUG: Added id_marker and tool_id\n");
                 }
                 if (!ts.args_marker.empty()) {
                     opening = opening + literal(ts.args_marker);
+                    fprintf(stderr, "DEBUG: Added args_marker\n");
                 }
                 // No explicit closer for this format (EOS terminates)
                 return tool(tool_open(opening) + space() + tool_args(args));
@@ -540,9 +547,36 @@ common_peg_parser common_chat_peg_unified_builder::standard_constructed_tools(
 // Unified Mapper Implementation
 // ============================================================================
 
+void common_chat_peg_unified_mapper::from_ast(const common_peg_ast_arena &    arena,
+                                               const common_peg_parse_result & parse_result_arg) {
+    // Call base class to visit all nodes
+    common_chat_peg_mapper::from_ast(arena, parse_result_arg);
+
+    // Flush any pending tool call that was started but never got a name
+    // This happens during partial parsing when the tool call is incomplete
+    if (pending_tool_call.has_value()) {
+        // Transfer any buffered arguments
+        if (!args_buffer.empty()) {
+            pending_tool_call->arguments = args_buffer;
+        }
+        // Close any open quotes in buffered args
+        if (buffer_needs_closing_quote && !pending_tool_call->arguments.empty()) {
+            pending_tool_call->arguments += "\"";
+        }
+        // Add the incomplete tool call to results
+        result.tool_calls.push_back(pending_tool_call.value());
+        pending_tool_call.reset();
+    }
+}
+
 void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
     // First call base class for reasoning/content handling
     common_chat_peg_mapper::map(node);
+
+    // Debug: print what tags we're receiving
+    if (!node.tag.empty()) {
+        fprintf(stderr, "DEBUG MAPPER: tag='%s' text='%.50s'\n", node.tag.c_str(), std::string(node.text).c_str());
+    }
 
     // Handle tool-related tags (unified version supporting both JSON and tagged formats)
     bool is_tool_open  = node.tag == common_chat_peg_unified_builder::TOOL_OPEN;

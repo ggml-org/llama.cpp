@@ -1,4 +1,5 @@
 #include "chat.h"
+#include "chat-auto-parser-helpers.h"
 #include "chat-parser-xml-toolcall.h"
 #include "chat-peg-parser.h"
 #include "chat-auto-parser.h"
@@ -20,7 +21,10 @@
 #include <cctype>
 #include <exception>
 #include <functional>
+#include <map>
+#include <mutex>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -225,6 +229,14 @@ struct common_chat_templates {
     bool has_explicit_template; // Model had builtin template or template overridde was specified.
     std::unique_ptr<common_chat_template> template_default; // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
+
+    // Cache for template analysis results (per template source)
+    mutable std::mutex analysis_cache_mutex;
+    mutable std::map<std::string, TemplateAnalysisResult> analysis_cache;
+
+    // Cache for generated parser results (per template + params combination)
+    mutable std::mutex parser_cache_mutex;
+    mutable std::map<std::string, common_chat_params> parser_cache;
 };
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
@@ -2873,16 +2885,62 @@ static common_chat_params common_chat_templates_apply_jinja(
     }
 
     // Ministral/Mistral Large 3 - uses special reasoning structure fixes, can't use autoparser
+    // Note: Mistral Small 3.2 uses [CALL_ID] which Ministral doesn't have, so we can distinguish them
     if (src.find("[SYSTEM_PROMPT]") != std::string::npos &&
         src.find("[TOOL_CALLS]") != std::string::npos &&
-        src.find("[ARGS]") != std::string::npos) {
+        src.find("[ARGS]") != std::string::npos &&
+        src.find("[CALL_ID]") == std::string::npos) {
         return common_chat_params_init_ministral_3(tmpl, params);
     }
 
-    // Unified two-phase template analysis
+    // Unified two-phase template analysis with caching
     try {
-        LOG_DBG("Using unified template analysis\n");
-        TemplateAnalysisResult analysis = TemplateAnalyzer::analyze_template(tmpl);
+        // Generate cache key (excludes messages and now)
+        const std::string cache_key = make_autoparser_cache_key(src, params);
+
+        // Check analysis cache first (needed for both cached and uncached parser paths)
+        TemplateAnalysisResult analysis;
+        {
+            std::lock_guard<std::mutex> lock(tmpls->analysis_cache_mutex);
+            auto it = tmpls->analysis_cache.find(src);
+            if (it != tmpls->analysis_cache.end()) {
+                LOG_DBG("Using cached template analysis\n");
+                analysis = it->second;
+            } else {
+                LOG_DBG("Analyzing template (analysis cache miss)\n");
+                analysis = TemplateAnalyzer::analyze_template(tmpl);
+                tmpls->analysis_cache[src] = analysis;
+            }
+        }
+        fprintf(stderr, "DEBUG ANALYSIS: function_format=%d, per_call_start='%s', id_marker='%s'\n",
+                static_cast<int>(analysis.tools.function_format),
+                analysis.tools.per_call_start.c_str(),
+                analysis.tools.id_marker.c_str());
+
+        // Check parser cache
+        // NOTE: Temporarily disabled to debug test failure
+        if (false) {
+            std::lock_guard<std::mutex> lock(tmpls->parser_cache_mutex);
+            auto it = tmpls->parser_cache.find(cache_key);
+            if (it != tmpls->parser_cache.end()) {
+                LOG_DBG("Using cached autoparser result\n");
+                // Clone the cached result and update the prompt with current messages
+                common_chat_params cached_result = it->second;
+                cached_result.prompt = apply_template(tmpl, params, std::nullopt);
+
+                // Apply the same prompt modifications that generate_parser applies
+                // (e.g., appending reasoning end marker when thinking is disabled)
+                if (analysis.content.reasoning_mode == ContentStructure::REASONING_FORCED_OPEN &&
+                    !params.enable_thinking) {
+                    cached_result.prompt += analysis.content.reasoning_end + "\n";
+                }
+
+                return cached_result;
+            }
+        }
+
+        LOG_DBG("Using unified template analysis (parser cache miss)\n");
+
         auto auto_params = UniversalPEGGenerator::generate_parser(analysis, tmpl, params);
 
         // Only use the auto-generated parser if it provides more than basic content-only handling.
@@ -2891,6 +2949,11 @@ static common_chat_params common_chat_templates_apply_jinja(
         if (auto_params.format != COMMON_CHAT_FORMAT_CONTENT_ONLY ||
             auto_params.thinking_forced_open ||
             !auto_params.parser.empty()) {
+            // Cache the result (store a copy without the prompt since that varies per messages)
+            {
+                std::lock_guard<std::mutex> lock(tmpls->parser_cache_mutex);
+                tmpls->parser_cache[cache_key] = auto_params;
+            }
             return auto_params;
         }
     } catch (const std::exception& e) {
