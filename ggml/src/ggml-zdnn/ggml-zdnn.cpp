@@ -58,6 +58,10 @@ static enum ggml_status ggml_zdnn_graph_compute(ggml_backend_t backend, ggml_cgr
             continue;
         }
 
+        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+            continue;
+        }
+
         bool ok = ggml_zdnn_compute_forward(ctx, node);
         if (!ok) {
             GGML_LOG_ERROR("%s: unsupported op %s (%s)\n",
