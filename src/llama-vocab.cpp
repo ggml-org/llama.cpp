@@ -2352,7 +2352,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         }
 
-        // add unused attribute to control tokens with the word "unused"
+        // auto-detect unused tokens: e.g. control tokens with the word "unused"
+        // ideally, these tokens should be marked as unused during conversion
         {
             uint32_t n_unused = 0;
 
