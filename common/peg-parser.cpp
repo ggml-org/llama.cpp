@@ -2,6 +2,7 @@
 
 #include "common.h"
 #include "json-schema-to-grammar.h"
+#include "log.h"
 #include "unicode.h"
 
 #include <algorithm>
@@ -334,11 +335,11 @@ struct parser_executor {
             if (pos >= ctx.input.size()) {
                 if (!ctx.is_partial) {
                     if (ctx.input.size() > pos && ctx.input[pos] == '<') {
-                        fprintf(stderr, "Check literal '%s' against '%s'\n", p.literal.c_str(),
+                        LOG_DBG("Check literal '%s' against '%s'\n", p.literal.c_str(),
                                 ctx.input.substr(pos, 20).c_str());
                     }
                     if (p.literal == "<think>") {
-                        fprintf(stderr, "Literal match failed: expected '%s', got '%c' (0x%02x) at pos %zu\n",
+                        LOG_DBG("Literal match failed: expected '%s', got '%c' (0x%02x) at pos %zu\n",
                                 p.literal.c_str(), ctx.input[pos], (unsigned char) ctx.input[pos], pos);
                     }
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
@@ -714,7 +715,7 @@ struct parser_executor {
 
     common_peg_parse_result operator()(const common_peg_rule_parser & p) {
         if (!ctx.is_partial) {
-            fprintf(stderr, "Enter rule '%s' at pos %zu\n", p.name.c_str(), start_pos);
+            LOG_DBG("Enter rule '%s' at pos %zu\n", p.name.c_str(), start_pos);
         }
         // Parse the child
         auto result = arena.parse(p.child, ctx, start_pos);

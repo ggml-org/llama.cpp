@@ -344,6 +344,8 @@ static const char * function_format_to_str(ToolCallStructure::FunctionFormat fmt
             return "PREFIXED_INDEXED";
         case ToolCallStructure::FUNC_NAME_AS_KEY:
             return "NAME_AS_KEY";
+        case ToolCallStructure::FUNC_BRACKET_TAG:
+            return "BRACKET_TAG";
     }
     return "UNKNOWN";
 }
@@ -441,6 +443,12 @@ int main(int argc, char ** argv) {
                 LOG_ERR("function_namespace: '%s'\n", analysis.tools.function_namespace.c_str());
                 LOG_ERR("args_marker: '%s'\n", analysis.tools.args_marker.c_str());
                 LOG_ERR("per_call_end: '%s'\n", analysis.tools.per_call_end.c_str());
+            }
+            if (analysis.tools.function_format == ToolCallStructure::FUNC_BRACKET_TAG) {
+                LOG_ERR("\n--- Bracket-Tag Format Details ---\n");
+                LOG_ERR("per_call_start: '%s'\n", analysis.tools.per_call_start.c_str());
+                LOG_ERR("id_marker: '%s'\n", analysis.tools.id_marker.c_str());
+                LOG_ERR("args_marker: '%s'\n", analysis.tools.args_marker.c_str());
             }
 
             // Generate Parser

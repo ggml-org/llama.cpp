@@ -54,6 +54,7 @@ struct ToolCallStructure {
         FUNC_TAG_NAME_ONLY,    // <X>...</X> where X is function name (rare)
         FUNC_PREFIXED_INDEXED, // <|tool_call_begin|>functions.X:0<|tool_call_argument_begin|>{...}<|tool_call_end|>
         FUNC_NAME_AS_KEY,      // [{"function_name": {...arguments...}}] (Apertus-style)
+        FUNC_BRACKET_TAG,      // [TOOL_CALLS]X[CALL_ID]id[ARGS]{...} (Mistral Small 3.2 style)
     };
     FunctionFormat function_format = FUNC_JSON_OBJECT;
 
@@ -72,6 +73,9 @@ struct ToolCallStructure {
     std::string function_namespace;  // e.g., "functions." (prefix before function name)
     std::string args_marker;         // e.g., "<|tool_call_argument_begin|>"
     std::string per_call_end;        // e.g., "<|tool_call_end|>"
+
+    // For FUNC_BRACKET_TAG format (e.g., Mistral Small 3.2)
+    std::string id_marker;           // e.g., "[CALL_ID]" - marker before tool call ID
 
     // Argument format (how arguments are structured within a function)
     enum ArgumentFormat {

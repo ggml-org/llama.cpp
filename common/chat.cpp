@@ -132,7 +132,7 @@ std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const comm
             // Check if one is a prefix of the other (for incremental parsing where names grow or shrink)
             bool is_prefix = (newf.name.rfind(pref.name, 0) == 0);
             if (!is_prefix) {
-                fprintf(stderr, "Tool call mismatch: prev='%s' new='%s'\n", pref.name.c_str(), newf.name.c_str());
+                LOG_ERR("Tool call mismatch: prev='%s' new='%s'\n", pref.name.c_str(), newf.name.c_str());
                 throw std::runtime_error("Invalid diff: tool call mismatch!");
             }
         }

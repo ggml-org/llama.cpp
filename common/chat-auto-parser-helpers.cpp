@@ -651,6 +651,7 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
         //   - Quoted: "\"" or "\">"
         //   - XML tag: <|some_tag|>
         //   - Indexed with tag: :0<|some_tag|> (Kimi-style)
+        //   - Bracket tags: [CALL_ID]...[ARGS] (Mistral Small 3.2 style)
         size_t func_name_end = func1_pos + std::string("test_function_name").length();
         if (func_name_end < func_context.length()) {
             char next_char = func_context[func_name_end];
@@ -668,6 +669,14 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
                 if (tag_close != std::string::npos) {
                     // It seems to be a tag, use it as suffix
                     patterns.function_name_suffix = func_context.substr(func_name_end, tag_close - func_name_end + 1);
+                }
+            } else if (next_char == '[') {
+                // Bracket-tag format: [CALL_ID]id[ARGS] (Mistral Small 3.2 style)
+                // Find where the JSON arguments start (at '{')
+                size_t json_start = func_context.find('{', func_name_end);
+                if (json_start != std::string::npos) {
+                    patterns.function_name_suffix = func_context.substr(func_name_end, json_start - func_name_end);
+                    LOG_DBG("Found bracket-tag suffix: '%s'\n", patterns.function_name_suffix.c_str());
                 }
             } else if (next_char == ':') {
                 // Indexed format: function_name:0<|marker|> or function_name:0{args}
@@ -854,10 +863,26 @@ InternalToolFormat determine_format_from_patterns(const InternalDiscoveredPatter
         return FORMAT_JSON_NATIVE;
     }
 
+    // Check for bracket-tag format: [TOOL_CALLS]name[CALL_ID]id[ARGS]{...}
+    // Detected when function_name_suffix contains bracket tags like [CALL_ID]...[ARGS]
+    if (!patterns.function_name_suffix.empty() && patterns.function_name_suffix.find('[') != std::string::npos &&
+        patterns.function_name_suffix.find(']') != std::string::npos) {
+        LOG_DBG("Detected BRACKET_TAG format from function_name_suffix containing bracket tags\n");
+        return FORMAT_BRACKET_TAG;
+    }
+
     if (!patterns.tool_call_start_marker.empty() &&
         (patterns.tool_call_start_marker.find('<') == 0 || patterns.tool_call_start_marker.find('[') == 0)) {
         bool is_prefix_marker =
             patterns.tool_call_start_marker.find("<|") == 0 || patterns.tool_call_start_marker.find("[|") == 0;
+        // Check for bracket-tag format: [TAG] style without | (e.g., [TOOL_CALLS])
+        bool is_bracket_tag = patterns.tool_call_start_marker.find('[') == 0 &&
+                              patterns.tool_call_start_marker.find("[|") != 0 &&
+                              patterns.tool_call_start_marker.find(']') != std::string::npos;
+        if (is_bracket_tag) {
+            LOG_DBG("Detected BRACKET_TAG format from tool_call_start_marker\n");
+            return FORMAT_BRACKET_TAG;
+        }
         if (is_prefix_marker) {
             LOG_DBG("Detected JSON_NATIVE format from tool_call_start_marker (instruction-based)\n");
             return FORMAT_JSON_NATIVE;

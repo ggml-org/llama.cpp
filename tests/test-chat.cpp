@@ -1495,25 +1495,24 @@ static void test_template_output_peg_parsers() {
     //         .run();
     // }
 
-    // TODO: Mistral Small 3.2 and Devstral use a different format: [TOOL_CALLS]func_name[CALL_ID]id[ARGS]{...}
-    // This is not the same as Mistral Nemo's [TOOL_CALLS][{...}] JSON format.
-    // Needs a new FUNC_TAG_SEPARATED format to support.
-    // {
-    //     auto tst = peg_tester("models/templates/Mistral-Small-3.2-24B-Instruct-2506.jinja");
-    //     tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-    //     tst.test("[TOOL_CALLS]special_function[CALL_ID]123456789[ARGS]{\"arg1\": 1}")
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_call_id)
-    //         .run();
-    // }
-    // {
-    //     auto tst = peg_tester("models/templates/unsloth-mistral-Devstral-Small-2507.jinja");
-    //     tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-    //     tst.test("[TOOL_CALLS]special_function[ARGS]{\"arg1\": 1}")
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_call)
-    //         .run();
-    // }
+    // Mistral Small 3.2 - FUNC_BRACKET_TAG format: [TOOL_CALLS]func_name[CALL_ID]id[ARGS]{...}
+    {
+        auto tst = peg_tester("models/templates/Mistral-Small-3.2-24B-Instruct-2506.jinja");
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test("[TOOL_CALLS]special_function[CALL_ID]123456789[ARGS]{\"arg1\": 1}")
+            .tools({ special_function_tool })
+            .expect(message_assist_call_id)
+            .run();
+    }
+    // Devstral - FUNC_BRACKET_TAG format (no ID marker): [TOOL_CALLS]func_name[ARGS]{...}
+    {
+        auto tst = peg_tester("models/templates/unsloth-mistral-Devstral-Small-2507.jinja");
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test("[TOOL_CALLS]special_function[ARGS]{\"arg1\": 1}")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
 
     {
         // Llama 3.1

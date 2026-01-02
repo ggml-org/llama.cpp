@@ -999,6 +999,51 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(const minja::chat_tem
         } else {
             ts.argument_format = ToolCallStructure::ARGS_JSON;
         }
+    } else if (format == FORMAT_BRACKET_TAG) {
+        // Bracket-tag format: [TOOL_CALLS]name[CALL_ID]id[ARGS]{...} (Mistral Small 3.2)
+        ts.supports_tools     = true;
+        ts.function_format    = ToolCallStructure::FUNC_BRACKET_TAG;
+        ts.argument_format    = ToolCallStructure::ARGS_JSON;
+
+        // The function_opener contains the bracket tag before the function name (e.g., "[TOOL_CALLS]")
+        // Each tool call starts with this tag, so it's the per_call_start, not a section wrapper
+        // tool_section_start/end should be empty since there's no overall section wrapper
+        ts.tool_section_start = "";
+        ts.tool_section_end   = "";
+        ts.per_call_start     = discovered.function_opener;
+
+        // Extract markers from function_name_suffix (e.g., "[CALL_ID]call_0001[ARGS]" or just "[ARGS]")
+        // Pattern: [ID_MARKER]...[ARGS_MARKER] or just [ARGS_MARKER]
+        if (!discovered.function_name_suffix.empty()) {
+            // Find all bracket tags in the suffix
+            std::vector<std::string> tags;
+            size_t pos = 0;
+            while ((pos = discovered.function_name_suffix.find('[', pos)) != std::string::npos) {
+                size_t end = discovered.function_name_suffix.find(']', pos);
+                if (end != std::string::npos) {
+                    tags.push_back(discovered.function_name_suffix.substr(pos, end - pos + 1));
+                    pos = end + 1;
+                } else {
+                    break;
+                }
+            }
+
+            // Classify tags: args marker contains "ARG", id marker contains "ID" or "CALL"
+            for (const auto & tag : tags) {
+                std::string upper_tag = tag;
+                for (auto & c : upper_tag) {
+                    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                }
+                if (upper_tag.find("ARG") != std::string::npos) {
+                    ts.args_marker = tag;
+                } else if (upper_tag.find("ID") != std::string::npos || upper_tag.find("CALL") != std::string::npos) {
+                    ts.id_marker = tag;
+                }
+            }
+        }
+
+        LOG_DBG("FUNC_BRACKET_TAG: per_call_start='%s', id_marker='%s', args_marker='%s'\n",
+                ts.per_call_start.c_str(), ts.id_marker.c_str(), ts.args_marker.c_str());
     }
 
     return ts;
