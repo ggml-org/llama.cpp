@@ -1,17 +1,20 @@
 <script lang="ts">
-	import { Paperclip } from '@lucide/svelte';
+	import { Paperclip, Plus } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FILE_TYPE_ICONS } from '$lib/constants/icons';
 	import { FileTypeCategory } from '$lib/enums';
+	import McpLogo from '$lib/components/app/misc/McpLogo.svelte';
 
 	interface Props {
 		class?: string;
 		disabled?: boolean;
 		hasAudioModality?: boolean;
 		hasVisionModality?: boolean;
+		showMcpOption?: boolean;
 		onFileUpload?: (fileType?: FileTypeCategory) => void;
+		onMcpClick?: () => void;
 	}
 
 	let {
@@ -19,14 +22,12 @@
 		disabled = false,
 		hasAudioModality = false,
 		hasVisionModality = false,
-		onFileUpload
+		showMcpOption = false,
+		onFileUpload,
+		onMcpClick
 	}: Props = $props();
 
-	const fileUploadTooltipText = $derived.by(() => {
-		return !hasVisionModality
-			? 'Text files and PDFs supported. Images, audio, and video require vision models.'
-			: 'Attach files';
-	});
+	const fileUploadTooltipText = 'Add files or MCP servers';
 
 	function handleFileUpload(fileType?: FileTypeCategory) {
 		onFileUpload?.(fileType);
@@ -43,9 +44,9 @@
 						{disabled}
 						type="button"
 					>
-						<span class="sr-only">Attach files</span>
+						<span class="sr-only">{fileUploadTooltipText}</span>
 
-						<Paperclip class="h-4 w-4" />
+						<Plus class="h-4 w-4" />
 					</Button>
 				</Tooltip.Trigger>
 
@@ -123,6 +124,18 @@
 					</Tooltip.Content>
 				{/if}
 			</Tooltip.Root>
+
+			{#if showMcpOption}
+				<DropdownMenu.Separator />
+				<DropdownMenu.Item
+					class="flex cursor-pointer items-center gap-2"
+					onclick={() => onMcpClick?.()}
+				>
+					<McpLogo style="width: 1rem; height: 1rem;" />
+
+					<span>MCP Servers</span>
+				</DropdownMenu.Item>
+			{/if}
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>
