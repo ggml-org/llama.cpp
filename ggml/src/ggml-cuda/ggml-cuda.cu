@@ -3903,6 +3903,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
             const int root_node_idx = node_indices[root_node];
 
             // only optimize for attn_norm
+	    // TODO: make this generic
             if (!strstr(root_node->name, "attn_norm")) {
                 continue;
             }
