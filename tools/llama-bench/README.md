@@ -32,6 +32,7 @@ options:
   -oe, --output-err <csv|json|jsonl|md|sql> output format printed to stderr (default: none)
   --list-devices                            list available devices and exit
   -v, --verbose                             verbose output
+  -nf, --no-fail                            continue on failure (default: disabled)
   --progress                                print test progress indicators
   -rpc, --rpc <rpc_servers>                 register RPC devices (comma separated)
 
@@ -79,6 +80,10 @@ With the exception of `-r`, `-o` and `-v`, all options can be specified multiple
 Each test is repeated the number of times given by `-r`, and the results are averaged. The results are given in average tokens per second (t/s) and standard deviation. Some output formats (e.g. json) also include the individual results of each repetition.
 
 Using the `-d <n>` option, each test can be run at a specified context depth, prefilling the KV cache with `<n>` tokens.
+
+Using the `-nf` option, any test param combination that results in a failure will NOT cause the entire set of permuted test scenarios to terminate.  Instead, the failing param combination will be logged to STDERR and the execution will then cycle to the next test scenario.  This will repeat until all calculated scenarios have been attempted.  Test scenarios that successfully execute will log results to STDOUT as usual.
+If any permutation resulted in a successful test, the `llama-bench` process will exit with a return code 0 (success).  If all permutations failed to execute, the `llama-bench` process will exit with a return code 1 (fail/error).
+In order for this new flag to remain backwards-compatible with the `llama-bench` tool's previous behavior for a given invocation, this new mode must be explicitly enabled.
 
 For a description of the other options, see the [completion example](../completion/README.md).
 
