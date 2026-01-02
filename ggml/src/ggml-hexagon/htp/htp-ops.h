@@ -26,6 +26,8 @@ struct htp_ops_context {
     struct htp_tensor src0;
     struct htp_tensor src1;
     struct htp_tensor src2;
+    struct htp_tensor src3;
+    struct htp_tensor src4;
     struct htp_tensor dst;
 
     struct htp_spad src0_spad;
@@ -49,6 +51,21 @@ struct htp_ops_context {
     struct fastdiv_values src1_div3;  // fastdiv values for ne3
     struct fastdiv_values src1_div21; // fastdiv values for ne2 * ne1
 
+    struct fastdiv_values src3_div1;  // fastdiv values for ne1
+    struct fastdiv_values src3_div2;  // fastdiv values for ne2
+    struct fastdiv_values src3_div3;  // fastdiv values for ne3
+    struct fastdiv_values src3_div21; // fastdiv values for ne2 * ne1
+
+    struct fastdiv_values broadcast_rk2;
+    struct fastdiv_values broadcast_rk3;
+    struct fastdiv_values broadcast_rv2;
+    struct fastdiv_values broadcast_rv3;
+
+    struct fastdiv_values mm_div_ne12_ne1; // fastdiv values for ne12 * ne1
+    struct fastdiv_values mm_div_ne1;      // fastdiv values for ne1
+    struct fastdiv_values mm_div_r2;       // fastdiv values for ne12 / ne02
+    struct fastdiv_values mm_div_r3;       // fastdiv values for ne13 / ne03
+
     uint32_t flags;
 };
 
@@ -60,5 +77,6 @@ int op_activations(struct htp_ops_context * octx);
 int op_softmax(struct htp_ops_context * octx);
 int op_add_id(struct htp_ops_context * octx);
 int op_rope(struct htp_ops_context * octx);
+int op_flash_attn_ext(struct htp_ops_context * octx);
 
 #endif /* HTP_OPS_H */

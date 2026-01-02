@@ -907,143 +907,52 @@ static void vec_dot_mxfp4x4x2_q8x4x2_rx2(const int n,
     hvx_vec_store_u(&s[0], 8, Q6_V_lo_W(p0));
 }
 
-#if 1
 static void vec_dot_f16_f32(const int n, float * restrict s, const void * restrict x, const void * restrict y) {
-    if (0) {
-        float rsum                 = 0;
-        const __fp16 * restrict vx = (const __fp16 * restrict) x;
-        const float * restrict vy  = (const float * restrict) y;
+    const HVX_UVector * restrict vx = (const HVX_UVector * restrict) x;
+    const HVX_UVector * restrict vy = (const HVX_UVector * restrict) y;
 
-        for (uint32_t i = 0; i < n; i++) {
-            rsum += (float)vx[i] * vy[i];
-        }
-        *s = rsum;
-        return;
-    }
+    uint32_t nvec = n / VLEN_FP16; // num full fp16 hvx vectors
+    uint32_t nloe = n % VLEN_FP16; // leftover elements
 
-    const HVX_UVector * restrict vx     = (const HVX_UVector * restrict) x;
-    const HVX_UVectorPair * restrict vy = (const HVX_UVectorPair * restrict) y;
+    const HVX_Vector zero = Q6_V_vsplat_R(0);
 
-    uint32_t nv0 = n / 64;  // num full fp16 hvx vectors
-    uint32_t nv1 = n % 64;  // leftover elements
+    HVX_Vector       rsum = Q6_V_vsplat_R(0);
 
-    // for some reason we need volatile here so that the compiler doesn't try anything funky
-    volatile HVX_Vector rsum = Q6_V_vsplat_R(0);
-    float r_sum_scalar = 0.0f;
     uint32_t i = 0;
 
-    for (i = 0; i < nv0; i++) {
-        HVX_VectorPair yp = vy[i];
+    #pragma unroll(2)
+    for (i = 0; i < nvec; i++) {
+        // Load y (fp32) and convert into fp16
+        HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+0], zero);  // 32 elements
+        HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+1], zero);  // 32 elements
+        HVX_Vector y_hf  = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf));
 
-        HVX_Vector     x  = vx[i];
-        HVX_VectorPair xp = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x), Q6_Vh_vsplat_R(0x3C00));  // mul by 1.0
+        // Load x (fp16)
+        HVX_Vector x_hf = vx[i];
 
-        //NOTE: need volatile here to prevent compiler optimization
-        // Seem compiler cannot guarantee read-after-write??
-        volatile HVX_Vector hi = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(xp)), Q6_V_hi_W(yp));
-        volatile HVX_Vector lo = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(xp)), Q6_V_lo_W(yp));
+        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x_hf), y_hf);
 
-        HVX_Vector sum = Q6_Vqf32_vadd_Vqf32Vqf32(hi, lo);
-        rsum           = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, sum);
+        rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
     }
 
-    if (nv1) {
-        // HVX_VectorPair yp = vy[i];
+    if (nloe) {
+        // Load y (fp32) and convert into fp16
+        HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+0], zero);  // 32 elements
+        HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+1], zero);  // 32 elements
+        HVX_Vector y_hf  = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf));
 
-        // HVX_Vector     x  = vx[i];
-        // HVX_VectorPair xp = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x), Q6_Vh_vsplat_R(0x3C00));  // mul by 1.0
+        // Load x (fp16) and zero-out unused elements
+        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 2);
+        HVX_Vector      x_hf = Q6_V_vand_QV(bmask, vx[i]);
 
-        // if (nv1 >= 32) {
-        //     volatile HVX_Vector hi = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(xp)), Q6_V_hi_W(yp));
-        //     rsum          = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, hi);
-        //     nv1 -= 32;
-        // }
+        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x_hf), y_hf);
 
-        // rsum = hvx_vec_qf32_reduce_sum(rsum);
-
-        // if (nv1) {
-        //     volatile HVX_Vector lo  = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(Q6_V_lo_W(xp)), Q6_V_lo_W(yp));
-        //     HVX_Vector sum = hvx_vec_qf32_reduce_sum_n(lo, nv1);
-        //     rsum           = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, sum);
-        // }
-
-        //process the remainder using scalar loop
-        rsum = hvx_vec_qf32_reduce_sum(rsum);
-        const __fp16 * restrict sx = (const __fp16 * restrict) x;
-        const float * restrict sy  = (const float * restrict) y;
-
-        for (uint32_t i = nv0 * 64; i < n; i++) {
-            r_sum_scalar += (float) sx[i] * sy[i];
-        }
-
-        // hvx_vec_dump_fp16("X", x);
-        // hvx_vec_dump_fp16("Y", y);
-        // hvx_vec_dump_fp32("SUM",  Q6_Vsf_equals_Vqf32(sum));
-        // hvx_vec_dump_fp32("RSUM", Q6_Vsf_equals_Vqf32(rsum));
-    } else {
-        rsum = hvx_vec_qf32_reduce_sum(rsum);
+        rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
     }
 
-    *s = hvx_vec_get_fp32(Q6_Vsf_equals_Vqf32(rsum)) + r_sum_scalar;
-
-#    ifdef HTP_DEBUG
-    {
-        float rsum                 = 0;
-        const __fp16 * restrict vx = (const __fp16 * restrict) x;
-        const float * restrict vy  = (const float * restrict) y;
-
-        for (uint32_t i = 0; i < n; i++) {
-            rsum += vx[i] * vy[i];
-        }
-
-        float diff = fabs(*s - rsum);
-        if (diff > 0.001) {
-            FARF(HIGH, "vec-dot-f16-missmatch: %u (%u:%u) expected %.6f got %.6f\n", n, nv0, nv1, rsum, *s);
-            // htp_dump_f16("x", vx, n);
-            // htp_dump_f32("y", vy, n);
-        }
-    }
-#    endif
+    rsum = Q6_Vsf_equals_Vqf32(hvx_vec_qf32_reduce_sum(rsum));
+    hvx_vec_store_u(&s[0], 4, rsum);
 }
-#else
-static void vec_dot_f16_f32(const int n, float * restrict s, const void * restrict x, const void * restrict y) {
-    const uint32_t fk = 64;
-    const uint32_t nb = n / fk;
-
-    assert(n % fk == 0);
-    assert(nb % 4 == 0);
-
-    const uint32_t x_blk_size = 2 * fk;  // fp16
-    const uint32_t y_blk_size = 4 * fk;  // fp32
-
-    // Row sum (qf32)
-    HVX_Vector rsum0 = Q6_V_vsplat_R(0);
-    HVX_Vector rsum1 = Q6_V_vsplat_R(0);
-    HVX_Vector rsum2 = Q6_V_vsplat_R(0);
-    HVX_Vector rsum3 = Q6_V_vsplat_R(0);
-
-    for (uint32_t i = 0; i < nb; i += 4) {
-        HVX_Vector_x4 vx = hvx_vec_load_x4_f16(x + (i * x_blk_size));
-        HVX_Vector_x4 vy = hvx_vec_load_x4_f32_as_f16(y + (i * y_blk_size));
-
-        HVX_VectorPair fa0 = Q6_Wqf32_vmpy_VhfVhf(vx.v[0], vy.v[0]);
-        HVX_VectorPair fa1 = Q6_Wqf32_vmpy_VhfVhf(vx.v[1], vy.v[1]);
-        HVX_VectorPair fa2 = Q6_Wqf32_vmpy_VhfVhf(vx.v[2], vy.v[2]);
-        HVX_VectorPair fa3 = Q6_Wqf32_vmpy_VhfVhf(vx.v[3], vy.v[3]);
-
-        rsum0 = Q6_Vqf32_vadd_Vqf32Vqf32(rsum0, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(fa0), Q6_V_hi_W(fa0)));
-        rsum1 = Q6_Vqf32_vadd_Vqf32Vqf32(rsum1, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(fa1), Q6_V_hi_W(fa1)));
-        rsum2 = Q6_Vqf32_vadd_Vqf32Vqf32(rsum2, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(fa2), Q6_V_hi_W(fa2)));
-        rsum3 = Q6_Vqf32_vadd_Vqf32Vqf32(rsum3, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(fa3), Q6_V_hi_W(fa3)));
-    }
-
-    // Reduce and convert into fp32
-    rsum0           = Q6_Vqf32_vadd_Vqf32Vqf32(rsum0, rsum1);
-    rsum2           = Q6_Vqf32_vadd_Vqf32Vqf32(rsum2, rsum3);
-    HVX_Vector rsum = hvx_vec_qf32_reduce_sum(Q6_Vqf32_vadd_Vqf32Vqf32(rsum0, rsum2));
-    hvx_vec_store_u(s, 4, Q6_Vsf_equals_Vqf32(rsum));
-}
-#endif
 
 #define htp_matmul_preamble            \
     const uint32_t ne00 = src0->ne[0]; \
@@ -1506,16 +1415,18 @@ static void matvec_id(struct htp_matmul_type * mt,
 
 // *** matmul in fp16
 
-static void matmul_f16_f32(struct htp_tensor * restrict src0,
-                           struct htp_tensor * restrict src1,
-                           struct htp_tensor * restrict dst,
-                           struct htp_spad * restrict src0_spad,
-                           struct htp_spad * restrict src1_spad,
-                           struct htp_spad * restrict dst_spad,
-                           uint32_t    nth,
-                           uint32_t    ith,
-                           uint32_t    src0_nrows_per_thread,
-                           dma_queue * dma_queue) {
+static void matmul_f16_f32(struct htp_ops_context * octx, uint32_t nth, uint32_t ith) {
+    struct htp_tensor * restrict src0    = &octx->src0;
+    struct htp_tensor * restrict src1    = &octx->src1;
+    struct htp_tensor * restrict dst     = &octx->dst;
+    struct htp_spad * restrict src0_spad = &octx->src0_spad;
+    struct htp_spad * restrict src1_spad = &octx->src1_spad;
+    struct htp_spad * restrict dst_spad  = &octx->dst_spad;
+
+    dma_queue *dma_queue = octx->ctx->dma[ith];
+
+    uint32_t src0_nrows_per_thread = octx->src0_nrows_per_thread;
+
     htp_matmul_preamble;
 
     uint64_t t1, t2;
@@ -1549,10 +1460,6 @@ static void matmul_f16_f32(struct htp_tensor * restrict src0,
     const uint32_t ir1_start = dr1 * ith1;
     const uint32_t ir1_end   = MIN(ir1_start + dr1, nr1);
 
-    // broadcast factors
-    const uint32_t r2 = ne12 / ne02;
-    const uint32_t r3 = ne13 / ne03;
-
     // no work for this thread
     if (ir0_start >= ir0_end || ir1_start >= ir1_end) {
         return;
@@ -1562,18 +1469,16 @@ static void matmul_f16_f32(struct htp_tensor * restrict src0,
     const uint32_t blck_0 = 64;
     const uint32_t blck_1 = 64;
 
-    __attribute__((aligned(128))) float tmp[64];
-
     for (uint32_t iir1 = ir1_start; iir1 < ir1_end; iir1 += blck_1) {
         for (uint32_t iir0 = ir0_start; iir0 < ir0_end; iir0 += blck_0) {
             for (uint32_t ir1 = iir1; ir1 < MIN(iir1 + blck_1, ir1_end); ir1++) {
-                const uint32_t i13 = (ir1 / (ne12 * ne1));
-                const uint32_t i12 = (ir1 - i13 * ne12 * ne1) / ne1;
+                const uint32_t i13 = fastdiv(ir1, &octx->mm_div_ne12_ne1);
+                const uint32_t i12 = fastdiv(ir1 - i13 * ne12 * ne1, &octx->mm_div_ne1);
                 const uint32_t i11 = (ir1 - i13 * ne12 * ne1 - i12 * ne1);
 
                 // broadcast src0 into src1
-                const uint32_t i03 = i13 / r3;
-                const uint32_t i02 = i12 / r2;
+                const uint32_t i03 = fastdiv(i13, &octx->mm_div_r3);
+                const uint32_t i02 = fastdiv(i12, &octx->mm_div_r2);
 
                 const uint32_t i1 = i11;
                 const uint32_t i2 = i12;
@@ -1588,10 +1493,8 @@ static void matmul_f16_f32(struct htp_tensor * restrict src0,
                 for (uint32_t ir0 = iir0; ir0 < ir0_block_end; ir0++) {
                     // Use nb01 stride for non-contiguous src0 support
                     const uint8_t * restrict src0_row = src0_base + ir0 * nb01;
-                    vec_dot_f16_f32(ne00, &tmp[ir0 - iir0], src0_row, src1_col);
+                    vec_dot_f16_f32(ne00, &dst_col[ir0], src0_row, src1_col);
                 }
-
-                hvx_copy_fp32_ua((uint8_t *) &dst_col[iir0], (uint8_t *) tmp, MIN(iir0 + blck_0, ir0_end) - iir0);
             }
         }
     }
@@ -1929,8 +1832,7 @@ static void htp_matmul_mxfp4x4x2_q8x4x2(unsigned int n, unsigned int i, void * d
 
 static void htp_matmul_f16_f32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = data;
-    matmul_f16_f32(&octx->src0, &octx->src1, &octx->dst, &octx->src0_spad, &octx->src1_spad, &octx->dst_spad, n, i,
-                   octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matmul_f16_f32(octx, n, i);
 }
 
 // ** matmul-id callbacks for worker_pool
@@ -2134,6 +2036,12 @@ int op_matmul(struct htp_ops_context * octx) {
             octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
             octx->src1_spad.size = octx->src1_spad.size_per_thread * octx->n_threads;
             octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
+
+            // FP16 matmul supports broadcast and needs fastdiv
+            octx->mm_div_ne12_ne1 = init_fastdiv_values(src1->ne[2] * dst->ne[1]);
+            octx->mm_div_ne1      = init_fastdiv_values(dst->ne[1]);
+            octx->mm_div_r2       = init_fastdiv_values(src1->ne[2] / src0->ne[2]);
+            octx->mm_div_r3       = init_fastdiv_values(src1->ne[3] / src0->ne[3]);
 
             need_quant = false;
             break;
