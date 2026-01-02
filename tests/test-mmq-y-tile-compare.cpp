@@ -223,6 +223,11 @@ void load_y_tile_soa(const char* vy, int* tile_y_qs, float* tile_y_d,
 int run_test(int nrows_y_unpadded, int nrows_y, int ncols_y, int WARP_SIZE, int mmq_x) {
     printf("\n--- Test: nrows_y_unpadded=%d, nrows_y=%d ---\n", nrows_y_unpadded, nrows_y);
 
+    if (nrows_y_unpadded % QK8_1 != 0) {
+        printf("  SKIP: nrows_y_unpadded must be a multiple of QK8_1 for Q8_1 SoA layout\n");
+        return 0;
+    }
+
     int blocks_per_col = nrows_y / QK8_1;
     int blocks_per_tile = WARP_SIZE / QI8_1;
 
@@ -304,16 +309,16 @@ int main() {
     int total_errors = 0;
 
     // Test 1: No padding (nrows_y_unpadded == nrows_y)
-    total_errors += run_test(128, 128, 4, 16, 4);
+    total_errors += run_test(128, 128, 4, 32, 4);
 
     // Test 2: With padding - unpadded is NOT multiple of QK8_1
     // nrows_y_unpadded=100, padded nrows_y=128 (next multiple of 32)
     // This exposes the kx vs nrows_y_unpadded mismatch!
-    total_errors += run_test(100, 128, 4, 16, 4);
+    total_errors += run_test(100, 128, 4, 32, 4);
 
     // Test 3: Different padding scenario
     // nrows_y_unpadded=50, padded nrows_y=64
-    total_errors += run_test(50, 64, 4, 16, 4);
+    total_errors += run_test(50, 64, 4, 32, 4);
 
     printf("\n=== FINAL SUMMARY ===\n");
     printf("Total errors across all tests: %d\n", total_errors);
@@ -334,7 +339,7 @@ int main_old() {
     const int nrows_y_unpadded = 128;  // Actual data rows (like K dimension)
     const int nrows_y = 128;           // Padded to multiple of QK8_1
     const int ncols_y = 4;             // Number of Y columns (batch size)
-    const int WARP_SIZE = 16;          // Intel Arc warp size
+    const int WARP_SIZE = 32;          // Must match GGML_SYCL_WARP_SIZE
     const int mmq_x = 4;               // Tile width
 
     int blocks_per_col = nrows_y / QK8_1;

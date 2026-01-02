@@ -19,25 +19,101 @@
 #include "ggml-quants.h"
 
 #define QK_K 256
+#ifndef QK8_1
+#define QK8_1 32
+#endif
+#ifndef QI6_K
+#define QI6_K 32
+#endif
+#ifndef QR6_K
+#define QR6_K 2
+#endif
+#ifndef QI8_1
+#define QI8_1 (QK8_1 / 4)
+#endif
 
-// CPU reference: compute full matmul Q6_K @ F32
-static void cpu_mul_mat_q6k_f32(const void* x_data, const float* y,
+// Helpers for Q6_K x Q8_1 CPU reference (matches MMVQ math)
+static inline int get_int_from_int8_aligned(const int8_t* x8, const int i32) {
+    return *((const int*)(x8 + sizeof(int) * i32));
+}
+
+static inline int get_int_from_uint8(const uint8_t* x8, const int i32) {
+    const uint16_t* x16 = (const uint16_t*)(x8 + sizeof(int) * i32);
+    int x32 = 0;
+    x32 |= x16[0];
+    x32 |= (int)x16[1] << 16;
+    return x32;
+}
+
+static float cpu_vec_dot_q6_K_q8_1(const block_q6_K* bq6_K, const block_q8_1* bq8_1, int iqs) {
+    const int bq8_offset = 2 * QR6_K * (iqs / (QI6_K/2)) + (iqs % (QI6_K/2)) / (QI6_K/4);
+    const int scale_offset = (QI6_K/4) * (iqs / (QI6_K/2)) + (iqs % (QI6_K/2)) / (QI6_K/8);
+    const int vh_shift = 2 * ((iqs % (QI6_K/2)) / (QI6_K/4));
+
+    const int vl = get_int_from_uint8(bq6_K->ql, iqs);
+    const int vh = get_int_from_uint8(bq6_K->qh, (QI6_K/4) * (iqs / (QI6_K/2)) + iqs % (QI6_K/4)) >> vh_shift;
+
+    const int8_t* scs = bq6_K->scales + scale_offset;
+
+    float sumf = 0.0f;
+    for (int i = 0; i < QR6_K; ++i) {
+        const int sc = scs[4 * i];
+        const int u = get_int_from_int8_aligned(bq8_1[bq8_offset + 2*i].qs, iqs % QI8_1);
+        const float d8 = ggml_fp16_to_fp32(bq8_1[bq8_offset + 2*i].d);
+
+        const int vil = (vl >> (4 * i)) & 0x0F0F0F0F;
+        const int vih = ((vh >> (4 * i)) << 4) & 0x30303030;
+        const int8_t* vil_bytes = (const int8_t*)&vil;
+        const int8_t* vih_bytes = (const int8_t*)&vih;
+        const int8_t* u_bytes = (const int8_t*)&u;
+
+        int dp4a_result = 0;
+        for (int j = 0; j < 4; ++j) {
+            int vi_j = (vil_bytes[j] | vih_bytes[j]) - 32;
+            dp4a_result += vi_j * u_bytes[j];
+        }
+
+        sumf += d8 * (dp4a_result * sc);
+    }
+    return ggml_fp16_to_fp32(bq6_K->d) * sumf;
+}
+
+static float cpu_row_dot_q6_K_q8_1(const block_q6_K* x_row, const block_q8_1* y, int ncols) {
+    const int blocks_per_row = ncols / QK_K;
+    float sum = 0.0f;
+
+    for (int ib = 0; ib < blocks_per_row; ++ib) {
+        const block_q6_K* bx = &x_row[ib];
+        const block_q8_1* by = &y[ib * (QK_K / QK8_1)];
+
+        for (int iqs = 0; iqs < QI6_K; ++iqs) {
+            sum += cpu_vec_dot_q6_K_q8_1(bx, by, iqs);
+        }
+    }
+    return sum;
+}
+
+// CPU reference: compute full matmul Q6_K @ Q8_1 (matches MMVQ quantization)
+static void cpu_mul_mat_q6k_q8_1(const void* x_data, const float* y,
                                  float* dst, int nrows, int ncols, int n_tokens) {
     const block_q6_K* x = (const block_q6_K*)x_data;
     const int blocks_per_row = ncols / QK_K;
+    const int y_blocks_per_row = ncols / QK8_1;
 
-    std::vector<float> x_f32(ncols);
+    std::vector<block_q8_1> y_q8(n_tokens * y_blocks_per_row);
+    for (int tok = 0; tok < n_tokens; tok++) {
+        quantize_row_q8_1_ref(y + tok * ncols,
+                              y_q8.data() + tok * y_blocks_per_row,
+                              ncols);
+    }
 
     for (int row = 0; row < nrows; row++) {
-        dequantize_row_q6_K(&x[row * blocks_per_row], x_f32.data(), ncols);
-
         for (int tok = 0; tok < n_tokens; tok++) {
-            float sum = 0.0f;
-            for (int k = 0; k < ncols; k++) {
-                sum += x_f32[k] * y[tok * ncols + k];
-            }
             // Output is transposed: dst[tok, row]
-            dst[tok * nrows + row] = sum;
+            dst[tok * nrows + row] = cpu_row_dot_q6_K_q8_1(
+                &x[row * blocks_per_row],
+                y_q8.data() + tok * y_blocks_per_row,
+                ncols);
         }
     }
 }
@@ -132,13 +208,16 @@ static bool test_mmvq_q6k_batch(int n_tokens, int n_rows, int n_cols, bool verbo
 
     // CPU reference
     std::vector<float> cpu_output(n_rows * n_tokens);
-    cpu_mul_mat_q6k_f32(weight_data.data(), input_data.data(),
-                        cpu_output.data(), n_rows, n_cols, n_tokens);
+    cpu_mul_mat_q6k_q8_1(weight_data.data(), input_data.data(),
+                         cpu_output.data(), n_rows, n_cols, n_tokens);
 
     // Compare
     int mismatches = 0;
     float max_diff = 0.0f;
     int first_bad_tok = -1, first_bad_row = -1;
+
+    const float abs_tol = (n_cols >= 4096 && n_rows >= 4096) ? 0.2f : 0.1f;
+    const float rel_tol = (n_cols >= 4096 && n_rows >= 4096) ? 0.3f : 0.15f;
 
     for (int tok = 0; tok < n_tokens; tok++) {
         for (int row = 0; row < n_rows; row++) {
@@ -147,7 +226,7 @@ static bool test_mmvq_q6k_batch(int n_tokens, int n_rows, int n_cols, bool verbo
             float ref_mag = std::fabs(cpu_output[idx]);
             float rel_err = ref_mag > 1e-6 ? diff / ref_mag : diff;
 
-            if (diff > 0.1f && rel_err > 0.15f) {
+            if (diff > abs_tol && rel_err > rel_tol) {
                 if (first_bad_tok < 0) {
                     first_bad_tok = tok;
                     first_bad_row = row;

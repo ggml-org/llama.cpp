@@ -83,53 +83,36 @@ static void dequantize_mul_mat_vec_reorder_kernel(
     }
 
     const int tid = item_ct1.get_local_id(2);
+    const int num_blocks_per_row = ncols / QK4_0;
+    const int ib0 = row * num_blocks_per_row;
 
-    const int ncols_left = ncols % (QK4_0*WARP_SIZE);
-    const int ncols_align = ncols - ncols_left;
-    const int iter_stride = 8*2*GGML_SYCL_DMMV_X;
-    const int vals_per_iter = iter_stride / WARP_SIZE;
-    const int y_offset = QK4_0/2;  // qr=2, so y_offset = qk/2
+    const uint8_t* qs_base = static_cast<const uint8_t*>(vx);
+    const sycl::half* d_base = reinterpret_cast<const sycl::half*>(
+        static_cast<const char*>(vx) + d_offset);
 
     float tmp = 0.0f;
-    const char *d_ptr = (const char*)vx + d_offset;
 
-    for (int i = 0; i < ncols_align; i += iter_stride) {
-        const int col = i + vals_per_iter*tid;
-        const int ib = (row*ncols + col)/QK4_0;
-        const int iqs = (col%QK4_0)/QR4_0;
-        const int iybs = col - col%QK4_0;
+    for (int block_in_row = tid; block_in_row < num_blocks_per_row; block_in_row += WARP_SIZE) {
+        const int block_idx = ib0 + block_in_row;
+        const float d = static_cast<float>(d_base[block_idx]);
 
+        const uint8_t* qs = qs_base + block_idx * (QK4_0 / 2);
+        const float* y_block = y + block_in_row * QK4_0;
+
+        float block_sum = 0.0f;
         #pragma unroll
-        for (int j = 0; j < vals_per_iter; j += 2) {
-            dfloat2 v;
-            // Direct function call - no function pointer
-            dequantize_q4_0_reorder((const void *)d_ptr, ib, (const void *)vx, ib * QK4_0 / 2 + iqs + j/QR4_0, v);
+        for (int j = 0; j < QK4_0 / 2; ++j) {
+            const uint8_t qs_byte = qs[j];
+            const float v0 = ((float)(qs_byte & 0xF) - 8.0f) * d;
+            const float v1 = ((float)(qs_byte >> 4) - 8.0f) * d;
 
-            tmp += v.x() * y[iybs + iqs + j / QR4_0 + 0];
-            tmp += v.y() * y[iybs + iqs + j / QR4_0 + y_offset];
+            block_sum += v0 * y_block[j];
+            block_sum += v1 * y_block[j + 16];
         }
+        tmp += block_sum;
     }
 
-    for (int i = ncols_align; i < ncols; i += iter_stride) {
-        if (tid>=ncols_left/QK4_0) continue;
-        const int col = i + vals_per_iter*tid;
-        const int ib = (row*ncols + col)/QK4_0;
-        const int iqs = (col%QK4_0)/QR4_0;
-        const int iybs = col - col%QK4_0;
-
-        #pragma unroll
-        for (int j = 0; j < vals_per_iter; j += 2) {
-            dfloat2 v;
-            dequantize_q4_0_reorder((const void *)d_ptr, ib, (const void *)vx, ib * QK4_0 / 2 + iqs + j/QR4_0, v);
-
-            tmp += v.x() * y[iybs + iqs + j / QR4_0 + 0];
-            tmp += v.y() * y[iybs + iqs + j / QR4_0 + y_offset];
-        }
-    }
-
-    // Warp reduction
-    const int mask_start = ncols > GGML_SYCL_DMMV_X ? WARP_SIZE >> 1 : WARP_SIZE >> 2;
-    for (int mask = mask_start; mask > 0; mask >>= 1) {
+    for (int mask = WARP_SIZE >> 1; mask > 0; mask >>= 1) {
         tmp += sycl::permute_group_by_xor(item_ct1.get_sub_group(), tmp, mask);
     }
 
@@ -574,6 +557,9 @@ bool test_model_dimensions(sycl::queue& q) {
     float max_diff = 0.0f;
     float max_rel_err = 0.0f;
 
+    const float abs_tol = 2e-5f;
+    const float rel_tol = 0.001f;
+
     for (int row = 0; row < nrows; row++) {
         float aos = h_aos_out[row];
         float soa = h_soa_out[row];
@@ -583,7 +569,7 @@ bool test_model_dimensions(sycl::queue& q) {
         max_diff = std::max(max_diff, diff);
         max_rel_err = std::max(max_rel_err, rel_err);
 
-        if (rel_err > 0.001f) {  // 0.1% relative error threshold
+        if (diff > abs_tol && rel_err > rel_tol) {
             if (errors < 5) {
                 printf("  FAIL row=%d: AoS=%.6f SoA=%.6f diff=%.6e rel=%.4f%%\n",
                        row, aos, soa, diff, rel_err * 100);

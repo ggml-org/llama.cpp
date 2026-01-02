@@ -309,6 +309,18 @@ if(GGML_SYCL)
     install(TARGETS test-mmq-q6k-gpu RUNTIME)
     add_test(NAME test-mmq-q6k-gpu COMMAND $<TARGET_FILE:test-mmq-q6k-gpu>)
 
+    # test-mmq-q6k-coalesced: GPU unit tests for Q6_K MMQ coalesced path
+    add_executable(test-mmq-q6k-coalesced test-mmq-q6k-coalesced.cpp)
+    target_link_libraries(test-mmq-q6k-coalesced PRIVATE ggml)
+    target_include_directories(test-mmq-q6k-coalesced PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-mmq-q6k-coalesced PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-mmq-q6k-coalesced PRIVATE "-fsycl")
+    install(TARGETS test-mmq-q6k-coalesced RUNTIME)
+    add_test(NAME test-mmq-q6k-coalesced COMMAND $<TARGET_FILE:test-mmq-q6k-coalesced>)
+
     # test-mmq-q8-0-tile-compare: Compare AoS vs SoA tile loading for Q8_0 MMQ
     add_executable(test-mmq-q8-0-tile-compare test-mmq-q8-0-tile-compare.cpp)
     target_link_libraries(test-mmq-q8-0-tile-compare PRIVATE ggml)
@@ -442,6 +454,19 @@ if(GGML_SYCL)
     install(TARGETS test-mmvq-q6k-debug RUNTIME)
 endif()
 
+# test-mmvq-coalesced: GPU unit tests for coalesced MMVQ (Q4_0 and Q6_K)
+if(GGML_SYCL)
+    add_executable(test-mmvq-coalesced test-mmvq-coalesced.cpp)
+    target_link_libraries(test-mmvq-coalesced PRIVATE ggml)
+    target_include_directories(test-mmvq-coalesced PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-mmvq-coalesced PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-mmvq-coalesced PRIVATE "-fsycl")
+    install(TARGETS test-mmvq-coalesced RUNTIME)
+    add_test(NAME test-mmvq-coalesced COMMAND $<TARGET_FILE:test-mmvq-coalesced>)
+endif()
+
 # test-q8-0-soa-gpu: GPU unit tests for Q8_0 SoA (tests actual SYCL kernels)
 if(GGML_SYCL)
     add_executable(test-q8-0-soa-gpu test-q8-0-soa-gpu.cpp)
@@ -493,6 +518,19 @@ if(GGML_SYCL)
     target_link_options(test-dmmv-q4-0-coalesced PRIVATE "-fsycl")
     install(TARGETS test-dmmv-q4-0-coalesced RUNTIME)
     add_test(NAME test-dmmv-q4-0-coalesced COMMAND $<TARGET_FILE:test-dmmv-q4-0-coalesced>)
+endif()
+
+# test-dmmv-q6k-coalesced: Q6_K DMMV with coalesced layout
+if(GGML_SYCL)
+    add_executable(test-dmmv-q6k-coalesced test-dmmv-q6k-coalesced.cpp)
+    target_link_libraries(test-dmmv-q6k-coalesced PRIVATE ggml ggml-cpu)
+    target_include_directories(test-dmmv-q6k-coalesced PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-dmmv-q6k-coalesced PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-dmmv-q6k-coalesced PRIVATE "-fsycl")
+    install(TARGETS test-dmmv-q6k-coalesced RUNTIME)
+    add_test(NAME test-dmmv-q6k-coalesced COMMAND $<TARGET_FILE:test-dmmv-q6k-coalesced>)
 endif()
 
 # test-q8-0-production-flow: Production-like Q8_0 test (MMQ -> DMMV flow)
@@ -621,6 +659,7 @@ if(GGML_SYCL)
     target_link_libraries(test-soa-roundtrip PRIVATE ggml)
     target_include_directories(test-soa-roundtrip PRIVATE
         ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
         ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
     target_compile_options(test-soa-roundtrip PRIVATE "-fsycl" "-Wno-narrowing")
     target_link_options(test-soa-roundtrip PRIVATE "-fsycl")

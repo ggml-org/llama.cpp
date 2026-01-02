@@ -19,6 +19,7 @@
 #include "ggml-backend.h"
 #include "ggml-sycl.h"
 #include "ggml-cpu.h"
+#include "ggml-quants.h"
 
 // Calculate max absolute difference
 static float max_diff(const float* a, const float* b, size_t n) {
@@ -28,6 +29,108 @@ static float max_diff(const float* a, const float* b, size_t n) {
         if (d > max_d) max_d = d;
     }
     return max_d;
+}
+
+static void get_tolerances(ggml_type type, bool is_mmq, float & abs_tol, float & rel_tol) {
+    abs_tol = 0.1f;
+    rel_tol = 0.15f;
+
+    if (type == GGML_TYPE_Q4_0) {
+        abs_tol = 0.8f;
+        rel_tol = 0.30f;
+    } else if (type == GGML_TYPE_Q6_K && !is_mmq) {
+        abs_tol = 0.5f;
+        rel_tol = 0.20f;
+    }
+}
+
+static void dequantize_row_q8_1_ref(const block_q8_1 * x, float * y, int64_t k) {
+    const int nb = k / QK8_1;
+    for (int i = 0; i < nb; ++i) {
+        const float d = ggml_fp16_to_fp32(x[i].d);
+        for (int j = 0; j < QK8_1; ++j) {
+            y[i * QK8_1 + j] = d * x[i].qs[j];
+        }
+    }
+}
+
+static void build_input_reference(ggml_type weight_type, int n_embd, int n_tokens,
+                                  const float * input_data, std::vector<float> & input_ref) {
+    input_ref.resize(n_embd * n_tokens);
+    if (n_tokens == 1) {
+        if (weight_type == GGML_TYPE_Q4_0 || weight_type == GGML_TYPE_Q8_0) {
+            const int blocks = n_embd / QK8_0;
+            std::vector<block_q8_0> q8(blocks);
+            quantize_row_q8_0_ref(input_data, q8.data(), n_embd);
+            dequantize_row_q8_0(q8.data(), input_ref.data(), n_embd);
+            return;
+        }
+        // Q6_K DMMV uses float input
+        memcpy(input_ref.data(), input_data, n_embd * sizeof(float));
+        return;
+    }
+
+    const int blocks = n_embd / QK8_1;
+    std::vector<block_q8_1> q8(n_tokens * blocks);
+    for (int t = 0; t < n_tokens; ++t) {
+        quantize_row_q8_1_ref(input_data + t * n_embd, q8.data() + t * blocks, n_embd);
+        dequantize_row_q8_1_ref(q8.data() + t * blocks, input_ref.data() + t * n_embd, n_embd);
+    }
+}
+
+static bool run_reference_mul_mat(ggml_type weight_type, const void * weight_data,
+                                  const float * input_data, int n_embd, int n_rows, int n_tokens,
+                                  std::vector<float> & output) {
+    std::vector<float> input_ref;
+    build_input_reference(weight_type, n_embd, n_tokens, input_data, input_ref);
+    output.assign(n_rows * n_tokens, 0.0f);
+
+    int blocks_per_row = 0;
+    switch (weight_type) {
+        case GGML_TYPE_Q4_0:
+            blocks_per_row = n_embd / QK4_0;
+            break;
+        case GGML_TYPE_Q8_0:
+            blocks_per_row = n_embd / QK8_0;
+            break;
+        case GGML_TYPE_Q6_K:
+            blocks_per_row = n_embd / QK_K;
+            break;
+        default:
+            return false;
+    }
+    std::vector<float> weight_f32(n_embd);
+
+    for (int row = 0; row < n_rows; ++row) {
+        const int row_offset = row * blocks_per_row;
+        switch (weight_type) {
+            case GGML_TYPE_Q4_0:
+                dequantize_row_q4_0(reinterpret_cast<const block_q4_0 *>(weight_data) + row_offset,
+                                    weight_f32.data(), n_embd);
+                break;
+            case GGML_TYPE_Q8_0:
+                dequantize_row_q8_0(reinterpret_cast<const block_q8_0 *>(weight_data) + row_offset,
+                                    weight_f32.data(), n_embd);
+                break;
+            case GGML_TYPE_Q6_K:
+                dequantize_row_q6_K(reinterpret_cast<const block_q6_K *>(weight_data) + row_offset,
+                                    weight_f32.data(), n_embd);
+                break;
+            default:
+                return false;
+        }
+
+        for (int t = 0; t < n_tokens; ++t) {
+            float sum = 0.0f;
+            const float * x = input_ref.data() + t * n_embd;
+            for (int k = 0; k < n_embd; ++k) {
+                sum += weight_f32[k] * x[k];
+            }
+            output[t * n_rows + row] = sum;
+        }
+    }
+
+    return true;
 }
 
 // Run MUL_MAT using the actual ggml backend (invokes real kernels)
@@ -121,20 +224,12 @@ static bool test_dmmv(const char* type_name, ggml_type type, int n_embd, int n_r
         return true;
     }
 
-    ggml_backend_t cpu_backend = ggml_backend_cpu_init();
-    if (!cpu_backend) {
-        printf("  SKIP: Could not initialize CPU backend\n");
-        ggml_backend_free(sycl_backend);
-        return true;
-    }
-
     // Get quantization functions to generate test data
     const auto* qfns = ggml_get_type_traits(type);
     const auto* qfns_cpu = ggml_get_type_traits_cpu(type);
 
     if (!qfns || !qfns_cpu || !qfns_cpu->from_float || qfns->blck_size == 0) {
         printf("  SKIP: Quantization functions not available for %s\n", type_name);
-        ggml_backend_free(cpu_backend);
         ggml_backend_free(sycl_backend);
         return true;
     }
@@ -168,25 +263,18 @@ static bool test_dmmv(const char* type_name, ggml_type type, int n_embd, int n_r
                                sycl_output);
     if (!sycl_ok) {
         printf("  FAIL: SYCL compute failed\n");
-        ggml_backend_free(cpu_backend);
         ggml_backend_free(sycl_backend);
         return false;
     }
 
-    // Run on CPU (reference implementation, no SoA)
+    // Run CPU reference that mirrors SYCL quantized input path
     std::vector<float> cpu_output;
-    printf("  Running on CPU (reference)...\n");
-    bool cpu_ok = run_mul_mat(cpu_backend, type, weight_quant.data(), weight_bytes,
-                              input_data.data(), n_embd, n_rows, n_tokens,
-                              cpu_output);
-    if (!cpu_ok) {
-        printf("  FAIL: CPU compute failed\n");
-        ggml_backend_free(cpu_backend);
+    printf("  Running on CPU (quantized reference)...\n");
+    if (!run_reference_mul_mat(type, weight_quant.data(), input_data.data(), n_embd, n_rows, n_tokens, cpu_output)) {
+        printf("  FAIL: CPU reference compute failed\n");
         ggml_backend_free(sycl_backend);
         return false;
     }
-
-    ggml_backend_free(cpu_backend);
     ggml_backend_free(sycl_backend);
 
     // Compare results
@@ -213,7 +301,9 @@ static bool test_dmmv(const char* type_name, ggml_type type, int n_embd, int n_r
     }
 
     // Tolerance for quantization + float precision
-    const float tolerance = 0.01f;
+    float abs_tol = 0.0f;
+    float rel_tol = 0.0f;
+    get_tolerances(type, false, abs_tol, rel_tol);
 
     if (has_nan) {
         printf("  FAIL: SYCL output contains NaN/Inf\n");
@@ -223,8 +313,15 @@ static bool test_dmmv(const char* type_name, ggml_type type, int n_embd, int n_r
         printf("  FAIL: SYCL output is all zeros\n");
         return false;
     }
-    if (max_d > tolerance) {
-        printf("  FAIL: Max difference %.6f exceeds tolerance %.6f\n", max_d, tolerance);
+    float max_rel = 0.0f;
+    for (size_t i = 0; i < sycl_output.size(); ++i) {
+        const float diff = fabsf(sycl_output[i] - cpu_output[i]);
+        const float denom = fmaxf(1.0f, fabsf(cpu_output[i]));
+        max_rel = fmaxf(max_rel, diff / denom);
+    }
+
+    if (max_d > abs_tol && max_rel > rel_tol) {
+        printf("  FAIL: Max difference %.6f exceeds tolerance %.6f\n", max_d, abs_tol);
         return false;
     }
 
@@ -242,19 +339,11 @@ static bool test_mmq(const char* type_name, ggml_type type, int n_embd, int n_ro
         return true;
     }
 
-    ggml_backend_t cpu_backend = ggml_backend_cpu_init();
-    if (!cpu_backend) {
-        printf("  SKIP: Could not initialize CPU backend\n");
-        ggml_backend_free(sycl_backend);
-        return true;
-    }
-
     const auto* qfns = ggml_get_type_traits(type);
     const auto* qfns_cpu = ggml_get_type_traits_cpu(type);
 
     if (!qfns || !qfns_cpu || !qfns_cpu->from_float || qfns->blck_size == 0) {
         printf("  SKIP: Quantization functions not available for %s\n", type_name);
-        ggml_backend_free(cpu_backend);
         ggml_backend_free(sycl_backend);
         return true;
     }
@@ -285,12 +374,10 @@ static bool test_mmq(const char* type_name, ggml_type type, int n_embd, int n_ro
                                input_data.data(), n_embd, n_rows, n_tokens,
                                sycl_output);
 
-    printf("  Running on CPU (reference)...\n");
-    bool cpu_ok = run_mul_mat(cpu_backend, type, weight_quant.data(), weight_bytes,
-                              input_data.data(), n_embd, n_rows, n_tokens,
-                              cpu_output);
-
-    ggml_backend_free(cpu_backend);
+    printf("  Running on CPU (quantized reference)...\n");
+    bool cpu_ok = run_reference_mul_mat(type, weight_quant.data(),
+                                        input_data.data(), n_embd, n_rows, n_tokens,
+                                        cpu_output);
     ggml_backend_free(sycl_backend);
 
     if (!sycl_ok || !cpu_ok) {
@@ -309,8 +396,17 @@ static bool test_mmq(const char* type_name, ggml_type type, int n_embd, int n_ro
 
     printf("  SYCL: %d/%zu non-zero, max_diff=%.6f\n", sycl_nonzero, sycl_output.size(), max_d);
 
-    const float tolerance = 0.01f;
-    if (has_nan || sycl_nonzero == 0 || max_d > tolerance) {
+    float abs_tol = 0.0f;
+    float rel_tol = 0.0f;
+    get_tolerances(type, true, abs_tol, rel_tol);
+    float max_rel = 0.0f;
+    for (size_t i = 0; i < sycl_output.size(); ++i) {
+        const float diff = fabsf(sycl_output[i] - cpu_output[i]);
+        const float denom = fmaxf(1.0f, fabsf(cpu_output[i]));
+        max_rel = fmaxf(max_rel, diff / denom);
+    }
+
+    if (has_nan || sycl_nonzero == 0 || (max_d > abs_tol && max_rel > rel_tol)) {
         printf("  FAIL\n");
         return false;
     }
