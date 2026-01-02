@@ -2511,6 +2511,7 @@ static bool ggml_backend_buft_is_cann(ggml_backend_buffer_type_t buft) {
  * @return bool Returns true if the operation should be offloaded, otherwise
  * false.
  */
+struct ggml_backend_cann_device_context;
 static bool ggml_backend_cann_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     ggml_backend_cann_device_context * dev_ctx = (ggml_backend_cann_device_context *)dev->context;
 
