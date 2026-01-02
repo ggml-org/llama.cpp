@@ -122,7 +122,8 @@ export class ChatService {
 				content: msg.content,
 				...(msg.name && { name: msg.name })
 			})),
-			stream
+			stream,
+			return_progress: stream ? true : undefined
 		};
 
 		// Include model in request if provided (required in ROUTER mode)
@@ -290,7 +291,7 @@ export class ChatService {
 		onReasoningChunk?: (chunk: string) => void,
 		onToolCallChunk?: (chunk: string) => void,
 		onModel?: (model: string) => void,
-		onTimings?: (timings: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
+		onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void,
 		conversationId?: string,
 		abortSignal?: AbortSignal
 	): Promise<void> {
@@ -385,11 +386,13 @@ export class ChatService {
 								onModel?.(chunkModel);
 							}
 
-							if (timings || promptProgress) {
+							if (promptProgress) {
+								ChatService.notifyTimings(undefined, promptProgress, onTimings);
+							}
+
+							if (timings) {
 								ChatService.notifyTimings(timings, promptProgress, onTimings);
-								if (timings) {
-									lastTimings = timings;
-								}
+								lastTimings = timings;
 							}
 
 							if (content) {
@@ -787,10 +790,11 @@ export class ChatService {
 		timings: ChatMessageTimings | undefined,
 		promptProgress: ChatMessagePromptProgress | undefined,
 		onTimingsCallback:
-			| ((timings: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void)
+			| ((timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void)
 			| undefined
 	): void {
-		if (!timings || !onTimingsCallback) return;
+		if (!onTimingsCallback || (!timings && !promptProgress)) return;
+
 		onTimingsCallback(timings, promptProgress);
 	}
 }

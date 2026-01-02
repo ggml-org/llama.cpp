@@ -188,6 +188,7 @@ export interface ApiChatCompletionRequest {
 	}>;
 	stream?: boolean;
 	model?: string;
+	return_progress?: boolean;
 	// Reasoning parameters
 	reasoning_format?: string;
 	// Generation parameters
@@ -357,6 +358,7 @@ export interface ApiProcessingState {
 	tokensPerSecond?: number;
 	// Progress information from prompt_progress
 	progressPercent?: number;
+	promptProgress?: ChatMessagePromptProgress;
 	promptTokens?: number;
 	promptMs?: number;
 	cacheTokens?: number;
