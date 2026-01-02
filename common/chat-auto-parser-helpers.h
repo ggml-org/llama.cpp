@@ -84,6 +84,8 @@ struct InternalDiscoveredPattern {
     std::string tool_name_field  = "name";
     std::string tool_args_field  = "arguments";
     std::string tool_id_field;
+    // Flag: template renders null content as "None" string, requires empty string instead
+    bool requires_nonnull_content = false;
 };
 
 // Internal enum for format classification

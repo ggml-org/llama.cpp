@@ -203,6 +203,29 @@ This allows it to reliably search for these strings in the output to identify wh
 
 **Note:** The analyzer uses a reverse search (`rfind`) to locate the function name in the tool call diff. This ensures it identifies the *actual* tool call generation rather than any tool definitions that might appear earlier in the diff (common in Mistral templates).
 
+### Phase 2: Format Classification
+
+The analyzer classifies tool call formats based on patterns found in the diff:
+
+1. **FUNC_PREFIXED_INDEXED** - Detected through structural analysis when:
+   - `function_opener` ends with `.` (namespace separator)
+   - `function_name_suffix` starts with `:` followed by digit (index)
+   - Example: `<|tool_call_begin|>functions.name:0<|tool_call_argument_begin|>`
+   - Splits opener at the last `>` before `.` to get `per_call_start` and `function_namespace`
+   - Extracts `args_marker` from `function_name_suffix` (the tag after the index)
+   - Derives `per_call_end` and `tool_section_end` by finding structurally matching markers in `tool_call_closer`
+
+2. **FUNC_TAG_WITH_NAME** - Detected when `<function=` or similar tag-with-name pattern is found:
+   - **Nested format** (e.g., Nemotron): `<tool_call><function=X>...</function></tool_call>`
+   - **Non-nested format** (e.g., Functionary v3.1): `<function=X>...</function>` where section markers equal function markers
+   - The analyzer detects overlap between `tool_section_start` and `function_prefix` to determine nesting
+
+3. **FUNC_JSON_OBJECT** - Standard JSON format with `name` and `arguments` fields
+
+4. **FUNC_NAME_AS_KEY** - Format where function name is the JSON key (e.g., Apertus)
+
+5. **ARGS_KEY_VALUE_TAGS** - Specialized argument format using `<arg_key>` / `<arg_value>` tags (e.g., GLM-4.6)
+
 ## Testing & Debugging
 
 ### Testing
@@ -245,13 +268,38 @@ To support a new template format:
 
 ## State of the Autoparser (Jan 2026)
 
-As of January 2026, the unified auto-parser successfully handles major template families including DeepSeek V3, Llama 3 (native JSON), GLM-4, GLM-4.6, and standard XML/JSON formats. It also supports Functionary v3.x and Mistral Nemo.
+As of January 2026, the unified auto-parser successfully handles major template families including DeepSeek V3, Llama 3 (native JSON), GLM-4, GLM-4.6, and standard XML/JSON formats. It also supports Functionary v3.1 and Mistral Nemo.
+
+### Tested Templates
+
+The following templates have active tests in `tests/test-chat.cpp`:
+
+| Template | Format | Notes |
+|----------|--------|-------|
+| DeepSeek V3.1 | `FUNC_JSON_OBJECT` | Forced thinking mode |
+| DeepSeek R1 Distill (Llama/Qwen) | Reasoning only | Forced-open thinking, tool tests pending |
+| llama-cpp-deepseek-r1 | Reasoning only | Forced-open thinking |
+| GLM-4.6 | `ARGS_KEY_VALUE_TAGS` | `<tool_call>name\n<arg_key>...<arg_value>...` format |
+| Kimi-K2 / Kimi-K2-Instruct / Kimi-K2-Thinking | `FUNC_PREFIXED_INDEXED` | `functions.name:0` with special markers |
+| Apertus-8B-Instruct | `FUNC_NAME_AS_KEY` | `{"function_name": {...}}` format |
+| MiniMax-M2 | `FUNC_TAG_WITH_NAME` | XML invoke with parameter tags |
+| NVIDIA-Nemotron-Nano-v2 | `FUNC_JSON_OBJECT` | `<TOOLCALL>` wrapper (nested) |
+| Mistral-Nemo-Instruct-2407 | `FUNC_JSON_OBJECT` | `[TOOL_CALLS]` wrapper with id field |
+| Functionary v3.1 | `FUNC_TAG_WITH_NAME` | `<function=X>` non-nested format |
+| MiMo-VL / Hermes 3 / Qwen 2.5 | `FUNC_JSON_OBJECT` | `<tool_call>` wrapper |
+| Apriel 1.5 | `FUNC_JSON_OBJECT` | `<tool_calls>` wrapper with JSON array |
+| Cohere Command-R7B | `FUNC_JSON_OBJECT` | `START_RESPONSE/ACTION/THINKING` markers |
 
 ### Currently Unsupported Templates
 
 | Template Family | Model / Variant | Issue Description |
-|----------------|-----------------|-------------------|
-| **OpenAI** | `GPT-OSS` | **Channel Markers**: Complex `<|channel|>` marker structure confuses the content/tool separation. |
+|-----------------|-----------------|-------------------|
+| **OpenAI** | `GPT-OSS` | Complex channel markers need new format |
+| **Functionary** | `v3.2` | Uses `recipient\nfunction_name\n{args}` |
+| **FireFunction** | `v2` | tool_section_end includes EOS marker |
+| **Cohere** | `Command-R Plus` | Different format than R7B (uses `Action:`) |
+| **Mistral Small 3.2** | `Mistral-Small-3.2-24B` | Uses `[TOOL_CALLS]func[ARGS]{...}` format |
+| **Devstral** | `Devstral-Small-2507` | Uses `[TOOL_CALLS]func[ARGS]{...}` format |
 
 ### Templates Without Tool Support
 
@@ -259,7 +307,7 @@ Some templates genuinely don't support tool calls (this is not a detection bug):
 
 - **Phi 3.5 Mini** - The official template has no tool handling. Use Phi-4-mini-instruct for function calling, or community fine-tuned versions.
 
-### TODO / Roadmap
+### Completed Fixes
 
 - [x] **Fix GLM-4.6**: Fixed reasoning detection (Method 1 derivation from closing tag, Method 2 reverse case handling). Tool format uses `ARGS_KEY_VALUE_TAGS`.
 - [x] **Fix Kimi/Apertus**: Implemented `FUNC_TAG_WITH_NAME` (no-equals) detection for Kimi and `FUNC_NAME_AS_KEY` for Apertus.
@@ -268,3 +316,20 @@ Some templates genuinely don't support tool calls (this is not a detection bug):
 - [x] **Refine DeepSeek R1**: Fixed GBNF generation for non-ASCII/multi-byte markers strings to support `R1` distillation templates.
 - [x] **Fix Cohere Markers**: Add Cohere's structural markers to the detected content patterns to correctly determine content boundaries.
 - [x] **Fix Mistral/Functionary**: Implemented robust detection logic (`rfind` for names, overlap detection for markers).
+- [x] **Fix Kimi-K2-Thinking**: Added `FUNC_PREFIXED_INDEXED` detection when `functions.` appears in function_opener. Derives markers from `_begin|>` pattern.
+- [x] **Fix Mistral ID Field**: Changed id_field search to use full tool diff instead of just tool_call_opener.
+- [x] **Fix Nested vs Non-nested XML**: Added detection for when `tool_section_start` matches `function_prefix` to properly set `function_close`.
+- [x] **Fix JSON Content Serialization**: Content is now `null` (not `""`) when tool_calls are present, per OpenAI spec.
+
+### TODO / Roadmap
+
+- [x] **Enable DeepSeek R1 Distill Tests**: Reasoning tests enabled; tool tests pending (multi-byte Unicode markers).
+- [x] **Enable Kimi-K2/Kimi-K2-Instruct**: Now working with FUNC_PREFIXED_INDEXED format.
+- [x] **Enable MiMo-VL/Hermes/Qwen**: Standard `<tool_call>` JSON format works.
+- [x] **Enable Apriel 1.5**: Uses `<tool_calls>` wrapper with JSON array.
+- [ ] **Add Mistral Small 3.2 / Devstral**: Needs new `FUNC_TAG_SEPARATED` format for `[TOOL_CALLS]func[ARGS]{...}`.
+- [ ] **Fix Functionary v3.2**: Add specialized format detection for recipient-based routing.
+- [ ] **Fix FireFunction v2**: Fix tool_section_end extraction to not include EOS markers.
+- [ ] **Fix OpenAI GPT-OSS**: Add `FUNC_CHANNEL_BASED` format for channel marker structure.
+- [x] **Enable Cohere Command-R7B**: Uses START_RESPONSE/THINKING/ACTION markers.
+- [ ] **Fix Cohere Command-R Plus**: Different marker format (Action: [...]) needs investigation.
