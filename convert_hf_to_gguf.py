@@ -6414,6 +6414,28 @@ class ARwkv7Model(Rwkv7Model):
         # required by llama.cpp, unused
         self.gguf_writer.add_head_count(0)
 
+@ModelBase.register("MaincoderForCausalLM")
+class MaincoderModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.MAINCODER
+
+    def set_vocab(self):
+        try:
+            self._set_vocab_sentencepiece()
+        except FileNotFoundError:
+            self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        head_dim = self.hparams.get("head_dim")
+        if head_dim is not None:
+            self.gguf_writer.add_key_length(head_dim)
+            self.gguf_writer.add_value_length(head_dim)
+            self.gguf_writer.add_rope_dimension_count(head_dim)
+
+        if (ff_size := self.hparams.get("intermediate_size_mlp")) is not None:
+            self.gguf_writer.add_feed_forward_length(ff_size)
+
 
 @ModelBase.register("MambaForCausalLM", "MambaLMHeadModel", "FalconMambaForCausalLM")
 class MambaModel(TextModel):
