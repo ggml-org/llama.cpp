@@ -330,6 +330,9 @@ class AgenticStore {
 					return;
 				}
 
+				// Emit tool call start (shows "pending" state in UI)
+				this.emitToolCallStart(toolCall, onChunk);
+
 				const mcpCall: MCPToolCall = {
 					id: toolCall.id,
 					function: {
@@ -355,8 +358,8 @@ class AgenticStore {
 					return;
 				}
 
-				// Emit tool preview (raw output for UI to format later)
-				this.emitToolPreview(toolCall, result, maxToolPreviewLines, onChunk);
+				// Emit tool result and end marker
+				this.emitToolCallResult(result, maxToolPreviewLines, onChunk);
 
 				// Add tool result to session (sanitize base64 images for context)
 				const contextValue = this.isBase64Image(result) ? '[Image displayed to user]' : result;
@@ -393,33 +396,46 @@ class AgenticStore {
 	}
 
 	/**
-	 * Emit tool call preview to the chunk callback.
-	 * Output is raw/sterile - UI formatting is a separate concern.
+	 * Emit tool call start marker (shows "pending" state in UI).
 	 */
-	private emitToolPreview(
+	private emitToolCallStart(
 		toolCall: AgenticToolCallList[number],
-		result: string,
-		maxLines: number,
 		emit?: (chunk: string) => void
 	): void {
 		if (!emit) return;
 
 		const toolName = toolCall.function.name;
 		const toolArgs = toolCall.function.arguments;
+		// Base64 encode args to avoid conflicts with markdown/HTML parsing
+		const toolArgsBase64 = btoa(unescape(encodeURIComponent(toolArgs)));
 
-		let output = `\n\n<!-- AGENTIC_TOOL_CALL_START -->`;
-		output += `\n<!-- TOOL_NAME: ${toolName} -->`;
-		output += `\n<!-- TOOL_ARGS: ${toolArgs.replace(/\n/g, '\\n')} -->`;
+		let output = `\n\n<<<AGENTIC_TOOL_CALL_START>>>`;
+		output += `\n<<<TOOL_NAME:${toolName}>>>`;
+		output += `\n<<<TOOL_ARGS_BASE64:${toolArgsBase64}>>>`;
+		emit(output);
+	}
 
+	/**
+	 * Emit tool call result and end marker.
+	 */
+	private emitToolCallResult(
+		result: string,
+		maxLines: number,
+		emit?: (chunk: string) => void
+	): void {
+		if (!emit) return;
+
+		let output = '';
 		if (this.isBase64Image(result)) {
 			output += `\n![tool-result](${result.trim()})`;
 		} else {
+			// Don't wrap in code fences - result may already be markdown with its own code blocks
 			const lines = result.split('\n');
 			const trimmedLines = lines.length > maxLines ? lines.slice(-maxLines) : lines;
-			output += `\n\`\`\`\n${trimmedLines.join('\n')}\n\`\`\``;
+			output += `\n${trimmedLines.join('\n')}`;
 		}
 
-		output += `\n<!-- AGENTIC_TOOL_CALL_END -->\n`;
+		output += `\n<<<AGENTIC_TOOL_CALL_END>>>\n`;
 		emit(output);
 	}
 
