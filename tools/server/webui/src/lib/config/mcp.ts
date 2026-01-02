@@ -34,12 +34,14 @@ export function parseMcpServerSettings(
 		);
 
 		const url = typeof entry?.url === 'string' ? entry.url.trim() : '';
+		const headers = typeof entry?.headers === 'string' ? entry.headers.trim() : undefined;
 
 		return {
 			id: generateMcpServerId((entry as { id?: unknown })?.id, index),
 			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 			url,
-			requestTimeoutSeconds
+			requestTimeoutSeconds,
+			headers: headers || undefined
 		} satisfies MCPServerSettingsEntry;
 	});
 }
@@ -52,11 +54,25 @@ function buildServerConfig(
 		return undefined;
 	}
 
+	// Parse custom headers if provided
+	let headers: Record<string, string> | undefined;
+	if (entry.headers) {
+		try {
+			const parsed = JSON.parse(entry.headers);
+			if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+				headers = parsed as Record<string, string>;
+			}
+		} catch {
+			console.warn('[MCP] Failed to parse custom headers JSON, ignoring:', entry.headers);
+		}
+	}
+
 	return {
 		url: entry.url,
 		transport: detectMcpTransportFromUrl(entry.url),
 		handshakeTimeoutMs: connectionTimeoutMs,
-		requestTimeoutMs: Math.round(entry.requestTimeoutSeconds * 1000)
+		requestTimeoutMs: Math.round(entry.requestTimeoutSeconds * 1000),
+		headers
 	};
 }
 

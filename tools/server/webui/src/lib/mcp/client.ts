@@ -78,6 +78,69 @@ export class MCPClient {
 		return Array.from(this.toolsToServer.keys());
 	}
 
+	/**
+	 * Normalize JSON Schema properties to ensure all have explicit types.
+	 * Infers type from default value if missing - fixes compatibility with
+	 * llama.cpp which requires explicit types in tool schemas.
+	 */
+	private normalizeSchemaProperties(schema: Record<string, unknown>): Record<string, unknown> {
+		if (!schema || typeof schema !== 'object') return schema;
+
+		const normalized = { ...schema };
+
+		// Process properties object
+		if (normalized.properties && typeof normalized.properties === 'object') {
+			const props = normalized.properties as Record<string, Record<string, unknown>>;
+			const normalizedProps: Record<string, Record<string, unknown>> = {};
+
+			for (const [key, prop] of Object.entries(props)) {
+				if (!prop || typeof prop !== 'object') {
+					normalizedProps[key] = prop;
+					continue;
+				}
+
+				const normalizedProp = { ...prop };
+
+				// Infer type from default if missing
+				if (!normalizedProp.type && normalizedProp.default !== undefined) {
+					const defaultVal = normalizedProp.default;
+					if (typeof defaultVal === 'string') {
+						normalizedProp.type = 'string';
+					} else if (typeof defaultVal === 'number') {
+						normalizedProp.type = Number.isInteger(defaultVal) ? 'integer' : 'number';
+					} else if (typeof defaultVal === 'boolean') {
+						normalizedProp.type = 'boolean';
+					} else if (Array.isArray(defaultVal)) {
+						normalizedProp.type = 'array';
+					} else if (typeof defaultVal === 'object' && defaultVal !== null) {
+						normalizedProp.type = 'object';
+					}
+				}
+
+				// Recursively normalize nested schemas
+				if (normalizedProp.properties) {
+					Object.assign(
+						normalizedProp,
+						this.normalizeSchemaProperties(normalizedProp as Record<string, unknown>)
+					);
+				}
+
+				// Normalize items in array schemas
+				if (normalizedProp.items && typeof normalizedProp.items === 'object') {
+					normalizedProp.items = this.normalizeSchemaProperties(
+						normalizedProp.items as Record<string, unknown>
+					);
+				}
+
+				normalizedProps[key] = normalizedProp;
+			}
+
+			normalized.properties = normalizedProps;
+		}
+
+		return normalized;
+	}
+
 	async getToolsDefinition(): Promise<
 		{
 			type: 'function';
@@ -91,16 +154,21 @@ export class MCPClient {
 
 		for (const [, server] of this.servers) {
 			for (const tool of server.tools) {
+				const rawSchema = (tool.inputSchema as Record<string, unknown>) ?? {
+					type: 'object',
+					properties: {},
+					required: []
+				};
+
+				// Normalize schema to fix missing types
+				const normalizedSchema = this.normalizeSchemaProperties(rawSchema);
+
 				tools.push({
 					type: 'function',
 					function: {
 						name: tool.name,
 						description: tool.description,
-						parameters: (tool.inputSchema as Record<string, unknown>) ?? {
-							type: 'object',
-							properties: {},
-							required: []
-						}
+						parameters: normalizedSchema
 					}
 				});
 			}
