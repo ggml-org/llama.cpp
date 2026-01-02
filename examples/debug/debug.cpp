@@ -368,7 +368,6 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    params.warmup = false;
     callback_data cb_data(params, params.tensor_filter);
 
     auto llama_init = common_init_from_params(params);
