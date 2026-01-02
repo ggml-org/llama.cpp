@@ -2,6 +2,7 @@
 
 #include "ggml.h"
 #include "common.hpp"
+#include "convert.hpp"
 #include "quants.hpp"
 #include "quantize.hpp"
 #include "vecdotq.hpp"
@@ -157,17 +158,9 @@ static void mul_mat_vec_q_reorder_slm(const void * __restrict__ vx, const void *
 }
 
 // Warp-coalesced MMVQ kernel for Q4_0
-// Tensor layout: within each 16-block tile, data is word-major instead of block-major
-// Word w of block b is at: tile_offset + w * 64 + b * 4
+// Tensor layout: within each tile, data is word-major instead of block-major
+// Word w of block b is at: tile_offset + w * (TILE_BLOCKS*4) + b * 4
 // This achieves 100% cache line utilization (vs 50% with strided access in standard reorder)
-//
-// Thread mapping (32 threads process 16 blocks per iteration):
-// - Threads 0-15:  process blocks 0-15, lower half (X bytes 0-7 = elements 0-7 + 16-23)
-// - Threads 16-31: process blocks 0-15, upper half (X bytes 8-15 = elements 8-15 + 24-31)
-//
-// Memory access pattern for first load:
-// - T0: offset 0, T1: offset 4, T2: offset 8, ... T15: offset 60 (perfect 4-byte coalescing)
-// - T16: offset 128, T17: offset 132, ... T31: offset 188 (another perfect cache line)
 static void mul_mat_vec_q4_0_coalesced(
     const void * __restrict__ vx,        // Coalesced X weights
     const void * __restrict__ vy,        // Reordered Y activations
@@ -186,13 +179,11 @@ static void mul_mat_vec_q4_0_coalesced(
         return;
     }
 
-    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16 blocks per tile
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
     const int blocks_per_row = ncols / QK4_0;
     const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
 
-    // Thread role: which block in tile and which half (lower=words 0,1 vs upper=words 2,3)
-    const int block_in_tile = lane_id % TILE_BLOCKS;  // 0-15
-    const int is_upper_half = lane_id / TILE_BLOCKS;   // 0 or 1
+    const int word_stride = TILE_BLOCKS * 4;
 
     // X base pointers (coalesced layout: quants first, then scales)
     // Quants: tiles_per_row * TILE_BLOCKS * 16 bytes per row = ncols/2 bytes
@@ -209,55 +200,57 @@ static void mul_mat_vec_q4_0_coalesced(
     float partial_sum = 0.0f;
 
     for (int tile = 0; tile < tiles_per_row; tile++) {
-        // Base offset for this tile's quants (256 bytes per tile)
+        // Base offset for this tile's quants
         const int tile_base = row * x_row_stride + tile * MMVQ_COALESCED_TILE_BYTES;
 
-        // Coalesced load: word w of block b at offset w*64 + b*4
-        // Thread loads 2 words (8 bytes total) from its assigned block
-        // Lower half (is_upper_half=0): words 0,1 at offsets 0+b*4, 64+b*4
-        // Upper half (is_upper_half=1): words 2,3 at offsets 128+b*4, 192+b*4
-        const int word_base = is_upper_half * 128;  // 0 or 128
-        const int word0_offset = word_base + block_in_tile * 4;       // word 0 or 2
-        const int word1_offset = word_base + 64 + block_in_tile * 4;  // word 1 or 3
+        for (int block_in_tile = lane_id; block_in_tile < TILE_BLOCKS; block_in_tile += WARP_SIZE) {
+            // Get scale for this block (scales are NOT coalesced, remain block-sequential)
+            const int block_idx = row * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
+            const float d = x_d[block_idx];
 
-        // Perfectly coalesced 4-byte loads
-        const int v0 = *((const int *)(x_qs + tile_base + word0_offset));
-        const int v1 = *((const int *)(x_qs + tile_base + word1_offset));
+            // Y block index and base offset
+            const int y_block = tile * TILE_BLOCKS + block_in_tile;
+            const int y_base = y_block * QK8_1;
 
-        // Get scale for this block (scales are NOT coalesced, remain block-sequential)
-        const int block_idx = row * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
-        const float d = x_d[block_idx];
+            for (int half = 0; half < 2; ++half) {
+                // Coalesced load: word w of block b at offset w*word_stride + b*4
+                // Thread loads 2 words (8 bytes total) per half
+                const int word_base = half * (2 * word_stride);
+                const int word0_offset = word_base + block_in_tile * 4;                  // word 0 or 2
+                const int word1_offset = word_base + word_stride + block_in_tile * 4;    // word 1 or 3
 
-        // Y block index and base offset
-        const int y_block = tile * TILE_BLOCKS + block_in_tile;
-        const int y_base = y_block * QK8_1;
+                // Perfectly coalesced 4-byte loads
+                const int v0 = *((const int *)(x_qs + tile_base + word0_offset));
+                const int v1 = *((const int *)(x_qs + tile_base + word1_offset));
 
-        // Load Y data matching the X half we're processing
-        // For lower half (is_upper_half=0): Y elements 0-3, 16-19, 4-7, 20-23
-        // For upper half (is_upper_half=1): Y elements 8-11, 24-27, 12-15, 28-31
-        const int y_offset = is_upper_half * 8;  // 0 or 8 (in terms of bytes)
-        const int u0 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4);      // Y[0:3] or Y[8:11]
-        const int u1 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 4);  // Y[16:19] or Y[24:27]
-        const int u2 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 1);  // Y[4:7] or Y[12:15]
-        const int u3 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 5);  // Y[20:23] or Y[28:31]
+                // Load Y data matching the X half we're processing
+                // For half=0: Y elements 0-3, 16-19, 4-7, 20-23
+                // For half=1: Y elements 8-11, 24-27, 12-15, 28-31
+                const int y_offset = half * 8;  // 0 or 8 (in terms of bytes)
+                const int u0 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4);      // Y[0:3] or Y[8:11]
+                const int u1 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 4);  // Y[16:19] or Y[24:27]
+                const int u2 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 1);  // Y[4:7] or Y[12:15]
+                const int u3 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 5);  // Y[20:23] or Y[28:31]
 
-        // Extract nibbles and compute dp4a
-        const int vi0_0 = (v0 >> 0) & 0x0F0F0F0F;  // low nibbles of word 0
-        const int vi1_0 = (v0 >> 4) & 0x0F0F0F0F;  // high nibbles of word 0
-        const int vi0_1 = (v1 >> 0) & 0x0F0F0F0F;  // low nibbles of word 1
-        const int vi1_1 = (v1 >> 4) & 0x0F0F0F0F;  // high nibbles of word 1
+                // Extract nibbles and compute dp4a
+                const int vi0_0 = (v0 >> 0) & 0x0F0F0F0F;  // low nibbles of word 0
+                const int vi1_0 = (v0 >> 4) & 0x0F0F0F0F;  // high nibbles of word 0
+                const int vi0_1 = (v1 >> 0) & 0x0F0F0F0F;  // low nibbles of word 1
+                const int vi1_1 = (v1 >> 4) & 0x0F0F0F0F;  // high nibbles of word 1
 
-        int sumi = 0;
-        sumi = dpct::dp4a(vi0_0, u0, sumi);
-        sumi = dpct::dp4a(vi1_0, u1, sumi);
-        sumi = dpct::dp4a(vi0_1, u2, sumi);
-        sumi = dpct::dp4a(vi1_1, u3, sumi);
+                int sumi = 0;
+                sumi = dpct::dp4a(vi0_0, u0, sumi);
+                sumi = dpct::dp4a(vi1_0, u1, sumi);
+                sumi = dpct::dp4a(vi0_1, u2, sumi);
+                sumi = dpct::dp4a(vi1_1, u3, sumi);
 
-        // Apply scales: result = d4 * (sumi * ds8.x - 4 * ds8.y)
-        // The 4 comes from: 8 elements * (subtract 8 offset) / 16 = 4
-        const sycl::half2 ds8 = y_ds[y_block];
-        const sycl::float2 ds8f = ds8.convert<float, sycl::rounding_mode::automatic>();
-        partial_sum += d * (sumi * ds8f.x() - 4.0f * ds8f.y());
+                // Apply scales: result = d4 * (sumi * ds8.x - 4 * ds8.y)
+                // The 4 comes from: 8 elements * (subtract 8 offset) / 16 = 4
+                const sycl::half2 ds8 = y_ds[y_block];
+                const sycl::float2 ds8f = ds8.convert<float, sycl::rounding_mode::automatic>();
+                partial_sum += d * (sumi * ds8f.x() - 4.0f * ds8f.y());
+            }
+        }
     }
 
     // Warp reduction using subgroup intrinsic
@@ -268,9 +261,11 @@ static void mul_mat_vec_q4_0_coalesced(
     }
 }
 
-// Q6_K coalesced kernel - processes 16 blocks per tile with word-major layout
+// Q6_K coalesced kernel - processes tile blocks with word-major layout
 // Q6_K block: 256 elements, ql[128] + qh[64] + scales[16] + d[2] = 210 bytes
-// Coalesced tile: [ql: 2048 bytes][qh: 1024 bytes][scales: 256 bytes] = 3328 bytes
+// Coalesced tile: [ql: TILE_BLOCKS * (QK_K / 2)]
+//                 [qh: TILE_BLOCKS * (QK_K / 4)]
+//                 [scales: TILE_BLOCKS * (QK_K / 16)]
 static void mul_mat_vec_q6_k_coalesced(
     const void * __restrict__ vx,
     const void * __restrict__ vy,
@@ -289,21 +284,16 @@ static void mul_mat_vec_q6_k_coalesced(
         return;
     }
 
-    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
     const int blocks_per_row = ncols / QK_K;
     const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
-
-    // Thread mapping: 32 threads per warp
-    // Threads 0-15: blocks 0-15, first set of sub-blocks
-    // Threads 16-31: blocks 0-15, second set of sub-blocks
-    const int block_in_tile = lane_id % TILE_BLOCKS;
-    const int thread_half = lane_id / TILE_BLOCKS;  // 0 or 1
 
     // Tile layout sizes
     constexpr int ql_tile_bytes = TILE_BLOCKS * (QK_K / 2);   // 2048
     constexpr int qh_tile_bytes = TILE_BLOCKS * (QK_K / 4);   // 1024
     constexpr int sc_tile_bytes = TILE_BLOCKS * (QK_K / 16);  // 256
     constexpr int tile_total = ql_tile_bytes + qh_tile_bytes + sc_tile_bytes;
+    constexpr int WORD_PLANE_STRIDE = TILE_BLOCKS * 4;
 
     // X base pointers (coalesced layout)
     const uint8_t * x_base = (const uint8_t *)vx;
@@ -312,8 +302,9 @@ static void mul_mat_vec_q6_k_coalesced(
     // D values are after all coalesced quant data
     const ggml_half * x_d = (const ggml_half *)(x_base + nrows * x_row_stride);
 
-    // Y pointers (standard Q8_1 format)
-    const block_q8_1 * y = (const block_q8_1 *)vy;
+    // Y pointers (standard reordered Q8_1 format: quants, then ds)
+    const int8_t * y_qs = (const int8_t *)vy;
+    const sycl::half2 * y_ds = (const sycl::half2 *)((const char *)vy + ncols);
 
     float partial_sum = 0.0f;
 
@@ -325,75 +316,59 @@ static void mul_mat_vec_q6_k_coalesced(
         const uint8_t * tile_qh = tile_ql + ql_tile_bytes;
         const int8_t * tile_sc = (const int8_t *)(tile_qh + qh_tile_bytes);
 
-        // Get super-block scale for this block
-        const int block_idx = row * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
-        const float d = x_d[block_idx];
+        for (int block_in_tile = lane_id; block_in_tile < TILE_BLOCKS; block_in_tile += WARP_SIZE) {
+            // Get block scale for this block
+            const int block_idx = row * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
+            const float d = x_d[block_idx];
 
-        // Process 8 Q8_1 sub-blocks per Q6_K block (256/32 = 8)
-        // Thread half determines which 4 sub-blocks to process
-        const int sub_start = thread_half * 4;
+            const int y_block_base = (tile * TILE_BLOCKS + block_in_tile) * 8;
+            for (int iqs = 0; iqs < QI6_K; ++iqs) {
+                const int vh_shift = 2 * ((iqs % (QI6_K / 2)) / (QI6_K / 4));
+                const int bq8_offset = 2 * QR6_K * (iqs / (QI6_K / 2)) + (iqs % (QI6_K / 2)) / (QI6_K / 4);
+                const int scale_offset = (QI6_K / 4) * (iqs / (QI6_K / 2)) + (iqs % (QI6_K / 2)) / (QI6_K / 8);
+                const int u_index = iqs % QI8_1;
 
-        int sumi = 0;
+                const int ql_offset = iqs * WORD_PLANE_STRIDE + block_in_tile * 4;
+                const int qh_word_idx = (QI6_K / 4) * (iqs / (QI6_K / 2)) + iqs % (QI6_K / 4);
+                const int qh_offset = qh_word_idx * WORD_PLANE_STRIDE + block_in_tile * 4;
+                const int vl = *((const int *)(tile_ql + ql_offset));
+                const int vh_raw = *((const int *)(tile_qh + qh_offset));
+                const int vh = vh_raw >> vh_shift;
 
-        for (int sub = 0; sub < 4; sub++) {
-            const int sub_idx = sub_start + sub;
-            const int y_block_idx = (tile * TILE_BLOCKS + block_in_tile) * 8 + sub_idx;
+                const int sc_idx0 = scale_offset;
+                const int sc_idx1 = scale_offset + 4;
+                const int sc_word0 = sc_idx0 / 4;
+                const int sc_byte0 = sc_idx0 % 4;
+                const int sc_word1 = sc_idx1 / 4;
+                const int sc_byte1 = sc_idx1 % 4;
+                const int sc_offset0 = sc_word0 * WORD_PLANE_STRIDE + block_in_tile * 4 + sc_byte0;
+                const int sc_offset1 = sc_word1 * WORD_PLANE_STRIDE + block_in_tile * 4 + sc_byte1;
+                const int8_t sc0 = tile_sc[sc_offset0];
+                const int8_t sc1 = tile_sc[sc_offset1];
 
-            // Load Y data
-            const block_q8_1 * y_blk = &y[y_block_idx];
+                const int y_block0 = y_block_base + bq8_offset;
+                const int y_block1 = y_block0 + 2;
+                const int u0 = get_int_from_int8_aligned(y_qs + y_block0 * QK8_1, u_index);
+                const int u1 = get_int_from_int8_aligned(y_qs + y_block1 * QK8_1, u_index);
+                const sycl::float2 ds0f = y_ds[y_block0].convert<float, sycl::rounding_mode::automatic>();
+                const sycl::float2 ds1f = y_ds[y_block1].convert<float, sycl::rounding_mode::automatic>();
+                const float d8_0 = ds0f.x();
+                const float d8_1 = ds1f.x();
 
-            // Each sub-block covers 32 elements = 8 words of ql, 4 words of qh
-            // ql: 16 bytes (4 words) per sub-block position
-            const int ql_sub_offset = sub_idx * 16;  // 16 bytes per sub-block
-            const int qh_sub_offset = sub_idx * 8;   // 8 bytes per sub-block
+                float sumf = 0.0f;
+                const int vil0 = (vl >> 0) & 0x0F0F0F0F;
+                const int vih0 = ((vh >> 0) << 4) & 0x30303030;
+                const int vi0 = dpct::vectorized_binary<sycl::char4>((vil0 | vih0), 0x20202020, dpct::sub_sat());
+                sumf += d8_0 * (dpct::dp4a(vi0, u0, 0) * sc0);
 
-            // Load 16 bytes of ql for this sub-block (4 coalesced int loads)
-            int ql_vals[4];
-            for (int w = 0; w < 4; w++) {
-                const int word_idx = ql_sub_offset / 4 + w;
-                const int ql_offset = word_idx * (TILE_BLOCKS * 4) + block_in_tile * 4;
-                ql_vals[w] = *((const int *)(tile_ql + ql_offset));
-            }
+                const int vil1 = (vl >> 4) & 0x0F0F0F0F;
+                const int vih1 = ((vh >> 4) << 4) & 0x30303030;
+                const int vi1 = dpct::vectorized_binary<sycl::char4>((vil1 | vih1), 0x20202020, dpct::sub_sat());
+                sumf += d8_1 * (dpct::dp4a(vi1, u1, 0) * sc1);
 
-            // Load 8 bytes of qh for this sub-block (2 coalesced int loads)
-            int qh_vals[2];
-            for (int w = 0; w < 2; w++) {
-                const int word_idx = qh_sub_offset / 4 + w;
-                const int qh_offset = word_idx * (TILE_BLOCKS * 4) + block_in_tile * 4;
-                qh_vals[w] = *((const int *)(tile_qh + qh_offset));
-            }
-
-            // Load scale for this sub-block
-            // scales: 16 bytes total per block, divided by 16 sub-positions
-            const int sc_word_idx = sub_idx / 4;  // 0 or 1 for this half
-            const int sc_byte_pos = sub_idx % 4;
-            const int sc_offset = sc_word_idx * (TILE_BLOCKS * 4) + block_in_tile * 4 + sc_byte_pos;
-            const int8_t sc = tile_sc[sc_offset];
-
-            // Process 32 elements (4 ql words)
-            for (int j = 0; j < 32; j++) {
-                // Get ql nibble (4 bits)
-                const int ql_word = j / 8;
-                const int ql_byte = (j % 8) / 2;
-                const int ql_nibble_pos = j % 2;
-                const int ql_byte_val = (ql_vals[ql_word] >> (ql_byte * 8)) & 0xFF;
-                const int ql_4bit = (ql_byte_val >> (ql_nibble_pos * 4)) & 0x0F;
-
-                // Get qh bits (2 bits)
-                const int qh_word = j / 16;
-                const int qh_bit_pos = (j % 16) * 2;
-                const int qh_2bit = (qh_vals[qh_word] >> qh_bit_pos) & 0x03;
-
-                // Combine to 6-bit signed value
-                const int q6 = (ql_4bit | (qh_2bit << 4)) - 32;
-
-                // Accumulate with Y
-                sumi += q6 * y_blk->qs[j];
+                partial_sum += d * sumf;
             }
         }
-
-        // Apply scale
-        partial_sum += d * sumi;
     }
 
     // Warp reduction
@@ -1135,9 +1110,9 @@ static void reorder_mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * vy,
     GGML_ASSERT(ncols % QK4_0 == 0);
     const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
     constexpr size_t num_subgroups = 16;
-    GGML_ASSERT(block_num_y % num_subgroups == 0);
+    const int        block_num_y_padded = ceil_div(block_num_y, (int)num_subgroups) * (int)num_subgroups;
 
-    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y * WARP_SIZE));
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y_padded * WARP_SIZE));
     const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
 
     // Calculate SLM sizes for Y-vector caching (same as regular MMVQ)
@@ -1169,9 +1144,9 @@ static void reorder_mul_mat_vec_q8_0_q8_1_sycl(const void * vx, const void * vy,
     GGML_ASSERT(ncols % QK8_0 == 0);
     const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
     constexpr size_t num_subgroups = 16;
-    GGML_ASSERT(block_num_y % num_subgroups == 0);
+    const int        block_num_y_padded = ceil_div(block_num_y, (int)num_subgroups) * (int)num_subgroups;
 
-    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y * WARP_SIZE));
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y_padded * WARP_SIZE));
     const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
 
     stream->submit([&](sycl::handler & cgh) {
@@ -1191,9 +1166,9 @@ static void reorder_mul_mat_vec_mxfp4_q8_1_sycl(const void * vx, const void * vy
     GGML_ASSERT(ncols % QK_MXFP4 == 0);
     const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
     constexpr size_t num_subgroups = 16;
-    GGML_ASSERT(block_num_y % num_subgroups == 0);
+    const int        block_num_y_padded = ceil_div(block_num_y, (int)num_subgroups) * (int)num_subgroups;
 
-    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y * WARP_SIZE));
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y_padded * WARP_SIZE));
     const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
 
     stream->submit([&](sycl::handler & cgh) {
@@ -1206,8 +1181,8 @@ static void reorder_mul_mat_vec_mxfp4_q8_1_sycl(const void * vx, const void * vy
 }
 
 // GPU kernel to convert Q4_0 reordered format to warp-coalesced format
-// Input layout (per 16-block tile):  [B0.qs[0:15]][B1.qs[0:15]]...[B15.qs[0:15]] = block-major
-// Output layout (per 16-block tile): [W0:B0..B15][W1:B0..B15][W2:B0..B15][W3:B0..B15] = word-major
+// Input layout (per tile):  [B0.qs[0:15]]...[B(TILE_BLOCKS-1).qs[0:15]] = block-major
+// Output layout (per tile): [W0:B0..B(TILE_BLOCKS-1)]...[W3:B0..B(TILE_BLOCKS-1)] = word-major
 // Where W0 = bytes 0-3, W1 = bytes 4-7, W2 = bytes 8-11, W3 = bytes 12-15 of each block
 static void convert_q4_0_to_coalesced_kernel(
     const uint8_t * __restrict__ src,   // Reordered format
@@ -1215,7 +1190,7 @@ static void convert_q4_0_to_coalesced_kernel(
     const int ncols, const int nrows,
     const sycl::nd_item<3> & item)
 {
-    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
     const int blocks_per_row = ncols / QK4_0;
     const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
     const int bytes_per_row = ncols / 2;  // 16 bytes per block, 32 elements per block
@@ -1244,8 +1219,9 @@ static void convert_q4_0_to_coalesced_kernel(
     // Source offset (block-major): row * bytes_per_row + tile * 256 + block * 16 + word * 4
     const int src_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 16) + block_in_tile * 16 + word_in_block * 4;
 
-    // Destination offset (word-major): row * bytes_per_row + tile * 256 + word * 64 + block * 4
-    const int dst_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 16) + word_in_block * 64 + block_in_tile * 4;
+    // Destination offset (word-major): row * bytes_per_row + tile * bytes + word * stride + block * 4
+    const int dst_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 16) +
+        word_in_block * (TILE_BLOCKS * 4) + block_in_tile * 4;
 
     // Copy 4 bytes
     *((int *)(dst + dst_offset)) = *((const int *)(src + src_offset));
@@ -1303,7 +1279,7 @@ static void convert_q6_k_to_coalesced_sycl(void * data, const int ncols, const i
 // UNIFIED COALESCED REORDER FUNCTION
 // This is the friend function declared in common.hpp - the ONLY way to set
 // COALESCED mode. Atomically transforms data AND sets flag.
-// Supports Q4_0, Q8_0, and MXFP4 tensor types.
+// Supports direct AoS→Coalesced or SoA→Coalesced, depending on current mode.
 // =============================================================================
 bool convert_tensor_to_coalesced(const ggml_tensor* tensor, dpct::queue_ptr stream, const char* caller) {
     if (!tensor || !tensor->extra) {
@@ -1314,21 +1290,15 @@ bool convert_tensor_to_coalesced(const ggml_tensor* tensor, dpct::queue_ptr stre
 
     ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
 
+    const reorder_mode current_mode = extra->optimized_feature.get_reorder();
+
     // Check if already coalesced
-    if (extra->optimized_feature.get_reorder() == reorder_mode::COALESCED) {
+    if (current_mode == reorder_mode::COALESCED) {
         return true;  // Already done
     }
 
-    // COALESCED requires SOA first
-    if (extra->optimized_feature.get_reorder() != reorder_mode::SOA) {
-        fprintf(stderr, "[COALESCED-UNIFIED] ERROR: tensor '%s' not in SOA mode (mode=%d). "
-                "COALESCED requires SOA first.\n",
-                tensor->name ? tensor->name : "?", (int)extra->optimized_feature.get_reorder());
-        return false;
-    }
-
     const int64_t ncols = tensor->ne[0];
-    const int64_t nrows = tensor->ne[1];
+    const int64_t nrows = ggml_nrows(tensor);
 
     // Type-specific transform and tile alignment check
     int block_size = 0;
@@ -1338,7 +1308,13 @@ bool convert_tensor_to_coalesced(const ggml_tensor* tensor, dpct::queue_ptr stre
             if ((ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS != 0) {
                 return false;  // Not tile-aligned
             }
-            convert_q4_0_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+            if (current_mode == reorder_mode::SOA) {
+                convert_q4_0_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+            } else if (current_mode == reorder_mode::NONE) {
+                reorder_q4_0_aos_to_coalesced_sycl(tensor->data, tensor->data, ncols, nrows, stream);
+            } else {
+                return false;
+            }
             break;
 
         case GGML_TYPE_Q8_0:
@@ -1346,7 +1322,13 @@ bool convert_tensor_to_coalesced(const ggml_tensor* tensor, dpct::queue_ptr stre
             if ((ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS != 0) {
                 return false;  // Not tile-aligned
             }
-            convert_q8_0_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+            if (current_mode == reorder_mode::SOA) {
+                convert_q8_0_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+            } else if (current_mode == reorder_mode::NONE) {
+                reorder_q8_0_aos_to_coalesced_sycl(tensor->data, tensor->data, ncols, nrows, stream);
+            } else {
+                return false;
+            }
             break;
 
         case GGML_TYPE_MXFP4:
@@ -1354,7 +1336,13 @@ bool convert_tensor_to_coalesced(const ggml_tensor* tensor, dpct::queue_ptr stre
             if ((ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS != 0) {
                 return false;  // Not tile-aligned
             }
-            convert_mxfp4_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+            if (current_mode == reorder_mode::SOA) {
+                convert_mxfp4_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+            } else if (current_mode == reorder_mode::NONE) {
+                reorder_mxfp4_aos_to_coalesced_sycl(tensor->data, tensor->data, ncols, nrows, stream);
+            } else {
+                return false;
+            }
             break;
 
         case GGML_TYPE_Q6_K:
@@ -1362,7 +1350,13 @@ bool convert_tensor_to_coalesced(const ggml_tensor* tensor, dpct::queue_ptr stre
             if ((ncols / block_size) % MMVQ_COALESCED_TILE_BLOCKS != 0) {
                 return false;  // Not tile-aligned
             }
-            convert_q6_k_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+            if (current_mode == reorder_mode::SOA) {
+                convert_q6_k_to_coalesced_sycl(tensor->data, ncols, nrows, stream);
+            } else if (current_mode == reorder_mode::NONE) {
+                reorder_q6_k_aos_to_coalesced_sycl(tensor->data, tensor->data, ncols, nrows, stream);
+            } else {
+                return false;
+            }
             break;
 
         default:
@@ -1430,15 +1424,13 @@ static void coalesced_mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * v
 // Q8_0 Warp-Coalesced MMVQ Kernel
 // ============================================================================
 // Q8_0 block: 32 int8 quants (32 bytes) + fp16 scale (2 bytes) = 34 bytes
-// Coalesced layout: group consecutive words (4 bytes) across 16 blocks per tile
+// Coalesced layout: group consecutive words (4 bytes) across TILE_BLOCKS per tile
 //
-// Memory layout per tile (16 blocks, 512 bytes quants):
-// Source (block-major): [B0.W0-W7][B1.W0-W7]...[B15.W0-W7]
-// Dest (word-major):    [W0:B0-B15][W1:B0-B15]...[W7:B0-B15]
+// Memory layout per tile (TILE_BLOCKS blocks):
+// Source (block-major): [B0.W0-W7][B1.W0-W7]...[B(TILE_BLOCKS-1).W0-W7]
+// Dest (word-major):    [W0:B0-B(TILE_BLOCKS-1)]...[W7:B0-B(TILE_BLOCKS-1)]
 //
-// Thread mapping (32 threads process 16 blocks per iteration):
-// - Threads 0-15:  process blocks 0-15, lower half (words 0-3 = elements 0-15)
-// - Threads 16-31: process blocks 0-15, upper half (words 4-7 = elements 16-31)
+// Thread mapping: threads iterate block_in_tile and process both halves per block
 static void mul_mat_vec_q8_0_coalesced(
     const void * __restrict__ vx,        // Coalesced X weights
     const void * __restrict__ vy,        // Reordered Y activations
@@ -1457,13 +1449,11 @@ static void mul_mat_vec_q8_0_coalesced(
         return;
     }
 
-    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16 blocks per tile
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
     const int blocks_per_row = ncols / QK8_0;
     const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
 
-    // Thread role: which block in tile and which half (lower=words 0-3 vs upper=words 4-7)
-    const int block_in_tile = lane_id % TILE_BLOCKS;  // 0-15
-    const int is_upper_half = lane_id / TILE_BLOCKS;  // 0 or 1
+    const int word_stride = TILE_BLOCKS * 4;
 
     // X base pointers (coalesced layout: quants first, then scales)
     // Quants: tiles_per_row * TILE_BLOCKS * 32 bytes per row = ncols bytes
@@ -1480,49 +1470,51 @@ static void mul_mat_vec_q8_0_coalesced(
     float partial_sum = 0.0f;
 
     for (int tile = 0; tile < tiles_per_row; tile++) {
-        // Base offset for this tile's quants (512 bytes per tile for Q8_0)
+        // Base offset for this tile's quants
         const int tile_base = row * x_row_stride + tile * MMVQ_COALESCED_TILE_BYTES_Q8_0;
 
-        // Coalesced load: word w of block b at offset w*64 + b*4
-        // Thread loads 4 words (16 bytes total) from its assigned block
-        // Lower half (is_upper_half=0): words 0-3 at offsets 0+b*4, 64+b*4, 128+b*4, 192+b*4
-        // Upper half (is_upper_half=1): words 4-7 at offsets 256+b*4, 320+b*4, 384+b*4, 448+b*4
-        const int word_base = is_upper_half * 256;  // 0 or 256 (4 words * 64 bytes stride)
+        for (int block_in_tile = lane_id; block_in_tile < TILE_BLOCKS; block_in_tile += WARP_SIZE) {
+            // Get scale for this block (scales are NOT coalesced, remain block-sequential)
+            const int block_idx = row * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
+            const float d = x_d[block_idx];
 
-        // Perfectly coalesced 4-byte loads
-        const int v0 = *((const int *)(x_qs + tile_base + word_base + 0 * 64 + block_in_tile * 4));
-        const int v1 = *((const int *)(x_qs + tile_base + word_base + 1 * 64 + block_in_tile * 4));
-        const int v2 = *((const int *)(x_qs + tile_base + word_base + 2 * 64 + block_in_tile * 4));
-        const int v3 = *((const int *)(x_qs + tile_base + word_base + 3 * 64 + block_in_tile * 4));
+            // Y block index and base offset
+            const int y_block = tile * TILE_BLOCKS + block_in_tile;
+            const int y_base = y_block * QK8_1;
 
-        // Get scale for this block (scales are NOT coalesced, remain block-sequential)
-        const int block_idx = row * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
-        const float d = x_d[block_idx];
+            for (int half = 0; half < 2; ++half) {
+                // Coalesced load: word w of block b at offset w*word_stride + b*4
+                // Thread loads 4 words (16 bytes total) per half
+                const int word_base = half * (4 * word_stride);
 
-        // Y block index and base offset
-        const int y_block = tile * TILE_BLOCKS + block_in_tile;
-        const int y_base = y_block * QK8_1;
+                // Perfectly coalesced 4-byte loads
+                const int v0 = *((const int *)(x_qs + tile_base + word_base + 0 * word_stride + block_in_tile * 4));
+                const int v1 = *((const int *)(x_qs + tile_base + word_base + 1 * word_stride + block_in_tile * 4));
+                const int v2 = *((const int *)(x_qs + tile_base + word_base + 2 * word_stride + block_in_tile * 4));
+                const int v3 = *((const int *)(x_qs + tile_base + word_base + 3 * word_stride + block_in_tile * 4));
 
-        // Load Y data matching the X half we're processing
-        // For lower half (is_upper_half=0): Y elements 0-15
-        // For upper half (is_upper_half=1): Y elements 16-31
-        const int y_offset = is_upper_half * 16;  // 0 or 16 (in bytes)
-        const int u0 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 0);  // Y[0:3] or Y[16:19]
-        const int u1 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 1);  // Y[4:7] or Y[20:23]
-        const int u2 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 2);  // Y[8:11] or Y[24:27]
-        const int u3 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 3);  // Y[12:15] or Y[28:31]
+                // Load Y data matching the X half we're processing
+                // For half=0: Y elements 0-15
+                // For half=1: Y elements 16-31
+                const int y_offset = half * 16;  // 0 or 16 (in bytes)
+                const int u0 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 0);  // Y[0:3] or Y[16:19]
+                const int u1 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 1);  // Y[4:7] or Y[20:23]
+                const int u2 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 2);  // Y[8:11] or Y[24:27]
+                const int u3 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 3);  // Y[12:15] or Y[28:31]
 
-        // dp4a: compute dot product of 4 int8 pairs
-        int sumi = 0;
-        sumi = dpct::dp4a(v0, u0, sumi);
-        sumi = dpct::dp4a(v1, u1, sumi);
-        sumi = dpct::dp4a(v2, u2, sumi);
-        sumi = dpct::dp4a(v3, u3, sumi);
+                // dp4a: compute dot product of 4 int8 pairs
+                int sumi = 0;
+                sumi = dpct::dp4a(v0, u0, sumi);
+                sumi = dpct::dp4a(v1, u1, sumi);
+                sumi = dpct::dp4a(v2, u2, sumi);
+                sumi = dpct::dp4a(v3, u3, sumi);
 
-        // Apply scales: Q8_0 × Q8_1 = d8_0 * d8_1 * sumi
-        const sycl::half2 ds8 = y_ds[y_block];
-        const float d8_1 = ds8[0];
-        partial_sum += d * d8_1 * sumi;
+                // Apply scales: Q8_0 × Q8_1 = d8_0 * d8_1 * sumi
+                const sycl::half2 ds8 = y_ds[y_block];
+                const float d8_1 = ds8[0];
+                partial_sum += d * d8_1 * sumi;
+            }
+        }
     }
 
     // Warp reduction using subgroup intrinsic
@@ -1534,8 +1526,8 @@ static void mul_mat_vec_q8_0_coalesced(
 }
 
 // GPU kernel to convert Q8_0 reordered format to warp-coalesced format
-// Input layout (per 16-block tile):  [B0.qs[0:31]][B1.qs[0:31]]...[B15.qs[0:31]] = block-major
-// Output layout (per 16-block tile): [W0:B0..B15][W1:B0..B15]...[W7:B0..B15] = word-major
+// Input layout (per tile):  [B0.qs[0:31]]...[B(TILE_BLOCKS-1).qs[0:31]] = block-major
+// Output layout (per tile): [W0:B0..B(TILE_BLOCKS-1)]...[W7:B0..B(TILE_BLOCKS-1)] = word-major
 // Where W0 = bytes 0-3, W1 = bytes 4-7, ..., W7 = bytes 28-31 of each block
 static void convert_q8_0_to_coalesced_kernel(
     const uint8_t * __restrict__ src,   // Reordered format
@@ -1543,13 +1535,13 @@ static void convert_q8_0_to_coalesced_kernel(
     const int ncols, const int nrows,
     const sycl::nd_item<3> & item)
 {
-    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
     const int blocks_per_row = ncols / QK8_0;
     const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
     const int bytes_per_row = ncols;  // 32 bytes per block, 32 elements per block
 
     // Grid: one work-item per 4-byte word in the tensor
-    // Total words per row = blocks_per_row * 8 = tiles_per_row * 16 * 8
+    // Total words per row = blocks_per_row * 8 = tiles_per_row * TILE_BLOCKS * 8
     const int global_id = item.get_global_linear_id();
     const int total_words_per_row = blocks_per_row * 8;  // 8 words per Q8_0 block
     const int total_words = nrows * total_words_per_row;
@@ -1573,7 +1565,8 @@ static void convert_q8_0_to_coalesced_kernel(
     const int src_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 32) + block_in_tile * 32 + word_in_block * 4;
 
     // Destination offset (word-major): row * bytes_per_row + tile * 512 + word * 64 + block * 4
-    const int dst_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 32) + word_in_block * 64 + block_in_tile * 4;
+    const int dst_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 32) +
+        word_in_block * (TILE_BLOCKS * 4) + block_in_tile * 4;
 
     // Copy 4 bytes
     *((int *)(dst + dst_offset)) = *((const int *)(src + src_offset));
@@ -1640,6 +1633,28 @@ bool ggml_sycl_convert_to_coalesced_q8_0(const ggml_tensor * tensor, dpct::queue
     return convert_tensor_to_coalesced(tensor, stream, "ggml_sycl_convert_to_coalesced");
 }
 
+// Public API for Q6_K coalesced conversion - call at model load time, after reorder
+bool ggml_sycl_convert_to_coalesced_q6_k(const ggml_tensor * tensor, dpct::queue_ptr stream) {
+    // Use centralized type support check
+    if (!is_coalesced_supported(tensor->type)) {
+        return false;
+    }
+
+    // Check if coalesced mode is enabled via global reorder mode
+    if (g_ggml_sycl_reorder_mode != reorder_mode::COALESCED) {
+        return false;
+    }
+
+    // Skip TP-sharded tensors (policy decision for this API)
+    ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *)tensor->extra;
+    if (extra && extra->tp_sharded) {
+        return false;
+    }
+
+    // Use the unified function - it handles all validation and atomic transform+flag
+    return convert_tensor_to_coalesced(tensor, stream, "ggml_sycl_convert_to_coalesced");
+}
+
 // Dispatch function for coalesced Q8_0 MMVQ kernel
 static void coalesced_mul_mat_vec_q8_0_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
                                                   const int nrows, dpct::queue_ptr stream) {
@@ -1684,13 +1699,9 @@ static void mul_mat_vec_mxfp4_coalesced(
         return;
     }
 
-    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16 blocks per tile
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
     const int blocks_per_row = ncols / QK_MXFP4;
     const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
-
-    // Thread role: which block in tile and which half (lower=words 0,1 vs upper=words 2,3)
-    const int block_in_tile = lane_id % TILE_BLOCKS;  // 0-15
-    const int is_upper_half = lane_id / TILE_BLOCKS;  // 0 or 1
 
     // X base pointers (coalesced layout: quants first, then scales)
     const uint8_t * x_qs = (const uint8_t *)vx;
@@ -1706,52 +1717,56 @@ static void mul_mat_vec_mxfp4_coalesced(
     float partial_sum = 0.0f;
 
     for (int tile = 0; tile < tiles_per_row; tile++) {
-        // Base offset for this tile's quants (256 bytes per tile for MXFP4)
+        // Base offset for this tile's quants
         const int tile_base = row * x_row_stride + tile * MMVQ_COALESCED_TILE_BYTES_MXFP4;
 
-        // Coalesced load: word w of block b at offset w*64 + b*4
-        const int word_base = is_upper_half * 128;  // 0 or 128
-        const int word0_offset = word_base + block_in_tile * 4;       // word 0 or 2
-        const int word1_offset = word_base + 64 + block_in_tile * 4;  // word 1 or 3
+        const int word_stride = TILE_BLOCKS * 4;
+        for (int block_in_tile = lane_id; block_in_tile < TILE_BLOCKS; block_in_tile += WARP_SIZE) {
+            for (int half = 0; half < 2; ++half) {
+                const int word_base = half * (2 * word_stride);
+                const int word0_offset = word_base + block_in_tile * 4;               // word 0 or 2
+                const int word1_offset = word_base + word_stride + block_in_tile * 4; // word 1 or 3
 
-        // Perfectly coalesced 4-byte loads
-        const int v0 = *((const int *)(x_qs + tile_base + word0_offset));
-        const int v1 = *((const int *)(x_qs + tile_base + word1_offset));
+                // Perfectly coalesced 4-byte loads
+                const int v0 = *((const int *)(x_qs + tile_base + word0_offset));
+                const int v1 = *((const int *)(x_qs + tile_base + word1_offset));
 
-        // Get E8M0 exponent for this block
-        const int block_idx = row * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
-        const uint8_t e8m0 = x_e[block_idx];
-        const float scale = ggml_sycl_e8m0_to_fp32(e8m0) * 0.5f;
+                // Get E8M0 exponent for this block
+                const int block_idx = row * blocks_per_row + tile * TILE_BLOCKS + block_in_tile;
+                const uint8_t e8m0 = x_e[block_idx];
+                const float scale = ggml_sycl_e8m0_to_fp32(e8m0) * 0.5f;
 
-        // Y block index and base offset
-        const int y_block = tile * TILE_BLOCKS + block_in_tile;
-        const int y_base = y_block * QK8_1;
+                // Y block index and base offset
+                const int y_block = tile * TILE_BLOCKS + block_in_tile;
+                const int y_base = y_block * QK8_1;
 
-        // Load Y data matching the X half we're processing
-        const int y_offset = is_upper_half * 8;  // 0 or 8 (in terms of bytes)
+                // Load Y data matching the X half we're processing
+                const int y_offset = half * 8;  // 0 or 8 (in terms of bytes)
 
-        // Use MXFP4 lookup table for dequantization
-        // Process 8 elements per load (2 words of 4 nibbles each = 8 FP4 values)
-        const sycl::int2 dq0 = get_int_from_table_16(v0, kvalues_mxfp4);
-        const sycl::int2 dq1 = get_int_from_table_16(v1, kvalues_mxfp4);
+                // Use MXFP4 lookup table for dequantization
+                // Process 8 elements per load (2 words of 4 nibbles each = 8 FP4 values)
+                const sycl::int2 dq0 = get_int_from_table_16(v0, kvalues_mxfp4);
+                const sycl::int2 dq1 = get_int_from_table_16(v1, kvalues_mxfp4);
 
-        // Load corresponding Y values
-        const int u0 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4);      // Y[0:3] or Y[8:11]
-        const int u1 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 4);  // Y[16:19] or Y[24:27]
-        const int u2 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 1);  // Y[4:7] or Y[12:15]
-        const int u3 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 5);  // Y[20:23] or Y[28:31]
+                // Load corresponding Y values
+                const int u0 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4);      // Y[0:3] or Y[8:11]
+                const int u1 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 4);  // Y[16:19] or Y[24:27]
+                const int u2 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 1);  // Y[4:7] or Y[12:15]
+                const int u3 = get_int_from_int8_aligned(y_qs + y_base, y_offset / 4 + 5);  // Y[20:23] or Y[28:31]
 
-        // dp4a: compute dot product
-        int sumi = 0;
-        sumi = ggml_sycl_dp4a(dq0.x(), u0, sumi);
-        sumi = ggml_sycl_dp4a(dq0.y(), u1, sumi);
-        sumi = ggml_sycl_dp4a(dq1.x(), u2, sumi);
-        sumi = ggml_sycl_dp4a(dq1.y(), u3, sumi);
+                // dp4a: compute dot product
+                int sumi = 0;
+                sumi = ggml_sycl_dp4a(dq0.x(), u0, sumi);
+                sumi = ggml_sycl_dp4a(dq0.y(), u1, sumi);
+                sumi = ggml_sycl_dp4a(dq1.x(), u2, sumi);
+                sumi = ggml_sycl_dp4a(dq1.y(), u3, sumi);
 
-        // Apply scales
-        const sycl::half2 ds8 = y_ds[y_block];
-        const float d8_1 = ds8[0];
-        partial_sum += scale * d8_1 * sumi;
+                // Apply scales
+                const sycl::half2 ds8 = y_ds[y_block];
+                const float d8_1 = ds8[0];
+                partial_sum += scale * d8_1 * sumi;
+            }
+        }
     }
 
     // Warp reduction using subgroup intrinsic
@@ -1770,7 +1785,7 @@ static void convert_mxfp4_to_coalesced_kernel(
     const int ncols, const int nrows,
     const sycl::nd_item<3> & item)
 {
-    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
     const int blocks_per_row = ncols / QK_MXFP4;
     const int bytes_per_row = ncols / 2;  // 16 bytes per block, 32 elements per block
 
@@ -1792,7 +1807,8 @@ static void convert_mxfp4_to_coalesced_kernel(
     const int word_in_block = word_in_tile % 4;
 
     const int src_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 16) + block_in_tile * 16 + word_in_block * 4;
-    const int dst_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 16) + word_in_block * 64 + block_in_tile * 4;
+    const int dst_offset = row * bytes_per_row + tile * (TILE_BLOCKS * 16) +
+        word_in_block * (TILE_BLOCKS * 4) + block_in_tile * 4;
 
     *((int *)(dst + dst_offset)) = *((const int *)(src + src_offset));
 }
@@ -1833,8 +1849,10 @@ static void convert_mxfp4_to_coalesced_sycl(void * data, const int ncols, const 
 
 // Q6_K Coalesced Conversion
 // SoA layout: [all ql][all qh][all scales][all d]
-// Coalesced layout per tile (16 blocks):
-//   [ql word-major: 2048 bytes] [qh word-major: 1024 bytes] [scales word-major: 256 bytes]
+// Coalesced layout per tile (TILE_BLOCKS blocks):
+//   [ql word-major: TILE_BLOCKS * (QK_K / 2)]
+//   [qh word-major: TILE_BLOCKS * (QK_K / 4)]
+//   [scales word-major: TILE_BLOCKS * (QK_K / 16)]
 // D values remain at tensor end (not coalesced within tiles)
 static void convert_q6_k_to_coalesced_kernel(
     const uint8_t * __restrict__ src,   // SoA format
@@ -1842,7 +1860,7 @@ static void convert_q6_k_to_coalesced_kernel(
     const int ncols, const int nrows,
     const sycl::nd_item<3> & item)
 {
-    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 16
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
     const int blocks_per_row = ncols / QK_K;
     const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
 
@@ -1858,10 +1876,10 @@ static void convert_q6_k_to_coalesced_kernel(
     // D values stay in place (at tensor end)
 
     // Coalesced tile sizes
-    constexpr int ql_tile_bytes = TILE_BLOCKS * (QK_K / 2);   // 16 * 128 = 2048
-    constexpr int qh_tile_bytes = TILE_BLOCKS * (QK_K / 4);   // 16 * 64 = 1024
-    constexpr int sc_tile_bytes = TILE_BLOCKS * (QK_K / 16);  // 16 * 16 = 256
-    constexpr int tile_total = ql_tile_bytes + qh_tile_bytes + sc_tile_bytes;  // 3328 bytes
+    constexpr int ql_tile_bytes = TILE_BLOCKS * (QK_K / 2);
+    constexpr int qh_tile_bytes = TILE_BLOCKS * (QK_K / 4);
+    constexpr int sc_tile_bytes = TILE_BLOCKS * (QK_K / 16);
+    constexpr int tile_total = ql_tile_bytes + qh_tile_bytes + sc_tile_bytes;
 
     // Destination base for quant data (coalesced tiles)
     uint8_t * dst_tiles = dst;
@@ -2020,6 +2038,15 @@ static void coalesced_mul_mat_vec_mxfp4_q8_1_sycl(const void * vx, const void * 
 static void coalesced_mul_mat_vec_q6_k_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
                                                   const int nrows, dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
+    const int nblocks = ncols / QK_K;
+    if (nblocks % MMVQ_COALESCED_TILE_BLOCKS != 0) {
+        fprintf(stderr, "\n=== Q6_K COALESCED ASSERTION FAILURE ===\n");
+        fprintf(stderr, "ncols=%d, nrows=%d, nblocks=%d, MMVQ_COALESCED_TILE_BLOCKS=%d\n",
+                ncols, nrows, nblocks, MMVQ_COALESCED_TILE_BLOCKS);
+        fprintf(stderr, "Remainder: %d %% %d = %d (expected 0)\n",
+                nblocks, MMVQ_COALESCED_TILE_BLOCKS, nblocks % MMVQ_COALESCED_TILE_BLOCKS);
+        fprintf(stderr, "==========================================\n\n");
+    }
     GGML_ASSERT((ncols / QK_K) % MMVQ_COALESCED_TILE_BLOCKS == 0);
 
     constexpr size_t num_subgroups = 16;
@@ -2321,9 +2348,9 @@ static void reorder_mul_mat_vec_q4_k_q8_1_sycl(const void * vx, const void * vy,
 
     const int block_num_y = ceil_div(nrows, GGML_SYCL_MMV_Y);
     constexpr size_t num_subgroups = 16;
-    GGML_ASSERT(block_num_y % num_subgroups == 0);
+    const int block_num_y_padded = ceil_div(block_num_y, (int)num_subgroups) * (int)num_subgroups;
 
-    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, block_num_y * WARP_SIZE);
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, block_num_y_padded * WARP_SIZE);
     const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
 
     stream->submit([&](sycl::handler & cgh) {
@@ -2367,9 +2394,9 @@ static void reorder_mul_mat_vec_q6_k_q8_1_sycl(const void * vx, const void * vy,
     GGML_ASSERT(ncols % QK_K == 0);
     const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
     constexpr size_t num_subgroups = 16;
-    GGML_ASSERT(block_num_y % num_subgroups == 0);
+    const int        block_num_y_padded = ceil_div(block_num_y, (int)num_subgroups) * (int)num_subgroups;
 
-    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, block_num_y * WARP_SIZE);
+    const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, block_num_y_padded * WARP_SIZE);
     const sycl::range<3> workgroup_size(1, GGML_SYCL_MMV_Y, num_subgroups * WARP_SIZE);
 
     stream->submit([&](sycl::handler & cgh) {
