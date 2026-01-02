@@ -75,6 +75,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_BITNET,           "bitnet"           },
     { LLM_ARCH_T5,               "t5"               },
     { LLM_ARCH_T5ENCODER,        "t5encoder"        },
+    { LLM_ARCH_NLLB,             "nllb"             },
     { LLM_ARCH_JAIS,             "jais"             },
     { LLM_ARCH_NEMOTRON,         "nemotron"         },
     { LLM_ARCH_NEMOTRON_H,       "nemotron_h"       },
@@ -116,7 +117,6 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_RND1,             "rnd1"             },
     { LLM_ARCH_PANGU_EMBED,      "pangu-embedded"   },
     { LLM_ARCH_MISTRAL3,         "mistral3"         },
-    { LLM_ARCH_MIMO2,            "mimo2"           },
     { LLM_ARCH_LLAMA_EMBED,      "llama-embed"      },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
@@ -1642,6 +1642,35 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_ENC_FFN_DOWN,
                 LLM_TENSOR_ENC_FFN_UP,
             };
+        case LLM_ARCH_NLLB:
+            return {
+                LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_POS_EMBD,
+                LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_DEC_OUTPUT_NORM,
+                LLM_TENSOR_DEC_ATTN_NORM,
+                LLM_TENSOR_DEC_ATTN_Q,
+                LLM_TENSOR_DEC_ATTN_K,
+                LLM_TENSOR_DEC_ATTN_V,
+                LLM_TENSOR_DEC_ATTN_OUT,
+                LLM_TENSOR_DEC_CROSS_ATTN_NORM,
+                LLM_TENSOR_DEC_CROSS_ATTN_Q,
+                LLM_TENSOR_DEC_CROSS_ATTN_K,
+                LLM_TENSOR_DEC_CROSS_ATTN_V,
+                LLM_TENSOR_DEC_CROSS_ATTN_OUT,
+                LLM_TENSOR_DEC_FFN_NORM,
+                LLM_TENSOR_DEC_FFN_DOWN,
+                LLM_TENSOR_DEC_FFN_UP,
+                LLM_TENSOR_ENC_OUTPUT_NORM,
+                LLM_TENSOR_ENC_ATTN_NORM,
+                LLM_TENSOR_ENC_ATTN_Q,
+                LLM_TENSOR_ENC_ATTN_K,
+                LLM_TENSOR_ENC_ATTN_V,
+                LLM_TENSOR_ENC_ATTN_OUT,
+                LLM_TENSOR_ENC_FFN_NORM,
+                LLM_TENSOR_ENC_FFN_DOWN,
+                LLM_TENSOR_ENC_FFN_UP,
+            };
         case LLM_ARCH_JAIS:
             return {
                 LLM_TENSOR_TOKEN_EMBD,
@@ -2207,27 +2236,6 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_VISEXP_FFN_GATE,
                 LLM_TENSOR_VISEXP_FFN_DOWN,
                 LLM_TENSOR_VISEXP_FFN_UP,
-            };
-        case LLM_ARCH_MIMO2:
-            return {
-                LLM_TENSOR_TOKEN_EMBD,
-                LLM_TENSOR_OUTPUT_NORM,
-                LLM_TENSOR_OUTPUT,
-                LLM_TENSOR_ATTN_NORM,
-                LLM_TENSOR_ATTN_Q,
-                LLM_TENSOR_ATTN_K,
-                LLM_TENSOR_ATTN_V,
-                LLM_TENSOR_ATTN_SINKS,
-                LLM_TENSOR_ATTN_OUT,
-                LLM_TENSOR_FFN_NORM,
-                LLM_TENSOR_FFN_GATE,
-                LLM_TENSOR_FFN_DOWN,
-                LLM_TENSOR_FFN_UP,
-                LLM_TENSOR_FFN_GATE_INP,
-                LLM_TENSOR_FFN_GATE_EXPS,
-                LLM_TENSOR_FFN_DOWN_EXPS,
-                LLM_TENSOR_FFN_UP_EXPS,
-                LLM_TENSOR_FFN_EXP_PROBS_B,
             };
         case LLM_ARCH_GPTJ:
         case LLM_ARCH_UNKNOWN:

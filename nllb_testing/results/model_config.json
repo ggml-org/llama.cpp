@@ -1,0 +1,16 @@
+{
+  "model_name": "facebook/nllb-200-distilled-600M",
+  "d_model": 1024,
+  "encoder_layers": 12,
+  "decoder_layers": 12,
+  "encoder_attention_heads": 16,
+  "decoder_attention_heads": 16,
+  "encoder_ffn_dim": 4096,
+  "decoder_ffn_dim": 4096,
+  "max_position_embeddings": 1024,
+  "vocab_size": 256204,
+  "bos_token_id": 0,
+  "eos_token_id": 2,
+  "pad_token_id": 1,
+  "decoder_start_token_id": 2
+}

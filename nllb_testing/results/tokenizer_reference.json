@@ -1,0 +1,97 @@
+{
+  "test_1": {
+    "sentence": "eng_Latn Hello, how are you?",
+    "input_ids": [
+      256047,
+      256047,
+      94124,
+      248079,
+      11657,
+      2442,
+      1259,
+      248130,
+      2
+    ],
+    "tokens": [
+      "eng_Latn",
+      "eng_Latn",
+      "Hello",
+      ",",
+      "how",
+      "are",
+      "you",
+      "?",
+      "</s>"
+    ]
+  },
+  "test_2": {
+    "sentence": "eng_Latn The quick brown fox jumps over the lazy dog.",
+    "input_ids": [
+      256047,
+      256047,
+      1617,
+      75149,
+      8610,
+      1254,
+      1931,
+      248153,
+      169768,
+      248066,
+      2415,
+      349,
+      82,
+      1328,
+      6658,
+      248075,
+      2
+    ],
+    "tokens": [
+      "eng_Latn",
+      "eng_Latn",
+      "The",
+      "quick",
+      "bro",
+      "wn",
+      "fo",
+      "x",
+      "jump",
+      "s",
+      "over",
+      "the",
+      "la",
+      "zy",
+      "dog",
+      ".",
+      "</s>"
+    ]
+  },
+  "test_3": {
+    "sentence": "eng_Latn Machine learning is transforming the world.",
+    "input_ids": [
+      256047,
+      256047,
+      138409,
+      106668,
+      248,
+      42806,
+      87,
+      349,
+      15697,
+      248075,
+      2
+    ],
+    "tokens": [
+      "eng_Latn",
+      "eng_Latn",
+      "Machine",
+      "learning",
+      "is",
+      "transform",
+      "ing",
+      "the",
+      "world",
+      ".",
+      "</s>"
+    ]
+  }
+}

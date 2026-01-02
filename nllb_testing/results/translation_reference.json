@@ -1,0 +1,68 @@
+{
+  "test_1": {
+    "source": "eng_Latn Hello, how are you?",
+    "target_lang": "fra_Latn",
+    "translation": "Bonjour, comment allez-vous ?",
+    "output_token_ids": [
+      2,
+      256057,
+      17994,
+      141190,
+      248079,
+      25358,
+      123732,
+      248105,
+      30213,
+      385,
+      2
+    ]
+  },
+  "test_2": {
+    "source": "eng_Latn The quick brown fox jumps over the lazy dog.",
+    "target_lang": "fra_Latn",
+    "translation": "Le renard brun rapide saute sur le chien paresseux.",
+    "output_token_ids": [
+      2,
+      256057,
+      1181,
+      7273,
+      1077,
+      1212,
+      24,
+      105439,
+      127,
+      4712,
+      2562,
+      96,
+      143251,
+      413,
+      9437,
+      1612,
+      248075,
+      2
+    ]
+  },
+  "test_3": {
+    "source": "eng_Latn Machine learning is transforming the world.",
+    "target_lang": "fra_Latn",
+    "translation": "L'apprentissage automatique transforme le monde.",
+    "output_token_ids": [
+      2,
+      256057,
+      155,
+      248116,
+      52221,
+      138,
+      1179,
+      2828,
+      88752,
+      1956,
+      3292,
+      28043,
+      96,
+      25601,
+      248075,
+      2
+    ]
+  }
+}
