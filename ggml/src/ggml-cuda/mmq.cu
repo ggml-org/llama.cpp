@@ -354,9 +354,8 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
                 default:
                     return true;
             }
-        } else {
-            return true;
         }
+        return true;
     }
 
     return (!GGML_CUDA_CC_IS_CDNA(cc)) || ne11 < MMQ_DP4A_MAX_BATCH_SIZE;
