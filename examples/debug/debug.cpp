@@ -251,8 +251,7 @@ static void save_output_data(const output_data & output, const std::string & mod
         std::filesystem::path filepath{base_path.string() + ".bin"};
         std::ofstream file{filepath, std::ios::binary};
         if (!file) {
-            LOG_ERR("%s: error: failed to open binary output file\n", __func__);
-            return;
+            throw std::runtime_error("failed to open binary output file: " + filepath.string());
         }
         file.write(reinterpret_cast<const char*>(output.data_ptr), output.data_size * sizeof(float));
         LOG("Data saved to %s\n", filepath.c_str());
@@ -263,8 +262,7 @@ static void save_output_data(const output_data & output, const std::string & mod
         std::filesystem::path filepath{base_path.string() + ".txt"};
         std::ofstream file{filepath};
         if (!file) {
-            LOG_ERR("%s: error: failed to open text output file\n", __func__);
-            return;
+            throw std::runtime_error("failed to open text output file: " + filepath.string());
         }
         for (int i = 0; i < output.data_size; i++) {
             file << i << ": " << output.data_ptr[i] << '\n';
@@ -277,8 +275,7 @@ static void save_output_data(const output_data & output, const std::string & mod
         std::filesystem::path filepath{base_path.string() + "-prompt.txt"};
         std::ofstream file{filepath};
         if (!file) {
-            LOG_ERR("%s: error: failed to open prompt output file\n", __func__);
-            return;
+            throw std::runtime_error("failed to open prompt output file: " + filepath.string());
         }
 
         file << "prompt: " << output.prompt << '\n';
@@ -300,8 +297,7 @@ static void save_output_data(const output_data & output, const std::string & mod
         std::filesystem::path filepath{base_path.string() + "-tokens.bin"};
         std::ofstream file{filepath, std::ios::binary};
         if (!file) {
-            LOG_ERR("%s: error: failed to open tokens binary file\n", __func__);
-            return;
+            throw std::runtime_error("failed to open tokens binary file: " + filepath.string());
         }
         file.write(reinterpret_cast<const char*>(output.tokens.data()), output.tokens.size() * sizeof(llama_token));
         LOG("Tokens saved to %s\n", filepath.c_str());
