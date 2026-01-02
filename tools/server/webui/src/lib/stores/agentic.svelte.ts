@@ -202,6 +202,13 @@ class AgenticStore {
 			return { handled: true, error: normalizedError };
 		} finally {
 			this._isRunning = false;
+			// Lazy Disconnect: Close MCP connections after agentic flow completes
+			// This prevents continuous keepalive/heartbeat polling when tools are not in use
+			await mcpStore.shutdown().catch((err) => {
+				console.warn('[AgenticStore] Failed to shutdown MCP after flow:', err);
+			});
+
+			console.log('[AgenticStore] MCP connections closed (lazy disconnect)');
 		}
 	}
 
