@@ -342,7 +342,7 @@ llama_context::llama_context(
 
         reserve();
 
-        if (cparams.flash_attn) {
+        if (!cparams.flash_attn) {
             if (ggml_is_quantized(params.type_v)) {
                 throw std::runtime_error("quantized V cache was requested, but this requires Flash Attention");
             }
