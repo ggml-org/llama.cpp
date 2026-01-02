@@ -42,12 +42,50 @@ to_fp16_nc_sycl_t get_to_fp16_nc_sycl(ggml_type type);
 //   [block0: d,qs[16]][block1: d,qs[16]]...
 //
 // Coalesced: Warp-optimized layout for GPU memory access
-//   Tiles of 32 blocks with interleaved qs for coalesced access:
-//   [tile0: qs interleaved (512B), d values (64B)][tile1...]
+//   Tiles of MMVQ_COALESCED_TILE_BLOCKS blocks with interleaved qs for coalesced access:
+//   [tile0: qs interleaved, d values][tile1...]
 //
 // SoA (Structure of Arrays): Intermediate format
 //   [all qs bytes contiguous][all d values contiguous]
 // =============================================================================
+
+// Convert Q4_0 from AoS (block_q4_0) to SoA layout
+void reorder_q4_0_aos_to_soa_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,
+    int64_t ne01,
+    dpct::queue_ptr stream);
+
+// Convert Q8_0 from AoS (block_q8_0) to SoA layout
+void reorder_q8_0_aos_to_soa_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,
+    int64_t ne01,
+    dpct::queue_ptr stream);
+
+// Convert Q4_K from AoS (block_q4_K) to SoA layout
+void reorder_q4_k_aos_to_soa_sycl(
+    const void * src,
+    void * dst,
+    int64_t nblocks,
+    dpct::queue_ptr stream);
+
+// Convert Q6_K from AoS (block_q6_K) to SoA layout
+void reorder_q6_k_aos_to_soa_sycl(
+    const void * src,
+    void * dst,
+    int64_t nblocks,
+    dpct::queue_ptr stream);
+
+// Convert MXFP4 from AoS (block_mxfp4) to SoA layout
+void reorder_mxfp4_aos_to_soa_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,
+    int64_t ne01,
+    dpct::queue_ptr stream);
 
 // Convert Q4_0 from AoS (block_q4_0) to Coalesced layout
 void reorder_q4_0_aos_to_coalesced_sycl(
@@ -55,6 +93,30 @@ void reorder_q4_0_aos_to_coalesced_sycl(
     void * dst,
     int64_t ne00,  // number of elements per row
     int64_t ne01,  // number of rows
+    dpct::queue_ptr stream);
+
+// Convert Q8_0 from AoS (block_q8_0) to Coalesced layout
+void reorder_q8_0_aos_to_coalesced_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,
+    int64_t ne01,
+    dpct::queue_ptr stream);
+
+// Convert MXFP4 from AoS (block_mxfp4) to Coalesced layout
+void reorder_mxfp4_aos_to_coalesced_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,
+    int64_t ne01,
+    dpct::queue_ptr stream);
+
+// Convert Q6_K from AoS (block_q6_K) to Coalesced layout
+void reorder_q6_k_aos_to_coalesced_sycl(
+    const void * src,
+    void * dst,
+    int64_t ne00,
+    int64_t ne01,
     dpct::queue_ptr stream);
 
 // Convert Q4_0 from Coalesced layout to SoA layout (for testing/debugging)

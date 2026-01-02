@@ -67,6 +67,10 @@ GGML_BACKEND_API void ggml_backend_sycl_get_device_description(int device,
 GGML_BACKEND_API int  ggml_backend_sycl_get_device_count();
 GGML_BACKEND_API void ggml_backend_sycl_get_device_memory(int device, size_t *free, size_t *total);
 
+// Device-to-host memcpy using the SYCL backend queue for the tensor's buffer.
+// This avoids mixing queues/contexts in tests.
+GGML_BACKEND_API void ggml_backend_sycl_memcpy_d2h(const struct ggml_tensor * tensor, void * dst, size_t size);
+
 // SYCL doesn't support registering host memory, keep here for reference
 // GGML_BACKEND_API bool ggml_backend_sycl_register_host_buffer(void * buffer, size_t size);
 // GGML_BACKEND_API void ggml_backend_sycl_unregister_host_buffer(void * buffer);

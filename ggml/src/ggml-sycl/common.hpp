@@ -248,10 +248,10 @@ constexpr int MMVQ_SLM_Y_DS_SIZE = MMVQ_SLM_MAX_BLOCKS + 1;  // half2 array + pa
 // Warp-coalesced MMVQ configuration
 // Reorganizes weight data so consecutive threads load consecutive bytes
 // This achieves 100% cache line utilization (vs 50% with strided access)
-constexpr int MMVQ_COALESCED_TILE_BLOCKS = 16;  // Blocks per warp tile (must match WARP_SIZE/2)
-constexpr int MMVQ_COALESCED_TILE_BYTES_Q4_0 = MMVQ_COALESCED_TILE_BLOCKS * 16;  // 256 bytes quants per tile (Q4_0: 16 bytes/block)
-constexpr int MMVQ_COALESCED_TILE_BYTES_Q8_0 = MMVQ_COALESCED_TILE_BLOCKS * 32;  // 512 bytes quants per tile (Q8_0: 32 bytes/block)
-constexpr int MMVQ_COALESCED_TILE_BYTES_MXFP4 = MMVQ_COALESCED_TILE_BLOCKS * 16; // 256 bytes quants per tile (MXFP4: 16 bytes/block)
+constexpr int MMVQ_COALESCED_TILE_BLOCKS = WARP_SIZE;  // Blocks per warp tile (match WARP_SIZE for 1 thread/block)
+constexpr int MMVQ_COALESCED_TILE_BYTES_Q4_0 = MMVQ_COALESCED_TILE_BLOCKS * 16;  // Q4_0: 16 bytes/block
+constexpr int MMVQ_COALESCED_TILE_BYTES_Q8_0 = MMVQ_COALESCED_TILE_BLOCKS * 32;  // Q8_0: 32 bytes/block
+constexpr int MMVQ_COALESCED_TILE_BYTES_MXFP4 = MMVQ_COALESCED_TILE_BLOCKS * 16; // MXFP4: 16 bytes/block
 // Legacy alias for Q4_0
 constexpr int MMVQ_COALESCED_TILE_BYTES = MMVQ_COALESCED_TILE_BYTES_Q4_0;
 
@@ -309,11 +309,10 @@ inline bool is_coalesced_supported(ggml_type type) {
             return true;
         case GGML_TYPE_Q6_K:
             return true;
-        // Future: add Q8_0, MXFP4, etc. as kernels are verified
-        // case GGML_TYPE_Q8_0:
-        //     return true;
-        // case GGML_TYPE_MXFP4:
-        //     return true;
+        case GGML_TYPE_Q8_0:
+            return true;
+        case GGML_TYPE_MXFP4:
+            return true;
         default:
             return false;
     }
