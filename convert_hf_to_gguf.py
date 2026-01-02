@@ -1062,6 +1062,9 @@ class TextModel(ModelBase):
         if chkhsh == "66b8d4e19ab16c3bfd89bce5d785fb7e0155e8648708a1f42077cb9fe002c273":
             # ref: https://huggingface.co/alvarobartt/grok-2-tokenizer
             res = "grok-2"
+        if chkhsh == "b3d1dd861f1d4c5c0d2569ce36baf3f90fe8a102db3de50dd71ff860d91be3df":
+            # ref: https://huggingface.co/aari1995/German_Semantic_V3
+            res = "jina-v2-de"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -1230,6 +1233,12 @@ class TextModel(ModelBase):
         if chkhsh == "4a2e2abae11ca2b86d570fc5b44be4d5eb5e72cc8f22dd136a94b37da83ab665":
             # ref: https://huggingface.co/KORMo-Team/KORMo-tokenizer
             res = "kormo"
+        if chkhsh == "9d70134b369a70e5735009b6de918f7581b5211f7c074d1f89f753aea8248af1":
+            # ref: https://huggingface.co/tencent/Youtu-LLM-2B
+            res = "youtu"
+        if chkhsh == "16389f0a1f51ee53e562ffd51c371dc508639ab0e4261502071836e50e223e91":
+            # ref: https://huggingface.co/upstage/Solar-Open-100B
+            res = "solar-open"
 
         if res is None:
             logger.warning("\n")
@@ -2486,6 +2495,7 @@ class StableLMModel(TextModel):
     "VLlama3ForCausalLM",
     "LlavaForConditionalGeneration",
     "VoxtralForConditionalGeneration",
+    "IQuestCoderForCausalLM",
     "LlamaModel")
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
@@ -5284,13 +5294,14 @@ class BertModel(TextModel):
         self.gguf_writer.add_token_type_count(self.hparams.get("type_vocab_size", 1))
 
         # convert to phantom space vocab
-        def phantom(tok):
-            if tok.startswith("[") and tok.endswith("]"):
+        def phantom(tok, toktype):
+            if toktype == gguf.TokenType.CONTROL:
                 return tok
             if tok.startswith("##"):
                 return tok[2:]
             return "\u2581" + tok
-        tokens = list(map(phantom, tokens))
+        assert len(tokens) == len(toktypes)
+        tokens = list(map(phantom, tokens, toktypes))
 
         # add vocab to gguf
         self.gguf_writer.add_tokenizer_model("bert")
@@ -6404,6 +6415,17 @@ class ARwkv7Model(Rwkv7Model):
         self.gguf_writer.add_head_count(0)
 
 
+@ModelBase.register("MaincoderForCausalLM")
+class MaincoderModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.MAINCODER
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        if (head_dim := self.hparams.get("head_dim")) is not None:
+            self.gguf_writer.add_rope_dimension_count(head_dim)
+
+
 @ModelBase.register("MambaForCausalLM", "MambaLMHeadModel", "FalconMambaForCausalLM")
 class MambaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MAMBA
@@ -7181,6 +7203,7 @@ class DeepseekModel(TextModel):
     "DeepseekV2ForCausalLM",
     "DeepseekV3ForCausalLM",
     "KimiVLForConditionalGeneration",
+    "YoutuForCausalLM",
 )
 class DeepseekV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
@@ -7247,7 +7270,15 @@ class DeepseekV2Model(TextModel):
         super().set_gguf_parameters()
         hparams = self.hparams
 
-        self.gguf_writer.add_leading_dense_block_count(hparams["first_k_dense_replace"])
+        # first_k_dense_replace: number of leading layers using dense FFN instead of MoE
+        # For non-MoE models (like Youtu), set to n_layer to use dense FFN for all layers
+        # For MoE models (like DeepSeek-V2), this is the number of leading non-MoE layers
+        has_moe = hparams.get("n_routed_experts") is not None
+        first_k_dense_replace = hparams.get("first_k_dense_replace")
+        if first_k_dense_replace is None:
+            # Default: if no MoE, all layers are dense; if MoE, none are dense
+            first_k_dense_replace = hparams["num_hidden_layers"] if not has_moe else 0
+        self.gguf_writer.add_leading_dense_block_count(first_k_dense_replace)
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
         if "q_lora_rank" in hparams and hparams["q_lora_rank"] is not None:
             self.gguf_writer.add_q_lora_rank(hparams["q_lora_rank"])
@@ -7259,11 +7290,24 @@ class DeepseekV2Model(TextModel):
         self.gguf_writer.add_key_length_mla(hparams["qk_nope_head_dim"] + hparams["qk_rope_head_dim"])
         self.gguf_writer.add_value_length_mla(hparams["v_head_dim"])
 
-        self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
-        self.gguf_writer.add_expert_count(hparams["n_routed_experts"])
-        self.gguf_writer.add_expert_shared_count(hparams["n_shared_experts"])
-        self.gguf_writer.add_expert_weights_scale(hparams["routed_scaling_factor"])
-        self.gguf_writer.add_expert_weights_norm(hparams["norm_topk_prob"])
+        # MoE parameters (required by C++ code for DEEPSEEK2 arch)
+        # For non-MoE models like Youtu, use intermediate_size as expert_feed_forward_length
+        moe_intermediate_size = self.find_hparam(["moe_intermediate_size", "intermediate_size"], optional=False)
+        self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+
+        if (n_routed_experts := hparams.get("n_routed_experts")) is not None:
+            self.gguf_writer.add_expert_count(n_routed_experts)
+
+        # expert_shared_count is required by C++ code, default to 0 for non-MoE models
+        n_shared_experts = hparams.get("n_shared_experts", 0)
+        self.gguf_writer.add_expert_shared_count(n_shared_experts)
+
+        # When not set, C++ code will use scale_w = false to skip the no-op scaling
+        if (routed_scaling_factor := hparams.get("routed_scaling_factor")) is not None:
+            self.gguf_writer.add_expert_weights_scale(routed_scaling_factor)
+
+        if (norm_topk_prob := hparams.get("norm_topk_prob")) is not None and norm_topk_prob:
+            self.gguf_writer.add_expert_weights_norm(norm_topk_prob)
 
         self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
 
@@ -7279,9 +7323,16 @@ class DeepseekV2Model(TextModel):
         # skip vision tensors and remove "language_model." for Kimi-VL
         if "vision_tower" in name or "multi_modal_projector" in name:
             return []
-
+        if name.startswith("siglip2.") or name.startswith("merger."):
+            return []
         if name.startswith("language_model."):
             name = name.replace("language_model.", "")
+
+        # skip lm_head.weight if tie_word_embeddings is True
+        if self.hparams.get("tie_word_embeddings", False):
+            if name == "lm_head.weight" or name == "model.lm_head.weight":
+                logger.info("Skipping tied output layer 'lm_head.weight' (will use token_embd.weight)")
+                return []
 
         # rename e_score_correction_bias tensors
         if name.endswith("e_score_correction_bias"):
@@ -10615,6 +10666,79 @@ class JanusProVisionModel(MmprojModel):
             return [(self.map_tensor_name(name), data_torch)]
 
         return []
+
+
+@ModelBase.register("YOUTUVLForConditionalGeneration", "YOUTUVLForCausalLM")
+class YOUTUVLVisionModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        self.hparams_vision["image_size"] = self.hparams_vision.get("image_size", 560)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.YOUTUVL)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-6))
+
+        # Handle activation function
+        hidden_act = str(self.hparams.get("hidden_act", "gelu_pytorch_tanh")).lower()
+        if hidden_act in ("gelu", "gelu_pytorch_tanh", "gelu_fast", "gelu_new", "gelu_accurate"):
+            self.gguf_writer.add_vision_use_gelu(True)
+        elif hidden_act == "silu":
+            self.gguf_writer.add_vision_use_silu(True)
+        else:
+            raise ValueError(f"Unsupported activation function for YOUTUVL: {hidden_act}")
+
+        self.gguf_writer.add_vision_spatial_merge_size(self.hparams.get("spatial_merge_size", 2))
+
+        window_size = self.hparams.get("window_size")
+        if window_size is not None:
+            self.gguf_writer.add_vision_window_size(window_size)
+        # fullatt_block_indexes contains explicit layer indices that use full attention
+        # e.g., [2, 5, 8, 11] means layers 2, 5, 8, 11 use full attention
+        # All other layers use window attention
+        fullatt_block_indexes = self.hparams.get("fullatt_block_indexes")
+        assert fullatt_block_indexes is not None, "fullatt_block_indexes is required for youtuvl"
+        # Store the explicit layer indices for YoutuVL (irregular pattern approach)
+        self.gguf_writer.add_vision_wa_layer_indexes(layers=fullatt_block_indexes)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        # Skip language model tensors
+        skip_prefixes = ('lm_head.', 'model.layers.', 'model.embed_tokens.', 'model.norm.')
+        if name.startswith(skip_prefixes):
+            return []
+
+        # Try to map the tensor using TensorNameMap (handles vision encoder and projector)
+        try:
+            new_name = self.map_tensor_name(name)
+            return [(new_name, data_torch)]
+        except ValueError:
+            # If mapping fails, log warning and skip
+            logger.warning(f"Cannot map tensor: {name}")
+            return []
+
+
+@ModelBase.register("SolarOpenForCausalLM")
+class SolarOpenModel(Glm4MoeModel):
+    model_arch = gguf.MODEL_ARCH.GLM4_MOE
+
+    def set_vocab(self):
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        tokens, toktypes, tokpre = self.get_vocab_base()
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+        special_vocab._set_special_token("eos", tokenizer.get_added_vocab()["<|endoftext|>"])
+        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|endoftext|>"])
+        special_vocab._set_special_token("unk", tokenizer.get_added_vocab()["<unk>"])
+        special_vocab._set_special_token("bos", tokenizer.get_added_vocab()["<|startoftext|>"])
+        special_vocab.add_to_gguf(self.gguf_writer)
 
 
 ###### CONVERSION LOGIC ######

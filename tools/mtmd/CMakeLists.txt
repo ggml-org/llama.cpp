@@ -27,6 +27,7 @@ add_library(mtmd
             models/qwen3vl.cpp
             models/siglip.cpp
             models/whisper-enc.cpp
+            models/youtuvl.cpp
             )
 
 set_target_properties(mtmd PROPERTIES
