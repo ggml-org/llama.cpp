@@ -6719,6 +6719,10 @@ static void ggml_compute_backward(
 }
 
 static void ggml_visit_parents_compute(struct ggml_tensor * node) {
+    if (node->op == GGML_OP_NONE) {
+        return;
+    }
+
     if (node->flags & GGML_TENSOR_FLAG_COMPUTE) {
         return;
     }
@@ -6734,7 +6738,7 @@ static void ggml_visit_parents_compute(struct ggml_tensor * node) {
 }
 
 static size_t ggml_visit_parents_graph(struct ggml_cgraph * cgraph, struct ggml_tensor * node, bool compute) {
-    if (compute) {
+    if (node->op != GGML_OP_NONE && compute) {
         node->flags |= GGML_TENSOR_FLAG_COMPUTE;
     }
 
