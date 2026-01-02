@@ -383,6 +383,8 @@ llama_context::~llama_context() {
 void llama_context::reserve() {
     LLAMA_LOG_INFO("%s: reserving ...\n", __func__);
 
+    synchronize();
+
     const uint32_t n_seqs = cparams.n_seq_max;
     const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
@@ -529,6 +531,10 @@ void llama_context::reserve() {
 }
 
 void llama_context::synchronize() {
+    if (!sched) {
+        return;
+    }
+
     ggml_backend_sched_synchronize(sched.get());
 
     // FIXME: if multiple single tokens are evaluated without a synchronization,
