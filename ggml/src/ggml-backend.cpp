@@ -1922,6 +1922,7 @@ static struct ggml_tensor * graph_copy_dup_tensor(struct ggml_hash_set hash_set,
         dst->view_offs = src->view_offs;
     }
     dst->op = src->op;
+    dst->flags = src->flags;
     memcpy(dst->op_params, src->op_params, sizeof(dst->op_params));
     ggml_set_name(dst, src->name);
 
