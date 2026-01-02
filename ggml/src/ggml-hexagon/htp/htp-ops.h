@@ -66,6 +66,9 @@ struct htp_ops_context {
     struct fastdiv_values mm_div_r2;       // fastdiv values for ne12 / ne02
     struct fastdiv_values mm_div_r3;       // fastdiv values for ne13 / ne03
 
+    struct fastdiv_values set_rows_div_ne12; // fastdiv values for ne12
+    struct fastdiv_values set_rows_div_ne11; // fastdiv values for ne11
+
     uint32_t flags;
 };
 
@@ -78,5 +81,6 @@ int op_softmax(struct htp_ops_context * octx);
 int op_add_id(struct htp_ops_context * octx);
 int op_rope(struct htp_ops_context * octx);
 int op_flash_attn_ext(struct htp_ops_context * octx);
+int op_set_rows(struct htp_ops_context * octx);
 
 #endif /* HTP_OPS_H */

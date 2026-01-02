@@ -36,6 +36,8 @@ enum htp_data_type {
     HTP_TYPE_F16   = 1,
     HTP_TYPE_Q4_0  = 2,
     HTP_TYPE_Q8_0  = 8,
+    HTP_TYPE_I32   = 26,
+    HTP_TYPE_I64   = 27,
     HTP_TYPE_MXFP4 = 39,
     HTP_TYPE_COUNT
 };
@@ -58,6 +60,7 @@ enum htp_op {
     HTP_OP_ADD_ID         = 12,
     HTP_OP_ROPE           = 13,
     HTP_OP_FLASH_ATTN_EXT = 14,
+    HTP_OP_SET_ROWS       = 15,
     INVALID
 };
 
