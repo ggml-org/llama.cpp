@@ -715,6 +715,12 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(const minja::chat_tem
         return ts;
     }
 
+    // Propagate requires_nonnull_content flag from differential analysis
+    ts.requires_nonnull_content = discovered.requires_nonnull_content;
+    if (ts.requires_nonnull_content) {
+        LOG_DBG("Template requires non-null content (renders null as 'None')\n");
+    }
+
     // Check if minja reports tool call support (for informational purposes)
     auto caps = tmpl.original_caps();
     if (!caps.supports_tool_calls) {
@@ -800,13 +806,150 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(const minja::chat_tem
                         ts.function_prefix = discovered.function_opener.substr(0, eq_pos + 1);
                     }
                     ts.function_suffix = discovered.function_name_suffix;
-                    ts.function_close  = discovered.function_closer;
+
+                    // For formats like <function=name>{args}</function>, where function_prefix
+                    // IS the section start (no separate wrapper), tool_section_end is the function close.
+                    // But for nested formats like <tool_call><function=name>...</function></tool_call>,
+                    // the function_close is separate from tool_section_end.
+                    // We detect the non-nested case when tool_section_start matches function_prefix
+                    // (or tool_section_start was already cleared because it matched).
+                    bool section_start_matches_prefix =
+                        ts.tool_section_start.empty() ||
+                        ts.tool_section_start.find(ts.function_prefix) == 0 ||
+                        ts.function_prefix.find(ts.tool_section_start) == 0;
+                    if (section_start_matches_prefix && ts.function_prefix.find('<') == 0 &&
+                        !ts.tool_section_end.empty() && ts.tool_section_end.find("</") == 0) {
+                        ts.function_close   = ts.tool_section_end;
+                        ts.tool_section_end = "";  // Clear to avoid double wrapping
+                    } else {
+                        ts.function_close = discovered.function_closer;
+                    }
                 } else if (!discovered.function_opener.empty() && discovered.function_opener[0] == '<') {
-                    // Formats like <|tool_call_begin|>name (Kimi)
-                    // The whole opener is the prefix
-                    ts.function_prefix = discovered.function_opener;
-                    ts.function_suffix = discovered.function_name_suffix;
-                    ts.function_close  = discovered.function_closer;
+                    // Check for FUNC_PREFIXED_INDEXED format
+                    // Detected by: function_opener ends with "." (namespace separator)
+                    //              AND function_name_suffix starts with ":" followed by digit (index)
+                    // Example: <|tool_call_begin|>functions.name:0<|tool_call_argument_begin|>
+                    size_t namespace_dot = discovered.function_opener.rfind('.');
+                    bool has_namespace = (namespace_dot != std::string::npos &&
+                                          namespace_dot == discovered.function_opener.length() - 1);
+
+                    bool has_index = (!discovered.function_name_suffix.empty() &&
+                                      discovered.function_name_suffix[0] == ':' &&
+                                      discovered.function_name_suffix.length() > 1 &&
+                                      std::isdigit(static_cast<unsigned char>(discovered.function_name_suffix[1])));
+
+                    if (has_namespace && has_index) {
+                        LOG_DBG("Detected FUNC_PREFIXED_INDEXED format: namespace ends with '.', suffix has ':N' index\n");
+                        ts.function_format = ToolCallStructure::FUNC_PREFIXED_INDEXED;
+
+                        // Split function_opener into per_call_start and function_namespace
+                        // e.g., "<|tool_call_begin|>functions." -> "<|tool_call_begin|>" + "functions."
+                        // Find where the namespace starts (after the last '>' before the '.')
+                        size_t namespace_start = discovered.function_opener.rfind('>');
+                        if (namespace_start != std::string::npos && namespace_start < namespace_dot) {
+                            ts.per_call_start     = discovered.function_opener.substr(0, namespace_start + 1);
+                            ts.function_namespace = discovered.function_opener.substr(namespace_start + 1);
+                        } else {
+                            // Fallback: namespace is just the part ending with '.'
+                            ts.per_call_start     = discovered.function_opener.substr(0, namespace_dot);
+                            ts.function_namespace = ".";
+                        }
+
+                        // Extract args_marker from function_name_suffix
+                        // Format: ":0<|some_marker|>" -> index is ":0", args_marker is "<|some_marker|>"
+                        size_t args_marker_start = discovered.function_name_suffix.find('<');
+                        if (args_marker_start != std::string::npos) {
+                            size_t args_marker_end = discovered.function_name_suffix.find('>', args_marker_start);
+                            if (args_marker_end != std::string::npos) {
+                                ts.args_marker = discovered.function_name_suffix.substr(
+                                    args_marker_start, args_marker_end - args_marker_start + 1);
+                            }
+                        }
+
+                        // Derive per_call_end from tool_call_closer by finding corresponding end marker
+                        // tool_call_closer contains per_call_end + tool_section_end
+                        // We find per_call_end by looking for a marker that structurally matches per_call_start
+                        if (!discovered.tool_call_closer.empty() && !ts.per_call_start.empty()) {
+                            // Extract structural pattern from per_call_start
+                            // e.g., "<|tool_call_begin|>" -> look for "<|tool_call_...|>" in closer
+                            size_t start_marker_begin = ts.per_call_start.find("<|");
+                            size_t start_marker_end = ts.per_call_start.rfind("|>");
+                            if (start_marker_begin != std::string::npos && start_marker_end != std::string::npos) {
+                                // Find the base pattern (e.g., "<|tool_call" from "<|tool_call_begin|>")
+                                std::string start_content = ts.per_call_start.substr(
+                                    start_marker_begin + 2, start_marker_end - start_marker_begin - 2);
+                                // Find a related marker in the closer
+                                size_t closer_pos = discovered.tool_call_closer.find("<|");
+                                while (closer_pos != std::string::npos) {
+                                    size_t closer_end = discovered.tool_call_closer.find("|>", closer_pos);
+                                    if (closer_end != std::string::npos) {
+                                        std::string candidate = discovered.tool_call_closer.substr(
+                                            closer_pos, closer_end - closer_pos + 2);
+                                        // Check if this marker shares a common prefix with per_call_start
+                                        // (ignoring _begin vs _end suffix differences)
+                                        std::string candidate_content = candidate.substr(2, candidate.length() - 4);
+                                        // Find common prefix between start_content and candidate_content
+                                        size_t common_len = 0;
+                                        while (common_len < start_content.length() &&
+                                               common_len < candidate_content.length() &&
+                                               start_content[common_len] == candidate_content[common_len]) {
+                                            common_len++;
+                                        }
+                                        // If substantial overlap (>50%), this is likely the per_call_end
+                                        if (common_len > start_content.length() / 2 &&
+                                            candidate_content.find("end") != std::string::npos) {
+                                            ts.per_call_end = candidate;
+                                            break;
+                                        }
+                                    }
+                                    closer_pos = discovered.tool_call_closer.find("<|", closer_pos + 1);
+                                }
+                            }
+                        }
+
+                        // Derive tool_section_end from tool_section_start by finding matching end marker
+                        // For FUNC_PREFIXED_INDEXED, we always derive this to get the correct marker
+                        // (the default discovered.tool_call_end_marker may contain extra content)
+                        if (!ts.tool_section_start.empty()) {
+                            size_t start_marker_begin = ts.tool_section_start.find("<|");
+                            size_t start_marker_end = ts.tool_section_start.rfind("|>");
+                            if (start_marker_begin != std::string::npos && start_marker_end != std::string::npos) {
+                                std::string start_content = ts.tool_section_start.substr(
+                                    start_marker_begin + 2, start_marker_end - start_marker_begin - 2);
+                                size_t closer_pos = discovered.tool_call_closer.find("<|");
+                                while (closer_pos != std::string::npos) {
+                                    size_t closer_end = discovered.tool_call_closer.find("|>", closer_pos);
+                                    if (closer_end != std::string::npos) {
+                                        std::string candidate = discovered.tool_call_closer.substr(
+                                            closer_pos, closer_end - closer_pos + 2);
+                                        std::string candidate_content = candidate.substr(2, candidate.length() - 4);
+                                        size_t common_len = 0;
+                                        while (common_len < start_content.length() &&
+                                               common_len < candidate_content.length() &&
+                                               start_content[common_len] == candidate_content[common_len]) {
+                                            common_len++;
+                                        }
+                                        if (common_len > start_content.length() / 2 &&
+                                            candidate_content.find("end") != std::string::npos) {
+                                            ts.tool_section_end = candidate;
+                                            break;
+                                        }
+                                    }
+                                    closer_pos = discovered.tool_call_closer.find("<|", closer_pos + 1);
+                                }
+                            }
+                        }
+
+                        LOG_DBG("FUNC_PREFIXED_INDEXED: per_call_start='%s', namespace='%s', args_marker='%s', per_call_end='%s'\n",
+                                ts.per_call_start.c_str(), ts.function_namespace.c_str(),
+                                ts.args_marker.c_str(), ts.per_call_end.c_str());
+                    } else {
+                        // Other formats like <|tool_call_begin|>name (non-indexed)
+                        // The whole opener is the prefix
+                        ts.function_prefix = discovered.function_opener;
+                        ts.function_suffix = discovered.function_name_suffix;
+                        ts.function_close  = discovered.function_closer;
+                    }
                 }
             }
         }

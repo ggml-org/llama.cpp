@@ -316,8 +316,11 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
                     });
                 }
             }
-        } else {
+        } else if (msg.tool_calls.empty()) {
             jmsg["content"] = "";
+        } else {
+            // Per OpenAI spec, content should be null (not empty string) when there are tool calls.
+            jmsg["content"] = nullptr;
         }
         if (!msg.reasoning_content.empty()) {
             jmsg["reasoning_content"] = msg.reasoning_content;

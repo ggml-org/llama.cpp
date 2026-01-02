@@ -507,8 +507,10 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
             extract_json_field_name(patterns.tool_call_opener + tool1_diff.substr(func1_pos), "arguments",
                                     { "parameters", "arguments", "args", "params", "input" });
 
+        // ID field might be anywhere in the JSON object (often at the end, after arguments)
+        // So we search in the full diff, not just tool_call_opener
         patterns.tool_id_field =
-            extract_json_field_name(patterns.tool_call_opener, "", { "tool_call_id", "tool_id", "id", "call_id" });
+            extract_json_field_name(tool1_diff, "", { "tool_call_id", "tool_id", "id", "call_id" });
 
         // Extract parameter patterns from tool2_diff
         size_t param1_pos       = tool2_diff.find("\"param1\"");
@@ -644,6 +646,11 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
         }
 
         // Function name suffix
+        // Handles various formats:
+        //   - Simple: ">" or "]" or "}"
+        //   - Quoted: "\"" or "\">"
+        //   - XML tag: <|some_tag|>
+        //   - Indexed with tag: :0<|some_tag|> (Kimi-style)
         size_t func_name_end = func1_pos + std::string("test_function_name").length();
         if (func_name_end < func_context.length()) {
             char next_char = func_context[func_name_end];
@@ -661,6 +668,30 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
                 if (tag_close != std::string::npos) {
                     // It seems to be a tag, use it as suffix
                     patterns.function_name_suffix = func_context.substr(func_name_end, tag_close - func_name_end + 1);
+                }
+            } else if (next_char == ':') {
+                // Indexed format: function_name:0<|marker|> or function_name:0{args}
+                // Find where the suffix ends - either at a tag marker or at the JSON args start
+                size_t suffix_end = func_name_end + 1;
+                // Skip the index digits
+                while (suffix_end < func_context.length() &&
+                       std::isdigit(static_cast<unsigned char>(func_context[suffix_end]))) {
+                    suffix_end++;
+                }
+                if (suffix_end < func_context.length()) {
+                    char after_index = func_context[suffix_end];
+                    if (after_index == '<') {
+                        // There's a marker after the index (e.g., :0<|tool_call_argument_begin|>)
+                        size_t tag_close = func_context.find('>', suffix_end);
+                        if (tag_close != std::string::npos) {
+                            patterns.function_name_suffix = func_context.substr(func_name_end, tag_close - func_name_end + 1);
+                        } else {
+                            patterns.function_name_suffix = func_context.substr(func_name_end, suffix_end - func_name_end);
+                        }
+                    } else {
+                        // Just the index part (e.g., :0)
+                        patterns.function_name_suffix = func_context.substr(func_name_end, suffix_end - func_name_end);
+                    }
                 }
             }
         }
@@ -1033,6 +1064,27 @@ InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & t
 
         inputs.messages   = { user_msg, tool_msg1 };
         auto tool1_output = safe_render({ user_msg, tool_msg1 });
+
+        // Detect if template renders null content as "None" (Python/Jinja string representation)
+        // This happens when templates concatenate content without null checks, e.g.:
+        //   {{ '<|im_start|>' + message.role + '\n' + content }}
+        // Check if "None" appears in the tool output where it shouldn't
+        if (tool1_output.find("None") != std::string::npos) {
+            // Verify this is actually from null content by checking if it goes away with empty string
+            json tool_msg1_empty_content = tool_msg1;
+            tool_msg1_empty_content["content"] = "";
+            auto tool1_output_empty = safe_render({ user_msg, tool_msg1_empty_content });
+            if (tool1_output_empty.find("None") == std::string::npos) {
+                LOG_DBG("Template renders null content as 'None', switching to empty string\n");
+                patterns.requires_nonnull_content = true;
+                tool1_output = tool1_output_empty;
+
+                // Update tool messages to use empty string instead of null
+                tool_msg1["content"] = "";
+                tool_msg2["content"] = "";
+                tool_msg3["content"] = "";
+            }
+        }
 
         inputs.messages   = { user_msg, tool_msg2 };
         auto tool2_output = safe_render({ user_msg, tool_msg2 });

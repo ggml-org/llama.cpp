@@ -86,6 +86,9 @@ struct ToolCallStructure {
     std::string arg_suffix;     // e.g., ">"
     std::string arg_close;      // e.g., "</param>", "</parameter>"
     std::string arg_separator;  // e.g., "", "\n"
+
+    // Flag: template renders null content as "None" string, requires empty string instead
+    bool requires_nonnull_content = false;
 };
 
 // Combined result of unified template analysis

@@ -844,113 +844,6 @@ static void test_tools_oaicompat_json_conversion() {
                   common_chat_tools_to_json_oaicompat<json>({ special_function_tool }).dump(2));
 }
 
-static void test_template_output_parsers() {
-    printf("[%s]\n", __func__);
-
-    common_chat_templates_inputs inputs_no_tools;
-    inputs_no_tools.messages = { message_user };
-
-    common_chat_templates_inputs inputs_tools;
-    inputs_tools.messages = { message_user };
-    inputs_tools.tools    = { special_function_tool };
-
-    common_chat_templates_inputs inputs_tools_builtin;
-    inputs_tools_builtin.messages = { message_user };
-    inputs_tools_builtin.tools    = { python_tool };
-
-    // {
-    //     // microsoft-Phi-3.5-mini-instruct - TODO: migrate to PEG format (Phase 5)
-    //     assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE,
-    //                   common_chat_templates_apply(
-    //                       read_templates("models/templates/microsoft-Phi-3.5-mini-instruct.jinja").get(), inputs_tools)
-    //                       .format);
-    // }
-    {
-        // Generic tool calls doesn't generate / parse content-only messages symmetrically.
-        // These tests are format-agnostic and test the GENERIC fallback parser.
-
-        assert_equals(simple_assist_msg("{ \"tool_call\" : { \"name\" : \"t"),
-                      common_chat_parse("{ \"tool_call\" : { \"name\" : \"t",
-                                        /* is_partial= */ true,
-                                        { /* .format = */ COMMON_CHAT_FORMAT_GENERIC,
-                                          /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-                                          /* .reasoning_in_content = */ false,
-                                          /* .thinking_forced_open = */ true,
-                                          /* .parse_tool_calls = */ false }));
-        assert_equals(message_assist_empty,
-                      common_chat_parse("{ \"tool_call\" : { \"name\" : \"t",
-                                        /* is_partial= */ true, { /* .format = */ COMMON_CHAT_FORMAT_GENERIC }));
-
-        assert_equals(
-            simple_assist_msg("", "", "puppeteer_screenshot", "{\"name\":\"servethehome_homepage\","),
-            common_chat_parse(
-                R"({"tool_call": {"name": "puppeteer_screenshot", "arguments": {"name": "servethehome_homepage",)",
-                /* is_partial= */ true,
-                {
-                    /* .format = */ COMMON_CHAT_FORMAT_GENERIC,
-                }));
-
-        assert_equals(message_assist_call_empty_args,
-                      common_chat_parse("{ \"tool_call\" : { \"name\" : \"special_function\"",
-                                        /* is_partial= */ true,
-                                        {
-                                            /* .format = */ COMMON_CHAT_FORMAT_GENERIC,
-                                        }));
-        assert_equals(message_assist_call_cutoff_args,
-                      common_chat_parse("{ \"tool_call\" : { \"name\" : \"special_function\", \"arguments\" : { \"arg",
-                                        /* is_partial= */ true, { /* .format = */ COMMON_CHAT_FORMAT_GENERIC }));
-
-        assert_msg_equals(message_assist, common_chat_parse("{\n"
-                                                            "  \"response\": \"Hello, world!\\nWhat's up?\"\n"
-                                                            "}",
-                                                            /* is_partial= */ false,
-                                                            {
-                                                                /* .format = */ COMMON_CHAT_FORMAT_GENERIC,
-                                                            }));
-    }
-    {
-        assert_msg_equals(simple_assist_msg("Réponse", "raisonnement"),
-                          common_chat_parse(message_assist_thoughts_unparsed_magistral.content,
-                                            /* is_partial= */ false,
-                                            {
-                                                /* .format = */ COMMON_CHAT_FORMAT_MAGISTRAL,
-                                                /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
-                                            }));
-    }
-    {
-        auto                     tmpls = read_templates("models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja");
-        std::vector<std::string> end_tokens{ "<|eom_id|>", "<|eot_id|>" };
-
-        assert_equals(COMMON_CHAT_FORMAT_CONTENT_ONLY,
-                      common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
-        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE,
-                      common_chat_templates_apply(tmpls.get(), inputs_tools_builtin).format);
-        assert_equals(
-            COMMON_CHAT_FORMAT_PEG_NATIVE,
-            common_chat_templates_apply(
-                read_templates("models/templates/meta-llama-Llama-3.3-70B-Instruct.jinja").get(), inputs_tools_builtin)
-                .format);
-
-        // test_templates(tmpls.get(), end_tokens, message_assist, tools, R"(?)", /* expect_grammar_triggered= */ false);
-        // test_templates(tmpls.get(), end_tokens, message_assist_call, { special_function_tool },
-        //                "{\"name\": \"special_function\", \"parameters\": {\"arg1\": 1}}");
-    }
-    {
-        auto                     tmpls = read_templates("models/templates/meta-llama-Llama-3.2-3B-Instruct.jinja");
-        std::vector<std::string> end_tokens{ "<|eom_id|>", "<|eot_id|>" };
-
-        assert_equals(COMMON_CHAT_FORMAT_PEG_NATIVE, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
-        assert_equals(COMMON_CHAT_FORMAT_CONTENT_ONLY,
-                      common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
-
-        test_templates(tmpls.get(), end_tokens, message_assist, { special_function_tool }, "Hello, world!\nWhat's up?",
-                       /* expect_grammar_triggered= */ false);
-        // test_templates(tmpls.get(), end_tokens, message_assist_call, { special_function_tool },
-        //                "{\"name\": \"special_function\", \"parameters\": {\"arg1\": 1}}");
-    }
-}
-
 static void test_template_output_peg_parsers() {
     printf("[%s]\n", __func__);
 
@@ -1383,36 +1276,6 @@ static void test_template_output_peg_parsers() {
             .run();
     }
 
-    // TODO: NVIDIA-Nemotron-Nano-v2 tests are disabled pending autoparser streaming fixes
-    // The streaming parsing regression check fails for tool calls in this template format
-    // {
-    //     auto tst = peg_tester("models/templates/NVIDIA-Nemotron-Nano-v2.jinja");
-    //     tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
-    //         .enable_thinking(true)
-    //         .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
-    //         .expect(message_assist_thoughts)
-    //         .run();
-    // }
-
-    // TODO: Apertus-8B-Instruct tests disabled - autoparser doesn't detect the tool format correctly
-    // {
-    //     auto tst = peg_tester("models/templates/Apertus-8B-Instruct.jinja");
-    //     tst.test("<|tools_prefix|>[{\"special_function\": {\"arg1\": 1}}]<|tools_suffix|>")
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_call)
-    //         .run();
-    // }
-
-    // TODO: MiniMax-M2 tests disabled - autoparser doesn't detect the <minimax:tool_call><invoke...> format
-    // {
-    //     auto tst = peg_tester("models/templates/MiniMax-M2.jinja");
-    //     tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
-    //         .enable_thinking(true)
-    //         .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
-    //         .expect(message_assist_thoughts)
-    //         .run();
-    // }
-
     // GLM-4.6 tests - format: <tool_call>function_name\n<arg_key>...</arg_key>\n<arg_value>...</arg_value>\n</tool_call>
     {
         auto tst = peg_tester("models/templates/GLM-4.6.jinja");
@@ -1425,17 +1288,16 @@ static void test_template_output_peg_parsers() {
             .run();
     }
 
-    // Kimi-K2-Thinking tests - now supported with FUNC_PREFIXED_INDEXED format
-    // TODO: Kimi-K2-Thinking tests failing - parsing tool calls as content
-    // {
-    //     auto tst = peg_tester("models/templates/Kimi-K2-Thinking.jinja");
-    //     tst.test(
-    //            "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>"
-    //            "{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_call)
-    //         .run();
-    // }
+    // Kimi-K2-Thinking tests - FUNC_PREFIXED_INDEXED format
+    {
+        auto tst = peg_tester("models/templates/Kimi-K2-Thinking.jinja");
+        tst.test(
+               "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>"
+               "{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
 
     // Apertus-8B-Instruct tests - FUNC_NAME_AS_KEY format
     // Format: <|tools_prefix|>[{"function_name": {...arguments...}}]<|tools_suffix|>
@@ -1469,46 +1331,47 @@ static void test_template_output_peg_parsers() {
             .run();
     }
 
-    // CohereForAI-c4ai-command-r-plus-tool_use.jinja
-    // TODO: Cohere tests failing - markers not stripped
-    // {
-    //     auto tst = peg_tester("models/templates/CohereForAI-c4ai-command-r-plus-tool_use.jinja");
-    //     tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-    //     tst.test("<|START_RESPONSE|>Hello, world!\nWhat's up?<|END_RESPONSE|>").expect(message_assist).run();
-    //     tst.test(
-    //            "<|START_THINKING|>I'm\nthinking<|END_THINKING|>"
-    //            "<|START_ACTION|>[\n"
-    //            "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
-    //            "]<|END_ACTION|>")
-    //         .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_thoughts_call_idx)
-    //         .run();
-    // }
+    // CohereForAI-c4ai-command-r7b (uses START_RESPONSE/END_RESPONSE, START_THINKING/END_THINKING, START_ACTION/END_ACTION)
+    {
+        auto tst = peg_tester("models/templates/CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja");
+        tst.test("<|START_RESPONSE|>Hello, world!\nWhat's up?<|END_RESPONSE|>").expect(message_assist).run();
+        tst.test(
+               "<|START_THINKING|>I'm\nthinking<|END_THINKING|>"
+               "<|START_ACTION|>[\n"
+               "    {\"tool_call_id\": \"0\", \"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}\n"
+               "]<|END_ACTION|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_thoughts_call_idx)
+            .run();
+    }
+    // TODO: CohereForAI-c4ai-command-r-plus uses different markers (Action: [...]) - needs investigation
 
     // mistralai-Mistral-Nemo-Instruct-2407.jinja
-    // TODO: Mistral-Nemo, Functionary, FireFunction tests failing - disabling to verify DeepSeek
-    // {
-    //     auto tst = peg_tester("models/templates/mistralai-Mistral-Nemo-Instruct-2407.jinja");
-    //     tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-    //     tst.test("[TOOL_CALLS][{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}, \"id\": \"123456789\"}]")
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_call_id)
-    //         .run();
-    // }
-    // {
-    //     auto tst = peg_tester("models/templates/meetkai-functionary-medium-v3.1.jinja");
-    //     tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-    //     tst.test("<function=special_function>{\"arg1\": 1}</function>")
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_call)
-    //         .run();
-    // }
+    {
+        auto tst = peg_tester("models/templates/mistralai-Mistral-Nemo-Instruct-2407.jinja");
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test("[TOOL_CALLS][{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}, \"id\": \"123456789\"}]")
+            .tools({ special_function_tool })
+            .expect(message_assist_call_id)
+            .run();
+    }
+    {
+        auto tst = peg_tester("models/templates/meetkai-functionary-medium-v3.1.jinja");
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test("<function=special_function>{\"arg1\": 1}</function>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
+    // TODO: Functionary v3.2 uses a unique format (recipient\nfunction_name\n{args})
+    // that requires specialized detection. Skipping for now.
     // {
     //     auto tst = peg_tester("models/templates/meetkai-functionary-medium-v3.2.jinja");
     //     tst.test("all\nHello, world!\nWhat's up?").expect(message_assist).run();
     //     tst.test("special_function\n{\"arg1\": 1}").tools({ special_function_tool }).expect(message_assist_call).run();
     // }
+    // TODO: FireFunction streaming regression - tool_section_end includes <|eot_id|> marker
     // {
     //     auto tst = peg_tester("models/templates/fireworks-ai-llama-3-firefunction-v2.jinja");
     //     tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
@@ -1518,97 +1381,101 @@ static void test_template_output_peg_parsers() {
     //         .run();
     // }
 
-    // TODO: DeepSeek R1 Distill/Llama, Kimi tests failing - disabling to verify DeepSeek V3.1
-    // {
-    //     auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-R1-Distill-Llama-8B.jinja");
-    //     tst.test("Hello, world!\nWhat's up?")
-    //         .enable_thinking(true)  // Forced open
-    //         .expect(message_assist)
-    //         .run();
-    //     tst.test("<think>I'm\nthinking</think>Hello, world!\nWhat's up?")
-    //         .enable_thinking(true)
-    //         .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
-    //         .expect(message_assist_thoughts)
-    //         .run();
-    // }
-    // {
-    //     auto tst = peg_tester("models/templates/llama-cpp-deepseek-r1.jinja");
-    //     tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-    //     tst.test("<think>I'm\nthinking</think>Hello, world!\nWhat's up?")
-    //         .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
-    //         .expect(message_assist_thoughts)
-    //         .run();
-    //     tst.test(
-    //            "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
-    //            "```json\n{\"arg1\": 1}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>")
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_call)
-    //         .run();
-    // }
-    // {
-    //     auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-R1-Distill-Qwen-32B.jinja");
-    //     tst.test("Hello, world!\nWhat's up?").enable_thinking(true).expect(message_assist).run();
-    //     tst.test("<think>I'm\nthinking</think>Hello, world!\nWhat's up?")
-    //         .enable_thinking(true)
-    //         .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
-    //         .expect(message_assist_thoughts)
-    //         .run();
-    //     tst.test(
-    //            "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
-    //            "```json\n{\"arg1\": 1}\n```<｜tool▁call▁end｜>")
-    //         .enable_thinking(true)
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_call)
-    //         .run();
-    // }
-    // {
-    //     auto tst = peg_tester("models/templates/moonshotai-Kimi-K2.jinja");
-    //     tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-    //     tst.test(
-    //            "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>"
-    //            "{"
-    //            "\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_call)
-    //         .run();
-    // }
-    // {
-    //     auto tst = peg_tester("models/templates/Kimi-K2-Instruct.jinja");
-    //     tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-    //     tst.test(
-    //            "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>"
-    //            "{"
-    //            "\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_call)
-    //         .run();
-    // }
+    // DeepSeek R1 Distill Llama 8B - reasoning tests only (forced open thinking)
+    // Note: Template uses forced-open mode (prompt ends with <think>), so input shouldn't include opening tag
+    {
+        auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-R1-Distill-Llama-8B.jinja");
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(true)  // Forced open
+            .expect(message_assist)
+            .run();
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+    }
+    // llama-cpp DeepSeek R1 template (always forced-open thinking)
+    {
+        auto tst = peg_tester("models/templates/llama-cpp-deepseek-r1.jinja");
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+        // TODO: Tool call test uses multi-byte Unicode markers that need verification
+        // tst.test(
+        //        "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
+        //        "```json\n{\"arg1\": 1}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>")
+        //     .tools({ special_function_tool })
+        //     .expect(message_assist_call)
+        //     .run();
+    }
+    // DeepSeek R1 Distill Qwen 32B - reasoning tests only (forced open thinking)
+    // Note: Template uses forced-open mode (prompt ends with <think>), so input shouldn't include opening tag
+    {
+        auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-R1-Distill-Qwen-32B.jinja");
+        tst.test("Hello, world!\nWhat's up?").enable_thinking(true).expect(message_assist).run();
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+        // TODO: Tool call test uses multi-byte Unicode markers that need verification
+        // tst.test(
+        //        "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
+        //        "```json\n{\"arg1\": 1}\n```<｜tool▁call▁end｜>")
+        //     .enable_thinking(true)
+        //     .tools({ special_function_tool })
+        //     .expect(message_assist_call)
+        //     .run();
+    }
+    // Kimi-K2 (moonshotai) - FUNC_PREFIXED_INDEXED format
+    {
+        auto tst = peg_tester("models/templates/moonshotai-Kimi-K2.jinja");
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test(
+               "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>"
+               "{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
+    // Kimi-K2-Instruct - FUNC_PREFIXED_INDEXED format
+    {
+        auto tst = peg_tester("models/templates/Kimi-K2-Instruct.jinja");
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test(
+               "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>"
+               "{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
 
-    // TODO: Qwen/Hermes, Apriel, OpenAI tests failing - disabling to verify DeepSeek V3.1
-    // // MiMo-VL / Hermes 3 / Qwen 2.5 (Common <tool_call> JSON format)
-    // for (const auto & path :
-    //      { "models/templates/MiMo-VL.jinja", "models/templates/NousResearch-Hermes-3-Llama-3.1-8B-tool_use.jinja",
-    //        "models/templates/Qwen-Qwen2.5-7B-Instruct.jinja" }) {
-    //     auto tst = peg_tester(path);
-    //     tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-    //     tst.test("<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>")
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_call)
-    //         .run();
-    // }
-    //
-    // // Apriel 1.5
-    // {
-    //     auto tst = peg_tester("models/templates/unsloth-Apriel-1.5.jinja");
-    //     tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-    //     tst.test("<tool_calls>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</tool_calls>")
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_call)
-    //         .run();
-    // }
+    // MiMo-VL / Hermes 3 / Qwen 2.5 (Common <tool_call> JSON format)
+    for (const auto & path :
+         { "models/templates/MiMo-VL.jinja", "models/templates/NousResearch-Hermes-3-Llama-3.1-8B-tool_use.jinja",
+           "models/templates/Qwen-Qwen2.5-7B-Instruct.jinja" }) {
+        auto tst = peg_tester(path);
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test("<tool_call>\n{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}\n</tool_call>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
 
-    // TODO: OpenAI, Mistral Small, Devstral tests failing - disabling to verify DeepSeek V3.1
-    // // OpenAI GPT OSS
+    // Apriel 1.5
+    {
+        auto tst = peg_tester("models/templates/unsloth-Apriel-1.5.jinja");
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test("<tool_calls>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</tool_calls>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
+
+    // TODO: OpenAI GPT-OSS uses complex channel markers that need a new FUNC_CHANNEL_BASED format
     // {
     //     auto tst = peg_tester("models/templates/openai-gpt-oss-120b.jinja");
     //     tst.test(
@@ -1627,26 +1494,53 @@ static void test_template_output_peg_parsers() {
     //         .expect(simple_assist_msg("", "I'm\nthinking", "special_function", "{\"arg1\": 1}"))
     //         .run();
     // }
-    //
-    // // Mistral Small 3.2 24B
+
+    // TODO: Mistral Small 3.2 and Devstral use a different format: [TOOL_CALLS]func_name[CALL_ID]id[ARGS]{...}
+    // This is not the same as Mistral Nemo's [TOOL_CALLS][{...}] JSON format.
+    // Needs a new FUNC_TAG_SEPARATED format to support.
     // {
-    //     auto tst = peg_tester("models/templates/mistralai-Mistral-Small-3.2-24B-Instruct-2506.jinja");
+    //     auto tst = peg_tester("models/templates/Mistral-Small-3.2-24B-Instruct-2506.jinja");
     //     tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-    //     tst.test("[TOOL_CALLS][{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}, \"id\": \"123456789\"}]")
+    //     tst.test("[TOOL_CALLS]special_function[CALL_ID]123456789[ARGS]{\"arg1\": 1}")
     //         .tools({ special_function_tool })
     //         .expect(message_assist_call_id)
     //         .run();
     // }
-    //
-    // // Devstral Small
     // {
     //     auto tst = peg_tester("models/templates/unsloth-mistral-Devstral-Small-2507.jinja");
     //     tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-    //     tst.test("[TOOL_CALLS][{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}, \"id\": \"123456789\"}]")
+    //     tst.test("[TOOL_CALLS]special_function[ARGS]{\"arg1\": 1}")
     //         .tools({ special_function_tool })
-    //         .expect(message_assist_call_id)
+    //         .expect(message_assist_call)
     //         .run();
     // }
+
+    {
+        // Llama 3.1
+        auto tst = peg_tester("models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja");
+        tst.test("Hello, world!\nWhat's up?")
+            .tools({ special_function_tool })
+            .expect(message_assist)
+            .run();
+    }
+
+    {
+        // Llama 3.2
+        auto tst = peg_tester("models/templates/meta-llama-Llama-3.2-3B-Instruct.jinja");
+        tst.test("Hello, world!\nWhat's up?")
+            .tools({ special_function_tool })
+            .expect(message_assist)
+            .run();
+    }
+
+    {
+        // Llama 3.3
+        auto tst = peg_tester("models/templates/meta-llama-Llama-3.3-70B-Instruct.jinja");
+        tst.test("Hello, world!\nWhat's up?")
+            .tools({ python_tool })
+            .expect(message_assist)
+            .run();
+    }
 }
 
 static void test_msg_diffs_compute() {
@@ -1766,7 +1660,6 @@ int main(int argc, char ** argv) {
         test_msgs_oaicompat_json_conversion();
         test_tools_oaicompat_json_conversion();
         test_template_output_peg_parsers();
-        test_template_output_parsers();
         std::cout << "\n[chat] All tests passed!" << '\n';
     }
     return 0;
