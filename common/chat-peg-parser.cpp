@@ -191,8 +191,9 @@ common_peg_parser common_chat_peg_unified_builder::build_tool_section(const Tool
             // (indicated by words like "call_begin", "call_start", or similar patterns)
             bool has_separate_section_and_call_markers = false;
 
-            // FUNC_PREFIXED_INDEXED always has separate section and per-call markers
-            if (ts.function_format == ToolCallStructure::FUNC_PREFIXED_INDEXED) {
+            // FUNC_PREFIXED_INDEXED and FUNC_BRACKET_TAG always have separate section and per-call markers
+            if (ts.function_format == ToolCallStructure::FUNC_PREFIXED_INDEXED ||
+                ts.function_format == ToolCallStructure::FUNC_BRACKET_TAG) {
                 has_separate_section_and_call_markers = true;
             } else if (ts.function_format == ToolCallStructure::FUNC_NAME_AS_KEY) {
                 // FUNC_NAME_AS_KEY uses comma-separated JSON objects in an array
@@ -334,6 +335,25 @@ common_peg_parser common_chat_peg_unified_builder::build_function(const ToolCall
                 // The function name IS the JSON key, and arguments are the value directly
                 auto opening = literal("{\"") + tool_name(literal(name)) + literal("\":");
                 return tool(tool_open(opening) + space() + tool_args(args) + space() + literal("}"));
+            }
+
+        case ToolCallStructure::FUNC_BRACKET_TAG:
+            {
+                // Build bracket-tag parser (e.g., Mistral Small 3.2):
+                // [TOOL_CALLS]function_name[CALL_ID]call_id[ARGS]{...}
+                // per_call_start = "[TOOL_CALLS]"
+                // id_marker = "[CALL_ID]"
+                // args_marker = "[ARGS]"
+                auto opening = literal(ts.per_call_start) + tool_name(literal(name));
+                if (!ts.id_marker.empty()) {
+                    // Add id_marker + id value (captured as tool_id)
+                    opening = opening + literal(ts.id_marker) + tool_id(until(ts.args_marker));
+                }
+                if (!ts.args_marker.empty()) {
+                    opening = opening + literal(ts.args_marker);
+                }
+                // No explicit closer for this format (EOS terminates)
+                return tool(tool_open(opening) + space() + tool_args(args));
             }
     }
 

@@ -320,6 +320,7 @@ Some templates genuinely don't support tool calls (this is not a detection bug):
 - [x] **Fix Mistral ID Field**: Changed id_field search to use full tool diff instead of just tool_call_opener.
 - [x] **Fix Nested vs Non-nested XML**: Added detection for when `tool_section_start` matches `function_prefix` to properly set `function_close`.
 - [x] **Fix JSON Content Serialization**: Content is now `null` (not `""`) when tool_calls are present, per OpenAI spec.
+- [x] **Fix Null Content Rendering**: Added `requires_nonnull_content` detection for templates that render `null` content as Python "None" string. Content is patched to empty string for these models.
 
 ### TODO / Roadmap
 

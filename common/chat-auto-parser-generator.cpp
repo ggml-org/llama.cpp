@@ -6,6 +6,7 @@
 
 #include <minja/chat-template.hpp>
 #include <minja/minja.hpp>
+#include <optional>
 #include <stdexcept>
 
 using json = nlohmann::ordered_json;
@@ -37,8 +38,22 @@ common_chat_params UniversalPEGGenerator::generate_parser(
         LOG_DBG("  tool_section_start: '%s'\n", analysis.tools.tool_section_start.c_str());
         LOG_DBG("  tool_section_end: '%s'\n", analysis.tools.tool_section_end.c_str());
 
+        // Patch messages if template requires non-null content
+        // Some templates (e.g., iquest) render null as "None" when concatenating strings
+        std::optional<json> messages_override;
+        if (analysis.tools.requires_nonnull_content && !inputs.messages.empty()) {
+            LOG_DBG("Patching null content to empty string (template requires non-null content)\n");
+            json patched_messages = inputs.messages;
+            for (auto & msg : patched_messages) {
+                if (msg.contains("content") && msg["content"].is_null()) {
+                    msg["content"] = "";
+                }
+            }
+            messages_override = patched_messages;
+        }
+
         // Calculate prompt first to detect forced thinking
-        data.prompt = apply_template(tmpl, inputs);
+        data.prompt = apply_template(tmpl, inputs, messages_override);
 
         // Determine if thinking is forced open based on prompt ending
         bool thinking_forced_open = false;
@@ -80,6 +95,16 @@ common_chat_params UniversalPEGGenerator::generate_parser(
             // Need PEG parser to handle function name parsing
             data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
             LOG_DBG("Generated unified parser for tag-with-name format (format: PEG_NATIVE)\n");
+        } else if (analysis.tools.function_format == ToolCallStructure::FUNC_BRACKET_TAG) {
+            // Bracket-tag format (e.g., [TOOL_CALLS]name[CALL_ID]id[ARGS]{...} for Mistral Small 3.2)
+            // Need PEG parser to handle bracket tag parsing
+            data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
+            LOG_DBG("Generated unified parser for bracket-tag format (format: PEG_NATIVE)\n");
+        } else if (analysis.tools.function_format == ToolCallStructure::FUNC_PREFIXED_INDEXED) {
+            // Prefixed-indexed format (e.g., Kimi-K2)
+            // Need PEG parser to handle namespace and indexed format
+            data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
+            LOG_DBG("Generated unified parser for prefixed-indexed format (format: PEG_NATIVE)\n");
         } else {
             data.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
             LOG_DBG("Generated unified parser without tools or content markers (format: CONTENT_ONLY)\n");
@@ -91,6 +116,10 @@ common_chat_params UniversalPEGGenerator::generate_parser(
             trigger_word = analysis.tools.tool_section_start;
         } else if (analysis.tools.function_format == ToolCallStructure::FUNC_TAG_WITH_NAME) {
             trigger_word = analysis.tools.function_prefix;
+        } else if (analysis.tools.function_format == ToolCallStructure::FUNC_BRACKET_TAG ||
+                   analysis.tools.function_format == ToolCallStructure::FUNC_PREFIXED_INDEXED) {
+            // For formats with per-call markers, use per_call_start as trigger
+            trigger_word = analysis.tools.per_call_start;
         }
 
         // Build grammar for tool calls
