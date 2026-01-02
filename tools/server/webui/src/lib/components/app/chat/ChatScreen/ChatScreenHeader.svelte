@@ -3,6 +3,7 @@
 	import { DialogChatSettings } from '$lib/components/app';
 	import { Button } from '$lib/components/ui/button';
 	import { useSidebar } from '$lib/components/ui/sidebar';
+	import McpLogo from '../../misc/McpLogo.svelte';
 
 	const sidebar = useSidebar();
 
