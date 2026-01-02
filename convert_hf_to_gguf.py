@@ -6414,6 +6414,7 @@ class ARwkv7Model(Rwkv7Model):
         # required by llama.cpp, unused
         self.gguf_writer.add_head_count(0)
 
+
 @ModelBase.register("MaincoderForCausalLM")
 class MaincoderModel(TextModel):
     model_arch = gguf.MODEL_ARCH.MAINCODER
