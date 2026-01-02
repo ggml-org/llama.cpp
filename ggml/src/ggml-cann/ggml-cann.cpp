@@ -2512,7 +2512,7 @@ static bool ggml_backend_buft_is_cann(ggml_backend_buffer_type_t buft) {
  * false.
  */
 static bool ggml_backend_cann_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-    const int min_batch_size = 32;
+    const int min_batch_size = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
     GGML_UNUSED(dev);
 
     return op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS;
