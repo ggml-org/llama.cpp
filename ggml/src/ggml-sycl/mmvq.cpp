@@ -390,6 +390,7 @@ static void mul_mat_vec_q6_k_variable_tile(
     const void * __restrict__ vy,
     float * __restrict__ dst,
     const int ncols, const int nrows,
+    const int total_nrows, const int row_low,
     const int blocks_per_row,
     const int num_tiles,
     const int row_quants_bytes,
@@ -399,138 +400,139 @@ static void mul_mat_vec_q6_k_variable_tile(
     const auto sg = nd_item.get_sub_group();
     const int warp_id = nd_item.get_local_id(2) / WARP_SIZE;
     const int lane_id = sg.get_local_linear_id();
-    const int row = nd_item.get_group(2);
+    const int local_row = nd_item.get_group(2);  // Row within this slice
+    const int global_row = row_low + local_row;  // Row in full tensor
 
-    if (row >= nrows) return;
+    if (local_row >= nrows) return;
 
-    // Each warp processes one tile
-    if (warp_id >= num_tiles) {
-        // Extra warps wait at barrier
-        sycl::group_barrier(nd_item.get_group());
-        return;
-    }
-
-    // Get this warp's tile info using precomputed values
-    // We can't call tile_size_at in kernel, so we recompute locally
-    int tile_size = 0;
-    int tile_offset = 0;
-    {
-        int remaining = blocks_per_row;
-        int current_offset = 0;
-        for (int t = 0; t <= warp_id && remaining > 0; t++) {
-            int ts = 1;
-            while (ts * 2 <= remaining && ts < 32) {
-                ts *= 2;
-            }
-            if (t == warp_id) {
-                tile_size = ts;
-                tile_offset = current_offset;
-            }
-            current_offset += ts;
-            remaining -= ts;
-        }
-    }
-
-    // Compute byte offset to this tile within the row
-    int tile_byte_offset = 0;
-    {
-        int remaining = blocks_per_row;
-        int current_offset = 0;
-        for (int t = 0; t < warp_id && remaining > 0; t++) {
-            int ts = 1;
-            while (ts * 2 <= remaining && ts < 32) {
-                ts *= 2;
-            }
-            tile_byte_offset += ts * (128 + 64 + 16);
-            current_offset += ts;
-            remaining -= ts;
-        }
-    }
-
-    const int word_plane_stride = tile_size * 4;
-
-    // X pointers
+    // X base pointers
     const uint8_t * x_base = (const uint8_t *)vx;
-    const uint8_t * tile_base = x_base + row * row_quants_bytes + tile_byte_offset;
-
-    // Tile layout: [ql: tile_size * 128][qh: tile_size * 64][scales: tile_size * 16]
-    const uint8_t * tile_ql = tile_base;
-    const uint8_t * tile_qh = tile_ql + tile_size * 128;
-    const int8_t * tile_sc = (const int8_t *)(tile_qh + tile_size * 64);
-
-    // D values at end of tensor
-    const ggml_half * x_d = (const ggml_half *)(x_base + nrows * row_quants_bytes);
 
     // Y pointers
     const int8_t * y_qs = (const int8_t *)vy;
     const sycl::half2 * y_ds = (const sycl::half2 *)((const char *)vy + ncols);
 
+    // D values at end of tensor - use total_nrows since d values are at end of FULL tensor
+    const ggml_half * x_d = (const ggml_half *)(x_base + total_nrows * row_quants_bytes);
+
     float partial_sum = 0.0f;
 
-    // Only active lanes process blocks
-    if (lane_id < tile_size) {
-        const int block_in_tile = lane_id;
-        const int global_block_idx = row * blocks_per_row + tile_offset + block_in_tile;
-        const float d = x_d[global_block_idx];
+    // Only warps assigned to tiles do actual work
+    // Extra warps will contribute 0 to the reduction
+    if (warp_id < num_tiles) {
+        // Get this warp's tile info using precomputed values
+        // We can't call tile_size_at in kernel, so we recompute locally
+        int tile_size = 0;
+        int tile_offset = 0;
+        {
+            int remaining = blocks_per_row;
+            int current_offset = 0;
+            for (int t = 0; t <= warp_id && remaining > 0; t++) {
+                int ts = 1;
+                while (ts * 2 <= remaining && ts < 32) {
+                    ts *= 2;
+                }
+                if (t == warp_id) {
+                    tile_size = ts;
+                    tile_offset = current_offset;
+                }
+                current_offset += ts;
+                remaining -= ts;
+            }
+        }
 
-        const int y_block_base = (tile_offset + block_in_tile) * 8;
+        // Compute byte offset to this tile within the row
+        int tile_byte_offset = 0;
+        {
+            int remaining = blocks_per_row;
+            int current_offset = 0;
+            for (int t = 0; t < warp_id && remaining > 0; t++) {
+                int ts = 1;
+                while (ts * 2 <= remaining && ts < 32) {
+                    ts *= 2;
+                }
+                tile_byte_offset += ts * (128 + 64 + 16);
+                current_offset += ts;
+                remaining -= ts;
+            }
+        }
 
-        for (int iqs = 0; iqs < QI6_K; ++iqs) {
-            const int vh_shift = 2 * ((iqs % (QI6_K / 2)) / (QI6_K / 4));
-            const int bq8_offset = 2 * QR6_K * (iqs / (QI6_K / 2)) + (iqs % (QI6_K / 2)) / (QI6_K / 4);
-            const int scale_offset = (QI6_K / 4) * (iqs / (QI6_K / 2)) + (iqs % (QI6_K / 2)) / (QI6_K / 8);
-            const int u_index = iqs % QI8_1;
+        const int word_plane_stride = tile_size * 4;
 
-            const int ql_offset = iqs * word_plane_stride + block_in_tile * 4;
-            const int qh_word_idx = (QI6_K / 4) * (iqs / (QI6_K / 2)) + iqs % (QI6_K / 4);
-            const int qh_offset = qh_word_idx * word_plane_stride + block_in_tile * 4;
-            const int vl = *((const int *)(tile_ql + ql_offset));
-            const int vh_raw = *((const int *)(tile_qh + qh_offset));
-            const int vh = vh_raw >> vh_shift;
+        // X pointers - use global_row for accessing the full tensor data
+        const uint8_t * tile_base = x_base + global_row * row_quants_bytes + tile_byte_offset;
 
-            const int sc_idx0 = scale_offset;
-            const int sc_idx1 = scale_offset + 4;
-            const int sc_word0 = sc_idx0 / 4;
-            const int sc_byte0 = sc_idx0 % 4;
-            const int sc_word1 = sc_idx1 / 4;
-            const int sc_byte1 = sc_idx1 % 4;
-            const int sc_offset0 = sc_word0 * word_plane_stride + block_in_tile * 4 + sc_byte0;
-            const int sc_offset1 = sc_word1 * word_plane_stride + block_in_tile * 4 + sc_byte1;
-            const int8_t sc0 = tile_sc[sc_offset0];
-            const int8_t sc1 = tile_sc[sc_offset1];
+        // Tile layout: [ql: tile_size * 128][qh: tile_size * 64][scales: tile_size * 16]
+        const uint8_t * tile_ql = tile_base;
+        const uint8_t * tile_qh = tile_ql + tile_size * 128;
+        const int8_t * tile_sc = (const int8_t *)(tile_qh + tile_size * 64);
 
-            const int y_block0 = y_block_base + bq8_offset;
-            const int y_block1 = y_block0 + 2;
-            const int u0 = get_int_from_int8_aligned(y_qs + y_block0 * QK8_1, u_index);
-            const int u1 = get_int_from_int8_aligned(y_qs + y_block1 * QK8_1, u_index);
-            const sycl::float2 ds0f = y_ds[y_block0].convert<float, sycl::rounding_mode::automatic>();
-            const sycl::float2 ds1f = y_ds[y_block1].convert<float, sycl::rounding_mode::automatic>();
-            const float d8_0 = ds0f.x();
-            const float d8_1 = ds1f.x();
+        // Only active lanes process blocks
+        if (lane_id < tile_size) {
+            const int block_in_tile = lane_id;
+            const int global_block_idx = global_row * blocks_per_row + tile_offset + block_in_tile;
+            const float d = x_d[global_block_idx];
 
-            float sumf = 0.0f;
-            const int vil0 = (vl >> 0) & 0x0F0F0F0F;
-            const int vih0 = ((vh >> 0) << 4) & 0x30303030;
-            const int vi0 = dpct::vectorized_binary<sycl::char4>((vil0 | vih0), 0x20202020, dpct::sub_sat());
-            sumf += d8_0 * (dpct::dp4a(vi0, u0, 0) * sc0);
+            const int y_block_base = (tile_offset + block_in_tile) * 8;
 
-            const int vil1 = (vl >> 4) & 0x0F0F0F0F;
-            const int vih1 = ((vh >> 4) << 4) & 0x30303030;
-            const int vi1 = dpct::vectorized_binary<sycl::char4>((vil1 | vih1), 0x20202020, dpct::sub_sat());
-            sumf += d8_1 * (dpct::dp4a(vi1, u1, 0) * sc1);
+            for (int iqs = 0; iqs < QI6_K; ++iqs) {
+                const int vh_shift = 2 * ((iqs % (QI6_K / 2)) / (QI6_K / 4));
+                const int bq8_offset = 2 * QR6_K * (iqs / (QI6_K / 2)) + (iqs % (QI6_K / 2)) / (QI6_K / 4);
+                const int scale_offset = (QI6_K / 4) * (iqs / (QI6_K / 2)) + (iqs % (QI6_K / 2)) / (QI6_K / 8);
+                const int u_index = iqs % QI8_1;
 
-            partial_sum += d * sumf;
+                const int ql_offset = iqs * word_plane_stride + block_in_tile * 4;
+                const int qh_word_idx = (QI6_K / 4) * (iqs / (QI6_K / 2)) + iqs % (QI6_K / 4);
+                const int qh_offset = qh_word_idx * word_plane_stride + block_in_tile * 4;
+                const int vl = *((const int *)(tile_ql + ql_offset));
+                const int vh_raw = *((const int *)(tile_qh + qh_offset));
+                const int vh = vh_raw >> vh_shift;
+
+                const int sc_idx0 = scale_offset;
+                const int sc_idx1 = scale_offset + 4;
+                const int sc_word0 = sc_idx0 / 4;
+                const int sc_byte0 = sc_idx0 % 4;
+                const int sc_word1 = sc_idx1 / 4;
+                const int sc_byte1 = sc_idx1 % 4;
+                const int sc_offset0 = sc_word0 * word_plane_stride + block_in_tile * 4 + sc_byte0;
+                const int sc_offset1 = sc_word1 * word_plane_stride + block_in_tile * 4 + sc_byte1;
+                const int8_t sc0 = tile_sc[sc_offset0];
+                const int8_t sc1 = tile_sc[sc_offset1];
+
+                const int y_block0 = y_block_base + bq8_offset;
+                const int y_block1 = y_block0 + 2;
+                const int u0 = get_int_from_int8_aligned(y_qs + y_block0 * QK8_1, u_index);
+                const int u1 = get_int_from_int8_aligned(y_qs + y_block1 * QK8_1, u_index);
+                const sycl::float2 ds0f = y_ds[y_block0].convert<float, sycl::rounding_mode::automatic>();
+                const sycl::float2 ds1f = y_ds[y_block1].convert<float, sycl::rounding_mode::automatic>();
+                const float d8_0 = ds0f.x();
+                const float d8_1 = ds1f.x();
+
+                float sumf = 0.0f;
+                const int vil0 = (vl >> 0) & 0x0F0F0F0F;
+                const int vih0 = ((vh >> 0) << 4) & 0x30303030;
+                const int vi0 = dpct::vectorized_binary<sycl::char4>((vil0 | vih0), 0x20202020, dpct::sub_sat());
+                sumf += d8_0 * (dpct::dp4a(vi0, u0, 0) * sc0);
+
+                const int vil1 = (vl >> 4) & 0x0F0F0F0F;
+                const int vih1 = ((vh >> 4) << 4) & 0x30303030;
+                const int vi1 = dpct::vectorized_binary<sycl::char4>((vil1 | vih1), 0x20202020, dpct::sub_sat());
+                sumf += d8_1 * (dpct::dp4a(vi1, u1, 0) * sc1);
+
+                partial_sum += d * sumf;
+            }
         }
     }
 
-    // Warp-level reduction
+    // Warp-level reduction - ALL warps participate (extra warps contribute 0)
     float warp_sum = sycl::reduce_over_group(sg, partial_sum, sycl::plus<float>());
 
-    // Write to shared memory
+    // Write to shared memory - ALL warps write (extra warps write 0)
     if (lane_id == 0) {
         shared_partials[warp_id] = warp_sum;
     }
 
+    // ALL warps must hit this barrier (critical for correctness)
     sycl::group_barrier(nd_item.get_group());
 
     // First warp reduces all partial sums
@@ -538,15 +540,18 @@ static void mul_mat_vec_q6_k_variable_tile(
         float val = (lane_id < num_tiles) ? shared_partials[lane_id] : 0.0f;
         float final_sum = sycl::reduce_over_group(sg, val, sycl::plus<float>());
         if (lane_id == 0) {
-            dst[row] = final_sum;
+            dst[local_row] = final_sum;  // Output to slice-relative position
         }
     }
 }
 
 // Dispatch function for Q6_K variable tile kernel
+// total_nrows is the full tensor row count (ne01), nrows is the slice size (row_diff)
+// row_low is the starting row offset for this slice
 static void variable_tile_mul_mat_vec_q6_k_q8_1_sycl(
     const void * vx, const void * vy, float * dst,
     const int ncols, const int nrows,
+    const int total_nrows, const int row_low,
     sycl::queue & stream)
 {
     const int blocks_per_row = ncols / QK_K;
@@ -567,8 +572,8 @@ static void variable_tile_mul_mat_vec_q6_k_q8_1_sycl(
         }
     }
 
-    GGML_SYCL_DEBUG("[MMVQ] Q6_K variable tile: blocks_per_row=%d, num_tiles=%d, threads=%d\n",
-                   blocks_per_row, num_tiles, threads_per_row);
+    GGML_SYCL_DEBUG("[MMVQ] Q6_K variable tile: blocks_per_row=%d, num_tiles=%d, threads=%d, total_nrows=%d, row_low=%d\n",
+                   blocks_per_row, num_tiles, threads_per_row, total_nrows, row_low);
 
     sycl::range<3> grid(1, 1, nrows);
     sycl::range<3> block(1, 1, threads_per_row);
@@ -580,7 +585,7 @@ static void variable_tile_mul_mat_vec_q6_k_q8_1_sycl(
             sycl::nd_range<3>(grid * block, block),
             [=](sycl::nd_item<3> nd_item) [[intel::reqd_sub_group_size(WARP_SIZE)]] {
                 mul_mat_vec_q6_k_variable_tile(
-                    vx, vy, dst, ncols, nrows, blocks_per_row, num_tiles,
+                    vx, vy, dst, ncols, nrows, total_nrows, row_low, blocks_per_row, num_tiles,
                     row_quants_bytes, shared_partials.get_pointer(), nd_item);
             });
     });
@@ -2243,13 +2248,14 @@ static void coalesced_mul_mat_vec_mxfp4_q8_1_sycl(const void * vx, const void * 
 
 // Dispatch function for coalesced Q6_K MMVQ kernel
 // Now uses variable tile kernel which handles any block count
+// total_nrows is the full tensor row count (ne01), nrows is the slice size (row_diff)
+// row_low is the starting row offset for this slice
 static void coalesced_mul_mat_vec_q6_k_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols,
-                                                  const int nrows, dpct::queue_ptr stream) {
+                                                  const int nrows, const int total_nrows, const int row_low, dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
-    const int blocks_per_row = ncols / QK_K;
 
     // Use variable tile kernel which handles arbitrary block counts
-    variable_tile_mul_mat_vec_q6_k_q8_1_sycl(vx, vy, dst, ncols, nrows, *stream);
+    variable_tile_mul_mat_vec_q6_k_q8_1_sycl(vx, vy, dst, ncols, nrows, total_nrows, row_low, *stream);
 }
 
 static void mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * vy, float * dst, const int ncols, const int nrows,
@@ -3792,7 +3798,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                 break;
             case GGML_TYPE_Q6_K:
                 {
-                    // Q6_K only has SOA kernel (no COALESCED version) - check is_soa() specifically
+                    // Q6_K supports SOA and COALESCED (variable tile) layouts
                     auto * extra = (ggml_tensor_extra_gpu *) dst->src[0]->extra;
 
 #ifdef GGML_SYCL_Q6K_Y_DEBUG
@@ -3844,8 +3850,10 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                         reorder_mul_mat_vec_q6_k_q8_1_sycl(soa_base, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, ne01, row_low, stream);
                     } else if (extra && extra->optimized_feature.is_coalesced()) {
                         GGML_SYCL_DEBUG("Calling coalesced_mul_mat_vec_q6_k_q8_1_sycl\n");
-                        GGML_SYCL_KTRACE("mmvq_q6_k_coalesced", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-                        coalesced_mul_mat_vec_q6_k_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                        GGML_SYCL_KTRACE("mmvq_q6_k_coalesced", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld", (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
+                        // For coalesced layout, use base pointer (not pre-offset src0_dd_i) and pass row_low for correct block indexing
+                        const void * coalesced_base = ggml_sycl_get_data_ptr(src0, ctx.device);
+                        coalesced_mul_mat_vec_q6_k_q8_1_sycl(coalesced_base, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, ne01, row_low, stream);
                     } else {
                         GGML_SYCL_DEBUG("Calling mul_mat_vec_q6_k_q8_1_sycl\n");
                         GGML_SYCL_KTRACE("mmvq_q6_k_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
