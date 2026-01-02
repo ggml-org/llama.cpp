@@ -105,6 +105,8 @@ common_chat_params UniversalPEGGenerator::generate_parser(
             // Bracket-tag format (e.g., [TOOL_CALLS]name[CALL_ID]id[ARGS]{...} for Mistral Small 3.2)
             // Need PEG parser to handle bracket tag parsing
             data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
+            fprintf(stderr, "DEBUG GENERATOR: FUNC_BRACKET_TAG format detected, per_call_start='%s', id_marker='%s'\n",
+                    analysis.tools.per_call_start.c_str(), analysis.tools.id_marker.c_str());
             LOG_DBG("Generated unified parser for bracket-tag format (format: PEG_NATIVE)\n");
         } else if (analysis.tools.function_format == ToolCallStructure::FUNC_PREFIXED_INDEXED) {
             // Prefixed-indexed format (e.g., Kimi-K2)

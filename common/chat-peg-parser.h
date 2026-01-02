@@ -153,5 +153,6 @@ class common_chat_peg_unified_mapper : public common_chat_peg_mapper {
   public:
     common_chat_peg_unified_mapper(common_chat_msg & msg) : common_chat_peg_mapper(msg) {}
 
+    void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result) override;
     void map(const common_peg_ast_node & node) override;
 };
