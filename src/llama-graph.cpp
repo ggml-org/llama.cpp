@@ -21,7 +21,8 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
     }
 
     if (ubatch->embd) {
-        const int64_t n_embd   = embd->ne[0];
+        GGML_ASSERT(n_embd == embd->ne[0]);
+
         const int64_t n_tokens = ubatch->n_tokens;
 
         ggml_backend_tensor_set(embd, ubatch->embd, 0, n_tokens*n_embd*ggml_element_size(embd));
@@ -1206,17 +1207,21 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
     const int64_t n_embd = hparams.n_embd_inp();
 
-    auto inp = std::make_unique<llm_graph_input_embd>();
+    auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+
+    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
+    cb(inp->tokens, "inp_tokens", -1);
+    ggml_set_input(inp->tokens);
+    res->t_tokens = inp->tokens;
+
+    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, ubatch.n_tokens);
+    ggml_set_input(inp->embd);
 
     ggml_tensor * cur = nullptr;
 
-    if (ubatch.token) {
-        inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
-        //cb(inp->tokens, "inp_tokens", -1);
-        ggml_set_input(inp->tokens);
-        res->t_tokens = inp->tokens;
-
+    {
         cur = ggml_get_rows(ctx0, tok_embd, inp->tokens);
+        cur = ggml_scale(ctx0, cur, ubatch.token ? 1.0f : 0.0f);
 
         // apply lora for embedding tokens if needed
         for (const auto & lora : *loras) {
@@ -1235,12 +1240,9 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
 
             cur = ggml_add(ctx0, cur, inpL_delta);
         }
-    } else {
-        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, ubatch.n_tokens);
-        ggml_set_input(inp->embd);
-
-        cur = inp->embd;
     }
+
+    cur = ggml_add(ctx0, cur, ggml_scale(ctx0, inp->embd, ubatch.embd ? 1.0f : 0.0f));
 
     // For Granite architecture
     if (hparams.f_embedding_scale != 0.0f) {
