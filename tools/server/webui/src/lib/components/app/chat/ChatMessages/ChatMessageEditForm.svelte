@@ -2,11 +2,22 @@
 	import { X, AlertTriangle } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Switch } from '$lib/components/ui/switch';
-	import { ChatForm, DialogConfirmation } from '$lib/components/app';
-	import { getMessageEditContext } from '$lib/contexts';
-	import { KeyboardKey } from '$lib/enums';
-	import { chatStore } from '$lib/stores/chat.svelte';
-	import { processFilesToChatUploaded } from '$lib/utils/browser-only';
+	import { ChatAttachmentsList, DialogConfirmation, ModelsSelector } from '$lib/components/app';
+	import { INPUT_CLASSES } from '$lib/constants/css-classes';
+	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
+	import { AttachmentType, FileTypeCategory, MimeTypeText } from '$lib/enums';
+	import { config } from '$lib/stores/settings.svelte';
+	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
+	import { setEditModeActive, clearEditMode } from '$lib/stores/chat.svelte';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { modelsStore } from '$lib/stores/models.svelte';
+	import { isRouterMode } from '$lib/stores/server.svelte';
+	import {
+		autoResizeTextarea,
+		getFileTypeCategory,
+		getFileTypeCategoryByExtension,
+		parseClipboardContent
+	} from '$lib/utils';
 
 	const editCtx = getMessageEditContext();
 
