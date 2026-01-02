@@ -9,6 +9,18 @@ import { buildMcpClientConfig } from '$lib/config/mcp';
 import { config } from '$lib/stores/settings.svelte';
 import type { MCPToolCall } from '$lib/types/mcp';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
+import { MCPClient } from '$lib/mcp';
+import { detectMcpTransportFromUrl } from '$lib/utils/mcp';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Health Check Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type HealthCheckState =
+	| { status: 'idle' }
+	| { status: 'loading' }
+	| { status: 'error'; message: string }
+	| { status: 'success'; tools: { name: string; description?: string }[] };
 
 /**
  * mcpStore - Reactive store for MCP (Model Context Protocol) host management
@@ -43,6 +55,9 @@ class MCPStore {
 	private _error = $state<string | null>(null);
 	private _configSignature = $state<string | null>(null);
 	private _initPromise: Promise<MCPHostManager | undefined> | null = null;
+
+	// Health check state (in-memory only, not persisted)
+	private _healthChecks = $state<Record<string, HealthCheckState>>({});
 
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Computed Getters
@@ -297,6 +312,123 @@ class MCPStore {
 	clearError(): void {
 		this._error = null;
 	}
+
+	// ─────────────────────────────────────────────────────────────────────────────
+	// Health Check (Settings UI)
+	// ─────────────────────────────────────────────────────────────────────────────
+
+	/**
+	 * Get health check state for a specific server
+	 */
+	getHealthCheckState(serverId: string): HealthCheckState {
+		return this._healthChecks[serverId] ?? { status: 'idle' };
+	}
+
+	/**
+	 * Set health check state for a specific server
+	 */
+	private setHealthCheckState(serverId: string, state: HealthCheckState): void {
+		this._healthChecks = { ...this._healthChecks, [serverId]: state };
+	}
+
+	/**
+	 * Check if health check has been performed for a server
+	 */
+	hasHealthCheck(serverId: string): boolean {
+		return serverId in this._healthChecks && this._healthChecks[serverId].status !== 'idle';
+	}
+
+	/**
+	 * Parse custom headers from JSON string
+	 */
+	private parseHeaders(headersJson?: string): Record<string, string> | undefined {
+		if (!headersJson?.trim()) return undefined;
+		try {
+			const parsed = JSON.parse(headersJson);
+			if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+				return parsed as Record<string, string>;
+			}
+		} catch {
+			console.warn('[MCP Store] Failed to parse custom headers JSON:', headersJson);
+		}
+		return undefined;
+	}
+
+	/**
+	 * Run health check for a specific server
+	 */
+	async runHealthCheck(server: {
+		id: string;
+		url: string;
+		requestTimeoutSeconds: number;
+		headers?: string;
+	}): Promise<void> {
+		const trimmedUrl = server.url.trim();
+
+		if (!trimmedUrl) {
+			this.setHealthCheckState(server.id, {
+				status: 'error',
+				message: 'Please enter a server URL first.'
+			});
+			return;
+		}
+
+		this.setHealthCheckState(server.id, { status: 'loading' });
+
+		const timeoutMs = Math.round(server.requestTimeoutSeconds * 1000);
+		const headers = this.parseHeaders(server.headers);
+
+		const mcpClient = new MCPClient({
+			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
+			capabilities: DEFAULT_MCP_CONFIG.capabilities,
+			clientInfo: DEFAULT_MCP_CONFIG.clientInfo,
+			requestTimeoutMs: timeoutMs,
+			servers: {
+				[server.id]: {
+					url: trimmedUrl,
+					transport: detectMcpTransportFromUrl(trimmedUrl),
+					handshakeTimeoutMs: DEFAULT_MCP_CONFIG.connectionTimeoutMs,
+					requestTimeoutMs: timeoutMs,
+					headers
+				}
+			}
+		});
+
+		try {
+			await mcpClient.initialize();
+			const tools = (await mcpClient.getToolsDefinition()).map((tool) => ({
+				name: tool.function.name,
+				description: tool.function.description
+			}));
+
+			this.setHealthCheckState(server.id, { status: 'success', tools });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : 'Unknown error occurred';
+			this.setHealthCheckState(server.id, { status: 'error', message });
+		} finally {
+			try {
+				await mcpClient.shutdown();
+			} catch (shutdownError) {
+				console.warn('[MCP Store] Failed to cleanly shutdown health check client', shutdownError);
+			}
+		}
+	}
+
+	/**
+	 * Clear health check state for a specific server
+	 */
+	clearHealthCheck(serverId: string): void {
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
+		const { [serverId]: _removed, ...rest } = this._healthChecks;
+		this._healthChecks = rest;
+	}
+
+	/**
+	 * Clear all health check states
+	 */
+	clearAllHealthChecks(): void {
+		this._healthChecks = {};
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -340,4 +472,26 @@ export function mcpConnectedServerNames() {
 
 export function mcpToolCount() {
 	return mcpStore.toolCount;
+}
+
+// Health check exports
+export function mcpGetHealthCheckState(serverId: string) {
+	return mcpStore.getHealthCheckState(serverId);
+}
+
+export function mcpHasHealthCheck(serverId: string) {
+	return mcpStore.hasHealthCheck(serverId);
+}
+
+export async function mcpRunHealthCheck(server: {
+	id: string;
+	url: string;
+	requestTimeoutSeconds: number;
+	headers?: string;
+}) {
+	return mcpStore.runHealthCheck(server);
+}
+
+export function mcpClearHealthCheck(serverId: string) {
+	return mcpStore.clearHealthCheck(serverId);
 }
