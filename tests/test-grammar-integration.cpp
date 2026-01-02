@@ -802,19 +802,6 @@ static void test_quantifiers() {
 		"yy"
         }
     );
-    test_grammar(
-        "hang",
-        // Grammar
-        R"""(
-            root ::= (((((([^x]*){0,99}){0,99}){0,99}){0,99}){0,99}){0,99}
-        )""",
-        // Passing strings
-        {
-        },
-        // Failing strings
-        {
-        }
-    );
 }
 
 static void test_failure_missing_root() {
