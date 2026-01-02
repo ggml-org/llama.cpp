@@ -1,6 +1,7 @@
 #include "chat-parser.h"
 
 #include "chat-peg-parser.h"
+#include "chat.h"
 #include "common.h"
 #include "log.h"
 #include "peg-parser.h"
@@ -1593,7 +1594,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &   parser,
         throw std::runtime_error("Failed to parse due to missing parser definition.");
     }
 
-    LOG_DBG("Parsing input with format %s: %s\n", common_chat_format_name(syntax.format), input.c_str());
+    LOG_DBG("Parsing PEG input with format %s: %s\n", common_chat_format_name(syntax.format), input.c_str());
 
     common_peg_parse_context ctx(input, is_partial);
     auto                     result = parser.parse(ctx);
@@ -1606,7 +1607,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &   parser,
     common_chat_msg msg;
     msg.role = "assistant";
 
-    if (syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE) {
+    if (syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE || syntax.format == COMMON_CHAT_FORMAT_PEG_CONSTRUCTED) {
         auto mapper = common_chat_peg_unified_mapper(msg);
         mapper.from_ast(ctx.ast, result);
     } else {

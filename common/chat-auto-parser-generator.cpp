@@ -52,6 +52,12 @@ common_chat_params UniversalPEGGenerator::generate_parser(
             messages_override = patched_messages;
         }
 
+        if (inputs.messages.empty()) {
+            // Some templates don't handle empty messages well - always leave something in
+            json message = { { { "role", "user" }, { "content", "Hello" } } };
+            messages_override.emplace(message);
+        }
+
         // Calculate prompt first to detect forced thinking
         data.prompt = apply_template(tmpl, inputs, messages_override);
 
