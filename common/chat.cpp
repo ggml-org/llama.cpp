@@ -2620,6 +2620,7 @@ static common_chat_params common_chat_params_init_solar_open(const common_chat_t
                 std::string name = function.at("name");
                 const auto & schema = function.at("parameters");
 
+                // tool(name, schema) <- name "<|tool_call:args|>" schema
                 parser_tool_call |= p.rule("tool-" + name,
                     p.atomic(p.tool_name(p.literal(name)) + lit_tool_call_args)
                     + p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema)));
@@ -2628,6 +2629,10 @@ static common_chat_params common_chat_params_init_solar_open(const common_chat_t
             auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
             auto max_calls = inputs.parallel_tool_calls ? -1 : 1;
 
+            // tool-calls  <- "<|tool_calls|>" tool-call+
+            // tool-call   <- "<|tool_call:begin|> call-id "<|tool_call:name|>" &([^<]+ "<|tool_call:args|>") tool-choice "<|tool_call:end|>"
+            // call-id     <- [a-zA-Z0-9_-]+
+            // tool-choice <- tool(t[0].name, t[0].schema) / ... / tool(t[n].name, t[n].schema)
             auto parser_tool_calls = p.trigger_rule("tool-calls",
                 p.atomic(p.literal("<|tool_calls|>"))
                 + p.repeat(
@@ -2638,7 +2643,8 @@ static common_chat_params common_chat_params_init_solar_open(const common_chat_t
                         + p.peek(p.chars("[^<]", 1, -1) + lit_tool_call_args))
                     + parser_tool_call
                     + p.tool_close(lit_tool_call_end),
-                    1, max_calls));
+                /* min = */ 1,
+                /* max = */ max_calls));
 
             if (min_calls == 1) {
                 // If required, then try any combination of the reasoning, content, and tool call
