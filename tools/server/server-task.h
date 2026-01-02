@@ -337,6 +337,9 @@ struct server_task_result_cmpl_partial : server_task_result {
     std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
     bool is_updated = false;
 
+    // for Anthropic API: track if any reasoning content has been generated
+    bool anthropic_has_reasoning = false;
+
     virtual bool is_stop() override {
         return false; // in stream mode, partial responses are not considered stop
     }
@@ -346,6 +349,8 @@ struct server_task_result_cmpl_partial : server_task_result {
     virtual void update(task_result_state & state) override {
         is_updated = true;
         state.update_chat_msg(content, true, oaicompat_msg_diffs);
+        // track if the accumulated message has any reasoning content
+        anthropic_has_reasoning = !state.chat_msg.reasoning_content.empty();
     }
 
     json to_json_non_oaicompat();
