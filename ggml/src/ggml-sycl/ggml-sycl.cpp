@@ -708,12 +708,16 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
         switch (tensor->type) {
             case GGML_TYPE_Q4_0:
                 if (use_coalesced) {
-                    if (!reorder_q4_0_coalesced_cpu(reorder_buf, data, ncols, nrows)) {
-                        GGML_ABORT("Q4_0 coalesced reorder failed (tile alignment required)");
+                    if (reorder_q4_0_coalesced_cpu(reorder_buf, data, ncols, nrows)) {
+                        cpu_reorder_mode = reorder_mode::COALESCED;
+                        GGML_SYCL_DEBUG("[CPU-REORDER] Q4_0 AoS→Coalesced: %s ncols=%lld nrows=%lld\n",
+                                        tensor->name, ncols, nrows);
+                    } else {
+                        // Fall back to SoA if coalesced fails (tile alignment)
+                        reorder_q4_0_cpu(reorder_buf, data, ncols, nrows);
+                        GGML_SYCL_DEBUG("[CPU-REORDER] Q4_0 coalesced failed, falling back to SoA: %s ncols=%lld nrows=%lld\n",
+                                        tensor->name, ncols, nrows);
                     }
-                    cpu_reorder_mode = reorder_mode::COALESCED;
-                    GGML_SYCL_DEBUG("[CPU-REORDER] Q4_0 AoS→Coalesced: %s ncols=%lld nrows=%lld\n",
-                                    tensor->name, ncols, nrows);
                 } else {
                     reorder_q4_0_cpu(reorder_buf, data, ncols, nrows);
                     GGML_SYCL_DEBUG("[CPU-REORDER] Q4_0 AoS→SoA: %s ncols=%lld nrows=%lld\n",
@@ -722,12 +726,16 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
                 break;
             case GGML_TYPE_Q8_0:
                 if (use_coalesced) {
-                    if (!reorder_q8_0_coalesced_cpu(reorder_buf, data, ncols, nrows)) {
-                        GGML_ABORT("Q8_0 coalesced reorder failed (tile alignment required)");
+                    if (reorder_q8_0_coalesced_cpu(reorder_buf, data, ncols, nrows)) {
+                        cpu_reorder_mode = reorder_mode::COALESCED;
+                        GGML_SYCL_DEBUG("[CPU-REORDER] Q8_0 AoS→Coalesced: %s ncols=%lld nrows=%lld\n",
+                                        tensor->name, ncols, nrows);
+                    } else {
+                        // Fall back to SoA if coalesced fails (tile alignment)
+                        reorder_q8_0_cpu(reorder_buf, data, ncols, nrows);
+                        GGML_SYCL_DEBUG("[CPU-REORDER] Q8_0 coalesced failed, falling back to SoA: %s ncols=%lld nrows=%lld\n",
+                                        tensor->name, ncols, nrows);
                     }
-                    cpu_reorder_mode = reorder_mode::COALESCED;
-                    GGML_SYCL_DEBUG("[CPU-REORDER] Q8_0 AoS→Coalesced: %s ncols=%lld nrows=%lld\n",
-                                    tensor->name, ncols, nrows);
                 } else {
                     reorder_q8_0_cpu(reorder_buf, data, ncols, nrows);
                     GGML_SYCL_DEBUG("[CPU-REORDER] Q8_0 AoS→SoA: %s ncols=%lld nrows=%lld\n",
@@ -744,12 +752,16 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
             case GGML_TYPE_Q6_K: {
                 const size_t nblocks = size / sizeof(block_q6_K);
                 if (use_coalesced) {
-                    if (!reorder_q6_k_coalesced_cpu(reorder_buf, data, ncols, nrows)) {
-                        GGML_ABORT("Q6_K coalesced reorder failed (tile alignment required)");
+                    if (reorder_q6_k_coalesced_cpu(reorder_buf, data, ncols, nrows)) {
+                        cpu_reorder_mode = reorder_mode::COALESCED;
+                        GGML_SYCL_DEBUG("[CPU-REORDER] Q6_K AoS→Coalesced: %s nblocks=%zu\n",
+                                        tensor->name, nblocks);
+                    } else {
+                        // Fall back to SoA if coalesced fails (tile alignment)
+                        reorder_q6_k_cpu(reorder_buf, data, nblocks);
+                        GGML_SYCL_DEBUG("[CPU-REORDER] Q6_K coalesced failed, falling back to SoA: %s nblocks=%zu\n",
+                                        tensor->name, nblocks);
                     }
-                    cpu_reorder_mode = reorder_mode::COALESCED;
-                    GGML_SYCL_DEBUG("[CPU-REORDER] Q6_K AoS→Coalesced: %s nblocks=%zu\n",
-                                    tensor->name, nblocks);
                 } else {
                     reorder_q6_k_cpu(reorder_buf, data, nblocks);
                     GGML_SYCL_DEBUG("[CPU-REORDER] Q6_K AoS→SoA: %s nblocks=%zu\n",
@@ -759,12 +771,16 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
             }
             case GGML_TYPE_MXFP4:
                 if (use_coalesced) {
-                    if (!reorder_mxfp4_coalesced_cpu(reorder_buf, data, ncols, nrows)) {
-                        GGML_ABORT("MXFP4 coalesced reorder failed (tile alignment required)");
+                    if (reorder_mxfp4_coalesced_cpu(reorder_buf, data, ncols, nrows)) {
+                        cpu_reorder_mode = reorder_mode::COALESCED;
+                        GGML_SYCL_DEBUG("[CPU-REORDER] MXFP4 AoS→Coalesced: %s ncols=%lld nrows=%lld\n",
+                                        tensor->name, ncols, nrows);
+                    } else {
+                        // Fall back to SoA if coalesced fails (tile alignment)
+                        reorder_mxfp4_cpu(reorder_buf, data, ncols, nrows);
+                        GGML_SYCL_DEBUG("[CPU-REORDER] MXFP4 coalesced failed, falling back to SoA: %s ncols=%lld nrows=%lld\n",
+                                        tensor->name, ncols, nrows);
                     }
-                    cpu_reorder_mode = reorder_mode::COALESCED;
-                    GGML_SYCL_DEBUG("[CPU-REORDER] MXFP4 AoS→Coalesced: %s ncols=%lld nrows=%lld\n",
-                                    tensor->name, ncols, nrows);
                 } else {
                     reorder_mxfp4_cpu(reorder_buf, data, ncols, nrows);
                     GGML_SYCL_DEBUG("[CPU-REORDER] MXFP4 AoS→SoA: %s ncols=%lld nrows=%lld\n",
