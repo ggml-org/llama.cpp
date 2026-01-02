@@ -9349,84 +9349,80 @@ static void reorder_q6_k_cpu(void* dst_soa, const void* src_aos, size_t nblocks)
 //   - D values follow all quant tiles contiguously
 // This matches the GPU DMMV/MMVQ coalesced kernel access pattern
 static bool reorder_q6_k_coalesced_cpu(void* dst_coalesced, const void* src_aos, int ncols, int nrows) {
-    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
-    constexpr int WORD_PLANE_STRIDE = TILE_BLOCKS * 4;  // bytes between word planes
+    // Variable tile decomposition: supports any block count via power-of-2 tiles
+    // Each tile is the largest power-of-2 <= remaining blocks, max 32 (warp size)
+    // Example: 56 blocks = 32 + 16 + 8 = 3 tiles
 
-    const size_t blocks_per_row = ncols / QK_K;
-    const size_t nblocks = blocks_per_row * nrows;
+    const int blocks_per_row = ncols / QK_K;
+    const size_t nblocks = (size_t)blocks_per_row * nrows;
+    const int num_tiles = tile_count(blocks_per_row);
 
-    // Layout sizes
-    const size_t ql_per_row = blocks_per_row * (QK_K / 2);    // 128 bytes/block
-    const size_t qh_per_row = blocks_per_row * (QK_K / 4);    // 64 bytes/block
-    const size_t sc_per_row = blocks_per_row * (QK_K / 16);   // 16 bytes/block
-    const size_t row_quants_bytes = ql_per_row + qh_per_row + sc_per_row;
-    const size_t total_quants_bytes = nrows * row_quants_bytes;
-
-    // Coalesced tile sizes
-    constexpr int ql_tile_bytes = TILE_BLOCKS * (QK_K / 2);
-    constexpr int qh_tile_bytes = TILE_BLOCKS * (QK_K / 4);
-    constexpr int sc_tile_bytes = TILE_BLOCKS * (QK_K / 16);
-    constexpr int tile_total = ql_tile_bytes + qh_tile_bytes + sc_tile_bytes;
+    // Compute row stride: sum of all tile sizes * bytes per block
+    // Each tile stores: ql (128 bytes) + qh (64 bytes) + scales (16 bytes) = 208 bytes per block
+    size_t row_quants_bytes = 0;
+    for (int t = 0; t < num_tiles; t++) {
+        int ts = tile_size_at(blocks_per_row, t);
+        row_quants_bytes += (size_t)ts * (128 + 64 + 16);
+    }
 
     // AoS input
     const uint8_t* aos = (const uint8_t*)src_aos;
 
-    // Coalesced layout: [row0_tile0_ql+qh+sc][row0_tile1_ql+qh+sc]...[rowN_tileM_ql+qh+sc][all d values]
-    // All tile data is written contiguously, d values come after all tiles
-    const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
-    uint8_t* coal_d = (uint8_t*)dst_coalesced + nrows * tiles_per_row * tile_total;
+    // Coalesced layout: [row0_tiles][row1_tiles]...[all d values]
+    // D values contiguous at end of all quant data
+    uint8_t* coal_d = (uint8_t*)dst_coalesced + (size_t)nrows * row_quants_bytes;
 
-    // Verify tile alignment
-    if (blocks_per_row % TILE_BLOCKS != 0) {
-        fprintf(stderr, "[CPU-REORDER] Q6_K coalesced: blocks_per_row=%zu not divisible by %d, falling back to SoA\n",
-                blocks_per_row, TILE_BLOCKS);
-        // Fall back to SoA reorder instead of using coalesced layout
-        reorder_q6_k_cpu(dst_coalesced, src_aos, nblocks);
-        return false;  // Fell back to SoA
+    GGML_SYCL_DEBUG("[CPU-REORDER] Q6_K variable tile: blocks_per_row=%d, num_tiles=%d, row_stride=%zu\n",
+                   blocks_per_row, num_tiles, row_quants_bytes);
+
+    // Process each row
+    for (int row = 0; row < nrows; row++) {
+        uint8_t* row_dst = (uint8_t*)dst_coalesced + row * row_quants_bytes;
+        int block_idx = 0;
+
+        for (int tile = 0; tile < num_tiles; tile++) {
+            const int tile_size = tile_size_at(blocks_per_row, tile);
+            const int word_plane_stride = tile_size * 4;  // Stride between word planes for this tile
+
+            // Tile layout: [ql: tile_size * 128][qh: tile_size * 64][scales: tile_size * 16]
+            uint8_t* tile_ql = row_dst;
+            uint8_t* tile_qh = tile_ql + tile_size * 128;
+            uint8_t* tile_sc = tile_qh + tile_size * 64;
+
+            // Process each block in this tile
+            for (int b = 0; b < tile_size; b++) {
+                const size_t global_block = row * blocks_per_row + block_idx + b;
+                const uint8_t* block_aos = aos + global_block * sizeof(block_q6_K);
+
+                // === Process ql (128 bytes = 32 words of 4 bytes) ===
+                const uint8_t* src_ql = block_aos;  // ql at offset 0
+                for (int word = 0; word < 32; word++) {
+                    memcpy(tile_ql + word * word_plane_stride + b * 4, src_ql + word * 4, 4);
+                }
+
+                // === Process qh (64 bytes = 16 words of 4 bytes) ===
+                const uint8_t* src_qh = block_aos + 128;  // qh at offset 128
+                for (int word = 0; word < 16; word++) {
+                    memcpy(tile_qh + word * word_plane_stride + b * 4, src_qh + word * 4, 4);
+                }
+
+                // === Process scales (16 bytes = 4 words of 4 bytes) ===
+                const uint8_t* src_sc = block_aos + 128 + 64;  // scales at offset 192
+                for (int word = 0; word < 4; word++) {
+                    memcpy(tile_sc + word * word_plane_stride + b * 4, src_sc + word * 4, 4);
+                }
+
+                // === Copy d (2 bytes) - contiguous at end of all quant data ===
+                const uint8_t* src_d = block_aos + 128 + 64 + 16;  // d at offset 208
+                memcpy(coal_d + global_block * sizeof(ggml_half), src_d, sizeof(ggml_half));
+            }
+
+            // Advance destination pointer to next tile
+            row_dst = tile_sc + tile_size * 16;
+            block_idx += tile_size;
+        }
     }
-
-    // Process each block
-    for (size_t ib = 0; ib < nblocks; ib++) {
-        const uint8_t* block_aos = aos + ib * sizeof(block_q6_K);
-
-        // Which row/column is this block?
-        const size_t row = ib / blocks_per_row;
-        const size_t col_block = ib % blocks_per_row;
-        const size_t tile = col_block / TILE_BLOCKS;
-        const size_t block_in_tile = col_block % TILE_BLOCKS;
-
-        // === Process ql (128 bytes = 32 words of 4 bytes) ===
-        const uint8_t* src_ql = block_aos;  // ql at offset 0
-        const size_t ql_tile_base = row * tiles_per_row * tile_total + tile * tile_total;
-
-        for (int word = 0; word < 32; word++) {
-            const size_t ql_offset = ql_tile_base + word * WORD_PLANE_STRIDE + block_in_tile * 4;
-            memcpy((uint8_t*)dst_coalesced + ql_offset, src_ql + word * 4, 4);
-        }
-
-        // === Process qh (64 bytes = 16 words of 4 bytes) ===
-        const uint8_t* src_qh = block_aos + (QK_K / 2);  // qh at offset 128
-        const size_t qh_tile_base = ql_tile_base + ql_tile_bytes;
-
-        for (int word = 0; word < 16; word++) {
-            const size_t qh_offset = qh_tile_base + word * WORD_PLANE_STRIDE + block_in_tile * 4;
-            memcpy((uint8_t*)dst_coalesced + qh_offset, src_qh + word * 4, 4);
-        }
-
-        // === Process scales (16 bytes = 4 words of 4 bytes) ===
-        const uint8_t* src_sc = block_aos + (QK_K / 2) + (QK_K / 4);  // scales at offset 192
-        const size_t sc_tile_base = qh_tile_base + qh_tile_bytes;
-
-        for (int word = 0; word < 4; word++) {
-            const size_t sc_offset = sc_tile_base + word * WORD_PLANE_STRIDE + block_in_tile * 4;
-            memcpy((uint8_t*)dst_coalesced + sc_offset, src_sc + word * 4, 4);
-        }
-
-        // === Copy d (2 bytes) - contiguous after all quant tiles ===
-        const uint8_t* src_d = block_aos + (QK_K / 2) + (QK_K / 4) + (QK_K / 16);  // d at offset 208
-        memcpy(coal_d + ib * sizeof(ggml_half), src_d, sizeof(ggml_half));
-    }
-    return true;  // Successfully used coalesced layout
+    return true;  // Always succeeds with variable tiles
 }
 
 // MXFP4: [e:1][qs:16] = 17 bytes per block (QK_MXFP4=32)
