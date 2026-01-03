@@ -320,9 +320,9 @@ static void get_rows_q6_k_soa_sycl(ggml_backend_sycl_context & ctx, const ggml_t
 }
 
 // Q6_K Coalesced layout kernel for GET_ROWS
-// Coalesced layout: word-major within tiles for each component
-//   - Tile structure: [ql_word_major...][qh_word_major...][scales_word_major...]
-//   - Word plane stride = TILE_BLOCKS * 4 bytes
+// Coalesced layout: variable tile decomposition with word-major ordering
+//   - Variable power-of-2 tiles (max 32 blocks), e.g., 56 blocks = 32 + 16 + 8
+//   - Within each tile: word-major ordering for memory coalescing
 //   - D values follow all quant tiles contiguously
 template<typename dst_t>
 static void k_get_rows_q6_k_coalesced(
@@ -332,13 +332,10 @@ static void k_get_rows_q6_k_coalesced(
             size_t s1, size_t s2, size_t s3,
             size_t nb01, size_t nb02, size_t nb03,
             size_t s10, size_t s11, size_t s12,
-            int64_t d_offset,
+            int64_t d_offset, int64_t row_quants_bytes,
             const sycl::nd_item<3> &item_ct1) {
 
-    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
-    constexpr int WORD_PLANE_STRIDE = TILE_BLOCKS * 4;
-
-    // Thread layout: same as Q6_K SoA (64 threads: 2 phases × 32 threads)
+    // Thread layout: same as Q6_K SoA (64 threads: 2 phases x 32 threads)
     const int tid = item_ct1.get_local_id(2);
     const int ip = tid / 32;
     const int il = tid % 32;
@@ -367,16 +364,35 @@ static void k_get_rows_q6_k_coalesced(
     // Global block index
     const int64_t ib_global = i01 * blocks_per_row + block_in_row;
 
-    // Coalesced tile calculations
-    const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
-    const int tile = block_in_row / TILE_BLOCKS;
-    const int block_in_tile = block_in_row % TILE_BLOCKS;
+    // === Variable tile decomposition (matches CPU reorder) ===
+    // Find which tile contains this block and where within the tile
+    int tile_size = 0;
+    int tile_byte_offset = 0;
+    int block_in_tile = 0;
+    {
+        int remaining = blocks_per_row;
+        int block_idx = 0;
+        while (remaining > 0) {
+            // Find largest power-of-2 tile size <= remaining, max 32
+            int ts = 1;
+            while (ts * 2 <= remaining && ts < 32) {
+                ts *= 2;
+            }
+            // Check if block_in_row is in this tile
+            if (block_in_row < block_idx + ts) {
+                tile_size = ts;
+                block_in_tile = block_in_row - block_idx;
+                break;
+            }
+            // Advance to next tile
+            tile_byte_offset += ts * (128 + 64 + 16);  // ql + qh + scales per block
+            block_idx += ts;
+            remaining -= ts;
+        }
+    }
 
-    // Tile sizes
-    constexpr int ql_tile_bytes = TILE_BLOCKS * (QK_K / 2);   // 2048
-    constexpr int qh_tile_bytes = TILE_BLOCKS * (QK_K / 4);   // 1024
-    constexpr int sc_tile_bytes = TILE_BLOCKS * (QK_K / 16);  // 256
-    constexpr int tile_total = ql_tile_bytes + qh_tile_bytes + sc_tile_bytes;
+    // Word plane stride for this tile
+    const int word_plane_stride = tile_size * 4;
 
     // Base pointer
     const uint8_t * base_ptr = static_cast<const uint8_t *>(src0);
@@ -385,11 +401,14 @@ static void k_get_rows_q6_k_coalesced(
     // Destination position
     dst_t * y = dst_row + block_in_row * QK_K + 128 * ip + il;
 
-    // Tile base for this row/tile
-    const int64_t tile_row_base = i01 * tiles_per_row * tile_total;
-    const int64_t ql_tile_base = tile_row_base + tile * tile_total;
-    const int64_t qh_tile_base = ql_tile_base + ql_tile_bytes;
-    const int64_t sc_tile_base = qh_tile_base + qh_tile_bytes;
+    // Tile base for this row
+    const int64_t row_base = i01 * row_quants_bytes;
+    const int64_t tile_base = row_base + tile_byte_offset;
+
+    // Component offsets within this tile
+    const int64_t ql_tile_base = tile_base;
+    const int64_t qh_tile_base = tile_base + tile_size * 128;  // After ql
+    const int64_t sc_tile_base = tile_base + tile_size * (128 + 64);  // After ql + qh
 
     // === Read two ql bytes ===
     const int ql_pos0 = 64 * ip + il;
@@ -398,8 +417,8 @@ static void k_get_rows_q6_k_coalesced(
     const int ql_byte0 = ql_pos0 % 4;
     const int ql_word1 = ql_pos1 / 4;
     const int ql_byte1 = ql_pos1 % 4;
-    const int64_t ql_offset0 = ql_tile_base + ql_word0 * WORD_PLANE_STRIDE + block_in_tile * 4 + ql_byte0;
-    const int64_t ql_offset1 = ql_tile_base + ql_word1 * WORD_PLANE_STRIDE + block_in_tile * 4 + ql_byte1;
+    const int64_t ql_offset0 = ql_tile_base + ql_word0 * word_plane_stride + block_in_tile * 4 + ql_byte0;
+    const int64_t ql_offset1 = ql_tile_base + ql_word1 * word_plane_stride + block_in_tile * 4 + ql_byte1;
     const uint8_t ql0 = base_ptr[ql_offset0];
     const uint8_t ql1 = base_ptr[ql_offset1];
 
@@ -407,7 +426,7 @@ static void k_get_rows_q6_k_coalesced(
     const int qh_pos = 32 * ip + il;
     const int qh_word = qh_pos / 4;
     const int qh_byte = qh_pos % 4;
-    const int64_t qh_offset = qh_tile_base + qh_word * WORD_PLANE_STRIDE + block_in_tile * 4 + qh_byte;
+    const int64_t qh_offset = qh_tile_base + qh_word * word_plane_stride + block_in_tile * 4 + qh_byte;
     const uint8_t qh = base_ptr[qh_offset];
 
     // === Read scales ===
@@ -423,10 +442,10 @@ static void k_get_rows_q6_k_coalesced(
     const int sc_byte4 = sc_idx4 % 4;
     const int sc_word6 = sc_idx6 / 4;
     const int sc_byte6 = sc_idx6 % 4;
-    const int64_t sc_offset0 = sc_tile_base + sc_word0 * WORD_PLANE_STRIDE + block_in_tile * 4 + sc_byte0;
-    const int64_t sc_offset2 = sc_tile_base + sc_word2 * WORD_PLANE_STRIDE + block_in_tile * 4 + sc_byte2;
-    const int64_t sc_offset4 = sc_tile_base + sc_word4 * WORD_PLANE_STRIDE + block_in_tile * 4 + sc_byte4;
-    const int64_t sc_offset6 = sc_tile_base + sc_word6 * WORD_PLANE_STRIDE + block_in_tile * 4 + sc_byte6;
+    const int64_t sc_offset0 = sc_tile_base + sc_word0 * word_plane_stride + block_in_tile * 4 + sc_byte0;
+    const int64_t sc_offset2 = sc_tile_base + sc_word2 * word_plane_stride + block_in_tile * 4 + sc_byte2;
+    const int64_t sc_offset4 = sc_tile_base + sc_word4 * word_plane_stride + block_in_tile * 4 + sc_byte4;
+    const int64_t sc_offset6 = sc_tile_base + sc_word6 * word_plane_stride + block_in_tile * 4 + sc_byte6;
     const int8_t sc0 = static_cast<int8_t>(base_ptr[sc_offset0]);
     const int8_t sc2 = static_cast<int8_t>(base_ptr[sc_offset2]);
     const int8_t sc4 = static_cast<int8_t>(base_ptr[sc_offset4]);
@@ -444,12 +463,12 @@ static void k_get_rows_q6_k_coalesced(
 static void get_rows_q6_k_coalesced_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor *src0, const ggml_tensor *src1,
                           ggml_tensor *dst, const void *src0_dd,
                           const int32_t *src1_dd, float *dst_dd,
-                          int64_t d_offset,
+                          int64_t d_offset, int64_t row_quants_bytes,
                           queue_ptr stream) {
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
-    // Q6_K uses 64 threads (2 phases × 32 threads) per block
+    // Q6_K uses 64 threads (2 phases x 32 threads) per block
     const sycl::range<3> block_dims(1, 1, 64);
     const int64_t blocks_per_row = ne00 / QK_K;
     const sycl::range<3> block_nums(ne11 * ne12, ne10, blocks_per_row);
@@ -466,7 +485,7 @@ static void get_rows_q6_k_coalesced_sycl(ggml_backend_sycl_context & ctx, const 
                          [=](sycl::nd_item<3> item_ct1) {
                              k_get_rows_q6_k_coalesced<float>(
                                  src0_dd, src1_dd, dst_dd, ne00, ne01, ne12, s1, s2,
-                                 s3, nb01, nb02, nb03, s10, s11, s12, d_offset, item_ct1);
+                                 s3, nb01, nb02, nb03, s10, s11, s12, d_offset, row_quants_bytes, item_ct1);
                          });
 
     GGML_UNUSED(dst);
@@ -1036,18 +1055,16 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             // Check reorder mode for proper kernel dispatch
             ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *) dst->src[0]->extra;
             if (extra && extra->optimized_feature.is_coalesced()) {
-                // Coalesced layout: word-major reordering within tiles for each component
-                // Calculate d_offset: total quant bytes (ql+qh+sc) across all rows
+                // Coalesced layout: variable tile decomposition with word-major ordering
+                // Calculate row_quants_bytes: total quant bytes per row (ql+qh+sc)
+                // For Q6_K: each block contributes 128 + 64 + 16 = 208 bytes
                 const int64_t ne00 = dst->src[0]->ne[0];
                 const int64_t ne01 = dst->src[0]->ne[1];
                 const int64_t blocks_per_row = ne00 / QK_K;
-                const int64_t ql_per_row = blocks_per_row * (QK_K / 2);
-                const int64_t qh_per_row = blocks_per_row * (QK_K / 4);
-                const int64_t sc_per_row = blocks_per_row * (QK_K / 16);
-                const int64_t row_quants_bytes = ql_per_row + qh_per_row + sc_per_row;
+                const int64_t row_quants_bytes = blocks_per_row * (128 + 64 + 16);
                 const int64_t d_offset = ne01 * row_quants_bytes;
                 get_rows_q6_k_coalesced_sycl(ctx, dst->src[0], dst->src[1], dst,
-                    src0_d, src1_i32, dst_d, d_offset, ctx.stream());
+                    src0_d, src1_i32, dst_d, d_offset, row_quants_bytes, ctx.stream());
             } else if (extra && extra->optimized_feature.is_soa()) {
                 // Standard SoA layout: [all ql (n*128)][all qh (n*64)][all scales (n*16)][all d (n*2)]
                 get_rows_q6_k_soa_sycl(ctx, dst->src[0], dst->src[1], dst,
