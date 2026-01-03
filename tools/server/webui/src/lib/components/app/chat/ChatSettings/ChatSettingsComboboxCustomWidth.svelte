@@ -152,7 +152,7 @@
 	</Popover.Root>
 
 	{#if isEditing}
-		<div class="animate-in fade-in slide-in-from-top-1 flex items-start gap-2 duration-200">
+		<div class="flex animate-in items-start gap-2 duration-200 fade-in slide-in-from-top-1">
 			<div class="flex-1 space-y-1">
 				<Input
 					bind:ref={inputRef}
