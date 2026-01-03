@@ -815,7 +815,8 @@ json server_task_result_cmpl_final::to_json_anthropic() {
     if (!msg.reasoning_content.empty()) {
         content_blocks.push_back({
             {"type", "thinking"},
-            {"thinking", msg.reasoning_content}
+            {"thinking", msg.reasoning_content},
+            {"signature", ""}  // empty signature for local models (no cryptographic verification)
         });
     }
 
@@ -980,6 +981,19 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
 
     // close content blocks in order
     if (has_thinking) {
+        // Anthropic API requires a signature_delta before closing thinking blocks
+        // We use an empty signature since we can't generate a cryptographic signature for local models
+        events.push_back({
+            {"event", "content_block_delta"},
+            {"data", {
+                {"type", "content_block_delta"},
+                {"index", thinking_block_index},
+                {"delta", {
+                    {"type", "signature_delta"},
+                    {"signature", ""}
+                }}
+            }}
+        });
         events.push_back({
             {"event", "content_block_stop"},
             {"data", {
@@ -1208,8 +1222,8 @@ json server_task_result_rerank::to_json() {
 json server_task_result_cmpl_partial::to_json_anthropic() {
     json events = json::array();
     bool first = (n_decoded == 1);
-    bool thinking_block_started = false;
-    bool text_block_started     = false;
+    // use member variables to track block state across streaming calls
+    // (anthropic_thinking_block_started, anthropic_text_block_started)
 
     if (first) {
         events.push_back({
@@ -1238,10 +1252,14 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
     // use anthropic_has_reasoning (set in update()) to know if ANY reasoning was generated
     size_t text_block_index     = anthropic_has_reasoning ? 1 : 0;
 
+    // get streaming state from task_result_state (persists across chunks)
+    bool & thinking_started = anthropic_state->anthropic_thinking_block_started;
+    bool & text_started     = anthropic_state->anthropic_text_block_started;
+
     for (const auto & diff : oaicompat_msg_diffs) {
         // handle thinking/reasoning content
         if (!diff.reasoning_content_delta.empty()) {
-            if (!thinking_block_started) {
+            if (!thinking_started) {
                 events.push_back({
                     {"event", "content_block_start"},
                     {"data", {
@@ -1253,7 +1271,7 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
                         }}
                     }}
                 });
-                thinking_block_started = true;
+                thinking_started = true;
             }
 
             events.push_back({
@@ -1271,7 +1289,7 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
 
         // handle regular text content
         if (!diff.content_delta.empty()) {
-            if (!text_block_started) {
+            if (!text_started) {
                 events.push_back({
                     {"event", "content_block_start"},
                     {"data", {
@@ -1283,7 +1301,7 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
                         }}
                     }}
                 });
-                text_block_started = true;
+                text_started = true;
             }
 
             events.push_back({
@@ -1302,7 +1320,7 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
         // handle tool calls
         if (diff.tool_call_index != std::string::npos) {
             // use anthropic_has_reasoning for thinking block count (persists across calls)
-            size_t content_block_index = (anthropic_has_reasoning ? 1 : 0) + (text_block_started ? 1 : 0) + diff.tool_call_index;
+            size_t content_block_index = (anthropic_has_reasoning ? 1 : 0) + (text_started ? 1 : 0) + diff.tool_call_index;
 
             if (!diff.tool_call_delta.name.empty()) {
                 events.push_back({

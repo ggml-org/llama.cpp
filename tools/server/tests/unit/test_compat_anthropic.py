@@ -853,6 +853,12 @@ def test_anthropic_thinking_with_reasoning_model(stream):
             e.get("delta", {}).get("type") == "thinking_delta"]
         assert len(thinking_deltas) > 0, "Should have thinking_delta events"
 
+        # should have signature_delta event before thinking block closes (Anthropic API requirement)
+        signature_deltas = [e for e in events if
+            e.get("type") == "content_block_delta" and
+            e.get("delta", {}).get("type") == "signature_delta"]
+        assert len(signature_deltas) > 0, "Should have signature_delta event for thinking block"
+
         # should have text block after thinking
         text_starts = [e for e in events if
             e.get("type") == "content_block_start" and
@@ -883,6 +889,7 @@ def test_anthropic_thinking_with_reasoning_model(stream):
         assert len(thinking_blocks) > 0, "Should have thinking content block"
         assert "thinking" in thinking_blocks[0], "Thinking block should have 'thinking' field"
         assert len(thinking_blocks[0]["thinking"]) > 0, "Thinking content should not be empty"
+        assert "signature" in thinking_blocks[0], "Thinking block should have 'signature' field (Anthropic API requirement)"
 
         # should also have text block
         text_blocks = [b for b in content if b.get("type") == "text"]
