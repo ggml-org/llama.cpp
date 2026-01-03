@@ -24,6 +24,7 @@ llm_build_modern_bert::llm_build_modern_bert(const llama_model & model, const ll
 
     for (int il = 0; il < n_layer; ++il) {
         float freq_base_l = model.get_rope_freq_base(cparams, il);
+        float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
         cur = inpL;
 
@@ -48,13 +49,13 @@ llm_build_modern_bert::llm_build_modern_bert(const llama_model & model, const ll
         // RoPE
         Qcur = ggml_rope_ext(
                 ctx0, Qcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale,
+                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                 ext_factor, attn_factor, beta_fast, beta_slow
                 );
 
         Kcur = ggml_rope_ext(
                 ctx0, Kcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale,
+                n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                 ext_factor, attn_factor, beta_fast, beta_slow
                 );
 
