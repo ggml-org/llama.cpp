@@ -10,7 +10,7 @@ template <typename T> __global__ void divide_by_count(T * result, size_t count) 
     *result /= static_cast<T>(count);
 }
 
-void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_cuda_graph * cuda_graph, ggml_tensor * dst) {
     const ggml_tensor * src0   = dst->src[0];
     const float *       src0_d = (const float *) src0->data;
     float *             dst_d  = (float *) dst->data;
@@ -33,14 +33,12 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 #ifdef USE_CUDA_GRAPH
             // CUDA_GRAPHS_DISABLED
             ((ncols > 65536) &&
-             ((ctx.cuda_graph->instance == nullptr) && (iscapturing == cudaStreamCaptureStatusNone) ||
-              ctx.cuda_graph->disable_due_to_gpu_arch || ctx.cuda_graph->disable_due_to_too_many_updates ||
-              ctx.cuda_graph->disable_due_to_failed_graph_capture)) ||
+             ((cuda_graph && cuda_graph->instance == nullptr) && (iscapturing == cudaStreamCaptureStatusNone) ||
+              ctx.disable_graph_due_to_env || ctx.disable_graph_due_to_gpu_arch || ctx.disable_graph_due_to_too_many_updates)) ||
         // CUDA_GRAPHS ENABLED
         ((ncols > 32768) &&
-         !((ctx.cuda_graph->instance == nullptr) && (iscapturing == cudaStreamCaptureStatusNone) ||
-           ctx.cuda_graph->disable_due_to_gpu_arch || ctx.cuda_graph->disable_due_to_too_many_updates ||
-           ctx.cuda_graph->disable_due_to_failed_graph_capture))) {
+         !((cuda_graph && cuda_graph->instance == nullptr) && (iscapturing == cudaStreamCaptureStatusNone) ||
+           ctx.disable_graph_due_to_env || ctx.disable_graph_due_to_gpu_arch || ctx.disable_graph_due_to_too_many_updates))) {
 #else
         (ncols > 65536)) {
 #endif // USE_CUDA_GRAPH
