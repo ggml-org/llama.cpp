@@ -4,13 +4,13 @@ import {
 	type OpenAIToolDefinition,
 	type ServerStatus
 } from '$lib/mcp/host-manager';
+import { MCPServerConnection } from '$lib/mcp/server-connection';
 import type { ToolExecutionResult } from '$lib/mcp/server-connection';
 import { buildMcpClientConfig, incrementMcpServerUsage } from '$lib/config/mcp';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import type { MCPToolCall } from '$lib/types/mcp';
 import type { McpServerOverride } from '$lib/types/database';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
-import { MCPClient } from '$lib/mcp';
 import { detectMcpTransportFromUrl } from '$lib/utils/mcp';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -391,27 +391,24 @@ class MCPStore {
 		const timeoutMs = Math.round(server.requestTimeoutSeconds * 1000);
 		const headers = this.parseHeaders(server.headers);
 
-		const mcpClient = new MCPClient({
-			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
-			capabilities: DEFAULT_MCP_CONFIG.capabilities,
+		const connection = new MCPServerConnection({
+			name: server.id,
+			server: {
+				url: trimmedUrl,
+				transport: detectMcpTransportFromUrl(trimmedUrl),
+				handshakeTimeoutMs: DEFAULT_MCP_CONFIG.connectionTimeoutMs,
+				requestTimeoutMs: timeoutMs,
+				headers
+			},
 			clientInfo: DEFAULT_MCP_CONFIG.clientInfo,
-			requestTimeoutMs: timeoutMs,
-			servers: {
-				[server.id]: {
-					url: trimmedUrl,
-					transport: detectMcpTransportFromUrl(trimmedUrl),
-					handshakeTimeoutMs: DEFAULT_MCP_CONFIG.connectionTimeoutMs,
-					requestTimeoutMs: timeoutMs,
-					headers
-				}
-			}
+			capabilities: DEFAULT_MCP_CONFIG.capabilities
 		});
 
 		try {
-			await mcpClient.initialize();
-			const tools = (await mcpClient.getToolsDefinition()).map((tool) => ({
-				name: tool.function.name,
-				description: tool.function.description
+			await connection.connect();
+			const tools = connection.tools.map((tool) => ({
+				name: tool.name,
+				description: tool.description
 			}));
 
 			this.setHealthCheckState(server.id, { status: 'success', tools });
@@ -420,9 +417,12 @@ class MCPStore {
 			this.setHealthCheckState(server.id, { status: 'error', message });
 		} finally {
 			try {
-				await mcpClient.shutdown();
+				await connection.disconnect();
 			} catch (shutdownError) {
-				console.warn('[MCP Store] Failed to cleanly shutdown health check client', shutdownError);
+				console.warn(
+					'[MCP Store] Failed to cleanly shutdown health check connection',
+					shutdownError
+				);
 			}
 		}
 	}
