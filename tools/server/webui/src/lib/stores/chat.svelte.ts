@@ -634,8 +634,9 @@ class ChatStore {
 			}
 		};
 
-		// Try agentic flow first if enabled
-		const agenticConfig = getAgenticConfig(config());
+		// Try agentic flow first if enabled (considering per-chat MCP overrides)
+		const perChatOverrides = conversationsStore.activeConversation?.mcpServerOverrides;
+		const agenticConfig = getAgenticConfig(config(), perChatOverrides);
 		if (agenticConfig.enabled) {
 			const agenticResult = await agenticStore.runAgenticFlow({
 				messages: allMessages,
@@ -644,7 +645,8 @@ class ChatStore {
 					...(modelOverride ? { model: modelOverride } : {})
 				},
 				callbacks: streamCallbacks,
-				signal: abortController.signal
+				signal: abortController.signal,
+				perChatOverrides
 			});
 
 			if (agenticResult.handled) {

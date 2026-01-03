@@ -1,11 +1,22 @@
 import type { ChatMessageTimings, ChatRole, ChatMessageType } from '$lib/types/chat';
 import { AttachmentType } from '$lib/enums';
 
+/**
+ * Per-chat MCP server override - allows enabling/disabling servers for specific conversations.
+ * If undefined for a server, the global setting is used.
+ */
+export interface McpServerOverride {
+	serverId: string;
+	enabled: boolean;
+}
+
 export interface DatabaseConversation {
 	currNode: string | null;
 	id: string;
 	lastModified: number;
 	name: string;
+	/** Per-chat MCP server overrides. If not set, global settings are used. */
+	mcpServerOverrides?: McpServerOverride[];
 }
 
 export interface DatabaseMessageExtraAudioFile {

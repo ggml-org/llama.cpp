@@ -19,9 +19,11 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	autoShowSidebarOnNewChat: true,
 	autoMicOnEmpty: false,
 	mcpServers: '[]',
+	mcpServerUsageStats: '{}', // JSON object: { [serverId]: usageCount }
 	agenticMaxTurns: 10,
 	agenticMaxToolPreviewLines: 25,
 	agenticFilterReasoningAfterFirstTurn: true,
+	showToolCallInProgress: false,
 	// make sure these default values are in sync with `common.h`
 	samplers: 'top_k;typ_p;top_p;min_p;temperature',
 	backend_sampling: false,
@@ -113,12 +115,16 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
 	mcpServers:
 		'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',
+	mcpServerUsageStats:
+		'Usage statistics for MCP servers. Tracks how many times tools from each server have been used.',
 	agenticMaxTurns:
 		'Maximum number of tool execution cycles before stopping (prevents infinite loops).',
 	agenticMaxToolPreviewLines:
 		'Number of lines shown in tool output previews (last N lines). Only these previews and the final LLM response persist after the agentic loop completes.',
 	agenticFilterReasoningAfterFirstTurn:
 		'Only show reasoning from the first agentic turn. When disabled, reasoning from all turns is merged in one (WebUI limitation).',
+	showToolCallInProgress:
+		'Automatically expand tool call details while executing and keep them expanded after completion.',
 	pyInterpreterEnabled:
 		'Enable Python interpreter using Pyodide. Allows running Python code in markdown code blocks.',
 	enableContinueGeneration:
