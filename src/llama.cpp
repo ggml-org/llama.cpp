@@ -393,7 +393,7 @@ static void llama_params_fit_impl(
                         + std::to_string(ntbo) + " is insufficient for model");
                 }
                 tensor_buft_overrides[itbo].pattern = get_overflow_pattern(il, il == il0 ? ngl_per_device[id].overflow_type : LAYER_FRACTION_MOE);
-                tensor_buft_overrides[itbo].buft = overflow_bufts[id];
+                tensor_buft_overrides[itbo].buft = il == il0 ? overflow_bufts[id] : ggml_backend_cpu_buffer_type();
                 itbo++;
             }
             il0 += ngl_per_device[id].n_part;
@@ -468,7 +468,7 @@ static void llama_params_fit_impl(
         LLAMA_LOG_DEBUG("%s: id=%zu, target=%" PRId64 " MiB\n", __func__, id, targets[id]/MiB);
     }
 
-    std::vector<ggml_backend_buffer_type_t> overflow_bufts; // which bufts the partial layers of a device overflow to:
+    std::vector<ggml_backend_buffer_type_t> overflow_bufts; // which bufts the first partial layer of a device overflows to:
     overflow_bufts.reserve(nd);
     for (size_t id = 0; id < nd - 1; ++id) {
         overflow_bufts.push_back(ggml_backend_dev_buffer_type(devs[id + 1]));
@@ -512,9 +512,6 @@ static void llama_params_fit_impl(
             if (mem_high[id] > targets[id]) {
                 assert(ngl_per_device_high[id].n_layer > ngl_per_device[id].n_layer);
                 uint32_t delta = ngl_per_device_high[id].n_layer - ngl_per_device[id].n_layer;
-                if (hp_nex > 0 && size_t(id) == nd - 1) {
-                    delta--;
-                }
                 LLAMA_LOG_DEBUG("%s: start filling device %" PRIu32 ", delta=%" PRIu32 "\n", __func__, id, delta);
                 while (delta > 1) {
                     uint32_t step_size = int64_t(delta) * (targets[id] - mem[id]) / (mem_high[id] - mem[id]);
@@ -524,7 +521,8 @@ static void llama_params_fit_impl(
                     std::vector<ngl_t> ngl_per_device_test = ngl_per_device;
                     ngl_per_device_test[id].n_layer += step_size;
                     if (hp_nex) {
-                        ngl_per_device_test[id].n_part += step_size;
+                        ngl_per_device_test[id].n_part += size_t(id) == nd - 1 && ngl_per_device_test[id].n_part == 0 ?
+                            step_size - 1 : step_size; // the first layer is the output layer which must always be full
                     }
                     const std::vector<int64_t> mem_test = get_memory_for_layers(__func__, ngl_per_device_test, overflow_bufts);
 
