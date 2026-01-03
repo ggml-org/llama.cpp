@@ -1403,13 +1403,13 @@ static void test_template_output_peg_parsers() {
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .expect(message_assist_thoughts)
             .run();
-        // TODO: finding less tool calls
-        // tst.test(
-        //        "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
-        //        "```json\n{\"arg1\": 1}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>")
-        //     .tools({ special_function_tool })
-        //     .expect(message_assist_call)
-        //     .run();
+        // TESTING - uncommented for debugging
+        tst.test(
+               "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
+               "```json\n{\"arg1\": 1}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
     }
     // DeepSeek R1 Distill Qwen 32B - reasoning tests only (forced open thinking)
     // Note: Template uses forced-open mode (prompt ends with <think>), so input shouldn't include opening tag
@@ -1422,13 +1422,13 @@ static void test_template_output_peg_parsers() {
             .expect(message_assist_thoughts)
             .run();
         // TODO: finding less tool calls
-        // tst.test(
-        //        "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
-        //        "```json\n{\"arg1\": 1}\n```<｜tool▁call▁end｜>")
-        //     .enable_thinking(true)
-        //     .tools({ special_function_tool })
-        //     .expect(message_assist_call)
-        //     .run();
+        tst.test(
+               "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
+               "```json\n{\"arg1\": 1}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>")
+            .enable_thinking(true)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
     }
     // Kimi-K2 (moonshotai) - FUNC_PREFIXED_INDEXED format
     {
