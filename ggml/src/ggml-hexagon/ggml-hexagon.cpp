@@ -2327,6 +2327,11 @@ static inline size_t init_unary_req(htp_general_req * req, dspqueue_buffer * buf
             supported = true;
             break;
 
+        case GGML_OP_SCALE:
+            req->op   = HTP_OP_SCALE;
+            supported = true;
+            break;
+
         case GGML_OP_UNARY:
             if (ggml_get_unary_op(t) == GGML_UNARY_OP_SILU) {
                 req->op   = HTP_OP_UNARY_SILU;
@@ -2482,6 +2487,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 ggml_hexagon_dispatch_op<init_binary_id_req<false>>(sess, node, flags);
                 break;
             case GGML_OP_RMS_NORM:
+            case GGML_OP_SCALE:
                 ggml_hexagon_dispatch_op<init_unary_req>(sess, node, flags);
                 break;
             case GGML_OP_UNARY:
@@ -2851,6 +2857,7 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
             break;
 
         case GGML_OP_RMS_NORM:
+        case GGML_OP_SCALE:
             supp = ggml_hexagon_supported_unary(sess, op);
             break;
 

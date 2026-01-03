@@ -1170,6 +1170,7 @@ void  hvx_sub_f32_opt(const uint8_t * restrict src0,
                       const int num_elems);
 void  hvx_sub_scalar_f32(const uint8_t * restrict src, const float val, uint8_t * restrict dst, const int num_elems);
 void  hvx_scale_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems, const float scale);
+void  hvx_scale_offset_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems, const float scale, const float offset);
 void  hvx_inverse_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems);
 void  hvx_sigmoid_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems);
 void  hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems, bool negate);

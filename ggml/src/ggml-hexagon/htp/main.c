@@ -886,6 +886,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                 break;
 
             case HTP_OP_RMS_NORM:
+            case HTP_OP_SCALE:
                 if (n_bufs != 2) {
                     FARF(ERROR, "Bad unary-req buffer list");
                     continue;
