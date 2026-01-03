@@ -270,7 +270,7 @@ static void llama_params_fit_impl(
                     __func__, -global_surplus/MiB);
             }
             if (cparams->n_ctx == default_cparams.n_ctx) {
-                if (n_ctx_min > 0 && hp_nct > n_ctx_min) {
+                if (n_ctx_min > 0 && hp_nct > uint32_t(n_ctx_min)) {
                     int64_t sum_used_target = sum_free;
                     for (size_t id = 0; id < nd; id++) {
                         sum_used_target -= margins[id];
