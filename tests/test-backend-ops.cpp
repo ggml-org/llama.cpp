@@ -1169,6 +1169,9 @@ struct test_case {
 
     std::vector<ggml_tensor *> sentinels;
 
+    // Track weight tensors for separate buffer allocation with GGML_BACKEND_BUFFER_USAGE_WEIGHTS
+    std::vector<ggml_tensor *> weight_tensors;
+
     std::string current_op_name;
 
     void add_sentinel(ggml_context * ctx) {
@@ -1247,6 +1250,8 @@ struct test_case {
                        const char *   op_names_filter,
                        printer *      output_printer) {
         mode = MODE_TEST;
+        weight_tensors.clear();
+        sentinels.clear();
 
         ggml_init_params params = {
             /* .mem_size = */ ggml_tensor_overhead()*128 + ggml_graph_overhead(),
@@ -1297,10 +1302,35 @@ struct test_case {
         // post-graph sentinel
         add_sentinel(ctx);
 
-        // allocate
+        // allocate weight tensors in a separate buffer with GGML_BACKEND_BUFFER_USAGE_WEIGHTS
+        ggml_backend_buffer_t weights_buf = nullptr;
+        if (!weight_tensors.empty()) {
+            // Calculate total size needed for weight tensors
+            size_t weight_size = 0;
+            for (ggml_tensor * wt : weight_tensors) {
+                weight_size += ggml_backend_buft_get_alloc_size(ggml_backend_get_default_buffer_type(backend1), wt);
+            }
+            weight_size = GGML_PAD(weight_size, ggml_backend_buft_get_alignment(ggml_backend_get_default_buffer_type(backend1)));
+
+            weights_buf = ggml_backend_buft_alloc_buffer(ggml_backend_get_default_buffer_type(backend1), weight_size);
+            if (weights_buf == NULL) {
+                printf("failed to allocate weight tensors [%s] ", ggml_backend_name(backend1));
+                ggml_free(ctx);
+                return test_status_t::FAIL;
+            }
+            ggml_backend_buffer_set_usage(weights_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+            // Allocate each weight tensor in the weights buffer
+            ggml_tallocr weights_talloc = ggml_tallocr_new(weights_buf);
+            for (ggml_tensor * wt : weight_tensors) {
+                ggml_tallocr_alloc(&weights_talloc, wt);
+            }
+        }
+
+        // allocate remaining tensors
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend1);
 
-        if (buf == NULL) {
+        if (buf == NULL && weights_buf == NULL) {
             printf("failed to allocate tensors [%s] ", ggml_backend_name(backend1));
             ggml_free(ctx);
             return test_status_t::FAIL;
@@ -1400,6 +1430,9 @@ struct test_case {
                                                                run_whole_graph() ? fused_nodes_to_verify.data() : nullptr,
                                                                fused_nodes_to_verify.size());
 
+        if (weights_buf) {
+            ggml_backend_buffer_free(weights_buf);
+        }
         ggml_backend_buffer_free(buf);
 
         ggml_free(ctx);
@@ -1419,6 +1452,7 @@ struct test_case {
 
     bool eval_perf(ggml_backend_t backend, const char * op_names_filter, printer * output_printer) {
         mode = MODE_PERF;
+        weight_tensors.clear();
 
         static const size_t graph_nodes = 8192;
 
@@ -1447,10 +1481,34 @@ struct test_case {
             return true;
         }
 
-        // allocate
+        // allocate weight tensors in a separate buffer with GGML_BACKEND_BUFFER_USAGE_WEIGHTS
+        ggml_backend_buffer_ptr weights_buf(nullptr); // smart ptr
+        if (!weight_tensors.empty()) {
+            // Calculate total size needed for weight tensors
+            size_t weight_size = 0;
+            for (ggml_tensor * wt : weight_tensors) {
+                weight_size += ggml_backend_buft_get_alloc_size(ggml_backend_get_default_buffer_type(backend), wt);
+            }
+            weight_size = GGML_PAD(weight_size, ggml_backend_buft_get_alignment(ggml_backend_get_default_buffer_type(backend)));
+
+            weights_buf.reset(ggml_backend_buft_alloc_buffer(ggml_backend_get_default_buffer_type(backend), weight_size));
+            if (weights_buf == NULL) {
+                printf("failed to allocate weight tensors\n");
+                return false;
+            }
+            ggml_backend_buffer_set_usage(weights_buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+            // Allocate each weight tensor in the weights buffer
+            ggml_tallocr weights_talloc = ggml_tallocr_new(weights_buf.get());
+            for (ggml_tensor * wt : weight_tensors) {
+                ggml_tallocr_alloc(&weights_talloc, wt);
+            }
+        }
+
+        // allocate remaining tensors
         ggml_backend_buffer_ptr buf(ggml_backend_alloc_ctx_tensors(ctx.get(), backend)); // smart ptr
 
-        if (buf == NULL) {
+        if (buf == NULL && weights_buf == NULL) {
             printf("failed to allocate tensors\n");
             return false;
         }
@@ -1549,6 +1607,7 @@ struct test_case {
 
     bool eval_support(ggml_backend_t backend, const char * op_names_filter, printer * output_printer) {
         mode = MODE_SUPPORT;
+        weight_tensors.clear();
 
         static const size_t graph_nodes = 8192;
 
@@ -1584,6 +1643,7 @@ struct test_case {
 
     bool eval_grad(ggml_backend_t backend, const char * op_names_filter, printer * output_printer) {
         mode = MODE_GRAD;
+        weight_tensors.clear();
         const std::vector<float> expect = grad_expect();
 
         ggml_init_params params = {
@@ -1694,9 +1754,35 @@ struct test_case {
             return true;
         }
 
-        // allocate
+        // allocate weight tensors in a separate buffer with GGML_BACKEND_BUFFER_USAGE_WEIGHTS
+        ggml_backend_buffer_ptr weights_buf(nullptr); // smart ptr
+        if (!weight_tensors.empty()) {
+            // Calculate total size needed for weight tensors
+            size_t weight_size = 0;
+            for (ggml_tensor * wt : weight_tensors) {
+                weight_size += ggml_backend_buft_get_alloc_size(ggml_backend_get_default_buffer_type(backend), wt);
+            }
+            weight_size = GGML_PAD(weight_size, ggml_backend_buft_get_alignment(ggml_backend_get_default_buffer_type(backend)));
+
+            weights_buf.reset(ggml_backend_buft_alloc_buffer(ggml_backend_get_default_buffer_type(backend), weight_size));
+            if (weights_buf == NULL) {
+                test_operation_info info(op_desc(out), vars(), ggml_backend_name(backend));
+                info.set_error("weight allocation", "");
+                output_printer->print_operation(info);
+                return false;
+            }
+            ggml_backend_buffer_set_usage(weights_buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+            // Allocate each weight tensor in the weights buffer
+            ggml_tallocr weights_talloc = ggml_tallocr_new(weights_buf.get());
+            for (ggml_tensor * wt : weight_tensors) {
+                ggml_tallocr_alloc(&weights_talloc, wt);
+            }
+        }
+
+        // allocate remaining tensors
         ggml_backend_buffer_ptr buf(ggml_backend_alloc_ctx_tensors(ctx.get(), backend)); // smart ptr
-        if (buf == NULL) {
+        if (buf == NULL && weights_buf == NULL) {
             test_operation_info info(op_desc(out), vars(), ggml_backend_name(backend));
             info.set_error("allocation", "");
             output_printer->print_operation(info);
@@ -3662,6 +3748,7 @@ struct test_mul_mat : public test_case {
 
             a = ggml_new_tensor_4d(ctx, type_a, ne_a[per[0]], ne_a[per[1]], ne_a[per[2]], ne_a[per[3]]);
             b = ggml_new_tensor_4d(ctx, type_b, ne_b[per[0]], ne_b[per[1]], ne_b[per[2]], ne_b[per[3]]);
+            weight_tensors.push_back(a); // Track weight tensor for GGML_BACKEND_BUFFER_USAGE_WEIGHTS
             if (!ggml_is_quantized(type_a)) {
                 if (bs[1] == 1 && nr[1] == 1) {
                     ggml_set_param(a);
@@ -3679,6 +3766,7 @@ struct test_mul_mat : public test_case {
             const int64_t k_physical = k_v == 0 ? k : k_v;
             a = ggml_new_tensor_4d(ctx, type_a, k_physical, m, bs[0],       bs[1]);
             b = ggml_new_tensor_4d(ctx, type_b, k_physical, n, bs[0]*nr[0], bs[1]*nr[1]);
+            weight_tensors.push_back(a); // Track weight tensor for GGML_BACKEND_BUFFER_USAGE_WEIGHTS
 
             if (!ggml_is_quantized(type_a)) {
                 if (bs[1] == 1 && nr[1] == 1) {
@@ -3772,6 +3860,7 @@ struct test_mul_mat_id : public test_case {
         // C^T = A * B^T: (k, m) * (k, n) => (m, n)
         ggml_tensor * as = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
         ggml_set_name(as, "as");
+        weight_tensors.push_back(as); // Track weight tensor for GGML_BACKEND_BUFFER_USAGE_WEIGHTS
 
         ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, n);
         ggml_set_name(ids, "ids");
@@ -3832,6 +3921,7 @@ struct test_mul_mat_id_fusion : public test_case {
         // C^T = A * B^T: (k, m) * (k, n) => (m, n)
         ggml_tensor * as = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
         ggml_set_name(as, "as");
+        weight_tensors.push_back(as); // Track weight tensor for GGML_BACKEND_BUFFER_USAGE_WEIGHTS
 
         ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, n);
         ggml_set_name(ids, "ids");
@@ -3848,6 +3938,7 @@ struct test_mul_mat_id_fusion : public test_case {
 
         for (uint32_t i = 1; i < o; ++i) {
             ggml_tensor * a2 = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
+            weight_tensors.push_back(a2); // Track weight tensor for GGML_BACKEND_BUFFER_USAGE_WEIGHTS
             ggml_tensor * out2 = ggml_mul_mat_id(ctx, a2, b, ids);
             ggml_set_name(out2, "out2");
             out = ggml_add(ctx, out, out2);
