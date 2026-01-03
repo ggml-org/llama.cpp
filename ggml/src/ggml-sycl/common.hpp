@@ -73,7 +73,6 @@ const int32_t * ggml_sycl_get_seq_ids_host_kv(size_t * count);
 
 extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_tp_debug;  // Tensor Parallelism debug output
-extern int g_ggml_sycl_disable_optimize;
 extern int g_ggml_sycl_prioritize_dmmv;
 
 // Track when SYCL graph recording is active
@@ -334,6 +333,15 @@ enum class reorder_mode : uint8_t {
     SOA       = 1,  // SoA layout: all qs bytes contiguous, then all d values
     COALESCED = 2,  // Tile-based layout for better cache line utilization (requires SOA first)
 };
+
+// Global reorder mode setting (set from GGML_SYCL_REORDER_MODE env var)
+extern reorder_mode g_ggml_sycl_reorder_mode;
+
+// Check if weight reordering is enabled (based on GGML_SYCL_REORDER_MODE)
+// Returns true if mode is SOA or COALESCED, false if NONE
+inline bool ggml_sycl_reorder_enabled() {
+    return g_ggml_sycl_reorder_mode != reorder_mode::NONE;
+}
 
 // Check if a tensor type supports coalesced memory layout conversion
 // Add new types here as coalesced kernels are implemented

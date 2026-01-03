@@ -1253,6 +1253,7 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                 if (extra && extra->optimized_feature.is_coalesced()) {
                     // Coalesced layout: variable tile decomposition with word-major ordering
                     // Uses new variable tile kernel that computes row_quants_bytes correctly
+                    GGML_SYCL_DEBUG("Calling get_rows_q6_k_coalesced_variable_sycl\n");
                     get_rows_q6_k_coalesced_variable_sycl<float>(ctx, dst->src[0], dst->src[1], dst, src0_d, src1_i32,
                                                                  dst_d, ctx.stream());
                 } else if (extra && extra->optimized_feature.is_soa()) {

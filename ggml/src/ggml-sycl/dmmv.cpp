@@ -601,10 +601,14 @@ static void dequantize_mul_mat_vec_q8_0_reorder_kernel(const void * __restrict__
     }
 }
 
-// Coalesced DMMV kernel for Q4_0
-// Matches the coalesced MMVQ layout: word w of block b at tile_offset + w*64 + b*4
-// Tile = TILE_BLOCKS blocks of 16-byte quants
-// Scales are after all quants, block-sequential (not coalesced)
+// Coalesced DMMV kernel for Q4_0 - simplified tile+block iteration
+// Layout: [quants: nrows_full * ncols/2 bytes] [scales: nrows_full * blocks_per_row * 2 bytes]
+// Each tile: TILE_BLOCKS (32) blocks with interleaved quants for coalesced access
+// Memory organization per tile (512 bytes total):
+//   - Word 0: bytes 0-3 from all 32 blocks (128 bytes)
+//   - Word 1: bytes 4-7 from all 32 blocks (128 bytes)
+//   - Word 2: bytes 8-11 from all 32 blocks (128 bytes)
+//   - Word 3: bytes 12-15 from all 32 blocks (128 bytes)
 //
 // Parameters for slicing support:
 // - nrows: number of rows to process
@@ -626,55 +630,56 @@ static void dequantize_mul_mat_vec_q4_0_coalesced(
         return;
     }
 
-    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
+    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;  // 32
     const int blocks_per_row = ncols / QK4_0;
-    const int word_stride = TILE_BLOCKS * 4;
+    const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
+    constexpr int word_stride = TILE_BLOCKS * 4;  // 128 bytes
 
     // X base pointers (coalesced layout: quants first, then scales)
     const uint8_t * x_qs = (const uint8_t *)vx;
     const int x_row_stride = ncols / 2;  // bytes per row of quants
+    const int global_row = row_low + row;
 
     // Scales are after all quants in the FULL tensor
     const sycl::half * x_d = (const sycl::half *)((const char *)vx + nrows_full * x_row_stride);
 
     float partial_sum = 0.0f;
-    const int global_row = row_low + row;
-    const int row_quants_bytes = ncols / 2;
-    const int y_offset = QK4_0 / 2;
-    const int iter_stride = 2 * GGML_SYCL_DMMV_X;
-    const int vals_per_iter = iter_stride / WARP_SIZE;
 
-    for (int i = 0; i < ncols; i += iter_stride) {
-        const int col = i + vals_per_iter * lane_id;
-        if (col >= ncols) {
-            continue;
+    // Tile-by-tile iteration (matches memory layout naturally)
+    for (int tile = 0; tile < tiles_per_row; ++tile) {
+        const int64_t tile_base = (int64_t)global_row * x_row_stride +
+                                  (int64_t)tile * MMVQ_COALESCED_TILE_BYTES;
+
+        // Each lane handles one block in this tile (TILE_BLOCKS = WARP_SIZE = 32)
+        const int block_in_tile = lane_id;
+        const int block_idx = tile * TILE_BLOCKS + block_in_tile;
+
+        const float d = (float)x_d[global_row * blocks_per_row + block_idx];
+        const dfloat * y_block = y + block_idx * QK4_0;
+
+        float block_sum = 0.0f;
+
+        // Process all 16 bytes of this block (4 words × 4 bytes)
+        #pragma unroll
+        for (int word = 0; word < 4; ++word) {
+            const int64_t word_offset = tile_base + word * word_stride + block_in_tile * 4;
+
+            #pragma unroll
+            for (int b = 0; b < 4; ++b) {
+                const int j = word * 4 + b;  // byte index 0-15
+                const uint8_t qs_byte = x_qs[word_offset + b];
+                const float v0 = ((float)(qs_byte & 0xF) - 8.0f) * d;
+                const float v1 = ((float)(qs_byte >> 4) - 8.0f) * d;
+                block_sum += v0 * (float)y_block[j];
+                block_sum += v1 * (float)y_block[j + 16];
+            }
         }
-
-        const int ib = col / QK4_0;
-        const int iqs = (col % QK4_0) / 2;
-        const int iybs = col - col % QK4_0;
-
-        const int tile = ib / TILE_BLOCKS;
-        const int block_in_tile = ib % TILE_BLOCKS;
-        const int word_idx = iqs / 4;
-        const int byte_in_word = iqs % 4;
-
-        const int64_t row_base = (int64_t)global_row * row_quants_bytes;
-        const int64_t tile_base = row_base + (int64_t)tile * MMVQ_COALESCED_TILE_BYTES;
-        const int64_t qs_offset = tile_base + word_idx * word_stride + block_in_tile * 4 + byte_in_word;
-        const uint8_t qs_byte = x_qs[qs_offset];
-
-        const float d = (float)x_d[global_row * blocks_per_row + ib];
-        const float v0 = (float)((qs_byte & 0xF) - 8);
-        const float v1 = (float)((qs_byte >> 4) - 8);
-
-        partial_sum += d * (v0 * (float)y[iybs + iqs + 0] + v1 * (float)y[iybs + iqs + y_offset]);
+        partial_sum += block_sum;
     }
 
     // Warp reduction
     float sum = partial_sum;
-    const int mask_start = ncols > GGML_SYCL_DMMV_X ? WARP_SIZE >> 1 : WARP_SIZE >> 2;
-    for (int mask = mask_start; mask > 0; mask >>= 1) {
+    for (int mask = WARP_SIZE >> 1; mask > 0; mask >>= 1) {
         sum += dpct::permute_sub_group_by_xor(nd_item.get_sub_group(), sum, mask);
     }
 
@@ -3127,70 +3132,52 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                     }
                 }
 
-                {
-                    block_q8_0 * src1_q8 = ggml_sycl_get_q8_0_cache(ne00, ctx.device, stream);
-                    quantize_row_q8_0_sycl(src1_ddf_i, src1_q8, ne00, 1, ne00, stream);
-                    stream->wait();
+                if (mode == reorder_mode::COALESCED) {
+                    // Use direct dfloat path (no Q8 quantization overhead)
+                    const int64_t ne01 = src0->ne[1];
+                    GGML_SYCL_KTRACE("dmmv_q4_0_coalesced", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld",
+                                     (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
+                    dequantize_mul_mat_vec_q4_0_sycl_coalesced(src0_dd_i, src1_dfloat,
+                                                              dst_dd_i, ne00, row_diff, ne01, row_low, stream);
+                } else if (mode == reorder_mode::SOA) {
+                    // Use direct dfloat path (no Q8 quantization overhead)
+                    const ggml_tensor * storage = get_storage_tensor(src0);
+                    const int64_t storage_ne01 = storage->ne[1];
+                    const int64_t ncols = storage->ne[0];
+                    const int64_t nblocks = storage_ne01 * (ncols / QK4_0);
+                    const int64_t total_qs_bytes = nblocks * (QK4_0 / 2);
+                    const int64_t d_offset = total_qs_bytes;
 
-                    if (mode == reorder_mode::COALESCED) {
-                        const int64_t ne01 = src0->ne[1];
-                        GGML_SYCL_KTRACE("dmmv_q4_0_coalesced_q8_0", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld",
-                                         (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
-                        dequantize_mul_mat_vec_q4_0_sycl_coalesced_q8_0(src0_dd_i, src1_q8,
-                                                                       dst_dd_i, ne00, row_diff, ne01, row_low, stream);
-                    } else if (mode == reorder_mode::SOA) {
-                        const ggml_tensor * storage = get_storage_tensor(src0);
-                        const int64_t storage_ne01 = storage->ne[1];
-                        const int64_t ncols = storage->ne[0];
-                        const int64_t nblocks = storage_ne01 * (ncols / QK4_0);
-                        const int64_t total_qs_bytes = nblocks * (QK4_0 / 2);
-                        const int64_t d_offset = total_qs_bytes;
+                    const void * storage_base = ggml_sycl_get_data_ptr(storage, ctx.device);
 
-                        const void * storage_base = ggml_sycl_get_data_ptr(storage, ctx.device);
-
-                        int64_t view_row_offset = 0;
-                        if (src0->view_src != nullptr) {
-                            view_row_offset = src0->view_offs / src0->nb[1];
-                        }
-                        const int global_row_low = row_low + view_row_offset;
-
-                        GGML_SYCL_KTRACE("dmmv_q4_0_soa_q8_0", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld d_offset=%lld",
-                                         (long long)ne00, (long long)row_diff, (long long)storage_ne01, (long long)global_row_low, (long long)d_offset);
-                        dequantize_mul_mat_vec_q4_0_sycl_reorder_q8_0(storage_base, src1_q8, dst_dd_i,
-                                                                     ne00, row_diff, d_offset, global_row_low, stream);
-                    } else {
-                        GGML_SYCL_KTRACE("dmmv_q4_0_aos_q8_0", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-                        dequantize_mul_mat_vec_q4_0_sycl_q8_0(src0_dd_i, src1_q8, dst_dd_i, ne00, row_diff, stream);
+                    int64_t view_row_offset = 0;
+                    if (src0->view_src != nullptr) {
+                        view_row_offset = src0->view_offs / src0->nb[1];
                     }
+                    const int global_row_low = row_low + view_row_offset;
+
+                    GGML_SYCL_KTRACE("dmmv_q4_0_soa", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld d_offset=%lld",
+                                     (long long)ne00, (long long)row_diff, (long long)storage_ne01, (long long)global_row_low, (long long)d_offset);
+                    dequantize_mul_mat_vec_q4_0_sycl_reorder(storage_base, src1_dfloat, dst_dd_i,
+                                                            ne00, row_diff, d_offset, global_row_low, stream);
+                } else {
+                    // NONE mode - use direct dfloat path (no Q8 quantization overhead)
+                    // This matches master branch behavior for optimal performance
+                    dequantize_mul_mat_vec_q4_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
                 }
             }
             break;
         case GGML_TYPE_Q4_1:
-            {
-                block_q8_1 * src1_q8 = ggml_sycl_get_q8_1_cache(ne00, ctx.device, stream);
-                quantize_row_q8_1_sycl<quantize_q8_1>(src1_ddf_i, src1_q8, ne00, 1, ne00, stream);
-                stream->wait();
-                GGML_SYCL_KTRACE("dmmv_q4_1_q8_1", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-                dequantize_mul_mat_vec_q4_1_sycl_q8_1(src0_dd_i, src1_q8, dst_dd_i, ne00, row_diff, stream);
-            }
+            // Use direct dfloat path (no Q8 quantization overhead)
+            dequantize_mul_mat_vec_q4_1_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             break;
         case GGML_TYPE_Q5_0:
-            {
-                block_q8_0 * src1_q8 = ggml_sycl_get_q8_0_cache(ne00, ctx.device, stream);
-                quantize_row_q8_0_sycl(src1_ddf_i, src1_q8, ne00, 1, ne00, stream);
-                stream->wait();
-                GGML_SYCL_KTRACE("dmmv_q5_0_q8_0", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-                dequantize_mul_mat_vec_q5_0_sycl_q8_0(src0_dd_i, src1_q8, dst_dd_i, ne00, row_diff, stream);
-            }
+            // Use direct dfloat path (no Q8 quantization overhead)
+            dequantize_mul_mat_vec_q5_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             break;
         case GGML_TYPE_Q5_1:
-            {
-                block_q8_1 * src1_q8 = ggml_sycl_get_q8_1_cache(ne00, ctx.device, stream);
-                quantize_row_q8_1_sycl<quantize_q8_1>(src1_ddf_i, src1_q8, ne00, 1, ne00, stream);
-                stream->wait();
-                GGML_SYCL_KTRACE("dmmv_q5_1_q8_1", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-                dequantize_mul_mat_vec_q5_1_sycl_q8_1(src0_dd_i, src1_q8, dst_dd_i, ne00, row_diff, stream);
-            }
+            // Use direct dfloat path (no Q8 quantization overhead)
+            dequantize_mul_mat_vec_q5_1_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
             break;
         case GGML_TYPE_Q8_0:
             {
@@ -3204,46 +3191,37 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                             src0->name ? src0->name : "?", extra, (int)mode);
                 }
 
-                block_q8_0 * src1_q8 = ggml_sycl_get_q8_0_cache(ne00, ctx.device, stream);
-                quantize_row_q8_0_sycl(src1_ddf_i, src1_q8, ne00, 1, ne00, stream);
-                stream->wait();
-
                 if (mode == reorder_mode::COALESCED) {
+                    // Use direct dfloat path (no Q8 quantization overhead)
                     const int64_t ne01 = src0->ne[1];
-                    GGML_SYCL_KTRACE("dmmv_q8_0_coalesced_q8_0", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld",
+                    GGML_SYCL_KTRACE("dmmv_q8_0_coalesced", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld",
                                      (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
-                    dequantize_mul_mat_vec_q8_0_sycl_coalesced_q8_0(src0_dd_i, src1_q8,
-                                                                   dst_dd_i, ne00, row_diff, ne01, row_low, stream);
+                    dequantize_mul_mat_vec_q8_0_sycl_coalesced(src0_dd_i, src1_dfloat,
+                                                              dst_dd_i, ne00, row_diff, ne01, row_low, stream);
                 } else if (mode == reorder_mode::SOA) {
-                    // Q8_0 SoA layout: [all qs: nblocks * 32 bytes][all d: nblocks * 2 bytes]
-                    // CRITICAL: Must use storage tensor dimensions for offset calculation, not view dimensions
+                    // Use direct dfloat path (no Q8 quantization overhead)
                     const ggml_tensor * storage = get_storage_tensor(src0);
-                    const int64_t storage_ne01 = storage->ne[1];  // storage tensor rows (not view rows!)
+                    const int64_t storage_ne01 = storage->ne[1];
                     const int64_t ncols = storage->ne[0];
-                    // Q8_0: explicit nblocks pattern (matches Q6_K)
                     const int64_t nblocks = storage_ne01 * (ncols / QK8_0);
-                    const int64_t total_qs_bytes = nblocks * QK8_0;  // 32 bytes per block
+                    const int64_t total_qs_bytes = nblocks * QK8_0;
                     const int64_t d_offset = total_qs_bytes;
 
-                    // Get storage tensor base pointer
                     const void * storage_base = ggml_sycl_get_data_ptr(storage, ctx.device);
 
-                    // Calculate global row_low: row_low is relative to src0, need to add view offset
                     int64_t view_row_offset = 0;
                     if (src0->view_src != nullptr) {
-                        // src0 is a view - calculate its row offset within storage
-                        // Use nb[1] (row stride) to calculate row offset from byte offset
                         view_row_offset = src0->view_offs / src0->nb[1];
                     }
                     const int global_row_low = row_low + view_row_offset;
 
-                    GGML_SYCL_KTRACE("dmmv_q8_0_soa_q8_0", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld d_offset=%lld",
+                    GGML_SYCL_KTRACE("dmmv_q8_0_soa", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld d_offset=%lld",
                                      (long long)ne00, (long long)row_diff, (long long)storage_ne01, (long long)global_row_low, (long long)d_offset);
-                    dequantize_mul_mat_vec_q8_0_sycl_reorder_q8_0(storage_base, src1_q8, dst_dd_i,
-                                                                  ne00, row_diff, d_offset, global_row_low, stream);
+                    dequantize_mul_mat_vec_q8_0_sycl_reorder(storage_base, src1_dfloat, dst_dd_i,
+                                                            ne00, row_diff, d_offset, global_row_low, stream);
                 } else {
-                    GGML_SYCL_KTRACE("dmmv_q8_0_aos_q8_0", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-                    dequantize_mul_mat_vec_q8_0_sycl_q8_0(src0_dd_i, src1_q8, dst_dd_i, ne00, row_diff, stream);
+                    // NONE mode - use direct dfloat path (no Q8 quantization overhead)
+                    dequantize_mul_mat_vec_q8_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
                 }
             }
             break;

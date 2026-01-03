@@ -78,7 +78,6 @@ static bool g_sycl_loaded = false;
 int g_ggml_sycl_debug = 0;
 int g_ggml_sycl_tp_debug = 0;  // Tensor Parallelism debug output (GGML_SYCL_TP_DEBUG env var)
 int g_ggml_sycl_tp_async_ffn = 0;  // Async FFN pipelining (DISABLED - causes hangs)
-int g_ggml_sycl_disable_optimize = 0;
 int g_ggml_sycl_disable_graph = 0;
 int g_ggml_sycl_disable_dnn = 0;
 int g_ggml_sycl_prioritize_dmmv = 0;
@@ -254,19 +253,18 @@ static inline int get_sycl_env(const char *env_name, int default_val) {
 }
 
 // Get reorder mode from environment variable GGML_SYCL_REORDER_MODE
-// Valid values: "none", "soa", "coalesced"
-// Falls back to GGML_SYCL_DISABLE_OPT for backward compatibility
+// Valid values: "none", "soa", "coalesced" (case-sensitive)
+// Default: "none" to match master branch behavior (no weight reordering)
 static reorder_mode get_reorder_mode() {
     const char* mode = getenv("GGML_SYCL_REORDER_MODE");
     if (mode == nullptr) {
-        // Default: use SoA (existing behavior) unless GGML_SYCL_DISABLE_OPT is set
-        return getenv("GGML_SYCL_DISABLE_OPT") ? reorder_mode::NONE : reorder_mode::SOA;
+        return reorder_mode::NONE;  // Default: no reordering, matches master
     }
     if (strcmp(mode, "none") == 0) return reorder_mode::NONE;
     if (strcmp(mode, "soa") == 0) return reorder_mode::SOA;
     if (strcmp(mode, "coalesced") == 0) return reorder_mode::COALESCED;
-    fprintf(stderr, "WARN: Unknown GGML_SYCL_REORDER_MODE '%s', using soa\n", mode);
-    return reorder_mode::SOA;
+    fprintf(stderr, "WARN: Unknown GGML_SYCL_REORDER_MODE '%s', using none\n", mode);
+    return reorder_mode::NONE;
 }
 
 static const char* reorder_mode_to_string(reorder_mode mode) {
@@ -284,7 +282,6 @@ static void ggml_check_sycl() try {
     if (!initialized) {
         g_ggml_sycl_debug = get_sycl_env("GGML_SYCL_DEBUG", 0);
         g_ggml_sycl_tp_debug = get_sycl_env("GGML_SYCL_TP_DEBUG", 0);
-        g_ggml_sycl_disable_optimize = get_sycl_env("GGML_SYCL_DISABLE_OPT", 0);
         g_ggml_sycl_disable_graph = get_sycl_env("GGML_SYCL_DISABLE_GRAPH", 0);
         g_ggml_sycl_disable_dnn = get_sycl_env("GGML_SYCL_DISABLE_DNN", 0);
         g_ggml_sycl_prioritize_dmmv = get_sycl_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
@@ -298,7 +295,6 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("Running with Environment Variables:\n");
         GGML_LOG_INFO("  GGML_SYCL_DEBUG: %d\n", g_ggml_sycl_debug);
         GGML_LOG_INFO("  GGML_SYCL_TP_DEBUG: %d\n", g_ggml_sycl_tp_debug);
-        GGML_LOG_INFO("  GGML_SYCL_DISABLE_OPT: %d\n", g_ggml_sycl_disable_optimize);
 #ifdef GGML_SYCL_GRAPH
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: %d\n", g_ggml_sycl_disable_graph);
 #else
@@ -603,7 +599,7 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
         }
     } else if ((tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q6_K ||
                 tensor->type == GGML_TYPE_Q8_0 || tensor->type == GGML_TYPE_MXFP4) &&
-        !g_ggml_sycl_disable_optimize) {
+        ggml_sycl_reorder_enabled()) {
         ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
         tensor->extra                 = extra;
         ctx->tensor_extras.push_back({tensor, extra});  //used to release it when destroy ctx.
@@ -679,14 +675,14 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     bool dims_ok = tensor->ne[0] > 0 && tensor->ne[1] > 0;
     bool full_tensor = (offset == 0 && size == ggml_nbytes(tensor));
 
-    if (type_ok && !g_ggml_sycl_disable_optimize && ctx->supports_soa_reorder && dims_ok && full_tensor) {
+    if (type_ok && ggml_sycl_reorder_enabled() && ctx->supports_soa_reorder && dims_ok && full_tensor) {
         do_reorder = true;
     }
 
     // Debug: trace CPU reorder decision for MXFP4
     if (tensor->type == GGML_TYPE_MXFP4) {
-        if (false) fprintf(stderr, "[SET_TENSOR-DEBUG] MXFP4: %s type_ok=%d disable_opt=%d soa_reorder=%d dims_ok=%d full=%d -> do_cpu_reorder=%d\n",
-                tensor->name, type_ok, g_ggml_sycl_disable_optimize, ctx->supports_soa_reorder, dims_ok, full_tensor, do_reorder);
+        if (false) fprintf(stderr, "[SET_TENSOR-DEBUG] MXFP4: %s type_ok=%d reorder_enabled=%d soa_reorder=%d dims_ok=%d full=%d -> do_cpu_reorder=%d\n",
+                tensor->name, type_ok, (int)ggml_sycl_reorder_enabled(), ctx->supports_soa_reorder, dims_ok, full_tensor, do_reorder);
     }
 
     // === SoA/Coalesced reorder (if needed) ===
@@ -9457,8 +9453,8 @@ static bool should_cpu_reorder(const ggml_tensor* tensor, const ggml_backend_syc
         return false;
     }
 
-    // Check if reordering is disabled globally
-    if (g_ggml_sycl_disable_optimize) {
+    // Check if reordering is enabled
+    if (!ggml_sycl_reorder_enabled()) {
         return false;
     }
 
@@ -9862,12 +9858,12 @@ static void reorder_callback_mxfp4(uint8_t* data_device, int ncols, int nrows,
 // Check if tensor is eligible for reordering (regardless of batch size)
 // Used by opt_for_reorder() to decide whether to reorder on first use
 static bool can_reorder_tensor(ggml_backend_sycl_context& ctx, const ggml_tensor * dst) {
-    bool result = !g_ggml_sycl_disable_optimize && //allow optimize, controlled by $GGML_SYCL_DISABLE_OPT
+    bool result = ggml_sycl_reorder_enabled() &&  // reordering enabled via GGML_SYCL_REORDER_MODE
             ctx.supports_soa_reorder &&  //device capability: GPU supports SoA optimization
             (dst->op == GGML_OP_MUL_MAT || dst->op == GGML_OP_MUL_MAT_ID);  //MUL_MAT or MoE
     if (g_ggml_sycl_debug >= 2) {
-        fprintf(stderr, "[REORDER-DBG] can_reorder: disable_opt=%d device_supports_soa=%d op=%d result=%d\n",
-                (int)g_ggml_sycl_disable_optimize, (int)ctx.supports_soa_reorder,
+        fprintf(stderr, "[REORDER-DBG] can_reorder: reorder_enabled=%d device_supports_soa=%d op=%d result=%d\n",
+                (int)ggml_sycl_reorder_enabled(), (int)ctx.supports_soa_reorder,
                 dst->op, (int)result);
     }
     return result;
@@ -9876,13 +9872,13 @@ static bool can_reorder_tensor(ggml_backend_sycl_context& ctx, const ggml_tensor
 // Check if we should USE the SoA kernel for this operation (requires batch=1)
 // The tensor may already be reordered, but we only use SoA kernel for decode (batch=1)
 static bool should_reorder_tensor(ggml_backend_sycl_context& ctx, const ggml_tensor * dst) {
-    bool result = !g_ggml_sycl_disable_optimize && //allow optimize, controlled by $GGML_SYCL_DISABLE_OPT
+    bool result = ggml_sycl_reorder_enabled() &&  // reordering enabled via GGML_SYCL_REORDER_MODE
             ctx.supports_soa_reorder &&  //device capability: GPU supports SoA optimization
             dst->op == GGML_OP_MUL_MAT &&   //limit to some supported cases of Q4_0, to do for more cases.
             dst->src[1]->ne[1]==1 && dst->src[1]->ne[2]==1 && dst->src[1]->ne[3]==1;
     if (g_ggml_sycl_debug) {
-        fprintf(stderr, "[REORDER-DBG] should_reorder: disable_opt=%d device_supports_soa=%d op=%d src1_dims=[%lld,%lld,%lld] result=%d\n",
-                (int)g_ggml_sycl_disable_optimize, (int)ctx.supports_soa_reorder,
+        fprintf(stderr, "[REORDER-DBG] should_reorder: reorder_enabled=%d device_supports_soa=%d op=%d src1_dims=[%lld,%lld,%lld] result=%d\n",
+                (int)ggml_sycl_reorder_enabled(), (int)ctx.supports_soa_reorder,
                 dst->op, (long long)dst->src[1]->ne[1], (long long)dst->src[1]->ne[2], (long long)dst->src[1]->ne[3],
                 (int)result);
     }
@@ -9915,8 +9911,8 @@ static bool tensor_needs_reorder(ggml_backend_sycl_context& ctx, const ggml_tens
 // NOTE: We don't check activation dimensions (ne[1]) because we want to pre-reorder ALL weights
 // during prompt phase, so decode phase graphs don't get blocked.
 static bool graph_needs_reorder(ggml_backend_sycl_context& ctx, ggml_cgraph * cgraph) {
-    // Skip if optimize is disabled globally or device doesn't support reordering
-    if (g_ggml_sycl_disable_optimize || !ctx.supports_soa_reorder) {
+    // Skip if reordering is disabled or device doesn't support it
+    if (!ggml_sycl_reorder_enabled() || !ctx.supports_soa_reorder) {
         return false;
     }
 
@@ -10273,8 +10269,8 @@ static void graph_unpin_weights(ggml_backend_sycl_context* ctx) {
 // NOTE: We don't check should_reorder_tensor() because that requires ne[1]==1 (decode mode).
 // We want to pre-reorder during prompt phase (ne[1]>1) to avoid blocking decode phase graphs.
 static void graph_pre_reorder_all(ggml_backend_sycl_context& ctx, ggml_cgraph * cgraph) {
-    // Skip if optimize is disabled globally or device doesn't support reordering
-    if (g_ggml_sycl_disable_optimize || !ctx.supports_soa_reorder) {
+    // Skip if reordering is disabled or device doesn't support it
+    if (!ggml_sycl_reorder_enabled() || !ctx.supports_soa_reorder) {
         return;
     }
 
@@ -10385,6 +10381,12 @@ static void graph_pre_reorder_all(ggml_backend_sycl_context& ctx, ggml_cgraph * 
 
 static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor * src0, const ggml_tensor * /* src1 */,
                             ggml_tensor * dst, mul_mat_algo mm_algorithm) {
+    // Skip reordering during SYCL graph recording - wait() calls are forbidden.
+    // Tensors should be pre-reordered via graph_pre_reorder_all() before recording starts.
+    if (g_ggml_sycl_graph_recording) {
+        return;
+    }
+
     // Use can_reorder_tensor() instead of should_reorder_tensor()
     // We want to reorder on FIRST USE regardless of batch size (prompt or decode).
     // The batch=1 check in should_reorder_tensor() only determines which kernel to use,
@@ -10613,8 +10615,8 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
 // Without this, the first decode token uses non-reordered kernels while
 // subsequent tokens use reordered kernels, causing different results.
 static void pre_reorder_all_tensors(ggml_backend_sycl_context * sycl_ctx, ggml_cgraph * cgraph) {
-    // Skip if optimize is disabled globally or device doesn't support reordering
-    if (g_ggml_sycl_disable_optimize || !sycl_ctx->supports_soa_reorder) {
+    // Skip if reordering is disabled or device doesn't support it
+    if (!ggml_sycl_reorder_enabled() || !sycl_ctx->supports_soa_reorder) {
         return;
     }
 
