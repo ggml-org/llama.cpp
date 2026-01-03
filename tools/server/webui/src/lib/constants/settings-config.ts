@@ -40,6 +40,8 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	dry_penalty_last_n: -1,
 	max_tokens: -1,
 	custom: '', // custom json-stringified object
+	// [AI] Tool calling limits
+	maxToolCalls: 10,
 	// experimental features
 	pyInterpreterEnabled: false,
 	enableContinueGeneration: false
@@ -85,6 +87,7 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 	dry_penalty_last_n:
 		'DRY sampling reduces repetition in generated text even across long contexts. This parameter sets DRY penalty for the last n tokens.',
 	max_tokens: 'The maximum number of token per output. Use -1 for infinite (no limit).',
+	maxToolCalls: 'Maximum number of tool calls allowed per message. Prevents infinite tool calling loops. Use -1 for unlimited.',
 	custom: 'Custom JSON parameters to send to the API. Must be valid JSON format.',
 	showThoughtInProgress: 'Expand thought process by default when generating messages.',
 	showToolCalls:

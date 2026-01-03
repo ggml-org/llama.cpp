@@ -14,6 +14,7 @@
 	import { Toaster } from 'svelte-sonner';
 	import { goto } from '$app/navigation';
 	import { modelsStore } from '$lib/stores/models.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants/tooltip-config';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 
@@ -137,6 +138,20 @@
 			routerModelsFetched = true;
 			untrack(() => {
 				modelsStore.fetchRouterModels();
+			});
+		}
+	});
+
+	// [AI] Initialize MCP store on app load (run once)
+	let mcpInitialized = false;
+
+	$effect(() => {
+		if (!mcpInitialized) {
+			mcpInitialized = true;
+			untrack(() => {
+				mcpStore.initialize().catch((error) => {
+					console.error('MCP initialization failed:', error);
+				});
 			});
 		}
 	});

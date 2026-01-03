@@ -1,0 +1,41 @@
+# To execute this docker compose yml file use `docker compose -f docker-compose-v3-node-all-browsers.yml up`
+# Add the `-d` flag at the end for detached execution
+# To stop the execution, hit Ctrl+C, and then `docker compose -f docker-compose-v3-node-all-browsers.yml down`
+services:
+  selenium-hub:
+    image: selenium/hub:4.36.0-20251001
+    container_name: selenium-hub
+    ports:
+      - "4442:4442"
+      - "4443:4443"
+      - "4444:4444"
+
+  all-browsers:
+    image: selenium/node-all-browsers:4.36.0-20251001
+    shm_size: 3gb
+    depends_on:
+      - selenium-hub
+    environment:
+      - SE_EVENT_BUS_HOST=selenium-hub
+      # Uncomment the following lines to set a value to environment variable of particular browser when GENERATE_CONFIG=true
+#      - SE_NODE_STEREOTYPE_CHROME=
+#      - SE_NODE_BROWSER_NAME_CHROME=
+#      - SE_NODE_BROWSER_VERSION_CHROME=
+#      - SE_NODE_PLATFORM_NAME_CHROME=
+#      - SE_BROWSER_BINARY_LOCATION_CHROME=
+#      - SE_NODE_STEREOTYPE_EXTRA_CHROME=
+#      - SE_NODE_MAX_SESSIONS_CHROME=
+#      - SE_NODE_STEREOTYPE_EDGE=
+#      - SE_NODE_BROWSER_NAME_EDGE=
+#      - SE_NODE_BROWSER_VERSION_EDGE=
+#      - SE_NODE_PLATFORM_NAME_EDGE=
+#      - SE_BROWSER_BINARY_LOCATION_EDGE=
+#      - SE_NODE_STEREOTYPE_EXTRA_EDGE=
+#      - SE_NODE_MAX_SESSIONS_EDGE=
+#      - SE_NODE_STEREOTYPE_FIREFOX=
+#      - SE_NODE_BROWSER_NAME_FIREFOX=
+#      - SE_NODE_BROWSER_VERSION_FIREFOX=
+#      - SE_NODE_PLATFORM_NAME_FIREFOX=
+#      - SE_BROWSER_BINARY_LOCATION_FIREFOX=
+#      - SE_NODE_STEREOTYPE_EXTRA_FIREFOX=
+#      - SE_NODE_MAX_SESSIONS_FIREFOX=
