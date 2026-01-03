@@ -358,6 +358,7 @@
 		.class} overflow-hidden rounded-3xl backdrop-blur-md {disabled
 		? 'cursor-not-allowed opacity-60'
 		: ''} {className}"
+	style={chatWidthClasses().style}
 	data-slot="chat-form"
 >
 	<ChatAttachmentsList

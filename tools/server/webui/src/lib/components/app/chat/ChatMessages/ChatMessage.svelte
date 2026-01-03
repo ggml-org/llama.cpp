@@ -235,6 +235,7 @@
 	<ChatMessageUser
 		bind:textareaElement
 		class={className}
+		{style}
 		{deletionInfo}
 		{editedContent}
 		{editedExtras}
