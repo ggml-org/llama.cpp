@@ -1180,6 +1180,8 @@ private:
             slot.smpl.reset();
         }
 
+        slot.task = std::make_unique<const server_task>(std::move(task));
+
         // initialize draft batch
         // TODO: rework speculative decoding [TAG_SERVER_SPEC_REWORK]
         if (slot.can_speculate()) {
@@ -1187,8 +1189,6 @@ private:
 
             slot.batch_spec = llama_batch_init(task.params.speculative.n_max + 1, 0, 1);
         }
-
-        slot.task = std::make_unique<const server_task>(std::move(task));
 
         slot.state = slot.task->is_child()
             ? SLOT_STATE_WAIT_OTHER // wait for the parent to process prompt
