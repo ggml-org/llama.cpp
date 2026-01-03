@@ -463,7 +463,6 @@ Some templates genuinely don't support tool calls (this is not a detection bug):
 
 ### TODO / Roadmap
 
-- [ ] **Enable DeepSeek R1 Distill Tests**: Reasoning tests enabled; tool tests pending (multi-byte Unicode markers).
 - [ ] **Fix OpenAI GPT-OSS**: Add `FUNC_CHANNEL_BASED` format for channel marker structure.
 - [ ] **Fix Cohere Command-R Plus**: Different marker format (Action: [...]) needs investigation.
 

@@ -1019,6 +1019,34 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(const minja::chat_tem
             ts.tool_section_end = "";
         }
 
+        // Handle nested container markers (e.g., DeepSeek R1 style)
+        // If function_suffix contains markdown code block (```), the template uses nested markers
+        // tool_section_start might be: <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function
+        // We need to derive tool_section_end from the outer marker pattern
+        if (ts.function_suffix.find("```") != std::string::npos && !ts.tool_section_start.empty()) {
+            // Check if tool_section_start contains nested markers (both outer and per-call)
+            // Pattern: <X_calls_begin><X_call_begin>...
+            // We look for "calls" pattern which indicates an outer container
+            size_t calls_pos = ts.tool_section_start.find("calls");
+            if (calls_pos != std::string::npos && calls_pos < ts.tool_section_start.length()) {
+                // Find where the outer marker ends (after the first >)
+                size_t first_close = ts.tool_section_start.find('>', calls_pos);
+                if (first_close != std::string::npos && first_close < ts.tool_section_start.length() - 1) {
+                    // Extract the outer marker (e.g., "<｜tool▁calls▁begin｜>")
+                    std::string outer_start = ts.tool_section_start.substr(0, first_close + 1);
+                    // Derive the outer end marker by replacing "begin" with "end"
+                    size_t begin_pos = outer_start.find("begin");
+                    if (begin_pos != std::string::npos) {
+                        std::string outer_end = outer_start.substr(0, begin_pos) + "end" +
+                                               outer_start.substr(begin_pos + 5);
+                        ts.tool_section_end = outer_end;
+                        LOG_DBG("Derived nested tool_section_end: '%s' from tool_section_start: '%s'\n",
+                                ts.tool_section_end.c_str(), ts.tool_section_start.c_str());
+                    }
+                }
+            }
+        }
+
         // Determine argument format
         if (!discovered.parameter_key_prefix.empty() &&
             discovered.parameter_key_prefix.find('<') != std::string::npos) {

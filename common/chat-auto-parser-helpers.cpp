@@ -702,6 +702,19 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
                         patterns.function_name_suffix = func_context.substr(func_name_end, suffix_end - func_name_end);
                     }
                 }
+            } else if (next_char == '\n' || next_char == '\r') {
+                // Check for markdown code block pattern (e.g., DeepSeek R1): \n```json\n{...}\n```<end>
+                size_t code_block_start = func_context.find("```", func_name_end);
+                if (code_block_start != std::string::npos && code_block_start < func_name_end + 10) {
+                    // Found code block start after function name
+                    // Skip the optional language tag (e.g., "json")
+                    size_t newline_after_lang = func_context.find('\n', code_block_start + 3);
+                    if (newline_after_lang != std::string::npos) {
+                        // function_name_suffix should include everything up to (and including) the newline after language tag
+                        patterns.function_name_suffix = func_context.substr(func_name_end, newline_after_lang - func_name_end + 1);
+                        LOG_DBG("Found markdown code block suffix: '%s'\n", patterns.function_name_suffix.c_str());
+                    }
+                }
             }
         }
 
@@ -711,6 +724,33 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
             search_start += patterns.function_name_suffix.length();
         }
         patterns.function_closer = find_closing_pattern(func_context, search_start);
+
+        // Check for markdown code block wrapped arguments (e.g., DeepSeek R1)
+        // Pattern: \n```json\n{...}\n```<per_call_end>
+        // If function_name_suffix contains code block opener, function_closer should be ```<per_call_end>, not }
+        // Note: We don't include leading \n because the JSON args parser consumes trailing whitespace
+        if (patterns.function_closer == "}" && !patterns.function_name_suffix.empty() &&
+            patterns.function_name_suffix.find("```") != std::string::npos) {
+            // function_name_suffix contains a code block opener, look for the closing code block
+            size_t code_block_end = func_context.find("```", search_start);
+            if (code_block_end != std::string::npos) {
+                // Found closing code block, extract everything from ``` to end of tool call
+                // The closer should be \n```<per_call_end> (everything from ``` to the end marker)
+                size_t after_block = code_block_end + 3;
+                // Find the next tag marker (e.g., <|tool_call_end|>)
+                size_t next_tag = func_context.find('<', after_block);
+                if (next_tag != std::string::npos) {
+                    size_t tag_end = func_context.find('>', next_tag);
+                    if (tag_end != std::string::npos) {
+                        // Don't include leading newline - the JSON args parser consumes trailing whitespace
+                        // So start exactly at the ``` (code_block_end)
+                        patterns.function_closer = func_context.substr(code_block_end, tag_end - code_block_end + 1);
+                        LOG_DBG("Detected markdown code block args, adjusted function_closer to: '%s'\n",
+                                patterns.function_closer.c_str());
+                    }
+                }
+            }
+        }
 
         // Tool call start marker
         if (patterns.function_opener.length() > 0 &&
