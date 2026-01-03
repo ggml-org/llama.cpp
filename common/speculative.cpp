@@ -359,3 +359,116 @@ llama_tokens common_speculative_gen_draft(
     }
     return result;
 }
+
+llama_tokens mtp_speculative_gen_draft(
+    struct common_sampler * smpl,
+    struct llama_context * ctx,
+    struct common_speculative_params params,
+    llama_token id_last,
+    int32_t n_past,
+    llama_seq_id seq_id) {
+
+    int n_draft = params.n_draft; 
+    
+    llama_tokens drafts;
+    drafts.reserve(n_draft);
+
+    if (!smpl) return drafts;
+
+    llama_batch mtp_batch = llama_batch_init(1, 0, 1);
+    mtp_batch.mtp_params.op_type = MTP_OP_DRAFT_GEN;
+
+    llama_token current_input_id = id_last;
+    int32_t current_n_past = n_past;
+
+    for (int i = 0; i < n_draft; ++i) {
+        mtp_batch.n_tokens = 0;
+        common_batch_add(mtp_batch, current_input_id, current_n_past, {seq_id}, true);
+
+        // Perform the MTP draft generation decode. This writes the MTP layer's
+        // KV state for the draft token into the cache.
+        if (llama_decode(ctx, mtp_batch) != 0) {
+            break;
+        }
+
+        llama_token id_next = common_sampler_sample_speculative(smpl, ctx, 0);
+
+        // Drafting stops if token probability drops below `p_min` to save compute.
+        const auto * cur_p = common_sampler_get_candidates(smpl, true);
+        if (cur_p && cur_p->size > 0) {
+            float prob = cur_p->data[0].p;
+
+            if (prob < params.p_min) {
+                drafts.push_back(id_next);
+                current_n_past++; 
+                break;
+            }
+        }
+
+        drafts.push_back(id_next);
+        
+        current_input_id = id_next;
+        current_n_past++;
+    }
+    llama_batch_free(mtp_batch);
+
+    // CRITICAL: Purge the metadata for the draft token we just wrote.
+    // This makes the physical cell available again for the main model's validation pass,
+    // preventing a cache state corruption where two cells map to the same logical position.
+    if (!drafts.empty()) {
+        llama_kv_cache_seq_rm(ctx, seq_id, n_past, current_n_past);
+    }
+
+    return drafts;
+}
+
+
+void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, bool is_prompt_warmup) {
+    if (batch.n_tokens == 0) {
+        return;
+    }
+
+    LOG_DBG("[MTP-UPDATE|%s] Updating %d tokens...\n", is_prompt_warmup ? "PROMPT_WARMUP" : "GEN_ACCEPTED", batch.n_tokens);
+
+    llama_batch mtp_batch = batch;
+    if (is_prompt_warmup) {
+        mtp_batch.mtp_params.op_type = MTP_OP_WARMUP;
+    } else {
+        mtp_batch.mtp_params.op_type = MTP_OP_UPDATE_ACCEPTED;
+    }
+
+    for (int i = 0; i < mtp_batch.n_tokens; ++i) {
+        mtp_batch.logits[i] = true;
+    }
+    llama_decode(ctx, mtp_batch);
+}
+
+void mtp_accept_tokens(
+    struct llama_context * ctx,
+    const std::vector<llama_token> & ids,
+    int32_t n_past_base,
+    llama_seq_id seq_id
+) {
+    if (ids.empty()) {
+        return;
+    }
+
+    // Prepare a resized copy of the validation sinfo to match the number of accepted tokens.
+    //    This sets up the context for a "forced sinfo" decode.
+    if (!llama_mtp_prepare_sinfo_for_update(ctx, ids.size())) {
+        return;
+    }
+
+    // Build a new batch containing only the accepted tokens.
+    llama_batch accepted_batch = llama_batch_init(ids.size(), 0, 1);
+    for (size_t i = 0; i < ids.size(); ++i) {
+        common_batch_add(accepted_batch, ids[i], n_past_base + i, { seq_id }, true);
+    }
+
+    mtp_update_kv_cache(ctx, accepted_batch, false);
+
+    // Clean up the forced state to not affect subsequent, normal decode calls.
+    llama_mtp_cancel_sinfo_update(ctx);
+
+    llama_batch_free(accepted_batch);
+}
