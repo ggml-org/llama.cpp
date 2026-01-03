@@ -250,7 +250,7 @@ ggml_tensor * llm_build_gemma3n_iswa::get_per_layer_inputs() {
     if (ubatch.token) {
         inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
         ggml_set_input(inp->tokens);
-        res->t_tokens = inp->tokens;
+        res->t_inp_tokens = inp->tokens;
         inp_per_layer = ggml_get_rows(ctx0, model.tok_embd_per_layer, inp->tokens);
         inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_altup, n_layer, n_tokens);
         inp_per_layer = ggml_scale(ctx0, inp_per_layer, sqrtf((float) n_embd_altup));

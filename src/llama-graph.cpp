@@ -34,8 +34,8 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
 bool llm_graph_input_embd::can_reuse(const llm_graph_params & params) {
     bool res = true;
 
-    res &= (!tokens && !params.ubatch.token) || (tokens && tokens->ne[0] == params.ubatch.n_tokens);
-    res &= (!embd   && !params.ubatch.embd)  || (embd   &&   embd->ne[1] == params.ubatch.n_tokens);
+    res &= (!params.ubatch.token) || (tokens && tokens->ne[0] == params.ubatch.n_tokens);
+    res &= (!params.ubatch.embd)  || (embd   &&   embd->ne[1] == params.ubatch.n_tokens);
 
     return res;
 }
@@ -635,7 +635,8 @@ int64_t llm_graph_result::get_max_nodes() const {
 }
 
 void llm_graph_result::reset() {
-    t_tokens      = nullptr;
+    t_inp_tokens  = nullptr;
+    t_inp_embd    = nullptr;
     t_logits      = nullptr;
     t_embd        = nullptr;
     t_embd_pooled = nullptr;
@@ -1339,26 +1340,28 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
 // input embeddings with optional lora
 ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
-    const int64_t n_embd = hparams.n_embd_inp();
+    const int64_t n_embd_inp = hparams.n_embd_inp();
 
-    auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+    auto inp = std::make_unique<llm_graph_input_embd>(n_embd_inp);
 
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
     cb(inp->tokens, "inp_tokens", -1);
     ggml_set_input(inp->tokens);
+    res->t_inp_tokens = inp->tokens;
 
-    if (ubatch.token) {
-        res->t_tokens = inp->tokens;
-    }
-
-    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, ubatch.n_tokens);
+    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd_inp, ubatch.n_tokens);
     cb(inp->embd, "inp_embd", -1);
     ggml_set_input(inp->embd);
+    res->t_inp_embd = inp->embd;
 
-    ggml_tensor * cur;
+    // select one of the 2 inputs, based on the batch contents
+    // ref: https://github.com/ggml-org/llama.cpp/pull/18550
+    std::array<ggml_tensor *, 2> inps;
 
-    // token embeddings
+    // token embeddings path (ubatch.token != nullptr)
     {
+        auto & cur = inps[0];
+
         cur = ggml_get_rows(ctx0, tok_embd, inp->tokens);
 
         // apply lora for embedding tokens if needed
@@ -1378,11 +1381,33 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
 
             cur = ggml_add(ctx0, cur, inpL_delta);
         }
+
+        if (hparams.n_deepstack_layers > 0) {
+            // note: ensure the selected node is always assigned to the same backend
+            // if we don't do this, the `ggml_get_rows()` above (inps[0]) can remain on the CPU, while the inps[1]
+            //   below could be performed on the device (if n_deepstack_layers > 0, e.g. Qwen3 VL), which would result
+            //   in different backend ids, depending on which input path is selected
+            // TODO: is there a better way to do this?
+            cur = ggml_cont(ctx0, cur);
+        }
     }
 
-    std::array<ggml_tensor *, 2> inps = { cur, inp->embd };
+    // vector embeddings path (ubatch.embd != nullptr)
+    {
+        auto & cur = inps[1];
 
-    cur = ggml_build_forward_select(gf, inps.data(), inps.size(), ubatch.token ? 0 : 1);
+        cur = inp->embd;
+
+        if (hparams.n_deepstack_layers > 0) {
+            cur = ggml_view_2d(ctx0, cur, hparams.n_embd, n_tokens, cur->nb[1], 0);
+            cur = ggml_cont   (ctx0, cur); // makes the shape of this node the same as the ubatch.token path
+        }
+    }
+
+    assert(ggml_are_same_shape (inps[0], inps[1]));
+    assert(ggml_are_same_stride(inps[0], inps[1]));
+
+    ggml_tensor * cur = ggml_build_forward_select(gf, inps.data(), inps.size(), ubatch.token ? 0 : 1);
 
     // For Granite architecture
     if (hparams.f_embedding_scale != 0.0f) {
@@ -1488,7 +1513,7 @@ ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
     //}
 
     const auto n_embd = !cross->v_embd.empty() ? cross->n_embd : hparams.n_embd_inp();
-    const auto n_enc  = !cross->v_embd.empty() ? cross->n_enc : hparams.n_ctx_train;
+    const auto n_enc  = !cross->v_embd.empty() ? cross->n_enc  : hparams.n_ctx_train;
 
     cur = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, n_enc);
     ggml_set_input(cur);
