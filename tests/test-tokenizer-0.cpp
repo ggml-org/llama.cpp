@@ -160,6 +160,7 @@ int main(int argc, char **argv) {
         }
 
         auto cparams = llama_context_default_params();
+        cparams.n_ctx = 512;
 
         ctx = llama_init_from_model(model, cparams);
 
