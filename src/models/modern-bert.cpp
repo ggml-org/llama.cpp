@@ -23,8 +23,8 @@ llm_build_modern_bert::llm_build_modern_bert(const llama_model & model, const ll
     auto * inp_attn = build_attn_inp_no_cache();
 
     for (int il = 0; il < n_layer; ++il) {
-        float freq_base_l = model.get_rope_freq_base(cparams, il);
-        float freq_scale_l = model.get_rope_freq_scale(cparams, il);
+        const float freq_base_l  = model.get_rope_freq_base(cparams, il);
+        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
         cur = inpL;
 

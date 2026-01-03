@@ -25,8 +25,8 @@ llm_build_llama_iswa::llm_build_llama_iswa(const llama_model & model, const llm_
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
-        float freq_base_l  = model.get_rope_freq_base (cparams, il);
-        float freq_scale_l = model.get_rope_freq_scale(cparams, il);
+        const float freq_base_l  = model.get_rope_freq_base (cparams, il);
+        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
         ggml_tensor * inpSA = inpL;
 

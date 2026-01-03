@@ -22,8 +22,8 @@ llm_build_afmoe::llm_build_afmoe(const llama_model & model, const llm_graph_para
     const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
 
     for (int il = 0; il < n_layer; ++il) {
-        float freq_base_l  = model.get_rope_freq_base (cparams, il);
-        float freq_scale_l = model.get_rope_freq_scale(cparams, il);
+        const float freq_base_l  = model.get_rope_freq_base (cparams, il);
+        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
         ggml_tensor * inpSA = inpL;
 
