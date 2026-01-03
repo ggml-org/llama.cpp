@@ -461,38 +461,9 @@ Some templates genuinely don't support tool calls (this is not a detection bug):
 - **Phi 3.5 Mini** - The official template has no tool handling. Use Phi-4-mini-instruct for function calling, or community fine-tuned versions.
 - **Google Gemma 2 2B** - Pure instruction-following model without tool capabilities.
 
-### Completed Fixes
-
-- [x] **Fix GLM-4.6**: Fixed reasoning detection (Method 1 derivation from closing tag, Method 2 reverse case handling). Tool format uses `ARGS_KEY_VALUE_TAGS`.
-- [x] **Fix Kimi/Apertus**: Implemented `FUNC_PREFIXED_INDEXED` detection for Kimi and `FUNC_NAME_AS_KEY` for Apertus.
-- [x] **Add MiniMax Support**: Verified dynamic detection handles namespaced tags; fixed `arg_suffix` extraction for unquoted values.
-- [x] **Fix Nemotron Streaming**: Nemotron Nano-v2 now works with streaming parsing.
-- [x] **Refine DeepSeek R1**: Fixed GBNF generation for non-ASCII/multi-byte markers strings to support `R1` distillation templates.
-- [x] **Fix Cohere Markers**: Add Cohere's structural markers to the detected content patterns to correctly determine content boundaries.
-- [x] **Fix Mistral/Functionary**: Implemented robust detection logic (`rfind` for names, overlap detection for markers).
-- [x] **Fix Kimi-K2-Thinking**: Added `FUNC_PREFIXED_INDEXED` detection when `functions.` appears in function_opener. Derives markers from `_begin|>` pattern.
-- [x] **Fix Mistral ID Field**: Changed id_field search to use full tool diff instead of just tool_call_opener.
-- [x] **Fix Nested vs Non-nested XML**: Added detection for when `tool_section_start` matches `function_prefix` to properly set `function_close`.
-- [x] **Fix JSON Content Serialization**: Content is now `null` (not `""`) when tool_calls are present, per OpenAI spec.
-- [x] **Fix Null Content Rendering**: Added `requires_nonnull_content` detection for templates that render `null` content as Python "None" string. Content is patched to empty string for these models.
-- [x] **Add Functionary v3.2 Support**: Implemented `FUNC_RECIPIENT_BASED` format detection for `>>>` recipient delimiter pattern.
-- [x] **Add Mistral Small 3.2 / Devstral Support**: Implemented `FUNC_BRACKET_TAG` format for `[TOOL_CALLS]func[ARGS]{...}` pattern with optional ID marker.
-- [x] **Add ByteDance Seed-OSS Support**: Custom reasoning (`<seed:think>`) and tool (`<seed:tool_call>`) tags with XML structure.
-- [x] **Add Ministral-3-14B-Reasoning Support**: Custom `[THINK]...[/THINK]` reasoning tags.
-- [x] **Add Qwen3-Coder Support**: XML-style tool format with parameter tags.
-- [x] **Enable Multiple Template Families**: MiMo-VL, Hermes 3, Qwen 2.5, Apriel 1.5 all working with standard formats.
-- [x] **Add FireFunction v2 Support**: Implemented dedicated parser for ` functools[...]` array format.
-
 ### TODO / Roadmap
 
-- [x] **Enable DeepSeek R1 Distill Tests**: Reasoning tests enabled; tool tests pending (multi-byte Unicode markers).
-- [x] **Enable Kimi-K2/Kimi-K2-Instruct**: Now working with FUNC_PREFIXED_INDEXED format.
-- [x] **Enable MiMo-VL/Hermes/Qwen**: Standard `<tool_call>` JSON format works.
-- [x] **Enable Apriel 1.5**: Uses `<tool_calls>` wrapper with JSON array.
-- [x] **Enable Functionary v3.2**: Recipient-based routing format implemented.
-- [x] **Enable Mistral Small 3.2 / Devstral**: Bracket-tag format implemented.
-- [x] **Enable Cohere Command-R7B**: Uses START_RESPONSE/THINKING/ACTION markers.
-- [x] **Enable FireFunction v2**: Dedicated parser implementation completed.
+- [ ] **Enable DeepSeek R1 Distill Tests**: Reasoning tests enabled; tool tests pending (multi-byte Unicode markers).
 - [ ] **Fix OpenAI GPT-OSS**: Add `FUNC_CHANNEL_BASED` format for channel marker structure.
 - [ ] **Fix Cohere Command-R Plus**: Different marker format (Action: [...]) needs investigation.
 
