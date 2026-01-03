@@ -106,7 +106,7 @@
 	}
 </script>
 
-<Card.Root class="bg-muted/30 p-4">
+<Card.Root class="!gap-1.5 bg-muted/30 p-4">
 	{#if isEditing}
 		<!-- Edit Mode -->
 		<div class="space-y-4">
