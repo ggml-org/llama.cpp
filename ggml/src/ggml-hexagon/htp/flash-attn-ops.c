@@ -416,10 +416,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
         if (dst->type == HTP_TYPE_F32) {
             hvx_copy_fp32_ua(dst_ptr, (uint8_t *) VKQ32, DV);
         } else if (dst->type == HTP_TYPE_F16) {
-            __fp16 * d = (__fp16 *) dst_ptr;
-            for (int i = 0; i < DV; ++i) {
-                d[i] = (__fp16)VKQ32[i];
-            }
+            hvx_copy_fp16_fp32_ua(dst_ptr, (uint8_t *) VKQ32, DV);
         }
     }
 }

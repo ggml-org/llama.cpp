@@ -305,6 +305,37 @@ static inline void hvx_copy_fp16_fp32_uu(uint8_t * restrict dst, const uint8_t *
     }
 }
 
+// copy/convert n fp32 elements into n fp16 elements : source is aligned, destination is unaligned
+static inline void hvx_copy_fp16_fp32_ua(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    HVX_UVector * restrict vdst = (HVX_UVector *) dst; // fp16
+    HVX_Vector  * restrict vsrc = (HVX_Vector *)  src; // fp32
+
+    const HVX_Vector zero = Q6_V_vsplat_R(0);
+
+    uint32_t nvec = n / 64;
+    uint32_t nloe = n % 64;
+
+    uint32_t i = 0;
+
+    #pragma unroll(4)
+    for (; i < nvec; i++) {
+        // Load y (fp32) and convert into fp16
+        HVX_Vector s0_qf = Q6_Vqf32_vsub_VsfVsf(vsrc[i*2+0], zero); // 32 elements
+        HVX_Vector s1_qf = Q6_Vqf32_vsub_VsfVsf(vsrc[i*2+1], zero); // 32 elements
+        HVX_Vector s_hf  = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(s1_qf, s0_qf));
+        vdst[i] = Q6_Vh_vdeal_Vh(s_hf);
+    }
+
+    if (nloe) {
+        // Load y (fp32) and convert into fp16
+        HVX_Vector s0_qf = Q6_Vqf32_vsub_VsfVsf(vsrc[i*2+0], zero); // 32 elements
+        HVX_Vector s1_qf = Q6_Vqf32_vsub_VsfVsf(vsrc[i*2+1], zero); // 32 elements
+        HVX_Vector s_hf  = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(s1_qf, s0_qf));
+        hvx_vec_store_u((void *) &vdst[i], nloe * sizeof(__fp16), Q6_Vh_vdeal_Vh(s_hf));
+    }
+}
+
+
 // bcast 1 fp32 element from source to n fp32 elements in destination : destination is aligned
 static inline void hvx_bcast_fp32_a(uint8_t * restrict dst, float elem, uint32_t n) {
     HVX_Vector * restrict vdst = (HVX_Vector *) dst;
