@@ -749,6 +749,26 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
 
         patterns.tool_call_end_marker = find_tool_call_end(func_context, func1_pos);
 
+        // Strip EOS tokens (like <|eot_id|>) from tool_call_end_marker
+        // These tokens should not be part of the tool section structure
+        // Only strip actual EOS tokens, not structural markers like <|END_ACTION|>
+        if (!patterns.tool_call_end_marker.empty() && patterns.tool_call_end_marker.length() > 1) {
+            size_t eos_pos = patterns.tool_call_end_marker.find("<|");
+            if (eos_pos == 1) {
+                // Check if there's a bracket/brace before the token
+                char first_char = patterns.tool_call_end_marker[0];
+                if (first_char == ']' || first_char == '}') {
+                    // Check if this is an actual EOS token (contains "eot_id" or "eos")
+                    std::string token_content = patterns.tool_call_end_marker.substr(eos_pos);
+                    if (token_content.find("eot_id") != std::string::npos ||
+                        token_content.find("eos") != std::string::npos) {
+                        // This is an EOS token, strip it
+                        patterns.tool_call_end_marker = patterns.tool_call_end_marker.substr(0, 1);
+                    }
+                }
+            }
+        }
+
         // Trim whitespace
         if (!patterns.tool_call_end_marker.empty()) {
             size_t first = patterns.tool_call_end_marker.find_first_not_of(" \n\t");
@@ -824,6 +844,27 @@ InternalToolFormat determine_format_from_patterns(const InternalDiscoveredPatter
         patterns.tool_call_end_marker.empty()) {
         LOG_DBG("All patterns are empty - template doesn't support tool calls\n");
         return FORMAT_UNKNOWN;
+    }
+
+    // Check for recipient-based routing format (e.g., Functionary v3.2)
+    // STRUCTURAL PATTERN: The same marker is used for both content routing and tool routing
+    // Key indicators:
+    // 1. tool_call_start_marker == function_opener (same marker used for both)
+    // 2. No parameter markers (arguments are plain dict/JSON, not wrapped in tags)
+    // 3. No XML-style tags (differentiates from FUNC_TAG_WITH_NAME)
+    // 4. function_opener doesn't start with structural chars like {, [, < (differentiates from other formats)
+    if (!patterns.tool_call_start_marker.empty() && !patterns.function_opener.empty() &&
+        patterns.tool_call_start_marker == patterns.function_opener) {
+        // Check this isn't an XML-tagged format (opener would start with '<')
+        if (patterns.function_opener[0] != '<' && patterns.function_opener[0] != '{' &&
+            patterns.function_opener[0] != '[') {
+            // Check there are no parameter markers
+            if (patterns.parameter_opener.empty() && patterns.parameter_closer.empty()) {
+                LOG_DBG("Detected RECIPIENT_BASED format (tool_call_start_marker == function_opener = '%s')\n",
+                        patterns.tool_call_start_marker.c_str());
+                return FORMAT_RECIPIENT_BASED;
+            }
+        }
     }
 
     if (!patterns.tool_call_opener.empty()) {

@@ -55,6 +55,7 @@ struct ToolCallStructure {
         FUNC_PREFIXED_INDEXED, // <|tool_call_begin|>functions.X:0<|tool_call_argument_begin|>{...}<|tool_call_end|>
         FUNC_NAME_AS_KEY,      // [{"function_name": {...arguments...}}] (Apertus-style)
         FUNC_BRACKET_TAG,      // [TOOL_CALLS]X[CALL_ID]id[ARGS]{...} (Mistral Small 3.2 style)
+        FUNC_RECIPIENT_BASED,  // >>>recipient\n{content} where recipient is "all" (content) or function name (tools)
     };
     FunctionFormat function_format = FUNC_JSON_OBJECT;
 

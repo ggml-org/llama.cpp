@@ -63,6 +63,57 @@ TemplateAnalysisResult TemplateAnalyzer::analyze_template(const minja::chat_temp
         }
     }
 
+    // Post-processing: Detect content markers for recipient-based format
+    // For recipient-based format, content is prefixed with tool_call_start_marker + recipient_name + \n
+    // (e.g., ">>>all\n"). We need to detect and extract this as the content_start marker.
+    if (result.tools.function_format == ToolCallStructure::FUNC_RECIPIENT_BASED &&
+        result.content.content_start.empty() && !result.tools.tool_section_start.empty()) {
+
+        // Render template with content only (no tools) to detect the content marker
+        minja::chat_template_inputs inputs;
+        inputs.messages = {
+            { { "role", "user" }, { "content", "Hello" } },
+            { { "role", "assistant" }, { "content", "ACTUAL_CONTENT_HERE" } }
+        };
+        inputs.add_generation_prompt = true;
+
+        std::string output;
+        try {
+            output = tmpl.apply(inputs);
+        } catch (...) {
+            output = "";
+        }
+
+        if (!output.empty()) {
+            // Find where the actual content starts
+            size_t content_pos = output.find("ACTUAL_CONTENT_HERE");
+
+            if (content_pos != std::string::npos) {
+                // For recipient-based format, find the last occurrence of tool_call_start_marker
+                // before the content. The marker is from that position to the content (including the newline).
+                size_t marker_pos = output.rfind(result.tools.tool_section_start, content_pos);
+
+                if (marker_pos != std::string::npos && marker_pos < content_pos) {
+                    // Find the newline after the marker
+                    size_t newline_pos = output.find('\n', marker_pos);
+
+                    if (newline_pos != std::string::npos && newline_pos < content_pos) {
+                        // Extract everything up to and including the newline after the marker
+                        std::string detected_marker = output.substr(marker_pos, newline_pos - marker_pos + 1);
+
+                        // Verify the marker starts with tool_call_start_marker
+                        if (detected_marker.find(result.tools.tool_section_start) == 0) {
+                            result.content.content_start = detected_marker;
+                            result.content.content_mode = ContentStructure::CONTENT_ALWAYS_WRAPPED;
+                            LOG_DBG("Post-processing: Detected recipient-based content marker: '%s'\n",
+                                    result.content.content_start.c_str());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Collect preserved tokens from both phases
     collect_preserved_tokens(result);
 
@@ -1044,6 +1095,25 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(const minja::chat_tem
 
         LOG_DBG("FUNC_BRACKET_TAG: per_call_start='%s', id_marker='%s', args_marker='%s'\n",
                 ts.per_call_start.c_str(), ts.id_marker.c_str(), ts.args_marker.c_str());
+    } else if (format == FORMAT_RECIPIENT_BASED) {
+        // Recipient-based format (Functionary v3.2): >>>recipient\n{content}
+        // where recipient is either "all" (for content) or a function name (for tools)
+        ts.supports_tools     = true;
+        ts.function_format    = ToolCallStructure::FUNC_RECIPIENT_BASED;
+        ts.argument_format    = ToolCallStructure::ARGS_JSON;  // Python dict format, parse as JSON
+
+        // The tool_call_start_marker is used as the recipient delimiter
+        ts.tool_section_start = discovered.tool_call_start_marker;
+        ts.tool_section_end   = "";
+
+        // For recipient-based format, content is wrapped in tool_call_start_marker + "all\n"
+        // This needs to be detected and stripped. We detect this by checking if the
+        // content_start marker (from phase 1 analysis) starts with tool_call_start_marker
+        // If not already detected, infer it from the pattern.
+        // Note: This is set on the ContentStructure result, not ToolCallStructure
+        // The caller (analyze_template) will have the ContentStructure to modify
+
+        LOG_DBG("FUNC_RECIPIENT_BASED: delimiter='%s'\n", ts.tool_section_start.c_str());
     }
 
     return ts;

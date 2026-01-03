@@ -379,6 +379,8 @@ static const char * function_format_to_str(ToolCallStructure::FunctionFormat fmt
             return "NAME_AS_KEY";
         case ToolCallStructure::FUNC_BRACKET_TAG:
             return "BRACKET_TAG";
+        case ToolCallStructure::FUNC_RECIPIENT_BASED:
+            return "RECIPIENT_BASED";
     }
     return "UNKNOWN";
 }

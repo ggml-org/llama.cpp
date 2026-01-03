@@ -96,6 +96,11 @@ common_chat_params UniversalPEGGenerator::generate_parser(
             // Content markers detected - use PEG parser to strip them even without tools
             data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
             LOG_DBG("Generated unified parser for content marker stripping (format: PEG_NATIVE)\n");
+        } else if (analysis.tools.function_format == ToolCallStructure::FUNC_RECIPIENT_BASED) {
+            // Recipient-based format (e.g., Functionary v3.2): >>>recipient\n{content}
+            // Need PEG parser to handle recipient delimiter parsing
+            data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
+            LOG_DBG("Generated unified parser for recipient-based format (format: PEG_NATIVE)\n");
         } else if (analysis.tools.function_format == ToolCallStructure::FUNC_TAG_WITH_NAME) {
             // Tag-with-name format (e.g., func_name\n{args} for Functionary)
             // Need PEG parser to handle function name parsing
@@ -105,8 +110,6 @@ common_chat_params UniversalPEGGenerator::generate_parser(
             // Bracket-tag format (e.g., [TOOL_CALLS]name[CALL_ID]id[ARGS]{...} for Mistral Small 3.2)
             // Need PEG parser to handle bracket tag parsing
             data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
-            fprintf(stderr, "DEBUG GENERATOR: FUNC_BRACKET_TAG format detected, per_call_start='%s', id_marker='%s'\n",
-                    analysis.tools.per_call_start.c_str(), analysis.tools.id_marker.c_str());
             LOG_DBG("Generated unified parser for bracket-tag format (format: PEG_NATIVE)\n");
         } else if (analysis.tools.function_format == ToolCallStructure::FUNC_PREFIXED_INDEXED) {
             // Prefixed-indexed format (e.g., Kimi-K2)
@@ -128,6 +131,9 @@ common_chat_params UniversalPEGGenerator::generate_parser(
                    analysis.tools.function_format == ToolCallStructure::FUNC_PREFIXED_INDEXED) {
             // For formats with per-call markers, use per_call_start as trigger
             trigger_word = analysis.tools.per_call_start;
+        } else if (analysis.tools.function_format == ToolCallStructure::FUNC_RECIPIENT_BASED) {
+            // Recipient-based format uses tool_section_start (">>>") as trigger
+            trigger_word = analysis.tools.tool_section_start;
         }
 
         // Build grammar for tool calls
@@ -250,6 +256,17 @@ common_peg_arena UniversalPEGGenerator::build_parser(
                 // Functionary-style format: tool call starts immediately (e.g., func_name\n{args})
                 // No content before tools in this format - the entire output is the tool call
                 return p.sequence({ reasoning_for_tools, p.space(), tool_section, p.end() });
+            } else if (analysis.tools.function_format == ToolCallStructure::FUNC_BRACKET_TAG ||
+                       analysis.tools.function_format == ToolCallStructure::FUNC_PREFIXED_INDEXED) {
+                // Bracket-tag (Mistral Small 3.2) or prefixed-indexed (Kimi-K2) format:
+                // Tool calls start with per_call_start marker (e.g., [TOOL_CALLS], <|tool_call_begin|>)
+                if (!analysis.tools.per_call_start.empty()) {
+                    auto content_before_tools = p.content(p.until(analysis.tools.per_call_start));
+                    return p.sequence({ reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section, p.end() });
+                } else {
+                    // Fallback: no content before tools
+                    return p.sequence({ reasoning_for_tools, p.space(), tool_section, p.end() });
+                }
             } else {
                 // No section markers (raw JSON format): content must stop at JSON object start
                 // Tool calls start with "{", so use that as a delimiter
