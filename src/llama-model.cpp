@@ -578,6 +578,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     hparams.rope_scaling_type_train = llama_rope_scaling_type_from_string(rope_scaling);
     GGML_ASSERT(hparams.rope_scaling_type_train != LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED);
 
+    // TODO: Handle SWA metadata equally when models start implementing it
     // rope_freq_scale (inverse of the kv) is optional
     float ropescale = 0.0f;
     if (!ml.get_key(LLM_KV_ROPE_SCALING_FACTOR, ropescale, false)) {
@@ -1572,7 +1573,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.set_swa_pattern(4);
 
                     hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
-                    hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+                    hparams.rope_freq_scale_train_swa = 1.0; // See olmo2.cpp
                     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
                 } else {
                     hparams.swa_type = LLAMA_SWA_TYPE_NONE;
