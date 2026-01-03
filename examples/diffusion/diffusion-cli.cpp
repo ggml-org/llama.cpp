@@ -556,7 +556,7 @@ int main(int argc, char ** argv) {
     model_params.use_mlock          = params.use_mlock;
     model_params.check_tensors      = params.check_tensors;
 
-    llama_model * model = llama_model_load_from_file(params.model.path.c_str(), model_params);
+    llama_model * model = llama_model_load_from_file(params.model.path.c_str(), nullptr, 0, model_params);
     if (!model) {
         LOG_ERR("error: failed to load model '%s'\n", params.model.path.c_str());
         return 1;

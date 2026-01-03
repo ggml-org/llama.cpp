@@ -828,7 +828,7 @@ bool common_download_model(
             /*.no_alloc = */ true,
             /*.ctx      = */ NULL,
         };
-        auto * ctx_gguf = gguf_init_from_file(model.path.c_str(), gguf_params);
+        auto * ctx_gguf = gguf_init_from_file(model.path.c_str(), nullptr, 0, gguf_params);
         if (!ctx_gguf) {
             LOG_ERR("\n%s:  failed to load input GGUF from %s\n", __func__, model.path.c_str());
             return false;

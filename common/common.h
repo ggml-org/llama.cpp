@@ -231,6 +231,8 @@ struct common_params_model {
     std::string hf_file     = ""; // HF file                                                // NOLINT
     std::string docker_repo = ""; // Docker repo                                            // NOLINT
     std::string name        = ""; // in format <user>/<model>[:<tag>] (tag is optional)     // NOLINT
+    char* model_buf         = nullptr;
+    size_t model_buf_size   = 0;
 };
 
 struct common_params_speculative {

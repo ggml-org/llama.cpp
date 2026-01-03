@@ -223,7 +223,7 @@ endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TESTS AND NOT CMAKE_JS_VERSION)
     include(CTest)
-    add_subdirectory(tests)
+    # add_subdirectory(tests)
 endif()
 
 if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)

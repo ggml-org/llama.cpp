@@ -537,7 +537,7 @@ static void load_vocab(const char * filename, const Config * config, struct my_l
             /*.ctx      = */ &ctx_data,
         };
 
-        struct gguf_context * ctx = gguf_init_from_file(filename, params);
+        struct gguf_context * ctx = gguf_init_from_file(filename, nullptr, 0, params);
         GGML_ASSERT(ctx != NULL);
 
         const int model_idx = gguf_find_key(ctx, KV_TOKENIZER_MODEL);

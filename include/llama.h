@@ -437,6 +437,7 @@ extern "C" {
     // If the split file name does not follow this pattern, use llama_model_load_from_splits
     LLAMA_API struct llama_model * llama_model_load_from_file(
                              const char * path_model,
+                const char* model_buf, size_t model_buf_size,
               struct llama_model_params   params);
 
     // Load the model from multiple splits (support custom naming scheme)
@@ -472,6 +473,8 @@ extern "C" {
     // this function is NOT thread safe because it modifies the global llama logger state
     LLAMA_API bool llama_params_fit(
                                    const char   * path_model,
+                                   const char   * model_buf,
+                                   size_t         model_buf_size,
                     struct llama_model_params   * mparams,
                     struct llama_context_params * cparams,
                                           float * tensor_split,          // writable buffer for tensor split, needs at least llama_max_devices elements

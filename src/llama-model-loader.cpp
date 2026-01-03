@@ -470,6 +470,7 @@ namespace GGUFMeta {
 
 llama_model_loader::llama_model_loader(
         const std::string & fname,
+        const char* model_buf, size_t model_buf_size,
         std::vector<std::string> & splits,
         bool use_mmap,
         bool check_tensors,
@@ -496,7 +497,7 @@ llama_model_loader::llama_model_loader(
         /*.ctx      = */ &ctx,
     };
 
-    meta.reset(gguf_init_from_file(fname.c_str(), params));
+    meta.reset(gguf_init_from_file(fname.c_str(), model_buf, model_buf_size, params));
     if (!meta) {
         throw std::runtime_error(format("%s: failed to load model from %s", __func__, fname.c_str()));
     }
@@ -504,7 +505,7 @@ llama_model_loader::llama_model_loader(
     get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
     llm_kv = LLM_KV(llm_arch_from_string(arch_name));
 
-    files.emplace_back(new llama_file(fname.c_str(), "rb", !use_mmap));
+    files.emplace_back(new llama_file(fname.c_str(), model_buf, model_buf_size, "rb", !use_mmap));
     contexts.emplace_back(ctx);
 
     // Save tensors data offset of the main file.
@@ -555,7 +556,7 @@ llama_model_loader::llama_model_loader(
                 /*.no_alloc = */ true,
                 /*.ctx      = */ &ctx,
             };
-            gguf_context_ptr ctx_gguf { gguf_init_from_file(fname_split, split_params) };
+            gguf_context_ptr ctx_gguf { gguf_init_from_file(fname_split, nullptr, 0, split_params) };
             if (!ctx_gguf) {
                 throw std::runtime_error(format("%s: failed to load GGUF split from %s", __func__, fname_split));
             }
@@ -572,7 +573,7 @@ llama_model_loader::llama_model_loader(
                 }
             }
 
-            files.emplace_back(new llama_file(fname_split, "rb", !use_mmap));
+            files.emplace_back(new llama_file(fname_split, model_buf, model_buf_size,"rb", !use_mmap));
             contexts.emplace_back(ctx);
 
             // Save tensors data offset info of the shard.

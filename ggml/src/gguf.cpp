@@ -218,12 +218,30 @@ struct gguf_context {
 
 struct gguf_reader {
     FILE * file;
-
-    gguf_reader(FILE * file) : file(file) {}
+    const char* model_buf{nullptr};
+    size_t model_buf_size{0};
+    mutable size_t model_buf_pos;
+    bool using_file = true;
+    gguf_reader(FILE * file, const char* _mf, size_t _mfs) : file(file), model_buf(_mf), model_buf_size(_mfs), model_buf_pos(0) {
+        using_file = (model_buf == nullptr || model_buf_size == 0);
+    }
 
     template <typename T>
     bool read(T & dst) const {
-        return fread(&dst, 1, sizeof(dst), file) == sizeof(dst);
+        if (using_file) {
+            return fread(&dst, 1, sizeof(dst), file) == sizeof(dst);
+        }else {
+            if (sizeof(dst) + model_buf_pos < model_buf_size) {
+                memcpy(&dst, model_buf+model_buf_pos, sizeof(dst));
+                model_buf_pos += sizeof(dst);
+                return true;
+            }else{
+                memcpy(&dst, model_buf+model_buf_pos, model_buf_size - model_buf_pos);
+                model_buf_pos = model_buf_size;
+                return false;
+            }
+        }
+
     }
 
     template <typename T>
@@ -278,11 +296,38 @@ struct gguf_reader {
             return false;
         }
         dst.resize(size);
-        return fread(dst.data(), 1, dst.length(), file) == dst.length();
+        //return fread(dst.data(), 1, dst.length(), file) == dst.length();
+        if (using_file) {
+            return fread(dst.data(), 1, dst.length(), file) == dst.length();
+        } else {
+            if (dst.length() + model_buf_pos < model_buf_size) {
+                memcpy(dst.data(), model_buf + model_buf_pos, dst.length());
+                model_buf_pos += dst.length();
+                return true;
+            } else {
+                memcpy(dst.data(), model_buf + model_buf_pos, model_buf_size - model_buf_pos);
+                model_buf_pos = model_buf_size;
+                return false;
+            }
+        }
+
     }
 
     bool read(void * dst, const size_t size) const {
-        return fread(dst, 1, size, file) == size;
+        //return fread(dst, 1, size, file) == size;
+        if (using_file) {
+            return fread(dst, 1, size, file) == size;
+        } else {
+            if (size + model_buf_pos < model_buf_size) {
+                memcpy(dst, model_buf + model_buf_pos, size);
+                model_buf_pos += size;
+                return true;
+            } else {
+                memcpy(dst, model_buf + model_buf_pos, model_buf_size - model_buf_pos);
+                model_buf_pos = model_buf_size;
+                return false;
+            }
+        }
     }
 };
 
@@ -316,8 +361,8 @@ bool gguf_read_emplace_helper(const struct gguf_reader & gr, std::vector<struct 
     return true;
 }
 
-struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_params params) {
-    const struct gguf_reader gr(file);
+struct gguf_context * gguf_init_from_file_impl(FILE * file, const char* model_buf, size_t model_buf_size,struct gguf_init_params params) {
+    const struct gguf_reader gr(file, model_buf, model_buf_size);
     struct gguf_context * ctx = new gguf_context;
 
     bool ok = true;
@@ -609,15 +654,30 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
     }
     GGML_ASSERT(int64_t(ctx->info.size()) == n_tensors);
 
-    // we require the data section to be aligned, so take into account any padding
-    if (fseek(file, GGML_PAD(ftell(file), ctx->alignment), SEEK_SET) != 0) {
-        GGML_LOG_ERROR("%s: failed to seek to beginning of data section\n", __func__);
-        gguf_free(ctx);
-        return nullptr;
+    if(model_buf == nullptr || model_buf_size == 0){
+        // we require the data section to be aligned, so take into account any padding
+        if (fseek(file, GGML_PAD(ftell(file), ctx->alignment), SEEK_SET) != 0) {
+            GGML_LOG_ERROR("%s: failed to seek to beginning of data section\n", __func__);
+            gguf_free(ctx);
+            return nullptr;
+        }
+    } else {
+        // we require the data section to be aligned, so take into account any padding
+        long int bias = GGML_PAD(gr.model_buf_pos, ctx->alignment);
+        if (bias < 0 || bias > gr.model_buf_size) {
+            GGML_LOG_ERROR("%s: failed to seek to beginning of data section\n", __func__);
+            gguf_free(ctx);
+            return nullptr;
+        }
+        gr.model_buf_pos = bias;
     }
 
     // store the current file offset - this is where the data section starts
-    ctx->offset = ftell(file);
+    if(model_buf == nullptr || model_buf_size == 0){
+        ctx->offset = ftell(file);
+    }else {
+        ctx->offset = gr.model_buf_pos;
+    }
 
     // compute the total size of the data section, taking into account the alignment
     {
@@ -730,17 +790,22 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
     return ctx;
 }
 
-struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_params params) {
-    FILE * file = ggml_fopen(fname, "rb");
+struct gguf_context * gguf_init_from_file(const char * fname, const char* model_buf, size_t model_buf_size, struct gguf_init_params params) {
+    if(model_buf == nullptr || model_buf_size == 0){
+        FILE * file = ggml_fopen(fname, "rb");
 
-    if (!file) {
-        GGML_LOG_ERROR("%s: failed to open GGUF file '%s'\n", __func__, fname);
-        return nullptr;
+        if (!file) {
+            GGML_LOG_ERROR("%s: failed to open GGUF file '%s'\n", __func__, fname);
+            return nullptr;
+        }
+
+        struct gguf_context * result = gguf_init_from_file_impl(file, nullptr, 0, params);
+        fclose(file);
+        return result;
+    } else {
+        struct gguf_context* result = gguf_init_from_file_impl(nullptr, model_buf, model_buf_size, params);
+        return result;
     }
-
-    struct gguf_context * result = gguf_init_from_file_impl(file, params);
-    fclose(file);
-    return result;
 }
 
 void gguf_free(struct gguf_context * ctx) {

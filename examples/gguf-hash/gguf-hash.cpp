@@ -326,7 +326,7 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
         SHA1Update( &sha1_for_uuid_ctx, (unsigned char const *)uuidv5_namespace, sizeof(uuidv5_namespace));
     }
 
-    struct gguf_context * ctx = gguf_init_from_file(fname.c_str(), params);
+    struct gguf_context * ctx = gguf_init_from_file(fname.c_str(), nullptr, 0, params);
     const int n_tensors = gguf_get_n_tensors(ctx);
     bool tensor_layer_in_manifest = false;
     bool model_in_manifest = false;
