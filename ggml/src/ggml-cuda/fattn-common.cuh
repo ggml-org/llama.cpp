@@ -918,7 +918,9 @@ void launch_fattn(
         blocks_num.y = 1;
         blocks_num.z = 1;
 
-        dst_tmp_meta.alloc(((size_t) blocks_num.x) * ncols * (2 + DV/2));
+        if (ntiles_total % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
+            dst_tmp_meta.alloc((size_t(blocks_num.x) * ncols * (2 + DV/2)));
+        }
     } else {
         const int ntiles_KQ = (K->ne[1] + nbatch_fa - 1) / nbatch_fa; // Max. number of parallel blocks limited by tensor size.
 
