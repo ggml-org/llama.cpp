@@ -131,6 +131,7 @@ static void usage(const char * executable) {
     printf("  --token-embedding-type ggml_type: use this ggml_type for the token embeddings tensor\n");
     printf("  --tensor-type TENSOR=TYPE: quantize this tensor to this ggml_type. example: --tensor-type attn_q=q8_0\n");
     printf("      Advanced option to selectively quantize tensors. May be specified multiple times.\n");
+    printf("  --tensor-type-file tensor_type.txt: lookup the ggml_types in the input text file, which contains a list of \"tensor=ggml_type\" separated by spaces\n");
     printf("  --prune-layers L0,L1,L2...comma-separated list of layer numbers to prune from the model\n");
     printf("      Advanced option to remove all tensors from the given layers\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
@@ -415,6 +416,22 @@ static bool parse_tensor_type(const char * data, std::vector<tensor_quantization
     return true;
 }
 
+static bool parse_tensor_type_file(const char * filename, std::vector<tensor_quantization> & tensor_type) {
+    std::ifstream file(filename);
+    if (!file) {
+        return false;
+    }
+
+    std::string arg;
+    while (file >> arg) {
+        if (!parse_tensor_type(arg.c_str(), tensor_type)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static bool parse_layer_prune(const char * data, std::vector<int> & prune_layers) {
     if (!data) {
         printf("\n%s: no layer pruning ids provided\n\n", __func__);
@@ -478,6 +495,10 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--tensor-type") == 0) {
             if (arg_idx == argc-1 || !parse_tensor_type(argv[++arg_idx], tensor_types)) {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--tensor-type-file") == 0) {
+            if (arg_idx == argc-1 || !parse_tensor_type_file(argv[++arg_idx], tensor_types)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--prune-layers") == 0) {
