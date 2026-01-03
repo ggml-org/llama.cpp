@@ -21,20 +21,7 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplateAnalysis
     common_chat_params data;
 
     try {
-        LOG_DBG("=== GENERATING UNIFIED PEG PARSER ===\n");
-        LOG_DBG("Content structure:\n");
-        LOG_DBG("  reasoning_mode: %d\n", static_cast<int>(analysis.content.reasoning_mode));
-        LOG_DBG("  reasoning_start: '%s'\n", analysis.content.reasoning_start.c_str());
-        LOG_DBG("  reasoning_end: '%s'\n", analysis.content.reasoning_end.c_str());
-        LOG_DBG("  content_mode: %d\n", static_cast<int>(analysis.content.content_mode));
-        LOG_DBG("  content_start: '%s'\n", analysis.content.content_start.c_str());
-        LOG_DBG("  content_end: '%s'\n", analysis.content.content_end.c_str());
-        LOG_DBG("Tool structure:\n");
-        LOG_DBG("  supports_tools: %s\n", analysis.tools.supports_tools ? "true" : "false");
-        LOG_DBG("  function_format: %d\n", static_cast<int>(analysis.tools.function_format));
-        LOG_DBG("  argument_format: %d\n", static_cast<int>(analysis.tools.argument_format));
-        LOG_DBG("  tool_section_start: '%s'\n", analysis.tools.tool_section_start.c_str());
-        LOG_DBG("  tool_section_end: '%s'\n", analysis.tools.tool_section_end.c_str());
+        LOG_DBG("%s\n", __func__);
 
         // Patch messages if template requires non-null content
         // Some templates (e.g., iquest) render null as "None" when concatenating strings

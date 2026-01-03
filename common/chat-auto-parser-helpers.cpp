@@ -430,7 +430,7 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
                                                             const std::string & tool2_diff,
                                                             const std::string & tool3_diff,
                                                             const std::string & tool1_full) {
-    LOG_DBG("=== EXTRACTING PATTERNS FROM DIFFERENCES ===\n");
+    LOG_DBG("%s\n", __func__);
 
     InternalDiscoveredPattern patterns;
 
@@ -440,8 +440,6 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
     if (func1_pos != std::string::npos && func2_pos != std::string::npos) {
         patterns.tool_call_opener = tool1_diff.substr(0, func1_pos);
 
-        // Check for swallowed '<' (common in templates where content ends with <|endoftext|>)
-        // This happens when the content output shares the same starting character '<' as the tool call marker
         if (tool1_full.length() >= tool1_diff.length()) {
             size_t diff_start = tool1_full.length() - tool1_diff.length();
 
@@ -451,10 +449,7 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
             }
         }
 
-        // If function name is at position 0 in diff, look in full output for prefix
-        // This handles cases where the prefix is shared between content and tool calls
         if (func1_pos == 0 && !tool1_full.empty()) {
-            // Find the LAST occurrence of function name (the actual tool call, not type definitions)
             size_t func_in_full = tool1_full.rfind("test_function_name");
             if (func_in_full != std::string::npos && func_in_full > 0) {
                 // Look backwards from function name to find prefix pattern
@@ -507,12 +502,9 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
             extract_json_field_name(patterns.tool_call_opener + tool1_diff.substr(func1_pos), "arguments",
                                     { "parameters", "arguments", "args", "params", "input" });
 
-        // ID field might be anywhere in the JSON object (often at the end, after arguments)
-        // So we search in the full diff, not just tool_call_opener
         patterns.tool_id_field =
             extract_json_field_name(tool1_diff, "", { "tool_call_id", "tool_id", "id", "call_id" });
 
-        // Extract parameter patterns from tool2_diff
         size_t param1_pos       = tool2_diff.find("\"param1\"");
         bool   param_has_quotes = (param1_pos != std::string::npos);
         size_t param2_pos       = tool2_diff.find("\"param2\"");
@@ -566,8 +558,6 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
                 patterns.parameter_key_suffix = tool2_diff.substr(key_end, value1_pos - key_end);
             }
 
-            // Extract parameter closer (e.g., </parameter>)
-            // Look for closing tag after value1
             size_t value1_end = value1_pos + std::string("value1").length();
             if (value1_end < tool2_diff.length()) {
                 // Try to find XML-style closing tag like </parameter>
@@ -581,15 +571,11 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
             }
         }
 
-        // Extract function opener/closer
         const std::string & func_context = tool1_diff;
         size_t              open_pos     = func_context.rfind('<', func1_pos);
         if (open_pos != std::string::npos && open_pos < func1_pos) {
             size_t close_pos = func_context.find('>', open_pos);
             if (close_pos != std::string::npos && close_pos < func1_pos) {
-                // Check if XML tag is adjacent to function name (ignoring whitespace)
-                // This prevents false positives where an earlier XML tag is part of the tool section
-                // but not the immediate function opener (e.g. <|tools_prefix|>[{"func_name")
                 bool is_adjacent = true;
                 for (size_t k = close_pos + 1; k < func1_pos; ++k) {
                     char c = func_context[k];
@@ -606,8 +592,6 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
             }
         }
 
-        // Look for non-XML prefix patterns (e.g., ">>>", "##", etc.)
-        // Search backwards from function name for a non-alphanumeric prefix
         if (func1_pos > 0 && patterns.function_opener.empty()) {
             size_t prefix_end = func1_pos;
             // Skip whitespace immediately before function name
@@ -645,13 +629,6 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
             }
         }
 
-        // Function name suffix
-        // Handles various formats:
-        //   - Simple: ">" or "]" or "}"
-        //   - Quoted: "\"" or "\">"
-        //   - XML tag: <|some_tag|>
-        //   - Indexed with tag: :0<|some_tag|> (Kimi-style)
-        //   - Bracket tags: [CALL_ID]...[ARGS] (Mistral Small 3.2 style)
         size_t func_name_end = func1_pos + std::string("test_function_name").length();
         if (func_name_end < func_context.length()) {
             char next_char = func_context[func_name_end];
@@ -693,9 +670,11 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
                         // There's a marker after the index (e.g., :0<|tool_call_argument_begin|>)
                         size_t tag_close = func_context.find('>', suffix_end);
                         if (tag_close != std::string::npos) {
-                            patterns.function_name_suffix = func_context.substr(func_name_end, tag_close - func_name_end + 1);
+                            patterns.function_name_suffix =
+                                func_context.substr(func_name_end, tag_close - func_name_end + 1);
                         } else {
-                            patterns.function_name_suffix = func_context.substr(func_name_end, suffix_end - func_name_end);
+                            patterns.function_name_suffix =
+                                func_context.substr(func_name_end, suffix_end - func_name_end);
                         }
                     } else {
                         // Just the index part (e.g., :0)
@@ -711,7 +690,8 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
                     size_t newline_after_lang = func_context.find('\n', code_block_start + 3);
                     if (newline_after_lang != std::string::npos) {
                         // function_name_suffix should include everything up to (and including) the newline after language tag
-                        patterns.function_name_suffix = func_context.substr(func_name_end, newline_after_lang - func_name_end + 1);
+                        patterns.function_name_suffix =
+                            func_context.substr(func_name_end, newline_after_lang - func_name_end + 1);
                         LOG_DBG("Found markdown code block suffix: '%s'\n", patterns.function_name_suffix.c_str());
                     }
                 }
@@ -725,10 +705,6 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
         }
         patterns.function_closer = find_closing_pattern(func_context, search_start);
 
-        // Check for markdown code block wrapped arguments (e.g., DeepSeek R1)
-        // Pattern: \n```json\n{...}\n```<per_call_end>
-        // If function_name_suffix contains code block opener, function_closer should be ```<per_call_end>, not }
-        // Note: We don't include leading \n because the JSON args parser consumes trailing whitespace
         if (patterns.function_closer == "}" && !patterns.function_name_suffix.empty() &&
             patterns.function_name_suffix.find("```") != std::string::npos) {
             // function_name_suffix contains a code block opener, look for the closing code block
@@ -738,7 +714,7 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
                 // The closer should be \n```<per_call_end> (everything from ``` to the end marker)
                 size_t after_block = code_block_end + 3;
                 // Find the next tag marker (e.g., <|tool_call_end|>)
-                size_t next_tag = func_context.find('<', after_block);
+                size_t next_tag    = func_context.find('<', after_block);
                 if (next_tag != std::string::npos) {
                     size_t tag_end = func_context.find('>', next_tag);
                     if (tag_end != std::string::npos) {
@@ -789,9 +765,6 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
 
         patterns.tool_call_end_marker = find_tool_call_end(func_context, func1_pos);
 
-        // Strip EOS tokens (like <|eot_id|>) from tool_call_end_marker
-        // These tokens should not be part of the tool section structure
-        // Only strip actual EOS tokens, not structural markers like <|END_ACTION|>
         if (!patterns.tool_call_end_marker.empty() && patterns.tool_call_end_marker.length() > 1) {
             size_t eos_pos = patterns.tool_call_end_marker.find("<|");
             if (eos_pos == 1) {
@@ -876,7 +849,7 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
 }
 
 InternalToolFormat determine_format_from_patterns(const InternalDiscoveredPattern & patterns) {
-    LOG_DBG("=== DETERMINING FORMAT FROM PATTERNS ===\n");
+    LOG_DBG("%s\n", __func__);
 
     if (patterns.tool_call_opener.empty() && patterns.tool_call_closer.empty() && patterns.function_opener.empty() &&
         patterns.function_closer.empty() && patterns.parameter_opener.empty() && patterns.parameter_closer.empty() &&
@@ -1022,7 +995,7 @@ InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & t
     InternalDiscoveredPattern patterns;
 
     try {
-        LOG_DBG("=== STARTING TEMPLATE DIFFERENTIAL ANALYSIS ===\n");
+        LOG_DBG("%s\n", __func__);
 
         auto caps                      = tmpl.original_caps();
         bool minja_supports_tool_calls = caps.supports_tool_calls;
@@ -1203,13 +1176,13 @@ InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & t
         // Check if "None" appears in the tool output where it shouldn't
         if (tool1_output.find("None") != std::string::npos) {
             // Verify this is actually from null content by checking if it goes away with empty string
-            json tool_msg1_empty_content = tool_msg1;
+            json tool_msg1_empty_content       = tool_msg1;
             tool_msg1_empty_content["content"] = "";
-            auto tool1_output_empty = safe_render({ user_msg, tool_msg1_empty_content });
+            auto tool1_output_empty            = safe_render({ user_msg, tool_msg1_empty_content });
             if (tool1_output_empty.find("None") == std::string::npos) {
                 LOG_DBG("Template renders null content as 'None', switching to empty string\n");
                 patterns.requires_nonnull_content = true;
-                tool1_output = tool1_output_empty;
+                tool1_output                      = tool1_output_empty;
 
                 // Update tool messages to use empty string instead of null
                 tool_msg1["content"] = "";
