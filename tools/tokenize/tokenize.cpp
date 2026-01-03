@@ -1,5 +1,5 @@
 #include "common.h"
-//#include "log.h" // TODO: start using log.h
+#include "log.h"
 #include "llama.h"
 
 #include <cstdio>
@@ -16,25 +16,25 @@
 #endif
 
 static void print_usage_information(const char * argv0) {
-    printf("usage: %s [options]\n\n", argv0);
-    printf("The tokenize program tokenizes a prompt using a given model,\n");
-    printf("and prints the resulting tokens to standard output.\n\n");
-    printf("It needs a model file, a prompt, and optionally other flags\n");
-    printf("to control the behavior of the tokenizer.\n\n");
-    printf("    The possible options are:\n");
-    printf("\n");
-    printf("    -h, --help                           print this help and exit\n");
-    printf("    -m MODEL_PATH, --model MODEL_PATH    path to model.\n");
-    printf("    --ids                                if given, only print numerical token IDs, and not token strings.\n");
-    printf("                                         The output format looks like [1, 2, 3], i.e. parseable by Python.\n");
-    printf("    -f PROMPT_FNAME, --file PROMPT_FNAME read prompt from a file.\n");
-    printf("    -p PROMPT, --prompt PROMPT           read prompt from the argument.\n");
-    printf("    --stdin                              read prompt from standard input.\n");
-    printf("    --no-bos                             do not ever add a BOS token to the prompt, even if normally the model uses a BOS token.\n");
-    printf("    --no-escape                          do not escape input (such as \\n, \\t, etc.).\n");
-    printf("    --no-parse-special                   do not parse control tokens.\n");
-    printf("    --log-disable                        disable logs. Makes stderr quiet when loading the model.\n");
-    printf("    --show-count                         print the total number of tokens.\n");
+    LOG("usage: %s [options]\n\n", argv0);
+    LOG("The tokenize program tokenizes a prompt using a given model,\n");
+    LOG("and prints the resulting tokens to standard output.\n\n");
+    LOG("It needs a model file, a prompt, and optionally other flags\n");
+    LOG("to control the behavior of the tokenizer.\n\n");
+    LOG("    The possible options are:\n");
+    LOG("\n");
+    LOG("    -h, --help                           print this help and exit\n");
+    LOG("    -m MODEL_PATH, --model MODEL_PATH    path to model.\n");
+    LOG("    --ids                                if given, only print numerical token IDs, and not token strings.\n");
+    LOG("                                         The output format looks like [1, 2, 3], i.e. parseable by Python.\n");
+    LOG("    -f PROMPT_FNAME, --file PROMPT_FNAME read prompt from a file.\n");
+    LOG("    -p PROMPT, --prompt PROMPT           read prompt from the argument.\n");
+    LOG("    --stdin                              read prompt from standard input.\n");
+    LOG("    --no-bos                             do not ever add a BOS token to the prompt, even if normally the model uses a BOS token.\n");
+    LOG("    --no-escape                          do not escape input (such as \\n, \\t, etc.).\n");
+    LOG("    --no-parse-special                   do not parse control tokens.\n");
+    LOG("    --log-disable                        disable logs. Makes stderr quiet when loading the model.\n");
+    LOG("    --show-count                         print the total number of tokens.\n");
 }
 
 static void llama_log_callback_null(ggml_log_level level, const char * text, void * user_data) {
@@ -48,14 +48,14 @@ static std::string read_prompt_from_file(const char * filepath, bool & success) 
 
     std::ifstream in(filepath, std::ios::binary);
     if (!in) {
-        fprintf(stderr, "%s: could not open file '%s' for reading: %s\n", __func__, filepath, strerror(errno));
+        LOG_ERR("%s: could not open file '%s' for reading: %s\n", __func__, filepath, strerror(errno));
         return std::string();
     }
     // do not assume the file is seekable (e.g. /dev/stdin)
     std::stringstream buffer;
     buffer << in.rdbuf();
     if (in.fail()) {
-        fprintf(stderr, "%s: could not read the entire file '%s': %s\n", __func__, filepath, strerror(errno));
+        LOG_ERR("%s: could not read the entire file '%s': %s\n", __func__, filepath, strerror(errno));
         return std::string();
     }
 
@@ -226,7 +226,7 @@ int main(int raw_argc, char ** raw_argv) {
         }
         else if (arg == "-m" || arg == "--model") {
             if (model_path_set) {
-                fprintf(stderr, "Error: -m or --model specified multiple times.\n");
+                LOG_ERR("Error: -m or --model specified multiple times.\n");
                 return 1;
             }
             model_path = argv[++iarg].c_str();
@@ -243,7 +243,7 @@ int main(int raw_argc, char ** raw_argv) {
         }
         else if (arg == "-p" || arg == "--prompt") {
             if (prompt_set) {
-                fprintf(stderr, "Error: -p or --prompt specified multiple times.\n");
+                LOG_ERR("Error: -p or --prompt specified multiple times.\n");
                 return 1;
             }
             prompt_arg = argv[++iarg].c_str();
@@ -251,7 +251,7 @@ int main(int raw_argc, char ** raw_argv) {
         }
         else if (arg == "-f" || arg == "--file") {
             if (prompt_path_set) {
-                fprintf(stderr, "Error: -f or --file specified multiple times.\n");
+                LOG_ERR("Error: -f or --file specified multiple times.\n");
                 return 1;
             }
             prompt_path = argv[++iarg].c_str();
@@ -267,7 +267,7 @@ int main(int raw_argc, char ** raw_argv) {
             show_token_count = true;
         }
         else {
-            fprintf(stderr, "Error: unknown option '%s'\n", argv[iarg].c_str());
+            LOG_ERR("Error: unknown option '%s'\n", argv[iarg].c_str());
             return 1;
         }
     }
@@ -278,29 +278,29 @@ int main(int raw_argc, char ** raw_argv) {
 
     // Check that we have the required stuff set.
     if (model_path_set && model_path == NULL) {
-        fprintf(stderr, "Error: --model requires an argument.\n");
+        LOG_ERR("Error: --model requires an argument.\n");
         return 1;
     }
     if (!model_path_set) {
-        fprintf(stderr, "Error: must specify --model.\n");
+        LOG_ERR("Error: must specify --model.\n");
         return 1;
     }
     if (prompt_path_set && prompt_path == NULL) {
-        fprintf(stderr, "Error: --file requires an argument.\n");
+        LOG_ERR("Error: --file requires an argument.\n");
         return 1;
     }
     if (prompt_set && prompt_arg == NULL) {
-        fprintf(stderr, "Error: --prompt requires an argument.\n");
+        LOG_ERR("Error: --prompt requires an argument.\n");
         return 1;
     }
     const int prompts_set = !!(prompt_path_set) + !!(prompt_set) + !!(stdin_set);
     if (prompts_set > 1) {
-        fprintf(stderr, "Error: --stdin, --file and --prompt are mutually exclusive.\n");
+        LOG_ERR("Error: --stdin, --file and --prompt are mutually exclusive.\n");
         return 1;
     }
     // Must have some prompt.
     if (prompts_set == 0) {
-        fprintf(stderr, "Error: must specify one of: --stdin, --file or --prompt.\n");
+        LOG_ERR("Error: must specify one of: --stdin, --file or --prompt.\n");
         return 1;
     }
 
@@ -340,7 +340,7 @@ int main(int raw_argc, char ** raw_argv) {
     model_params.vocab_only = true;
     llama_model * model = llama_model_load_from_file(model_path, model_params);
     if (!model) {
-        fprintf(stderr, "Error: could not load model from file '%s'.\n", model_path);
+        LOG_ERR("Error: could not load model from file '%s'.\n", model_path);
         return 1;
     }
 
@@ -349,7 +349,7 @@ int main(int raw_argc, char ** raw_argv) {
     llama_context_params ctx_params = llama_context_default_params();
     llama_context * ctx = llama_init_from_model(model, ctx_params);
     if (!ctx) {
-        fprintf(stderr, "Error: could not create context.\n");
+        LOG_ERR("Error: could not create context.\n");
         return 1;
     }
 
@@ -360,7 +360,7 @@ int main(int raw_argc, char ** raw_argv) {
         std::stringstream stdin_buffer;
         stdin_buffer << std::cin.rdbuf();
         if (std::cin.fail()) {
-            fprintf(stderr, "Error: could not read the entire standard input.\n");
+            LOG_ERR("Error: could not read the entire standard input.\n");
             return 1;
         }
 
