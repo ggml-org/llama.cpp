@@ -2,7 +2,8 @@
 
 llm_build_qwen3vl::llm_build_qwen3vl(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const size_t n_deepstack_layers = hparams.n_deepstack_layers;
-    const int64_t n_embd = hparams.n_embd;
+
+    const int64_t n_embd      = hparams.n_embd;
     const int64_t n_embd_head = hparams.n_embd_head_v;
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -18,13 +19,9 @@ llm_build_qwen3vl::llm_build_qwen3vl(const llama_model & model, const llm_graph_
 
     std::vector<ggml_tensor *> deepstack_features(n_deepstack_layers, nullptr);
 
-    if (ubatch.embd) {
-        // Image input: split main embd and deepstack embds
-        ggml_tensor * inpL_main = ggml_view_2d(ctx0, inpL, n_embd, n_tokens, inpL->nb[1], 0);
-        for (size_t i = 0; i < n_deepstack_layers; i++) {
-            deepstack_features[i] = ggml_view_2d(ctx0, inpL, n_embd, n_tokens, inpL->nb[1], (i + 1) * n_embd * sizeof(float));
-        }
-        inpL = inpL_main;
+    // Image input: split main embd and deepstack embds
+    for (size_t i = 0; i < n_deepstack_layers; i++) {
+        deepstack_features[i] = ggml_view_2d(ctx0, res->t_inp_embd, n_embd, n_tokens, res->t_inp_embd->nb[1], (i + 1) * n_embd * sizeof(float));
     }
 
     // inp_pos - contains the positions
@@ -113,9 +110,13 @@ llm_build_qwen3vl::llm_build_qwen3vl(const llama_model & model, const llm_graph_
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
 
-        if (ubatch.embd && (size_t)il < n_deepstack_layers) {
-            cur = ggml_add(ctx0, cur, deepstack_features[il]);
-            cb(cur, "deepstack_out", il);
+        if (il < (int) n_deepstack_layers) {
+            ggml_tensor * cur_ds = ggml_add(ctx0, cur, deepstack_features[il]);
+            cb(cur_ds, "deepstack_out", il);
+
+            std::array<ggml_tensor *, 2> curs = { cur, cur_ds };
+
+            cur = ggml_build_forward_select(gf, curs.data(), curs.size(), ubatch.embd ? 1 : 0);
         }
 
         // input for next layer
