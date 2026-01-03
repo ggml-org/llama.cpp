@@ -10,6 +10,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { MCPServerConfig, ClientCapabilities, Implementation } from '$lib/types/mcp';
@@ -152,6 +153,11 @@ export class MCPServerConnection {
 		}
 		if (serverConfig.credentials) {
 			requestInit.credentials = serverConfig.credentials;
+		}
+
+		if (serverConfig.transport === 'websocket') {
+			console.log(`[MCP][${this.serverName}] Using WebSocket transport...`);
+			return new WebSocketClientTransport(url);
 		}
 
 		// Try StreamableHTTP first (modern), fall back to SSE (legacy)

@@ -8,9 +8,6 @@ export type {
 	ToolExecutionResult
 } from './server-connection';
 
-// Legacy client export (deprecated - use MCPHostManager instead)
-export { MCPClient } from './client';
-
 // Types
 export { MCPError } from '$lib/types/mcp';
 export type {
