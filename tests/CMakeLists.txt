@@ -533,6 +533,45 @@ if(GGML_SYCL)
     add_test(NAME test-dmmv-q6k-coalesced COMMAND $<TARGET_FILE:test-dmmv-q6k-coalesced>)
 endif()
 
+# test-mmvq-q6k-56block-sycl: Q6_K MMVQ with 56 blocks (variable tile) - tests Mistral FFN case
+if(GGML_SYCL)
+    add_executable(test-mmvq-q6k-56block-sycl test-mmvq-q6k-56block-sycl.cpp)
+    target_link_libraries(test-mmvq-q6k-56block-sycl PRIVATE ggml ggml-cpu)
+    target_include_directories(test-mmvq-q6k-56block-sycl PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-mmvq-q6k-56block-sycl PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-mmvq-q6k-56block-sycl PRIVATE "-fsycl")
+    install(TARGETS test-mmvq-q6k-56block-sycl RUNTIME)
+    add_test(NAME test-mmvq-q6k-56block-sycl COMMAND $<TARGET_FILE:test-mmvq-q6k-56block-sycl>)
+endif()
+
+# test-mmvq-q6k-mistral-dims: Q6_K MMVQ with exact Mistral 7B dimensions
+if(GGML_SYCL)
+    add_executable(test-mmvq-q6k-mistral-dims test-mmvq-q6k-mistral-dims.cpp)
+    target_link_libraries(test-mmvq-q6k-mistral-dims PRIVATE ggml ggml-cpu)
+    target_include_directories(test-mmvq-q6k-mistral-dims PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-mmvq-q6k-mistral-dims PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-mmvq-q6k-mistral-dims PRIVATE "-fsycl")
+    install(TARGETS test-mmvq-q6k-mistral-dims RUNTIME)
+    add_test(NAME test-mmvq-q6k-mistral-dims COMMAND $<TARGET_FILE:test-mmvq-q6k-mistral-dims>)
+endif()
+
+# test-mmvq-q6k-row-sweep: Q6_K 56-block row sweep to find failure threshold
+if(GGML_SYCL)
+    add_executable(test-mmvq-q6k-row-sweep test-mmvq-q6k-row-sweep.cpp)
+    target_link_libraries(test-mmvq-q6k-row-sweep PRIVATE ggml ggml-cpu)
+    target_include_directories(test-mmvq-q6k-row-sweep PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-mmvq-q6k-row-sweep PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-mmvq-q6k-row-sweep PRIVATE "-fsycl")
+    install(TARGETS test-mmvq-q6k-row-sweep RUNTIME)
+    add_test(NAME test-mmvq-q6k-row-sweep COMMAND $<TARGET_FILE:test-mmvq-q6k-row-sweep>)
+endif()
+
 # test-q8-0-production-flow: Production-like Q8_0 test (MMQ -> DMMV flow)
 # Tests the actual inference pattern: prompt processing then token generation
 if(GGML_SYCL)
