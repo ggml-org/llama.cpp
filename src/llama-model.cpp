@@ -578,7 +578,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     hparams.rope_scaling_type_train = llama_rope_scaling_type_from_string(rope_scaling);
     GGML_ASSERT(hparams.rope_scaling_type_train != LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED);
 
-    // TODO: Handle SWA metadata equally when models start implementing it
+    // TODO: Handle SWA metadata similarly when models start implementing it
     // rope_freq_scale (inverse of the kv) is optional
     float ropescale = 0.0f;
     if (!ml.get_key(LLM_KV_ROPE_SCALING_FACTOR, ropescale, false)) {
