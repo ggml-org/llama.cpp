@@ -179,24 +179,30 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
 #endif // LLAMA_USE_LLGUIDANCE
     } else {
         std::vector<std::string> trigger_patterns;
-        std::vector<std::string> patterns_anywhere;
         std::vector<llama_token> trigger_tokens;
         for (const auto & trigger : params.grammar_triggers) {
             switch (trigger.type) {
                 case COMMON_GRAMMAR_TRIGGER_TYPE_WORD:
                 {
                     const auto & word = trigger.value;
-                    patterns_anywhere.push_back(regex_escape(word));
+                    trigger_patterns.push_back(regex_escape(word));
                     break;
                 }
                 case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN:
                 {
-                    patterns_anywhere.push_back(trigger.value);
+                    trigger_patterns.push_back(trigger.value);
                     break;
                 }
                 case COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL:
                 {
-                    trigger_patterns.push_back(trigger.value);
+                    const auto & pattern = trigger.value;
+                    std::string anchored = "^$";
+                    if (!pattern.empty()) {
+                        anchored = (pattern.front() != '^' ? "^" : "")
+                            + pattern
+                            + (pattern.back() != '$' ? "$" : "");
+                    }
+                    trigger_patterns.push_back(anchored);
                     break;
                 }
                 case COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN:
@@ -208,10 +214,6 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, co
                 default:
                     GGML_ASSERT(false && "unknown trigger type");
             }
-        }
-
-        if (!patterns_anywhere.empty()) {
-            trigger_patterns.push_back("^[\\s\\S]*?(" + string_join(patterns_anywhere, "|") + ")[\\s\\S]*");
         }
 
         std::vector<const char *> trigger_patterns_c;

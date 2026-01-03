@@ -2065,7 +2065,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
             // Trigger on tool calls that appear in the commentary channel
             data.grammar_triggers.push_back({
                 COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
-                "<\\|channel\\|>(commentary|analysis) to"
+                "<\\|channel\\|>(?:commentary|analysis) to"
             });
 
             // Trigger tool calls that appear in the role section, either at the
@@ -2398,17 +2398,17 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
                 (inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call));
             // Trigger on some common known "good bad" outputs (only from the start and with a json that's about a specific argument name to avoid false positives)
             data.grammar_triggers.push_back({
-                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
+                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
                 // If thinking_forced_open, then we capture the </think> tag in the grammar,
                 // (important for required tool choice) and in the trigger's first capture (decides what is sent to the grammar)
-                std::string(data.thinking_forced_open ? "[\\s\\S]*?(</think>\\s*)" : "(?:<think>[\\s\\S]*?</think>\\s*)?") + (
+                std::string(data.thinking_forced_open ? "(</think>\\s*)" : "") + (
                     "\\s*("
                     "(?:<tool_call>"
                     "|<function"
                     "|(?:```(?:json|xml)?\n\\s*)?(?:<function_call>|<tools>|<xml><json>|<response>)?"
                     "\\s*\\{\\s*\"name\"\\s*:\\s*\"(?:" + string_join(escaped_names, "|") + ")\""
                     ")"
-                    ")[\\s\\S]*"
+                    ")"
                 ),
             });
             data.preserved_tokens = {
