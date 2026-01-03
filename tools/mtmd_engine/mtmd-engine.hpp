@@ -68,6 +68,7 @@ struct EngineConfigParam {
     bool keep_space = false;
     int max_cpu_threads = std::thread::hardware_concurrency();;
     size_t n_ctx = 8192*4;
+    int32_t n_batch = 2048;
     //int log_level;
     //enum ggml_log_level {
     //    GGML_LOG_LEVEL_NONE = 0,
