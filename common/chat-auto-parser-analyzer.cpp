@@ -68,11 +68,10 @@ TemplateAnalysisResult TemplateAnalyzer::analyze_template(const minja::chat_temp
     // (e.g., ">>>all\n"). We need to detect and extract this as the content_start marker.
     if (result.tools.function_format == ToolCallStructure::FUNC_RECIPIENT_BASED &&
         result.content.content_start.empty() && !result.tools.tool_section_start.empty()) {
-
         // Render template with content only (no tools) to detect the content marker
         minja::chat_template_inputs inputs;
         inputs.messages = {
-            { { "role", "user" }, { "content", "Hello" } },
+            { { "role", "user" },      { "content", "Hello" }               },
             { { "role", "assistant" }, { "content", "ACTUAL_CONTENT_HERE" } }
         };
         inputs.add_generation_prompt = true;
@@ -104,7 +103,7 @@ TemplateAnalysisResult TemplateAnalyzer::analyze_template(const minja::chat_temp
                         // Verify the marker starts with tool_call_start_marker
                         if (detected_marker.find(result.tools.tool_section_start) == 0) {
                             result.content.content_start = detected_marker;
-                            result.content.content_mode = ContentStructure::CONTENT_ALWAYS_WRAPPED;
+                            result.content.content_mode  = ContentStructure::CONTENT_ALWAYS_WRAPPED;
                             LOG_DBG("Post-processing: Detected recipient-based content marker: '%s'\n",
                                     result.content.content_start.c_str());
                         }
@@ -250,7 +249,7 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
                     // Special token format like <|END_THINKING|> -> <|START_THINKING|>
                     // or <|/think|> -> <|think|>
                     if (cs.reasoning_end.find("<|END_") == 0) {
-                        std::string core = cs.reasoning_end.substr(6);  // Remove "<|END_"
+                        std::string core   = cs.reasoning_end.substr(6);  // Remove "<|END_"
                         cs.reasoning_start = "<|START_" + core;
                     } else {
                         std::string core   = cs.reasoning_end.substr(3);  // Remove "<|/"
@@ -337,7 +336,7 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
                             opening_tag.find("system") == std::string::npos) {
                             std::string expected_close = create_closing_tag(opening_tag);
                             // Check if the closing tag follows immediately (empty thinking block)
-                            size_t close_pos = diff.find(expected_close, open_end + 1);
+                            size_t      close_pos      = diff.find(expected_close, open_end + 1);
                             if (close_pos != std::string::npos) {
                                 // Verify only whitespace between tags
                                 std::string between = diff.substr(open_end + 1, close_pos - open_end - 1);
@@ -779,457 +778,15 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(const minja::chat_tem
     }
 
     if (format == FORMAT_JSON_NATIVE) {
-        ts.supports_tools     = true;
-        ts.function_format    = ToolCallStructure::FUNC_JSON_OBJECT;
-        ts.argument_format    = ToolCallStructure::ARGS_JSON;
-        ts.tool_section_start = discovered.tool_call_start_marker;
-        ts.tool_section_end   = discovered.tool_call_end_marker;
-        ts.name_field         = discovered.tool_name_field;
-        ts.args_field         = discovered.tool_args_field;
-        ts.id_field           = discovered.tool_id_field;
-
-        // Check for FUNC_NAME_AS_KEY format (e.g. Apertus: {"function_name": args})
-        // This is characterized by the opener ending in {" and no explicit name field found yet
-        if (!discovered.tool_call_opener.empty() && discovered.tool_call_opener.length() >= 2 &&
-            discovered.tool_call_opener.substr(discovered.tool_call_opener.length() - 2) == "{\"") {
-            LOG_DBG("Detected FUNC_NAME_AS_KEY format from tool_call_opener ending in '{\"' \n");
-            ts.function_format = ToolCallStructure::FUNC_NAME_AS_KEY;
-        }
-
-        // For JSON_NATIVE format, clean up tool_section_end to only include the closing tag
-        // The differential analysis may include JSON closing braces (e.g., "}}\n</tool_call>")
-        // but the parser handles JSON separately, so we only need the tag marker
-        if (!ts.tool_section_end.empty()) {
-            size_t tag_start = ts.tool_section_end.find("</");
-            if (tag_start != std::string::npos) {
-                size_t tag_end = ts.tool_section_end.find('>', tag_start);
-                if (tag_end != std::string::npos) {
-                    // Check if there is a closing bracket ']' before the tag
-                    size_t bracket_pos = ts.tool_section_end.rfind(']', tag_start);
-                    if (bracket_pos != std::string::npos) {
-                        // Include the bracket
-                        ts.tool_section_end = ts.tool_section_end.substr(bracket_pos, tag_end - bracket_pos + 1);
-                    } else {
-                        ts.tool_section_end = ts.tool_section_end.substr(tag_start, tag_end - tag_start + 1);
-                    }
-                }
-            } else {
-                // Try other closing patterns like ]<|END_ACTION|>
-                tag_start = ts.tool_section_end.find("<|");
-                if (tag_start != std::string::npos) {
-                    size_t tag_end = ts.tool_section_end.find("|>", tag_start);
-                    if (tag_end != std::string::npos) {
-                        // Include the opening bracket if present
-                        size_t bracket_pos = ts.tool_section_end.rfind(']', tag_start);
-                        if (bracket_pos != std::string::npos && bracket_pos + 1 == tag_start) {
-                            ts.tool_section_end = ts.tool_section_end.substr(bracket_pos, tag_end - bracket_pos + 2);
-                        } else {
-                            ts.tool_section_end = ts.tool_section_end.substr(tag_start, tag_end - tag_start + 2);
-                        }
-                    }
-                }
-            }
-        }
+        analyze_json_format(ts, discovered);
     } else if (format == FORMAT_XML_CONSTRUCTED) {
-        ts.supports_tools     = true;
-        ts.function_format    = ToolCallStructure::FUNC_TAG_WITH_NAME;
-        ts.tool_section_start = discovered.tool_call_start_marker;
-        ts.tool_section_end   = discovered.tool_call_end_marker;
-
-        // Extract function tag patterns
-        if (!discovered.function_opener.empty()) {
-            char first = discovered.function_opener[0];
-            if (first != '<' && first != '{' && first != '[') {
-                // Non-XML/JSON prefix format (e.g., ">>>", "##", etc.)
-                // Function name follows prefix directly, ends with newline
-                ts.function_prefix = discovered.function_opener;
-                ts.function_suffix = "\n";  // Function name typically ends with newline
-                ts.function_close  = "";    // No closing tag for prefix formats
-            } else {
-                size_t eq_pos = discovered.function_opener.find('=');
-                if (eq_pos != std::string::npos) {
-                    // Check if there's a quote after the equals sign
-                    if (eq_pos + 1 < discovered.function_opener.length() &&
-                        (discovered.function_opener[eq_pos + 1] == '"' ||
-                         discovered.function_opener[eq_pos + 1] == '\'')) {
-                        ts.function_prefix = discovered.function_opener.substr(0, eq_pos + 2);
-                    } else {
-                        ts.function_prefix = discovered.function_opener.substr(0, eq_pos + 1);
-                    }
-                    ts.function_suffix = discovered.function_name_suffix;
-
-                    // For formats like <function=name>{args}</function>, where function_prefix
-                    // IS the section start (no separate wrapper), tool_section_end is the function close.
-                    // But for nested formats like <tool_call><function=name>...</function></tool_call>,
-                    // the function_close is separate from tool_section_end.
-                    // We detect the non-nested case when tool_section_start matches function_prefix
-                    // (or tool_section_start was already cleared because it matched).
-                    bool section_start_matches_prefix =
-                        ts.tool_section_start.empty() ||
-                        ts.tool_section_start.find(ts.function_prefix) == 0 ||
-                        ts.function_prefix.find(ts.tool_section_start) == 0;
-                    if (section_start_matches_prefix && ts.function_prefix.find('<') == 0 &&
-                        !ts.tool_section_end.empty() && ts.tool_section_end.find("</") == 0) {
-                        ts.function_close   = ts.tool_section_end;
-                        ts.tool_section_end = "";  // Clear to avoid double wrapping
-                    } else {
-                        ts.function_close = discovered.function_closer;
-                    }
-                } else if (!discovered.function_opener.empty() && discovered.function_opener[0] == '<') {
-                    // Check for FUNC_PREFIXED_INDEXED format
-                    // Detected by: function_opener ends with "." (namespace separator)
-                    //              AND function_name_suffix starts with ":" followed by digit (index)
-                    // Example: <|tool_call_begin|>functions.name:0<|tool_call_argument_begin|>
-                    size_t namespace_dot = discovered.function_opener.rfind('.');
-                    bool has_namespace = (namespace_dot != std::string::npos &&
-                                          namespace_dot == discovered.function_opener.length() - 1);
-
-                    bool has_index = (!discovered.function_name_suffix.empty() &&
-                                      discovered.function_name_suffix[0] == ':' &&
-                                      discovered.function_name_suffix.length() > 1 &&
-                                      std::isdigit(static_cast<unsigned char>(discovered.function_name_suffix[1])));
-
-                    if (has_namespace && has_index) {
-                        LOG_DBG("Detected FUNC_PREFIXED_INDEXED format: namespace ends with '.', suffix has ':N' index\n");
-                        ts.function_format = ToolCallStructure::FUNC_PREFIXED_INDEXED;
-
-                        // Split function_opener into per_call_start and function_namespace
-                        // e.g., "<|tool_call_begin|>functions." -> "<|tool_call_begin|>" + "functions."
-                        // Find where the namespace starts (after the last '>' before the '.')
-                        size_t namespace_start = discovered.function_opener.rfind('>');
-                        if (namespace_start != std::string::npos && namespace_start < namespace_dot) {
-                            ts.per_call_start     = discovered.function_opener.substr(0, namespace_start + 1);
-                            ts.function_namespace = discovered.function_opener.substr(namespace_start + 1);
-                        } else {
-                            // Fallback: namespace is just the part ending with '.'
-                            ts.per_call_start     = discovered.function_opener.substr(0, namespace_dot);
-                            ts.function_namespace = ".";
-                        }
-
-                        // Extract args_marker from function_name_suffix
-                        // Format: ":0<|some_marker|>" -> index is ":0", args_marker is "<|some_marker|>"
-                        size_t args_marker_start = discovered.function_name_suffix.find('<');
-                        if (args_marker_start != std::string::npos) {
-                            size_t args_marker_end = discovered.function_name_suffix.find('>', args_marker_start);
-                            if (args_marker_end != std::string::npos) {
-                                ts.args_marker = discovered.function_name_suffix.substr(
-                                    args_marker_start, args_marker_end - args_marker_start + 1);
-                            }
-                        }
-
-                        // Derive per_call_end from tool_call_closer by finding corresponding end marker
-                        // tool_call_closer contains per_call_end + tool_section_end
-                        // We find per_call_end by looking for a marker that structurally matches per_call_start
-                        if (!discovered.tool_call_closer.empty() && !ts.per_call_start.empty()) {
-                            // Extract structural pattern from per_call_start
-                            // e.g., "<|tool_call_begin|>" -> look for "<|tool_call_...|>" in closer
-                            size_t start_marker_begin = ts.per_call_start.find("<|");
-                            size_t start_marker_end = ts.per_call_start.rfind("|>");
-                            if (start_marker_begin != std::string::npos && start_marker_end != std::string::npos) {
-                                // Find the base pattern (e.g., "<|tool_call" from "<|tool_call_begin|>")
-                                std::string start_content = ts.per_call_start.substr(
-                                    start_marker_begin + 2, start_marker_end - start_marker_begin - 2);
-                                // Find a related marker in the closer
-                                size_t closer_pos = discovered.tool_call_closer.find("<|");
-                                while (closer_pos != std::string::npos) {
-                                    size_t closer_end = discovered.tool_call_closer.find("|>", closer_pos);
-                                    if (closer_end != std::string::npos) {
-                                        std::string candidate = discovered.tool_call_closer.substr(
-                                            closer_pos, closer_end - closer_pos + 2);
-                                        // Check if this marker shares a common prefix with per_call_start
-                                        // (ignoring _begin vs _end suffix differences)
-                                        std::string candidate_content = candidate.substr(2, candidate.length() - 4);
-                                        // Find common prefix between start_content and candidate_content
-                                        size_t common_len = 0;
-                                        while (common_len < start_content.length() &&
-                                               common_len < candidate_content.length() &&
-                                               start_content[common_len] == candidate_content[common_len]) {
-                                            common_len++;
-                                        }
-                                        // If substantial overlap (>50%), this is likely the per_call_end
-                                        if (common_len > start_content.length() / 2 &&
-                                            candidate_content.find("end") != std::string::npos) {
-                                            ts.per_call_end = candidate;
-                                            break;
-                                        }
-                                    }
-                                    closer_pos = discovered.tool_call_closer.find("<|", closer_pos + 1);
-                                }
-                            }
-                        }
-
-                        // Derive tool_section_end from tool_section_start by finding matching end marker
-                        // For FUNC_PREFIXED_INDEXED, we always derive this to get the correct marker
-                        // (the default discovered.tool_call_end_marker may contain extra content)
-                        if (!ts.tool_section_start.empty()) {
-                            size_t start_marker_begin = ts.tool_section_start.find("<|");
-                            size_t start_marker_end = ts.tool_section_start.rfind("|>");
-                            if (start_marker_begin != std::string::npos && start_marker_end != std::string::npos) {
-                                std::string start_content = ts.tool_section_start.substr(
-                                    start_marker_begin + 2, start_marker_end - start_marker_begin - 2);
-                                size_t closer_pos = discovered.tool_call_closer.find("<|");
-                                while (closer_pos != std::string::npos) {
-                                    size_t closer_end = discovered.tool_call_closer.find("|>", closer_pos);
-                                    if (closer_end != std::string::npos) {
-                                        std::string candidate = discovered.tool_call_closer.substr(
-                                            closer_pos, closer_end - closer_pos + 2);
-                                        std::string candidate_content = candidate.substr(2, candidate.length() - 4);
-                                        size_t common_len = 0;
-                                        while (common_len < start_content.length() &&
-                                               common_len < candidate_content.length() &&
-                                               start_content[common_len] == candidate_content[common_len]) {
-                                            common_len++;
-                                        }
-                                        if (common_len > start_content.length() / 2 &&
-                                            candidate_content.find("end") != std::string::npos) {
-                                            ts.tool_section_end = candidate;
-                                            break;
-                                        }
-                                    }
-                                    closer_pos = discovered.tool_call_closer.find("<|", closer_pos + 1);
-                                }
-                            }
-                        }
-
-                        LOG_DBG("FUNC_PREFIXED_INDEXED: per_call_start='%s', namespace='%s', args_marker='%s', per_call_end='%s'\n",
-                                ts.per_call_start.c_str(), ts.function_namespace.c_str(),
-                                ts.args_marker.c_str(), ts.per_call_end.c_str());
-                    } else {
-                        // Other formats like <|tool_call_begin|>name (non-indexed)
-                        // The whole opener is the prefix
-                        ts.function_prefix = discovered.function_opener;
-                        ts.function_suffix = discovered.function_name_suffix;
-                        ts.function_close  = discovered.function_closer;
-                    }
-                }
-            }
-        }
-
-        // Fix for templates where tool_section_start matches function_prefix (double wrapping)
-        // e.g. Functionary: tool_section_start="<function=", function_prefix="<function="
-        if (!ts.tool_section_start.empty() && !ts.function_prefix.empty() &&
-            ts.tool_section_start == ts.function_prefix) {
-            LOG_DBG("tool_section_start matches function_prefix, clearing section start to avoid double wrapping\n");
-            ts.tool_section_start = "";
-        }
-
-        // Similar check for tool_section_end matching function_close
-        if (!ts.tool_section_end.empty() && !ts.function_close.empty() && ts.tool_section_end == ts.function_close) {
-            LOG_DBG("tool_section_end matches function_close, clearing section end to avoid double wrapping\n");
-            ts.tool_section_end = "";
-        }
-
-        // Handle nested container markers (e.g., DeepSeek R1 style)
-        // If function_suffix contains markdown code block (```), the template uses nested markers
-        // tool_section_start might be: <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function
-        // We need to derive tool_section_end from the outer marker pattern
-        if (ts.function_suffix.find("```") != std::string::npos && !ts.tool_section_start.empty()) {
-            // Check if tool_section_start contains nested markers (both outer and per-call)
-            // Pattern: <X_calls_begin><X_call_begin>...
-            // We look for "calls" pattern which indicates an outer container
-            size_t calls_pos = ts.tool_section_start.find("calls");
-            if (calls_pos != std::string::npos && calls_pos < ts.tool_section_start.length()) {
-                // Find where the outer marker ends (after the first >)
-                size_t first_close = ts.tool_section_start.find('>', calls_pos);
-                if (first_close != std::string::npos && first_close < ts.tool_section_start.length() - 1) {
-                    // Extract the outer marker (e.g., "<｜tool▁calls▁begin｜>")
-                    std::string outer_start = ts.tool_section_start.substr(0, first_close + 1);
-                    // Derive the outer end marker by replacing "begin" with "end"
-                    size_t begin_pos = outer_start.find("begin");
-                    if (begin_pos != std::string::npos) {
-                        std::string outer_end = outer_start.substr(0, begin_pos) + "end" +
-                                               outer_start.substr(begin_pos + 5);
-                        ts.tool_section_end = outer_end;
-                        LOG_DBG("Derived nested tool_section_end: '%s' from tool_section_start: '%s'\n",
-                                ts.tool_section_end.c_str(), ts.tool_section_start.c_str());
-                    }
-                }
-            }
-        }
-
-        // Determine argument format
-        if (!discovered.parameter_key_prefix.empty() &&
-            discovered.parameter_key_prefix.find('<') != std::string::npos) {
-            ts.argument_format = ToolCallStructure::ARGS_TAGGED;
-            ts.arg_prefix      = discovered.parameter_key_prefix;
-            ts.arg_suffix      = discovered.parameter_key_suffix;
-            ts.arg_close       = discovered.parameter_closer;
-            ts.arg_separator   = discovered.argument_separator;
-
-            // Check for specific GLM-4 style key-value tags
-            // Format: <arg_key>key</arg_key>\n<arg_value>value</arg_value>
-            // Analyzer detects suffix as: </arg_key>\n<arg_value>
-            if (ts.arg_suffix.find("<arg_value>") != std::string::npos) {
-                ts.argument_format = ToolCallStructure::ARGS_KEY_VALUE_TAGS;
-
-                // Clean up suffix to be just the key closer
-                size_t val_opener = ts.arg_suffix.find("<arg_value>");
-                if (val_opener != std::string::npos) {
-                    // Extract just the </arg_key> part (trimming whitespace/newlines before <arg_value>)
-                    std::string key_closer = ts.arg_suffix.substr(0, val_opener);
-                    // Trim trailing whitespace/newlines
-                    while (!key_closer.empty() &&
-                           (key_closer.back() == '\n' || key_closer.back() == '\r' || key_closer.back() == ' ')) {
-                        key_closer.pop_back();
-                    }
-                    ts.arg_suffix = key_closer;
-                }
-            }
-        } else {
-            ts.argument_format = ToolCallStructure::ARGS_JSON;
-        }
+        analyze_xml_format(ts, discovered);
     } else if (format == FORMAT_BRACKET_TAG) {
-        // Bracket-tag format: [TOOL_CALLS]name[CALL_ID]id[ARGS]{...} (Mistral Small 3.2)
-        ts.supports_tools     = true;
-        ts.function_format    = ToolCallStructure::FUNC_BRACKET_TAG;
-        ts.argument_format    = ToolCallStructure::ARGS_JSON;
-
-        // The function_opener contains the bracket tag before the function name (e.g., "[TOOL_CALLS]")
-        // Each tool call starts with this tag, so it's the per_call_start, not a section wrapper
-        // tool_section_start/end should be empty since there's no overall section wrapper
-        ts.tool_section_start = "";
-        ts.tool_section_end   = "";
-        ts.per_call_start     = discovered.function_opener;
-
-        // Extract markers from function_name_suffix (e.g., "[CALL_ID]call_0001[ARGS]" or just "[ARGS]")
-        // Pattern: [ID_MARKER]...[ARGS_MARKER] or just [ARGS_MARKER]
-        if (!discovered.function_name_suffix.empty()) {
-            // Find all bracket tags in the suffix
-            std::vector<std::string> tags;
-            size_t pos = 0;
-            while ((pos = discovered.function_name_suffix.find('[', pos)) != std::string::npos) {
-                size_t end = discovered.function_name_suffix.find(']', pos);
-                if (end != std::string::npos) {
-                    tags.push_back(discovered.function_name_suffix.substr(pos, end - pos + 1));
-                    pos = end + 1;
-                } else {
-                    break;
-                }
-            }
-
-            // Classify tags: args marker contains "ARG", id marker contains "ID" or "CALL"
-            for (const auto & tag : tags) {
-                std::string upper_tag = tag;
-                for (auto & c : upper_tag) {
-                    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-                }
-                if (upper_tag.find("ARG") != std::string::npos) {
-                    ts.args_marker = tag;
-                } else if (upper_tag.find("ID") != std::string::npos || upper_tag.find("CALL") != std::string::npos) {
-                    ts.id_marker = tag;
-                }
-            }
-        }
-
-        LOG_DBG("FUNC_BRACKET_TAG: per_call_start='%s', id_marker='%s', args_marker='%s'\n",
-                ts.per_call_start.c_str(), ts.id_marker.c_str(), ts.args_marker.c_str());
+        analyze_bracket_tag_format(ts, discovered);
     } else if (format == FORMAT_RECIPIENT_BASED) {
-        // Recipient-based format (Functionary v3.2): >>>recipient\n{content}
-        // where recipient is either "all" (for content) or a function name (for tools)
-        ts.supports_tools     = true;
-        ts.function_format    = ToolCallStructure::FUNC_RECIPIENT_BASED;
-        ts.argument_format    = ToolCallStructure::ARGS_JSON;  // Python dict format, parse as JSON
-
-        // The tool_call_start_marker is used as the recipient delimiter
-        ts.tool_section_start = discovered.tool_call_start_marker;
-        ts.tool_section_end   = "";
-
-        // For recipient-based format, content is wrapped in tool_call_start_marker + "all\n"
-        // This needs to be detected and stripped. We detect this by checking if the
-        // content_start marker (from phase 1 analysis) starts with tool_call_start_marker
-        // If not already detected, infer it from the pattern.
-        // Note: This is set on the ContentStructure result, not ToolCallStructure
-        // The caller (analyze_template) will have the ContentStructure to modify
-
-        LOG_DBG("FUNC_RECIPIENT_BASED: delimiter='%s'\n", ts.tool_section_start.c_str());
+        analyze_recipient_based_format(ts, discovered);
     } else if (format == FORMAT_MARKDOWN_CODE_BLOCK) {
-        // Markdown code block format (Cohere Command-R Plus):
-        // Action:
-        // ```json
-        // [
-        //     {
-        //         "tool_name": "...",
-        //         "parameters": {...}
-        //     }
-        // ]
-        // ```
-        ts.supports_tools     = true;
-        ts.function_format    = ToolCallStructure::FUNC_MARKDOWN_CODE_BLOCK;
-        ts.argument_format    = ToolCallStructure::ARGS_JSON;
-
-        // Extract the code block marker (e.g., "Action:")
-        // The tool_call_start_marker should contain "Action:" followed by newline
-        if (!discovered.tool_call_start_marker.empty()) {
-            // Extract just the marker text (e.g., "Action:")
-            // The marker may be followed by whitespace/newline in the template
-            size_t marker_end = discovered.tool_call_start_marker.find_first_of(" \n\r\t");
-            if (marker_end != std::string::npos) {
-                ts.code_block_marker = discovered.tool_call_start_marker.substr(0, marker_end);
-            } else {
-                ts.code_block_marker = discovered.tool_call_start_marker;
-            }
-        }
-
-        // Extract the code block language (e.g., "json")
-        // For Command-R Plus format: Action:\n```json\n[...]
-        // The code fence is in tool_call_opener (before the function name), not function_name_suffix
-        if (!discovered.function_name_suffix.empty() &&
-            discovered.function_name_suffix.find("```") != std::string::npos) {
-            // Format: ```json or ```json\n
-            size_t code_fence_pos = discovered.function_name_suffix.find("```");
-            size_t lang_start = code_fence_pos + 3;
-            // Find the end of the language identifier (newline, space, or end of string)
-            size_t lang_end = discovered.function_name_suffix.find_first_of(" \n\r\t", lang_start);
-            if (lang_end != std::string::npos && lang_end > lang_start) {
-                ts.code_block_language = discovered.function_name_suffix.substr(lang_start, lang_end - lang_start);
-            } else {
-                // No language identifier after ```, will use "json" as default
-                ts.code_block_language = "json";
-            }
-        } else if (!discovered.tool_call_opener.empty() &&
-                   discovered.tool_call_opener.find("```") != std::string::npos) {
-            // Code fence is in tool_call_opener (before the function name)
-            // Format: Action:\n```json\n[...
-            size_t code_fence_pos = discovered.tool_call_opener.find("```");
-            size_t lang_start = code_fence_pos + 3;
-            // Find the end of the language identifier (newline, space, or end of string)
-            size_t lang_end = discovered.tool_call_opener.find_first_of(" \n\r\t", lang_start);
-            if (lang_end != std::string::npos && lang_end > lang_start) {
-                ts.code_block_language = discovered.tool_call_opener.substr(lang_start, lang_end - lang_start);
-            } else {
-                // No language identifier after ```, will use "json" as default
-                ts.code_block_language = "json";
-            }
-        } else {
-            // Default to "json" if no code fence found
-            ts.code_block_language = "json";
-        }
-
-        // The tool_section_end should be the closing code fence: ```
-        if (!discovered.tool_call_closer.empty() &&
-            discovered.tool_call_closer.find("```") != std::string::npos) {
-            // Extract just the closing code fence (may have trailing content)
-            size_t fence_pos = discovered.tool_call_closer.find("```");
-            size_t fence_end = fence_pos + 3;
-            // Include any non-newline characters after ``` (like language identifier if present)
-            while (fence_end < discovered.tool_call_closer.length() &&
-                   discovered.tool_call_closer[fence_end] != '\n' &&
-                   discovered.tool_call_closer[fence_end] != '\r') {
-                fence_end++;
-            }
-            ts.tool_section_end = discovered.tool_call_closer.substr(fence_pos, fence_end - fence_pos);
-        } else {
-            // Default closing code fence
-            ts.tool_section_end = "```";
-        }
-
-        // JSON array format for function calls
-        ts.name_field = discovered.tool_name_field;
-        ts.args_field = discovered.tool_args_field;
-        ts.id_field = discovered.tool_id_field;
-
-        LOG_DBG("FUNC_MARKDOWN_CODE_BLOCK: marker='%s', language='%s', section_end='%s'\n",
-                ts.code_block_marker.c_str(), ts.code_block_language.c_str(), ts.tool_section_end.c_str());
+        analyze_markdown_code_block_format(ts, discovered);
     }
 
     return ts;
@@ -1313,4 +870,463 @@ void TemplateAnalyzer::collect_preserved_tokens(TemplateAnalysisResult & result)
 
     result.preserved_tokens = tokens;
     LOG_DBG("Collected %zu preserved tokens\n", tokens.size());
+}
+
+void TemplateAnalyzer::analyze_json_format(ToolCallStructure & ts, const InternalDiscoveredPattern & discovered) {
+    ts.supports_tools     = true;
+    ts.function_format    = ToolCallStructure::FUNC_JSON_OBJECT;
+    ts.argument_format    = ToolCallStructure::ARGS_JSON;
+    ts.tool_section_start = discovered.tool_call_start_marker;
+    ts.tool_section_end   = discovered.tool_call_end_marker;
+    ts.name_field         = discovered.tool_name_field;
+    ts.args_field         = discovered.tool_args_field;
+    ts.id_field           = discovered.tool_id_field;
+
+    // Check for FUNC_NAME_AS_KEY format (e.g. Apertus: {"function_name": args})
+    // This is characterized by the opener ending in {" and no explicit name field found yet
+    if (!discovered.tool_call_opener.empty() && discovered.tool_call_opener.length() >= 2 &&
+        discovered.tool_call_opener.substr(discovered.tool_call_opener.length() - 2) == "{\"") {
+        LOG_DBG("Detected FUNC_NAME_AS_KEY format from tool_call_opener ending in '{\"' \n");
+        ts.function_format = ToolCallStructure::FUNC_NAME_AS_KEY;
+    }
+
+    // For JSON_NATIVE format, clean up tool_section_end to only include the closing tag
+    // The differential analysis may include JSON closing braces (e.g., "}}\n</tool_call>")
+    // but the parser handles JSON separately, so we only need the tag marker
+    if (!ts.tool_section_end.empty()) {
+        size_t tag_start = ts.tool_section_end.find("</");
+        if (tag_start != std::string::npos) {
+            size_t tag_end = ts.tool_section_end.find('>', tag_start);
+            if (tag_end != std::string::npos) {
+                // Check if there is a closing bracket ']' before the tag
+                size_t bracket_pos = ts.tool_section_end.rfind(']', tag_start);
+                if (bracket_pos != std::string::npos) {
+                    // Include the bracket
+                    ts.tool_section_end = ts.tool_section_end.substr(bracket_pos, tag_end - bracket_pos + 1);
+                } else {
+                    ts.tool_section_end = ts.tool_section_end.substr(tag_start, tag_end - tag_start + 1);
+                }
+            }
+        } else {
+            // Try other closing patterns like ]<|END_ACTION|>
+            tag_start = ts.tool_section_end.find("<|");
+            if (tag_start != std::string::npos) {
+                size_t tag_end = ts.tool_section_end.find("|>", tag_start);
+                if (tag_end != std::string::npos) {
+                    // Include the opening bracket if present
+                    size_t bracket_pos = ts.tool_section_end.rfind(']', tag_start);
+                    if (bracket_pos != std::string::npos && bracket_pos + 1 == tag_start) {
+                        ts.tool_section_end = ts.tool_section_end.substr(bracket_pos, tag_end - bracket_pos + 2);
+                    } else {
+                        ts.tool_section_end = ts.tool_section_end.substr(tag_start, tag_end - tag_start + 2);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void TemplateAnalyzer::analyze_xml_format(ToolCallStructure & ts, const InternalDiscoveredPattern & discovered) {
+    ts.supports_tools     = true;
+    ts.function_format    = ToolCallStructure::FUNC_TAG_WITH_NAME;
+    ts.tool_section_start = discovered.tool_call_start_marker;
+    ts.tool_section_end   = discovered.tool_call_end_marker;
+
+    // Extract function tag patterns
+    if (!discovered.function_opener.empty()) {
+        char first = discovered.function_opener[0];
+        if (first != '<' && first != '{' && first != '[') {
+            // Non-XML/JSON prefix format (e.g., ">>>", "##", etc.)
+            // Function name follows prefix directly, ends with newline
+            ts.function_prefix = discovered.function_opener;
+            ts.function_suffix = "\n";  // Function name typically ends with newline
+            ts.function_close  = "";    // No closing tag for prefix formats
+        } else {
+            size_t eq_pos = discovered.function_opener.find('=');
+            if (eq_pos != std::string::npos) {
+                // Check if there's a quote after the equals sign
+                if (eq_pos + 1 < discovered.function_opener.length() &&
+                    (discovered.function_opener[eq_pos + 1] == '"' || discovered.function_opener[eq_pos + 1] == '\'')) {
+                    ts.function_prefix = discovered.function_opener.substr(0, eq_pos + 2);
+                } else {
+                    ts.function_prefix = discovered.function_opener.substr(0, eq_pos + 1);
+                }
+                ts.function_suffix = discovered.function_name_suffix;
+
+                // For formats like <function=name>{args}</function>, where function_prefix
+                // IS the section start (no separate wrapper), tool_section_end is the function close.
+                // But for nested formats like <tool_call><function=name>...</function></tool_call>,
+                // the function_close is separate from tool_section_end.
+                // We detect the non-nested case when tool_section_start matches function_prefix
+                // (or tool_section_start was already cleared because it matched).
+                bool section_start_matches_prefix = ts.tool_section_start.empty() ||
+                                                    ts.tool_section_start.find(ts.function_prefix) == 0 ||
+                                                    ts.function_prefix.find(ts.tool_section_start) == 0;
+                if (section_start_matches_prefix && ts.function_prefix.find('<') == 0 && !ts.tool_section_end.empty() &&
+                    ts.tool_section_end.find("</") == 0) {
+                    ts.function_close   = ts.tool_section_end;
+                    ts.tool_section_end = "";  // Clear to avoid double wrapping
+                } else {
+                    ts.function_close = discovered.function_closer;
+                }
+            } else if (!discovered.function_opener.empty() && discovered.function_opener[0] == '<') {
+                // Check for FUNC_PREFIXED_INDEXED format
+                // Detected by: function_opener ends with "." (namespace separator)
+                //              AND function_name_suffix starts with ":" followed by digit (index)
+                // Example: <|tool_call_begin|>functions.name:0<|tool_call_argument_begin|>
+                size_t namespace_dot = discovered.function_opener.rfind('.');
+                bool   has_namespace =
+                    (namespace_dot != std::string::npos && namespace_dot == discovered.function_opener.length() - 1);
+
+                bool has_index =
+                    (!discovered.function_name_suffix.empty() && discovered.function_name_suffix[0] == ':' &&
+                     discovered.function_name_suffix.length() > 1 &&
+                     std::isdigit(static_cast<unsigned char>(discovered.function_name_suffix[1])));
+
+                if (has_namespace && has_index) {
+                    LOG_DBG("Detected FUNC_PREFIXED_INDEXED format: namespace ends with '.', suffix has ':N' index\n");
+                    ts.function_format = ToolCallStructure::FUNC_PREFIXED_INDEXED;
+
+                    // Split function_opener into per_call_start and function_namespace
+                    // e.g., "<|tool_call_begin|>functions." -> "<|tool_call_begin|>" + "functions."
+                    // Find where the namespace starts (after the last '>' before the '.')
+                    size_t namespace_start = discovered.function_opener.rfind('>');
+                    if (namespace_start != std::string::npos && namespace_start < namespace_dot) {
+                        ts.per_call_start     = discovered.function_opener.substr(0, namespace_start + 1);
+                        ts.function_namespace = discovered.function_opener.substr(namespace_start + 1);
+                    } else {
+                        // Fallback: namespace is just the part ending with '.'
+                        ts.per_call_start     = discovered.function_opener.substr(0, namespace_dot);
+                        ts.function_namespace = ".";
+                    }
+
+                    // Extract args_marker from function_name_suffix
+                    // Format: ":0<|some_marker|>" -> index is ":0", args_marker is "<|some_marker|>"
+                    size_t args_marker_start = discovered.function_name_suffix.find('<');
+                    if (args_marker_start != std::string::npos) {
+                        size_t args_marker_end = discovered.function_name_suffix.find('>', args_marker_start);
+                        if (args_marker_end != std::string::npos) {
+                            ts.args_marker = discovered.function_name_suffix.substr(
+                                args_marker_start, args_marker_end - args_marker_start + 1);
+                        }
+                    }
+
+                    // Derive per_call_end from tool_call_closer by finding corresponding end marker
+                    // tool_call_closer contains per_call_end + tool_section_end
+                    // We find per_call_end by looking for a marker that structurally matches per_call_start
+                    if (!discovered.tool_call_closer.empty() && !ts.per_call_start.empty()) {
+                        // Extract structural pattern from per_call_start
+                        // e.g., "<|tool_call_begin|>" -> look for "<|tool_call_...|>" in closer
+                        size_t start_marker_begin = ts.per_call_start.find("<|");
+                        size_t start_marker_end   = ts.per_call_start.rfind("|>");
+                        if (start_marker_begin != std::string::npos && start_marker_end != std::string::npos) {
+                            // Find the base pattern (e.g., "<|tool_call" from "<|tool_call_begin|>")
+                            std::string start_content = ts.per_call_start.substr(
+                                start_marker_begin + 2, start_marker_end - start_marker_begin - 2);
+                            // Find a related marker in the closer
+                            size_t closer_pos = discovered.tool_call_closer.find("<|");
+                            while (closer_pos != std::string::npos) {
+                                size_t closer_end = discovered.tool_call_closer.find("|>", closer_pos);
+                                if (closer_end != std::string::npos) {
+                                    std::string candidate =
+                                        discovered.tool_call_closer.substr(closer_pos, closer_end - closer_pos + 2);
+                                    // Check if this marker shares a common prefix with per_call_start
+                                    // (ignoring _begin vs _end suffix differences)
+                                    std::string candidate_content = candidate.substr(2, candidate.length() - 4);
+                                    // Find common prefix between start_content and candidate_content
+                                    size_t      common_len        = 0;
+                                    while (common_len < start_content.length() &&
+                                           common_len < candidate_content.length() &&
+                                           start_content[common_len] == candidate_content[common_len]) {
+                                        common_len++;
+                                    }
+                                    // If substantial overlap (>50%), this is likely the per_call_end
+                                    if (common_len > start_content.length() / 2 &&
+                                        candidate_content.find("end") != std::string::npos) {
+                                        ts.per_call_end = candidate;
+                                        break;
+                                    }
+                                }
+                                closer_pos = discovered.tool_call_closer.find("<|", closer_pos + 1);
+                            }
+                        }
+                    }
+
+                    // Derive tool_section_end from tool_section_start by finding matching end marker
+                    // For FUNC_PREFIXED_INDEXED, we always derive this to get the correct marker
+                    // (the default discovered.tool_call_end_marker may contain extra content)
+                    if (!ts.tool_section_start.empty()) {
+                        size_t start_marker_begin = ts.tool_section_start.find("<|");
+                        size_t start_marker_end   = ts.tool_section_start.rfind("|>");
+                        if (start_marker_begin != std::string::npos && start_marker_end != std::string::npos) {
+                            std::string start_content = ts.tool_section_start.substr(
+                                start_marker_begin + 2, start_marker_end - start_marker_begin - 2);
+                            size_t closer_pos = discovered.tool_call_closer.find("<|");
+                            while (closer_pos != std::string::npos) {
+                                size_t closer_end = discovered.tool_call_closer.find("|>", closer_pos);
+                                if (closer_end != std::string::npos) {
+                                    std::string candidate =
+                                        discovered.tool_call_closer.substr(closer_pos, closer_end - closer_pos + 2);
+                                    std::string candidate_content = candidate.substr(2, candidate.length() - 4);
+                                    size_t      common_len        = 0;
+                                    while (common_len < start_content.length() &&
+                                           common_len < candidate_content.length() &&
+                                           start_content[common_len] == candidate_content[common_len]) {
+                                        common_len++;
+                                    }
+                                    if (common_len > start_content.length() / 2 &&
+                                        candidate_content.find("end") != std::string::npos) {
+                                        ts.tool_section_end = candidate;
+                                        break;
+                                    }
+                                }
+                                closer_pos = discovered.tool_call_closer.find("<|", closer_pos + 1);
+                            }
+                        }
+                    }
+
+                    LOG_DBG(
+                        "FUNC_PREFIXED_INDEXED: per_call_start='%s', namespace='%s', args_marker='%s', "
+                        "per_call_end='%s'\n",
+                        ts.per_call_start.c_str(), ts.function_namespace.c_str(), ts.args_marker.c_str(),
+                        ts.per_call_end.c_str());
+                } else {
+                    // Other formats like <|tool_call_begin|>name (non-indexed)
+                    // The whole opener is the prefix
+                    ts.function_prefix = discovered.function_opener;
+                    ts.function_suffix = discovered.function_name_suffix;
+                    ts.function_close  = discovered.function_closer;
+                }
+            }
+        }
+    }
+
+    // Fix for templates where tool_section_start matches function_prefix (double wrapping)
+    // e.g. Functionary: tool_section_start="<function=", function_prefix="<function="
+    if (!ts.tool_section_start.empty() && !ts.function_prefix.empty() && ts.tool_section_start == ts.function_prefix) {
+        LOG_DBG("tool_section_start matches function_prefix, clearing section start to avoid double wrapping\n");
+        ts.tool_section_start = "";
+    }
+
+    // Similar check for tool_section_end matching function_close
+    if (!ts.tool_section_end.empty() && !ts.function_close.empty() && ts.tool_section_end == ts.function_close) {
+        LOG_DBG("tool_section_end matches function_close, clearing section end to avoid double wrapping\n");
+        ts.tool_section_end = "";
+    }
+
+    // Handle nested container markers (e.g., DeepSeek R1 style)
+    // If function_suffix contains markdown code block (```), the template uses nested markers
+    // tool_section_start might be: <｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function
+    // We need to derive tool_section_end from the outer marker pattern
+    if (ts.function_suffix.find("```") != std::string::npos && !ts.tool_section_start.empty()) {
+        // Check if tool_section_start contains nested markers (both outer and per-call)
+        // Pattern: <X_calls_begin><X_call_begin>...
+        // We look for "calls" pattern which indicates an outer container
+        size_t calls_pos = ts.tool_section_start.find("calls");
+        if (calls_pos != std::string::npos && calls_pos < ts.tool_section_start.length()) {
+            // Find where the outer marker ends (after the first >)
+            size_t first_close = ts.tool_section_start.find('>', calls_pos);
+            if (first_close != std::string::npos && first_close < ts.tool_section_start.length() - 1) {
+                // Extract the outer marker (e.g., "<｜tool▁calls▁begin｜>")
+                std::string outer_start = ts.tool_section_start.substr(0, first_close + 1);
+                // Derive the outer end marker by replacing "begin" with "end"
+                size_t      begin_pos   = outer_start.find("begin");
+                if (begin_pos != std::string::npos) {
+                    std::string outer_end =
+                        outer_start.substr(0, begin_pos) + "end" + outer_start.substr(begin_pos + 5);
+                    ts.tool_section_end = outer_end;
+                    LOG_DBG("Derived nested tool_section_end: '%s' from tool_section_start: '%s'\n",
+                            ts.tool_section_end.c_str(), ts.tool_section_start.c_str());
+                }
+            }
+        }
+    }
+
+    // Determine argument format
+    if (!discovered.parameter_key_prefix.empty() && discovered.parameter_key_prefix.find('<') != std::string::npos) {
+        ts.argument_format = ToolCallStructure::ARGS_TAGGED;
+        ts.arg_prefix      = discovered.parameter_key_prefix;
+        ts.arg_suffix      = discovered.parameter_key_suffix;
+        ts.arg_close       = discovered.parameter_closer;
+        ts.arg_separator   = discovered.argument_separator;
+
+        // Check for specific GLM-4 style key-value tags
+        // Format: <arg_key>key</arg_key>\n<arg_value>value</arg_value>
+        // Analyzer detects suffix as: </arg_key>\n<arg_value>
+        if (ts.arg_suffix.find("<arg_value>") != std::string::npos) {
+            ts.argument_format = ToolCallStructure::ARGS_KEY_VALUE_TAGS;
+
+            // Clean up suffix to be just the key closer
+            size_t val_opener = ts.arg_suffix.find("<arg_value>");
+            if (val_opener != std::string::npos) {
+                // Extract just the </arg_key> part (trimming whitespace/newlines before <arg_value>)
+                std::string key_closer = ts.arg_suffix.substr(0, val_opener);
+                // Trim trailing whitespace/newlines
+                while (!key_closer.empty() &&
+                       (key_closer.back() == '\n' || key_closer.back() == '\r' || key_closer.back() == ' ')) {
+                    key_closer.pop_back();
+                }
+                ts.arg_suffix = key_closer;
+            }
+        }
+    } else {
+        ts.argument_format = ToolCallStructure::ARGS_JSON;
+    }
+}
+
+void TemplateAnalyzer::analyze_bracket_tag_format(ToolCallStructure &               ts,
+                                                  const InternalDiscoveredPattern & discovered) {
+    // Bracket-tag format: [TOOL_CALLS]name[CALL_ID]id[ARGS]{...} (Mistral Small 3.2)
+    ts.supports_tools  = true;
+    ts.function_format = ToolCallStructure::FUNC_BRACKET_TAG;
+    ts.argument_format = ToolCallStructure::ARGS_JSON;
+
+    // The function_opener contains the bracket tag before the function name (e.g., "[TOOL_CALLS]")
+    // Each tool call starts with this tag, so it's the per_call_start, not a section wrapper
+    // tool_section_start/end should be empty since there's no overall section wrapper
+    ts.tool_section_start = "";
+    ts.tool_section_end   = "";
+    ts.per_call_start     = discovered.function_opener;
+
+    // Extract markers from function_name_suffix (e.g., "[CALL_ID]call_0001[ARGS]" or just "[ARGS]")
+    // Pattern: [ID_MARKER]...[ARGS_MARKER] or just [ARGS_MARKER]
+    if (!discovered.function_name_suffix.empty()) {
+        // Find all bracket tags in the suffix
+        std::vector<std::string> tags;
+        size_t                   pos = 0;
+        while ((pos = discovered.function_name_suffix.find('[', pos)) != std::string::npos) {
+            size_t end = discovered.function_name_suffix.find(']', pos);
+            if (end != std::string::npos) {
+                tags.push_back(discovered.function_name_suffix.substr(pos, end - pos + 1));
+                pos = end + 1;
+            } else {
+                break;
+            }
+        }
+
+        // Classify tags: args marker contains "ARG", id marker contains "ID" or "CALL"
+        for (const auto & tag : tags) {
+            std::string upper_tag = tag;
+            for (auto & c : upper_tag) {
+                c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            }
+            if (upper_tag.find("ARG") != std::string::npos) {
+                ts.args_marker = tag;
+            } else if (upper_tag.find("ID") != std::string::npos || upper_tag.find("CALL") != std::string::npos) {
+                ts.id_marker = tag;
+            }
+        }
+    }
+
+    LOG_DBG("FUNC_BRACKET_TAG: per_call_start='%s', id_marker='%s', args_marker='%s'\n", ts.per_call_start.c_str(),
+            ts.id_marker.c_str(), ts.args_marker.c_str());
+}
+
+void TemplateAnalyzer::analyze_recipient_based_format(ToolCallStructure &               ts,
+                                                      const InternalDiscoveredPattern & discovered) {
+    // Recipient-based format (Functionary v3.2): >>>recipient\n{content}
+    // where recipient is either "all" (for content) or a function name (for tools)
+    ts.supports_tools  = true;
+    ts.function_format = ToolCallStructure::FUNC_RECIPIENT_BASED;
+    ts.argument_format = ToolCallStructure::ARGS_JSON;  // Python dict format, parse as JSON
+
+    // The tool_call_start_marker is used as the recipient delimiter
+    ts.tool_section_start = discovered.tool_call_start_marker;
+    ts.tool_section_end   = "";
+
+    // For recipient-based format, content is wrapped in tool_call_start_marker + "all\n"
+    // This needs to be detected and stripped. We detect this by checking if the
+    // content_start marker (from phase 1 analysis) starts with tool_call_start_marker
+    // If not already detected, infer it from the pattern.
+    // Note: This is set on the ContentStructure result, not ToolCallStructure
+    // The caller (analyze_template) will have the ContentStructure to modify
+
+    LOG_DBG("FUNC_RECIPIENT_BASED: delimiter='%s'\n", ts.tool_section_start.c_str());
+}
+
+void TemplateAnalyzer::analyze_markdown_code_block_format(ToolCallStructure &               ts,
+                                                          const InternalDiscoveredPattern & discovered) {
+    // Markdown code block format (Cohere Command-R Plus):
+    // Action:
+    // ```json
+    // [
+    //     {
+    //         "tool_name": "...",
+    //         "parameters": {...}
+    //     }
+    // ]
+    // ```
+    ts.supports_tools  = true;
+    ts.function_format = ToolCallStructure::FUNC_MARKDOWN_CODE_BLOCK;
+    ts.argument_format = ToolCallStructure::ARGS_JSON;
+
+    // Extract the code block marker (e.g., "Action:")
+    // The tool_call_start_marker should contain "Action:" followed by newline
+    if (!discovered.tool_call_start_marker.empty()) {
+        // Extract just the marker text (e.g., "Action:")
+        // The marker may be followed by whitespace/newline in the template
+        size_t marker_end = discovered.tool_call_start_marker.find_first_of(" \n\r\t");
+        if (marker_end != std::string::npos) {
+            ts.code_block_marker = discovered.tool_call_start_marker.substr(0, marker_end);
+        } else {
+            ts.code_block_marker = discovered.tool_call_start_marker;
+        }
+    }
+
+    // Extract the code block language (e.g., "json")
+    // For Command-R Plus format: Action:\n```json\n[...]
+    // The code fence is in tool_call_opener (before the function name), not function_name_suffix
+    if (!discovered.function_name_suffix.empty() && discovered.function_name_suffix.find("```") != std::string::npos) {
+        // Format: ```json or ```json\n
+        size_t code_fence_pos = discovered.function_name_suffix.find("```");
+        size_t lang_start     = code_fence_pos + 3;
+        // Find the end of the language identifier (newline, space, or end of string)
+        size_t lang_end       = discovered.function_name_suffix.find_first_of(" \n\r\t", lang_start);
+        if (lang_end != std::string::npos && lang_end > lang_start) {
+            ts.code_block_language = discovered.function_name_suffix.substr(lang_start, lang_end - lang_start);
+        } else {
+            // No language identifier after ```, will use "json" as default
+            ts.code_block_language = "json";
+        }
+    } else if (!discovered.tool_call_opener.empty() && discovered.tool_call_opener.find("```") != std::string::npos) {
+        // Code fence is in tool_call_opener (before the function name)
+        // Format: Action:\n```json\n[...
+        size_t code_fence_pos = discovered.tool_call_opener.find("```");
+        size_t lang_start     = code_fence_pos + 3;
+        // Find the end of the language identifier (newline, space, or end of string)
+        size_t lang_end       = discovered.tool_call_opener.find_first_of(" \n\r\t", lang_start);
+        if (lang_end != std::string::npos && lang_end > lang_start) {
+            ts.code_block_language = discovered.tool_call_opener.substr(lang_start, lang_end - lang_start);
+        } else {
+            // No language identifier after ```, will use "json" as default
+            ts.code_block_language = "json";
+        }
+    } else {
+        // Default to "json" if no code fence found
+        ts.code_block_language = "json";
+    }
+
+    // The tool_section_end should be the closing code fence: ```
+    if (!discovered.tool_call_closer.empty() && discovered.tool_call_closer.find("```") != std::string::npos) {
+        // Extract just the closing code fence (may have trailing content)
+        size_t fence_pos = discovered.tool_call_closer.find("```");
+        size_t fence_end = fence_pos + 3;
+        // Include any non-newline characters after ``` (like language identifier if present)
+        while (fence_end < discovered.tool_call_closer.length() && discovered.tool_call_closer[fence_end] != '\n' &&
+               discovered.tool_call_closer[fence_end] != '\r') {
+            fence_end++;
+        }
+        ts.tool_section_end = discovered.tool_call_closer.substr(fence_pos, fence_end - fence_pos);
+    } else {
+        // Default closing code fence
+        ts.tool_section_end = "```";
+    }
+
+    // JSON array format for function calls
+    ts.name_field = discovered.tool_name_field;
+    ts.args_field = discovered.tool_args_field;
+    ts.id_field   = discovered.tool_id_field;
+
+    LOG_DBG("FUNC_MARKDOWN_CODE_BLOCK: marker='%s', language='%s', section_end='%s'\n", ts.code_block_marker.c_str(),
+            ts.code_block_language.c_str(), ts.tool_section_end.c_str());
 }

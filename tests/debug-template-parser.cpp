@@ -2,6 +2,8 @@
 #include "chat-auto-parser.h"
 #include "chat.h"
 #include "common.h"
+#include "ggml.h"
+#include "gguf.h"
 #include "log.h"
 
 #include <fstream>
@@ -9,9 +11,6 @@
 #include <minja/minja.hpp>
 #include <sstream>
 #include <string>
-
-#include "ggml.h"
-#include "gguf.h"
 
 using json = nlohmann::ordered_json;
 
@@ -61,18 +60,16 @@ static std::string read_file(const std::string & path) {
 }
 
 static std::string read_gguf_chat_template(const std::string & path) {
-    struct gguf_init_params params = {
-        /*no_alloc =*/  true,  // We only need metadata, not tensor data
-        /*ctx=*/        nullptr
-    };
+    struct gguf_init_params params = { /*no_alloc =*/true,  // We only need metadata, not tensor data
+                                       /*ctx=*/nullptr };
 
     struct gguf_context * ctx = gguf_init_from_file(path.c_str(), params);
     if (ctx == nullptr) {
         throw std::runtime_error("Could not open GGUF file: " + path);
     }
 
-    const char * key = "tokenizer.chat_template";
-    int64_t key_id = gguf_find_key(ctx, key);
+    const char * key    = "tokenizer.chat_template";
+    int64_t      key_id = gguf_find_key(ctx, key);
 
     if (key_id == -1) {
         gguf_free(ctx);
@@ -341,59 +338,59 @@ static void render_all_scenarios(const minja::chat_template & tmpl,
     }
 }
 
-static const char * reasoning_mode_to_str(ContentStructure::ReasoningMode mode) {
+static const char * reasoning_mode_to_str(content_structure::ReasoningMode mode) {
     switch (mode) {
-        case ContentStructure::REASONING_NONE:
+        case content_structure::REASONING_NONE:
             return "NONE";
-        case ContentStructure::REASONING_OPTIONAL:
+        case content_structure::REASONING_OPTIONAL:
             return "OPTIONAL";
-        case ContentStructure::REASONING_FORCED_OPEN:
+        case content_structure::REASONING_FORCED_OPEN:
             return "FORCED_OPEN";
     }
     return "UNKNOWN";
 }
 
-static const char * content_mode_to_str(ContentStructure::ContentMode mode) {
+static const char * content_mode_to_str(content_structure::ContentMode mode) {
     switch (mode) {
-        case ContentStructure::CONTENT_PLAIN:
+        case content_structure::CONTENT_PLAIN:
             return "PLAIN";
-        case ContentStructure::CONTENT_ALWAYS_WRAPPED:
+        case content_structure::CONTENT_ALWAYS_WRAPPED:
             return "ALWAYS_WRAPPED";
-        case ContentStructure::CONTENT_WRAPPED_WITH_REASONING:
+        case content_structure::CONTENT_WRAPPED_WITH_REASONING:
             return "WRAPPED_WITH_REASONING";
     }
     return "UNKNOWN";
 }
 
-static const char * function_format_to_str(ToolCallStructure::FunctionFormat fmt) {
+static const char * function_format_to_str(tool_call_structure::FunctionFormat fmt) {
     switch (fmt) {
-        case ToolCallStructure::FUNC_JSON_OBJECT:
+        case tool_call_structure::FUNC_JSON_OBJECT:
             return "JSON_OBJECT";
-        case ToolCallStructure::FUNC_TAG_WITH_NAME:
+        case tool_call_structure::FUNC_TAG_WITH_NAME:
             return "TAG_WITH_NAME";
-        case ToolCallStructure::FUNC_TAG_NAME_ONLY:
+        case tool_call_structure::FUNC_TAG_NAME_ONLY:
             return "TAG_NAME_ONLY";
-        case ToolCallStructure::FUNC_PREFIXED_INDEXED:
+        case tool_call_structure::FUNC_PREFIXED_INDEXED:
             return "PREFIXED_INDEXED";
-        case ToolCallStructure::FUNC_NAME_AS_KEY:
+        case tool_call_structure::FUNC_NAME_AS_KEY:
             return "NAME_AS_KEY";
-        case ToolCallStructure::FUNC_BRACKET_TAG:
+        case tool_call_structure::FUNC_BRACKET_TAG:
             return "BRACKET_TAG";
-        case ToolCallStructure::FUNC_RECIPIENT_BASED:
+        case tool_call_structure::FUNC_RECIPIENT_BASED:
             return "RECIPIENT_BASED";
-        case ToolCallStructure::FUNC_MARKDOWN_CODE_BLOCK:
+        case tool_call_structure::FUNC_MARKDOWN_CODE_BLOCK:
             return "MARKDOWN_CODE_BLOCK";
     }
     return "UNKNOWN";
 }
 
-static const char * argument_format_to_str(ToolCallStructure::ArgumentFormat fmt) {
+static const char * argument_format_to_str(tool_call_structure::ArgumentFormat fmt) {
     switch (fmt) {
-        case ToolCallStructure::ARGS_JSON:
+        case tool_call_structure::ARGS_JSON:
             return "JSON";
-        case ToolCallStructure::ARGS_TAGGED:
+        case tool_call_structure::ARGS_TAGGED:
             return "TAGGED";
-        case ToolCallStructure::ARGS_KEY_VALUE_TAGS:
+        case tool_call_structure::ARGS_KEY_VALUE_TAGS:
             return "KEY_VALUE_TAGS";
     }
     return "UNKNOWN";
@@ -451,7 +448,7 @@ int main(int argc, char ** argv) {
             LOG_ERR("                           TEMPLATE ANALYSIS\n");
             LOG_ERR("================================================================================\n");
 
-            TemplateAnalysisResult analysis = TemplateAnalyzer::analyze_template(chat_template);
+            template_analysis_result analysis = TemplateAnalyzer::analyze_template(chat_template);
 
             LOG_ERR("\n=== Analysis Results ===\n");
 
@@ -480,14 +477,14 @@ int main(int argc, char ** argv) {
             LOG_ERR("id_field: '%s'\n", analysis.tools.id_field.c_str());
 
             // Additional fields for special formats
-            if (analysis.tools.function_format == ToolCallStructure::FUNC_PREFIXED_INDEXED) {
+            if (analysis.tools.function_format == tool_call_structure::FUNC_PREFIXED_INDEXED) {
                 LOG_ERR("\n--- Prefixed-Indexed Format Details ---\n");
                 LOG_ERR("per_call_start: '%s'\n", analysis.tools.per_call_start.c_str());
                 LOG_ERR("function_namespace: '%s'\n", analysis.tools.function_namespace.c_str());
                 LOG_ERR("args_marker: '%s'\n", analysis.tools.args_marker.c_str());
                 LOG_ERR("per_call_end: '%s'\n", analysis.tools.per_call_end.c_str());
             }
-            if (analysis.tools.function_format == ToolCallStructure::FUNC_BRACKET_TAG) {
+            if (analysis.tools.function_format == tool_call_structure::FUNC_BRACKET_TAG) {
                 LOG_ERR("\n--- Bracket-Tag Format Details ---\n");
                 LOG_ERR("per_call_start: '%s'\n", analysis.tools.per_call_start.c_str());
                 LOG_ERR("id_marker: '%s'\n", analysis.tools.id_marker.c_str());

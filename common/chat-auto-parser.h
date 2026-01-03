@@ -18,9 +18,9 @@ using json = nlohmann::ordered_json;
 struct ContentStructure {
     // Reasoning handling mode
     enum ReasoningMode {
-        REASONING_NONE,        // No reasoning markers detected
-        REASONING_OPTIONAL,    // <think>...</think> may appear before content
-        REASONING_FORCED_OPEN, // Template ends with open reasoning tag (thinking_forced_open)
+        REASONING_NONE,         // No reasoning markers detected
+        REASONING_OPTIONAL,     // <think>...</think> may appear before content
+        REASONING_FORCED_OPEN,  // Template ends with open reasoning tag (thinking_forced_open)
     };
 
     ReasoningMode reasoning_mode = REASONING_NONE;
@@ -29,9 +29,9 @@ struct ContentStructure {
 
     // Content wrapping mode
     enum ContentMode {
-        CONTENT_PLAIN,                  // No content markers
-        CONTENT_ALWAYS_WRAPPED,         // <response>...</response> always present
-        CONTENT_WRAPPED_WITH_REASONING, // Content wrapped only when reasoning present
+        CONTENT_PLAIN,                   // No content markers
+        CONTENT_ALWAYS_WRAPPED,          // <response>...</response> always present
+        CONTENT_WRAPPED_WITH_REASONING,  // Content wrapped only when reasoning present
     };
 
     ContentMode content_mode = CONTENT_PLAIN;
@@ -49,15 +49,16 @@ struct ToolCallStructure {
 
     // Function format (how individual functions are structured)
     enum FunctionFormat {
-        FUNC_JSON_OBJECT,      // {"name": "X", "arguments": {...}}
-        FUNC_TAG_WITH_NAME,    // <function=X>{...}</function>
-        FUNC_TAG_NAME_ONLY,    // <X>...</X> where X is function name (rare)
-        FUNC_PREFIXED_INDEXED, // <|tool_call_begin|>functions.X:0<|tool_call_argument_begin|>{...}<|tool_call_end|>
-        FUNC_NAME_AS_KEY,      // [{"function_name": {...arguments...}}] (Apertus-style)
-        FUNC_BRACKET_TAG,      // [TOOL_CALLS]X[CALL_ID]id[ARGS]{...} (Mistral Small 3.2 style)
-        FUNC_RECIPIENT_BASED,  // >>>recipient\n{content} where recipient is "all" (content) or function name (tools)
-        FUNC_MARKDOWN_CODE_BLOCK, // Action:\n```json\n[...]\n``` (Cohere Command-R Plus style)
+        FUNC_JSON_OBJECT,       // {"name": "X", "arguments": {...}}
+        FUNC_TAG_WITH_NAME,     // <function=X>{...}</function>
+        FUNC_TAG_NAME_ONLY,     // <X>...</X> where X is function name (rare)
+        FUNC_PREFIXED_INDEXED,  // <|tool_call_begin|>functions.X:0<|tool_call_argument_begin|>{...}<|tool_call_end|>
+        FUNC_NAME_AS_KEY,       // [{"function_name": {...arguments...}}] (Apertus-style)
+        FUNC_BRACKET_TAG,       // [TOOL_CALLS]X[CALL_ID]id[ARGS]{...} (Mistral Small 3.2 style)
+        FUNC_RECIPIENT_BASED,   // >>>recipient\n{content} where recipient is "all" (content) or function name (tools)
+        FUNC_MARKDOWN_CODE_BLOCK,  // Action:\n```json\n[...]\n``` (Cohere Command-R Plus style)
     };
+
     FunctionFormat function_format = FUNC_JSON_OBJECT;
 
     // For FUNC_JSON_OBJECT format - field names (may vary between templates)
@@ -77,18 +78,19 @@ struct ToolCallStructure {
     std::string per_call_end;        // e.g., "<|tool_call_end|>"
 
     // For FUNC_BRACKET_TAG format (e.g., Mistral Small 3.2)
-    std::string id_marker;           // e.g., "[CALL_ID]" - marker before tool call ID
+    std::string id_marker;  // e.g., "[CALL_ID]" - marker before tool call ID
 
     // For FUNC_MARKDOWN_CODE_BLOCK format (e.g., Cohere Command-R Plus)
-    std::string code_block_marker;   // e.g., "Action:" - text marker before code block
-    std::string code_block_language; // e.g., "json" - language identifier in code fence
+    std::string code_block_marker;    // e.g., "Action:" - text marker before code block
+    std::string code_block_language;  // e.g., "json" - language identifier in code fence
 
     // Argument format (how arguments are structured within a function)
     enum ArgumentFormat {
-        ARGS_JSON,           // Standard JSON object: {"key": "value", ...}
-        ARGS_TAGGED,         // XML-style: <param=key>value</param>
-        ARGS_KEY_VALUE_TAGS, // <arg_key>key</arg_key><arg_value>value</arg_value> (GLM-4.6)
+        ARGS_JSON,            // Standard JSON object: {"key": "value", ...}
+        ARGS_TAGGED,          // XML-style: <param=key>value</param>
+        ARGS_KEY_VALUE_TAGS,  // <arg_key>key</arg_key><arg_value>value</arg_value> (GLM-4.6)
     };
+
     ArgumentFormat argument_format = ARGS_JSON;
 
     // For ARGS_TAGGED format
@@ -139,6 +141,15 @@ class TemplateAnalyzer {
     static void detect_tool_markers(const minja::chat_template & tmpl, ToolCallStructure & ts);
     static void detect_function_format(const minja::chat_template & tmpl, ToolCallStructure & ts);
     static void detect_argument_format(const minja::chat_template & tmpl, ToolCallStructure & ts);
+
+    // Phase 2 helper methods
+    static void analyze_json_format(ToolCallStructure & ts, const struct InternalDiscoveredPattern & discovered);
+    static void analyze_xml_format(ToolCallStructure & ts, const struct InternalDiscoveredPattern & discovered);
+    static void analyze_bracket_tag_format(ToolCallStructure & ts, const struct InternalDiscoveredPattern & discovered);
+    static void analyze_recipient_based_format(ToolCallStructure &                      ts,
+                                               const struct InternalDiscoveredPattern & discovered);
+    static void analyze_markdown_code_block_format(ToolCallStructure &                      ts,
+                                                   const struct InternalDiscoveredPattern & discovered);
 
     // Helper to collect preserved tokens from analysis result
     static void collect_preserved_tokens(TemplateAnalysisResult & result);

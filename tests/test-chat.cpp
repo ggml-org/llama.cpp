@@ -84,15 +84,18 @@ template <> bool equals(const common_chat_msg & expected, const common_chat_msg 
 
 template <class T> static void assert_equals(const T & expected, const T & actual) {
     if (!equals(expected, actual)) {
-        std::cerr << "Expected:```\n" << expected << "\n```" << std::endl;
-        std::cerr << "Actual:```\n" << actual << "\n```" << std::endl;
-        std::cerr << std::flush;
+        std::ostringstream oss_expected;
+        oss_expected << expected;
+        std::ostringstream oss_actual;
+        oss_actual << actual;
+        LOG_ERR("Expected: %s\n", oss_expected.str().c_str());
+        LOG_ERR("Actual: %s\n", oss_actual.str().c_str());
         throw std::runtime_error("Test failed");
     }
 }
 
 static std::string read_file(const std::string & path) {
-    std::cerr << "# Reading: " << path << '\n' << std::flush;
+    LOG_DBG("Reading: %s\n", path.c_str());
     std::ifstream fs(path, std::ios_base::binary);
     if (!fs.is_open()) {
         fs = std::ifstream("../" + path, std::ios_base::binary);
@@ -734,7 +737,7 @@ peg_test_builder peg_tester::test(const std::string & input) {
 }
 
 static void test_msgs_oaicompat_json_conversion() {
-    printf("[%s]\n", __func__);
+    LOG_DBG("%s\n", __func__);
     std::vector<common_chat_msg> msgs{
         message_user,
         message_user_parts,
@@ -804,7 +807,7 @@ static void test_msgs_oaicompat_json_conversion() {
 }
 
 static void test_tools_oaicompat_json_conversion() {
-    printf("[%s]\n", __func__);
+    LOG_DBG("%s\n", __func__);
     std::vector<common_chat_tool> tools{
         special_function_tool,
         python_tool,
@@ -845,7 +848,7 @@ static void test_tools_oaicompat_json_conversion() {
 }
 
 static void test_template_output_peg_parsers() {
-    printf("[%s]\n", __func__);
+    LOG_DBG("%s\n", __func__);
 
     // JSON schemas
     const char * invoice_schema = R"({
@@ -1381,9 +1384,12 @@ static void test_template_output_peg_parsers() {
     {
         auto tst = peg_tester("models/templates/meetkai-functionary-medium-v3.2.jinja");
         tst.test(">>>all\nHello, world!\nWhat's up?").expect(message_assist).run();
-        tst.test(">>>special_function\n{\"arg1\": 1}").tools({ special_function_tool }).expect(message_assist_call).run();
+        tst.test(">>>special_function\n{\"arg1\": 1}")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
     }
-    
+
     // FireFunction
     {
         auto tst = peg_tester("models/templates/fireworks-ai-llama-3-firefunction-v2.jinja");
@@ -1416,7 +1422,6 @@ static void test_template_output_peg_parsers() {
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .expect(message_assist_thoughts)
             .run();
-        // TESTING - uncommented for debugging
         tst.test(
                "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
                "```json\n{\"arg1\": 1}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>")
@@ -1434,7 +1439,6 @@ static void test_template_output_peg_parsers() {
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .expect(message_assist_thoughts)
             .run();
-        // TODO: finding less tool calls
         tst.test(
                "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
                "```json\n{\"arg1\": 1}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>")
@@ -1488,13 +1492,6 @@ static void test_template_output_peg_parsers() {
             .run();
     }
 
-    // TODO: OpenAI GPT-OSS uses complex channel markers that need a new FUNC_CHANNEL_BASED format
-    // {
-    //     auto tst = peg_tester("models/templates/openai-gpt-oss-120b.jinja");
-    //     tst.test(
-    //            "<|channel|>analysis<|message|>I'm\nthinking<|end|>"
-    //            "<|start|>assistant<|channel|>final<|message|>Hello, world!\nWhat's up?")
-    //         .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
     //         .expect(simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking"))
     //         .run();
     //
@@ -1530,33 +1527,24 @@ static void test_template_output_peg_parsers() {
     {
         // Llama 3.1
         auto tst = peg_tester("models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja");
-        tst.test("Hello, world!\nWhat's up?")
-            .tools({ special_function_tool })
-            .expect(message_assist)
-            .run();
+        tst.test("Hello, world!\nWhat's up?").tools({ special_function_tool }).expect(message_assist).run();
     }
 
     {
         // Llama 3.2
         auto tst = peg_tester("models/templates/meta-llama-Llama-3.2-3B-Instruct.jinja");
-        tst.test("Hello, world!\nWhat's up?")
-            .tools({ special_function_tool })
-            .expect(message_assist)
-            .run();
+        tst.test("Hello, world!\nWhat's up?").tools({ special_function_tool }).expect(message_assist).run();
     }
 
     {
         // Llama 3.3
         auto tst = peg_tester("models/templates/meta-llama-Llama-3.3-70B-Instruct.jinja");
-        tst.test("Hello, world!\nWhat's up?")
-            .tools({ python_tool })
-            .expect(message_assist)
-            .run();
+        tst.test("Hello, world!\nWhat's up?").tools({ python_tool }).expect(message_assist).run();
     }
 }
 
 static void test_msg_diffs_compute() {
-    printf("[%s]\n", __func__);
+    LOG_DBG("%s\n", __func__);
     {
         common_chat_msg msg1;
 
