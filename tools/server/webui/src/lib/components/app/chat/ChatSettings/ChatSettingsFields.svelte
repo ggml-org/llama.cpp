@@ -8,7 +8,7 @@
 	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { ChatSettingsParameterSourceIndicator } from '$lib/components/app';
-	import CustomWidthCombobox from './CustomWidthCombobox.svelte';
+	import ChatSettingsComboboxCustomWidth from './ChatSettingsComboboxCustomWidth.svelte';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -236,7 +236,7 @@
 					</Label>
 
 					<div class="w-full md:max-w-md">
-						<CustomWidthCombobox
+						<ChatSettingsComboboxCustomWidth
 							bind:value={localConfig[field.key]}
 							onChange={(value) => onConfigChange(field.key, value)}
 							disabled={isDisabled}
