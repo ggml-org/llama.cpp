@@ -61,6 +61,7 @@ struct ToolCallStructure {
         FUNC_NAME_AS_KEY,      // [{"function_name": {...arguments...}}] (Apertus-style)
         FUNC_BRACKET_TAG,      // [TOOL_CALLS]X[CALL_ID]id[ARGS]{...} (Mistral Small 3.2 style)
         FUNC_RECIPIENT_BASED,  // >>>recipient\n{content} where recipient is "all" (content) or function name (tools)
+        FUNC_MARKDOWN_CODE_BLOCK, // Action:\n```json\n[{"tool_name": "X", ...}]\n``` (Cohere Command-R Plus)
     };
     FunctionFormat function_format = FUNC_JSON_OBJECT;
 
@@ -96,6 +97,10 @@ struct ToolCallStructure {
     std::string arg_suffix;     // e.g., ">"
     std::string arg_close;      // e.g., "</param>", "</parameter>"
     std::string arg_separator;  // e.g., "", "\n"
+
+    // For FUNC_MARKDOWN_CODE_BLOCK format (Cohere Command-R Plus)
+    std::string code_block_marker;    // e.g., "Action:"
+    std::string code_block_language;  // e.g., "json"
 
     // Flag: template renders null content as "None" string, requires empty string instead
     bool requires_nonnull_content = false;
@@ -446,13 +451,13 @@ The following templates have active tests in `tests/test-chat.cpp`:
 | IBM Granite | `FUNC_JSON_OBJECT` | `<think></think>` + `<response></response>` |
 | ByteDance Seed-OSS | `FUNC_TAG_WITH_NAME` | Custom `<seed:think>` and `<seed:tool_call>` tags |
 | Qwen3-Coder | `FUNC_TAG_WITH_NAME` | XML-style tool format |
+| Cohere Command-R Plus | `FUNC_MARKDOWN_CODE_BLOCK` | `Action:\n\`\`\`json\n[...]\n\`\`\`` format |
 
 ### Currently Unsupported Templates
 
 | Template Family | Model / Variant | Issue Description |
 |-----------------|-----------------|-------------------|
 | **OpenAI** | `GPT-OSS` | Complex channel markers need new format |
-| **Cohere** | `Command-R Plus` | Different format than R7B (uses `Action:` markers) |
 
 ### Templates Without Tool Support
 
@@ -464,7 +469,7 @@ Some templates genuinely don't support tool calls (this is not a detection bug):
 ### TODO / Roadmap
 
 - [ ] **Fix OpenAI GPT-OSS**: Add `FUNC_CHANNEL_BASED` format for channel marker structure.
-- [ ] **Fix Cohere Command-R Plus**: Different marker format (Action: [...]) needs investigation.
+- [x] **~~Fix Cohere Command-R Plus~~**: Added `FUNC_MARKDOWN_CODE_BLOCK` format for `Action:\n\`\`\`json` structure.
 
 ### Recent Additions (Dec 2025 - Jan 2026)
 
@@ -474,5 +479,6 @@ Some templates genuinely don't support tool calls (this is not a detection bug):
 - **Improved Streaming Support**: Better handling of partial parsing for all supported formats
 - **Custom Tag Support**: Support for non-standard reasoning tags like `<seed:think>` (ByteDance)
 - **Multi-line Tool Arguments**: Better parsing of complex tool arguments with code blocks
+- **FUNC_MARKDOWN_CODE_BLOCK**: Support for Cohere Command-R Plus markdown code block format
 
 The auto-parser now successfully handles 25+ different template formats across reasoning-only, tool-calling, and hybrid models, with comprehensive test coverage ensuring robust parsing across streaming and non-streaming scenarios.

@@ -1,8 +1,8 @@
-#include "chat-auto-parser.h"
 #include "chat-auto-parser-helpers.h"
+#include "chat-auto-parser.h"
+#include "chat-peg-parser.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
-#include "chat-peg-parser.h"
 
 #include <minja/chat-template.hpp>
 #include <minja/minja.hpp>
@@ -15,11 +15,9 @@ using json = nlohmann::ordered_json;
 // Unified PEG Parser Generator
 // ============================================================================
 
-common_chat_params UniversalPEGGenerator::generate_parser(
-    const TemplateAnalysisResult &  analysis,
-    const minja::chat_template &    tmpl,
-    const struct templates_params & inputs) {
-
+common_chat_params UniversalPEGGenerator::generate_parser(const TemplateAnalysisResult &  analysis,
+                                                          const minja::chat_template &    tmpl,
+                                                          const struct templates_params & inputs) {
     common_chat_params data;
 
     try {
@@ -54,7 +52,9 @@ common_chat_params UniversalPEGGenerator::generate_parser(
 
         if (inputs.messages.empty()) {
             // Some templates don't handle empty messages well - always leave something in
-            json message = { { { "role", "user" }, { "content", "Hello" } } };
+            json message = {
+                { { "role", "user" }, { "content", "Hello" } }
+            };
             messages_override.emplace(message);
         }
 
@@ -77,12 +77,12 @@ common_chat_params UniversalPEGGenerator::generate_parser(
         data.thinking_forced_open = thinking_forced_open;
 
         // Build the unified parser
-        auto arena = build_parser(analysis, tmpl, inputs, thinking_forced_open);
+        auto arena  = build_parser(analysis, tmpl, inputs, thinking_forced_open);
         data.parser = arena.save();
 
         // Determine format
-        bool has_tools = inputs.tools.is_array() && !inputs.tools.empty() &&
-                        inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+        bool has_tools =
+            inputs.tools.is_array() && !inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
         if (has_tools && analysis.tools.supports_tools) {
             // Unified format that handles both JSON and tagged tool calls
@@ -194,12 +194,10 @@ common_chat_params UniversalPEGGenerator::generate_parser(
     return data;
 }
 
-common_peg_arena UniversalPEGGenerator::build_parser(
-    const TemplateAnalysisResult &  analysis,
-    const minja::chat_template &    tmpl,
-    const struct templates_params & inputs,
-    bool                            thinking_forced_open) {
-
+common_peg_arena UniversalPEGGenerator::build_parser(const TemplateAnalysisResult &  analysis,
+                                                     const minja::chat_template &    tmpl,
+                                                     const struct templates_params & inputs,
+                                                     bool                            thinking_forced_open) {
     GGML_UNUSED(tmpl);
 
     auto parser = build_chat_peg_unified_parser([&](common_chat_peg_unified_builder & p) {
@@ -210,13 +208,13 @@ common_peg_arena UniversalPEGGenerator::build_parser(
         auto content = p.build_content_block(analysis.content, inputs.reasoning_format);
 
         // Build tool section using ToolCallStructure (if applicable)
-        bool has_tools = inputs.tools.is_array() && !inputs.tools.empty() &&
-                        inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
+        bool has_tools =
+            inputs.tools.is_array() && !inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 
         if (has_tools && analysis.tools.supports_tools) {
             bool force_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
-            auto tool_section = p.build_tool_section(analysis.tools, inputs.tools,
-                                                     inputs.parallel_tool_calls, force_calls);
+            auto tool_section =
+                p.build_tool_section(analysis.tools, inputs.tools, inputs.parallel_tool_calls, force_calls);
 
             // Compose: reasoning -> content before tools -> tool_section -> trailing content
             // Check if this is a DeepSeek R1 style template with separate section and per-call markers
@@ -233,25 +231,27 @@ common_peg_arena UniversalPEGGenerator::build_parser(
             // without the </think> tag, so we need to make reasoning optional in that case.
             // But if reasoning_format is NONE, the reasoning block is already eps() - don't wrap it
             // in optional() as that would generate invalid grammar.
-            auto reasoning_for_tools = (thinking_forced_open && inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE)
-                                     ? p.optional(reasoning)
-                                     : reasoning;
+            auto reasoning_for_tools =
+                (thinking_forced_open && inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE) ?
+                    p.optional(reasoning) :
+                    reasoning;
 
             if (has_per_call_markers_in_prefix && !analysis.tools.tool_section_start.empty()) {
                 // DeepSeek R1 style: section markers wrap all calls, per-call markers in function_prefix
                 // No content before tools - go directly from reasoning to tool section
                 return p.sequence({ reasoning_for_tools, p.space(), tool_section, p.space(),
-                                   p.optional(p.content(p.rest())), p.end() });
+                                    p.optional(p.content(p.rest())), p.end() });
             } else if (!analysis.tools.tool_section_start.empty()) {
                 // With section markers: look for start marker to delimit content
                 auto content_before_tools = p.content(p.until(analysis.tools.tool_section_start));
-                return p.sequence({ reasoning_for_tools, p.space(), content_before_tools, p.space(),
-                                   tool_section, p.space(), p.optional(p.content(p.rest())), p.end() });
+                return p.sequence({ reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section,
+                                    p.space(), p.optional(p.content(p.rest())), p.end() });
             } else if (analysis.tools.function_format == ToolCallStructure::FUNC_TAG_WITH_NAME &&
                        !analysis.tools.function_prefix.empty()) {
                 // Tag-with-name format (e.g., >>>func_name): content stops at function prefix
                 auto content_before_tools = p.content(p.until(analysis.tools.function_prefix));
-                return p.sequence({ reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section, p.end() });
+                return p.sequence(
+                    { reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section, p.end() });
             } else if (analysis.tools.function_format == ToolCallStructure::FUNC_TAG_WITH_NAME) {
                 // Functionary-style format: tool call starts immediately (e.g., func_name\n{args})
                 // No content before tools in this format - the entire output is the tool call
@@ -262,16 +262,25 @@ common_peg_arena UniversalPEGGenerator::build_parser(
                 // Tool calls start with per_call_start marker (e.g., [TOOL_CALLS], <|tool_call_begin|>)
                 if (!analysis.tools.per_call_start.empty()) {
                     auto content_before_tools = p.content(p.until(analysis.tools.per_call_start));
-                    return p.sequence({ reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section, p.end() });
+                    return p.sequence(
+                        { reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section, p.end() });
                 } else {
                     // Fallback: no content before tools
                     return p.sequence({ reasoning_for_tools, p.space(), tool_section, p.end() });
                 }
+            } else if (analysis.tools.function_format == ToolCallStructure::FUNC_MARKDOWN_CODE_BLOCK &&
+                       !analysis.tools.code_block_marker.empty()) {
+                // Markdown code block format (Cohere Command-R Plus):
+                // Content stops at the code_block_marker (e.g., "Action:")
+                auto content_before_tools = p.content(p.until(analysis.tools.code_block_marker));
+                return p.sequence(
+                    { reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section, p.end() });
             } else {
                 // No section markers (raw JSON format): content must stop at JSON object start
                 // Tool calls start with "{", so use that as a delimiter
                 auto content_before_tools = p.content(p.until("{"));
-                return p.sequence({ reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section, p.end() });
+                return p.sequence(
+                    { reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section, p.end() });
             }
         }
 

@@ -1345,7 +1345,20 @@ static void test_template_output_peg_parsers() {
             .expect(message_assist_thoughts_call_idx)
             .run();
     }
-    // TODO: CohereForAI-c4ai-command-r-plus uses different markers (Action: [...]) - needs investigation
+    // CohereForAI-c4ai-command-r-plus (uses markdown code block format)
+    {
+        auto tst = peg_tester("models/templates/CohereForAI-c4ai-command-r-plus-tool_use.jinja");
+        tst.test("<|CHATBOT_TOKEN|>Hello, world!\nWhat's up?<|END_OF_TURN_TOKEN|>").expect(message_assist).run();
+        // Tool calls: Action: followed by JSON code block
+        tst.test(
+               "Action:\n"
+               "```json\n"
+               "[{\"tool_name\": \"special_function\", \"parameters\": {\"arg1\": 1}}]\n"
+               "```")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
 
     // mistralai-Mistral-Nemo-Instruct-2407.jinja
     {

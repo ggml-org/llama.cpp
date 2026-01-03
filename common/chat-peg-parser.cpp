@@ -198,6 +198,33 @@ common_peg_parser common_chat_peg_unified_builder::build_tool_section(const Tool
 
     // Build the section with or without markers
     auto build_section = [&]() -> common_peg_parser {
+        // Markdown code block format (Cohere Command-R Plus):
+        // Action:\n```json\n[{...}]\n```
+        if (ts.function_format == ToolCallStructure::FUNC_MARKDOWN_CODE_BLOCK) {
+            // Build the opening: "Action:\n```json"
+            std::string code_fence_open = "```";
+            if (!ts.code_block_language.empty()) {
+                code_fence_open += ts.code_block_language;
+            }
+
+            auto opening = literal(ts.code_block_marker) + literal("\n") + literal(code_fence_open) + literal("\n");
+            auto closing = literal("\n") + literal(ts.tool_section_end);  // "\n```"
+
+            // Build the JSON array of tool calls
+            // Don't use trigger_rule here since we're nested inside a sequence
+            auto tools_array = literal("[") + space();
+            if (parallel_tool_calls) {
+                tools_array = tools_array + tool_choices;
+                tools_array = tools_array + zero_or_more(space() + literal(",") + space() + tool_choices);
+            } else {
+                tools_array = tools_array + optional(tool_choices);
+            }
+            tools_array = tools_array + space() + literal("]");
+
+            // Full section: Action:\n```json\n[{...}]\n```
+            return trigger_rule("tool-call", opening + tools_array + closing);
+        }
+
         // Recipient-based format (Functionary v3.2): >>>function_name\n{arguments}
         // Uses tool_section_start as delimiter, but no array wrapper or section markers
         if (ts.function_format == ToolCallStructure::FUNC_RECIPIENT_BASED) {
@@ -395,6 +422,30 @@ common_peg_parser common_chat_peg_unified_builder::build_function(const ToolCall
                 auto opening = literal(ts.tool_section_start) + tool_name(literal(name));
                 // No explicit closer (newline + arguments, then EOS or next >>>)
                 return tool(tool_open(opening) + space() + tool_args(args));
+            }
+
+        case ToolCallStructure::FUNC_MARKDOWN_CODE_BLOCK:
+            {
+                // Build markdown code block parser (e.g., Cohere Command-R Plus):
+                // Action:
+                // ```json
+                // [
+                //     {
+                //         "tool_name": "function_name",
+                //         "parameters": {...}
+                //     }
+                // ]
+                // ```
+                // The individual function is a JSON object within the array
+                auto tool_name_ = json_member(ts.name_field, "\"" + tool_name(literal(name)) + "\"");
+                auto tool_args_ = json_member(ts.args_field, tool_args(args));
+
+                // Build the JSON object: {"tool_name": "...", "parameters": {...}}
+                // Use same pattern as FUNC_JSON_OBJECT: tool_open with atomic wrapper
+                return tool(tool_open(literal("{")) << space() << tool_name_ << space() << "," << space() << tool_args_
+                                                    << zero_or_more(space() << "," << space() << json_string()
+                                                                            << space() << ":" << space() << json())
+                                                    << space() << "}");
             }
     }
 

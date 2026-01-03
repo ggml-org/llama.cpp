@@ -84,6 +84,9 @@ struct InternalDiscoveredPattern {
     std::string tool_name_field  = "name";
     std::string tool_args_field  = "arguments";
     std::string tool_id_field;
+    // For markdown code block format (Cohere Command-R Plus)
+    std::string code_block_marker;   // e.g., "Action:"
+    std::string code_block_language; // e.g., "json"
     // Flag: template renders null content as "None" string, requires empty string instead
     bool requires_nonnull_content = false;
 };
@@ -92,8 +95,9 @@ struct InternalDiscoveredPattern {
 enum InternalToolFormat {
     FORMAT_JSON_NATIVE,
     FORMAT_XML_CONSTRUCTED,
-    FORMAT_BRACKET_TAG,     // [TOOL_CALLS]name[CALL_ID]id[ARGS]{...} (Mistral Small 3.2)
-    FORMAT_RECIPIENT_BASED, // >>>recipient\n{content} (Functionary v3.2)
+    FORMAT_BRACKET_TAG,      // [TOOL_CALLS]name[CALL_ID]id[ARGS]{...} (Mistral Small 3.2)
+    FORMAT_RECIPIENT_BASED,  // >>>recipient\n{content} (Functionary v3.2)
+    FORMAT_MARKDOWN_CODE_BLOCK, // Action:\n```json\n[...]\n``` (Cohere Command-R Plus)
     FORMAT_CONTENT_ONLY,
     FORMAT_UNKNOWN
 };
