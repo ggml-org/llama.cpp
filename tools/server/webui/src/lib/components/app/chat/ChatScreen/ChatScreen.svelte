@@ -12,7 +12,7 @@
 	} from '$lib/components/app';
 	import * as Alert from '$lib/components/ui/alert';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { getChatWidth } from '$lib/utils/chat-width';
+	import { chatWidthClasses } from '$lib/stores/chat.svelte';
 	import {
 		AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
 		AUTO_SCROLL_INTERVAL,
@@ -81,8 +81,6 @@
 	let hasPropsError = $derived(!!serverError());
 
 	let isCurrentConversationLoading = $derived(isLoading());
-
-	let widthConfig = $derived(getChatWidth(config().autoChatWidth, config().customChatWidth));
 
 	let isRouter = $derived(isRouterMode());
 
@@ -407,8 +405,8 @@
 
 			{#if hasPropsError}
 				<div
-					class="pointer-events-auto mx-auto mb-4 {widthConfig.class} px-1"
-					style={widthConfig.style}
+					class="pointer-events-auto mx-auto mb-4 {chatWidthClasses().class} px-1"
+					style={chatWidthClasses().style}
 					in:fly={{ y: 10, duration: 250 }}
 				>
 					<Alert.Root variant="destructive">
@@ -456,7 +454,7 @@
 		ondrop={handleDrop}
 		role="main"
 	>
-		<div class="w-full {widthConfig.class} px-4" style={widthConfig.style}>
+		<div class="w-full {chatWidthClasses().class} px-4" style={chatWidthClasses().style}>
 			<div class="mb-10 text-center" in:fade={{ duration: 300 }}>
 				<h1 class="mb-4 text-3xl font-semibold tracking-tight">llama.cpp</h1>
 

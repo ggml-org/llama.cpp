@@ -7,7 +7,6 @@
 		ChatFormHelperText,
 		ChatFormTextarea
 	} from '$lib/components/app';
-	import { getChatWidth } from '$lib/utils/chat-width';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 	import { config } from '$lib/stores/settings.svelte';
@@ -15,6 +14,7 @@
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { activeMessages } from '$lib/stores/conversations.svelte';
+	import { chatWidthClasses } from '$lib/stores/chat.svelte';
 	import {
 		FileTypeCategory,
 		MimeTypeApplication,
@@ -73,10 +73,6 @@
 	let previousIsLoading = $state(isLoading);
 	let recordingSupported = $state(false);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
-
-	let widthConfig = $derived(
-		getChatWidth(currentConfig.autoChatWidth, currentConfig.customChatWidth)
-	);
 
 	// Check if model is selected (in ROUTER mode)
 	let conversationModel = $derived(
@@ -358,7 +354,8 @@
 
 <form
 	onsubmit={handleSubmit}
-	class="{INPUT_CLASSES} border-radius-bottom-none mx-auto {widthConfig.class} overflow-hidden rounded-3xl backdrop-blur-md {disabled
+	class="{INPUT_CLASSES} border-radius-bottom-none mx-auto {chatWidthClasses()
+		.class} overflow-hidden rounded-3xl backdrop-blur-md {disabled
 		? 'cursor-not-allowed opacity-60'
 		: ''} {className}"
 	data-slot="chat-form"

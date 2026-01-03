@@ -4,7 +4,7 @@
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { getMessageSiblings } from '$lib/utils';
-	import { getChatWidth } from '$lib/utils/chat-width';
+	import { chatWidthClasses } from '$lib/stores/chat.svelte';
 
 	interface Props {
 		class?: string;
@@ -16,8 +16,6 @@
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
 	const currentConfig = config();
-
-	let widthConfig = $derived(getChatWidth(config().autoChatWidth, config().customChatWidth));
 
 	function refreshAllMessages() {
 		const conversation = activeConversation();
@@ -131,8 +129,8 @@
 <div class="flex h-full flex-col space-y-10 pt-16 md:pt-24 {className}" style="height: auto; ">
 	{#each displayMessages as { message, siblingInfo } (message.id)}
 		<ChatMessage
-			class="mx-auto w-full {widthConfig.class}"
-			style={widthConfig.style}
+			class="mx-auto w-full {chatWidthClasses().class}"
+			style={chatWidthClasses().style}
 			{message}
 			{siblingInfo}
 			onDelete={handleDeleteMessage}
