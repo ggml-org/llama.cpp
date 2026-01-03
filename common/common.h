@@ -245,7 +245,7 @@ struct common_params_model {
 struct common_params_speculative {
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
-    int32_t n_ctx        =     0; // draft context size
+    int32_t n_ctx        =    -1; // draft context size
     int32_t n_max        =    16; // maximum number of tokens to draft during speculative decoding
     int32_t n_min        =     0; // minimum number of draft tokens to use for speculative decoding
     int32_t n_gpu_layers =    -1; // number of layers to store in VRAM for the draft model (-1 - use default)
@@ -318,7 +318,7 @@ struct ggml_opt_optimizer_params common_opt_lr_pars(void * userdata);
 
 struct common_params {
     int32_t n_predict             =    -1; // max. number of new tokens to predict, -1 == no limit
-    int32_t n_ctx                 =     0; // context size, 0 == context the model was trained with
+    int32_t n_ctx                 =    -1; // context size, 0 == context the model was trained with, < 0 == auto
     int32_t n_batch               =  2048; // logical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_ubatch              =   512; // physical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_keep                =     0; // number of tokens to keep from initial prompt

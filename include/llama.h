@@ -325,7 +325,7 @@ extern "C" {
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
     //       https://github.com/ggml-org/llama.cpp/pull/7544
     struct llama_context_params {
-        uint32_t n_ctx;             // text context, 0 = from model
+        int32_t  n_ctx;             // context size in tokens, use llama_model_n_ctx_train for values <= 0
         uint32_t n_batch;           // logical maximum batch size that can be submitted to llama_decode
         uint32_t n_ubatch;          // physical maximum batch size
         uint32_t n_seq_max;         // max number of sequences (i.e. distinct states for recurrent models)
@@ -496,7 +496,7 @@ extern "C" {
                                           float * tensor_split,          // writable buffer for tensor split, needs at least llama_max_devices elements
         struct llama_model_tensor_buft_override * tensor_buft_overrides, // writable buffer for overrides, needs at least llama_max_tensor_buft_overrides elements
                                          size_t * margins,               // margins of memory to leave per device in bytes
-                                       uint32_t   n_ctx_min,             // minimum context size to set when trying to reduce memory use
+                                        int32_t   n_ctx_min,             // minimum context size to set when trying to reduce memory use
                             enum ggml_log_level   log_level);            // minimum log level to print during fitting, lower levels go to debug log
 
     LLAMA_API int64_t llama_time_us(void);

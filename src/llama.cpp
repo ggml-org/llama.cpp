@@ -159,10 +159,11 @@ class llama_params_fit_exception : public std::runtime_error {
 static void llama_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
+        size_t * margins_s, int32_t n_ctx_min, enum ggml_log_level log_level) {
     constexpr int64_t MiB = 1024*1024;
     typedef std::vector<llama_device_memory_data> dmds_t;
-    const llama_model_params default_mparams = llama_model_default_params();
+    const llama_model_params   default_mparams = llama_model_default_params();
+    const llama_context_params default_cparams = llama_context_default_params();
 
     std::vector<ggml_backend_dev_t> devs;
     uint32_t hp_ngl = 0; // hparams.n_gpu_layers
@@ -268,8 +269,8 @@ static void llama_params_fit_impl(
                     "%s: cannot meet free memory targets on all devices, need to use %" PRId64 " MiB less in total\n",
                     __func__, -global_surplus/MiB);
             }
-            if (cparams->n_ctx == 0) {
-                if (hp_nct > n_ctx_min) {
+            if (cparams->n_ctx == default_cparams.n_ctx) {
+                if (n_ctx_min > 0 && hp_nct > n_ctx_min) {
                     int64_t sum_used_target = sum_free;
                     for (size_t id = 0; id < nd; id++) {
                         sum_used_target -= margins[id];
@@ -315,7 +316,7 @@ static void llama_params_fit_impl(
                         __func__, hp_nct, n_ctx_min);
                 }
             } else {
-                LLAMA_LOG_INFO("%s: context size set by user to %" PRIu32 " -> no change\n", __func__, cparams->n_ctx);
+                LLAMA_LOG_INFO("%s: context size set by user to %" PRIi32 "%s -> no change\n", __func__, cparams->n_ctx, cparams->n_ctx <= 0 ? " (full)" : "");
             }
         }
     }
@@ -737,7 +738,7 @@ static void llama_params_fit_impl(
 enum llama_params_fit_status llama_params_fit(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t * margins, uint32_t n_ctx_min, enum ggml_log_level log_level) {
+        size_t * margins, int32_t n_ctx_min, enum ggml_log_level log_level) {
     const int64_t t0_us = llama_time_us();
     llama_params_fit_status status = LLAMA_PARAMS_FIT_STATUS_SUCCESS;
     try {

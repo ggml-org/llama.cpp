@@ -1226,11 +1226,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.lookup_cache_dynamic = value;
         }
     ).set_examples({LLAMA_EXAMPLE_LOOKUP}));
+    GGML_ASSERT(params.n_ctx <= 0); // string_format would need to be extended for a default > 0
     add_opt(common_arg(
-        {"-c", "--ctx-size"}, "N",
-        string_format("size of the prompt context (default: %d, 0 = loaded from model)", params.n_ctx),
-        [](common_params & params, int value) {
-            params.n_ctx = value;
+        {"-c", "--ctx-size"}, "[N|full]",
+        string_format("size of the prompt context in tokens, either an exact number, 'auto', or 'full' (default: '%s')",
+                      params.speculative.n_ctx == -1 ? "auto" : "full"),
+        [](common_params & params, const std::string & value) {
+            if (value == "auto") {
+                params.n_ctx = -1;
+            } else if (value == "full") {
+                params.n_ctx = 0;
+            } else {
+                params.n_ctx = std::stoi(value);
+            }
         }
     ).set_env("LLAMA_ARG_CTX_SIZE"));
     add_opt(common_arg(
@@ -2310,7 +2318,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_N_CPU_MOE_DRAFT"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
-        {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
+        {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "[N|auto|all]",
         string_format("max. number of layers to store in VRAM, either an exact number, 'auto', or 'all' (default: %s)", params.n_gpu_layers == -1 ? "auto" : "all"),
         [](common_params & params, const std::string & value) {
             if (value == "auto") {
@@ -2427,7 +2435,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_FIT_TARGET"));
     add_opt(common_arg(
         { "-fitc", "--fit-ctx" }, "N",
-        string_format("minimum ctx size that can be set by --fit option, default: %" PRIu32, params.fit_params_min_ctx),
+        string_format("minimum ctx size that can be set by --fit option, default: %" PRIi32, params.fit_params_min_ctx),
         [](common_params & params, int value) {
             params.fit_params_min_ctx = value;
         }
@@ -3343,11 +3351,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.p_min = std::stof(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_DRAFT_P_MIN"));
+    GGML_ASSERT(params.speculative.n_ctx <= 0); // string_format would need to be extended for a default > 0
     add_opt(common_arg(
-        {"-cd", "--ctx-size-draft"}, "N",
-        string_format("size of the prompt context for the draft model (default: %d, 0 = loaded from model)", params.speculative.n_ctx),
-        [](common_params & params, int value) {
-            params.speculative.n_ctx = value;
+        {"-cd", "--ctx-size-draft"}, "[N|auto|full]",
+        string_format("size of the prompt context for the draft model in tokens, either an exact number, 'auto', or 'full' (default: '%s')",
+                      params.speculative.n_ctx == -1 ? "auto" : "full"),
+        [](common_params & params, const std::string & value) {
+            if (value == "auto") {
+                params.speculative.n_ctx = -1;
+            } else if (value == "full") {
+                params.speculative.n_ctx = 0;
+            } else {
+                params.speculative.n_ctx = std::stoi(value);
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_CTX_SIZE_DRAFT"));
     add_opt(common_arg(
@@ -3360,7 +3376,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     GGML_ASSERT(params.speculative.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
-        {"-ngld", "--gpu-layers-draft", "--n-gpu-layers-draft"}, "N",
+        {"-ngld", "--gpu-layers-draft", "--n-gpu-layers-draft"}, "[N|auto|all]",
         string_format("max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: %s)",
             params.speculative.n_gpu_layers == -1 ? "auto" : "all"),
         [](common_params & params, const std::string & value) {

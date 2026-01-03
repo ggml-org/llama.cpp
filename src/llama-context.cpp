@@ -49,7 +49,7 @@ llama_context::llama_context(
     cparams.pooling_type     = params.pooling_type;
     cparams.warmup           = false;
 
-    cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
+    cparams.n_ctx            = params.n_ctx           <= 0    ? hparams.n_ctx_train           : params.n_ctx;
     cparams.rope_freq_base   = params.rope_freq_base  == 0.0f ? hparams.rope_freq_base_train  : params.rope_freq_base;
     cparams.rope_freq_scale  = params.rope_freq_scale == 0.0f ? hparams.rope_freq_scale_train : params.rope_freq_scale;
 
@@ -2983,7 +2983,7 @@ void llama_context::opt_epoch(
 
 llama_context_params llama_context_default_params() {
     llama_context_params result = {
-        /*.n_ctx                       =*/ 512,
+        /*.n_ctx                       =*/ -1,
         /*.n_batch                     =*/ 2048,
         /*.n_ubatch                    =*/ 512,
         /*.n_seq_max                   =*/ 1,
@@ -3033,7 +3033,7 @@ llama_context * llama_init_from_model(
         return nullptr;
     }
 
-    if (params.n_ctx == 0 && model->hparams.n_ctx_train == 0) {
+    if (params.n_ctx <= 0 && model->hparams.n_ctx_train == 0) {
         LLAMA_LOG_ERROR("%s: n_ctx and model->hparams.n_ctx_train cannot both be zero\n", __func__);
         return nullptr;
     }
