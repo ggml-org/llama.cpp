@@ -16,6 +16,7 @@
 		ChatSettingsImportExportTab,
 		ChatSettingsFields
 	} from '$lib/components/app';
+	import McpLogo from '$lib/components/app/misc/McpLogo.svelte';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { setMode } from 'mode-watcher';
@@ -240,17 +241,43 @@
 			fields: []
 		},
 		{
+			title: 'MCP',
+			icon: McpLogo,
+			fields: [
+				{
+					key: 'agenticMaxTurns',
+					label: 'Agentic loop max turns',
+					type: 'input'
+				},
+				{
+					key: 'agenticMaxToolPreviewLines',
+					label: 'Max lines per tool preview',
+					type: 'input'
+				},
+				{
+					key: 'agenticFilterReasoningAfterFirstTurn',
+					label: 'Filter reasoning after first turn',
+					type: 'checkbox'
+				},
+				{
+					key: 'showToolCallInProgress',
+					label: 'Show tool call in progress',
+					type: 'checkbox'
+				}
+			]
+		},
+		{
 			title: 'Developer',
 			icon: Code,
 			fields: [
 				{
-					key: 'showToolCalls',
-					label: 'Show tool call labels',
+					key: 'disableReasoningParsing',
+					label: 'Disable reasoning content parsing',
 					type: 'checkbox'
 				},
 				{
-					key: 'disableReasoningFormat',
-					label: 'Show raw LLM output',
+					key: 'showRawOutputSwitch',
+					label: 'Enable raw output toggle',
 					type: 'checkbox'
 				},
 				{
@@ -333,7 +360,9 @@
 			'dry_multiplier',
 			'dry_base',
 			'dry_allowed_length',
-			'dry_penalty_last_n'
+			'dry_penalty_last_n',
+			'agenticMaxTurns',
+			'agenticMaxToolPreviewLines'
 		];
 
 		for (const field of numericFields) {

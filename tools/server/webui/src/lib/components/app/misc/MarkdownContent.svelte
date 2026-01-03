@@ -25,6 +25,7 @@
 	interface Props {
 		content: string;
 		class?: string;
+		disableMath?: boolean;
 	}
 
 	interface MarkdownBlock {
@@ -32,7 +33,7 @@
 		html: string;
 	}
 
-	let { content, class: className = '' }: Props = $props();
+	let { content, class: className = '', disableMath = false }: Props = $props();
 
 	let containerRef = $state<HTMLDivElement>();
 	let renderedBlocks = $state<MarkdownBlock[]>([]);
@@ -47,6 +48,21 @@
 	const themeStyleId = `highlight-theme-${(window.idxThemeStyle = (window.idxThemeStyle ?? 0) + 1)}`;
 
 	let processor = $derived(() => {
+		if (disableMath) {
+			// Processor without math/LaTeX support
+			return remark()
+				.use(remarkGfm) // GitHub Flavored Markdown
+				.use(remarkBreaks) // Convert line breaks to <br>
+				.use(remarkLiteralHtml) // Treat raw HTML as literal text with preserved indentation
+				.use(remarkRehype) // Convert Markdown AST to rehype
+				.use(rehypeHighlight) // Add syntax highlighting
+				.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
+				.use(rehypeEnhanceLinks) // Add target="_blank" to links
+				.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
+				.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
+		}
+
+		// Default processor with math/LaTeX support
 		return remark()
 			.use(remarkGfm) // GitHub Flavored Markdown
 			.use(remarkMath) // Parse $inline$ and $$block$$ math
@@ -299,6 +315,60 @@
 	}
 
 	/**
+	 * Attaches error handlers to images to show fallback UI when loading fails (e.g., CORS).
+	 * Uses data-error-bound attribute to prevent duplicate bindings.
+	 */
+	function setupImageErrorHandlers() {
+		if (!containerRef) return;
+
+		const images = containerRef.querySelectorAll<HTMLImageElement>('img:not([data-error-bound])');
+
+		for (const img of images) {
+			img.dataset.errorBound = 'true';
+			img.addEventListener('error', handleImageError);
+		}
+	}
+
+	/**
+	 * Handles image load errors by replacing the image with a fallback UI.
+	 * Shows a placeholder with a link to open the image in a new tab.
+	 */
+	function handleImageError(event: Event) {
+		const img = event.target as HTMLImageElement;
+		if (!img || !img.src) return;
+
+		// Don't handle data URLs or already-handled images
+		if (img.src.startsWith('data:') || img.dataset.errorHandled === 'true') return;
+		img.dataset.errorHandled = 'true';
+
+		const src = img.src;
+		// Create fallback element
+		const fallback = document.createElement('div');
+		fallback.className = 'image-load-error';
+		fallback.innerHTML = `
+			<div class="image-error-content">
+				<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+					<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+					<circle cx="9" cy="9" r="2"/>
+					<path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
+				</svg>
+				<span class="image-error-text">External image cannot be displayed</span>
+				<a href="${src}" target="_blank" rel="noopener noreferrer" class="image-error-link">
+					<span>Open in new tab</span>
+					<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+						<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+						<polyline points="15 3 21 3 21 9"/>
+						<line x1="10" x2="21" y1="14" y2="3"/>
+					</svg>
+				</a>
+			</div>
+		`;
+
+		// Replace image with fallback
+		img.parentNode?.replaceChild(fallback, img);
+	}
+
+	/**
 	 * Converts a single HAST node to an enhanced HTML string.
 	 * Applies link and code block enhancements to the output.
 	 * @param processorInstance - The remark/rehype processor instance
@@ -366,6 +436,7 @@
 
 		if ((hasRenderedBlocks || hasUnstableBlock) && containerRef) {
 			setupCodeBlockActions();
+			setupImageErrorHandlers();
 		}
 	});
 
@@ -405,8 +476,8 @@
 	}
 
 	/* Base typography styles */
-	div :global(p:not(:last-child)) {
-		margin-bottom: 1rem;
+	div :global(p) {
+		margin-block: 1rem;
 		line-height: 1.75;
 	}
 
@@ -866,5 +937,54 @@
 		div :global(blockquote:hover) {
 			background: var(--muted);
 		}
+	}
+
+	/* Image load error fallback */
+	div :global(.image-load-error) {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		margin: 1.5rem 0;
+		padding: 1.5rem;
+		border-radius: 0.5rem;
+		background: var(--muted);
+		border: 1px dashed var(--border);
+	}
+
+	div :global(.image-error-content) {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.75rem;
+		color: var(--muted-foreground);
+		text-align: center;
+	}
+
+	div :global(.image-error-content svg) {
+		opacity: 0.5;
+	}
+
+	div :global(.image-error-text) {
+		font-size: 0.875rem;
+	}
+
+	div :global(.image-error-link) {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+		padding: 0.5rem 1rem;
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: var(--primary);
+		background: var(--background);
+		border: 1px solid var(--border);
+		border-radius: 0.375rem;
+		text-decoration: none;
+		transition: all 0.2s ease;
+	}
+
+	div :global(.image-error-link:hover) {
+		background: var(--muted);
+		border-color: var(--primary);
 	}
 </style>

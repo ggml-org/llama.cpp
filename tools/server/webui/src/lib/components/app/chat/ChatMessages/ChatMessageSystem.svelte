@@ -3,7 +3,7 @@
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { MarkdownContent } from '$lib/components/app';
-	import { INPUT_CLASSES } from '$lib/constants/input-classes';
+	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import { config } from '$lib/stores/settings.svelte';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 

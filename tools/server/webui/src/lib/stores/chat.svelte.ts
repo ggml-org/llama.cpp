@@ -1,6 +1,7 @@
 import { DatabaseService, ChatService } from '$lib/services';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
+import { agenticStore } from '$lib/stores/agentic.svelte';
 import { contextSize, isRouterMode } from '$lib/stores/server.svelte';
 import {
 	selectedModelName,
@@ -15,6 +16,7 @@ import {
 } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
+import { getAgenticConfig } from '$lib/config/agentic';
 
 /**
  * chatStore - Active AI interaction and streaming state management
@@ -517,122 +519,149 @@ class ChatStore {
 
 		const abortController = this.getOrCreateAbortController(assistantMessage.convId);
 
+		// Build common callbacks for both agentic and standard flows
+		const streamCallbacks = {
+			onChunk: (chunk: string) => {
+				streamedContent += chunk;
+				this.setChatStreaming(assistantMessage.convId, streamedContent, assistantMessage.id);
+				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+				conversationsStore.updateMessageAtIndex(idx, { content: streamedContent });
+			},
+			onReasoningChunk: (reasoningChunk: string) => {
+				streamedReasoningContent += reasoningChunk;
+				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+				conversationsStore.updateMessageAtIndex(idx, { thinking: streamedReasoningContent });
+			},
+			onToolCallChunk: (toolCallChunk: string) => {
+				const chunk = toolCallChunk.trim();
+				if (!chunk) return;
+				streamedToolCallContent = chunk;
+				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+				conversationsStore.updateMessageAtIndex(idx, { toolCalls: streamedToolCallContent });
+			},
+			onModel: (modelName: string) => recordModel(modelName),
+			onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
+				const tokensPerSecond =
+					timings?.predicted_ms && timings?.predicted_n
+						? (timings.predicted_n / timings.predicted_ms) * 1000
+						: 0;
+				this.updateProcessingStateFromTimings(
+					{
+						prompt_n: timings?.prompt_n || 0,
+						prompt_ms: timings?.prompt_ms,
+						predicted_n: timings?.predicted_n || 0,
+						predicted_per_second: tokensPerSecond,
+						cache_n: timings?.cache_n || 0,
+						prompt_progress: promptProgress
+					},
+					assistantMessage.convId
+				);
+			},
+			onComplete: async (
+				finalContent?: string,
+				reasoningContent?: string,
+				timings?: ChatMessageTimings,
+				toolCallContent?: string
+			) => {
+				this.stopStreaming();
+
+				const updateData: Record<string, unknown> = {
+					content: finalContent || streamedContent,
+					thinking: reasoningContent || streamedReasoningContent,
+					toolCalls: toolCallContent || streamedToolCallContent,
+					timings
+				};
+				if (resolvedModel && !modelPersisted) {
+					updateData.model = resolvedModel;
+				}
+				await DatabaseService.updateMessage(assistantMessage.id, updateData);
+
+				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+				const uiUpdate: Partial<DatabaseMessage> = {
+					content: updateData.content as string,
+					toolCalls: updateData.toolCalls as string
+				};
+				if (timings) uiUpdate.timings = timings;
+				if (resolvedModel) uiUpdate.model = resolvedModel;
+
+				conversationsStore.updateMessageAtIndex(idx, uiUpdate);
+				await conversationsStore.updateCurrentNode(assistantMessage.id);
+
+				if (onComplete) await onComplete(streamedContent);
+				this.setChatLoading(assistantMessage.convId, false);
+				this.clearChatStreaming(assistantMessage.convId);
+				this.clearProcessingState(assistantMessage.convId);
+
+				if (isRouterMode()) {
+					modelsStore.fetchRouterModels().catch(console.error);
+				}
+			},
+			onError: (error: Error) => {
+				this.stopStreaming();
+
+				if (this.isAbortError(error)) {
+					this.setChatLoading(assistantMessage.convId, false);
+					this.clearChatStreaming(assistantMessage.convId);
+					this.clearProcessingState(assistantMessage.convId);
+
+					return;
+				}
+
+				console.error('Streaming error:', error);
+
+				this.setChatLoading(assistantMessage.convId, false);
+				this.clearChatStreaming(assistantMessage.convId);
+				this.clearProcessingState(assistantMessage.convId);
+
+				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+
+				if (idx !== -1) {
+					const failedMessage = conversationsStore.removeMessageAtIndex(idx);
+					if (failedMessage) DatabaseService.deleteMessage(failedMessage.id).catch(console.error);
+				}
+
+				const contextInfo = (
+					error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
+				).contextInfo;
+
+				this.showErrorDialog(
+					error.name === 'TimeoutError' ? 'timeout' : 'server',
+					error.message,
+					contextInfo
+				);
+
+				if (onError) onError(error);
+			}
+		};
+
+		// Try agentic flow first if enabled (considering per-chat MCP overrides)
+		const perChatOverrides = conversationsStore.activeConversation?.mcpServerOverrides;
+		const agenticConfig = getAgenticConfig(config(), perChatOverrides);
+		if (agenticConfig.enabled) {
+			const agenticResult = await agenticStore.runAgenticFlow({
+				messages: allMessages,
+				options: {
+					...this.getApiOptions(),
+					...(modelOverride ? { model: modelOverride } : {})
+				},
+				callbacks: streamCallbacks,
+				signal: abortController.signal,
+				perChatOverrides
+			});
+
+			if (agenticResult.handled) {
+				return; // Agentic flow handled the request
+			}
+			// Fall through to standard ChatService if not handled
+		}
+
+		// Standard ChatService flow
 		await ChatService.sendMessage(
 			allMessages,
 			{
 				...this.getApiOptions(),
 				...(modelOverride ? { model: modelOverride } : {}),
-				onChunk: (chunk: string) => {
-					streamedContent += chunk;
-					this.setChatStreaming(assistantMessage.convId, streamedContent, assistantMessage.id);
-					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
-					conversationsStore.updateMessageAtIndex(idx, { content: streamedContent });
-				},
-				onReasoningChunk: (reasoningChunk: string) => {
-					streamedReasoningContent += reasoningChunk;
-					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
-					conversationsStore.updateMessageAtIndex(idx, { thinking: streamedReasoningContent });
-				},
-				onToolCallChunk: (toolCallChunk: string) => {
-					const chunk = toolCallChunk.trim();
-					if (!chunk) return;
-					streamedToolCallContent = chunk;
-					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
-					conversationsStore.updateMessageAtIndex(idx, { toolCalls: streamedToolCallContent });
-				},
-				onModel: (modelName: string) => recordModel(modelName),
-				onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
-					const tokensPerSecond =
-						timings?.predicted_ms && timings?.predicted_n
-							? (timings.predicted_n / timings.predicted_ms) * 1000
-							: 0;
-					this.updateProcessingStateFromTimings(
-						{
-							prompt_n: timings?.prompt_n || 0,
-							prompt_ms: timings?.prompt_ms,
-							predicted_n: timings?.predicted_n || 0,
-							predicted_per_second: tokensPerSecond,
-							cache_n: timings?.cache_n || 0,
-							prompt_progress: promptProgress
-						},
-						assistantMessage.convId
-					);
-				},
-				onComplete: async (
-					finalContent?: string,
-					reasoningContent?: string,
-					timings?: ChatMessageTimings,
-					toolCallContent?: string
-				) => {
-					this.stopStreaming();
-
-					const updateData: Record<string, unknown> = {
-						content: finalContent || streamedContent,
-						thinking: reasoningContent || streamedReasoningContent,
-						toolCalls: toolCallContent || streamedToolCallContent,
-						timings
-					};
-					if (resolvedModel && !modelPersisted) {
-						updateData.model = resolvedModel;
-					}
-					await DatabaseService.updateMessage(assistantMessage.id, updateData);
-
-					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
-					const uiUpdate: Partial<DatabaseMessage> = {
-						content: updateData.content as string,
-						toolCalls: updateData.toolCalls as string
-					};
-					if (timings) uiUpdate.timings = timings;
-					if (resolvedModel) uiUpdate.model = resolvedModel;
-
-					conversationsStore.updateMessageAtIndex(idx, uiUpdate);
-					await conversationsStore.updateCurrentNode(assistantMessage.id);
-
-					if (onComplete) await onComplete(streamedContent);
-					this.setChatLoading(assistantMessage.convId, false);
-					this.clearChatStreaming(assistantMessage.convId);
-					this.clearProcessingState(assistantMessage.convId);
-
-					if (isRouterMode()) {
-						modelsStore.fetchRouterModels().catch(console.error);
-					}
-				},
-				onError: (error: Error) => {
-					this.stopStreaming();
-
-					if (this.isAbortError(error)) {
-						this.setChatLoading(assistantMessage.convId, false);
-						this.clearChatStreaming(assistantMessage.convId);
-						this.clearProcessingState(assistantMessage.convId);
-
-						return;
-					}
-
-					console.error('Streaming error:', error);
-
-					this.setChatLoading(assistantMessage.convId, false);
-					this.clearChatStreaming(assistantMessage.convId);
-					this.clearProcessingState(assistantMessage.convId);
-
-					const idx = conversationsStore.findMessageIndex(assistantMessage.id);
-
-					if (idx !== -1) {
-						const failedMessage = conversationsStore.removeMessageAtIndex(idx);
-						if (failedMessage) DatabaseService.deleteMessage(failedMessage.id).catch(console.error);
-					}
-
-					const contextInfo = (
-						error as Error & { contextInfo?: { n_prompt_tokens: number; n_ctx: number } }
-					).contextInfo;
-
-					this.showErrorDialog(
-						error.name === 'TimeoutError' ? 'timeout' : 'server',
-						error.message,
-						contextInfo
-					);
-
-					if (onError) onError(error);
-				}
+				...streamCallbacks
 			},
 			assistantMessage.convId,
 			abortController.signal
@@ -1427,7 +1456,7 @@ class ChatStore {
 
 		// Config options needed by ChatService
 		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
-		if (currentConfig.disableReasoningFormat) apiOptions.disableReasoningFormat = true;
+		if (currentConfig.disableReasoningParsing) apiOptions.disableReasoningParsing = true;
 
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);

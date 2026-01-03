@@ -5,6 +5,7 @@ import { DatabaseService } from '$lib/services/database';
 import { config } from '$lib/stores/settings.svelte';
 import { filterByLeafNodeId, findLeafNode } from '$lib/utils';
 import { AttachmentType } from '$lib/enums';
+import type { McpServerOverride } from '$lib/types/database';
 
 /**
  * conversationsStore - Persistent conversation data and lifecycle management
@@ -61,6 +62,9 @@ class ConversationsStore {
 
 	/** Whether the store has been initialized */
 	isInitialized = $state(false);
+
+	/** Pending MCP server overrides for new conversations (before first message) */
+	pendingMcpServerOverrides = $state<McpServerOverride[]>([]);
 
 	/** Callback for title update confirmation dialog */
 	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
@@ -170,6 +174,20 @@ class ConversationsStore {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
 		const conversation = await DatabaseService.createConversation(conversationName);
 
+		// Apply any pending MCP server overrides to the new conversation
+		if (this.pendingMcpServerOverrides.length > 0) {
+			// Deep clone to plain objects (Svelte 5 $state uses Proxies which can't be cloned to IndexedDB)
+			const plainOverrides = this.pendingMcpServerOverrides.map((o) => ({
+				serverId: o.serverId,
+				enabled: o.enabled
+			}));
+			conversation.mcpServerOverrides = plainOverrides;
+			await DatabaseService.updateConversation(conversation.id, {
+				mcpServerOverrides: plainOverrides
+			});
+			this.pendingMcpServerOverrides = []; // Clear pending overrides
+		}
+
 		this.conversations.unshift(conversation);
 		this.activeConversation = conversation;
 		this.activeMessages = [];
@@ -192,6 +210,8 @@ class ConversationsStore {
 				return false;
 			}
 
+			// Clear pending overrides when switching to an existing conversation
+			this.pendingMcpServerOverrides = [];
 			this.activeConversation = conversation;
 
 			if (conversation.currNode) {
@@ -331,6 +351,150 @@ class ConversationsStore {
 			const updatedConv = this.conversations.splice(chatIndex, 1)[0];
 			this.conversations.unshift(updatedConv);
 		}
+	}
+
+	// ─────────────────────────────────────────────────────────────────────────────
+	// MCP Server Per-Chat Overrides
+	// ─────────────────────────────────────────────────────────────────────────────
+
+	/**
+	 * Gets MCP server override for a specific server in the active conversation.
+	 * Falls back to pending overrides if no active conversation exists.
+	 * @param serverId - The server ID to check
+	 * @returns The override if set, undefined if using global setting
+	 */
+	getMcpServerOverride(serverId: string): McpServerOverride | undefined {
+		if (this.activeConversation) {
+			return this.activeConversation.mcpServerOverrides?.find(
+				(o: McpServerOverride) => o.serverId === serverId
+			);
+		}
+		// Fall back to pending overrides if no active conversation
+		return this.pendingMcpServerOverrides.find((o) => o.serverId === serverId);
+	}
+
+	/**
+	 * Checks if an MCP server is enabled for the active conversation.
+	 * Per-chat override takes precedence over global setting.
+	 * @param serverId - The server ID to check
+	 * @param globalEnabled - The global enabled state from settings
+	 * @returns True if server is enabled for this conversation
+	 */
+	isMcpServerEnabledForChat(serverId: string, globalEnabled: boolean): boolean {
+		const override = this.getMcpServerOverride(serverId);
+		return override !== undefined ? override.enabled : globalEnabled;
+	}
+
+	/**
+	 * Sets or removes MCP server override for the active conversation.
+	 * If no conversation exists, stores as pending override (applied when conversation is created).
+	 * @param serverId - The server ID to override
+	 * @param enabled - The enabled state, or undefined to remove override (use global)
+	 */
+	async setMcpServerOverride(serverId: string, enabled: boolean | undefined): Promise<void> {
+		// If no active conversation, store as pending override
+		if (!this.activeConversation) {
+			this.setPendingMcpServerOverride(serverId, enabled);
+			return;
+		}
+
+		// Clone to plain objects to avoid Proxy serialization issues with IndexedDB
+		const currentOverrides = (this.activeConversation.mcpServerOverrides || []).map(
+			(o: McpServerOverride) => ({
+				serverId: o.serverId,
+				enabled: o.enabled
+			})
+		);
+		let newOverrides: McpServerOverride[];
+
+		if (enabled === undefined) {
+			// Remove override - use global setting
+			newOverrides = currentOverrides.filter((o: McpServerOverride) => o.serverId !== serverId);
+		} else {
+			// Set or update override
+			const existingIndex = currentOverrides.findIndex(
+				(o: McpServerOverride) => o.serverId === serverId
+			);
+			if (existingIndex >= 0) {
+				newOverrides = [...currentOverrides];
+				newOverrides[existingIndex] = { serverId, enabled };
+			} else {
+				newOverrides = [...currentOverrides, { serverId, enabled }];
+			}
+		}
+
+		// Update in database (plain objects, not proxies)
+		await DatabaseService.updateConversation(this.activeConversation.id, {
+			mcpServerOverrides: newOverrides.length > 0 ? newOverrides : undefined
+		});
+
+		// Update local state
+		this.activeConversation.mcpServerOverrides = newOverrides.length > 0 ? newOverrides : undefined;
+
+		// Also update in conversations list
+		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		if (convIndex !== -1) {
+			this.conversations[convIndex].mcpServerOverrides =
+				newOverrides.length > 0 ? newOverrides : undefined;
+		}
+	}
+
+	/**
+	 * Toggles MCP server enabled state for the active conversation.
+	 * Creates a per-chat override that differs from the global setting.
+	 * @param serverId - The server ID to toggle
+	 * @param globalEnabled - The global enabled state from settings
+	 */
+	async toggleMcpServerForChat(serverId: string, globalEnabled: boolean): Promise<void> {
+		const currentEnabled = this.isMcpServerEnabledForChat(serverId, globalEnabled);
+		await this.setMcpServerOverride(serverId, !currentEnabled);
+	}
+
+	/**
+	 * Resets MCP server to use global setting (removes per-chat override).
+	 * @param serverId - The server ID to reset
+	 */
+	async resetMcpServerToGlobal(serverId: string): Promise<void> {
+		await this.setMcpServerOverride(serverId, undefined);
+	}
+
+	/**
+	 * Sets or removes a pending MCP server override (for new conversations).
+	 * @param serverId - The server ID to override
+	 * @param enabled - The enabled state, or undefined to remove override
+	 */
+	private setPendingMcpServerOverride(serverId: string, enabled: boolean | undefined): void {
+		if (enabled === undefined) {
+			// Remove pending override
+			this.pendingMcpServerOverrides = this.pendingMcpServerOverrides.filter(
+				(o) => o.serverId !== serverId
+			);
+		} else {
+			// Set or update pending override
+			const existingIndex = this.pendingMcpServerOverrides.findIndex(
+				(o) => o.serverId === serverId
+			);
+			if (existingIndex >= 0) {
+				this.pendingMcpServerOverrides[existingIndex] = { serverId, enabled };
+			} else {
+				this.pendingMcpServerOverrides = [...this.pendingMcpServerOverrides, { serverId, enabled }];
+			}
+		}
+	}
+
+	/**
+	 * Gets a pending MCP server override.
+	 * @param serverId - The server ID to check
+	 */
+	private getPendingMcpServerOverride(serverId: string): McpServerOverride | undefined {
+		return this.pendingMcpServerOverrides.find((o) => o.serverId === serverId);
+	}
+
+	/**
+	 * Clears all pending MCP server overrides.
+	 */
+	clearPendingMcpServerOverrides(): void {
+		this.pendingMcpServerOverrides = [];
 	}
 
 	/**

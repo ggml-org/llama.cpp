@@ -1,10 +1,10 @@
 <script lang="ts">
 	import {
+		AgenticContent,
 		ModelBadge,
 		ChatMessageActions,
 		ChatMessageStatistics,
 		ChatMessageThinkingBlock,
-		CopyToClipboardIcon,
 		MarkdownContent,
 		ModelsSelector
 	} from '$lib/components/app';
@@ -13,10 +13,10 @@
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import { autoResizeTextarea, copyToClipboard } from '$lib/utils';
 	import { fade } from 'svelte/transition';
-	import { Check, X, Wrench } from '@lucide/svelte';
+	import { Check, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { INPUT_CLASSES } from '$lib/constants/input-classes';
+	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
@@ -52,7 +52,6 @@
 		siblingInfo?: ChatMessageSiblingInfo | null;
 		textareaElement?: HTMLTextAreaElement;
 		thinkingContent: string | null;
-		toolCallContent: ApiChatCompletionToolCall[] | string | null;
 	}
 
 	let {
@@ -79,16 +78,18 @@
 		shouldBranchAfterEdit = false,
 		siblingInfo = null,
 		textareaElement = $bindable(),
-		thinkingContent,
-		toolCallContent = null
+		thinkingContent
 	}: Props = $props();
 
-	const toolCalls = $derived(
-		Array.isArray(toolCallContent) ? (toolCallContent as ApiChatCompletionToolCall[]) : null
+	// Check if content contains agentic tool call markers
+	const isAgenticContent = $derived(
+		messageContent?.includes('<<<AGENTIC_TOOL_CALL_START>>>') ?? false
 	);
-	const fallbackToolCalls = $derived(typeof toolCallContent === 'string' ? toolCallContent : null);
 
 	const processingState = useProcessingState();
+
+	// Local state for raw output toggle (per message)
+	let showRawOutput = $state(false);
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
@@ -122,58 +123,6 @@
 			processingState.startMonitoring();
 		}
 	});
-
-	function formatToolCallBadge(toolCall: ApiChatCompletionToolCall, index: number) {
-		const callNumber = index + 1;
-		const functionName = toolCall.function?.name?.trim();
-		const label = functionName || `Call #${callNumber}`;
-
-		const payload: Record<string, unknown> = {};
-
-		const id = toolCall.id?.trim();
-		if (id) {
-			payload.id = id;
-		}
-
-		const type = toolCall.type?.trim();
-		if (type) {
-			payload.type = type;
-		}
-
-		if (toolCall.function) {
-			const fnPayload: Record<string, unknown> = {};
-
-			const name = toolCall.function.name?.trim();
-			if (name) {
-				fnPayload.name = name;
-			}
-
-			const rawArguments = toolCall.function.arguments?.trim();
-			if (rawArguments) {
-				try {
-					fnPayload.arguments = JSON.parse(rawArguments);
-				} catch {
-					fnPayload.arguments = rawArguments;
-				}
-			}
-
-			if (Object.keys(fnPayload).length > 0) {
-				payload.function = fnPayload;
-			}
-		}
-
-		const formattedPayload = JSON.stringify(payload, null, 2);
-
-		return {
-			label,
-			tooltip: formattedPayload,
-			copyValue: formattedPayload
-		};
-	}
-
-	function handleCopyToolCall(payload: string) {
-		void copyToClipboard(payload, 'Tool call copied to clipboard');
-	}
 </script>
 
 <div
@@ -238,8 +187,10 @@
 			</div>
 		</div>
 	{:else if message.role === 'assistant'}
-		{#if config().disableReasoningFormat}
+		{#if showRawOutput}
 			<pre class="raw-output">{messageContent || ''}</pre>
+		{:else if isAgenticContent}
+			<AgenticContent content={messageContent || ''} />
 		{:else}
 			<MarkdownContent content={messageContent || ''} />
 		{/if}
@@ -290,48 +241,6 @@
 				{/if}
 			</div>
 		{/if}
-
-		{#if config().showToolCalls}
-			{#if (toolCalls && toolCalls.length > 0) || fallbackToolCalls}
-				<span class="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-					<span class="inline-flex items-center gap-1">
-						<Wrench class="h-3.5 w-3.5" />
-
-						<span>Tool calls:</span>
-					</span>
-
-					{#if toolCalls && toolCalls.length > 0}
-						{#each toolCalls as toolCall, index (toolCall.id ?? `${index}`)}
-							{@const badge = formatToolCallBadge(toolCall, index)}
-							<button
-								type="button"
-								class="tool-call-badge inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-								title={badge.tooltip}
-								aria-label={`Copy tool call ${badge.label}`}
-								onclick={() => handleCopyToolCall(badge.copyValue)}
-							>
-								{badge.label}
-								<CopyToClipboardIcon
-									text={badge.copyValue}
-									ariaLabel={`Copy tool call ${badge.label}`}
-								/>
-							</button>
-						{/each}
-					{:else if fallbackToolCalls}
-						<button
-							type="button"
-							class="tool-call-badge tool-call-badge--fallback inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-							title={fallbackToolCalls}
-							aria-label="Copy tool call payload"
-							onclick={() => handleCopyToolCall(fallbackToolCalls)}
-						>
-							{fallbackToolCalls}
-							<CopyToClipboardIcon text={fallbackToolCalls} ariaLabel="Copy tool call payload" />
-						</button>
-					{/if}
-				</span>
-			{/if}
-		{/if}
 	</div>
 
 	{#if message.timestamp && !isEditing}
@@ -352,6 +261,9 @@
 			{onConfirmDelete}
 			{onNavigateToSibling}
 			{onShowDeleteDialogChange}
+			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
+			rawOutputEnabled={showRawOutput}
+			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
 		/>
 	{/if}
 </div>
@@ -400,19 +312,6 @@
 		font-size: 0.875rem;
 		line-height: 1.6;
 		white-space: pre-wrap;
-		word-break: break-word;
-	}
-
-	.tool-call-badge {
-		max-width: 12rem;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-
-	.tool-call-badge--fallback {
-		max-width: 20rem;
-		white-space: normal;
 		word-break: break-word;
 	}
 </style>
