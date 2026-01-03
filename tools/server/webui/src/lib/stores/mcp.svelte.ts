@@ -269,11 +269,20 @@ class MCPStore {
 	/**
 	 * Execute a tool call via MCP host manager.
 	 * Automatically routes to the appropriate server.
+	 * Also tracks usage statistics for the server.
 	 */
 	async executeTool(toolCall: MCPToolCall, signal?: AbortSignal): Promise<ToolExecutionResult> {
 		if (!this._hostManager) {
 			throw new Error('MCP host manager not initialized');
 		}
+
+		// Track usage for the server that provides this tool
+		const serverId = this.getToolServer(toolCall.function.name);
+		if (serverId) {
+			const updatedStats = incrementMcpServerUsage(config(), serverId);
+			settingsStore.updateConfig('mcpServerUsageStats', updatedStats);
+		}
+
 		return this._hostManager.executeTool(toolCall, signal);
 	}
 
