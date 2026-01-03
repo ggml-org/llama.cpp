@@ -161,6 +161,7 @@ struct InferEngine::Impl{
         ctx_arg.params.n_predict = config_param.max_predict_token_count;
         ctx_arg.params.n_ctx = config_param.n_ctx;
         ctx_arg.params.mmproj_use_gpu = true;
+        ctx_arg.params.n_batch = n_batch;
 
         // sampler
         ctx_arg.params.sampling.temp = 0;
@@ -508,13 +509,11 @@ Status InferEngine::to_gpu(){
 }
 
 Status InferEngine::infer(const InferInput& input, InferResult& result){
-    //impl_->n_batch = 1;
     return impl_->infer(input, result);
 }
 
 
 Status InferEngine::infer_batch(const std::vector<InferInput>& inputs, std::vector<InferResult>& results){
-    //impl_->n_batch = inputs.size();
     return impl_->infer_batch(inputs, results);
 }
 }

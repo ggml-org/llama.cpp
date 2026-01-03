@@ -33,6 +33,7 @@ void log_call(int level, const std::string& msg) {
 }
 
 void engine2() {
+    return;
     //test_mem_file();
     llama_engine::InferInput input;
     //input.img_bufs = load_img_file("e:/wafer.png");
