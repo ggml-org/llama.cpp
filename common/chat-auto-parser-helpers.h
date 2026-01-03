@@ -92,7 +92,8 @@ struct InternalDiscoveredPattern {
 enum InternalToolFormat {
     FORMAT_JSON_NATIVE,
     FORMAT_XML_CONSTRUCTED,
-    FORMAT_BRACKET_TAG,   // [TOOL_CALLS]name[CALL_ID]id[ARGS]{...} (Mistral Small 3.2)
+    FORMAT_BRACKET_TAG,     // [TOOL_CALLS]name[CALL_ID]id[ARGS]{...} (Mistral Small 3.2)
+    FORMAT_RECIPIENT_BASED, // >>>recipient\n{content} (Functionary v3.2)
     FORMAT_CONTENT_ONLY,
     FORMAT_UNKNOWN
 };

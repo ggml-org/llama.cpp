@@ -124,7 +124,7 @@ common_peg_parser common_chat_peg_unified_builder::build_content_block(const Con
         content_end   = "</response>";
     }
 
-    // Handle content markers
+    // Handle content markers with both start and end
     if (cs.content_mode != ContentStructure::CONTENT_PLAIN && !cs.content_start.empty() && !cs.content_end.empty()) {
         // Content is wrapped in markers
         if (reasoning_format == COMMON_REASONING_FORMAT_NONE) {
@@ -143,6 +143,23 @@ common_peg_parser common_chat_peg_unified_builder::build_content_block(const Con
             auto implicit_markers = content(until(cs.content_end)) + literal(cs.content_end);
             auto without_markers  = content(rest());
             return choice({ with_markers, implicit_markers, without_markers });
+        }
+    }
+
+    // Handle content with only start marker (no end marker)
+    // This is for formats like recipient-based (Functionary v3.2) where content is prefixed with
+    // a marker but has no explicit closing marker - content ends at end of message or before tool calls
+    if (cs.content_mode != ContentStructure::CONTENT_PLAIN && !cs.content_start.empty() && cs.content_end.empty()) {
+        if (reasoning_format == COMMON_REASONING_FORMAT_NONE) {
+            // Preserve any content before the start marker, then consume the marker and capture rest
+            auto with_start_marker = content(until(cs.content_start)) + literal(cs.content_start) + content(rest());
+            auto without_markers   = content(rest());
+            return choice({ with_start_marker, without_markers });
+        } else {
+            // Content starts directly after reasoning block
+            auto with_start_marker = literal(cs.content_start) + content(rest());
+            auto without_markers   = content(rest());
+            return choice({ with_start_marker, without_markers });
         }
     }
 
@@ -168,8 +185,6 @@ common_peg_parser common_chat_peg_unified_builder::build_tool_section(const Tool
     // Build tool choices based on function format
     auto tool_choices = choice();
 
-    fprintf(stderr, "DEBUG build_tool_section: function_format=%d, tools count=%zu\n",
-            static_cast<int>(ts.function_format), tools.size());
     for (const auto & tool_def : tools) {
         if (!tool_def.contains("function")) {
             continue;
@@ -177,13 +192,24 @@ common_peg_parser common_chat_peg_unified_builder::build_tool_section(const Tool
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
         nlohmann::json params = function.contains("parameters") ? function.at("parameters") : nlohmann::json::object();
-        fprintf(stderr, "DEBUG build_tool_section: building function '%s'\n", name.c_str());
 
         tool_choices |= rule("tool-" + name, build_function(ts, name, params));
     }
 
     // Build the section with or without markers
     auto build_section = [&]() -> common_peg_parser {
+        // Recipient-based format (Functionary v3.2): >>>function_name\n{arguments}
+        // Uses tool_section_start as delimiter, but no array wrapper or section markers
+        if (ts.function_format == ToolCallStructure::FUNC_RECIPIENT_BASED) {
+            auto tool_call = trigger_rule("tool-call", tool_choices);
+            if (parallel_tool_calls) {
+                // Multiple tool calls: each starts with >>>
+                return one_or_more(tool_call + space());
+            } else {
+                return tool_call;
+            }
+        }
+
         if (!ts.tool_section_start.empty() && !ts.tool_section_end.empty()) {
             // Check if this format has SEPARATE section markers and per-call markers.
             // This happens when:
@@ -347,19 +373,27 @@ common_peg_parser common_chat_peg_unified_builder::build_function(const ToolCall
                 // per_call_start = "[TOOL_CALLS]"
                 // id_marker = "[CALL_ID]"
                 // args_marker = "[ARGS]"
-                fprintf(stderr, "DEBUG build_function BRACKET_TAG: name='%s' per_call_start='%s' id_marker='%s' args_marker='%s'\n",
-                        name.c_str(), ts.per_call_start.c_str(), ts.id_marker.c_str(), ts.args_marker.c_str());
                 auto opening = literal(ts.per_call_start) + tool_name(literal(name));
                 if (!ts.id_marker.empty()) {
                     // Add id_marker + id value (captured as tool_id)
                     opening = opening + literal(ts.id_marker) + tool_id(until(ts.args_marker));
-                    fprintf(stderr, "DEBUG: Added id_marker and tool_id\n");
                 }
                 if (!ts.args_marker.empty()) {
                     opening = opening + literal(ts.args_marker);
-                    fprintf(stderr, "DEBUG: Added args_marker\n");
                 }
                 // No explicit closer for this format (EOS terminates)
+                return tool(tool_open(opening) + space() + tool_args(args));
+            }
+
+        case ToolCallStructure::FUNC_RECIPIENT_BASED:
+            {
+                // Build recipient-based parser (e.g., Functionary v3.2):
+                // >>>function_name
+                // {'param1': 'value1', 'param2': 'value2'}
+                // tool_section_start = ">>>"
+                // Function name directly follows ">>>" with newline, arguments are Python dict (parse as JSON)
+                auto opening = literal(ts.tool_section_start) + tool_name(literal(name));
+                // No explicit closer (newline + arguments, then EOS or next >>>)
                 return tool(tool_open(opening) + space() + tool_args(args));
             }
     }
@@ -572,11 +606,6 @@ void common_chat_peg_unified_mapper::from_ast(const common_peg_ast_arena &    ar
 void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
     // First call base class for reasoning/content handling
     common_chat_peg_mapper::map(node);
-
-    // Debug: print what tags we're receiving
-    if (!node.tag.empty()) {
-        fprintf(stderr, "DEBUG MAPPER: tag='%s' text='%.50s'\n", node.tag.c_str(), std::string(node.text).c_str());
-    }
 
     // Handle tool-related tags (unified version supporting both JSON and tagged formats)
     bool is_tool_open  = node.tag == common_chat_peg_unified_builder::TOOL_OPEN;

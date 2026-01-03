@@ -1364,13 +1364,12 @@ static void test_template_output_peg_parsers() {
             .expect(message_assist_call)
             .run();
     }
-    // TODO: Functionary v3.2 uses a unique format (recipient\nfunction_name\n{args})
-    // that requires specialized detection. Skipping for now.
-    // {
-    //     auto tst = peg_tester("models/templates/meetkai-functionary-medium-v3.2.jinja");
-    //     tst.test("all\nHello, world!\nWhat's up?").expect(message_assist).run();
-    //     tst.test("special_function\n{\"arg1\": 1}").tools({ special_function_tool }).expect(message_assist_call).run();
-    // }
+    // Functionary v3.2 - recipient-based format: >>>recipient\n{content}
+    {
+        auto tst = peg_tester("models/templates/meetkai-functionary-medium-v3.2.jinja");
+        tst.test(">>>all\nHello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test(">>>special_function\n{\"arg1\": 1}").tools({ special_function_tool }).expect(message_assist_call).run();
+    }
     // TODO: FireFunction streaming regression - tool_section_end includes <|eot_id|> marker
     // {
     //     auto tst = peg_tester("models/templates/fireworks-ai-llama-3-firefunction-v2.jinja");
