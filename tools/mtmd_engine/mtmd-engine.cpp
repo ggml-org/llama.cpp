@@ -19,6 +19,7 @@
 #include <mutex>
 #include <iostream>
 #include <thread>
+#include <chrono>
 
 /*限定模型只使用cpu的核心参数：
 1. -dev none: 禁止VLM模型使用gpu
@@ -38,6 +39,29 @@
 //    }
 //}
 
+class Timer {
+public:
+    Timer()=default;
+
+    void enable_print(bool _enable) {enable_print_ = _enable;}
+
+    void start() {
+        last = std::chrono::system_clock::now();
+    }
+
+    void print_time(const std::string& msg) {
+        if(!enable_print_) return;
+        auto cur = std::chrono::system_clock::now();
+        std::cout << msg << "(ms): " << std::chrono::duration_cast<std::chrono::milliseconds>(cur - last).count() << std::endl;
+        last = std::chrono::system_clock::now();
+    }
+  private :
+    std::chrono::system_clock::time_point last = std::chrono::system_clock::now();
+    bool enable_print_{false};
+};
+
+
+
 enum LogLevel : int {
     kLogTrace = 0,
     kLogDebug,
@@ -53,8 +77,10 @@ void llama_log_callback(enum ggml_log_level level, const char* text, void* user_
 }
 
 namespace llama_engine{
-//devices: CUDA0,如何构建设备参数可参考arg.cpp中的2062行
+
 struct InferEngine::Impl{
+    Timer timer;
+
     EngineConfigParam config_param;
     std::mutex infer_mutex;
     bool use_gpu = true;
@@ -68,7 +94,7 @@ struct InferEngine::Impl{
     const llama_vocab* vocab{nullptr};
     common_sampler* smpl{nullptr};
     llama_batch         batch{};
-    int                 n_batch{1};
+    int                 n_batch{2048};
 
     mtmd::bitmaps bitmaps;
 
@@ -133,6 +159,7 @@ struct InferEngine::Impl{
         ctx_arg.params.fit_params = config_param.fit_param;
         ctx_arg.params.n_gpu_layers = config_param.gpu_layer_count;
         ctx_arg.params.n_predict = config_param.max_predict_token_count;
+        ctx_arg.params.n_ctx = config_param.n_ctx;
         ctx_arg.params.mmproj_use_gpu = true;
 
         // sampler
@@ -174,14 +201,6 @@ struct InferEngine::Impl{
         // 因为后续遍历时使用的指针列表，所以需要添加一个nullptr哨兵
         devices.push_back(nullptr);
         ctx_arg.params.devices = devices;
-
-        //int log_level = external_log_to_internal(config_param.log_level);
-        //if (log_level < 0) {
-        //    common_log_pause(common_log_main());
-        //}
-        //else {
-        //    common_log_set_verbosity_thold(log_level);
-        //}
 
         return {};
     }
@@ -231,7 +250,6 @@ struct InferEngine::Impl{
         size_t vlm_model_buf_size,
         const char* mmproj_model_buf,
         size_t mmproj_model_buf_size) {
-        // 由于windows需自行包装buffer，或修改llama底层代码，暂无时间。暂定使用写入临时文件再读取的方案
         reset();
         common_params llama_param;
         auto status = config_param_to_llama_param(llama_param);
@@ -266,13 +284,12 @@ struct InferEngine::Impl{
     }
 
     Status release_gpu() {
-        //TODO: 比较好的方式是先将文件读取并做缓存到cpu。以此来模拟重新加载（弊端就是占用内存）
+        // 改为外部提供buffer
         reset();
         return {};
     }
 
     Status to_gpu() {
-
         return {-LogLevel::kLogCritical, "Not implemented, please reload the model."};
     }
 
@@ -294,8 +311,6 @@ struct InferEngine::Impl{
     }
 
     std::string chat_add_and_format(common_chat_msg& new_msg) {
-        //LOG_DBG("chat_add_and_format: new_msg.role='%s', new_msg.content='%s'\n",
-        //    new_msg.role.c_str(), new_msg.content.c_str());
         auto formatted = common_chat_format_single(tmpls.get(), chat_history,
             new_msg, new_msg.role == "user",use_jinja);
         chat_history.push_back(new_msg);
@@ -303,19 +318,21 @@ struct InferEngine::Impl{
     }
 
     Status eval_message(common_chat_msg& msg) {
+        timer.start();
         llama_batch_free(batch);
         batch = llama_batch_init(n_batch, 0, 1); // batch for next token generation
-
+        timer.print_time("init_batch");
         bool add_bos = chat_history.empty();
         auto formatted_chat = chat_add_and_format(msg);
         //LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.c_str());
-
+        timer.print_time("chat and format");
         mtmd_input_text text;
         text.text = formatted_chat.c_str();
         text.add_special = add_bos;
         text.parse_special = true;
 
         mtmd::input_chunks chunks(mtmd_input_chunks_init());
+        timer.print_time("mtmd input chunks init");
         auto bitmaps_c_ptr = bitmaps.c_ptr();
         int32_t res = mtmd_tokenize(ctx_vision.get(),
             chunks.ptr.get(), // output
@@ -327,7 +344,7 @@ struct InferEngine::Impl{
         }
 
         bitmaps.entries.clear();
-
+        timer.print_time("mtmd_tokenize");
         llama_pos new_n_past;
         if (mtmd_helper_eval_chunks(ctx_vision.get(),
                                     lctx, // lctx
@@ -337,10 +354,9 @@ struct InferEngine::Impl{
                                     n_batch, // n_batch
                                     true, // logits_last
                                     &new_n_past)) {
-                                    LOG_ERR("Unable to eval prompt\n");
-                                    return 1;
+            return { -LogLevel::kLogError, "Fail to eval input." };
         }
-
+        timer.print_time("mtmd_helper_eval_chunks");
         n_past = new_n_past;
 
         return {};
@@ -369,12 +385,9 @@ struct InferEngine::Impl{
             common_sampler_accept(smpl, token_id, true);
 
             if (llama_vocab_is_eog(vocab, token_id)) {
-                write_log(kLogDebug, __FILE__, __LINE__, "Generated count reached the max limition.");
+                write_log(kLogDebug, __FILE__, __LINE__, "Generated with eos.");
                 break; // end of generation
             }
-
-            //LOG("%s", common_token_to_piece(lctx, token_id).c_str());
-            //fflush(stdout);
 
             // eval the token
             common_batch_clear(batch);
@@ -396,7 +409,6 @@ struct InferEngine::Impl{
                 probs.push_back(tmp_probs[i]);
             }
         }
-        //std::string generated_text = common_detokenize(lctx, generated_tokens);
         common_chat_msg msg;
         msg.role = "assistant";
         msg.content = text;
@@ -405,15 +417,18 @@ struct InferEngine::Impl{
     }
 
     Status infer(const InferInput& input, InferResult& result) {
+        timer.start();
         std::unique_lock<std::mutex> infer_lock(infer_mutex);
         result.details.clear();
         clear_ctx_history();
+        timer.print_time("clear ctx");
         auto status = load_image(input.img_bufs);
         if (!status) {
             return status;
         }
+        timer.print_time("load image");
         std::string infer_prompt = mtmd_default_marker() + prompt;
-
+        timer.print_time("infer_prompt");
         common_chat_msg infer_msg;
         infer_msg.role = "user";
         infer_msg.content = infer_prompt;
@@ -422,9 +437,11 @@ struct InferEngine::Impl{
         if (!status) {
             return status;
         }
+        timer.print_time("eval message");
         std::string text;
         std::vector<float> probs;
         status = generate_response(text, probs);
+        timer.print_time("gen response");
         if (!status ) {
             return status;
         }
@@ -474,14 +491,11 @@ Status InferEngine::set_config_param(const EngineConfigParam& config_param) {
 Status InferEngine::load_model_from_file(const std::string &vlm_model_path, const std::string& mmproj_model_path){
 
     return impl_->load_model_from_file(vlm_model_path, mmproj_model_path);
-    return {};
 }
 
 Status InferEngine::load_model_from_buffer(const char* vlm_model_buf, size_t vlm_model_buf_size,
                             const char* mmproj_model_buf, size_t mmproj_model_buf_size){
     return impl_->load_model_from_buffer(vlm_model_buf, vlm_model_buf_size, mmproj_model_buf, mmproj_model_buf_size);
-    // 由于windows需自行包装buffer，或修改llama底层代码，暂无时间。暂定使用写入临时文件再读取的方案
-    return {-1, "This function is not yet supported."};
 }
 
 Status InferEngine::release_gpu(){
@@ -494,13 +508,13 @@ Status InferEngine::to_gpu(){
 }
 
 Status InferEngine::infer(const InferInput& input, InferResult& result){
-    impl_->n_batch = 1;
+    //impl_->n_batch = 1;
     return impl_->infer(input, result);
 }
 
 
 Status InferEngine::infer_batch(const std::vector<InferInput>& inputs, std::vector<InferResult>& results){
-    impl_->n_batch = inputs.size();
+    //impl_->n_batch = inputs.size();
     return impl_->infer_batch(inputs, results);
 }
 }
