@@ -1041,6 +1041,8 @@ struct ggml_graph_node_properties {
     int64_t ne[GGML_MAX_DIMS];
     size_t nb[GGML_MAX_DIMS];
     void * src_address[GGML_MAX_SRC];
+    int64_t src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+    size_t src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
     int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
 };
 
