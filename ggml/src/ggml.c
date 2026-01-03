@@ -6,6 +6,7 @@
 #include "ggml-threading.h"
 #include "ggml-cpu.h"
 #include "ggml.h"
+#include "ggml-cpu/ggml-cpu-impl.h"
 
 // FIXME: required here for quantization functions
 #include "ggml-quants.h"
