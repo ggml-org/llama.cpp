@@ -10,6 +10,7 @@
 #include "chat-auto-parser.h"
 #include "chat.h"
 #include "common.h"
+#include "ggml.h"
 #include "log.h"
 
 #include <fstream>
@@ -72,7 +73,6 @@ static common_chat_msg normalize(const common_chat_msg & msg) {
         try {
             tool_call.arguments = json::parse(tool_call.arguments).dump();
         } catch (const std::exception &) {
-            // Do nothing
         }
     }
     return normalized;
@@ -188,7 +188,7 @@ static void assert_msg_equals(const common_chat_msg & expected,
     }
 }
 
-common_chat_tool special_function_tool{
+static common_chat_tool special_function_tool{
     /* .name = */ "special_function",
     /* .description = */ "I'm special",
     /* .parameters = */ R"({
@@ -202,7 +202,7 @@ common_chat_tool special_function_tool{
         "required": ["arg1"]
     })",
 };
-common_chat_tool special_function_tool_with_optional_param{
+static common_chat_tool special_function_tool_with_optional_param{
     /* .name = */ "special_function_with_opt",
     /* .description = */ "I'm special but have optional stuff",
     /* .parameters = */ R"({
@@ -220,7 +220,7 @@ common_chat_tool special_function_tool_with_optional_param{
         "required": ["arg1"]
     })",
 };
-common_chat_tool python_tool{
+static common_chat_tool python_tool{
     /* .name = */ "python",
     /* .description = */ "an ipython interpreter",
     /* .parameters = */ R"({
@@ -234,7 +234,8 @@ common_chat_tool python_tool{
         "required": ["code"]
     })",
 };
-std::vector<common_chat_tool> tools{ special_function_tool, special_function_tool_with_optional_param, python_tool };
+static std::vector<common_chat_tool> tools{ special_function_tool, special_function_tool_with_optional_param,
+                                            python_tool };
 
 const common_chat_msg message_user{
     "user",
@@ -518,7 +519,8 @@ static void test_parser_with_streaming(const common_chat_msg & expected, const s
             unsigned char c = s[i];
             if ((c & 0x80) == 0) {
                 return len;
-            } else if ((c & 0xC0) == 0xC0) {
+            }
+            if ((c & 0xC0) == 0xC0) {
                 size_t expected_len = 0;
                 if ((c & 0xE0) == 0xC0) {
                     expected_len = 2;
@@ -531,9 +533,8 @@ static void test_parser_with_streaming(const common_chat_msg & expected, const s
                 }
                 if (len - i >= expected_len) {
                     return len;
-                } else {
-                    return i;
                 }
+                return i;
             }
         }
         return len - std::min(len, size_t(3));
@@ -753,7 +754,7 @@ static void test_msgs_oaicompat_json_conversion() {
         auto oai_json = common_chat_msgs_to_json_oaicompat<json>({ msg });
         auto msgs2    = common_chat_msgs_parse_oaicompat(oai_json);
         assert_equals((size_t) 1, msgs2.size());
-        auto msg2 = msgs2[0];
+        const auto & msg2 = msgs2[0];
         assert_msg_equals(msg, msg2);
     }
     assert_equals(std::string("[\n"
@@ -1644,10 +1645,10 @@ int main(int argc, char ** argv) {
                     std::cerr << "Skipping non-jinja file: " << path << '\n';
                     continue;
                 }
-                auto tmpls  = read_templates(path);
-                auto parts  = string_split(path, "/");
-                auto name   = parts[parts.size() - 1];
-                auto format = common_chat_format_name(common_chat_templates_apply(tmpls.get(), inputs).format);
+                auto         tmpls  = read_templates(path);
+                auto         parts  = string_split(path, "/");
+                const auto & name   = parts[parts.size() - 1];
+                const auto * format = common_chat_format_name(common_chat_templates_apply(tmpls.get(), inputs).format);
                 std::cout << "| " << name << " | " << format << " |\n";
             } catch (const std::exception & e) {
                 std::cerr << "Failed to process " << argv[i] << ": " << e.what() << '\n';

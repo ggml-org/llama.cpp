@@ -55,8 +55,8 @@ class common_chat_peg_mapper {
 // ============================================================================
 
 // Forward declarations for data structures
-struct ContentStructure;
-struct ToolCallStructure;
+struct content_structure;
+struct tool_call_structure;
 
 class common_chat_peg_unified_builder : public common_chat_peg_builder {
   public:
@@ -103,26 +103,26 @@ class common_chat_peg_unified_builder : public common_chat_peg_builder {
     // High-level building methods
 
     // Build reasoning block based on ContentStructure
-    common_peg_parser build_reasoning_block(const ContentStructure & cs,
+    common_peg_parser build_reasoning_block(const content_structure & cs,
                                             common_reasoning_format  reasoning_format,
                                             bool                     thinking_forced_open);
 
     // Build content block based on ContentStructure
-    common_peg_parser build_content_block(const ContentStructure & cs, common_reasoning_format reasoning_format);
+    common_peg_parser build_content_block(const content_structure & cs, common_reasoning_format reasoning_format);
 
     // Build complete tool section based on ToolCallStructure
-    common_peg_parser build_tool_section(const ToolCallStructure & ts,
+    common_peg_parser build_tool_section(const tool_call_structure & ts,
                                          const nlohmann::json &    tools,
                                          bool                      parallel_tool_calls,
                                          bool                      force_tool_calls);
 
     // Build single function parser based on ToolCallStructure
-    common_peg_parser build_function(const ToolCallStructure & ts,
+    common_peg_parser build_function(const tool_call_structure & ts,
                                      const std::string &       name,
                                      const nlohmann::json &    schema);
 
     // Build arguments parser based on ToolCallStructure
-    common_peg_parser build_arguments(const ToolCallStructure & ts, const nlohmann::json & schema);
+    common_peg_parser build_arguments(const tool_call_structure & ts, const nlohmann::json & params);
 
     // Legacy-compatible helper for building standard JSON tool calls
     // Used by tests and manual parsers
@@ -163,6 +163,6 @@ class common_chat_peg_unified_mapper : public common_chat_peg_mapper {
   public:
     common_chat_peg_unified_mapper(common_chat_msg & msg) : common_chat_peg_mapper(msg) {}
 
-    void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result) override;
+    void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & parse_result_arg) override;
     void map(const common_peg_ast_node & node) override;
 };

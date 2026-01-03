@@ -15,32 +15,32 @@ using json = nlohmann::ordered_json;
 // ============================================================================
 
 // Phase 1 result: Content and reasoning structure (analyzed without tools)
-struct ContentStructure {
+struct content_structure {
     // Reasoning handling mode
-    enum ReasoningMode {
+    enum reasoning_mode_type {
         REASONING_NONE,         // No reasoning markers detected
         REASONING_OPTIONAL,     // <think>...</think> may appear before content
         REASONING_FORCED_OPEN,  // Template ends with open reasoning tag (thinking_forced_open)
     };
 
-    ReasoningMode reasoning_mode = REASONING_NONE;
-    std::string   reasoning_start;  // e.g., "<think>", "<|START_THINKING|>"
-    std::string   reasoning_end;    // e.g., "</think>", "<|END_THINKING|>"
+    reasoning_mode_type reasoning_mode = REASONING_NONE;
+    std::string         reasoning_start;  // e.g., "<think>", "<|START_THINKING|>"
+    std::string         reasoning_end;    // e.g., "</think>", "<|END_THINKING|>"
 
     // Content wrapping mode
-    enum ContentMode {
+    enum content_mode_type {
         CONTENT_PLAIN,                   // No content markers
         CONTENT_ALWAYS_WRAPPED,          // <response>...</response> always present
         CONTENT_WRAPPED_WITH_REASONING,  // Content wrapped only when reasoning present
     };
 
-    ContentMode content_mode = CONTENT_PLAIN;
-    std::string content_start;  // e.g., "<response>", "<|START_RESPONSE|>"
-    std::string content_end;    // e.g., "</response>", "<|END_RESPONSE|>"
+    content_mode_type content_mode = CONTENT_PLAIN;
+    std::string       content_start;  // e.g., "<response>", "<|START_RESPONSE|>"
+    std::string       content_end;    // e.g., "</response>", "<|END_RESPONSE|>"
 };
 
 // Phase 2 result: Tool call structure (layered on Phase 1)
-struct ToolCallStructure {
+struct tool_call_structure {
     bool supports_tools = false;
 
     // Container markers (what wraps all tool calls)
@@ -48,7 +48,7 @@ struct ToolCallStructure {
     std::string tool_section_end;    // e.g., "</tool_call>", "]", "</TOOLCALL>", ""
 
     // Function format (how individual functions are structured)
-    enum FunctionFormat {
+    enum function_format {
         FUNC_JSON_OBJECT,       // {"name": "X", "arguments": {...}}
         FUNC_TAG_WITH_NAME,     // <function=X>{...}</function>
         FUNC_TAG_NAME_ONLY,     // <X>...</X> where X is function name (rare)
@@ -59,7 +59,7 @@ struct ToolCallStructure {
         FUNC_MARKDOWN_CODE_BLOCK,  // Action:\n```json\n[...]\n``` (Cohere Command-R Plus style)
     };
 
-    FunctionFormat function_format = FUNC_JSON_OBJECT;
+    function_format function_format = FUNC_JSON_OBJECT;
 
     // For FUNC_JSON_OBJECT format - field names (may vary between templates)
     std::string name_field = "name";       // Could be "tool_name", "function"
@@ -85,13 +85,13 @@ struct ToolCallStructure {
     std::string code_block_language;  // e.g., "json" - language identifier in code fence
 
     // Argument format (how arguments are structured within a function)
-    enum ArgumentFormat {
+    enum argument_format {
         ARGS_JSON,            // Standard JSON object: {"key": "value", ...}
         ARGS_TAGGED,          // XML-style: <param=key>value</param>
         ARGS_KEY_VALUE_TAGS,  // <arg_key>key</arg_key><arg_value>value</arg_value> (GLM-4.6)
     };
 
-    ArgumentFormat argument_format = ARGS_JSON;
+    argument_format argument_format = ARGS_JSON;
 
     // For ARGS_TAGGED format
     std::string arg_prefix;     // e.g., "<param=", "<parameter="
@@ -104,9 +104,9 @@ struct ToolCallStructure {
 };
 
 // Combined result of unified template analysis
-struct TemplateAnalysisResult {
-    ContentStructure  content;
-    ToolCallStructure tools;
+struct template_analysis_result {
+    content_structure   content;
+    tool_call_structure tools;
 
     // Preserved tokens for tokenizer (union of all markers)
     std::vector<std::string> preserved_tokens;
@@ -117,42 +117,42 @@ struct TemplateAnalysisResult {
 // ============================================================================
 
 // Template analyzer that uses two-phase differential analysis
-class TemplateAnalyzer {
+class template_analyzer {
   public:
     // Main entry point: Unified two-phase analysis
-    static TemplateAnalysisResult analyze_template(const minja::chat_template & tmpl);
+    static template_analysis_result analyze_template(const minja::chat_template & tmpl);
 
     // Phase 1 - Analyze content and reasoning structure (no tools)
-    static ContentStructure analyze_content_structure(const minja::chat_template & tmpl);
+    static content_structure analyze_content_structure(const minja::chat_template & tmpl);
 
     // Phase 2 - Analyze tool call structure (layered on Phase 1)
-    static ToolCallStructure analyze_tool_structure(const minja::chat_template & tmpl,
-                                                    const ContentStructure &     content);
+    static tool_call_structure analyze_tool_structure(const minja::chat_template & tmpl,
+                                                      const content_structure &    content);
 
   private:
     // Phase 1 detection helpers
-    static void detect_reasoning_markers(const minja::chat_template & tmpl, ContentStructure & cs);
-    static void detect_content_markers(const minja::chat_template & tmpl, ContentStructure & cs);
-    static ContentStructure::ReasoningMode detect_reasoning_mode(const minja::chat_template & tmpl,
-                                                                 const ContentStructure &     cs,
-                                                                 const std::string &          prompt);
+    static void detect_reasoning_markers(const minja::chat_template & tmpl, content_structure & cs);
+    static void detect_content_markers(const minja::chat_template & tmpl, content_structure & cs);
+    static content_structure::reasoning_mode_type detect_reasoning_mode(const content_structure & cs,
+                                                                        const std::string &       prompt);
 
     // Phase 2 detection helpers
-    static void detect_tool_markers(const minja::chat_template & tmpl, ToolCallStructure & ts);
-    static void detect_function_format(const minja::chat_template & tmpl, ToolCallStructure & ts);
-    static void detect_argument_format(const minja::chat_template & tmpl, ToolCallStructure & ts);
+    static void detect_tool_markers(const minja::chat_template & tmpl, tool_call_structure & ts);
+    static void detect_function_format(const minja::chat_template & tmpl, tool_call_structure & ts);
+    static void detect_argument_format(const minja::chat_template & tmpl, tool_call_structure & ts);
 
     // Phase 2 helper methods
-    static void analyze_json_format(ToolCallStructure & ts, const struct InternalDiscoveredPattern & discovered);
-    static void analyze_xml_format(ToolCallStructure & ts, const struct InternalDiscoveredPattern & discovered);
-    static void analyze_bracket_tag_format(ToolCallStructure & ts, const struct InternalDiscoveredPattern & discovered);
-    static void analyze_recipient_based_format(ToolCallStructure &                      ts,
-                                               const struct InternalDiscoveredPattern & discovered);
-    static void analyze_markdown_code_block_format(ToolCallStructure &                      ts,
-                                                   const struct InternalDiscoveredPattern & discovered);
+    static void analyze_json_format(tool_call_structure & ts, const struct internal_discovered_pattern & discovered);
+    static void analyze_xml_format(tool_call_structure & ts, const struct internal_discovered_pattern & discovered);
+    static void analyze_bracket_tag_format(tool_call_structure &                      ts,
+                                           const struct internal_discovered_pattern & discovered);
+    static void analyze_recipient_based_format(tool_call_structure &                      ts,
+                                               const struct internal_discovered_pattern & discovered);
+    static void analyze_markdown_code_block_format(tool_call_structure &                      ts,
+                                                   const struct internal_discovered_pattern & discovered);
 
     // Helper to collect preserved tokens from analysis result
-    static void collect_preserved_tokens(TemplateAnalysisResult & result);
+    static void collect_preserved_tokens(template_analysis_result & result);
 };
 
 // ============================================================================
@@ -182,17 +182,17 @@ struct templates_params {
 // PEG PARSER GENERATOR
 // ============================================================================
 
-class UniversalPEGGenerator {
+class universal_peg_generator {
   public:
     // Generate parser from analysis result
-    static common_chat_params generate_parser(const TemplateAnalysisResult &  analysis,
-                                              const minja::chat_template &    tmpl,
-                                              const struct templates_params & inputs);
+    static common_chat_params generate_parser(const template_analysis_result & analysis,
+                                              const minja::chat_template &     tmpl,
+                                              const struct templates_params &  inputs);
 
   private:
     // Build unified parser (single code path for all formats)
-    static common_peg_arena build_parser(const TemplateAnalysisResult &  analysis,
-                                         const minja::chat_template &    tmpl,
-                                         const struct templates_params & inputs,
-                                         bool                            thinking_forced_open);
+    static common_peg_arena build_parser(const template_analysis_result & analysis,
+                                         const minja::chat_template &     tmpl,
+                                         const struct templates_params &  inputs,
+                                         bool                             thinking_forced_open);
 };

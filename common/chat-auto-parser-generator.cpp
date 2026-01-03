@@ -7,17 +7,12 @@
 #include <minja/chat-template.hpp>
 #include <minja/minja.hpp>
 #include <optional>
-#include <stdexcept>
 
 using json = nlohmann::ordered_json;
 
-// ============================================================================
-// Unified PEG Parser Generator
-// ============================================================================
-
-common_chat_params UniversalPEGGenerator::generate_parser(const TemplateAnalysisResult &  analysis,
-                                                          const minja::chat_template &    tmpl,
-                                                          const struct templates_params & inputs) {
+common_chat_params universal_peg_generator::generate_parser(const template_analysis_result & analysis,
+                                                            const minja::chat_template &     tmpl,
+                                                            const struct templates_params &  inputs) {
     common_chat_params data;
 
     try {
@@ -50,7 +45,7 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplateAnalysis
 
         // Determine if thinking is forced open based on prompt ending
         bool thinking_forced_open = false;
-        if (analysis.content.reasoning_mode == ContentStructure::REASONING_FORCED_OPEN) {
+        if (analysis.content.reasoning_mode == content_structure::REASONING_FORCED_OPEN) {
             if (inputs.enable_thinking) {
                 thinking_forced_open = true;
                 LOG_DBG("Thinking forced open based on template analysis\n");
@@ -75,30 +70,30 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplateAnalysis
             // Unified format that handles both JSON and tagged tool calls
             data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
             LOG_DBG("Generated unified parser with tool support (format: PEG_NATIVE)\n");
-        } else if (analysis.content.reasoning_mode != ContentStructure::REASONING_NONE) {
+        } else if (analysis.content.reasoning_mode != content_structure::REASONING_NONE) {
             // Reasoning markers detected - use PEG parser to handle thinking blocks
             data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
             LOG_DBG("Generated unified parser for reasoning handling (format: PEG_NATIVE)\n");
-        } else if (analysis.content.content_mode != ContentStructure::CONTENT_PLAIN) {
+        } else if (analysis.content.content_mode != content_structure::CONTENT_PLAIN) {
             // Content markers detected - use PEG parser to strip them even without tools
             data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
             LOG_DBG("Generated unified parser for content marker stripping (format: PEG_NATIVE)\n");
-        } else if (analysis.tools.function_format == ToolCallStructure::FUNC_RECIPIENT_BASED) {
+        } else if (analysis.tools.function_format == tool_call_structure::FUNC_RECIPIENT_BASED) {
             // Recipient-based format (e.g., Functionary v3.2): >>>recipient\n{content}
             // Need PEG parser to handle recipient delimiter parsing
             data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
             LOG_DBG("Generated unified parser for recipient-based format (format: PEG_NATIVE)\n");
-        } else if (analysis.tools.function_format == ToolCallStructure::FUNC_TAG_WITH_NAME) {
+        } else if (analysis.tools.function_format == tool_call_structure::FUNC_TAG_WITH_NAME) {
             // Tag-with-name format (e.g., func_name\n{args} for Functionary)
             // Need PEG parser to handle function name parsing
             data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
             LOG_DBG("Generated unified parser for tag-with-name format (format: PEG_NATIVE)\n");
-        } else if (analysis.tools.function_format == ToolCallStructure::FUNC_BRACKET_TAG) {
+        } else if (analysis.tools.function_format == tool_call_structure::FUNC_BRACKET_TAG) {
             // Bracket-tag format (e.g., [TOOL_CALLS]name[CALL_ID]id[ARGS]{...} for Mistral Small 3.2)
             // Need PEG parser to handle bracket tag parsing
             data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
             LOG_DBG("Generated unified parser for bracket-tag format (format: PEG_NATIVE)\n");
-        } else if (analysis.tools.function_format == ToolCallStructure::FUNC_PREFIXED_INDEXED) {
+        } else if (analysis.tools.function_format == tool_call_structure::FUNC_PREFIXED_INDEXED) {
             // Prefixed-indexed format (e.g., Kimi-K2)
             // Need PEG parser to handle namespace and indexed format
             data.format = COMMON_CHAT_FORMAT_PEG_NATIVE;
@@ -110,17 +105,15 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplateAnalysis
 
         // Determine trigger word for lazy grammar
         std::string trigger_word;
-        if (!analysis.tools.tool_section_start.empty()) {
+        if (!analysis.tools.tool_section_start.empty() ||
+            analysis.tools.function_format == tool_call_structure::FUNC_RECIPIENT_BASED) {
             trigger_word = analysis.tools.tool_section_start;
-        } else if (analysis.tools.function_format == ToolCallStructure::FUNC_TAG_WITH_NAME) {
+        } else if (analysis.tools.function_format == tool_call_structure::FUNC_TAG_WITH_NAME) {
             trigger_word = analysis.tools.function_prefix;
-        } else if (analysis.tools.function_format == ToolCallStructure::FUNC_BRACKET_TAG ||
-                   analysis.tools.function_format == ToolCallStructure::FUNC_PREFIXED_INDEXED) {
+        } else if (analysis.tools.function_format == tool_call_structure::FUNC_BRACKET_TAG ||
+                   analysis.tools.function_format == tool_call_structure::FUNC_PREFIXED_INDEXED) {
             // For formats with per-call markers, use per_call_start as trigger
             trigger_word = analysis.tools.per_call_start;
-        } else if (analysis.tools.function_format == ToolCallStructure::FUNC_RECIPIENT_BASED) {
-            // Recipient-based format uses tool_section_start (">>>") as trigger
-            trigger_word = analysis.tools.tool_section_start;
         }
 
         // Build grammar for tool calls
@@ -133,7 +126,7 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplateAnalysis
 
         // For FUNC_TAG_WITH_NAME with empty prefix (Functionary), disable lazy grammar
         // since there's no clear trigger word - constrain from the start
-        if (analysis.tools.function_format == ToolCallStructure::FUNC_TAG_WITH_NAME &&
+        if (analysis.tools.function_format == tool_call_structure::FUNC_TAG_WITH_NAME &&
             analysis.tools.function_prefix.empty()) {
             data.grammar_lazy = false;
         }
@@ -141,7 +134,7 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplateAnalysis
         if (data.grammar_lazy) {
             if (!trigger_word.empty()) {
                 data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, trigger_word });
-            } else if (analysis.tools.function_format == ToolCallStructure::FUNC_JSON_OBJECT &&
+            } else if (analysis.tools.function_format == tool_call_structure::FUNC_JSON_OBJECT &&
                        analysis.tools.supports_tools) {
                 // Raw JSON format without markers (e.g., Llama 3.1) - use regex trigger
                 data.grammar_triggers.push_back({
@@ -181,10 +174,10 @@ common_chat_params UniversalPEGGenerator::generate_parser(const TemplateAnalysis
     return data;
 }
 
-common_peg_arena UniversalPEGGenerator::build_parser(const TemplateAnalysisResult &  analysis,
-                                                     const minja::chat_template &    tmpl,
-                                                     const struct templates_params & inputs,
-                                                     bool                            thinking_forced_open) {
+common_peg_arena universal_peg_generator::build_parser(const template_analysis_result & analysis,
+                                                       const minja::chat_template &     tmpl,
+                                                       const struct templates_params &  inputs,
+                                                       bool                             thinking_forced_open) {
     GGML_UNUSED(tmpl);
 
     auto parser = build_chat_peg_unified_parser([&](common_chat_peg_unified_builder & p) {
@@ -207,7 +200,7 @@ common_peg_arena UniversalPEGGenerator::build_parser(const TemplateAnalysisResul
             // Check if this is a DeepSeek R1 style template with separate section and per-call markers
             // These templates go directly from reasoning to tool calls (no content before)
             bool has_per_call_markers_in_prefix =
-                analysis.tools.function_format == ToolCallStructure::FUNC_TAG_WITH_NAME &&
+                analysis.tools.function_format == tool_call_structure::FUNC_TAG_WITH_NAME &&
                 !analysis.tools.function_prefix.empty() &&
                 analysis.tools.function_prefix.find("call") != std::string::npos &&
                 (analysis.tools.function_prefix.find("begin") != std::string::npos ||
@@ -228,47 +221,50 @@ common_peg_arena UniversalPEGGenerator::build_parser(const TemplateAnalysisResul
                 // No content before tools - go directly from reasoning to tool section
                 return p.sequence({ reasoning_for_tools, p.space(), tool_section, p.space(),
                                     p.optional(p.content(p.rest())), p.end() });
-            } else if (!analysis.tools.tool_section_start.empty()) {
+            }
+            if (!analysis.tools.tool_section_start.empty()) {
                 // With section markers: look for start marker to delimit content
                 auto content_before_tools = p.content(p.until(analysis.tools.tool_section_start));
                 return p.sequence({ reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section,
                                     p.space(), p.optional(p.content(p.rest())), p.end() });
-            } else if (analysis.tools.function_format == ToolCallStructure::FUNC_TAG_WITH_NAME &&
-                       !analysis.tools.function_prefix.empty()) {
+            }
+            if (analysis.tools.function_format == tool_call_structure::FUNC_TAG_WITH_NAME &&
+                !analysis.tools.function_prefix.empty()) {
                 // Tag-with-name format (e.g., >>>func_name): content stops at function prefix
                 auto content_before_tools = p.content(p.until(analysis.tools.function_prefix));
                 return p.sequence(
                     { reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section, p.end() });
-            } else if (analysis.tools.function_format == ToolCallStructure::FUNC_TAG_WITH_NAME) {
+            }
+            if (analysis.tools.function_format == tool_call_structure::FUNC_TAG_WITH_NAME) {
                 // Functionary-style format: tool call starts immediately (e.g., func_name\n{args})
                 // No content before tools in this format - the entire output is the tool call
                 return p.sequence({ reasoning_for_tools, p.space(), tool_section, p.end() });
-            } else if (analysis.tools.function_format == ToolCallStructure::FUNC_BRACKET_TAG ||
-                       analysis.tools.function_format == ToolCallStructure::FUNC_PREFIXED_INDEXED) {
+            }
+            if (analysis.tools.function_format == tool_call_structure::FUNC_BRACKET_TAG ||
+                analysis.tools.function_format == tool_call_structure::FUNC_PREFIXED_INDEXED) {
                 // Bracket-tag (Mistral Small 3.2) or prefixed-indexed (Kimi-K2) format:
                 // Tool calls start with per_call_start marker (e.g., [TOOL_CALLS], <|tool_call_begin|>)
                 if (!analysis.tools.per_call_start.empty()) {
                     auto content_before_tools = p.content(p.until(analysis.tools.per_call_start));
                     return p.sequence(
                         { reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section, p.end() });
-                } else {
-                    // Fallback: no content before tools
-                    return p.sequence({ reasoning_for_tools, p.space(), tool_section, p.end() });
                 }
-            } else if (analysis.tools.function_format == ToolCallStructure::FUNC_MARKDOWN_CODE_BLOCK &&
-                       !analysis.tools.code_block_marker.empty()) {
+                // Fallback: no content before tools
+                return p.sequence({ reasoning_for_tools, p.space(), tool_section, p.end() });
+            }
+            if (analysis.tools.function_format == tool_call_structure::FUNC_MARKDOWN_CODE_BLOCK &&
+                !analysis.tools.code_block_marker.empty()) {
                 // Markdown code block format (Cohere Command-R Plus):
                 // Content stops at the code_block_marker (e.g., "Action:")
                 auto content_before_tools = p.content(p.until(analysis.tools.code_block_marker));
                 return p.sequence(
                     { reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section, p.end() });
-            } else {
-                // No section markers (raw JSON format): content must stop at JSON object start
-                // Tool calls start with "{", so use that as a delimiter
-                auto content_before_tools = p.content(p.until("{"));
-                return p.sequence(
-                    { reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section, p.end() });
             }
+            // No section markers (raw JSON format): content must stop at JSON object start
+            // Tool calls start with "{", so use that as a delimiter
+            auto content_before_tools = p.content(p.until("{"));
+            return p.sequence(
+                { reasoning_for_tools, p.space(), content_before_tools, p.space(), tool_section, p.end() });
         }
 
         // No tools - just reasoning (if any) followed by content
