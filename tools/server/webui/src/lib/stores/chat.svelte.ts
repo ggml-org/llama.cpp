@@ -1649,7 +1649,7 @@ class ChatStore {
 
 		// Config options needed by ChatService
 		if (currentConfig.systemMessage) apiOptions.systemMessage = currentConfig.systemMessage;
-		if (currentConfig.disableReasoningFormat) apiOptions.disableReasoningFormat = true;
+		if (currentConfig.disableReasoningParsing) apiOptions.disableReasoningParsing = true;
 
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);

@@ -355,7 +355,7 @@
 			{onConfirmDelete}
 			{onNavigateToSibling}
 			{onShowDeleteDialogChange}
-			showRawOutputSwitch={currentConfig.disableReasoningFormat}
+			showRawOutputSwitch={currentConfig.showRawOutputSwitch}
 			rawOutputEnabled={showRawOutput}
 			onRawOutputToggle={(enabled) => (showRawOutput = enabled)}
 		/>
