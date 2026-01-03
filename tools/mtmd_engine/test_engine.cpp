@@ -6,51 +6,7 @@
 #include <Windows.h>
 #include <io.h>
 #include <chrono>
-
-//
-//FILE* create_memory_file(const void *data, size_t size) {
-//    // 创建内存映射文件
-//    HANDLE hMap = CreateFileMapping(
-//        INVALID_HANDLE_VALUE,
-//        NULL,
-//        PAGE_READWRITE,
-//        0,
-//        size,
-//        NULL
-//    );
-//
-//    if (!hMap) return NULL;
-//
-//    // 映射到内存
-//    void* pData = MapViewOfFile(hMap, FILE_MAP_WRITE, 0, 0, size);
-//    if (!pData) {
-//        CloseHandle(hMap);
-//        return NULL;
-//    }
-//
-//    // 复制数据
-//    if (data) {
-//        memcpy(pData, data, size);
-//    }
-//
-//    // 创建文件描述符
-//    int fd = _open_osfhandle((intptr_t)hMap, _O_RDWR | _O_CREAT);
-//    if (fd == -1) {
-//        UnmapViewOfFile(pData);
-//        CloseHandle(hMap);
-//        return NULL;
-//    }
-//
-//    // 创建FILE*指针
-//    FILE* fp = _fdopen(fd, "rb+");
-//    if (!fp) {
-//        _close(fd);
-//        UnmapViewOfFile(pData);
-//        CloseHandle(hMap);
-//    }
-//
-//    return fp;
-//}
+#include <thread>
 
 std::vector<unsigned char> load_img_file(const std::string path) {
     std::ifstream fin(path, std::ios::binary);
@@ -76,32 +32,87 @@ void log_call(int level, const std::string& msg) {
     std::cout<<"log(" << level << "): " << msg << std::endl;
 }
 
-//void test_mem_file() {
-//    std::vector<unsigned char> data = load_img_file("e:/wafer.jpg");
-//    auto mmf = MemoryMappedFile::CreateWithData(data.data(), data.size());
-//    FILE* fp = mmf->GetFilePointer();
-//    std::vector<unsigned char> new_data;
-//    new_data.resize(data.size());
-//    fread(new_data.data(), 1, data.size(), fp);
-//    std::ofstream new_f("e:/new_wafer.jpg", std::ios::binary);
-//    new_f.write((char*)new_data.data(), new_data.size());
-//}
-
-
-
-
-int main() {
+void engine2() {
     //test_mem_file();
     llama_engine::InferInput input;
-    input.img_bufs = load_img_file("e:/wafer.jpg");
+    //input.img_bufs = load_img_file("e:/wafer.png");
+    input.img_bufs = load_img_file("G:/model_test/xin_shang_wei_zhuang/20201016065520_S[25]_waferid.jpg");
 
     llama_engine::InferResult res;
 
     llama_engine::EngineConfigParam param;
-    param.gpu_devices.clear();
-    param.gpu_layer_count = 999;
+    //param.gpu_devices.clear();
+    param.gpu_layer_count         = 99;
+    param.log_call_back           = log_call;
+    param.max_predict_token_count = 32;
+    param.fit_param               = false;
+
+    llama_engine::InferEngine engine;
+    auto                      status = engine.set_config_param(param);
+    auto                      start  = std::chrono::system_clock::now();
+    //auto model_buf = load_img_file("d:/qwen/official_gguf/Qwen3VL-2B-Instruct-Q4_K_M.gguf");
+    ////auto model_buf = load_img_file("d:/qwen/o_gen/mmproj-Qwen3-VL-2B-Instruct-F16.gguf");
+    ////auto mmproj_buf = load_img_file("d:/qwen/official_gguf/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf");
+    //auto mmproj_buf = load_img_file("d:/qwen/o_gen/mmproj-Qwen3-VL-2B-Instruct-F16.gguf");
+
+    status = engine.load_model_from_file(
+        //"d:/qwen/Qwen3VL-2B-Instruct-F16.gguf",
+        //"d:/qwen/mmproj-Qwen3VL-2B-Instruct-F16.gguf"
+        //"d:/qwen/official_gguf/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+        //"d:/qwen/official_gguf/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
+        "g:/model_test/qwen/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+        "g:/model_test/qwen/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf");
+    //status = engine.load_model_from_buffer((char*)model_buf.data(), model_buf.size(), (char*)mmproj_buf.data(), mmproj_buf.size());
+    auto start1 = std::chrono::system_clock::now();
+    status      = engine.infer(input, res);
+    auto end    = std::chrono::system_clock::now();
+    std::cout << "============= result =======================" << std::endl;
+    std::cout << res.result << std::endl;
+    std::cout << "every character results:/nc, prob/n";
+    for (const auto & ch : res.details) {
+        std::cout << ch.character << ": " << ch.prob << std::endl;
+    }
+    while (true) {
+        auto end1 = std::chrono::system_clock::now();
+        status    = engine.infer(input, res);
+        auto end2 = std::chrono::system_clock::now();
+        print_time(end1, end2);
+        std::cout << "result from thread 2: " << res.result << std::endl;
+    }
+    auto end1 = std::chrono::system_clock::now();
+    status    = engine.infer(input, res);
+    auto end2 = std::chrono::system_clock::now();
+    print_time(start, start1);
+    print_time(start1, end);
+    print_time(end, end1);
+    print_time(end1, end2);
+
+    std::cout << "============= result =======================" << std::endl;
+    std::cout << res.result << std::endl;
+    std::cout << "every character results:/nc, prob/n";
+    for (const auto & ch : res.details) {
+        std::cout << ch.character << ": " << ch.prob << std::endl;
+    }
+}
+
+
+int main() {
+    std::thread task2(engine2);
+
+
+    //test_mem_file();
+    llama_engine::InferInput input;
+    input.img_bufs = load_img_file("e:/wafer.png");
+    //input.img_bufs = load_img_file("G:/model_test/xin_shang_wei_zhuang/20201016065520_S[25]_waferid.jpg");
+
+    llama_engine::InferResult res;
+
+    llama_engine::EngineConfigParam param;
+    //param.gpu_devices.clear();
+    param.gpu_layer_count = 99;
     param.log_call_back = log_call;
-    //param.fit_param = false;
+    param.max_predict_token_count=32;
+    param.fit_param = false;
 
     llama_engine::InferEngine engine;
     auto status = engine.set_config_param(param);
@@ -115,36 +126,43 @@ int main() {
     status = engine.load_model_from_file(
         //"d:/qwen/Qwen3VL-2B-Instruct-F16.gguf",
         //"d:/qwen/mmproj-Qwen3VL-2B-Instruct-F16.gguf"
-        "d:/qwen/official_gguf/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
-        "d:/qwen/official_gguf/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
-        //"g:/model_test/qwen/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
-        //"g:/model_test/qwen/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
+        //"d:/qwen/official_gguf/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+        //"d:/qwen/official_gguf/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
+        "g:/model_test/qwen/Qwen3VL-2B-Instruct-Q4_K_M.gguf",
+        "g:/model_test/qwen/mmproj-Qwen3VL-2B-Instruct-Q8_0.gguf"
     );
     //status = engine.load_model_from_buffer((char*)model_buf.data(), model_buf.size(), (char*)mmproj_buf.data(), mmproj_buf.size());
     auto start1 = std::chrono::system_clock::now();
     status = engine.infer(input, res);
+    auto end    = std::chrono::system_clock::now();
     std::cout << "============= result =======================" << std::endl;
     std::cout << res.result << std::endl;
-    std::cout << "every character results:\nc, prob\n";
+    std::cout << "every character results:/nc, prob/n";
     for (const auto& ch : res.details) {
         std::cout << ch.character << ": " << ch.prob << std::endl;
     }
-    auto end = std::chrono::system_clock::now();
+    while (true) {
+        auto end1 = std::chrono::system_clock::now();
+        status    = engine.infer(input, res);
+        auto end2 = std::chrono::system_clock::now();
+        print_time(end1, end2);
+        std::cout << "result: " << res.result << std::endl;
+    }
+    auto end1 = std::chrono::system_clock::now();
     status = engine.infer(input, res);
     auto end2 = std::chrono::system_clock::now();
     print_time(start, start1);
     print_time(start1, end);
-    print_time(end, end2);
+    print_time(end, end1);
+    print_time(end1, end2);
 
 
     std::cout<< "============= result =======================" << std::endl;
     std::cout<< res.result << std::endl;
-    std::cout<<"every character results:\nc, prob\n";
+    std::cout<<"every character results:/nc, prob/n";
     for (const auto& ch : res.details) {
         std::cout<< ch.character <<": "<< ch.prob<<std::endl;
     }
 
-
-
-
+    task2.join();
 }
