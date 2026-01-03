@@ -549,11 +549,13 @@ common_peg_parser common_chat_peg_unified_builder::standard_json_tools(const std
     }
 
     // Build the section with markers
+    auto tool_calls = tool_choices;
+    if (parallel_tool_calls) {
+        tool_calls = tool_calls + zero_or_more(space() + literal(",") + space() + tool_choices);
+    }
+
     auto section =
-        parallel_tool_calls ?
-            trigger_rule("tool-call", literal(section_start) + space() + one_or_more(tool_choices + space()) +
-                                          literal(section_end)) :
-            trigger_rule("tool-call", literal(section_start) + space() + tool_choices + space() + literal(section_end));
+        trigger_rule("tool-call", literal(section_start) + space() + tool_calls + space() + literal(section_end));
 
     return force_tool_calls ? section : optional(section);
 }
@@ -633,7 +635,7 @@ common_peg_parser common_chat_peg_unified_builder::standard_constructed_tools(
 // ============================================================================
 
 void common_chat_peg_unified_mapper::from_ast(const common_peg_ast_arena &    arena,
-                                               const common_peg_parse_result & parse_result_arg) {
+                                              const common_peg_parse_result & parse_result_arg) {
     // Call base class to visit all nodes
     common_chat_peg_mapper::from_ast(arena, parse_result_arg);
 
@@ -673,11 +675,11 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
         // Don't create tool call yet - wait for name to be known
         // This prevents sending incomplete tool calls in streaming mode
         pending_tool_call = common_chat_tool_call();
-        current_tool = &pending_tool_call.value();
-        arg_count    = 0;
+        current_tool      = &pending_tool_call.value();
+        arg_count         = 0;
         // Clear the arguments buffer for the new tool
         args_buffer.clear();
-        needs_closing_quote = false;
+        needs_closing_quote        = false;
         buffer_needs_closing_quote = false;
     }
 
@@ -803,12 +805,12 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
                 // Add opening quote if not already in a string
                 if (!current_tool->name.empty()) {
                     if (!needs_closing_quote) {
-                        value_to_add = "\"";
+                        value_to_add        = "\"";
                         needs_closing_quote = true;
                     }
                 } else {
                     if (!buffer_needs_closing_quote) {
-                        value_to_add = "\"";
+                        value_to_add               = "\"";
                         buffer_needs_closing_quote = true;
                     }
                 }
@@ -882,5 +884,5 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
             // Don't add to result if no name - this prevents incomplete tool calls
             pending_tool_call.reset();
         }
-}
+    }
 }
