@@ -1142,6 +1142,94 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(const minja::chat_tem
         // The caller (analyze_template) will have the ContentStructure to modify
 
         LOG_DBG("FUNC_RECIPIENT_BASED: delimiter='%s'\n", ts.tool_section_start.c_str());
+    } else if (format == FORMAT_MARKDOWN_CODE_BLOCK) {
+        // Markdown code block format (Cohere Command-R Plus):
+        // Action:
+        // ```json
+        // [
+        //     {
+        //         "tool_name": "...",
+        //         "parameters": {...}
+        //     }
+        // ]
+        // ```
+        ts.supports_tools     = true;
+        ts.function_format    = ToolCallStructure::FUNC_MARKDOWN_CODE_BLOCK;
+        ts.argument_format    = ToolCallStructure::ARGS_JSON;
+
+        // Extract the code block marker (e.g., "Action:")
+        // The tool_call_start_marker should contain "Action:" followed by newline
+        if (!discovered.tool_call_start_marker.empty()) {
+            // Extract just the marker text (e.g., "Action:")
+            // The marker may be followed by whitespace/newline in the template
+            size_t marker_end = discovered.tool_call_start_marker.find_first_of(" \n\r\t");
+            if (marker_end != std::string::npos) {
+                ts.code_block_marker = discovered.tool_call_start_marker.substr(0, marker_end);
+            } else {
+                ts.code_block_marker = discovered.tool_call_start_marker;
+            }
+        }
+
+        // Extract the code block language (e.g., "json")
+        // For Command-R Plus format: Action:\n```json\n[...]
+        // The code fence is in tool_call_opener (before the function name), not function_name_suffix
+        if (!discovered.function_name_suffix.empty() &&
+            discovered.function_name_suffix.find("```") != std::string::npos) {
+            // Format: ```json or ```json\n
+            size_t code_fence_pos = discovered.function_name_suffix.find("```");
+            size_t lang_start = code_fence_pos + 3;
+            // Find the end of the language identifier (newline, space, or end of string)
+            size_t lang_end = discovered.function_name_suffix.find_first_of(" \n\r\t", lang_start);
+            if (lang_end != std::string::npos && lang_end > lang_start) {
+                ts.code_block_language = discovered.function_name_suffix.substr(lang_start, lang_end - lang_start);
+            } else {
+                // No language identifier after ```, will use "json" as default
+                ts.code_block_language = "json";
+            }
+        } else if (!discovered.tool_call_opener.empty() &&
+                   discovered.tool_call_opener.find("```") != std::string::npos) {
+            // Code fence is in tool_call_opener (before the function name)
+            // Format: Action:\n```json\n[...
+            size_t code_fence_pos = discovered.tool_call_opener.find("```");
+            size_t lang_start = code_fence_pos + 3;
+            // Find the end of the language identifier (newline, space, or end of string)
+            size_t lang_end = discovered.tool_call_opener.find_first_of(" \n\r\t", lang_start);
+            if (lang_end != std::string::npos && lang_end > lang_start) {
+                ts.code_block_language = discovered.tool_call_opener.substr(lang_start, lang_end - lang_start);
+            } else {
+                // No language identifier after ```, will use "json" as default
+                ts.code_block_language = "json";
+            }
+        } else {
+            // Default to "json" if no code fence found
+            ts.code_block_language = "json";
+        }
+
+        // The tool_section_end should be the closing code fence: ```
+        if (!discovered.tool_call_closer.empty() &&
+            discovered.tool_call_closer.find("```") != std::string::npos) {
+            // Extract just the closing code fence (may have trailing content)
+            size_t fence_pos = discovered.tool_call_closer.find("```");
+            size_t fence_end = fence_pos + 3;
+            // Include any non-newline characters after ``` (like language identifier if present)
+            while (fence_end < discovered.tool_call_closer.length() &&
+                   discovered.tool_call_closer[fence_end] != '\n' &&
+                   discovered.tool_call_closer[fence_end] != '\r') {
+                fence_end++;
+            }
+            ts.tool_section_end = discovered.tool_call_closer.substr(fence_pos, fence_end - fence_pos);
+        } else {
+            // Default closing code fence
+            ts.tool_section_end = "```";
+        }
+
+        // JSON array format for function calls
+        ts.name_field = discovered.tool_name_field;
+        ts.args_field = discovered.tool_args_field;
+        ts.id_field = discovered.tool_id_field;
+
+        LOG_DBG("FUNC_MARKDOWN_CODE_BLOCK: marker='%s', language='%s', section_end='%s'\n",
+                ts.code_block_marker.c_str(), ts.code_block_language.c_str(), ts.tool_section_end.c_str());
     }
 
     return ts;
@@ -1210,6 +1298,16 @@ void TemplateAnalyzer::collect_preserved_tokens(TemplateAnalysisResult & result)
         }
         if (!result.tools.arg_close.empty()) {
             tokens.push_back(result.tools.arg_close);
+        }
+    }
+
+    // Add markers for markdown code block format (Cohere Command-R Plus)
+    if (result.tools.function_format == ToolCallStructure::FUNC_MARKDOWN_CODE_BLOCK) {
+        if (!result.tools.code_block_marker.empty()) {
+            tokens.push_back(result.tools.code_block_marker);
+        }
+        if (!result.tools.tool_section_end.empty()) {
+            tokens.push_back(result.tools.tool_section_end);  // Closing code fence ```
         }
     }
 

@@ -381,6 +381,8 @@ static const char * function_format_to_str(ToolCallStructure::FunctionFormat fmt
             return "BRACKET_TAG";
         case ToolCallStructure::FUNC_RECIPIENT_BASED:
             return "RECIPIENT_BASED";
+        case ToolCallStructure::FUNC_MARKDOWN_CODE_BLOCK:
+            return "MARKDOWN_CODE_BLOCK";
     }
     return "UNKNOWN";
 }

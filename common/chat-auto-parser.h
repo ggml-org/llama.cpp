@@ -56,6 +56,7 @@ struct ToolCallStructure {
         FUNC_NAME_AS_KEY,      // [{"function_name": {...arguments...}}] (Apertus-style)
         FUNC_BRACKET_TAG,      // [TOOL_CALLS]X[CALL_ID]id[ARGS]{...} (Mistral Small 3.2 style)
         FUNC_RECIPIENT_BASED,  // >>>recipient\n{content} where recipient is "all" (content) or function name (tools)
+        FUNC_MARKDOWN_CODE_BLOCK, // Action:\n```json\n[...]\n``` (Cohere Command-R Plus style)
     };
     FunctionFormat function_format = FUNC_JSON_OBJECT;
 
@@ -77,6 +78,10 @@ struct ToolCallStructure {
 
     // For FUNC_BRACKET_TAG format (e.g., Mistral Small 3.2)
     std::string id_marker;           // e.g., "[CALL_ID]" - marker before tool call ID
+
+    // For FUNC_MARKDOWN_CODE_BLOCK format (e.g., Cohere Command-R Plus)
+    std::string code_block_marker;   // e.g., "Action:" - text marker before code block
+    std::string code_block_language; // e.g., "json" - language identifier in code fence
 
     // Argument format (how arguments are structured within a function)
     enum ArgumentFormat {

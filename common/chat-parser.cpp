@@ -1600,6 +1600,21 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &   parser,
     auto                     result = parser.parse(ctx);
 
     if (result.fail()) {
+        // During partial parsing, return partial results if any AST nodes were captured
+        // This allows streaming to work correctly for formats like FUNC_MARKDOWN_CODE_BLOCK
+        if (is_partial && result.end > 0) {
+            // Try to extract any partial results from what was successfully parsed
+            common_chat_msg msg;
+            msg.role = "assistant";
+            if (syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE || syntax.format == COMMON_CHAT_FORMAT_PEG_CONSTRUCTED) {
+                auto mapper = common_chat_peg_unified_mapper(msg);
+                mapper.from_ast(ctx.ast, result);
+            } else {
+                auto mapper = common_chat_peg_mapper(msg);
+                mapper.from_ast(ctx.ast, result);
+            }
+            return msg;
+        }
         throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end) + ": " +
                                  input.substr(result.end));
     }

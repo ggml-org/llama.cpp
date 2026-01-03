@@ -886,6 +886,32 @@ InternalToolFormat determine_format_from_patterns(const InternalDiscoveredPatter
         return FORMAT_UNKNOWN;
     }
 
+    // Check for markdown code block format (Cohere Command-R Plus)
+    // STRUCTURAL PATTERN: Action:\n```json\n[...]\n```
+    // Key indicators:
+    // 1. tool_call_start_marker contains "Action:" or similar plain text marker
+    // 2. function_name_suffix or tool_call_closer contains "```" (markdown code fence)
+    // 3. tool_call_opener starts with "[" indicating JSON array
+    bool has_code_fence = false;
+    if (!patterns.function_name_suffix.empty() && patterns.function_name_suffix.find("```") != std::string::npos) {
+        has_code_fence = true;
+    }
+    if (!patterns.tool_call_closer.empty() && patterns.tool_call_closer.find("```") != std::string::npos) {
+        has_code_fence = true;
+    }
+    bool has_action_marker = false;
+    if (!patterns.tool_call_start_marker.empty()) {
+        std::string marker_lower = patterns.tool_call_start_marker;
+        std::transform(marker_lower.begin(), marker_lower.end(), marker_lower.begin(), ::tolower);
+        if (marker_lower.find("action") != std::string::npos) {
+            has_action_marker = true;
+        }
+    }
+    if (has_code_fence && has_action_marker) {
+        LOG_DBG("Detected MARKDOWN_CODE_BLOCK format (Action: + ```json code fence)\n");
+        return FORMAT_MARKDOWN_CODE_BLOCK;
+    }
+
     // Check for recipient-based routing format (e.g., Functionary v3.2)
     // STRUCTURAL PATTERN: The same marker is used for both content routing and tool routing
     // Key indicators:
