@@ -3261,9 +3261,9 @@ bool ggml_sycl_mul_mat_id_vec_q(
         }
 
         // Quantize all rows to Q8_1
-        // Use SoA quantizer if weights are in SoA layout (SoA kernels expect SoA Y)
+        // Use SoA quantizer if weights are in any reordered layout (both SoA and COALESCED kernels expect SoA Y)
         ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-        const bool y_soa = extra && extra->optimized_feature.is_soa();
+        const bool y_soa = extra && extra->optimized_feature.is_reordered();
         if (y_soa) {
             GGML_SYCL_DEBUG("[MoE-Q8_1] Quantizing Y to SoA layout (X is_soa=%d)\n", y_soa);
             quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(src1_d, (char*)q8_1_buffer, ne10, total_src1_rows, ne10_padded, stream);

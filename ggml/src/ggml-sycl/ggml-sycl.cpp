@@ -10984,9 +10984,9 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         if (g_ggml_sycl_debug) {
             static int mmq_dbg_count = 0;
             if (mmq_dbg_count++ < 10) {
-                fprintf(stderr, "[MMQ-DISPATCH] src0=%s type=%d extra=%p is_soa=%d batch=%lld\n",
+                fprintf(stderr, "[MMQ-DISPATCH] src0=%s type=%d extra=%p reorder_mode=%d batch=%lld\n",
                         src0->name, src0->type, (void*)mmq_extra,
-                        mmq_extra ? mmq_extra->optimized_feature.is_soa() : -1,
+                        mmq_extra ? (int)mmq_extra->optimized_feature.get_reorder() : -1,
                         (long long)src1->ne[1]);
             }
         }
