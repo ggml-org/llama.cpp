@@ -1403,7 +1403,7 @@ static void test_template_output_peg_parsers() {
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .expect(message_assist_thoughts)
             .run();
-        // TODO: Tool call test uses multi-byte Unicode markers that need verification
+        // TODO: finding less tool calls
         // tst.test(
         //        "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
         //        "```json\n{\"arg1\": 1}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>")
@@ -1421,7 +1421,7 @@ static void test_template_output_peg_parsers() {
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .expect(message_assist_thoughts)
             .run();
-        // TODO: Tool call test uses multi-byte Unicode markers that need verification
+        // TODO: finding less tool calls
         // tst.test(
         //        "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>special_function\n"
         //        "```json\n{\"arg1\": 1}\n```<｜tool▁call▁end｜>")
