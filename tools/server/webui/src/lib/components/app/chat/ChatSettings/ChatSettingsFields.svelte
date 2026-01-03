@@ -267,16 +267,16 @@
 				/>
 
 				<div class="space-y-1">
-					<label
+					<Label
 						for={field.key}
-						class="flex cursor-pointer items-center gap-1.5 pt-1 pb-0.5 text-sm leading-none font-medium"
+						class="flex cursor-pointer items-center gap-1.5 text-sm font-medium"
 					>
 						{field.label}
 
 						{#if field.isExperimental}
 							<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
 						{/if}
-					</label>
+					</Label>
 
 					{#if field.help || SETTING_CONFIG_INFO[field.key]}
 						<p class="text-xs text-muted-foreground">
