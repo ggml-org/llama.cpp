@@ -10885,11 +10885,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     }
 
     // mmvq path is faster in the CUDA backend.
-    if (!g_ggml_sycl_prioritize_dmmv && (ctx.stream()->get_backend() == sycl::backend::ext_oneapi_cuda
-        // Dispatch becomes obscure with the reorder, MMVQ when the reorder optimization
-        // is enabled takes precedence over DMMV, the current if-else implementation
-        // requires disabling DMMV if both conditions are met
-        || (should_reorder_tensor(ctx, dst) && ggml_sycl_supports_reorder_mmvq(src0->type)))) {
+    if (!g_ggml_sycl_prioritize_dmmv && ctx.stream()->get_backend() == sycl::backend::ext_oneapi_cuda) {
         use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && !use_mul_mat_vec_q;
     }
 
