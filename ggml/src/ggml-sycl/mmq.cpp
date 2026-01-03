@@ -1692,9 +1692,11 @@ load_tiles_q6_K_soa(const uint8_t *__restrict__ qs_base,
     }
 }
 
-// Q6_K coalesced tile loader
+// Q6_K coalesced tile loader with variable tile support
 // Coalesced layout per row:
-//   [ql tile][qh tile][sc tile] ... repeated for tiles_per_row, then all d values
+//   [ql tile 0][qh tile 0][sc tile 0][ql tile 1][qh tile 1][sc tile 1]... then all d values
+// Tiles are power-of-2, largest first, max 32 blocks each
+// Example: 56 blocks = 32 + 16 + 8 = 3 tiles
 template <int mmq_y, int nwarps, bool need_check>
 static __dpct_inline__ void
 load_tiles_q6_K_coalesced(const uint8_t *__restrict__ qs_base,
@@ -1714,18 +1716,24 @@ load_tiles_q6_K_coalesced(const uint8_t *__restrict__ qs_base,
     GGML_SYCL_ASSUME(k >= 0);
     GGML_SYCL_ASSUME(k <  WARP_SIZE);
 
-    constexpr int TILE_BLOCKS = MMVQ_COALESCED_TILE_BLOCKS;
-    constexpr int word_stride = TILE_BLOCKS * 4;
-    constexpr int ql_tile_bytes = TILE_BLOCKS * (QK_K / 2);
-    constexpr int qh_tile_bytes = TILE_BLOCKS * (QK_K / 4);
-    constexpr int sc_tile_bytes = TILE_BLOCKS * (QK_K / 16);
-    constexpr int tile_total = ql_tile_bytes + qh_tile_bytes + sc_tile_bytes;
+    // Compute row_stride using variable tile decomposition
+    // Each tile contributes: tile_size * (128 + 64 + 16) bytes for ql + qh + sc
+    size_t row_stride = 0;
+    {
+        int remaining = blocks_per_row;
+        while (remaining > 0) {
+            int ts = 1;
+            while (ts * 2 <= remaining && ts < 32) {
+                ts *= 2;
+            }
+            row_stride += ts * (128 + 64 + 16);
+            remaining -= ts;
+        }
+    }
 
     const int kbx  = k / QI6_K;
     const int kqsx = k % QI6_K;
 
-    const int tiles_per_row = blocks_per_row / TILE_BLOCKS;
-    const size_t row_stride = tiles_per_row * tile_total;
     const sycl::half * d_base = (const sycl::half *)(qs_base + d_offset);
 
 #pragma unroll
@@ -1738,10 +1746,47 @@ load_tiles_q6_K_coalesced(const uint8_t *__restrict__ qs_base,
 
         const int global_row = row_low + row_offset + i;
         const int block_in_row = block_offset + kbx;
-        const int tile = block_in_row / TILE_BLOCKS;
-        const int block_in_tile = block_in_row % TILE_BLOCKS;
 
-        const uint8_t * tile_base = qs_base + global_row * row_stride + tile * tile_total;
+        // Find which tile this block belongs to using variable tile decomposition
+        int tile = 0, tile_offset = 0, tile_size = 32;
+        {
+            int remaining = blocks_per_row;
+            int acc = 0;
+            while (remaining > 0) {
+                int ts = 1;
+                while (ts * 2 <= remaining && ts < 32) {
+                    ts *= 2;
+                }
+                if (block_in_row < acc + ts) {
+                    tile_size = ts;
+                    tile_offset = acc;
+                    break;
+                }
+                acc += ts;
+                remaining -= ts;
+                tile++;
+            }
+        }
+        const int block_in_tile = block_in_row - tile_offset;
+
+        // Compute byte offset to this tile within the row
+        size_t tile_byte_offset = 0;
+        {
+            int remaining = blocks_per_row;
+            for (int t = 0; t < tile && remaining > 0; t++) {
+                int ts = 1;
+                while (ts * 2 <= remaining && ts < 32) {
+                    ts *= 2;
+                }
+                tile_byte_offset += ts * (128 + 64 + 16);
+                remaining -= ts;
+            }
+        }
+
+        const int word_stride = tile_size * 4;
+        const int ql_tile_bytes = tile_size * 128;
+
+        const uint8_t * tile_base = qs_base + global_row * row_stride + tile_byte_offset;
         const uint8_t * tile_ql = tile_base;
         const uint8_t * tile_qh = tile_ql + ql_tile_bytes;
 
@@ -1796,9 +1841,48 @@ load_tiles_q6_K_coalesced(const uint8_t *__restrict__ qs_base,
 
         const int global_row = row_low + row_offset + i;
         const int block_in_row = block_offset + (k % (MMQ_TILE_NE_K/8)) / 4;
-        const int tile = block_in_row / TILE_BLOCKS;
-        const int block_in_tile = block_in_row % TILE_BLOCKS;
-        const uint8_t * tile_base = qs_base + global_row * row_stride + tile * tile_total;
+
+        // Find which tile this block belongs to using variable tile decomposition
+        int tile = 0, tile_offset_sc = 0, tile_size_sc = 32;
+        {
+            int remaining = blocks_per_row;
+            int acc = 0;
+            while (remaining > 0) {
+                int ts = 1;
+                while (ts * 2 <= remaining && ts < 32) {
+                    ts *= 2;
+                }
+                if (block_in_row < acc + ts) {
+                    tile_size_sc = ts;
+                    tile_offset_sc = acc;
+                    break;
+                }
+                acc += ts;
+                remaining -= ts;
+                tile++;
+            }
+        }
+        const int block_in_tile = block_in_row - tile_offset_sc;
+
+        // Compute byte offset to this tile within the row
+        size_t tile_byte_offset = 0;
+        {
+            int remaining = blocks_per_row;
+            for (int t = 0; t < tile && remaining > 0; t++) {
+                int ts = 1;
+                while (ts * 2 <= remaining && ts < 32) {
+                    ts *= 2;
+                }
+                tile_byte_offset += ts * (128 + 64 + 16);
+                remaining -= ts;
+            }
+        }
+
+        const int word_stride = tile_size_sc * 4;
+        const int ql_tile_bytes = tile_size_sc * 128;
+        const int qh_tile_bytes = tile_size_sc * 64;
+
+        const uint8_t * tile_base = qs_base + global_row * row_stride + tile_byte_offset;
         const int8_t * tile_sc = (const int8_t *)(tile_base + ql_tile_bytes + qh_tile_bytes);
 
         const int sc_word_idx = k % (MMQ_TILE_NE_K/8);
@@ -5611,8 +5695,22 @@ void ggml_sycl_op_mul_mat_q(
                 const int64_t storage_ne01 = storage->ne[1];
                 const int64_t storage_ne00 = storage->ne[0];
                 const int64_t blocks_per_row = storage_ne00 / QK_K;
-                const int64_t row_quants_bytes = blocks_per_row * ((QK_K / 2) + (QK_K / 4) + (QK_K / 16));
-                const size_t d_offset = static_cast<size_t>(storage_ne01) * static_cast<size_t>(row_quants_bytes);
+
+                // Compute row_quants_bytes using variable tile decomposition
+                // Each tile contributes: tile_size * (128 + 64 + 16) bytes for ql + qh + sc
+                size_t row_quants_bytes = 0;
+                {
+                    int remaining = static_cast<int>(blocks_per_row);
+                    while (remaining > 0) {
+                        int ts = 1;
+                        while (ts * 2 <= remaining && ts < 32) {
+                            ts *= 2;
+                        }
+                        row_quants_bytes += ts * (128 + 64 + 16);
+                        remaining -= ts;
+                    }
+                }
+                const size_t d_offset = static_cast<size_t>(storage_ne01) * row_quants_bytes;
 
                 const void * coa_base = ggml_sycl_get_data_ptr(storage, device_id);
 

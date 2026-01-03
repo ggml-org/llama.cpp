@@ -532,7 +532,8 @@ static void mul_mat_vec_q6_k_variable_tile(
         shared_partials[warp_id] = warp_sum;
     }
 
-    // ALL warps must hit this barrier (critical for correctness)
+    // Memory fence + barrier for proper visibility across sub-groups on Intel Arc
+    sycl::atomic_fence(sycl::memory_order::seq_cst, sycl::memory_scope::work_group);
     sycl::group_barrier(nd_item.get_group());
 
     // First warp reduces all partial sums

@@ -1647,6 +1647,247 @@ static void dequantize_mul_mat_vec_q6_K_sycl_coalesced(
         });
 }
 
+// =============================================================================
+// Q6_K VARIABLE TILE COALESCED DMMV KERNEL
+// Handles arbitrary block counts using power-of-2 tile decomposition
+// Each work-group processes one row, with multiple warps handling different tiles
+// Shared memory reduction combines partial sums from all tiles
+// Input: float y (dequantized), not Q8_1 quantized
+// =============================================================================
+static void dequantize_mul_mat_vec_q6_k_coalesced_variable(
+    const void * __restrict__ vx,
+    const float * __restrict__ yy,
+    float * __restrict__ dst,
+    const int ncols,
+    const int nrows,
+    const int nrows_full,
+    const int row_low,
+    const int blocks_per_row,
+    const int num_tiles,
+    const int row_quants_bytes,
+    float * __restrict__ shared_partials,
+    const sycl::nd_item<3> & item_ct1)
+{
+    const auto sg = item_ct1.get_sub_group();
+    const int warp_id = item_ct1.get_local_id(2) / QK_WARP_SIZE;
+    const int lane_id = sg.get_local_linear_id();
+    const int row = item_ct1.get_group(2);
+
+    if (row >= nrows) return;
+
+    const int global_row = row_low + row;
+
+    // X base pointers
+    const uint8_t * x_base = (const uint8_t *)vx;
+
+    // D values at end of tensor - use nrows_full since d values are at end of FULL tensor
+    const sycl::half * d_base = (const sycl::half *)(x_base + static_cast<int64_t>(nrows_full) * row_quants_bytes);
+
+    float partial_sum = 0.0f;
+
+    // Only warps assigned to tiles do actual work
+    // Extra warps will contribute 0 to the reduction
+    if (warp_id < num_tiles) {
+        // Get this warp's tile info - recompute locally since we can't call tile_size_at in kernel
+        int tile_size = 0;
+        int tile_offset = 0;
+        {
+            int remaining = blocks_per_row;
+            int current_offset = 0;
+            for (int t = 0; t <= warp_id && remaining > 0; t++) {
+                int ts = 1;
+                while (ts * 2 <= remaining && ts < 32) {
+                    ts *= 2;
+                }
+                if (t == warp_id) {
+                    tile_size = ts;
+                    tile_offset = current_offset;
+                }
+                current_offset += ts;
+                remaining -= ts;
+            }
+        }
+
+        // Compute byte offset to this tile within the row
+        int tile_byte_offset = 0;
+        {
+            int remaining = blocks_per_row;
+            for (int t = 0; t < warp_id && remaining > 0; t++) {
+                int ts = 1;
+                while (ts * 2 <= remaining && ts < 32) {
+                    ts *= 2;
+                }
+                tile_byte_offset += ts * (128 + 64 + 16);  // ql + qh + scales per block
+                remaining -= ts;
+            }
+        }
+
+        // X pointers - use global_row for accessing the full tensor data
+        const uint8_t * tile_base = x_base + static_cast<int64_t>(global_row) * row_quants_bytes + tile_byte_offset;
+
+        // Tile layout: [ql: tile_size * 128][qh: tile_size * 64][scales: tile_size * 16]
+        const uint8_t * tile_ql = tile_base;
+        const uint8_t * tile_qh = tile_ql + tile_size * 128;
+        const int8_t * tile_sc = (const int8_t *)(tile_qh + tile_size * 64);
+
+        const int word_plane_stride = tile_size * 4;
+
+        // Process blocks within this tile
+        // Each lane processes one block (up to tile_size blocks)
+        if (lane_id < tile_size) {
+            const int block_in_tile = lane_id;
+            const int global_block_idx = global_row * blocks_per_row + tile_offset + block_in_tile;
+            const float d = static_cast<float>(d_base[global_block_idx]);
+
+            const float * y = yy + (tile_offset + block_in_tile) * QK_K;
+
+            // Process all 256 elements in this Q6_K block
+            // Q6_K: 256 values, 128 ql bytes (2 values/byte), 64 qh bytes (4 values/byte), 16 scale bytes
+            for (int im = 0; im < 2; ++im) {  // Two halves of 128 elements each
+                const int y_offset = 128 * im;
+                const int ql_offset_base = 64 * im;
+                const int qh_offset_base = 32 * im;
+                const int s_offset_base = 8 * im;
+
+                for (int in = 0; in < 16; ++in) {
+                    const int l0 = in;
+
+                    // Load ql bytes using word-major access
+                    auto load_ql = [&](int byte_idx) -> uint8_t {
+                        const int word = byte_idx / 4;
+                        const int byte_in_word = byte_idx % 4;
+                        const int offset = word * word_plane_stride + block_in_tile * 4 + byte_in_word;
+                        return tile_ql[offset];
+                    };
+
+                    // Load qh bytes using word-major access
+                    auto load_qh = [&](int byte_idx) -> uint8_t {
+                        const int word = byte_idx / 4;
+                        const int byte_in_word = byte_idx % 4;
+                        const int offset = word * word_plane_stride + block_in_tile * 4 + byte_in_word;
+                        return tile_qh[offset];
+                    };
+
+                    // Load scale bytes using word-major access
+                    auto load_sc = [&](int byte_idx) -> int8_t {
+                        const int word = byte_idx / 4;
+                        const int byte_in_word = byte_idx % 4;
+                        const int offset = word * word_plane_stride + block_in_tile * 4 + byte_in_word;
+                        return tile_sc[offset];
+                    };
+
+                    const uint8_t ql0 = load_ql(ql_offset_base + l0 + 0);
+                    const uint8_t ql1 = load_ql(ql_offset_base + l0 + 16);
+                    const uint8_t ql2 = load_ql(ql_offset_base + l0 + 32);
+                    const uint8_t ql3 = load_ql(ql_offset_base + l0 + 48);
+
+                    const uint8_t qh0 = load_qh(qh_offset_base + l0 + 0);
+                    const uint8_t qh1 = load_qh(qh_offset_base + l0 + 16);
+
+                    const int8_t s0 = load_sc(s_offset_base + 0);
+                    const int8_t s1 = load_sc(s_offset_base + 1);
+                    const int8_t s2 = load_sc(s_offset_base + 2);
+                    const int8_t s3 = load_sc(s_offset_base + 3);
+                    const int8_t s4 = load_sc(s_offset_base + 4);
+                    const int8_t s5 = load_sc(s_offset_base + 5);
+                    const int8_t s6 = load_sc(s_offset_base + 6);
+                    const int8_t s7 = load_sc(s_offset_base + 7);
+
+                    // Dequantize: combine 4-bit low + 2-bit high, subtract 32
+                    int8_t q0 = (int8_t)((ql0 & 0xF) | ((qh0 & 0x03) << 4)) - 32;
+                    int8_t q1 = (int8_t)((ql1 & 0xF) | ((qh1 & 0x03) << 4)) - 32;
+                    int8_t q2 = (int8_t)((ql2 & 0xF) | ((qh0 & 0x0c) << 2)) - 32;
+                    int8_t q3 = (int8_t)((ql3 & 0xF) | ((qh1 & 0x0c) << 2)) - 32;
+                    int8_t q4 = (int8_t)((ql0 >> 4) | ((qh0 & 0x30) >> 0)) - 32;
+                    int8_t q5 = (int8_t)((ql1 >> 4) | ((qh1 & 0x30) >> 0)) - 32;
+                    int8_t q6 = (int8_t)((ql2 >> 4) | ((qh0 & 0xc0) >> 2)) - 32;
+                    int8_t q7 = (int8_t)((ql3 >> 4) | ((qh1 & 0xc0) >> 2)) - 32;
+
+                    // Compute dot product with y values
+                    float sum = y[y_offset + l0 +  0] * s0 * d * q0
+                              + y[y_offset + l0 + 16] * s1 * d * q1
+                              + y[y_offset + l0 + 32] * s2 * d * q2
+                              + y[y_offset + l0 + 48] * s3 * d * q3
+                              + y[y_offset + l0 + 64] * s4 * d * q4
+                              + y[y_offset + l0 + 80] * s5 * d * q5
+                              + y[y_offset + l0 + 96] * s6 * d * q6
+                              + y[y_offset + l0 +112] * s7 * d * q7;
+
+                    partial_sum += sum;
+                }
+            }
+        }
+    }
+
+    // Warp-level reduction - ALL warps participate (extra warps contribute 0)
+    float warp_sum = sycl::reduce_over_group(sg, partial_sum, sycl::plus<float>());
+
+    // Write to shared memory - ALL warps write (extra warps write 0)
+    if (lane_id == 0) {
+        shared_partials[warp_id] = warp_sum;
+    }
+
+    // Memory fence + barrier for proper visibility across sub-groups on Intel Arc
+    sycl::atomic_fence(sycl::memory_order::seq_cst, sycl::memory_scope::work_group);
+    sycl::group_barrier(item_ct1.get_group());
+
+    // First warp reduces all partial sums
+    if (warp_id == 0) {
+        float val = (lane_id < num_tiles) ? shared_partials[lane_id] : 0.0f;
+        float final_sum = sycl::reduce_over_group(sg, val, sycl::plus<float>());
+        if (lane_id == 0) {
+            dst[row] = final_sum;  // Output to slice-relative position
+        }
+    }
+}
+
+// Dispatch function for Q6_K variable tile DMMV kernel
+// nrows_full is the full tensor row count (ne01), nrows is the slice size (row_diff)
+// row_low is the starting row offset for this slice
+static void dequantize_mul_mat_vec_q6_K_sycl_coalesced_variable(
+    const void * vx, const float * y, float * dst,
+    const int ncols, const int nrows,
+    const int nrows_full, const int row_low,
+    dpct::queue_ptr stream)
+{
+    const int blocks_per_row = ncols / QK_K;
+    const int num_tiles = tile_count(blocks_per_row);
+    const int threads_per_row = num_tiles * QK_WARP_SIZE;
+
+    // Compute row stride (bytes per row for quant data, excluding d values)
+    int row_quants_bytes = 0;
+    {
+        int remaining = blocks_per_row;
+        while (remaining > 0) {
+            int ts = 1;
+            while (ts * 2 <= remaining && ts < 32) {
+                ts *= 2;
+            }
+            row_quants_bytes += ts * (128 + 64 + 16);  // ql + qh + scales per block
+            remaining -= ts;
+        }
+    }
+
+    GGML_SYCL_DEBUG("[DMMV] Q6_K variable tile: blocks_per_row=%d, num_tiles=%d, threads=%d, nrows_full=%d, row_low=%d\n",
+                   blocks_per_row, num_tiles, threads_per_row, nrows_full, row_low);
+
+    sycl::range<3> grid(1, 1, nrows);
+    sycl::range<3> block(1, 1, threads_per_row);
+
+    stream->submit([&](sycl::handler & cgh) {
+        sycl::local_accessor<float, 1> shared_partials(sycl::range<1>(num_tiles), cgh);
+
+        cgh.parallel_for(
+            sycl::nd_range<3>(grid * block, block),
+            [=](sycl::nd_item<3> item_ct1) [[intel::reqd_sub_group_size(QK_WARP_SIZE)]] {
+                dequantize_mul_mat_vec_q6_k_coalesced_variable(
+                    vx, y, dst, ncols, nrows, nrows_full, row_low,
+                    blocks_per_row, num_tiles, row_quants_bytes,
+                    shared_partials.get_pointer(), item_ct1);
+            });
+    });
+}
+
 static void convert_mul_mat_vec_f16_sycl(const void *vx, const dfloat *y,
                                          float *dst, const int ncols,
                                          const int nrows,
@@ -3048,10 +3289,10 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                     }
                     const int global_row_low = row_low + view_row_offset;
 
-                    GGML_SYCL_KTRACE("dmmv_q6_k_coalesced", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld",
+                    GGML_SYCL_KTRACE("dmmv_q6_k_coalesced_variable", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld",
                                      (long long)ne00, (long long)row_diff, (long long)storage_ne01, (long long)global_row_low);
-                    dequantize_mul_mat_vec_q6_K_sycl_coalesced(storage_base, src1_ddf_i, dst_dd_i,
-                                                              ne00, row_diff, storage_ne01, global_row_low, stream);
+                    dequantize_mul_mat_vec_q6_K_sycl_coalesced_variable(storage_base, src1_ddf_i, dst_dd_i,
+                                                                        ne00, row_diff, storage_ne01, global_row_low, stream);
                 } else if (mode == reorder_mode::SOA) {
                     // Q6_K SoA layout: [all ql] [all qh] [all scales] [all d]
                     // CRITICAL: Must use storage tensor dimensions for offset calculation, not view dimensions
