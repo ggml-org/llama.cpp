@@ -185,6 +185,11 @@
 					key: 'samplers',
 					label: 'Samplers',
 					type: 'input'
+				},
+				{
+					key: 'backend_sampling',
+					label: 'Backend sampling',
+					type: 'checkbox'
 				}
 			]
 		},

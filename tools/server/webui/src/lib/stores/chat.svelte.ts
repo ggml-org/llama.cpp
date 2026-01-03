@@ -1461,6 +1461,8 @@ class ChatStore {
 		if (hasValue(currentConfig.dry_penalty_last_n))
 			apiOptions.dry_penalty_last_n = Number(currentConfig.dry_penalty_last_n);
 		if (currentConfig.samplers) apiOptions.samplers = currentConfig.samplers;
+		if (currentConfig.backend_sampling)
+			apiOptions.backend_sampling = currentConfig.backend_sampling;
 		if (currentConfig.custom) apiOptions.custom = currentConfig.custom;
 
 		return apiOptions;
