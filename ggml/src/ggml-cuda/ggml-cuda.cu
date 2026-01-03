@@ -2911,6 +2911,10 @@ static void set_ggml_graph_node_properties(ggml_tensor * node, ggml_graph_node_p
     }
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         graph_node_properties->src_address[i] = node->src[i] ? node->src[i]->data : nullptr;
+        for (int j = 0; j < GGML_MAX_DIMS; j++) {
+            graph_node_properties->src_ne[i][j] = node->src[i] ? node->src[i]->ne[j] : 0;
+            graph_node_properties->src_nb[i][j] = node->src[i] ? node->src[i]->nb[j] : 0;
+        }
     }
     memcpy(graph_node_properties->op_params, node->op_params, GGML_MAX_OP_PARAMS);
 }
@@ -2935,11 +2939,21 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
     }
 
     for (int i = 0; i < GGML_MAX_SRC; i++) {
-        if (node->src[i] &&
-            node->src[i]->data != graph_node_properties->src_address[i] &&
+        if (!node->src[i]) {
+            continue;
+        }
+        if (node->src[i]->data != graph_node_properties->src_address[i] &&
             node->op != GGML_OP_VIEW
         ) {
             return false;
+        }
+        for (int j = 0; j < GGML_MAX_DIMS; j++) {
+            if (node->src[i]->ne[j] != graph_node_properties->src_ne[i][j]) {
+                return false;
+            }
+            if (node->src[i]->nb[j] != graph_node_properties->src_nb[i][j]) {
+                return false;
+            }
         }
     }
 
@@ -2952,7 +2966,6 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
 }
 
 static bool is_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
-
     bool cuda_graph_update_required = false;
 
     if (cuda_ctx->cuda_graph->instance == nullptr) {
