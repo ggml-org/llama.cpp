@@ -342,8 +342,6 @@
 		img.dataset.errorHandled = 'true';
 
 		const src = img.src;
-		const alt = img.alt || 'Image';
-
 		// Create fallback element
 		const fallback = document.createElement('div');
 		fallback.className = 'image-load-error';
