@@ -975,6 +975,18 @@ struct clip_model_loader {
                                     ? PROJECTOR_TYPE_QWEN25VL
                                     : PROJECTOR_TYPE_QWEN2A;
             }
+
+            // Qwen3-Omni: vision uses qwen3vl pipeline, audio stays qwen3o
+            if (model.proj_type == PROJECTOR_TYPE_QWEN3O) {
+                projector_type new_type = modality == CLIP_MODALITY_VISION
+                                    ? PROJECTOR_TYPE_QWEN3VL
+                                    : PROJECTOR_TYPE_QWEN3O;
+                LOG_INF("%s: QWEN3O auto-conversion: %s -> %s (modality=%s)\n", __func__,
+                        PROJECTOR_TYPE_NAMES[model.proj_type].c_str(),
+                        PROJECTOR_TYPE_NAMES[new_type].c_str(),
+                        modality == CLIP_MODALITY_VISION ? "vision" : "audio");
+                model.proj_type = new_type;
+            }
         }
 
         const bool is_vision = model.modality == CLIP_MODALITY_VISION;

@@ -4547,6 +4547,315 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
         return super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
+class Qwen3OmniModel(MmprojModel):
+    """Qwen3-Omni multimodal model converter for audio + vision encoders.
+
+    Key differences from Qwen2.5-Omni:
+    - Audio uses conv2d1/conv2d2/conv2d3 (not conv1/conv2)
+    - Audio has conv_out, ln_post, proj1, proj2
+    - Vision has merger_list (deepstack) like Qwen3-VL
+    - Vision patch_embed is Conv3D (needs 5D→4D tensor splitting)
+    - Vision has explicit pos_embed.weight
+    """
+    has_vision_encoder = True
+    has_audio_encoder = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Setup audio config
+        assert self.hparams_audio is not None
+        self.hparams_audio["hidden_size"] = self.hparams_audio.get("d_model")
+        self.hparams_audio["intermediate_size"] = self.hparams_audio.get("encoder_ffn_dim")
+        self.hparams_audio["num_attention_heads"] = self.hparams_audio.get("encoder_attention_heads")
+
+        # Setup vision config
+        assert self.hparams_vision is not None
+        self.hparams_vision["num_attention_heads"] = self.hparams_vision.get("num_heads")
+        self.hparams_vision["num_hidden_layers"] = self.hparams_vision.get("depth")
+
+        # Handle image_size - may need to compute from other params
+        if "image_size" not in self.hparams_vision or self.hparams_vision["image_size"] is None:
+            self.hparams_vision["image_size"] = 768  # Default for Qwen3-Omni
+
+        # Track deepstack layers
+        self.is_deepstack_layers = [False] * int(self.hparams_vision.get("num_hidden_layers", 27) or 27)
+        for idx in self.hparams_vision.get("deepstack_visual_indexes", []):
+            self.is_deepstack_layers[idx] = True
+
+    def get_vision_config(self) -> dict[str, Any] | None:
+        return self.global_config.get("thinker_config", {}).get("vision_config")
+
+    def get_audio_config(self) -> dict[str, Any] | None:
+        return self.global_config.get("thinker_config", {}).get("audio_config")
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # Set projector type for Qwen3-Omni
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN3O)
+
+        # Audio parameters
+        assert self.hparams_audio is not None
+        self.gguf_writer.add_audio_num_mel_bins(self.hparams_audio.get("num_mel_bins", 128))
+        self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams_audio.get("layer_norm_eps", 1e-5))
+
+        # Vision parameters
+        self.gguf_writer.add_vision_use_gelu(True)  # Qwen3-Omni uses GELU
+
+        # Vision attention layernorm eps from text config
+        text_config = self.global_config.get("thinker_config", {}).get("text_config", {})
+        rms_norm_eps = text_config.get("rms_norm_eps", 1e-6)
+        self.gguf_writer.add_vision_attention_layernorm_eps(rms_norm_eps)
+
+        # Deepstack layers for vision
+        if any(self.is_deepstack_layers):
+            self.gguf_writer.add_vision_is_deepstack_layers(self.is_deepstack_layers)
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        """Generate sinusoidal position embeddings for audio encoder."""
+        assert self.hparams_audio is not None
+        max_timescale = 10000
+        length = 1500  # Max audio sequence length
+        channels = self.hparams_audio.get("hidden_size", 1280)
+
+        log_timescale_increment = np.log(max_timescale) / (channels // 2 - 1)
+        inv_timescales = torch.exp(-log_timescale_increment * torch.arange(channels // 2).float())
+        scaled_time = torch.arange(length)[:, np.newaxis] * inv_timescales[np.newaxis, :]
+        pos_embd = torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=1).to(dtype=torch.float32)
+
+        yield ("audio_tower.embed_positions.weight", pos_embd)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        # Keep conv layers in higher precision
+        if ".conv" in name and ".weight" in name:
+            return gguf.GGMLQuantizationType.F16
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Strip thinker prefix
+        if name.startswith("thinker."):
+            name = name.replace("thinker.", "")
+
+        # Skip text model tensors (handled by text model converter)
+        if name.startswith("model.") or name.startswith("lm_head") or name.startswith("embed_tokens"):
+            return []
+
+        # Skip talker and code2wav (not needed for inference)
+        if name.startswith("talker.") or name.startswith("code2wav."):
+            return []
+
+        # Handle audio tensors
+        if name.startswith("audio_tower"):
+            # Strip audio_tower. prefix for processing
+            audio_name = name.replace("audio_tower.", "")
+
+            # Skip embed_positions - we generate sinusoidal positions in generate_extra_tensors
+            if audio_name.startswith("embed_positions"):
+                return []
+
+            # Handle conv2d1/2/3 - map to a.enc_conv1d.{bid}
+            for i in [1, 2, 3]:
+                if audio_name.startswith(f"conv2d{i}."):
+                    suffix = audio_name.split(".", 1)[1]  # weight or bias
+                    if suffix == "bias":
+                        data_torch = data_torch.unsqueeze(-1)
+                    new_name = self.format_tensor_name(gguf.MODEL_TENSOR.A_ENC_CONV1D, i - 1, suffix=f".{suffix}")
+                    return [(new_name, data_torch)]
+
+            # Handle conv_out - use a separate conv layer index
+            if audio_name.startswith("conv_out."):
+                suffix = audio_name.split(".", 1)[1]
+                if suffix == "bias":
+                    data_torch = data_torch.unsqueeze(-1)
+                new_name = self.format_tensor_name(gguf.MODEL_TENSOR.A_ENC_CONV1D, 3, suffix=f".{suffix}")
+                return [(new_name, data_torch)]
+
+            # Handle ln_post - post normalization
+            if audio_name.startswith("ln_post."):
+                suffix = audio_name.split(".", 1)[1]
+                new_name = self.format_tensor_name(gguf.MODEL_TENSOR.A_POST_NORM, suffix=f".{suffix}")
+                return [(new_name, data_torch)]
+
+            # Handle proj1/proj2 - audio multimodal projector (use A_MMPROJ which supports bid)
+            if audio_name.startswith("proj1."):
+                suffix = audio_name.split(".", 1)[1]
+                new_name = self.format_tensor_name(gguf.MODEL_TENSOR.A_MMPROJ, 0, suffix=f".{suffix}")
+                return [(new_name, data_torch)]
+            if audio_name.startswith("proj2."):
+                suffix = audio_name.split(".", 1)[1]
+                new_name = self.format_tensor_name(gguf.MODEL_TENSOR.A_MMPROJ, 1, suffix=f".{suffix}")
+                return [(new_name, data_torch)]
+
+            # Handle encoder layers - transform to Whisper-compatible names and use map_tensor_name
+            if audio_name.startswith("layers."):
+                # Qwen3-Omni uses same layer naming as Whisper/Ultravox
+                # audio_tower.layers.{bid}.self_attn.q_proj -> audio_tower.layers.{bid}.self_attn.q_proj
+                # Just add back the audio_tower prefix and use map_tensor_name
+                return [(self.map_tensor_name(name), data_torch)]
+
+            # Fallback for any other audio tensors
+            logger.warning(f"Unknown audio tensor: {name}")
+            return [(self.map_tensor_name(name), data_torch)]
+
+        # Handle visual tensors
+        if name.startswith("visual."):
+            # Handle merger_list (deepstack)
+            if name.startswith("visual.merger_list."):
+                # Format: visual.merger_list.{idx}.{ln_q|mlp}.{layer}.{weight|bias}
+                parts = name.split(".")
+                idx = int(parts[2])  # merger_list index
+
+                # Get actual layer index from deepstack_visual_indexes
+                deepstack_indexes = self.hparams_vision.get("deepstack_visual_indexes", [])
+                if idx < len(deepstack_indexes):
+                    layer_idx = deepstack_indexes[idx]
+                else:
+                    layer_idx = idx  # Fallback
+
+                suffix_parts = parts[3:]  # Everything after the index
+                suffix = ".".join(suffix_parts)
+
+                if suffix.startswith("ln_q"):
+                    tensor_type = gguf.MODEL_TENSOR.V_DS_NORM
+                    tail = suffix.split(".", 1)[1] if "." in suffix else "weight"
+                elif suffix.startswith("mlp.0"):
+                    tensor_type = gguf.MODEL_TENSOR.V_DS_FC1
+                    tail = suffix.split(".", 2)[2] if suffix.count(".") >= 2 else "weight"
+                elif suffix.startswith("mlp.2"):
+                    tensor_type = gguf.MODEL_TENSOR.V_DS_FC2
+                    tail = suffix.split(".", 2)[2] if suffix.count(".") >= 2 else "weight"
+                else:
+                    raise ValueError(f"Unexpected deepstack tensor: {name}")
+
+                new_name = self.format_tensor_name(tensor_type, layer_idx, suffix=f".{tail}")
+                return [(new_name, data_torch)]
+
+            # Handle main merger
+            if name.startswith("visual.merger."):
+                suffix = name.split(".", 2)[2]
+                if suffix.startswith("mlp.0"):
+                    # First FC layer
+                    tail = suffix.split(".", 2)[2] if suffix.count(".") >= 2 else "weight"
+                    new_name = self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, 0, suffix=f".{tail}")
+                elif suffix.startswith("mlp.2"):
+                    # Second FC layer
+                    tail = suffix.split(".", 2)[2] if suffix.count(".") >= 2 else "weight"
+                    new_name = self.format_tensor_name(gguf.MODEL_TENSOR.V_MMPROJ, 2, suffix=f".{tail}")
+                elif suffix.startswith("ln_q"):
+                    tail = suffix.split(".", 1)[1] if "." in suffix else "weight"
+                    new_name = self.format_tensor_name(gguf.MODEL_TENSOR.V_POST_NORM, suffix=f".{tail}")
+                else:
+                    raise ValueError(f"Unexpected merger tensor: {name}")
+                return [(new_name, data_torch)]
+
+            # Handle QKV split for attention
+            if ".qkv." in name:
+                if data_torch.ndim == 2:  # weight
+                    c3, _ = data_torch.shape
+                else:  # bias
+                    c3 = data_torch.shape[0]
+                assert c3 % 3 == 0
+                c = c3 // 3
+                wq = data_torch[:c]
+                wk = data_torch[c:c * 2]
+                wv = data_torch[c * 2:]
+                return [
+                    (self.map_tensor_name(name.replace("qkv", "q")), wq),
+                    (self.map_tensor_name(name.replace("qkv", "k")), wk),
+                    (self.map_tensor_name(name.replace("qkv", "v")), wv),
+                ]
+
+            # Handle patch_embed - Conv3D needs splitting to 4D tensors (GGUF max is 4D)
+            if name == "visual.patch_embed.proj.weight":
+                # Split Conv3D into Conv2Ds along temporal dimension
+                if data_torch.ndim == 5:
+                    c1, c2, kt, kh, kw = data_torch.shape
+                    del c1, c2, kh, kw
+                    if kt != 2:
+                        raise ValueError("Current implementation only supports temporal_patch_size of 2")
+                    return [
+                        (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight", data_torch[:, :, 0, ...]),
+                        (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".weight.1", data_torch[:, :, 1, ...]),
+                    ]
+                return [(self.map_tensor_name(name), data_torch)]
+
+            if name == "visual.patch_embed.proj.bias":
+                return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_ENC_EMBD_PATCH] + ".bias", data_torch)]
+
+            # Default handling for other visual tensors
+            return [(self.map_tensor_name(name), data_torch)]
+
+        # Fall back to parent for any other tensors
+        return super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
+class Qwen3OmniMoeTextModel(Qwen3MoeModel):
+    """Qwen3-Omni MoE text model converter.
+
+    Converts the text model (thinker.model.*) from Qwen3-Omni to GGUF format.
+    The audio and vision encoders are handled by Qwen3OmniModel (mmproj converter).
+
+    Key differences from Qwen3VLMoeTextModel:
+    - Tensor prefix is thinker.model.* (not model.*)
+    - Must skip: thinker.audio_tower, thinker.visual, talker, code2wav
+    - Config structure: thinker_config.text_config (handled by load_hparams)
+    """
+    model_arch = gguf.MODEL_ARCH.QWEN3OMNI
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # Handle MRoPE (Multi-axis Rotary Position Embedding) for Qwen3-Omni
+        # The text_config is already merged into hparams by load_hparams
+        rope_scaling = self.hparams.get("rope_scaling") or self.hparams.get("rope_parameters") or {}
+
+        if rope_scaling.get("mrope_section"):
+            # mrope_section contains [time, height, width] dimensions
+            mrope_section = rope_scaling["mrope_section"]
+            # Pad to 4 dimensions [time, height, width, extra]
+            while len(mrope_section) < 4:
+                mrope_section.append(0)
+            self.gguf_writer.add_rope_dimension_sections(mrope_section[:4])
+            logger.info(f"MRoPE sections: {mrope_section[:4]}")
+
+        # Get vision config for deepstack layers (from thinker_config in hparams)
+        thinker_config = self.hparams.get("thinker_config", {})
+        vision_config = thinker_config.get("vision_config", {})
+        deepstack_layer_num = len(vision_config.get("deepstack_visual_indexes", []))
+        if deepstack_layer_num > 0:
+            self.gguf_writer.add_num_deepstack_layers(deepstack_layer_num)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip multimodal encoders - they go in the mmproj file
+        if name.startswith("thinker.audio_tower."):
+            return []
+        if name.startswith("thinker.visual."):
+            return []
+
+        # Skip talker (speech synthesis) and code2wav (audio generation) - not needed for text inference
+        if name.startswith("talker."):
+            return []
+        if name.startswith("code2wav."):
+            return []
+
+        # Strip thinker prefix to get standard tensor names
+        # Original names:
+        #   thinker.model.layers.* -> model.layers.*
+        #   thinker.model.embed_tokens.* -> model.embed_tokens.*
+        #   thinker.model.norm.* -> model.norm.*
+        #   thinker.lm_head.* -> lm_head.* (NOT model.lm_head!)
+        if name.startswith("thinker.model."):
+            name = name.replace("thinker.model.", "model.", 1)
+        elif name.startswith("thinker."):
+            # Handle other thinker tensors (lm_head, etc.) - just strip thinker.
+            name = name.replace("thinker.", "", 1)
+
+        return super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("GPT2LMHeadModel")
 class GPT2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT2
