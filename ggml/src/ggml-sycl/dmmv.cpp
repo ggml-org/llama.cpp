@@ -9,65 +9,6 @@
 #include <cstdlib>
 #include <cstring>
 
-//============================================================================
-// Unified DMMV SoA kernels following Q6_K pattern
-// All quant types use the same structure: compute pointers directly in kernel
-//============================================================================
-
-struct ggml_sycl_q8_0_cache {
-    block_q8_0 * ptr = nullptr;
-    int ncols = 0;
-    int device = -1;
-};
-
-struct ggml_sycl_q8_1_cache {
-    block_q8_1 * ptr = nullptr;
-    int ncols = 0;
-    int device = -1;
-};
-
-static block_q8_0 * ggml_sycl_get_q8_0_cache(int ncols, int device, const dpct::queue_ptr & stream) {
-    static thread_local ggml_sycl_q8_0_cache cache;
-    const int blocks_per_row = ncols / QK8_0;
-
-    if (cache.ptr != nullptr && (cache.ncols != ncols || cache.device != device)) {
-        sycl::free(cache.ptr, *stream);
-        cache.ptr = nullptr;
-    }
-
-    if (cache.ptr == nullptr) {
-        cache.ptr = sycl::malloc_device<block_q8_0>(blocks_per_row, *stream);
-        if (!cache.ptr) {
-            GGML_ABORT("DMMV Q4_0: failed to allocate q8_0 cache buffer");
-        }
-        cache.ncols = ncols;
-        cache.device = device;
-    }
-
-    return cache.ptr;
-}
-
-static block_q8_1 * ggml_sycl_get_q8_1_cache(int ncols, int device, const dpct::queue_ptr & stream) {
-    static thread_local ggml_sycl_q8_1_cache cache;
-    const int blocks_per_row = ncols / QK8_1;
-
-    if (cache.ptr != nullptr && (cache.ncols != ncols || cache.device != device)) {
-        sycl::free(cache.ptr, *stream);
-        cache.ptr = nullptr;
-    }
-
-    if (cache.ptr == nullptr) {
-        cache.ptr = sycl::malloc_device<block_q8_1>(blocks_per_row, *stream);
-        if (!cache.ptr) {
-            GGML_ABORT("DMMV: failed to allocate q8_1 cache buffer");
-        }
-        cache.ncols = ncols;
-        cache.device = device;
-    }
-
-    return cache.ptr;
-}
-
 // Q4_0 SoA DMMV kernel - follows Q6_K pattern exactly
 // SoA layout: [all qs: nblocks * 16 bytes] [all d: nblocks * 2 bytes]
 // Each byte contains 2 x 4-bit values: low nibble = value[i], high nibble = value[i+16]
