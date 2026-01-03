@@ -7,12 +7,19 @@ export interface SettingsFieldConfig {
 	key: string;
 	label: string;
 	type: 'input' | 'textarea' | 'checkbox' | 'select';
+	isExperimental?: boolean;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof import('@lucide/svelte').Icon }>;
 }
 
 export interface SettingsChatServiceOptions {
 	stream?: boolean;
+	// Model (required in ROUTER mode, optional in MODEL mode)
+	model?: string;
+	// System message to inject
+	systemMessage?: string;
+	// Disable reasoning format (use 'none' instead of 'auto')
+	disableReasoningFormat?: boolean;
 	// Generation parameters
 	temperature?: number;
 	max_tokens?: number;
@@ -44,7 +51,7 @@ export interface SettingsChatServiceOptions {
 	onReasoningChunk?: (chunk: string) => void;
 	onToolCallChunk?: (chunk: string) => void;
 	onModel?: (model: string) => void;
-	onFirstValidChunk?: () => void;
+	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
 	onComplete?: (
 		response: string,
 		reasoningContent?: string,

@@ -75,6 +75,8 @@ static common_chat_msg normalize(const common_chat_msg & msg) {
     }
     return normalized;
 }
+
+
 template <>
 bool equals(const common_chat_msg & expected, const common_chat_msg & actual) {
     return normalize(expected) == normalize(actual);
@@ -148,17 +150,29 @@ static std::string renormalize_json(const std::string & json_str) {
         return json_str;
     }
 }
-static void assert_msg_equals(const common_chat_msg & expected, const common_chat_msg & actual) {
+static void assert_msg_equals(const common_chat_msg & expected, const common_chat_msg & actual, bool ignore_whitespace_differences = false) {
     assert_equals(expected.role, actual.role);
-    assert_equals(expected.content, actual.content);
+    if (ignore_whitespace_differences) {
+        assert_equals(string_strip(expected.content), string_strip(actual.content));
+    } else {
+        assert_equals(expected.content, actual.content);
+    }
     assert_equals(expected.content_parts.size(), actual.content_parts.size());
     for (size_t i = 0; i < expected.content_parts.size(); i++) {
         const auto & expected_part = expected.content_parts[i];
         const auto & actual_part   = actual.content_parts[i];
         assert_equals(expected_part.type, actual_part.type);
-        assert_equals(expected_part.text, actual_part.text);
+        if (ignore_whitespace_differences) {
+            assert_equals(string_strip(expected_part.text), string_strip(actual_part.text));
+        } else {
+            assert_equals(expected_part.text, actual_part.text);
+        }
     }
-    assert_equals(expected.reasoning_content, actual.reasoning_content);
+    if (ignore_whitespace_differences) {
+        assert_equals(string_strip(expected.reasoning_content), string_strip(actual.reasoning_content));
+    } else {
+        assert_equals(expected.reasoning_content, actual.reasoning_content);
+    }
     assert_equals(expected.tool_calls.size(), actual.tool_calls.size());
     for (size_t i = 0; i < expected.tool_calls.size(); i++) {
         const auto & expected_tool_call = expected.tool_calls[i];
@@ -178,6 +192,24 @@ common_chat_tool special_function_tool {
             "arg1": {
                 "type": "integer",
                 "description": "The arg."
+            }
+        },
+        "required": ["arg1"]
+    })",
+};
+common_chat_tool special_function_tool_with_optional_param {
+    /* .name = */ "special_function_with_opt",
+    /* .description = */ "I'm special but have optional stuff",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "arg1": {
+                "type": "integer",
+                "description": "The arg."
+            },
+            "arg2": {
+                "type": "integer",
+                "description": "The optional arg."
             }
         },
         "required": ["arg1"]
@@ -211,13 +243,24 @@ common_chat_tool code_interpreter_tool {
         "required": ["code"]
     })",
 };
-std::vector<common_chat_tool> tools           { special_function_tool, python_tool };
+std::vector<common_chat_tool> tools           { special_function_tool, special_function_tool_with_optional_param, python_tool };
 std::vector<common_chat_tool> llama_3_1_tools { special_function_tool, code_interpreter_tool };
 
 struct delta_data {
     std::string        delta;
     common_chat_params params;
 };
+
+static common_chat_msg simple_assist_msg(const std::string & content, const std::string & reasoning_content = "", const std::string & tool_name = "", const std::string & arguments = "", const std::string & id = "") {
+    common_chat_msg msg;
+    msg.role = "assistant";
+    msg.content = content;
+    msg.reasoning_content = reasoning_content;
+    if (!tool_name.empty()) {
+        msg.tool_calls.push_back({ tool_name, arguments, id });
+    }
+    return msg;
+}
 
 static delta_data init_delta(const struct common_chat_templates * tmpls, const std::vector<std::string> & end_tokens,
                              const common_chat_msg & user_message,
@@ -280,7 +323,9 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
                           const std::string & expected_delta = "",
                           bool expect_grammar_triggered = true,
                           bool test_grammar_if_triggered = true,
-                          common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE) {
+                          common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_NONE,
+                          bool ignore_whitespace_differences = false
+                        ) {
     common_chat_msg user_message;
     user_message.role = "user";
     user_message.content = "Hello, world!";
@@ -288,7 +333,11 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
     for (const auto & tool_choice : std::vector<common_chat_tool_choice> {COMMON_CHAT_TOOL_CHOICE_AUTO, COMMON_CHAT_TOOL_CHOICE_REQUIRED}) {
         auto data = init_delta(tmpls, end_tokens, user_message, test_message, tools, tool_choice);
         if (!expected_delta.empty()) {
-            assert_equals(expected_delta, data.delta);
+            if (ignore_whitespace_differences) {
+                assert_equals(string_strip(expected_delta), string_strip(data.delta));
+            } else {
+                assert_equals(expected_delta, data.delta);
+            }
         }
 
         if (expect_grammar_triggered) {
@@ -296,7 +345,7 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
             syntax.format = data.params.format;
             syntax.reasoning_format = reasoning_format;
             const auto msg = common_chat_parse(data.delta, /* is_partial= */ false, syntax);
-            assert_msg_equals(test_message, msg);
+            assert_msg_equals(test_message, msg, ignore_whitespace_differences);
         }
 
         if (!test_message.tool_calls.empty()) {
@@ -373,6 +422,72 @@ static void test_templates(const struct common_chat_templates * tmpls, const std
     }
 }
 
+/**
+ * Test if streaming=true is consistant with streaming=false for given partial parser
+ * Also test if there is any problem with partial message
+ */
+template <typename T>
+static void test_parser_with_streaming(const common_chat_msg & expected, const std::string & raw_message, T parse_msg) {
+    constexpr auto utf8_truncate_safe_len = [](const std::string_view s) -> size_t {
+        auto len = s.size();
+        if (len == 0) return 0;
+        auto i = len;
+        for (size_t back = 0; back < 4 && i > 0; ++back) {
+            --i;
+            unsigned char c = s[i];
+            if ((c & 0x80) == 0) {
+                return len;
+            } else if ((c & 0xC0) == 0xC0) {
+                size_t expected_len = 0;
+                if ((c & 0xE0) == 0xC0) expected_len = 2;
+                else if ((c & 0xF0) == 0xE0) expected_len = 3;
+                else if ((c & 0xF8) == 0xF0) expected_len = 4;
+                else return i;
+                if (len - i >= expected_len) {
+                    return len;
+                } else {
+                    return i;
+                }
+            }
+        }
+        return len - std::min(len, size_t(3));
+    };
+    constexpr auto utf8_truncate_safe_view = [utf8_truncate_safe_len](const std::string_view s) {
+        return s.substr(0, utf8_truncate_safe_len(s));
+    };
+
+    auto merged = simple_assist_msg("");
+    auto last_msg = parse_msg("");
+    for (size_t i = 1; i <= raw_message.size(); ++i) {
+        auto curr_msg = parse_msg(std::string(utf8_truncate_safe_view(std::string_view(raw_message).substr(0, i))));
+        if (curr_msg == simple_assist_msg("")) continue;
+        LOG_INF("Streaming msg: %s\n", common_chat_msgs_to_json_oaicompat<json>({curr_msg}).dump().c_str());
+        for (auto diff: common_chat_msg_diff::compute_diffs(last_msg, curr_msg)) {
+            LOG_INF("Streaming diff: %s\n", common_chat_msg_diff_to_json_oaicompat<json>(diff).dump().c_str());
+            if (!diff.reasoning_content_delta.empty()) {
+                merged.reasoning_content += diff.reasoning_content_delta;
+            }
+            if (!diff.content_delta.empty()) {
+                merged.content += diff.content_delta;
+            }
+            if (diff.tool_call_index != std::string::npos) {
+                if (!diff.tool_call_delta.name.empty()) {
+                    merged.tool_calls.push_back({diff.tool_call_delta.name, "", ""});
+                }
+                if (!diff.tool_call_delta.arguments.empty()) {
+                    GGML_ASSERT(!merged.tool_calls.empty());
+                    merged.tool_calls.back().arguments += diff.tool_call_delta.arguments;
+                }
+            }
+            LOG_INF("Streaming merged: %s\n", common_chat_msgs_to_json_oaicompat<json>({merged}).dump().c_str());
+        }
+        assert_msg_equals(curr_msg, merged, true);
+        last_msg = curr_msg;
+    }
+    assert_msg_equals(expected, parse_msg(raw_message), true);
+    assert_msg_equals(expected, merged, true);
+}
+
 const common_chat_msg message_user {
     "user",
     "Hey there!",
@@ -395,16 +510,7 @@ const common_chat_msg message_user_parts {
     /* .tool_name = */ "",
     /* .tool_call_id = */ "",
 };
-static common_chat_msg simple_assist_msg(const std::string & content, const std::string & reasoning_content = "", const std::string & tool_name = "", const std::string & arguments = "", const std::string & id = "") {
-    common_chat_msg msg;
-    msg.role = "assistant";
-    msg.content = content;
-    msg.reasoning_content = reasoning_content;
-    if (!tool_name.empty()) {
-        msg.tool_calls.push_back({ tool_name, arguments, id });
-    }
-    return msg;
-}
+
 const common_chat_msg message_assist                              = simple_assist_msg("Hello, world!\nWhat's up?");
 const common_chat_msg message_assist_empty                        = simple_assist_msg("");
 const common_chat_msg message_assist_thoughts_unparsed_deepseek   = simple_assist_msg("<think>I'm\nthinking</think>Hello, world!\nWhat's up?");
@@ -417,6 +523,8 @@ const common_chat_msg message_assist_thoughts                    = simple_assist
 const common_chat_msg message_assist_thoughts_unopened_unparsed  = simple_assist_msg("I'm\nthinking</think>Hello, world!\nWhat's up?");
 const common_chat_msg message_assist_thoughts_no_content         = simple_assist_msg("", "I'm\nthinking");
 const common_chat_msg message_assist_call                        = simple_assist_msg("", "", "special_function", "{\"arg1\": 1}");
+const common_chat_msg message_assist_call_noopt                  = simple_assist_msg("", "", "special_function_with_opt", "{\"arg1\": 1}");
+const common_chat_msg message_assist_call_withopt                = simple_assist_msg("", "", "special_function_with_opt", "{\"arg1\": 1, \"arg2\": 2}");
 const common_chat_msg message_assist_call_content                = simple_assist_msg("Hello, world!\nWhat's up?", "", "special_function", "{\"arg1\":1}");
 const common_chat_msg message_assist_call_empty_args             = simple_assist_msg("", "", "special_function");
 const common_chat_msg message_assist_call_cutoff_args            = simple_assist_msg("", "", "special_function", "{\"arg");
@@ -430,6 +538,71 @@ const common_chat_msg message_assist_call_python                 = simple_assist
 const common_chat_msg message_assist_call_python_lines           = simple_assist_msg("", "", "python", "{\"code\":\"# This is a program:\\nprint('hey')\"}");
 const common_chat_msg message_assist_call_python_lines_unclosed  = simple_assist_msg("", "", "python", "{\"code\":\"# This is a program:\\nprint('hey')");
 const common_chat_msg message_assist_call_code_interpreter       = simple_assist_msg("", "", "code_interpreter", "{\"code\":\"print('hey')\"}");
+
+// Use for PEG parser implementations
+struct peg_test_case {
+    common_chat_templates_inputs params;
+    std::string input;
+    common_chat_msg expect;
+};
+
+struct make_peg_parser {
+    common_chat_params params_;
+    common_peg_arena arena_;
+
+    make_peg_parser(common_chat_templates * tmpls, const common_chat_templates_inputs & inputs) {
+        params_ = common_chat_templates_apply(tmpls, inputs);
+        arena_.load(params_.parser);
+    }
+
+    common_chat_msg parse(const std::string & msg, bool is_partial) {
+        return common_chat_peg_parse(arena_, msg, is_partial, /* syntax = */ {params_.format});
+    }
+};
+
+static void test_peg_parser(common_chat_templates * tmpls, const std::function<void(peg_test_case &)> & init) {
+    peg_test_case tc;
+    init(tc);
+    if (tc.params.messages.empty()) {
+        tc.params.messages = {message_user};
+    }
+    if (tc.expect.role.empty()) {
+        tc.expect.role = "assistant";
+    }
+
+    auto parser = make_peg_parser(tmpls, tc.params);
+
+    common_chat_msg msg_accum;
+    common_chat_msg msg_prev;
+    msg_accum.role = msg_prev.role = "assistant";
+
+    for (size_t i = 1; i <= tc.input.size(); ++i) {
+        auto is_partial = i < tc.input.size();
+        common_chat_msg msg_current = parser.parse(tc.input.substr(0, i), is_partial);
+
+        for (const auto & diff : common_chat_msg_diff::compute_diffs(msg_prev, msg_current)) {
+            if (!diff.reasoning_content_delta.empty()) {
+                msg_accum.reasoning_content += diff.reasoning_content_delta;
+            }
+            if (!diff.content_delta.empty()) {
+                msg_accum.content += diff.content_delta;
+            }
+            if (diff.tool_call_index != std::string::npos) {
+                if (!diff.tool_call_delta.name.empty()) {
+                    msg_accum.tool_calls.push_back({diff.tool_call_delta.name, "", ""});
+                }
+                if (!diff.tool_call_delta.arguments.empty()) {
+                    msg_accum.tool_calls.back().arguments += diff.tool_call_delta.arguments;
+                }
+            }
+        }
+        assert_msg_equals(msg_current, msg_accum, true);
+        msg_prev = msg_current;
+    }
+
+    assert_msg_equals(tc.expect, parser.parse(tc.input, false), true);
+    assert_msg_equals(tc.expect, msg_accum, true);
+}
 
 static void test_msgs_oaicompat_json_conversion() {
     printf("[%s]\n", __func__);
@@ -477,7 +650,7 @@ static void test_msgs_oaicompat_json_conversion() {
             "[\n"
             "  {\n"
             "    \"role\": \"assistant\",\n"
-            "    \"content\": null,\n"
+            "    \"content\": \"\",\n"
             "    \"tool_calls\": [\n"
             "      {\n"
             "        \"type\": \"function\",\n"
@@ -551,6 +724,30 @@ static void test_tools_oaicompat_json_conversion() {
             "]"
         ),
         common_chat_tools_to_json_oaicompat<json>({special_function_tool}).dump(2));
+
+    {
+        auto tools_no_params = common_chat_tools_parse_oaicompat(json::parse(
+            R"([{"type": "function", "function": {"name": "test_func", "description": "A test"}}])"));
+        assert_equals((size_t) 1, tools_no_params.size());
+        assert_equals(std::string("test_func"), tools_no_params[0].name);
+        assert_equals(std::string("A test"), tools_no_params[0].description);
+        assert_equals(std::string("{}"), tools_no_params[0].parameters);
+    }
+    {
+        auto tools_no_desc = common_chat_tools_parse_oaicompat(json::parse(
+            R"([{"type": "function", "function": {"name": "test_func", "parameters": {"type": "object"}}}])"));
+        assert_equals((size_t) 1, tools_no_desc.size());
+        assert_equals(std::string("test_func"), tools_no_desc[0].name);
+        assert_equals(std::string(""), tools_no_desc[0].description);
+    }
+    {
+        auto tools_minimal = common_chat_tools_parse_oaicompat(json::parse(
+            R"([{"type": "function", "function": {"name": "test_func"}}])"));
+        assert_equals((size_t) 1, tools_minimal.size());
+        assert_equals(std::string("test_func"), tools_minimal[0].name);
+        assert_equals(std::string(""), tools_minimal[0].description);
+        assert_equals(std::string("{}"), tools_minimal[0].parameters);
+    }
 }
 
 static void test_template_output_parsers() {
@@ -733,7 +930,8 @@ static void test_template_output_parsers() {
                       "      },\n"
                       "      \"id\": \"123456789\"\n"
                       "    }\n"
-                      "  ]\n"
+                      "  ],\n"
+                      "  \"content\": \"\"\n"
                       "}");
     }
     {
@@ -1540,7 +1738,8 @@ static void test_template_output_parsers() {
                       "      },\n"
                       "      \"id\": \"123456789\"\n"
                       "    }\n"
-                      "  ]\n"
+                      "  ],\n"
+                      "  \"content\": \"\"\n"
                       "}",
                       /* expect_grammar_triggered= */ false
         );
@@ -1834,7 +2033,7 @@ static void test_template_output_parsers() {
 
         // Test partial parsing for incomplete tool call - don't actually add the call until parsing parameters is done
         assert_msg_equals(
-            simple_assist_msg("", ""),
+            simple_assist_msg("", "", "calculate_sum", "{\"numbers\":"),
             common_chat_parse(
                 "<seed:tool_call>\n"
                 "<function=calculate_sum>\n"
@@ -2288,6 +2487,1290 @@ Hey there!<|im_end|>
         // above verify edge cases and format variations for the tool call output format.
     }
 
+    {
+        auto tmpls = read_templates("models/templates/MiniMax-M2.jinja");
+        std::vector<std::string> end_tokens{ "[e~[" };
+
+        assert_equals(COMMON_CHAT_FORMAT_MINIMAX_M2, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_MINIMAX_M2, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+
+        // Test parsing regular content
+        assert_msg_equals(message_assist,
+            common_chat_parse(
+                "Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_MINIMAX_M2}));
+
+        // Test parsing content with thinking
+        assert_msg_equals(message_assist_thoughts,
+            common_chat_parse(
+                "<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+
+        // Test parsing tool calls
+        assert_msg_equals(message_assist_call,
+            common_chat_parse(
+                "<minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_MINIMAX_M2}));
+
+        // Test parsing tool calls with thinking
+        assert_msg_equals(message_assist_call_thoughts,
+            common_chat_parse(
+                "<think>I'm\nthinking</think><minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>",
+                /* is_partial= */ false,
+                {
+                    /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+                }));
+
+        // Test tool calls with extra content
+        assert_msg_equals(message_assist_call_content,
+            common_chat_parse(
+                "<minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_MINIMAX_M2}
+            ));
+
+        // Test tool calls with extra content AND thinking
+        assert_msg_equals(message_assist_call_thoughts_content,
+            common_chat_parse(
+                "<think>I'm\nthinking</think><minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {
+                    /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+                }));
+
+        // Test streaming
+        test_parser_with_streaming(message_assist_call_thoughts_content,
+            "<think>I'm\nthinking\n</think>Hello, world!\nWhat's up?\n<minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(message_assist_call_thoughts_unparsed,
+            "<think>I'm\nthinking</think>\n\n<minimax:tool_call><invoke name=\"special_function\"><parameter name=\"arg1\">1</parameter></invoke></minimax:tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
+            }); });
+        test_parser_with_streaming(message_assist_call_thoughts_content,
+            "<think>I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?\n\n<minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>\n",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(message_assist_call_withopt,
+            "<minimax:tool_call>\n<invoke name=\"special_function_with_opt\">\n<parameter name=\"arg1\">1</parameter>\n<parameter name=\"arg2\">2</parameter>\n</invoke>\n</minimax:tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_MINIMAX_M2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
+            }); });
+
+        // Test template generation for regular content
+        test_templates(tmpls.get(), end_tokens, message_assist, tools,
+                      "Hello, world!\nWhat's up?",
+                      /* expect_grammar_triggered= */ false);
+
+        // Test template generation for tool calls
+        test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
+                      "<minimax:tool_call>\n<invoke name=\"special_function\">\n<parameter name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_NONE,
+                      /* ignore_whitespace_differences= */ true
+        );
+
+        // Test template generation for tools with optional parameters
+        test_templates(tmpls.get(), end_tokens, message_assist_call_noopt, tools,
+                      "<minimax:tool_call>\n<invoke name=\"special_function_with_opt\">\n<parameter name=\"arg1\">1</parameter>\n</invoke>\n</minimax:tool_call>",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_NONE,
+                      /* ignore_whitespace_differences= */ true
+        );
+        test_templates(tmpls.get(), end_tokens, message_assist_call_withopt, tools,
+                      "<minimax:tool_call>\n<invoke name=\"special_function_with_opt\">\n<parameter name=\"arg1\">1</parameter>\n<parameter name=\"arg2\">2</parameter>\n</invoke>\n</minimax:tool_call>",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_NONE,
+                      /* ignore_whitespace_differences= */ true
+        );
+    }
+
+    {
+        auto tmpls = read_templates("models/templates/GLM-4.6.jinja");
+        std::vector<std::string>   end_tokens{ "<|assistant|>", "<|observation|>" };
+
+        assert_equals(COMMON_CHAT_FORMAT_GLM_4_5, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_GLM_4_5, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+
+        // Test parsing regular content
+        assert_msg_equals(message_assist,
+            common_chat_parse(
+                "Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_GLM_4_5}));
+
+        // Test parsing content with thinking
+        assert_msg_equals(message_assist_thoughts,
+            common_chat_parse(
+                "\n<think>I'm\nthinking</think>\nHello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }), true);
+
+        // Test parsing tool calls
+        assert_msg_equals(message_assist_call,
+            common_chat_parse(
+                "\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_GLM_4_5}), true);
+
+        // Test parsing tool calls with thinking
+        assert_msg_equals(message_assist_call_thoughts,
+            common_chat_parse(
+                "\n<think>I'm\nthinking</think>\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
+                /* is_partial= */ false,
+                {
+                    /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+                }), true);
+
+        // Test tool calls with extra content
+        assert_msg_equals(message_assist_call_content,
+            common_chat_parse(
+                "\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_GLM_4_5}
+            ), true);
+
+        // Test tool calls with extra content AND thinking
+        assert_msg_equals(message_assist_call_thoughts_content,
+            common_chat_parse(
+                "\n<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
+                /* is_partial= */ false,
+                {
+                    /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+                }), true);
+
+        // Test streaming
+        test_parser_with_streaming(message_assist_call_thoughts_content,
+            "\n<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(message_assist_call_thoughts_unparsed,
+            "\n<think>I'm\nthinking</think>\n\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
+            }); });
+        test_parser_with_streaming(message_assist_call_withopt,
+            "\n<think></think>\n<tool_call>special_function_with_opt\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n<arg_key>arg2</arg_key>\n<arg_value>2</arg_value>\n</tool_call>\n",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+            test_parser_with_streaming(
+                simple_assist_msg("", "", "complex_function", "{\"name\":\"John Doe\",\"age\":30,\"active\":true,\"score\":95.5}"),
+                "<tool_call>complex_function\n"
+                "<arg_key>name</arg_key>\n"
+                "<arg_value>John Doe</arg_value>\n"
+                "<arg_key>age</arg_key>\n"
+                "<arg_value>30</arg_value>\n"
+                "<arg_key>active</arg_key>\n"
+                "<arg_value>true</arg_value>\n"
+                "<arg_key>score</arg_key>\n"
+                "<arg_value>95.5</arg_value>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_GLM_4_5}); });
+        test_parser_with_streaming(
+                simple_assist_msg("", "", "web_search", "{\"query\":\"\\\"From Zero\\\" Linkin Park album tracklist complete songs\",\"limit\":3,\"type\":\"text\"}"),
+                "<tool_call>web_search\n"
+                "<arg_key>query</arg_key>\n"
+                "<arg_value>\"From Zero\" Linkin Park album tracklist complete songs</arg_value>\n"
+                "<arg_key>limit</arg_key>\n"
+                "<arg_value>3</arg_value>\n"
+                "<arg_key>type</arg_key>\n"
+                "<arg_value>text</arg_value>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_GLM_4_5}); });
+
+        // Test interleaved thinking
+        test_parser_with_streaming(simple_assist_msg("Hello, world!\n\nWhat's up?", "I'm\nthinkingThinking2", "special_function", "{\"arg1\": 1}"),
+            "\n<think>I'm\nthinking</think>Hello, world!\n<think>Thinking2</think>What's up?\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(simple_assist_msg("\n<think>I'm\nthinking</think>Hello, world!\n<think>Thinking2</think>What's up?", "", "special_function", "{\"arg1\": 1}"),
+            "\n<think>I'm\nthinking</think>Hello, world!\n<think>Thinking2</think>What's up?\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_GLM_4_5,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
+            }); });
+
+        // Test template generation for regular content
+        test_templates(tmpls.get(), end_tokens, message_assist, tools,
+                      "\n<think></think>\nHello, world!\nWhat's up?",
+                      /* expect_grammar_triggered= */ false);
+
+        // Test template generation for tool calls
+        test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
+                      "\n<think></think>\n<tool_call>special_function\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>\n",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ false,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                      /* ignore_whitespace_differences= */ true
+        );
+
+        // Test template generation for tools with optional parameters
+        test_templates(tmpls.get(), end_tokens, message_assist_call_noopt, tools,
+                      "\n<think></think>\n<tool_call>special_function_with_opt\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n</tool_call>\n",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ false,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                      /* ignore_whitespace_differences= */ true
+        );
+        test_templates(tmpls.get(), end_tokens, message_assist_call_withopt, tools,
+                      "\n<think></think>\n<tool_call>special_function_with_opt\n<arg_key>arg1</arg_key>\n<arg_value>1</arg_value>\n<arg_key>arg2</arg_key>\n<arg_value>2</arg_value>\n</tool_call>\n",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ false,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                      /* ignore_whitespace_differences= */ true
+        );
+    }
+
+    {
+        auto tmpls = read_templates("models/templates/Kimi-K2-Thinking.jinja");
+        std::vector<std::string> end_tokens{ "<|im_end|>" };
+
+        assert_equals(COMMON_CHAT_FORMAT_KIMI_K2, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_KIMI_K2, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+
+        // Test parsing regular content
+        assert_msg_equals(message_assist,
+            common_chat_parse(
+                "Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_KIMI_K2}));
+
+        // Test parsing content with thinking
+        assert_msg_equals(message_assist_thoughts,
+            common_chat_parse(
+                "<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+
+        // Test parsing tool calls
+        assert_msg_equals(message_assist_call,
+            common_chat_parse(
+                "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_KIMI_K2}));
+
+        // Test parsing tool calls with thinking
+        assert_msg_equals(message_assist_call_thoughts,
+            common_chat_parse(
+                "<think>I'm\nthinking</think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
+                /* is_partial= */ false,
+                {
+                    /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+                }));
+
+        // Test tool calls with extra content
+        assert_msg_equals(message_assist_call_content,
+            common_chat_parse(
+                "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_KIMI_K2}
+            ));
+
+        // Test tool calls with extra content AND thinking
+        assert_msg_equals(message_assist_call_thoughts_content,
+            common_chat_parse(
+                "<think>I'm\nthinking</think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {
+                    /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+                }));
+
+        // Test streaming
+        test_parser_with_streaming(message_assist_call_thoughts_content,
+            "<think>I'm\nthinking\n</think>Hello, world!\nWhat's up?\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(message_assist_call_thoughts_unparsed,
+            "<think>I'm\nthinking</think>\n\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
+            }); });
+        test_parser_with_streaming(message_assist_call_thoughts_content,
+            "<think>I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?\n\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>\n",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(message_assist_call_withopt,
+            "<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function_with_opt:0<|tool_call_argument_begin|>{\"arg1\": 1, \"arg2\": 2}<|tool_call_end|><|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
+            }); });
+        test_parser_with_streaming(simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking", "special_function", "{\"arg1\": \"123456\"}"),
+            "<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": \"123456\"}<|tool_call_end|><|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking", "special_function", "{\"arg1\": [1, 2, \"345\", 6]}"),
+            "<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": [1, 2, \"345\", 6]}<|tool_call_end|><|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(simple_assist_msg("Hello, world!\nWhat's up?", "I'm\nthinking", "special_function", "{\"arg1\": {\"12\": 34, \"5\": [67, 8], \"9\": \"10\"}}"),
+            "<think>I'm\nthinking</think>Hello, world!\nWhat's up?\n<|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": {\"12\": 34, \"5\": [67, 8], \"9\": \"10\"}}<|tool_call_end|><|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_KIMI_K2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(
+                simple_assist_msg("", "", "complex_function", "{\"name\":\"John Doe\",\"age\":30,\"active\":true,\"score\":95.5}"),
+                "<|tool_calls_section_begin|><|tool_call_begin|>functions.complex_function:0<|tool_call_argument_begin|>"
+                "{\"name\": \"John Doe\", \"age\": 30, \"active\": true, \"score\": 95.5}"
+                "<|tool_call_end|><|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_KIMI_K2}); });
+        test_parser_with_streaming(
+                simple_assist_msg("", "", "web_search", "{\"query\":\"\\\"From Zero\\\" Linkin Park album tracklist complete songs\",\"limit\":3,\"type\":\"text\"}"),
+                "<|tool_calls_section_begin|><|tool_call_begin|>functions.web_search:0<|tool_call_argument_begin|>"
+                "{\"query\":\"\\\"From Zero\\\" Linkin Park album tracklist complete songs\",\"limit\":3,\"type\":\"text\"}"
+                "<|tool_call_end|><|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_KIMI_K2}); });
+        test_parser_with_streaming(
+                simple_assist_msg("", "", "read_file", "{\"args\": [{\"path\": \"src/providers/ThemeProvider.tsx\"}, {\"path\": \"src/components/Header.tsx\"}, {\"path\": \"src/components/ThemeToggle.tsx\"}, {\"path\": \"src/app/globals.css\"}, {\"path\": \"src/app/layout.tsx\"}]}"),
+                "<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>"
+                "{\"args\": [{\"path\": \"src/providers/ThemeProvider.tsx\"}, {\"path\": \"src/components/Header.tsx\"}, {\"path\": \"src/components/ThemeToggle.tsx\"}, {\"path\": \"src/app/globals.css\"}, {\"path\": \"src/app/layout.tsx\"}]}"
+                "<|tool_call_end|><|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_KIMI_K2}); });
+        test_parser_with_streaming(
+                simple_assist_msg(
+                        "Let me start by examining the relevant files to understand the current implementation.", "",
+                        "read_file",
+                        "{\"files\": [{\"path\": \"src/app/Partners.tsx\", \"line_ranges\": [\"1-100\"]}]}"),
+                "Let me start by examining the relevant files to understand the current implementation."
+                "<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>"
+                "{\"files\":[{\"path\":\"src/app/Partners.tsx\",\"line_ranges\":[\"1-100\"]}]}"
+                "<|tool_call_end|><|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_KIMI_K2}); });
+        auto multi_tool_msg = simple_assist_msg("Let me call multiple tools.", "I'm thinking.");
+        multi_tool_msg.tool_calls.push_back({ "read_file", "{\"files\": [{\"path\": \"src/app/Partners.tsx\", \"line_ranges\": [\"1-100\"]}]}", "" });
+        multi_tool_msg.tool_calls.push_back({ "web_search", "{\"query\":\"\\\"From Zero\\\" Linkin Park album tracklist complete songs\",\"limit\":3,\"type\":\"text\"}", "" });
+        multi_tool_msg.tool_calls.push_back({ "complex_function", "{\"name\": \"John Doe\", \"age\": 30, \"active\": true, \"score\": 95.5}", "" });
+        multi_tool_msg.tool_calls.push_back({ "emoji_function", "{\"message\":\"Hello! 👋 🌟 🚀 Testing emojis: 😀😃😄😁 and symbols: ∑∏∆∇\"}", "" });
+        test_parser_with_streaming(multi_tool_msg,
+                "<think>I'm thinking.</think>Let me call multiple tools."
+                "<|tool_calls_section_begin|>"
+                "<|tool_call_begin|>functions.read_file:0<|tool_call_argument_begin|>"
+                "{\"files\":[{\"path\":\"src/app/Partners.tsx\",\"line_ranges\":[\"1-100\"]}]}"
+                "<|tool_call_end|>"
+                "<|tool_call_begin|>functions.web_search:1<|tool_call_argument_begin|>"
+                "{\"query\":\"\\\"From Zero\\\" Linkin Park album tracklist complete songs\",\"limit\":3,\"type\":\"text\"}"
+                "<|tool_call_end|>"
+                "<|tool_call_begin|>functions.complex_function:2<|tool_call_argument_begin|>"
+                "{\"name\": \"John Doe\", \"age\": 30, \"active\": true, \"score\": 95.5}"
+                "<|tool_call_end|>"
+                "<|tool_call_begin|>functions.emoji_function:3<|tool_call_argument_begin|>"
+                "{\"message\":\"Hello! 👋 🌟 🚀 Testing emojis: 😀😃😄😁 and symbols: ∑∏∆∇\"}"
+                "<|tool_call_end|>"
+                "<|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    COMMON_CHAT_FORMAT_KIMI_K2,
+                    COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(
+                simple_assist_msg("", "I'm thinking", "complex_function_in_think", "{\"name\":\"John Doe\",\"age\":30,\"active\":true,\"score\":95.5}"),
+                "<think>I'm thinking<|tool_calls_section_begin|><|tool_call_begin|>functions.complex_function_in_think:0<|tool_call_argument_begin|>"
+                "{\"name\": \"John Doe\", \"age\": 30, \"active\": true, \"score\": 95.5}"
+                "<|tool_call_end|><|tool_calls_section_end|>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    COMMON_CHAT_FORMAT_KIMI_K2,
+                    COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(
+                simple_assist_msg("Hello", "I'm thinkingI'm still thinking", "complex_function_in_think", "{\"name\":\"John Doe\",\"age\":30,\"active\":true,\"score\":95.5}"),
+                "<think>I'm thinking<|tool_calls_section_begin|><|tool_call_begin|>functions.complex_function_in_think:0<|tool_call_argument_begin|>"
+                "{\"name\": \"John Doe\", \"age\": 30, \"active\": true, \"score\": 95.5}"
+                "<|tool_call_end|><|tool_calls_section_end|>I'm still thinking</think>Hello",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    COMMON_CHAT_FORMAT_KIMI_K2,
+                    COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+
+        // Test template rendering
+        common_chat_templates_inputs conversation_with_tools = inputs_tools;
+        conversation_with_tools.messages.push_back(simple_assist_msg("Let's do it", "Think first", "complex_function", "{\"name\":\"John Doe\",\"age\":30,\"active\":true,\"score\":95.5}"));
+        conversation_with_tools.messages.push_back({
+            "tool",
+            "Tool response 1",
+            /* .content_parts = */ {},
+            /* .tool_calls = */ {},
+            /* .reasoning_content = */ "",
+            /* .tool_name = */ "complex_function",
+            /* .tool_call_id = */ "",
+        });
+        conversation_with_tools.messages.push_back(simple_assist_msg("Continue", "Think next", "web_search", "{\"query\":\"\\\"From Zero\\\" Linkin Park album tracklist complete songs\",\"limit\":3,\"type\":\"text\"}"));
+        conversation_with_tools.messages.push_back({
+            "tool",
+            "Tool response 2",
+            /* .content_parts = */ {},
+            /* .tool_calls = */ {},
+            /* .reasoning_content = */ "",
+            /* .tool_name = */ "web_search",
+            /* .tool_call_id = */ "",
+        });
+        conversation_with_tools.messages.push_back(simple_assist_msg("CC", "Think last", "read_file", "{\"args\": [{\"path\": \"src/providers/ThemeProvider.tsx\"}, {\"path\": \"src/components/Header.tsx\"}, {\"path\": \"src/components/ThemeToggle.tsx\"}, {\"path\": \"src/app/globals.css\"}, {\"path\": \"src/app/layout.tsx\"}]}"));
+        conversation_with_tools.messages.push_back({
+            "tool",
+            "Tool response 3",
+            /* .content_parts = */ {},
+            /* .tool_calls = */ {},
+            /* .reasoning_content = */ "",
+            /* .tool_name = */ "read_file",
+            /* .tool_call_id = */ "",
+        });
+        assert_equals(common_chat_templates_apply(tmpls.get(), conversation_with_tools).prompt, std::string("<|im_system|>tool_declare<|im_middle|>[{\"type\": \"function\", \"function\": {\"name\": \"special_function\", \"description\": \"I'm special\", \"parameters\": {\"type\": \"object\", \"properties\": {\"arg1\": {\"type\": \"integer\", \"description\": \"The arg.\"}}, \"required\": [\"arg1\"]}}}]<|im_end|><|im_system|>system<|im_middle|>You are Kimi, an AI assistant created by Moonshot AI.<|im_end|><|im_user|>user<|im_middle|>Hey there!<|im_end|><|im_assistant|>assistant<|im_middle|><think>Think first</think>Let's do it<|tool_calls_section_begin|><|tool_call_begin|>functions.complex_function:0<|tool_call_argument_begin|>{\"name\":\"John Doe\",\"age\":30,\"active\":true,\"score\":95.5}<|tool_call_end|><|tool_calls_section_end|><|im_end|><|im_system|>complex_function<|im_middle|>## Return of functions.complex_function:0\nTool response 1<|im_end|><|im_assistant|>assistant<|im_middle|><think>Think next</think>Continue<|tool_calls_section_begin|><|tool_call_begin|>functions.web_search:1<|tool_call_argument_begin|>{\"query\":\"\\\"From Zero\\\" Linkin Park album tracklist complete songs\",\"limit\":3,\"type\":\"text\"}<|tool_call_end|><|tool_calls_section_end|><|im_end|><|im_system|>web_search<|im_middle|>## Return of functions.web_search:1\nTool response 2<|im_end|><|im_assistant|>assistant<|im_middle|><think>Think last</think>CC<|tool_calls_section_begin|><|tool_call_begin|>functions.read_file:2<|tool_call_argument_begin|>{\"args\": [{\"path\": \"src/providers/ThemeProvider.tsx\"}, {\"path\": \"src/components/Header.tsx\"}, {\"path\": \"src/components/ThemeToggle.tsx\"}, {\"path\": \"src/app/globals.css\"}, {\"path\": \"src/app/layout.tsx\"}]}<|tool_call_end|><|tool_calls_section_end|><|im_end|><|im_system|>read_file<|im_middle|>## Return of functions.read_file:2\nTool response 3<|im_end|><|im_assistant|>assistant<|im_middle|>"));
+
+        // Test template generation for regular content
+        test_templates(tmpls.get(), end_tokens, message_assist, tools,
+                      "<think></think>Hello, world!\nWhat's up?",
+                      /* expect_grammar_triggered= */ false);
+
+        // Test template generation for tool calls
+        test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
+                      "<think></think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                      /* ignore_whitespace_differences= */ true
+        );
+
+        // Test template generation for tools with optional parameters
+        test_templates(tmpls.get(), end_tokens, message_assist_call_noopt, tools,
+                      "<think></think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function_with_opt:0<|tool_call_argument_begin|>{\"arg1\": 1}<|tool_call_end|><|tool_calls_section_end|>",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                      /* ignore_whitespace_differences= */ true
+        );
+        test_templates(tmpls.get(), end_tokens, message_assist_call_withopt, tools,
+                      "<think></think><|tool_calls_section_begin|><|tool_call_begin|>functions.special_function_with_opt:0<|tool_call_argument_begin|>{\"arg1\": 1, \"arg2\": 2}<|tool_call_end|><|tool_calls_section_end|>",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                      /* ignore_whitespace_differences= */ true
+        );
+    }
+
+    // Test Qwen3-Coder XML format
+    {
+        // Basic XML tool call parsing
+        assert_msg_equals(
+            message_assist_call,
+            common_chat_parse(
+                "<tool_call>\n"
+                "  <function=special_function>\n"
+                "    <parameter=arg1>\n"
+                "      1\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}));
+
+        // Multiple parameters with different types
+        common_chat_msg expected_multi_param;
+        expected_multi_param.role = "assistant";
+        expected_multi_param.tool_calls = {
+            { "complex_function", "{\"name\":\"John Doe\",\"age\":30,\"active\":true,\"score\":95.5}", "" }
+        };
+
+        test_parser_with_streaming(expected_multi_param,
+                "<tool_call>\n"
+                "  <function=complex_function>\n"
+                "    <parameter=name>\n"
+                "      John Doe\n"
+                "    </parameter>\n"
+                "    <parameter=age>\n"
+                "      30\n"
+                "    </parameter>\n"
+                "    <parameter=active>\n"
+                "      true\n"
+                "    </parameter>\n"
+                "    <parameter=score>\n"
+                "      95.5\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Special characters and Unicode
+        common_chat_msg expected_special_chars;
+        expected_special_chars.role = "assistant";
+        expected_special_chars.tool_calls = {
+            { "unicode_function", "{\"message\":\"Hello 世界! 🌍 Special chars: @#$%^&*()\"}", "" }
+        };
+
+        test_parser_with_streaming(expected_special_chars,
+                "<tool_call>\n"
+                "  <function=unicode_function>\n"
+                "    <parameter=message>\n"
+                "      Hello 世界! 🌍 Special chars: @#$%^&*()\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Multiline content with newlines and indentation
+        common_chat_msg expected_multiline;
+        expected_multiline.role = "assistant";
+        expected_multiline.tool_calls = {
+            { "code_function", "{\"code\":\"def hello():\\n    print(\\\"Hello, World!\\\")\\n    return True\"}", "" }
+        };
+
+        test_parser_with_streaming(expected_multiline,
+                "<tool_call>\n"
+                "  <function=code_function>\n"
+                "    <parameter=code>\n"
+                "def hello():\n"
+                "    print(\"Hello, World!\")\n"
+                "    return True\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // JSON object as parameter value
+        common_chat_msg expected_json_param;
+        expected_json_param.role = "assistant";
+        expected_json_param.tool_calls = {
+            { "json_function", "{\"config\":{\"host\":\"localhost\",\"port\":8080,\"ssl\":false}}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_json_param,
+                "<tool_call>\n"
+                "  <function=json_function>\n"
+                "    <parameter=config>\n"
+                "      {\"host\": \"localhost\", \"port\": 8080, \"ssl\": false}\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Array as parameter value
+        common_chat_msg expected_array_param;
+        expected_array_param.role = "assistant";
+        expected_array_param.tool_calls = {
+            { "array_function", "{\"items\":[\"apple\",\"banana\",\"cherry\"]}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_array_param,
+                "<tool_call>\n"
+                "  <function=array_function>\n"
+                "    <parameter=items>\n"
+                "      [\"apple\", \"banana\", \"cherry\"]\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Empty parameter
+        common_chat_msg expected_empty_param;
+        expected_empty_param.role = "assistant";
+        expected_empty_param.tool_calls = {
+            { "empty_function", "{\"empty_param\":\"\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_empty_param,
+                "<tool_call>\n"
+                "  <function=empty_function>\n"
+                "    <parameter=empty_param>\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Boolean values (true/false)
+        common_chat_msg expected_boolean;
+        expected_boolean.role = "assistant";
+        expected_boolean.tool_calls = {
+            { "boolean_function", "{\"enabled\":true,\"debug\":false}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_boolean,
+                "<tool_call>\n"
+                "  <function=boolean_function>\n"
+                "    <parameter=enabled>\n"
+                "      true\n"
+                "    </parameter>\n"
+                "    <parameter=debug>\n"
+                "      false\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Null value
+        common_chat_msg expected_null;
+        expected_null.role = "assistant";
+        expected_null.tool_calls = {
+            { "null_function", "{\"optional_param\":null}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_null,
+                "<tool_call>\n"
+                "  <function=null_function>\n"
+                "    <parameter=optional_param>\n"
+                "      null\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Negative numbers and scientific notation
+        common_chat_msg expected_numbers;
+        expected_numbers.role = "assistant";
+        expected_numbers.tool_calls = {
+            { "math_function", "{\"negative\":-42,\"decimal\":-3.14,\"scientific\":1.23e-4}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_numbers,
+                "<tool_call>\n"
+                "  <function=math_function>\n"
+                "    <parameter=negative>\n"
+                "      -42\n"
+                "    </parameter>\n"
+                "    <parameter=decimal>\n"
+                "      -3.14\n"
+                "    </parameter>\n"
+                "    <parameter=scientific>\n"
+                "      1.23e-4\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // XML-like content in parameters (should be escaped)
+        common_chat_msg expected_xml_content;
+        expected_xml_content.role = "assistant";
+        expected_xml_content.tool_calls = {
+            { "xml_function", "{\"xml_content\":\"<root><item>value</item></root>\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_xml_content,
+                "<tool_call>\n"
+                "  <function=xml_function>\n"
+                "    <parameter=xml_content>\n"
+                "      <root><item>value</item></root>\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Quotes and escape characters
+        common_chat_msg expected_quotes;
+        expected_quotes.role = "assistant";
+        expected_quotes.tool_calls = {
+            { "quote_function", "{\"message\":\"She said \\\"Hello!\\\" and left.\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_quotes,
+                "<tool_call>\n"
+                "  <function=quote_function>\n"
+                "    <parameter=message>\n"
+                "      She said \"Hello!\" and left.\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Long parameter value (simplified)
+        std::string long_text = "This is a long text parameter that should test the parser's ability to handle larger amounts of text data.";
+
+        common_chat_msg expected_long_text;
+        expected_long_text.role = "assistant";
+        expected_long_text.tool_calls = {
+            { "long_function", "{\"long_text\":\"" + long_text + "\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_long_text,
+                "<tool_call>\n"
+                "  <function=long_function>\n"
+                "    <parameter=long_text>\n"
+                "      " + long_text + "\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Mixed content with text before and after tool call
+        common_chat_msg expected_mixed_content;
+        expected_mixed_content.role = "assistant";
+        expected_mixed_content.content = "I'll help you search for products. ";
+        expected_mixed_content.tool_calls = {
+            { "search_function", "{\"query\":\"laptops\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_mixed_content,
+                "I'll help you search for products. <tool_call>\n"
+                "  <function=search_function>\n"
+                "    <parameter=query>\n"
+                "      laptops\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Compact format (no extra whitespace)
+        common_chat_msg expected_compact;
+        expected_compact.role = "assistant";
+        expected_compact.tool_calls = {
+            { "compact_function", "{\"param\":\"value\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_compact,
+                "<tool_call><function=compact_function><parameter=param>value</parameter></function></tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Function name with underscores and numbers
+        common_chat_msg expected_complex_name;
+        expected_complex_name.role = "assistant";
+        expected_complex_name.tool_calls = {
+            { "get_user_data_v2", "{\"user_id\":12345}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_complex_name,
+                "<tool_call>\n"
+                "  <function=get_user_data_v2>\n"
+                "    <parameter=user_id>\n"
+                "      12345\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Parameter names with underscores and numbers
+        common_chat_msg expected_complex_params;
+        expected_complex_params.role = "assistant";
+        expected_complex_params.tool_calls = {
+            { "test_function", "{\"param_1\":\"value1\",\"param_2_name\":\"value2\",\"param3\":123}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_complex_params,
+                "<tool_call>\n"
+                "  <function=test_function>\n"
+                "    <parameter=param_1>\n"
+                "      value1\n"
+                "    </parameter>\n"
+                "    <parameter=param_2_name>\n"
+                "      value2\n"
+                "    </parameter>\n"
+                "    <parameter=param3>\n"
+                "      123\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Very deeply nested XML content in parameter
+        common_chat_msg expected_deep_xml;
+        expected_deep_xml.role = "assistant";
+        expected_deep_xml.tool_calls = {
+            { "xml_parser", "{\"xml\":\"<root><level1><level2><level3>deep content</level3></level2></level1></root>\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_deep_xml,
+                "<tool_call>\n"
+                "  <function=xml_parser>\n"
+                "    <parameter=xml>\n"
+                "      <root><level1><level2><level3>deep content</level3></level2></level1></root>\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Parameter with only whitespace
+        common_chat_msg expected_whitespace_param;
+        expected_whitespace_param.role = "assistant";
+        expected_whitespace_param.tool_calls = {
+            { "whitespace_function", "{\"spaces\":\"\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_whitespace_param,
+                "<tool_call>\n"
+                "  <function=whitespace_function>\n"
+                "    <parameter=spaces>\n"
+                "      \n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Parameter with tabs and mixed whitespace
+        common_chat_msg expected_mixed_whitespace;
+        expected_mixed_whitespace.role = "assistant";
+        expected_mixed_whitespace.tool_calls = {
+            { "tab_function", "{\"content\":\"line1\\n\\tindented line\\n    spaces\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_mixed_whitespace,
+                "<tool_call>\n"
+                "  <function=tab_function>\n"
+                "    <parameter=content>\n"
+                "line1\n"
+                "\tindented line\n"
+                "    spaces\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Control characters and special Unicode
+        common_chat_msg expected_control_chars;
+        expected_control_chars.role = "assistant";
+        expected_control_chars.tool_calls = {
+            { "control_function", "{\"text\":\"Line1\\nLine2\\tTabbed\\rCarriage return\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_control_chars,
+                "<tool_call>\n"
+                "  <function=control_function>\n"
+                "    <parameter=text>\n"
+                "Line1\nLine2\tTabbed\rCarriage return\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Emoji and extended Unicode characters
+        common_chat_msg expected_emoji;
+        expected_emoji.role = "assistant";
+        expected_emoji.tool_calls = {
+            { "emoji_function", "{\"message\":\"Hello! 👋 🌟 🚀 Testing emojis: 😀😃😄😁 and symbols: ∑∏∆∇\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_emoji,
+                "<tool_call>\n"
+                "  <function=emoji_function>\n"
+                "    <parameter=message>\n"
+                "      Hello! 👋 🌟 🚀 Testing emojis: 😀😃😄😁 and symbols: ∑∏∆∇\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Mathematical expressions and formulas
+        common_chat_msg expected_math;
+        expected_math.role = "assistant";
+        expected_math.tool_calls = {
+            { "math_function", "{\"formula\":\"E = mc² and ∫f(x)dx = F(x) + C\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_math,
+                "<tool_call>\n"
+                "  <function=math_function>\n"
+                "    <parameter=formula>\n"
+                "      E = mc² and ∫f(x)dx = F(x) + C\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // SQL injection-like content (should be safely escaped)
+        common_chat_msg expected_sql;
+        expected_sql.role = "assistant";
+        expected_sql.tool_calls = {
+            { "sql_function", "{\"query\":\"SELECT * FROM users WHERE id = 1; DROP TABLE users; --\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_sql,
+                "<tool_call>\n"
+                "  <function=sql_function>\n"
+                "    <parameter=query>\n"
+                "      SELECT * FROM users WHERE id = 1; DROP TABLE users; --\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // HTML/XML injection content
+        common_chat_msg expected_html;
+        expected_html.role = "assistant";
+        expected_html.tool_calls = {
+            { "html_function", "{\"content\":\"<script>alert('xss')</script><img src=x onerror=alert(1)>\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_html,
+                "<tool_call>\n"
+                "  <function=html_function>\n"
+                "    <parameter=content>\n"
+                "      <script>alert('xss')</script><img src=x onerror=alert(1)>\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Binary-like content (base64)
+        common_chat_msg expected_binary;
+        expected_binary.role = "assistant";
+        expected_binary.tool_calls = {
+            { "binary_function", "{\"data\":\"SGVsbG8gV29ybGQhIFRoaXMgaXMgYmFzZTY0IGVuY29kZWQgdGV4dC4=\"}", "" }
+        };
+
+        test_parser_with_streaming(
+            expected_binary,
+                "<tool_call>\n"
+                "  <function=binary_function>\n"
+                "    <parameter=data>\n"
+                "      SGVsbG8gV29ybGQhIFRoaXMgaXMgYmFzZTY0IGVuY29kZWQgdGV4dC4=\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+
+        // Very large numbers (should be parsed as scientific notation)
+        common_chat_msg expected_large_numbers;
+        expected_large_numbers.role = "assistant";
+        expected_large_numbers.tool_calls = {
+            { "number_function", "{\"big_int\":1e+60}", "" }  // Large number becomes scientific notation
+        };
+
+        test_parser_with_streaming(
+            expected_large_numbers,
+                "<tool_call>\n"
+                "  <function=number_function>\n"
+                "    <parameter=big_int>\n"
+                "      999999999999999999999999999999999999999999999999999999999999\n"
+                "    </parameter>\n"
+                "  </function>\n"
+                "</tool_call>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_QWEN3_CODER_XML}); });
+    }
+
+    {
+        // Qwen3-Coder template
+        auto tmpls = read_templates("models/templates/Qwen3-Coder.jinja");
+        common_chat_templates_inputs inputs;
+        inputs.messages = { message_user };
+
+        common_chat_tool qwen_union_tool {
+            /* .name = */ "qwen_union",
+            /* .description = */ "Test tool for union/anyOf handling",
+            /* .parameters = */ R"({
+                "type": "object",
+                "properties": {
+                    "priority": { "type": ["number", "null"] },
+                    "maybe_text": { "anyOf": [ { "type": "string" } ] },
+                    "config": { "anyOf": [ { "type": "object" }, { "type": "null" } ] }
+                },
+                "required": []
+            })",
+        };
+        inputs.tools = { qwen_union_tool };
+
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+        assert_equals(COMMON_CHAT_FORMAT_QWEN3_CODER_XML, params.format);
+        assert_equals(false, params.grammar.empty());
+
+        // Grammar should compile successfully
+        auto grammar = build_grammar(params.grammar);
+        GGML_ASSERT(grammar && "Failed to build Qwen3-Coder grammar with union types");
+    }
+}
+
+static void test_template_output_peg_parsers() {
+    printf("[%s]\n", __func__);
+
+    // JSON schemas
+    const char * invoice_schema = R"({
+        "type": "object",
+        "properties": {
+            "amount": {"type": "number"},
+            "date": {"type": "string"}
+        }
+    })";
+
+    {
+        // Ministral-3-14B-Reasoning-2512
+        auto tmpls = read_templates("models/templates/mistralai-Ministral-3-14B-Reasoning-2512.jinja");
+
+        // Test basic message
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "Hello, world!\nWhat's up?";
+            t.expect = message_assist;
+        });
+
+        // Test basic message and reasoning with reasoning_format = none
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "[THINK]I'm\nthinking[/THINK]Hello, world!\nWhat's up?";
+            t.expect.content = "[THINK]I'm\nthinking[/THINK]Hello, world!\nWhat's up?";
+        });
+
+        // Test basic message and reasoning with reasoning_format = auto
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "[THINK]I'm\nthinking[/THINK]Hello, world!\nWhat's up?";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+
+            t.expect = message_assist_thoughts;
+        });
+
+        // Test tool call
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = R"([TOOL_CALLS]special_function[ARGS]{"arg1":1})";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call;
+        });
+
+        // Test tool call with reasoning
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "[THINK]I'm\nthinking[/THINK]"
+                      R"([TOOL_CALLS]special_function[ARGS]{"arg1":1})";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call_thoughts;
+        });
+
+        // Test parallel tool calls
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = R"([TOOL_CALLS]special_function[ARGS]{"arg1": 1})"
+                      R"([TOOL_CALLS]special_function_with_opt[ARGS]{"arg1": 1, "arg2": 2})";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.parallel_tool_calls = true;
+            t.params.tools = {special_function_tool, special_function_tool_with_optional_param};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "special_function",
+                /* .arguments = */ R"({"arg1": 1})",
+                /* .id = */        {},
+            }, {
+                /* .name = */      "special_function_with_opt",
+                /* .arguments = */ R"({"arg1": 1, "arg2": 2})",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test response format
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "[THINK]I need to output the invoice details in JSON[/THINK]"
+                      "```json\n"
+                      R"({"amount": 123.45, "date": "2025-12-03"})"
+                      "\n```";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.json_schema = invoice_schema;
+
+            t.expect.reasoning_content = "I need to output the invoice details in JSON";
+            t.expect.content =R"({"amount": 123.45, "date": "2025-12-03"})";
+        });
+    }
+
+    {
+        // NVIDIA Nemotron-3 Nano
+        auto tmpls = read_templates("models/templates/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.jinja");
+
+        // Test basic message
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "Hello, world!\nWhat's up?";
+            t.expect = message_assist;
+        });
+
+        // Test basic message and reasoning with reasoning_format = none
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "I'm\nthinking\n</think>\nHello, world!\nWhat's up?";
+            t.expect.content = "I'm\nthinking\n</think>\nHello, world!\nWhat's up?";
+        });
+
+        // Test basic message and reasoning with reasoning_format = auto
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "I'm\nthinking\n</think>\nHello, world!\nWhat's up?";
+            t.params.enable_thinking = true;
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+
+            t.expect = message_assist_thoughts;
+        });
+
+        // Test tool call
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.enable_thinking = false;
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call;
+        });
+
+        // Test tool call with reasoning
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "I'm\nthinking\n</think>\n"
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call_thoughts;
+        });
+
+        // Test parallel tool calls
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>\n"
+                "<tool_call>\n"
+                "<function=special_function_with_opt>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "<parameter=arg2>\n"
+                "2\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.enable_thinking = false;
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.parallel_tool_calls = true;
+            t.params.tools = {special_function_tool, special_function_tool_with_optional_param};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "special_function",
+                /* .arguments = */ R"({"arg1": 1})",
+                /* .id = */        {},
+            }, {
+                /* .name = */      "special_function_with_opt",
+                /* .arguments = */ R"({"arg1": 1, "arg2": 2})",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test tool call with string parameter
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "<tool_call>\n"
+                "<function=python>\n"
+                "<parameter=code>\n"
+                "def hello():\n"
+                "    print(\"Hello, world!\")\n"
+                "\n"
+                "hello()\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.enable_thinking = false;
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {python_tool};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "python",
+                /* .arguments = */ "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test tool call with string parameter and no closing </parameter> tag
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "<tool_call>\n"
+                "<function=python>\n"
+                "<parameter=code>\n"
+                "def hello():\n"
+                "    print(\"Hello, world!\")\n"
+                "\n"
+                "hello()\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.enable_thinking = false;
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {python_tool};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "python",
+                /* .arguments = */ "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test response format
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+              "I need to output the invoice details in JSON\n"
+              "</think>\n"
+              R"({"amount": 123.45, "date": "2025-12-03"})";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.json_schema = invoice_schema;
+
+            t.expect.reasoning_content = "I need to output the invoice details in JSON";
+            t.expect.content = R"({"amount": 123.45, "date": "2025-12-03"})";
+        });
+    }
+
 }
 
 static void test_msg_diffs_compute() {
@@ -2413,6 +3896,7 @@ int main(int argc, char ** argv) {
             test_msgs_oaicompat_json_conversion();
             test_tools_oaicompat_json_conversion();
             test_template_output_parsers();
+            test_template_output_peg_parsers();
             std::cout << "\n[chat] All tests passed!" << '\n';
         }
         return 0;

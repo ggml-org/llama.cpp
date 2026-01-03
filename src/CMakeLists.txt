@@ -67,7 +67,7 @@ add_library(llama
             models/gemma-embedding.cpp
             models/gemma.cpp
             models/gemma2-iswa.cpp
-            models/gemma3-iswa.cpp
+            models/gemma3.cpp
             models/gemma3n-iswa.cpp
             models/glm4-moe.cpp
             models/glm4.cpp
@@ -87,9 +87,12 @@ add_library(llama
             models/llada.cpp
             models/llama-iswa.cpp
             models/llama.cpp
+            models/maincoder.cpp
             models/mamba.cpp
+            models/mimo2-iswa.cpp
             models/minicpm3.cpp
             models/minimax-m2.cpp
+            models/modern-bert.cpp
             models/mpt.cpp
             models/nemotron-h.cpp
             models/nemotron.cpp
@@ -105,6 +108,7 @@ add_library(llama
             models/phi3.cpp
             models/plamo.cpp
             models/plamo2.cpp
+            models/plamo3.cpp
             models/plm.cpp
             models/qwen.cpp
             models/qwen2.cpp
@@ -114,7 +118,9 @@ add_library(llama
             models/qwen3vl.cpp
             models/qwen3vl-moe.cpp
             models/qwen3moe.cpp
+            models/qwen3next.cpp
             models/refact.cpp
+            models/rnd1.cpp
             models/rwkv6-base.cpp
             models/rwkv6.cpp
             models/rwkv6qwen2.cpp
@@ -130,12 +136,14 @@ add_library(llama
             models/t5-enc.cpp
             models/wavtokenizer-dec.cpp
             models/xverse.cpp
+            models/mistral3.cpp
             models/graph-context-mamba.cpp
             )
 
 set_target_properties(llama PROPERTIES
     VERSION ${LLAMA_INSTALL_VERSION}
     SOVERSION 0
+    MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
 target_include_directories(llama PRIVATE .)

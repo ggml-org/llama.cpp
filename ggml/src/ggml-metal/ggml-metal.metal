@@ -1249,6 +1249,22 @@ kernel void kernel_scale_f32_4(
     dst[tpig] = src0[tpig] * args.scale + args.bias;
 }
 
+kernel void kernel_fill_f32(
+        constant ggml_metal_kargs_fill & args,
+        device const float * src0,
+        device       float * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = args.val;
+}
+
+kernel void kernel_fill_f32_4(
+        constant ggml_metal_kargs_fill & args,
+        device const float4 * src0,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = args.val;
+}
+
 kernel void kernel_clamp_f32(
         constant ggml_metal_kargs_clamp & args,
         device const float * src0,
@@ -1595,6 +1611,36 @@ kernel void kernel_exp_f32_4(
     dst[tpig] = exp(src0[tpig]);
 }
 
+kernel void kernel_softplus_f32(
+        device const float * src0,
+        device       float * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    device const float & x = src0[tpig];
+    dst[tpig] = select(log(1.0f + exp(x)), x, x > 20.0f);
+}
+
+kernel void kernel_softplus_f32_4(
+        device const float4 * src0,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    device const float4 & x = src0[tpig];
+    dst[tpig] = select(log(1.0f + exp(x)), x, x > 20.0f);
+}
+
+kernel void kernel_expm1_f32(
+        device const float * src0,
+        device       float * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = exp(src0[tpig]) - 1.0f;
+}
+
+kernel void kernel_expm1_f32_4(
+        device const float4 * src0,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = exp(src0[tpig]) - 1.0f;
+}
+
 kernel void kernel_reglu_f32(
         constant ggml_metal_kargs_glu & args,
         device const char * src0,
@@ -1744,6 +1790,7 @@ kernel void kernel_op_sum_f32(
         return;
     }
 
+    // TODO: become function constant
     const uint nsg = (ntg.x + 31) / 32;
 
     float sumf = 0;
@@ -1831,6 +1878,186 @@ typedef decltype(kernel_sum_rows<false>) kernel_sum_rows_t;
 
 template [[host_name("kernel_sum_rows_f32")]] kernel kernel_sum_rows_t kernel_sum_rows<false>;
 template [[host_name("kernel_mean_f32")]]     kernel kernel_sum_rows_t kernel_sum_rows<true>;
+
+template<typename T>
+kernel void kernel_cumsum_blk(
+        constant ggml_metal_kargs_cumsum_blk & args,
+        device const char * src0,
+        device       char * tmp,
+        device       char * dst,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int ib = tgpig[0]/args.ne01;
+
+    const int i00 = ib*ntg.x;
+    const int i01 = tgpig[0]%args.ne01;
+    const int i02 = tgpig[1];
+    const int i03 = tgpig[2];
+
+    device const float * src0_row = (device const float *) (src0 +
+            args.nb01*i01 +
+            args.nb02*i02 +
+            args.nb03*i03);
+
+    threadgroup float * shmem_f32 = (threadgroup float *) shmem;
+
+    float v = 0.0f;
+
+    if (i00 + tpitg.x < args.ne00) {
+        v = src0_row[i00 + tpitg.x];
+    }
+
+    float s = simd_prefix_inclusive_sum(v);
+
+    if (tiisg == N_SIMDWIDTH - 1) {
+        shmem_f32[sgitg] = s;
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sgitg == 0) {
+        shmem_f32[tiisg] = simd_prefix_exclusive_sum(shmem_f32[tiisg]);
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    s += shmem_f32[sgitg];
+
+    device float * dst_row = (device float *) dst +
+        args.ne00*i01 +
+        args.ne00*args.ne01*i02 +
+        args.ne00*args.ne01*args.ne02*i03;
+
+    if (i00 + tpitg.x < args.ne00) {
+        dst_row[i00 + tpitg.x] = s;
+    }
+
+    if (args.outb && tpitg.x == ntg.x - 1) {
+        device float * tmp_row = (device float *) tmp +
+            args.net0*i01 +
+            args.net0*args.net1*i02 +
+            args.net0*args.net1*args.net2*i03;
+
+        tmp_row[ib] = s;
+    }
+}
+
+typedef decltype(kernel_cumsum_blk<float>) kernel_cumsum_blk_t;
+
+template [[host_name("kernel_cumsum_blk_f32")]] kernel kernel_cumsum_blk_t kernel_cumsum_blk<float>;
+
+template<typename T>
+kernel void kernel_cumsum_add(
+        constant ggml_metal_kargs_cumsum_add & args,
+        device const char * tmp,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int ib = tgpig[0]/args.ne01;
+
+    if (ib == 0) {
+        return;
+    }
+
+    const int i00 = ib*ntg.x;
+    const int i01 = tgpig[0]%args.ne01;
+    const int i02 = tgpig[1];
+    const int i03 = tgpig[2];
+
+    device const float * tmp_row = (device const float *) (tmp +
+            args.nbt1*i01 +
+            args.nbt2*i02 +
+            args.nbt3*i03);
+
+    device float * dst_row = (device float *) dst +
+        args.ne00*i01 +
+        args.ne00*args.ne01*i02 +
+        args.ne00*args.ne01*args.ne02*i03;
+
+    if (i00 + tpitg.x < args.ne00) {
+        dst_row[i00 + tpitg.x] += tmp_row[ib - 1];
+    }
+}
+
+typedef decltype(kernel_cumsum_add<float>) kernel_cumsum_add_t;
+
+template [[host_name("kernel_cumsum_add_f32")]] kernel kernel_cumsum_add_t kernel_cumsum_add<float>;
+
+
+template<uint32_t ttype>
+bool _ggml_vec_tri_cmp(const int i, const int r);
+
+template<>
+bool _ggml_vec_tri_cmp</* GGML_TRI_TYPE_LOWER */ 3>(const int i, const int r) {
+    return i < r;
+}
+
+template<>
+bool _ggml_vec_tri_cmp</* GGML_TRI_TYPE_LOWER_DIAG */ 2>(const int i, const int r) {
+    return i <= r;
+}
+
+template<>
+bool _ggml_vec_tri_cmp</* GGML_TRI_TYPE_UPPER */ 1>(const int i, const int r) {
+    return i > r;
+}
+
+template<>
+bool _ggml_vec_tri_cmp</* GGML_TRI_TYPE_UPPER_DIAG */ 0>(const int i, const int r) {
+    return i >= r;
+}
+
+template<typename T, int ttype>
+kernel void kernel_tri(
+        constant ggml_metal_kargs_tri & args,
+        device const char * src0,
+        device const char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int i3 = tgpig.z;
+    const int i2 = tgpig.y;
+    const int i1 = tgpig.x;
+
+    if (i3 >= args.ne03 || i2 >= args.ne02 || i1 >= args.ne01) {
+        return;
+    }
+
+    device const T * src_row = (device const T *) ((device const char *) src0 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03);
+    device       T * dst_row = (device       T *) ((device       char *) dst  + i1*args.nb1  + i2*args.nb2  + i3*args.nb3);
+
+    // Each thread is a single element of the row if ne00 < max threads per
+    // threadgroup, so this will loop once for each index that this thread is
+    // responsible for
+    for (int64_t i0 = tpitg.x; i0 < args.ne00; i0 += ntg.x) {
+        // Use the comparison as a mask for branchless
+        dst_row[i0] = static_cast<T>(_ggml_vec_tri_cmp<ttype>(i0, i1)) * src_row[i0];
+    }
+}
+
+typedef decltype(kernel_tri<float, 0>) kernel_tri_t;
+
+template [[host_name("kernel_tri_f32_0")]] kernel kernel_tri_t kernel_tri<float, 0>;
+template [[host_name("kernel_tri_f32_1")]] kernel kernel_tri_t kernel_tri<float, 1>;
+template [[host_name("kernel_tri_f32_2")]] kernel kernel_tri_t kernel_tri<float, 2>;
+template [[host_name("kernel_tri_f32_3")]] kernel kernel_tri_t kernel_tri<float, 3>;
+template [[host_name("kernel_tri_f16_0")]] kernel kernel_tri_t kernel_tri<half, 0>;
+template [[host_name("kernel_tri_f16_1")]] kernel kernel_tri_t kernel_tri<half, 1>;
+template [[host_name("kernel_tri_f16_2")]] kernel kernel_tri_t kernel_tri<half, 2>;
+template [[host_name("kernel_tri_f16_3")]] kernel kernel_tri_t kernel_tri<half, 3>;
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_tri_bf16_0")]] kernel kernel_tri_t kernel_tri<bfloat, 0>;
+template [[host_name("kernel_tri_bf16_1")]] kernel kernel_tri_t kernel_tri<bfloat, 1>;
+template [[host_name("kernel_tri_bf16_2")]] kernel kernel_tri_t kernel_tri<bfloat, 2>;
+template [[host_name("kernel_tri_bf16_3")]] kernel kernel_tri_t kernel_tri<bfloat, 3>;
+#endif
 
 template<typename T>
 kernel void kernel_soft_max(
@@ -2117,7 +2344,102 @@ kernel void kernel_ssm_conv_f32_f32_4(
     x[0] = sumf;
 }
 
+constant short FC_ssm_conv_bs   [[function_constant(FC_SSM_CONV + 0)]];
+
+// Batched version: each threadgroup processes multiple tokens for better efficiency
+// Thread layout: each thread handles one token, threadgroup covers BATCH_SIZE tokens
+kernel void kernel_ssm_conv_f32_f32_batched(
+        constant ggml_metal_kargs_ssm_conv & args,
+        device const  void * src0,
+        device const  void * src1,
+        device       float * dst,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3   ntg[[threads_per_threadgroup]]) {
+    // tgpig.x = row index (ir)
+    // tgpig.y = batch of tokens (i2_base / BATCH_SIZE)
+    // tgpig.z = sequence index (i3)
+    // tpitg.x = thread within batch (0..BATCH_SIZE-1)
+    const short BATCH_SIZE = FC_ssm_conv_bs;
+
+    const int64_t ir      = tgpig.x;
+    const int64_t i2_base = tgpig.y * BATCH_SIZE;
+    const int64_t i3      = tgpig.z;
+    const int64_t i2_off  = tpitg.x;
+    const int64_t i2      = i2_base + i2_off;
+
+    const int64_t nc  = args.ne10;  // conv kernel size (typically 4)
+    const int64_t n_t = args.ne1;   // number of tokens
+
+    // Bounds check for partial batches at the end
+    if (i2 >= n_t) {
+        return;
+    }
+
+    // Load conv weights (shared across all tokens for this row)
+    device const float * c = (device const float *) ((device const char *) src1 + ir*args.nb11);
+
+    // Load source for this specific token
+    device const float * s = (device const float *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
+
+    // Output location for this token
+    device float * x = (device float *) ((device char *) dst + ir*args.nb0 + i2*args.nb1 + i3*args.nb2);
+
+    float sumf = 0.0f;
+    for (int64_t i0 = 0; i0 < nc; ++i0) {
+        sumf += s[i0] * c[i0];
+    }
+
+    x[0] = sumf;
+}
+
+kernel void kernel_ssm_conv_f32_f32_batched_4(
+        constant ggml_metal_kargs_ssm_conv & args,
+        device const  void * src0,
+        device const  void * src1,
+        device       float * dst,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3   ntg[[threads_per_threadgroup]]) {
+    // tgpig.x = row index (ir)
+    // tgpig.y = batch of tokens (i2_base / BATCH_SIZE)
+    // tgpig.z = sequence index (i3)
+    // tpitg.x = thread within batch (0..BATCH_SIZE-1)
+    const short BATCH_SIZE = FC_ssm_conv_bs;
+
+    const int64_t ir      = tgpig.x;
+    const int64_t i2_base = tgpig.y * BATCH_SIZE;
+    const int64_t i3      = tgpig.z;
+    const int64_t i2_off  = tpitg.x;
+    const int64_t i2      = i2_base + i2_off;
+
+    const int64_t nc  = args.ne10;  // conv kernel size (typically 4)
+    const int64_t n_t = args.ne1;   // number of tokens
+
+    // Bounds check for partial batches at the end
+    if (i2 >= n_t) {
+        return;
+    }
+
+    // Load conv weights (shared across all tokens for this row)
+    device const float4 * c = (device const float4 *) ((device const char *) src1 + ir*args.nb11);
+
+    // Load source for this specific token
+    device const float4 * s = (device const float4 *) ((device const char *) src0 + ir*args.nb01 + i2*args.nb00 + i3*args.nb02);
+
+    // Output location for this token
+    device float * x = (device float *) ((device char *) dst + ir*args.nb0 + i2*args.nb1 + i3*args.nb2);
+
+    float sumf = 0.0f;
+    for (int64_t i0 = 0; i0 < nc/4; ++i0) {
+        sumf += dot(s[i0], c[i0]);
+    }
+
+    x[0] = sumf;
+}
+
 // ref: ggml.c:ggml_compute_forward_ssm_scan_f32, Mamba-2 part
+// Optimized version: reduces redundant memory loads by having one thread load shared values
 kernel void kernel_ssm_scan_f32(
         constant ggml_metal_kargs_ssm_scan & args,
         device const void * src0,
@@ -2137,7 +2459,15 @@ kernel void kernel_ssm_scan_f32(
         uint3    tgpg[[threadgroups_per_grid]]) {
     constexpr short NW = N_SIMDWIDTH;
 
-    shared[tpitg.x] = 0.0f;
+    // Shared memory layout:
+    // [0..sgptg*NW-1]: partial sums for reduction (existing)
+    // [sgptg*NW..sgptg*NW+sgptg-1]: pre-computed x_dt values for each token in batch
+    // [sgptg*NW+sgptg..sgptg*NW+2*sgptg-1]: pre-computed dA values for each token in batch
+    threadgroup float * shared_sums = shared;
+    threadgroup float * shared_x_dt = shared + sgptg * NW;
+    threadgroup float * shared_dA   = shared + sgptg * NW + sgptg;
+
+    shared_sums[tpitg.x] = 0.0f;
 
     const int32_t i0 = tpitg.x;
     const int32_t i1 = tgpig.x;
@@ -2177,32 +2507,47 @@ kernel void kernel_ssm_scan_f32(
     for (int i2 = 0; i2 < n_t; i2 += sgptg) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        for (int t = 0; t < sgptg && i2 + t < n_t; t++) {
-            const float dt0  = dt[0];
+        // Pre-compute x_dt and dA for this batch of tokens
+        // Only first sgptg threads do the loads and expensive math
+        if (i0 < sgptg && i2 + i0 < n_t) {
+            // ns12 and ns21 are element strides (nb12/nb10, nb21/nb20)
+            device const float * x_t  = x  + i0 * args.ns12;
+            device const float * dt_t = dt + i0 * args.ns21;
+
+            const float dt0  = dt_t[0];
             const float dtsp = dt0 <= 20.0f ? log(1.0f + exp(dt0)) : dt0;
-            const float x_dt = x[0] * dtsp;
-            const float dA   = exp(dtsp * A0);
+            shared_x_dt[i0] = x_t[0] * dtsp;
+            shared_dA[i0]   = dtsp;  // Store dtsp, compute exp(dtsp * A0) per-thread since A0 varies
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        for (int t = 0; t < sgptg && i2 + t < n_t; t++) {
+            const float x_dt = shared_x_dt[t];
+            const float dA   = exp(shared_dA[t] * A0);
 
             s = (s0 * dA) + (B[i0] * x_dt);
 
             const float sumf = simd_sum(s * C[i0]);
 
             if (tiisg == 0) {
-                shared[t*NW + sgitg] = sumf;
+                shared_sums[t*NW + sgitg] = sumf;
             }
 
             // recurse
             s0 = s;
 
-            x  += args.ns12;
-            dt += args.ns21;
             B  += args.ns42;
             C  += args.ns52;
         }
 
+        // Advance pointers for next batch
+        x  += sgptg * args.ns12;
+        dt += sgptg * args.ns21;
+
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        const float sumf = simd_sum(shared[sgitg*NW + tiisg]);
+        const float sumf = simd_sum(shared_sums[sgitg*NW + tiisg]);
 
         if (tiisg == 0 && i2 + sgitg < n_t) {
             y[sgitg*nh*nr] = sumf;
@@ -4543,7 +4888,7 @@ typedef void (argsort_t)(
         constant   ggml_metal_kargs_argsort & args,
         device   const char * src0,
         device      int32_t * dst,
-        threadgroup int32_t * smem_i32 [[threadgroup(0)]],
+        threadgroup int32_t * shmem_i32 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort3 tpitg[[thread_position_in_threadgroup]],
         ushort3   ntg[[threads_per_threadgroup]]);
@@ -4553,22 +4898,23 @@ kernel void kernel_argsort_f32_i32(
         constant   ggml_metal_kargs_argsort & args,
         device   const char * src0,
         device      int32_t * dst,
-        threadgroup int32_t * smem_i32 [[threadgroup(0)]],
+        threadgroup int32_t * shmem_i32 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort3 tpitg[[thread_position_in_threadgroup]],
         ushort3   ntg[[threads_per_threadgroup]]) {
     // bitonic sort
     const int col = tpitg[0];
+    const int ib  = tgpig[0] / args.ne01;
 
-    const int i00 = (tgpig[0]/args.ne01)*ntg.x;
-    const int i01 =  tgpig[0]%args.ne01;
-    const int i02 =  tgpig[1];
-    const int i03 =  tgpig[2];
+    const int i00 = ib*ntg.x;
+    const int i01 = tgpig[0] % args.ne01;
+    const int i02 = tgpig[1];
+    const int i03 = tgpig[2];
 
-    device const float * x_row = (device const float *) (src0 + args.nb01*i01 + args.nb02*i02 + args.nb03*i03);
+    device const float * src0_row = (device const float *) (src0 + args.nb01*i01 + args.nb02*i02 + args.nb03*i03);
 
     // initialize indices
-    smem_i32[col] = i00 + col;
+    shmem_i32[col] = i00 + col;
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -4577,20 +4923,20 @@ kernel void kernel_argsort_f32_i32(
             int ixj = col ^ j;
             if (ixj > col) {
                 if ((col & k) == 0) {
-                    if (smem_i32[col] >= args.ne00 ||
-                       (smem_i32[ixj] <  args.ne00 && (order == GGML_SORT_ORDER_ASC ?
-                            x_row[smem_i32[col]] > x_row[smem_i32[ixj]] :
-                            x_row[smem_i32[col]] < x_row[smem_i32[ixj]]))
+                    if (shmem_i32[col] >= args.ne00 ||
+                       (shmem_i32[ixj] <  args.ne00 && (order == GGML_SORT_ORDER_ASC ?
+                            src0_row[shmem_i32[col]] > src0_row[shmem_i32[ixj]] :
+                            src0_row[shmem_i32[col]] < src0_row[shmem_i32[ixj]]))
                     ) {
-                        SWAP(smem_i32[col], smem_i32[ixj]);
+                        SWAP(shmem_i32[col], shmem_i32[ixj]);
                     }
                 } else {
-                    if (smem_i32[ixj] >= args.ne00 ||
-                       (smem_i32[col] <  args.ne00 && (order == GGML_SORT_ORDER_ASC ?
-                            x_row[smem_i32[col]] < x_row[smem_i32[ixj]] :
-                            x_row[smem_i32[col]] > x_row[smem_i32[ixj]]))
+                    if (shmem_i32[ixj] >= args.ne00 ||
+                       (shmem_i32[col] <  args.ne00 && (order == GGML_SORT_ORDER_ASC ?
+                            src0_row[shmem_i32[col]] < src0_row[shmem_i32[ixj]] :
+                            src0_row[shmem_i32[col]] > src0_row[shmem_i32[ixj]]))
                     ) {
-                        SWAP(smem_i32[col], smem_i32[ixj]);
+                        SWAP(shmem_i32[col], shmem_i32[ixj]);
                     }
                 }
             }
@@ -4599,11 +4945,13 @@ kernel void kernel_argsort_f32_i32(
         }
     }
 
-    // copy the result to dst without the padding
-    if (i00 + col < args.ne00) {
-        dst += i00 + args.ne00*i01 + args.ne00*args.ne01*i02 + args.ne00*args.ne01*args.ne02*i03;
+    const int64_t i0 = ib*args.top_k;
 
-        dst[col] = smem_i32[col];
+    // copy the result to dst without the padding
+    if (i0 + col < args.ne0 && col < args.top_k) {
+        dst += i0 + args.ne0*i01 + args.ne0*args.ne1*i02 + args.ne0*args.ne1*args.ne2*i03;
+
+        dst[col] = shmem_i32[col];
     }
 }
 
@@ -4628,83 +4976,135 @@ kernel void kernel_argsort_merge_f32_i32(
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort3 tpitg[[thread_position_in_threadgroup]],
         ushort3   ntg[[threads_per_threadgroup]]) {
-    int im  = tgpig[0] / args.ne01;
-    int i01 = tgpig[0] % args.ne01;
-    int i02 = tgpig[1];
-    int i03 = tgpig[2];
 
-    const int start = im * (2*args.len);
+    const int im  = tgpig[0] / args.ne01;
+    const int i01 = tgpig[0] % args.ne01;
+    const int i02 = tgpig[1];
+    const int i03 = tgpig[2];
 
-    const int len0 = MIN(args.len, MAX(0, args.ne00 - (int)(start)));
-    const int len1 = MIN(args.len, MAX(0, args.ne00 - (int)(start + args.len)));
+    const int start = im * (2 * args.len);
+
+    const int len0 = MIN(args.len, MAX(0, args.ne0 - (int)(start)));
+    const int len1 = MIN(args.len, MAX(0, args.ne0 - (int)(start + args.len)));
 
     const int total = len0 + len1;
 
     device const int32_t * tmp0 = tmp + start
-        + i01*args.ne00
-        + i02*args.ne00*args.ne01
-        + i03*args.ne00*args.ne01*args.ne02;
+        + i01*args.ne0
+        + i02*args.ne0*args.ne01
+        + i03*args.ne0*args.ne01*args.ne02;
 
     device const int32_t * tmp1 = tmp0 + args.len;
 
     dst += start
-        + i01*args.ne00
-        + i02*args.ne00*args.ne01
-        + i03*args.ne00*args.ne01*args.ne02;
+        + i01*args.top_k
+        + i02*args.top_k*args.ne01
+        + i03*args.top_k*args.ne01*args.ne02;
 
     device const float * src0_row = (device const float *)(src0
         + args.nb01*i01
         + args.nb02*i02
         + args.nb03*i03);
 
-    for (int k = tpitg.x; k < (int) total; k += ntg.x) {
-        // find partition (i,j) such that i+j = k
-        int low  = k > len1 ? k - len1 : 0;
-        int high = MIN(k, len0);
+    if (total == 0) {
+        return;
+    }
 
-        while (low < high) {
-            const int mid = (low + high) >> 1;
+    const int chunk = (total + ntg.x - 1) / ntg.x;
 
-            const int32_t idx0 = tmp0[mid];
-            const int32_t idx1 = tmp1[k - mid - 1];
+    const int k0 = tpitg.x * chunk;
+    const int k1 = MIN(MIN(k0 + chunk, total), args.top_k);
 
-            const float val0 = src0_row[idx0];
-            const float val1 = src0_row[idx1];
+    if (k0 >= args.top_k) {
+        return;
+    }
 
-            if (order == GGML_SORT_ORDER_ASC) {
-                if (val0 <= val1) {
-                    low = mid + 1;
-                } else {
-                    high = mid;
-                }
-            } else {
-                if (val0 >= val1) {
-                    low = mid + 1;
-                } else {
-                    high = mid;
-                }
-            }
+    if (k0 >= total) {
+        return;
+    }
+
+    int low  = k0 > len1 ? k0 - len1 : 0;
+    int high = MIN(k0, len0);
+
+    // binary-search partition (i, j) such that i + j = k
+    while (low < high) {
+        const int mid = (low + high) >> 1;
+
+        const int32_t idx0 = tmp0[mid];
+        const int32_t idx1 = tmp1[k0 - mid - 1];
+
+        const float val0 = src0_row[idx0];
+        const float val1 = src0_row[idx1];
+
+        bool take_left;
+        if (order == GGML_SORT_ORDER_ASC) {
+            take_left = (val0 <= val1);
+        } else {
+            take_left = (val0 >= val1);
         }
 
-        const int i = low;
-        const int j = k - i;
+        if (take_left) {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
 
+    int i = low;
+    int j = k0 - i;
+
+    // keep the merge fronts into registers
+    int32_t idx0 = 0;
+    float   val0 = 0.0f;
+    if (i < len0) {
+        idx0 = tmp0[i];
+        val0 = src0_row[idx0];
+    }
+
+    int32_t idx1 = 0;
+    float   val1 = 0.0f;
+    if (j < len1) {
+        idx1 = tmp1[j];
+        val1 = src0_row[idx1];
+    }
+
+    for (int k = k0; k < k1; ++k) {
         int32_t out_idx;
 
         if (i >= len0) {
-            out_idx = tmp1[j];
+            while (k < k1) {
+                dst[k++] = tmp1[j++];
+            }
+            break;
         } else if (j >= len1) {
-            out_idx = tmp0[i];
+            while (k < k1) {
+                dst[k++] = tmp0[i++];
+            }
+            break;
         } else {
-            const int32_t idx0 = tmp0[i];
-            const int32_t idx1 = tmp1[j];
+            bool take_left;
 
-            const float val0 = src0_row[idx0];
-            const float val1 = src0_row[idx1];
+            if (order == GGML_SORT_ORDER_ASC) {
+                take_left = (val0 <= val1);
+            } else {
+                take_left = (val0 >= val1);
+            }
 
-            out_idx = (order == GGML_SORT_ORDER_ASC)
-                ? (val0 <= val1 ? idx0 : idx1)
-                : (val0 >= val1 ? idx0 : idx1);
+            if (take_left) {
+                out_idx = idx0;
+                ++i;
+                if (i < len0) {
+                    idx0 = tmp0[i];
+                    val0 = src0_row[idx0];
+                }
+            } else {
+                out_idx = idx1;
+                ++j;
+                if (j < len1) {
+                    idx1 = tmp1[j];
+                    val1 = src0_row[idx1];
+                }
+            }
         }
 
         dst[k] = out_idx;
@@ -5591,6 +5991,7 @@ typedef decltype(kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, hal
 
 template [[host_name("kernel_flash_attn_ext_f32_dk32_dv32"  )]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_F32, float4x4,   1, dequantize_f32,  float4x4,   1, dequantize_f32,  32,  32>;
 template [[host_name("kernel_flash_attn_ext_f32_dk40_dv40"  )]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_F32, float4x4,   1, dequantize_f32,  float4x4,   1, dequantize_f32,  40,  40>;
+template [[host_name("kernel_flash_attn_ext_f32_dk48_dv48"  )]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_F32, float4x4,   1, dequantize_f32,  float4x4,   1, dequantize_f32,  48,  48>;
 template [[host_name("kernel_flash_attn_ext_f32_dk64_dv64"  )]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_F32, float4x4,   1, dequantize_f32,  float4x4,   1, dequantize_f32,  64,  64>;
 template [[host_name("kernel_flash_attn_ext_f32_dk72_dv72"  )]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_F32, float4x4,   1, dequantize_f32,  float4x4,   1, dequantize_f32,  72,  72>;
 template [[host_name("kernel_flash_attn_ext_f32_dk80_dv80"  )]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_F32, float4x4,   1, dequantize_f32,  float4x4,   1, dequantize_f32,  80,  80>;
@@ -5604,6 +6005,7 @@ template [[host_name("kernel_flash_attn_ext_f32_dk576_dv512")]]  kernel flash_at
 
 template [[host_name("kernel_flash_attn_ext_f16_dk32_dv32"  )]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    half4x4,    1, dequantize_f16,  half4x4,    1, dequantize_f16,  32,  32>;
 template [[host_name("kernel_flash_attn_ext_f16_dk40_dv40"  )]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    half4x4,    1, dequantize_f16,  half4x4,    1, dequantize_f16,  40,  40>;
+template [[host_name("kernel_flash_attn_ext_f16_dk48_dv48"  )]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    half4x4,    1, dequantize_f16,  half4x4,    1, dequantize_f16,  48,  48>;
 template [[host_name("kernel_flash_attn_ext_f16_dk64_dv64"  )]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    half4x4,    1, dequantize_f16,  half4x4,    1, dequantize_f16,  64,  64>;
 template [[host_name("kernel_flash_attn_ext_f16_dk72_dv72"  )]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    half4x4,    1, dequantize_f16,  half4x4,    1, dequantize_f16,  72,  72>;
 template [[host_name("kernel_flash_attn_ext_f16_dk80_dv80"  )]]  kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    half4x4,    1, dequantize_f16,  half4x4,    1, dequantize_f16,  80,  80>;
@@ -5618,6 +6020,7 @@ template [[host_name("kernel_flash_attn_ext_f16_dk576_dv512")]]  kernel flash_at
 #if defined(GGML_METAL_HAS_BF16)
 template [[host_name("kernel_flash_attn_ext_bf16_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_BF, bfloat4x4,  1, dequantize_bf16, bfloat4x4,  1, dequantize_bf16, 32,  32>;
 template [[host_name("kernel_flash_attn_ext_bf16_dk40_dv40"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_BF, bfloat4x4,  1, dequantize_bf16, bfloat4x4,  1, dequantize_bf16, 40,  40>;
+template [[host_name("kernel_flash_attn_ext_bf16_dk48_dv48"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_BF, bfloat4x4,  1, dequantize_bf16, bfloat4x4,  1, dequantize_bf16, 48,  48>;
 template [[host_name("kernel_flash_attn_ext_bf16_dk64_dv64"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_BF, bfloat4x4,  1, dequantize_bf16, bfloat4x4,  1, dequantize_bf16, 64,  64>;
 template [[host_name("kernel_flash_attn_ext_bf16_dk72_dv72"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_BF, bfloat4x4,  1, dequantize_bf16, bfloat4x4,  1, dequantize_bf16, 72,  72>;
 template [[host_name("kernel_flash_attn_ext_bf16_dk80_dv80"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES_BF, bfloat4x4,  1, dequantize_bf16, bfloat4x4,  1, dequantize_bf16, 80,  80>;
@@ -5632,6 +6035,7 @@ template [[host_name("kernel_flash_attn_ext_bf16_dk576_dv512")]] kernel flash_at
 
 template [[host_name("kernel_flash_attn_ext_q4_0_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q4_0, 2, dequantize_q4_0, block_q4_0, 2, dequantize_q4_0, 32,  32>;
 template [[host_name("kernel_flash_attn_ext_q4_0_dk40_dv40"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q4_0, 2, dequantize_q4_0, block_q4_0, 2, dequantize_q4_0, 40,  40>;
+template [[host_name("kernel_flash_attn_ext_q4_0_dk48_dv48"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q4_0, 2, dequantize_q4_0, block_q4_0, 2, dequantize_q4_0, 48,  48>;
 template [[host_name("kernel_flash_attn_ext_q4_0_dk64_dv64"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q4_0, 2, dequantize_q4_0, block_q4_0, 2, dequantize_q4_0, 64,  64>;
 template [[host_name("kernel_flash_attn_ext_q4_0_dk72_dv72"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q4_0, 2, dequantize_q4_0, block_q4_0, 2, dequantize_q4_0, 72,  72>;
 template [[host_name("kernel_flash_attn_ext_q4_0_dk80_dv80"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q4_0, 2, dequantize_q4_0, block_q4_0, 2, dequantize_q4_0, 80,  80>;
@@ -5645,6 +6049,7 @@ template [[host_name("kernel_flash_attn_ext_q4_0_dk576_dv512")]] kernel flash_at
 
 template [[host_name("kernel_flash_attn_ext_q4_1_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q4_1, 2, dequantize_q4_1, block_q4_1, 2, dequantize_q4_1, 32,  32>;
 template [[host_name("kernel_flash_attn_ext_q4_1_dk40_dv40"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q4_1, 2, dequantize_q4_1, block_q4_1, 2, dequantize_q4_1, 40,  40>;
+template [[host_name("kernel_flash_attn_ext_q4_1_dk48_dv48"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q4_1, 2, dequantize_q4_1, block_q4_1, 2, dequantize_q4_1, 48,  48>;
 template [[host_name("kernel_flash_attn_ext_q4_1_dk64_dv64"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q4_1, 2, dequantize_q4_1, block_q4_1, 2, dequantize_q4_1, 64,  64>;
 template [[host_name("kernel_flash_attn_ext_q4_1_dk72_dv72"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q4_1, 2, dequantize_q4_1, block_q4_1, 2, dequantize_q4_1, 72,  72>;
 template [[host_name("kernel_flash_attn_ext_q4_1_dk80_dv80"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q4_1, 2, dequantize_q4_1, block_q4_1, 2, dequantize_q4_1, 80,  80>;
@@ -5658,6 +6063,7 @@ template [[host_name("kernel_flash_attn_ext_q4_1_dk576_dv512")]] kernel flash_at
 
 template [[host_name("kernel_flash_attn_ext_q5_0_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q5_0, 2, dequantize_q5_0, block_q5_0, 2, dequantize_q5_0, 32,  32>;
 template [[host_name("kernel_flash_attn_ext_q5_0_dk40_dv40"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q5_0, 2, dequantize_q5_0, block_q5_0, 2, dequantize_q5_0, 40,  40>;
+template [[host_name("kernel_flash_attn_ext_q5_0_dk48_dv48"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q5_0, 2, dequantize_q5_0, block_q5_0, 2, dequantize_q5_0, 48,  48>;
 template [[host_name("kernel_flash_attn_ext_q5_0_dk64_dv64"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q5_0, 2, dequantize_q5_0, block_q5_0, 2, dequantize_q5_0, 64,  64>;
 template [[host_name("kernel_flash_attn_ext_q5_0_dk72_dv72"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q5_0, 2, dequantize_q5_0, block_q5_0, 2, dequantize_q5_0, 72,  72>;
 template [[host_name("kernel_flash_attn_ext_q5_0_dk80_dv80"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q5_0, 2, dequantize_q5_0, block_q5_0, 2, dequantize_q5_0, 80,  80>;
@@ -5671,6 +6077,7 @@ template [[host_name("kernel_flash_attn_ext_q5_0_dk576_dv512")]] kernel flash_at
 
 template [[host_name("kernel_flash_attn_ext_q5_1_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q5_1, 2, dequantize_q5_1, block_q5_1, 2, dequantize_q5_1, 32,  32>;
 template [[host_name("kernel_flash_attn_ext_q5_1_dk40_dv40"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q5_1, 2, dequantize_q5_1, block_q5_1, 2, dequantize_q5_1, 40,  40>;
+template [[host_name("kernel_flash_attn_ext_q5_1_dk48_dv48"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q5_1, 2, dequantize_q5_1, block_q5_1, 2, dequantize_q5_1, 48,  48>;
 template [[host_name("kernel_flash_attn_ext_q5_1_dk64_dv64"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q5_1, 2, dequantize_q5_1, block_q5_1, 2, dequantize_q5_1, 64,  64>;
 template [[host_name("kernel_flash_attn_ext_q5_1_dk72_dv72"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q5_1, 2, dequantize_q5_1, block_q5_1, 2, dequantize_q5_1, 72,  72>;
 template [[host_name("kernel_flash_attn_ext_q5_1_dk80_dv80"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q5_1, 2, dequantize_q5_1, block_q5_1, 2, dequantize_q5_1, 80,  80>;
@@ -5684,6 +6091,7 @@ template [[host_name("kernel_flash_attn_ext_q5_1_dk576_dv512")]] kernel flash_at
 
 template [[host_name("kernel_flash_attn_ext_q8_0_dk32_dv32"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 32,  32>;
 template [[host_name("kernel_flash_attn_ext_q8_0_dk40_dv40"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 40,  40>;
+template [[host_name("kernel_flash_attn_ext_q8_0_dk48_dv48"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 48,  48>;
 template [[host_name("kernel_flash_attn_ext_q8_0_dk64_dv64"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 64,  64>;
 template [[host_name("kernel_flash_attn_ext_q8_0_dk72_dv72"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 72,  72>;
 template [[host_name("kernel_flash_attn_ext_q8_0_dk80_dv80"  )]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 80,  80>;
@@ -6401,6 +6809,7 @@ template [[host_name("kernel_cpy_f32_f32")]]   kernel kernel_cpy_t kernel_cpy_t_
 template [[host_name("kernel_cpy_f32_f16")]]   kernel kernel_cpy_t kernel_cpy_t_t<float,   half>;
 template [[host_name("kernel_cpy_f32_i32")]]   kernel kernel_cpy_t kernel_cpy_t_t<float,   int32_t>;
 template [[host_name("kernel_cpy_i32_f32")]]   kernel kernel_cpy_t kernel_cpy_t_t<int32_t, float>;
+template [[host_name("kernel_cpy_i32_i32")]]   kernel kernel_cpy_t kernel_cpy_t_t<int32_t, int32_t>;
 #if defined(GGML_METAL_HAS_BF16)
 template [[host_name("kernel_cpy_f32_bf16")]]  kernel kernel_cpy_t kernel_cpy_t_t<float,   bfloat>;
 #endif
@@ -9149,9 +9558,6 @@ template [[host_name("kernel_mul_mm_iq4_xs_f32")]]  kernel mul_mm_t kernel_mul_m
 
 template [[host_name("kernel_mul_mm_f32_f16")]]     kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   float4x4,      1,     dequantize_f32,     float,  float4x4,  half, half2x4>;
 template [[host_name("kernel_mul_mm_f16_f16")]]     kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   half4x4,       1,     dequantize_f16,     half,   half4x4,   half, half2x4>;
-#if defined(GGML_METAL_HAS_BF16)
-template [[host_name("kernel_mul_mm_bf16_f16")]]    kernel mul_mm_t kernel_mul_mm<bfloat, bfloat4x4, simdgroup_bfloat8x8, half,   half2x4,   simdgroup_half8x8,   bfloat4x4,     1,     dequantize_bf16,    bfloat, bfloat4x4, half, half2x4>;
-#endif
 template [[host_name("kernel_mul_mm_q4_0_f16")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0,    float,  float4x4,  half, half2x4>;
 template [[host_name("kernel_mul_mm_q4_1_f16")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_1,    2,     dequantize_q4_1,    float,  float4x4,  half, half2x4>;
 template [[host_name("kernel_mul_mm_q5_0_f16")]]    kernel mul_mm_t kernel_mul_mm<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_0,    2,     dequantize_q5_0,    float,  float4x4,  half, half2x4>;
@@ -9207,9 +9613,6 @@ template [[host_name("kernel_mul_mm_id_iq4_xs_f32")]]  kernel mul_mm_id kernel_m
 
 template [[host_name("kernel_mul_mm_id_f32_f16")]]     kernel mul_mm_id kernel_mul_mm_id<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   float4x4,      1,     dequantize_f32,     float,  float4x4,  half, half2x4>;
 template [[host_name("kernel_mul_mm_id_f16_f16")]]     kernel mul_mm_id kernel_mul_mm_id<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   half4x4,       1,     dequantize_f16,     half,   half4x4,   half, half2x4>;
-#if defined(GGML_METAL_HAS_BF16)
-template [[host_name("kernel_mul_mm_id_bf16_f16")]]    kernel mul_mm_id kernel_mul_mm_id<bfloat, bfloat4x4, simdgroup_bfloat8x8, half,   half2x4,   simdgroup_half8x8,   bfloat4x4,     1,     dequantize_bf16,    bfloat, bfloat4x4, half, half2x4>;
-#endif
 template [[host_name("kernel_mul_mm_id_q4_0_f16")]]    kernel mul_mm_id kernel_mul_mm_id<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_0,    2,     dequantize_q4_0,    float,  float4x4,  half, half2x4>;
 template [[host_name("kernel_mul_mm_id_q4_1_f16")]]    kernel mul_mm_id kernel_mul_mm_id<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q4_1,    2,     dequantize_q4_1,    float,  float4x4,  half, half2x4>;
 template [[host_name("kernel_mul_mm_id_q5_0_f16")]]    kernel mul_mm_id kernel_mul_mm_id<half,   half4x4,   simdgroup_half8x8,   half,   half2x4,   simdgroup_half8x8,   block_q5_0,    2,     dequantize_q5_0,    float,  float4x4,  half, half2x4>;
@@ -9512,3 +9915,75 @@ kernel void kernel_opt_step_sgd_f32(
 
     x[gid] = x[gid] * (1.0f - pars[0] * pars[1]) - pars[0] * g[gid];
 }
+
+template<typename T>
+kernel void kernel_memset(
+        constant ggml_metal_kargs_fill & args,
+        device T * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    dst[tpig] = args.val;
+}
+
+typedef decltype(kernel_memset<int64_t>) kernel_memset_t;
+
+template [[host_name("kernel_memset_i64")]] kernel kernel_memset_t kernel_memset<int64_t>;
+
+constant short FC_count_equal_nsg [[function_constant(FC_COUNT_EQUAL + 0)]];
+
+template<typename T>
+kernel void kernel_count_equal(
+        constant ggml_metal_kargs_count_equal & args,
+        device   const char * src0,
+        device   const char * src1,
+        device   atomic_int * dst,
+        threadgroup int32_t * shmem_i32 [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const short NSG = FC_count_equal_nsg;
+
+    const int i3 = tgpig.z;
+    const int i2 = tgpig.y;
+    const int i1 = tgpig.x;
+
+    if (i3 >= args.ne03 || i2 >= args.ne02 || i1 >= args.ne01) {
+        return;
+    }
+
+    int sum = 0;
+
+    device const char * base0 = src0 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03;
+    device const char * base1 = src1 + i1*args.nb11 + i2*args.nb12 + i3*args.nb13;
+
+    for (int64_t i0 = tpitg.x; i0 < args.ne00; i0 += ntg.x) {
+        const T v0 = *(device const T *)(base0 + i0*args.nb00);
+        const T v1 = *(device const T *)(base1 + i0*args.nb10);
+        sum += (v0 == v1);
+    }
+
+    sum = simd_sum(sum);
+
+    if (tiisg == 0) {
+        shmem_i32[sgitg] = sum;
+    }
+
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    if (sgitg == 0) {
+        float v = 0.0f;
+        if (tpitg.x < NSG) {
+            v = shmem_i32[tpitg.x];
+        }
+
+        float total = simd_sum(v);
+        if (tpitg.x == 0) {
+            atomic_fetch_add_explicit(dst, (int32_t) total, memory_order_relaxed);
+        }
+    }
+}
+
+typedef decltype(kernel_count_equal<int32_t>) kernel_count_equal_t;
+
+template [[host_name("kernel_count_equal_i32")]] kernel kernel_count_equal_t kernel_count_equal<int32_t>;

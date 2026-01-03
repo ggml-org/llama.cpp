@@ -1,3 +1,5 @@
+#pragma once
+
 #include "ggml.h"
 #include "gguf.h"
 #include "clip.h"
@@ -12,6 +14,8 @@
 #include <memory>
 
 // Internal header for clip.cpp
+
+#define MTMD_INTERNAL_HEADER
 
 #define KEY_FTYPE               "general.file_type"
 #define KEY_NAME                "general.name"
@@ -41,13 +45,14 @@
 #define KEY_SPATIAL_MERGE_SIZE  "clip.vision.spatial_merge_size"
 #define KEY_IS_DEEPSTACK_LAYERS "clip.vision.is_deepstack_layers"
 
-#define KEY_MM_PATCH_MERGE_TYPE   "clip.vision.mm_patch_merge_type"
-#define KEY_IMAGE_GRID_PINPOINTS  "clip.vision.image_grid_pinpoints"
-#define KEY_IMAGE_CROP_RESOLUTION "clip.vision.image_crop_resolution"
-#define KEY_WIN_ATTN_PATTERN      "clip.vision.n_wa_pattern"
-#define KEY_ATTN_WINDOW_SIZE      "clip.vision.window_size"
-#define KEY_MINICPMV_VERSION      "clip.minicpmv_version"
-#define KEY_MINICPMV_QUERY_NUM    "clip.minicpmv_query_num"
+#define KEY_MM_PATCH_MERGE_TYPE    "clip.vision.mm_patch_merge_type"
+#define KEY_IMAGE_GRID_PINPOINTS   "clip.vision.image_grid_pinpoints"
+#define KEY_IMAGE_CROP_RESOLUTION  "clip.vision.image_crop_resolution"
+#define KEY_WIN_ATTN_PATTERN       "clip.vision.n_wa_pattern"
+#define KEY_WIN_ATTN_LAYER_INDEXES "clip.vision.wa_layer_indexes"
+#define KEY_ATTN_WINDOW_SIZE       "clip.vision.window_size"
+#define KEY_MINICPMV_VERSION       "clip.minicpmv_version"
+#define KEY_MINICPMV_QUERY_NUM     "clip.minicpmv_query_num"
 
 // audio-specific
 #define KEY_AUDIO_PROJ_TYPE     "clip.audio.projector_type" // for models with mixed modalities
@@ -64,6 +69,7 @@
 #define TN_PATCH_EMBD      "v.patch_embd.weight"  // not rename tensor with ".0" postfix for backwrad compat
 #define TN_PATCH_EMBD_1    "v.patch_embd.weight.1"
 #define TN_PATCH_BIAS      "v.patch_embd.bias"
+#define TN_NORM_EMBD       "v.norm_embd.%s"
 #define TN_ATTN_QKV        "%s.blk.%d.attn_qkv.%s"
 #define TN_ATTN_K          "%s.blk.%d.attn_k.%s"
 #define TN_ATTN_Q          "%s.blk.%d.attn_q.%s"
@@ -82,6 +88,10 @@
 #define TN_LN_PRE          "%s.pre_ln.%s"
 #define TN_LN_POST         "%s.post_ln.%s"
 #define TN_LLAVA_PROJ      "mm.%d.%s"
+#define TN_MM_UP           "mm.up.%s"
+#define TN_MM_GATE         "mm.gate.%s"
+#define TN_MM_DOWN         "mm.down.%s"
+#define TN_MM_POST_NORM    "mm.post_norm.%s"
 #define TN_MVLM_PROJ_MLP   "mm.model.mlp.%d.%s"
 #define TN_MVLM_PROJ_BLOCK "mm.model.mb_block.%d.block.%d.%s"
 #define TN_MVLM_PROJ_PEG   "mm.model.peg.%d.%s"
@@ -91,7 +101,7 @@
 #define TN_MM_INP_PROJ     "mm.input_projection.weight" // gemma3
 #define TN_MM_SOFT_EMB_N   "mm.soft_emb_norm.weight"    // gemma3
 #define TN_MM_PROJECTOR    "mm.model.fc.weight"         // idefics3
-#define TN_MM_PATCH_MERGER "mm.patch_merger.weight"     // mistral small 3.1
+#define TN_MM_PATCH_MERGER "mm.patch_merger.%s"         // mistral small 3.1, glm4v
 #define TN_TOK_IMG_BREAK   "v.token_embd.img_break"     // pixtral
 #define TN_TOK_GLM_BOI     "adapter.boi"                // glm-edge (these embeddings are not in text model)
 #define TN_TOK_GLM_EOI     "adapter.eoi"                // glm-edge (these embeddings are not in text model)
@@ -129,8 +139,27 @@
 #define TN_TOK_BOI         "v.boi"
 #define TN_TOK_EOI         "v.eoi"
 
+// (conformer) lfm2
+#define TN_PRE_ENCODE_OUT  "a.pre_encode.out.%s"
+#define TN_FFN_NORM        "%s.blk.%d.ffn_norm.%s"
+#define TN_FFN_NORM_1      "%s.blk.%d.ffn_norm_1.%s"
+#define TN_FFN_UP_1        "%s.blk.%d.ffn_up_1.%s"
+#define TN_FFN_DOWN_1      "%s.blk.%d.ffn_down_1.%s"
+#define TN_POS_BIAS_U      "%s.blk.%d.pos_bias_u"
+#define TN_POS_BIAS_V      "%s.blk.%d.pos_bias_v"
+#define TN_NORM_CONV       "%s.blk.%d.norm_conv.%s"
+#define TN_LINEAR_POS      "%s.blk.%d.linear_pos.%s"
+#define TN_CONV_DW         "%s.blk.%d.conv_dw.%s"
+#define TN_CONV_NORM       "%s.blk.%d.conv_norm.%s"
+#define TN_CONV_PW1        "%s.blk.%d.conv_pw1.%s"
+#define TN_CONV_PW2        "%s.blk.%d.conv_pw2.%s"
+
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
+
+// forward declaration
+// TODO: improve this later
+struct clip_ctx;
 
 enum projector_type {
     PROJECTOR_TYPE_MLP,
@@ -149,13 +178,18 @@ enum projector_type {
     PROJECTOR_TYPE_INTERNVL,
     PROJECTOR_TYPE_LLAMA4,
     PROJECTOR_TYPE_QWEN2A,
+    PROJECTOR_TYPE_GLMA,
     PROJECTOR_TYPE_QWEN25O, // will be replaced by QWEN2A or QWEN25VL depending on clip_ctx
     PROJECTOR_TYPE_VOXTRAL,
+    PROJECTOR_TYPE_MUSIC_FLAMINGO,
     PROJECTOR_TYPE_LFM2,
     PROJECTOR_TYPE_KIMIVL,
     PROJECTOR_TYPE_LIGHTONOCR,
     PROJECTOR_TYPE_COGVLM,
     PROJECTOR_TYPE_JANUS_PRO,
+    PROJECTOR_TYPE_LFM2A,
+    PROJECTOR_TYPE_GLM4V,
+    PROJECTOR_TYPE_YOUTUVL,
     PROJECTOR_TYPE_UNKNOWN,
 };
 
@@ -175,13 +209,18 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_INTERNVL,  "internvl"},
     { PROJECTOR_TYPE_LLAMA4,    "llama4"},
     { PROJECTOR_TYPE_QWEN2A,    "qwen2a"},
+    { PROJECTOR_TYPE_GLMA,      "glma"},
     { PROJECTOR_TYPE_QWEN25O,   "qwen2.5o"},
     { PROJECTOR_TYPE_VOXTRAL,   "voxtral"},
+    { PROJECTOR_TYPE_MUSIC_FLAMINGO, "musicflamingo"},
     { PROJECTOR_TYPE_LFM2,      "lfm2"},
     { PROJECTOR_TYPE_KIMIVL,    "kimivl"},
     { PROJECTOR_TYPE_LIGHTONOCR,"lightonocr"},
     { PROJECTOR_TYPE_COGVLM,    "cogvlm"},
     { PROJECTOR_TYPE_JANUS_PRO, "janus_pro"},
+    { PROJECTOR_TYPE_LFM2A,     "lfm2a"},
+    { PROJECTOR_TYPE_GLM4V,     "glm4v"},
+    { PROJECTOR_TYPE_YOUTUVL,   "youtuvl"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
@@ -484,6 +523,8 @@ static void print_tensor_data(ggml_tensor * t, uint8_t * data, int64_t n) {
         printf("    ]\n");
     }
 }
+
+void clip_debug_encode(clip_ctx * ctx, int h, int w, float fill_value);
 
 //
 // API used internally with mtmd

@@ -1,28 +1,26 @@
 <script lang="ts">
-	import { ChatMessageThinkingBlock, MarkdownContent } from '$lib/components/app';
-	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { isLoading } from '$lib/stores/chat.svelte';
-	import { fade } from 'svelte/transition';
 	import {
-		Check,
-		Copy,
-		Package,
-		X,
-		Gauge,
-		Clock,
-		WholeWord,
-		ChartNoAxesColumn,
-		Wrench
-	} from '@lucide/svelte';
+		ModelBadge,
+		ChatMessageActions,
+		ChatMessageStatistics,
+		ChatMessageThinkingBlock,
+		CopyToClipboardIcon,
+		MarkdownContent,
+		ModelsSelector
+	} from '$lib/components/app';
+	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
+	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
+	import { isLoading } from '$lib/stores/chat.svelte';
+	import { autoResizeTextarea, copyToClipboard } from '$lib/utils';
+	import { fade } from 'svelte/transition';
+	import { Check, X, Wrench } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
-	import ChatMessageActions from './ChatMessageActions.svelte';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { modelName as serverModelName } from '$lib/stores/server.svelte';
-	import { copyToClipboard } from '$lib/utils/copy';
-	import type { ApiChatCompletionToolCall } from '$lib/types/api';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { isRouterMode } from '$lib/stores/server.svelte';
 
 	interface Props {
 		class?: string;
@@ -40,12 +38,13 @@
 		onCancelEdit?: () => void;
 		onCopy: () => void;
 		onConfirmDelete: () => void;
+		onContinue?: () => void;
 		onDelete: () => void;
 		onEdit?: () => void;
 		onEditKeydown?: (event: KeyboardEvent) => void;
 		onEditedContentChange?: (content: string) => void;
 		onNavigateToSibling?: (siblingId: string) => void;
-		onRegenerate: () => void;
+		onRegenerate: (modelOverride?: string) => void;
 		onSaveEdit?: () => void;
 		onShowDeleteDialogChange: (show: boolean) => void;
 		onShouldBranchAfterEditChange?: (value: boolean) => void;
@@ -67,6 +66,7 @@
 		messageContent,
 		onCancelEdit,
 		onConfirmDelete,
+		onContinue,
 		onCopy,
 		onDelete,
 		onEdit,
@@ -91,16 +91,20 @@
 	const fallbackToolCalls = $derived(typeof toolCallContent === 'string' ? toolCallContent : null);
 
 	const processingState = useProcessingState();
-	let currentConfig = $derived(config());
-	let serverModel = $derived(serverModelName());
-	let displayedModel = $derived((): string | null => {
-		if (!currentConfig.showModelInfo) return null;
 
+	let currentConfig = $derived(config());
+	let isRouter = $derived(isRouterMode());
+	let displayedModel = $derived((): string | null => {
 		if (message.model) {
 			return message.model;
 		}
 
-		return serverModel;
+		return null;
+	});
+
+	const { handleModelChange } = useModelChangeValidation({
+		getRequiredModalities: () => conversationsStore.getModalitiesUpToMessage(message.id),
+		onSuccess: (modelName) => onRegenerate(modelName)
 	});
 
 	function handleCopyModel() {
@@ -108,6 +112,18 @@
 
 		void copyToClipboard(model ?? '');
 	}
+
+	$effect(() => {
+		if (isEditing && textareaElement) {
+			autoResizeTextarea(textareaElement);
+		}
+	});
+
+	$effect(() => {
+		if (isLoading() && !message?.content?.trim()) {
+			processingState.startMonitoring();
+		}
+	});
 
 	function formatToolCallBadge(toolCall: ApiChatCompletionToolCall, index: number) {
 		const callNumber = index + 1;
@@ -180,7 +196,7 @@
 		<div class="mt-6 w-full {className}" {style} in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
-					{processingState.getProcessingMessage()}
+					{processingState.getPromptProgressText() ?? processingState.getProcessingMessage()}
 				</span>
 			</div>
 		</div>
@@ -193,7 +209,10 @@
 				bind:value={editedContent}
 				class="min-h-[50vh] w-full resize-y rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
 				onkeydown={onEditKeydown}
-				oninput={(e) => onEditedContentChange?.(e.currentTarget.value)}
+				oninput={(e) => {
+					autoResizeTextarea(e.currentTarget);
+					onEditedContentChange?.(e.currentTarget.value);
+				}}
 				placeholder="Edit assistant message..."
 			></textarea>
 
@@ -235,22 +254,44 @@
 
 	<div class="info my-6 grid gap-4">
 		{#if displayedModel()}
-			<span class="inline-flex items-center gap-2 text-xs text-muted-foreground">
-				<span class="inline-flex items-center gap-1">
-					<Package class="h-3.5 w-3.5" />
+			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
+				{#if isRouter}
+					<ModelsSelector
+						currentModel={displayedModel()}
+						onModelChange={handleModelChange}
+						disabled={isLoading()}
+						upToMessageId={message.id}
+					/>
+				{:else}
+					<ModelBadge model={displayedModel() || undefined} onclick={handleCopyModel} />
+				{/if}
 
-					<span>Model used:</span>
-				</span>
+				{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
+					<ChatMessageStatistics
+						promptTokens={message.timings.prompt_n}
+						promptMs={message.timings.prompt_ms}
+						predictedTokens={message.timings.predicted_n}
+						predictedMs={message.timings.predicted_ms}
+					/>
+				{:else if isLoading() && currentConfig.showMessageStats}
+					{@const liveStats = processingState.getLiveProcessingStats()}
+					{@const genStats = processingState.getLiveGenerationStats()}
+					{@const promptProgress = processingState.processingState?.promptProgress}
+					{@const isStillProcessingPrompt =
+						promptProgress && promptProgress.processed < promptProgress.total}
 
-				<button
-					class="inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-					onclick={handleCopyModel}
-				>
-					{displayedModel()}
-
-					<Copy class="ml-1 h-3 w-3 " />
-				</button>
-			</span>
+					{#if liveStats || genStats}
+						<ChatMessageStatistics
+							isLive={true}
+							isProcessingPrompt={!!isStillProcessingPrompt}
+							promptTokens={liveStats?.tokensProcessed}
+							promptMs={liveStats?.timeMs}
+							predictedTokens={genStats?.tokensGenerated}
+							predictedMs={genStats?.timeMs}
+						/>
+					{/if}
+				{/if}
+			</div>
 		{/if}
 
 		{#if config().showToolCalls}
@@ -273,8 +314,10 @@
 								onclick={() => handleCopyToolCall(badge.copyValue)}
 							>
 								{badge.label}
-
-								<Copy class="ml-1 h-3 w-3" />
+								<CopyToClipboardIcon
+									text={badge.copyValue}
+									ariaLabel={`Copy tool call ${badge.label}`}
+								/>
 							</button>
 						{/each}
 					{:else if fallbackToolCalls}
@@ -286,44 +329,11 @@
 							onclick={() => handleCopyToolCall(fallbackToolCalls)}
 						>
 							{fallbackToolCalls}
-
-							<Copy class="ml-1 h-3 w-3" />
+							<CopyToClipboardIcon text={fallbackToolCalls} ariaLabel="Copy tool call payload" />
 						</button>
 					{/if}
 				</span>
 			{/if}
-		{/if}
-
-		{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
-			{@const tokensPerSecond = (message.timings.predicted_n / message.timings.predicted_ms) * 1000}
-			<span class="inline-flex items-center gap-2 text-xs text-muted-foreground">
-				<span class="inline-flex items-center gap-1">
-					<ChartNoAxesColumn class="h-3.5 w-3.5" />
-
-					<span>Statistics:</span>
-				</span>
-
-				<div class="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-					<span
-						class="inline-flex items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-					>
-						<Gauge class="h-3 w-3" />
-						{tokensPerSecond.toFixed(2)} tokens/s
-					</span>
-					<span
-						class="inline-flex items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-					>
-						<WholeWord class="h-3 w-3" />
-						{message.timings.predicted_n} tokens
-					</span>
-					<span
-						class="inline-flex items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-					>
-						<Clock class="h-3 w-3" />
-						{(message.timings.predicted_ms / 1000).toFixed(2)}s
-					</span>
-				</div>
-			</span>
 		{/if}
 	</div>
 
@@ -338,6 +348,9 @@
 			{onCopy}
 			{onEdit}
 			{onRegenerate}
+			onContinue={currentConfig.enableContinueGeneration && !thinkingContent
+				? onContinue
+				: undefined}
 			{onDelete}
 			{onConfirmDelete}
 			{onNavigateToSibling}

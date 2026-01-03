@@ -1,16 +1,9 @@
 <script lang="ts">
 	import { ChatMessage } from '$lib/components/app';
-	import { DatabaseStore } from '$lib/stores/database';
-	import {
-		activeConversation,
-		deleteMessage,
-		navigateToSibling,
-		editMessageWithBranching,
-		editAssistantMessage,
-		regenerateMessageWithBranching
-	} from '$lib/stores/chat.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { getMessageSiblings } from '$lib/utils/branching';
+	import { getMessageSiblings } from '$lib/utils';
 	import { getChatWidth } from '$lib/utils/chat-width';
 
 	interface Props {
@@ -22,6 +15,7 @@
 	let { class: className, messages = [], onUserAction }: Props = $props();
 
 	let allConversationMessages = $state<DatabaseMessage[]>([]);
+	const currentConfig = config();
 
 	let widthConfig = $derived(getChatWidth(config().autoChatWidth, config().customChatWidth));
 
@@ -29,7 +23,7 @@
 		const conversation = activeConversation();
 
 		if (conversation) {
-			DatabaseStore.getConversationMessages(conversation.id).then((messages) => {
+			conversationsStore.getConversationMessages(conversation.id).then((messages) => {
 				allConversationMessages = messages;
 			});
 		} else {
@@ -51,7 +45,12 @@
 			return [];
 		}
 
-		return messages.map((message) => {
+		// Filter out system messages if showSystemMessage is false
+		const filteredMessages = currentConfig.showSystemMessage
+			? messages
+			: messages.filter((msg) => msg.type !== 'system');
+
+		return filteredMessages.map((message) => {
 			const siblingInfo = getMessageSiblings(allConversationMessages, message.id);
 
 			return {
@@ -67,13 +66,17 @@
 	});
 
 	async function handleNavigateToSibling(siblingId: string) {
-		await navigateToSibling(siblingId);
+		await conversationsStore.navigateToSibling(siblingId);
 	}
 
-	async function handleEditWithBranching(message: DatabaseMessage, newContent: string) {
+	async function handleEditWithBranching(
+		message: DatabaseMessage,
+		newContent: string,
+		newExtras?: DatabaseMessageExtra[]
+	) {
 		onUserAction?.();
 
-		await editMessageWithBranching(message.id, newContent);
+		await chatStore.editMessageWithBranching(message.id, newContent, newExtras);
 
 		refreshAllMessages();
 	}
@@ -85,20 +88,41 @@
 	) {
 		onUserAction?.();
 
-		await editAssistantMessage(message.id, newContent, shouldBranch);
+		await chatStore.editAssistantMessage(message.id, newContent, shouldBranch);
 
 		refreshAllMessages();
 	}
 
-	async function handleRegenerateWithBranching(message: DatabaseMessage) {
+	async function handleRegenerateWithBranching(message: DatabaseMessage, modelOverride?: string) {
 		onUserAction?.();
 
-		await regenerateMessageWithBranching(message.id);
+		await chatStore.regenerateMessageWithBranching(message.id, modelOverride);
 
 		refreshAllMessages();
 	}
+
+	async function handleContinueAssistantMessage(message: DatabaseMessage) {
+		onUserAction?.();
+
+		await chatStore.continueAssistantMessage(message.id);
+
+		refreshAllMessages();
+	}
+
+	async function handleEditUserMessagePreserveResponses(
+		message: DatabaseMessage,
+		newContent: string,
+		newExtras?: DatabaseMessageExtra[]
+	) {
+		onUserAction?.();
+
+		await chatStore.editUserMessagePreserveResponses(message.id, newContent, newExtras);
+
+		refreshAllMessages();
+	}
+
 	async function handleDeleteMessage(message: DatabaseMessage) {
-		await deleteMessage(message.id);
+		await chatStore.deleteMessage(message.id);
 
 		refreshAllMessages();
 	}
@@ -115,7 +139,9 @@
 			onNavigateToSibling={handleNavigateToSibling}
 			onEditWithBranching={handleEditWithBranching}
 			onEditWithReplacement={handleEditWithReplacement}
+			onEditUserMessagePreserveResponses={handleEditUserMessagePreserveResponses}
 			onRegenerateWithBranching={handleRegenerateWithBranching}
+			onContinueAssistantMessage={handleContinueAssistantMessage}
 		/>
 	{/each}
 </div>
