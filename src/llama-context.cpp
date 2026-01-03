@@ -385,6 +385,8 @@ void llama_context::reserve() {
 
     synchronize();
 
+    const int64_t t_start_us = ggml_time_us();
+
     const uint32_t n_seqs = cparams.n_seq_max;
     const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
@@ -528,6 +530,10 @@ void llama_context::reserve() {
     } else {
         LLAMA_LOG_INFO("%s: graph splits = %d (with bs=%d), %d (with bs=1)\n", __func__, n_splits_pp, n_tokens, n_splits_tg);
     }
+
+    const int64_t t_end_us = ggml_time_us();
+
+    LLAMA_LOG_INFO("%s: reserve took %.2f ms\n", __func__, (t_end_us - t_start_us)/1000.0);
 }
 
 void llama_context::synchronize() {
@@ -983,6 +989,10 @@ void llama_context::set_embeddings(bool value) {
 void llama_context::set_causal_attn(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
+    if (cparams.causal_attn == value) {
+        return;
+    }
+
     cparams.causal_attn = value;
 
     reserve();
@@ -1035,6 +1045,12 @@ void llama_context::set_adapter_lora(
             float scale) {
     LLAMA_LOG_DEBUG("%s: adapter = %p, scale = %f\n", __func__, (void *) adapter, scale);
 
+    if (auto it = loras.find(adapter); it != loras.end()) {
+        if (it->second == scale) {
+            return;
+        }
+    }
+
     loras[adapter] = scale;
 
     reserve();
@@ -1044,9 +1060,9 @@ bool llama_context::rm_adapter_lora(
             llama_adapter_lora * adapter) {
     LLAMA_LOG_DEBUG("%s: adapter = %p\n", __func__, (void *) adapter);
 
-    auto pos = loras.find(adapter);
-    if (pos != loras.end()) {
-        loras.erase(pos);
+    auto it = loras.find(adapter);
+    if (it != loras.end()) {
+        loras.erase(it);
 
         reserve();
 
@@ -1058,6 +1074,10 @@ bool llama_context::rm_adapter_lora(
 
 void llama_context::clear_adapter_lora() {
     LLAMA_LOG_DEBUG("%s: call\n", __func__);
+
+    if (loras.empty()) {
+        return;
+    }
 
     loras.clear();
 
@@ -1072,13 +1092,9 @@ bool llama_context::apply_adapter_cvec(
                 int32_t   il_end) {
     LLAMA_LOG_DEBUG("%s: il_start = %d, il_end = %d\n", __func__, il_start, il_end);
 
-    bool res = cvec.apply(model, data, len, n_embd, il_start, il_end);
+    // TODO: should we reserve?
 
-    if (res) {
-        reserve();
-    }
-
-    return res;
+    return cvec.apply(model, data, len, n_embd, il_start, il_end);
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
