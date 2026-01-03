@@ -1370,15 +1370,16 @@ static void test_template_output_peg_parsers() {
         tst.test(">>>all\nHello, world!\nWhat's up?").expect(message_assist).run();
         tst.test(">>>special_function\n{\"arg1\": 1}").tools({ special_function_tool }).expect(message_assist_call).run();
     }
-    // TODO: FireFunction streaming regression - tool_section_end includes <|eot_id|> marker
-    // {
-    //     auto tst = peg_tester("models/templates/fireworks-ai-llama-3-firefunction-v2.jinja");
-    //     tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
-    //     tst.test(" functools[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]")
-    //         .tools({ special_function_tool })
-    //         .expect(message_assist_call)
-    //         .run();
-    // }
+    
+    // FireFunction
+    {
+        auto tst = peg_tester("models/templates/fireworks-ai-llama-3-firefunction-v2.jinja");
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+        tst.test(" functools[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
 
     // DeepSeek R1 Distill Llama 8B - reasoning tests only (forced open thinking)
     // Note: Template uses forced-open mode (prompt ends with <think>), so input shouldn't include opening tag
