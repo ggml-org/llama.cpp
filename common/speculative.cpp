@@ -418,9 +418,9 @@ llama_tokens common_speculative_gen_self_draft(const llama_tokens & tokens, llam
     if (copy_max < n_draft_min) {
         return draft_tokens;
     }
-    LOG_DBG("%s: #tokens = %ld: found matching pattern at pos %ld, length %ld, draft length %ld\n",
-        __func__, (int64_t) cur_len,
-        (int64_t) match_pos, (int64_t) pattern.size(), copy_max);
+    LOG_DBG("%s: #tokens = %zu: found matching pattern at pos %zu, length %zu, draft length %zu\n",
+        __func__, cur_len,
+        match_pos, pattern.size(), copy_max);
 
     draft_tokens.reserve(copy_max);
     for (size_t j = 0; j < copy_max; ++j) {
