@@ -235,7 +235,7 @@ struct common_chat_templates {
 
     // Cache for template analysis results (per template source)
     mutable std::mutex                                    analysis_cache_mutex;
-    mutable std::map<std::string, TemplateAnalysisResult> analysis_cache;
+    mutable std::map<std::string, template_analysis_result> analysis_cache;
 
     // Cache for generated parser results (per template + params combination)
     mutable std::mutex                                parser_cache_mutex;
@@ -2980,7 +2980,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         const std::string cache_key = make_autoparser_cache_key(src, params);
 
         // Check analysis cache first (needed for both cached and uncached parser paths)
-        TemplateAnalysisResult analysis;
+        template_analysis_result analysis;
         {
             std::lock_guard<std::mutex> lock(tmpls->analysis_cache_mutex);
             auto                        it = tmpls->analysis_cache.find(src);
@@ -2989,7 +2989,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
                 analysis = it->second;
             } else {
                 LOG_DBG("Analyzing template (analysis cache miss)\n");
-                analysis                   = TemplateAnalyzer::analyze_template(tmpl);
+                analysis                   = template_analyzer::analyze_template(tmpl);
                 tmpls->analysis_cache[src] = analysis;
             }
         }
@@ -3010,7 +3010,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
 
                 // Apply the same prompt modifications that generate_parser applies
                 // (e.g., appending reasoning end marker when thinking is disabled)
-                if (analysis.content.reasoning_mode == ContentStructure::REASONING_FORCED_OPEN &&
+                if (analysis.content.reasoning_mode == content_structure::REASONING_FORCED_OPEN &&
                     !params.enable_thinking) {
                     cached_result.prompt += analysis.content.reasoning_end + "\n";
                 }
@@ -3021,7 +3021,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
 
         LOG_DBG("Using unified template analysis (parser cache miss)\n");
 
-        auto auto_params = UniversalPEGGenerator::generate_parser(analysis, tmpl, params);
+        auto auto_params = universal_peg_generator::generate_parser(analysis, tmpl, params);
 
         // Only use the auto-generated parser if it provides more than basic content-only handling.
         // A PEG parser with thinking support or a non-empty parser (PEG grammar)

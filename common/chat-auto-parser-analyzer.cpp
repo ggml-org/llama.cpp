@@ -7,14 +7,10 @@
 
 using json = nlohmann::ordered_json;
 
-// ============================================================================
-// Public API: Unified Two-Phase Analysis
-// ============================================================================
-
-TemplateAnalysisResult TemplateAnalyzer::analyze_template(const minja::chat_template & tmpl) {
+template_analysis_result template_analyzer::analyze_template(const minja::chat_template & tmpl) {
     LOG_DBG("=== STARTING UNIFIED TEMPLATE ANALYSIS ===\n");
 
-    TemplateAnalysisResult result;
+    template_analysis_result result;
 
     // Phase 1: Analyze content and reasoning structure (no tools involved)
     result.content = analyze_content_structure(tmpl);
@@ -41,7 +37,7 @@ TemplateAnalysisResult TemplateAnalyzer::analyze_template(const minja::chat_temp
                 // Extract it and clean up tool_section_start
                 result.content.reasoning_start = start_marker;
                 result.content.reasoning_end   = end_marker;
-                result.content.reasoning_mode  = ContentStructure::REASONING_OPTIONAL;
+                result.content.reasoning_mode  = content_structure::REASONING_OPTIONAL;
 
                 // Clean up tool_section_start: remove everything before and including the end marker
                 size_t after_end = end_pos + end_marker.length();
@@ -66,7 +62,7 @@ TemplateAnalysisResult TemplateAnalyzer::analyze_template(const minja::chat_temp
     // Post-processing: Detect content markers for recipient-based format
     // For recipient-based format, content is prefixed with tool_call_start_marker + recipient_name + \n
     // (e.g., ">>>all\n"). We need to detect and extract this as the content_start marker.
-    if (result.tools.function_format == ToolCallStructure::FUNC_RECIPIENT_BASED &&
+    if (result.tools.function_format == tool_call_structure::FUNC_RECIPIENT_BASED &&
         result.content.content_start.empty() && !result.tools.tool_section_start.empty()) {
         // Render template with content only (no tools) to detect the content marker
         minja::chat_template_inputs inputs;
@@ -103,7 +99,7 @@ TemplateAnalysisResult TemplateAnalyzer::analyze_template(const minja::chat_temp
                         // Verify the marker starts with tool_call_start_marker
                         if (detected_marker.find(result.tools.tool_section_start) == 0) {
                             result.content.content_start = detected_marker;
-                            result.content.content_mode  = ContentStructure::CONTENT_ALWAYS_WRAPPED;
+                            result.content.content_mode  = content_structure::CONTENT_ALWAYS_WRAPPED;
                             LOG_DBG("Post-processing: Detected recipient-based content marker: '%s'\n",
                                     result.content.content_start.c_str());
                         }
@@ -134,14 +130,10 @@ TemplateAnalysisResult TemplateAnalyzer::analyze_template(const minja::chat_temp
     return result;
 }
 
-// ============================================================================
-// PHASE 1: Content and Reasoning Analysis
-// ============================================================================
-
-ContentStructure TemplateAnalyzer::analyze_content_structure(const minja::chat_template & tmpl) {
+content_structure template_analyzer::analyze_content_structure(const minja::chat_template & tmpl) {
     LOG_DBG("=== PHASE 1: ANALYZING CONTENT STRUCTURE ===\n");
 
-    ContentStructure cs;
+    content_structure cs;
 
     // Step 1: Detect reasoning markers by toggling enable_thinking
     detect_reasoning_markers(tmpl, cs);
@@ -165,7 +157,7 @@ ContentStructure TemplateAnalyzer::analyze_content_structure(const minja::chat_t
         return cs;
     }
 
-    cs.reasoning_mode = detect_reasoning_mode(tmpl, cs, prompt);
+    cs.reasoning_mode = detect_reasoning_mode(cs, prompt);
 
     LOG_DBG("Phase 1 complete: reasoning_mode=%d, content_mode=%d\n", static_cast<int>(cs.reasoning_mode),
             static_cast<int>(cs.content_mode));
@@ -173,7 +165,7 @@ ContentStructure TemplateAnalyzer::analyze_content_structure(const minja::chat_t
     return cs;
 }
 
-void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmpl, ContentStructure & cs) {
+void template_analyzer::detect_reasoning_markers(const minja::chat_template & tmpl, content_structure & cs) {
     LOG_DBG("=== DETECTING REASONING MARKERS ===\n");
 
     // Method 1: Compare outputs with reasoning_content field present vs absent
@@ -521,7 +513,8 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
                     continue;
                 }
 
-                std::string start_tag, end_tag;
+                std::string start_tag;
+                std::string end_tag;
 
                 if (!keyword.empty()) {
                     // Pattern like <|START_THINKING|><|END_THINKING|>
@@ -534,7 +527,7 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
                     // Find the end of this tag (look for |> or >)
                     size_t tag_end = prompt.find("|>", full_open_pos + full_open.length());
                     if (tag_end == std::string::npos) {
-                        tag_end = prompt.find(">", full_open_pos + full_open.length());
+                        tag_end = prompt.find('>', full_open_pos + full_open.length());
                     }
                     if (tag_end == std::string::npos) {
                         continue;
@@ -553,7 +546,7 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
                     // Find end of close tag
                     size_t close_end = prompt.find("|>", close_pos + expected_close.length());
                     if (close_end == std::string::npos) {
-                        close_end = prompt.find(">", close_pos + expected_close.length());
+                        close_end = prompt.find('>', close_pos + expected_close.length());
                     }
                     if (close_end == std::string::npos) {
                         continue;
@@ -601,7 +594,7 @@ void TemplateAnalyzer::detect_reasoning_markers(const minja::chat_template & tmp
     }
 }
 
-void TemplateAnalyzer::detect_content_markers(const minja::chat_template & tmpl, ContentStructure & cs) {
+void template_analyzer::detect_content_markers(const minja::chat_template & tmpl, content_structure & cs) {
     LOG_DBG("=== DETECTING CONTENT MARKERS ===\n");
 
     // Render template with a unique content marker
@@ -685,41 +678,38 @@ void TemplateAnalyzer::detect_content_markers(const minja::chat_template & tmpl,
 
     if (!start_with_thinking.empty() && !start_no_thinking.empty()) {
         // Content is always wrapped
-        cs.content_mode  = ContentStructure::CONTENT_ALWAYS_WRAPPED;
+        cs.content_mode  = content_structure::CONTENT_ALWAYS_WRAPPED;
         cs.content_start = start_with_thinking;
         cs.content_end   = end_with_thinking;
         LOG_DBG("Content markers found in both thinking modes (ALWAYS_WRAPPED)\n");
     } else if (!start_with_thinking.empty() && start_no_thinking.empty()) {
         // Content is wrapped only when reasoning is present
-        cs.content_mode  = ContentStructure::CONTENT_WRAPPED_WITH_REASONING;
+        cs.content_mode  = content_structure::CONTENT_WRAPPED_WITH_REASONING;
         cs.content_start = start_with_thinking;
         cs.content_end   = end_with_thinking;
         LOG_DBG("Content markers found only with thinking enabled (WRAPPED_WITH_REASONING)\n");
     } else if (!start_no_thinking.empty()) {
         // Unusual: content wrapped without thinking but not with? Use what we found
-        cs.content_mode  = ContentStructure::CONTENT_ALWAYS_WRAPPED;
+        cs.content_mode  = content_structure::CONTENT_ALWAYS_WRAPPED;
         cs.content_start = start_no_thinking;
         cs.content_end   = end_no_thinking;
         LOG_DBG("Content markers found only without thinking (treating as ALWAYS_WRAPPED)\n");
     } else {
-        cs.content_mode = ContentStructure::CONTENT_PLAIN;
+        cs.content_mode = content_structure::CONTENT_PLAIN;
         LOG_DBG("No content markers detected (PLAIN)\n");
     }
 
     LOG_DBG("Content markers: start='%s', end='%s'\n", cs.content_start.c_str(), cs.content_end.c_str());
 }
 
-ContentStructure::ReasoningMode TemplateAnalyzer::detect_reasoning_mode(const minja::chat_template & tmpl,
-                                                                        const ContentStructure &     cs,
-                                                                        const std::string &          prompt) {
-    (void) tmpl;  // Unused for now
-
+content_structure::reasoning_mode_type template_analyzer::detect_reasoning_mode(const content_structure & cs,
+                                                                                const std::string &       prompt) {
     LOG_DBG("=== DETECTING REASONING MODE ===\n");
 
     // If no reasoning markers detected, mode is NONE
     if (cs.reasoning_start.empty()) {
         LOG_DBG("No reasoning markers, mode=REASONING_NONE\n");
-        return ContentStructure::REASONING_NONE;
+        return content_structure::REASONING_NONE;
     }
 
     // Check if the prompt ends with the reasoning start marker (forced open)
@@ -731,25 +721,21 @@ ContentStructure::ReasoningMode TemplateAnalyzer::detect_reasoning_mode(const mi
 
     if (string_ends_with(trimmed_prompt, trimmed_marker)) {
         LOG_DBG("Prompt ends with reasoning start marker, mode=REASONING_FORCED_OPEN\n");
-        return ContentStructure::REASONING_FORCED_OPEN;
+        return content_structure::REASONING_FORCED_OPEN;
     }
 
     // Otherwise, reasoning is optional
     LOG_DBG("Reasoning markers present but not forced, mode=REASONING_OPTIONAL\n");
-    return ContentStructure::REASONING_OPTIONAL;
+    return content_structure::REASONING_OPTIONAL;
 }
 
-// ============================================================================
-// PHASE 2: Tool Call Structure Analysis
-// ============================================================================
-
-ToolCallStructure TemplateAnalyzer::analyze_tool_structure(const minja::chat_template & tmpl,
-                                                           const ContentStructure &     content) {
+tool_call_structure template_analyzer::analyze_tool_structure(const minja::chat_template & tmpl,
+                                                              const content_structure &    content) {
     (void) content;  // May be used in future for better tool detection
 
     LOG_DBG("=== PHASE 2: ANALYZING TOOL STRUCTURE ===\n");
 
-    ToolCallStructure ts;
+    tool_call_structure ts;
 
     // Use differential analysis to detect tool patterns
     // This now includes a robust test that renders two payloads:
@@ -792,11 +778,7 @@ ToolCallStructure TemplateAnalyzer::analyze_tool_structure(const minja::chat_tem
     return ts;
 }
 
-// ============================================================================
-// Preserved Token Collection
-// ============================================================================
-
-void TemplateAnalyzer::collect_preserved_tokens(TemplateAnalysisResult & result) {
+void template_analyzer::collect_preserved_tokens(template_analysis_result & result) {
     LOG_DBG("=== COLLECTING PRESERVED TOKENS ===\n");
 
     std::vector<std::string> tokens;
@@ -826,7 +808,7 @@ void TemplateAnalyzer::collect_preserved_tokens(TemplateAnalysisResult & result)
     }
 
     // Add function markers for tag-based formats
-    if (result.tools.function_format == ToolCallStructure::FUNC_TAG_WITH_NAME) {
+    if (result.tools.function_format == tool_call_structure::FUNC_TAG_WITH_NAME) {
         if (!result.tools.function_prefix.empty()) {
             tokens.push_back(result.tools.function_prefix);
         }
@@ -836,7 +818,7 @@ void TemplateAnalyzer::collect_preserved_tokens(TemplateAnalysisResult & result)
     }
 
     // Add markers for prefixed-indexed formats (e.g., Kimi-K2)
-    if (result.tools.function_format == ToolCallStructure::FUNC_PREFIXED_INDEXED) {
+    if (result.tools.function_format == tool_call_structure::FUNC_PREFIXED_INDEXED) {
         if (!result.tools.per_call_start.empty()) {
             tokens.push_back(result.tools.per_call_start);
         }
@@ -849,7 +831,7 @@ void TemplateAnalyzer::collect_preserved_tokens(TemplateAnalysisResult & result)
     }
 
     // Add argument markers for tagged formats
-    if (result.tools.argument_format == ToolCallStructure::ARGS_TAGGED) {
+    if (result.tools.argument_format == tool_call_structure::ARGS_TAGGED) {
         if (!result.tools.arg_prefix.empty()) {
             tokens.push_back(result.tools.arg_prefix);
         }
@@ -859,7 +841,7 @@ void TemplateAnalyzer::collect_preserved_tokens(TemplateAnalysisResult & result)
     }
 
     // Add markers for markdown code block format (Cohere Command-R Plus)
-    if (result.tools.function_format == ToolCallStructure::FUNC_MARKDOWN_CODE_BLOCK) {
+    if (result.tools.function_format == tool_call_structure::FUNC_MARKDOWN_CODE_BLOCK) {
         if (!result.tools.code_block_marker.empty()) {
             tokens.push_back(result.tools.code_block_marker);
         }
@@ -872,10 +854,10 @@ void TemplateAnalyzer::collect_preserved_tokens(TemplateAnalysisResult & result)
     LOG_DBG("Collected %zu preserved tokens\n", tokens.size());
 }
 
-void TemplateAnalyzer::analyze_json_format(ToolCallStructure & ts, const InternalDiscoveredPattern & discovered) {
+void template_analyzer::analyze_json_format(tool_call_structure & ts, const internal_discovered_pattern & discovered) {
     ts.supports_tools     = true;
-    ts.function_format    = ToolCallStructure::FUNC_JSON_OBJECT;
-    ts.argument_format    = ToolCallStructure::ARGS_JSON;
+    ts.function_format    = tool_call_structure::FUNC_JSON_OBJECT;
+    ts.argument_format    = tool_call_structure::ARGS_JSON;
     ts.tool_section_start = discovered.tool_call_start_marker;
     ts.tool_section_end   = discovered.tool_call_end_marker;
     ts.name_field         = discovered.tool_name_field;
@@ -887,7 +869,7 @@ void TemplateAnalyzer::analyze_json_format(ToolCallStructure & ts, const Interna
     if (!discovered.tool_call_opener.empty() && discovered.tool_call_opener.length() >= 2 &&
         discovered.tool_call_opener.substr(discovered.tool_call_opener.length() - 2) == "{\"") {
         LOG_DBG("Detected FUNC_NAME_AS_KEY format from tool_call_opener ending in '{\"' \n");
-        ts.function_format = ToolCallStructure::FUNC_NAME_AS_KEY;
+        ts.function_format = tool_call_structure::FUNC_NAME_AS_KEY;
     }
 
     // For JSON_NATIVE format, clean up tool_section_end to only include the closing tag
@@ -926,9 +908,9 @@ void TemplateAnalyzer::analyze_json_format(ToolCallStructure & ts, const Interna
     }
 }
 
-void TemplateAnalyzer::analyze_xml_format(ToolCallStructure & ts, const InternalDiscoveredPattern & discovered) {
+void template_analyzer::analyze_xml_format(tool_call_structure & ts, const internal_discovered_pattern & discovered) {
     ts.supports_tools     = true;
-    ts.function_format    = ToolCallStructure::FUNC_TAG_WITH_NAME;
+    ts.function_format    = tool_call_structure::FUNC_TAG_WITH_NAME;
     ts.tool_section_start = discovered.tool_call_start_marker;
     ts.tool_section_end   = discovered.tool_call_end_marker;
 
@@ -985,7 +967,7 @@ void TemplateAnalyzer::analyze_xml_format(ToolCallStructure & ts, const Internal
 
                 if (has_namespace && has_index) {
                     LOG_DBG("Detected FUNC_PREFIXED_INDEXED format: namespace ends with '.', suffix has ':N' index\n");
-                    ts.function_format = ToolCallStructure::FUNC_PREFIXED_INDEXED;
+                    ts.function_format = tool_call_structure::FUNC_PREFIXED_INDEXED;
 
                     // Split function_opener into per_call_start and function_namespace
                     // e.g., "<|tool_call_begin|>functions." -> "<|tool_call_begin|>" + "functions."
@@ -1144,7 +1126,7 @@ void TemplateAnalyzer::analyze_xml_format(ToolCallStructure & ts, const Internal
 
     // Determine argument format
     if (!discovered.parameter_key_prefix.empty() && discovered.parameter_key_prefix.find('<') != std::string::npos) {
-        ts.argument_format = ToolCallStructure::ARGS_TAGGED;
+        ts.argument_format = tool_call_structure::ARGS_TAGGED;
         ts.arg_prefix      = discovered.parameter_key_prefix;
         ts.arg_suffix      = discovered.parameter_key_suffix;
         ts.arg_close       = discovered.parameter_closer;
@@ -1154,7 +1136,7 @@ void TemplateAnalyzer::analyze_xml_format(ToolCallStructure & ts, const Internal
         // Format: <arg_key>key</arg_key>\n<arg_value>value</arg_value>
         // Analyzer detects suffix as: </arg_key>\n<arg_value>
         if (ts.arg_suffix.find("<arg_value>") != std::string::npos) {
-            ts.argument_format = ToolCallStructure::ARGS_KEY_VALUE_TAGS;
+            ts.argument_format = tool_call_structure::ARGS_KEY_VALUE_TAGS;
 
             // Clean up suffix to be just the key closer
             size_t val_opener = ts.arg_suffix.find("<arg_value>");
@@ -1170,16 +1152,16 @@ void TemplateAnalyzer::analyze_xml_format(ToolCallStructure & ts, const Internal
             }
         }
     } else {
-        ts.argument_format = ToolCallStructure::ARGS_JSON;
+        ts.argument_format = tool_call_structure::ARGS_JSON;
     }
 }
 
-void TemplateAnalyzer::analyze_bracket_tag_format(ToolCallStructure &               ts,
-                                                  const InternalDiscoveredPattern & discovered) {
+void template_analyzer::analyze_bracket_tag_format(tool_call_structure &               ts,
+                                                   const internal_discovered_pattern & discovered) {
     // Bracket-tag format: [TOOL_CALLS]name[CALL_ID]id[ARGS]{...} (Mistral Small 3.2)
     ts.supports_tools  = true;
-    ts.function_format = ToolCallStructure::FUNC_BRACKET_TAG;
-    ts.argument_format = ToolCallStructure::ARGS_JSON;
+    ts.function_format = tool_call_structure::FUNC_BRACKET_TAG;
+    ts.argument_format = tool_call_structure::ARGS_JSON;
 
     // The function_opener contains the bracket tag before the function name (e.g., "[TOOL_CALLS]")
     // Each tool call starts with this tag, so it's the per_call_start, not a section wrapper
@@ -1222,13 +1204,13 @@ void TemplateAnalyzer::analyze_bracket_tag_format(ToolCallStructure &           
             ts.id_marker.c_str(), ts.args_marker.c_str());
 }
 
-void TemplateAnalyzer::analyze_recipient_based_format(ToolCallStructure &               ts,
-                                                      const InternalDiscoveredPattern & discovered) {
+void template_analyzer::analyze_recipient_based_format(tool_call_structure &               ts,
+                                                       const internal_discovered_pattern & discovered) {
     // Recipient-based format (Functionary v3.2): >>>recipient\n{content}
     // where recipient is either "all" (for content) or a function name (for tools)
     ts.supports_tools  = true;
-    ts.function_format = ToolCallStructure::FUNC_RECIPIENT_BASED;
-    ts.argument_format = ToolCallStructure::ARGS_JSON;  // Python dict format, parse as JSON
+    ts.function_format = tool_call_structure::FUNC_RECIPIENT_BASED;
+    ts.argument_format = tool_call_structure::ARGS_JSON;  // Python dict format, parse as JSON
 
     // The tool_call_start_marker is used as the recipient delimiter
     ts.tool_section_start = discovered.tool_call_start_marker;
@@ -1244,8 +1226,8 @@ void TemplateAnalyzer::analyze_recipient_based_format(ToolCallStructure &       
     LOG_DBG("FUNC_RECIPIENT_BASED: delimiter='%s'\n", ts.tool_section_start.c_str());
 }
 
-void TemplateAnalyzer::analyze_markdown_code_block_format(ToolCallStructure &               ts,
-                                                          const InternalDiscoveredPattern & discovered) {
+void template_analyzer::analyze_markdown_code_block_format(tool_call_structure &               ts,
+                                                           const internal_discovered_pattern & discovered) {
     // Markdown code block format (Cohere Command-R Plus):
     // Action:
     // ```json
@@ -1257,8 +1239,8 @@ void TemplateAnalyzer::analyze_markdown_code_block_format(ToolCallStructure &   
     // ]
     // ```
     ts.supports_tools  = true;
-    ts.function_format = ToolCallStructure::FUNC_MARKDOWN_CODE_BLOCK;
-    ts.argument_format = ToolCallStructure::ARGS_JSON;
+    ts.function_format = tool_call_structure::FUNC_MARKDOWN_CODE_BLOCK;
+    ts.argument_format = tool_call_structure::ARGS_JSON;
 
     // Extract the code block marker (e.g., "Action:")
     // The tool_call_start_marker should contain "Action:" followed by newline

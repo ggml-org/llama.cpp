@@ -1,7 +1,5 @@
 #pragma once
 
-#include "chat.h"
-
 #include <minja/chat-template.hpp>
 #include <minja/minja.hpp>
 #include <optional>
@@ -12,15 +10,15 @@ using json = nlohmann::ordered_json;
 
 // Forward declaration of minja::chat_template
 namespace minja {
-struct chat_template;
+class chat_template;
 }
 
 // ============================================================================
 // String Manipulation Helpers
 // ============================================================================
 
-void trim_whitespace(std::string & str);
-void trim_trailing_newlines(std::string & str);
+void   trim_whitespace(std::string & str);
+void   trim_trailing_newlines(std::string & str);
 size_t count_non_whitespace(const std::string & str);
 size_t find_last_of_any(const std::string & str, const std::string & chars, size_t start_pos);
 
@@ -38,13 +36,14 @@ std::string create_closing_tag(const std::string & opening_tag);
 std::string find_common_prefix(const std::vector<std::string> & strings);
 std::string find_common_suffix_generic(const std::vector<std::string> & strings);
 std::string find_common_substring_limited(const std::vector<std::string> & strings,
-                                           size_t max_length, const std::string & delimiters);
+                                          size_t                           max_length,
+                                          const std::string &              delimiters);
 
 // ============================================================================
 // Additional Helper Functions
 // ============================================================================
 
-bool string_ends_with(const std::string & str, const std::string & suffix);
+bool        string_ends_with(const std::string & str, const std::string & suffix);
 std::string apply_template(const minja::chat_template &    tmpl,
                            const struct templates_params & inputs,
                            const std::optional<json> &     messages_override  = std::nullopt,
@@ -64,7 +63,7 @@ std::string adjust_to_token_boundary(const std::string & str);
 // ============================================================================
 
 // Internal structure for differential analysis (used during pattern extraction)
-struct InternalDiscoveredPattern {
+struct internal_discovered_pattern {
     std::string tool_call_opener;
     std::string tool_call_closer;
     std::string function_opener;
@@ -81,23 +80,23 @@ struct InternalDiscoveredPattern {
     std::string reasoning_end_marker;
     std::string content_start_marker;
     std::string content_end_marker;
-    std::string tool_name_field  = "name";
-    std::string tool_args_field  = "arguments";
+    std::string tool_name_field = "name";
+    std::string tool_args_field = "arguments";
     std::string tool_id_field;
     // For markdown code block format (Cohere Command-R Plus)
-    std::string code_block_marker;   // e.g., "Action:"
-    std::string code_block_language; // e.g., "json"
+    std::string code_block_marker;    // e.g., "Action:"
+    std::string code_block_language;  // e.g., "json"
     // Flag: template renders null content as "None" string, requires empty string instead
-    bool requires_nonnull_content = false;
+    bool        requires_nonnull_content = false;
 };
 
 // Internal enum for format classification
-enum InternalToolFormat {
+enum internal_tool_format {
     FORMAT_JSON_NATIVE,
     FORMAT_XML_CONSTRUCTED,
-    FORMAT_BRACKET_TAG,      // [TOOL_CALLS]name[CALL_ID]id[ARGS]{...} (Mistral Small 3.2)
-    FORMAT_RECIPIENT_BASED,  // >>>recipient\n{content} (Functionary v3.2)
-    FORMAT_MARKDOWN_CODE_BLOCK, // Action:\n```json\n[...]\n``` (Cohere Command-R Plus)
+    FORMAT_BRACKET_TAG,          // [TOOL_CALLS]name[CALL_ID]id[ARGS]{...} (Mistral Small 3.2)
+    FORMAT_RECIPIENT_BASED,      // >>>recipient\n{content} (Functionary v3.2)
+    FORMAT_MARKDOWN_CODE_BLOCK,  // Action:\n```json\n[...]\n``` (Cohere Command-R Plus)
     FORMAT_CONTENT_ONLY,
     FORMAT_UNKNOWN
 };
@@ -106,8 +105,9 @@ enum InternalToolFormat {
 std::string find_string_difference(const std::string & base, const std::string & extended);
 
 // Extract JSON field name from an opener string
-std::string extract_json_field_name(const std::string & opener, const std::string & default_name,
-                                     const std::vector<std::string> & candidates);
+std::string extract_json_field_name(const std::string &              opener,
+                                    const std::string &              default_name,
+                                    const std::vector<std::string> & candidates);
 
 // Find a closing pattern in a string starting from a given position
 std::string find_closing_pattern(const std::string & diff, size_t func_pos);
@@ -119,21 +119,19 @@ std::string find_tool_call_start(const std::string & diff);
 std::string find_tool_call_end(const std::string & diff, size_t func_pos);
 
 // Infer the tool call opener from multiple difference strings
-std::string infer_tool_call_opener(const std::string & diff1, const std::string & diff2,
-                                    const std::string & diff3);
+std::string infer_tool_call_opener(const std::string & diff1, const std::string & diff2, const std::string & diff3);
 
 // Infer the tool call closer from multiple difference strings
-std::string infer_tool_call_closer(const std::string & diff1, const std::string & diff2,
-                                    const std::string & diff3);
+std::string infer_tool_call_closer(const std::string & diff1, const std::string & diff2, const std::string & diff3);
 
 // Extract patterns from differences between tool calls
-InternalDiscoveredPattern extract_patterns_from_differences(const std::string & tool1_diff,
-                                                              const std::string & tool2_diff,
-                                                              const std::string & tool3_diff,
-                                                              const std::string & tool1_full = "");
+internal_discovered_pattern extract_patterns_from_differences(const std::string & tool1_diff,
+                                                            const std::string & tool2_diff,
+                                                            const std::string & tool3_diff,
+                                                            const std::string & tool1_full = "");
 
 // Determine the format classification from discovered patterns
-InternalToolFormat determine_format_from_patterns(const InternalDiscoveredPattern & patterns);
+internal_tool_format determine_format_from_patterns(const internal_discovered_pattern & patterns);
 
 // Analyze template using differential analysis (internal use)
-InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & tmpl);
+internal_discovered_pattern analyze_by_differential(const minja::chat_template & tmpl);

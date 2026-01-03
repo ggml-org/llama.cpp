@@ -8,15 +8,9 @@
 
 using json = nlohmann::ordered_json;
 
-// Helper functions shared between analyzer and generator
-
 bool string_ends_with(const std::string & str, const std::string & suffix) {
     return str.size() >= suffix.size() && str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
-
-// ============================================================================
-// String Manipulation Helpers
-// ============================================================================
 
 void trim_whitespace(std::string & str) {
     if (str.empty()) {
@@ -58,10 +52,6 @@ size_t find_last_of_any(const std::string & str, const std::string & chars, size
     return last_pos;
 }
 
-// ============================================================================
-// Tag Extraction Helpers
-// ============================================================================
-
 std::string extract_tag_name(const std::string & tag) {
     if (tag.empty() || tag[0] != '<') {
         return "";
@@ -88,10 +78,6 @@ std::string create_closing_tag(const std::string & opening_tag) {
     }
     return "";
 }
-
-// ============================================================================
-// Common String Helpers
-// ============================================================================
 
 std::string find_common_prefix(const std::vector<std::string> & strings) {
     if (strings.empty()) {
@@ -158,10 +144,6 @@ std::string find_common_substring_limited(const std::vector<std::string> & strin
     return common;
 }
 
-// ============================================================================
-// Template Application Helpers
-// ============================================================================
-
 std::string apply_template(const minja::chat_template &    tmpl,
                            const struct templates_params & inputs,
                            const std::optional<json> &     messages_override,
@@ -191,10 +173,6 @@ std::string apply_template(const minja::chat_template &    tmpl,
         return "";
     }
 }
-
-// ============================================================================
-// Special Token Boundary Detection (<|...|> tokens)
-// ============================================================================
 
 std::string adjust_to_token_boundary(const std::string & str) {
     if (str.empty()) {
@@ -228,10 +206,6 @@ std::string adjust_to_token_boundary(const std::string & str) {
 
     return result;
 }
-
-// ============================================================================
-// Template Pattern Analysis Helpers
-// ============================================================================
 
 std::string find_string_difference(const std::string & base, const std::string & extended) {
     size_t common_prefix = 0;
@@ -426,13 +400,13 @@ std::string infer_tool_call_closer(const std::string & diff1, const std::string 
     return find_common_suffix_generic(differences);
 }
 
-InternalDiscoveredPattern extract_patterns_from_differences(const std::string & tool1_diff,
-                                                            const std::string & tool2_diff,
-                                                            const std::string & tool3_diff,
-                                                            const std::string & tool1_full) {
+internal_discovered_pattern extract_patterns_from_differences(const std::string & tool1_diff,
+                                                              const std::string & tool2_diff,
+                                                              const std::string & tool3_diff,
+                                                              const std::string & tool1_full) {
     LOG_DBG("%s\n", __func__);
 
-    InternalDiscoveredPattern patterns;
+    internal_discovered_pattern patterns;
 
     size_t func1_pos = tool1_diff.rfind("test_function_name");
     size_t func2_pos = tool2_diff.rfind("test_function_name");
@@ -848,7 +822,7 @@ InternalDiscoveredPattern extract_patterns_from_differences(const std::string & 
     return patterns;
 }
 
-InternalToolFormat determine_format_from_patterns(const InternalDiscoveredPattern & patterns) {
+internal_tool_format determine_format_from_patterns(const internal_discovered_pattern & patterns) {
     LOG_DBG("%s\n", __func__);
 
     if (patterns.tool_call_opener.empty() && patterns.tool_call_closer.empty() && patterns.function_opener.empty() &&
@@ -966,10 +940,10 @@ InternalToolFormat determine_format_from_patterns(const InternalDiscoveredPatter
         if (is_prefix_marker) {
             LOG_DBG("Detected JSON_NATIVE format from tool_call_start_marker (instruction-based)\n");
             return FORMAT_JSON_NATIVE;
-        } else {
-            LOG_DBG("Detected XML_CONSTRUCTED format from tool_call_start_marker\n");
-            return FORMAT_XML_CONSTRUCTED;
         }
+
+        LOG_DBG("Detected XML_CONSTRUCTED format from tool_call_start_marker\n");
+        return FORMAT_XML_CONSTRUCTED;
     }
 
     if (!patterns.tool_call_start_marker.empty() && patterns.tool_call_start_marker.find('{') == 0) {
@@ -991,8 +965,8 @@ InternalToolFormat determine_format_from_patterns(const InternalDiscoveredPatter
     return FORMAT_UNKNOWN;
 }
 
-InternalDiscoveredPattern analyze_by_differential(const minja::chat_template & tmpl) {
-    InternalDiscoveredPattern patterns;
+internal_discovered_pattern analyze_by_differential(const minja::chat_template & tmpl) {
+    internal_discovered_pattern patterns;
 
     try {
         LOG_DBG("%s\n", __func__);
