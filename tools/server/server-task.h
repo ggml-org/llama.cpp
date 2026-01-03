@@ -96,6 +96,10 @@ struct task_result_state {
     std::string generated_text; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
 
+    // for Anthropic API streaming: track content block state across chunks
+    bool anthropic_thinking_block_started = false;
+    bool anthropic_text_block_started = false;
+
     task_result_state(const common_chat_syntax & oaicompat_chat_syntax)
         : oaicompat_chat_syntax(oaicompat_chat_syntax) {}
 
@@ -337,6 +341,11 @@ struct server_task_result_cmpl_partial : server_task_result {
     std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
     bool is_updated = false;
 
+    // for Anthropic API: track if any reasoning content has been generated
+    bool anthropic_has_reasoning = false;
+    // pointer to task_result_state for Anthropic streaming state tracking
+    task_result_state * anthropic_state = nullptr;
+
     virtual bool is_stop() override {
         return false; // in stream mode, partial responses are not considered stop
     }
@@ -346,6 +355,10 @@ struct server_task_result_cmpl_partial : server_task_result {
     virtual void update(task_result_state & state) override {
         is_updated = true;
         state.update_chat_msg(content, true, oaicompat_msg_diffs);
+        // track if the accumulated message has any reasoning content
+        anthropic_has_reasoning = !state.chat_msg.reasoning_content.empty();
+        // store pointer to state for Anthropic streaming
+        anthropic_state = &state;
     }
 
     json to_json_non_oaicompat();

@@ -805,3 +805,92 @@ def test_anthropic_vs_openai_different_response_format():
     assert "input_tokens" in anthropic_res.body["usage"]
     assert "completion_tokens" in openai_res.body["usage"]
     assert "output_tokens" in anthropic_res.body["usage"]
+
+
+# Extended thinking tests with reasoning models
+
+@pytest.mark.slow
+@pytest.mark.parametrize("stream", [False, True])
+def test_anthropic_thinking_with_reasoning_model(stream):
+    """Test that thinking content blocks are properly returned for reasoning models"""
+    global server
+    server = ServerProcess()
+    server.model_hf_repo = "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF"
+    server.model_hf_file = "DeepSeek-R1-Distill-Qwen-7B-Q4_K_M.gguf"
+    server.reasoning_format = "deepseek"
+    server.jinja = True
+    server.n_ctx = 8192
+    server.n_predict = 1024
+    server.server_port = 8084
+    server.start(timeout_seconds=600)  # large model needs time to download
+
+    if stream:
+        res = server.make_stream_request("POST", "/v1/messages", data={
+            "model": "test",
+            "max_tokens": 1024,
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": 500
+            },
+            "messages": [
+                {"role": "user", "content": "What is 2+2?"}
+            ],
+            "stream": True
+        })
+
+        events = list(res)
+
+        # should have thinking content block events
+        thinking_starts = [e for e in events if
+            e.get("type") == "content_block_start" and
+            e.get("content_block", {}).get("type") == "thinking"]
+        assert len(thinking_starts) > 0, "Should have thinking content_block_start event"
+        assert thinking_starts[0]["index"] == 0, "Thinking block should be at index 0"
+
+        # should have thinking_delta events
+        thinking_deltas = [e for e in events if
+            e.get("type") == "content_block_delta" and
+            e.get("delta", {}).get("type") == "thinking_delta"]
+        assert len(thinking_deltas) > 0, "Should have thinking_delta events"
+
+        # should have signature_delta event before thinking block closes (Anthropic API requirement)
+        signature_deltas = [e for e in events if
+            e.get("type") == "content_block_delta" and
+            e.get("delta", {}).get("type") == "signature_delta"]
+        assert len(signature_deltas) > 0, "Should have signature_delta event for thinking block"
+
+        # should have text block after thinking
+        text_starts = [e for e in events if
+            e.get("type") == "content_block_start" and
+            e.get("content_block", {}).get("type") == "text"]
+        assert len(text_starts) > 0, "Should have text content_block_start event"
+        assert text_starts[0]["index"] == 1, "Text block should be at index 1 (after thinking)"
+    else:
+        res = server.make_request("POST", "/v1/messages", data={
+            "model": "test",
+            "max_tokens": 1024,
+            "thinking": {
+                "type": "enabled",
+                "budget_tokens": 500
+            },
+            "messages": [
+                {"role": "user", "content": "What is 2+2?"}
+            ]
+        })
+
+        assert res.status_code == 200
+        assert res.body["type"] == "message"
+
+        content = res.body["content"]
+        assert len(content) >= 2, "Should have at least thinking and text blocks"
+
+        # first block should be thinking
+        thinking_blocks = [b for b in content if b.get("type") == "thinking"]
+        assert len(thinking_blocks) > 0, "Should have thinking content block"
+        assert "thinking" in thinking_blocks[0], "Thinking block should have 'thinking' field"
+        assert len(thinking_blocks[0]["thinking"]) > 0, "Thinking content should not be empty"
+        assert "signature" in thinking_blocks[0], "Thinking block should have 'signature' field (Anthropic API requirement)"
+
+        # should also have text block
+        text_blocks = [b for b in content if b.get("type") == "text"]
+        assert len(text_blocks) > 0, "Should have text content block"
