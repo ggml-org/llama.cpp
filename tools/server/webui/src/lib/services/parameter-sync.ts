@@ -69,12 +69,6 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		type: 'boolean',
 		canSync: true
 	},
-	{
-		key: 'disableReasoningFormat',
-		serverKey: 'disableReasoningFormat',
-		type: 'boolean',
-		canSync: true
-	},
 	{ key: 'keepStatsVisible', serverKey: 'keepStatsVisible', type: 'boolean', canSync: true },
 	{ key: 'showMessageStats', serverKey: 'showMessageStats', type: 'boolean', canSync: true },
 	{

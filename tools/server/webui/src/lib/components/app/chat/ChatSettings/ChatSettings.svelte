@@ -276,8 +276,13 @@
 			icon: Code,
 			fields: [
 				{
-					key: 'disableReasoningFormat',
-					label: 'Enable raw LLM output switch',
+					key: 'disableReasoningParsing',
+					label: 'Disable reasoning content parsing',
+					type: 'checkbox'
+				},
+				{
+					key: 'showRawOutputSwitch',
+					label: 'Enable raw output toggle',
 					type: 'checkbox'
 				},
 				{
