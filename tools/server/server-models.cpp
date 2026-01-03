@@ -26,6 +26,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+extern char **environ;
 #endif
 
 #if defined(__APPLE__) && defined(__MACH__)
@@ -99,6 +100,24 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     }
 }
 
+static std::vector<std::string> get_environment([[maybe_unused]] char ** envp) {
+    std::vector<std::string> env;
+
+#ifdef _WIN32
+    char ** env_ptr = envp;
+#else
+    char ** env_ptr = environ;
+#endif
+
+    if (env_ptr != nullptr) {
+        for (char ** e = env_ptr; *e != nullptr; e++) {
+            env.push_back(std::string(*e));
+        }
+    }
+
+    return env;
+}
+
 void server_model_meta::update_args(common_preset_context & ctx_preset, std::string bin_path) {
     // update params
     unset_reserved_args(preset, false);
@@ -121,10 +140,8 @@ server_models::server_models(
         char ** envp)
             : ctx_preset(LLAMA_EXAMPLE_SERVER),
               base_params(params),
+              base_env(get_environment(envp)),
               base_preset(ctx_preset.load_from_args(argc, argv)) {
-    for (char ** env = envp; *env != nullptr; env++) {
-        base_env.push_back(std::string(*env));
-    }
     // clean up base preset
     unset_reserved_args(base_preset, true);
     // set binary path
