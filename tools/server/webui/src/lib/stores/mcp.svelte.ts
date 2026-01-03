@@ -5,9 +5,10 @@ import {
 	type ServerStatus
 } from '$lib/mcp/host-manager';
 import type { ToolExecutionResult } from '$lib/mcp/server-connection';
-import { buildMcpClientConfig } from '$lib/config/mcp';
-import { config } from '$lib/stores/settings.svelte';
+import { buildMcpClientConfig, incrementMcpServerUsage } from '$lib/config/mcp';
+import { config, settingsStore } from '$lib/stores/settings.svelte';
 import type { MCPToolCall } from '$lib/types/mcp';
+import type { McpServerOverride } from '$lib/types/database';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 import { MCPClient } from '$lib/mcp';
 import { detectMcpTransportFromUrl } from '$lib/utils/mcp';
@@ -139,11 +140,14 @@ class MCPStore {
 	 * Ensure MCP host manager is initialized with current config.
 	 * Returns the host manager if successful, undefined otherwise.
 	 * Handles config changes by reinitializing as needed.
+	 * @param perChatOverrides - Optional per-chat MCP server overrides
 	 */
-	async ensureInitialized(): Promise<MCPHostManager | undefined> {
+	async ensureInitialized(
+		perChatOverrides?: McpServerOverride[]
+	): Promise<MCPHostManager | undefined> {
 		if (!browser) return undefined;
 
-		const mcpConfig = buildMcpClientConfig(config());
+		const mcpConfig = buildMcpClientConfig(config(), perChatOverrides);
 		const signature = mcpConfig ? JSON.stringify(mcpConfig) : null;
 
 		// No config - shutdown if needed

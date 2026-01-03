@@ -31,7 +31,7 @@ import {
 import type { ApiChatCompletionToolCall, ApiChatMessageData } from '$lib/types/api';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from '$lib/types/chat';
 import type { MCPToolCall } from '$lib/types/mcp';
-import type { DatabaseMessage, DatabaseMessageExtra } from '$lib/types/database';
+import type { DatabaseMessage, DatabaseMessageExtra, McpServerOverride } from '$lib/types/database';
 import { getAgenticConfig } from '$lib/config/agentic';
 import { config } from '$lib/stores/settings.svelte';
 import { getAuthHeaders } from '$lib/utils';
@@ -69,6 +69,8 @@ export interface AgenticFlowParams {
 	options?: AgenticFlowOptions;
 	callbacks: AgenticFlowCallbacks;
 	signal?: AbortSignal;
+	/** Per-chat MCP server overrides */
+	perChatOverrides?: McpServerOverride[];
 }
 
 export interface AgenticFlowResult {
@@ -126,18 +128,18 @@ class AgenticStore {
 	 * @returns AgenticFlowResult indicating if the flow handled the request
 	 */
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
-		const { messages, options = {}, callbacks, signal } = params;
+		const { messages, options = {}, callbacks, signal, perChatOverrides } = params;
 		const { onChunk, onReasoningChunk, onToolCallChunk, onModel, onComplete, onError, onTimings } =
 			callbacks;
 
-		// Get agentic configuration
-		const agenticConfig = getAgenticConfig(config());
+		// Get agentic configuration (considering per-chat MCP overrides)
+		const agenticConfig = getAgenticConfig(config(), perChatOverrides);
 		if (!agenticConfig.enabled) {
 			return { handled: false };
 		}
 
-		// Ensure MCP is initialized
-		const hostManager = await mcpStore.ensureInitialized();
+		// Ensure MCP is initialized with per-chat overrides
+		const hostManager = await mcpStore.ensureInitialized(perChatOverrides);
 		if (!hostManager) {
 			console.log('[AgenticStore] MCP not initialized, falling back to standard chat');
 			return { handled: false };

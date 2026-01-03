@@ -1,5 +1,6 @@
 import type { MCPClientConfig, MCPServerConfig, MCPServerSettingsEntry } from '$lib/types/mcp';
 import type { SettingsConfigType } from '$lib/types/settings';
+import type { McpServerOverride } from '$lib/types/database';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 import { detectMcpTransportFromUrl, generateMcpServerId } from '$lib/utils/mcp';
 import { normalizePositiveNumber } from '$lib/utils/number';
@@ -77,10 +78,32 @@ function buildServerConfig(
 }
 
 /**
+ * Checks if a server is enabled considering per-chat overrides.
+ * Per-chat override takes precedence over global setting.
+ */
+function isServerEnabled(
+	server: MCPServerSettingsEntry,
+	perChatOverrides?: McpServerOverride[]
+): boolean {
+	if (perChatOverrides) {
+		const override = perChatOverrides.find((o) => o.serverId === server.id);
+		if (override !== undefined) {
+			return override.enabled;
+		}
+	}
+	return server.enabled;
+}
+
+/**
  * Builds MCP client configuration from settings.
  * Returns undefined if no valid servers are configured.
+ * @param config - Global settings configuration
+ * @param perChatOverrides - Optional per-chat server overrides
  */
-export function buildMcpClientConfig(config: SettingsConfigType): MCPClientConfig | undefined {
+export function buildMcpClientConfig(
+	config: SettingsConfigType,
+	perChatOverrides?: McpServerOverride[]
+): MCPClientConfig | undefined {
 	const rawServers = parseMcpServerSettings(config.mcpServers);
 
 	if (!rawServers.length) {
@@ -89,7 +112,7 @@ export function buildMcpClientConfig(config: SettingsConfigType): MCPClientConfi
 
 	const servers: Record<string, MCPServerConfig> = {};
 	for (const [index, entry] of rawServers.entries()) {
-		if (!entry.enabled) continue;
+		if (!isServerEnabled(entry, perChatOverrides)) continue;
 
 		const normalized = buildServerConfig(entry);
 		if (normalized) {
@@ -110,6 +133,55 @@ export function buildMcpClientConfig(config: SettingsConfigType): MCPClientConfi
 	};
 }
 
-export function hasEnabledMcpServers(config: SettingsConfigType): boolean {
-	return Boolean(buildMcpClientConfig(config));
+export function hasEnabledMcpServers(
+	config: SettingsConfigType,
+	perChatOverrides?: McpServerOverride[]
+): boolean {
+	return Boolean(buildMcpClientConfig(config, perChatOverrides));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP Server Usage Stats
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type McpServerUsageStats = Record<string, number>;
+
+/**
+ * Parse MCP server usage stats from settings.
+ */
+export function parseMcpServerUsageStats(rawStats: unknown): McpServerUsageStats {
+	if (!rawStats) return {};
+
+	if (typeof rawStats === 'string') {
+		const trimmed = rawStats.trim();
+		if (!trimmed) return {};
+
+		try {
+			const parsed = JSON.parse(trimmed);
+			if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+				return parsed as McpServerUsageStats;
+			}
+		} catch {
+			console.warn('[MCP] Failed to parse mcpServerUsageStats JSON, ignoring value');
+		}
+	}
+
+	return {};
+}
+
+/**
+ * Get usage count for a specific server.
+ */
+export function getMcpServerUsageCount(config: SettingsConfigType, serverId: string): number {
+	const stats = parseMcpServerUsageStats(config.mcpServerUsageStats);
+	return stats[serverId] || 0;
+}
+
+/**
+ * Increment usage count for a server and return updated stats JSON.
+ */
+export function incrementMcpServerUsage(config: SettingsConfigType, serverId: string): string {
+	const stats = parseMcpServerUsageStats(config.mcpServerUsageStats);
+	stats[serverId] = (stats[serverId] || 0) + 1;
+	return JSON.stringify(stats);
 }
