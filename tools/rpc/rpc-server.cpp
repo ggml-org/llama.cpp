@@ -145,7 +145,7 @@ static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "  -h, --help                       show this help message and exit\n");
     fprintf(stderr, "  -t, --threads N                  number of threads for the CPU device (default: %d)\n", params.n_threads);
     fprintf(stderr, "  -d, --device <dev1,dev2,...>     comma-separated list of devices\n");
-    fprintf(stderr, "  -H, --host HOST                  host to bind to (default: %s)\n", params.host.c_str());
+    fprintf(stderr, "  -H, --host HOST                  host to bind to, or path to unix socket ending in .sock (default: %s)\n", params.host.c_str());
     fprintf(stderr, "  -p, --port PORT                  port to bind to (default: %d)\n", params.port);
     fprintf(stderr, "  -c, --cache                      enable local file cache\n");
     fprintf(stderr, "\n");
@@ -258,7 +258,10 @@ int main(int argc, char * argv[]) {
         return 1;
     }
 
-    if (params.host != "127.0.0.1") {
+    bool is_unix_socket = params.host.size() >= 5 &&
+                          params.host.rfind(".sock") == params.host.size() - 5;
+
+    if (!is_unix_socket && params.host != "127.0.0.1") {
         fprintf(stderr, "\n");
         fprintf(stderr, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n");
         fprintf(stderr, "WARNING: Host ('%s') is != '127.0.0.1'\n", params.host.c_str());
@@ -273,7 +276,12 @@ int main(int argc, char * argv[]) {
         fprintf(stderr, "No devices found\n");
         return 1;
     }
-    std::string endpoint = params.host + ":" + std::to_string(params.port);
+    std::string endpoint;
+    if (is_unix_socket) {
+        endpoint = params.host;
+    } else {
+        endpoint = params.host + ":" + std::to_string(params.port);
+    }
     const char * cache_dir = nullptr;
     std::string cache_dir_str;
     if (params.use_cache) {
