@@ -263,6 +263,11 @@
 					key: 'agenticFilterReasoningAfterFirstTurn',
 					label: 'Filter reasoning after first turn',
 					type: 'checkbox'
+				},
+				{
+					key: 'showToolCallInProgress',
+					label: 'Show tool call in progress',
+					type: 'checkbox'
 				}
 			]
 		},

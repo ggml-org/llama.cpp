@@ -8,6 +8,7 @@
 	 */
 
 	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
+	import { config } from '$lib/stores/settings.svelte';
 	import { Wrench, Loader2 } from '@lucide/svelte';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
@@ -19,7 +20,7 @@
 	}
 
 	interface AgenticSection {
-		type: 'text' | 'tool_call' | 'tool_call_pending';
+		type: 'text' | 'tool_call' | 'tool_call_pending' | 'tool_call_streaming';
 		content: string;
 		toolName?: string;
 		toolArgs?: string;
@@ -34,12 +35,20 @@
 	// Track expanded state for each tool call (default expanded)
 	let expandedStates: Record<number, boolean> = $state({});
 
-	function isExpanded(index: number): boolean {
-		return expandedStates[index] ?? true;
+	// Get showToolCallInProgress setting
+	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
+
+	function isExpanded(index: number, isPending: boolean): boolean {
+		// If showToolCallInProgress is enabled and tool is pending, force expand
+		if (showToolCallInProgress && isPending) {
+			return true;
+		}
+		// Otherwise use stored state, defaulting to expanded only if showToolCallInProgress is true
+		return expandedStates[index] ?? showToolCallInProgress;
 	}
 
-	function toggleExpanded(index: number) {
-		expandedStates[index] = !isExpanded(index);
+	function toggleExpanded(index: number, isPending: boolean) {
+		expandedStates[index] = !isExpanded(index, isPending);
 	}
 
 	function parseAgenticContent(rawContent: string): AgenticSection[] {
@@ -88,9 +97,19 @@
 
 		// Check for pending tool call at the end (START without END)
 		const remainingContent = rawContent.slice(lastIndex);
+
+		// Full pending match (has NAME and ARGS)
 		const pendingMatch = remainingContent.match(
 			/<<<AGENTIC_TOOL_CALL_START>>>\n<<<TOOL_NAME:(.+?)>>>\n<<<TOOL_ARGS_BASE64:(.+?)>>>([\s\S]*)$/
 		);
+
+		// Partial pending match (has START and NAME but ARGS still streaming)
+		const partialWithNameMatch = remainingContent.match(
+			/<<<AGENTIC_TOOL_CALL_START>>>\n<<<TOOL_NAME:(.+?)>>>\n<<<TOOL_ARGS_BASE64:([^>]*)$/
+		);
+
+		// Very early match (just START marker, maybe partial NAME)
+		const earlyMatch = remainingContent.match(/<<<AGENTIC_TOOL_CALL_START>>>([\s\S]*)$/);
 
 		if (pendingMatch) {
 			// Add text before pending tool call
@@ -121,9 +140,54 @@
 				toolArgs,
 				toolResult: streamingResult || undefined
 			});
+		} else if (partialWithNameMatch) {
+			// Has START and NAME, ARGS still streaming
+			const pendingIndex = remainingContent.indexOf('<<<AGENTIC_TOOL_CALL_START>>>');
+			if (pendingIndex > 0) {
+				const textBefore = remainingContent.slice(0, pendingIndex).trim();
+				if (textBefore) {
+					sections.push({ type: 'text', content: textBefore });
+				}
+			}
+
+			sections.push({
+				type: 'tool_call_streaming',
+				content: '',
+				toolName: partialWithNameMatch[1],
+				toolArgs: undefined,
+				toolResult: undefined
+			});
+		} else if (earlyMatch) {
+			// Just START marker, show streaming state
+			const pendingIndex = remainingContent.indexOf('<<<AGENTIC_TOOL_CALL_START>>>');
+			if (pendingIndex > 0) {
+				const textBefore = remainingContent.slice(0, pendingIndex).trim();
+				if (textBefore) {
+					sections.push({ type: 'text', content: textBefore });
+				}
+			}
+
+			// Try to extract tool name if present
+			const nameMatch = earlyMatch[1]?.match(/<<<TOOL_NAME:([^>]+)>>>/);
+
+			sections.push({
+				type: 'tool_call_streaming',
+				content: '',
+				toolName: nameMatch?.[1],
+				toolArgs: undefined,
+				toolResult: undefined
+			});
 		} else if (lastIndex < rawContent.length) {
 			// Add remaining text after last completed tool call
-			const remainingText = rawContent.slice(lastIndex).trim();
+			// But strip any partial markers that might be starting
+			let remainingText = rawContent.slice(lastIndex).trim();
+
+			// Check for partial marker at the end (e.g., "<<<" or "<<<AGENTIC" etc.)
+			const partialMarkerMatch = remainingText.match(/<<<[A-Z_]*$/);
+			if (partialMarkerMatch) {
+				remainingText = remainingText.slice(0, partialMarkerMatch.index).trim();
+			}
+
 			if (remainingText) {
 				sections.push({ type: 'text', content: remainingText });
 			}
@@ -170,13 +234,26 @@
 			<div class="agentic-text">
 				<MarkdownContent content={section.content} />
 			</div>
+		{:else if section.type === 'tool_call_streaming'}
+			<!-- Early streaming state - show minimal UI while markers are being received -->
+			<div class="my-4">
+				<Card class="gap-0 border-muted bg-muted/30 py-0">
+					<div class="flex items-center gap-2 p-3 text-muted-foreground">
+						<Loader2 class="h-4 w-4 animate-spin" />
+						{#if section.toolName}
+							<span class="font-mono text-sm font-medium">{section.toolName}</span>
+						{/if}
+						<span class="text-xs italic">preparing...</span>
+					</div>
+				</Card>
+			</div>
 		{:else if section.type === 'tool_call' || section.type === 'tool_call_pending'}
 			{@const isPending = section.type === 'tool_call_pending'}
-			<Collapsible.Root open={isExpanded(index)} class="my-4">
+			<Collapsible.Root open={isExpanded(index, isPending)} class="my-2">
 				<Card class="gap-0 border-muted bg-muted/30 py-0">
 					<Collapsible.Trigger
 						class="flex w-full cursor-pointer items-center justify-between p-3"
-						onclick={() => toggleExpanded(index)}
+						onclick={() => toggleExpanded(index, isPending)}
 					>
 						<div class="flex items-center gap-2 text-muted-foreground">
 							{#if isPending}
