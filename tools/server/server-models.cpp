@@ -140,8 +140,8 @@ server_models::server_models(
         char ** envp)
             : ctx_preset(LLAMA_EXAMPLE_SERVER),
               base_params(params),
-              base_preset(ctx_preset.load_from_args(argc, argv)),
-              base_env(get_environment(envp)) {
+              base_env(get_environment(envp)),
+              base_preset(ctx_preset.load_from_args(argc, argv)) {
     // clean up base preset
     unset_reserved_args(base_preset, true);
     // set binary path
