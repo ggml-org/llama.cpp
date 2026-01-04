@@ -268,7 +268,6 @@ cmake .. -G Ninja \
   -DBUILD_SHARED_LIBS=OFF \
   -DGGML_OPENCL=ON
 ninja
-
 ```
 
 ## Known Issues
