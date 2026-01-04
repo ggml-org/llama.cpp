@@ -146,13 +146,11 @@ inline void extract_q8_0_scales(
 // Q8_0 XMX GEMM for a single expert's token batch
 // Computes: output[batch, out_dim] = q_tokens[batch, in_dim] @ weights[out_dim, in_dim]^T
 //
-// SKELETON STATUS: This kernel compiles but produces INCORRECT output.
-// The following must be implemented before production use:
-//   1. Proper joint_matrix_load for mat_a from pre-quantized q_tokens
-//   2. Scale application during output: out = (int32_acc * token_scale * weight_scale)
-//   3. Conversion from scaled float to fp16 for storage
+// Q8_0 block format (34 bytes per 32 elements):
+//   - d: 2 bytes fp16 scale (at offset 0)
+//   - qs[32]: 32 int8 values (at offset 2)
 //
-// Note: Token quantization is now done externally via preprocess_tokens_q8()
+// Note: Token quantization is done externally via preprocess_tokens_q8()
 //
 template<int TILES_M = 4, int TILES_N = 4>
 void launch_xmx_moe_gemm_q8_0(
@@ -171,6 +169,8 @@ void launch_xmx_moe_gemm_q8_0(
     constexpr int XMX_N = 16;
     constexpr int XMX_K = 32;
     constexpr int SG_SIZE = 16;
+    constexpr int Q8_0_BLOCK_SIZE = 34;  // 2 bytes fp16 scale + 32 int8 values
+    constexpr int Q8_0_SCALE_SIZE = 2;   // fp16 scale at start of block
 
     // Work-group grid
     int wg_out_rows = TILES_M * XMX_M;  // 32 output rows per WG
@@ -183,9 +183,18 @@ void launch_xmx_moe_gemm_q8_0(
     sycl::range<2> local{static_cast<size_t>(cfg.wg_size), 1};
 
     queue.submit([&](sycl::handler& cgh) {
-        // SLM for weight tiles (double-buffered)
+        // SLM for unpacked weight tiles
+        // One K-block of weights for TILES_N output columns: TILES_N * XMX_N * XMX_K int8 values
+        // = 4 * 16 * 32 = 2048 bytes
+        constexpr int slm_weights_size = TILES_N * XMX_N * XMX_K;
         sycl::local_accessor<int8_t, 1> slm_weights(
-            sycl::range<1>(cfg.slm_weight_bytes), cgh);
+            sycl::range<1>(slm_weights_size), cgh);
+
+        // Separate SLM for accumulator extraction (avoids corrupting weight data)
+        // Size: XMX_M * XMX_N int32 values = 8 * 16 * 4 = 512 bytes
+        constexpr int slm_acc_size = XMX_M * XMX_N * sizeof(int32_t);
+        sycl::local_accessor<int8_t, 1> slm_acc(
+            sycl::range<1>(slm_acc_size), cgh);
 
         // SLM for token tiles (TILES_M * XMX_M * XMX_K int8 = 1024 bytes)
         sycl::local_accessor<int8_t, 1> slm_tokens(
@@ -195,14 +204,9 @@ void launch_xmx_moe_gemm_q8_0(
         // Token scales: one per row (TILES_M * XMX_M = 32 rows)
         sycl::local_accessor<float, 1> slm_token_scales(
             sycl::range<1>(TILES_M * XMX_M), cgh);
+        // Weight scales: one per output column (TILES_N * XMX_N = 64 columns)
         sycl::local_accessor<float, 1> slm_weight_scales(
-            sycl::range<1>(TILES_N), cgh);
-
-        // Verify SLM allocation is sufficient for accumulator storage
-        constexpr int bytes_per_int32 = sizeof(int32_t) / sizeof(int8_t);  // 4
-        constexpr int required_acc_slm = TILES_M * TILES_N * XMX_M * XMX_N * bytes_per_int32;
-        static_assert(16 * 1024 >= required_acc_slm,
-                      "slm_weight_bytes insufficient for accumulator storage");
+            sycl::range<1>(TILES_N * XMX_N), cgh);
 
         cgh.parallel_for(
             sycl::nd_range<2>(global, local),
@@ -231,27 +235,27 @@ void launch_xmx_moe_gemm_q8_0(
 
                 // K-dimension reduction loop
                 // Each iteration processes XMX_K=32 elements along the reduction dimension
-                const int8_t* w_ptr = static_cast<const int8_t*>(weights_qs);
+                // For Q8_0: 32 elements = 1 block = 34 bytes (2 byte scale + 32 int8)
+                const uint8_t* w_ptr = static_cast<const uint8_t*>(weights_qs);
+                const int64_t num_k_blocks = in_dim / XMX_K;
+                int lane = sg.get_local_linear_id();
+                int num_sgs = cfg.wg_size / SG_SIZE;
 
-                for (int64_t k = 0; k < in_dim; k += XMX_K) {
-                    // Declare joint matrices for this K-tile
-                    joint_matrix<sycl::sub_group, int8_t, use::a,
-                                 XMX_M, XMX_K, layout::row_major> mat_a;
-                    joint_matrix<sycl::sub_group, int8_t, use::b,
-                                 XMX_K, XMX_N, layout::row_major> mat_b;
+                for (int64_t k_block = 0; k_block < num_k_blocks; k_block++) {
+                    int64_t k = k_block * XMX_K;
 
                     // === Cooperative token loading to SLM ===
-                    // Each sub-group loads part of the token tile
-                    int lane = sg.get_local_linear_id();
-                    int items_per_sg = (TILES_M * XMX_M * XMX_K) / (cfg.wg_size / SG_SIZE);
+                    // Load pre-quantized int8 tokens
+                    constexpr int slm_tokens_size = TILES_M * XMX_M * XMX_K;
+                    int items_per_sg = slm_tokens_size / num_sgs;
                     int sg_offset = sg_id * items_per_sg;
                     for (int i = 0; i < items_per_sg; i += SG_SIZE) {
                         int idx = sg_offset + i + lane;
-                        if (idx < TILES_M * XMX_M * XMX_K) {
+                        if (idx < slm_tokens_size) {
                             int tile_row = idx / XMX_K;
                             int tile_k = idx % XMX_K;
                             int global_row = wg_row + tile_row;
-                            int global_k = k + tile_k;
+                            int64_t global_k = k + tile_k;
                             if (global_row < batch && global_k < in_dim) {
                                 slm_tokens[idx] = q_tokens[global_row * in_dim + global_k];
                             } else {
@@ -260,41 +264,82 @@ void launch_xmx_moe_gemm_q8_0(
                         }
                     }
 
-                    // Load token scales for this K-block - one per row (32 total)
-                    // We have cfg.wg_size/SG_SIZE sub-groups = 16 sub-groups
-                    // Need to load TILES_M * XMX_M = 32 scales
-                    // Use first 2 sub-groups, each lane loads one scale
+                    // === Load token scales for this K-block ===
                     if (sg_id < (TILES_M * XMX_M + SG_SIZE - 1) / SG_SIZE) {
                         int row_idx = sg_id * SG_SIZE + lane;
                         if (row_idx < TILES_M * XMX_M) {
                             int global_row = wg_row + row_idx;
-                            int64_t k_block_idx = k / XMX_K;
                             if (global_row < batch) {
                                 slm_token_scales[row_idx] = static_cast<float>(
-                                    token_scales[global_row * (in_dim / XMX_K) + k_block_idx]);
+                                    token_scales[global_row * num_k_blocks + k_block]);
                             } else {
                                 slm_token_scales[row_idx] = 0.0f;
                             }
                         }
                     }
 
-                    // Load weight scales for this K-block
-                    if (sg_id < TILES_N && lane == 0) {
-                        int global_col = wg_col + sg_id * XMX_N;
-                        int64_t k_block_idx = k / XMX_K;
-                        if (global_col < out_dim) {
-                            slm_weight_scales[sg_id] = static_cast<float>(
-                                weights_d[(global_col * (in_dim / XMX_K)) + k_block_idx]);
-                        } else {
-                            slm_weight_scales[sg_id] = 0.0f;
+                    // === Q8_0 Weight Unpacking to SLM ===
+                    // Each sub-group handles part of the weight tile
+                    // Q8_0 block layout: [2 bytes fp16 scale][32 int8 values] = 34 bytes
+                    // Weight layout: [out_dim, in_dim/32] blocks, each block = 34 bytes
+                    // For TILES_N * XMX_N output columns, we need to unpack
+                    // TILES_N * XMX_N blocks (one block per column for this K-block)
+                    //
+                    // Total elements to unpack: TILES_N * XMX_N * XMX_K = 64 * 32 = 2048
+                    int weights_per_sg = slm_weights_size / num_sgs;
+                    int w_sg_offset = sg_id * weights_per_sg;
+
+                    for (int i = 0; i < weights_per_sg; i += SG_SIZE) {
+                        int idx = w_sg_offset + i + lane;
+                        if (idx < slm_weights_size) {
+                            // Decode which output column and K-element this is
+                            int out_col_local = idx / XMX_K;       // 0..63 (within TILES_N * XMX_N)
+                            int k_elem = idx % XMX_K;              // 0..31
+
+                            int global_col = wg_col + out_col_local;
+
+                            int8_t unpacked_val = 0;
+                            if (global_col < out_dim) {
+                                // Calculate Q8_0 block address for this (col, k_block)
+                                // Weight layout: row-major [out_dim, in_dim/32] Q8_0 blocks
+                                int64_t block_offset = global_col * num_k_blocks + k_block;
+                                const uint8_t* block_ptr = w_ptr + block_offset * Q8_0_BLOCK_SIZE;
+
+                                // Q8_0 unpacking: skip 2-byte scale header, read int8 directly
+                                unpacked_val = static_cast<int8_t>(block_ptr[Q8_0_SCALE_SIZE + k_elem]);
+                            }
+                            slm_weights[idx] = unpacked_val;
+                        }
+                    }
+
+                    // === Load Q8_0 scales for weight columns ===
+                    // One scale per output column (TILES_N * XMX_N = 64 scales)
+                    if (sg_id < (TILES_N * XMX_N + SG_SIZE - 1) / SG_SIZE) {
+                        int col_idx = sg_id * SG_SIZE + lane;
+                        if (col_idx < TILES_N * XMX_N) {
+                            int global_col = wg_col + col_idx;
+                            if (global_col < out_dim) {
+                                // Scale is stored at weights_d which is pre-extracted
+                                slm_weight_scales[col_idx] = static_cast<float>(
+                                    weights_d[global_col * num_k_blocks + k_block]);
+                            } else {
+                                slm_weight_scales[col_idx] = 0.0f;
+                            }
                         }
                     }
 
                     item.barrier(sycl::access::fence_space::local_space);
 
+                    // === XMX Computation ===
+                    // Declare joint matrices for this K-tile
+                    joint_matrix<sycl::sub_group, int8_t, use::a,
+                                 XMX_M, XMX_K, layout::row_major> mat_a;
+                    joint_matrix<sycl::sub_group, int8_t, use::b,
+                                 XMX_K, XMX_N, layout::row_major> mat_b;
+
                     // Compute tiles - iterate over M and N tile positions
                     for (int tm = 0; tm < TILES_M; tm++) {
-                        // Load mat_a from SLM (requires address_space_cast)
+                        // Load mat_a from SLM tokens
                         auto slm_tokens_ptr = sycl::address_space_cast<
                             sycl::access::address_space::local_space,
                             sycl::access::decorated::no>(
@@ -306,21 +351,22 @@ void launch_xmx_moe_gemm_q8_0(
                             int col = wg_col + tn * XMX_N;
 
                             if (row < batch && col < out_dim) {
-                                // Load B (weights) from global memory
-                                // weights_qs layout: [out_dim, in_dim] row-major int8
-                                auto w_offset = w_ptr + col * in_dim + k;
-                                sycl::multi_ptr<const int8_t, sycl::access::address_space::global_space> w_mptr(w_offset);
-                                joint_matrix_load(sg, mat_b, w_mptr, static_cast<size_t>(in_dim));
+                                // Load mat_b from SLM unpacked weights
+                                // Weight tile layout: [TILES_N * XMX_N, XMX_K] stored as
+                                // [out_col_local * XMX_K + k_elem]
+                                // For joint_matrix_load, we need contiguous K dimension
+                                auto slm_weights_ptr = sycl::address_space_cast<
+                                    sycl::access::address_space::local_space,
+                                    sycl::access::decorated::no>(
+                                        &slm_weights[tn * XMX_N * XMX_K]);
+                                joint_matrix_load(sg, mat_b, slm_weights_ptr, XMX_K);
 
                                 // XMX multiply-accumulate: acc += mat_a * mat_b
                                 joint_matrix_mad(sg, acc[tm][tn], mat_a, mat_b, acc[tm][tn]);
 
-                                // Store accumulator to SLM to extract values
-                                // Use reinterpret to get int32 pointer from int8 SLM
-                                // bytes_per_int32 (4) converts int8 index to int32-aligned offset
-                                constexpr int bytes_per_int32 = sizeof(int32_t) / sizeof(int8_t);
-                                int32_t* acc_slm_raw = reinterpret_cast<int32_t*>(
-                                    &slm_weights[tm * TILES_N * XMX_M * XMX_N * bytes_per_int32]);
+                                // Store accumulator to separate SLM buffer to extract values
+                                // Using dedicated slm_acc avoids corrupting weight data in slm_weights
+                                int32_t* acc_slm_raw = reinterpret_cast<int32_t*>(&slm_acc[0]);
                                 auto acc_slm_ptr = sycl::address_space_cast<
                                     sycl::access::address_space::local_space,
                                     sycl::access::decorated::no>(acc_slm_raw);
@@ -329,16 +375,18 @@ void launch_xmx_moe_gemm_q8_0(
                                 item.barrier(sycl::access::fence_space::local_space);
 
                                 // Apply scales and accumulate in float
-                                // Token scales are per-row, weight scales are per-tile
-                                // Hoist weight scale outside the loop (same for all iterations)
-                                float w_scale = slm_weight_scales[tn];
+                                // Note: slm_weight_scales[tn * XMX_N + tile_col] for per-column scales
                                 for (int i = lane; i < XMX_M * XMX_N; i += SG_SIZE) {
                                     int tile_row = i / XMX_N;
+                                    int tile_col = i % XMX_N;
                                     int global_row = row + tile_row;
-                                    float t_scale = (global_row < batch) ?
-                                        slm_token_scales[tm * XMX_M + tile_row] : 0.0f;
-                                    int32_t raw = acc_slm_raw[i];
-                                    float_acc[tm][tn][i] += raw * t_scale * w_scale;
+                                    int global_col = col + tile_col;
+                                    if (global_row < batch && global_col < out_dim) {
+                                        float t_scale = slm_token_scales[tm * XMX_M + tile_row];
+                                        float w_scale = slm_weight_scales[tn * XMX_N + tile_col];
+                                        int32_t raw = acc_slm_raw[i];
+                                        float_acc[tm][tn][i] += raw * t_scale * w_scale;
+                                    }
                                 }
 
                                 // Reset accumulator for next K-block
@@ -347,8 +395,7 @@ void launch_xmx_moe_gemm_q8_0(
                         }
                     }
 
-                    // Barrier before next K-iteration to ensure all reads complete
-                    // before SLM is overwritten with new data
+                    // Barrier before next K-iteration
                     item.barrier(sycl::access::fence_space::local_space);
                 }  // end K-loop
 
@@ -359,7 +406,6 @@ void launch_xmx_moe_gemm_q8_0(
                         int col = wg_col + tn * XMX_N;
 
                         if (row < batch && col < out_dim) {
-                            int lane = sg.get_local_linear_id();
                             for (int i = lane; i < XMX_M * XMX_N; i += SG_SIZE) {
                                 int tile_row = i / XMX_N;
                                 int tile_col = i % XMX_N;
