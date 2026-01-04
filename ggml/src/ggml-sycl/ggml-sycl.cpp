@@ -11540,15 +11540,28 @@ static bool try_xmx_sorted_moe(
     GGML_SYCL_DEBUG("\n");
 
     // Allocate buffers for pre-quantized tokens (reused across experts)
-    // Q8_0 quantization: int8 values + fp16 scales (one per 32 elements)
-    constexpr int64_t QK = 32;  // Quantization block size
+    // Q8_0 quantization: int8 values + fp16 scales (one per QK8_0 elements)
     int64_t max_batch = total_pairs;  // Upper bound on tokens per expert
     int8_t* q_tokens = sycl::malloc_device<int8_t>(max_batch * in_dim, *stream);
-    sycl::half* token_scales = sycl::malloc_device<sycl::half>(max_batch * (in_dim / QK), *stream);
+    sycl::half* token_scales = sycl::malloc_device<sycl::half>(max_batch * (in_dim / QK8_0), *stream);
+
+    if (!q_tokens || !token_scales) {
+        GGML_SYCL_DEBUG("[XMX MoE] Failed to allocate q_tokens or token_scales\n");
+        if (q_tokens) sycl::free(q_tokens, *stream);
+        if (token_scales) sycl::free(token_scales, *stream);
+        sycl::free(tokens_f16_input, *stream);
+        sycl::free(tokens_sorted, *stream);
+        sycl::free(token_map, *stream);
+        sycl::free(expert_counts, *stream);
+        sycl::free(expert_offsets, *stream);
+        sycl::free(expert_write_pos, *stream);
+        sycl::free(sorted_output, *stream);
+        return false;
+    }
 
     // Allocate buffer for Q8_0 expert scales (reused across experts)
-    // Each expert has out_dim * (in_dim/QK) scales
-    int64_t num_k_blocks = in_dim / QK;
+    // Each expert has out_dim * (in_dim/QK8_0) scales
+    int64_t num_k_blocks = in_dim / QK8_0;
     sycl::half* expert_scale_buf = nullptr;
     if (src0->type == GGML_TYPE_Q8_0) {
         expert_scale_buf = sycl::malloc_device<sycl::half>(
