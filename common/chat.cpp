@@ -670,10 +670,10 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_APRIEL_1_5: return "Apriel 1.5";
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO: return "Xiaomi MiMo";
         case COMMON_CHAT_FORMAT_SOLAR_OPEN: return "Solar Open";
+        case COMMON_CHAT_FORMAT_DEEPSEEK_V3_2: return "DeepSeek V3.2";
         case COMMON_CHAT_FORMAT_PEG_SIMPLE: return "peg-simple";
         case COMMON_CHAT_FORMAT_PEG_NATIVE: return "peg-native";
         case COMMON_CHAT_FORMAT_PEG_CONSTRUCTED: return "peg-constructed";
-        case COMMON_CHAT_FORMAT_DEEPSEEK_V3_2: return "DeepSeek V3.2";
         default:
             throw std::runtime_error("Unknown chat format");
     }
