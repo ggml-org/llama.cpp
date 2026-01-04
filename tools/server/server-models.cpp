@@ -165,13 +165,45 @@ void server_models::load_models() {
     }
     // 3. custom-path models from presets
     common_preset global = {};
+    common_presets groups = {};
     common_presets custom_presets = {};
     if (!base_params.models_preset.empty()) {
-        custom_presets = ctx_preset.load_from_ini(base_params.models_preset, global);
+        custom_presets = ctx_preset.load_from_ini(base_params.models_preset, global, groups);
         SRV_INF("Loaded %zu custom model presets from %s\n", custom_presets.size(), base_params.models_preset.c_str());
+        if (!groups.empty()) {
+            SRV_INF("Loaded %zu group presets from %s\n", groups.size(), base_params.models_preset.c_str());
+        }
     }
 
-    // cascade, apply global preset first
+    // apply group settings to models before applying global
+    // this ensures the cascade order is: global -> group -> model-specific
+    auto apply_group_before_cascade = [&groups](common_presets & presets) {
+        for (auto & [name, preset] : presets) {
+            if (!preset.group.empty()) {
+                // check if the group exists
+                auto it = groups.find(preset.group);
+                if (it != groups.end()) {
+                    // create a temporary preset starting with the group
+                    common_preset with_group = it->second;
+                    with_group.name = preset.name;
+                    with_group.group = preset.group; // preserve the group assignment
+                    // merge the model's preset on top (model-specific overrides group)
+                    with_group.merge(preset);
+                    preset = with_group;
+                    SRV_DBG("Applied group '%s' to model '%s'\n", preset.group.c_str(), name.c_str());
+                } else {
+                    SRV_WRN("Group '%s' assigned to model '%s' not found\n", preset.group.c_str(), name.c_str());
+                }
+            }
+        }
+    };
+    
+    // apply groups before cascading global
+    apply_group_before_cascade(cached_models);
+    apply_group_before_cascade(local_models);
+    apply_group_before_cascade(custom_presets);
+
+    // cascade, apply global preset on top of everything
     cached_models  = ctx_preset.cascade(global, cached_models);
     local_models   = ctx_preset.cascade(global, local_models);
     custom_presets = ctx_preset.cascade(global, custom_presets);

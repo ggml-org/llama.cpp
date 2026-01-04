@@ -17,6 +17,7 @@ struct common_preset_context;
 
 struct common_preset {
     std::string name;
+    std::string group; // optional group name for cascading
 
     // options are stored as common_arg to string mapping, representing CLI arg and its value
     std::map<common_arg, std::string> options;
@@ -53,7 +54,8 @@ struct common_preset_context {
     common_preset_context(llama_example ex);
 
     // load presets from INI file
-    common_presets load_from_ini(const std::string & path, common_preset & global) const;
+    // groups: output parameter for group presets (sections starting with "group-")
+    common_presets load_from_ini(const std::string & path, common_preset & global, common_presets & groups) const;
 
     // generate presets from cached models
     common_presets load_from_cache() const;

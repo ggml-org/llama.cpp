@@ -236,7 +236,7 @@ common_preset_context::common_preset_context(llama_example ex)
     key_to_opt = get_map_key_opt(ctx_params);
 }
 
-common_presets common_preset_context::load_from_ini(const std::string & path, common_preset & global) const {
+common_presets common_preset_context::load_from_ini(const std::string & path, common_preset & global, common_presets & groups) const {
     common_presets out;
     auto ini_data = parse_ini_from_file(path);
 
@@ -250,6 +250,14 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
         LOG_DBG("loading preset: %s\n", preset.name.c_str());
         for (const auto & [key, value] : section.second) {
             LOG_DBG("option: %s = %s\n", key.c_str(), value.c_str());
+            
+            // special handling for "group" option
+            if (key == "group") {
+                preset.group = value;
+                LOG_DBG("preset '%s' assigned to group '%s'\n", preset.name.c_str(), value.c_str());
+                continue;
+            }
+            
             if (key_to_opt.find(key) != key_to_opt.end()) {
                 const auto & opt = key_to_opt.at(key);
                 if (is_bool_arg(opt)) {
@@ -266,6 +274,9 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
         if (preset.name == "*") {
             // handle global preset
             global = preset;
+        } else if (preset.name.find("group-") == 0) {
+            // handle group preset (sections starting with "group-")
+            groups[preset.name] = preset;
         } else {
             out[preset.name] = preset;
         }

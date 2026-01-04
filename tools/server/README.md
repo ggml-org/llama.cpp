@@ -1453,9 +1453,23 @@ version = 1
 c = 8192
 n-gpu-layer = 8
 
+; (Optional) Define groups to share parameters across multiple models.
+; Group sections must start with "group-" prefix.
+[group-mistral-small]
+c = 4096
+n-gpu-layers = 32
+chat-template = chatml
+
+[group-large-models]
+c = 16384
+n-gpu-layers = 48
+cache-ram = 0
+
 ; If the key corresponds to an existing model on the server,
 ; this will be used as the default config for that model
 [ggml-org/MY-MODEL-GGUF:Q8_0]
+; assign this model to a group (optional)
+group = group-mistral-small
 ; string value
 chat-template = chatml
 ; numeric value
@@ -1471,11 +1485,22 @@ model-draft = ./my-models/draft.gguf
 ; but it's RECOMMENDED to use absolute path
 model-draft = /Users/abc/my-models/draft.gguf
 
+; Another model using the same group
+[ggml-org/ANOTHER-MODEL:Q4_K_M]
+group = group-mistral-small
+; only override what's different from the group
+n-gpu-layers = 16
+
 ; If the key does NOT correspond to an existing model,
 ; you need to specify at least the model path or HF repo
 [custom_model]
 model = /Users/abc/my-awesome-model-Q4_K_M.gguf
 ```
+
+The settings cascade in the following order (later values override earlier ones):
+1. Global settings from `[*]` section
+2. Group settings from `[group-*]` section (if assigned via `group = group-name`)
+3. Model-specific settings
 
 Note: some arguments are controlled by router (e.g., host, port, API key, HF repo, model alias). They will be removed or overwritten upon loading.
 
