@@ -329,9 +329,10 @@ inline dpct::err0 ggml_sycl_set_device(const int device) try {
 
 //////////////////////
 enum class reorder_mode : uint8_t {
-    NONE      = 0,  // Original AoS layout (Array of Structures)
-    SOA       = 1,  // SoA layout: all qs bytes contiguous, then all d values
-    COALESCED = 2,  // Tile-based layout for better cache line utilization (requires SOA first)
+    NONE         = 0,  // Original AoS layout (Array of Structures)
+    SOA          = 1,  // SoA layout: all qs bytes contiguous, then all d values
+    COALESCED    = 2,  // Tile-based layout for MMVQ (word-major interleaved, requires SOA first)
+    XMX_COALESCED = 3,  // XMX-optimized layout for MoE GEMM (K_TILE=32 aligned rows)
 };
 
 // Global reorder mode setting (set from GGML_SYCL_REORDER_MODE env var)
@@ -425,12 +426,14 @@ struct optimize_feature {
             valid = true;  // NONE → SOA
         } else if (reorder_ == reorder_mode::SOA && new_mode == reorder_mode::COALESCED) {
             valid = true;  // SOA → COALESCED
+        } else if (reorder_ == reorder_mode::NONE && new_mode == reorder_mode::XMX_COALESCED) {
+            valid = true;  // NONE → XMX_COALESCED (direct conversion for MoE expert weights)
         }
 
         if (!valid) {
             fprintf(stderr,
                     "[SYCL WARNING] Invalid reorder transition %d → %d for tensor '%s'. "
-                    "Valid: NONE→SOA, SOA→COALESCED\n",
+                    "Valid: NONE→SOA, SOA→COALESCED, NONE→XMX_COALESCED\n",
                     (int) reorder_, (int) new_mode, tensor_name ? tensor_name : "?");
         }
 
@@ -462,6 +465,13 @@ struct optimize_feature {
         GGML_UNUSED(tensor_name);
     }
 
+    // Mark as XMX Coalesced when MoE expert weights have been converted to XMX-optimized layout
+    // ONLY call this when the data has been transformed to XMX coalesced format!
+    void mark_xmx_coalesced_pretransformed(const char * tensor_name) {
+        reorder_ = reorder_mode::XMX_COALESCED;
+        GGML_UNUSED(tensor_name);
+    }
+
     // Set the data owner for view tensors. Call this when creating a view.
     void set_data_owner(optimize_feature * owner) { data_owner_ = owner; }
 
@@ -471,6 +481,8 @@ struct optimize_feature {
     bool is_soa() const { return get_reorder() == reorder_mode::SOA; }
 
     bool is_coalesced() const { return get_reorder() == reorder_mode::COALESCED; }
+
+    bool is_xmx_coalesced() const { return get_reorder() == reorder_mode::XMX_COALESCED; }
 
     // Check if ANY reorder was applied - use for "skip if already reordered" logic
     bool is_reordered() const { return get_reorder() != reorder_mode::NONE; }

@@ -11600,48 +11600,38 @@ static bool try_xmx_sorted_moe(
     }
 
     // For SoA format, compute d_offset (byte offset from qs to scales)
-    // SoA layout per expert: [all qs: nblocks * 32 bytes][all d: nblocks * 2 bytes]
-    // nblocks = out_dim * (in_dim / 32)
+    // SoA layout is FLAT across all experts:
+    //   [all qs for all experts][all scales for all experts]
+    // nblocks_per_expert = out_dim * (in_dim / 32)
+    // total_nblocks = nblocks_per_expert * n_experts
     const int64_t nblocks_per_expert = out_dim * num_k_blocks;
-    const int64_t soa_d_offset = nblocks_per_expert * QK8_0;  // Byte offset to scales
+    const int64_t total_nblocks = nblocks_per_expert * n_experts;
+
+    // For Q8_0: qs = 32 bytes/block, d = 2 bytes/block
+    const int64_t soa_d_offset = nblocks_per_expert * QK8_0;  // Per-expert offset (for non-flat SoA)
+    const int64_t soa_total_qs_q8 = total_nblocks * QK8_0;    // Total qs region for flat SoA
+
+    // For MXFP4: qs = 16 bytes/block, e = 1 byte/block
+    constexpr int64_t MXFP4_QS_BYTES_PER_BLOCK = 16;  // QK_MXFP4 / 2
+    const int64_t soa_total_qs_mxfp4 = total_nblocks * MXFP4_QS_BYTES_PER_BLOCK;  // Total qs region for flat SoA
+    const int64_t mxfp4_qs_per_expert = nblocks_per_expert * MXFP4_QS_BYTES_PER_BLOCK;
 
     const char* layout_name = is_coalesced ? "Coalesced" : (is_soa ? "SoA" : "AoS");
     const char* quant_name = (src0->type == GGML_TYPE_Q8_0) ? "Q8_0" : "MXFP4";
     GGML_SYCL_DEBUG("[XMX MoE] Using %s format for %s weights\n", layout_name, quant_name);
 
-    // Check if we need to look up cached experts (for mmap'd/host buffer weights)
-    // When is_soa is true, the data is in the unified cache in SoA format
-    const bool use_expert_cache = is_soa || is_coalesced;
-    int layer_id = -1;
-    if (use_expert_cache) {
-        // Extract layer number for cache lookup (same logic as MMVQ path)
-        layer_id = ggml_sycl_tp_extract_layer_number(src0->name);
-        if (layer_id < 0) {
-            layer_id = static_cast<int>(reinterpret_cast<uintptr_t>(src0->data) & 0x7FFFFFFF);
-        }
-    }
+    // When is_soa or is_coalesced is true (from tensor metadata), src0->data
+    // already points to device memory with the correct layout - no cache needed.
+    // This matches how fused ESIMD uses src0->data directly.
 
     for (int64_t e = 0; e < n_experts; e++) {
         if (h_counts[e] == 0) continue;
 
+
         // Weight tensor: [in_dim, out_dim, n_experts]
         // Stride to expert e = e * (in_dim * out_dim) in elements
         const size_t bytes_per_expert = src0->nb[2];
-        const void* expert_mmap_ptr = static_cast<const char*>(src0->data) + e * bytes_per_expert;
-
-        // Get expert weights - from cache if SoA/coalesced, otherwise direct
-        const void* expert_weights = expert_mmap_ptr;
-        if (use_expert_cache) {
-            // Look up cached SoA/coalesced data using mmap pointer as key
-            void* cached_ptr = ggml_sycl::get_cached_expert(expert_mmap_ptr);
-            if (cached_ptr) {
-                expert_weights = cached_ptr;
-                GGML_SYCL_DEBUG("[XMX MoE] Using cached expert %ld (layer=%d)\n", (long)e, layer_id);
-            } else {
-                GGML_SYCL_DEBUG("[XMX MoE] WARNING: Cache miss for expert %ld, using original data\n", (long)e);
-                // Fall back to original pointer - kernel will likely produce garbage
-            }
-        }
+        const void* expert_weights = static_cast<const char*>(src0->data) + e * bytes_per_expert;
 
         // Pre-quantize fp16 tokens to int8 with per-block scales
         const sycl::half* expert_tokens = tokens_sorted + h_offsets[e] * in_dim;
@@ -11651,10 +11641,12 @@ static bool try_xmx_sorted_moe(
 
         // Dispatch to appropriate kernel based on quantization type and layout
         if (src0->type == GGML_TYPE_Q8_0) {
+            // Q8_0: qs = 32 bytes/block, d = 2 bytes/block (half)
+            const int64_t q8_qs_per_expert = nblocks_per_expert * QK8_0;
+
             if (is_coalesced) {
                 // Coalesced format: weights are tile-major reordered with separate qs and d arrays
-                // qs pointer: expert_weights (start of expert data)
-                // d pointer: expert_weights + soa_d_offset (scales after all quant data)
+                // Per-expert layout, use AoS-style stride
                 const int8_t* coalesced_qs = static_cast<const int8_t*>(expert_weights);
                 const sycl::half* coalesced_d = reinterpret_cast<const sycl::half*>(
                     static_cast<const char*>(expert_weights) + soa_d_offset);
@@ -11665,12 +11657,15 @@ static bool try_xmx_sorted_moe(
                     sorted_output + h_offsets[e] * out_dim,
                     h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
             } else if (is_soa) {
-                // SoA format: weights are already separated into qs and d arrays
-                // qs pointer: expert_weights (start of expert data)
-                // d pointer: expert_weights + soa_d_offset
-                const int8_t* soa_qs = static_cast<const int8_t*>(expert_weights);
-                const sycl::half* soa_d = reinterpret_cast<const sycl::half*>(
-                    static_cast<const char*>(expert_weights) + soa_d_offset);
+                // FLAT SoA format: [all qs for all experts][all d for all experts]
+                // Expert e's data is at offset e * nblocks_per_expert within each region
+                const int8_t* base_qs = static_cast<const int8_t*>(src0->data);
+                const sycl::half* base_d = reinterpret_cast<const sycl::half*>(
+                    static_cast<const char*>(src0->data) + soa_total_qs_q8);
+
+                // Calculate pointers for expert e
+                const int8_t* soa_qs = base_qs + e * q8_qs_per_expert;
+                const sycl::half* soa_d = base_d + e * nblocks_per_expert;
 
                 moe_xmx::launch_xmx_moe_gemm_q8_0_soa<4, 4>(
                     soa_qs, soa_d,
@@ -11691,14 +11686,11 @@ static bool try_xmx_sorted_moe(
             }
         } else if (src0->type == GGML_TYPE_MXFP4) {
             // MXFP4 layout: 32 4-bit values packed in 16 bytes + 1 byte E8M0 exponent = 17 bytes per block
-            // SoA/Coalesced: qs at offset 0, e (exponents) at offset nblocks * 16
-            constexpr int MXFP4_QS_BYTES_PER_BLOCK = 16;  // QK_MXFP4 / 2
-            const int64_t mxfp4_e_offset = nblocks_per_expert * MXFP4_QS_BYTES_PER_BLOCK;
-
             if (is_coalesced) {
                 // Coalesced format: tile-major reordered with separate qs and e arrays
+                // Per-expert layout, use AoS-style stride
                 const uint8_t* coalesced_qs = static_cast<const uint8_t*>(expert_weights);
-                const uint8_t* coalesced_e = coalesced_qs + mxfp4_e_offset;
+                const uint8_t* coalesced_e = coalesced_qs + mxfp4_qs_per_expert;
 
                 moe_xmx::launch_xmx_moe_gemm_mxfp4_coalesced<4, 4>(
                     coalesced_qs, coalesced_e,
@@ -11706,9 +11698,22 @@ static bool try_xmx_sorted_moe(
                     sorted_output + h_offsets[e] * out_dim,
                     h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
             } else if (is_soa) {
-                // SoA format: qs and e arrays are separate and contiguous
-                const uint8_t* soa_qs = static_cast<const uint8_t*>(expert_weights);
-                const uint8_t* soa_e = soa_qs + mxfp4_e_offset;
+                // FLAT SoA format: [all qs for all experts][all e for all experts]
+                // Expert e's data is at offset e * nblocks_per_expert within each region
+                const uint8_t* base_qs = static_cast<const uint8_t*>(src0->data);
+                const uint8_t* base_e = base_qs + soa_total_qs_mxfp4;
+
+                // Calculate pointers for expert e
+                const uint8_t* soa_qs = base_qs + e * mxfp4_qs_per_expert;
+                const uint8_t* soa_e = base_e + e * nblocks_per_expert;
+
+                if (e == 0 && g_ggml_sycl_debug) {
+                    fprintf(stderr, "[XMX MoE MXFP4 SoA] base=%p total_qs=%ld e_offset=%ld "
+                            "soa_qs=%p soa_e=%p batch=%ld\n",
+                            (void*)base_qs, (long)soa_total_qs_mxfp4,
+                            (long)(base_e - base_qs),
+                            (void*)soa_qs, (void*)soa_e, (long)h_counts[e]);
+                }
 
                 moe_xmx::launch_xmx_moe_gemm_mxfp4_soa<4, 4>(
                     soa_qs, soa_e,
@@ -11770,15 +11775,23 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
     const ggml_tensor *ids = dst->src[2];
     GGML_TENSOR_BINARY_OP_LOCALS
 
-    // Try fused MoE ESIMD kernel first for batched prefill (ne12 > 1)
+    // Try XMX sorted MoE path first when explicitly enabled (experimental)
+    // This gives priority to the XMX kernel for testing/benchmarking
+    static bool xmx_moe_enabled = (getenv("GGML_SYCL_XMX_MOE") != nullptr);
+    if (xmx_moe_enabled && try_xmx_sorted_moe(ctx, src0, src1, ids, dst)) {
+        GGML_SYCL_DEBUG("[MoE] XMX sorted dispatch successful for type %d\n", src0->type);
+        return;
+    }
+
+    // Try fused MoE ESIMD kernel for batched prefill (ne12 > 1)
     // This is much faster than per-expert dispatch for prompt processing
     if (ggml_sycl_mul_mat_id_fused(ctx, src0, src1, ids, dst)) {
         GGML_SYCL_DEBUG("[MoE] Fused ESIMD dispatch successful for type %d\n", src0->type);
         return;
     }
 
-    // Try XMX sorted MoE path (experimental, Q8_0/MXFP4, requires GGML_SYCL_XMX_MOE=1)
-    if (try_xmx_sorted_moe(ctx, src0, src1, ids, dst)) {
+    // Try XMX sorted MoE path as fallback (experimental, Q8_0/MXFP4)
+    if (!xmx_moe_enabled && try_xmx_sorted_moe(ctx, src0, src1, ids, dst)) {
         GGML_SYCL_DEBUG("[MoE] XMX sorted dispatch successful for type %d\n", src0->type);
         return;
     }
