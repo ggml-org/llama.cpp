@@ -163,6 +163,12 @@ void launch_xmx_moe_gemm_q8_0(
         sycl::local_accessor<float, 1> slm_weight_scales(
             sycl::range<1>(TILES_N), cgh);
 
+        // Verify SLM allocation is sufficient for accumulator storage
+        constexpr int bytes_per_int32 = sizeof(int32_t) / sizeof(int8_t);  // 4
+        constexpr int required_acc_slm = TILES_M * TILES_N * XMX_M * XMX_N * bytes_per_int32;
+        static_assert(16 * 1024 >= required_acc_slm,
+                      "slm_weight_bytes insufficient for accumulator storage");
+
         cgh.parallel_for(
             sycl::nd_range<2>(global, local),
             [=](sycl::nd_item<2> item) [[intel::reqd_sub_group_size(SG_SIZE)]] {
@@ -276,8 +282,10 @@ void launch_xmx_moe_gemm_q8_0(
 
                                 // Store accumulator to SLM to extract values
                                 // Use reinterpret to get int32 pointer from int8 SLM
+                                // bytes_per_int32 (4) converts int8 index to int32-aligned offset
+                                constexpr int bytes_per_int32 = sizeof(int32_t) / sizeof(int8_t);
                                 int32_t* acc_slm_raw = reinterpret_cast<int32_t*>(
-                                    &slm_weights[tm * TILES_N * XMX_M * XMX_N * sizeof(int32_t) / sizeof(int8_t)]);
+                                    &slm_weights[tm * TILES_N * XMX_M * XMX_N * bytes_per_int32]);
                                 auto acc_slm_ptr = sycl::address_space_cast<
                                     sycl::access::address_space::local_space,
                                     sycl::access::decorated::no>(acc_slm_raw);
@@ -287,20 +295,19 @@ void launch_xmx_moe_gemm_q8_0(
 
                                 // Apply scales and accumulate in float
                                 // Token scales are per-row, weight scales are per-tile
+                                // Hoist weight scale outside the loop (same for all iterations)
+                                float w_scale = slm_weight_scales[tn];
                                 for (int i = lane; i < XMX_M * XMX_N; i += SG_SIZE) {
                                     int tile_row = i / XMX_N;
                                     int global_row = row + tile_row;
                                     float t_scale = (global_row < batch) ?
                                         slm_token_scales[tm * XMX_M + tile_row] : 0.0f;
-                                    float w_scale = slm_weight_scales[tn];
                                     int32_t raw = acc_slm_raw[i];
                                     float_acc[tm][tn][i] += raw * t_scale * w_scale;
                                 }
 
                                 // Reset accumulator for next K-block
                                 joint_matrix_fill(sg, acc[tm][tn], 0);
-
-                                item.barrier(sycl::access::fence_space::local_space);
                             }
                         }
                     }
