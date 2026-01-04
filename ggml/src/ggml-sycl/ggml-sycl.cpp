@@ -11432,6 +11432,15 @@ static bool try_xmx_sorted_moe(
         return false;
     }
 
+    // Check weight memory layout - we support AoS, SoA, and Coalesced for Q8_0 and MXFP4
+    ggml_tensor_extra_gpu* src0_extra = (ggml_tensor_extra_gpu*)src0->extra;
+    const bool is_soa = src0_extra && src0_extra->optimized_feature.is_soa();
+    const bool is_coalesced = src0_extra && src0_extra->optimized_feature.is_coalesced();
+    const bool is_aos = !is_soa && !is_coalesced;  // Default AoS when no reordering
+
+    GGML_SYCL_DEBUG("[XMX MoE] Weight layout: %s\n",
+                   is_coalesced ? "coalesced" : (is_soa ? "soa" : "aos"));
+
     // XMX MoE uses synchronous memcpy for expert counts - incompatible with command graphs
     if (!g_ggml_sycl_disable_graph) {
         GGML_SYCL_DEBUG("[XMX MoE] Requires GGML_SYCL_DISABLE_GRAPH=1, skipping\n");
@@ -11561,9 +11570,10 @@ static bool try_xmx_sorted_moe(
 
     // Allocate buffer for Q8_0 expert scales (reused across experts)
     // Each expert has out_dim * (in_dim/QK8_0) scales
+    // Not needed for SoA format - scales are already separate in memory
     int64_t num_k_blocks = in_dim / QK8_0;
     sycl::half* expert_scale_buf = nullptr;
-    if (src0->type == GGML_TYPE_Q8_0) {
+    if (src0->type == GGML_TYPE_Q8_0 && !is_soa) {
         expert_scale_buf = sycl::malloc_device<sycl::half>(
             out_dim * num_k_blocks, *stream);
         if (!expert_scale_buf) {
@@ -11581,6 +11591,16 @@ static bool try_xmx_sorted_moe(
         }
     }
 
+    // For SoA format, compute d_offset (byte offset from qs to scales)
+    // SoA layout per expert: [all qs: nblocks * 32 bytes][all d: nblocks * 2 bytes]
+    // nblocks = out_dim * (in_dim / 32)
+    const int64_t nblocks_per_expert = out_dim * num_k_blocks;
+    const int64_t soa_d_offset = nblocks_per_expert * QK8_0;  // Byte offset to scales
+
+    const char* layout_name = is_coalesced ? "Coalesced" : (is_soa ? "SoA" : "AoS");
+    const char* quant_name = (src0->type == GGML_TYPE_Q8_0) ? "Q8_0" : "MXFP4";
+    GGML_SYCL_DEBUG("[XMX MoE] Using %s format for %s weights\n", layout_name, quant_name);
+
     for (int64_t e = 0; e < n_experts; e++) {
         if (h_counts[e] == 0) continue;
 
@@ -11589,37 +11609,86 @@ static bool try_xmx_sorted_moe(
         const size_t bytes_per_expert = src0->nb[2];
         const void* expert_weights = static_cast<const char*>(src0->data) + e * bytes_per_expert;
 
-        // Dispatch to appropriate kernel based on quantization type
+        // Pre-quantize fp16 tokens to int8 with per-block scales
+        const sycl::half* expert_tokens = tokens_sorted + h_offsets[e] * in_dim;
+        moe_xmx::preprocess_tokens_q8(
+            expert_tokens, q_tokens, token_scales,
+            h_counts[e], in_dim, *stream);
+
+        // Dispatch to appropriate kernel based on quantization type and layout
         if (src0->type == GGML_TYPE_Q8_0) {
-            // Extract Q8_0 scales for this expert's weights
-            moe_xmx::extract_q8_0_scales(
-                expert_weights, expert_scale_buf,
-                out_dim, in_dim, *stream);
+            if (is_coalesced) {
+                // Coalesced format: weights are tile-major reordered with separate qs and d arrays
+                // qs pointer: expert_weights (start of expert data)
+                // d pointer: expert_weights + soa_d_offset (scales after all quant data)
+                const int8_t* coalesced_qs = static_cast<const int8_t*>(expert_weights);
+                const sycl::half* coalesced_d = reinterpret_cast<const sycl::half*>(
+                    static_cast<const char*>(expert_weights) + soa_d_offset);
 
-            // Pre-quantize fp16 tokens to int8 with per-block scales
-            const sycl::half* expert_tokens = tokens_sorted + h_offsets[e] * in_dim;
-            moe_xmx::preprocess_tokens_q8(
-                expert_tokens, q_tokens, token_scales,
-                h_counts[e], in_dim, *stream);
+                moe_xmx::launch_xmx_moe_gemm_q8_0_coalesced<4, 4>(
+                    coalesced_qs, coalesced_d,
+                    q_tokens, token_scales,
+                    sorted_output + h_offsets[e] * out_dim,
+                    h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
+            } else if (is_soa) {
+                // SoA format: weights are already separated into qs and d arrays
+                // qs pointer: expert_weights (start of expert data)
+                // d pointer: expert_weights + soa_d_offset
+                const int8_t* soa_qs = static_cast<const int8_t*>(expert_weights);
+                const sycl::half* soa_d = reinterpret_cast<const sycl::half*>(
+                    static_cast<const char*>(expert_weights) + soa_d_offset);
 
-            moe_xmx::launch_xmx_moe_gemm_q8_0<4, 4>(
-                expert_weights, expert_scale_buf,
-                q_tokens, token_scales,
-                sorted_output + h_offsets[e] * out_dim,
-                h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
+                moe_xmx::launch_xmx_moe_gemm_q8_0_soa<4, 4>(
+                    soa_qs, soa_d,
+                    q_tokens, token_scales,
+                    sorted_output + h_offsets[e] * out_dim,
+                    h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
+            } else {
+                // AoS format: extract scales from interleaved Q8_0 blocks
+                moe_xmx::extract_q8_0_scales(
+                    expert_weights, expert_scale_buf,
+                    out_dim, in_dim, *stream);
+
+                moe_xmx::launch_xmx_moe_gemm_q8_0<4, 4>(
+                    expert_weights, expert_scale_buf,
+                    q_tokens, token_scales,
+                    sorted_output + h_offsets[e] * out_dim,
+                    h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
+            }
         } else if (src0->type == GGML_TYPE_MXFP4) {
             // MXFP4 layout: 32 4-bit values packed in 16 bytes + 1 byte E8M0 exponent = 17 bytes per block
-            // Pre-quantize fp16 tokens to int8 with per-block scales (same as Q8_0)
-            const sycl::half* expert_tokens = tokens_sorted + h_offsets[e] * in_dim;
-            moe_xmx::preprocess_tokens_q8(
-                expert_tokens, q_tokens, token_scales,
-                h_counts[e], in_dim, *stream);
+            // SoA/Coalesced: qs at offset 0, e (exponents) at offset nblocks * 16
+            constexpr int MXFP4_QS_BYTES_PER_BLOCK = 16;  // QK_MXFP4 / 2
+            const int64_t mxfp4_e_offset = nblocks_per_expert * MXFP4_QS_BYTES_PER_BLOCK;
 
-            moe_xmx::launch_xmx_moe_gemm_mxfp4<4, 4>(
-                expert_weights,
-                q_tokens, token_scales,
-                sorted_output + h_offsets[e] * out_dim,
-                h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
+            if (is_coalesced) {
+                // Coalesced format: tile-major reordered with separate qs and e arrays
+                const uint8_t* coalesced_qs = static_cast<const uint8_t*>(expert_weights);
+                const uint8_t* coalesced_e = coalesced_qs + mxfp4_e_offset;
+
+                moe_xmx::launch_xmx_moe_gemm_mxfp4_coalesced<4, 4>(
+                    coalesced_qs, coalesced_e,
+                    q_tokens, token_scales,
+                    sorted_output + h_offsets[e] * out_dim,
+                    h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
+            } else if (is_soa) {
+                // SoA format: qs and e arrays are separate and contiguous
+                const uint8_t* soa_qs = static_cast<const uint8_t*>(expert_weights);
+                const uint8_t* soa_e = soa_qs + mxfp4_e_offset;
+
+                moe_xmx::launch_xmx_moe_gemm_mxfp4_soa<4, 4>(
+                    soa_qs, soa_e,
+                    q_tokens, token_scales,
+                    sorted_output + h_offsets[e] * out_dim,
+                    h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
+            } else {
+                // AoS format: interleaved [e:1][qs:16] = 17 bytes per block
+                moe_xmx::launch_xmx_moe_gemm_mxfp4<4, 4>(
+                    expert_weights,
+                    q_tokens, token_scales,
+                    sorted_output + h_offsets[e] * out_dim,
+                    h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
+            }
         }
     }
 
