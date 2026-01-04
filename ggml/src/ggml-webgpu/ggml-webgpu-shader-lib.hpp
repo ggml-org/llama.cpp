@@ -10,6 +10,8 @@
 #define GGML_WEBGPU_F16_SIZE_BYTES                   2
 #define GGML_WEBGPU_FLASH_ATTN_PREFERRED_KV_SG_TILES 8u
 #define GGML_WEBGPU_FLASH_ATTN_PREFERRED_WG_SIZE     128u
+// Matches GGML_PAD(..., 256) in src/llama-context.cpp for KV cache sizing.
+#define GGML_WEBGPU_KV_SEQ_PAD                       256u
 
 struct ggml_webgpu_flash_attn_shader_lib_context {
     ggml_type kv_type;
@@ -136,6 +138,14 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
     uint32_t q_tile  = context.sg_mat_m;
     uint32_t kv_tile = std::min(ggml_webgpu_flash_attn_max_kv_tile(context),
                                 context.sg_mat_n * GGML_WEBGPU_FLASH_ATTN_PREFERRED_KV_SG_TILES);
+    if (context.kv_direct)  {
+        GGML_ASSERT(kv_tile <= GGML_WEBGPU_KV_SEQ_PAD);
+        // Avoids having to use bounds-checks and decreasing performance for direct KV loads
+        while (GGML_WEBGPU_KV_SEQ_PAD % kv_tile != 0) {
+            kv_tile -= context.sg_mat_n;
+        }
+    }
+
     defines.push_back(std::string("Q_TILE=") + std::to_string(q_tile));
     defines.push_back(std::string("KV_TILE=") + std::to_string(kv_tile));
 

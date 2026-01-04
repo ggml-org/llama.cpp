@@ -25,6 +25,9 @@ enable chromium_experimental_subgroup_matrix;
 #define KV_TILE 16
 #define WG_SIZE 64
 
+// Number of subgroup-matrix-width blocks that span the KV tile. SG_MAT_N must divide KV_TILE.
+#define KV_BLOCKS (KV_TILE / SG_MAT_N)
+
 // Quantization constants/helpers
 #define BLOCK_SIZE 32
 #define BLOCKS_K ((HEAD_DIM_QK + BLOCK_SIZE - 1) / BLOCK_SIZE)
@@ -156,10 +159,6 @@ fn calc_softmax_term(kv_idx: u32, q_tile_row: u32, slope: f16) -> f16 {
     return v;
 }
 
-// Q_TILE is assumed to match SG_MAT_M, so we process a single Q block per workgroup.
-// Number of subgroup-matrix-width blocks that span the KV tile. SG_MAT_N must divide KV_TILE.
-// TODO: if this can be used instead of valid_kv_blocks, performance increases
-const KV_BLOCKS = KV_TILE / SG_MAT_N;
 
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
@@ -298,16 +297,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
       workgroupBarrier();
 
-#ifdef KV_DIRECT
-      let tile_kv = min(params.seq_len_kv - kv_tile, KV_TILE);
-#else
-      let tile_kv: u32 = KV_TILE;
-#endif
-      let valid_kv_blocks = tile_kv / SG_MAT_N;
-
       // accumulate q block * k block into registers across the entire KV tile
       // TODO: this loop seems to be the current largest bottleneck
-      for (var kv_block = subgroup_id; kv_block < valid_kv_blocks; kv_block += num_subgroups) {
+      for (var kv_block = subgroup_id; kv_block < KV_BLOCKS; kv_block += num_subgroups) {
           var acc: subgroup_matrix_result<f16, SG_MAT_M, SG_MAT_N>;
 #ifdef KV_DIRECT
           let k_block_row = kv_tile + kv_block * SG_MAT_N;
@@ -494,7 +486,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                   HEAD_DIM_V
               );
 
-              for (var kv_block = 0u; kv_block < valid_kv_blocks; kv_block++) {
+              for (var kv_block = 0u; kv_block < KV_BLOCKS; kv_block++) {
                   let p_offset = kv_block * SG_MAT_N;
                   var p_sg_mat: subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K> = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(
                       &inter_shmem,

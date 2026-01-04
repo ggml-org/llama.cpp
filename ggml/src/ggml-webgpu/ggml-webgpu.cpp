@@ -1107,7 +1107,8 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
                         .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
                         .size    = ggml_webgpu_tensor_binding_size(ctx, dst) });
 
-    bool kv_direct = (K->type == GGML_TYPE_F16) && (Q->ne[0] % ctx->sg_mat_k == 0) && (K->ne[1] % ctx->sg_mat_n == 0);
+    bool kv_direct =
+        (K->type == GGML_TYPE_F16) && (Q->ne[0] % ctx->sg_mat_k == 0) && (K->ne[1] % GGML_WEBGPU_KV_SEQ_PAD == 0);
 
     flash_attn_pipeline_key key = {
         .q_type             = Q->type,
@@ -2668,7 +2669,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 size_t     limit_bytes = webgpu_ctx->limits.maxComputeWorkgroupStorageSize;
                 const bool has_mask    = op->src[3] != nullptr;
                 const bool kv_direct   = src1->type == GGML_TYPE_F16 && (src0->ne[0] % webgpu_ctx->sg_mat_k) == 0 &&
-                                       (src1->ne[1] % webgpu_ctx->sg_mat_n) == 0;
+                                       (src1->ne[1] % GGML_WEBGPU_KV_SEQ_PAD) == 0;
                 const size_t min_bytes = ggml_webgpu_flash_attn_wg_mem_bytes(
                     webgpu_ctx->sg_mat_m, webgpu_ctx->sg_mat_n, (uint32_t) src0->ne[0], (uint32_t) src2->ne[0],
                     has_mask, kv_direct);
