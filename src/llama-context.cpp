@@ -1442,7 +1442,9 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     if (model.arch == LLM_ARCH_QWEN3NEXT) {
         return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
     }
-    return std::max<uint32_t>(1024u, 8u*model.n_tensors());
+    uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
+    res += model.n_lora_nodes;
+    return res;
 }
 
 llm_graph_result * llama_context::get_gf_res_reserve() const {
@@ -1456,7 +1458,7 @@ ggml_cgraph * llama_context::graph_reserve(
 
     if (n_tokens % n_seqs != 0) {
         n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs; // round to next multiple of n_seqs
-        n_outputs = std::min(n_outputs, n_tokens);
+        n_outputs = std::max(n_outputs, n_tokens);
 
         LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
     }
