@@ -109,7 +109,7 @@ inline void preprocess_tokens_q8(
 }
 
 // Extract fp16 scales from Q8_0 weight blocks
-// Q8_0 block layout: [32 int8 values][2 bytes fp16 scale] = 34 bytes per block
+// Q8_0 block layout: [2 bytes fp16 scale][32 int8 values] = 34 bytes per block
 // Output: scales[out_dim * (in_dim/32)] in row-major order
 inline void extract_q8_0_scales(
     const void* weights_qs,   // [out_dim, in_dim] Q8_0 packed
