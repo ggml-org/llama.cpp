@@ -2932,18 +2932,25 @@ static void ggml_vk_load_shaders(vk_device& device) {
         m_warptile_mmqid_int_k = { 128,  64,  64, 32, mul_mat_subgroup_size_16,     32, 1, 2, 2, 1, mul_mat_subgroup_size_16 };
         s_warptile_mmqid_int_k = { mul_mat_subgroup_size_32, 32, 32, 32, 32,       32, 1, 2, 1, 1, mul_mat_subgroup_size_16 };
 
+        l_mmq_wg_denoms = l_wg_denoms = { 128, 128, 1 };
+        m_mmq_wg_denoms = m_wg_denoms = { 64, 64, 1 };
+        s_mmq_wg_denoms = s_wg_denoms = { 32, 32, 1 };
+        l_align                       = 128;
+        m_align                       = 64;
+        s_align                       = 32;
+
         // chip specific tuning
         if ((device->architecture == AMD_GCN) && (device->driver_id != vk::DriverId::eAmdProprietary)) {
             m_warptile_mmq = m_warptile_mmq_int = { 256, 64, 64, 32, 16, 16, 2, 2, 2, 1, 16 };
             m_warptile_mmqid = m_warptile_mmqid_int = { 256, 64, 64, 32, 16, 16, 2, 2, 2, 1, 16 };
         }
-
-        l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
-        m_mmq_wg_denoms = m_wg_denoms = { 64,  64, 1 };
-        s_mmq_wg_denoms = s_wg_denoms = { 32,  32, 1 };
-        l_align = 128;
-        m_align =  64;
-        s_align =  32;
+        else if (device->vendor_id == VK_VENDOR_ID_INTEL) {
+            if (device->coopmat_support && device->architecture == INTEL_XE2) {
+                // Xe2/Xe3 with coopmat enabled - warptile performance tuning
+                l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
+                l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
+            }
+        }
 
         for (uint32_t i = 0; i < GGML_TYPE_COUNT; ++i) {
             ggml_type t = (ggml_type)i;
@@ -3617,6 +3624,13 @@ static void ggml_vk_load_shaders(vk_device& device) {
         l_wg_denoms = {128, 128, 1 };
         m_wg_denoms = { 64,  64, 1 };
         s_wg_denoms = { 32,  32, 1 };
+
+        if (device->vendor_id == VK_VENDOR_ID_INTEL) {
+            if (device->architecture == INTEL_XE2) {
+                // Xe2/Xe3 - bf16 warptile performance tuning
+                l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, 4, 4, 1, subgroup_size_8 };
+            }
+        }
 
         CREATE_MM(GGML_TYPE_BF16, pipeline_matmul_bf16, matmul_bf16, , wg_denoms, warptile, vk_mat_mat_push_constants, 3, , 0);
         CREATE_MM(GGML_TYPE_BF16, pipeline_matmul_id_bf16, matmul_id_bf16, , wg_denoms, warptile, vk_mat_mat_id_push_constants, mul_mat_id_param_count, _id, 0);
@@ -4982,10 +4996,15 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #ifndef GGML_VULKAN_RUN_TESTS
             case VK_VENDOR_ID_AMD:
             case VK_VENDOR_ID_INTEL:
-                device->mul_mat_l[i] = false;
+                if (!device->coopmat_support || device->architecture != INTEL_XE2) {
+                    device->mul_mat_l[i] = false;
+                    device->mul_mat_id_l[i] = false;
+                } else {
+                    device->mul_mat_l[i] = true;  // if coopmat & XE2+, allow large matmul warptile config for Intel
+                    device->mul_mat_id_l[i] = true;
+                }
                 device->mul_mat_m[i] = true;
                 device->mul_mat_s[i] = true;
-                device->mul_mat_id_l[i] = false;
                 device->mul_mat_id_m[i] = true;
                 device->mul_mat_id_s[i] = true;
                 break;
