@@ -114,6 +114,9 @@
 	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
 	--color-sidebar-border: var(--sidebar-border);
 	--color-sidebar-ring: var(--sidebar-ring);
+	--breakpoint-3xl: 120rem; /* 1920px */
+	--breakpoint-4xl: 150rem; /* 2400px */
+	--breakpoint-5xl: 180rem; /* 2880px */
 }
 
 @layer base {

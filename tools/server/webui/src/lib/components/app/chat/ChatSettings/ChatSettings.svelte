@@ -85,6 +85,16 @@
 			icon: Monitor,
 			fields: [
 				{
+					key: 'autoChatWidth',
+					label: 'Automatic width',
+					type: 'checkbox'
+				},
+				{
+					key: 'customChatWidth',
+					label: 'Custom width',
+					type: 'combobox'
+				},
+				{
 					key: 'showMessageStats',
 					label: 'Show message generation statistics',
 					type: 'checkbox'

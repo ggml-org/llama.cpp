@@ -103,6 +103,18 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		serverKey: 'enableContinueGeneration',
 		type: 'boolean',
 		canSync: true
+	},
+	{
+		key: 'autoChatWidth',
+		serverKey: 'autoChatWidth',
+		type: 'boolean',
+		canSync: true
+	},
+	{
+		key: 'customChatWidth',
+		serverKey: 'customChatWidth',
+		type: 'string',
+		canSync: true
 	}
 ];
 
