@@ -73,6 +73,10 @@
 #include "ggml-cann.h"
 #endif
 
+#ifdef GGML_USE_QNN
+#include "ggml-qnn.h"
+#endif
+
 #ifdef GGML_USE_ZENDNN
 #include "ggml-zendnn.h"
 #endif
@@ -221,6 +225,9 @@ struct ggml_backend_registry {
 #endif
 #ifdef GGML_USE_RPC
         register_backend(ggml_backend_rpc_reg());
+#endif
+#ifdef GGML_USE_QNN
+        register_backend(ggml_backend_qnn_reg());
 #endif
 #ifdef GGML_USE_CPU
         register_backend(ggml_backend_cpu_reg());
