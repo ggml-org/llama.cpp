@@ -925,12 +925,12 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
         // Load y (fp32) and convert into fp16
         HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+0], zero);  // 32 elements
         HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+1], zero);  // 32 elements
-        HVX_Vector y_hf  = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf));
+        HVX_Vector y_hf  = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf)));
 
         // Load x (fp16)
-        HVX_Vector x_hf = vx[i];
+        HVX_Vector x_hf  = vx[i];
 
-        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x_hf), y_hf);
+        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(x_hf, y_hf);
 
         rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
     }
@@ -939,13 +939,18 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
         // Load y (fp32) and convert into fp16
         HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+0], zero);  // 32 elements
         HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+1], zero);  // 32 elements
-        HVX_Vector y_hf  = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf));
+        HVX_Vector y_hf  = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf)));
 
-        // Load x (fp16) and zero-out unused elements
+        // Load x (fp16)
+        HVX_Vector x_hf  = vx[i];
+
+        // Zero-out unused elements
+        // Note that we need to clear both x and y because they may contain NANs
         HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 2);
-        HVX_Vector      x_hf = Q6_V_vand_QV(bmask, vx[i]);
+        x_hf = Q6_V_vand_QV(bmask, x_hf);
+        y_hf = Q6_V_vand_QV(bmask, y_hf);
 
-        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x_hf), y_hf);
+        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(x_hf, y_hf);
 
         rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
     }

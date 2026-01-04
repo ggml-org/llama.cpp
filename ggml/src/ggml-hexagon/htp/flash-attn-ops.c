@@ -23,7 +23,7 @@
 #include "ops-utils.h"
 
 // Dot product of FP32 and FP16 vectors, accumulating to float
-static void hvx_dot_f32_f16_ua(float * restrict r, const void * restrict y, const void * restrict x, unsigned int n, float s) {
+static inline void hvx_dot_f32_f16_ua(float * restrict r, const void * restrict y, const void * restrict x, unsigned int n, float s) {
     const HVX_UVector * restrict vy = (const HVX_UVector * restrict) y; // fp32
     const HVX_Vector  * restrict vx = (const HVX_Vector  * restrict) x; // fp16
 
@@ -40,29 +40,34 @@ static void hvx_dot_f32_f16_ua(float * restrict r, const void * restrict y, cons
         // Load y (fp32) and convert into fp16
         HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+0], zero);  // 32 elements
         HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+1], zero);  // 32 elements
-        HVX_Vector y_hf  = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf));
+        HVX_Vector y_hf  = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf)));
 
         // Load x (fp16)
-        HVX_Vector x_hf = vx[i];
+        HVX_Vector x_hf  = vx[i];
 
-        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x_hf), y_hf);
+        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(x_hf, y_hf);
 
-        rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
+        rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf), Q6_V_hi_W(xy_qf)));
     }
 
     if (nloe) {
         // Load y (fp32) and convert into fp16
         HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+0], zero);  // 32 elements
         HVX_Vector y1_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+1], zero);  // 32 elements
-        HVX_Vector y_hf  = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf));
+        HVX_Vector y_hf  = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(y1_qf, y0_qf)));
 
-        // Load x (fp16) and zero-out unused elements
+        // Load x (fp16)
+        HVX_Vector x_hf  = vx[i];
+
+        // Zero-out unused elements
+        // Note that we need to clear both x and y because they may contain NANs
         HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 2);
-        HVX_Vector      x_hf = Q6_V_vand_QV(bmask, vx[i]);
+        x_hf = Q6_V_vand_QV(bmask, x_hf);
+        y_hf = Q6_V_vand_QV(bmask, y_hf);
 
-        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x_hf), y_hf);
+        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(x_hf, y_hf);
 
-        rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
+        rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf), Q6_V_hi_W(xy_qf)));
     }
 
     rsum = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(rsum), hvx_vec_splat_fp32(s));
@@ -72,7 +77,7 @@ static void hvx_dot_f32_f16_ua(float * restrict r, const void * restrict y, cons
 }
 
 // Dot product of two F16 vectors, accumulating to float
-static void hvx_dot_f16_f16_ua(float * restrict r, const void * restrict x, const void * restrict y, unsigned int n, float s) {
+static inline void hvx_dot_f16_f16_ua(float * restrict r, const void * restrict x, const void * restrict y, unsigned int n, float s) {
     const HVX_UVector * restrict vx = (const HVX_UVector * restrict) x; // fp16
     const HVX_Vector  * restrict vy = (const HVX_Vector  * restrict) y; // fp16
 
@@ -101,7 +106,7 @@ static void hvx_dot_f16_f16_ua(float * restrict r, const void * restrict x, cons
         HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 2);
         HVX_Vector      x_hf = Q6_V_vand_QV(bmask, vx[i]);
 
-        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(x_hf), y_hf);
+        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(x_hf, y_hf);
 
         rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
     }
@@ -112,7 +117,7 @@ static void hvx_dot_f16_f16_ua(float * restrict r, const void * restrict x, cons
 }
 
 // MAD: y (F32) += x (F16) * v (float)
-static void hvx_mad_f32_f16_aa(float * restrict y, const void * restrict x, int n, float s) {
+static inline void hvx_mad_f32_f16_aa(float * restrict y, const void * restrict x, int n, float s) {
     const HVX_Vector * restrict ptr_x = (const HVX_Vector *) x;
     HVX_Vector * restrict ptr_y = (HVX_Vector *) y;
 
@@ -262,6 +267,10 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
         const uint32_t iv3 = fastdiv(iq3, &octx->broadcast_rv3);
         const uint32_t iv2 = fastdiv(iq2, &octx->broadcast_rv2);
 
+        // Fetch Q row
+        const uint8_t * q_row_ptr = (const uint8_t *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3);
+        dma_queue_push(dma, dma_make_ptr(spad_q, q_row_ptr), size_q_row_padded, nbq1, size_q_row, 1);
+
         const uint32_t h = iq2; // head index
         const float slope = (max_bias > 0.0f) ? (h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1)) : 1.0f;
 
@@ -270,14 +279,6 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
 
         // Clear accumulator
         memset(VKQ32, 0, DV * sizeof(float));
-
-        const uint8_t * q_row_ptr = (const uint8_t *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3);
-
-        // Fetch Q row
-        dma_queue_push(dma, dma_make_ptr(spad_q, q_row_ptr), size_q_row_padded, nbq1, size_q_row, 1);
-        dma_queue_pop(dma);
-
-        const uint8_t * q_ptr_vtcm = spad_q;
 
         const __fp16 * mp_base = NULL;
         if (mask) {
@@ -312,6 +313,11 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
             }
         }
 
+        const uint8_t * q_ptr_vtcm = dma_queue_pop(dma).dst;
+
+	FARF(HIGH, "FA: n_blocks %u size_q_row_padded %u nbq1 %u size_q_row %u spad_size_vkq %u : q_ptr %p VKQ %p (%u)", n_blocks,
+            size_q_row_padded, nbq1, size_q_row, spad_size_vkq, q_ptr_vtcm, VKQ32, (unsigned long) q_ptr_vtcm - (unsigned long) VKQ32);
+
         for (uint32_t ib = 0; ib < n_blocks; ++ib) {
             const uint32_t ic_start = ib * FLASH_ATTN_BLOCK_SIZE;
             const uint32_t current_block_size = MIN(FLASH_ATTN_BLOCK_SIZE, nek1 - ic_start);
@@ -326,6 +332,9 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
             const uint8_t * k_base = spad_k + buf_idx * size_k_block;
             const uint8_t * v_base = spad_v + buf_idx * size_v_block;
             const __fp16 * m_base  = mask ? (const __fp16 *)(spad_m + buf_idx * size_m_block) : NULL;
+
+  	    FARF(HIGH, "FA: DK %u q_ptr %p VKQ %p k_base %p v_base %p m_base %p", DK, 
+                q_ptr_vtcm, VKQ32, k_base, v_base, m_base);
 
             // Inner loop processing the block from VTCM
             uint32_t ic = 0;
@@ -537,7 +546,7 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
         octx->src3_div3 = init_fastdiv_values(mask->ne[3]);
     }
 
-    size_t spad_size_vkq = htp_round_up(octx->src2.ne[0] * sizeof(float), 128); // VKQ32
+    size_t spad_size_vkq = htp_round_up(v->ne[0] * sizeof(float), 128); // VKQ32
 
     size_t size_q_row = q->ne[0] * ((q->type == HTP_TYPE_F32) ? 4 : 2);
     size_t size_q_row_padded = htp_round_up(size_q_row, 128);
