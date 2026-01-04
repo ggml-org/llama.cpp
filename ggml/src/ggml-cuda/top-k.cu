@@ -11,13 +11,6 @@ using namespace cub;
 #endif      // GGML_CUDA_USE_CUB
 
 #ifdef CUB_TOP_K_AVAILABLE
-static __global__ void init_indices(int * indices, const int ncols) {
-    const int col = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (col < ncols) {
-        indices[col] = col;
-    }
-}
 
 static void top_k_cub(ggml_cuda_pool & pool,
                       const float *    src,
@@ -30,26 +23,20 @@ static void top_k_cub(ggml_cuda_pool & pool,
     auto stream_env   = cuda::stream_ref{ stream };
     auto env          = cuda::std::execution::env{ stream_env, requirements };
 
-    ggml_cuda_pool_alloc<int>   temp_indices_alloc(pool, ncols);
     ggml_cuda_pool_alloc<float> temp_keys_alloc(pool, ncols);
-
-    int *   temp_indices = temp_indices_alloc.get();
-    float * temp_keys    = temp_keys_alloc.get();
-
-    static const int block_size = 256;
-    const dim3       grid_size((ncols + block_size - 1) / block_size, 1);
-    init_indices<<<grid_size, block_size, 0, stream>>>(temp_indices, ncols);
-
+    float *                     temp_keys = temp_keys_alloc.get();
     CUDA_CHECK(cudaMemcpyAsync(temp_keys, src, ncols * sizeof(float), cudaMemcpyDeviceToDevice, stream));
 
+    auto indexes_in = cuda::make_counting_iterator(0);
+
     size_t temp_storage_bytes = 0;
-    DeviceTopK::MaxPairs(nullptr, temp_storage_bytes, temp_keys, cuda::discard_iterator(), temp_indices, dst, ncols, k,
+    DeviceTopK::MaxPairs(nullptr, temp_storage_bytes, temp_keys, cuda::discard_iterator(), indexes_in, dst, ncols, k,
                          env);
 
     ggml_cuda_pool_alloc<uint8_t> temp_storage_alloc(pool, temp_storage_bytes);
     void *                        d_temp_storage = temp_storage_alloc.get();
 
-    DeviceTopK::MaxPairs(d_temp_storage, temp_storage_bytes, temp_keys, cuda::discard_iterator(), temp_indices, dst,
+    DeviceTopK::MaxPairs(d_temp_storage, temp_storage_bytes, temp_keys, cuda::discard_iterator(), indexes_in, dst,
                          ncols, k, env);
 }
 
