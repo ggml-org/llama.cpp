@@ -40,6 +40,7 @@ struct llama_context {
 
     ~llama_context();
 
+    void reserve();
     void synchronize();
 
     const llama_model   & get_model()   const;
