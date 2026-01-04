@@ -17,6 +17,10 @@
 #include "ggml-impl.h"
 #include <mutex>
 
+#if __has_include(<sycl/ext/oneapi/matrix/matrix.hpp>)
+#include <sycl/ext/oneapi/matrix/matrix.hpp>
+#endif
+
 int get_current_device_id() {
   return dpct::dev_mgr::instance().current_device_id();
 }
@@ -326,6 +330,63 @@ void ggml_sycl_host_free(void* ptr) try {
 
 bool gpu_has_xmx(sycl::device &dev) {
     return dev.has(sycl::aspect::ext_intel_matrix);
+}
+
+XMXCapabilities query_xmx_capabilities(sycl::device & dev) {
+    XMXCapabilities caps;
+
+    if (!dev.has(sycl::aspect::ext_intel_matrix)) {
+        return caps;
+    }
+    caps.supported = true;
+
+    // Query SLM size
+    caps.slm_size = dev.get_info<sycl::info::device::local_mem_size>();
+
+#if defined(SYCL_EXT_ONEAPI_MATRIX_VERSION) && SYCL_EXT_ONEAPI_MATRIX_VERSION >= 1
+    using namespace sycl::ext::oneapi::experimental;
+
+    try {
+        auto combinations = dev.get_info<info::device::matrix_combinations>();
+
+        for (const auto& combo : combinations) {
+            // Find int8 configuration (for Q8_0)
+            if (combo.atype == matrix_type::sint8 &&
+                combo.btype == matrix_type::sint8) {
+                caps.supports_int8 = true;
+                caps.M = combo.msize;
+                caps.N = combo.nsize;
+                caps.K = combo.ksize;
+
+                GGML_SYCL_DEBUG("[XMX] int8: M=%zu, N=%zu, K=%zu\n",
+                               caps.M, caps.N, caps.K);
+            }
+
+            if (combo.atype == matrix_type::fp16 &&
+                combo.btype == matrix_type::fp16) {
+                caps.supports_fp16 = true;
+            }
+        }
+    } catch (const sycl::exception& e) {
+        GGML_SYCL_DEBUG("[XMX] Query failed: %s\n", e.what());
+    }
+#else
+    // Fallback: assume Intel Arc defaults
+    caps.supports_int8 = true;
+    caps.supports_fp16 = true;
+    caps.M = 8;
+    caps.N = 16;
+    caps.K = 32;
+    GGML_SYCL_DEBUG("[XMX] Using default config: M=8, N=16, K=32\n");
+#endif
+
+    // Compute optimal tile counts
+    if (caps.M > 0 && caps.N > 0) {
+        caps.optimal_tiles_m = std::min(4, static_cast<int>(32 / caps.M));
+        caps.optimal_tiles_n = std::min(4, static_cast<int>(64 / caps.N));
+    }
+
+    return caps;
 }
 
 int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block_size) {
