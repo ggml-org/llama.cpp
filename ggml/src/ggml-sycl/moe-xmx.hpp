@@ -108,6 +108,43 @@ inline void preprocess_tokens_q8(
     });
 }
 
+// Extract fp16 scales from Q8_0 weight blocks
+// Q8_0 block layout: [32 int8 values][2 bytes fp16 scale] = 34 bytes per block
+// Output: scales[out_dim * (in_dim/32)] in row-major order
+inline void extract_q8_0_scales(
+    const void* weights_qs,   // [out_dim, in_dim] Q8_0 packed
+    sycl::half* scales,       // [out_dim, in_dim/32] output scales
+    int64_t out_dim,
+    int64_t in_dim,
+    sycl::queue& queue)
+{
+    constexpr int QK = 32;    // Q8_0 block size
+    constexpr int Q8_0_BLOCK_SIZE = 34;  // 32 int8 + 2 bytes fp16 scale
+
+    int64_t num_blocks_per_row = in_dim / QK;
+    int64_t total_blocks = out_dim * num_blocks_per_row;
+
+    const uint8_t* w_ptr = static_cast<const uint8_t*>(weights_qs);
+
+    queue.parallel_for(
+        sycl::range<1>(total_blocks),
+        [=](sycl::id<1> idx) {
+            // Q8_0 block layout: first 2 bytes are fp16 scale (little-endian)
+            // then 32 bytes of int8 values
+            int64_t block_offset = idx * Q8_0_BLOCK_SIZE;
+
+            // Load fp16 scale (stored at start of block in GGML Q8_0 format)
+            uint16_t scale_bits = w_ptr[block_offset] |
+                                 (static_cast<uint16_t>(w_ptr[block_offset + 1]) << 8);
+
+            // Reinterpret as fp16
+            sycl::half scale;
+            std::memcpy(&scale, &scale_bits, sizeof(sycl::half));
+
+            scales[idx] = scale;
+        }).wait();
+}
+
 // Q8_0 XMX GEMM for a single expert's token batch
 // Computes: output[batch, out_dim] = q_tokens[batch, in_dim] @ weights[out_dim, in_dim]^T
 //
