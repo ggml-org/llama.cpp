@@ -3396,12 +3396,16 @@ static void llama_sampler_adaptive_p_free(struct llama_sampler * smpl) {
 }
 
 static struct llama_sampler_i llama_sampler_adaptive_p_i = {
-    /* .name   = */ llama_sampler_adaptive_p_name,
-    /* .accept = */ nullptr,
-    /* .apply  = */ llama_sampler_adaptive_p_apply,
-    /* .reset  = */ llama_sampler_adaptive_p_reset,
-    /* .clone  = */ llama_sampler_adaptive_p_clone,
-    /* .free   = */ llama_sampler_adaptive_p_free,
+    /* .name              = */ llama_sampler_adaptive_p_name,
+    /* .accept            = */ nullptr,
+    /* .apply             = */ llama_sampler_adaptive_p_apply,
+    /* .reset             = */ llama_sampler_adaptive_p_reset,
+    /* .clone             = */ llama_sampler_adaptive_p_clone,
+    /* .free              = */ llama_sampler_adaptive_p_free,
+    /* .backend_init      = */ nullptr,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ nullptr,
+    /* .backend_set_input = */ nullptr,
 };
 
 struct llama_sampler * llama_sampler_init_adaptive_p(
