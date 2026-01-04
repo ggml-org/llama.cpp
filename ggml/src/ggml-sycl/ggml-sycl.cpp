@@ -11426,9 +11426,9 @@ static bool try_xmx_sorted_moe(
         return false;
     }
 
-    // Only handle Q8_0 for now
-    if (src0->type != GGML_TYPE_Q8_0) {
-        GGML_SYCL_DEBUG("[XMX MoE] Only Q8_0 supported, got type %d\n", src0->type);
+    // Handle Q8_0 and MXFP4 quantized weights
+    if (src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_MXFP4) {
+        GGML_SYCL_DEBUG("[XMX MoE] Only Q8_0/MXFP4 supported, got type %d\n", src0->type);
         return false;
     }
 
@@ -11521,23 +11521,31 @@ static bool try_xmx_sorted_moe(
     for (int64_t e = 0; e < n_experts; e++) {
         if (h_counts[e] == 0) continue;
 
-        // Q8_0 layout: each block is 32 int8 values + 1 fp16 scale
         // Weight tensor: [in_dim, out_dim, n_experts]
         // Stride to expert e = e * (in_dim * out_dim) in elements
-        // In Q8_0: stride = e * (in_dim/32 * out_dim * block_size)
-        // where block_size = 32 * sizeof(int8_t) + sizeof(fp16) = 34 bytes
         const size_t bytes_per_expert = src0->nb[2];
         const void* expert_weights = static_cast<const char*>(src0->data) + e * bytes_per_expert;
 
-        // Q8_0 scales are embedded in the blocks - extract pointer
-        // For now, pass nullptr as the kernel is a skeleton
-        const sycl::half* expert_scales = nullptr;  // TODO: extract scales from Q8_0 blocks
+        // Dispatch to appropriate kernel based on quantization type
+        if (src0->type == GGML_TYPE_Q8_0) {
+            // Q8_0 layout: each block is 32 int8 values + 1 fp16 scale = 34 bytes
+            // Scales are embedded in the blocks - extract pointer
+            // For now, pass nullptr as the kernel is a skeleton
+            const sycl::half* expert_scales = nullptr;  // TODO: extract scales from Q8_0 blocks
 
-        moe_xmx::launch_xmx_moe_gemm_q8_0<4, 4>(
-            expert_weights, expert_scales,
-            tokens_sorted + h_offsets[e] * in_dim,
-            sorted_output + h_offsets[e] * out_dim,
-            h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
+            moe_xmx::launch_xmx_moe_gemm_q8_0<4, 4>(
+                expert_weights, expert_scales,
+                tokens_sorted + h_offsets[e] * in_dim,
+                sorted_output + h_offsets[e] * out_dim,
+                h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
+        } else if (src0->type == GGML_TYPE_MXFP4) {
+            // MXFP4 layout: 32 4-bit values packed in 16 bytes + 1 byte E8M0 exponent = 17 bytes per block
+            moe_xmx::launch_xmx_moe_gemm_mxfp4<4, 4>(
+                expert_weights,
+                tokens_sorted + h_offsets[e] * in_dim,
+                sorted_output + h_offsets[e] * out_dim,
+                h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
+        }
     }
 
     // Phase 3: Scatter results back to original positions
@@ -11588,7 +11596,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
         return;
     }
 
-    // Try XMX sorted MoE path (experimental, Q8_0 only, requires GGML_SYCL_XMX_MOE=1)
+    // Try XMX sorted MoE path (experimental, Q8_0/MXFP4, requires GGML_SYCL_XMX_MOE=1)
     if (try_xmx_sorted_moe(ctx, src0, src1, ids, dst)) {
         GGML_SYCL_DEBUG("[MoE] XMX sorted dispatch successful for type %d\n", src0->type);
         return;
