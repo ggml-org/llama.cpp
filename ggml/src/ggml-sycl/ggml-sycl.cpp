@@ -254,17 +254,17 @@ static inline int get_sycl_env(const char *env_name, int default_val) {
 
 // Get reorder mode from environment variable GGML_SYCL_REORDER_MODE
 // Valid values: "none", "soa", "coalesced" (case-sensitive)
-// Default: "none" to match master branch behavior (no weight reordering)
+// Default: "coalesced" - 35% faster tg128 vs none (42.59 vs 31.57 t/s on Arc A770)
 static reorder_mode get_reorder_mode() {
     const char* mode = getenv("GGML_SYCL_REORDER_MODE");
     if (mode == nullptr) {
-        return reorder_mode::NONE;  // Default: no reordering, matches master
+        return reorder_mode::COALESCED;  // Default: coalesced for best decode perf
     }
     if (strcmp(mode, "none") == 0) return reorder_mode::NONE;
     if (strcmp(mode, "soa") == 0) return reorder_mode::SOA;
     if (strcmp(mode, "coalesced") == 0) return reorder_mode::COALESCED;
-    fprintf(stderr, "WARN: Unknown GGML_SYCL_REORDER_MODE '%s', using none\n", mode);
-    return reorder_mode::NONE;
+    fprintf(stderr, "WARN: Unknown GGML_SYCL_REORDER_MODE '%s', using coalesced\n", mode);
+    return reorder_mode::COALESCED;
 }
 
 static const char* reorder_mode_to_string(reorder_mode mode) {
@@ -10886,8 +10886,10 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         }
     }
 
-    // mmvq path is faster in the CUDA backend.
-    if (!g_ggml_sycl_prioritize_dmmv && ctx.stream()->get_backend() == sycl::backend::ext_oneapi_cuda) {
+    // mmvq path is faster in the CUDA backend and on Intel with weight reordering enabled.
+    // On Intel, MMVQ outperforms DMMV for Q4_0 decode (41.66 vs 31.42 t/s on Arc A770).
+    if (!g_ggml_sycl_prioritize_dmmv && (ctx.stream()->get_backend() == sycl::backend::ext_oneapi_cuda
+        || (should_reorder_tensor(ctx, dst) && ggml_sycl_supports_reorder_mmvq(src0->type)))) {
         use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && !use_mul_mat_vec_q;
     }
 
