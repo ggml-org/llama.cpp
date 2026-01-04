@@ -11200,14 +11200,26 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
         return false;  // Disabled by environment variable
     }
 
-    GGML_TENSOR_BINARY_OP_LOCALS
+    // Early batch size checks - avoid expensive GGML_TENSOR_BINARY_OP_LOCALS for common cases
+    const int64_t batch_size = src1->ne[2];  // ne12 - number of tokens
 
     // Only use fused kernel for batched prefill (multiple tokens)
     // For single-token decode, MMVQ is faster due to higher parallelism
-    // Tested: persistent kernel was 3.6x SLOWER for tg due to reduced parallelism
-    if (ne12 <= 1) {
+    if (batch_size <= 1) {
         return false;  // Use MMVQ for single-token decode
     }
+
+    // For large batch sizes, host-side oneDNN batching is much faster
+    // Fused ESIMD kernel: ~87 t/s for pp512, oneDNN batching: ~675 t/s
+    // Threshold determined empirically - fused kernel only wins for small batches
+    constexpr int64_t FUSED_MOE_MAX_BATCH = 32;
+    if (batch_size > FUSED_MOE_MAX_BATCH) {
+        GGML_SYCL_DEBUG("[MoE FUSED] Batch %ld > %d, using oneDNN batching\n",
+                        (long)batch_size, FUSED_MOE_MAX_BATCH);
+        return false;  // Fall back to host-side oneDNN batching
+    }
+
+    GGML_TENSOR_BINARY_OP_LOCALS
 
     // Check for supported quantization types
     if (src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_MXFP4) {
@@ -11567,8 +11579,11 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
         static bool fused_moe_disabled = (std::getenv("GGML_SYCL_DISABLE_FUSED_MOE") != nullptr);
         // Note: Fused kernel requires contiguous device memory for all experts
         // Cannot use when weights are in mmap (use_expert_cache is true)
+        // For large batches, oneDNN GEMM is faster than fused ESIMD kernel
+        constexpr int64_t FUSED_MOE_MAX_BATCH_HOST = 32;
         const bool use_fused_moe = !fused_moe_disabled && fused_moe_esimd_available() &&
                                    !use_expert_cache &&  // Cannot use with mmap weights
+                                   (ne12 <= FUSED_MOE_MAX_BATCH_HOST) &&  // Large batches use oneDNN
                                    (src0->type == GGML_TYPE_MXFP4) &&
                                    src1->type == GGML_TYPE_F32;
 
@@ -13466,8 +13481,9 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
             case GGML_OP_MUL_MAT_ID:
                 {
                     // MoE MUL_MAT_ID graph compatibility:
-                    // - ne12 > 1 (batched prefill): fused MoE kernel (Q8_0, MXFP4) - no allocations
+                    // - ne12 in (1, 32]: fused MoE kernel (Q8_0, MXFP4) - no allocations
                     // - ne12 == 1 (decode): MMVQ kernel (Q4_0, Q8_0, MXFP4) - pre-allocated buffers
+                    // - ne12 > 32: falls back to host-side oneDNN batching (graph-incompatible)
                     const ggml_tensor * node = cgraph->nodes[i];
                     const ggml_tensor * src0 = node->src[0];
                     const ggml_tensor * src1 = node->src[1];
@@ -13484,10 +13500,14 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
                     }
 
                     bool graph_compatible = false;
+                    // Fused MoE kernel threshold - must match ggml_sycl_mul_mat_id_fused()
+                    constexpr int64_t FUSED_MOE_MAX_BATCH = 32;
                     if (ggml_is_quantized(src0->type)) {
-                        if (ne12 > 1) {
-                            // Batched prefill - fused MoE kernel supports Q8_0 and MXFP4
+                        if (ne12 > 1 && ne12 <= FUSED_MOE_MAX_BATCH) {
+                            // Small batched prefill (2-32 tokens) - fused MoE kernel (Q8_0, MXFP4)
                             // These kernels don't do dynamic allocations
+                            // Large batches (>32) fall back to host-side oneDNN batching which
+                            // requires stream->wait() and is incompatible with graph recording
                             switch (src0->type) {
                                 case GGML_TYPE_Q8_0:
                                 case GGML_TYPE_MXFP4:
@@ -13496,7 +13516,7 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
                                 default:
                                     break;
                             }
-                        } else {
+                        } else if (ne12 <= 1) {
                             // Decode (ne12 == 1) - MMVQ kernel with pre-allocated Q8_1 buffers
                             switch (src0->type) {
                                 case GGML_TYPE_Q4_0:
