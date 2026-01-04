@@ -365,7 +365,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
 
                 float ms = expf(M_old - M_new);
 
-                hvx_scale_f32((const uint8_t *) VKQ32, (uint8_t *) VKQ32, DV, ms);
+                hvx_scale_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms);
                 S = S * ms;
 
                 HVX_Vector M_new_vec = hvx_vec_splat_fp32(M_new);
@@ -414,7 +414,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
                 if (s_val > M) {
                     M = s_val;
                     ms = expf(Mold - M);
-                    hvx_scale_f32((const uint8_t *) VKQ32, (uint8_t *) VKQ32, DV, ms);
+                    hvx_scale_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms);
                 } else {
                     vs = expf(s_val - M);
                 }
@@ -464,7 +464,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
 
             if (s > M) {
                 ms = expf(M - s);
-                hvx_scale_f32((const uint8_t *) VKQ32, (uint8_t *) VKQ32, DV, ms);
+                hvx_scale_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, ms);
             } else {
                 vs = expf(s - M);
             }
@@ -473,7 +473,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
         }
 
         const float S_inv = S == 0.0f ? 0.0f : 1.0f/S;
-        hvx_scale_f32((const uint8_t *) VKQ32, (uint8_t *) VKQ32, DV, S_inv);
+        hvx_scale_f32_aa((uint8_t *) VKQ32, (const uint8_t *) VKQ32, DV, S_inv);
 
         // Store result
         // dst indices

@@ -104,7 +104,7 @@ static void scale_htp_f32(const float * restrict src,
             htp_l2fetch(src_local + row_elems, 1, row_size, row_size);
         }
 
-        hvx_scale_offset_f32((const uint8_t *) src_local, (uint8_t *) dst_local, row_elems, scale, bias);
+        hvx_scale_offset_f32((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems, scale, bias);
     }
 }
 
@@ -135,7 +135,7 @@ static void rms_norm_htp_f32(const float * restrict src,
             const float mean  = sum / row_elems;
             const float scale = 1.0f / sqrtf(mean + epsilon);
 
-            hvx_scale_f32((const uint8_t *) src_local, (uint8_t *) dst_local, row_elems, scale);
+            hvx_scale_f32((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems, scale);
         }
     }
 }

@@ -1166,6 +1166,115 @@ static inline void hvx_sigmoid_f32(const uint8_t * restrict src, uint8_t * restr
     }
 }
 
+static inline void hvx_scale_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const int n, const float scale) {
+    int nvec = n / VLEN_FP32;
+    int nloe = n % VLEN_FP32;
+
+    HVX_Vector vs = hvx_vec_splat_fp32(scale);
+
+    HVX_Vector * vsrc = (HVX_Vector *) src;
+    HVX_Vector * vdst = (HVX_Vector *) dst;
+
+    uint32_t i = 0;
+
+    #pragma unroll(4)
+    for (i = 0; i < nvec; ++i) {
+        HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(vsrc[i], vs);
+        vdst[i]      = Q6_Vsf_equals_Vqf32(v);
+    }
+
+    if (nloe) {
+        HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(vsrc[i], vs);
+        hvx_vec_store_u((void *) &vdst[i], nloe * 4, Q6_Vsf_equals_Vqf32(v));
+    }
+}
+
+static inline void hvx_scale_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, const int n, const float scale) {
+    int nvec = n / VLEN_FP32;
+    int nloe = n % VLEN_FP32;
+
+    HVX_Vector vs = hvx_vec_splat_fp32(scale);
+
+    HVX_UVector * vsrc = (HVX_UVector *) src;
+    HVX_UVector * vdst = (HVX_UVector *) dst;
+
+    uint32_t i = 0;
+
+    #pragma unroll(4)
+    for (i = 0; i < nvec; ++i) {
+        HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(vsrc[i], vs);
+        vdst[i]      = Q6_Vsf_equals_Vqf32(v);
+    }
+
+    if (nloe) {
+        HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(vsrc[i], vs);
+        hvx_vec_store_u((void *) &vdst[i], nloe * 4, Q6_Vsf_equals_Vqf32(v));
+    }
+}
+
+static inline void hvx_scale_f32(uint8_t * restrict dst, const uint8_t * restrict src, const int n, const float scale) {
+    if (htp_is_aligned((void *) src, VLEN) && htp_is_aligned((void *) dst, VLEN)) {
+        hvx_scale_f32_aa(dst, src, n, scale);
+    } else {
+        hvx_scale_f32_uu(dst, src, n, scale);
+    }
+}
+
+static inline void hvx_scale_offset_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const int n, const float scale, const float offset) {
+    int nvec = n / VLEN_FP32;
+    int nloe = n % VLEN_FP32;
+
+    HVX_Vector vs = hvx_vec_splat_fp32(scale);
+    HVX_Vector vo = hvx_vec_splat_fp32(offset);
+
+    HVX_Vector * vsrc = (HVX_Vector *) src;
+    HVX_Vector * vdst = (HVX_Vector *) dst;
+
+    uint32_t i = 0;
+
+    #pragma unroll(4)
+    for (i = 0; i < nvec; ++i) {
+        HVX_Vector v = Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vsrc[i], vs), vo);
+        vdst[i] = Q6_Vsf_equals_Vqf32(v);
+    }
+
+    if (nloe) {
+        HVX_Vector v = Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vsrc[i], vs), vo);
+        hvx_vec_store_u((void *) &vdst[i], nloe * 4, Q6_Vsf_equals_Vqf32(v));
+    }
+}
+
+static inline void hvx_scale_offset_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, const int n, const float scale, const float offset) {
+    int nvec = n / VLEN_FP32;
+    int nloe = n % VLEN_FP32;
+
+    HVX_Vector vs = hvx_vec_splat_fp32(scale);
+    HVX_Vector vo = hvx_vec_splat_fp32(offset);
+
+    HVX_UVector * vsrc = (HVX_UVector *) src;
+    HVX_UVector * vdst = (HVX_UVector *) dst;
+
+    uint32_t i = 0;
+
+    #pragma unroll(4)
+    for (i = 0; i < nvec; ++i) {
+        HVX_Vector v = Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vsrc[i], vs), vo);
+        vdst[i] = Q6_Vsf_equals_Vqf32(v);
+    }
+
+    if (nloe) {
+        HVX_Vector v = Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vsrc[i], vs), vo);
+        hvx_vec_store_u((void *) &vdst[i], nloe * 4, Q6_Vsf_equals_Vqf32(v));
+    }
+}
+
+static inline void hvx_scale_offset_f32(uint8_t * restrict dst, const uint8_t * restrict src, const int n, const float scale, const float offset) {
+    if (htp_is_aligned((void *) src, VLEN) && htp_is_aligned((void *) dst, VLEN)) {
+        hvx_scale_offset_f32_aa(dst, src, n, scale, offset);
+    } else {
+        hvx_scale_offset_f32_uu(dst, src, n, scale, offset);
+    }
+}
 
 float hvx_sum_of_squares_f32(const uint8_t * restrict src, const int num_elems);
 void  hvx_mul_f32(const uint8_t * restrict src0,
@@ -1200,8 +1309,6 @@ void  hvx_sub_f32_opt(const uint8_t * restrict src0,
                       uint8_t * restrict dst,
                       const int num_elems);
 void  hvx_sub_scalar_f32(const uint8_t * restrict src, const float val, uint8_t * restrict dst, const int num_elems);
-void  hvx_scale_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems, const float scale);
-void  hvx_scale_offset_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems, const float scale, const float offset);
 void  hvx_inverse_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems);
 void  hvx_sigmoid_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems);
 void  hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems, bool negate);
