@@ -364,6 +364,9 @@ extern "C" {
     GGML_API enum ggml_status ggml_backend_tensor_alloc(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, void * addr);
     GGML_API enum ggml_status ggml_backend_view_init(struct ggml_tensor * tensor);
 
+    // Get host memory information
+    GGML_API void ggml_backend_get_host_memory(size_t * free, size_t * total);
+
     // CPU buffer types are always available
     GGML_API ggml_backend_buffer_t      ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size);
     GGML_API ggml_backend_buffer_type_t ggml_backend_cpu_buffer_type(void);

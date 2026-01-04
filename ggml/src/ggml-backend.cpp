@@ -27,6 +27,10 @@
 #include <sys/sysctl.h>
 #endif
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
 
 // backend buffer type
 
@@ -490,6 +494,11 @@ const char * ggml_backend_dev_description(ggml_backend_dev_t device) {
 void ggml_backend_dev_memory(ggml_backend_dev_t device, size_t * free, size_t * total) {
     GGML_ASSERT(device);
     device->iface.get_memory(device, free, total);
+
+    // fallback to host memory if device reports zero memory
+    if (*free == 0 && *total == 0) {
+        ggml_backend_get_host_memory(free, total);
+    }
 }
 
 enum ggml_backend_dev_type ggml_backend_dev_type(ggml_backend_dev_t device) {
@@ -500,6 +509,11 @@ enum ggml_backend_dev_type ggml_backend_dev_type(ggml_backend_dev_t device) {
 void ggml_backend_dev_get_props(ggml_backend_dev_t device, struct ggml_backend_dev_props * props) {
     memset(props, 0, sizeof(*props));
     device->iface.get_props(device, props);
+
+    // fallback to host memory if device reports zero memory
+    if (props->memory_free == 0 && props->memory_total == 0) {
+        ggml_backend_get_host_memory(&props->memory_free, &props->memory_total);
+    }
 }
 
 ggml_backend_reg_t ggml_backend_dev_backend_reg(ggml_backend_dev_t device) {
@@ -1878,6 +1892,22 @@ ggml_backend_t ggml_backend_sched_get_tensor_backend(ggml_backend_sched_t sched,
 }
 
 // utils
+
+void ggml_backend_get_host_memory(size_t * free, size_t * total) {
+#ifdef _WIN32
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    GlobalMemoryStatusEx(&status);
+    *total = status.ullTotalPhys;
+    *free = status.ullAvailPhys;
+#else
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long page_size = sysconf(_SC_PAGE_SIZE);
+    *total = pages * page_size;
+    // "free" system memory is ill-defined, for practical purposes assume that all of it is free:
+    *free = *total;
+#endif
+}
 
 enum ggml_status ggml_backend_view_init(struct ggml_tensor * tensor) {
     GGML_ASSERT(tensor);
