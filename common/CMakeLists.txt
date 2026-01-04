@@ -83,6 +83,17 @@ add_library(${TARGET} STATIC
     speculative.h
     unicode.cpp
     unicode.h
+    jinja/jinja-lexer.cpp
+    jinja/jinja-lexer.h
+    jinja/jinja-parser.cpp
+    jinja/jinja-parser.h
+    jinja/jinja-interpreter.cpp
+    jinja/jinja-interpreter.h
+    jinja/jinja-value.cpp
+    jinja/jinja-value.h
+    jinja/jinja-string.h
+    jinja/jinja-caps.cpp
+    jinja/jinja-caps.h
     )
 
 target_include_directories(${TARGET} PUBLIC . ../vendor)

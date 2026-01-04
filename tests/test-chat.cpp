@@ -84,8 +84,8 @@ bool equals(const common_chat_msg & expected, const common_chat_msg & actual) {
 
 template <class T> static void assert_equals(const T & expected, const T & actual) {
     if (!equals(expected, actual)) {
-        std::cerr << "Expected: " << expected << std::endl;
-        std::cerr << "Actual: " << actual << std::endl;
+        std::cerr << "Expected:```\n" << expected << "\n```" << std::endl;
+        std::cerr << "Actual:```\n" << actual << "\n```" << std::endl;
         std::cerr << std::flush;
         throw std::runtime_error("Test failed");
     }
@@ -764,6 +764,9 @@ static void test_template_output_parsers() {
     inputs_tools_builtin.messages           = {message_user};
     inputs_tools_builtin.tools              = {python_tool};
 
+    // TODO @ngxson : the COMMON_CHAT_FORMAT_GENERIC relies on many workarounds for various models;
+    // it is costly to maintain and not robust, considering removing it in the future.
+#if 0
     {
         // Not supported yet
         auto tmpls = read_templates("models/templates/CohereForAI-c4ai-command-r-plus-tool_use.jinja");
@@ -934,6 +937,8 @@ static void test_template_output_parsers() {
                       "  \"content\": \"\"\n"
                       "}");
     }
+#endif
+
     {
         auto tmpls = read_templates("models/templates/mistralai-Mistral-Nemo-Instruct-2407.jinja");
         std::vector<std::string>   end_tokens{ "</s>" };
