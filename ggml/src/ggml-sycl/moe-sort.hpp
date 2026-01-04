@@ -23,6 +23,29 @@ struct MoEExpertBatch {
     int32_t count;   // Number of tokens for this expert
 };
 
+// Convert F32 tokens to F16 for XMX processing
+inline void moe_convert_f32_to_f16(
+    const float* tokens_f32,     // [n_tokens, hidden_dim] F32 input
+    sycl::half* tokens_f16,      // [n_tokens, hidden_dim] F16 output
+    int64_t n_tokens,
+    int64_t hidden_dim,
+    sycl::queue& queue)
+{
+    constexpr int SG_SIZE = 16;
+    int64_t total_elements = n_tokens * hidden_dim;
+
+    queue.parallel_for(
+        sycl::nd_range<1>(
+            ((total_elements + SG_SIZE - 1) / SG_SIZE) * SG_SIZE,
+            SG_SIZE),
+        [=](sycl::nd_item<1> item) {
+            int64_t idx = item.get_global_id(0);
+            if (idx < total_elements) {
+                tokens_f16[idx] = sycl::half(tokens_f32[idx]);
+            }
+        }).wait();
+}
+
 // Sort tokens by expert ID for efficient batched GEMM
 // Returns total number of (token, expert) pairs processed
 template<int MAX_EXPERTS = 64>
