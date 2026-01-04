@@ -47,11 +47,19 @@ struct MoEXMXConfig {
 
 // Q8_0 XMX GEMM for a single expert's token batch
 // Computes: output[batch, out_dim] = tokens[batch, in_dim] @ weights[out_dim, in_dim]^T
+//
+// SKELETON STATUS: This kernel compiles but produces INCORRECT output.
+// The following must be implemented before production use:
+//   1. Token quantization (fp16 -> int8) with scale computation
+//   2. Proper joint_matrix_load for mat_a from quantized tokens
+//   3. Scale application during output: out = (int32_acc * token_scale * weight_scale)
+//   4. Conversion from scaled float to fp16 for storage
+//
 template<int TILES_M = 4, int TILES_N = 4>
 void launch_xmx_moe_gemm_q8_0(
     const void* weights_qs,       // [out_dim, in_dim] int8 quantized
-    const sycl::half* weights_d,  // [out_dim, in_dim/32] scales
-    const sycl::half* tokens,     // [batch, in_dim]
+    const sycl::half* weights_d,  // [out_dim, in_dim/32] Q8_0 scales (1 per 32 elements)
+    const sycl::half* tokens,     // [batch, in_dim] fp16 activations
     sycl::half* output,           // [batch, out_dim]
     int64_t batch,
     int64_t out_dim,
@@ -91,7 +99,8 @@ void launch_xmx_moe_gemm_q8_0(
                 // Bounds check
                 if (wg_row >= batch) return;
 
-                // Suppress unused variable warning
+                // TODO: Use sg_id for sub-group cooperative loading of weight tiles into SLM
+                // TODO: Use slm_weights for double-buffered weight prefetching
                 (void)sg_id;
                 (void)slm_weights;
 
@@ -105,59 +114,90 @@ void launch_xmx_moe_gemm_q8_0(
                     }
                 }
 
-                // K-dimension reduction
+                // K-dimension reduction loop
+                // Each iteration processes XMX_K=32 elements along the reduction dimension
                 const int8_t* w_ptr = static_cast<const int8_t*>(weights_qs);
 
                 for (int64_t k = 0; k < in_dim; k += XMX_K) {
-                    // Load weight and token tiles
+                    // Declare joint matrices for this K-tile
                     joint_matrix<sycl::sub_group, int8_t, use::a,
                                  XMX_M, XMX_K, layout::row_major> mat_a;
                     joint_matrix<sycl::sub_group, int8_t, use::b,
                                  XMX_K, XMX_N, layout::row_major> mat_b;
 
-                    // Compute tiles
+                    // TODO: Load mat_a from tokens
+                    // Current tokens are fp16, but XMX requires int8. Options:
+                    //   Option A: Pre-quantize tokens to int8 before kernel launch
+                    //   Option B: Quantize on-the-fly in SLM (expensive but flexible)
+                    // For now, fill with zeros as placeholder (produces zero output)
+                    joint_matrix_fill(sg, mat_a, static_cast<int8_t>(0));
+
+                    // Compute tiles - iterate over M and N tile positions
                     for (int tm = 0; tm < TILES_M; tm++) {
                         for (int tn = 0; tn < TILES_N; tn++) {
                             int row = wg_row + tm * XMX_M;
                             int col = wg_col + tn * XMX_N;
 
                             if (row < batch && col < out_dim) {
-                                // Load A (tokens) - need to quantize on the fly or use pre-quantized
-                                // Load B (weights)
+                                // Load B (weights) from global memory
+                                // weights_qs layout: [out_dim, in_dim] row-major int8
                                 joint_matrix_load(sg, mat_b,
                                     w_ptr + col * in_dim + k,
                                     static_cast<size_t>(in_dim));
 
-                                // XMX multiply-accumulate
+                                // XMX multiply-accumulate: acc += mat_a * mat_b
                                 joint_matrix_mad(sg, acc[tm][tn], mat_a, mat_b, acc[tm][tn]);
                             }
                         }
                     }
 
-                    sycl::group_barrier(item.get_group());
+                    // Note: No barrier needed here - each sub-group works independently
+                    // TODO: Add barrier when implementing cooperative SLM weight loading
                 }
 
-                // Store results with scale application
+                // TODO: Store results with scale application
+                // The accumulator contains int32 dot products. To get fp16 output:
+                //   1. Extract int32 values from accumulator
+                //   2. For each K-block, multiply by (token_scale[k/32] * weight_scale[k/32])
+                //   3. Sum scaled values across K dimension
+                //   4. Convert final float to fp16 and store
+                //
+                // For now, write zeros as placeholder (safe, predictable output)
                 for (int tm = 0; tm < TILES_M; tm++) {
                     for (int tn = 0; tn < TILES_N; tn++) {
                         int row = wg_row + tm * XMX_M;
                         int col = wg_col + tn * XMX_N;
 
                         if (row < batch && col < out_dim) {
-                            // TODO: Apply Q8_0 scales and store as fp16
-                            joint_matrix_store(sg, acc[tm][tn],
-                                reinterpret_cast<int32_t*>(output + row * out_dim + col),
-                                static_cast<size_t>(out_dim),
-                                layout::row_major);
+                            // Placeholder: write zeros instead of unscaled int32 garbage
+                            // Each sub-group lane writes its portion of the tile
+                            int lane = sg.get_local_linear_id();
+                            for (int i = lane; i < XMX_M * XMX_N; i += SG_SIZE) {
+                                int tile_row = i / XMX_N;
+                                int tile_col = i % XMX_N;
+                                if (row + tile_row < batch && col + tile_col < out_dim) {
+                                    output[(row + tile_row) * out_dim + col + tile_col] =
+                                        sycl::half(0.0f);
+                                }
+                            }
                         }
+
+                        // Suppress unused accumulator warning (will be used when scaling is implemented)
+                        (void)acc[tm][tn];
                     }
                 }
             });
     }).wait();
 
-    // Suppress unused parameter warnings
-    (void)weights_d;
+    // TODO: tokens parameter will be used for:
+    //   - Loading fp16 activations to quantize into mat_a
+    //   - Computing per-block token scales for dequantization
     (void)tokens;
+
+    // TODO: weights_d parameter will be used for:
+    //   - Loading Q8_0 weight scales (1 scale per 32 elements)
+    //   - Multiplying with token scales during output dequantization
+    (void)weights_d;
 }
 
 } // namespace moe_xmx
