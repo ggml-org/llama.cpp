@@ -152,6 +152,17 @@ void launch_xmx_moe_gemm_q8_0(
         sycl::local_accessor<int8_t, 1> slm_weights(
             sycl::range<1>(cfg.slm_weight_bytes), cgh);
 
+        // SLM for token tiles (TILES_M * XMX_M * XMX_K int8 = 1024 bytes)
+        sycl::local_accessor<int8_t, 1> slm_tokens(
+            sycl::range<1>(TILES_M * XMX_M * XMX_K), cgh);
+
+        // SLM for scales (token + weight scales for current K-block)
+        // Token scales: one per row (TILES_M * XMX_M = 32 rows)
+        sycl::local_accessor<float, 1> slm_token_scales(
+            sycl::range<1>(TILES_M * XMX_M), cgh);
+        sycl::local_accessor<float, 1> slm_weight_scales(
+            sycl::range<1>(TILES_N), cgh);
+
         cgh.parallel_for(
             sycl::nd_range<2>(global, local),
             [=](sycl::nd_item<2> item) [[intel::reqd_sub_group_size(SG_SIZE)]] {
@@ -164,10 +175,10 @@ void launch_xmx_moe_gemm_q8_0(
                 // Bounds check
                 if (wg_row >= batch) return;
 
-                // TODO: Use sg_id for sub-group cooperative loading of weight tiles into SLM
                 // TODO: Use slm_weights for double-buffered weight prefetching
-                (void)sg_id;
+                // TODO: Use slm_weight_scales for weight scale loading
                 (void)slm_weights;
+                (void)slm_weight_scales;
 
                 // Initialize accumulators
                 joint_matrix<sycl::sub_group, int32_t, use::accumulator,
@@ -190,15 +201,55 @@ void launch_xmx_moe_gemm_q8_0(
                     joint_matrix<sycl::sub_group, int8_t, use::b,
                                  XMX_K, XMX_N, layout::row_major> mat_b;
 
-                    // TODO: Load mat_a from tokens
-                    // Current tokens are fp16, but XMX requires int8. Options:
-                    //   Option A: Pre-quantize tokens to int8 before kernel launch
-                    //   Option B: Quantize on-the-fly in SLM (expensive but flexible)
-                    // For now, fill with zeros as placeholder (produces zero output)
-                    joint_matrix_fill(sg, mat_a, static_cast<int8_t>(0));
+                    // === Cooperative token loading to SLM ===
+                    // Each sub-group loads part of the token tile
+                    int lane = sg.get_local_linear_id();
+                    int items_per_sg = (TILES_M * XMX_M * XMX_K) / (cfg.wg_size / SG_SIZE);
+                    int sg_offset = sg_id * items_per_sg;
+                    for (int i = 0; i < items_per_sg; i += SG_SIZE) {
+                        int idx = sg_offset + i + lane;
+                        if (idx < TILES_M * XMX_M * XMX_K) {
+                            int tile_row = idx / XMX_K;
+                            int tile_k = idx % XMX_K;
+                            int global_row = wg_row + tile_row;
+                            int global_k = k + tile_k;
+                            if (global_row < batch && global_k < in_dim) {
+                                slm_tokens[idx] = q_tokens[global_row * in_dim + global_k];
+                            } else {
+                                slm_tokens[idx] = 0;
+                            }
+                        }
+                    }
+
+                    // Load token scales for this K-block - one per row (32 total)
+                    // We have cfg.wg_size/SG_SIZE sub-groups = 16 sub-groups
+                    // Need to load TILES_M * XMX_M = 32 scales
+                    // Use first 2 sub-groups, each lane loads one scale
+                    if (sg_id < (TILES_M * XMX_M + SG_SIZE - 1) / SG_SIZE) {
+                        int row_idx = sg_id * SG_SIZE + lane;
+                        if (row_idx < TILES_M * XMX_M) {
+                            int global_row = wg_row + row_idx;
+                            int64_t k_block_idx = k / XMX_K;
+                            if (global_row < batch) {
+                                slm_token_scales[row_idx] = static_cast<float>(
+                                    token_scales[global_row * (in_dim / XMX_K) + k_block_idx]);
+                            } else {
+                                slm_token_scales[row_idx] = 0.0f;
+                            }
+                        }
+                    }
+
+                    item.barrier(sycl::access::fence_space::local_space);
 
                     // Compute tiles - iterate over M and N tile positions
                     for (int tm = 0; tm < TILES_M; tm++) {
+                        // Load mat_a from SLM (requires address_space_cast)
+                        auto slm_tokens_ptr = sycl::address_space_cast<
+                            sycl::access::address_space::local_space,
+                            sycl::access::decorated::no>(
+                                &slm_tokens[tm * XMX_M * XMX_K]);
+                        joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
+
                         for (int tn = 0; tn < TILES_N; tn++) {
                             int row = wg_row + tm * XMX_M;
                             int col = wg_col + tn * XMX_N;
@@ -216,9 +267,10 @@ void launch_xmx_moe_gemm_q8_0(
                         }
                     }
 
-                    // Note: No barrier needed here - each sub-group works independently
-                    // TODO: Add barrier when implementing cooperative SLM weight loading
-                }
+                    // Barrier before next K-iteration to ensure all reads complete
+                    // before SLM is overwritten with new data
+                    item.barrier(sycl::access::fence_space::local_space);
+                }  // end K-loop
 
                 // TODO: Store results with scale application
                 // The accumulator contains int32 dot products. To get fp16 output:
@@ -254,11 +306,8 @@ void launch_xmx_moe_gemm_q8_0(
             });
     }).wait();
 
-    // TODO: q_tokens and token_scales parameters will be used for:
-    //   - Loading pre-quantized int8 tokens into mat_a
-    //   - Applying token scales during output dequantization
-    (void)q_tokens;
-    (void)token_scales;
+    // Note: q_tokens and token_scales are now loaded in the kernel above
+    // via cooperative SLM loading into slm_tokens and slm_token_scales
 
     // TODO: weights_d parameter will be used for:
     //   - Loading Q8_0 weight scales (1 scale per 32 elements)

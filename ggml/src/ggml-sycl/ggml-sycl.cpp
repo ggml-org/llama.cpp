@@ -11518,6 +11518,13 @@ static bool try_xmx_sorted_moe(
     }
     GGML_SYCL_DEBUG("\n");
 
+    // Allocate buffers for pre-quantized tokens (reused across experts)
+    // Q8_0 quantization: int8 values + fp16 scales (one per 32 elements)
+    constexpr int64_t QK = 32;  // Quantization block size
+    int64_t max_batch = total_pairs;  // Upper bound on tokens per expert
+    int8_t* q_tokens = sycl::malloc_device<int8_t>(max_batch * in_dim, *stream);
+    sycl::half* token_scales = sycl::malloc_device<sycl::half>(max_batch * (in_dim / QK), *stream);
+
     for (int64_t e = 0; e < n_experts; e++) {
         if (h_counts[e] == 0) continue;
 
@@ -11533,9 +11540,15 @@ static bool try_xmx_sorted_moe(
             // For now, pass nullptr as the kernel is a skeleton
             const sycl::half* expert_scales = nullptr;  // TODO: extract scales from Q8_0 blocks
 
+            // Pre-quantize fp16 tokens to int8 with per-block scales
+            const sycl::half* expert_tokens = tokens_sorted + h_offsets[e] * in_dim;
+            moe_xmx::preprocess_tokens_q8(
+                expert_tokens, q_tokens, token_scales,
+                h_counts[e], in_dim, *stream);
+
             moe_xmx::launch_xmx_moe_gemm_q8_0<4, 4>(
                 expert_weights, expert_scales,
-                tokens_sorted + h_offsets[e] * in_dim,
+                q_tokens, token_scales,
                 sorted_output + h_offsets[e] * out_dim,
                 h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
         } else if (src0->type == GGML_TYPE_MXFP4) {
@@ -11547,6 +11560,10 @@ static bool try_xmx_sorted_moe(
                 h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
         }
     }
+
+    // Free pre-quantization buffers
+    sycl::free(q_tokens, *stream);
+    sycl::free(token_scales, *stream);
 
     // Phase 3: Scatter results back to original positions
     // Note: dst is F32, but we're writing F16. This will be incorrect but
