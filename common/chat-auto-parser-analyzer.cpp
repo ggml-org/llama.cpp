@@ -745,6 +745,17 @@ tool_call_structure template_analyzer::analyze_tool_structure(const minja::chat_
     auto discovered = analyze_by_differential(tmpl);
     auto format     = determine_format_from_patterns(discovered);
 
+    // Strip EOS tokens from discovered patterns (handles both standard <|eos|> and fullwidth <｜end▁of▁sentence｜>)
+    if (!discovered.tool_call_closer.empty()) {
+        LOG_DBG("Before stripping: tool_call_closer='%s' (len=%zu)\n", discovered.tool_call_closer.c_str(),
+                discovered.tool_call_closer.length());
+        discovered.tool_call_closer = strip_eos_token(discovered.tool_call_closer);
+        LOG_DBG("After stripping: tool_call_closer='%s'\n", discovered.tool_call_closer.c_str());
+    }
+    if (!discovered.tool_call_end_marker.empty()) {
+        discovered.tool_call_end_marker = strip_eos_token(discovered.tool_call_end_marker);
+    }
+
     if (format == FORMAT_UNKNOWN) {
         LOG_DBG("Template does not support tool calls (differential analysis returned no patterns)\n");
         ts.supports_tools = false;
@@ -1074,8 +1085,19 @@ void template_analyzer::analyze_xml_format(tool_call_structure & ts, const inter
                         ts.per_call_end.c_str());
                 } else {
                     // Other formats like <|tool_call_begin|>name (non-indexed)
-                    // The whole opener is the prefix
+                    // Use function_opener as default, but try to use full tool_call_opener if it contains more
                     ts.function_prefix = discovered.function_opener;
+                    LOG_DBG("Initial function_prefix: '%s', tool_call_opener: '%s', tool_section_start: '%s'\n",
+                            ts.function_prefix.c_str(), discovered.tool_call_opener.c_str(),
+                            ts.tool_section_start.c_str());
+                    if (!ts.tool_section_start.empty() &&
+                        discovered.tool_call_opener.find(ts.tool_section_start) == 0) {
+                        std::string remainder = discovered.tool_call_opener.substr(ts.tool_section_start.length());
+                        LOG_DBG("Derived remainder: '%s'\n", remainder.c_str());
+                        if (remainder.length() > ts.function_prefix.length()) {
+                            ts.function_prefix = remainder;
+                        }
+                    }
                     ts.function_suffix = discovered.function_name_suffix;
                     ts.function_close  = discovered.function_closer;
                 }
@@ -1117,8 +1139,118 @@ void template_analyzer::analyze_xml_format(tool_call_structure & ts, const inter
                     std::string outer_end =
                         outer_start.substr(0, begin_pos) + "end" + outer_start.substr(begin_pos + 5);
                     ts.tool_section_end = outer_end;
-                    LOG_DBG("Derived nested tool_section_end: '%s' from tool_section_start: '%s'\n",
-                            ts.tool_section_end.c_str(), ts.tool_section_start.c_str());
+
+                    // Strip outer marker from function_prefix and function_opener if they were combined
+                    if (ts.tool_section_start.find(outer_start) == 0) {
+                        std::string remainder    = ts.tool_section_start.substr(outer_start.length());
+                        // Trim leading whitespace from remainder
+                        size_t      first_non_ws = remainder.find_first_not_of(" \t\n\r");
+                        if (first_non_ws != std::string::npos && first_non_ws > 0) {
+                            remainder = remainder.substr(first_non_ws);
+                        }
+
+                        // Concatenate with existing function_prefix (e.g. separator tag)
+                        // but avoid double-concatenation if already present
+                        if (!remainder.empty() && ts.function_prefix.find(remainder) == std::string::npos) {
+                            ts.function_prefix = remainder + ts.function_prefix;
+                        }
+                    }
+
+                    // Update tool_section_start to be just the outer marker
+                    ts.tool_section_start = outer_start;
+
+                    // Check if there's a fence in tool_call_closer that should be in function_close
+                    // (DeepSeek R1 wraps JSON in markdown blocks within the custom tags)
+                    if (discovered.tool_call_closer.find("```") != std::string::npos) {
+                        size_t fence_pos = discovered.tool_call_closer.find("```");
+                        // Include leading newlines if present before the fence
+                        while (fence_pos > 0 && (discovered.tool_call_closer[fence_pos - 1] == '\n' ||
+                                                 discovered.tool_call_closer[fence_pos - 1] == '\r')) {
+                            fence_pos--;
+                        }
+                        ts.function_close = discovered.tool_call_closer.substr(fence_pos);
+
+                        // Clip function_close to not include tool_section_end (if they were combined in differential analysis)
+                        if (!ts.tool_section_end.empty()) {
+                            size_t end_pos = ts.function_close.find(ts.tool_section_end);
+                            if (end_pos != std::string::npos) {
+                                ts.function_close = ts.function_close.substr(0, end_pos);
+                            }
+                        }
+
+                        // Further trim any trailing EOS or prompt garbage
+                        ts.function_close     = strip_eos_token(ts.function_close);
+                        size_t prompt_garbage = ts.function_close.find("<｜");
+                        if (prompt_garbage != std::string::npos && prompt_garbage > 0 &&
+                            ts.function_close.substr(prompt_garbage).find("Assistant") != std::string::npos) {
+                            ts.function_close = ts.function_close.substr(0, prompt_garbage);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // General cleanup for tool_section_end when tool_section_start uses token markers (<|...|> or <｜...｜>)
+    // If tool_section_start contains a token marker with "begin" and tool_section_end is messy (contains }
+    // or multiple markers), derive tool_section_end by finding matching end marker in tool_call_closer
+    if (!ts.tool_section_start.empty() && !discovered.tool_call_closer.empty()) {
+        // Check if tool_section_start contains a token marker
+        size_t start_opener_pos = find_token_opener(ts.tool_section_start, 0);
+        size_t start_closer_pos = find_token_closer(ts.tool_section_start, start_opener_pos);
+        if (start_opener_pos != std::string::npos && start_closer_pos != std::string::npos) {
+            size_t      opener_len    = get_token_opener_length(ts.tool_section_start, start_opener_pos);
+            // Extract the token content (between opener and closer)
+            std::string start_content = ts.tool_section_start.substr(start_opener_pos + opener_len,
+                                                                     start_closer_pos - start_opener_pos - opener_len);
+
+            // Check if tool_section_end needs cleanup (starts with } or contains multiple markers)
+            bool needs_cleanup = false;
+            if (!ts.tool_section_end.empty() && ts.tool_section_end[0] == '}') {
+                needs_cleanup = true;
+            }
+            // Count tokens in tool_section_end
+            size_t token_count = 0;
+            size_t pos         = 0;
+            while ((pos = find_token_opener(ts.tool_section_end, pos)) != std::string::npos) {
+                token_count++;
+                pos += get_token_opener_length(ts.tool_section_end, pos);
+            }
+            if (token_count > 1) {
+                needs_cleanup = true;
+            }
+
+            if (needs_cleanup) {
+                // Find matching end marker in tool_call_closer
+                // Look for a token that has similar content but with "end" instead of "begin"
+                pos = 0;
+                while ((pos = find_token_opener(discovered.tool_call_closer, pos)) != std::string::npos) {
+                    size_t end_closer_pos = find_token_closer(discovered.tool_call_closer, pos);
+                    if (end_closer_pos != std::string::npos) {
+                        size_t      op_len    = get_token_opener_length(discovered.tool_call_closer, pos);
+                        size_t      cl_len    = get_token_closer_length(discovered.tool_call_closer, end_closer_pos);
+                        std::string candidate = discovered.tool_call_closer.substr(pos, end_closer_pos + cl_len - pos);
+                        std::string candidate_content =
+                            discovered.tool_call_closer.substr(pos + op_len, end_closer_pos - pos - op_len);
+
+                        // Check if this candidate matches our start marker structure
+                        // Start content might be "tool▁calls▁begin" and candidate might be "tool▁calls▁end"
+                        size_t begin_in_start   = start_content.find("begin");
+                        size_t end_in_candidate = candidate_content.find("end");
+                        if (begin_in_start != std::string::npos && end_in_candidate != std::string::npos) {
+                            // Check if they share a common prefix (e.g., "tool▁calls▁")
+                            std::string start_base = start_content.substr(0, begin_in_start);
+                            std::string cand_base  = candidate_content.substr(0, end_in_candidate);
+                            if (start_base == cand_base) {
+                                ts.tool_section_end = candidate;
+                                LOG_DBG(
+                                    "Derived tool_section_end='%s' from tool_section_start='%s' using token matching\n",
+                                    ts.tool_section_end.c_str(), ts.tool_section_start.c_str());
+                                break;
+                            }
+                        }
+                    }
+                    pos += get_token_opener_length(discovered.tool_call_closer, pos);
                 }
             }
         }
@@ -1154,6 +1286,10 @@ void template_analyzer::analyze_xml_format(tool_call_structure & ts, const inter
     } else {
         ts.argument_format = tool_call_structure::ARGS_JSON;
     }
+
+    LOG_DBG("%s: final markers: section_start='%s', section_end='%s', prefix='%s', close='%s'\n", __func__,
+            ts.tool_section_start.c_str(), ts.tool_section_end.c_str(), ts.function_prefix.c_str(),
+            ts.function_close.c_str());
 }
 
 void template_analyzer::analyze_bracket_tag_format(tool_call_structure &               ts,

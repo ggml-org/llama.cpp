@@ -109,7 +109,8 @@ common_peg_parser common_chat_peg_unified_builder::build_reasoning_block(const c
 }
 
 common_peg_parser common_chat_peg_unified_builder::build_content_block(const content_structure & cs,
-                                                                       common_reasoning_format   reasoning_format) {
+                                                                       common_reasoning_format   reasoning_format,
+                                                                       const std::string &       tool_section_start) {
     std::string content_start = cs.content_start;
     std::string content_end   = cs.content_end;
 
@@ -617,10 +618,6 @@ common_peg_parser common_chat_peg_unified_builder::standard_constructed_tools(
 
     return force_tool_calls ? section : optional(section);
 }
-
-// ============================================================================
-// Unified Mapper Implementation
-// ============================================================================
 
 void common_chat_peg_unified_mapper::from_ast(const common_peg_ast_arena &    arena,
                                               const common_peg_parse_result & parse_result_arg) {

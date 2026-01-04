@@ -58,6 +58,8 @@ struct trie {
         size_t current = 0;  // Start at root
         size_t pos     = start_pos;
 
+        // LOG_DBG("%s: checking at pos %zu, sv='%s'\n", __func__, start_pos, std::string(sv).c_str());
+
         while (pos < sv.size()) {
             auto result = parse_utf8_codepoint(sv, pos);
             if (result.status != utf8_parse_result::SUCCESS) {
@@ -75,6 +77,7 @@ struct trie {
 
             // Check if we've matched a complete word
             if (nodes[current].is_word) {
+                // LOG_DBG("%s: complete match found at pos %zu\n", __func__, pos);
                 return match_result{ match_result::COMPLETE_MATCH };
             }
         }
@@ -315,6 +318,32 @@ struct parser_executor {
         ctx(ctx),
         start_pos(start) {}
 
+    std::string debug_indent() const { return std::string(ctx.parse_depth * 2, ' '); }
+
+    std::string debug_input_snippet(size_t pos, size_t len = 20) const {
+        if (pos >= ctx.input.size()) {
+            return "<EOF>";
+        }
+        auto        snippet = ctx.input.substr(pos, len);
+        // Escape newlines for display
+        std::string result;
+        for (char c : snippet) {
+            if (c == '\n') {
+                result += "\\n";
+            } else if (c == '\r') {
+                result += "\\r";
+            } else if (c == '\t') {
+                result += "\\t";
+            } else {
+                result += c;
+            }
+        }
+        if (pos + len < ctx.input.size()) {
+            result += "...";
+        }
+        return result;
+    }
+
     common_peg_parse_result operator()(const common_peg_epsilon_parser & /* p */) const {
         return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos);
     }
@@ -334,14 +363,6 @@ struct parser_executor {
         for (auto i = 0u; i < p.literal.size(); ++i) {
             if (pos >= ctx.input.size()) {
                 if (!ctx.is_partial) {
-                    if (ctx.input.size() > pos && ctx.input[pos] == '<') {
-                        LOG_DBG("Check literal '%s' against '%s'\n", p.literal.c_str(),
-                                ctx.input.substr(pos, 20).c_str());
-                    }
-                    if (p.literal == "<think>") {
-                        LOG_DBG("Literal match failed: expected '%s', got '%c' (0x%02x) at pos %zu\n",
-                                p.literal.c_str(), ctx.input[pos], (unsigned char) ctx.input[pos], pos);
-                    }
                     return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
                 }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos);
@@ -356,22 +377,35 @@ struct parser_executor {
     }
 
     common_peg_parse_result operator()(const common_peg_sequence_parser & p) {
-        // if (start_pos == 0) fprintf(stderr, "Sequence at pos %zu\n", start_pos);
+        if (ctx.debug) {
+            LOG_DBG("%sSEQ start at %zu '%s' (%zu children)\n", debug_indent().c_str(), start_pos,
+                    debug_input_snippet(start_pos).c_str(), p.children.size());
+        }
+        ctx.parse_depth++;
+
         auto                           pos = start_pos;
         std::vector<common_peg_ast_id> nodes;
 
-        for (const auto & child_id : p.children) {
-            auto result = arena.parse(child_id, ctx, pos);
+        for (size_t i = 0; i < p.children.size(); i++) {
+            const auto & child_id = p.children[i];
+            auto         result   = arena.parse(child_id, ctx, pos);
+
+            if (ctx.debug) {
+                LOG_DBG("%s  SEQ child %zu: %s at %zu->%zu\n", debug_indent().c_str(), i,
+                        common_peg_parse_result_type_name(result.type), result.start, result.end);
+            }
 
             if (result.fail()) {
-                // In partial mode, if we consumed input up to (or very close to) the end of input,
-                // treat this as needing more input rather than a hard failure.
-                // This handles cases like tool calls where the opening marker matches
-                // but the JSON content is incomplete.
-                // Note: Don't return accumulated nodes here - the sequence hasn't completed,
-                // so any tool calls detected by earlier children aren't valid yet.
+                ctx.parse_depth--;
                 if (ctx.is_partial && result.end >= ctx.input.size()) {
-                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, result.end);
+                    if (ctx.debug) {
+                        LOG_DBG("%sSEQ -> NEED_MORE (child failed at end)\n", debug_indent().c_str());
+                    }
+                    return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, result.end,
+                                                   std::move(nodes));
+                }
+                if (ctx.debug) {
+                    LOG_DBG("%sSEQ -> FAIL\n", debug_indent().c_str());
                 }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos, result.end);
             }
@@ -381,6 +415,10 @@ struct parser_executor {
             }
 
             if (result.need_more_input()) {
+                ctx.parse_depth--;
+                if (ctx.debug) {
+                    LOG_DBG("%sSEQ -> NEED_MORE\n", debug_indent().c_str());
+                }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, result.end,
                                                std::move(nodes));
             }
@@ -388,22 +426,52 @@ struct parser_executor {
             pos = result.end;
         }
 
+        ctx.parse_depth--;
+        if (ctx.debug) {
+            LOG_DBG("%sSEQ -> SUCCESS at %zu->%zu\n", debug_indent().c_str(), start_pos, pos);
+        }
         return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos, std::move(nodes));
     }
 
     common_peg_parse_result operator()(const common_peg_choice_parser & p) {
+        if (ctx.debug) {
+            LOG_DBG("%sCHOICE start at %zu '%s' (%zu options)\n", debug_indent().c_str(), start_pos,
+                    debug_input_snippet(start_pos).c_str(), p.children.size());
+        }
+        ctx.parse_depth++;
+
         auto pos = start_pos;
-        for (const auto & child_id : p.children) {
-            auto result = arena.parse(child_id, ctx, pos);
+        for (size_t i = 0; i < p.children.size(); i++) {
+            const auto & child_id = p.children[i];
+            auto         result   = arena.parse(child_id, ctx, pos);
+            if (ctx.debug) {
+                LOG_DBG("%s  CHOICE option %zu: %s\n", debug_indent().c_str(), i,
+                        common_peg_parse_result_type_name(result.type));
+            }
             if (!result.fail()) {
+                ctx.parse_depth--;
+                if (ctx.debug) {
+                    LOG_DBG("%sCHOICE -> %s (option %zu)\n", debug_indent().c_str(),
+                            common_peg_parse_result_type_name(result.type), i);
+                }
                 return result;
             }
         }
 
+        ctx.parse_depth--;
+        if (ctx.debug) {
+            LOG_DBG("%sCHOICE -> FAIL (no options matched)\n", debug_indent().c_str());
+        }
         return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
     }
 
     common_peg_parse_result operator()(const common_peg_repetition_parser & p) {
+        if (ctx.debug) {
+            LOG_DBG("%sREPEAT start at %zu '%s' (min=%d, max=%d)\n", debug_indent().c_str(), start_pos,
+                    debug_input_snippet(start_pos).c_str(), p.min_count, p.max_count);
+        }
+        ctx.parse_depth++;
+
         auto                           pos         = start_pos;
         int                            match_count = 0;
         std::vector<common_peg_ast_id> nodes;
@@ -411,14 +479,25 @@ struct parser_executor {
         // Try to match up to max_count times (or unlimited if max_count is -1)
         while (p.max_count == -1 || match_count < p.max_count) {
             if (pos >= ctx.input.size()) {
+                if (ctx.debug) {
+                    LOG_DBG("%s  REPEAT: at end of input, count=%d\n", debug_indent().c_str(), match_count);
+                }
                 break;
             }
 
             auto result = arena.parse(p.child, ctx, pos);
 
+            if (ctx.debug) {
+                LOG_DBG("%s  REPEAT iter %d: %s at %zu->%zu, nodes=%zu\n", debug_indent().c_str(), match_count,
+                        common_peg_parse_result_type_name(result.type), result.start, result.end, result.nodes.size());
+            }
+
             if (result.success()) {
                 // Prevent infinite loop on empty matches
                 if (result.end == pos) {
+                    if (ctx.debug) {
+                        LOG_DBG("%s  REPEAT: empty match, stopping\n", debug_indent().c_str());
+                    }
                     break;
                 }
 
@@ -436,23 +515,44 @@ struct parser_executor {
                     nodes.insert(nodes.end(), result.nodes.begin(), result.nodes.end());
                 }
 
+                ctx.parse_depth--;
+                if (ctx.debug) {
+                    LOG_DBG("%sREPEAT -> NEED_MORE (count=%d, nodes=%zu)\n", debug_indent().c_str(), match_count,
+                            nodes.size());
+                }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, result.end,
                                                std::move(nodes));
             }
 
             // Child failed - stop trying
+            if (ctx.debug) {
+                LOG_DBG("%s  REPEAT: child failed, stopping\n", debug_indent().c_str());
+            }
             break;
         }
 
         // Check if we got enough matches
         if (p.min_count > 0 && match_count < p.min_count) {
+            ctx.parse_depth--;
             if (pos >= ctx.input.size() && ctx.is_partial) {
+                if (ctx.debug) {
+                    LOG_DBG("%sREPEAT -> NEED_MORE (not enough matches: %d < %d)\n", debug_indent().c_str(),
+                            match_count, p.min_count);
+                }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, pos,
                                                std::move(nodes));
+            }
+            if (ctx.debug) {
+                LOG_DBG("%sREPEAT -> FAIL (not enough matches: %d < %d)\n", debug_indent().c_str(), match_count,
+                        p.min_count);
             }
             return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos, pos);
         }
 
+        ctx.parse_depth--;
+        if (ctx.debug) {
+            LOG_DBG("%sREPEAT -> SUCCESS (count=%d, nodes=%zu)\n", debug_indent().c_str(), match_count, nodes.size());
+        }
         return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos, std::move(nodes));
     }
 
@@ -685,16 +785,14 @@ struct parser_executor {
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_FAIL, start_pos);
             }
 
-            // Check if a delimiter starts at this position
             auto match = matcher.check_at(ctx.input, pos);
-
             if (match == trie::COMPLETE_MATCH) {
-                // Found a complete delimiter, return everything before it
+                LOG_DBG("Until: complete match found at pos %zu\n", pos);
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
             }
 
             if (match == trie::PARTIAL_MATCH) {
-                // Found a partial match extending to end of input, return everything before it
+                LOG_DBG("Until: partial match found at pos %zu\n", pos);
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
             }
 
@@ -714,16 +812,14 @@ struct parser_executor {
     }
 
     common_peg_parse_result operator()(const common_peg_rule_parser & p) {
-        if (!ctx.is_partial) {
-            LOG_DBG("Enter rule '%s' at pos %zu\n", p.name.c_str(), start_pos);
-        }
         // Parse the child
         auto result = arena.parse(p.child, ctx, start_pos);
 
         if (!result.fail()) {
             std::string_view text;
             if (result.start < ctx.input.size()) {
-                text = std::string_view(ctx.input).substr(result.start, result.end - result.start);
+                text = std::string_view(ctx.input).substr(
+                    result.start, std::min(result.end - result.start, ctx.input.size() - result.start));
             }
 
             auto node_id = ctx.ast.add_node(p.name, "", result.start, result.end, text, std::move(result.nodes),
@@ -1134,7 +1230,7 @@ common_peg_parser common_peg_parser_builder::json_object() {
         auto ws      = space();
         auto member  = sequence({ json_string(), ws, literal(":"), ws, json() });
         auto members = sequence({ member, zero_or_more(sequence({ ws, literal(","), ws, member })) });
-        return sequence({ literal("{"), ws, choice({ literal("}"), sequence({ members, ws, literal("}") }) }), ws });
+        return sequence({ literal("{"), ws, choice({ literal("}"), sequence({ members, ws, literal("}") }) }) });
     });
 }
 
@@ -1142,7 +1238,7 @@ common_peg_parser common_peg_parser_builder::json_array() {
     return rule("json-array", [this]() {
         auto ws       = space();
         auto elements = sequence({ json(), zero_or_more(sequence({ literal(","), ws, json() })) });
-        return sequence({ literal("["), ws, choice({ literal("]"), sequence({ elements, ws, literal("]") }) }), ws });
+        return sequence({ literal("["), ws, choice({ literal("]"), sequence({ elements, ws, literal("]") }) }) });
     });
 }
 
