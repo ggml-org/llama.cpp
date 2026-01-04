@@ -650,7 +650,7 @@ static void test_msgs_oaicompat_json_conversion() {
             "[\n"
             "  {\n"
             "    \"role\": \"assistant\",\n"
-            "    \"content\": null,\n"
+            "    \"content\": \"\",\n"
             "    \"tool_calls\": [\n"
             "      {\n"
             "        \"type\": \"function\",\n"
@@ -724,6 +724,30 @@ static void test_tools_oaicompat_json_conversion() {
             "]"
         ),
         common_chat_tools_to_json_oaicompat<json>({special_function_tool}).dump(2));
+
+    {
+        auto tools_no_params = common_chat_tools_parse_oaicompat(json::parse(
+            R"([{"type": "function", "function": {"name": "test_func", "description": "A test"}}])"));
+        assert_equals((size_t) 1, tools_no_params.size());
+        assert_equals(std::string("test_func"), tools_no_params[0].name);
+        assert_equals(std::string("A test"), tools_no_params[0].description);
+        assert_equals(std::string("{}"), tools_no_params[0].parameters);
+    }
+    {
+        auto tools_no_desc = common_chat_tools_parse_oaicompat(json::parse(
+            R"([{"type": "function", "function": {"name": "test_func", "parameters": {"type": "object"}}}])"));
+        assert_equals((size_t) 1, tools_no_desc.size());
+        assert_equals(std::string("test_func"), tools_no_desc[0].name);
+        assert_equals(std::string(""), tools_no_desc[0].description);
+    }
+    {
+        auto tools_minimal = common_chat_tools_parse_oaicompat(json::parse(
+            R"([{"type": "function", "function": {"name": "test_func"}}])"));
+        assert_equals((size_t) 1, tools_minimal.size());
+        assert_equals(std::string("test_func"), tools_minimal[0].name);
+        assert_equals(std::string(""), tools_minimal[0].description);
+        assert_equals(std::string("{}"), tools_minimal[0].parameters);
+    }
 }
 
 static void test_template_output_parsers() {
@@ -906,7 +930,8 @@ static void test_template_output_parsers() {
                       "      },\n"
                       "      \"id\": \"123456789\"\n"
                       "    }\n"
-                      "  ]\n"
+                      "  ],\n"
+                      "  \"content\": \"\"\n"
                       "}");
     }
     {
@@ -1713,7 +1738,8 @@ static void test_template_output_parsers() {
                       "      },\n"
                       "      \"id\": \"123456789\"\n"
                       "    }\n"
-                      "  ]\n"
+                      "  ],\n"
+                      "  \"content\": \"\"\n"
                       "}",
                       /* expect_grammar_triggered= */ false
         );

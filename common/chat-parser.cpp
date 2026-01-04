@@ -1413,6 +1413,14 @@ static void common_chat_parse_seed_oss(common_chat_msg_parser & builder) {
     builder.consume_reasoning_with_xml_tool_calls(form, "<seed:think>", "</seed:think>");
 }
 
+static void common_chat_parse_solar_open(common_chat_msg_parser & builder) {
+    builder.try_parse_reasoning("<|think|>", "<|end|><|begin|>assistant<|content|>");
+
+    // TODO: Tool calling
+
+    builder.add_content(builder.consume_rest());
+}
+
 static void common_chat_parse_content_only(common_chat_msg_parser & builder) {
     builder.try_parse_reasoning("<think>", "</think>");
     builder.add_content(builder.consume_rest());
@@ -1496,6 +1504,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO:
             common_chat_parse_xiaomi_mimo(builder);
+            break;
+        case COMMON_CHAT_FORMAT_SOLAR_OPEN:
+            common_chat_parse_solar_open(builder);
             break;
         case COMMON_CHAT_FORMAT_DEEPSEEK_V3_2:
             common_chat_parse_deepseek_v3_2(builder);
