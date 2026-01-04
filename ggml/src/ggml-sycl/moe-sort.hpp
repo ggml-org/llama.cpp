@@ -167,4 +167,26 @@ void moe_scatter_results(
         }).wait();
 }
 
+// Scatter results back with F16→F32 conversion
+// Use when sorted output is F16 but final output must be F32
+inline void moe_scatter_results_f16_to_f32(
+    const sycl::half* sorted_output,  // [total_pairs, output_dim] F16
+    float* final_output,               // [n_tokens * n_ids, output_dim] F32
+    const MoETokenMapping* token_map,
+    int64_t total_pairs,
+    int64_t output_dim,
+    sycl::queue& queue)
+{
+    queue.parallel_for(
+        sycl::range<1>(total_pairs),
+        [=](sycl::id<1> idx) {
+            int32_t original_pos = token_map[idx].original_idx;
+
+            for (int64_t d = 0; d < output_dim; d++) {
+                final_output[original_pos * output_dim + d] =
+                    static_cast<float>(sorted_output[idx * output_dim + d]);
+            }
+        }).wait();
+}
+
 #endif // GGML_SYCL_MOE_SORT_HPP
