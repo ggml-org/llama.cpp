@@ -11432,6 +11432,12 @@ static bool try_xmx_sorted_moe(
         return false;
     }
 
+    // XMX MoE uses synchronous memcpy for expert counts - incompatible with command graphs
+    if (!g_ggml_sycl_disable_graph) {
+        GGML_SYCL_DEBUG("[XMX MoE] Requires GGML_SYCL_DISABLE_GRAPH=1, skipping\n");
+        return false;
+    }
+
     sycl::queue* stream = ctx.stream();
 
     // Extract tensor dimensions
