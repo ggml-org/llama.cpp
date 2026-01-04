@@ -229,7 +229,6 @@ If not installed already, install Git, CMake, Clang, Ninja and Python, then run 
 1. **Install OpenCL Headers and Library**
 
 ```bash
-
 mkdir -p ~/dev/llm
 
 cd ~/dev/llm
