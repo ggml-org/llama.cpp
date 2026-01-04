@@ -112,8 +112,8 @@ static void hvx_dot_f16_f16_uu(float * restrict r, const void * restrict x, cons
 }
 
 // MAD: y (F32) += x (F16) * v (float)
-static void hvx_mad_f32_f16_au(float * restrict y, const void * restrict x, int n, float s) {
-    const HVX_UVector * restrict ptr_x = (const HVX_UVector *) x;
+static void hvx_mad_f32_f16_aa(float * restrict y, const void * restrict x, int n, float s) {
+    const HVX_Vector * restrict ptr_x = (const HVX_Vector *) x;
     HVX_Vector * restrict ptr_y = (HVX_Vector *) y;
 
     uint32_t nvec = n / VLEN_FP16; // num full fp16 hvx vectors
@@ -383,7 +383,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
                 for (int j = 0; j < VLEN_FP32; ++j) {
                     const uint32_t cur_ic = ic + j;
                     const uint8_t * v_ptr = v_base + cur_ic * size_v_row_padded;
-                    hvx_mad_f32_f16_au(VKQ32, v_ptr, DV, p_arr[j]);
+                    hvx_mad_f32_f16_aa(VKQ32, v_ptr, DV, p_arr[j]);
                 }
             }
 
@@ -421,7 +421,7 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
 
                 const uint8_t * v_ptr = v_base + ic * size_v_row_padded;
 
-                hvx_mad_f32_f16_au(VKQ32, v_ptr, DV, vs);
+                hvx_mad_f32_f16_aa(VKQ32, v_ptr, DV, vs);
 
                 S = S * ms + vs;
             }
