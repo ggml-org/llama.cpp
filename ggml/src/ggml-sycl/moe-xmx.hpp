@@ -404,6 +404,13 @@ void launch_xmx_moe_gemm_mxfp4(
         sycl::local_accessor<int8_t, 1> slm_weights(
             sycl::range<1>(slm_weights_size), cgh);
 
+        // Separate SLM for accumulator extraction (avoids corrupting weight data)
+        // Size: XMX_M * XMX_N int32 values = 8 * 16 * 4 = 512 bytes
+        // We process one tile at a time, so only need space for one tile's accumulator
+        constexpr int slm_acc_size = XMX_M * XMX_N * sizeof(int32_t);
+        sycl::local_accessor<int8_t, 1> slm_acc(
+            sycl::range<1>(slm_acc_size), cgh);
+
         // SLM for token tiles (TILES_M * XMX_M rows * XMX_K cols)
         // = 4 * 8 * 32 = 1024 bytes
         constexpr int slm_tokens_size = TILES_M * XMX_M * XMX_K;
@@ -476,7 +483,7 @@ void launch_xmx_moe_gemm_mxfp4(
                             int tile_row = idx / XMX_K;
                             int tile_k = idx % XMX_K;
                             int global_row = wg_row + tile_row;
-                            int global_k = static_cast<int>(k) + tile_k;
+                            int64_t global_k = k + tile_k;
                             if (global_row < batch && global_k < in_dim) {
                                 slm_tokens[idx] = q_tokens[global_row * in_dim + global_k];
                             } else {
@@ -527,11 +534,11 @@ void launch_xmx_moe_gemm_mxfp4(
                                 const uint8_t* block_ptr = w_ptr + block_offset * MXFP4_BLOCK_STRIDE;
 
                                 // MXFP4 unpacking:
-                                // Low nibble (& 0xF) -> elements 0-15
-                                // High nibble (>> 4) -> elements 16-31
-                                int byte_idx = k_elem < 16 ? k_elem : k_elem - 16;
+                                // Low nibble (& 0xF) -> elements 0-15 (within first MXFP4_PACKED_BYTES)
+                                // High nibble (>> 4) -> elements 16-31 (second half)
+                                int byte_idx = k_elem < MXFP4_PACKED_BYTES ? k_elem : k_elem - MXFP4_PACKED_BYTES;
                                 uint8_t packed_byte = block_ptr[byte_idx];
-                                uint8_t nibble = (k_elem < 16) ? (packed_byte & 0xF) : (packed_byte >> 4);
+                                uint8_t nibble = (k_elem < MXFP4_PACKED_BYTES) ? (packed_byte & 0xF) : (packed_byte >> 4);
 
                                 // LUT lookup for int8 value
                                 unpacked_val = slm_kvalues[nibble];
@@ -595,10 +602,9 @@ void launch_xmx_moe_gemm_mxfp4(
                                 // XMX multiply-accumulate: acc += mat_a * mat_b
                                 joint_matrix_mad(sg, acc[tm][tn], mat_a, mat_b, acc[tm][tn]);
 
-                                // Store accumulator to SLM to extract values for scale application
-                                // Reuse part of slm_weights as temporary storage
-                                int32_t* acc_slm_raw = reinterpret_cast<int32_t*>(
-                                    &slm_weights[0]);
+                                // Store accumulator to separate SLM buffer to extract values
+                                // Using dedicated slm_acc avoids corrupting weight data in slm_weights
+                                int32_t* acc_slm_raw = reinterpret_cast<int32_t*>(&slm_acc[0]);
                                 auto acc_slm_ptr = sycl::address_space_cast<
                                     sycl::access::address_space::local_space,
                                     sycl::access::decorated::no>(acc_slm_raw);
