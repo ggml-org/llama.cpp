@@ -207,6 +207,172 @@ std::string adjust_to_token_boundary(const std::string & str) {
     return result;
 }
 
+// Fullwidth vertical bar: ｜ (U+FF5C) is 3 bytes in UTF-8: 0xEF 0xBD 0x9C
+static const std::string FULLWIDTH_PIPE   = "\xef\xbd\x9c";        // ｜
+static const std::string TOKEN_OPENER_STD = "<|";
+static const std::string TOKEN_OPENER_FW  = "<" + FULLWIDTH_PIPE;  // <｜
+static const std::string TOKEN_CLOSER_STD = "|>";
+static const std::string TOKEN_CLOSER_FW  = FULLWIDTH_PIPE + ">";  // ｜>
+
+size_t find_token_opener(const std::string & str, size_t start_pos) {
+    size_t pos_std = str.find(TOKEN_OPENER_STD, start_pos);
+    size_t pos_fw  = str.find(TOKEN_OPENER_FW, start_pos);
+
+    if (pos_std == std::string::npos) {
+        return pos_fw;
+    }
+    if (pos_fw == std::string::npos) {
+        return pos_std;
+    }
+    return std::min(pos_std, pos_fw);
+}
+
+size_t find_token_closer(const std::string & str, size_t start_pos) {
+    size_t pos_std = str.find(TOKEN_CLOSER_STD, start_pos);
+    size_t pos_fw  = str.find(TOKEN_CLOSER_FW, start_pos);
+
+    if (pos_std == std::string::npos) {
+        return pos_fw;
+    }
+    if (pos_fw == std::string::npos) {
+        return pos_std;
+    }
+    return std::min(pos_std, pos_fw);
+}
+
+size_t get_token_opener_length(const std::string & str, size_t pos) {
+    if (pos >= str.length()) {
+        return 0;
+    }
+    if (str.compare(pos, TOKEN_OPENER_FW.length(), TOKEN_OPENER_FW) == 0) {
+        return TOKEN_OPENER_FW.length();  // 4 bytes for <｜
+    }
+    if (str.compare(pos, TOKEN_OPENER_STD.length(), TOKEN_OPENER_STD) == 0) {
+        return TOKEN_OPENER_STD.length();  // 2 bytes for <|
+    }
+    return 0;
+}
+
+size_t get_token_closer_length(const std::string & str, size_t pos) {
+    if (pos >= str.length()) {
+        return 0;
+    }
+    if (str.compare(pos, TOKEN_CLOSER_FW.length(), TOKEN_CLOSER_FW) == 0) {
+        return TOKEN_CLOSER_FW.length();  // 4 bytes for ｜>
+    }
+    if (str.compare(pos, TOKEN_CLOSER_STD.length(), TOKEN_CLOSER_STD) == 0) {
+        return TOKEN_CLOSER_STD.length();  // 2 bytes for |>
+    }
+    return 0;
+}
+
+std::string strip_eos_token(const std::string & str) {
+    if (str.empty()) {
+        return str;
+    }
+
+    // Find the last token in the string
+    // We need to find a token that looks like an EOS marker
+    // Common patterns:
+    // - <|eot_id|>, <|eos|>, <|end|>, <|endoftext|>
+    // - <｜end▁of▁sentence｜> (DeepSeek fullwidth)
+
+    size_t last_closer = std::string::npos;
+    size_t search_pos  = str.length();
+
+    // Search backwards for the last token closer
+    while (search_pos > 0) {
+        // Check for fullwidth closer first (it's longer)
+        if (search_pos >= TOKEN_CLOSER_FW.length()) {
+            size_t check_pos = search_pos - TOKEN_CLOSER_FW.length();
+            if (str.compare(check_pos, TOKEN_CLOSER_FW.length(), TOKEN_CLOSER_FW) == 0) {
+                last_closer = check_pos;
+                break;
+            }
+        }
+        // Check for standard closer
+        if (search_pos >= TOKEN_CLOSER_STD.length()) {
+            size_t check_pos = search_pos - TOKEN_CLOSER_STD.length();
+            if (str.compare(check_pos, TOKEN_CLOSER_STD.length(), TOKEN_CLOSER_STD) == 0) {
+                last_closer = check_pos;
+                break;
+            }
+        }
+        search_pos--;
+    }
+
+    if (last_closer == std::string::npos) {
+        return str;  // No token closer found
+    }
+
+    // Find the corresponding opener
+    size_t opener_search_start = (last_closer > 100) ? last_closer - 100 : 0;
+    size_t last_opener         = std::string::npos;
+    size_t opener_len          = 0;
+
+    for (size_t pos = opener_search_start; pos < last_closer; pos++) {
+        size_t len = get_token_opener_length(str, pos);
+        if (len > 0) {
+            last_opener = pos;
+            opener_len  = len;
+        }
+    }
+
+    if (last_opener == std::string::npos) {
+        return str;  // No matching opener found
+    }
+
+    // Extract the token content to check if it's an EOS marker
+    size_t closer_len     = get_token_closer_length(str, last_closer);
+    size_t content_start  = last_opener + opener_len;
+    size_t content_length = last_closer - content_start;
+
+    if (content_length == 0 || content_length > 50) {
+        return str;  // Invalid or too long token content
+    }
+
+    std::string token_content = str.substr(content_start, content_length);
+
+    // Convert to lowercase for comparison (ASCII only, sufficient for EOS markers)
+    std::string lower_content;
+    for (char c : token_content) {
+        lower_content += (c >= 'A' && c <= 'Z') ? (c + 32) : c;
+    }
+
+    // Check if this looks like an EOS token
+    // True EOS tokens:
+    //   - <|eos|>, <|eot_id|>, <|end_of_text|>, <|endoftext|>
+    //   - <｜end▁of▁sentence｜> (DeepSeek fullwidth)
+    // NOT EOS tokens (structural markers):
+    //   - <|END_ACTION|>, <|TOOL_CALL_END|>, <|end_thinking|>, etc.
+
+    bool is_eos = false;
+
+    // Check for specific EOS patterns
+    if (lower_content == "eos" || lower_content == "eot_id" || lower_content == "eot" ||
+        lower_content == "end_of_text" || lower_content == "endoftext") {
+        is_eos = true;
+    }
+    // DeepSeek's end_of_sentence uses fullwidth underscore (▁) which is preserved in lower_content
+    // The token content would be "end▁of▁sentence" (with ▁ = U+2581)
+    else if (token_content.find("sentence") != std::string::npos ||
+             token_content.find("\xe2\x96\x81of\xe2\x96\x81sentence") != std::string::npos) {
+        is_eos = true;
+    }
+
+    if (!is_eos) {
+        return str;  // Not an EOS token
+    }
+
+    // Strip the EOS token
+    std::string result = str.substr(0, last_opener);
+
+    LOG_DBG("Stripped EOS token '%s' from string\n",
+            str.substr(last_opener, last_closer + closer_len - last_opener).c_str());
+
+    return result;
+}
+
 std::string find_string_difference(const std::string & base, const std::string & extended) {
     size_t common_prefix = 0;
     while (common_prefix < base.length() && common_prefix < extended.length() &&
@@ -334,7 +500,7 @@ std::string find_tool_call_end(const std::string & diff, size_t func_pos) {
         }
     }
 
-    std::vector<std::string> end_patterns = { "</", "]", "}", ">", "\n", " " };
+    std::vector<std::string> end_patterns = { "</", "]", "}", ">", "```", "\n", " " };
     std::string              best_pattern;
     size_t                   best_pos = std::string::npos;
 
@@ -342,7 +508,8 @@ std::string find_tool_call_end(const std::string & diff, size_t func_pos) {
         if (s.empty()) {
             return false;
         }
-        return s[0] == ']' || s[0] == '}' || s[0] == '>' || (s.size() >= 2 && s.substr(0, 2) == "</");
+        return s[0] == ']' || s[0] == '}' || s[0] == '>' || (s.size() >= 2 && s.substr(0, 2) == "</") ||
+               (s.size() >= 3 && s.substr(0, 3) == "```");
     };
 
     for (const auto & pattern : end_patterns) {
@@ -375,7 +542,7 @@ std::string find_tool_call_end(const std::string & diff, size_t func_pos) {
             best_pattern = pattern;
             best_pos     = pos;
 
-            if (current_is_struct && (pattern == "]" || pattern == "}")) {
+            if (current_is_struct && (pattern == "]" || pattern == "}" || pattern == "```")) {
                 size_t tag_start = diff.find('<', best_pos + pattern.length());
                 if (tag_start != std::string::npos && tag_start < best_pos + pattern.length() + 5) {
                     size_t tag_end = diff.find('>', tag_start);
@@ -678,6 +845,25 @@ internal_discovered_pattern extract_patterns_from_differences(const std::string 
             search_start += patterns.function_name_suffix.length();
         }
         patterns.function_closer = find_closing_pattern(func_context, search_start);
+
+        // Fix for XML-style tag formats where function_closer was detected as "}" (JSON closing)
+        // but should be the actual tag closer (e.g., <|tool_call_end|> or <｜tool▁call▁end｜>)
+        if (patterns.function_closer == "}" && !patterns.function_opener.empty() &&
+            patterns.function_opener[0] == '<') {
+            // This is an XML-style tag format, so the closer should be a tag, not just "}"
+            // Find the next tag marker after the search position
+            size_t next_tag = func_context.find('<', search_start);
+            if (next_tag != std::string::npos) {
+                // Handle both standard <|...|> and fullwidth <｜...｜> formats
+                size_t closer_pos = find_token_closer(func_context, next_tag);
+                if (closer_pos != std::string::npos) {
+                    size_t closer_len        = get_token_closer_length(func_context, closer_pos);
+                    patterns.function_closer = func_context.substr(next_tag, closer_pos - next_tag + closer_len);
+                    LOG_DBG("Adjusted function_closer from '}' to tag '%s' for XML-style format\n",
+                            patterns.function_closer.c_str());
+                }
+            }
+        }
 
         if (patterns.function_closer == "}" && !patterns.function_name_suffix.empty() &&
             patterns.function_name_suffix.find("```") != std::string::npos) {

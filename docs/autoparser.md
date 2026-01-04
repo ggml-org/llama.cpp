@@ -11,41 +11,41 @@ The unified auto-parser uses a two-phase incremental analysis approach:
 
 ## Data Structures
 
-### ContentStructure (Phase 1 Result)
+### content_structure (Phase 1 Result)
 
 Describes how the template handles content and reasoning:
 
 ```cpp
-struct ContentStructure {
-    enum ReasoningMode {
-        REASONING_NONE,        // No reasoning markers detected
-        REASONING_OPTIONAL,    // <think>...</think> may appear before content
-        REASONING_FORCED_OPEN, // Template ends with open reasoning tag (thinking_forced_open)
+struct content_structure {
+    enum reasoning_mode_type {
+        REASONING_NONE,         // No reasoning markers detected
+        REASONING_OPTIONAL,     // <think>...</think> may appear before content
+        REASONING_FORCED_OPEN,  // Template ends with open reasoning tag (thinking_forced_open)
     };
 
-    ReasoningMode reasoning_mode = REASONING_NONE;
-    std::string   reasoning_start;  // e.g., "<think>", "<|START_THINKING|>"
-    std::string   reasoning_end;    // e.g., "</think>", "<|END_THINKING|>"
+    reasoning_mode_type reasoning_mode = REASONING_NONE;
+    std::string         reasoning_start;  // e.g., "<think>", "<|START_THINKING|>"
+    std::string         reasoning_end;    // e.g., "</think>", "<|END_THINKING|>"
 
     // Content wrapping mode
-    enum ContentMode {
-        CONTENT_PLAIN,                  // No content markers
-        CONTENT_ALWAYS_WRAPPED,         // <response>...</response> always present
-        CONTENT_WRAPPED_WITH_REASONING, // Content wrapped only when reasoning present
+    enum content_mode_type {
+        CONTENT_PLAIN,                   // No content markers
+        CONTENT_ALWAYS_WRAPPED,          // <response>...</response> always present
+        CONTENT_WRAPPED_WITH_REASONING,  // Content wrapped only when reasoning present
     };
 
-    ContentMode content_mode = CONTENT_PLAIN;
-    std::string content_start;  // e.g., "<response>", "<|START_RESPONSE|>"
-    std::string content_end;    // e.g., "</response>", "<|END_RESPONSE|>"
+    content_mode_type content_mode = CONTENT_PLAIN;
+    std::string       content_start;  // e.g., "<response>", "<|START_RESPONSE|>"
+    std::string       content_end;    // e.g., "</response>", "<|END_RESPONSE|>"
 };
 ```
 
-### ToolCallStructure (Phase 2 Result)
+### tool_call_structure (Phase 2 Result)
 
 Describes how the template formats tool calls:
 
 ```cpp
-struct ToolCallStructure {
+struct tool_call_structure {
     bool supports_tools = false;
 
     // Container markers (what wraps all tool calls)
@@ -53,17 +53,17 @@ struct ToolCallStructure {
     std::string tool_section_end;    // e.g., "</tool_call>", "]", "</TOOLCALL>", ""
 
     // Function format (how individual functions are structured)
-    enum FunctionFormat {
-        FUNC_JSON_OBJECT,      // {"name": "X", "arguments": {...}}
-        FUNC_TAG_WITH_NAME,    // <function=X>{...}</function>
-        FUNC_TAG_NAME_ONLY,    // <X>...</X> where X is function name (rare)
-        FUNC_PREFIXED_INDEXED, // <|tool_call_begin|>functions.X:0<|tool_call_argument_begin|>{...}<|tool_call_end|>
-        FUNC_NAME_AS_KEY,      // [{"function_name": {...arguments...}}] (Apertus-style)
-        FUNC_BRACKET_TAG,      // [TOOL_CALLS]X[CALL_ID]id[ARGS]{...} (Mistral Small 3.2 style)
-        FUNC_RECIPIENT_BASED,  // >>>recipient\n{content} where recipient is "all" (content) or function name (tools)
-        FUNC_MARKDOWN_CODE_BLOCK, // Action:\n```json\n[{"tool_name": "X", ...}]\n``` (Cohere Command-R Plus)
+    enum function_format {
+        FUNC_JSON_OBJECT,       // {"name": "X", "arguments": {...}}
+        FUNC_TAG_WITH_NAME,     // <function=X>{...}</function>
+        FUNC_TAG_NAME_ONLY,     // <X>...</X> where X is function name (rare)
+        FUNC_PREFIXED_INDEXED,  // <|tool_call_begin|>functions.X:0<|tool_call_argument_begin|>{...}<|tool_call_end|>
+        FUNC_NAME_AS_KEY,       // [{"function_name": {...arguments...}}] (Apertus-style)
+        FUNC_BRACKET_TAG,       // [TOOL_CALLS]X[CALL_ID]id[ARGS]{...} (Mistral Small 3.2 style)
+        FUNC_RECIPIENT_BASED,   // >>>recipient\n{content} where recipient is "all" (content) or function name (tools)
+        FUNC_MARKDOWN_CODE_BLOCK,  // Action:\n```json\n[{"tool_name": "X", ...}]\n``` (Cohere Command-R Plus)
     };
-    FunctionFormat function_format = FUNC_JSON_OBJECT;
+    function_format function_format = FUNC_JSON_OBJECT;
 
     // For FUNC_JSON_OBJECT format - field names (may vary between templates)
     std::string name_field = "name";       // Could be "tool_name", "function"
@@ -82,25 +82,25 @@ struct ToolCallStructure {
     std::string per_call_end;        // e.g., "<|tool_call_end|>"
 
     // For FUNC_BRACKET_TAG format (e.g., Mistral Small 3.2)
-    std::string id_marker;           // e.g., "[CALL_ID]" - marker before tool call ID
+    std::string id_marker;  // e.g., "[CALL_ID]" - marker before tool call ID
+
+    // For FUNC_MARKDOWN_CODE_BLOCK format (Cohere Command-R Plus)
+    std::string code_block_marker;    // e.g., "Action:" - text marker before code block
+    std::string code_block_language;  // e.g., "json" - language identifier in code fence
 
     // Argument format (how arguments are structured within a function)
-    enum ArgumentFormat {
-        ARGS_JSON,           // Standard JSON object: {"key": "value", ...}
-        ARGS_TAGGED,         // XML-style: <param=key>value</param>
-        ARGS_KEY_VALUE_TAGS, // <arg_key>key</arg_key><arg_value>value</arg_value> (GLM-4.6)
+    enum argument_format {
+        ARGS_JSON,            // Standard JSON object: {"key": "value", ...}
+        ARGS_TAGGED,          // XML-style: <param=key>value</param>
+        ARGS_KEY_VALUE_TAGS,  // <arg_key>key</arg_key><arg_value>value</arg_value> (GLM-4.6)
     };
-    ArgumentFormat argument_format = ARGS_JSON;
+    argument_format argument_format = ARGS_JSON;
 
     // For ARGS_TAGGED format
     std::string arg_prefix;     // e.g., "<param=", "<parameter="
     std::string arg_suffix;     // e.g., ">"
     std::string arg_close;      // e.g., "</param>", "</parameter>"
     std::string arg_separator;  // e.g., "", "\n"
-
-    // For FUNC_MARKDOWN_CODE_BLOCK format (Cohere Command-R Plus)
-    std::string code_block_marker;    // e.g., "Action:"
-    std::string code_block_language;  // e.g., "json"
 
     // Flag: template renders null content as "None" string, requires empty string instead
     bool requires_nonnull_content = false;
@@ -109,7 +109,7 @@ struct ToolCallStructure {
 
 ## Analysis Flow
 
-```
+```console
 Template
     |
     v
@@ -119,7 +119,7 @@ Phase 1: analyze_content_structure()
     |-- detect_reasoning_mode() - check if prompt ends with open tag
     |
     v
-ContentStructure
+content_structure
     |
     v
 Phase 2: analyze_tool_structure()
@@ -129,13 +129,13 @@ Phase 2: analyze_tool_structure()
     |-- Classify argument format (JSON vs tagged)
     |
     v
-ToolCallStructure
+tool_call_structure
     |
     v
-generate_parser(ContentStructure, ToolCallStructure)
-    |-- build_reasoning_block(ContentStructure)
-    |-- build_content_block(ContentStructure)
-    |-- build_tool_section(ToolCallStructure, tools)
+generate_parser(content_structure, tool_call_structure)
+    |-- build_reasoning_block(content_structure)
+    |-- build_content_block(content_structure)
+    |-- build_tool_section(tool_call_structure, tools)
     |-- Compose into final parser
     |
     v
@@ -148,10 +148,10 @@ The mechanism starts in `common/chat.cpp`, in `common_chat_templates_apply_jinja
 
 ```cpp
 // 1. Analyze the template (two-phase)
-TemplateAnalysisResult analysis = TemplateAnalyzer::analyze_template(tmpl);
+template_analysis_result analysis = template_analyzer::analyze_template(tmpl);
 
 // 2. Generate the parser and grammar
-auto auto_params = UniversalPEGGenerator::generate_parser(analysis, tmpl, params);
+auto auto_params = universal_peg_generator::generate_parser(analysis, tmpl, params);
 
 // 3. Use if it provides more than basic content handling
 if (auto_params.format != COMMON_CHAT_FORMAT_CONTENT_ONLY ||
@@ -203,6 +203,7 @@ The unified builder (`common_chat_peg_unified_builder`) provides high-level meth
 #### Reasoning Detection (4 Methods)
 
 **Method 1: Differential Reasoning Content Analysis**
+
 - Render template with `reasoning_content` field present vs absent
 - Compare outputs to find markers between `THOUGHT_MARKER` and `CONTENT_MARKER`
 - If only closing tag found, derive opening tag using patterns:
@@ -211,6 +212,7 @@ The unified builder (`common_chat_peg_unified_builder`) provides high-level meth
 - Handles various tag formats including XML and special token formats
 
 **Method 2: Enable-Thinking Toggle Analysis**
+
 - Toggle `enable_thinking` context variable between true/false
 - Detects differences in generated prompts
 - Handles two scenarios:
@@ -220,6 +222,7 @@ The unified builder (`common_chat_peg_unified_builder`) provides high-level meth
 - Validates extracted tags against blacklist of role markers
 
 **Method 3: Prompt Ending Analysis**
+
 - Checks if prompt ends with unclosed reasoning tag
 - Looks for trailing tags in prompt with `enable_thinking=true`
 - Differentiates between open tags (`<think>`) and close tags (`</think>`)
@@ -227,6 +230,7 @@ The unified builder (`common_chat_peg_unified_builder`) provides high-level meth
 - Validates reasoning-like patterns (contains "think", "reason", "thought")
 
 **Method 4: Adjacent Tag Pair Detection**
+
 - Looks for patterns like `<minimax:tool_call></think>`, `<|START_THINKING|><|END_THINKING|>`, `[think][/think]`
 - Searches for predefined tag patterns in prompt
 - Validates tags are adjacent with only whitespace between
@@ -257,12 +261,14 @@ The unified builder (`common_chat_peg_unified_builder`) provides high-level meth
 #### Differential Analysis Algorithm
 
 **Test Payload Strategy**:
+
 1. **Base**: User + Assistant with content only (no tools)
 2. **Tool 1**: User + Assistant with tool_calls (empty args)
 3. **Tool 2**: User + Assistant with tool_calls (with args)
 4. **Tool 3**: User + Assistant with multiple tool calls
 
 **Pattern Extraction Process**:
+
 1. Compute string differences between base and tool outputs
 2. Use `test_function_name` as reliable search anchor (using `rfind` for last occurrence)
 3. Extract structural elements:
@@ -275,23 +281,28 @@ The unified builder (`common_chat_peg_unified_builder`) provides high-level meth
 #### Format Classification Logic
 
 **FORMAT_JSON_NATIVE**:
+
 - Detected by `{"name":` pattern in `tool_call_opener`
 - Or XML markers with JSON structure
 
 **FORMAT_XML_CONSTRUCTED**:
+
 - `function_opener` starts with `<`
 - No substantial parameter markers
 
 **FORMAT_RECIPIENT_BASED**:
+
 - `tool_call_start_marker == function_opener`
 - No parameter markers
 - Opener doesn't start with structural chars
 
 **FORMAT_BRACKET_TAG**:
+
 - `function_name_suffix` contains bracket tags like `[CALL_ID]...[ARGS]`
 - `tool_call_start_marker` matches `[TOOL_CALLS]` pattern
 
 **FORMAT_PREFIXED_INDEXED**:
+
 - `function_opener` ends with `.` (namespace separator)
 - `function_name_suffix` starts with `:` followed by digit
 - Example: `functions.name:0<|tool_call_argument_begin|>`
@@ -299,25 +310,30 @@ The unified builder (`common_chat_peg_unified_builder`) provides high-level meth
 #### Specialized Format Handling
 
 **FUNC_PREFIXED_INDEXED (Kimi-K2)**:
+
 - Splits `function_opener` at last `>` to get `per_call_start` + `function_namespace`
 - Extracts `args_marker` from `function_name_suffix`
 - Derives `per_call_end` by matching structural patterns in `tool_call_closer`
 
 **FUNC_TAG_WITH_NAME (Functionary/Nemotron)**:
+
 - Detects nested vs non-nested formats
 - Uses overlap detection between `tool_section_start` and `function_prefix`
 - Handles double-wrapping prevention
 
 **ARGS_KEY_VALUE_TAGS (GLM-4.6)**:
+
 - Detects `<arg_key>key</arg_key><arg_value>value</arg_value>` pattern
 - Cleans up suffix to extract just the key closer
 
 **FUNC_RECIPIENT_BASED (Functionary v3.2)**:
+
 - Detects `>>>` recipient delimiter format
 - Routes to "all" for content, function name for tools
 - Uses same delimiter for both content and tool routing
 
 **FUNC_BRACKET_TAG (Mistral Small 3.2/Devstral)**:
+
 - Detects `[TOOL_CALLS]function_name[ARGS]{...}` pattern
 - Optional `[CALL_ID]id` marker for tool call identification
 - No section wrapper - each call starts independently
@@ -327,6 +343,7 @@ The unified builder (`common_chat_peg_unified_builder`) provides high-level meth
 #### Unified Parser Building
 
 **Composition Strategy**:
+
 ```cpp
 // Standard format
 sequence({ reasoning, space(), content, space(), tools, space(), content, end() })
@@ -339,11 +356,13 @@ optional(reasoning) when thinking_forced_open && tools present
 ```
 
 **Trigger Word Detection**:
+
 - Uses `tool_section_start` as primary trigger
 - Falls back to `function_prefix` or `per_call_start`
 - Raw JSON uses regex pattern trigger
 
 **Lazy Grammar Optimization**:
+
 - Enabled by default for performance
 - Disabled when thinking forced open
 - Disabled when no clear trigger word exists
@@ -355,6 +374,7 @@ optional(reasoning) when thinking_forced_open && tools present
 The test suite covers:
 
 **Reasoning Models**:
+
 - Qwen-QwQ-32B (forced-open thinking)
 - DeepSeek R1 variants (reasoning only)
 - IBM Granite (reasoning + tools)
@@ -363,6 +383,7 @@ The test suite covers:
 - llama-cpp-deepseek-r1
 
 **Tool Call Formats**:
+
 - JSON: Llama 3.x, Mistral Nemo, Hermes, MiMo-VL
 - XML: Nemotron, Qwen3-Coder, MiniMax
 - Tagged: GLM-4.6 (key-value tags)
@@ -372,6 +393,7 @@ The test suite covers:
 - Recipient-based: Functionary v3.2
 
 **Edge Cases**:
+
 - Streaming/partial parsing
 - Empty content with tools
 - Parallel tool calls
@@ -384,15 +406,18 @@ The test suite covers:
 ### Debug Tools
 
 **Template Debugger**: `tests/debug-template-parser.cpp`
+
 - Usage: `./bin/debug-template-parser path/to/template.jinja`
 - Shows detected format, markers, generated parser, and GBNF grammar
 
 **Debug Logging**: Enable with `LLAMA_LOG_VERBOSITY=2`
+
 - Shows detailed analysis steps
 - Displays pattern extraction results
 - Lists generated parser structure
 
 **PEG Test Builder**: Fluent API for creating test cases
+
 ```cpp
 auto tst = peg_tester("template.jinja");
 tst.test("input")
@@ -417,9 +442,9 @@ To support a new template format:
 
 1. **Forced Thinking**: If `enable_thinking` is true but the model has already started a thought block (e.g., ended the prompt with `<think>`), the parser enters "forced thinking" mode where it immediately expects reasoning content.
 2. **Ambiguous Content**: Templates that mix content and tool calls without clear delimiters can be tricky. The analyzer tries to find "common" start/end patterns across multiple examples to be robust.
-4. **Double Wrapping**: Some templates (e.g., Functionary) use the same string for both the tool section start and the function prefix (e.g., `<function=`). The analyzer detects this overlap and prevents double-wrapping in the generated parser.
-5. **Null Content Rendering**: Some templates render `null` content as Python "None" string. The analyzer detects this and patches content to empty string.
-6. **Multi-byte Unicode Markers**: Some templates use special Unicode characters in markers that require careful handling in GBNF generation.
+3. **Double Wrapping**: Some templates (e.g., Functionary) use the same string for both the tool section start and the function prefix (e.g., `<function=`). The analyzer detects this overlap and prevents double-wrapping in the generated parser.
+4. **Null Content Rendering**: Some templates render `null` content as Python "None" string. The analyzer detects this and patches content to empty string.
+5. **Multi-byte Unicode Markers**: Some templates use special Unicode characters in markers that require careful handling in GBNF generation.
 
 ## State of the Autoparser (Jan 2026)
 

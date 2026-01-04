@@ -58,6 +58,26 @@ std::string apply_template(const minja::chat_template &    tmpl,
 // This prevents truncation mid-token
 std::string adjust_to_token_boundary(const std::string & str);
 
+// Find the position of a token opener (<| or <｜) in a string
+// Returns std::string::npos if not found
+size_t find_token_opener(const std::string & str, size_t start_pos = 0);
+
+// Find the position of a token closer (|> or ｜>) in a string
+// Returns std::string::npos if not found
+size_t find_token_closer(const std::string & str, size_t start_pos = 0);
+
+// Get the length of the token opener at the given position (2 for <| or 4 for <｜)
+// Returns 0 if no valid opener at position
+size_t get_token_opener_length(const std::string & str, size_t pos);
+
+// Get the length of the token closer at the given position (2 for |> or 4 for ｜>)
+// Returns 0 if no valid closer at position
+size_t get_token_closer_length(const std::string & str, size_t pos);
+
+// Strip EOS/end-of-sentence tokens from the end of a string
+// Handles both standard (<|eos|>, <|eot_id|>) and fullwidth (<｜end▁of▁sentence｜>) formats
+std::string strip_eos_token(const std::string & str);
+
 // ============================================================================
 // Template Pattern Analysis Helpers
 // ============================================================================

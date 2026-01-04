@@ -119,11 +119,6 @@ common_chat_params universal_peg_generator::generate_parser(const template_analy
         // Build grammar for tool calls
         data.grammar_lazy = analysis.tools.supports_tools && has_tools;
 
-        // If thinking forced open, we must constrain from the start
-        if (data.thinking_forced_open) {
-            data.grammar_lazy = false;
-        }
-
         // For FUNC_TAG_WITH_NAME with empty prefix (Functionary), disable lazy grammar
         // since there's no clear trigger word - constrain from the start
         if (analysis.tools.function_format == tool_call_structure::FUNC_TAG_WITH_NAME &&
@@ -134,13 +129,6 @@ common_chat_params universal_peg_generator::generate_parser(const template_analy
         if (data.grammar_lazy) {
             if (!trigger_word.empty()) {
                 data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, trigger_word });
-            } else if (analysis.tools.function_format == tool_call_structure::FUNC_JSON_OBJECT &&
-                       analysis.tools.supports_tools) {
-                // Raw JSON format without markers (e.g., Llama 3.1) - use regex trigger
-                data.grammar_triggers.push_back({
-                    COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
-                    "(\\{\\s*(?:\"type\"\\s*:\\s*\"function\"\\s*,\\s*)?\"name\"\\s*:\\s*\")[\\s\\S]*",
-                });
             }
         }
 
@@ -185,6 +173,8 @@ common_peg_arena universal_peg_generator::build_parser(const template_analysis_r
         auto reasoning = p.build_reasoning_block(analysis.content, inputs.reasoning_format, thinking_forced_open);
 
         // Build content block using ContentStructure
+        // Note: we don't pass tool_section_start here because content-before-tools handling
+        // is done inline in each branch below with p.content(p.until(marker))
         auto content = p.build_content_block(analysis.content, inputs.reasoning_format);
 
         // Build tool section using ToolCallStructure (if applicable)
@@ -197,15 +187,6 @@ common_peg_arena universal_peg_generator::build_parser(const template_analysis_r
                 p.build_tool_section(analysis.tools, inputs.tools, inputs.parallel_tool_calls, force_calls);
 
             // Compose: reasoning -> content before tools -> tool_section -> trailing content
-            // Check if this is a DeepSeek R1 style template with separate section and per-call markers
-            // These templates go directly from reasoning to tool calls (no content before)
-            bool has_per_call_markers_in_prefix =
-                analysis.tools.function_format == tool_call_structure::FUNC_TAG_WITH_NAME &&
-                !analysis.tools.function_prefix.empty() &&
-                analysis.tools.function_prefix.find("call") != std::string::npos &&
-                (analysis.tools.function_prefix.find("begin") != std::string::npos ||
-                 analysis.tools.function_prefix.find("start") != std::string::npos);
-
             // When thinking is forced open, the reasoning block expects </think>.
             // For tool-only messages (no thinking content), the model may output tools directly
             // without the </think> tag, so we need to make reasoning optional in that case.
@@ -216,12 +197,6 @@ common_peg_arena universal_peg_generator::build_parser(const template_analysis_r
                     p.optional(reasoning) :
                     reasoning;
 
-            if (has_per_call_markers_in_prefix && !analysis.tools.tool_section_start.empty()) {
-                // DeepSeek R1 style: section markers wrap all calls, per-call markers in function_prefix
-                // No content before tools - go directly from reasoning to tool section
-                return p.sequence({ reasoning_for_tools, p.space(), tool_section, p.space(),
-                                    p.optional(p.content(p.rest())), p.end() });
-            }
             if (!analysis.tools.tool_section_start.empty()) {
                 // With section markers: look for start marker to delimit content
                 auto content_before_tools = p.content(p.until(analysis.tools.tool_section_start));

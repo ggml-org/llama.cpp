@@ -2,7 +2,6 @@
 #include "chat-auto-parser.h"
 #include "chat.h"
 #include "common.h"
-#include "ggml.h"
 #include "gguf.h"
 #include "log.h"
 
@@ -18,13 +17,13 @@ using json = nlohmann::ordered_json;
 // Command-line options
 // ============================================================================
 
-enum class OutputMode {
+enum class output_mode {
     ANALYSIS,  // Only output analysis results (default)
     TEMPLATE,  // Only output rendered template
     BOTH       // Output both
 };
 
-enum class InputMessageType {
+enum class input_message_type {
     NONE,                    // Don't render any message scenarios (only analysis)
     CONTENT_ONLY,            // Simple assistant message with content
     REASONING_CONTENT,       // Message with reasoning_content + content
@@ -35,14 +34,14 @@ enum class InputMessageType {
     ALL                      // Render all scenarios
 };
 
-struct DebugOptions {
+struct debug_options {
     std::string      template_path;
     bool             with_tools        = true;
     bool             with_deepseek     = false;
     bool             generation_prompt = true;
     bool             enable_reasoning  = true;
-    OutputMode       output_mode       = OutputMode::BOTH;
-    InputMessageType input_message     = InputMessageType::NONE;
+    output_mode       mode             = output_mode::BOTH;
+    input_message_type input_message     = input_message_type::NONE;
 };
 
 // ============================================================================
@@ -108,7 +107,7 @@ static bool parse_bool_option(const std::string & value) {
     return value == "1" || value == "true" || value == "yes";
 }
 
-static bool parse_options(int argc, char ** argv, DebugOptions & opts) {
+static bool parse_options(int argc, char ** argv, debug_options & opts) {
     if (argc < 2) {
         print_usage(argv[0]);
         return false;
@@ -130,11 +129,11 @@ static bool parse_options(int argc, char ** argv, DebugOptions & opts) {
         } else if (arg.rfind("--output=", 0) == 0) {
             std::string mode = arg.substr(9);
             if (mode == "analysis") {
-                opts.output_mode = OutputMode::ANALYSIS;
+                opts.mode = output_mode::ANALYSIS;
             } else if (mode == "template") {
-                opts.output_mode = OutputMode::TEMPLATE;
+                opts.mode = output_mode::TEMPLATE;
             } else if (mode == "both") {
-                opts.output_mode = OutputMode::BOTH;
+                opts.mode = output_mode::BOTH;
             } else {
                 LOG_ERR("Unknown output mode: %s\n", mode.c_str());
                 return false;
@@ -142,19 +141,19 @@ static bool parse_options(int argc, char ** argv, DebugOptions & opts) {
         } else if (arg.rfind("--input-message=", 0) == 0) {
             std::string type = arg.substr(16);
             if (type == "content_only") {
-                opts.input_message = InputMessageType::CONTENT_ONLY;
+                opts.input_message = input_message_type::CONTENT_ONLY;
             } else if (type == "reasoning_content") {
-                opts.input_message = InputMessageType::REASONING_CONTENT;
+                opts.input_message = input_message_type::REASONING_CONTENT;
             } else if (type == "tool_call_only") {
-                opts.input_message = InputMessageType::TOOL_CALL_ONLY;
+                opts.input_message = input_message_type::TOOL_CALL_ONLY;
             } else if (type == "content_tool_call") {
-                opts.input_message = InputMessageType::CONTENT_TOOL_CALL;
+                opts.input_message = input_message_type::CONTENT_TOOL_CALL;
             } else if (type == "reasoning_tool_call") {
-                opts.input_message = InputMessageType::REASONING_TOOL_CALL;
+                opts.input_message = input_message_type::REASONING_TOOL_CALL;
             } else if (type == "content_fake_tool_call") {
-                opts.input_message = InputMessageType::CONTENT_FAKE_TOOL_CALL;
+                opts.input_message = input_message_type::CONTENT_FAKE_TOOL_CALL;
             } else if (type == "all") {
-                opts.input_message = InputMessageType::ALL;
+                opts.input_message = input_message_type::ALL;
             } else {
                 LOG_ERR("Unknown input message type: %s\n", type.c_str());
                 return false;
@@ -308,26 +307,26 @@ static void render_all_scenarios(const minja::chat_template & tmpl,
                                  const json &                 tools,
                                  bool                         add_generation_prompt,
                                  bool                         enable_thinking,
-                                 InputMessageType             message_type) {
+                                 input_message_type             message_type) {
     json user_msg = build_user_message();
 
-    auto render_if = [&](InputMessageType type, const std::string & name, const json & assistant_msg) {
-        if (message_type == InputMessageType::ALL || message_type == type) {
+    auto render_if = [&](input_message_type type, const std::string & name, const json & assistant_msg) {
+        if (message_type == input_message_type::ALL || message_type == type) {
             json messages = json::array({ user_msg, assistant_msg });
             render_scenario(tmpl, name, messages, tools, add_generation_prompt, enable_thinking);
         }
     };
 
-    render_if(InputMessageType::CONTENT_ONLY, "content_only", build_content_only_message());
-    render_if(InputMessageType::REASONING_CONTENT, "reasoning_content", build_reasoning_content_message());
-    render_if(InputMessageType::TOOL_CALL_ONLY, "tool_call_only", build_tool_call_only_message());
-    render_if(InputMessageType::CONTENT_TOOL_CALL, "content_tool_call", build_content_tool_call_message());
-    render_if(InputMessageType::REASONING_TOOL_CALL, "reasoning_tool_call", build_reasoning_tool_call_message());
-    render_if(InputMessageType::CONTENT_FAKE_TOOL_CALL, "content_fake_tool_call",
+    render_if(input_message_type::CONTENT_ONLY, "content_only", build_content_only_message());
+    render_if(input_message_type::REASONING_CONTENT, "reasoning_content", build_reasoning_content_message());
+    render_if(input_message_type::TOOL_CALL_ONLY, "tool_call_only", build_tool_call_only_message());
+    render_if(input_message_type::CONTENT_TOOL_CALL, "content_tool_call", build_content_tool_call_message());
+    render_if(input_message_type::REASONING_TOOL_CALL, "reasoning_tool_call", build_reasoning_tool_call_message());
+    render_if(input_message_type::CONTENT_FAKE_TOOL_CALL, "content_fake_tool_call",
               build_content_fake_tool_call_message());
 
     // Also render with add_generation_prompt=true to show the prompt ending
-    if (message_type == InputMessageType::ALL) {
+    if (message_type == input_message_type::ALL) {
         LOG_ERR("\n\n=== Generation Prompt Scenarios (add_generation_prompt=true) ===\n");
 
         json prompt_messages = json::array({ user_msg });
@@ -338,7 +337,7 @@ static void render_all_scenarios(const minja::chat_template & tmpl,
     }
 }
 
-static const char * reasoning_mode_to_str(content_structure::ReasoningMode mode) {
+static const char * reasoning_mode_to_str(content_structure::reasoning_mode_type mode) {
     switch (mode) {
         case content_structure::REASONING_NONE:
             return "NONE";
@@ -350,7 +349,7 @@ static const char * reasoning_mode_to_str(content_structure::ReasoningMode mode)
     return "UNKNOWN";
 }
 
-static const char * content_mode_to_str(content_structure::ContentMode mode) {
+static const char * content_mode_to_str(content_structure::content_mode_type mode) {
     switch (mode) {
         case content_structure::CONTENT_PLAIN:
             return "PLAIN";
@@ -362,7 +361,7 @@ static const char * content_mode_to_str(content_structure::ContentMode mode) {
     return "UNKNOWN";
 }
 
-static const char * function_format_to_str(tool_call_structure::FunctionFormat fmt) {
+static const char * function_format_to_str(enum tool_call_structure::function_format fmt) {
     switch (fmt) {
         case tool_call_structure::FUNC_JSON_OBJECT:
             return "JSON_OBJECT";
@@ -384,7 +383,7 @@ static const char * function_format_to_str(tool_call_structure::FunctionFormat f
     return "UNKNOWN";
 }
 
-static const char * argument_format_to_str(tool_call_structure::ArgumentFormat fmt) {
+static const char * argument_format_to_str(enum tool_call_structure::argument_format fmt) {
     switch (fmt) {
         case tool_call_structure::ARGS_JSON:
             return "JSON";
@@ -400,7 +399,7 @@ int main(int argc, char ** argv) {
     // Set log level to most verbose to capture all debug output
     common_log_set_verbosity_thold(99);
 
-    DebugOptions opts;
+    debug_options opts;
     if (!parse_options(argc, argv, opts)) {
         return 1;
     }
@@ -430,8 +429,8 @@ int main(int argc, char ** argv) {
         json tools = opts.with_tools ? build_tools_definition() : json();
 
         // Render template scenarios if requested
-        if (opts.input_message != InputMessageType::NONE &&
-            (opts.output_mode == OutputMode::TEMPLATE || opts.output_mode == OutputMode::BOTH)) {
+        if (opts.input_message != input_message_type::NONE &&
+            (opts.mode == output_mode::TEMPLATE || opts.mode == output_mode::BOTH)) {
             LOG_ERR("\n");
             LOG_ERR("================================================================================\n");
             LOG_ERR("                         TEMPLATE RENDERING OUTPUT\n");
@@ -442,13 +441,13 @@ int main(int argc, char ** argv) {
         }
 
         // Output analysis if requested
-        if (opts.output_mode == OutputMode::ANALYSIS || opts.output_mode == OutputMode::BOTH) {
+        if (opts.mode == output_mode::ANALYSIS || opts.mode == output_mode::BOTH) {
             LOG_ERR("\n");
             LOG_ERR("================================================================================\n");
             LOG_ERR("                           TEMPLATE ANALYSIS\n");
             LOG_ERR("================================================================================\n");
 
-            template_analysis_result analysis = TemplateAnalyzer::analyze_template(chat_template);
+            template_analysis_result analysis = template_analyzer::analyze_template(chat_template);
 
             LOG_ERR("\n=== Analysis Results ===\n");
 
@@ -508,10 +507,10 @@ int main(int argc, char ** argv) {
             }
             params.parallel_tool_calls = false;
 
-            auto parser_data = UniversalPEGGenerator::generate_parser(analysis, chat_template, params);
+            auto parser_data = universal_peg_generator::generate_parser(analysis, chat_template, params);
 
             LOG_ERR("\n=== Generated Parser ===\n");
-            LOG_ERR("%s\n", parser_data.parser.c_str());
+            LOG_ERR("%s\n", json::parse(parser_data.parser).dump(4).c_str());
 
             LOG_ERR("\n=== Generated Grammar ===\n");
             LOG_ERR("%s\n", parser_data.grammar.c_str());

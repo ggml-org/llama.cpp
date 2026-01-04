@@ -139,6 +139,7 @@ struct common_peg_parse_result {
 struct common_peg_parse_context {
     std::string input;
     bool is_partial;
+    bool debug = false;  // Enable debug output for parser tracing
     common_peg_ast_arena ast;
 
     int parse_depth;

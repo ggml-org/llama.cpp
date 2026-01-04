@@ -108,7 +108,9 @@ class common_chat_peg_unified_builder : public common_chat_peg_builder {
                                             bool                     thinking_forced_open);
 
     // Build content block based on ContentStructure
-    common_peg_parser build_content_block(const content_structure & cs, common_reasoning_format reasoning_format);
+    common_peg_parser build_content_block(const content_structure & cs,
+                                         common_reasoning_format reasoning_format,
+                                         const std::string &    tool_section_start = "");
 
     // Build complete tool section based on ToolCallStructure
     common_peg_parser build_tool_section(const tool_call_structure & ts,
