@@ -63,10 +63,9 @@ inline void preprocess_tokens_q8(
     int64_t in_dim,
     sycl::queue& queue)
 {
-    constexpr int QK = 32;      // Quantization block size (matches XMX_K)
     constexpr int SG_SIZE = 16;
 
-    int64_t num_blocks = batch * (in_dim / QK);
+    int64_t num_blocks = batch * (in_dim / QK8_0);
 
     queue.submit([&](sycl::handler& cgh) {
         cgh.parallel_for(
@@ -74,13 +73,13 @@ inline void preprocess_tokens_q8(
             [=](sycl::nd_item<1> item) [[intel::reqd_sub_group_size(SG_SIZE)]] {
                 auto sg = item.get_sub_group();
                 int64_t block_id = item.get_group(0);
-                int64_t row = block_id / (in_dim / QK);
-                int64_t k_block = block_id % (in_dim / QK);
+                int64_t row = block_id / (in_dim / QK8_0);
+                int64_t k_block = block_id % (in_dim / QK8_0);
 
                 int lane = sg.get_local_linear_id();
 
                 // Each lane loads 2 values (32 total per sub-group)
-                int64_t base = row * in_dim + k_block * QK;
+                int64_t base = row * in_dim + k_block * QK8_0;
                 float v0 = static_cast<float>(tokens[base + lane * 2]);
                 float v1 = static_cast<float>(tokens[base + lane * 2 + 1]);
 
@@ -102,7 +101,7 @@ inline void preprocess_tokens_q8(
 
                 // Store scale (one per block, lane 0 only)
                 if (lane == 0) {
-                    scales[row * (in_dim / QK) + k_block] = sycl::half(scale);
+                    scales[row * (in_dim / QK8_0) + k_block] = sycl::half(scale);
                 }
             });
     });
@@ -118,10 +117,9 @@ inline void extract_q8_0_scales(
     int64_t in_dim,
     sycl::queue& queue)
 {
-    constexpr int QK = 32;    // Q8_0 block size
     constexpr int Q8_0_BLOCK_SIZE = 34;  // 32 int8 + 2 bytes fp16 scale
 
-    int64_t num_blocks_per_row = in_dim / QK;
+    int64_t num_blocks_per_row = in_dim / QK8_0;
     int64_t total_blocks = out_dim * num_blocks_per_row;
 
     const uint8_t* w_ptr = static_cast<const uint8_t*>(weights_qs);
