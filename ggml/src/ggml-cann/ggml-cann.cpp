@@ -1888,6 +1888,7 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
             break;
         case GGML_OP_OUT_PROD:
             ggml_cann_out_prod(ctx, dst);
+            break;
         case GGML_OP_SSM_CONV:
             ggml_cann_ssm_conv(ctx, dst);
             break;
@@ -2078,6 +2079,40 @@ static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
 }
 
 /**
+ * @brief Check if CANN backend can fuse the specified operation sequence
+ *
+ * This function determines whether an operation sequence starting from the specified node
+ * can be fused into an optimized operation in the CANN backend. Operation fusion can reduce
+ * memory access overhead and improve computational efficiency.
+ *
+ * @param cgraph Pointer to the computation graph
+ * @param node_idx Index of the starting node in the computation graph
+ * @param ops Sequence of operation types to check for fusion
+ * @return true if the operations can be fused
+ * @return false if the operations cannot be fused
+ */
+static bool ggml_cann_can_fuse(const struct ggml_cgraph *          cgraph,
+                               int                                 node_idx,
+                               std::initializer_list<enum ggml_op> ops) {
+    if (!ggml_can_fuse(cgraph, node_idx, ops)) {
+        return false;
+    }
+
+    // CANN backend supports fusing ADD + RMS_NORM operations
+    if ((ops.size() == 2) && ops.begin()[0] == GGML_OP_ADD && ops.begin()[1] == GGML_OP_RMS_NORM) {
+        ggml_tensor * add_node = cgraph->nodes[node_idx];
+        // TODO: support broadcast for ADD + RMS_NORM
+        if (add_node->src[0]->ne[0] != add_node->src[1]->ne[0] || add_node->src[0]->ne[1] != add_node->src[1]->ne[1] ||
+            add_node->src[0]->ne[2] != add_node->src[1]->ne[2] || add_node->src[0]->ne[3] != add_node->src[1]->ne[3]) {
+            return false;
+        }
+        return true;
+    }
+
+    return false;
+}
+
+/**
  * @brief Evaluate the computation graph and optionally capture or execute it using CANN graph API.
  *
  * If CANN graph execution is enabled and graph capture is required, this function begins
@@ -2101,9 +2136,18 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
 #endif  // USE_ACL_GRAPH
     // Only perform the graph execution if CANN graphs are not enabled, or we are capturing the graph.
     // With the use of CANN graphs, the execution will be performed by the graph launch.
+    static bool opt_fusion = parse_bool(get_env("GGML_CANN_OPERATOR_FUSION").value_or(""));
+
     if (!use_cann_graph || cann_graph_capture_required) {
         for (int i = 0; i < cgraph->n_nodes; i++) {
             ggml_tensor * node = cgraph->nodes[i];
+            if (opt_fusion) {
+                if (ggml_cann_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_RMS_NORM })) {
+                    ggml_cann_op_add_rms_norm_fused(*cann_ctx, node, cgraph->nodes[i + 1]);
+                    i++;
+                    continue;
+                }
+            }
 
             if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE ||
                 node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
