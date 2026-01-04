@@ -216,6 +216,8 @@ struct common_params_sampling {
     std::vector<llama_logit_bias> logit_bias;     // logit biases to apply
     std::vector<llama_logit_bias> logit_bias_eog; // pre-calculated logit biases for EOG tokens
 
+    bool backend_sampling = false;
+
     bool has_logit_bias() const {
         return !logit_bias.empty();
     }
@@ -689,7 +691,9 @@ struct common_init_result {
 
     llama_model * model();
     llama_context * context();
+
     common_sampler * sampler(llama_seq_id seq_id);
+    void reset_samplers();
 
     std::vector<llama_adapter_lora_ptr> & lora();
 

@@ -713,7 +713,7 @@ enum llama_params_fit_status llama_params_fit(
 
 struct llama_sampler_chain_params llama_sampler_chain_default_params() {
     struct llama_sampler_chain_params result = {
-        /*.no_perf                     =*/ true,
+        /*.no_perf =*/ true,
     };
 
     return result;
