@@ -507,6 +507,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
     ml.get_key(LLM_KV_CONTEXT_LENGTH,          hparams.n_ctx_train);
     ml.get_key(LLM_KV_EMBEDDING_LENGTH,        hparams.n_embd);
+    ml.get_key(LLM_KV_EMBEDDING_LENGTH_OUT,    hparams.n_embd_out, false);
     ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer);
     ml.get_key(LLM_KV_EXPERT_COUNT,            hparams.n_expert,        false);
     ml.get_key(LLM_KV_EXPERT_USED_COUNT,       hparams.n_expert_used,   false);
@@ -627,6 +628,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     ml.get_arr(LLM_KV_CLASSIFIER_OUTPUT_LABELS, classifier_labels, false);
     if (!classifier_labels.empty()) {
         hparams.n_cls_out = classifier_labels.size();
+        hparams.n_embd_out = classifier_labels.size();
     }
 
     // arch-specific KVs
@@ -6446,6 +6448,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             layer.shortconv.out_proj = create_tensor(tn(LLM_TENSOR_SHORTCONV_OUTPROJ, "weight", i), {n_embd, n_embd}, 0);
                         }
                     }
+
+                    // for LFM2-ColBert-350M
+                    dense_2_out_layers = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "weight"), {n_embd, hparams.get_n_embd_out()}, TENSOR_NOT_REQUIRED);
                 } break;
             case LLM_ARCH_SMALLTHINKER:
                 {
@@ -7974,6 +7979,10 @@ int32_t llama_model_n_embd(const llama_model * model) {
 
 int32_t llama_model_n_embd_inp(const llama_model * model) {
     return model->hparams.n_embd_inp();
+}
+
+int32_t llama_model_n_embd_out(const llama_model * model) {
+    return model->hparams.get_n_embd_out();
 }
 
 int32_t llama_model_n_layer(const llama_model * model) {

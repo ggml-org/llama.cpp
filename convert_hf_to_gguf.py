@@ -9948,6 +9948,31 @@ class LFM2Model(TextModel):
         return any(p in name for p in ["audio", "codebook", "conformer", "depth_embedding", "depthformer", "depth_linear"])
 
 
+@ModelBase.register("Lfm2Model")
+class LFM2ColBertModel(LFM2Model):
+    model_arch = gguf.MODEL_ARCH.LFM2
+    dense_tensor_name = "dense_2"
+
+    def set_vocab(self):
+        super().set_vocab()
+        self.gguf_writer.add_add_bos_token(False)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if not name.startswith(self.dense_tensor_name):
+            name = "model." + name
+
+        return super().modify_tensors(data_torch, name, bid)
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # dense tensor is stored in a separate safetensors file
+        from safetensors.torch import load_file
+        tensors_file = self.dir_model / "1_Dense" / "model.safetensors"
+        assert tensors_file.is_file()
+        tensor = load_file(tensors_file)["linear.weight"]
+        self.gguf_writer.add_embedding_length_out(tensor.shape[0])
+        yield f"{self.dense_tensor_name}.weight", tensor.clone()
+
+
 @ModelBase.register("Lfm2MoeForCausalLM")
 class LFM2MoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2MOE

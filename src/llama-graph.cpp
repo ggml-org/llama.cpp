@@ -2067,14 +2067,18 @@ llm_graph_input_mem_hybrid * llm_graph_context::build_inp_mem_hybrid() const {
 void llm_graph_context::build_dense_out(
     ggml_tensor * dense_2,
     ggml_tensor * dense_3) const {
-    if (!cparams.embeddings || dense_2 == nullptr || dense_3 == nullptr) {
+    if (!cparams.embeddings || !(dense_2 || dense_3)) {
         return;
     }
     ggml_tensor * cur = res->t_embd_pooled != nullptr ? res->t_embd_pooled : res->t_embd;
     GGML_ASSERT(cur != nullptr && "missing t_embd_pooled/t_embd");
 
-    cur = ggml_mul_mat(ctx0, dense_2, cur);
-    cur = ggml_mul_mat(ctx0, dense_3, cur);
+    if (dense_2) {
+        cur = ggml_mul_mat(ctx0, dense_2, cur);
+    }
+    if (dense_3) {
+        cur = ggml_mul_mat(ctx0, dense_3, cur);
+    }
     cb(cur, "result_embd_pooled", -1);
     res->t_embd_pooled = cur;
     ggml_build_forward_expand(gf, cur);
