@@ -1013,12 +1013,6 @@ json oaicompat_chat_params_parse(
 
     // Apply chat template to the list of messages
     auto chat_params = common_chat_templates_apply(opt.tmpls, inputs);
-    SRV_INF("enable_thinking(req/body)=%d kwarg=%s prompt_thinking=%d format=%s\nPROMPT:\n%s",
-        inputs.enable_thinking,
-        json_value(inputs.chat_template_kwargs, "enable_thinking", std::string("")).c_str(),
-        chat_params.thinking_forced_open,
-        common_chat_format_name(chat_params.format),
-        chat_params.prompt.c_str());
 
     /* Append assistant prefilled message */
     if (prefill_assistant_message) {

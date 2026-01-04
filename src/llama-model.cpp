@@ -1919,12 +1919,14 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_EXAONE_MOE:
             {
-                // TODO: implement
                 hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
                 hparams.n_swa = 128;
                 hparams.set_swa_pattern(4);
                 hparams.n_layer_dense_lead = 1;
+                hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
+                hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
 
+                ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,                hparams.rope_freq_base_train_swa, false);
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa, true);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_EXPERT_COUNT,                      hparams.n_expert);

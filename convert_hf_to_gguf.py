@@ -1230,6 +1230,15 @@ class TextModel(ModelBase):
         if chkhsh == "f4f37b6c8eb9ea29b3eac6bb8c8487c5ab7885f8d8022e67edc1c68ce8403e95":
             # ref: https://huggingface.co/MiniMaxAI/MiniMax-M2
             res = "minimax-m2"
+        if chkhsh == "4a2e2abae11ca2b86d570fc5b44be4d5eb5e72cc8f22dd136a94b37da83ab665":
+            # ref: https://huggingface.co/KORMo-Team/KORMo-tokenizer
+            res = "kormo"
+        if chkhsh == "9d70134b369a70e5735009b6de918f7581b5211f7c074d1f89f753aea8248af1":
+            # ref: https://huggingface.co/tencent/Youtu-LLM-2B
+            res = "youtu"
+        if chkhsh == "16389f0a1f51ee53e562ffd51c371dc508639ab0e4261502071836e50e223e91":
+            # ref: https://huggingface.co/upstage/Solar-Open-100B
+            res = "solar-open"
         if chkhsh == "6c81ce329e0802883b22eabab0d3fa48357337ef1ecb45443828bf1f6254833f":
             # ref: https://huggingface.co/LGAI-EXAONE/K-EXAONE-236B-A23B
             res = "exaone-moe"
@@ -8499,16 +8508,12 @@ class ExaoneMoEModel(Exaone4Model):
         super().set_gguf_parameters()
         # We check whether the layer is MoE or not by referencing MoE module dynamically, not by the layer index
         self.gguf_writer.add_expert_count(self.hparams["num_experts"])
-        self.gguf_writer.add_expert_used_count(self.hparams["num_experts_per_tok"])
         moe_intermediate_size = self.hparams["moe_intermediate_size"]
         num_shared_experts = self.hparams["num_shared_experts"]
         self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
         self.gguf_writer.add_expert_shared_count(num_shared_experts)
         self.gguf_writer.add_expert_shared_feed_forward_length(moe_intermediate_size * num_shared_experts)
-        self.gguf_writer.add_expert_group_count(self.hparams["n_group"])            # 확인 필요
-        self.gguf_writer.add_expert_group_used_count(self.hparams["topk_group"])    # 확인 필요
         self.gguf_writer.add_expert_weights_scale(self.hparams["routed_scaling_factor"])
-        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
         self.gguf_writer.add_expert_weights_norm(self.hparams["norm_topk_prob"])
         
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
