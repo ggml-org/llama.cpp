@@ -35,7 +35,7 @@ static void hvx_dot_f32_f16_ua(float * restrict r, const void * restrict y, cons
 
     uint32_t i = 0;
 
-    #pragma unroll(2)
+    #pragma unroll(4)
     for (i = 0; i < nvec; i++) {
         // Load y (fp32) and convert into fp16
         HVX_Vector y0_qf = Q6_Vqf32_vsub_VsfVsf(vy[i*2+0], zero);  // 32 elements
@@ -84,7 +84,7 @@ static void hvx_dot_f16_f16_ua(float * restrict r, const void * restrict x, cons
 
     uint32_t i = 0;
 
-    #pragma unroll(2)
+    #pragma unroll(4)
     for (i = 0; i < nvec; i++) {
         HVX_Vector y_hf = vy[i];
         HVX_Vector x_hf = vx[i];
@@ -122,6 +122,7 @@ static void hvx_mad_f32_f16_aa(float * restrict y, const void * restrict x, int 
     HVX_Vector S = hvx_vec_splat_fp16(s);
 
     uint32_t i = 0;
+    #pragma unroll(4)
     for (i = 0; i < nvec; ++i) {
         // Multiply x * s -> pair of F32 vectors
         HVX_VectorPair xs_p = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(ptr_x[i]), S);
