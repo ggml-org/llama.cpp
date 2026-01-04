@@ -255,7 +255,6 @@ cmake --build . --target install
 ### II. Build llama.cpp
 
 ```bash
-
 mkdir -p ~/dev/llm
 cd ~/dev/llm
 
