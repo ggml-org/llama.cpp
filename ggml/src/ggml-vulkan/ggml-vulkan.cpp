@@ -90,6 +90,7 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 #define VK_VENDOR_ID_AMD 0x1002
 #define VK_VENDOR_ID_APPLE 0x106b
+#define VK_VENDOR_ID_ARM 0x13B5
 #define VK_VENDOR_ID_INTEL 0x8086
 #define VK_VENDOR_ID_NVIDIA 0x10de
 
@@ -2528,7 +2529,11 @@ static vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
                                                        vk::MemoryPropertyFlagBits::eDeviceLocal});
         } else if (device->uma) {
             // Fall back to host memory type
-            buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal,
+            // 1. Prefer Device Local AND Host Visible (Best for UMA)
+            // 2. Fallback to Device Local
+            // 3. Fallback to Host Visible
+            buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+                                                       vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
         } else if (device->disable_host_visible_vidmem) {
             if (device->allow_sysmem_fallback) {
@@ -2540,6 +2545,9 @@ static vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
         } else {
             // use rebar if available, otherwise fallback to device only visible memory
             if (device->allow_sysmem_fallback) {
+                // 1. Prefer Device Local AND Host Visible (ReBAR)
+                // 2. Fallback to Device Local
+                // 3. Fallback to Host Visible
                 buf = ggml_vk_create_buffer(device, size, {vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
                                                            vk::MemoryPropertyFlagBits::eDeviceLocal,
                                                            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent});
@@ -2930,7 +2938,15 @@ static void ggml_vk_load_shaders(vk_device& device) {
         s_warptile_mmqid_int_k = { mul_mat_subgroup_size_32, 32, 32, 32, 32,       32, 1, 2, 1, 1, mul_mat_subgroup_size_16 };
 
         // chip specific tuning
-        if ((device->architecture == AMD_GCN) && (device->driver_id != vk::DriverId::eAmdProprietary)) {
+        if (device->vendor_id == VK_VENDOR_ID_ARM) {
+            m_warptile_mmq = m_warptile_mmq_int = { 64, 64, 64, 16, 16, 32, 2, 2, 2, 1, 16 };
+            m_warptile = { 64, 64, 64, 16, 16, 32, 2, 2, 2, 1, 16 };
+            m_warptile_id = m_warptile_mmqid = { 64, 64, 64, 16, 16, 32, 2, 2, 2, 1, 16 };
+
+            l_warptile_mmq = l_warptile_mmq_int = m_warptile_mmq;
+            l_warptile = m_warptile;
+            l_warptile_id = l_warptile_mmqid = m_warptile_id;
+        } else if ((device->architecture == AMD_GCN) && (device->driver_id != vk::DriverId::eAmdProprietary)) {
             m_warptile_mmq = m_warptile_mmq_int = { 256, 64, 64, 32, 16, 16, 2, 2, 2, 1, 16 };
             m_warptile_mmqid = m_warptile_mmqid_int = { 256, 64, 64, 32, 16, 16, 2, 2, 2, 1, 16 };
         }
@@ -4487,6 +4503,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->vendor_id = device->properties.vendorID;
         device->driver_id = driver_props.driverID;
 
+        if (device->vendor_id == VK_VENDOR_ID_ARM) {
+            // Previously forced FP32 here due to poor FP16 performance on some ARM GPUs.
+            // With adjusted l_warptile (below), FP16 is now performant and preferred.
+        }
+
         // Implementing the async backend interfaces seems broken on older Intel HW,
         // see https://github.com/ggml-org/llama.cpp/issues/17302.
         device->support_async = (device->vendor_id != VK_VENDOR_ID_INTEL ||
@@ -4521,6 +4542,9 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         if (GGML_VK_SUBALLOCATION_BLOCK_SIZE != nullptr) {
             device->suballocation_block_size = std::stoull(GGML_VK_SUBALLOCATION_BLOCK_SIZE);
+        } else if (device->vendor_id == VK_VENDOR_ID_ARM) {
+            // Limit batching of allocations to 256MB on Mali GPUs to avoid fragmentation issues
+            device->suballocation_block_size = 256 * 1024 * 1024;
         } else {
             // Limit batching of allocations to 1GB by default to avoid fragmentation issues
             device->suballocation_block_size = 1024*1024*1024;
