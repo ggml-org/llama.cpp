@@ -490,6 +490,15 @@ const char * ggml_backend_dev_description(ggml_backend_dev_t device) {
 void ggml_backend_dev_memory(ggml_backend_dev_t device, size_t * free, size_t * total) {
     GGML_ASSERT(device);
     device->iface.get_memory(device, free, total);
+
+    // If func get_memory returns zeros, fall back to the CPU backend and query it.
+    if (*free == 0 && *total == 0) {
+        ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        GGML_ASSERT(cpu_dev);
+
+        cpu_dev->iface.get_memory(cpu_dev, free, total);
+        GGML_ASSERT(*free != 0 && *total != 0);
+    }
 }
 
 enum ggml_backend_dev_type ggml_backend_dev_type(ggml_backend_dev_t device) {
