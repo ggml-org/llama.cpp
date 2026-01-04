@@ -40,7 +40,7 @@ static void top_k_cub(ggml_cuda_pool & pool,
                          ncols, k, env);
 }
 
-#elif defined(GGML_CUDA_USE_CUB) // CUB_TOP_K_AVAILABLE
+#elif defined(GGML_CUDA_USE_CUB)  // CUB_TOP_K_AVAILABLE
 
 static int next_power_of_2(int x) {
     int n = 1;
@@ -50,7 +50,7 @@ static int next_power_of_2(int x) {
     return n;
 }
 
-#endif  // CUB_TOP_K_AVAILABLE
+#endif                            // CUB_TOP_K_AVAILABLE
 
 void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0   = dst->src[0];
@@ -74,7 +74,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     for (int i = 0; i < nrows; i++) {
         top_k_cub(pool, src0_d + i * ncols, dst_d + i * k, ncols, k, stream);
     }
-#elif defined(GGML_CUDA_USE_CUB) // CUB_TOP_K_AVAILABLE
+#elif defined(GGML_CUDA_USE_CUB)  // CUB_TOP_K_AVAILABLE
     // Fall back to argsort + copy
     const int    ncols_pad      = next_power_of_2(ncols);
     const size_t shared_mem     = ncols_pad * sizeof(int);
@@ -90,7 +90,7 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     }
     CUDA_CHECK(cudaMemcpy2DAsync(dst_d, k * sizeof(int), tmp_dst, ncols * sizeof(int), k * sizeof(int), nrows,
                                  cudaMemcpyDeviceToDevice, stream));
-#else  // GGML_CUDA_USE_CUB
+#else                             // GGML_CUDA_USE_CUB
     ggml_cuda_pool_alloc<int> temp_dst_alloc(pool, ncols * nrows);
     int *                     tmp_dst = temp_dst_alloc.get();
     argsort_f32_i32_cuda_bitonic(src0_d, tmp_dst, ncols, nrows, GGML_SORT_ORDER_DESC, stream);
