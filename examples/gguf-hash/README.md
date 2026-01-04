@@ -8,6 +8,7 @@ CLI to hash GGUF files to detect difference on a per model and per tensor level.
 - `--help`: display help message
 - `--xxh64`: use xhash 64bit hash mode (default)
 - `--sha1`: use sha1
+- `--xxh3`: use xxh3
 - `--uuid`: use uuid
 - `--sha256`: use sha256
 - `--all`: use all hash

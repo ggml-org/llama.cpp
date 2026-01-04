@@ -1092,6 +1092,7 @@ XXH_PUBLIC_API XXH_PUREF XXH64_hash_t XXH64_hashFromCanonical(XXH_NOESCAPE const
  *   - WebAssembly SIMD128
  *   - POWER8 VSX
  *   - s390x ZVector
+ *   - RVV
  * This can be controlled via the @ref XXH_VECTOR macro, but it automatically
  * selects the best version according to predefined macros. For the x86 family, an
  * automatic runtime dispatcher is included separately in @ref xxh_x86dispatch.c.
@@ -3751,6 +3752,8 @@ XXH_PUBLIC_API XXH64_hash_t XXH64_hashFromCanonical(XXH_NOESCAPE const XXH64_can
 #    include <immintrin.h>
 #  elif defined(__SSE2__)
 #    include <emmintrin.h>
+#  elif defined(__riscv_v)
+#    include <riscv_vector.h>
 #  endif
 #endif
 
@@ -3873,6 +3876,7 @@ enum XXH_VECTOR_TYPE /* fake enum */ {
                        */
     XXH_VSX    = 5,  /*!< VSX and ZVector for POWER8/z13 (64-bit) */
     XXH_SVE    = 6,  /*!< SVE for some ARMv8-A and ARMv9-A */
+    XXH_RVV    = 7,  
 };
 /*!
  * @ingroup tuning
@@ -3895,6 +3899,7 @@ enum XXH_VECTOR_TYPE /* fake enum */ {
 #  define XXH_NEON   4
 #  define XXH_VSX    5
 #  define XXH_SVE    6
+#  define XXH_RVV    7
 #endif
 
 #ifndef XXH_VECTOR    /* can be defined on command line */
@@ -3919,6 +3924,8 @@ enum XXH_VECTOR_TYPE /* fake enum */ {
      || (defined(__s390x__) && defined(__VEC__)) \
      && defined(__GNUC__) /* TODO: IBM XL */
 #    define XXH_VECTOR XXH_VSX
+#  elif defined(__riscv_v)
+#    define XXH_VECTOR XXH_RVV
 #  else
 #    define XXH_VECTOR XXH_SCALAR
 #  endif
@@ -3931,6 +3938,12 @@ enum XXH_VECTOR_TYPE /* fake enum */ {
 #  else
 #    warning "__ARM_FEATURE_SVE isn't supported. Use SCALAR instead."
 #  endif
+#  undef XXH_VECTOR
+#  define XXH_VECTOR XXH_SCALAR
+#endif
+
+#if (XXH_VECTOR == XXH_RVV) && !defined(__riscv_v)
+#  warning "__riscv_v isn't supported. Use SCALAR instead."
 #  undef XXH_VECTOR
 #  define XXH_VECTOR XXH_SCALAR
 #endif
@@ -3956,6 +3969,8 @@ enum XXH_VECTOR_TYPE /* fake enum */ {
 #     define XXH_ACC_ALIGN 64
 #  elif XXH_VECTOR == XXH_SVE   /* sve */
 #     define XXH_ACC_ALIGN 64
+#  elif XXH_VECTOR == XXH_RVV   /* rvv */
+#     define XXH_ACC_ALIGN 64
 #  endif
 #endif
 
@@ -3963,6 +3978,8 @@ enum XXH_VECTOR_TYPE /* fake enum */ {
     || XXH_VECTOR == XXH_AVX2 || XXH_VECTOR == XXH_AVX512
 #  define XXH_SEC_ALIGN XXH_ACC_ALIGN
 #elif XXH_VECTOR == XXH_SVE
+#  define XXH_SEC_ALIGN XXH_ACC_ALIGN
+#elif XXH_VECTOR == XXH_RVV
 #  define XXH_SEC_ALIGN XXH_ACC_ALIGN
 #else
 #  define XXH_SEC_ALIGN 8
@@ -5626,6 +5643,117 @@ XXH_mult32to64_add64(xxh_u64 lhs, xxh_u64 rhs, xxh_u64 acc)
 }
 #endif
 
+#if (XXH_VECTOR == XXH_RVV)
+
+XXH_FORCE_INLINE void
+XXH3_accumulate_512_rvv(void* XXH_RESTRICT acc,
+                        const void* XXH_RESTRICT input,
+                        const void* XXH_RESTRICT secret)
+{
+    XXH_ALIGN(XXH_ACC_ALIGN) uint64_t aligned_input[XXH_ACC_NB];
+    XXH_ALIGN(XXH_ACC_ALIGN) uint64_t aligned_secret[XXH_ACC_NB];
+    XXH_ALIGN(XXH_ACC_ALIGN) uint64_t aligned_acc[XXH_ACC_NB];
+
+    memcpy(aligned_input,  input,  XXH_STRIPE_LEN);
+    memcpy(aligned_secret, secret, XXH_STRIPE_LEN);
+    memcpy(aligned_acc,    acc,    XXH_STRIPE_LEN);
+
+    size_t vl = __riscv_vsetvl_e64m8(8);
+
+    vuint64m8_t data_vec = __riscv_vle64_v_u64m8(aligned_input, vl);
+    vuint64m8_t key_vec  = __riscv_vle64_v_u64m8(aligned_secret, vl);
+    vuint64m8_t acc_vec  = __riscv_vle64_v_u64m8(aligned_acc, vl);
+
+    vuint64m8_t data_key = __riscv_vxor_vv_u64m8(data_vec, key_vec, vl);
+
+    vuint64m8_t data_key_lo = __riscv_vand_vx_u64m8(data_key, 0xFFFFFFFFULL, vl);
+    vuint64m8_t data_key_hi = __riscv_vsrl_vx_u64m8(data_key, 32, vl);
+
+    vuint64m8_t idx = __riscv_vxor_vx_u64m8(__riscv_vid_v_u64m8(vl), 1, vl);
+    vuint64m8_t data_swap = __riscv_vrgather_vv_u64m8(data_vec, idx, vl);
+
+    acc_vec = __riscv_vadd_vv_u64m8(acc_vec, data_swap, vl);
+    acc_vec = __riscv_vmacc_vv_u64m8(acc_vec, data_key_lo, data_key_hi, vl);
+
+    __riscv_vse64_v_u64m8(aligned_acc, acc_vec, vl);
+    memcpy(acc, aligned_acc, XXH_STRIPE_LEN);
+}
+
+XXH_FORCE_INLINE void
+XXH3_accumulate_rvv(xxh_u64* XXH_RESTRICT acc,
+                    const xxh_u8* XXH_RESTRICT input,
+                    const xxh_u8* XXH_RESTRICT secret,
+                    size_t nbStripes)
+{
+    if (nbStripes == 0) return;
+
+    XXH_ALIGN(XXH_ACC_ALIGN) uint64_t aligned_acc[XXH_ACC_NB];
+    memcpy(aligned_acc, acc, XXH_STRIPE_LEN);
+
+    const uint64_t* xinput  = (const uint64_t*) (const void*) input;
+    const uint64_t* xsecret = (const uint64_t*) (const void*) secret;
+
+    XXH_ALIGN(XXH_ACC_ALIGN) uint64_t aligned_input[XXH_ACC_NB];
+    XXH_ALIGN(XXH_ACC_ALIGN) uint64_t aligned_secret[XXH_ACC_NB];
+
+    size_t vl        = __riscv_vsetvl_e64m8(8);
+    vuint64m8_t vacc = __riscv_vle64_v_u64m8(aligned_acc, vl);
+    vuint64m8_t idx  = __riscv_vxor_vx_u64m8(__riscv_vid_v_u64m8(vl), 1, vl);
+
+    do {
+        XXH_PREFETCH((const xxh_u8*)xinput + XXH_PREFETCH_DIST);
+
+        memcpy(aligned_input,  xinput,  XXH_STRIPE_LEN);
+        memcpy(aligned_secret, xsecret, XXH_STRIPE_LEN);
+
+        vuint64m8_t data_vec = __riscv_vle64_v_u64m8(aligned_input, vl);
+        vuint64m8_t key_vec  = __riscv_vle64_v_u64m8(aligned_secret, vl);
+
+        vuint64m8_t data_key    = __riscv_vxor_vv_u64m8(data_vec, key_vec, vl);
+        vuint64m8_t data_key_lo = __riscv_vand_vx_u64m8(data_key, 0xFFFFFFFFULL, vl);
+        vuint64m8_t data_key_hi = __riscv_vsrl_vx_u64m8(data_key, 32, vl);
+
+        vuint64m8_t data_swap = __riscv_vrgather_vv_u64m8(data_vec, idx, vl);
+
+        vacc = __riscv_vadd_vv_u64m8(vacc, data_swap, vl);
+        vacc = __riscv_vmacc_vv_u64m8(vacc, data_key_lo, data_key_hi, vl);
+
+        xinput  += 8;
+        xsecret += 1;
+        nbStripes--;
+    } while (nbStripes > 0);
+
+    __riscv_vse64_v_u64m8(aligned_acc, vacc, vl);
+    memcpy(acc, aligned_acc, XXH_STRIPE_LEN);
+}
+
+XXH_FORCE_INLINE void
+XXH3_scrambleAcc_rvv(void* XXH_RESTRICT acc, const void* XXH_RESTRICT secret)
+{
+    XXH_ALIGN(XXH_ACC_ALIGN) uint64_t aligned_acc[XXH_ACC_NB];
+    XXH_ALIGN(XXH_ACC_ALIGN) uint64_t aligned_secret[XXH_ACC_NB];
+
+    memcpy(aligned_acc,    acc,    XXH_STRIPE_LEN);
+    memcpy(aligned_secret, secret, XXH_STRIPE_LEN);
+
+    size_t vl = __riscv_vsetvl_e64m8(8);
+
+    vuint64m8_t acc_vec = __riscv_vle64_v_u64m8(aligned_acc, vl);
+    vuint64m8_t key_vec = __riscv_vle64_v_u64m8(aligned_secret, vl);
+
+    vuint64m8_t shifted  = __riscv_vsrl_vx_u64m8(acc_vec, 47, vl);
+    vuint64m8_t data_vec = __riscv_vxor_vv_u64m8(acc_vec, shifted, vl);
+
+    vuint64m8_t data_key = __riscv_vxor_vv_u64m8(data_vec, key_vec, vl);
+
+    acc_vec = __riscv_vmul_vx_u64m8(data_key, XXH_PRIME32_1, vl);
+
+    __riscv_vse64_v_u64m8(aligned_acc, acc_vec, vl);
+    memcpy(acc, aligned_acc, XXH_STRIPE_LEN);
+}
+
+#endif  // XXH_VECTOR == XXH_RVV
+
 /*!
  * @internal
  * @brief Scalar round for @ref XXH3_accumulate_512_scalar().
@@ -5823,8 +5951,13 @@ typedef void (*XXH3_f_initCustomSecret)(void* XXH_RESTRICT, xxh_u64);
 #define XXH3_scrambleAcc    XXH3_scrambleAcc_scalar
 #define XXH3_initCustomSecret XXH3_initCustomSecret_scalar
 
-#else /* scalar */
+#elif (XXH_VECTOR == XXH_RVV)
+#define XXH3_accumulate_512 XXH3_accumulate_512_rvv
+#define XXH3_accumulate     XXH3_accumulate_rvv
+#define XXH3_scrambleAcc    XXH3_scrambleAcc_rvv
+#define XXH3_initCustomSecret XXH3_initCustomSecret_scalar
 
+#else /* scalar */
 #define XXH3_accumulate_512 XXH3_accumulate_512_scalar
 #define XXH3_accumulate     XXH3_accumulate_scalar
 #define XXH3_scrambleAcc    XXH3_scrambleAcc_scalar
