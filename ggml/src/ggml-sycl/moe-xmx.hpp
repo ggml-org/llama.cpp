@@ -175,11 +175,6 @@ void launch_xmx_moe_gemm_q8_0(
                 // Bounds check
                 if (wg_row >= batch) return;
 
-                // TODO: Use slm_weights for double-buffered weight prefetching
-                // TODO: Use slm_weight_scales for weight scale loading
-                (void)slm_weights;
-                (void)slm_weight_scales;
-
                 // Initialize accumulators
                 joint_matrix<sycl::sub_group, int32_t, use::accumulator,
                              XMX_M, XMX_N> acc[TILES_M][TILES_N];
@@ -189,6 +184,9 @@ void launch_xmx_moe_gemm_q8_0(
                         joint_matrix_fill(sg, acc[tm][tn], 0);
                     }
                 }
+
+                // Float accumulators for precision across K-blocks
+                float float_acc[TILES_M][TILES_N][XMX_M * XMX_N] = {{{0.0f}}};
 
                 // K-dimension reduction loop
                 // Each iteration processes XMX_K=32 elements along the reduction dimension
@@ -239,6 +237,18 @@ void launch_xmx_moe_gemm_q8_0(
                         }
                     }
 
+                    // Load weight scales for this K-block
+                    if (sg_id < TILES_N && lane == 0) {
+                        int global_col = wg_col + sg_id * XMX_N;
+                        int64_t k_block_idx = k / XMX_K;
+                        if (global_col < out_dim) {
+                            slm_weight_scales[sg_id] = static_cast<float>(
+                                weights_d[(global_col * (in_dim / XMX_K)) + k_block_idx]);
+                        } else {
+                            slm_weight_scales[sg_id] = 0.0f;
+                        }
+                    }
+
                     item.barrier(sycl::access::fence_space::local_space);
 
                     // Compute tiles - iterate over M and N tile positions
@@ -263,6 +273,34 @@ void launch_xmx_moe_gemm_q8_0(
 
                                 // XMX multiply-accumulate: acc += mat_a * mat_b
                                 joint_matrix_mad(sg, acc[tm][tn], mat_a, mat_b, acc[tm][tn]);
+
+                                // Store accumulator to SLM to extract values
+                                // Use reinterpret to get int32 pointer from int8 SLM
+                                int32_t* acc_slm_raw = reinterpret_cast<int32_t*>(
+                                    &slm_weights[tm * TILES_N * XMX_M * XMX_N * sizeof(int32_t) / sizeof(int8_t)]);
+                                auto acc_slm_ptr = sycl::address_space_cast<
+                                    sycl::access::address_space::local_space,
+                                    sycl::access::decorated::no>(acc_slm_raw);
+                                joint_matrix_store(sg, acc[tm][tn], acc_slm_ptr, XMX_N, layout::row_major);
+
+                                item.barrier(sycl::access::fence_space::local_space);
+
+                                // Apply scales and accumulate in float
+                                // Token scales are per-row, weight scales are per-tile
+                                for (int i = lane; i < XMX_M * XMX_N; i += SG_SIZE) {
+                                    int tile_row = i / XMX_N;
+                                    int global_row = row + tile_row;
+                                    float t_scale = (global_row < batch) ?
+                                        slm_token_scales[tm * XMX_M + tile_row] : 0.0f;
+                                    float w_scale = slm_weight_scales[tn];
+                                    int32_t raw = acc_slm_raw[i];
+                                    float_acc[tm][tn][i] += raw * t_scale * w_scale;
+                                }
+
+                                // Reset accumulator for next K-block
+                                joint_matrix_fill(sg, acc[tm][tn], 0);
+
+                                item.barrier(sycl::access::fence_space::local_space);
                             }
                         }
                     }
@@ -272,47 +310,31 @@ void launch_xmx_moe_gemm_q8_0(
                     item.barrier(sycl::access::fence_space::local_space);
                 }  // end K-loop
 
-                // TODO: Store results with scale application
-                // The accumulator contains int32 dot products. To get fp16 output:
-                //   1. Extract int32 values from accumulator
-                //   2. For each K-block, multiply by (token_scale[k/32] * weight_scale[k/32])
-                //   3. Sum scaled values across K dimension
-                //   4. Convert final float to fp16 and store
-                //
-                // For now, write zeros as placeholder (safe, predictable output)
+                // === Final output store ===
                 for (int tm = 0; tm < TILES_M; tm++) {
                     for (int tn = 0; tn < TILES_N; tn++) {
                         int row = wg_row + tm * XMX_M;
                         int col = wg_col + tn * XMX_N;
 
                         if (row < batch && col < out_dim) {
-                            // Placeholder: write zeros instead of unscaled int32 garbage
-                            // Each sub-group lane writes its portion of the tile
                             int lane = sg.get_local_linear_id();
                             for (int i = lane; i < XMX_M * XMX_N; i += SG_SIZE) {
                                 int tile_row = i / XMX_N;
                                 int tile_col = i % XMX_N;
                                 if (row + tile_row < batch && col + tile_col < out_dim) {
                                     output[(row + tile_row) * out_dim + col + tile_col] =
-                                        sycl::half(0.0f);
+                                        sycl::half(float_acc[tm][tn][i]);
                                 }
                             }
                         }
 
-                        // Suppress unused accumulator warning (will be used when scaling is implemented)
+                        // Suppress unused accumulator warning (used during K-loop for XMX MAD)
                         (void)acc[tm][tn];
                     }
                 }
             });
     }).wait();
 
-    // Note: q_tokens and token_scales are now loaded in the kernel above
-    // via cooperative SLM loading into slm_tokens and slm_token_scales
-
-    // TODO: weights_d parameter will be used for:
-    //   - Loading Q8_0 weight scales (1 scale per 32 elements)
-    //   - Multiplying with token scales during output dequantization
-    (void)weights_d;
 }
 
 // MXFP4 XMX GEMM for a single expert's token batch
