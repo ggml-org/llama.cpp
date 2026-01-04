@@ -82,7 +82,7 @@
 			} catch {
 				toolArgs = toolArgsBase64;
 			}
-			const toolResult = match[3].trim();
+			const toolResult = match[3].replace(/^\n+|\n+$/g, '');
 
 			sections.push({
 				type: 'tool_call',
@@ -131,7 +131,7 @@
 				toolArgs = toolArgsBase64;
 			}
 			// Capture streaming result content (everything after args marker)
-			const streamingResult = pendingMatch[3]?.trim() || '';
+			const streamingResult = (pendingMatch[3] || '').replace(/^\n+|\n+$/g, '');
 
 			sections.push({
 				type: 'tool_call_pending',
@@ -209,23 +209,6 @@
 			return args;
 		}
 	}
-
-	function isJsonContent(content: string): boolean {
-		const trimmed = content.trim();
-		return (
-			(trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-			(trimmed.startsWith('[') && trimmed.endsWith(']'))
-		);
-	}
-
-	function formatJsonContent(content: string): string {
-		try {
-			const parsed = JSON.parse(content);
-			return JSON.stringify(parsed, null, 2);
-		} catch {
-			return content;
-		}
-	}
 </script>
 
 <div class="agentic-content">
@@ -301,18 +284,10 @@
 									{/if}
 								</div>
 								{#if section.toolResult}
-									{#if isJsonContent(section.toolResult)}
-										<SyntaxHighlightedCode
-											code={formatJsonContent(section.toolResult)}
-											language="json"
-											maxHeight="20rem"
-											class="text-xs"
-										/>
-									{:else}
-										<div class="text-sm">
-											<MarkdownContent content={section.toolResult} disableMath />
-										</div>
-									{/if}
+									<div class="overflow-auto rounded-lg border border-border bg-muted">
+										<!-- prettier-ignore -->
+										<pre class="m-0 overflow-x-auto whitespace-pre-wrap p-4 font-mono text-xs leading-relaxed"><code>{section.toolResult}</code></pre>
+									</div>
 								{:else if isPending}
 									<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
 										Waiting for result...
