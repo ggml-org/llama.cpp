@@ -1025,7 +1025,6 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         auto content_segment =
             content_header + p.until("<|message|>") + "<|message|>" + p.content(segment_content) + end_segment;
 
-        // JSON schema response format
         if (!inputs.json_schema.is_null()) {
             auto final_header = p.literal("<|channel|>final");
             auto constraint   = p.optional(p.literal(" <|constrain|>") + p.until("<|message|>"));
@@ -1045,55 +1044,43 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
                 // Tool call can appear as:
                 // 1. In role header: " to=functions.NAME<|channel|>..."
                 // 2. In channel: "<|channel|>(analysis|commentary) to=functions.NAME..."
-                auto func_name_in_role    = p.literal(" to=functions.") + p.tool_name(p.literal(name));
-                auto func_name_in_channel = p.literal(" to=functions.") + p.tool_name(p.literal(name));
+                auto func_name = p.literal(" to=functions.") + p.tool_name(p.literal(name));
 
-                // Channel header after recipient (in role)
                 auto channel_after_recipient =
                     p.literal("<|channel|>") + p.choice({ p.literal("analysis"), p.literal("commentary") });
-
-                // Optional constraint - use until to handle partial matching during streaming
-                // (constraint can be " <|constrain|>json" or " <|constrain|>identifier" etc.)
-                auto constraint = p.until("<|message|>");
-
-                // Tool arguments
-                auto args = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", params));
+                auto constraint = p.optional(p.space() + p.literal("<|constrain|>") + p.until("<|message|>"));
+                auto args       = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", params));
 
                 // Pattern 1: recipient in role header
                 // " to=functions.NAME<|channel|>(analysis|commentary)[constraint]<|message|>ARGS"
-                auto tool_in_role = p.tool(p.tool_open(func_name_in_role + channel_after_recipient + constraint) +
-                                           "<|message|>" + args);
+                auto tool_in_role =
+                    p.tool(p.tool_open(func_name + channel_after_recipient) + constraint + "<|message|>" + args);
 
                 // Pattern 2: recipient in channel header
                 // "<|channel|>(analysis|commentary) to=functions.NAME[constraint]<|message|>ARGS"
                 auto channel_with_recipient =
                     p.literal("<|channel|>") + p.choice({ p.literal("analysis"), p.literal("commentary") });
-                auto tool_in_channel = p.tool(p.tool_open(channel_with_recipient + func_name_in_channel + constraint) +
-                                              "<|message|>" + args);
+                auto tool_in_channel =
+                    p.tool(channel_with_recipient + p.tool_open(func_name + constraint + "<|message|>") + args);
 
                 tool_choice |= p.rule("tool-" + name, tool_in_role | tool_in_channel);
             });
 
-            // Build tool calls section
             auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
             auto max_calls = inputs.parallel_tool_calls ? -1 : 1;
 
-            // Optional role start before tool call
-            auto role_start = p.optional(p.literal("<|start|>assistant"));
+            auto role_start = p.optional(p.space() + p.literal("<|start|>assistant"));
 
-            // Tool call with optional preceding content
             auto tool_call = p.trigger_rule(
                 "tool-call",
-                role_start + p.repeat(tool_choice + p.optional(p.literal("<|start|>assistant")), min_calls, max_calls));
+                p.repeat(role_start + tool_choice, min_calls, max_calls));
 
-            // Full parser: optional reasoning, optional content, optional tool calls
             if (extract_reasoning) {
                 return p.optional(analysis_segment) + p.optional(content_segment) + tool_call;
             }
             return p.content(p.until_one_of({ " to=functions.", "<|channel|>" })) + tool_call;
         }
 
-        // Content only parser
         include_grammar = false;
         if (extract_reasoning) {
             return p.optional(analysis_segment) + content_segment;
@@ -1191,12 +1178,12 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         params.json_schema = json::parse(inputs.json_schema);
     }
 
-    if (inputs.parallel_tool_calls && !tmpl.original_caps().supports_parallel_tool_calls) {
-        LOG_DBG("Disabling parallel_tool_calls because the template does not support it\n");
-        params.parallel_tool_calls = false;
-    } else {
+    // if (inputs.parallel_tool_calls && !tmpl.original_caps().supports_parallel_tool_calls) {
+    //     LOG_DBG("Disabling parallel_tool_calls because the template does not support it\n");
+    //     params.parallel_tool_calls = false;
+    // } else {
         params.parallel_tool_calls = inputs.parallel_tool_calls;
-    }
+    //}
 
     if (params.tools.is_array()) {
         if (params.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && !params.grammar.empty()) {
