@@ -11588,6 +11588,12 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
         return;
     }
 
+    // Try XMX sorted MoE path (experimental, Q8_0 only, requires GGML_SYCL_XMX_MOE=1)
+    if (try_xmx_sorted_moe(ctx, src0, src1, ids, dst)) {
+        GGML_SYCL_DEBUG("[MoE] XMX sorted dispatch successful for type %d\n", src0->type);
+        return;
+    }
+
     // Try GPU-side expert routing (MMVQ) - good for decode (ne12 == 1)
     // This avoids the host sync that blocks graph recording
     if (ggml_sycl_mul_mat_id_vec_q(ctx, src0, src1, ids, dst)) {

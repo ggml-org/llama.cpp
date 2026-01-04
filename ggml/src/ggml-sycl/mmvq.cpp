@@ -3163,9 +3163,22 @@ bool ggml_sycl_mul_mat_id_vec_q(
     ggml_backend_sycl_context & ctx,
     const ggml_tensor *src0, const ggml_tensor *src1, const ggml_tensor *ids, ggml_tensor *dst) {
 
+    // Early batch size check - avoid expensive GGML_TENSOR_BINARY_OP_LOCALS for large batches
+    // For large batch sizes, host-side routing with oneDNN batching is faster
+    // MMVQ dispatches per-(token, expert) which has more overhead for large batches
+    // oneDNN batching groups tokens by expert and uses optimized GEMM
+    // Threshold determined empirically: MMVQ ~49 t/s for pp512, oneDNN ~675 t/s
+    constexpr int64_t MMVQ_MOE_MAX_BATCH = 32;
+    const int64_t batch_size = src1->ne[2];  // ne12 - number of tokens
+    if (batch_size > MMVQ_MOE_MAX_BATCH) {
+        GGML_SYCL_DEBUG("[MMVQ] Batch %ld > %d, using host-side oneDNN batching\n",
+                        (long)batch_size, MMVQ_MOE_MAX_BATCH);
+        return false;  // Fall back to host-side routing with oneDNN batching
+    }
+
     GGML_TENSOR_BINARY_OP_LOCALS;
 
-    // Supports both ne12 == 1 (decode) and ne12 > 1 (prompt)
+    // Supports both ne12 == 1 (decode) and ne12 > 1 (prompt, up to threshold)
     // The kernel dispatches over (iid1, id) pairs in parallel
 
     // Only handle quantized types that have _id kernels
