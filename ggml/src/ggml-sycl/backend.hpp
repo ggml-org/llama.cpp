@@ -40,6 +40,7 @@
 #include "tsembd.hpp"
 #include "wkv.hpp"
 #include "pad_reflect_1d.hpp"
+#include "fattn.hpp"
 
 
 #endif  // GGML_SYCL_BACKEND_HPP
