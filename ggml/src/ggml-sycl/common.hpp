@@ -484,6 +484,30 @@ struct optimize_feature {
     }
 };
 
+// XMX hardware capabilities queried at runtime
+// Moved here so sycl_device_info can include it as a member
+struct XMXCapabilities {
+    bool supported = false;
+
+    // Tile dimensions (queried from hardware)
+    size_t M = 0;  // Expected: 8
+    size_t N = 0;  // Expected: 16
+    size_t K = 0;  // Expected: 32
+
+    // Supported types
+    bool supports_int8 = false;
+    bool supports_fp16 = false;
+
+    // Device memory info
+    size_t slm_size = 0;  // Shared local memory per work-group
+
+    // Derived optimal config
+    int optimal_tiles_m = 1;
+    int optimal_tiles_n = 1;
+};
+
+XMXCapabilities query_xmx_capabilities(sycl::device & dev);
+
 struct sycl_device_info {
     int    cc;   // compute capability
     int    nsm;  // number of streaming multiprocessors (CUDA) maps to the maximum
@@ -494,6 +518,7 @@ struct sycl_device_info {
     size_t total_vram;
     //sycl_hw_info hw_info;     \\ device id and aarch, currently not used
     bool   supports_soa_reorder = false;  // Device capability: can use SoA weight layout
+    XMXCapabilities xmx_caps;  // XMX matrix engine capabilities (queried at init)
 };
 
 struct ggml_sycl_device_info {
@@ -1555,28 +1580,8 @@ constexpr size_t ceil_div(const size_t m, const size_t n) {
 
 bool gpu_has_xmx(sycl::device & dev);
 
-// XMX hardware capabilities queried at runtime
-struct XMXCapabilities {
-    bool supported = false;
-
-    // Tile dimensions (queried from hardware)
-    size_t M = 0;  // Expected: 8
-    size_t N = 0;  // Expected: 16
-    size_t K = 0;  // Expected: 32
-
-    // Supported types
-    bool supports_int8 = false;
-    bool supports_fp16 = false;
-
-    // Device memory info
-    size_t slm_size = 0;  // Shared local memory per work-group
-
-    // Derived optimal config
-    int optimal_tiles_m = 1;
-    int optimal_tiles_n = 1;
-};
-
-XMXCapabilities query_xmx_capabilities(sycl::device & dev);
+// XMXCapabilities struct and query_xmx_capabilities() declaration
+// moved to line ~487 so sycl_device_info can include xmx_caps as a member
 
 template <int N, class T> std::string debug_get_array_str(const std::string & prefix, const T array[N]) {
     if (LIKELY(!g_ggml_sycl_debug)) {

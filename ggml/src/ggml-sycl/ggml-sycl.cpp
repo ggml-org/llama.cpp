@@ -157,6 +157,16 @@ static ggml_sycl_device_info ggml_sycl_init() {
         info.devices[i].smpbo = prop.get_local_mem_size();
 
         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
+
+        // Query XMX (Intel matrix engine) capabilities
+        info.devices[i].xmx_caps = query_xmx_capabilities(device);
+        GGML_LOG_INFO("[SYCL] Device %d XMX: %s, M=%zu N=%zu K=%zu, SLM=%zuKB\n",
+                      i,
+                      info.devices[i].xmx_caps.supported ? "yes" : "no",
+                      info.devices[i].xmx_caps.M,
+                      info.devices[i].xmx_caps.N,
+                      info.devices[i].xmx_caps.K,
+                      info.devices[i].xmx_caps.slm_size / 1024);
     }
 
     for (int id = 0; id < info.device_count; ++id) {
