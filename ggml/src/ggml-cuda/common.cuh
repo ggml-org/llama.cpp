@@ -1058,13 +1058,13 @@ struct ggml_cuda_graph {
     cudaGraphExec_t instance = nullptr;
     size_t num_nodes = 0;
     std::vector<cudaGraphNode_t> nodes;
-    std::vector<cudaKernelNodeParams> params;
     bool disable_due_to_gpu_arch = false;
     bool disable_due_to_too_many_updates = false;
     bool disable_due_to_failed_graph_capture = false;
     int number_consecutive_updates = 0;
     bool cuda_graphs_enabled = false;
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
+    std::vector<ggml_graph_node_properties> extraneous_srcs_properties;
 #endif
 };
 
