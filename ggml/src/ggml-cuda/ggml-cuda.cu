@@ -2980,8 +2980,13 @@ static bool is_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, 
 
     // Loop over nodes in GGML graph to determine if CUDA graph update is required
     // and store properties to allow this comparison for the next token
+    std::unordered_map<ggml_tensor *, bool> seen_node;
+    std::vector<ggml_tensor *>              extraneous_srcs;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         bool has_matching_properties = true;
+
+        seen_node[cgraph->nodes[i]] = true;
+
         if (!cuda_graph_update_required) {
             has_matching_properties = ggml_graph_node_has_matching_properties(cgraph->nodes[i], &cuda_ctx->cuda_graph->ggml_graph_properties[i]);
         }
@@ -2989,6 +2994,32 @@ static bool is_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, 
             cuda_graph_update_required = true;
         }
         set_ggml_graph_node_properties(cgraph->nodes[i], &cuda_ctx->cuda_graph->ggml_graph_properties[i]);
+
+        for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
+            ggml_tensor * src = cgraph->nodes[i]->src[src_idx];
+            if (src && seen_node.find(src) == seen_node.end()) {
+                extraneous_srcs.push_back(src);
+            }
+        }
+    }
+
+    if (cuda_ctx->cuda_graph->extraneous_srcs_properties.size() != (size_t) extraneous_srcs.size()) {
+        cuda_graph_update_required = true;
+        cuda_ctx->cuda_graph->extraneous_srcs_properties.resize(extraneous_srcs.size());
+    }
+
+    for (size_t i = 0; i < extraneous_srcs.size(); ++i) {
+        bool has_matching_properties = true;
+
+        if (!cuda_graph_update_required) {
+            has_matching_properties = ggml_graph_node_has_matching_properties(
+                extraneous_srcs[i], &cuda_ctx->cuda_graph->extraneous_srcs_properties[i]);
+        }
+
+        if (!has_matching_properties) {
+            cuda_graph_update_required = true;
+        }
+        set_ggml_graph_node_properties(extraneous_srcs[i], &cuda_ctx->cuda_graph->extraneous_srcs_properties[i]);
     }
 
     return cuda_graph_update_required;
