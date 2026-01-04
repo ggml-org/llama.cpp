@@ -11499,13 +11499,28 @@ static bool try_xmx_sorted_moe(
     stream->memcpy(expert_write_pos, expert_offsets,
                    n_experts * sizeof(int32_t)).wait();
 
-    // Note: src1 is F32, but moe_sort_tokens_by_expert expects the same type for input/output.
-    // We need to convert F32 to F16 during the sort. For now, we'll do a direct cast
-    // which will be incorrect but matches the skeleton status of this implementation.
-    // TODO: Implement proper F32->F16 conversion during sort
-    const sycl::half* tokens_in = reinterpret_cast<const sycl::half*>(src1->data);
+    // Phase 1a: Convert F32 tokens to F16 for XMX processing
+    const float* tokens_f32 = static_cast<const float*>(src1->data);
+    sycl::half* tokens_f16_input = sycl::malloc_device<sycl::half>(
+        n_tokens * in_dim, *stream);
+
+    if (!tokens_f16_input) {
+        GGML_SYCL_DEBUG("[XMX MoE] Failed to allocate tokens_f16_input\n");
+        sycl::free(tokens_sorted, *stream);
+        sycl::free(token_map, *stream);
+        sycl::free(expert_counts, *stream);
+        sycl::free(expert_offsets, *stream);
+        sycl::free(sorted_output, *stream);
+        sycl::free(expert_write_pos, *stream);
+        return false;
+    }
+
+    moe_convert_f32_to_f16(
+        tokens_f32, tokens_f16_input, n_tokens, in_dim, *stream);
+
+    // Phase 1b: Sort tokens by expert
     moe_sort_tokens_by_expert(
-        tokens_in, tokens_sorted, expert_ids, expert_write_pos,
+        tokens_f16_input, tokens_sorted, expert_ids, expert_write_pos,
         token_map, n_tokens, n_ids, in_dim, n_experts, *stream);
 
     // Phase 2: XMX GEMM per expert
@@ -11531,6 +11546,28 @@ static bool try_xmx_sorted_moe(
     int8_t* q_tokens = sycl::malloc_device<int8_t>(max_batch * in_dim, *stream);
     sycl::half* token_scales = sycl::malloc_device<sycl::half>(max_batch * (in_dim / QK), *stream);
 
+    // Allocate buffer for Q8_0 expert scales (reused across experts)
+    // Each expert has out_dim * (in_dim/QK) scales
+    int64_t num_k_blocks = in_dim / QK;
+    sycl::half* expert_scale_buf = nullptr;
+    if (src0->type == GGML_TYPE_Q8_0) {
+        expert_scale_buf = sycl::malloc_device<sycl::half>(
+            out_dim * num_k_blocks, *stream);
+        if (!expert_scale_buf) {
+            GGML_SYCL_DEBUG("[XMX MoE] Failed to allocate expert_scale_buf\n");
+            sycl::free(q_tokens, *stream);
+            sycl::free(token_scales, *stream);
+            sycl::free(tokens_f16_input, *stream);
+            sycl::free(tokens_sorted, *stream);
+            sycl::free(token_map, *stream);
+            sycl::free(expert_counts, *stream);
+            sycl::free(expert_offsets, *stream);
+            sycl::free(expert_write_pos, *stream);
+            sycl::free(sorted_output, *stream);
+            return false;
+        }
+    }
+
     for (int64_t e = 0; e < n_experts; e++) {
         if (h_counts[e] == 0) continue;
 
@@ -11541,10 +11578,10 @@ static bool try_xmx_sorted_moe(
 
         // Dispatch to appropriate kernel based on quantization type
         if (src0->type == GGML_TYPE_Q8_0) {
-            // Q8_0 layout: each block is 32 int8 values + 1 fp16 scale = 34 bytes
-            // Scales are embedded in the blocks - extract pointer
-            // For now, pass nullptr as the kernel is a skeleton
-            const sycl::half* expert_scales = nullptr;  // TODO: extract scales from Q8_0 blocks
+            // Extract Q8_0 scales for this expert's weights
+            moe_xmx::extract_q8_0_scales(
+                expert_weights, expert_scale_buf,
+                out_dim, in_dim, *stream);
 
             // Pre-quantize fp16 tokens to int8 with per-block scales
             const sycl::half* expert_tokens = tokens_sorted + h_offsets[e] * in_dim;
@@ -11553,7 +11590,7 @@ static bool try_xmx_sorted_moe(
                 h_counts[e], in_dim, *stream);
 
             moe_xmx::launch_xmx_moe_gemm_q8_0<4, 4>(
-                expert_weights, expert_scales,
+                expert_weights, expert_scale_buf,
                 q_tokens, token_scales,
                 sorted_output + h_offsets[e] * out_dim,
                 h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
@@ -11577,16 +11614,15 @@ static bool try_xmx_sorted_moe(
     sycl::free(q_tokens, *stream);
     sycl::free(token_scales, *stream);
 
-    // Phase 3: Scatter results back to original positions
-    // Note: dst is F32, but we're writing F16. This will be incorrect but
-    // matches the skeleton status of this implementation.
-    // TODO: Implement proper F16->F32 conversion during scatter
-    sycl::half* final_output = reinterpret_cast<sycl::half*>(dst->data);
-    moe_scatter_results(
+    // Phase 3: Scatter results back to original positions with F16->F32 conversion
+    float* final_output = static_cast<float*>(dst->data);
+    moe_scatter_results_f16_to_f32(
         sorted_output, final_output, token_map,
         total_pairs, out_dim, *stream);
 
     // Free temporary buffers
+    sycl::free(tokens_f16_input, *stream);
+    if (expert_scale_buf) sycl::free(expert_scale_buf, *stream);
     sycl::free(tokens_sorted, *stream);
     sycl::free(token_map, *stream);
     sycl::free(expert_counts, *stream);
