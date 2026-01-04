@@ -32,6 +32,8 @@ struct llama_memory_breakdown_data {
     }
 };
 
+struct llama_context_kv_cache_data;
+
 struct llama_context {
     // init scheduler and compute buffers, reserve worst-case graphs
     llama_context(
@@ -69,6 +71,11 @@ struct llama_context {
     float * get_embeddings();
     float * get_embeddings_ith(int32_t i);
     float * get_embeddings_seq(llama_seq_id seq_id);
+    ggml_tensor * get_embeddings_tensor();
+
+    const float * draft_input_hidden_state = nullptr;
+
+    void * kv_cache_data = nullptr; 
 
     void attach_threadpool(
             ggml_threadpool_t threadpool,
@@ -100,6 +107,8 @@ struct llama_context {
                 int32_t   il_start,
                 int32_t   il_end);
 
+    void kv_cache_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1);
+
     // process a single ubatch with a specific graph type
     // if memory_context is provided, it will be applied first to the context's memory
     // ret contains the status of the graph computation
@@ -108,7 +117,8 @@ struct llama_context {
                 const llama_ubatch & ubatch,
                     llm_graph_type   gtype,
             llama_memory_context_i * mctx,
-                       ggml_status & ret);
+                       ggml_status & ret,
+                const llama_mtp_params & mtp_params);
 
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);
@@ -218,9 +228,20 @@ private:
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
-                          llm_graph_type   gtype) const;
+                          llm_graph_type   gtype,
+                           const llama_mtp_params & mtp_params) const;
 
     llm_graph_cb graph_get_cb() const;
+
+    // Methods for MTP decode     
+    std::unique_ptr<llama_memory_context_i> initialize_decode_context(const llama_batch & batch_inp, const bool output_all);
+
+    bool prepare_mtp_graph_inputs(
+        llm_graph_result * res,
+        const llama_ubatch & ubatch,
+        const llama_mtp_params & mtp_params);
+
+    std::unique_ptr<struct llama_memory_context_i> mtp_memory_batch(const llama_batch & batch_inp);
 
     // TODO: read/write lora adapters and cvec
     size_t state_write_data(llama_io_write_i & io);
@@ -251,6 +272,7 @@ private:
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
     size_t  embd_size = 0; // capacity (of floats) for embeddings
     float * embd      = nullptr;
+    ggml_tensor * embd_tensor = nullptr;
 
     // sequence embeddings output (map of [n_embd] vectors)
     // populated only when pooling_type != LLAMA_POOLING_TYPE_NONE

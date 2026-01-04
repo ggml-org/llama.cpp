@@ -228,6 +228,17 @@ extern "C" {
     //               - if not:        only the last token is output
     //            )
     //
+    typedef enum {
+        MTP_OP_NONE,
+        MTP_OP_WARMUP,
+        MTP_OP_UPDATE_ACCEPTED,
+        MTP_OP_DRAFT_GEN,
+    } llama_mtp_op_type;
+
+    typedef struct llama_mtp_params {
+        llama_mtp_op_type op_type;
+    } llama_mtp_params;
+
     typedef struct llama_batch {
         int32_t n_tokens;
 
@@ -237,6 +248,7 @@ extern "C" {
         int32_t      *  n_seq_id;
         llama_seq_id ** seq_id;
         int8_t       *  logits;   // TODO: rename this to "output"
+        llama_mtp_params mtp_params;
     } llama_batch;
 
     enum llama_model_kv_override_type {
@@ -314,6 +326,7 @@ extern "C" {
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
+        bool mtp;             // use mtp if is supported by the Model
     };
 
     // NOTE: changing the default values of parameters marked as [EXPERIMENTAL] may cause crashes or incorrect results in certain configurations
@@ -542,6 +555,8 @@ extern "C" {
     LLAMA_API enum llama_vocab_type llama_vocab_type(const struct llama_vocab * vocab);
 
     LLAMA_API int32_t llama_vocab_n_tokens(const struct llama_vocab * vocab);
+
+    LLAMA_API int32_t llama_model_n_nextn_layer(const struct llama_model * model);
 
     // Functions to access the model's GGUF metadata scalar values
     // - The functions return the length of the string on success, or -1 on failure
@@ -1450,6 +1465,38 @@ extern "C" {
             int64_t                   idata_split,
             ggml_opt_epoch_callback   callback_train,
             ggml_opt_epoch_callback   callback_eval);
+
+    //
+    // MTP
+    //
+
+    LLAMA_API void llama_set_draft_input_hidden_state(struct llama_context * ctx, const float * hidden_state);
+
+    /**
+     * @brief Prepares the context for an MTP KV cache update by creating a resized copy of the last sinfo.
+     *        This is used after speculative validation when only a subset of draft tokens are accepted.
+     * @param n_accepted The number of tokens that were accepted and for which the sinfo should be resized.
+     * @return true on success.
+     */
+    LLAMA_API bool llama_mtp_prepare_sinfo_for_update(struct llama_context * ctx, size_t n_accepted);
+    
+    /**
+     * @brief Prepares the context for an MTP KV cache update by reusing the sinfo from the last main model decode.
+     *        This is used for the prompt warmup to ensure the MTP and main model KV caches are perfectly aligned.
+     * @return true on success.
+     */
+    LLAMA_API bool llama_mtp_prepare_sinfo_for_warmup(struct llama_context * ctx);
+    
+    /**
+     * @brief Clears the forced sinfo state from the context. Must be called after a decode that used a prepared sinfo.
+     */
+    LLAMA_API void llama_mtp_cancel_sinfo_update(struct llama_context * ctx);
+
+    /**
+     * @brief Removes KV cache metadata for a specified sequence and token range.
+     *        This makes the physical cells logically available again without deleting the tensor data.
+     */
+    LLAMA_API void llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1);
 
 #ifdef __cplusplus
 }

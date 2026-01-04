@@ -29,6 +29,7 @@ enum llm_graph_type {
     LLM_GRAPH_TYPE_DEFAULT,
     LLM_GRAPH_TYPE_ENCODER,
     LLM_GRAPH_TYPE_DECODER,
+    LLM_GRAPH_TYPE_DRAFT,
 };
 
 enum llm_ffn_op_type {
@@ -101,6 +102,20 @@ protected:
 };
 
 using llm_graph_input_ptr = std::unique_ptr<llm_graph_input_i>;
+
+class llm_graph_input_mtp_states : public llm_graph_input_i {
+public:
+    llm_graph_input_mtp_states()          = default;
+    virtual ~llm_graph_input_mtp_states() = default;
+
+    void set_input(const llama_ubatch * /*ubatch*/) override {}
+
+    bool can_reuse(const llm_graph_params & /*params*/) override {
+        return true;
+    }
+
+    ggml_tensor * states = nullptr;
+};
 
 class llm_graph_input_embd : public llm_graph_input_i {
 public:
@@ -428,6 +443,7 @@ struct llm_graph_params {
     const llama_adapter_loras    * loras;
     const llama_memory_context_i * mctx;
     const llama_cross            * cross;
+    llama_mtp_params             mtp_params;
 
     uint32_t n_outputs;
 
@@ -476,6 +492,7 @@ struct llm_graph_params {
             cvec      == other.cvec  &&
             loras     == other.loras &&
             cross     == other.cross &&
+            mtp_params.op_type == other.mtp_params.op_type &&
             n_outputs == other.n_outputs;
     }
 };
@@ -690,6 +707,7 @@ struct llm_graph_context {
     //
 
     ggml_tensor * build_inp_embd(ggml_tensor * tok_embd) const;
+    ggml_tensor * build_inp_embd_mtp(ggml_tensor * mtp_tok_embd) const;
     ggml_tensor * build_inp_pos() const;
     ggml_tensor * build_inp_attn_scale() const;
     ggml_tensor * build_inp_out_ids() const;

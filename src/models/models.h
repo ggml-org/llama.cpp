@@ -220,6 +220,8 @@ struct llm_build_glm4 : public llm_graph_context {
 
 struct llm_build_glm4_moe : public llm_graph_context {
     llm_build_glm4_moe(const llama_model & model, const llm_graph_params & params);
+
+    ggml_tensor * build_mtp_tail(const llama_layer & mtp_layer, ggml_tensor * prev_embeddings, int64_t n_embd_head, const llama_model & model);
 };
 
 struct llm_build_gpt2 : public llm_graph_context {
