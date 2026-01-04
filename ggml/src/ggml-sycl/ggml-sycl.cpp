@@ -11441,6 +11441,14 @@ static bool try_xmx_sorted_moe(
     GGML_SYCL_DEBUG("[XMX MoE] Weight layout: %s\n",
                    is_coalesced ? "coalesced" : (is_soa ? "soa" : "aos"));
 
+    // Check if expert weights are in host/mmap memory
+    // If so, skip XMX path - let host-side dispatch populate the cache first
+    // GPU kernels cannot access host memory and will hang
+    if (src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
+        GGML_SYCL_DEBUG("[XMX MoE] Weights in host buffer, falling back to populate cache\n");
+        return false;
+    }
+
     // XMX MoE uses synchronous memcpy for expert counts - incompatible with command graphs
     if (!g_ggml_sycl_disable_graph) {
         GGML_SYCL_DEBUG("[XMX MoE] Requires GGML_SYCL_DISABLE_GRAPH=1, skipping\n");
