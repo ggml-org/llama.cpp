@@ -11601,13 +11601,39 @@ static bool try_xmx_sorted_moe(
     const char* quant_name = (src0->type == GGML_TYPE_Q8_0) ? "Q8_0" : "MXFP4";
     GGML_SYCL_DEBUG("[XMX MoE] Using %s format for %s weights\n", layout_name, quant_name);
 
+    // Check if we need to look up cached experts (for mmap'd/host buffer weights)
+    // When is_soa is true, the data is in the unified cache in SoA format
+    const bool use_expert_cache = is_soa || is_coalesced;
+    int layer_id = -1;
+    if (use_expert_cache) {
+        // Extract layer number for cache lookup (same logic as MMVQ path)
+        layer_id = ggml_sycl_tp_extract_layer_number(src0->name);
+        if (layer_id < 0) {
+            layer_id = static_cast<int>(reinterpret_cast<uintptr_t>(src0->data) & 0x7FFFFFFF);
+        }
+    }
+
     for (int64_t e = 0; e < n_experts; e++) {
         if (h_counts[e] == 0) continue;
 
         // Weight tensor: [in_dim, out_dim, n_experts]
         // Stride to expert e = e * (in_dim * out_dim) in elements
         const size_t bytes_per_expert = src0->nb[2];
-        const void* expert_weights = static_cast<const char*>(src0->data) + e * bytes_per_expert;
+        const void* expert_mmap_ptr = static_cast<const char*>(src0->data) + e * bytes_per_expert;
+
+        // Get expert weights - from cache if SoA/coalesced, otherwise direct
+        const void* expert_weights = expert_mmap_ptr;
+        if (use_expert_cache) {
+            // Look up cached SoA/coalesced data using mmap pointer as key
+            void* cached_ptr = ggml_sycl::get_cached_expert(expert_mmap_ptr);
+            if (cached_ptr) {
+                expert_weights = cached_ptr;
+                GGML_SYCL_DEBUG("[XMX MoE] Using cached expert %ld (layer=%d)\n", (long)e, layer_id);
+            } else {
+                GGML_SYCL_DEBUG("[XMX MoE] WARNING: Cache miss for expert %ld, using original data\n", (long)e);
+                // Fall back to original pointer - kernel will likely produce garbage
+            }
+        }
 
         // Pre-quantize fp16 tokens to int8 with per-block scales
         const sycl::half* expert_tokens = tokens_sorted + h_offsets[e] * in_dim;
