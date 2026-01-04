@@ -3876,7 +3876,7 @@ enum XXH_VECTOR_TYPE /* fake enum */ {
                        */
     XXH_VSX    = 5,  /*!< VSX and ZVector for POWER8/z13 (64-bit) */
     XXH_SVE    = 6,  /*!< SVE for some ARMv8-A and ARMv9-A */
-    XXH_RVV    = 7,  
+    XXH_RVV    = 7,
 };
 /*!
  * @ingroup tuning
