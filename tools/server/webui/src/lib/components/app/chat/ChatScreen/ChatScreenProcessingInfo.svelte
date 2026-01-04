@@ -5,6 +5,7 @@
 	import { chatStore, isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { activeMessages, activeConversation } from '$lib/stores/conversations.svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import { chatWidthClasses } from '$lib/stores/chat.svelte';
 
 	const processingState = useProcessingState();
 
@@ -61,7 +62,10 @@
 </script>
 
 <div class="chat-processing-info-container pointer-events-none" class:visible={showProcessingInfo}>
-	<div class="chat-processing-info-content">
+	<div
+		class="chat-processing-info-content {chatWidthClasses().class}"
+		style={chatWidthClasses().style}
+	>
 		{#each processingDetails as detail (detail)}
 			<span class="chat-processing-info-detail pointer-events-auto">{detail}</span>
 		{/each}
@@ -92,7 +96,6 @@
 		align-items: center;
 		gap: 1rem;
 		justify-content: center;
-		max-width: 48rem;
 		margin: 0 auto;
 	}
 

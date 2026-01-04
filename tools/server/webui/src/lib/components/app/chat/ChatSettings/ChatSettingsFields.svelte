@@ -8,6 +8,7 @@
 	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { ChatSettingsParameterSourceIndicator } from '$lib/components/app';
+	import ChatSettingsComboboxCustomWidth from './ChatSettingsComboboxCustomWidth.svelte';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -222,26 +223,60 @@
 					{field.help || SETTING_CONFIG_INFO[field.key]}
 				</p>
 			{/if}
+		{:else if field.type === 'combobox'}
+			{#if field.key === 'customChatWidth'}
+				{@const isDisabled = localConfig.autoChatWidth}
+
+				<div class="space-y-2">
+					<Label
+						for={field.key}
+						class="text-sm font-medium {isDisabled ? 'text-muted-foreground' : ''}"
+					>
+						{field.label}
+					</Label>
+
+					<div class="w-full md:max-w-md">
+						<ChatSettingsComboboxCustomWidth
+							bind:value={localConfig[field.key]}
+							onChange={(value) => onConfigChange(field.key, value)}
+							disabled={isDisabled}
+						/>
+					</div>
+
+					{#if isDisabled}
+						<p class="text-xs text-muted-foreground">Disabled when automative width is enabled.</p>
+					{:else if field.help || SETTING_CONFIG_INFO[field.key]}
+						<p class="text-xs text-muted-foreground">
+							{field.help || SETTING_CONFIG_INFO[field.key]}
+						</p>
+					{/if}
+				</div>
+			{/if}
 		{:else if field.type === 'checkbox'}
 			<div class="flex items-start space-x-3">
 				<Checkbox
 					id={field.key}
 					checked={Boolean(localConfig[field.key])}
-					onCheckedChange={(checked) => onConfigChange(field.key, checked)}
+					onCheckedChange={(checked) => {
+						onConfigChange(field.key, checked);
+						if (field.key === 'autoChatWidth' && checked) {
+							onConfigChange('customChatWidth', '');
+						}
+					}}
 					class="mt-1"
 				/>
 
 				<div class="space-y-1">
-					<label
+					<Label
 						for={field.key}
-						class="flex cursor-pointer items-center gap-1.5 pt-1 pb-0.5 text-sm leading-none font-medium"
+						class="flex cursor-pointer items-center gap-1.5 text-sm font-medium"
 					>
 						{field.label}
 
 						{#if field.isExperimental}
 							<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
 						{/if}
-					</label>
+					</Label>
 
 					{#if field.help || SETTING_CONFIG_INFO[field.key]}
 						<p class="text-xs text-muted-foreground">

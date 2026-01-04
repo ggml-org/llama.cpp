@@ -24,6 +24,7 @@
 
 	interface Props {
 		class?: string;
+		style?: string;
 		deletionInfo: {
 			totalCount: number;
 			userMessages: number;
@@ -57,6 +58,7 @@
 
 	let {
 		class: className = '',
+		style,
 		deletionInfo,
 		editedContent = '',
 		isEditing = false,
@@ -178,6 +180,7 @@
 
 <div
 	class="text-md group w-full leading-7.5 {className}"
+	{style}
 	role="group"
 	aria-label="Assistant message with actions"
 >
@@ -190,7 +193,7 @@
 	{/if}
 
 	{#if message?.role === 'assistant' && isLoading() && !message?.content?.trim()}
-		<div class="mt-6 w-full max-w-[48rem]" in:fade>
+		<div class="mt-6 w-full {className}" {style} in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
 					{processingState.getPromptProgressText() ?? processingState.getProcessingMessage()}
@@ -388,7 +391,6 @@
 
 	.raw-output {
 		width: 100%;
-		max-width: 48rem;
 		margin-top: 1.5rem;
 		padding: 1rem 1.25rem;
 		border-radius: 1rem;

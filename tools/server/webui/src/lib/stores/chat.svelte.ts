@@ -15,6 +15,7 @@ import {
 } from '$lib/utils';
 import { SvelteMap } from 'svelte/reactivity';
 import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
+import { AUTO_WIDTH_CLASSES, CUSTOM_WIDTH_PRESETS, DEFAULT_WIDTH } from '$lib/constants/chat-width';
 
 /**
  * chatStore - Active AI interaction and streaming state management
@@ -76,6 +77,32 @@ class ChatStore {
 	private isStreamingActive = $state(false);
 	private isEditModeActive = $state(false);
 	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
+
+	get chatWidthClasses(): { class: string; style?: string } {
+		const currentConfig = config();
+		const customChatWidth = currentConfig.customChatWidth;
+
+		// Custom width takes priority if set
+		if (customChatWidth) {
+			let pixelValue: number | null = null;
+
+			if (customChatWidth in CUSTOM_WIDTH_PRESETS) {
+				const preset = customChatWidth as keyof typeof CUSTOM_WIDTH_PRESETS;
+				pixelValue = CUSTOM_WIDTH_PRESETS[preset];
+			} else {
+				// User typed a number directly instead of selecting a preset
+				const number = Number(customChatWidth);
+				if (!isNaN(number) && number > 0) {
+					pixelValue = number;
+				}
+			}
+			if (pixelValue !== null) {
+				return { class: '', style: `max-width: ${pixelValue}px` };
+			}
+		}
+
+		return currentConfig.autoChatWidth ? { class: AUTO_WIDTH_CLASSES } : { class: DEFAULT_WIDTH };
+	}
 
 	// ─────────────────────────────────────────────────────────────────────────────
 	// Loading State
@@ -1483,3 +1510,4 @@ export const isEditing = () => chatStore.isEditing();
 export const isLoading = () => chatStore.isLoading;
 export const setEditModeActive = (handler: (files: File[]) => void) =>
 	chatStore.setEditModeActive(handler);
+export const chatWidthClasses = () => chatStore.chatWidthClasses;

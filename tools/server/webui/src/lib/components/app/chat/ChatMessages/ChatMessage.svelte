@@ -8,6 +8,7 @@
 
 	interface Props {
 		class?: string;
+		style?: string;
 		message: DatabaseMessage;
 		onCopy?: (message: DatabaseMessage) => void;
 		onContinueAssistantMessage?: (message: DatabaseMessage) => void;
@@ -34,6 +35,7 @@
 
 	let {
 		class: className = '',
+		style,
 		message,
 		onCopy,
 		onContinueAssistantMessage,
@@ -233,6 +235,7 @@
 	<ChatMessageUser
 		bind:textareaElement
 		class={className}
+		{style}
 		{deletionInfo}
 		{editedContent}
 		{editedExtras}
@@ -259,6 +262,7 @@
 	<ChatMessageAssistant
 		bind:textareaElement
 		class={className}
+		{style}
 		{deletionInfo}
 		{editedContent}
 		{isEditing}

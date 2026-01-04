@@ -14,6 +14,7 @@
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { activeMessages } from '$lib/stores/conversations.svelte';
+	import { chatWidthClasses } from '$lib/stores/chat.svelte';
 	import {
 		FileTypeCategory,
 		MimeTypeApplication,
@@ -353,9 +354,11 @@
 
 <form
 	onsubmit={handleSubmit}
-	class="{INPUT_CLASSES} border-radius-bottom-none mx-auto max-w-[48rem] overflow-hidden rounded-3xl backdrop-blur-md {disabled
+	class="{INPUT_CLASSES} border-radius-bottom-none mx-auto {chatWidthClasses()
+		.class} overflow-hidden rounded-3xl backdrop-blur-md {disabled
 		? 'cursor-not-allowed opacity-60'
 		: ''} {className}"
+	style={chatWidthClasses().style}
 	data-slot="chat-form"
 >
 	<ChatAttachmentsList
