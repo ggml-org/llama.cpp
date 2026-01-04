@@ -4,6 +4,7 @@
 #ifdef GGML_CUDA_USE_CUB
 #    include <cub/cub.cuh>
 #    if (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 2)
+#        include <cuda/iterator>
 #        define CUB_TOP_K_AVAILABLE
 using namespace cub;
 #    endif  // CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 2
@@ -42,12 +43,14 @@ static void top_k_cub(ggml_cuda_pool & pool,
     CUDA_CHECK(cudaMemcpyAsync(temp_keys, src, ncols * sizeof(float), cudaMemcpyDeviceToDevice, stream));
 
     size_t temp_storage_bytes = 0;
-    DeviceTopK::MaxPairs(nullptr, temp_storage_bytes, temp_keys, temp_keys, temp_indices, dst, ncols, k, env);
+    DeviceTopK::MaxPairs(nullptr, temp_storage_bytes, temp_keys, cuda::discard_iterator(), temp_indices, dst, ncols, k,
+                         env);
 
     ggml_cuda_pool_alloc<uint8_t> temp_storage_alloc(pool, temp_storage_bytes);
     void *                        d_temp_storage = temp_storage_alloc.get();
 
-    DeviceTopK::MaxPairs(d_temp_storage, temp_storage_bytes, temp_keys, temp_keys, temp_indices, dst, ncols, k, env);
+    DeviceTopK::MaxPairs(d_temp_storage, temp_storage_bytes, temp_keys, cuda::discard_iterator(), temp_indices, dst,
+                         ncols, k, env);
 }
 
 #elif defined(GGML_CUDA_USE_CUB) // CUB_TOP_K_AVAILABLE
