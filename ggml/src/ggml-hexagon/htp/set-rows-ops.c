@@ -106,8 +106,6 @@ static int set_rows_thread_f16_f32(struct htp_ops_context * octx, const int nth,
 
     const bool is_i32 = (octx->src1.type == HTP_TYPE_I32);
 
-    FARF(HIGH, "set-rows: %d/%d nrows %u\n", nth, ith, dr);
-
     for (uint32_t i03 = 0; i03 < ne03; ++i03) {
         for (uint32_t i02 = 0; i02 < ne02; ++i02) {
             for (uint32_t i = ir0; i < ir1; ++i) {
