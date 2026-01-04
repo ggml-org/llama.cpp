@@ -1644,9 +1644,6 @@ int ggml_metal_op_pool_1d(ggml_metal_op_t ctx, int idx) {
     const int32_t s0 = opts[2];
     const int32_t p0 = opts[3];
 
-    GGML_ASSERT(p0 == 0);
-    GGML_ASSERT(k0 == s0);
-
     const int64_t IW = op->src[0]->ne[0];
     const int64_t N  = op->ne[3];
     const int64_t OC = op->ne[2];
