@@ -251,8 +251,9 @@ struct server_slot {
         return state != SLOT_STATE_IDLE;
     }
 
+    // Checks if a draft model is active or self-speculation using context-tokens
     bool can_speculate() const {
-        return ctx_dft;
+        return ctx_dft || task->params.speculative.use_self;
     }
 
     void add_token(const completion_token_output & token) {
@@ -1151,15 +1152,15 @@ private:
             SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
         }
 
+        slot.task = std::make_unique<const server_task>(std::move(task));
+
         // initialize draft batch
         // TODO: rework speculative decoding [TAG_SERVER_SPEC_REWORK]
-        if (slot.ctx_dft) {
+        if (slot.can_speculate()) {
             llama_batch_free(slot.batch_spec);
 
             slot.batch_spec = llama_batch_init(task.params.speculative.n_max + 1, 0, 1);
         }
-
-        slot.task = std::make_unique<const server_task>(std::move(task));
 
         slot.state = slot.is_child()
             ? SLOT_STATE_WAIT_OTHER // wait for the parent to process prompt
@@ -1975,9 +1976,11 @@ private:
                 }
 
                 struct common_speculative_params params_spec;
-                params_spec.n_draft = n_draft_max;
-                params_spec.n_reuse = llama_n_ctx(slot.ctx_dft) - slot.task->params.speculative.n_max;
-                params_spec.p_min   = slot.task->params.speculative.p_min;
+                params_spec.n_draft   = n_draft_max;
+                params_spec.n_reuse   = slot.ctx_dft ? (llama_n_ctx(slot.ctx_dft) - slot.task->params.speculative.n_max) : 0;
+                params_spec.p_min     = slot.task->params.speculative.p_min;
+                params_spec.self_mode       = slot.task->params.speculative.use_self;
+                params_spec.self_ngram_size = std::max(5, slot.task->params.speculative.n_min);
                 const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
                 llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
 
@@ -2748,6 +2751,7 @@ private:
 
                 SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int) ids.size() - 1, (int) n_draft, slot.prompt.n_tokens());
             }
+
         }
 
         SRV_DBG("%s", "run slots completed\n");
