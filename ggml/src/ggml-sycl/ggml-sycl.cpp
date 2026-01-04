@@ -90,6 +90,12 @@ int g_ggml_sycl_xmx_threshold = 1024; // Max batch size for XMX (XMX faster for 
 thread_local bool g_ggml_sycl_graph_recording = false;  // True when SYCL graph is recording
 reorder_mode g_ggml_sycl_reorder_mode = reorder_mode::SOA;  // Default to SoA (existing behavior)
 
+// Maximum batch size for fused ESIMD MoE kernel.
+// Larger batches (e.g., prefill with 512 tokens) fall back to host-side oneDNN batching
+// which is ~7x faster for large batches (679 t/s vs 87 t/s on GPT-OSS 20B).
+// The fused kernel excels at decode (single-token) but is slower than oneDNN for prefill.
+constexpr int64_t GGML_SYCL_FUSED_MOE_MAX_BATCH = 32;
+
 // Model load phase flag - when true, skip weight caching to avoid OOM during load
 static std::atomic<bool> g_sycl_in_model_load{false};
 
@@ -11210,12 +11216,10 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
     }
 
     // For large batch sizes, host-side oneDNN batching is much faster
-    // Fused ESIMD kernel: ~87 t/s for pp512, oneDNN batching: ~675 t/s
-    // Threshold determined empirically - fused kernel only wins for small batches
-    constexpr int64_t FUSED_MOE_MAX_BATCH = 32;
-    if (batch_size > FUSED_MOE_MAX_BATCH) {
-        GGML_SYCL_DEBUG("[MoE FUSED] Batch %ld > %d, using oneDNN batching\n",
-                        (long)batch_size, FUSED_MOE_MAX_BATCH);
+    // See GGML_SYCL_FUSED_MOE_MAX_BATCH definition at file scope for details
+    if (batch_size > GGML_SYCL_FUSED_MOE_MAX_BATCH) {
+        GGML_SYCL_DEBUG("[MoE FUSED] Batch %ld > %ld, using oneDNN batching\n",
+                        (long)batch_size, (long)GGML_SYCL_FUSED_MOE_MAX_BATCH);
         return false;  // Fall back to host-side oneDNN batching
     }
 
@@ -11580,10 +11584,9 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
         // Note: Fused kernel requires contiguous device memory for all experts
         // Cannot use when weights are in mmap (use_expert_cache is true)
         // For large batches, oneDNN GEMM is faster than fused ESIMD kernel
-        constexpr int64_t FUSED_MOE_MAX_BATCH_HOST = 32;
         const bool use_fused_moe = !fused_moe_disabled && fused_moe_esimd_available() &&
                                    !use_expert_cache &&  // Cannot use with mmap weights
-                                   (ne12 <= FUSED_MOE_MAX_BATCH_HOST) &&  // Large batches use oneDNN
+                                   (ne12 <= GGML_SYCL_FUSED_MOE_MAX_BATCH) &&  // Large batches use oneDNN
                                    (src0->type == GGML_TYPE_MXFP4) &&
                                    src1->type == GGML_TYPE_F32;
 
@@ -13500,10 +13503,9 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
                     }
 
                     bool graph_compatible = false;
-                    // Fused MoE kernel threshold - must match ggml_sycl_mul_mat_id_fused()
-                    constexpr int64_t FUSED_MOE_MAX_BATCH = 32;
+                    // Uses GGML_SYCL_FUSED_MOE_MAX_BATCH defined at file scope
                     if (ggml_is_quantized(src0->type)) {
-                        if (ne12 > 1 && ne12 <= FUSED_MOE_MAX_BATCH) {
+                        if (ne12 > 1 && ne12 <= GGML_SYCL_FUSED_MOE_MAX_BATCH) {
                             // Small batched prefill (2-32 tokens) - fused MoE kernel (Q8_0, MXFP4)
                             // These kernels don't do dynamic allocations
                             // Large batches (>32) fall back to host-side oneDNN batching which

@@ -34,6 +34,12 @@ if [ -z "$RESULT" ]; then
     exit 1
 fi
 
+# Validate that result is a valid number (digits with optional decimal point)
+if ! echo "$RESULT" | grep -qE '^[0-9]+\.?[0-9]*$'; then
+    echo "FAIL: Invalid result format: '$RESULT' (expected numeric value)"
+    exit 1
+fi
+
 echo "MoE pp512: ${RESULT} t/s (target >= ${BASELINE})"
 
 # Compare as integers (multiply by 100 to handle decimals)
