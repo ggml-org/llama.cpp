@@ -11559,9 +11559,15 @@ static bool try_xmx_sorted_moe(
                 h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
         } else if (src0->type == GGML_TYPE_MXFP4) {
             // MXFP4 layout: 32 4-bit values packed in 16 bytes + 1 byte E8M0 exponent = 17 bytes per block
+            // Pre-quantize fp16 tokens to int8 with per-block scales (same as Q8_0)
+            const sycl::half* expert_tokens = tokens_sorted + h_offsets[e] * in_dim;
+            moe_xmx::preprocess_tokens_q8(
+                expert_tokens, q_tokens, token_scales,
+                h_counts[e], in_dim, *stream);
+
             moe_xmx::launch_xmx_moe_gemm_mxfp4<4, 4>(
                 expert_weights,
-                tokens_sorted + h_offsets[e] * in_dim,
+                q_tokens, token_scales,
                 sorted_output + h_offsets[e] * out_dim,
                 h_counts[e], out_dim, in_dim, xmx_cfg, *stream);
         }
