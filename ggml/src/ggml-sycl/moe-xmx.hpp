@@ -182,6 +182,9 @@ void launch_xmx_moe_gemm_q8_0(
     };
     sycl::range<2> local{static_cast<size_t>(cfg.wg_size), 1};
 
+    // Compute num_sgs for per-sub-group SLM allocation
+    const int num_sgs = cfg.wg_size / SG_SIZE;
+
     queue.submit([&](sycl::handler& cgh) {
         // SLM for unpacked weight tiles
         // One K-block of weights for TILES_N output columns: TILES_N * XMX_N * XMX_K int8 values
@@ -190,9 +193,11 @@ void launch_xmx_moe_gemm_q8_0(
         sycl::local_accessor<int8_t, 1> slm_weights(
             sycl::range<1>(slm_weights_size), cgh);
 
-        // Separate SLM for accumulator extraction (avoids corrupting weight data)
-        // Size: XMX_M * XMX_N int32 values = 8 * 16 * 4 = 512 bytes
-        constexpr int slm_acc_size = XMX_M * XMX_N * sizeof(int32_t);
+        // Separate SLM for accumulator extraction - PER SUB-GROUP to avoid race conditions
+        // Size: num_sgs * XMX_M * XMX_N * sizeof(int32_t) bytes
+        // Each sub-group gets its own 512-byte section to prevent concurrent writes
+        constexpr int slm_acc_per_sg = XMX_M * XMX_N * sizeof(int32_t);
+        const int slm_acc_size = num_sgs * slm_acc_per_sg;
         sycl::local_accessor<int8_t, 1> slm_acc(
             sycl::range<1>(slm_acc_size), cgh);
 
@@ -364,15 +369,18 @@ void launch_xmx_moe_gemm_q8_0(
                                 // XMX multiply-accumulate: acc += mat_a * mat_b
                                 joint_matrix_mad(sg, acc[tm][tn], mat_a, mat_b, acc[tm][tn]);
 
-                                // Store accumulator to separate SLM buffer to extract values
-                                // Using dedicated slm_acc avoids corrupting weight data in slm_weights
-                                int32_t* acc_slm_raw = reinterpret_cast<int32_t*>(&slm_acc[0]);
+                                // Store accumulator to per-sub-group SLM section to extract values
+                                // Each sub-group uses its own slm_acc section to avoid race conditions
+                                constexpr int acc_elements = XMX_M * XMX_N;
+                                int32_t* acc_slm_raw = reinterpret_cast<int32_t*>(
+                                    &slm_acc[sg_id * acc_elements * sizeof(int32_t)]);
                                 auto acc_slm_ptr = sycl::address_space_cast<
                                     sycl::access::address_space::local_space,
                                     sycl::access::decorated::no>(acc_slm_raw);
                                 joint_matrix_store(sg, acc[tm][tn], acc_slm_ptr, XMX_N, layout::row_major);
 
-                                item.barrier(sycl::access::fence_space::local_space);
+                                // Sub-group barrier is sufficient - each SG has its own section
+                                sycl::group_barrier(sg);
 
                                 // Apply scales and accumulate in float
                                 // Note: slm_weight_scales[tn * XMX_N + tile_col] for per-column scales
@@ -423,7 +431,7 @@ void launch_xmx_moe_gemm_q8_0(
             });
     }).wait();
 
-}
+}  // end launch_xmx_moe_gemm_q8_0
 
 // MXFP4 XMX GEMM for a single expert's token batch
 // Computes: output[batch, out_dim] = q_tokens[batch, in_dim] @ weights[out_dim, in_dim]^T
@@ -485,12 +493,14 @@ void launch_xmx_moe_gemm_mxfp4(
         sycl::local_accessor<int8_t, 1> slm_weights(
             sycl::range<1>(slm_weights_size), cgh);
 
-        // Separate SLM for accumulator extraction (avoids corrupting weight data)
-        // Size: XMX_M * XMX_N int32 values = 8 * 16 * 4 = 512 bytes
-        // We process one tile at a time, so only need space for one tile's accumulator
-        constexpr int slm_acc_size = XMX_M * XMX_N * sizeof(int32_t);
+        // Separate SLM for accumulator extraction - PER SUB-GROUP to avoid race conditions
+        // Size: num_sgs * XMX_M * XMX_N * sizeof(int32_t) bytes
+        // Each sub-group gets its own 512-byte section to prevent concurrent writes
+        const int num_sgs_mxfp4 = cfg.wg_size / SG_SIZE;
+        constexpr int slm_acc_per_sg_mxfp4 = XMX_M * XMX_N * sizeof(int32_t);
+        const int slm_acc_size_mxfp4 = num_sgs_mxfp4 * slm_acc_per_sg_mxfp4;
         sycl::local_accessor<int8_t, 1> slm_acc(
-            sycl::range<1>(slm_acc_size), cgh);
+            sycl::range<1>(slm_acc_size_mxfp4), cgh);
 
         // SLM for token tiles (TILES_M * XMX_M rows * XMX_K cols)
         // = 4 * 8 * 32 = 1024 bytes
@@ -683,15 +693,18 @@ void launch_xmx_moe_gemm_mxfp4(
                                 // XMX multiply-accumulate: acc += mat_a * mat_b
                                 joint_matrix_mad(sg, acc[tm][tn], mat_a, mat_b, acc[tm][tn]);
 
-                                // Store accumulator to separate SLM buffer to extract values
-                                // Using dedicated slm_acc avoids corrupting weight data in slm_weights
-                                int32_t* acc_slm_raw = reinterpret_cast<int32_t*>(&slm_acc[0]);
+                                // Store accumulator to per-sub-group SLM section to extract values
+                                // Each sub-group uses its own slm_acc section to avoid race conditions
+                                constexpr int acc_elements = XMX_M * XMX_N;
+                                int32_t* acc_slm_raw = reinterpret_cast<int32_t*>(
+                                    &slm_acc[sg_id * acc_elements * sizeof(int32_t)]);
                                 auto acc_slm_ptr = sycl::address_space_cast<
                                     sycl::access::address_space::local_space,
                                     sycl::access::decorated::no>(acc_slm_raw);
                                 joint_matrix_store(sg, acc[tm][tn], acc_slm_ptr, XMX_N, layout::row_major);
 
-                                item.barrier(sycl::access::fence_space::local_space);
+                                // Sub-group barrier is sufficient - each SG has its own section
+                                sycl::group_barrier(sg);
 
                                 // Apply scales and accumulate in float
                                 // Note: slm_weight_scales[tn * XMX_N + tile_col] for per-column scales
