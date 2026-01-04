@@ -45,6 +45,69 @@ struct MoEXMXConfig {
     }
 };
 
+// Pre-quantize fp16 tokens to int8 with per-block scales
+// Output: q_tokens[batch * in_dim] int8, scales[batch * (in_dim/32)] fp16
+void preprocess_tokens_q8(
+    const sycl::half* tokens,   // [batch, in_dim] fp16 input
+    int8_t* q_tokens,           // [batch, in_dim] int8 output
+    sycl::half* scales,         // [batch, in_dim/32] per-block scales
+    int64_t batch,
+    int64_t in_dim,
+    sycl::queue& queue);
+
+inline void preprocess_tokens_q8(
+    const sycl::half* tokens,
+    int8_t* q_tokens,
+    sycl::half* scales,
+    int64_t batch,
+    int64_t in_dim,
+    sycl::queue& queue)
+{
+    constexpr int QK = 32;      // Quantization block size (matches XMX_K)
+    constexpr int SG_SIZE = 16;
+
+    int64_t num_blocks = batch * (in_dim / QK);
+
+    queue.submit([&](sycl::handler& cgh) {
+        cgh.parallel_for(
+            sycl::nd_range<1>(num_blocks * SG_SIZE, SG_SIZE),
+            [=](sycl::nd_item<1> item) [[intel::reqd_sub_group_size(SG_SIZE)]] {
+                auto sg = item.get_sub_group();
+                int64_t block_id = item.get_group(0);
+                int64_t row = block_id / (in_dim / QK);
+                int64_t k_block = block_id % (in_dim / QK);
+
+                int lane = sg.get_local_linear_id();
+
+                // Each lane loads 2 values (32 total per sub-group)
+                int64_t base = row * in_dim + k_block * QK;
+                float v0 = static_cast<float>(tokens[base + lane * 2]);
+                float v1 = static_cast<float>(tokens[base + lane * 2 + 1]);
+
+                // Find max absolute value via sub-group reduction
+                float local_max = sycl::fmax(sycl::fabs(v0), sycl::fabs(v1));
+                float amax = sycl::reduce_over_group(sg, local_max, sycl::maximum<float>());
+
+                // Compute scale and inverse scale
+                float scale = amax / 127.0f;
+                float inv_scale = (amax > 0.0f) ? 127.0f / amax : 0.0f;
+
+                // Quantize values
+                int8_t q0 = static_cast<int8_t>(sycl::round(v0 * inv_scale));
+                int8_t q1 = static_cast<int8_t>(sycl::round(v1 * inv_scale));
+
+                // Store quantized values
+                q_tokens[base + lane * 2] = q0;
+                q_tokens[base + lane * 2 + 1] = q1;
+
+                // Store scale (one per block, lane 0 only)
+                if (lane == 0) {
+                    scales[row * (in_dim / QK) + k_block] = sycl::half(scale);
+                }
+            });
+    });
+}
+
 // Q8_0 XMX GEMM for a single expert's token batch
 // Computes: output[batch, out_dim] = tokens[batch, in_dim] @ weights[out_dim, in_dim]^T
 //
