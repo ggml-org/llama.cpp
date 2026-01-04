@@ -18,6 +18,16 @@
 #   include <cblas.h>
 #endif
 
+#if defined(_WIN32)
+#    define WIN32_LEAN_AND_MEAN
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <windows.h>
+#else
+#    include <unistd.h>
+#endif
+
 struct ggml_backend_blas_context {
     int n_threads = GGML_DEFAULT_N_THREADS;
     std::unique_ptr<char[]> work_data;
@@ -339,9 +349,21 @@ static const char * ggml_backend_blas_device_get_description(ggml_backend_dev_t 
 }
 
 static void ggml_backend_blas_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    // TODO
-    *free = 0;
-    *total = 0;
+    // NOTE: This implementation mirrors the behavior of the ggml-cpu backend.
+#ifdef _WIN32
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    GlobalMemoryStatusEx(&status);
+    *total = status.ullTotalPhys;
+    *free = status.ullAvailPhys;
+#else
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long page_size = sysconf(_SC_PAGE_SIZE);
+    *total = pages * page_size;
+
+    // "free" system memory is ill-defined, for practical purposes assume that all of it is free:
+    *free = *total;
+#endif // _WIN32
 
     GGML_UNUSED(dev);
 }
