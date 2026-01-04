@@ -109,21 +109,23 @@ inline void preprocess_tokens_q8(
 }
 
 // Q8_0 XMX GEMM for a single expert's token batch
-// Computes: output[batch, out_dim] = tokens[batch, in_dim] @ weights[out_dim, in_dim]^T
+// Computes: output[batch, out_dim] = q_tokens[batch, in_dim] @ weights[out_dim, in_dim]^T
 //
 // SKELETON STATUS: This kernel compiles but produces INCORRECT output.
 // The following must be implemented before production use:
-//   1. Token quantization (fp16 -> int8) with scale computation
-//   2. Proper joint_matrix_load for mat_a from quantized tokens
-//   3. Scale application during output: out = (int32_acc * token_scale * weight_scale)
-//   4. Conversion from scaled float to fp16 for storage
+//   1. Proper joint_matrix_load for mat_a from pre-quantized q_tokens
+//   2. Scale application during output: out = (int32_acc * token_scale * weight_scale)
+//   3. Conversion from scaled float to fp16 for storage
+//
+// Note: Token quantization is now done externally via preprocess_tokens_q8()
 //
 template<int TILES_M = 4, int TILES_N = 4>
 void launch_xmx_moe_gemm_q8_0(
-    const void* weights_qs,       // [out_dim, in_dim] int8 quantized
-    const sycl::half* weights_d,  // [out_dim, in_dim/32] Q8_0 scales (1 per 32 elements)
-    const sycl::half* tokens,     // [batch, in_dim] fp16 activations
-    sycl::half* output,           // [batch, out_dim]
+    const void* weights_qs,           // [out_dim, in_dim] int8 quantized
+    const sycl::half* weights_d,      // [out_dim, in_dim/32] Q8_0 scales (1 per 32 elements)
+    const int8_t* q_tokens,           // [batch, in_dim] pre-quantized int8
+    const sycl::half* token_scales,   // [batch, in_dim/32] token scales
+    sycl::half* output,               // [batch, out_dim]
     int64_t batch,
     int64_t out_dim,
     int64_t in_dim,
@@ -252,10 +254,11 @@ void launch_xmx_moe_gemm_q8_0(
             });
     }).wait();
 
-    // TODO: tokens parameter will be used for:
-    //   - Loading fp16 activations to quantize into mat_a
-    //   - Computing per-block token scales for dequantization
-    (void)tokens;
+    // TODO: q_tokens and token_scales parameters will be used for:
+    //   - Loading pre-quantized int8 tokens into mat_a
+    //   - Applying token scales during output dequantization
+    (void)q_tokens;
+    (void)token_scales;
 
     // TODO: weights_d parameter will be used for:
     //   - Loading Q8_0 weight scales (1 scale per 32 elements)
