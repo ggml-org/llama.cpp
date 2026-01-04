@@ -1762,6 +1762,8 @@ jobs:
           rustup install stable
           rustup default stable
 
+          git lfs install
+
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
@@ -1859,6 +1861,8 @@ jobs:
           rustup install stable
           rustup default stable
 
+          git lfs install
+
       - name: GCC version check
         run: |
           gcc --version
@@ -1951,6 +1955,8 @@ jobs:
           rustup install stable
           rustup default stable
 
+          git lfs install
+
       - name: GCC version check
         run: |
           gcc --version
@@ -2022,6 +2028,8 @@ jobs:
           # Install Rust stable version
           rustup install stable
           rustup default stable
+
+          git lfs install
 
       - name: GCC version check
         run: |
