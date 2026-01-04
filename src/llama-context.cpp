@@ -648,7 +648,7 @@ float * llama_context::get_logits() {
     return logits;
 }
 
-int64_t llama_context::resolve_output_row(int32_t i) const {
+int64_t llama_context::output_resolve_row(int32_t i) const {
     int64_t j = -1;
 
     // support negative indices (last output row)
@@ -687,6 +687,7 @@ float * llama_context::get_logits_ith(int32_t i) {
             throw std::runtime_error("no logits");
         }
 
+        // TODO: use output_resolve_row()
         if (i < 0) {
             j = n_outputs + i;
             if (j < 0) {
@@ -723,7 +724,7 @@ float * llama_context::get_embeddings() {
     return embd;
 }
 
-llama_token * llama_context::get_sampled_tokens() {
+llama_token * llama_context::get_sampled_tokens()  const{
     return sampling.sampled;
 }
 
@@ -737,6 +738,7 @@ float * llama_context::get_embeddings_ith(int32_t i) {
             throw std::runtime_error("no embeddings");
         }
 
+        // TODO: use output_resolve_row()
         if (i < 0) {
             j = n_outputs + i;
             if (j < 0) {
@@ -784,7 +786,7 @@ llama_token llama_context::get_sampled_token_ith(int32_t idx) {
     }
 
     try {
-        const int64_t row = resolve_output_row(idx);
+        const int64_t row = output_resolve_row(idx);
         GGML_ASSERT(row < (int64_t) sampling.sampled_size);
         return sampling.sampled[row];
     } catch (const std::exception & err) {
@@ -801,7 +803,7 @@ float * llama_context::get_sampled_probs_ith(int32_t idx) {
     }
 
     try {
-        const int64_t row = resolve_output_row(idx);
+        const int64_t row = output_resolve_row(idx);
         if ((size_t) row >= sampling.probs_count.size() || sampling.probs_count[row] == 0) {
             return nullptr;
         }
@@ -820,7 +822,7 @@ float * llama_context::get_sampled_logits_ith(int32_t idx) {
     }
 
     try {
-        const int64_t row = resolve_output_row(idx);
+        const int64_t row = output_resolve_row(idx);
         if ((size_t) row >= sampling.logits_count.size() || sampling.logits_count[row] == 0) {
             return nullptr;
         }
@@ -835,7 +837,7 @@ const llama_token * llama_context::get_sampled_candidates_ith(int32_t idx) {
     output_reorder();
 
     try {
-        const int64_t row = resolve_output_row(idx);
+        const int64_t row = output_resolve_row(idx);
         if (sampling.candidates != nullptr &&
             (size_t) row < sampling.candidates_count.size() &&
             sampling.candidates_count[row] > 0) {
@@ -856,7 +858,7 @@ size_t llama_context::get_sampled_candidates_count(int32_t idx) {
     }
 
     try {
-        const int64_t row = resolve_output_row(idx);
+        const int64_t row = output_resolve_row(idx);
         if ((size_t) row >= sampling.candidates_count.size()) {
             return 0;
         }
@@ -875,7 +877,7 @@ size_t llama_context::get_sampled_logits_count(int32_t idx) {
     }
 
     try {
-        const int64_t row = resolve_output_row(idx);
+        const int64_t row = output_resolve_row(idx);
         if ((size_t) row >= sampling.logits_count.size()) {
             return 0;
         }
@@ -894,7 +896,7 @@ size_t llama_context::get_sampled_probs_count(int32_t idx) {
     }
 
     try {
-        const int64_t row = resolve_output_row(idx);
+        const int64_t row = output_resolve_row(idx);
         if ((size_t) row >= sampling.probs_count.size()) {
             return 0;
         }
@@ -1563,28 +1565,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
 
-        // This flag indicates whether a backend sampler has actually sampled a specific
-        // token, or if it has produced probabilites. If true, we can skip the normal copying of logits and embeddings.
-        const bool has_sampled = !res->t_sampled.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty();
-
-        if (has_samplers && has_sampled) {
-            const auto seq_to_output_row = build_seq_to_output_row(ubatch, n_outputs_prev);
-            const auto stride = n_vocab;
-
-            // async copy the sampled tokens from the backend to the host.
-            copy_tensor_async_ints(res->t_sampled, sampling.sampled, sampling.sampled_size, seq_to_output_row, sched.get());
-
-            // async copy the sampled logits from the backend to the host.
-            copy_tensor_async_floats(res->t_sampled_logits, sampling.logits, stride, sampling.logits_count, seq_to_output_row, sched.get());
-
-            // async copy the sampled probablities from the backend to the host.
-            copy_tensor_async_floats(res->t_sampled_probs,  sampling.probs,  stride, sampling.probs_count,  seq_to_output_row, sched.get());
-
-            // async copy the candidate token ids from the backend to the host.
-            // These are needed by CPU samplers to map probability/logit indices to vocab token ids.
-            copy_tensor_async_candidates(res->t_candidates, sampling.candidates, stride, sampling.candidates_count, seq_to_output_row, sched.get());
-        }
-
         auto * t_logits = res->get_logits();
         auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;
 
@@ -1663,6 +1643,22 @@ int llama_context::decode(const llama_batch & batch_inp) {
                         GGML_ABORT("unknown pooling type");
                     }
             }
+        }
+
+        // This flag indicates whether a backend sampler has actually sampled a specific
+        // token, or if it has produced probabilites. If true, we can skip the normal copying of logits and embeddings.
+        const bool has_sampled = !res->t_sampled.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty();
+
+        if (has_samplers && has_sampled) {
+            const auto seq_to_output_row = build_seq_to_output_row(ubatch, n_outputs_prev);
+            const auto stride = n_vocab;
+
+            // async copy the sampling data from the backend to the host
+            copy_tensor_async_ints(res->t_sampled, sampling.sampled, sampling.sampled_size, seq_to_output_row, sched.get());
+
+            copy_tensor_async_floats    (res->t_sampled_logits, sampling.logits,     stride, sampling.logits_count,     seq_to_output_row, sched.get());
+            copy_tensor_async_floats    (res->t_sampled_probs,  sampling.probs,      stride, sampling.probs_count,      seq_to_output_row, sched.get());
+            copy_tensor_async_candidates(res->t_candidates,     sampling.candidates, stride, sampling.candidates_count, seq_to_output_row, sched.get());
         }
 
         n_outputs_prev += n_outputs;
@@ -1747,9 +1743,10 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
         has_embd   = true;
     }
 
-    // Check which sampling modes are needed by sequences in the current batch.
-    bool batch_has_sampling     = false;
-    bool batch_needs_cpu_logits = false;
+    // Check which sampling modes are needed for the current batch.
+    // TODO: avoid this branching by working with the worst-case
+    bool has_sampling = false;
+    bool cpu_logits   = false;
 
     if (batch.logits) {
         for (int32_t i = 0; i < batch.n_tokens; i++) {
@@ -1759,37 +1756,38 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
             for (int32_t j = 0; j < batch.n_seq_id[i]; j++) {
                 llama_seq_id seq_id = batch.seq_id[i][j];
                 if (sampling.samplers.find(seq_id) != sampling.samplers.end()) {
-                    batch_has_sampling = true;
+                    has_sampling = true;
                 } else {
-                    batch_needs_cpu_logits = true;
+                    cpu_logits = true;
                 }
             }
         }
     } else {
         // When batch.logits is nullptr (when loading state with a dummy batch),
         // allocate CPU logits.
-        batch_needs_cpu_logits = true;
+        cpu_logits = true;
     }
 
     size_t backend_float_count = 0;
     size_t backend_token_count = 0;
 
     // Allocate CPU logits buffer only if needed by sequences in this batch
-    logits_size = (has_logits && batch_needs_cpu_logits) ? n_vocab*n_outputs_max : 0;
+    logits_size = (has_logits && cpu_logits) ? n_vocab*n_outputs_max : 0;
     embd_size   = has_embd ? n_embd*n_outputs_max : 0;
 
-    if (!batch_has_sampling) {
-        sampling.logits_size       = 0;
-        sampling.probs_size        = 0;
-        sampling.sampled_size      = 0;
-        sampling.candidates_size   = 0;
+    // TODO: avoid this branching by working with the worst-case
+    if (!has_sampling) {
+        sampling.logits_size     = 0;
+        sampling.probs_size      = 0;
+        sampling.sampled_size    = 0;
+        sampling.candidates_size = 0;
     } else {
         sampling.logits_size     = n_vocab*n_outputs_max;
         sampling.probs_size      = n_vocab*n_outputs_max;
-        sampling.sampled_size    = n_outputs_max;
+        sampling.sampled_size    =         n_outputs_max;
         sampling.candidates_size = n_vocab*n_outputs_max;
 
-        backend_float_count = sampling.logits_size + sampling.probs_size;
+        backend_float_count = sampling.logits_size  + sampling.probs_size;
         backend_token_count = sampling.sampled_size + sampling.candidates_size;
     }
 
@@ -1799,8 +1797,9 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
     }
 
     const size_t prev_size = buf_output ? ggml_backend_buffer_get_size(buf_output.get()) : 0;
-    const size_t new_size  = (logits_size + embd_size + backend_float_count) * sizeof(float)
-                         + backend_token_count * sizeof(llama_token);
+    const size_t new_size  =
+        (logits_size + embd_size + backend_float_count) * sizeof(float) +
+        (                          backend_token_count) * sizeof(llama_token);
 
     // alloc only when more than the current capacity is required
     // TODO: also consider shrinking the buffer
@@ -1811,6 +1810,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
             LLAMA_LOG_DEBUG("%s: reallocating output buffer from size %.02f MiB to %.02f MiB\n", __func__, prev_size / 1024.0 / 1024.0, new_size / 1024.0 / 1024.0);
 #endif
             synchronize();
+
+            // TODO: not needed?
             buf_output = nullptr;
             logits = nullptr;
             embd = nullptr;
@@ -1835,22 +1836,21 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
     logits = nullptr;
     embd   = nullptr;
 
-    // reset sampling pointers.
-    sampling.logits     = nullptr;
-    sampling.probs      = nullptr;
-    sampling.sampled    = nullptr;
-    sampling.candidates = nullptr;
-
     size_t offset = 0;
     uint8_t * base = (uint8_t *) output_base;
 
-    logits = (has_logits && batch_needs_cpu_logits) ? output_base : nullptr;
+    logits = (has_logits && cpu_logits) ? output_base : nullptr;
     offset += logits_size * sizeof(float);
 
     embd = has_embd ? (float *) (base + offset) : nullptr;
     offset += embd_size * sizeof(float);
 
-    if (batch_has_sampling) {
+    sampling.logits     = nullptr;
+    sampling.probs      = nullptr;
+    sampling.sampled    = nullptr;
+    sampling.candidates = nullptr;
+
+    if (has_sampling) {
         sampling.logits = (float *) (base + offset);
         offset += sampling.logits_size * sizeof(float);
 
@@ -1865,24 +1865,16 @@ uint32_t llama_context::output_reserve(int32_t n_outputs, const llama_batch & ba
 
         // The count vectors keep track of the actual number of logits/probs/candidates
         // copied from the backend for each output row.
-        const size_t n_rows = (size_t) n_outputs_max;
-        if (sampling.outputs_capacity < n_rows) {
-            // The output size has increased, so resize and reset the count vectors.
-            sampling.outputs_capacity = n_rows;
 
-            sampling.logits_count.assign(n_rows, 0);
-            sampling.probs_count.assign(n_rows, 0);
-            sampling.candidates_count.assign(n_rows, 0);
-        } else {
-            // The output size has not increased so just reset the counts to zero.
-            std::fill(sampling.logits_count.begin(), sampling.logits_count.end(), 0);
-            std::fill(sampling.probs_count.begin(),  sampling.probs_count.end(),  0);
-            std::fill(sampling.candidates_count.begin(), sampling.candidates_count.end(), 0);
-        }
+        sampling.logits_count.resize(n_outputs_max);
+        sampling.probs_count.resize(n_outputs_max);
+        sampling.candidates_count.resize(n_outputs_max);
 
-        if (sampling.sampled) {
-            std::fill_n(sampling.sampled, sampling.sampled_size, LLAMA_TOKEN_NULL);
-        }
+        std::fill(sampling.logits_count.begin(),     sampling.logits_count.end(),     0);
+        std::fill(sampling.probs_count.begin(),      sampling.probs_count.end(),      0);
+        std::fill(sampling.candidates_count.begin(), sampling.candidates_count.end(), 0);
+
+        std::fill_n(sampling.sampled, sampling.sampled_size, LLAMA_TOKEN_NULL);
     }
 
     // set all ids as invalid (negative)
@@ -2502,6 +2494,9 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
         }
     }
 
+    // TODO: handle sampling buffers and samplers state ?
+    //       https://github.com/ggml-org/llama.cpp/pull/17004
+
     if (memory != nullptr) {
         LLAMA_LOG_DEBUG("%s: - writing memory module\n", __func__);
         memory->state_write(io);
@@ -2590,6 +2585,9 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
             io.read_to(this->embd, embd_size * sizeof(float));
         }
     }
+
+    // TODO: handle sampling buffers and samplers state ?
+    //       https://github.com/ggml-org/llama.cpp/pull/17004
 
     if (memory) {
         LLAMA_LOG_DEBUG("%s: - reading memory module\n", __func__);

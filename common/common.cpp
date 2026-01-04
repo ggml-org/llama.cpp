@@ -1320,6 +1320,7 @@ common_init_result_ptr common_init_from_params(common_params & params) {
         llama_synchronize(lctx);
         llama_perf_context_reset(lctx);
         llama_set_warmup(lctx, false);
+
         // reset samplers to reset RNG state after warmup to the seeded state
         res->reset_samplers();
     }

@@ -1098,7 +1098,7 @@ jobs:
             save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
         - name: Build with CMake
-# Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled withing CTK and that CTK version is used in this project
+          # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
           run: |
             cmake -S . -B build -G Ninja \
               -DLLAMA_CURL=OFF \
@@ -1145,7 +1145,7 @@ jobs:
       - name: Build
         id: cmake_build
         shell: cmd
-        # Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled withing CTK and that CTK version is used in this project
+        # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           cmake -S . -B build -G "Ninja Multi-Config" ^

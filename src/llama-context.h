@@ -70,7 +70,7 @@ struct llama_context {
     float * get_embeddings_ith(int32_t i);
     float * get_embeddings_seq(llama_seq_id seq_id);
 
-    llama_token * get_sampled_tokens();
+    llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
 
     float * get_sampled_logits_ith(int32_t idx);
@@ -207,7 +207,9 @@ private:
     uint32_t output_reserve(int32_t n_outputs, const llama_batch & batch);
 
     void output_reorder();
-    int64_t resolve_output_row(int32_t i) const;
+
+    // map the output row index `i` to batch index
+    int64_t output_resolve_row(int32_t i) const;
 
     //
     // graph
@@ -262,6 +264,12 @@ private:
     size_t  logits_size = 0; // capacity (of floats) for logits
     float * logits      = nullptr;
 
+    // embeddings output (2-dimensional array: [n_outputs][n_embd])
+    // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
+    size_t  embd_size = 0; // capacity (of floats) for embeddings
+    float * embd      = nullptr;
+
+    // TODO: simplify
     struct sampling_info {
         std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -277,7 +285,6 @@ private:
         llama_token * candidates   = nullptr;
         size_t        candidates_size = 0;
 
-        size_t outputs_capacity = 0;
         std::vector<uint32_t> logits_count;
         std::vector<uint32_t> probs_count;
         std::vector<uint32_t> candidates_count;
@@ -286,11 +293,6 @@ private:
     };
 
     sampling_info sampling;
-
-    // embeddings output (2-dimensional array: [n_outputs][n_embd])
-    // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
-    size_t  embd_size = 0; // capacity (of floats) for embeddings
-    float * embd      = nullptr;
 
     // sequence embeddings output (map of [n_embd] vectors)
     // populated only when pooling_type != LLAMA_POOLING_TYPE_NONE

@@ -1024,6 +1024,7 @@ extern "C" {
     LLAMA_API uint32_t llama_get_sampled_logits_count_ith(struct llama_context * ctx, int32_t i);
 
     // Get the backend sampled candidates (token ids) for the ith token
+    // These are needed to map probability/logit indices to vocab token ids.
     // Returns NULL if no candidates were sampled.
     LLAMA_API llama_token * llama_get_sampled_candidates_ith      (struct llama_context * ctx, int32_t i);
     LLAMA_API uint32_t      llama_get_sampled_candidates_count_ith(struct llama_context * ctx, int32_t i);
