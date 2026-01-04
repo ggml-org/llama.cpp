@@ -21,6 +21,6 @@ fi
 echo $CONVERTED_MODEL
 echo $MODEL_TESTING_PROMPT
 
-cmake --build ../../build --target llama-logits -j8
+cmake --build ../../build --target llama-debug -j8
 
-../../build/bin/llama-logits -m "$CONVERTED_MODEL" "$MODEL_TESTING_PROMPT"
+../../build/bin/llama-debug -m "$CONVERTED_MODEL" -p "$MODEL_TESTING_PROMPT" --save-logits
