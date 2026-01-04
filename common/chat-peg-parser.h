@@ -6,10 +6,6 @@
 #include <map>
 #include <optional>
 
-// ============================================================================
-// Base PEG Builder for Chat Parsing
-// ============================================================================
-
 class common_chat_peg_builder : public common_peg_parser_builder {
   public:
     static constexpr const char * REASONING_BLOCK = "reasoning-block";
@@ -34,10 +30,6 @@ inline common_peg_arena build_chat_peg_parser(
     return builder.build();
 }
 
-// ============================================================================
-// Base PEG Mapper for Chat Parsing
-// ============================================================================
-
 class common_chat_peg_mapper {
   public:
     common_chat_msg & result;
@@ -50,11 +42,6 @@ class common_chat_peg_mapper {
     virtual void map(const common_peg_ast_node & node);
 };
 
-// ============================================================================
-// Unified Builder (handles all tool call formats)
-// ============================================================================
-
-// Forward declarations for data structures
 struct content_structure;
 struct tool_call_structure;
 
@@ -142,17 +129,12 @@ class common_chat_peg_unified_builder : public common_chat_peg_builder {
                                                  bool                                       force_tool_calls);
 };
 
-// Builder function for unified parser
 inline common_peg_arena build_chat_peg_unified_parser(
     const std::function<common_peg_parser(common_chat_peg_unified_builder & builder)> & fn) {
     common_chat_peg_unified_builder builder;
     builder.set_root(fn(builder));
     return builder.build();
 }
-
-// ============================================================================
-// Unified Mapper (handles all tool call formats)
-// ============================================================================
 
 class common_chat_peg_unified_mapper : public common_chat_peg_mapper {
     std::optional<common_chat_tool_call> pending_tool_call;  // Tool call waiting for name

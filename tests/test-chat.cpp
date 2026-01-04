@@ -18,6 +18,7 @@
 #include <functional>
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <stdexcept>
 #include <string>
 
 using json = nlohmann::ordered_json;
@@ -660,9 +661,11 @@ struct make_peg_parser {
     common_peg_arena   arena_;
     bool               detailed_debug_;
 
-    make_peg_parser(common_chat_templates * tmpls, const common_chat_templates_inputs & inputs, bool detailed_debug = false) {
+    make_peg_parser(common_chat_templates *              tmpls,
+                    const common_chat_templates_inputs & inputs,
+                    bool                                 detailed_debug = false) {
         detailed_debug_ = detailed_debug;
-        params_ = common_chat_templates_apply(tmpls, inputs);
+        params_         = common_chat_templates_apply(tmpls, inputs);
         arena_.load(params_.parser);
     }
 
@@ -673,7 +676,9 @@ struct make_peg_parser {
     }
 };
 
-static void test_peg_parser(common_chat_templates * tmpls, const std::function<void(peg_test_case &)> & init, bool detailed_debug) {
+static void test_peg_parser(common_chat_templates *                      tmpls,
+                            const std::function<void(peg_test_case &)> & init,
+                            bool                                         detailed_debug) {
     // UTF-8-safe truncation helper (same as in test_parser_with_streaming)
     constexpr auto utf8_truncate_safe_len = [](const std::string_view s) -> size_t {
         auto len = s.size();
@@ -779,7 +784,8 @@ class peg_tester {
 
   public:
     explicit peg_tester(const std::string & template_path, const bool detailed_debug = false) :
-        tmpls_(read_templates(template_path)), template_path_(template_path),
+        tmpls_(read_templates(template_path)),
+        template_path_(template_path),
         detailed_debug_(detailed_debug) {}
 
     const std::string & template_path() const { return template_path_; }
@@ -1777,12 +1783,12 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         // Parallel tool calls
         tst.test(
-               " to=functions.special_function<|channel|>analysis<|message|>{\"arg1\": 1}<|start|>assistant"
-               " to=functions.special_function_with_opt<|channel|>analysis<|message|>{\"arg1\": 1, \"arg2\": 2}")
+               " to=functions.special_function<|channel|>analysis<|message|>{\"arg1\": 1}\n"
+               "<|start|>assistant to=functions.special_function_with_opt<|channel|>analysis<|message|>{\"arg1\": 1, \"arg2\": 2}")
             .parallel_tool_calls(true)
             .tools({
                 special_function_tool, special_function_tool_with_optional_param
-        })
+            })
             .expect_tool_calls({
                 { "special_function", R"({"arg1": 1})", {} },
                 { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
@@ -1871,7 +1877,7 @@ static void test_msg_diffs_compute() {
 
 int main(int argc, char ** argv) {
     common_log_set_verbosity_thold(999);
-    bool detailed_debug = false;
+    bool detailed_debug    = false;
     bool only_run_filtered = false;
 
     // Check for --template flag
@@ -1893,7 +1899,6 @@ int main(int argc, char ** argv) {
         return 0;
     }
 
-    // try {
 #ifndef _WIN32
     if (argc > 1) {
         common_chat_templates_inputs inputs;
@@ -1932,8 +1937,4 @@ int main(int argc, char ** argv) {
         std::cout << "\n[chat] All tests passed!" << '\n';
     }
     return 0;
-    // } catch (const std::exception & e) {
-    //     std::cerr << "Error: " << e.what() << '\n';
-    //     return 1;
-    // }
 }

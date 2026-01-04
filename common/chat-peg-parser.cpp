@@ -1,6 +1,7 @@
 #include "chat-peg-parser.h"
 
 #include "chat-auto-parser.h"
+#include "ggml.h"
 
 #include <nlohmann/json.hpp>
 
@@ -17,10 +18,6 @@ static std::string_view trim_trailing_space(std::string_view sv, int max = -1) {
     }
     return sv;
 }
-
-// ============================================================================
-// Base Mapper Implementation
-// ============================================================================
 
 void common_chat_peg_mapper::from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result) {
     arena.visit(result, [this](const common_peg_ast_node & node) { map(node); });
@@ -41,10 +38,6 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     }
 }
 
-// ============================================================================
-// Base Builder Helper
-// ============================================================================
-
 common_peg_parser common_chat_peg_builder::tag_with_safe_content(const std::string &       tag_name,
                                                                  const std::string &       marker,
                                                                  const common_peg_parser & p) {
@@ -54,10 +47,6 @@ common_peg_parser common_chat_peg_builder::tag_with_safe_content(const std::stri
     auto content_chunk = rule(tag_name, content(negate(literal(marker)) + any() + until(marker)));
     return zero_or_more(choice({ p, content_chunk }));
 }
-
-// ============================================================================
-// Unified Builder Implementation
-// ============================================================================
 
 common_peg_parser common_chat_peg_unified_builder::build_reasoning_block(const content_structure & cs,
                                                                          common_reasoning_format   reasoning_format,
@@ -111,6 +100,7 @@ common_peg_parser common_chat_peg_unified_builder::build_reasoning_block(const c
 common_peg_parser common_chat_peg_unified_builder::build_content_block(const content_structure & cs,
                                                                        common_reasoning_format   reasoning_format,
                                                                        const std::string &       tool_section_start) {
+    GGML_UNUSED(tool_section_start); // leaving for now just in case
     std::string content_start = cs.content_start;
     std::string content_end   = cs.content_end;
 
