@@ -344,6 +344,7 @@ struct cmd_params {
     bool                             verbose;
     bool                             progress;
     bool                             no_warmup;
+    bool                             no_fail;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
 };
@@ -382,6 +383,7 @@ static const cmd_params cmd_params_defaults = {
     /* verbose              */ false,
     /* progress             */ false,
     /* no_warmup            */ false,
+    /* no_fail              */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -406,6 +408,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                             verbose output\n");
     printf("  --progress                                print test progress indicators\n");
     printf("  --no-warmup                               skip warmup runs before benchmarking\n");
+    printf("  -nf, --no-fail                            continue on failure (default: disabled)\n");
     if (llama_supports_rpc()) {
         printf("  -rpc, --rpc <rpc_servers>                 register RPC devices (comma separated)\n");
     }
@@ -509,6 +512,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.delay                = cmd_params_defaults.delay;
     params.progress             = cmd_params_defaults.progress;
     params.no_warmup            = cmd_params_defaults.no_warmup;
+    params.no_fail              = cmd_params_defaults.no_fail;
 
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
@@ -933,6 +937,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 params.progress = true;
             } else if (arg == "--no-warmup") {
                 params.no_warmup = true;
+            } else if (arg == "-nf" || arg == "--no-fail") {
+                params.no_fail = true;
             } else {
                 invalid_param = true;
                 break;
@@ -2067,6 +2073,7 @@ int main(int argc, char ** argv) {
 
     int  params_idx   = 0;
     auto params_count = params_instances.size();
+    bool any_success  = false;
     for (const auto & inst : params_instances) {
         params_idx++;
         if (params.progress) {
@@ -2080,17 +2087,35 @@ int main(int argc, char ** argv) {
 
             lmodel = llama_model_load_from_file(inst.model.c_str(), inst.to_llama_mparams());
             if (lmodel == NULL) {
-                fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
-                return 1;
+                if (params.no_fail) {
+                    fprintf(stderr, "%s: error: failed to load model '%s' - skipping this permutation\n", __func__, inst.model.c_str());
+                    fprintf(stderr, "  Settings: n_gpu_layers=%d, n_cpu_moe=%d, split_mode=%s, main_gpu=%d, use_mmap=%d, no_host=%d, devices=%s\n",
+                            inst.n_gpu_layers, inst.n_cpu_moe, split_mode_str(inst.split_mode), inst.main_gpu,
+                            inst.use_mmap, inst.no_host, devices_to_string(inst.devices).c_str());
+                    continue;
+                } else {
+                    fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
+                    return 1;
+                }
             }
             prev_inst = &inst;
         }
 
         llama_context * ctx = llama_init_from_model(lmodel, inst.to_llama_cparams());
         if (ctx == NULL) {
-            fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
-            llama_model_free(lmodel);
-            return 1;
+            if (params.no_fail) {
+                fprintf(stderr, "%s: error: failed to create context with model '%s' - skipping this permutation\n", __func__, inst.model.c_str());
+                fprintf(stderr, "  Settings: n_batch=%d, n_ubatch=%d, type_k=%s, type_v=%s, flash_attn=%d, no_kv_offload=%d, embeddings=%d, no_op_offload=%d\n",
+                        inst.n_batch, inst.n_ubatch, ggml_type_name(inst.type_k), ggml_type_name(inst.type_v),
+                        inst.flash_attn, inst.no_kv_offload, inst.embeddings, inst.no_op_offload);
+                fprintf(stderr, "  n_prompt=%d, n_gen=%d, n_depth=%d\n", inst.n_prompt, inst.n_gen, inst.n_depth);
+                // Note: Keep lmodel loaded for potential next permutation with same model params
+                continue;
+            } else {
+                fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
+                llama_model_free(lmodel);
+                return 1;
+            }
         }
 
         test t(inst, lmodel, ctx);
@@ -2104,10 +2129,17 @@ int main(int argc, char ** argv) {
 
         struct ggml_threadpool_params tpp = ggml_threadpool_params_default(t.n_threads);
         if (!parse_cpu_mask(t.cpu_mask, tpp.cpumask)) {
-            fprintf(stderr, "%s: failed to parse cpu-mask: %s\n", __func__, t.cpu_mask.c_str());
-            llama_free(ctx);
-            llama_model_free(lmodel);
-            exit(1);
+            if (params.no_fail) {
+                fprintf(stderr, "%s: failed to parse cpu-mask: %s - skipping this permutation\n", __func__, t.cpu_mask.c_str());
+                fprintf(stderr, "  Settings: n_threads=%d, cpu_strict=%d, poll=%d\n", t.n_threads, t.cpu_strict, t.poll);
+                llama_free(ctx);
+                continue;
+            } else {
+                fprintf(stderr, "%s: failed to parse cpu-mask: %s\n", __func__, t.cpu_mask.c_str());
+                llama_free(ctx);
+                llama_model_free(lmodel);
+                exit(1);
+            }
         }
         tpp.strict_cpu = t.cpu_strict;
         tpp.poll       = t.poll;
@@ -2115,10 +2147,17 @@ int main(int argc, char ** argv) {
 
         struct ggml_threadpool * threadpool = ggml_threadpool_new_fn(&tpp);
         if (!threadpool) {
-            fprintf(stderr, "%s: threadpool create failed : n_threads %d\n", __func__, tpp.n_threads);
-            llama_free(ctx);
-            llama_model_free(lmodel);
-            exit(1);
+            if (params.no_fail) {
+                fprintf(stderr, "%s: threadpool create failed : n_threads %d - skipping this permutation\n", __func__, tpp.n_threads);
+                fprintf(stderr, "  Settings: cpu_mask=%s, cpu_strict=%d, poll=%d\n", t.cpu_mask.c_str(), t.cpu_strict, t.poll);
+                llama_free(ctx);
+                continue;
+            } else {
+                fprintf(stderr, "%s: threadpool create failed : n_threads %d\n", __func__, tpp.n_threads);
+                llama_free(ctx);
+                llama_model_free(lmodel);
+                exit(1);
+            }
         }
 
         llama_attach_threadpool(ctx, threadpool, NULL);
@@ -2132,10 +2171,21 @@ int main(int argc, char ** argv) {
                 //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
                 bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
                 if (!res) {
-                    fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
-                    llama_free(ctx);
-                    llama_model_free(lmodel);
-                    exit(1);
+                    if (params.no_fail) {
+                        fprintf(stderr, "%s: error: failed to run prompt warmup - skipping this permutation\n", __func__);
+                        fprintf(stderr, "  Settings: model=%s, n_prompt=%d, n_batch=%d, n_ubatch=%d, n_threads=%d\n",
+                                t.model_type.c_str(), t.n_prompt, t.n_batch, t.n_ubatch, t.n_threads);
+                        fprintf(stderr, "  type_k=%s, type_v=%s, n_gpu_layers=%d, flash_attn=%d\n",
+                                ggml_type_name(t.type_k), ggml_type_name(t.type_v), t.n_gpu_layers, t.flash_attn);
+                        llama_free(ctx);
+                        ggml_threadpool_free_fn(threadpool);
+                        continue;
+                    } else {
+                        fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
+                        llama_free(ctx);
+                        llama_model_free(lmodel);
+                        exit(1);
+                    }
                 }
             }
             if (t.n_gen > 0) {
@@ -2144,10 +2194,21 @@ int main(int argc, char ** argv) {
                 }
                 bool res = test_gen(ctx, 1, t.n_threads);
                 if (!res) {
-                    fprintf(stderr, "%s: error: failed to run gen warmup\n", __func__);
-                    llama_free(ctx);
-                    llama_model_free(lmodel);
-                    exit(1);
+                    if (params.no_fail) {
+                        fprintf(stderr, "%s: error: failed to run gen warmup - skipping this permutation\n", __func__);
+                        fprintf(stderr, "  Settings: model=%s, n_gen=1, n_batch=%d, n_ubatch=%d, n_threads=%d\n",
+                                t.model_type.c_str(), t.n_batch, t.n_ubatch, t.n_threads);
+                        fprintf(stderr, "  type_k=%s, type_v=%s, n_gpu_layers=%d, flash_attn=%d\n",
+                                ggml_type_name(t.type_k), ggml_type_name(t.type_v), t.n_gpu_layers, t.flash_attn);
+                        llama_free(ctx);
+                        ggml_threadpool_free_fn(threadpool);
+                        continue;
+                    } else {
+                        fprintf(stderr, "%s: error: failed to run gen warmup\n", __func__);
+                        llama_free(ctx);
+                        llama_model_free(lmodel);
+                        exit(1);
+                    }
                 }
             }
         }
@@ -2174,10 +2235,21 @@ int main(int argc, char ** argv) {
                     }
                     bool res = test_prompt(ctx, t.n_depth, t.n_batch, t.n_threads);
                     if (!res) {
-                        fprintf(stderr, "%s: error: failed to run depth\n", __func__);
-                        llama_free(ctx);
-                        llama_model_free(lmodel);
-                        exit(1);
+                        if (params.no_fail) {
+                            fprintf(stderr, "%s: error: failed to run depth - skipping this permutation\n", __func__);
+                            fprintf(stderr, "  Settings: model=%s, n_depth=%d, n_batch=%d, n_ubatch=%d, n_threads=%d\n",
+                                    t.model_type.c_str(), t.n_depth, t.n_batch, t.n_ubatch, t.n_threads);
+                            fprintf(stderr, "  type_k=%s, type_v=%s, n_gpu_layers=%d, flash_attn=%d\n",
+                                    ggml_type_name(t.type_k), ggml_type_name(t.type_v), t.n_gpu_layers, t.flash_attn);
+                            llama_free(ctx);
+                            ggml_threadpool_free_fn(threadpool);
+                            continue;
+                        } else {
+                            fprintf(stderr, "%s: error: failed to run depth\n", __func__);
+                            llama_free(ctx);
+                            llama_model_free(lmodel);
+                            exit(1);
+                        }
                     }
 
                     // store the context state for reuse in later runs
@@ -2201,10 +2273,22 @@ int main(int argc, char ** argv) {
                 }
                 bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
                 if (!res) {
-                    fprintf(stderr, "%s: error: failed to run prompt\n", __func__);
-                    llama_free(ctx);
-                    llama_model_free(lmodel);
-                    exit(1);
+                    if (params.no_fail) {
+                        fprintf(stderr, "%s: error: failed to run prompt - skipping this permutation\n", __func__);
+                        fprintf(stderr, "  Settings: model=%s, n_prompt=%d, n_gen=%d, n_depth=%d\n",
+                                t.model_type.c_str(), t.n_prompt, t.n_gen, t.n_depth);
+                        fprintf(stderr, "  n_batch=%d, n_ubatch=%d, n_threads=%d, type_k=%s, type_v=%s\n",
+                                t.n_batch, t.n_ubatch, t.n_threads, ggml_type_name(t.type_k), ggml_type_name(t.type_v));
+                        fprintf(stderr, "  n_gpu_layers=%d, flash_attn=%d\n", t.n_gpu_layers, t.flash_attn);
+                        llama_free(ctx);
+                        ggml_threadpool_free_fn(threadpool);
+                        continue;
+                    } else {
+                        fprintf(stderr, "%s: error: failed to run prompt\n", __func__);
+                        llama_free(ctx);
+                        llama_model_free(lmodel);
+                        exit(1);
+                    }
                 }
             }
             if (t.n_gen > 0) {
@@ -2214,16 +2298,31 @@ int main(int argc, char ** argv) {
                 }
                 bool res = test_gen(ctx, t.n_gen, t.n_threads);
                 if (!res) {
-                    fprintf(stderr, "%s: error: failed to run gen\n", __func__);
-                    llama_free(ctx);
-                    llama_model_free(lmodel);
-                    exit(1);
+                    if (params.no_fail) {
+                        fprintf(stderr, "%s: error: failed to run gen - skipping this permutation\n", __func__);
+                        fprintf(stderr, "  Settings: model=%s, n_prompt=%d, n_gen=%d, n_depth=%d\n",
+                                t.model_type.c_str(), t.n_prompt, t.n_gen, t.n_depth);
+                        fprintf(stderr, "  n_batch=%d, n_ubatch=%d, n_threads=%d, type_k=%s, type_v=%s\n",
+                                t.n_batch, t.n_ubatch, t.n_threads, ggml_type_name(t.type_k), ggml_type_name(t.type_v));
+                        fprintf(stderr, "  n_gpu_layers=%d, flash_attn=%d\n", t.n_gpu_layers, t.flash_attn);
+                        llama_free(ctx);
+                        ggml_threadpool_free_fn(threadpool);
+                        continue;
+                    } else {
+                        fprintf(stderr, "%s: error: failed to run gen\n", __func__);
+                        llama_free(ctx);
+                        llama_model_free(lmodel);
+                        exit(1);
+                    }
                 }
             }
 
             uint64_t t_ns = get_time_ns() - t_start;
             t.samples_ns.push_back(t_ns);
         }
+
+        // Mark this test as successful
+        any_success = true;
 
         if (p) {
             p->print_test(t);
@@ -2254,5 +2353,6 @@ int main(int argc, char ** argv) {
 
     llama_backend_free();
 
-    return 0;
+    // Exit code logic: 0 if any test succeeded, 1 if all tests failed
+    return any_success ? 0 : 1;
 }
