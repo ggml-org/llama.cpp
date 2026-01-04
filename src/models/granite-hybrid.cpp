@@ -12,6 +12,7 @@ llm_build_granite_hybrid::llm_build_granite_hybrid(const llama_model & model, co
     inpL = build_inp_embd(model.tok_embd);
 
     // prevent a graph split due to early `ggml_build_forward_expand()` call in `build_mamba2_layer()`
+    // ref: https://github.com/ggml-org/llama.cpp/pull/18599
     ggml_build_forward_expand(gf, inpL);
 
     auto * inp = build_inp_mem_hybrid();
