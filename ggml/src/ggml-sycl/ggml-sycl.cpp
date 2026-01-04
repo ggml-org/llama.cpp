@@ -66,6 +66,8 @@
 #include "ggml-sycl/mmvq.hpp"
 #include "ggml-sycl/fused-norm-gemm.hpp"
 #include "ggml-sycl/fused-moe-esimd.hpp"
+#include "ggml-sycl/moe-sort.hpp"
+#include "ggml-sycl/moe-xmx.hpp"
 #include "ggml-sycl/fused-ffn.hpp"
 #include "ggml-sycl/gpu-sampler.hpp"
 #include "ggml-sycl/cont-batching.hpp"
@@ -11387,6 +11389,51 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
     GGML_UNUSED(dst);
 #endif
     return false;
+}
+
+// XMX Sorted MoE path (experimental)
+// Enabled via: GGML_SYCL_XMX_MOE=1
+static bool try_xmx_sorted_moe(
+    ggml_backend_sycl_context& ctx,
+    const ggml_tensor* src0,
+    const ggml_tensor* src1,
+    const ggml_tensor* ids,
+    ggml_tensor* dst)
+{
+#if SYCL_XMX_MOE_AVAILABLE
+    static bool enabled = getenv("GGML_SYCL_XMX_MOE") != nullptr;
+    if (!enabled) return false;
+
+    // TODO(Task 5): Add XMX capability check once ctx has xmx_caps
+    // For now, query XMX capabilities directly from the device
+    sycl::device dev = dpct::get_device(ctx.device);
+    XMXCapabilities caps = query_xmx_capabilities(dev);
+
+    if (!caps.supported || !caps.supports_int8) {
+        GGML_SYCL_DEBUG("[XMX MoE] XMX not supported or no int8 support, skipping\n");
+        return false;
+    }
+
+    // Check Q8_0 K dimension matches
+    if (caps.K != QK8_0) {
+        GGML_SYCL_DEBUG("[XMX MoE] K=%zu != QK8_0=%d, skipping\n",
+                       caps.K, QK8_0);
+        return false;
+    }
+
+    GGML_SYCL_DEBUG("[XMX MoE] Using XMX sorted kernel\n");
+
+    // TODO: Implement full dispatch
+    // For now, return false to fall back to existing path
+    return false;
+#else
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(src0);
+    GGML_UNUSED(src1);
+    GGML_UNUSED(ids);
+    GGML_UNUSED(dst);
+    return false;
+#endif
 }
 
 static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,

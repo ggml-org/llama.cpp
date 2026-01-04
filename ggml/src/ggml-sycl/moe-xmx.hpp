@@ -141,9 +141,9 @@ void launch_xmx_moe_gemm_q8_0(
                             if (row < batch && col < out_dim) {
                                 // Load B (weights) from global memory
                                 // weights_qs layout: [out_dim, in_dim] row-major int8
-                                joint_matrix_load(sg, mat_b,
-                                    w_ptr + col * in_dim + k,
-                                    static_cast<size_t>(in_dim));
+                                auto w_offset = w_ptr + col * in_dim + k;
+                                sycl::multi_ptr<const int8_t, sycl::access::address_space::global_space> w_mptr(w_offset);
+                                joint_matrix_load(sg, mat_b, w_mptr, static_cast<size_t>(in_dim));
 
                                 // XMX multiply-accumulate: acc += mat_a * mat_b
                                 joint_matrix_mad(sg, acc[tm][tn], mat_a, mat_b, acc[tm][tn]);
