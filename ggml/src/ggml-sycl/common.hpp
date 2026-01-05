@@ -1395,6 +1395,121 @@ struct ggml_backend_sycl_context {
         }
     } mmvq_soa_buffers;
 
+    // Pre-allocated buffers for XMX MoE graph recording
+    // XMX MoE needs various temporary buffers that can't be allocated during graph recording
+    struct xmx_moe_buffers_t {
+        // Token sorting buffers (persistent across graph executions)
+        sycl::half * tokens_f16_input = nullptr;  // F32->F16 converted tokens [n_input_rows * in_dim]
+        sycl::half * tokens_sorted    = nullptr;  // Sorted tokens [total_pairs * in_dim]
+        void *       token_map        = nullptr;  // Token mapping for scatter-back [total_pairs] (MoETokenMapping*)
+        int32_t *         expert_counts    = nullptr;  // Per-expert token counts [n_experts]
+        int32_t *         expert_offsets   = nullptr;  // Prefix sum offsets [n_experts + 1]
+        int32_t *         expert_write_pos = nullptr;  // Atomic write positions [n_experts]
+        sycl::half *      sorted_output    = nullptr;  // XMX output [total_pairs * out_dim]
+
+        // Q8 quantization buffers
+        int8_t *     q_tokens     = nullptr;  // Quantized tokens [total_pairs * in_dim]
+        sycl::half * token_scales = nullptr;  // Token scales [total_pairs * (in_dim / QK8_0)]
+
+        // Expert scale buffer for AoS Q8_0
+        sycl::half * expert_scale_buf = nullptr;  // [out_dim * (in_dim / QK8_0)]
+
+        // Sorted token IDs for fused path
+        int32_t * sorted_token_ids = nullptr;  // [total_pairs]
+
+        // Tile mapping buffers for fused XMX MoE kernel
+        // Pre-allocated for graph recording (fixed addresses required)
+        int32_t * expert_tile_offsets = nullptr;  // [MAX_EXPERTS + 1] prefix sum of tiles per expert
+        int32_t * total_tiles         = nullptr;  // [1] scalar: total work tiles across all experts
+
+        // Maximum supported experts for pre-allocation
+        static constexpr int MAX_EXPERTS = 64;
+
+        // Buffer dimensions (for reallocation check)
+        int64_t max_total_pairs  = 0;
+        int64_t max_in_dim       = 0;
+        int64_t max_out_dim      = 0;
+        int64_t max_n_experts    = 0;
+        int64_t max_n_input_rows = 0;
+
+        bool initialized = false;
+
+        void reset_usage() {
+            // No per-call reset needed - buffers are persistent
+        }
+
+        // Allocate tile mapping buffers for fused XMX MoE kernel
+        // Called once during initialization - enables graph recording with fixed addresses
+        void allocate_tile_mapping(sycl::queue & q) {
+            if (!expert_tile_offsets) {
+                expert_tile_offsets = sycl::malloc_device<int32_t>(MAX_EXPERTS + 1, q);
+                total_tiles         = sycl::malloc_device<int32_t>(1, q);
+            }
+        }
+
+        // Free tile mapping buffers
+        void free_tile_mapping(sycl::queue & q) {
+            if (expert_tile_offsets) {
+                sycl::free(expert_tile_offsets, q);
+                expert_tile_offsets = nullptr;
+            }
+            if (total_tiles) {
+                sycl::free(total_tiles, q);
+                total_tiles = nullptr;
+            }
+        }
+
+        void free_buffers(queue_ptr stream) {
+            if (tokens_f16_input)
+                sycl::free(tokens_f16_input, *stream);
+            if (tokens_sorted)
+                sycl::free(tokens_sorted, *stream);
+            if (token_map)
+                sycl::free(static_cast<void *>(token_map), *stream);
+            if (expert_counts)
+                sycl::free(expert_counts, *stream);
+            if (expert_offsets)
+                sycl::free(expert_offsets, *stream);
+            if (expert_write_pos)
+                sycl::free(expert_write_pos, *stream);
+            if (sorted_output)
+                sycl::free(sorted_output, *stream);
+            if (q_tokens)
+                sycl::free(q_tokens, *stream);
+            if (token_scales)
+                sycl::free(token_scales, *stream);
+            if (expert_scale_buf)
+                sycl::free(expert_scale_buf, *stream);
+            if (sorted_token_ids)
+                sycl::free(sorted_token_ids, *stream);
+            if (expert_tile_offsets)
+                sycl::free(expert_tile_offsets, *stream);
+            if (total_tiles)
+                sycl::free(total_tiles, *stream);
+
+            tokens_f16_input    = nullptr;
+            tokens_sorted       = nullptr;
+            token_map           = nullptr;
+            expert_counts       = nullptr;
+            expert_offsets      = nullptr;
+            expert_write_pos    = nullptr;
+            sorted_output       = nullptr;
+            q_tokens            = nullptr;
+            token_scales        = nullptr;
+            expert_scale_buf    = nullptr;
+            sorted_token_ids    = nullptr;
+            expert_tile_offsets = nullptr;
+            total_tiles         = nullptr;
+
+            max_total_pairs  = 0;
+            max_in_dim       = 0;
+            max_out_dim      = 0;
+            max_n_experts    = 0;
+            max_n_input_rows = 0;
+            initialized      = false;
+        }
+    } xmx_moe_buffers;
+
     // Q8_1 quantization cache for MoE: avoids re-quantizing same input across gate/up/down
     // In MoE layers, the same input is used for all projections - caching saves 3x quantization
     struct moe_quant_cache {
