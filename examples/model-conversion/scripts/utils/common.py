@@ -200,3 +200,46 @@ def save_output_data(data, tokens, prompt, model_name, type_suffix="", output_di
         f.write(f"n_tokens: {len(tokens)}\n")
         f.write(f"token ids: {', '.join(str(int(tid)) for tid in tokens)}\n")
     print(f"Prompt saved to {base_path}-prompt.txt")
+
+
+def compare_tokens(original, converted, type_suffix="", output_dir="data"):
+    data_dir = Path(output_dir)
+
+    # Read tokens from both models
+    tokens1_file = data_dir / f"{original}{type_suffix}-tokens.bin"
+    tokens2_file = data_dir / f"{converted}{type_suffix}-tokens.bin"
+
+    if not tokens1_file.exists():
+        print(f"Error: Token file not found: {tokens1_file}")
+        return False
+
+    if not tokens2_file.exists():
+        print(f"Error: Token file not found: {tokens2_file}")
+        return False
+
+    tokens1 = np.fromfile(tokens1_file, dtype=np.int32)
+    tokens2 = np.fromfile(tokens2_file, dtype=np.int32)
+
+    print(f"\nComparing tokens between:")
+    print(f"  Original : {original} ({len(tokens1)} tokens)")
+    print(f"  Converted: {converted} ({len(tokens2)} tokens)")
+
+    if len(tokens1) != len(tokens2):
+        print(f"\n❌ Token count mismatch: {len(tokens1)} vs {len(tokens2)}")
+        return False
+
+    if np.array_equal(tokens1, tokens2):
+        print(f"\n✅ All {len(tokens1)} tokens match!")
+        return True
+
+    mismatches = np.where(tokens1 != tokens2)[0]
+    print(f"\n❌ Found {len(mismatches)} mismatched tokens:")
+
+    num_to_show = min(len(mismatches), 10)
+    for idx in mismatches[:num_to_show]:
+        print(f"  Position {idx}: {tokens1[idx]} vs {tokens2[idx]}")
+
+    if len(mismatches) > num_to_show:
+        print(f"  ... and {len(mismatches) - num_to_show} more mismatches")
+
+    return False
