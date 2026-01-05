@@ -10,6 +10,7 @@
 #include "common.hpp"
 #include "moe-xmx.hpp"  // For MoEXMXConfig and preprocessing
 #include <sycl/sycl.hpp>
+#include <vector>
 
 #if SYCL_XMX_MOE_AVAILABLE
 
@@ -78,27 +79,23 @@ void fused_xmx_moe_gemm_q8_0(
     const int n_output_tiles = (out_dim + TILE_N - 1) / TILE_N;
     const int num_sgs = cfg.wg_size / SG_SIZE;
 
-    // Total sorted tokens (sum of all expert counts)
-    // Read from expert_offsets[n_experts] on host
-    int total_sorted = 0;
-    queue.copy(&expert_offsets[n_experts], &total_sorted, 1).wait();
+    // Copy expert_offsets to host ONCE before kernel launch
+    std::vector<int32_t> h_offsets(n_experts + 1);
+    queue.copy(expert_offsets, h_offsets.data(), n_experts + 1).wait();
+    int total_sorted = h_offsets[n_experts];
 
     if (total_sorted == 0) return;
 
-    // Compute total work items across ALL experts
+    // Compute total work items across ALL experts using host-side offsets
     int64_t total_work = 0;
     for (int e = 0; e < n_experts; e++) {
-        int expert_start = 0, expert_end = 0;
-        queue.copy(&expert_offsets[e], &expert_start, 1);
-        queue.copy(&expert_offsets[e + 1], &expert_end, 1);
-        queue.wait();
-        int expert_tokens = expert_end - expert_start;
+        int expert_tokens = h_offsets[e + 1] - h_offsets[e];
         total_work += static_cast<int64_t>(expert_tokens) * n_output_tiles;
     }
 
     if (total_work == 0) return;
 
-    // Suppress unused variable warnings for TILE_M and num_sgs
+    // Suppress unused variable warnings
     (void)TILE_M;
     (void)num_sgs;
     (void)num_tokens;
@@ -107,10 +104,15 @@ void fused_xmx_moe_gemm_q8_0(
 
     queue.submit([&](sycl::handler& cgh) {
         // SLM allocations
-        sycl::local_accessor<int8_t, 1> slm_token(sycl::range<1>(in_dim), cgh);
-        sycl::local_accessor<sycl::half, 1> slm_token_scales(sycl::range<1>(num_k_blocks), cgh);
+        // Token data for current K-block only (not full in_dim - loaded per K-iteration)
+        sycl::local_accessor<int8_t, 1> slm_token(sycl::range<1>(XMX_K), cgh);
+        // Token scale for current K-block (single value per token, but we process 1 token/WG)
+        sycl::local_accessor<float, 1> slm_token_scale(sycl::range<1>(1), cgh);
+        // Weight tile for current K-block
         sycl::local_accessor<int8_t, 1> slm_weights(sycl::range<1>(TILE_N * XMX_K), cgh);
-        sycl::local_accessor<sycl::half, 1> slm_weight_scales(sycl::range<1>(TILE_N), cgh);
+        // Per-column weight scales for current K-block
+        sycl::local_accessor<float, 1> slm_weight_scales(sycl::range<1>(TILE_N), cgh);
+        // Per-sub-group accumulator extraction buffer
         sycl::local_accessor<int32_t, 1> slm_acc(sycl::range<1>(cfg.wg_size / SG_SIZE * XMX_M * XMX_N), cgh);
 
         const int wg_size_captured = cfg.wg_size;
@@ -144,15 +146,6 @@ void fused_xmx_moe_gemm_q8_0(
                         int sorted_idx = expert_start + local_token_idx;
                         int token_idx = sorted_token_ids[sorted_idx];
 
-                        // Collaborative load of token into SLM
-                        for (int i = tid; i < static_cast<int>(in_dim); i += wg_size_captured) {
-                            slm_token[i] = q_tokens[token_idx * in_dim + i];
-                        }
-                        for (int i = tid; i < num_k_blocks; i += wg_size_captured) {
-                            slm_token_scales[i] = token_scales[token_idx * num_k_blocks + i];
-                        }
-                        sycl::group_barrier(item.get_group());
-
                         // Expert weight pointers
                         const int8_t* expert_qs = all_expert_qs +
                             expert * (out_dim * num_k_blocks * XMX_K);
@@ -161,17 +154,29 @@ void fused_xmx_moe_gemm_q8_0(
 
                         int col_start = tile_idx * TILE_N;
 
-                        // Initialize accumulators
+                        // Initialize int32 accumulators (reset per K-block)
                         joint_matrix<sycl::sub_group, int32_t, use::accumulator,
-                                     XMX_M, XMX_N> acc[TILES_M][TILES_N];
-                        for (int tm = 0; tm < TILES_M; tm++) {
-                            for (int tn = 0; tn < TILES_N; tn++) {
-                                joint_matrix_fill(sg, acc[tm][tn], 0);
-                            }
+                                     XMX_M, XMX_N> acc[TILES_N];
+                        for (int tn = 0; tn < TILES_N; tn++) {
+                            joint_matrix_fill(sg, acc[tn], 0);
                         }
 
-                        // K-dimension reduction
+                        // Float accumulators for precision across K-blocks
+                        // For decode (single token), we only need TILES_N * XMX_N outputs
+                        float float_acc[TILES_N * XMX_N] = {0.0f};
+
+                        // K-dimension reduction with per-K-block scale application
                         for (int k_block = 0; k_block < num_k_blocks; k_block++) {
+                            // Load token data for this K-block only
+                            for (int i = tid; i < XMX_K; i += wg_size_captured) {
+                                slm_token[i] = q_tokens[token_idx * in_dim + k_block * XMX_K + i];
+                            }
+                            // Load token scale for this K-block (single value)
+                            if (tid == 0) {
+                                slm_token_scale[0] = static_cast<float>(
+                                    token_scales[token_idx * num_k_blocks + k_block]);
+                            }
+
                             // Load weight tile for this K-block
                             for (int i = tid; i < TILE_N * XMX_K; i += wg_size_captured) {
                                 int col = i / XMX_K;
@@ -180,13 +185,18 @@ void fused_xmx_moe_gemm_q8_0(
                                 if (out_col < static_cast<int>(out_dim)) {
                                     slm_weights[i] = expert_qs[
                                         out_col * num_k_blocks * XMX_K + k_block * XMX_K + k];
+                                } else {
+                                    slm_weights[i] = 0;
                                 }
                             }
+                            // Load per-column weight scales for this K-block
                             for (int i = tid; i < TILE_N; i += wg_size_captured) {
                                 int out_col = col_start + i;
                                 if (out_col < static_cast<int>(out_dim)) {
-                                    slm_weight_scales[i] = expert_d[
-                                        out_col * num_k_blocks + k_block];
+                                    slm_weight_scales[i] = static_cast<float>(
+                                        expert_d[out_col * num_k_blocks + k_block]);
+                                } else {
+                                    slm_weight_scales[i] = 0.0f;
                                 }
                             }
                             sycl::group_barrier(item.get_group());
@@ -197,38 +207,57 @@ void fused_xmx_moe_gemm_q8_0(
                             joint_matrix<sycl::sub_group, int8_t, use::b,
                                          XMX_K, XMX_N, layout::row_major> mat_b;
 
-                            joint_matrix_load(sg, mat_a, &slm_token[k_block * XMX_K], XMX_K);
+                            // Load mat_a ONCE outside TILES_N loop (FIX #3)
+                            auto slm_token_ptr = sycl::address_space_cast<
+                                sycl::access::address_space::local_space,
+                                sycl::access::decorated::no>(&slm_token[0]);
+                            joint_matrix_load(sg, mat_a, slm_token_ptr, XMX_K);
 
                             for (int tn = 0; tn < TILES_N; tn++) {
-                                joint_matrix_load(sg, mat_b,
-                                    &slm_weights[tn * XMX_N * XMX_K], XMX_K);
+                                auto slm_weights_ptr = sycl::address_space_cast<
+                                    sycl::access::address_space::local_space,
+                                    sycl::access::decorated::no>(&slm_weights[tn * XMX_N * XMX_K]);
+                                joint_matrix_load(sg, mat_b, slm_weights_ptr, XMX_K);
 
-                                for (int tm = 0; tm < TILES_M; tm++) {
-                                    joint_matrix_mad(sg, acc[tm][tn], mat_a, mat_b, acc[tm][tn]);
+                                joint_matrix_mad(sg, acc[tn], mat_a, mat_b, acc[tn]);
+                            }
+
+                            // Per-K-block scale application (FIX #1)
+                            // Extract int32 accumulator, apply scales, accumulate to float_acc
+                            int32_t* sg_acc_ptr = &slm_acc[sg_id * XMX_M * XMX_N];
+                            float t_scale = slm_token_scale[0];
+
+                            for (int tn = 0; tn < TILES_N; tn++) {
+                                auto acc_slm_ptr = sycl::address_space_cast<
+                                    sycl::access::address_space::local_space,
+                                    sycl::access::decorated::no>(sg_acc_ptr);
+                                joint_matrix_store(sg, acc[tn], acc_slm_ptr, XMX_N,
+                                    layout::row_major);
+                                sycl::group_barrier(sg);
+
+                                // For decode (single token), only row 0 matters (FIX #2)
+                                // Extract XMX_N values from row 0 of the 8x16 accumulator
+                                for (int i = lane; i < XMX_N; i += SG_SIZE) {
+                                    int tile_col = i;
+                                    float w_scale = slm_weight_scales[tn * XMX_N + tile_col];
+                                    int32_t raw = sg_acc_ptr[i];  // Row 0, col i
+                                    float_acc[tn * XMX_N + tile_col] += raw * t_scale * w_scale;
                                 }
+
+                                // Reset int32 accumulator for next K-block
+                                joint_matrix_fill(sg, acc[tn], 0);
                             }
 
                             sycl::group_barrier(item.get_group());
                         }
 
-                        // Store results with scale application
-                        int32_t* sg_acc_ptr = &slm_acc[sg_id * XMX_M * XMX_N];
-
-                        for (int tm = 0; tm < TILES_M; tm++) {
-                            for (int tn = 0; tn < TILES_N; tn++) {
-                                joint_matrix_store(sg, acc[tm][tn], sg_acc_ptr, XMX_N,
-                                    layout::row_major);
-                                sycl::group_barrier(sg);
-
-                                if (tm == 0 && lane < XMX_N) {
-                                    int out_col = col_start + tn * XMX_N + lane;
-                                    if (out_col < static_cast<int>(out_dim)) {
-                                        int32_t acc_val = sg_acc_ptr[lane];
-                                        // TODO: Proper scale multiplication
-                                        float result = static_cast<float>(acc_val);
-                                        output[sorted_idx * out_dim + out_col] =
-                                            sycl::half(result);
-                                    }
+                        // Store final results
+                        for (int tn = 0; tn < TILES_N; tn++) {
+                            for (int i = lane; i < XMX_N; i += SG_SIZE) {
+                                int out_col = col_start + tn * XMX_N + i;
+                                if (out_col < static_cast<int>(out_dim)) {
+                                    output[sorted_idx * out_dim + out_col] =
+                                        sycl::half(float_acc[tn * XMX_N + i]);
                                 }
                             }
                         }
