@@ -628,7 +628,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     ml.get_arr(LLM_KV_CLASSIFIER_OUTPUT_LABELS, classifier_labels, false);
     if (!classifier_labels.empty()) {
         hparams.n_cls_out = classifier_labels.size();
-        hparams.n_embd_out = classifier_labels.size();
     }
 
     // arch-specific KVs
