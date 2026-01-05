@@ -934,6 +934,7 @@ struct llm_graph_context {
 
     void build_dense_out(
             ggml_tensor * dense_2,
+            ggml_tensor * dense_2_b,
             ggml_tensor * dense_3) const;
 };
 
