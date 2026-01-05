@@ -10,10 +10,6 @@
 
 using json = nlohmann::ordered_json;
 
-// ============================================================================
-// UNIFIED AUTO-PARSER DATA STRUCTURES
-// ============================================================================
-
 // Phase 1 result: Content and reasoning structure (analyzed without tools)
 struct content_structure {
     // Reasoning handling mode
@@ -112,10 +108,6 @@ struct template_analysis_result {
     std::vector<std::string> preserved_tokens;
 };
 
-// ============================================================================
-// TEMPLATE ANALYZER
-// ============================================================================
-
 // Template analyzer that uses two-phase differential analysis
 class template_analyzer {
   public:
@@ -155,10 +147,6 @@ class template_analyzer {
     static void collect_preserved_tokens(template_analysis_result & result);
 };
 
-// ============================================================================
-// TEMPLATE PARAMETERS
-// ============================================================================
-
 struct templates_params {
     json                                  messages;
     json                                  tools;
@@ -177,10 +165,6 @@ struct templates_params {
     bool                                  is_inference;
     bool                                  add_inference;
 };
-
-// ============================================================================
-// PEG PARSER GENERATOR
-// ============================================================================
 
 class universal_peg_generator {
   public:
