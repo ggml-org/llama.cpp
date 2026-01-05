@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Paperclip } from '@lucide/svelte';
+	import { MessageSquare } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -11,6 +12,7 @@
 		hasAudioModality?: boolean;
 		hasVisionModality?: boolean;
 		onFileUpload?: () => void;
+		onSystemPromptClick?: () => void;
 	}
 
 	let {
@@ -18,7 +20,8 @@
 		disabled = false,
 		hasAudioModality = false,
 		hasVisionModality = false,
-		onFileUpload
+		onFileUpload,
+		onSystemPromptClick
 	}: Props = $props();
 
 	const fileUploadTooltipText = $derived.by(() => {
@@ -118,6 +121,23 @@
 					</Tooltip.Content>
 				{/if}
 			</Tooltip.Root>
+			<DropdownMenu.Separator />
+			<Tooltip.Root>
+				<Tooltip.Trigger class="w-full">
+					<DropdownMenu.Item
+						class="flex cursor-pointer items-center gap-2"
+						onclick={() => onSystemPromptClick?.()}
+					>
+						<MessageSquare class="h-4 w-4" />
+
+						<span>System Prompt</span>
+					</DropdownMenu.Item>
+				</Tooltip.Trigger>
+
+					<Tooltip.Content>
+						<p>Add a custom system message for this conversation</p>
+					</Tooltip.Content>
+				</Tooltip.Root>
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>
