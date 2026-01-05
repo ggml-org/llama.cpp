@@ -19,6 +19,33 @@ namespace moe_xmx {
 
 using namespace sycl::ext::oneapi::experimental::matrix;
 
+// Device function: binary search to find expert from work-group ID
+// Given wg_id and expert_tile_offsets[], returns the expert index
+// such that expert_tile_offsets[expert] <= wg_id < expert_tile_offsets[expert + 1]
+inline int find_expert_for_workgroup(
+    int             wg_id,
+    const int32_t * expert_tile_offsets,
+    int             n_experts) {
+    int lo = 0, hi = n_experts;
+    while (lo < hi) {
+        int mid = (lo + hi) / 2;
+        if (expert_tile_offsets[mid + 1] <= wg_id) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+// Compute local tile index within expert's tile range
+inline int get_local_tile_index(
+    int             wg_id,
+    int             expert_idx,
+    const int32_t * expert_tile_offsets) {
+    return wg_id - expert_tile_offsets[expert_idx];
+}
+
 // Configuration for XMX MoE kernel
 struct MoEXMXConfig {
     // Hardware parameters (from XMXCapabilities)
