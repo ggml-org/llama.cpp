@@ -1217,17 +1217,17 @@ int llama_context::encode(const llama_batch & batch_inp) {
                 } break;
             case LLAMA_POOLING_TYPE_RANK:
                 {
-                    // extract the rerank score - n_embd_out floats per sequence
+                    // extract the rerank score - n_cls_out floats per sequence
                     auto & embd_seq_out = embd_seq;
 
-                    const uint32_t n_embd_out = hparams.get_n_embd_out();
+                    const uint32_t n_cls_out = hparams.n_cls_out;
 
                     for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
                         const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
                         const int32_t      seq_idx = ubatch.seq_idx[seq_id];
 
-                        embd_seq_out[seq_id].resize(n_embd_out);
-                        ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd_out*seq_idx)*sizeof(float), n_embd_out*sizeof(float));
+                        embd_seq_out[seq_id].resize(n_cls_out);
+                        ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_cls_out*seq_idx)*sizeof(float), n_cls_out*sizeof(float));
                     }
                 } break;
             case LLAMA_POOLING_TYPE_UNSPECIFIED:
@@ -1628,17 +1628,17 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     } break;
                 case LLAMA_POOLING_TYPE_RANK:
                     {
-                        // extract the rerank score - n_embd_out floats per sequence
+                        // extract the rerank score - n_cls_out floats per sequence
                         auto & embd_seq_out = embd_seq;
 
-                        const uint32_t n_embd_out = hparams.get_n_embd_out();
+                        const uint32_t n_cls_out = hparams.n_cls_out;
 
                         for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
                             const llama_seq_id seq_id  = ubatch.seq_id_unq[s];
                             const int32_t      seq_idx = ubatch.seq_idx[seq_id];
 
-                            embd_seq_out[seq_id].resize(n_embd_out);
-                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_embd_out*seq_idx)*sizeof(float), n_embd_out*sizeof(float));
+                            embd_seq_out[seq_id].resize(n_cls_out);
+                            ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_cls_out*seq_idx)*sizeof(float), n_cls_out*sizeof(float));
                         }
                     } break;
                 case LLAMA_POOLING_TYPE_UNSPECIFIED:
