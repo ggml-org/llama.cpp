@@ -677,8 +677,6 @@
 	/* Code blocks */
 
 	div :global(.code-block-wrapper) {
-		scrollbar-width: thin;
-		scrollbar-gutter: stable;
 		margin: 1.5rem 0;
 		border-radius: 0.75rem;
 		overflow: auto;
