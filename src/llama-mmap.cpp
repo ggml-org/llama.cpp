@@ -154,14 +154,6 @@ struct llama_file::impl {
         write_raw(&val, sizeof(val));
     }
 
-    void read_aligned_chunk(size_t offset, void * dest, size_t size) {
-        throw std::runtime_error("DirectIO is not implemented on Windows.");
-    }
-
-    void read_raw_unsafe(void * ptr, size_t len) {
-        throw std::runtime_error("DirectIO is not implemented on Windows.");
-    }
-
     bool has_direct_io() const {
         return true;
     }
@@ -400,7 +392,7 @@ int llama_file::file_id() const {
 void llama_file::seek(size_t offset, int whence) const { pimpl->seek(offset, whence); }
 void llama_file::read_raw(void * ptr, size_t len) { pimpl->read_raw(ptr, len); }
 #ifdef _WIN32
-void llama_file::read_raw_unsafe(void * ptr, size_t len) const { pimpl->read_raw(ptr, len); }
+void llama_file::read_raw_unsafe(void * ptr, size_t len) { pimpl->read_raw(ptr, len); }
 #else
 void llama_file::read_raw_unsafe(void * ptr, size_t len) { pimpl->read_raw_unsafe(ptr, len); }
 #endif
