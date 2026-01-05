@@ -17,7 +17,6 @@ llm_build_exaone_moe::llm_build_exaone_moe(const llama_model & model, const llm_
     ggml_tensor * inp_pos = build_inp_pos();
 
     auto * inp_attn_iswa = build_attn_inp_kv_iswa();
-    // auto * inp_attn_kv = build_attn_inp_kv();
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -65,16 +64,9 @@ llm_build_exaone_moe::llm_build_exaone_moe(const llama_model & model, const llm_
             cb(Kcur, "Kcur", il);
             cb(Vcur, "Vcur", il);
 
-            if (is_local_layer) {
-                cur = build_attn(inp_attn_iswa,
-                        model.layers[il].wo, NULL,
-                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
-            } else {
-                // cur = build_attn(inp_attn_kv,
-                cur = build_attn(inp_attn_iswa,
-                        model.layers[il].wo, NULL,
-                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
-            }
+            cur = build_attn(inp_attn_iswa,
+                model.layers[il].wo, NULL,
+                Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
             cb(cur, "attn_out", il);
         }
         if (il == n_layer - 1 && inp_out_ids) {
