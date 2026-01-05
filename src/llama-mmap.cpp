@@ -171,7 +171,7 @@ struct llama_file::impl {
             if (init_fd()) {
                 return;
             }
-            LLAMA_LOG_WARN("Failed to open model %s with error: %s. Falling back to buffered I/O",
+            LLAMA_LOG_WARN("Failed to open file '%s' with error: %s. Falling back to buffered I/O",
                            fname, strerror(errno));
         }
 #endif
