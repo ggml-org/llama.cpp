@@ -12,14 +12,15 @@
 
 #include "common.hpp"
 #include "dequantize.hpp"
+
 #include <sycl/sycl.hpp>
 
 // Check for ESIMD support
 #if __has_include(<sycl/ext/intel/esimd.hpp>)
-#define SYCL_ESIMD_MOE_AVAILABLE 1
-#include <sycl/ext/intel/esimd.hpp>
+#    define SYCL_ESIMD_MOE_AVAILABLE 1
+#    include <sycl/ext/intel/esimd.hpp>
 #else
-#define SYCL_ESIMD_MOE_AVAILABLE 0
+#    define SYCL_ESIMD_MOE_AVAILABLE 0
 #endif
 
 #if SYCL_ESIMD_MOE_AVAILABLE
@@ -50,57 +51,57 @@ constexpr int MOE_QK8_0 = 32;
 // Expert weights layout: [num_experts, nrows_per_expert, ncols]
 // Quantized as Q8_0 blocks: each block = {scale (f16), qs[32] (int8)}
 
-template <int HIDDEN_DIM_BLOCKS>  // ncols / QK8_0
-void fused_moe_q8_0_kernel(
-    const void * __restrict__ expert_weights,  // [num_experts, nrows, ncols] Q8_0
-    const void * __restrict__ input,           // F32 input with 2D layout
-    const int32_t * __restrict__ expert_ids,   // [num_tokens, n_ids] expert indices
-    float * __restrict__ output,               // [num_tokens, n_ids, nrows] F32
-    const int64_t stride_expert,               // Bytes between experts in weights
-    [[maybe_unused]] const int64_t ncols,       // Hidden size (input dimension)
-    const int64_t nrows,                       // Output size per expert
-    const int64_t n_ids,                       // Number of expert selections per token
-    const int64_t num_tokens,                  // Total number of tokens
-    const int64_t ne11,                        // src1 dimension 1 size
-    const int64_t ids_nb0,                     // ids stride for id dimension (bytes)
-    const int64_t ids_nb1,                     // ids stride for token dimension (bytes)
-    const int64_t in_nb11,                     // input stride for dimension 1 (bytes)
-    const int64_t in_nb12,                     // input stride for dimension 2 (bytes)
-    const int64_t out_nb1,                     // output stride for id dimension (bytes)
-    const int64_t out_nb2,                     // output stride for token dimension (bytes)
-    const sycl::nd_item<3> & item
-) {
+template <int HIDDEN_DIM_BLOCKS>                                          // ncols / QK8_0
+void fused_moe_q8_0_kernel(const void * __restrict__ expert_weights,      // [num_experts, nrows, ncols] Q8_0
+                           const void * __restrict__ input,               // F32 input with 2D layout
+                           const int32_t * __restrict__ expert_ids,       // [num_tokens, n_ids] expert indices
+                           float * __restrict__ output,                   // [num_tokens, n_ids, nrows] F32
+                           const int64_t                  stride_expert,  // Bytes between experts in weights
+                           [[maybe_unused]] const int64_t ncols,          // Hidden size (input dimension)
+                           const int64_t                  nrows,          // Output size per expert
+                           const int64_t                  n_ids,          // Number of expert selections per token
+                           const int64_t                  num_tokens,     // Total number of tokens
+                           const int64_t                  ne11,           // src1 dimension 1 size
+                           const int64_t                  ids_nb0,        // ids stride for id dimension (bytes)
+                           const int64_t                  ids_nb1,        // ids stride for token dimension (bytes)
+                           const int64_t                  in_nb11,        // input stride for dimension 1 (bytes)
+                           const int64_t                  in_nb12,        // input stride for dimension 2 (bytes)
+                           const int64_t                  out_nb1,        // output stride for id dimension (bytes)
+                           const int64_t                  out_nb2,        // output stride for token dimension (bytes)
+                           const sycl::nd_item<3> &       item) {
     using namespace esimd;
 
     // Work distribution:
     // group(0) = batch_idx = token_idx * n_ids + id_idx
     // group(2) = output row
     const int batch_idx = item.get_group(0);
-    const int row = item.get_group(2);
-    const int tid = item.get_local_id(2);
+    const int row       = item.get_group(2);
+    const int tid       = item.get_local_id(2);
 
-    if (row >= nrows) return;
+    if (row >= nrows) {
+        return;
+    }
 
     // Decompose batch_idx into (token_idx, id_idx) - 2D iteration
     const int token_idx = batch_idx / n_ids;  // i12 = iid1
-    const int id_idx = batch_idx % n_ids;     // id
+    const int id_idx    = batch_idx % n_ids;  // id
 
-    if (token_idx >= num_tokens) return;
+    if (token_idx >= num_tokens) {
+        return;
+    }
 
     // Read expert ID from ids tensor using proper 2D indexing
-    const int32_t expert_id = *(const int32_t *)((const char*)expert_ids +
-                                                  token_idx * ids_nb1 + id_idx * ids_nb0);
+    const int32_t expert_id = *(const int32_t *) ((const char *) expert_ids + token_idx * ids_nb1 + id_idx * ids_nb0);
 
     // Expert weights: offset by expert_id * stride_expert
-    const block_q8_0 * weights_row = (const block_q8_0 *)((const char*)expert_weights +
-                                                           expert_id * stride_expert) +
-                                     row * HIDDEN_DIM_BLOCKS;
+    const block_q8_0 * weights_row =
+        (const block_q8_0 *) ((const char *) expert_weights + expert_id * stride_expert) + row * HIDDEN_DIM_BLOCKS;
 
     // Compute input offset using proper 2D indexing (matching MMVQ kernel)
     // i11 = id_idx % ne11, i12 = token_idx
-    const int64_t i11 = id_idx % ne11;
-    const int64_t i12 = token_idx;
-    const float * input_row = (const float *)((const char*)input + i11 * in_nb11 + i12 * in_nb12);
+    const int64_t i11       = id_idx % ne11;
+    const int64_t i12       = token_idx;
+    const float * input_row = (const float *) ((const char *) input + i11 * in_nb11 + i12 * in_nb12);
 
     // Each thread processes a subset of blocks and accumulates
     float partial_sum = 0.0f;
@@ -113,7 +114,7 @@ void fused_moe_q8_0_kernel(
         // Load and dequantize weights, compute dot product with input
         float block_sum = 0.0f;
 
-        #pragma unroll
+#    pragma unroll
         for (int i = 0; i < MOE_QK8_0; i++) {
             float w = static_cast<float>(weights_row[b].qs[i]) * scale;
             float x = input_row[b * MOE_QK8_0 + i];
@@ -126,7 +127,7 @@ void fused_moe_q8_0_kernel(
     // Warp-level reduction using sub-group operations
     auto sg = item.get_sub_group();
 
-    #pragma unroll
+#    pragma unroll
     for (int offset = sg.get_max_local_range()[0] / 2; offset > 0; offset /= 2) {
         partial_sum += sycl::shift_group_left(sg, partial_sum, offset);
     }
@@ -134,8 +135,8 @@ void fused_moe_q8_0_kernel(
     // Write output using proper 2D indexing
     // i1 = id_idx, i2 = token_idx
     if (tid == 0) {
-        float * out_ptr = (float *)((char*)output + token_idx * out_nb2 + id_idx * out_nb1);
-        out_ptr[row] = partial_sum;
+        float * out_ptr = (float *) ((char *) output + token_idx * out_nb2 + id_idx * out_nb1);
+        out_ptr[row]    = partial_sum;
     }
 }
 
@@ -147,46 +148,47 @@ void fused_moe_q8_0_kernel(
 // Block size for MXFP4 (use different name to avoid macro conflict)
 constexpr int MOE_QK_MXFP4 = 32;
 
-template <int HIDDEN_DIM_BLOCKS>  // ncols / MOE_QK_MXFP4
-void fused_moe_mxfp4_kernel(
-    const void * __restrict__ expert_weights,
-    const void * __restrict__ input,          // F32 input with 2D layout
-    const int32_t * __restrict__ expert_ids,
-    float * __restrict__ output,
-    const int64_t stride_expert,
-    [[maybe_unused]] const int64_t ncols,
-    const int64_t nrows,
-    const int64_t n_ids,
-    const int64_t num_tokens,
-    const int64_t ne11,                       // src1 dimension 1 size
-    const int64_t ids_nb0,
-    const int64_t ids_nb1,
-    const int64_t in_nb11,                    // input stride for dimension 1 (bytes)
-    const int64_t in_nb12,                    // input stride for dimension 2 (bytes)
-    const int64_t out_nb1,
-    const int64_t out_nb2,
-    const sycl::nd_item<3> & item
-) {
+template <int HIDDEN_DIM_BLOCKS>                              // ncols / MOE_QK_MXFP4
+void fused_moe_mxfp4_kernel(const void * __restrict__ expert_weights,
+                            const void * __restrict__ input,  // F32 input with 2D layout
+                            const int32_t * __restrict__ expert_ids,
+                            float * __restrict__ output,
+                            const int64_t                  stride_expert,
+                            [[maybe_unused]] const int64_t ncols,
+                            const int64_t                  nrows,
+                            const int64_t                  n_ids,
+                            const int64_t                  num_tokens,
+                            const int64_t                  ne11,  // src1 dimension 1 size
+                            const int64_t                  ids_nb0,
+                            const int64_t                  ids_nb1,
+                            const int64_t                  in_nb11,  // input stride for dimension 1 (bytes)
+                            const int64_t                  in_nb12,  // input stride for dimension 2 (bytes)
+                            const int64_t                  out_nb1,
+                            const int64_t                  out_nb2,
+                            const sycl::nd_item<3> &       item) {
     using namespace esimd;
 
     const int batch_idx = item.get_group(0);
-    const int row = item.get_group(2);
-    const int tid = item.get_local_id(2);
+    const int row       = item.get_group(2);
+    const int tid       = item.get_local_id(2);
 
-    if (row >= nrows) return;
+    if (row >= nrows) {
+        return;
+    }
 
     // Decompose batch_idx into (token_idx, id_idx) - 2D iteration
     const int token_idx = batch_idx / n_ids;  // i12 = iid1
-    const int id_idx = batch_idx % n_ids;     // id
+    const int id_idx    = batch_idx % n_ids;  // id
 
-    if (token_idx >= num_tokens) return;
+    if (token_idx >= num_tokens) {
+        return;
+    }
 
     // Read expert ID from ids tensor using proper 2D indexing
-    const int32_t expert_id = *(const int32_t *)((const char*)expert_ids +
-                                                  token_idx * ids_nb1 + id_idx * ids_nb0);
+    const int32_t expert_id = *(const int32_t *) ((const char *) expert_ids + token_idx * ids_nb1 + id_idx * ids_nb0);
 
     // Validate expert_id is in range (helps catch indexing bugs)
-    if (expert_id < 0 || expert_id >= 32) {
+    if (expert_id < 0 || expert_id >= 64) {
         // Invalid expert ID - this indicates an indexing bug
         if (tid == 0 && row == 0) {
             // Can't print from kernel, but at least write a sentinel value
@@ -195,15 +197,14 @@ void fused_moe_mxfp4_kernel(
     }
 
     // Expert weights: offset by expert_id * stride_expert
-    const block_mxfp4 * weights_row = (const block_mxfp4 *)((const char*)expert_weights +
-                                                             expert_id * stride_expert) +
-                                      row * HIDDEN_DIM_BLOCKS;
+    const block_mxfp4 * weights_row =
+        (const block_mxfp4 *) ((const char *) expert_weights + expert_id * stride_expert) + row * HIDDEN_DIM_BLOCKS;
 
     // Compute input offset using proper 2D indexing (matching MMVQ kernel)
     // i11 = id_idx % ne11, i12 = token_idx
-    const int64_t i11 = id_idx % ne11;
-    const int64_t i12 = token_idx;
-    const float * input_row = (const float *)((const char*)input + i11 * in_nb11 + i12 * in_nb12);
+    const int64_t i11       = id_idx % ne11;
+    const int64_t i12       = token_idx;
+    const float * input_row = (const float *) ((const char *) input + i11 * in_nb11 + i12 * in_nb12);
 
     float partial_sum = 0.0f;
 
@@ -213,10 +214,10 @@ void fused_moe_mxfp4_kernel(
 
         float block_sum = 0.0f;
 
-        // MXFP4 format: low nibbles (bytes 0-15) -> elements 0-15
-        //               high nibbles (bytes 0-15) -> elements 16-31
-        // This matches the dp4a layout used in MMVQ
-        #pragma unroll
+// MXFP4 format: low nibbles (bytes 0-15) -> elements 0-15
+//               high nibbles (bytes 0-15) -> elements 16-31
+// This matches the dp4a layout used in MMVQ
+#    pragma unroll
         for (int i = 0; i < MOE_QK_MXFP4 / 2; i++) {
             uint8_t packed = weights_row[b].qs[i];
 
@@ -224,8 +225,8 @@ void fused_moe_mxfp4_kernel(
             // kvalues_mxfp4 = {0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12}
             // Values are doubled (e2m1 * 2), but sycl_e8m0_to_fp32_half already halves,
             // so the two cancel out and we don't need additional scaling
-            float w_lo = scale * kvalues_mxfp4[packed & 0xF];  // Low nibble -> element i
-            float w_hi = scale * kvalues_mxfp4[packed >> 4];   // High nibble -> element i+16
+            float w_lo = scale * kvalues_mxfp4[packed & 0xF];   // Low nibble -> element i
+            float w_hi = scale * kvalues_mxfp4[packed >> 4];    // High nibble -> element i+16
 
             float x_lo = input_row[b * MOE_QK_MXFP4 + i];       // Input element i
             float x_hi = input_row[b * MOE_QK_MXFP4 + i + 16];  // Input element i+16
@@ -239,11 +240,11 @@ void fused_moe_mxfp4_kernel(
 
     // Work-group level reduction using SLM
     // Sub-group reduction alone won't work if work-group > sub-group
-    auto sg = item.get_sub_group();
+    auto      sg      = item.get_sub_group();
     const int sg_size = sg.get_max_local_range()[0];
 
-    // First reduce within each sub-group
-    #pragma unroll
+// First reduce within each sub-group
+#    pragma unroll
     for (int offset = sg_size / 2; offset > 0; offset /= 2) {
         partial_sum += sycl::shift_group_left(sg, partial_sum, offset);
     }
@@ -251,8 +252,8 @@ void fused_moe_mxfp4_kernel(
     // Write output - only first lane of first sub-group
     // Since WG_SIZE=32 and SG_SIZE=32, we should have exactly one sub-group
     if (tid == 0) {
-        float * out_ptr = (float *)((char*)output + token_idx * out_nb2 + id_idx * out_nb1);
-        out_ptr[row] = partial_sum;
+        float * out_ptr = (float *) ((char *) output + token_idx * out_nb2 + id_idx * out_nb1);
+        out_ptr[row]    = partial_sum;
     }
 }
 
@@ -268,42 +269,45 @@ void fused_moe_mxfp4_kernel(
 //   qs_offset = block_index * 16 (16 packed bytes per block)
 //   scale_offset = total_qs_size + block_index
 
-template <int HIDDEN_DIM_BLOCKS>  // ncols / MOE_QK_MXFP4
-void fused_moe_mxfp4_soa_kernel(
-    sycl::nd_item<3> item,
-    const uint8_t * __restrict__ weights_qs,      // Pointer to qs region start
-    const uint8_t * __restrict__ weights_scales,  // Pointer to scales region start
-    const float * __restrict__ input,
-    const int32_t * __restrict__ expert_ids,
-    float * __restrict__ output,
-    const int64_t nrows_per_expert,   // Rows per expert
-    const int64_t ncols,              // Hidden dimension
-    const int64_t n_ids,
-    const int64_t num_tokens,
-    const int64_t ne11,
-    const int64_t ids_nb0,
-    const int64_t ids_nb1,
-    const int64_t in_nb11,
-    const int64_t in_nb12,
-    const int64_t out_nb1,
-    const int64_t out_nb2
-) {
+template <int HIDDEN_DIM_BLOCKS>                                              // ncols / MOE_QK_MXFP4
+void fused_moe_mxfp4_soa_kernel(sycl::nd_item<3> item,
+                                const uint8_t * __restrict__ weights_qs,      // Pointer to qs region start
+                                const uint8_t * __restrict__ weights_scales,  // Pointer to scales region start
+                                const float * __restrict__ input,
+                                const int32_t * __restrict__ expert_ids,
+                                float * __restrict__ output,
+                                const int64_t nrows_per_expert,  // Rows per expert
+                                const int64_t ncols,             // Hidden dimension
+                                const int64_t n_ids,
+                                const int64_t num_tokens,
+                                const int64_t ne11,
+                                const int64_t ids_nb0,
+                                const int64_t ids_nb1,
+                                const int64_t in_nb11,
+                                const int64_t in_nb12,
+                                const int64_t out_nb1,
+                                const int64_t out_nb2) {
     const int batch_idx = item.get_group(0);
-    const int row = item.get_group(2);
-    const int tid = item.get_local_id(2);
+    const int row       = item.get_group(2);
+    const int tid       = item.get_local_id(2);
 
-    if (row >= nrows_per_expert) return;
+    if (row >= nrows_per_expert) {
+        return;
+    }
 
     const int token_idx = batch_idx / n_ids;
-    const int id_idx = batch_idx % n_ids;
+    const int id_idx    = batch_idx % n_ids;
 
-    if (token_idx >= num_tokens) return;
+    if (token_idx >= num_tokens) {
+        return;
+    }
 
     // Get expert ID for this token
-    const int32_t expert_id = *(const int32_t *)((const char*)expert_ids +
-                                                  token_idx * ids_nb1 + id_idx * ids_nb0);
+    const int32_t expert_id = *(const int32_t *) ((const char *) expert_ids + token_idx * ids_nb1 + id_idx * ids_nb0);
 
-    if (expert_id < 0 || expert_id >= 64) return;  // Validate (up to 64 experts)
+    if (expert_id < 0 || expert_id >= 64) {
+        return;  // Validate (up to 64 experts)
+    }
 
     // Compute number of blocks per row
     const int hidden_dim_blocks = (HIDDEN_DIM_BLOCKS > 0) ? HIDDEN_DIM_BLOCKS : (ncols / MOE_QK_MXFP4);
@@ -313,13 +317,13 @@ void fused_moe_mxfp4_soa_kernel(
     const int64_t row_block_offset = (expert_id * nrows_per_expert + row) * hidden_dim_blocks;
 
     // qs region: each block contributes 16 bytes (32 4-bit values packed into 16 bytes)
-    const uint8_t * qs_row = weights_qs + row_block_offset * (MOE_QK_MXFP4 / 2);
+    const uint8_t * qs_row    = weights_qs + row_block_offset * (MOE_QK_MXFP4 / 2);
     // scales region: each block contributes 1 byte (E8M0 scale)
     const uint8_t * scale_row = weights_scales + row_block_offset;
 
     // Input row with proper 2D indexing
-    const int64_t i11 = id_idx % ne11;
-    const float * input_row = (const float *)((const char*)input + i11 * in_nb11 + token_idx * in_nb12);
+    const int64_t i11       = id_idx % ne11;
+    const float * input_row = (const float *) ((const char *) input + i11 * in_nb11 + token_idx * in_nb12);
 
     float partial_sum = 0.0f;
 
@@ -329,7 +333,7 @@ void fused_moe_mxfp4_soa_kernel(
 
         float block_sum = 0.0f;
 
-        #pragma unroll
+#    pragma unroll
         for (int i = 0; i < MOE_QK_MXFP4 / 2; i++) {
             uint8_t packed = qs_row[b * (MOE_QK_MXFP4 / 2) + i];
 
@@ -347,14 +351,14 @@ void fused_moe_mxfp4_soa_kernel(
 
     // Subgroup reduction
     auto sg = item.get_sub_group();
-    #pragma unroll
+#    pragma unroll
     for (int offset = sg.get_max_local_range()[0] / 2; offset > 0; offset /= 2) {
         partial_sum += sycl::shift_group_left(sg, partial_sum, offset);
     }
 
     if (tid == 0) {
-        float * out_ptr = (float *)((char*)output + token_idx * out_nb2 + id_idx * out_nb1);
-        out_ptr[row] = partial_sum;
+        float * out_ptr = (float *) ((char *) output + token_idx * out_nb2 + id_idx * out_nb1);
+        out_ptr[row]    = partial_sum;
     }
 }
 
@@ -369,41 +373,39 @@ void fused_moe_mxfp4_soa_kernel(
 // 5. LUT caching - kvalues_mxfp4 cached in SLM
 
 // Number of persistent work-groups (2 per XeCore, B50 has 20 XeCores)
-constexpr int MOE_PERSISTENT_GROUPS = 40;
+constexpr int MOE_PERSISTENT_GROUPS  = 40;
 // Work-group size for persistent kernel (must match sub-group size)
 constexpr int MOE_PERSISTENT_WG_SIZE = 32;
 // Maximum input dimension we can cache in SLM (128KB limit, using 32KB for input)
-constexpr int MOE_MAX_CACHED_COLS = 8192;  // 8192 * 4 = 32KB
+constexpr int MOE_MAX_CACHED_COLS    = 8192;  // 8192 * 4 = 32KB
 
 // Persistent MXFP4 kernel with SLM caching
 // Key difference from original: processes all experts for one (token, row) together,
 // caching input in SLM. Writes separate outputs per expert (API compatible).
 template <int HIDDEN_DIM_BLOCKS>
-void persistent_moe_mxfp4_kernel(
-    const void * __restrict__ expert_weights,
-    const float * __restrict__ input,
-    const int32_t * __restrict__ expert_ids,
-    float * __restrict__ output,
-    const int64_t stride_expert,
-    const int64_t ncols,
-    const int64_t nrows,
-    const int64_t n_ids,
-    const int64_t num_tokens,
-    const int64_t ne11,
-    const int64_t ids_nb0,
-    const int64_t ids_nb1,
-    const int64_t in_nb11,
-    const int64_t in_nb12,
-    const int64_t out_nb1,
-    const int64_t out_nb2,
-    const int64_t num_groups,
-    float * __restrict__ slm_input,      // SLM for input caching
-    float * __restrict__ slm_kvalues,    // SLM for LUT
-    const sycl::nd_item<1> & item
-) {
+void persistent_moe_mxfp4_kernel(const void * __restrict__ expert_weights,
+                                 const float * __restrict__ input,
+                                 const int32_t * __restrict__ expert_ids,
+                                 float * __restrict__ output,
+                                 const int64_t stride_expert,
+                                 const int64_t ncols,
+                                 const int64_t nrows,
+                                 const int64_t n_ids,
+                                 const int64_t num_tokens,
+                                 const int64_t ne11,
+                                 const int64_t ids_nb0,
+                                 const int64_t ids_nb1,
+                                 const int64_t in_nb11,
+                                 const int64_t in_nb12,
+                                 const int64_t out_nb1,
+                                 const int64_t out_nb2,
+                                 const int64_t num_groups,
+                                 float * __restrict__ slm_input,    // SLM for input caching
+                                 float * __restrict__ slm_kvalues,  // SLM for LUT
+                                 const sycl::nd_item<1> & item) {
     const int group_id = item.get_group_linear_id();
-    const int tid = item.get_local_id(0);
-    auto sg = item.get_sub_group();
+    const int tid      = item.get_local_id(0);
+    auto      sg       = item.get_sub_group();
 
     // Cache kvalues_mxfp4 in SLM (16 floats = 64 bytes)
     if (tid < 16) {
@@ -419,13 +421,13 @@ void persistent_moe_mxfp4_kernel(
 
     // Persistent loop - each work-group handles multiple work items
     for (int64_t work_idx = group_id; work_idx < total_work; work_idx += num_groups) {
-        const int row = work_idx % nrows;
+        const int row       = work_idx % nrows;
         const int token_idx = work_idx / nrows;
 
         // Load input to SLM (collaborative load across work-group)
-        const int64_t i11 = 0;  // Default dimension
-        const int64_t i12 = token_idx;
-        const float * token_input = (const float *)((const char*)input + i11 * in_nb11 + i12 * in_nb12);
+        const int64_t i11         = 0;  // Default dimension
+        const int64_t i12         = token_idx;
+        const float * token_input = (const float *) ((const char *) input + i11 * in_nb11 + i12 * in_nb12);
 
         // Collaborative load: each thread loads multiple elements
         for (int i = tid; i < ncols && i < MOE_MAX_CACHED_COLS; i += MOE_PERSISTENT_WG_SIZE) {
@@ -436,22 +438,21 @@ void persistent_moe_mxfp4_kernel(
         // Process all experts for this (token, row), writing separate outputs
         for (int id_idx = 0; id_idx < n_ids; id_idx++) {
             // Read expert ID
-            const int32_t expert_id = *(const int32_t *)((const char*)expert_ids +
-                                                          token_idx * ids_nb1 + id_idx * ids_nb0);
+            const int32_t expert_id =
+                *(const int32_t *) ((const char *) expert_ids + token_idx * ids_nb1 + id_idx * ids_nb0);
 
             if (expert_id < 0 || expert_id >= 64) {
                 // Write zero for invalid expert
                 if (tid == 0) {
-                    float * out_ptr = (float *)((char*)output + token_idx * out_nb2 + id_idx * out_nb1);
-                    out_ptr[row] = 0.0f;
+                    float * out_ptr = (float *) ((char *) output + token_idx * out_nb2 + id_idx * out_nb1);
+                    out_ptr[row]    = 0.0f;
                 }
                 continue;
             }
 
             // Expert weights for this row
-            const block_mxfp4 * weights_row = (const block_mxfp4 *)((const char*)expert_weights +
-                                                                     expert_id * stride_expert) +
-                                              row * actual_blocks;
+            const block_mxfp4 * weights_row =
+                (const block_mxfp4 *) ((const char *) expert_weights + expert_id * stride_expert) + row * actual_blocks;
 
             // Each thread processes subset of blocks
             float partial_sum = 0.0f;
@@ -462,8 +463,8 @@ void persistent_moe_mxfp4_kernel(
 
                 float block_sum = 0.0f;
 
-                // Process 32 elements per block (16 bytes of packed 4-bit values)
-                #pragma unroll
+// Process 32 elements per block (16 bytes of packed 4-bit values)
+#    pragma unroll
                 for (int i = 0; i < MOE_QK_MXFP4 / 2; i++) {
                     uint8_t packed = weights_row[b].qs[i];
 
@@ -481,16 +482,16 @@ void persistent_moe_mxfp4_kernel(
                 partial_sum += block_sum;
             }
 
-            // Sub-group reduction
-            #pragma unroll
+// Sub-group reduction
+#    pragma unroll
             for (int offset = sg.get_max_local_range()[0] / 2; offset > 0; offset /= 2) {
                 partial_sum += sycl::shift_group_left(sg, partial_sum, offset);
             }
 
             // Write output for this expert (maintains original API)
             if (tid == 0) {
-                float * out_ptr = (float *)((char*)output + token_idx * out_nb2 + id_idx * out_nb1);
-                out_ptr[row] = partial_sum;
+                float * out_ptr = (float *) ((char *) output + token_idx * out_nb2 + id_idx * out_nb1);
+                out_ptr[row]    = partial_sum;
             }
         }
 
@@ -500,31 +501,29 @@ void persistent_moe_mxfp4_kernel(
 
 // Launch persistent MXFP4 kernel
 template <int HIDDEN_DIM_BLOCKS>
-static void launch_persistent_moe_mxfp4_impl(
-    const void * expert_weights,
-    const float * input,
-    const int32_t * expert_ids,
-    float * output,
-    int64_t stride_expert,
-    int64_t ncols,
-    int64_t nrows,
-    int64_t n_ids,
-    int64_t num_tokens,
-    int64_t ne11,
-    int64_t ids_nb0,
-    int64_t ids_nb1,
-    int64_t in_nb11,
-    int64_t in_nb12,
-    int64_t out_nb1,
-    int64_t out_nb2,
-    sycl::queue & stream
-) {
+static void launch_persistent_moe_mxfp4_impl(const void *    expert_weights,
+                                             const float *   input,
+                                             const int32_t * expert_ids,
+                                             float *         output,
+                                             int64_t         stride_expert,
+                                             int64_t         ncols,
+                                             int64_t         nrows,
+                                             int64_t         n_ids,
+                                             int64_t         num_tokens,
+                                             int64_t         ne11,
+                                             int64_t         ids_nb0,
+                                             int64_t         ids_nb1,
+                                             int64_t         in_nb11,
+                                             int64_t         in_nb12,
+                                             int64_t         out_nb1,
+                                             int64_t         out_nb2,
+                                             sycl::queue &   stream) {
     // Use fewer groups for small workloads
     const int64_t total_work = num_tokens * nrows;
-    const int num_groups = std::min((int64_t)MOE_PERSISTENT_GROUPS, total_work);
+    const int     num_groups = std::min((int64_t) MOE_PERSISTENT_GROUPS, total_work);
 
     // SLM sizes
-    const size_t slm_input_size = std::min(ncols, (int64_t)MOE_MAX_CACHED_COLS) * sizeof(float);
+    const size_t slm_input_size   = std::min(ncols, (int64_t) MOE_MAX_CACHED_COLS) * sizeof(float);
     const size_t slm_kvalues_size = 16 * sizeof(float);
 
     sycl::range<1> grid(num_groups * MOE_PERSISTENT_WG_SIZE);
@@ -532,62 +531,52 @@ static void launch_persistent_moe_mxfp4_impl(
 
     stream.submit([&](sycl::handler & cgh) {
         // Allocate SLM
-        auto slm_input = sycl::local_accessor<float, 1>(sycl::range<1>(slm_input_size / sizeof(float)), cgh);
+        auto slm_input   = sycl::local_accessor<float, 1>(sycl::range<1>(slm_input_size / sizeof(float)), cgh);
         auto slm_kvalues = sycl::local_accessor<float, 1>(sycl::range<1>(16), cgh);
 
-        cgh.parallel_for(
-            sycl::nd_range<1>(grid, block),
-            [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]] {
-                persistent_moe_mxfp4_kernel<HIDDEN_DIM_BLOCKS>(
-                    expert_weights, input, expert_ids, output,
-                    stride_expert, ncols, nrows, n_ids, num_tokens, ne11,
-                    ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2,
-                    num_groups,
-                    slm_input.get_pointer(), slm_kvalues.get_pointer(),
-                    item);
-            });
+        cgh.parallel_for(sycl::nd_range<1>(grid, block), [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(32)]] {
+            persistent_moe_mxfp4_kernel<HIDDEN_DIM_BLOCKS>(expert_weights, input, expert_ids, output, stride_expert,
+                                                           ncols, nrows, n_ids, num_tokens, ne11, ids_nb0, ids_nb1,
+                                                           in_nb11, in_nb12, out_nb1, out_nb2, num_groups,
+                                                           slm_input.get_pointer(), slm_kvalues.get_pointer(), item);
+        });
     });
 }
 
 // Main launch function for persistent MXFP4 kernel
-static void launch_persistent_moe_mxfp4(
-    const void * expert_weights,
-    const float * input,
-    const int32_t * expert_ids,
-    float * output,
-    int64_t stride_expert,
-    int64_t ncols,
-    int64_t nrows,
-    int64_t n_ids,
-    int64_t num_tokens,
-    int64_t ne11,
-    int64_t ids_nb0,
-    int64_t ids_nb1,
-    int64_t in_nb11,
-    int64_t in_nb12,
-    int64_t out_nb1,
-    int64_t out_nb2,
-    sycl::queue & stream
-) {
+static void launch_persistent_moe_mxfp4(const void *    expert_weights,
+                                        const float *   input,
+                                        const int32_t * expert_ids,
+                                        float *         output,
+                                        int64_t         stride_expert,
+                                        int64_t         ncols,
+                                        int64_t         nrows,
+                                        int64_t         n_ids,
+                                        int64_t         num_tokens,
+                                        int64_t         ne11,
+                                        int64_t         ids_nb0,
+                                        int64_t         ids_nb1,
+                                        int64_t         in_nb11,
+                                        int64_t         in_nb12,
+                                        int64_t         out_nb1,
+                                        int64_t         out_nb2,
+                                        sycl::queue &   stream) {
     const int hidden_dim_blocks = ncols / MOE_QK_MXFP4;
 
     // Dispatch based on common hidden dimensions
     if (hidden_dim_blocks == 90) {  // 2880 / 32 (GPT-OSS)
-        launch_persistent_moe_mxfp4_impl<90>(
-            expert_weights, input, expert_ids, output,
-            stride_expert, ncols, nrows, n_ids, num_tokens, ne11,
-            ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2, stream);
+        launch_persistent_moe_mxfp4_impl<90>(expert_weights, input, expert_ids, output, stride_expert, ncols, nrows,
+                                             n_ids, num_tokens, ne11, ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1,
+                                             out_nb2, stream);
     } else if (hidden_dim_blocks == 128) {  // 4096 / 32
-        launch_persistent_moe_mxfp4_impl<128>(
-            expert_weights, input, expert_ids, output,
-            stride_expert, ncols, nrows, n_ids, num_tokens, ne11,
-            ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2, stream);
+        launch_persistent_moe_mxfp4_impl<128>(expert_weights, input, expert_ids, output, stride_expert, ncols, nrows,
+                                              n_ids, num_tokens, ne11, ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1,
+                                              out_nb2, stream);
     } else {
         // Generic fallback
-        launch_persistent_moe_mxfp4_impl<0>(
-            expert_weights, input, expert_ids, output,
-            stride_expert, ncols, nrows, n_ids, num_tokens, ne11,
-            ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2, stream);
+        launch_persistent_moe_mxfp4_impl<0>(expert_weights, input, expert_ids, output, stride_expert, ncols, nrows,
+                                            n_ids, num_tokens, ne11, ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1,
+                                            out_nb2, stream);
     }
 }
 
@@ -597,8 +586,8 @@ static void launch_persistent_moe_mxfp4(
 inline bool use_persistent_moe_kernel() {
     static int enabled = -1;
     if (enabled < 0) {
-        const char* env = getenv("GGML_SYCL_MOE_PERSISTENT");
-        enabled = (env && atoi(env) == 1) ? 1 : 0;  // Default OFF
+        const char * env = getenv("GGML_SYCL_MOE_PERSISTENT");
+        enabled          = (env && atoi(env) == 1) ? 1 : 0;  // Default OFF
     }
     return enabled != 0;
 }
@@ -612,79 +601,69 @@ inline bool fused_moe_esimd_available() {
 }
 
 // Launch fused MoE kernel for Q8_0 weights
-static void launch_fused_moe_q8_0(
-    const void * expert_weights,
-    const void * input,
-    const int32_t * expert_ids,
-    float * output,
-    int64_t stride_expert,
-    int64_t ncols,
-    int64_t nrows,
-    int64_t n_ids,
-    int64_t num_tokens,
-    int64_t ne11,
-    int64_t ids_nb0,
-    int64_t ids_nb1,
-    int64_t in_nb11,
-    int64_t in_nb12,
-    int64_t out_nb1,
-    int64_t out_nb2,
-    sycl::queue & stream
-) {
-    const int64_t total_batches = num_tokens * n_ids;
-    const int hidden_dim_blocks = ncols / MOE_QK8_0;
+static void launch_fused_moe_q8_0(const void *    expert_weights,
+                                  const void *    input,
+                                  const int32_t * expert_ids,
+                                  float *         output,
+                                  int64_t         stride_expert,
+                                  int64_t         ncols,
+                                  int64_t         nrows,
+                                  int64_t         n_ids,
+                                  int64_t         num_tokens,
+                                  int64_t         ne11,
+                                  int64_t         ids_nb0,
+                                  int64_t         ids_nb1,
+                                  int64_t         in_nb11,
+                                  int64_t         in_nb12,
+                                  int64_t         out_nb1,
+                                  int64_t         out_nb2,
+                                  sycl::queue &   stream) {
+    const int64_t total_batches     = num_tokens * n_ids;
+    const int     hidden_dim_blocks = ncols / MOE_QK8_0;
 
     sycl::range<3> grid(total_batches, 1, nrows);
     sycl::range<3> block(1, 1, MOE_WG_SIZE);
 
     stream.submit([&](sycl::handler & cgh) {
-        cgh.parallel_for(
-            sycl::nd_range<3>(grid * block, block),
-            [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(32)]] {
-                // Dispatch based on hidden dimension
-                // Common sizes: 2880 (GPT-OSS), 4096 (Llama), etc.
-                if (hidden_dim_blocks == 90) {  // 2880 / 32
-                    fused_moe_q8_0_kernel<90>(
-                        expert_weights, input, expert_ids, output,
-                        stride_expert, ncols, nrows, n_ids, num_tokens, ne11,
-                        ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2, item);
-                } else if (hidden_dim_blocks == 128) {  // 4096 / 32
-                    fused_moe_q8_0_kernel<128>(
-                        expert_weights, input, expert_ids, output,
-                        stride_expert, ncols, nrows, n_ids, num_tokens, ne11,
-                        ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2, item);
-                } else {
-                    // Generic fallback - less optimized
-                    fused_moe_q8_0_kernel<0>(
-                        expert_weights, input, expert_ids, output,
-                        stride_expert, ncols, nrows, n_ids, num_tokens, ne11,
-                        ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2, item);
-                }
-            });
+        cgh.parallel_for(sycl::nd_range<3>(grid * block, block), [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(
+                                                                     32)]] {
+            // Dispatch based on hidden dimension
+            // Common sizes: 2880 (GPT-OSS), 4096 (Llama), etc.
+            if (hidden_dim_blocks == 90) {  // 2880 / 32
+                fused_moe_q8_0_kernel<90>(expert_weights, input, expert_ids, output, stride_expert, ncols, nrows, n_ids,
+                                          num_tokens, ne11, ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2, item);
+            } else if (hidden_dim_blocks == 128) {  // 4096 / 32
+                fused_moe_q8_0_kernel<128>(expert_weights, input, expert_ids, output, stride_expert, ncols, nrows,
+                                           n_ids, num_tokens, ne11, ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1,
+                                           out_nb2, item);
+            } else {
+                // Generic fallback - less optimized
+                fused_moe_q8_0_kernel<0>(expert_weights, input, expert_ids, output, stride_expert, ncols, nrows, n_ids,
+                                         num_tokens, ne11, ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2, item);
+            }
+        });
     });
 }
 
 // Helper to launch MXFP4 kernel with specific template parameter
 template <int HIDDEN_DIM_BLOCKS>
-static void launch_fused_moe_mxfp4_impl(
-    const void * expert_weights,
-    const float * input,
-    const int32_t * expert_ids,
-    float * output,
-    int64_t stride_expert,
-    int64_t ncols,
-    int64_t nrows,
-    int64_t n_ids,
-    int64_t num_tokens,
-    int64_t ne11,
-    int64_t ids_nb0,
-    int64_t ids_nb1,
-    int64_t in_nb11,
-    int64_t in_nb12,
-    int64_t out_nb1,
-    int64_t out_nb2,
-    sycl::queue & stream
-) {
+static void launch_fused_moe_mxfp4_impl(const void *    expert_weights,
+                                        const float *   input,
+                                        const int32_t * expert_ids,
+                                        float *         output,
+                                        int64_t         stride_expert,
+                                        int64_t         ncols,
+                                        int64_t         nrows,
+                                        int64_t         n_ids,
+                                        int64_t         num_tokens,
+                                        int64_t         ne11,
+                                        int64_t         ids_nb0,
+                                        int64_t         ids_nb1,
+                                        int64_t         in_nb11,
+                                        int64_t         in_nb12,
+                                        int64_t         out_nb1,
+                                        int64_t         out_nb2,
+                                        sycl::queue &   stream) {
     const int64_t total_batches = num_tokens * n_ids;
 
     sycl::range<3> grid(total_batches, 1, nrows);
@@ -692,111 +671,107 @@ static void launch_fused_moe_mxfp4_impl(
 
     stream.submit([&](sycl::handler & cgh) {
         cgh.parallel_for(
-            sycl::nd_range<3>(grid * block, block),
-            [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(32)]] {
-                fused_moe_mxfp4_kernel<HIDDEN_DIM_BLOCKS>(
-                    expert_weights, input, expert_ids, output,
-                    stride_expert, ncols, nrows, n_ids, num_tokens, ne11,
-                    ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2, item);
+            sycl::nd_range<3>(grid * block, block), [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(32)]] {
+                fused_moe_mxfp4_kernel<HIDDEN_DIM_BLOCKS>(expert_weights, input, expert_ids, output, stride_expert,
+                                                          ncols, nrows, n_ids, num_tokens, ne11, ids_nb0, ids_nb1,
+                                                          in_nb11, in_nb12, out_nb1, out_nb2, item);
             });
     });
 }
 
 // Launch fused MoE kernel for MXFP4 weights
-static void launch_fused_moe_mxfp4(
-    const void * expert_weights,
-    const float * input,
-    const int32_t * expert_ids,
-    float * output,
-    int64_t stride_expert,
-    int64_t ncols,
-    int64_t nrows,
-    int64_t n_ids,
-    int64_t num_tokens,
-    int64_t ne11,
-    int64_t ids_nb0,
-    int64_t ids_nb1,
-    int64_t in_nb11,
-    int64_t in_nb12,
-    int64_t out_nb1,
-    int64_t out_nb2,
-    sycl::queue & stream
-) {
+static void launch_fused_moe_mxfp4(const void *    expert_weights,
+                                   const float *   input,
+                                   const int32_t * expert_ids,
+                                   float *         output,
+                                   int64_t         stride_expert,
+                                   int64_t         ncols,
+                                   int64_t         nrows,
+                                   int64_t         n_ids,
+                                   int64_t         num_tokens,
+                                   int64_t         ne11,
+                                   int64_t         ids_nb0,
+                                   int64_t         ids_nb1,
+                                   int64_t         in_nb11,
+                                   int64_t         in_nb12,
+                                   int64_t         out_nb1,
+                                   int64_t         out_nb2,
+                                   sycl::queue &   stream) {
     const int hidden_dim_blocks = ncols / MOE_QK_MXFP4;
 
     // Dispatch at host side to avoid runtime branching in kernel
     if (hidden_dim_blocks == 90) {  // 2880 / 32
-        launch_fused_moe_mxfp4_impl<90>(
-            expert_weights, input, expert_ids, output,
-            stride_expert, ncols, nrows, n_ids, num_tokens, ne11,
-            ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2, stream);
+        launch_fused_moe_mxfp4_impl<90>(expert_weights, input, expert_ids, output, stride_expert, ncols, nrows, n_ids,
+                                        num_tokens, ne11, ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2, stream);
     } else if (hidden_dim_blocks == 128) {  // 4096 / 32
-        launch_fused_moe_mxfp4_impl<128>(
-            expert_weights, input, expert_ids, output,
-            stride_expert, ncols, nrows, n_ids, num_tokens, ne11,
-            ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2, stream);
+        launch_fused_moe_mxfp4_impl<128>(expert_weights, input, expert_ids, output, stride_expert, ncols, nrows, n_ids,
+                                         num_tokens, ne11, ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2,
+                                         stream);
     } else {
         // Generic fallback - pass actual block count
-        const int64_t actual_blocks = ncols / MOE_QK_MXFP4;
-        const int64_t total_batches = num_tokens * n_ids;
+        const int64_t  actual_blocks = ncols / MOE_QK_MXFP4;
+        const int64_t  total_batches = num_tokens * n_ids;
         sycl::range<3> grid(total_batches, 1, nrows);
         sycl::range<3> block(1, 1, MOE_WG_SIZE);
 
         stream.submit([&](sycl::handler & cgh) {
             cgh.parallel_for(
-                sycl::nd_range<3>(grid * block, block),
-                [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(32)]] {
+                sycl::nd_range<3>(grid * block, block), [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(32)]] {
                     // Use dynamic loop bound
                     const int batch_idx = item.get_group(0);
-                    const int row = item.get_group(2);
-                    const int tid = item.get_local_id(2);
+                    const int row       = item.get_group(2);
+                    const int tid       = item.get_local_id(2);
 
-                    if (row >= nrows) return;
+                    if (row >= nrows) {
+                        return;
+                    }
 
                     const int token_idx = batch_idx / n_ids;
-                    const int id_idx = batch_idx % n_ids;
+                    const int id_idx    = batch_idx % n_ids;
 
-                    if (token_idx >= num_tokens) return;
+                    if (token_idx >= num_tokens) {
+                        return;
+                    }
 
-                    const int32_t expert_id = *(const int32_t *)((const char*)expert_ids +
-                                                                  token_idx * ids_nb1 + id_idx * ids_nb0);
+                    const int32_t expert_id =
+                        *(const int32_t *) ((const char *) expert_ids + token_idx * ids_nb1 + id_idx * ids_nb0);
 
-                    const block_mxfp4 * weights_row = (const block_mxfp4 *)((const char*)expert_weights +
-                                                                             expert_id * stride_expert) +
-                                                      row * actual_blocks;
+                    const block_mxfp4 * weights_row =
+                        (const block_mxfp4 *) ((const char *) expert_weights + expert_id * stride_expert) +
+                        row * actual_blocks;
 
-                    const int64_t i11 = id_idx % ne11;
-                    const int64_t i12 = token_idx;
-                    const float * input_row = (const float *)((const char*)input + i11 * in_nb11 + i12 * in_nb12);
+                    const int64_t i11       = id_idx % ne11;
+                    const int64_t i12       = token_idx;
+                    const float * input_row = (const float *) ((const char *) input + i11 * in_nb11 + i12 * in_nb12);
 
                     float partial_sum = 0.0f;
 
                     for (int b = tid; b < actual_blocks; b += MOE_WG_SIZE) {
-                        const float scale = sycl_e8m0_to_fp32_half(weights_row[b].e);
-                        float block_sum = 0.0f;
+                        const float scale     = sycl_e8m0_to_fp32_half(weights_row[b].e);
+                        float       block_sum = 0.0f;
 
-                        // MXFP4 format: low nibbles -> elements 0-15, high nibbles -> elements 16-31
-                        #pragma unroll
+// MXFP4 format: low nibbles -> elements 0-15, high nibbles -> elements 16-31
+#    pragma unroll
                         for (int i = 0; i < MOE_QK_MXFP4 / 2; i++) {
                             uint8_t packed = weights_row[b].qs[i];
-                            float w_lo = scale * kvalues_mxfp4[packed & 0xF];
-                            float w_hi = scale * kvalues_mxfp4[packed >> 4];
-                            float x_lo = input_row[b * MOE_QK_MXFP4 + i];
-                            float x_hi = input_row[b * MOE_QK_MXFP4 + i + 16];
+                            float   w_lo   = scale * kvalues_mxfp4[packed & 0xF];
+                            float   w_hi   = scale * kvalues_mxfp4[packed >> 4];
+                            float   x_lo   = input_row[b * MOE_QK_MXFP4 + i];
+                            float   x_hi   = input_row[b * MOE_QK_MXFP4 + i + 16];
                             block_sum += w_lo * x_lo + w_hi * x_hi;
                         }
                         partial_sum += block_sum;
                     }
 
                     auto sg = item.get_sub_group();
-                    #pragma unroll
+#    pragma unroll
                     for (int offset = sg.get_max_local_range()[0] / 2; offset > 0; offset /= 2) {
                         partial_sum += sycl::shift_group_left(sg, partial_sum, offset);
                     }
 
                     if (tid == 0) {
-                        float * out_ptr = (float *)((char*)output + token_idx * out_nb2 + id_idx * out_nb1);
-                        out_ptr[row] = partial_sum;
+                        float * out_ptr = (float *) ((char *) output + token_idx * out_nb2 + id_idx * out_nb1);
+                        out_ptr[row]    = partial_sum;
                     }
                 });
         });
@@ -805,30 +780,28 @@ static void launch_fused_moe_mxfp4(
 
 // Launch fused MoE kernel for MXFP4 weights in SoA (reordered) layout
 // After reorder_qw_mxfp4: [all qs for all experts][all scales for all experts]
-static void launch_fused_moe_mxfp4_soa(
-    const void * expert_weights,      // Base pointer to reordered tensor
-    const float * input,
-    const int32_t * expert_ids,
-    float * output,
-    int64_t total_qs_size,            // Size of qs region = (ncols / 2) * total_rows
-    int64_t ncols,                    // Hidden dimension
-    int64_t nrows_per_expert,         // Rows per expert (not total rows)
-    int64_t n_ids,
-    int64_t num_tokens,
-    int64_t ne11,
-    int64_t ids_nb0,
-    int64_t ids_nb1,
-    int64_t in_nb11,
-    int64_t in_nb12,
-    int64_t out_nb1,
-    int64_t out_nb2,
-    sycl::queue & stream
-) {
-    const int hidden_dim_blocks = ncols / MOE_QK_MXFP4;
-    const int64_t total_batches = num_tokens * n_ids;
+static void launch_fused_moe_mxfp4_soa(const void *    expert_weights,  // Base pointer to reordered tensor
+                                       const float *   input,
+                                       const int32_t * expert_ids,
+                                       float *         output,
+                                       int64_t         total_qs_size,  // Size of qs region = (ncols / 2) * total_rows
+                                       int64_t         ncols,          // Hidden dimension
+                                       int64_t         nrows_per_expert,  // Rows per expert (not total rows)
+                                       int64_t         n_ids,
+                                       int64_t         num_tokens,
+                                       int64_t         ne11,
+                                       int64_t         ids_nb0,
+                                       int64_t         ids_nb1,
+                                       int64_t         in_nb11,
+                                       int64_t         in_nb12,
+                                       int64_t         out_nb1,
+                                       int64_t         out_nb2,
+                                       sycl::queue &   stream) {
+    const int     hidden_dim_blocks = ncols / MOE_QK_MXFP4;
+    const int64_t total_batches     = num_tokens * n_ids;
 
     // SoA layout: [all qs] [all scales]
-    const uint8_t * weights_qs = (const uint8_t *)expert_weights;
+    const uint8_t * weights_qs     = (const uint8_t *) expert_weights;
     const uint8_t * weights_scales = weights_qs + total_qs_size;
 
     sycl::range<3> block(1, 1, MOE_WG_SIZE);
@@ -838,67 +811,97 @@ static void launch_fused_moe_mxfp4_soa(
     if (hidden_dim_blocks == 90) {  // 2880 / 32
         stream.submit([&](sycl::handler & cgh) {
             cgh.parallel_for(
-                sycl::nd_range<3>(grid * block, block),
-                [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(32)]] {
-                    fused_moe_mxfp4_soa_kernel<90>(
-                        item, weights_qs, weights_scales, input, expert_ids, output,
-                        nrows_per_expert, ncols, n_ids, num_tokens, ne11,
-                        ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2);
+                sycl::nd_range<3>(grid * block, block), [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(32)]] {
+                    fused_moe_mxfp4_soa_kernel<90>(item, weights_qs, weights_scales, input, expert_ids, output,
+                                                   nrows_per_expert, ncols, n_ids, num_tokens, ne11, ids_nb0, ids_nb1,
+                                                   in_nb11, in_nb12, out_nb1, out_nb2);
                 });
         });
     } else if (hidden_dim_blocks == 128) {  // 4096 / 32
         stream.submit([&](sycl::handler & cgh) {
             cgh.parallel_for(
-                sycl::nd_range<3>(grid * block, block),
-                [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(32)]] {
-                    fused_moe_mxfp4_soa_kernel<128>(
-                        item, weights_qs, weights_scales, input, expert_ids, output,
-                        nrows_per_expert, ncols, n_ids, num_tokens, ne11,
-                        ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2);
+                sycl::nd_range<3>(grid * block, block), [=](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(32)]] {
+                    fused_moe_mxfp4_soa_kernel<128>(item, weights_qs, weights_scales, input, expert_ids, output,
+                                                    nrows_per_expert, ncols, n_ids, num_tokens, ne11, ids_nb0, ids_nb1,
+                                                    in_nb11, in_nb12, out_nb1, out_nb2);
                 });
         });
     } else {
         // Fallback for other hidden dimensions - use runtime parameter
         stream.submit([&](sycl::handler & cgh) {
-            cgh.parallel_for(
-                sycl::nd_range<3>(grid * block, block),
-                [=, hdb=hidden_dim_blocks](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(32)]] {
-                    fused_moe_mxfp4_soa_kernel<0>(
-                        item, weights_qs, weights_scales, input, expert_ids, output,
-                        nrows_per_expert, ncols, n_ids, num_tokens, ne11,
-                        ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2);
-                });
+            cgh.parallel_for(sycl::nd_range<3>(grid * block, block),
+                             [=, hdb = hidden_dim_blocks](sycl::nd_item<3> item) [[sycl::reqd_sub_group_size(32)]] {
+                                 fused_moe_mxfp4_soa_kernel<0>(item, weights_qs, weights_scales, input, expert_ids,
+                                                               output, nrows_per_expert, ncols, n_ids, num_tokens, ne11,
+                                                               ids_nb0, ids_nb1, in_nb11, in_nb12, out_nb1, out_nb2);
+                             });
         });
     }
 }
 
-#else  // !SYCL_ESIMD_MOE_AVAILABLE
+#else   // !SYCL_ESIMD_MOE_AVAILABLE
 
 inline bool fused_moe_esimd_available() {
     return false;
 }
 
-static void launch_fused_moe_q8_0(
-    const void *, const void *, const int32_t *, float *,
-    int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
-    int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, sycl::queue &
-) {
+static void launch_fused_moe_q8_0(const void *,
+                                  const void *,
+                                  const int32_t *,
+                                  float *,
+                                  int64_t,
+                                  int64_t,
+                                  int64_t,
+                                  int64_t,
+                                  int64_t,
+                                  int64_t,
+                                  int64_t,
+                                  int64_t,
+                                  int64_t,
+                                  int64_t,
+                                  int64_t,
+                                  int64_t,
+                                  sycl::queue &) {
     GGML_ASSERT(false && "ESIMD MoE not available");
 }
 
-static void launch_fused_moe_mxfp4(
-    const void *, const float *, const int32_t *, float *,
-    int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
-    int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, sycl::queue &
-) {
+static void launch_fused_moe_mxfp4(const void *,
+                                   const float *,
+                                   const int32_t *,
+                                   float *,
+                                   int64_t,
+                                   int64_t,
+                                   int64_t,
+                                   int64_t,
+                                   int64_t,
+                                   int64_t,
+                                   int64_t,
+                                   int64_t,
+                                   int64_t,
+                                   int64_t,
+                                   int64_t,
+                                   int64_t,
+                                   sycl::queue &) {
     GGML_ASSERT(false && "ESIMD MoE not available");
 }
 
-static void launch_fused_moe_mxfp4_soa(
-    const void *, const float *, const int32_t *, float *,
-    int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
-    int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, sycl::queue &
-) {
+static void launch_fused_moe_mxfp4_soa(const void *,
+                                       const float *,
+                                       const int32_t *,
+                                       float *,
+                                       int64_t,
+                                       int64_t,
+                                       int64_t,
+                                       int64_t,
+                                       int64_t,
+                                       int64_t,
+                                       int64_t,
+                                       int64_t,
+                                       int64_t,
+                                       int64_t,
+                                       int64_t,
+                                       int64_t,
+                                       sycl::queue &) {
     GGML_ASSERT(false && "ESIMD MoE SoA not available");
 }
 
