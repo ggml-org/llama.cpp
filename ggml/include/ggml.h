@@ -234,6 +234,8 @@
 
 #if UINTPTR_MAX == 0xFFFFFFFF
     #define GGML_MEM_ALIGN 4
+#elif defined(__EMSCRIPTEN__)
+    #define GGML_MEM_ALIGN 8
 #else
     #define GGML_MEM_ALIGN 16
 #endif
