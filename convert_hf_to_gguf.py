@@ -9953,10 +9953,6 @@ class LFM2ColBertModel(LFM2Model):
     model_arch = gguf.MODEL_ARCH.LFM2
     dense_tensor_name = "dense_2"
 
-    def set_vocab(self):
-        super().set_vocab()
-        self.gguf_writer.add_add_bos_token(False)
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if not name.startswith(self.dense_tensor_name):
             name = "model." + name
