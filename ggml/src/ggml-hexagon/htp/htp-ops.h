@@ -13,6 +13,7 @@
 
 struct htp_spad {
     uint8_t * data;
+    size_t    stride;
     size_t    size;
     size_t    size_per_thread;
 };
