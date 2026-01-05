@@ -3,9 +3,7 @@
 import argparse
 import os
 import sys
-import numpy as np
 import importlib
-from pathlib import Path
 
 from transformers import AutoTokenizer, AutoConfig, AutoModel
 import torch
