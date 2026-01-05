@@ -7189,6 +7189,7 @@ class DeepseekModel(TextModel):
     "DeepseekV3ForCausalLM",
     "KimiVLForConditionalGeneration",
     "YoutuForCausalLM",
+    "YoutuVLForConditionalGeneration"
 )
 class DeepseekV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
@@ -10653,8 +10654,8 @@ class JanusProVisionModel(MmprojModel):
         return []
 
 
-@ModelBase.register("YOUTUVLForConditionalGeneration", "YOUTUVLForCausalLM")
-class YOUTUVLVisionModel(MmprojModel):
+@ModelBase.register("YoutuVLForConditionalGeneration")
+class YoutuVLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         assert self.hparams_vision is not None
