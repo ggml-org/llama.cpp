@@ -343,8 +343,9 @@ struct server_task_result_cmpl_partial : server_task_result {
 
     // for Anthropic API: track if any reasoning content has been generated
     bool anthropic_has_reasoning = false;
-    // pointer to task_result_state for Anthropic streaming state tracking
-    task_result_state * anthropic_state = nullptr;
+    // Streaming state copied from task_result_state for this chunk
+    bool anthropic_thinking_block_started = false;
+    bool anthropic_text_block_started = false;
 
     virtual bool is_stop() override {
         return false; // in stream mode, partial responses are not considered stop
@@ -357,8 +358,20 @@ struct server_task_result_cmpl_partial : server_task_result {
         state.update_chat_msg(content, true, oaicompat_msg_diffs);
         // track if the accumulated message has any reasoning content
         anthropic_has_reasoning = !state.chat_msg.reasoning_content.empty();
-        // store pointer to state for Anthropic streaming
-        anthropic_state = &state;
+
+        // Copy current state for use in to_json_anthropic() (reflects state BEFORE this chunk)
+        anthropic_thinking_block_started = state.anthropic_thinking_block_started;
+        anthropic_text_block_started = state.anthropic_text_block_started;
+
+        // Pre-compute state updates based on diffs (for next chunk)
+        for (const auto & diff : oaicompat_msg_diffs) {
+            if (!diff.reasoning_content_delta.empty() && !state.anthropic_thinking_block_started) {
+                state.anthropic_thinking_block_started = true;
+            }
+            if (!diff.content_delta.empty() && !state.anthropic_text_block_started) {
+                state.anthropic_text_block_started = true;
+            }
+        }
     }
 
     json to_json_non_oaicompat();

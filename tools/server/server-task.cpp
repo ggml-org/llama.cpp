@@ -1252,9 +1252,10 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
     // use anthropic_has_reasoning (set in update()) to know if ANY reasoning was generated
     size_t text_block_index     = anthropic_has_reasoning ? 1 : 0;
 
-    // get streaming state from task_result_state (persists across chunks)
-    bool & thinking_started = anthropic_state->anthropic_thinking_block_started;
-    bool & text_started     = anthropic_state->anthropic_text_block_started;
+    // use local copies of streaming state (copied from task_result_state in update())
+    // these reflect the state BEFORE this chunk was processed
+    bool thinking_started = anthropic_thinking_block_started;
+    bool text_started     = anthropic_text_block_started;
 
     for (const auto & diff : oaicompat_msg_diffs) {
         // handle thinking/reasoning content
