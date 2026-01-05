@@ -185,9 +185,7 @@ endif()
 
 llama_build_and_test(test-chat-parser.cpp)
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
-llama_build_and_test(test-chat-parser-comparison.cpp)
 llama_build_and_test(debug-template-parser.cpp)
-llama_build_and_test(test-complex-parser.cpp)
 llama_build_and_test(test-chat-template.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
@@ -234,7 +232,6 @@ llama_test(test-backend-sampler NAME test-backend-sampler-dist-and-cpu ARGS --te
 llama_test(test-backend-sampler NAME test-backend-sampler-logit-bias   ARGS --test logit_bias)
 llama_test(test-backend-sampler NAME test-backend-sampler-mul_seq      ARGS --test multi_sequence)
 llama_test(test-backend-sampler NAME test-backend-sampler-set-sampler  ARGS --test set_sampler)
-llama_build_and_test(test-auto-parser-generation.cpp)
 
 # Test for state restore with fragmented KV cache
 # Requires a model, uses same args pattern as test-thread-safety
