@@ -131,12 +131,12 @@
 					type="button"
 				>
 					<Card
-						class="rounded-[1.125rem] !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5 data-[multiline]:py-2.5"
+						class="overflow-y-auto rounded-[1.125rem] !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5 data-[multiline]:py-2.5"
 						data-multiline={isMultiline ? '' : undefined}
-						style="border: 2px dashed hsl(var(--border));"
+						style="border: 2px dashed hsl(var(--border)); max-height: calc(100dvh - var(--chat-form-area-height));"
 					>
 						<div
-							class="relative overflow-hidden transition-all duration-300 {isExpanded
+							class="relative transition-all duration-300 {isExpanded
 								? 'cursor-text select-text'
 								: 'select-none'}"
 							style={!isExpanded && showExpandButton
@@ -145,7 +145,10 @@
 						>
 							{#if currentConfig.renderUserContentAsMarkdown}
 								<div bind:this={messageElement} class="text-md {isExpanded ? 'cursor-text' : ''}">
-									<MarkdownContent class="markdown-system-content" content={message.content} />
+									<MarkdownContent
+										class="markdown-system-content overflow-auto"
+										content={message.content}
+									/>
 								</div>
 							{:else}
 								<span

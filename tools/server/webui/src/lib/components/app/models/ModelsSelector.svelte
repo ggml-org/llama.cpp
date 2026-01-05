@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { onMount } from 'svelte';
 	import { ChevronDown, EyeOff, Loader2, MicOff, Package, Power } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import * as Popover from '$lib/components/ui/popover';
 	import { cn } from '$lib/components/ui/utils';
 	import {
 		modelsStore,
@@ -17,7 +16,7 @@
 	import { usedModalities, conversationsStore } from '$lib/stores/conversations.svelte';
 	import { ServerModelStatus } from '$lib/enums';
 	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { DialogModelInformation, SearchInput } from '$lib/components/app';
+	import { DialogModelInformation, SearchableDropdownMenu } from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
@@ -142,7 +141,6 @@
 	});
 
 	let searchTerm = $state('');
-	let searchInputRef = $state<HTMLInputElement | null>(null);
 	let highlightedIndex = $state<number>(-1);
 
 	let filteredOptions: ModelOption[] = $derived(
@@ -179,7 +177,7 @@
 		});
 	});
 
-	// Handle changes to the model selector pop-down or the model dialog, depending on if the server is in
+	// Handle changes to the model selector dropdown or the model dialog, depending on if the server is in
 	// router mode or not.
 	function handleOpenChange(open: boolean) {
 		if (loading || updating) return;
@@ -189,11 +187,6 @@
 				isOpen = true;
 				searchTerm = '';
 				highlightedIndex = -1;
-
-				// Focus search input after popover opens
-				tick().then(() => {
-					requestAnimationFrame(() => searchInputRef?.focus());
-				});
 
 				modelsStore.fetchRouterModels().then(() => {
 					modelsStore.fetchModalitiesForLoadedModels();
@@ -347,178 +340,170 @@
 		{@const selectedOption = getDisplayOption()}
 
 		{#if isRouter}
-			<Popover.Root bind:open={isOpen} onOpenChange={handleOpenChange}>
-				<Popover.Trigger
-					class={cn(
-						`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
-						!isCurrentModelInCache()
-							? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
-							: forceForegroundText
-								? 'text-foreground'
-								: isHighlightedCurrentModelActive
+			<SearchableDropdownMenu
+				bind:open={isOpen}
+				onOpenChange={handleOpenChange}
+				bind:searchValue={searchTerm}
+				placeholder="Search models..."
+				onSearchKeyDown={handleSearchKeyDown}
+				align="end"
+				contentClass="w-96 max-w-[calc(100vw-2rem)]"
+				listMaxHeight="max-h-[50dvh]"
+				emptyMessage="No models found."
+				isEmpty={filteredOptions.length === 0 && isCurrentModelInCache()}
+				disabled={disabled || updating}
+			>
+				{#snippet trigger()}
+					<button
+						type="button"
+						class={cn(
+							`inline-flex cursor-pointer items-center gap-1.5 rounded-sm bg-muted-foreground/10 px-1.5 py-1 text-xs transition hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60`,
+							!isCurrentModelInCache()
+								? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
+								: forceForegroundText
 									? 'text-foreground'
-									: 'text-muted-foreground',
-						isOpen ? 'text-foreground' : ''
-					)}
-					style="max-width: min(calc(100cqw - 6.5rem), 32rem)"
-					disabled={disabled || updating}
-				>
-					<Package class="h-3.5 w-3.5" />
+									: isHighlightedCurrentModelActive
+										? 'text-foreground'
+										: 'text-muted-foreground',
+							isOpen ? 'text-foreground' : ''
+						)}
+						style="max-width: min(calc(100cqw - 6.5rem), 24rem)"
+						disabled={disabled || updating}
+					>
+						<Package class="h-3.5 w-3.5" />
 
-					<span class="truncate font-medium">
-						{selectedOption?.model || 'Select model'}
-					</span>
+						<span class="truncate font-medium">
+							{selectedOption?.model || 'Select model'}
+						</span>
 
-					{#if updating}
-						<Loader2 class="h-3 w-3.5 animate-spin" />
-					{:else}
-						<ChevronDown class="h-3 w-3.5" />
+						{#if updating}
+							<Loader2 class="h-3 w-3.5 animate-spin" />
+						{:else}
+							<ChevronDown class="h-3 w-3.5" />
+						{/if}
+					</button>
+				{/snippet}
+
+				<div class="models-list">
+					{#if !isCurrentModelInCache() && currentModel}
+						<!-- Show unavailable model as first option (disabled) -->
+						<button
+							type="button"
+							class="flex w-full cursor-not-allowed items-center bg-red-400/10 p-2 text-left text-sm text-red-400"
+							role="option"
+							aria-selected="true"
+							aria-disabled="true"
+							disabled
+						>
+							<span class="truncate">{selectedOption?.name || currentModel}</span>
+							<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
+						</button>
+						<div class="my-1 h-px bg-border"></div>
 					{/if}
-				</Popover.Trigger>
+					{#if filteredOptions.length === 0}
+						<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
+					{/if}
+					{#each filteredOptions as option, index (option.id)}
+						{@const status = getModelStatus(option.model)}
+						{@const isLoaded = status === ServerModelStatus.LOADED}
+						{@const isLoading = status === ServerModelStatus.LOADING}
+						{@const isSelected = currentModel === option.model || activeId === option.id}
+						{@const isCompatible = isModelCompatible(option)}
+						{@const isHighlighted = index === highlightedIndex}
+						{@const missingModalities = getMissingModalities(option)}
 
-				<Popover.Content
-					class="group/popover-content w-96 max-w-[calc(100vw-2rem)] p-0"
-					align="end"
-					sideOffset={8}
-					collisionPadding={16}
-				>
-					<div class="flex max-h-[50dvh] flex-col overflow-hidden">
 						<div
-							class="order-1 shrink-0 border-b p-4 group-data-[side=top]/popover-content:order-2 group-data-[side=top]/popover-content:border-t group-data-[side=top]/popover-content:border-b-0"
+							class={cn(
+								'group flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
+								isCompatible
+									? 'cursor-pointer hover:bg-muted focus:bg-muted'
+									: 'cursor-not-allowed opacity-50',
+								isSelected || isHighlighted
+									? 'bg-accent text-accent-foreground'
+									: isCompatible
+										? 'hover:bg-accent hover:text-accent-foreground'
+										: '',
+								isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
+							)}
+							role="option"
+							aria-selected={isSelected || isHighlighted}
+							aria-disabled={!isCompatible}
+							tabindex={isCompatible ? 0 : -1}
+							onclick={() => isCompatible && handleSelect(option.id)}
+							onmouseenter={() => (highlightedIndex = index)}
+							onkeydown={(e) => {
+								if (isCompatible && (e.key === 'Enter' || e.key === ' ')) {
+									e.preventDefault();
+									handleSelect(option.id);
+								}
+							}}
 						>
-							<SearchInput
-								id="model-search"
-								placeholder="Search models..."
-								bind:value={searchTerm}
-								bind:ref={searchInputRef}
-								onClose={() => handleOpenChange(false)}
-								onKeyDown={handleSearchKeyDown}
-							/>
-						</div>
-						<div
-							class="models-list order-2 min-h-0 flex-1 overflow-y-auto group-data-[side=top]/popover-content:order-1"
-						>
-							{#if !isCurrentModelInCache() && currentModel}
-								<!-- Show unavailable model as first option (disabled) -->
-								<button
-									type="button"
-									class="flex w-full cursor-not-allowed items-center bg-red-400/10 px-4 py-2 text-left text-sm text-red-400"
-									role="option"
-									aria-selected="true"
-									aria-disabled="true"
-									disabled
-								>
-									<span class="truncate">{selectedOption?.name || currentModel}</span>
-									<span class="ml-2 text-xs whitespace-nowrap opacity-70">(not available)</span>
-								</button>
-								<div class="my-1 h-px bg-border"></div>
-							{/if}
-							{#if filteredOptions.length === 0}
-								<p class="px-4 py-3 text-sm text-muted-foreground">No models found.</p>
-							{/if}
-							{#each filteredOptions as option, index (option.id)}
-								{@const status = getModelStatus(option.model)}
-								{@const isLoaded = status === ServerModelStatus.LOADED}
-								{@const isLoading = status === ServerModelStatus.LOADING}
-								{@const isSelected = currentModel === option.model || activeId === option.id}
-								{@const isCompatible = isModelCompatible(option)}
-								{@const isHighlighted = index === highlightedIndex}
-								{@const missingModalities = getMissingModalities(option)}
+							<span class="min-w-0 flex-1 truncate">{option.model}</span>
 
-								<div
-									class={cn(
-										'group flex w-full items-center gap-2 px-4 py-2 text-left text-sm transition focus:outline-none',
-										isCompatible
-											? 'cursor-pointer hover:bg-muted focus:bg-muted'
-											: 'cursor-not-allowed opacity-50',
-										isSelected || isHighlighted
-											? 'bg-accent text-accent-foreground'
-											: isCompatible
-												? 'hover:bg-accent hover:text-accent-foreground'
-												: '',
-										isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
-									)}
-									role="option"
-									aria-selected={isSelected || isHighlighted}
-									aria-disabled={!isCompatible}
-									tabindex={isCompatible ? 0 : -1}
-									onclick={() => isCompatible && handleSelect(option.id)}
-									onmouseenter={() => (highlightedIndex = index)}
-									onkeydown={(e) => {
-										if (isCompatible && (e.key === 'Enter' || e.key === ' ')) {
-											e.preventDefault();
-											handleSelect(option.id);
-										}
-									}}
-								>
-									<span class="min-w-0 flex-1 truncate">{option.model}</span>
-
-									{#if missingModalities}
-										<span class="flex shrink-0 items-center gap-1 text-muted-foreground/70">
-											{#if missingModalities.vision}
-												<Tooltip.Root>
-													<Tooltip.Trigger>
-														<EyeOff class="h-3.5 w-3.5" />
-													</Tooltip.Trigger>
-													<Tooltip.Content class="z-[9999]">
-														<p>No vision support</p>
-													</Tooltip.Content>
-												</Tooltip.Root>
-											{/if}
-											{#if missingModalities.audio}
-												<Tooltip.Root>
-													<Tooltip.Trigger>
-														<MicOff class="h-3.5 w-3.5" />
-													</Tooltip.Trigger>
-													<Tooltip.Content class="z-[9999]">
-														<p>No audio support</p>
-													</Tooltip.Content>
-												</Tooltip.Root>
-											{/if}
-										</span>
-									{/if}
-
-									{#if isLoading}
+							{#if missingModalities}
+								<span class="flex shrink-0 items-center gap-1 text-muted-foreground/70">
+									{#if missingModalities.vision}
 										<Tooltip.Root>
 											<Tooltip.Trigger>
-												<Loader2 class="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+												<EyeOff class="h-3.5 w-3.5" />
 											</Tooltip.Trigger>
 											<Tooltip.Content class="z-[9999]">
-												<p>Loading model...</p>
+												<p>No vision support</p>
 											</Tooltip.Content>
 										</Tooltip.Root>
-									{:else if isLoaded}
+									{/if}
+									{#if missingModalities.audio}
 										<Tooltip.Root>
 											<Tooltip.Trigger>
-												<button
-													type="button"
-													class="relative ml-2 flex h-4 w-4 shrink-0 items-center justify-center"
-													onclick={(e) => {
-														e.stopPropagation();
-														modelsStore.unloadModel(option.model);
-													}}
-												>
-													<span
-														class="mr-2 h-2 w-2 rounded-full bg-green-500 transition-opacity group-hover:opacity-0"
-													></span>
-													<Power
-														class="absolute mr-2 h-4 w-4 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-600"
-													/>
-												</button>
+												<MicOff class="h-3.5 w-3.5" />
 											</Tooltip.Trigger>
 											<Tooltip.Content class="z-[9999]">
-												<p>Unload model</p>
+												<p>No audio support</p>
 											</Tooltip.Content>
 										</Tooltip.Root>
-									{:else}
-										<span class="mx-2 h-2 w-2 rounded-full bg-muted-foreground/50"></span>
 									{/if}
-								</div>
-							{/each}
+								</span>
+							{/if}
+
+							{#if isLoading}
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										<Loader2 class="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+									</Tooltip.Trigger>
+									<Tooltip.Content class="z-[9999]">
+										<p>Loading model...</p>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							{:else if isLoaded}
+								<Tooltip.Root>
+									<Tooltip.Trigger>
+										<button
+											type="button"
+											class="relative ml-2 flex h-4 w-4 shrink-0 items-center justify-center"
+											onclick={(e) => {
+												e.stopPropagation();
+												modelsStore.unloadModel(option.model);
+											}}
+										>
+											<span
+												class="mr-2 h-2 w-2 rounded-full bg-green-500 transition-opacity group-hover:opacity-0"
+											></span>
+											<Power
+												class="absolute mr-2 h-4 w-4 text-red-500 opacity-0 transition-opacity group-hover:opacity-100 hover:text-red-600"
+											/>
+										</button>
+									</Tooltip.Trigger>
+									<Tooltip.Content class="z-[9999]">
+										<p>Unload model</p>
+									</Tooltip.Content>
+								</Tooltip.Root>
+							{:else}
+								<span class="mx-2 h-2 w-2 rounded-full bg-muted-foreground/50"></span>
+							{/if}
 						</div>
-					</div>
-				</Popover.Content>
-			</Popover.Root>
+					{/each}
+				</div>
+			</SearchableDropdownMenu>
 		{:else}
 			<button
 				class={cn(

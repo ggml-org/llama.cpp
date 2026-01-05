@@ -23,6 +23,7 @@ export { default as ChatMessageStatistics } from './chat/ChatMessages/ChatMessag
 export { default as ChatMessageSystem } from './chat/ChatMessages/ChatMessageSystem.svelte';
 export { default as ChatMessageThinkingBlock } from './chat/ChatMessages/ChatMessageThinkingBlock.svelte';
 export { default as ChatMessages } from './chat/ChatMessages/ChatMessages.svelte';
+export { default as CollapsibleInfoCard } from './chat/ChatMessages/CollapsibleInfoCard.svelte';
 export { default as MessageBranchingControls } from './chat/ChatMessages/ChatMessageBranchingControls.svelte';
 
 export { default as ChatScreen } from './chat/ChatScreen/ChatScreen.svelte';
@@ -68,8 +69,13 @@ export { default as KeyboardShortcutInfo } from './misc/KeyboardShortcutInfo.sve
 export { default as MarkdownContent } from './misc/MarkdownContent.svelte';
 export { default as RemoveButton } from './misc/RemoveButton.svelte';
 export { default as SearchInput } from './misc/SearchInput.svelte';
+export { default as SearchableDropdownMenu } from './misc/SearchableDropdownMenu.svelte';
 export { default as SyntaxHighlightedCode } from './misc/SyntaxHighlightedCode.svelte';
 export { default as ModelsSelector } from './models/ModelsSelector.svelte';
+
+// MCP
+
+export { default as McpSelector } from './mcp/McpSelector.svelte';
 
 // Server
 

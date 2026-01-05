@@ -75,7 +75,7 @@
 	style="max-height: {maxHeight}; max-width: {maxWidth};"
 >
 	<!-- Needs to be formatted as single line for proper rendering -->
-	<pre class="m-0 overflow-x-auto p-4"><code class="hljs text-sm leading-relaxed"
+	<pre class="m-0 overflow-x-auto"><code class="hljs text-sm leading-relaxed"
 			>{@html highlightedHtml}</code
 		></pre>
 </div>

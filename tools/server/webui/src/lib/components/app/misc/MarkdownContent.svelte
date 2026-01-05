@@ -677,25 +677,33 @@
 	/* Code blocks */
 
 	div :global(.code-block-wrapper) {
+		scrollbar-width: thin;
+		scrollbar-gutter: stable;
 		margin: 1.5rem 0;
 		border-radius: 0.75rem;
-		overflow: hidden;
-		border: 1px solid var(--border);
+		overflow: auto;
+		border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
 		background: var(--code-background);
+		box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+		max-height: calc(100dvh - var(--chat-form-area-height));
+	}
+
+	:global(.dark) div :global(.code-block-wrapper) {
+		border-color: color-mix(in oklch, var(--border) 20%, transparent);
 	}
 
 	div :global(.code-block-header) {
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		padding: 0.5rem 1rem;
-		background: hsl(var(--muted) / 0.5);
-		border-bottom: 1px solid var(--border);
+		padding: 0.5rem 1rem 0;
 		font-size: 0.875rem;
+		position: sticky;
+		top: 0;
 	}
 
 	div :global(.code-language) {
-		color: var(--code-foreground);
+		color: var(--color-foreground);
 		font-weight: 500;
 		font-family:
 			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
@@ -735,7 +743,7 @@
 
 	div :global(.code-block-wrapper pre) {
 		background: transparent;
-		padding: 1rem;
+		padding: 0.5rem;
 		margin: 0;
 		overflow-x: auto;
 		border-radius: 0;

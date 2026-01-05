@@ -63,7 +63,7 @@
 <div class="chat-processing-info-container pointer-events-none" class:visible={showProcessingInfo}>
 	<div class="chat-processing-info-content">
 		{#each processingDetails as detail (detail)}
-			<span class="chat-processing-info-detail pointer-events-auto">{detail}</span>
+			<span class="chat-processing-info-detail pointer-events-auto backdrop-blur-sm">{detail}</span>
 		{/each}
 	</div>
 </div>
@@ -73,7 +73,7 @@
 		position: sticky;
 		top: 0;
 		z-index: 10;
-		padding: 1.5rem 1rem;
+		padding: 0 1rem 0.75rem;
 		opacity: 0;
 		transform: translateY(50%);
 		transition:
@@ -100,7 +100,6 @@
 		color: var(--muted-foreground);
 		font-size: 0.75rem;
 		padding: 0.25rem 0.75rem;
-		background: var(--muted);
 		border-radius: 0.375rem;
 		font-family:
 			ui-monospace, SFMono-Regular, 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;

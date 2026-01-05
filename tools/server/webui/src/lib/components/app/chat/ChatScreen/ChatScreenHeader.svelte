@@ -14,7 +14,7 @@
 </script>
 
 <header
-	class="md:background-transparent pointer-events-none fixed top-0 right-0 left-0 z-50 flex items-center justify-end bg-background/40 p-4 backdrop-blur-xl duration-200 ease-linear {sidebar.open
+	class="pointer-events-none fixed top-0 right-0 left-0 z-50 flex items-center justify-end p-4 duration-200 ease-linear {sidebar.open
 		? 'md:left-[var(--sidebar-width)]'
 		: ''}"
 >
