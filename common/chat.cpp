@@ -4,6 +4,7 @@
 #include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
 #include "common.h"
+#include "ggml.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
 
@@ -950,16 +951,10 @@ static common_chat_params common_chat_params_init_generic(const common_chat_temp
     data.grammar_lazy = false;
     data.grammar = build_grammar([&](const common_grammar_builder & builder) { builder.add_schema("root", schema); });
 
-    auto tweaked_messages = tmpl.add_system(
-        inputs.messages,
-        "Respond in JSON format, either with `tool_call` (a request to call tools) or with `response` reply to the user's request");
-
-    // ensure all messages has "content" field
-    for (auto & message : tweaked_messages) {
-        if (!message.contains("content") || message["content"].is_null()) {
-            message["content"] = "";
-        }
-    }
+    auto tweaked_messages =
+        common_chat_template::add_system(inputs.messages,
+                                         "Respond in JSON format, either with `tool_call` (a request to call tools) or "
+                                         "with `response` reply to the user's request");
 
     data.prompt = apply(tmpl, inputs, /* messages_override= */ tweaked_messages);
     data.format = COMMON_CHAT_FORMAT_GENERIC;
@@ -1592,15 +1587,6 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
                 LOG_DBG("Using cached autoparser result\n");
                 // Clone the cached result and update the prompt with current messages
                 common_chat_params cached_result = it->second;
-                cached_result.prompt             = apply_template(tmpl, params, std::nullopt);
-
-                // Apply the same prompt modifications that generate_parser applies
-                // (e.g., appending reasoning end marker when thinking is disabled)
-                if (analysis.content.reasoning_mode == content_structure::REASONING_FORCED_OPEN &&
-                    !params.enable_thinking) {
-                    cached_result.prompt += analysis.content.reasoning_end + "\n";
-                }
-
                 return cached_result;
             }
         }
@@ -1609,111 +1595,16 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
 
         auto auto_params = universal_peg_generator::generate_parser(analysis, tmpl, params);
 
-        // Only use the auto-generated parser if it provides more than basic content-only handling.
-        // A PEG parser with thinking support or a non-empty parser (PEG grammar)
-        // provides specialized handling that the generic handler doesn't.
-        if (auto_params.format != COMMON_CHAT_FORMAT_CONTENT_ONLY || auto_params.thinking_forced_open ||
-            !auto_params.parser.empty()) {
-            // Cache the result (store a copy without the prompt since that varies per messages)
-            {
-                std::lock_guard<std::mutex> lock(tmpls->parser_cache_mutex);
-                tmpls->parser_cache[cache_key] = auto_params;
-            }
+        if (!auto_params.parser.empty()) {
+            std::lock_guard<std::mutex> lock(tmpls->parser_cache_mutex);
+            tmpls->parser_cache[cache_key] = auto_params;
             return auto_params;
         }
     } catch (const std::exception & e) {
-        LOG_WRN("Automatic parser generation failed: %s - using generic fallback\n", e.what());
+        LOG_WRN("Automatic parser generation failed: %s\n", e.what());
     }
 
-    // GPT-OSS
-    if (src.find("<|channel|>") != std::string::npos) {
-        return common_chat_params_init_gpt_oss(tmpl, params);
-    }
-
-    // Seed-OSS
-    if (src.find("<seed:think>") != std::string::npos) {
-        return common_chat_params_init_seed_oss(tmpl, params, inputs);
-    }
-
-    // Nemotron v2
-    if (src.find("<SPECIAL_10>") != std::string::npos) {
-        return common_chat_params_init_nemotron_v2(tmpl, params);
-    }
-
-    // Apertus format detection
-    if (src.find("<|system_start|>") != std::string::npos && src.find("<|tools_prefix|>") != std::string::npos) {
-        return common_chat_params_init_apertus(tmpl, params);
-    }
-
-    // LFM2 (w/ tools)
-    if (src.find("List of tools: <|tool_list_start|>[") != std::string::npos &&
-        src.find("]<|tool_list_end|>") != std::string::npos) {
-        return common_chat_params_init_lfm2(tmpl, params);
-    }
-
-    // MiniMax-M2 format detection
-    if (src.find("]~!b[") != std::string::npos && src.find("]~b]") != std::string::npos) {
-        return common_chat_params_init_minimax_m2(tmpl, params);
-    }
-
-    // Kimi K2 format detection
-    if (src.find("<|im_system|>tool_declare<|im_middle|>") != std::string::npos &&
-        src.find("<|tool_calls_section_begin|>") != std::string::npos &&
-        src.find("## Return of") != std::string::npos) {
-        return common_chat_params_init_kimi_k2(tmpl, params);
-    }
-
-    // Apriel 1.5 format detection
-    if (src.find("<thinking>") != std::string::npos && src.find("</thinking>") != std::string::npos &&
-        src.find("<available_tools>") != std::string::npos && src.find("<|assistant|>") != std::string::npos &&
-        src.find("<|tool_result|>") != std::string::npos && src.find("<tool_calls>[") != std::string::npos &&
-        src.find("]</tool_calls>") != std::string::npos) {
-        return common_chat_params_init_apriel_1_5(tmpl, params);
-    }
-
-    // Use generic handler when mixing tools + JSON schema.
-    // TODO: support that mix in handlers below.
-    if ((params.tools.is_array() && params.json_schema.is_object())) {
-        return common_chat_params_init_generic(tmpl, params);
-    }
-
-    // Functionary prepends "all\n" to plain content outputs, so we use its handler in all cases.
-    if (src.find(">>>all") != std::string::npos) {
-        return common_chat_params_init_functionary_v3_2(tmpl, params);
-    }
-
-    // Firefunction v2 requires datetime and functions in the context even w/o tools, so we also use its handler in all cases.
-    if (src.find(" functools[") != std::string::npos) {
-        return common_chat_params_init_firefunction_v2(tmpl, params);
-    }
-
-    // Functionary v3.1 (w/ tools)
-    if (src.find("<|start_header_id|>") != std::string::npos && src.find("<function=") != std::string::npos) {
-        return common_chat_params_init_functionary_v3_1_llama_3_1(tmpl, params);
-    }
-
-    if (src.find("[THINK]") != std::string::npos && src.find("[/THINK]") != std::string::npos) {
-        return common_chat_params_init_magistral(tmpl, params);
-    }
-
-    // Solar Open
-    if (src.find("<|tool_response:begin|>") != std::string::npos &&
-        src.find("<|tool_response:name|>") != std::string::npos &&
-        src.find("<|tool_response:result|>") != std::string::npos) {
-        return common_chat_params_init_solar_open(tmpl, params);
-    }
-
-    // Plain handler (no tools)
-    if (params.tools.is_null() || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
-        return common_chat_params_init_without_tools(tmpl, params);
-    }
-
-    // Mistral Nemo (w/ tools)
-    if (src.find("[TOOL_CALLS]") != std::string::npos) {
-        return common_chat_params_init_mistral_nemo(tmpl, params);
-    }
-
-    // Generic fallback
+    // Generic fallback - basic content-only handling
     return common_chat_params_init_generic(tmpl, params);
 }
 

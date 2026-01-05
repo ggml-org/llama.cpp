@@ -20,7 +20,7 @@ struct content_structure {
     enum reasoning_mode_type {
         REASONING_NONE,         // No reasoning markers detected
         REASONING_OPTIONAL,     // <think>...</think> may appear before content
-        REASONING_FORCED_OPEN,  // Template ends with open reasoning tag (thinking_forced_open)
+        REASONING_FORCED_OPEN,  // Template ends with open reasoning tag OR starts implicitly (empty start, present end)
     };
 
     reasoning_mode_type reasoning_mode = REASONING_NONE;
@@ -252,9 +252,11 @@ The unified builder (`common_chat_peg_unified_builder`) provides high-level meth
 
 #### Reasoning Mode Detection
 
-- **REASONING_FORCED_OPEN**: Prompt ends with reasoning start marker
-- **REASONING_OPTIONAL**: Markers present but not forced
-- **REASONING_NONE**: No markers detected
+- **REASONING_FORCED_OPEN**:
+  - **Explicit**: Prompt ends with reasoning start marker (e.g., `<think>`).
+  - **Implicit**: reasoning end marker is present but start marker is empty (e.g., `[BEGIN FINAL RESPONSE]`).
+- **REASONING_OPTIONAL**: Markers present but not forced.
+- **REASONING_NONE**: No markers detected.
 
 ### Phase 2: Tool Call Structure Analysis
 
@@ -469,6 +471,7 @@ The following templates have active tests in `tests/test-chat.cpp`:
 | Functionary v3.2 | `FUNC_RECIPIENT_BASED` | `>>>` recipient delimiter format |
 | MiMo-VL / Hermes 3 / Qwen 2.5 | `FUNC_JSON_OBJECT` | `<tool_call>` wrapper |
 | Apriel 1.5 | `FUNC_JSON_OBJECT` | `<tool_calls>` wrapper with JSON array |
+| Apriel 1.6 Thinker | Reasoning only | Implicit reasoning start |
 | Cohere Command-R7B | `FUNC_JSON_OBJECT` | `START_RESPONSE/ACTION/THINKING` markers |
 | Mistral Small 3.2 | `FUNC_BRACKET_TAG` | `[TOOL_CALLS]func[ARGS]{...}` with ID |
 | Devstral | `FUNC_BRACKET_TAG` | `[TOOL_CALLS]func[ARGS]{...}` without ID |
@@ -505,5 +508,6 @@ Some templates genuinely don't support tool calls (this is not a detection bug):
 - **Custom Tag Support**: Support for non-standard reasoning tags like `<seed:think>` (ByteDance)
 - **Multi-line Tool Arguments**: Better parsing of complex tool arguments with code blocks
 - **FUNC_MARKDOWN_CODE_BLOCK**: Support for Cohere Command-R Plus markdown code block format
+- **Implicit Reasoning Support**: Support for templates where reasoning starts implicitly without a start marker.
 
 The auto-parser now successfully handles 25+ different template formats across reasoning-only, tool-calling, and hybrid models, with comprehensive test coverage ensuring robust parsing across streaming and non-streaming scenarios.

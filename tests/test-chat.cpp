@@ -1676,6 +1676,27 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // Apriel 1.6 Thinker (reasoning-only support)
+    {
+        auto tst = peg_tester("models/templates/Apriel-1.6-15b-Thinker-fixed.jinja", detailed_debug);
+        tst.test("Hello, world!\nWhat's up?").expect(message_assist).run();
+
+        // Implicit reasoning start (forced open)
+        tst.test("I'm\nthinking\n[BEGIN FINAL RESPONSE]\nHello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // Reasoning + Tool calls
+        tst.test(
+               "I'm\nthinking\n[BEGIN FINAL RESPONSE]\n<tool_calls>[{\"name\": \"special_function\", \"arguments\": "
+               "{\"arg1\": 1}}]</tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+    }
+
     // Mistral Small 3.2 - FUNC_BRACKET_TAG format: [TOOL_CALLS]func_name[CALL_ID]id[ARGS]{...}
     {
         auto tst = peg_tester("models/templates/Mistral-Small-3.2-24B-Instruct-2506.jinja", detailed_debug);
@@ -1784,11 +1805,12 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         // Parallel tool calls
         tst.test(
                " to=functions.special_function<|channel|>analysis<|message|>{\"arg1\": 1}\n"
-               "<|start|>assistant to=functions.special_function_with_opt<|channel|>analysis<|message|>{\"arg1\": 1, \"arg2\": 2}")
+               "<|start|>assistant to=functions.special_function_with_opt<|channel|>analysis<|message|>{\"arg1\": 1, "
+               "\"arg2\": 2}")
             .parallel_tool_calls(true)
             .tools({
                 special_function_tool, special_function_tool_with_optional_param
-            })
+        })
             .expect_tool_calls({
                 { "special_function", R"({"arg1": 1})", {} },
                 { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },

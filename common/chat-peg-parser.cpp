@@ -74,13 +74,15 @@ common_peg_parser common_chat_peg_unified_builder::build_reasoning_block(const c
     }
 
     // If still no markers, return empty
-    if (reason_start.empty() || reason_end.empty()) {
+    // But allow empty start marker if thinking is forced open (implicit start)
+    if ((reason_start.empty() && !thinking_forced_open) || reason_end.empty()) {
         return eps();
     }
 
     if (thinking_forced_open) {
         // Mandatory reasoning: parse from current position to end marker
-        return rule("reasoning", reasoning_block(reasoning(until(reason_end)) + literal(reason_end)));
+        auto parser = reasoning(until(reason_end)) + literal(reason_end);
+        return rule("reasoning", reasoning_block(parser));
     }
     // Optional reasoning: may or may not appear
     // Also try <|START_THINKING|> style markers if standard markers don't match
@@ -100,7 +102,7 @@ common_peg_parser common_chat_peg_unified_builder::build_reasoning_block(const c
 common_peg_parser common_chat_peg_unified_builder::build_content_block(const content_structure & cs,
                                                                        common_reasoning_format   reasoning_format,
                                                                        const std::string &       tool_section_start) {
-    GGML_UNUSED(tool_section_start); // leaving for now just in case
+    GGML_UNUSED(tool_section_start);  // leaving for now just in case
     std::string content_start = cs.content_start;
     std::string content_end   = cs.content_end;
 

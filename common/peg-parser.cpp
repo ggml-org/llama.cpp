@@ -391,7 +391,7 @@ struct parser_executor {
             if (ctx.debug) {
                 fprintf(stderr, "%sSEQ child %zu: %s\n", debug_indent().c_str(), i, arena.dump(child_id).c_str());
             }
-            auto result   = arena.parse(child_id, ctx, pos);
+            auto result = arena.parse(child_id, ctx, pos);
 
             if (ctx.debug) {
                 fprintf(stderr, "%sSEQ child %zu: %s at %zu->%zu\n", debug_indent().c_str(), i,
@@ -449,7 +449,7 @@ struct parser_executor {
             if (ctx.debug) {
                 fprintf(stderr, "%sCHOICE option %zu: %s\n", debug_indent().c_str(), i, arena.dump(child_id).c_str());
             }
-            auto         result   = arena.parse(child_id, ctx, pos);
+            auto result = arena.parse(child_id, ctx, pos);
             if (ctx.debug) {
                 fprintf(stderr, "%sCHOICE option %zu: %s\n", debug_indent().c_str(), i,
                         common_peg_parse_result_type_name(result.type));
@@ -524,8 +524,8 @@ struct parser_executor {
 
                 ctx.parse_depth--;
                 if (ctx.debug) {
-                    fprintf(stderr, "%sREPEAT -> NEED_MORE (count=%d, nodes=%zu)\n", debug_indent().c_str(), match_count,
-                            nodes.size());
+                    fprintf(stderr, "%sREPEAT -> NEED_MORE (count=%d, nodes=%zu)\n", debug_indent().c_str(),
+                            match_count, nodes.size());
                 }
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_NEED_MORE_INPUT, start_pos, result.end,
                                                std::move(nodes));
@@ -558,7 +558,8 @@ struct parser_executor {
 
         ctx.parse_depth--;
         if (ctx.debug) {
-            fprintf(stderr, "%sREPEAT -> SUCCESS (count=%d, nodes=%zu)\n", debug_indent().c_str(), match_count, nodes.size());
+            fprintf(stderr, "%sREPEAT -> SUCCESS (count=%d, nodes=%zu)\n", debug_indent().c_str(), match_count,
+                    nodes.size());
         }
         return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos, std::move(nodes));
     }
@@ -839,7 +840,7 @@ struct parser_executor {
     common_peg_parse_result operator()(const common_peg_tag_parser & p) {
         // Parse the child
         if (ctx.debug) {
-            fprintf(stderr, "%sTAG: %s\n", debug_indent().c_str(), p.tag.c_str());        
+            fprintf(stderr, "%sTAG: %s\n", debug_indent().c_str(), p.tag.c_str());
         }
         auto result = arena.parse(p.child, ctx, start_pos);
 
@@ -951,7 +952,8 @@ std::string common_peg_arena::dump(common_peg_parser_id id) const {
     return dump_impl(id, visited);
 }
 
-std::string common_peg_arena::dump_impl(common_peg_parser_id id, std::unordered_set<common_peg_parser_id> & visited) const {
+std::string common_peg_arena::dump_impl(common_peg_parser_id                       id,
+                                        std::unordered_set<common_peg_parser_id> & visited) const {
     // Check for cycles
     if (visited.count(id)) {
         return "[cycle]";
@@ -986,7 +988,8 @@ std::string common_peg_arena::dump_impl(common_peg_parser_id id, std::unordered_
                 return "Choice(" + string_join(parts, ", ") + ")";
             } else if constexpr (std::is_same_v<T, common_peg_repetition_parser>) {
                 if (p.max_count == -1) {
-                    return "Repetition(" + dump_impl(p.child, visited) + ", " + std::to_string(p.min_count) + ", unbounded)";
+                    return "Repetition(" + dump_impl(p.child, visited) + ", " + std::to_string(p.min_count) +
+                           ", unbounded)";
                 }
                 return "Repetition(" + dump_impl(p.child, visited) + ", " + std::to_string(p.min_count) + ", " +
                        std::to_string(p.max_count) + ")";
