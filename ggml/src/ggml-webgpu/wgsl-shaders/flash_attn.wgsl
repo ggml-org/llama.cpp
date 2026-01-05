@@ -317,21 +317,21 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                   HEAD_DIM_QK
               );
 
-                  // load k submatrix from device or shared memory
+              // load k submatrix from device or shared memory
 #ifdef KV_DIRECT
-                  var k_sg_mat: subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N> = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(
-                      &K,
-                      k_global_offset + head_dim_block,
-                      true,
-                      params.stride_k1
-                  );
+              var k_sg_mat: subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N> = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(
+                  &K,
+                  k_global_offset + head_dim_block,
+                  true,
+                  params.stride_k1
+              );
 #else
-                  var k_sg_mat: subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N> = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(
-                      &kv_shmem,
-                      k_block_offset + head_dim_block,
-                      true,
-                      HEAD_DIM_QK
-                  );
+              var k_sg_mat: subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N> = subgroupMatrixLoad<subgroup_matrix_right<f16, SG_MAT_K, SG_MAT_N>>(
+                  &kv_shmem,
+                  k_block_offset + head_dim_block,
+                  true,
+                  HEAD_DIM_QK
+              );
 #endif
               acc = subgroupMatrixMultiplyAccumulate(q_sg_mat, k_sg_mat, acc);
           }
@@ -350,7 +350,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           let global_k_col = kv_tile + mask_col;
           let mask_in_bounds = global_q_row < params.seq_len_q && global_k_col < params.seq_len_kv;
           let mask_idx = mask_global_offset + mask_row * params.seq_len_kv + global_k_col;
-
           mask_shmem[elem_idx] = select(0.0, mask[mask_idx], mask_in_bounds);
       }
 #endif
@@ -514,7 +513,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                       HEAD_DIM_V
                   );
 #endif
-
                   // O += P * V
                   o_sg_mat = subgroupMatrixMultiplyAccumulate(p_sg_mat, v_sg_mat, o_sg_mat);
               }
