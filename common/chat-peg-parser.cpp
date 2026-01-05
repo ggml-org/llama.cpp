@@ -733,26 +733,6 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
     if (is_arg_value && current_tool) {
         std::string value_content = std::string(trim_trailing_space(node.text));
 
-        // During incremental parsing, the value might contain the start or full closing tag
-        // Strip any content that looks like a closing tag (starts with </)
-        // This handles both partial tags like "</para" and full tags like "</parameter>"
-        // Use find() not rfind() to get the FIRST occurrence - handles cases like
-        // "1\n</parameter>\n</" where we want to strip from the first </
-        auto tag_start = value_content.find("</");
-        if (tag_start != std::string::npos) {
-            value_content = value_content.substr(0, tag_start);
-        } else {
-            // Also handle just < at the end (start of any tag)
-            if (!value_content.empty() && value_content.back() == '<') {
-                value_content.pop_back();
-            }
-        }
-
-        // Trim trailing whitespace again after stripping
-        while (!value_content.empty() && std::isspace(static_cast<unsigned char>(value_content.back()))) {
-            value_content.pop_back();
-        }
-
         std::string value_to_add;
         if (!value_content.empty()) {
             // Try to parse as JSON value (number, bool, null, object, array)
