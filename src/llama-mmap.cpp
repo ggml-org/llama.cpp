@@ -110,7 +110,7 @@ struct llama_file::impl {
         }
     }
 
-    void read_raw(void * ptr, size_t len) const {
+    void read_raw(void * ptr, size_t len) {
         size_t bytes_read = 0;
         while (bytes_read < len) {
             size_t chunk_size = std::min<size_t>(len - bytes_read, 64*1024*1024);
@@ -127,7 +127,7 @@ struct llama_file::impl {
         }
     }
 
-    uint32_t read_u32() const {
+    uint32_t read_u32() {
         uint32_t val;
         read_raw(&val, sizeof(val));
         return val;
@@ -154,11 +154,11 @@ struct llama_file::impl {
         write_raw(&val, sizeof(val));
     }
 
-    void read_aligned_chunk(size_t offset, void * dest, size_t size) const {
+    void read_aligned_chunk(size_t offset, void * dest, size_t size) {
         throw std::runtime_error("DirectIO is not implemented on Windows.");
     }
 
-    void read_raw_unsafe(void * ptr, size_t len) const {
+    void read_raw_unsafe(void * ptr, size_t len) {
         throw std::runtime_error("DirectIO is not implemented on Windows.");
     }
 
@@ -172,33 +172,45 @@ struct llama_file::impl {
         }
     }
 #else
-    impl(const char * fname, const char * mode, [[maybe_unused]] const bool use_direct_io = false) {
+    impl(const char * fname, const char * mode, [[maybe_unused]] const bool use_direct_io = false) : fname(fname) {
 #ifdef __linux__
         // Try unbuffered I/O for read only
         if (use_direct_io && std::strcmp(mode, "rb") == 0) {
-            fd = open(fname, O_RDONLY | O_DIRECT);
-
-            if (fd != -1) {
-                struct stat file_stats{};
-                fstat(fd, &file_stats);
-
-                size = file_stats.st_size;
-                alignment = file_stats.st_blksize;
-
-                off_t ret = lseek(fd, 0, SEEK_SET);
-                if (ret == -1) {
-                    throw std::runtime_error(format("seek error: %s", strerror(errno)));
-                }
+            if (init_fd()) {
                 return;
             }
-
             LLAMA_LOG_WARN("Failed to open model %s with error: %s. Falling back to buffered I/O",
-                fname, strerror(errno));
+                           fname, strerror(errno));
         }
 #endif
-        fp = ggml_fopen(fname, mode);
+        init_fp(mode);
+    }
+
+#ifdef __linux__
+    bool init_fd() {
+        fd = open(fname.c_str(), O_RDONLY | O_DIRECT);
+
+        if (fd != -1) {
+            struct stat file_stats{};
+            fstat(fd, &file_stats);
+
+            size = file_stats.st_size;
+            alignment = file_stats.st_blksize;
+
+            off_t ret = lseek(fd, 0, SEEK_SET);
+            if (ret == -1) {
+                throw std::runtime_error(format("seek error: %s", strerror(errno)));
+            }
+            return true;
+        }
+        return false;
+    }
+#endif
+
+    void init_fp(const char * mode) {
+        fp = ggml_fopen(fname.c_str(), mode);
         if (fp == NULL) {
-            throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
+            throw std::runtime_error(format("failed to open %s: %s", fname.c_str(), strerror(errno)));
         }
         seek(0, SEEK_END);
         size = tell();
@@ -234,7 +246,7 @@ struct llama_file::impl {
         }
     }
 
-    void read_raw_unsafe(void * ptr, size_t len) const {
+    void read_raw_unsafe(void * ptr, size_t len) {
         if (len == 0) {
             return;
         }
@@ -257,6 +269,17 @@ struct llama_file::impl {
                     if (errno == EINTR) {
                         continue;  // Interrupted by signal, retry
                     }
+                    // Fallback to std::fread in case the DMA controller cannot access the buffer
+                    if (errno == EFAULT) {
+                        auto curr_off = tell();
+                        close(fd);
+                        fd = -1;
+                        alignment = 1;
+                        init_fp("rb");
+                        seek(curr_off, SEEK_SET);
+                        read_raw_unsafe(ptr, len);
+                        return;
+                    }
                     throw std::runtime_error(format("read error: %s", strerror(errno)));
                 }
                 if (ret == 0) {
@@ -274,7 +297,7 @@ struct llama_file::impl {
         }
     }
 
-    void read_aligned_chunk(void * dest, size_t size) const {
+    void read_aligned_chunk(void * dest, size_t size) {
         size_t offset = tell();
         off_t aligned_offset = offset & ~(alignment - 1);
         off_t offset_from_alignment = offset - aligned_offset;
@@ -298,7 +321,7 @@ struct llama_file::impl {
         memcpy(dest, reinterpret_cast<void *>(actual_data), size);
     }
 
-    void read_raw(void * ptr, size_t len) const {
+    void read_raw(void * ptr, size_t len) {
         if (has_direct_io()) {
             read_aligned_chunk(ptr, len);
         } else {
@@ -306,7 +329,7 @@ struct llama_file::impl {
         }
     }
 
-    uint32_t read_u32() const {
+    uint32_t read_u32() {
         uint32_t ret;
         read_raw(&ret, sizeof(ret));
         return ret;
@@ -339,6 +362,7 @@ struct llama_file::impl {
         }
     }
     int fd = -1;
+    std::string fname;
 #endif
 
     size_t read_alignment() const {
@@ -374,14 +398,14 @@ int llama_file::file_id() const {
 }
 
 void llama_file::seek(size_t offset, int whence) const { pimpl->seek(offset, whence); }
-void llama_file::read_raw(void * ptr, size_t len) const { pimpl->read_raw(ptr, len); }
+void llama_file::read_raw(void * ptr, size_t len) { pimpl->read_raw(ptr, len); }
 #ifdef _WIN32
 void llama_file::read_raw_unsafe(void * ptr, size_t len) const { pimpl->read_raw(ptr, len); }
 #else
-void llama_file::read_raw_unsafe(void * ptr, size_t len) const { pimpl->read_raw_unsafe(ptr, len); }
+void llama_file::read_raw_unsafe(void * ptr, size_t len) { pimpl->read_raw_unsafe(ptr, len); }
 #endif
 
-uint32_t llama_file::read_u32() const { return pimpl->read_u32(); }
+uint32_t llama_file::read_u32() { return pimpl->read_u32(); }
 
 void llama_file::write_raw(const void * ptr, size_t len) const { pimpl->write_raw(ptr, len); }
 void llama_file::write_u32(uint32_t val) const { pimpl->write_u32(val); }
