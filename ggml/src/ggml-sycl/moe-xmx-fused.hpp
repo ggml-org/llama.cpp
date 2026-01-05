@@ -352,8 +352,8 @@ void fused_xmx_moe_gemm_mxfp4_soa(
 
     queue.submit([&](sycl::handler& cgh) {
         // SLM allocations
-        // Token data for current K-block only
-        sycl::local_accessor<int8_t, 1> slm_token(sycl::range<1>(XMX_K), cgh);
+        // Token data for current K-block - needs full 8x32 matrix for joint_matrix_load
+        sycl::local_accessor<int8_t, 1> slm_token(sycl::range<1>(XMX_M * XMX_K), cgh);
         // Token scale for current K-block
         sycl::local_accessor<float, 1> slm_token_scale(sycl::range<1>(1), cgh);
         // Dequantized weight tile (MXFP4 unpacked to int8 via LUT)
@@ -365,7 +365,6 @@ void fused_xmx_moe_gemm_mxfp4_soa(
         // Per-sub-group accumulator extraction buffer
         sycl::local_accessor<int32_t, 1> slm_acc(sycl::range<1>(cfg.wg_size / SG_SIZE * XMX_M * XMX_N), cgh);
 
-        const int wg_size_captured = cfg.wg_size;
         const int num_persistent_wgs_captured = cfg.num_persistent_wgs;
 
         cgh.parallel_for(
@@ -373,7 +372,6 @@ void fused_xmx_moe_gemm_mxfp4_soa(
             [=](sycl::nd_item<1> item) [[intel::reqd_sub_group_size(SG_SIZE)]] {
                 auto sg = item.get_sub_group();
                 int group_id = item.get_group_linear_id();
-                int tid = item.get_local_linear_id();
                 int sg_id = sg.get_group_linear_id();
                 int lane = sg.get_local_linear_id();
 
@@ -382,6 +380,11 @@ void fused_xmx_moe_gemm_mxfp4_soa(
                     slm_kvalues[lane] = kvalues_mxfp4[lane];
                 }
                 sycl::group_barrier(item.get_group());
+
+                // Early exit for non-zero sub-groups (they have no unique work in decode mode)
+                // All sub-groups would compute and write to the same output location,
+                // causing a race condition. Only sub-group 0 does the actual work.
+                if (sg_id != 0) return;
 
                 // Persistent loop over all experts
                 for (int expert = 0; expert < n_experts; expert++) {
@@ -420,19 +423,29 @@ void fused_xmx_moe_gemm_mxfp4_soa(
 
                         // K-dimension reduction with per-K-block scale application
                         for (int k_block = 0; k_block < num_k_blocks; k_block++) {
-                            // Load token data for this K-block only
-                            for (int i = tid; i < XMX_K; i += wg_size_captured) {
-                                slm_token[i] = q_tokens[token_idx * in_dim + k_block * XMX_K + i];
+                            // Load token data for this K-block into 8x32 matrix
+                            // For decode (batch=1), we only have 1 token row but XMX needs 8 rows
+                            // Row 0 gets the actual token data, rows 1-7 are zero-padded
+                            for (int i = lane; i < XMX_M * XMX_K; i += SG_SIZE) {
+                                int row = i / XMX_K;
+                                int col = i % XMX_K;
+                                if (row == 0) {
+                                    slm_token[i] = q_tokens[token_idx * in_dim + k_block * XMX_K + col];
+                                } else {
+                                    slm_token[i] = 0;  // Pad other rows with zeros
+                                }
                             }
                             // Load token scale for this K-block
-                            if (tid == 0) {
+                            if (lane == 0) {
                                 slm_token_scale[0] = static_cast<float>(
                                     token_scales[token_idx * num_k_blocks + k_block]);
                             }
+                            sycl::group_barrier(sg);
 
                             // Load and dequantize MXFP4 weight tile for this K-block
-                            // Each thread handles multiple columns to unpack
-                            for (int i = tid; i < TILE_N; i += wg_size_captured) {
+                            // Only sub-group 0 is active, so use lane and SG_SIZE
+                            // Each lane handles multiple columns to unpack (TILE_N=64, SG_SIZE=16)
+                            for (int i = lane; i < TILE_N; i += SG_SIZE) {
                                 int out_col = col_start + i;
                                 if (out_col < static_cast<int>(out_dim)) {
                                     // SoA block index: out_col * num_k_blocks + k_block
@@ -458,7 +471,7 @@ void fused_xmx_moe_gemm_mxfp4_soa(
                                     }
                                 }
                             }
-                            sycl::group_barrier(item.get_group());
+                            sycl::group_barrier(sg);
 
                             // XMX multiply-accumulate
                             joint_matrix<sycl::sub_group, int8_t, use::a,
@@ -506,7 +519,7 @@ void fused_xmx_moe_gemm_mxfp4_soa(
                                 joint_matrix_fill(sg, acc[tn], 0);
                             }
 
-                            sycl::group_barrier(item.get_group());
+                            sycl::group_barrier(sg);
                         }
 
                         // Store final results
@@ -520,7 +533,7 @@ void fused_xmx_moe_gemm_mxfp4_soa(
                             }
                         }
 
-                        sycl::group_barrier(item.get_group());
+                        sycl::group_barrier(sg);
                     }
                 }
             });
