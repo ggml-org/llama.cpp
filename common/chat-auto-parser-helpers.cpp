@@ -169,7 +169,7 @@ std::string apply_template(const minja::chat_template &    tmpl,
         auto result = tmpl.apply(tmpl_inputs, tmpl_opts);
         return result;
     } catch (const std::exception & e) {
-        LOG_DBG("Template application failed: %s\n", e.what());
+        LOG_ERR("Template application failed: %s\n", e.what());
         return "";
     }
 }

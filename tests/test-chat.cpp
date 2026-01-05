@@ -239,6 +239,21 @@ static common_chat_tool python_tool{
     })",
 };
 
+static common_chat_tool html_tool{
+    /* .name = */ "html",
+    /* .description = */ "an html validator",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "markup": {
+                "type": "string",
+                "description": "HTML markup to validate."
+            }
+        },
+        "required": ["markup"]
+    })",
+};
+
 static common_chat_tool get_time_tool{
     /* .name = */ "get_time",
     /* .description = */ "Get the current time in a city",
@@ -269,8 +284,24 @@ static common_chat_tool get_weather_tool{
     })",
 };
 
+static common_chat_tool todo_list{
+    /* .name = */ "todo_list",
+    /* .description = */ "Create or update the todo list",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "description": "List of TODO list items"
+            }
+        },
+        "required": ["items"]
+    })",
+};
+
+
 static std::vector<common_chat_tool> tools{ special_function_tool, special_function_tool_with_optional_param,
-                                            python_tool };
+                                            python_tool, html_tool, todo_list };
 
 const common_chat_msg message_user{
     "user",
@@ -923,7 +954,9 @@ static void test_msgs_oaicompat_json_conversion() {
                               "        \"type\": \"function\",\n"
                               "        \"function\": {\n"
                               "          \"name\": \"python\",\n"
-                              "          \"arguments\": \"{\\\"code\\\":\\\"print('hey')\\\"}\"\n"
+                              "          \"arguments\": {\n"
+                              "            \"code\": \"print('hey')\"\n"
+                              "          }\n"
                               "        }\n"
                               "      }\n"
                               "    ]\n"
@@ -1409,6 +1442,28 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
             })
             .run();
+
+        // Test with HTML tag content
+        tst.test(
+               "<tool_call>\n"
+               "<function=html>\n"
+               "<parameter=markup>\n"
+               "<html>\n"
+               " <head>\n"
+               "  <title>Hello!</title>\n"
+               " </head>\n"
+               "</html>\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({
+                html_tool
+        })
+            .expect_tool_calls({
+                { "html", "{\"markup\": \"<html>\\n <head>\\n  <title>Hello!</title>\\n </head>\\n</html>\"}", {} },
+            })
+            .run();
+
     }
     {
         auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.1.jinja", detailed_debug);

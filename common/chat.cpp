@@ -16,6 +16,14 @@
 #include "jinja/runtime.h"
 #include "jinja/caps.h"
 
+// #include <minja/chat-template.hpp>
+// #include <minja/minja.hpp>
+
+#include "jinja/parser.h"
+#include "jinja/value.h"
+#include "jinja/runtime.h"
+#include "jinja/caps.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -25,7 +33,6 @@
 #include <map>
 #include <minja/chat-template.hpp>
 #include <minja/minja.hpp>
-#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -41,6 +48,18 @@ static std::string format_time(const std::chrono::system_clock::time_point & now
     ss << std::put_time(&local_time, format.c_str());
     auto res = ss.str();
     return res;
+}
+
+static json safe_args_parse(const std::string & to_parse) {
+    std::string stripped = to_parse;
+    if (to_parse.at(0) == '"' && to_parse.at(to_parse.length() - 1) == '"') {
+        stripped = to_parse.substr(1, to_parse.length() - 1);
+    }
+    try {
+        return json::parse(stripped);
+    } catch (json::exception & e) {
+        return stripped;
+    }
 }
 
 static std::string string_diff(const std::string & last, const std::string & current) {
@@ -232,14 +251,6 @@ struct common_chat_templates {
     bool has_explicit_template;  // Model had builtin template or template overridde was specified.
     std::unique_ptr<common_chat_template> template_default;  // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
-
-    // Cache for template analysis results (per template source)
-    mutable std::mutex                                      analysis_cache_mutex;
-    mutable std::map<std::string, template_analysis_result> analysis_cache;
-
-    // Cache for generated parser results (per template + params combination)
-    mutable std::mutex                                parser_cache_mutex;
-    mutable std::map<std::string, common_chat_params> parser_cache;
 };
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
@@ -331,7 +342,12 @@ template <> std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const 
                         throw std::invalid_argument("Missing tool call name: " + tool_call.dump());
                     }
                     tc.name      = fc.at("name");
-                    tc.arguments = fc.at("arguments");
+                    const auto & args    = fc.at("arguments");
+                    if (args.is_string()) {
+                        tc.arguments = args;
+                    } else {
+                        tc.arguments = args.dump();
+                    }
                     if (tool_call.contains("id")) {
                         tc.id = tool_call.at("id");
                     }
@@ -421,8 +437,9 @@ template <> json common_chat_msgs_to_json_oaicompat(const std::vector<common_cha
                     { "function",
                      {
                           { "name", tool_call.name },
-                          { "arguments", json::parse(tool_call.arguments) },
-                      }                      },
+                          { "arguments", safe_args_parse(tool_call.arguments) },
+                      }                      
+                    },
                 };
                 if (!tool_call.id.empty()) {
                     tc["id"] = tool_call.id;
@@ -1556,50 +1573,10 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         return common_chat_params_init_gpt_oss(tmpl, params);
     }
 
-    // Unified two-phase template analysis with caching
     try {
-        // Generate cache key (excludes messages and now)
-        const std::string cache_key = make_autoparser_cache_key(src, params);
-
-        // Check analysis cache first (needed for both cached and uncached parser paths)
-        template_analysis_result analysis;
-        {
-            std::lock_guard<std::mutex> lock(tmpls->analysis_cache_mutex);
-            auto                        it = tmpls->analysis_cache.find(src);
-            if (it != tmpls->analysis_cache.end()) {
-                LOG_DBG("Using cached template analysis\n");
-                analysis = it->second;
-            } else {
-                LOG_DBG("Analyzing template (analysis cache miss)\n");
-                analysis                   = template_analyzer::analyze_template(tmpl);
-                tmpls->analysis_cache[src] = analysis;
-            }
-        }
-        fprintf(stderr, "DEBUG ANALYSIS: function_format=%d, per_call_start='%s', id_marker='%s'\n",
-                static_cast<int>(analysis.tools.function_format), analysis.tools.per_call_start.c_str(),
-                analysis.tools.id_marker.c_str());
-
-        // Check parser cache
-        {
-            std::lock_guard<std::mutex> lock(tmpls->parser_cache_mutex);
-            auto                        it = tmpls->parser_cache.find(cache_key);
-            if (it != tmpls->parser_cache.end()) {
-                LOG_DBG("Using cached autoparser result\n");
-                // Clone the cached result and update the prompt with current messages
-                common_chat_params cached_result = it->second;
-                return cached_result;
-            }
-        }
-
-        LOG_DBG("Using unified template analysis (parser cache miss)\n");
-
+        template_analysis_result analysis = template_analyzer::analyze_template(tmpl);
         auto auto_params = universal_peg_generator::generate_parser(analysis, tmpl, params);
-
-        if (!auto_params.parser.empty()) {
-            std::lock_guard<std::mutex> lock(tmpls->parser_cache_mutex);
-            tmpls->parser_cache[cache_key] = auto_params;
-            return auto_params;
-        }
+        return auto_params;
     } catch (const std::exception & e) {
         LOG_WRN("Automatic parser generation failed: %s\n", e.what());
     }
