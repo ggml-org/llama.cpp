@@ -2973,15 +2973,16 @@ static bool is_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, 
     }
 
     // Check if the graph size has changed
-    if (cuda_ctx->cuda_graph->ggml_graph_properties.size() != (size_t)cgraph->n_nodes) {
+    if (cuda_ctx->cuda_graph->ggml_graph_properties.size() != (size_t)cgraph->n_nodes + cgraph->n_leafs) {
         cuda_graph_update_required = true;
-        cuda_ctx->cuda_graph->ggml_graph_properties.resize(cgraph->n_nodes);
+        cuda_ctx->cuda_graph->ggml_graph_properties.resize(cgraph->n_nodes + cgraph->n_leafs);
     }
 
     // Loop over nodes in GGML graph to determine if CUDA graph update is required
     // and store properties to allow this comparison for the next token
     for (int i = 0; i < cgraph->n_nodes; i++) {
         bool has_matching_properties = true;
+
         if (!cuda_graph_update_required) {
             has_matching_properties = ggml_graph_node_has_matching_properties(cgraph->nodes[i], &cuda_ctx->cuda_graph->ggml_graph_properties[i]);
         }
@@ -2989,6 +2990,17 @@ static bool is_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, 
             cuda_graph_update_required = true;
         }
         set_ggml_graph_node_properties(cgraph->nodes[i], &cuda_ctx->cuda_graph->ggml_graph_properties[i]);
+    }
+
+    for (int i = 0; i < cgraph->n_leafs; i++) {
+        bool has_matching_properties = true;
+        if (!cuda_graph_update_required) {
+            has_matching_properties = ggml_graph_node_has_matching_properties(cgraph->leafs[i], &cuda_ctx->cuda_graph->ggml_graph_properties[cgraph->n_nodes + i]);
+        }
+        if (!has_matching_properties) {
+            cuda_graph_update_required = true;
+        }
+        set_ggml_graph_node_properties(cgraph->leafs[i], &cuda_ctx->cuda_graph->ggml_graph_properties[cgraph->n_nodes + i]);
     }
 
     return cuda_graph_update_required;

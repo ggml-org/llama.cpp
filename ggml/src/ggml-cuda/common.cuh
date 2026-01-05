@@ -1065,6 +1065,7 @@ struct ggml_cuda_graph {
     int number_consecutive_updates = 0;
     bool cuda_graphs_enabled = false;
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
+    std::vector<ggml_graph_node_properties> extraneous_srcs_properties;
 #endif
 };
 
