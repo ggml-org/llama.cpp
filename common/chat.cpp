@@ -512,13 +512,17 @@ template <> json common_chat_msg_diff_to_json_oaicompat(const common_chat_msg_di
             tool_call["id"]   = diff.tool_call_delta.id;
             tool_call["type"] = "function";
         }
-        json function = json::object();
-        if (!diff.tool_call_delta.name.empty()) {
-            function["name"] = diff.tool_call_delta.name;
+        if (!diff.tool_call_delta.name.empty() || !diff.tool_call_delta.arguments.empty()) {
+            json function = json::object();
+            if (!diff.tool_call_delta.name.empty()) {
+                function["name"] = diff.tool_call_delta.name;
+            }
+            if (!diff.tool_call_delta.arguments.empty()) {
+                function["arguments"] = diff.tool_call_delta.arguments;
+            }
+            tool_call["function"] = function;
         }
-        function["arguments"] = diff.tool_call_delta.arguments;
-        tool_call["function"] = function;
-        delta["tool_calls"]   = json::array({ tool_call });
+        delta["tool_calls"] = json::array({ tool_call });
     }
     return delta;
 }
@@ -1184,9 +1188,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
             auto role_start = p.optional(p.space() + p.literal("<|start|>assistant"));
 
-            auto tool_call = p.trigger_rule(
-                "tool-call",
-                p.repeat(role_start + tool_choice, min_calls, max_calls));
+            auto tool_call = p.trigger_rule("tool-call", p.repeat(role_start + tool_choice, min_calls, max_calls));
 
             if (extract_reasoning) {
                 return p.optional(analysis_segment) + p.optional(content_segment) + tool_call;
@@ -1533,7 +1535,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     //     LOG_DBG("Disabling parallel_tool_calls because the template does not support it\n");
     //     params.parallel_tool_calls = false;
     // } else {
-        params.parallel_tool_calls = inputs.parallel_tool_calls;
+    params.parallel_tool_calls = inputs.parallel_tool_calls;
     //}
 
     if (params.tools.is_array()) {
