@@ -205,7 +205,7 @@ void fused_xmx_moe_gemm_q8_0(
                             joint_matrix<sycl::sub_group, int8_t, use::a,
                                          XMX_M, XMX_K, layout::row_major> mat_a;
                             joint_matrix<sycl::sub_group, int8_t, use::b,
-                                         XMX_K, XMX_N, layout::row_major> mat_b;
+                                         XMX_K, XMX_N, layout::col_major> mat_b;
 
                             // Load mat_a ONCE outside TILES_N loop (FIX #3)
                             auto slm_token_ptr = sycl::address_space_cast<
@@ -275,10 +275,13 @@ void fused_xmx_moe_gemm_q8_0(
 
 // MXFP4 format constants
 constexpr int MXFP4_PACKED_BYTES = 16;   // 16 packed bytes = 32 elements (4-bit each)
-constexpr int MXFP4_BLOCK_STRIDE = 17;   // 16 bytes packed + 1 byte E8M0 exponent
+// Note: MXFP4_BLOCK_STRIDE (17) is only used in AoS format; SoA stores qs and e separately
 
 // Fused XMX MoE GEMM for MXFP4 weights (SoA layout)
 // Processes ALL experts in a single kernel launch using persistent work-groups
+//
+// IMPORTANT: This kernel is optimized for DECODE mode (batch=1, single token per expert).
+// For prompt processing (batch > 1), use the per-expert launch path instead.
 //
 // SoA layout (per expert):
 //   - qs: [nblocks * 16] packed nibble bytes contiguously
@@ -433,7 +436,7 @@ void fused_xmx_moe_gemm_mxfp4_soa(
                                 int out_col = col_start + i;
                                 if (out_col < static_cast<int>(out_dim)) {
                                     // SoA block index: out_col * num_k_blocks + k_block
-                                    int64_t block_idx = out_col * num_k_blocks + k_block;
+                                    int64_t block_idx = static_cast<int64_t>(out_col) * num_k_blocks + k_block;
 
                                     // E8M0 exponent -> scale (includes 0.5 factor for kvalues)
                                     uint8_t e8m0 = expert_e[block_idx];
@@ -461,7 +464,7 @@ void fused_xmx_moe_gemm_mxfp4_soa(
                             joint_matrix<sycl::sub_group, int8_t, use::a,
                                          XMX_M, XMX_K, layout::row_major> mat_a;
                             joint_matrix<sycl::sub_group, int8_t, use::b,
-                                         XMX_K, XMX_N, layout::row_major> mat_b;
+                                         XMX_K, XMX_N, layout::col_major> mat_b;
 
                             // Load mat_a ONCE outside TILES_N loop
                             auto slm_token_ptr = sycl::address_space_cast<
