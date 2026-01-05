@@ -1486,6 +1486,7 @@ The precedence rule for preset options is as follows:
 
 We also offer additional options that are exclusive to presets (these aren't treated as command-line arguments):
 - `load-on-startup` (boolean): Controls whether the model loads automatically when the server starts
+- `stop-timeout` (int, seconds): After requested unload, wait for this many seconds before forcing termination (default: 10)
 
 ### Routing requests
 
@@ -1574,8 +1575,7 @@ Payload:
 
 ```json
 {
-  "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
-  "extra_args": ["-n", "128", "--top-k", "4"]
+  "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M"
 }
 ```
 

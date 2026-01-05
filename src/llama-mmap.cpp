@@ -248,10 +248,10 @@ struct llama_file::impl {
                 throw std::runtime_error("unexpectedly reached end of file");
             }
         } else {
-            bool successful = false;
-            GGML_ASSERT(len % alignment == 0 && (uintptr_t) ptr % alignment == 0);
-            while (!successful) {
-                off_t ret = read(fd, ptr, len);
+            size_t bytes_read = 0;
+            while (bytes_read < len) {
+                const size_t to_read = len - bytes_read;
+                ssize_t ret = ::read(fd, reinterpret_cast<char *>(ptr) + bytes_read, to_read);
 
                 if (ret == -1) {
                     if (errno == EINTR) {
@@ -260,10 +260,16 @@ struct llama_file::impl {
                     throw std::runtime_error(format("read error: %s", strerror(errno)));
                 }
                 if (ret == 0) {
+                    // EOF: allow if this read was only pulling alignment padding past file end
+                    off_t pos = lseek(fd, 0, SEEK_CUR);
+                    if (pos != -1 && (size_t) pos == size) {
+                        std::memset(reinterpret_cast<char *>(ptr) + bytes_read, 0, len - bytes_read);
+                        return;
+                    }
                     throw std::runtime_error("unexpectedly reached end of file");
                 }
 
-                successful = true;
+                bytes_read += (size_t) ret;
             }
         }
     }
