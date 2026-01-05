@@ -66,7 +66,7 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
     };
 }
 
-int main(int argc, char ** argv, char ** envp) {
+int main(int argc, char ** argv) {
     // own arguments required by this example
     common_params params;
 
@@ -126,7 +126,7 @@ int main(int argc, char ** argv, char ** envp) {
     if (is_router_server) {
         // setup server instances manager
         try {
-            models_routes.emplace(params, argc, argv, envp);
+            models_routes.emplace(params, argc, argv);
         } catch (const std::exception & e) {
             LOG_ERR("%s: failed to initialize router models: %s\n", __func__, e.what());
             return 1;

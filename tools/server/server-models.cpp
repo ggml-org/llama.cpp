@@ -21,11 +21,13 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
+#include <windows.h>
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+extern char **environ;
 #endif
 
 #if defined(__APPLE__) && defined(__MACH__)
@@ -99,6 +101,49 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     }
 }
 
+#ifdef _WIN32
+static std::string wide_to_utf8(const wchar_t * ws) {
+    if (!ws || !*ws) {
+        return {};
+    }
+
+    const int len = static_cast<int>(std::wcslen(ws));
+    const int bytes = WideCharToMultiByte(CP_UTF8, 0, ws, len, nullptr, 0, nullptr, nullptr);
+    if (bytes == 0) {
+        return {};
+    }
+
+    std::string utf8(bytes, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, ws, len, utf8.data(), bytes, nullptr, nullptr);
+
+    return utf8;
+}
+#endif
+
+static std::vector<std::string> get_environment() {
+    std::vector<std::string> env;
+
+#ifdef _WIN32
+    LPWCH env_block = GetEnvironmentStringsW();
+    if (!env_block) {
+        return env;
+    }
+    for (LPWCH e = env_block; *e; e += wcslen(e) + 1) {
+        env.emplace_back(wide_to_utf8(e));
+    }
+    FreeEnvironmentStringsW(env_block);
+#else
+    if (environ == nullptr) {
+        return env;
+    }
+    for (char ** e = environ; *e != nullptr; e++) {
+        env.emplace_back(*e);
+    }
+#endif
+
+    return env;
+}
+
 void server_model_meta::update_args(common_preset_context & ctx_preset, std::string bin_path) {
     // update params
     unset_reserved_args(preset, false);
@@ -117,14 +162,11 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
 server_models::server_models(
         const common_params & params,
         int argc,
-        char ** argv,
-        char ** envp)
+        char ** argv)
             : ctx_preset(LLAMA_EXAMPLE_SERVER),
               base_params(params),
+              base_env(get_environment()),
               base_preset(ctx_preset.load_from_args(argc, argv)) {
-    for (char ** env = envp; *env != nullptr; env++) {
-        base_env.push_back(std::string(*env));
-    }
     // clean up base preset
     unset_reserved_args(base_preset, true);
     // set binary path
