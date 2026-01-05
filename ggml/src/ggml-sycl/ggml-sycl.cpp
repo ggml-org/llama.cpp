@@ -11688,6 +11688,40 @@ static bool try_xmx_sorted_moe(
         GGML_SYCL_DEBUG("[MoE] Fused XMX path failed, falling back to per-expert dispatch\n");
     }
 
+    // Try MXFP4 fused kernel path (single kernel for all experts)
+    else if (fused_enabled && src0->type == GGML_TYPE_MXFP4 && is_soa) {
+        // Extract sorted_token_ids from token_map for fused kernel
+        stream->parallel_for(sycl::range<1>(total_pairs), [=](sycl::id<1> idx) {
+            sorted_token_ids[idx] = token_map[idx].original_idx;
+        }).wait();
+
+        // Pre-quantize ALL sorted tokens for fused kernel
+        moe_xmx::preprocess_tokens_q8(
+            tokens_sorted, q_tokens, token_scales,
+            total_pairs, in_dim, *stream);
+
+        // MXFP4 SoA weight pointers
+        const uint8_t* base_qs = static_cast<const uint8_t*>(src0->data);
+        const uint8_t* base_e = base_qs + soa_total_qs_mxfp4;
+
+        bool fused_ok = try_fused_xmx_moe_mxfp4_soa(
+            base_qs, base_e,
+            q_tokens, token_scales,
+            sorted_token_ids, expert_offsets,
+            sorted_output,
+            static_cast<int>(total_pairs), static_cast<int>(n_experts),
+            out_dim, in_dim,
+            mxfp4_qs_per_expert, nblocks_per_expert,
+            ctx.device, *stream);
+
+        if (fused_ok) {
+            GGML_SYCL_DEBUG("[MoE] Fused MXFP4 XMX path succeeded\n");
+            stream->wait();
+            goto scatter_back;
+        }
+        GGML_SYCL_DEBUG("[MoE] Fused MXFP4 XMX path failed, falling back to per-expert dispatch\n");
+    }
+
     for (int64_t e = 0; e < n_experts; e++) {
         if (h_counts[e] == 0) continue;
 
