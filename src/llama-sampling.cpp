@@ -1718,6 +1718,136 @@ struct llama_sampler * llama_sampler_init_min_p(float p, size_t min_keep) {
     );
 }
 
+// tail-free
+
+struct llama_sampler_tail_free : public llama_sampler_backend {
+    const float  z;        // threshold
+    const size_t min_keep; // keep at least this many
+
+    std::vector<llama_token_data> buf_sort;
+};
+
+static const char * llama_sampler_tail_free_name(const struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_tail_free *) smpl->ctx;
+    return sctx->get_name();
+}
+
+static struct llama_sampler * llama_sampler_tail_free_clone(const struct llama_sampler * smpl) {
+    const auto * ctx = (const llama_sampler_tail_free *) smpl->ctx;
+    return llama_sampler_init_tail_free(ctx->z, ctx->min_keep);
+}
+
+static void llama_sampler_tail_free_free(struct llama_sampler * smpl) {
+    delete (llama_sampler_tail_free *) smpl->ctx;
+}
+
+static size_t llama_tail_free_keep_count(const llama_token_data * pdata, size_t n, float z, size_t min_keep) {
+    if (n <= min_keep) return n;
+    if (n < 3) return std::max(min_keep, n);
+
+    // Compute max curvature for normalization.
+    float max_d2 = 0.0f;
+    for (size_t i = 0; i + 2 < n; ++i) {
+        const float d2 = pdata[i].p - 2.0f*pdata[i + 1].p + pdata[i + 2].p;
+        if (d2 > max_d2) max_d2 = d2;
+    }
+
+    // Flat / monotone curve -> no strong knee -> keep all
+    if (max_d2 <= 0.0f) return n;
+
+    const float inv = 1.0f / (max_d2 + 1e-12f);
+
+    // Find earliest i where normalized curvature exceeds z.
+    // If it trips at i, we keep up to i+2 (so we include the local neighborhood).
+    for (size_t i = 0; i + 2 < n; ++i) {
+        const float d2 = pdata[i].p - 2.0f*pdata[i + 1].p + pdata[i + 2].p;
+        const float norm = d2 * inv;
+
+        if (norm > z) {
+            size_t keep = i + 2;                // include i and i+1
+            keep = std::max(keep, min_keep);    // tail-safe
+            keep = std::min(keep, n);
+            return keep;
+        }
+    }
+
+    return n;
+}
+
+static void llama_sampler_tail_free_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+    auto * ctx = (llama_sampler_tail_free *) smpl->ctx;
+
+    // If z <= 0 => keep everything (empty filter)
+    if (ctx->z <= 0.0f) {
+        return;
+    }
+
+    llama_sampler_softmax_impl(cur_p, false);
+
+    size_t k = cur_p->size;
+    auto * pdata = cur_p->data;
+
+    auto & buf_sort = ctx->buf_sort;
+
+    // Same heuristic as top-p: partial sort for large unsorted arrays
+    if (!cur_p->sorted && cur_p->size > 1024) {
+        k = std::min<size_t>(256, cur_p->size);
+        llama_token_data_array_partial_sort(*cur_p, k, buf_sort);
+        pdata = buf_sort.data();
+    } else if (!cur_p->sorted) {
+        // small candidates -> sort inplace
+        llama_token_data_array_partial_sort_inplace(cur_p, k);
+    }
+
+    // Ensure fully sorted before curvature scan.
+    // If we only partial-sorted initially, we may need to expand to full sort.
+    if (!cur_p->sorted && k < cur_p->size) {
+        k = cur_p->size;
+        llama_token_data_array_partial_sort(*cur_p, k, buf_sort);
+        pdata = buf_sort.data();
+    }
+
+    const size_t keep = llama_tail_free_keep_count(pdata, cur_p->size, ctx->z, ctx->min_keep);
+
+    if (!cur_p->sorted) {
+        std::copy(buf_sort.data(), buf_sort.data() + keep, cur_p->data);
+        cur_p->sorted = true;
+    }
+
+    cur_p->size = keep;
+}
+
+static struct llama_sampler_i llama_sampler_tail_free_i = {
+    /* .name              = */ llama_sampler_tail_free_name,
+    /* .accept            = */ nullptr,
+    /* .apply             = */ llama_sampler_tail_free_apply,
+    /* .reset             = */ nullptr,
+    /* .clone             = */ llama_sampler_tail_free_clone,
+    /* .free              = */ llama_sampler_tail_free_free,
+    /* .backend_init      = */ nullptr,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ nullptr, // CPU-only first
+    /* .backend_set_input = */ nullptr,
+};
+
+struct llama_sampler * llama_sampler_init_tail_free(float z, size_t min_keep) {
+    const bool is_empty = z <= 0.0f;
+
+    if (is_empty) {
+        return llama_sampler_init_empty("?tail-free");
+    }
+
+    return llama_sampler_init(
+        /* .iface = */ &llama_sampler_tail_free_i,
+        /* .ctx   = */ new llama_sampler_tail_free {
+            ("tail-free"),
+            /* .z        = */ z,
+            /* .min_keep = */ min_keep,
+            /* .buf_sort = */ {},
+        }
+    );
+}
+
 // typical
 
 struct llama_sampler_typical {
