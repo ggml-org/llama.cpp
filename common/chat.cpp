@@ -421,7 +421,7 @@ template <> json common_chat_msgs_to_json_oaicompat(const std::vector<common_cha
                     { "function",
                      {
                           { "name", tool_call.name },
-                          { "arguments", tool_call.arguments },
+                          { "arguments", json::parse(tool_call.arguments) },
                       }                      },
                 };
                 if (!tool_call.id.empty()) {

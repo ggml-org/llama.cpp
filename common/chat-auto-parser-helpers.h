@@ -8,30 +8,17 @@
 
 using json = nlohmann::ordered_json;
 
-// Forward declaration of minja::chat_template
 namespace minja {
 class chat_template;
 }
-
-// ============================================================================
-// String Manipulation Helpers
-// ============================================================================
 
 void   trim_whitespace(std::string & str);
 void   trim_trailing_newlines(std::string & str);
 size_t count_non_whitespace(const std::string & str);
 size_t find_last_of_any(const std::string & str, const std::string & chars, size_t start_pos);
 
-// ============================================================================
-// Tag Extraction Helpers
-// ============================================================================
-
 std::string extract_tag_name(const std::string & tag);
 std::string create_closing_tag(const std::string & opening_tag);
-
-// ============================================================================
-// Common String Helpers
-// ============================================================================
 
 std::string find_common_prefix(const std::vector<std::string> & strings);
 std::string find_common_suffix_generic(const std::vector<std::string> & strings);
@@ -39,20 +26,12 @@ std::string find_common_substring_limited(const std::vector<std::string> & strin
                                           size_t                           max_length,
                                           const std::string &              delimiters);
 
-// ============================================================================
-// Additional Helper Functions
-// ============================================================================
-
 bool        string_ends_with(const std::string & str, const std::string & suffix);
 std::string apply_template(const minja::chat_template &    tmpl,
                            const struct templates_params & inputs,
                            const std::optional<json> &     messages_override  = std::nullopt,
                            const std::optional<json> &     tools_override     = std::nullopt,
                            const std::optional<json> &     additional_context = std::nullopt);
-
-// ============================================================================
-// Special Token Boundary Detection (<|...|> tokens)
-// ============================================================================
 
 // Adjust a marker string to ensure it ends at a complete <|...|> token boundary
 // This prevents truncation mid-token
@@ -77,10 +56,6 @@ size_t get_token_closer_length(const std::string & str, size_t pos);
 // Strip EOS/end-of-sentence tokens from the end of a string
 // Handles both standard (<|eos|>, <|eot_id|>) and fullwidth (<｜end▁of▁sentence｜>) formats
 std::string strip_eos_token(const std::string & str);
-
-// ============================================================================
-// Template Pattern Analysis Helpers
-// ============================================================================
 
 // Internal structure for differential analysis (used during pattern extraction)
 struct internal_discovered_pattern {

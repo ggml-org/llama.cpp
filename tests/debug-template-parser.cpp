@@ -13,10 +13,6 @@
 
 using json = nlohmann::ordered_json;
 
-// ============================================================================
-// Command-line options
-// ============================================================================
-
 enum class output_mode {
     ANALYSIS,  // Only output analysis results (default)
     TEMPLATE,  // Only output rendered template
@@ -43,10 +39,6 @@ struct debug_options {
     output_mode       mode             = output_mode::BOTH;
     input_message_type input_message     = input_message_type::NONE;
 };
-
-// ============================================================================
-// Helper functions
-// ============================================================================
 
 static std::string read_file(const std::string & path) {
     std::ifstream fin(path, std::ios::binary);
@@ -168,10 +160,6 @@ static bool parse_options(int argc, char ** argv, debug_options & opts) {
     return true;
 }
 
-// ============================================================================
-// Test message builders
-// ============================================================================
-
 static json build_user_message() {
     return json{
         { "role",    "user"                               },
@@ -264,10 +252,6 @@ static json build_tools_definition() {
                                   { "parameters", parameters_schema } } } }
     });
 }
-
-// ============================================================================
-// Template rendering
-// ============================================================================
 
 static void render_scenario(const minja::chat_template & tmpl,
                             const std::string &          scenario_name,
