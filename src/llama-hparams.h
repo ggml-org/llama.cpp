@@ -162,6 +162,9 @@ struct llama_hparams {
     // for Classifiers
     uint32_t n_cls_out = 1;
 
+    // output embedding dimension (0 = use n_embd)
+    uint32_t n_embd_out = 0;
+
     // llama4 smallthinker
     uint32_t n_moe_layer_step        = 0;
     uint32_t n_no_rope_layer_step    = 4;
@@ -233,6 +236,9 @@ struct llama_hparams {
 
     // dimension of main + auxiliary input embeddings
     uint32_t n_embd_inp() const;
+
+    // dimension of output embeddings
+    uint32_t get_n_embd_out() const;
 
     // dimension of key embeddings across all k-v heads
     uint32_t n_embd_k_gqa(uint32_t il = 0) const;
