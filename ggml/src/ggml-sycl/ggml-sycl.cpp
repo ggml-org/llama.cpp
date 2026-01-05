@@ -68,6 +68,7 @@
 #include "ggml-sycl/fused-moe-esimd.hpp"
 #include "ggml-sycl/moe-sort.hpp"
 #include "ggml-sycl/moe-xmx.hpp"
+#include "ggml-sycl/moe-xmx-fused.hpp"
 #include "ggml-sycl/fused-ffn.hpp"
 #include "ggml-sycl/gpu-sampler.hpp"
 #include "ggml-sycl/cont-batching.hpp"
@@ -11419,6 +11420,8 @@ static bool try_xmx_sorted_moe(
     static bool enabled = getenv("GGML_SYCL_XMX_MOE") != nullptr;
     if (!enabled) return false;
 
+    static bool fused_enabled = getenv("GGML_SYCL_XMX_MOE_FUSED") != nullptr;
+
     // Get XMX capabilities from cached device info
     auto& caps = ggml_sycl_info().devices[ctx.device].xmx_caps;
     if (!caps.supported || !caps.supports_int8) {
@@ -11477,8 +11480,11 @@ static bool try_xmx_sorted_moe(
         total_pairs * in_dim, *stream);
     MoETokenMapping* token_map = sycl::malloc_device<MoETokenMapping>(
         total_pairs, *stream);
+    int32_t* sorted_token_ids = fused_enabled ?
+        sycl::malloc_device<int32_t>(total_pairs, *stream) : nullptr;
     int32_t* expert_counts = sycl::malloc_device<int32_t>(n_experts, *stream);
-    int32_t* expert_offsets = sycl::malloc_device<int32_t>(n_experts, *stream);
+    // Allocate n_experts+1 for fused path (needs cumulative offsets including total)
+    int32_t* expert_offsets = sycl::malloc_device<int32_t>(n_experts + 1, *stream);
     sycl::half* sorted_output = sycl::malloc_device<sycl::half>(
         total_pairs * out_dim, *stream);
 
@@ -11487,9 +11493,19 @@ static bool try_xmx_sorted_moe(
         // Free any successfully allocated buffers
         if (tokens_sorted) sycl::free(tokens_sorted, *stream);
         if (token_map) sycl::free(token_map, *stream);
+        if (sorted_token_ids) sycl::free(sorted_token_ids, *stream);
         if (expert_counts) sycl::free(expert_counts, *stream);
         if (expert_offsets) sycl::free(expert_offsets, *stream);
         if (sorted_output) sycl::free(sorted_output, *stream);
+        return false;
+    }
+    if (fused_enabled && !sorted_token_ids) {
+        GGML_SYCL_DEBUG("[XMX MoE] Failed to allocate sorted_token_ids for fused path\n");
+        sycl::free(tokens_sorted, *stream);
+        sycl::free(token_map, *stream);
+        sycl::free(expert_counts, *stream);
+        sycl::free(expert_offsets, *stream);
+        sycl::free(sorted_output, *stream);
         return false;
     }
 
@@ -11508,6 +11524,7 @@ static bool try_xmx_sorted_moe(
         GGML_SYCL_DEBUG("[XMX MoE] Failed to allocate expert_write_pos\n");
         sycl::free(tokens_sorted, *stream);
         sycl::free(token_map, *stream);
+        if (sorted_token_ids) sycl::free(sorted_token_ids, *stream);
         sycl::free(expert_counts, *stream);
         sycl::free(expert_offsets, *stream);
         sycl::free(sorted_output, *stream);
@@ -11525,6 +11542,7 @@ static bool try_xmx_sorted_moe(
         GGML_SYCL_DEBUG("[XMX MoE] Failed to allocate tokens_f16_input\n");
         sycl::free(tokens_sorted, *stream);
         sycl::free(token_map, *stream);
+        if (sorted_token_ids) sycl::free(sorted_token_ids, *stream);
         sycl::free(expert_counts, *stream);
         sycl::free(expert_offsets, *stream);
         sycl::free(sorted_output, *stream);
@@ -11569,6 +11587,7 @@ static bool try_xmx_sorted_moe(
         sycl::free(tokens_f16_input, *stream);
         sycl::free(tokens_sorted, *stream);
         sycl::free(token_map, *stream);
+        if (sorted_token_ids) sycl::free(sorted_token_ids, *stream);
         sycl::free(expert_counts, *stream);
         sycl::free(expert_offsets, *stream);
         sycl::free(expert_write_pos, *stream);
@@ -11591,6 +11610,7 @@ static bool try_xmx_sorted_moe(
             sycl::free(tokens_f16_input, *stream);
             sycl::free(tokens_sorted, *stream);
             sycl::free(token_map, *stream);
+            if (sorted_token_ids) sycl::free(sorted_token_ids, *stream);
             sycl::free(expert_counts, *stream);
             sycl::free(expert_offsets, *stream);
             sycl::free(expert_write_pos, *stream);
@@ -11623,6 +11643,50 @@ static bool try_xmx_sorted_moe(
     // When is_soa or is_coalesced is true (from tensor metadata), src0->data
     // already points to device memory with the correct layout - no cache needed.
     // This matches how fused ESIMD uses src0->data directly.
+
+    // Q8_0 stride per expert (bytes of qs data)
+    const int64_t q8_qs_per_expert = nblocks_per_expert * QK8_0;
+
+    // Try fused kernel path (single kernel for all experts)
+    if (fused_enabled && src0->type == GGML_TYPE_Q8_0 && is_soa) {
+        // Extract sorted_token_ids from token_map for fused kernel
+        // token_map[i].original_idx -> sorted_token_ids[i]
+        stream->parallel_for(sycl::range<1>(total_pairs), [=](sycl::id<1> idx) {
+            sorted_token_ids[idx] = token_map[idx].original_idx;
+        }).wait();
+
+        // Pre-quantize ALL tokens (in original order) for fused kernel
+        // The fused kernel indexes by original token ID, so we quantize tokens_f16_input
+        // Note: tokens_f16_input is n_tokens x in_dim, but we need total_pairs x in_dim
+        // For now, quantize the sorted tokens and adjust indexing
+        moe_xmx::preprocess_tokens_q8(
+            tokens_sorted, q_tokens, token_scales,
+            total_pairs, in_dim, *stream);
+
+        // SoA weight pointers
+        const int8_t* base_qs = static_cast<const int8_t*>(src0->data);
+        const sycl::half* base_d = reinterpret_cast<const sycl::half*>(
+            static_cast<const char*>(src0->data) + soa_total_qs_q8);
+
+        bool fused_ok = try_fused_xmx_moe_q8_0(
+            base_qs, base_d,
+            q_tokens, token_scales,
+            sorted_token_ids, expert_offsets,
+            sorted_output,
+            static_cast<int>(total_pairs), static_cast<int>(n_experts),
+            out_dim, in_dim,
+            q8_qs_per_expert,
+            ctx.device, *stream);
+
+        if (fused_ok) {
+            GGML_SYCL_DEBUG("[MoE] Fused XMX path succeeded\n");
+            // Wait for fused kernel to complete before scatter
+            stream->wait();
+            // Skip per-expert loop, go directly to scatter-back
+            goto scatter_back;
+        }
+        GGML_SYCL_DEBUG("[MoE] Fused XMX path failed, falling back to per-expert dispatch\n");
+    }
 
     for (int64_t e = 0; e < n_experts; e++) {
         if (h_counts[e] == 0) continue;
@@ -11731,6 +11795,10 @@ static bool try_xmx_sorted_moe(
         }
     }
 
+    // Single sync after all expert kernels submitted (avoids per-kernel stalls)
+    stream->wait();
+
+scatter_back:
     // Free pre-quantization buffers
     sycl::free(q_tokens, *stream);
     sycl::free(token_scales, *stream);
@@ -11746,6 +11814,7 @@ static bool try_xmx_sorted_moe(
     if (expert_scale_buf) sycl::free(expert_scale_buf, *stream);
     sycl::free(tokens_sorted, *stream);
     sycl::free(token_map, *stream);
+    if (sorted_token_ids) sycl::free(sorted_token_ids, *stream);
     sycl::free(expert_counts, *stream);
     sycl::free(expert_offsets, *stream);
     sycl::free(expert_write_pos, *stream);
