@@ -219,4 +219,275 @@ inline void moe_scatter_results_f16_to_f32(const sycl::half * sorted_output,  //
         .wait();
 }
 
+// ============================================================================
+// Graph-compatible async versions (no .wait() calls)
+// These functions return sycl::event for dependency chaining
+// ============================================================================
+
+// Async F32 to F16 conversion - returns event for chaining
+inline sycl::event moe_convert_f32_to_f16_async(const char *  tokens_f32,
+                                                 sycl::half *  tokens_f16,
+                                                 int64_t       n_tokens,
+                                                 int64_t       hidden_dim,
+                                                 int64_t       ne11,
+                                                 int64_t       nb1,
+                                                 int64_t       nb2,
+                                                 sycl::queue & queue) {
+    constexpr int SG_SIZE        = 16;
+    int64_t       n_input_rows   = ne11 * n_tokens;
+    int64_t       total_elements = n_input_rows * hidden_dim;
+
+    return queue.parallel_for(sycl::nd_range<1>(((total_elements + SG_SIZE - 1) / SG_SIZE) * SG_SIZE, SG_SIZE),
+                              [=](sycl::nd_item<1> item) {
+                                  int64_t idx = item.get_global_id(0);
+                                  if (idx < total_elements) {
+                                      int64_t       row_idx   = idx / hidden_dim;
+                                      int64_t       dim_idx   = idx % hidden_dim;
+                                      int64_t       token_idx = row_idx / ne11;
+                                      int64_t       id_slot   = row_idx % ne11;
+                                      const float * input_row =
+                                          reinterpret_cast<const float *>(tokens_f32 + token_idx * nb2 + id_slot * nb1);
+                                      tokens_f16[idx] = sycl::half(input_row[dim_idx]);
+                                  }
+                              });
+}
+
+// Async token counting - returns event for chaining
+template <int MAX_EXPERTS = 64>
+sycl::event moe_count_tokens_per_expert_async(const int32_t * expert_ids,
+                                               int32_t *       expert_counts,
+                                               int64_t         n_tokens,
+                                               int64_t         n_ids,
+                                               sycl::queue &   queue,
+                                               sycl::event     dep_event = {}) {
+    // Zero counts (with dependency on previous event if provided)
+    sycl::event memset_event;
+    if (dep_event.get_info<sycl::info::event::command_execution_status>() !=
+        sycl::info::event_command_status::complete) {
+        memset_event = queue.memset(expert_counts, 0, MAX_EXPERTS * sizeof(int32_t), { dep_event });
+    } else {
+        memset_event = queue.memset(expert_counts, 0, MAX_EXPERTS * sizeof(int32_t));
+    }
+
+    // Parallel histogram
+    return queue.submit([&](sycl::handler & cgh) {
+        cgh.depends_on(memset_event);
+        cgh.parallel_for(sycl::range<1>(n_tokens * n_ids), [=](sycl::id<1> idx) {
+            int expert = expert_ids[idx];
+            if (expert >= 0 && expert < MAX_EXPERTS) {
+                sycl::atomic_ref<int32_t, sycl::memory_order::relaxed, sycl::memory_scope::device,
+                                 sycl::access::address_space::global_space>(expert_counts[expert])
+                    .fetch_add(1);
+            }
+        });
+    });
+}
+
+// GPU-side exclusive prefix sum (parallel scan) for small arrays
+// Works well for n_experts <= 64 (typical MoE size)
+inline sycl::event moe_compute_expert_offsets_gpu(const int32_t * expert_counts,
+                                                   int32_t *       expert_offsets,
+                                                   int64_t         n_experts,
+                                                   sycl::queue &   queue,
+                                                   sycl::event     dep_event = {}) {
+    // For small n_experts, use single work-group prefix sum
+    // Output: expert_offsets[i] = sum of counts[0..i-1] (exclusive)
+    //         expert_offsets[n_experts] = total (inclusive sum)
+    return queue.submit([&](sycl::handler & cgh) {
+        if (dep_event.get_info<sycl::info::event::command_execution_status>() !=
+            sycl::info::event_command_status::complete) {
+            cgh.depends_on(dep_event);
+        }
+
+        // Use single work-group with local memory for prefix sum
+        constexpr int WG_SIZE = 64;  // Must be >= n_experts
+        sycl::local_accessor<int32_t, 1> local_data(WG_SIZE * 2, cgh);
+
+        cgh.parallel_for(sycl::nd_range<1>(WG_SIZE, WG_SIZE), [=](sycl::nd_item<1> item) {
+            int tid = item.get_local_id(0);
+
+            // Load data into local memory (with bounds check)
+            local_data[tid]            = (tid < n_experts) ? expert_counts[tid] : 0;
+            local_data[tid + WG_SIZE]  = 0;
+            item.barrier(sycl::access::fence_space::local_space);
+
+            // Hillis-Steele parallel inclusive scan
+            int offset = 1;
+            for (int d = WG_SIZE; d > 0; d >>= 1) {
+                if (tid < d && tid >= offset) {
+                    local_data[tid + WG_SIZE] = local_data[tid - offset] + local_data[tid];
+                }
+                item.barrier(sycl::access::fence_space::local_space);
+
+                // Swap buffers
+                if (tid < WG_SIZE) {
+                    int temp                  = local_data[tid];
+                    local_data[tid]           = local_data[tid + WG_SIZE];
+                    local_data[tid + WG_SIZE] = temp;
+                }
+                item.barrier(sycl::access::fence_space::local_space);
+                offset <<= 1;
+            }
+
+            // Convert inclusive scan to exclusive scan and write output
+            // exclusive[i] = inclusive[i-1], exclusive[0] = 0
+            if (tid == 0) {
+                expert_offsets[0] = 0;
+            }
+            if (tid < n_experts - 1) {
+                expert_offsets[tid + 1] = local_data[tid];
+            }
+            // Write total at the end
+            if (tid == n_experts - 1) {
+                expert_offsets[n_experts] = local_data[tid];
+            }
+        });
+    });
+}
+
+// Simpler GPU-side prefix sum using sequential single-thread (reliable for n_experts <= 64)
+inline sycl::event moe_compute_expert_offsets_gpu_simple(const int32_t * expert_counts,
+                                                          int32_t *       expert_offsets,
+                                                          int64_t         n_experts,
+                                                          sycl::queue &   queue,
+                                                          sycl::event     dep_event = {}) {
+    return queue.submit([&](sycl::handler & cgh) {
+        if (dep_event.get_info<sycl::info::event::command_execution_status>() !=
+            sycl::info::event_command_status::complete) {
+            cgh.depends_on(dep_event);
+        }
+
+        // Single work-item does sequential prefix sum (simple and correct for small n_experts)
+        cgh.single_task([=]() {
+            int32_t sum       = 0;
+            expert_offsets[0] = 0;
+            for (int64_t i = 0; i < n_experts; i++) {
+                sum += expert_counts[i];
+                expert_offsets[i + 1] = sum;
+            }
+        });
+    });
+}
+
+// Async token sorting - returns event for chaining
+template <typename T>
+sycl::event moe_sort_tokens_by_expert_async(const T *         tokens_in,
+                                             T *               tokens_sorted,
+                                             const int32_t *   expert_ids,
+                                             int32_t *         expert_write_pos,
+                                             MoETokenMapping * token_map,
+                                             int64_t           n_tokens,
+                                             int64_t           n_ids,
+                                             int64_t           ne11,
+                                             int64_t           hidden_dim,
+                                             int64_t           n_experts,
+                                             sycl::queue &     queue,
+                                             sycl::event       dep_event = {}) {
+    return queue.submit([&](sycl::handler & cgh) {
+        if (dep_event.get_info<sycl::info::event::command_execution_status>() !=
+            sycl::info::event_command_status::complete) {
+            cgh.depends_on(dep_event);
+        }
+
+        cgh.parallel_for(sycl::range<1>(n_tokens * n_ids), [=](sycl::id<1> idx) {
+            int64_t token_idx = idx / n_ids;
+            int64_t id_slot   = idx % n_ids;
+            int     expert    = expert_ids[idx];
+
+            if (expert < 0 || expert >= n_experts) {
+                return;
+            }
+
+            // Atomically claim a slot for this expert
+            int32_t write_pos = sycl::atomic_ref<int32_t, sycl::memory_order::relaxed, sycl::memory_scope::device,
+                                                 sycl::access::address_space::global_space>(expert_write_pos[expert])
+                                    .fetch_add(1);
+
+            // Compute input row index with broadcast
+            int64_t input_row = token_idx * ne11 + (id_slot % ne11);
+
+            // Copy token data
+            for (int64_t d = 0; d < hidden_dim; d++) {
+                tokens_sorted[write_pos * hidden_dim + d] = tokens_in[input_row * hidden_dim + d];
+            }
+
+            // Record mapping for scatter-back
+            token_map[write_pos].original_idx = static_cast<int32_t>(idx);
+            token_map[write_pos].expert_idx   = expert;
+        });
+    });
+}
+
+// Async scatter results with F16->F32 conversion - returns event for chaining
+inline sycl::event moe_scatter_results_f16_to_f32_async(const sycl::half *      sorted_output,
+                                                         char *                  final_output,
+                                                         const MoETokenMapping * token_map,
+                                                         int64_t                 total_pairs,
+                                                         int64_t                 output_dim,
+                                                         int64_t                 n_ids,
+                                                         int64_t                 out_nb1,
+                                                         int64_t                 out_nb2,
+                                                         sycl::queue &           queue,
+                                                         sycl::event             dep_event = {}) {
+    return queue.submit([&](sycl::handler & cgh) {
+        if (dep_event.get_info<sycl::info::event::command_execution_status>() !=
+            sycl::info::event_command_status::complete) {
+            cgh.depends_on(dep_event);
+        }
+
+        cgh.parallel_for(sycl::range<1>(total_pairs), [=](sycl::id<1> idx) {
+            int32_t original_pos = token_map[idx].original_idx;
+            int32_t token_idx    = original_pos / n_ids;
+            int32_t id_slot      = original_pos % n_ids;
+
+            float * out_ptr = reinterpret_cast<float *>(final_output + token_idx * out_nb2 + id_slot * out_nb1);
+
+            for (int64_t d = 0; d < output_dim; d++) {
+                out_ptr[d] = static_cast<float>(sorted_output[idx * output_dim + d]);
+            }
+        });
+    });
+}
+
+// Compute tile mapping for fused XMX kernel
+// Converts expert counts to tile counts and computes cumulative tile offsets
+// This enables work-groups to self-assign to experts via binary search
+//
+// Output:
+//   expert_tile_offsets[i] = cumulative tiles for experts 0..i-1
+//   expert_tile_offsets[n_experts] = total_tiles (for grid launch size)
+//
+// Formula: tiles_for_expert[e] = ceil(expert_counts[e] / tile_M)
+inline sycl::event moe_compute_tile_mapping(
+    const int32_t * expert_counts,       // [n_experts] token counts per expert
+    int32_t *       expert_tile_offsets, // [n_experts + 1] output tile offsets
+    int32_t *       total_tiles_out,     // [1] output: total tiles for grid launch
+    int64_t         n_experts,
+    int64_t         tile_M,              // XMX tile size in M dimension (typically 32)
+    sycl::queue &   queue,
+    sycl::event     dep_event = {}) {
+
+    return queue.submit([&](sycl::handler & cgh) {
+        if (dep_event.get_info<sycl::info::event::command_execution_status>() !=
+            sycl::info::event_command_status::complete) {
+            cgh.depends_on(dep_event);
+        }
+
+        // Single work-item computes prefix sum of tile counts
+        cgh.single_task([=]() {
+            int32_t cumulative = 0;
+            expert_tile_offsets[0] = 0;
+
+            for (int64_t e = 0; e < n_experts; e++) {
+                int32_t count = expert_counts[e];
+                int32_t tiles = (count + tile_M - 1) / tile_M;  // ceil division
+                cumulative += tiles;
+                expert_tile_offsets[e + 1] = cumulative;
+            }
+
+            *total_tiles_out = cumulative;
+        });
+    });
+}
+
 #endif  // GGML_SYCL_MOE_SORT_HPP
