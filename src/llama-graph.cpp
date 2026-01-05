@@ -1326,6 +1326,10 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
 
     res->add_input(std::move(inp));
 
+    // make sure the produced embeddings are immediately materialized in the ggml graph
+    // ref: https://github.com/ggml-org/llama.cpp/pull/18599
+    ggml_build_forward_expand(gf, cur);
+
     return cur;
 }
 

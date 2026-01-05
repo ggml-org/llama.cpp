@@ -218,6 +218,56 @@ cmake .. -G Ninja `
 ninja
 ```
 
+## Linux
+
+The two steps just above also apply to Linux. When building for linux, the commands are mostly the same as those for PowerShell on Windows, but in the second step they do not have the `-DCMAKE_TOOLCHAIN_FILE` parameter, and then in both steps the backticks are replaced with back slashes.
+
+If not installed already, install Git, CMake, Clang, Ninja and Python, then run in the terminal the following:
+
+### I. Setup Environment
+
+1. **Install OpenCL Headers and Library**
+
+```bash
+mkdir -p ~/dev/llm
+
+cd ~/dev/llm
+git clone https://github.com/KhronosGroup/OpenCL-Headers && cd OpenCL-Headers
+mkdir build && cd build
+cmake .. -G Ninja \
+  -DBUILD_TESTING=OFF \
+  -DOPENCL_HEADERS_BUILD_TESTING=OFF \
+  -DOPENCL_HEADERS_BUILD_CXX_TESTS=OFF \
+  -DCMAKE_INSTALL_PREFIX="$HOME/dev/llm/opencl"
+cmake --build . --target install
+
+cd ~/dev/llm
+git clone https://github.com/KhronosGroup/OpenCL-ICD-Loader && cd OpenCL-ICD-Loader
+mkdir build && cd build
+cmake .. -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl" \
+  -DCMAKE_INSTALL_PREFIX="$HOME/dev/llm/opencl"
+cmake --build . --target install
+```
+
+### II. Build llama.cpp
+
+```bash
+mkdir -p ~/dev/llm
+cd ~/dev/llm
+
+git clone https://github.com/ggml-org/llama.cpp && cd llama.cpp
+mkdir build && cd build
+
+cmake .. -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_PREFIX_PATH="$HOME/dev/llm/opencl" \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DGGML_OPENCL=ON
+ninja
+```
+
 ## Known Issues
 
 - Flash attention does not always improve performance.
