@@ -9,7 +9,7 @@
 #include <fstream>
 #include <algorithm>
 
-// most of the code here is copied from whisper.cpp
+// some of the code here is copied from whisper.cpp
 
 constexpr bool DEBUG = false;
 
@@ -20,10 +20,9 @@ struct mtmd_audio_mel_filters {
     std::vector<float> data;
 };
 
-// note: this global cache is shared among all preprocessors
-//       if we want to use multiple preprocessors at the same time,
-//       we will need to enclose it in the preprocessor class in the future
-static struct mtmd_audio_global_cache {
+// cache for audio processing
+// each processor instance owns its own cache
+struct mtmd_audio_cache {
     // precomputed sin/cos table for FFT
     std::vector<float> sin_vals;
     std::vector<float> cos_vals;
@@ -137,77 +136,146 @@ static struct mtmd_audio_global_cache {
             }
         }
     }
-} g_cache;
+};
 
-// naive Discrete Fourier Transform
-// input is real-valued
-// output is complex-valued
-static void dft(const float * in, int N, float * out) {
-    const int n_sin_cos_vals = g_cache.sin_vals.size();
-    const int sin_cos_step = n_sin_cos_vals / N;
+// Unified DFT implementation for both forward and inverse transforms
+// Template parameters:
+//   Inverse: false = DFT with exp(-2πi·k·n/N), no scaling
+//            true  = IDFT with exp(+2πi·k·n/N), scales by 1/N
+//   RealInput: true = input is real-valued (stride 1), avoids imaginary computations
+//              false = input is complex-valued (interleaved real/imag, stride 2)
+template <bool Inverse, bool RealInput>
+static void dft_impl(const mtmd_audio_cache & cache, const float * in, int N, float * out) {
+    const int n_sin_cos_vals = cache.sin_vals.size();
+    const int sin_cos_step   = n_sin_cos_vals / N;
+
+    constexpr float sign  = Inverse ? 1.0f : -1.0f;
+    const float     scale = Inverse ? (1.0f / N) : 1.0f;
 
     for (int k = 0; k < N; k++) {
         float re = 0;
         float im = 0;
 
         for (int n = 0; n < N; n++) {
-            int idx = (k * n * sin_cos_step) % (n_sin_cos_vals); // t = 2*M_PI*k*n/N
-            re += in[n] * g_cache.cos_vals[idx]; // cos(t)
-            im -= in[n] * g_cache.sin_vals[idx]; // sin(t)
+            int   idx     = (k * n * sin_cos_step) % n_sin_cos_vals;
+            float cos_val = cache.cos_vals[idx];
+            float sin_val = cache.sin_vals[idx];
+
+            if constexpr (RealInput) {
+                // Real input: in_im = 0, simplifies to:
+                // re += in_re * cos_val
+                // im += sign * in_re * sin_val
+                float in_re = in[n];
+                re += in_re * cos_val;
+                im += sign * in_re * sin_val;
+            } else {
+                float in_re = in[n * 2 + 0];
+                float in_im = in[n * 2 + 1];
+                // (a + bi) * (cos + sign*i*sin) = (a*cos - sign*b*sin) + (sign*a*sin + b*cos)i
+                re += in_re * cos_val - sign * in_im * sin_val;
+                im += sign * in_re * sin_val + in_im * cos_val;
+            }
         }
 
-        out[k*2 + 0] = re;
-        out[k*2 + 1] = im;
+        out[k * 2 + 0] = re * scale;
+        out[k * 2 + 1] = im * scale;
     }
 }
 
-// Cooley-Tukey FFT
-// poor man's implementation - use something better
-// input is real-valued
-// output is complex-valued
-static void fft(float * in, int N, float * out) {
-    const int n_sin_cos_vals = g_cache.sin_vals.size();
+// Cooley-Tukey FFT/IFFT unified implementation
+// Template parameters:
+//   Inverse: false = FFT with exp(-2πi·k/N), no scaling
+//            true  = IFFT with exp(+2πi·k/N), scales by 0.5 at each level
+//   RealInput: true = input is real-valued (stride 1)
+//              false = input is complex-valued (interleaved real/imag, stride 2)
+template <bool Inverse, bool RealInput>
+static void fft_impl(const mtmd_audio_cache & cache, float * in, int N, float * out) {
+    const int n_sin_cos_vals = cache.sin_vals.size();
+
     if (N == 1) {
         out[0] = in[0];
-        out[1] = 0;
+        if constexpr (RealInput) {
+            out[1] = 0.0f;
+        } else {
+            out[1] = in[1];
+        }
         return;
     }
 
     const int half_N = N / 2;
-    if (N - half_N*2 == 1) {
-        dft(in, N, out);
+    if (N - half_N * 2 == 1) {
+        // Odd N: fall back to DFT
+        dft_impl<Inverse, RealInput>(cache, in, N, out);
         return;
     }
 
-    float* even = in + N;
-    for (int i = 0; i < half_N; ++i) {
-        even[i]= in[2*i];
-    }
-    float* even_fft = out + 2 * N;
-    fft(even, half_N, even_fft);
+    // Split into even and odd
+    if constexpr (RealInput) {
+        // Real input: stride is 1, copy only real values
+        float * even = in + N;
+        for (int i = 0; i < half_N; ++i) {
+            even[i] = in[2 * i];
+        }
+        float * even_fft = out + 2 * N;
+        fft_impl<Inverse, true>(cache, even, half_N, even_fft);
 
-    float* odd = even;
-    for (int i = 0; i < half_N; ++i) {
-        odd[i] = in[2*i + 1];
+        float * odd = even;
+        for (int i = 0; i < half_N; ++i) {
+            odd[i] = in[2 * i + 1];
+        }
+        float * odd_fft = even_fft + N;
+        fft_impl<Inverse, true>(cache, odd, half_N, odd_fft);
+    } else {
+        // Complex input: stride is 2, copy complex pairs
+        float * even = in + N * 2;
+        for (int i = 0; i < half_N; ++i) {
+            even[i * 2 + 0] = in[2 * i * 2 + 0];
+            even[i * 2 + 1] = in[2 * i * 2 + 1];
+        }
+        float * even_fft = out + 2 * N;
+        fft_impl<Inverse, false>(cache, even, half_N, even_fft);
+
+        float * odd = even;
+        for (int i = 0; i < half_N; ++i) {
+            odd[i * 2 + 0] = in[(2 * i + 1) * 2 + 0];
+            odd[i * 2 + 1] = in[(2 * i + 1) * 2 + 1];
+        }
+        float * odd_fft = even_fft + N;
+        fft_impl<Inverse, false>(cache, odd, half_N, odd_fft);
     }
-    float* odd_fft = even_fft + N;
-    fft(odd, half_N, odd_fft);
+
+    float * even_fft = out + 2 * N;
+    float * odd_fft  = even_fft + N;
 
     const int sin_cos_step = n_sin_cos_vals / N;
+
+    constexpr float sign  = Inverse ? 1.0f : -1.0f;
+    constexpr float scale = Inverse ? 0.5f : 1.0f;
+
     for (int k = 0; k < half_N; k++) {
         int idx = k * sin_cos_step; // t = 2*M_PI*k/N
-        float re =  g_cache.cos_vals[idx]; // cos(t)
-        float im = -g_cache.sin_vals[idx]; // sin(t)
+        float re = cache.cos_vals[idx];
+        float im = sign * cache.sin_vals[idx];
 
         float re_odd = odd_fft[2*k + 0];
         float im_odd = odd_fft[2*k + 1];
 
-        out[2*k + 0] = even_fft[2*k + 0] + re*re_odd - im*im_odd;
-        out[2*k + 1] = even_fft[2*k + 1] + re*im_odd + im*re_odd;
+        out[2*k + 0] = scale * (even_fft[2*k + 0] + re*re_odd - im*im_odd);
+        out[2*k + 1] = scale * (even_fft[2*k + 1] + re*im_odd + im*re_odd);
 
-        out[2*(k + half_N) + 0] = even_fft[2*k + 0] - re*re_odd + im*im_odd;
-        out[2*(k + half_N) + 1] = even_fft[2*k + 1] - re*im_odd - im*re_odd;
+        out[2*(k + half_N) + 0] = scale * (even_fft[2*k + 0] - re*re_odd + im*im_odd);
+        out[2*(k + half_N) + 1] = scale * (even_fft[2*k + 1] - re*im_odd - im*re_odd);
     }
+}
+
+// Forward FFT for real input (used by mel spectrogram)
+static void fft(const mtmd_audio_cache & cache, float * in, int N, float * out) {
+    fft_impl<false, true>(cache, in, N, out);
+}
+
+// Inverse FFT for complex input
+static void ifft(const mtmd_audio_cache & cache, float * in, int N, float * out) {
+    fft_impl<true, false>(cache, in, N, out);
 }
 
 struct filter_params {
@@ -222,20 +290,27 @@ struct filter_params {
     bool    norm_per_feature = false;
 };
 
-static void log_mel_spectrogram_worker_thread(int ith, const float * hann, const std::vector<float> & samples,
-                                              int n_samples, int frame_size, int frame_step, int n_threads,
-                                              const filter_params & params, mtmd_audio_mel & out) {
+static void log_mel_spectrogram_worker_thread(int                        ith,
+                                              const float *              hann,
+                                              const std::vector<float> & samples,
+                                              int                        n_samples,
+                                              int                        frame_size,
+                                              int                        frame_step,
+                                              int                        n_threads,
+                                              const filter_params &      params,
+                                              const mtmd_audio_cache &   cache,
+                                              mtmd_audio_mel &           out) {
     std::vector<float> fft_in(frame_size * 2, 0.0);
     std::vector<float> fft_out(frame_size * 2 * 2 * 2);
 
     int n_fft_bins = params.n_fft_bins;
     int i = ith;
 
-    const auto & filters = g_cache.filters;
+    const auto & filters = cache.filters;
 
     // make sure n_fft == 1 + (WHISPER_N_FFT / 2), bin_0 to bin_nyquist
     GGML_ASSERT(n_fft_bins == 1 + (frame_size / 2));
-    GGML_ASSERT(g_cache.sin_vals.size() == g_cache.cos_vals.size());
+    GGML_ASSERT(cache.sin_vals.size() == cache.cos_vals.size());
     // calculate FFT only when fft_in are not all zero
     for (; i < std::min(n_samples / frame_step + 1, out.n_len); i += n_threads) {
         const int offset = i * frame_step;
@@ -251,7 +326,7 @@ static void log_mel_spectrogram_worker_thread(int ith, const float * hann, const
         }
 
         // FFT
-        fft(fft_in.data(), frame_size, fft_out.data());
+        fft(cache, fft_in.data(), frame_size, fft_out.data());
 
         // Calculate modulus^2 of complex numbers
         // Use pow(fft_out[2 * j + 0], 2) + pow(fft_out[2 * j + 1], 2) causes inference quality problem? Interesting.
@@ -293,19 +368,19 @@ static void log_mel_spectrogram_worker_thread(int ith, const float * hann, const
 }
 
 // ref: https://github.com/openai/whisper/blob/main/whisper/audio.py#L110-L157
-static bool log_mel_spectrogram(
-        const float * samples,
-        const int     n_samples_in,
-        const int     n_threads,
-        const filter_params & params,
-        mtmd_audio_mel & out) {
+static bool log_mel_spectrogram(const float *            samples,
+                                const int                n_samples_in,
+                                const int                n_threads,
+                                const filter_params &    params,
+                                const mtmd_audio_cache & cache,
+                                mtmd_audio_mel &         out) {
     //const int64_t t_start_us = ggml_time_us();
 
     out.n_len_org = n_samples_in;
     int n_samples = n_samples_in;
 
     // Hann window
-    const float * hann = g_cache.hann_window.data();
+    const float * hann = cache.hann_window.data();
     const int frame_size = (params.n_fft_bins - 1) * 2;
     const int frame_step = params.hop_length;
 
@@ -375,11 +450,11 @@ static bool log_mel_spectrogram(
             workers[iw] = std::thread(
                     log_mel_spectrogram_worker_thread, iw + 1, hann, std::cref(samples_padded),
                     n_samples, frame_size, frame_step, n_threads,
-                    std::cref(params), std::ref(out));
+                    std::cref(params), std::cref(cache), std::ref(out));
         }
 
         // main thread
-        log_mel_spectrogram_worker_thread(0, hann, samples_padded, n_samples, frame_size, frame_step, n_threads, params, out);
+        log_mel_spectrogram_worker_thread(0, hann, samples_padded, n_samples, frame_size, frame_step, n_threads, params, cache, out);
         for (int iw = 0; iw < n_threads - 1; ++iw) {
             workers[iw].join();
         }
@@ -449,19 +524,25 @@ static bool log_mel_spectrogram(
 // mtmd_audio_preprocessor_whisper
 //
 
+struct mtmd_audio_preprocessor_whisper::impl {
+    mtmd_audio_cache cache;
+};
+
+mtmd_audio_preprocessor_whisper::mtmd_audio_preprocessor_whisper(const clip_ctx * ctx) :
+    mtmd_audio_preprocessor(ctx),
+    pimpl(std::make_unique<impl>()) {}
+
+mtmd_audio_preprocessor_whisper::~mtmd_audio_preprocessor_whisper() = default;
+
 void mtmd_audio_preprocessor_whisper::initialize() {
-    g_cache.fill_sin_cos_table(hparams.audio_n_fft);
-    g_cache.fill_hann_window(hparams.audio_window_len, true);
-    g_cache.fill_mel_filterbank_matrix(
-        hparams.n_mel_bins,
-        hparams.audio_n_fft,
-        hparams.audio_sample_rate);
+    pimpl->cache.fill_sin_cos_table(hparams.audio_n_fft);
+    pimpl->cache.fill_hann_window(hparams.audio_window_len, true);
+    pimpl->cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
 }
 
-bool mtmd_audio_preprocessor_whisper::preprocess(
-        const float * samples,
-        size_t n_samples,
-        std::vector<mtmd_audio_mel> & output) {
+bool mtmd_audio_preprocessor_whisper::preprocess(const float *                 samples,
+                                                 size_t                        n_samples,
+                                                 std::vector<mtmd_audio_mel> & output) {
     if (n_samples == 0) {
         // empty audio
         return false;
@@ -490,10 +571,10 @@ bool mtmd_audio_preprocessor_whisper::preprocess(
     params.use_natural_log  = false;
     params.norm_per_feature = false;
 
-    // make sure the global cache is initialized
-    GGML_ASSERT(!g_cache.sin_vals.empty());
-    GGML_ASSERT(!g_cache.cos_vals.empty());
-    GGML_ASSERT(!g_cache.filters.data.empty());
+    // make sure the cache is initialized
+    GGML_ASSERT(!pimpl->cache.sin_vals.empty());
+    GGML_ASSERT(!pimpl->cache.cos_vals.empty());
+    GGML_ASSERT(!pimpl->cache.filters.data.empty());
 
     mtmd_audio_mel out_full;
     bool ok = log_mel_spectrogram(
@@ -501,6 +582,7 @@ bool mtmd_audio_preprocessor_whisper::preprocess(
                 n_samples,
                 4, // n_threads
                 params,
+                pimpl->cache,
                 out_full);
     if (!ok) {
         return false;
@@ -540,13 +622,20 @@ bool mtmd_audio_preprocessor_whisper::preprocess(
 // mtmd_audio_preprocessor_conformer
 //
 
+struct mtmd_audio_preprocessor_conformer::impl {
+    mtmd_audio_cache cache;
+};
+
+mtmd_audio_preprocessor_conformer::mtmd_audio_preprocessor_conformer(const clip_ctx * ctx) :
+    mtmd_audio_preprocessor(ctx),
+    pimpl(std::make_unique<impl>()) {}
+
+mtmd_audio_preprocessor_conformer::~mtmd_audio_preprocessor_conformer() = default;
+
 void mtmd_audio_preprocessor_conformer::initialize() {
-    g_cache.fill_sin_cos_table(hparams.audio_n_fft);
-    g_cache.fill_hann_window(hparams.audio_window_len, true);
-    g_cache.fill_mel_filterbank_matrix(
-        hparams.n_mel_bins,
-        hparams.audio_n_fft,
-        hparams.audio_sample_rate);
+    pimpl->cache.fill_sin_cos_table(hparams.audio_n_fft);
+    pimpl->cache.fill_hann_window(hparams.audio_window_len, true);
+    pimpl->cache.fill_mel_filterbank_matrix(hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate);
 }
 
 bool mtmd_audio_preprocessor_conformer::preprocess(
@@ -569,10 +658,10 @@ bool mtmd_audio_preprocessor_conformer::preprocess(
     params.use_natural_log  = true;
     params.norm_per_feature = true;
 
-    // make sure the global cache is initialized
-    GGML_ASSERT(!g_cache.sin_vals.empty());
-    GGML_ASSERT(!g_cache.cos_vals.empty());
-    GGML_ASSERT(!g_cache.filters.data.empty());
+    // make sure the cache is initialized
+    GGML_ASSERT(!pimpl->cache.sin_vals.empty());
+    GGML_ASSERT(!pimpl->cache.cos_vals.empty());
+    GGML_ASSERT(!pimpl->cache.filters.data.empty());
 
     mtmd_audio_mel out_full;
     bool ok = log_mel_spectrogram(
@@ -580,6 +669,7 @@ bool mtmd_audio_preprocessor_conformer::preprocess(
                 n_samples,
                 4, // n_threads
                 params,
+                pimpl->cache,
                 out_full);
     if (!ok) {
         return false;
@@ -587,4 +677,142 @@ bool mtmd_audio_preprocessor_conformer::preprocess(
 
     output.push_back(std::move(out_full));
     return true;
+}
+
+//
+// mtmd_audio_streaming_istft implementation
+//
+
+struct mtmd_audio_streaming_istft::impl {
+    int n_fft;
+    int hop_length;
+    int n_fft_bins;
+
+    // Own cache for output processing
+    mtmd_audio_cache cache;
+
+    // Streaming state
+    std::vector<float> overlap_buffer;
+    std::vector<float> window_sum_buffer;
+    int                padding_to_remove;
+
+    // Working buffers for IFFT
+    std::vector<float> ifft_in;
+    std::vector<float> ifft_out;
+
+    impl(int n_fft, int hop_length) :
+        n_fft(n_fft),
+        hop_length(hop_length),
+        n_fft_bins(n_fft / 2 + 1),
+        overlap_buffer(n_fft, 0.0f),
+        window_sum_buffer(n_fft, 0.0f),
+        padding_to_remove((n_fft - hop_length) / 2),
+        ifft_in(n_fft * 2 * 4, 0.0f),  // extra space for recursive IFFT
+        ifft_out(n_fft * 2 * 4, 0.0f) {
+        cache.fill_sin_cos_table(n_fft);
+        cache.fill_hann_window(n_fft, true);
+    }
+
+    void reset() {
+        std::fill(overlap_buffer.begin(), overlap_buffer.end(), 0.0f);
+        std::fill(window_sum_buffer.begin(), window_sum_buffer.end(), 0.0f);
+        padding_to_remove = (n_fft - hop_length) / 2;
+    }
+
+    std::vector<float> process_frame(const float * frame_spectrum) {
+        std::vector<float> output(hop_length);
+
+        // copy frequencies
+        for (int j = 0; j < n_fft_bins; j++) {
+            ifft_in[j * 2 + 0] = frame_spectrum[j * 2 + 0];
+            ifft_in[j * 2 + 1] = frame_spectrum[j * 2 + 1];
+        }
+
+        // mirror negative frequencies
+        for (int j = 1; j < n_fft_bins - 1; j++) {
+            int mirror_idx              = n_fft - j;
+            ifft_in[mirror_idx * 2 + 0] = ifft_in[j * 2 + 0];
+            ifft_in[mirror_idx * 2 + 1] = -ifft_in[j * 2 + 1];  // conjugate
+        }
+
+        ifft(cache, ifft_in.data(), n_fft, ifft_out.data());
+
+        // update window sum and overlap buffer
+        for (int j = 0; j < n_fft; j++) {
+            window_sum_buffer[j] += cache.hann_window[j] * cache.hann_window[j];
+            overlap_buffer[j] += ifft_out[j * 2] * cache.hann_window[j];
+        }
+
+        // extract hop_length samples with normalization
+        for (int i = 0; i < hop_length; i++) {
+            if (window_sum_buffer[i] > 1e-8f) {
+                output[i] = overlap_buffer[i] / window_sum_buffer[i];
+            } else {
+                output[i] = overlap_buffer[i];
+            }
+        }
+
+        // shift buffers left by hop_length
+        std::copy(overlap_buffer.begin() + hop_length, overlap_buffer.end(), overlap_buffer.begin());
+        std::fill(overlap_buffer.end() - hop_length, overlap_buffer.end(), 0.0f);
+
+        std::copy(window_sum_buffer.begin() + hop_length, window_sum_buffer.end(), window_sum_buffer.begin());
+        std::fill(window_sum_buffer.end() - hop_length, window_sum_buffer.end(), 0.0f);
+
+        // Remove padding if needed
+        int to_remove = std::min(padding_to_remove, (int) output.size());
+        padding_to_remove -= to_remove;
+        output.erase(output.begin(), output.begin() + to_remove);
+
+        return output;
+    }
+
+    std::vector<float> flush() {
+        std::vector<float> output;
+
+        // Extract remaining samples from overlap buffer
+        // Continue until we've extracted all meaningful samples
+        int remaining = n_fft - hop_length;
+        while (remaining > 0) {
+            int chunk_size = std::min(remaining, hop_length);
+
+            for (int i = 0; i < chunk_size; i++) {
+                float sample;
+                if (window_sum_buffer[i] > 1e-8f) {
+                    sample = overlap_buffer[i] / window_sum_buffer[i];
+                } else {
+                    sample = overlap_buffer[i];
+                }
+                output.push_back(sample);
+            }
+
+            // Shift buffers
+            std::copy(overlap_buffer.begin() + chunk_size, overlap_buffer.end(), overlap_buffer.begin());
+            std::fill(overlap_buffer.end() - chunk_size, overlap_buffer.end(), 0.0f);
+
+            std::copy(window_sum_buffer.begin() + chunk_size, window_sum_buffer.end(), window_sum_buffer.begin());
+            std::fill(window_sum_buffer.end() - chunk_size, window_sum_buffer.end(), 0.0f);
+
+            remaining -= chunk_size;
+        }
+
+        return output;
+    }
+};
+
+mtmd_audio_streaming_istft::mtmd_audio_streaming_istft(int n_fft, int hop_length) :
+    pimpl(std::make_unique<impl>(n_fft, hop_length)) {}
+
+mtmd_audio_streaming_istft::~mtmd_audio_streaming_istft() = default;
+
+void mtmd_audio_streaming_istft::reset() {
+    pimpl->reset();
+}
+
+std::vector<float> mtmd_audio_streaming_istft::process_frame(const float * frame_spectrum) {
+    return pimpl->process_frame(frame_spectrum);
+}
+
+std::vector<float> mtmd_audio_streaming_istft::flush() {
+    return pimpl->flush();
 }
