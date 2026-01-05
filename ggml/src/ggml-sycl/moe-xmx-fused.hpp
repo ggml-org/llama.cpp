@@ -271,4 +271,46 @@ void fused_xmx_moe_gemm_q8_0(
 
 } // namespace moe_xmx_fused
 
+// Entry point for fused XMX MoE dispatch
+// Returns true if fused path was used, false to fallback
+inline bool try_fused_xmx_moe_q8_0(
+    const int8_t* all_expert_qs,
+    const sycl::half* all_expert_d,
+    const int8_t* q_tokens,
+    const sycl::half* token_scales,
+    const int32_t* sorted_token_ids,
+    const int32_t* expert_offsets,
+    sycl::half* output,
+    int num_tokens,
+    int n_experts,
+    int64_t out_dim,
+    int64_t in_dim,
+    int64_t expert_stride,
+    int device_id,
+    sycl::queue& queue)
+{
+    // Get device config
+    const auto& dev_info = ggml_sycl_info().devices[device_id];
+    if (!dev_info.xmx_caps.supported) {
+        return false;
+    }
+
+    moe_xmx_fused::FusedMoEConfig cfg = moe_xmx_fused::FusedMoEConfig::from_device(device_id);
+
+    GGML_SYCL_DEBUG("[MoE-Fused] Launching fused Q8_0 kernel: "
+                   "tokens=%d experts=%d out=%ld in=%ld wgs=%d\n",
+                   num_tokens, n_experts, out_dim, in_dim, cfg.num_persistent_wgs);
+
+    moe_xmx_fused::fused_xmx_moe_gemm_q8_0<4, 4>(
+        all_expert_qs, all_expert_d,
+        q_tokens, token_scales,
+        sorted_token_ids, expert_offsets,
+        output,
+        num_tokens, n_experts,
+        out_dim, in_dim, expert_stride,
+        cfg, queue);
+
+    return true;
+}
+
 #endif // SYCL_XMX_MOE_AVAILABLE
