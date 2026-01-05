@@ -52,6 +52,7 @@ def run_query(url, messages, tools=None, stream=False, tool_choice=None):
                             reasoning_chunk = delta.get("reasoning_content", "")
                             if reasoning_chunk:
                                 reasoning_content += reasoning_chunk
+                                print(f"\x1B[3m{reasoning_chunk}\x1B[0m", end="", flush=True)
 
                             # Tool calls
                             if "tool_calls" in delta:

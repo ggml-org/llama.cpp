@@ -706,10 +706,16 @@ content_structure::reasoning_mode_type template_analyzer::detect_reasoning_mode(
                                                                                 const std::string &       prompt) {
     LOG_DBG("=== DETECTING REASONING MODE ===\n");
 
-    // If no reasoning markers detected, mode is NONE
-    if (cs.reasoning_start.empty()) {
+    // If both markers are empty, mode is NONE
+    if (cs.reasoning_start.empty() && cs.reasoning_end.empty()) {
         LOG_DBG("No reasoning markers, mode=REASONING_NONE\n");
         return content_structure::REASONING_NONE;
+    }
+
+    // Handle case with end marker but no start marker (implicit start)
+    if (cs.reasoning_start.empty() && !cs.reasoning_end.empty()) {
+        LOG_DBG("Reasoning end marker present but no start marker, mode=REASONING_FORCED_OPEN\n");
+        return content_structure::REASONING_FORCED_OPEN;
     }
 
     // Check if the prompt ends with the reasoning start marker (forced open)

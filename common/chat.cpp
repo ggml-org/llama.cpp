@@ -4,6 +4,7 @@
 #include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
 #include "common.h"
+#include "ggml.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
 
@@ -761,98 +762,6 @@ static std::string apply(const common_chat_template &    tmpl,
     return result;
 }
 
-static common_chat_params common_chat_params_init_generic(const common_chat_template &    tmpl,
-                                                          const struct templates_params & inputs) {
-    common_chat_params data;
-
-    auto tool_call_schemas = json::array();
-    foreach_function(inputs.tools, [&](const json & tool) {
-        const auto & function    = tool.at("function");
-        auto         tool_schema = json{
-                    { "type",       "object"                             },
-                    { "properties",
-                     {
-                  { "name",
-                            {
-                        { "type", "string" },
-                        { "const", function.at("name") },
-                    } },
-                  { "arguments", function.at("parameters") },
-              }                                                          },
-                    { "required",   json::array({ "name", "arguments" }) },
-        };
-        if (function.contains("description")) {
-            tool_schema["description"] = function.at("description");
-        }
-        if (inputs.parallel_tool_calls) {
-            tool_schema.at("properties")["id"] = {
-                { "type",      "string" },
-                { "minLength", 4        },
-            };
-            tool_schema.at("required").push_back("id");
-        }
-        tool_call_schemas.emplace_back(tool_schema);
-    });
-    const auto tool_call =
-        inputs.parallel_tool_calls ?
-            json{
-                { "type",       "object"                      },
-                { "properties",
-                 {
-                      { "tool_calls",
-                        {
-                            { "type", "array" },
-                            { "items", tool_call_schemas.size() == 1 ? tool_call_schemas[0] :
-                                                                       json{
-                                                                           { "anyOf", tool_call_schemas },
-                                                                       } },
-                            { "minItems", 1 },
-                        } },
-                  }                                           },
-                { "required",   json::array({ "tool_calls" }) },
-    } :
-            json{
-                { "type", "object" },
-                { "properties",
-                  {
-                      { "tool_call", tool_call_schemas.size() == 1 ? tool_call_schemas[0] :
-                                                                     json{
-                                                                         { "anyOf", tool_call_schemas },
-                                                                     } },
-                  } },
-                { "required", json::array({ "tool_call" }) },
-            };
-    const auto schema =
-        inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED ?
-            json{
-                { "anyOf", json::array({
-                               tool_call,
-                               {
-                                   { "type", "object" },
-                                   { "properties",
-                                     {
-                                         { "response", inputs.json_schema.is_null() ? json{ { "type", "string" } } :
-                                                                                      inputs.json_schema },
-                                     } },
-                                   { "required", json::array({ "response" }) },
-                               },
-                           }) }
-    } :
-            tool_call;
-
-    data.grammar_lazy = false;
-    data.grammar = build_grammar([&](const common_grammar_builder & builder) { builder.add_schema("root", schema); });
-
-    auto tweaked_messages =
-        common_chat_template::add_system(inputs.messages,
-                                         "Respond in JSON format, either with `tool_call` (a request to call tools) or "
-                                         "with `response` reply to the user's request");
-
-    data.prompt = apply(tmpl, inputs, /* messages_override= */ tweaked_messages);
-    data.format = COMMON_CHAT_FORMAT_GENERIC;
-    return data;
-}
-
 static common_chat_params common_chat_params_init_ministral_3(const common_chat_template &    tmpl,
                                                               const struct templates_params & inputs) {
     common_chat_params data;
@@ -1241,15 +1150,6 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
                 LOG_DBG("Using cached autoparser result\n");
                 // Clone the cached result and update the prompt with current messages
                 common_chat_params cached_result = it->second;
-                cached_result.prompt             = apply_template(tmpl, params, std::nullopt);
-
-                // Apply the same prompt modifications that generate_parser applies
-                // (e.g., appending reasoning end marker when thinking is disabled)
-                if (analysis.content.reasoning_mode == content_structure::REASONING_FORCED_OPEN &&
-                    !params.enable_thinking) {
-                    cached_result.prompt += analysis.content.reasoning_end + "\n";
-                }
-
                 return cached_result;
             }
         }
@@ -1258,24 +1158,16 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
 
         auto auto_params = universal_peg_generator::generate_parser(analysis, tmpl, params);
 
-        // Only use the auto-generated parser if it provides more than basic content-only handling.
-        // A PEG parser with thinking support or a non-empty parser (PEG grammar)
-        // provides specialized handling that the generic handler doesn't.
-        if (auto_params.format != COMMON_CHAT_FORMAT_CONTENT_ONLY || auto_params.thinking_forced_open ||
-            !auto_params.parser.empty()) {
-            // Cache the result (store a copy without the prompt since that varies per messages)
-            {
-                std::lock_guard<std::mutex> lock(tmpls->parser_cache_mutex);
-                tmpls->parser_cache[cache_key] = auto_params;
-            }
+        if (!auto_params.parser.empty()) {
+            std::lock_guard<std::mutex> lock(tmpls->parser_cache_mutex);
+            tmpls->parser_cache[cache_key] = auto_params;
             return auto_params;
         }
     } catch (const std::exception & e) {
-        LOG_WRN("Automatic parser generation failed: %s - using generic fallback\n", e.what());
+        LOG_WRN("Automatic parser generation failed: %s\n", e.what());
     }
 
-    // Generic fallback - basic content-only handling
-    return common_chat_params_init_generic(tmpl, params);
+    GGML_ABORT("Failed to build parser, exiting.");
 }
 
 // Legacy template route (adhoc C++ implementation of known templates), forward to llama_chat_apply_template.
