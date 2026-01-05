@@ -10,10 +10,7 @@
 	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
 	import { Wrench, Loader2 } from '@lucide/svelte';
-	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
-	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
-	import { buttonVariants } from '$lib/components/ui/button/index.js';
-	import { Card } from '$lib/components/ui/card';
+	import CollapsibleInfoCard from './CollapsibleInfoCard.svelte';
 
 	interface Props {
 		content: string;
@@ -104,8 +101,9 @@
 		);
 
 		// Partial pending match (has START and NAME but ARGS still streaming)
+		// Capture everything after TOOL_ARGS_BASE64: until the end
 		const partialWithNameMatch = remainingContent.match(
-			/<<<AGENTIC_TOOL_CALL_START>>>\n<<<TOOL_NAME:(.+?)>>>\n<<<TOOL_ARGS_BASE64:([^>]*)$/
+			/<<<AGENTIC_TOOL_CALL_START>>>\n<<<TOOL_NAME:(.+?)>>>\n<<<TOOL_ARGS_BASE64:([\s\S]*)$/
 		);
 
 		// Very early match (just START marker, maybe partial NAME)
@@ -150,11 +148,31 @@
 				}
 			}
 
+			// Try to decode partial base64 args
+			const partialArgsBase64 = partialWithNameMatch[2] || '';
+			let partialArgs = '';
+			if (partialArgsBase64) {
+				try {
+					// Try to decode - may fail if incomplete base64
+					partialArgs = decodeURIComponent(escape(atob(partialArgsBase64)));
+				} catch {
+					// If decoding fails, try padding the base64
+					try {
+						const padded =
+							partialArgsBase64 + '=='.slice(0, (4 - (partialArgsBase64.length % 4)) % 4);
+						partialArgs = decodeURIComponent(escape(atob(padded)));
+					} catch {
+						// Show raw base64 if all decoding fails
+						partialArgs = '';
+					}
+				}
+			}
+
 			sections.push({
 				type: 'tool_call_streaming',
 				content: '',
 				toolName: partialWithNameMatch[1],
-				toolArgs: undefined,
+				toolArgs: partialArgs || undefined,
 				toolResult: undefined
 			});
 		} else if (earlyMatch) {
@@ -218,86 +236,79 @@
 				<MarkdownContent content={section.content} />
 			</div>
 		{:else if section.type === 'tool_call_streaming'}
-			<!-- Early streaming state - show minimal UI while markers are being received -->
-			<div class="my-4">
-				<Card class="gap-0 border-muted bg-muted/30 py-0">
-					<div class="flex items-center gap-2 p-3 text-muted-foreground">
-						<Loader2 class="h-4 w-4 animate-spin" />
-						{#if section.toolName}
-							<span class="font-mono text-sm font-medium">{section.toolName}</span>
-						{/if}
-						<span class="text-xs italic">preparing...</span>
+			<!-- Streaming state - show CollapsibleInfoCard with live streaming args -->
+			<CollapsibleInfoCard
+				open={isExpanded(index, true)}
+				class="my-2"
+				icon={Loader2}
+				iconClass="h-4 w-4 animate-spin"
+				title={section.toolName || 'Tool call'}
+				subtitle="streaming..."
+				onToggle={() => toggleExpanded(index, true)}
+			>
+				<div class="pt-3">
+					<div class="my-3 flex items-center gap-2 text-xs text-muted-foreground">
+						<span>Arguments:</span>
+						<Loader2 class="h-3 w-3 animate-spin" />
 					</div>
-				</Card>
-			</div>
+					{#if section.toolArgs}
+						<SyntaxHighlightedCode
+							code={formatToolArgs(section.toolArgs)}
+							language="json"
+							maxHeight="20rem"
+							class="text-xs"
+						/>
+					{:else}
+						<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
+							Receiving arguments...
+						</div>
+					{/if}
+				</div>
+			</CollapsibleInfoCard>
 		{:else if section.type === 'tool_call' || section.type === 'tool_call_pending'}
 			{@const isPending = section.type === 'tool_call_pending'}
-			<Collapsible.Root open={isExpanded(index, isPending)} class="my-2">
-				<Card class="gap-0 border-muted bg-muted/30 py-0">
-					<Collapsible.Trigger
-						class="flex w-full cursor-pointer items-center justify-between p-3"
-						onclick={() => toggleExpanded(index, isPending)}
-					>
-						<div class="flex items-center gap-2 text-muted-foreground">
-							{#if isPending}
-								<Loader2 class="h-4 w-4 animate-spin" />
-							{:else}
-								<Wrench class="h-4 w-4" />
-							{/if}
-							<span class="font-mono text-sm font-medium">{section.toolName}</span>
-							{#if isPending}
-								<span class="text-xs italic">executing...</span>
-							{/if}
-						</div>
+			{@const toolIcon = isPending ? Loader2 : Wrench}
+			{@const toolIconClass = isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'}
+			<CollapsibleInfoCard
+				open={isExpanded(index, isPending)}
+				class="my-2"
+				icon={toolIcon}
+				iconClass={toolIconClass}
+				title={section.toolName || ''}
+				subtitle={isPending ? 'executing...' : undefined}
+				onToggle={() => toggleExpanded(index, isPending)}
+			>
+				{#if section.toolArgs && section.toolArgs !== '{}'}
+					<div class="pt-3">
+						<div class="my-3 text-xs text-muted-foreground">Arguments:</div>
+						<SyntaxHighlightedCode
+							code={formatToolArgs(section.toolArgs)}
+							language="json"
+							maxHeight="20rem"
+							class="text-xs"
+						/>
+					</div>
+				{/if}
 
-						<div
-							class={buttonVariants({
-								variant: 'ghost',
-								size: 'sm',
-								class: 'h-6 w-6 p-0 text-muted-foreground hover:text-foreground'
-							})}
-						>
-							<ChevronsUpDownIcon class="h-4 w-4" />
-							<span class="sr-only">Toggle tool call content</span>
+				<div class="pt-3">
+					<div class="my-3 flex items-center gap-2 text-xs text-muted-foreground">
+						<span>Result:</span>
+						{#if isPending}
+							<Loader2 class="h-3 w-3 animate-spin" />
+						{/if}
+					</div>
+					{#if section.toolResult}
+						<div class="overflow-auto rounded-lg border border-border bg-muted">
+							<!-- prettier-ignore -->
+							<pre class="m-0 overflow-x-auto whitespace-pre-wrap p-4 font-mono text-xs leading-relaxed"><code>{section.toolResult}</code></pre>
 						</div>
-					</Collapsible.Trigger>
-
-					<Collapsible.Content>
-						<div class="border-t border-muted px-3 pb-3">
-							{#if section.toolArgs && section.toolArgs !== '{}'}
-								<div class="pt-3">
-									<div class="my-3 text-xs text-muted-foreground">Arguments:</div>
-									<SyntaxHighlightedCode
-										code={formatToolArgs(section.toolArgs)}
-										language="json"
-										maxHeight="20rem"
-										class="text-xs"
-									/>
-								</div>
-							{/if}
-
-							<div class="pt-3">
-								<div class="my-3 flex items-center gap-2 text-xs text-muted-foreground">
-									<span>Result:</span>
-									{#if isPending}
-										<Loader2 class="h-3 w-3 animate-spin" />
-									{/if}
-								</div>
-								{#if section.toolResult}
-									<div class="overflow-auto rounded-lg border border-border bg-muted">
-										<!-- prettier-ignore -->
-										<pre class="m-0 overflow-x-auto whitespace-pre-wrap p-4 font-mono text-xs leading-relaxed"><code>{section.toolResult}</code></pre>
-									</div>
-								{:else if isPending}
-									<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
-										Waiting for result...
-									</div>
-								{/if}
-							</div>
+					{:else if isPending}
+						<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
+							Waiting for result...
 						</div>
-					</Collapsible.Content>
-				</Card>
-			</Collapsible.Root>
+					{/if}
+				</div>
+			</CollapsibleInfoCard>
 		{/if}
 	{/each}
 </div>

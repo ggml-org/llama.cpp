@@ -36,6 +36,7 @@ export { default as ChatMessageSystem } from './chat/ChatMessages/ChatMessageSys
 export { default as ChatMessageThinkingBlock } from './chat/ChatMessages/ChatMessageThinkingBlock.svelte';
 export { default as ChatMessageUser } from './chat/ChatMessages/ChatMessageUser.svelte';
 export { default as ChatMessages } from './chat/ChatMessages/ChatMessages.svelte';
+export { default as CollapsibleInfoCard } from './chat/ChatMessages/CollapsibleInfoCard.svelte';
 export { default as MessageBranchingControls } from './chat/ChatMessages/ChatMessageBranchingControls.svelte';
 export { default as ChatScreen } from './chat/ChatScreen/ChatScreen.svelte';
 export { default as ChatScreenDragOverlay } from './chat/ChatScreen/ChatScreenDragOverlay.svelte';
@@ -68,8 +69,30 @@ export { default as DialogMcpServersSettings } from './dialogs/DialogMcpServersS
 export { default as DialogModelInformation } from './dialogs/DialogModelInformation.svelte';
 export { default as DialogModelNotAvailable } from './dialogs/DialogModelNotAvailable.svelte';
 
-// Compatibility aliases
-export { default as ActionButton } from './actions/ActionIcon.svelte';
-export { default as ActionDropdown } from './navigation/DropdownMenuActions.svelte';
-export { default as CopyToClipboardIcon } from './actions/ActionIconCopyToClipboard.svelte';
-export { default as RemoveButton } from './actions/ActionIconRemove.svelte';
+// Miscellanous
+
+export { default as ActionButton } from './misc/ActionButton.svelte';
+export { default as ActionDropdown } from './misc/ActionDropdown.svelte';
+export { default as BadgeChatStatistic } from './misc/BadgeChatStatistic.svelte';
+export { default as BadgeInfo } from './misc/BadgeInfo.svelte';
+export { default as ModelBadge } from './models/ModelBadge.svelte';
+export { default as BadgeModality } from './misc/BadgeModality.svelte';
+export { default as ConversationSelection } from './misc/ConversationSelection.svelte';
+export { default as CopyToClipboardIcon } from './misc/CopyToClipboardIcon.svelte';
+export { default as KeyboardShortcutInfo } from './misc/KeyboardShortcutInfo.svelte';
+export { default as MarkdownContent } from './misc/MarkdownContent.svelte';
+export { default as RemoveButton } from './misc/RemoveButton.svelte';
+export { default as SearchInput } from './misc/SearchInput.svelte';
+export { default as SearchableDropdownMenu } from './misc/SearchableDropdownMenu.svelte';
+export { default as SyntaxHighlightedCode } from './misc/SyntaxHighlightedCode.svelte';
+export { default as ModelsSelector } from './models/ModelsSelector.svelte';
+
+// MCP
+
+export { default as McpSelector } from './mcp/McpSelector.svelte';
+
+// Server
+
+export { default as ServerStatus } from './server/ServerStatus.svelte';
+export { default as ServerErrorSplash } from './server/ServerErrorSplash.svelte';
+export { default as ServerLoadingSplash } from './server/ServerLoadingSplash.svelte';
