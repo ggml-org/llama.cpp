@@ -716,6 +716,274 @@ void launch_xmx_moe_gemm_q8_0_soa(const int8_t *       weights_qs,    // [out_di
 
 }  // end launch_xmx_moe_gemm_q8_0_soa
 
+// Fused XMX MoE kernel - GPU-side expert assignment for graph compatibility
+// Each work-group determines its expert via binary search, eliminating host iteration
+//
+// Key differences from per-expert kernel:
+// 1. Launches total_tiles work-groups (covers all experts)
+// 2. Each WG binary-searches to find its expert
+// 3. No host synchronization needed
+//
+// Parameters:
+//   expert_offsets: [n_experts + 1] token offsets (cumulative sum of counts)
+//   expert_tile_offsets: [n_experts + 1] tile offsets (cumulative sum of ceil(count/tile_M))
+//   total_tiles: total work-groups to launch
+template <int TILES_M = 4, int TILES_N = 4>
+sycl::event launch_fused_xmx_moe_q8_0_soa(
+    sycl::queue &          queue,
+    sycl::event            dep_event,
+    const int8_t *         all_expert_qs,      // [n_experts * out_dim * in_dim] SoA qs
+    const sycl::half *     all_expert_d,       // [n_experts * out_dim * in_dim/32] SoA scales
+    const int8_t *         q_tokens,           // [total_pairs, in_dim] pre-quantized
+    const sycl::half *     token_scales,       // [total_pairs, in_dim/32]
+    sycl::half *           sorted_output,      // [total_pairs, out_dim]
+    const int32_t *        expert_offsets,     // [n_experts + 1] token offsets
+    const int32_t *        expert_tile_offsets,// [n_experts + 1] tile offsets
+    int32_t                total_tiles,
+    int64_t                n_experts,
+    int64_t                out_dim,
+    int64_t                in_dim,
+    int64_t                qs_stride_per_expert, // bytes of qs data per expert
+    const MoEXMXConfig &   cfg) {
+
+    constexpr int XMX_M   = 8;
+    constexpr int XMX_N   = 16;
+    constexpr int XMX_K   = 32;
+    constexpr int SG_SIZE = 16;
+
+    int wg_out_rows = TILES_M * XMX_M;  // 32 output rows per WG
+    int wg_out_cols = TILES_N * XMX_N;  // 64 output cols per WG
+
+    // Calculate n_col_wgs (number of work-groups per tile row for N dimension)
+    int n_col_wgs = (out_dim + wg_out_cols - 1) / wg_out_cols;
+
+    // Launch grid: total_tiles * n_col_wgs work-groups
+    // Each tile processes wg_out_rows tokens, each col_wg covers wg_out_cols output dims
+    sycl::range<2> global{ static_cast<size_t>(total_tiles * cfg.wg_size),
+                           static_cast<size_t>(n_col_wgs) };
+    sycl::range<2> local{ static_cast<size_t>(cfg.wg_size), 1 };
+
+    const int     num_sgs       = cfg.wg_size / SG_SIZE;
+    const int64_t num_k_blocks  = in_dim / XMX_K;
+    const int64_t nblocks_per_expert = out_dim * num_k_blocks;
+
+    return queue.submit([&](sycl::handler & cgh) {
+        // Always depend on the event - SYCL handles already-complete events efficiently
+        // Checking event status creates a race condition and unnecessary host overhead
+        cgh.depends_on(dep_event);
+
+        // SLM allocations (same as per-expert kernel)
+        constexpr int slm_weights_size = TILES_N * XMX_N * XMX_K;
+        sycl::local_accessor<int8_t, 1> slm_weights(sycl::range<1>(slm_weights_size), cgh);
+
+        constexpr int slm_acc_per_sg = XMX_M * XMX_N * sizeof(int32_t);
+        const int     slm_acc_size   = num_sgs * slm_acc_per_sg;
+        sycl::local_accessor<int8_t, 1> slm_acc(sycl::range<1>(slm_acc_size), cgh);
+
+        sycl::local_accessor<int8_t, 1> slm_tokens(sycl::range<1>(TILES_M * XMX_M * XMX_K), cgh);
+        sycl::local_accessor<float, 1>  slm_token_scales(sycl::range<1>(TILES_M * XMX_M), cgh);
+        sycl::local_accessor<float, 1>  slm_weight_scales(sycl::range<1>(TILES_N * XMX_N), cgh);
+
+        cgh.parallel_for(
+            sycl::nd_range<2>(global, local),
+            [=](sycl::nd_item<2> item) [[intel::reqd_sub_group_size(SG_SIZE)]] {
+                auto sg    = item.get_sub_group();
+                int  sg_id = sg.get_group_linear_id();
+                int  lane  = sg.get_local_linear_id();
+
+                // GPU-side work assignment via binary search
+                int tile_idx = item.get_group(0);  // Which tile (0 to total_tiles-1)
+                int col_wg   = item.get_group(1);  // Which column work-group
+
+                // Find expert for this tile via binary search
+                int expert_idx = find_expert_for_workgroup(tile_idx, expert_tile_offsets, n_experts);
+
+                // Get expert's token range
+                int expert_token_start = expert_offsets[expert_idx];
+                int expert_token_count = expert_offsets[expert_idx + 1] - expert_token_start;
+
+                // Get local tile index within this expert
+                int local_tile = get_local_tile_index(tile_idx, expert_idx, expert_tile_offsets);
+
+                // Calculate which rows this WG handles within the expert's batch
+                int wg_row = local_tile * wg_out_rows;  // Row offset within expert batch
+                int wg_col = col_wg * wg_out_cols;      // Column offset in output
+
+                // Skip if no work for this WG
+                if (wg_row >= expert_token_count) {
+                    return;
+                }
+
+                // Calculate global row in sorted token array
+                int global_row_start = expert_token_start + wg_row;
+
+                // Get expert weight pointers (SoA layout)
+                const int8_t *     expert_qs = all_expert_qs + expert_idx * qs_stride_per_expert;
+                const sycl::half * expert_d  = all_expert_d + expert_idx * nblocks_per_expert;
+
+                // Initialize accumulators
+                joint_matrix<sycl::sub_group, int32_t, use::accumulator, XMX_M, XMX_N> acc[TILES_M][TILES_N];
+                for (int tm = 0; tm < TILES_M; tm++) {
+                    for (int tn = 0; tn < TILES_N; tn++) {
+                        joint_matrix_fill(sg, acc[tm][tn], 0);
+                    }
+                }
+
+                float float_acc[TILES_M][TILES_N][XMX_M * XMX_N] = { { { 0.0f } } };
+
+                // K-dimension reduction loop (same logic as per-expert kernel)
+                for (int64_t k_block = 0; k_block < num_k_blocks; k_block++) {
+                    int64_t k = k_block * XMX_K;
+
+                    // Cooperative token loading to SLM
+                    constexpr int slm_tokens_size = TILES_M * XMX_M * XMX_K;
+                    int items_per_sg = slm_tokens_size / num_sgs;
+                    int sg_offset    = sg_id * items_per_sg;
+
+                    for (int i = 0; i < items_per_sg; i += SG_SIZE) {
+                        int idx = sg_offset + i + lane;
+                        if (idx < slm_tokens_size) {
+                            int tile_row   = idx / XMX_K;
+                            int tile_k     = idx % XMX_K;
+                            int local_row  = wg_row + tile_row;
+
+                            if (local_row < expert_token_count) {
+                                int global_row = global_row_start + tile_row;
+                                slm_tokens[idx] = q_tokens[global_row * in_dim + k + tile_k];
+                            } else {
+                                slm_tokens[idx] = 0;
+                            }
+                        }
+                    }
+
+                    // Load token scales for this K-block
+                    if (sg_id < (TILES_M * XMX_M + SG_SIZE - 1) / SG_SIZE) {
+                        int row_idx = sg_id * SG_SIZE + lane;
+                        if (row_idx < TILES_M * XMX_M) {
+                            int local_row = wg_row + row_idx;
+                            if (local_row < expert_token_count) {
+                                int global_row = global_row_start + row_idx;
+                                slm_token_scales[row_idx] =
+                                    static_cast<float>(token_scales[global_row * num_k_blocks + k_block]);
+                            } else {
+                                slm_token_scales[row_idx] = 0.0f;
+                            }
+                        }
+                    }
+
+                    // Load weights from SoA format
+                    int weights_per_sg = slm_weights_size / num_sgs;
+                    int w_sg_offset    = sg_id * weights_per_sg;
+
+                    for (int i = 0; i < weights_per_sg; i += SG_SIZE) {
+                        int idx = w_sg_offset + i + lane;
+                        if (idx < slm_weights_size) {
+                            int out_col_local = idx / XMX_K;
+                            int k_elem        = idx % XMX_K;
+                            int global_col    = wg_col + out_col_local;
+
+                            int8_t val = 0;
+                            if (global_col < out_dim) {
+                                // SoA block indexing: block_idx = out_col * num_k_blocks + k_block
+                                int64_t block_idx = global_col * num_k_blocks + k_block;
+                                val = expert_qs[block_idx * XMX_K + k_elem];
+                            }
+                            slm_weights[k_elem + out_col_local * XMX_K] = val;
+                        }
+                    }
+
+                    // Load weight scales
+                    if (sg_id < (TILES_N * XMX_N + SG_SIZE - 1) / SG_SIZE) {
+                        int col_idx = sg_id * SG_SIZE + lane;
+                        if (col_idx < TILES_N * XMX_N) {
+                            int global_col = wg_col + col_idx;
+                            if (global_col < out_dim) {
+                                int64_t block_idx = global_col * num_k_blocks + k_block;
+                                slm_weight_scales[col_idx] = static_cast<float>(expert_d[block_idx]);
+                            } else {
+                                slm_weight_scales[col_idx] = 0.0f;
+                            }
+                        }
+                    }
+
+                    item.barrier(sycl::access::fence_space::local_space);
+
+                    // XMX computation (only sg_id == 0)
+                    if (sg_id == 0) {
+                        joint_matrix<sycl::sub_group, int8_t, use::a, XMX_M, XMX_K, layout::row_major> mat_a;
+                        joint_matrix<sycl::sub_group, int8_t, use::b, XMX_K, XMX_N, layout::col_major> mat_b;
+
+                        for (int tm = 0; tm < TILES_M; tm++) {
+                            auto slm_tokens_ptr = sycl::address_space_cast<
+                                sycl::access::address_space::local_space, sycl::access::decorated::no>(
+                                &slm_tokens[tm * XMX_M * XMX_K]);
+                            joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
+
+                            for (int tn = 0; tn < TILES_N; tn++) {
+                                int local_row = wg_row + tm * XMX_M;
+                                int col       = wg_col + tn * XMX_N;
+
+                                if (local_row < expert_token_count && col < out_dim) {
+                                    auto slm_weights_ptr = sycl::address_space_cast<
+                                        sycl::access::address_space::local_space, sycl::access::decorated::no>(
+                                        &slm_weights[tn * XMX_N * XMX_K]);
+                                    joint_matrix_load(sg, mat_b, slm_weights_ptr, XMX_K);
+
+                                    joint_matrix_mad(sg, acc[tm][tn], mat_a, mat_b, acc[tm][tn]);
+
+                                    int32_t * acc_slm_raw = reinterpret_cast<int32_t *>(&slm_acc[0]);
+                                    auto acc_slm_ptr = sycl::address_space_cast<
+                                        sycl::access::address_space::local_space, sycl::access::decorated::no>(
+                                        acc_slm_raw);
+                                    joint_matrix_store(sg, acc[tm][tn], acc_slm_ptr, XMX_N, layout::row_major);
+
+                                    sycl::group_barrier(sg);
+
+                                    for (int i = lane; i < XMX_M * XMX_N; i += SG_SIZE) {
+                                        int tile_row = i / XMX_N;
+                                        int tile_col = i % XMX_N;
+                                        if (local_row + tile_row < expert_token_count && col + tile_col < out_dim) {
+                                            float t_scale = slm_token_scales[tm * XMX_M + tile_row];
+                                            float w_scale = slm_weight_scales[tn * XMX_N + tile_col];
+                                            float_acc[tm][tn][i] += acc_slm_raw[i] * t_scale * w_scale;
+                                        }
+                                    }
+
+                                    joint_matrix_fill(sg, acc[tm][tn], 0);
+                                }
+                            }
+                        }
+                    }
+
+                    item.barrier(sycl::access::fence_space::local_space);
+                }
+
+                // Final output store (only sg_id == 0)
+                if (sg_id == 0) {
+                    for (int tm = 0; tm < TILES_M; tm++) {
+                        for (int tn = 0; tn < TILES_N; tn++) {
+                            int local_row = wg_row + tm * XMX_M;
+                            int col       = wg_col + tn * XMX_N;
+
+                            if (local_row < expert_token_count && col < out_dim) {
+                                for (int i = lane; i < XMX_M * XMX_N; i += SG_SIZE) {
+                                    int tile_row = i / XMX_N;
+                                    int tile_col = i % XMX_N;
+                                    if (local_row + tile_row < expert_token_count && col + tile_col < out_dim) {
+                                        int global_row = global_row_start + tm * XMX_M + tile_row;
+                                        sorted_output[global_row * out_dim + col + tile_col] =
+                                            sycl::half(float_acc[tm][tn][i]);
+                                    }
+                                }
+                            }
+                            (void) acc[tm][tn];
+                        }
+                    }
+                }
+            });
+    });
+}
+
 // Q8_0 Coalesced XMX GEMM for a single expert's token batch
 // Same as launch_xmx_moe_gemm_q8_0_soa but reads from coalesced-formatted weights
 //
