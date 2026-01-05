@@ -3,6 +3,8 @@
 import os
 import sys
 import torch
+import numpy as np
+from pathlib import Path
 
 
 def get_model_name_from_env_path(env_path_name):
@@ -148,3 +150,53 @@ def setup_rope_debug(model_module_path: str, function_name: str = "apply_rotary_
     # Patch it
     setattr(module, function_name, debug_rope)
     print(f"RoPE debug patching applied to {model_module_path}.{function_name}")
+
+
+def save_output_data(data, tokens, prompt, model_name, type_suffix="", output_dir="data"):
+    """
+    Save output data (logits/embeddings), tokens, and prompt to files.
+
+    Args:
+        data:        numpy array of floats (logits or embeddings)
+        tokens:      list or array of token IDs
+        prompt:      string containing the input prompt
+        model_name:  name of the model
+        type_suffix: optional suffix like "-embeddings" (default: "")
+        output_dir:  directory to save files (default: "data")
+
+    Creates the following files in output_dir:
+        - pytorch-{model_name}{type_suffix}.bin
+        - pytorch-{model_name}{type_suffix}.txt
+        - pytorch-{model_name}{type_suffix}-prompt.txt
+        - pytorch-{model_name}{type_suffix}-tokens.bin
+    """
+    data_dir = Path(output_dir)
+    data_dir.mkdir(exist_ok=True)
+    base_path = data_dir / f"pytorch-{model_name}{type_suffix}"
+
+    # Convert and flatten logits/embeddings
+    data = data.cpu().numpy() if isinstance(data, torch.Tensor) else np.asarray(data)
+    data = data.flatten() if data.ndim > 1 else data
+
+    # Save logits/embedding files
+    data.astype(np.float32).tofile(f"{base_path}.bin")
+    print(f"Data saved to {base_path}.bin")
+
+    with open(f"{base_path}.txt", "w") as f:
+        f.writelines(f"{i}: {value:.6f}\n" for i, value in enumerate(data))
+    print(f"Data saved to {base_path}.txt")
+
+    # Convert and flatten tokens
+    tokens = tokens.cpu().numpy() if isinstance(tokens, torch.Tensor) else np.asarray(tokens)
+    tokens = tokens.flatten() if tokens.ndim > 1 else tokens
+
+    # Save token binary file
+    tokens.astype(np.int32).tofile(f"{base_path}-tokens.bin")
+    print(f"Tokens saved to {base_path}-tokens.bin")
+
+    # Save prompt file
+    with open(f"{base_path}-prompt.txt", "w") as f:
+        f.write(f"prompt: {prompt}\n")
+        f.write(f"n_tokens: {len(tokens)}\n")
+        f.write(f"token ids: {', '.join(str(int(tid)) for tid in tokens)}\n")
+    print(f"Prompt saved to {base_path}-prompt.txt")
