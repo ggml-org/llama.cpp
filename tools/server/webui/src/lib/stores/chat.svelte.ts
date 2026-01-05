@@ -32,6 +32,7 @@ import {
 import { SvelteMap } from 'svelte/reactivity';
 import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
 import { getAgenticConfig } from '$lib/config/agentic';
+import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
 
 class ChatStore {
 	activeProcessingState = $state<ApiProcessingState | null>(null);
@@ -48,11 +49,6 @@ class ChatStore {
 	private isEditModeActive = $state(false);
 	private addFilesHandler: ((files: File[]) => void) | null = $state(null);
 	pendingEditMessageId = $state<string | null>(null);
-	private messageUpdateCallback:
-		| ((messageId: string, updates: Partial<DatabaseMessage>) => void)
-		| null = null;
-	private _pendingDraftMessage = $state<string>('');
-	private _pendingDraftFiles = $state<ChatUploadedFile[]>([]);
 
 	private setChatLoading(convId: string, loading: boolean): void {
 		this.touchConversationState(convId);

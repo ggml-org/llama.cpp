@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Plus } from '@lucide/svelte';
+	import { Plus, MessageSquare } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -15,6 +15,7 @@
 		showMcpOption?: boolean;
 		onFileUpload?: (fileType?: FileTypeCategory) => void;
 		onMcpClick?: () => void;
+		onSystemPromptClick?: () => void;
 	}
 
 	let {
@@ -24,7 +25,8 @@
 		hasVisionModality = false,
 		showMcpOption = false,
 		onFileUpload,
-		onMcpClick
+		onMcpClick,
+		onSystemPromptClick
 	}: Props = $props();
 
 	const fileUploadTooltipText = 'Add files or MCP servers';
@@ -136,6 +138,24 @@
 					<span>MCP Servers</span>
 				</DropdownMenu.Item>
 			{/if}
+
+			<DropdownMenu.Separator />
+			<Tooltip.Root>
+				<Tooltip.Trigger class="w-full">
+					<DropdownMenu.Item
+						class="flex cursor-pointer items-center gap-2"
+						onclick={() => onSystemPromptClick?.()}
+					>
+						<MessageSquare class="h-4 w-4" />
+
+						<span>System Prompt</span>
+					</DropdownMenu.Item>
+				</Tooltip.Trigger>
+
+				<Tooltip.Content>
+					<p>Add a custom system message for this conversation</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
 		</DropdownMenu.Content>
 	</DropdownMenu.Root>
 </div>

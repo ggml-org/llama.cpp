@@ -39,10 +39,9 @@
 		onAttachmentRemove?: (index: number) => void;
 		onFilesAdd?: (files: File[]) => void;
 		onStop?: () => void;
-		onSubmit?: () => void;
-		onSystemPromptClick?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
-		onUploadedFileRemove?: (fileId: string) => void;
-		onValueChange?: (value: string) => void;
+		onSystemPromptAdd?: () => void;
+		showHelperText?: boolean;
+		uploadedFiles?: ChatUploadedFile[];
 	}
 
 	let {
@@ -340,36 +339,19 @@
 			activeModelId={activeModelId ?? undefined}
 		/>
 
-		<div
-			class="flex-column relative min-h-[48px] items-center rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:!py-3"
-			onpaste={handlePaste}
-		>
-			<ChatFormTextarea
-				class="px-5 py-1.5 md:pt-0"
-				bind:this={textareaRef}
-				bind:value
-				onKeydown={handleKeydown}
-				onInput={() => {
-					onValueChange?.(value);
-				}}
-				{disabled}
-				{placeholder}
-			/>
-
-			<ChatFormActions
-				class="px-3"
-				bind:this={chatFormActionsRef}
-				canSend={canSubmit}
-				hasText={value.trim().length > 0}
-				{disabled}
-				{isLoading}
-				{isRecording}
-				{uploadedFiles}
-				onFileUpload={handleFileUpload}
-				onMicClick={handleMicClick}
-				{onStop}
-				onSystemPromptClick={() => onSystemPromptClick?.({ message: value, files: uploadedFiles })}
-			/>
-		</div>
+		<ChatFormActions
+			class="px-3"
+			bind:this={chatFormActionsRef}
+			canSend={message.trim().length > 0 || uploadedFiles.length > 0}
+			hasText={message.trim().length > 0}
+			{disabled}
+			{isLoading}
+			{isRecording}
+			{uploadedFiles}
+			onFileUpload={handleFileUpload}
+			onMicClick={handleMicClick}
+			onStop={handleStop}
+			onSystemPromptClick={onSystemPromptAdd}
+		/>
 	</div>
 </form>
