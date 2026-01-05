@@ -1,6 +1,15 @@
 <script lang="ts">
-	import { chatStore } from '$lib/stores/chat.svelte';
+	import { goto } from '$app/navigation';
+	import {
+		chatStore,
+		pendingEditMessageId,
+		clearPendingEditMessageId,
+		removeSystemPromptPlaceholder
+	} from '$lib/stores/chat.svelte';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { DatabaseService } from '$lib/services';
 	import { config } from '$lib/stores/settings.svelte';
+	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
 	import { copyToClipboard, isIMEComposing, formatMessageForClipboard } from '$lib/utils';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
@@ -69,8 +78,30 @@
 		return null;
 	});
 
-	function handleCancelEdit() {
+	// Auto-start edit mode if this message is the pending edit target
+	$effect(() => {
+		const pendingId = pendingEditMessageId();
+
+		if (pendingId && pendingId === message.id && !isEditing) {
+			handleEdit();
+			clearPendingEditMessageId();
+		}
+	});
+
+	async function handleCancelEdit() {
 		isEditing = false;
+
+		// If canceling a new system message with placeholder content, remove it without deleting children
+		if (message.role === 'system') {
+			const conversationDeleted = await removeSystemPromptPlaceholder(message.id);
+
+			if (conversationDeleted) {
+				goto('/');
+			}
+
+			return;
+		}
+
 		editedContent = message.content;
 		editedExtras = message.extra ? [...message.extra] : [];
 		editedUploadedFiles = [];
@@ -103,7 +134,12 @@
 
 	function handleEdit() {
 		isEditing = true;
-		editedContent = message.content;
+		// Clear placeholder content for system messages
+		editedContent =
+			message.role === 'system' && message.content === SYSTEM_MESSAGE_PLACEHOLDER
+				? ''
+				: message.content;
+		textareaElement?.focus();
 		editedExtras = message.extra ? [...message.extra] : [];
 		editedUploadedFiles = [];
 
@@ -143,7 +179,26 @@
 	}
 
 	async function handleSaveEdit() {
-		if (message.role === 'user' || message.role === 'system') {
+		if (message.role === 'system') {
+			// System messages: update in place without branching
+			const newContent = editedContent.trim();
+
+			// If content is empty or still the placeholder, remove without deleting children
+			if (!newContent) {
+				const conversationDeleted = await removeSystemPromptPlaceholder(message.id);
+				isEditing = false;
+				if (conversationDeleted) {
+					goto('/');
+				}
+				return;
+			}
+
+			await DatabaseService.updateMessage(message.id, { content: newContent });
+			const index = conversationsStore.findMessageIndex(message.id);
+			if (index !== -1) {
+				conversationsStore.updateMessageAtIndex(index, { content: newContent });
+			}
+		} else if (message.role === 'user') {
 			const finalExtras = await getMergedExtras();
 			onEditWithBranching?.(message, editedContent.trim(), finalExtras);
 		} else {

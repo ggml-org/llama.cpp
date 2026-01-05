@@ -30,6 +30,7 @@
 		onFileUpload?: () => void;
 		onMicClick?: () => void;
 		onStop?: () => void;
+		onSystemPromptClick?: () => void;
 	}
 
 	let {
@@ -42,7 +43,8 @@
 		uploadedFiles = [],
 		onFileUpload,
 		onMicClick,
-		onStop
+		onStop,
+		onSystemPromptClick
 	}: Props = $props();
 
 	let currentConfig = $derived(config());
@@ -167,7 +169,7 @@
 
 	let showMcpDialog = $state(false);
 
-
+	// MCP servers state (simplified - just need to check if any exist)
 	let mcpServers = $derived(parseMcpServerSettings(currentConfig.mcpServers));
 	let hasMcpServers = $derived(mcpServers.length > 0);
 </script>
@@ -181,6 +183,7 @@
 			showMcpOption={!hasMcpServers}
 			onMcpClick={() => (showMcpDialog = true)}
 			{onFileUpload}
+			{onSystemPromptClick}
 		/>
 
 		{#if hasMcpServers}
