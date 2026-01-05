@@ -11487,17 +11487,20 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
 
     GGML_SYCL_DEBUG("[XMX MoE] Weight layout: %s\n", is_coalesced ? "coalesced" : (is_soa ? "soa" : "aos"));
 
+    // EARLY BAIL-OUT for graph recording compatibility
+    // Only Q8_0 SoA path is graph-compatible (uses fused kernel with fixed grid size).
+    // All other paths require host synchronization that breaks graph recording.
+    const bool is_graph_compatible = (src0->type == GGML_TYPE_Q8_0 && is_soa);
+    if (g_ggml_sycl_graph_recording && !is_graph_compatible) {
+        GGML_SYCL_DEBUG("[XMX MoE] Non-Q8_0-SoA during graph recording, falling back to ESIMD\n");
+        return false;
+    }
+
     // Check if expert weights are in host/mmap memory
     // If so, skip XMX path - let host-side dispatch populate the cache first
     // GPU kernels cannot access host memory and will hang
     if (src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
         GGML_SYCL_DEBUG("[XMX MoE] Weights in host buffer, falling back to populate cache\n");
-        return false;
-    }
-
-    // XMX MoE uses synchronous memcpy for expert counts - incompatible with command graphs
-    if (!g_ggml_sycl_disable_graph) {
-        GGML_SYCL_DEBUG("[XMX MoE] Requires GGML_SYCL_DISABLE_GRAPH=1, skipping\n");
         return false;
     }
 
@@ -11626,14 +11629,25 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
                               ne11, in_dim, n_experts, *stream);
 
     // Phase 2: XMX GEMM per expert
-    auto                 xmx_cfg = moe_xmx::MoEXMXConfig::from_capabilities(caps);
+    auto xmx_cfg = moe_xmx::MoEXMXConfig::from_capabilities(caps);
+
+    // For Q8_0 SoA with graph-compatible fused path, we skip the host sync here.
+    // For all other paths (MXFP4, AoS, Coalesced), we need to read counts/offsets.
+    // Note: Graph recording bail-out for non-compatible paths happens at function entry.
+    const bool use_graph_compatible_fused = (src0->type == GGML_TYPE_Q8_0 && is_soa);
+
+    // Read counts/offsets to host (only for non-graph-compatible paths)
     std::vector<int32_t> h_counts(n_experts), h_offsets(n_experts + 1);
-    stream->memcpy(h_counts.data(), expert_counts, n_experts * sizeof(int32_t)).wait();
-    // Read n_experts+1 offsets to get the total valid pairs at the end
-    stream->memcpy(h_offsets.data(), expert_offsets, (n_experts + 1) * sizeof(int32_t)).wait();
-    // actual_pairs = sum of all expert counts = h_offsets[n_experts]
-    // This is the number of VALID (token, expert) pairs, not total_pairs which includes empty slots
-    int64_t actual_pairs = h_offsets[n_experts];
+    int64_t              actual_pairs = 0;
+
+    if (!use_graph_compatible_fused) {
+        stream->memcpy(h_counts.data(), expert_counts, n_experts * sizeof(int32_t)).wait();
+        // Read n_experts+1 offsets to get the total valid pairs at the end
+        stream->memcpy(h_offsets.data(), expert_offsets, (n_experts + 1) * sizeof(int32_t)).wait();
+        // actual_pairs = sum of all expert counts = h_offsets[n_experts]
+        // This is the number of VALID (token, expert) pairs, not total_pairs which includes empty slots
+        actual_pairs = h_offsets[n_experts];
+    }
     GGML_SYCL_DEBUG("[XMX MoE] actual_pairs=%ld vs total_pairs=%ld (savings: %ld)\n", (long) actual_pairs,
                     (long) total_pairs, (long) (total_pairs - actual_pairs));
 
@@ -11725,43 +11739,78 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     // Q8_0 stride per expert (bytes of qs data)
     const int64_t q8_qs_per_expert = nblocks_per_expert * QK8_0;
 
-    // Try fused kernel path (single kernel for all experts)
-    if (fused_enabled && src0->type == GGML_TYPE_Q8_0 && is_soa) {
-        // Extract sorted_token_ids from token_map for fused kernel
-        // token_map[i].original_idx -> sorted_token_ids[i]
-        stream
-            ->parallel_for(sycl::range<1>(total_pairs),
-                           [=](sycl::id<1> idx) { sorted_token_ids[idx] = token_map[idx].original_idx; })
-            .wait();
+    // Try graph-compatible fused kernel path (single kernel for all experts)
+    // Uses GPU-side work assignment via tile mapping - no host iteration needed
+    // During graph recording, use fixed max grid size to avoid sync for total_tiles read.
+    // Extra work-groups early-exit when their tile is out of range.
+    if (src0->type == GGML_TYPE_Q8_0 && is_soa) {
+        // Ensure tile mapping buffers are pre-allocated (enables graph recording)
+        ctx.xmx_moe_buffers.allocate_tile_mapping(*stream);
+        int32_t * expert_tile_offsets = ctx.xmx_moe_buffers.expert_tile_offsets;
+        int32_t * total_tiles_dev     = ctx.xmx_moe_buffers.total_tiles;
 
-        // Pre-quantize ALL tokens (in original order) for fused kernel
-        // The fused kernel indexes by original token ID, so we quantize tokens_f16_input
-        // Note: tokens_f16_input is n_tokens x in_dim, but we need total_pairs x in_dim
-        // For now, quantize the sorted tokens and adjust indexing
+        // Pre-quantize ALL sorted tokens for fused kernel
         moe_xmx::preprocess_tokens_q8(tokens_sorted, q_tokens, token_scales, total_pairs, in_dim, *stream);
+
+        // Compute tile mapping on GPU (no host sync needed for this)
+        // Each expert's token count is converted to tile count via ceil division
+        constexpr int64_t TILE_M = 32;   // XMX tile height (TILES_M=4 * XMX_M=8)
+        sycl::event       offset_event;  // Empty event - in-order queue handles dependencies
+        sycl::event       tile_map_event = moe_compute_tile_mapping(expert_counts, expert_tile_offsets, total_tiles_dev,
+                                                                    n_experts, TILE_M, *stream, offset_event);
+
+        // Compute maximum possible tiles for fixed grid size (graph-compatible)
+        // max_tiles = ceil(total_pairs / TILE_M) = worst case where all tokens go to one expert
+        const int32_t max_tiles = static_cast<int32_t>((total_pairs + TILE_M - 1) / TILE_M);
+
+        // During graph recording, use fixed max grid size to avoid host sync.
+        // During normal execution, read actual total_tiles for efficiency.
+        int32_t total_tiles_host = max_tiles;
+        if (!g_ggml_sycl_graph_recording) {
+            // Read actual tile count - one sync point for efficiency
+            stream->memcpy(&total_tiles_host, total_tiles_dev, sizeof(int32_t), { tile_map_event }).wait();
+
+            if (total_tiles_host == 0) {
+                // No work - all experts have zero tokens
+                GGML_SYCL_DEBUG("[XMX MoE] No tiles to process (all experts empty)\n");
+                goto scatter_back;
+            }
+        }
+
+        GGML_SYCL_DEBUG("[XMX MoE] Fused kernel: total_tiles=%d (max=%d, recording=%d) for %ld experts\n",
+                        total_tiles_host, max_tiles, g_ggml_sycl_graph_recording ? 1 : 0, (long) n_experts);
 
         // SoA weight pointers
         const int8_t *     base_qs = static_cast<const int8_t *>(src0->data);
         const sycl::half * base_d =
             reinterpret_cast<const sycl::half *>(static_cast<const char *>(src0->data) + soa_total_qs_q8);
 
-        bool fused_ok =
-            try_fused_xmx_moe_q8_0(base_qs, base_d, q_tokens, token_scales, sorted_token_ids, expert_offsets,
-                                   sorted_output, static_cast<int>(total_pairs), static_cast<int>(n_experts), out_dim,
-                                   in_dim, q8_qs_per_expert, ctx.device, *stream);
+        // Single fused kernel launch - GPU-side work assignment via binary search
+        // Each work-group finds its expert via expert_tile_offsets lookup.
+        // Extra WGs (when total_tiles < max_tiles) early-exit in kernel.
+        // Note: tile_map_event dependency ensures tile offsets are ready;
+        // quantization completed earlier on in-order queue
+        sycl::event gemm_event = moe_xmx::launch_fused_xmx_moe_q8_0_soa<4, 4>(
+            *stream, tile_map_event, base_qs, base_d, q_tokens, token_scales, sorted_output, expert_offsets,
+            expert_tile_offsets, total_tiles_host, n_experts, out_dim, in_dim, q8_qs_per_expert, xmx_cfg);
 
-        if (fused_ok) {
-            GGML_SYCL_DEBUG("[MoE] Fused XMX path succeeded\n");
-            // Wait for fused kernel to complete before scatter
-            stream->wait();
-            // Skip per-expert loop, go directly to scatter-back
-            goto scatter_back;
+        // During graph recording, don't call wait() - use in-order queue semantics
+        // During normal execution, wait before scatter-back
+        if (!g_ggml_sycl_graph_recording) {
+            gemm_event.wait();
         }
-        GGML_SYCL_DEBUG("[MoE] Fused XMX path failed, falling back to per-expert dispatch\n");
+
+        // Set actual_pairs for scatter-back (use total_pairs as safe upper bound)
+        // All sorted token entries are valid, so scatter will write correct results
+        actual_pairs = total_pairs;
+
+        GGML_SYCL_DEBUG("[MoE] Graph-compatible fused XMX path succeeded\n");
+        goto scatter_back;
     }
 
     // Try MXFP4 fused kernel path (single kernel for all experts)
-    else if (fused_enabled && src0->type == GGML_TYPE_MXFP4 && is_soa) {
+    // Note: MXFP4 still uses the old fused path - graph compatibility TBD
+    if (fused_enabled && src0->type == GGML_TYPE_MXFP4 && is_soa) {
         // Extract sorted_token_ids from token_map for fused kernel
         stream
             ->parallel_for(sycl::range<1>(total_pairs),
