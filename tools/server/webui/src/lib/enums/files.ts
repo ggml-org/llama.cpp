@@ -32,9 +32,10 @@ export enum FileTypePdf {
 
 export enum FileTypeText {
 	PLAIN_TEXT = 'plainText',
-	MARKDOWN = 'markdown',
-	JAVASCRIPT = 'javascript',
-	TYPESCRIPT = 'typescript',
+	MARKDOWN = 'md',
+	ASCIIDOC = 'asciidoc',
+	JAVASCRIPT = 'js',
+	TYPESCRIPT = 'ts',
 	JSX = 'jsx',
 	TSX = 'tsx',
 	CSS = 'css',
@@ -61,7 +62,12 @@ export enum FileTypeText {
 	VUE = 'vue',
 	SVELTE = 'svelte',
 	LATEX = 'latex',
-	BIBTEX = 'bibtex'
+	BIBTEX = 'bibtex',
+	CUDA = 'cuda',
+	VULKAN = 'vulkan',
+	HASKELL = 'haskell',
+	CSHARP = 'csharp',
+	PROPERTIES = 'properties'
 }
 
 // File extension enums
@@ -86,6 +92,7 @@ export enum FileExtensionPdf {
 export enum FileExtensionText {
 	TXT = '.txt',
 	MD = '.md',
+	ADOC = '.adoc',
 	JS = '.js',
 	TS = '.ts',
 	JSX = '.jsx',
@@ -119,7 +126,14 @@ export enum FileExtensionText {
 	VUE = '.vue',
 	SVELTE = '.svelte',
 	TEX = '.tex',
-	BIB = '.bib'
+	BIB = '.bib',
+	CU = '.cu',
+	CUH = '.cuh',
+	COMP = '.comp',
+	HPP = '.hpp',
+	HS = '.hs',
+	PROPERTIES = '.properties',
+	CS = '.cs'
 }
 
 // MIME type enums
@@ -147,6 +161,7 @@ export enum MimeTypeImage {
 export enum MimeTypeText {
 	PLAIN = 'text/plain',
 	MARKDOWN = 'text/markdown',
+	ASCIIDOC = 'text/asciidoc',
 	JAVASCRIPT = 'text/javascript',
 	JAVASCRIPT_APP = 'application/javascript',
 	TYPESCRIPT = 'text/typescript',
@@ -162,7 +177,10 @@ export enum MimeTypeText {
 	CSV = 'text/csv',
 	PYTHON = 'text/x-python',
 	JAVA = 'text/x-java-source',
+	CPP_HDR = 'text/x-c++hdr',
 	CPP_SRC = 'text/x-c++src',
+	CSHARP = 'text/x-csharp',
+	HASKELL = 'text/x-haskell',
 	C_SRC = 'text/x-csrc',
 	C_HDR = 'text/x-chdr',
 	PHP = 'text/x-php',
@@ -179,6 +197,10 @@ export enum MimeTypeText {
 	DART = 'text/x-dart',
 	VUE = 'text/x-vue',
 	SVELTE = 'text/x-svelte',
-	LATEX = 'text/x-tex',
-	BIBTEX = 'text/x-bibtex'
+	TEX = 'text/x-tex',
+	TEX_APP = 'application/x-tex',
+	LATEX = 'application/x-latex',
+	BIBTEX = 'text/x-bibtex',
+	CUDA = 'text/x-cuda',
+	PROPERTIES = 'text/properties'
 }

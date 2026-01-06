@@ -68,7 +68,7 @@ struct ggml_compute_params {
 #endif  // __VXE2__
 #endif  // __s390x__ && __VEC__
 
-#if defined(__ARM_FEATURE_SVE)
+#if defined(__ARM_FEATURE_SVE) && defined(__linux__)
 #include <sys/prctl.h>
 #endif
 
@@ -328,7 +328,7 @@ inline static int32x4_t ggml_vdotq_s32(int32x4_t acc, int8x16_t a, int8x16_t b) 
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <intrin.h>
-#elif defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__) || defined(__SSSE3__) || defined(__SSE3__) || defined(__SSE__)
+#elif defined(__SSE__) || defined(__SSE3__) || defined(__SSSE3__) || defined(__AVX__) || defined(__F16C__) || defined(__AVX2__) || defined(__AVX512F__) || defined(__AVX512BF16__)
 #include <immintrin.h>
 #endif
 
@@ -500,13 +500,15 @@ inline static int32x4_t ggml_vec_dot(int32x4_t acc, int8x16_t a, int8x16_t b) {
 
 #endif
 
-#if defined(__loongarch_asx)
+#if defined(__loongarch_sx)
 /* float type data load instructions */
 static __m128 __lsx_vreplfr2vr_s(const float val) {
     v4f32 res = {val, val, val, val};
     return (__m128)res;
 }
+#endif
 
+#if defined(__loongarch_asx)
 static __m256 __lasx_xvreplfr2vr_s(const float val) {
     v8f32 res = {val, val, val, val, val, val, val, val};
     return (__m256)res;

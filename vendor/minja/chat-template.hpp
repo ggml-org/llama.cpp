@@ -192,18 +192,25 @@ class chat_template {
             };
         };
         const json dummy_args_obj {{"argument_needle", "print('Hello, World!')"}};
+        const auto contains_arg_needle = [&](const std::string & out_str) {
+            return contains(out_str, "<parameter=argument_needle>")
+                || contains(out_str, "\"argument_needle\":")
+                || contains(out_str, "'argument_needle':")
+                || contains(out_str, ">argument_needle<")
+                || contains(out_str, "<parameter name=\"argument_needle\">");
+        };
 
         // Note: the arguments are rendered in both cases, but may be double-escaped, which we don't want.
         out = try_raw_render(json::array({
             dummy_user_msg,
             make_tool_calls_msg(json::array({make_tool_call("ipython", dummy_args_obj.dump())})),
         }), {}, false);
-        auto tool_call_renders_str_arguments = contains(out, "<parameter=argument_needle>") || contains(out, "\"argument_needle\":") || contains(out, "'argument_needle':");
+        auto tool_call_renders_str_arguments = contains_arg_needle(out);
         out = try_raw_render(json::array({
             dummy_user_msg,
             make_tool_calls_msg(json::array({make_tool_call("ipython", dummy_args_obj)})),
         }), {}, false);
-        auto tool_call_renders_obj_arguments = contains(out, "<parameter=argument_needle>") || contains(out, "\"argument_needle\":") || contains(out, "'argument_needle':");
+        auto tool_call_renders_obj_arguments = contains_arg_needle(out);
 
         caps_.supports_tool_calls = tool_call_renders_str_arguments || tool_call_renders_obj_arguments;
         caps_.requires_object_arguments = !tool_call_renders_str_arguments && tool_call_renders_obj_arguments;

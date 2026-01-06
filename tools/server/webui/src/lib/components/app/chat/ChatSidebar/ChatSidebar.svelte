@@ -1,14 +1,15 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ChatSidebarConversationItem } from '$lib/components/app';
+	import { Trash2 } from '@lucide/svelte';
+	import { ChatSidebarConversationItem, DialogConfirmation } from '$lib/components/app';
 	import ScrollArea from '$lib/components/ui/scroll-area/scroll-area.svelte';
 	import * as Sidebar from '$lib/components/ui/sidebar';
-	import {
-		conversations,
-		deleteConversation,
-		updateConversationName
-	} from '$lib/stores/chat.svelte';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import Input from '$lib/components/ui/input/input.svelte';
+	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { getPreviewText } from '$lib/utils/text';
 	import ChatSidebarActions from './ChatSidebarActions.svelte';
 
 	const sidebar = Sidebar.useSidebar();
@@ -16,6 +17,13 @@
 	let currentChatId = $derived(page.params.id);
 	let isSearchModeActive = $state(false);
 	let searchQuery = $state('');
+	let showDeleteDialog = $state(false);
+	let showEditDialog = $state(false);
+	let selectedConversation = $state<DatabaseConversation | null>(null);
+	let editedName = $state('');
+	let selectedConversationNamePreview = $derived.by(() =>
+		selectedConversation ? getPreviewText(selectedConversation.name) : ''
+	);
 
 	let filteredConversations = $derived.by(() => {
 		if (searchQuery.trim().length > 0) {
@@ -27,12 +35,41 @@
 		return conversations();
 	});
 
-	async function editConversation(id: string, name: string) {
-		await updateConversationName(id, name);
+	async function handleDeleteConversation(id: string) {
+		const conversation = conversations().find((conv) => conv.id === id);
+		if (conversation) {
+			selectedConversation = conversation;
+			showDeleteDialog = true;
+		}
 	}
 
-	async function handleDeleteConversation(id: string) {
-		await deleteConversation(id);
+	async function handleEditConversation(id: string) {
+		const conversation = conversations().find((conv) => conv.id === id);
+		if (conversation) {
+			selectedConversation = conversation;
+			editedName = conversation.name;
+			showEditDialog = true;
+		}
+	}
+
+	function handleConfirmDelete() {
+		if (selectedConversation) {
+			showDeleteDialog = false;
+
+			setTimeout(() => {
+				conversationsStore.deleteConversation(selectedConversation.id);
+				selectedConversation = null;
+			}, 100); // Wait for animation to finish
+		}
+	}
+
+	function handleConfirmEdit() {
+		if (!editedName.trim() || !selectedConversation) return;
+
+		showEditDialog = false;
+
+		conversationsStore.updateConversationName(selectedConversation.id, editedName);
+		selectedConversation = null;
 	}
 
 	export function handleMobileSidebarItemClick() {
@@ -66,10 +103,14 @@
 
 		await goto(`#/chat/${id}`);
 	}
+
+	function handleStopGeneration(id: string) {
+		chatStore.stopGenerationForChat(id);
+	}
 </script>
 
 <ScrollArea class="h-[100vh]">
-	<Sidebar.Header class=" top-0 z-10 gap-6 bg-sidebar/50 px-4 pt-4 pb-2 backdrop-blur-lg md:sticky">
+	<Sidebar.Header class=" top-0 z-10 gap-6 bg-sidebar/50 px-4 py-4 pb-2 backdrop-blur-lg md:sticky">
 		<a href="#/" onclick={handleMobileSidebarItemClick}>
 			<h1 class="inline-flex items-center gap-1 px-2 text-xl font-semibold">llama.cpp</h1>
 		</a>
@@ -98,8 +139,9 @@
 							{handleMobileSidebarItemClick}
 							isActive={currentChatId === conversation.id}
 							onSelect={selectConversation}
-							onEdit={editConversation}
+							onEdit={handleEditConversation}
 							onDelete={handleDeleteConversation}
+							onStop={handleStopGeneration}
 						/>
 					</Sidebar.MenuItem>
 				{/each}
@@ -118,8 +160,52 @@
 			</Sidebar.Menu>
 		</Sidebar.GroupContent>
 	</Sidebar.Group>
-
-	<div class="bottom-0 z-10 bg-sidebar bg-sidebar/50 px-4 py-4 backdrop-blur-lg md:sticky">
-		<p class="text-xs text-muted-foreground">Conversations are stored locally in your browser.</p>
-	</div>
 </ScrollArea>
+
+<DialogConfirmation
+	bind:open={showDeleteDialog}
+	title="Delete Conversation"
+	description={selectedConversation
+		? `Are you sure you want to delete "${selectedConversationNamePreview}"? This action cannot be undone and will permanently remove all messages in this conversation.`
+		: ''}
+	confirmText="Delete"
+	cancelText="Cancel"
+	variant="destructive"
+	icon={Trash2}
+	onConfirm={handleConfirmDelete}
+	onCancel={() => {
+		showDeleteDialog = false;
+		selectedConversation = null;
+	}}
+/>
+
+<AlertDialog.Root bind:open={showEditDialog}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Edit Conversation Name</AlertDialog.Title>
+			<AlertDialog.Description>
+				<Input
+					class="mt-4 text-foreground"
+					onkeydown={(e) => {
+						if (e.key === 'Enter') {
+							e.preventDefault();
+							handleConfirmEdit();
+						}
+					}}
+					placeholder="Enter a new name"
+					type="text"
+					bind:value={editedName}
+				/>
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel
+				onclick={() => {
+					showEditDialog = false;
+					selectedConversation = null;
+				}}>Cancel</AlertDialog.Cancel
+			>
+			<AlertDialog.Action onclick={handleConfirmEdit}>Save</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>

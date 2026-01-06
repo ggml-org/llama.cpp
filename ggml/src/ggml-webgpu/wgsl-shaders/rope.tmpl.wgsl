@@ -221,6 +221,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let is_neox = bool(params.mode & 2);
     let is_mrope = bool(params.mode & 8);
+    let is_imrope = params.mode == 40;
     let is_vision = params.mode == 24;
 
     var i = gid.x * 2; // start index for this thread
@@ -248,24 +249,36 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let sec_w = params.sections1 + params.sections0;
         let sec_e = params.sections2 + sec_w;
         let sector = (i0 / 2) % sect_dims;
-        if (sector >= params.sections0 && sector < sec_w) {
-            theta_base_mult = 1;
-            if (is_vision) {
-                theta_scale_pwr = sector - params.sections0;
-            }
-        } else if (sector >= sec_w && sector < sec_e) {
-            theta_base_mult = 2;
-            if (is_vision) {
-                theta_scale_pwr = sector - sec_w;
-            }
-        } else if (sector >= sec_e) {
-            if (is_vision) {
-                theta_scale_pwr = sector - sec_e;
-                theta_scale_pwr = (i0 / 2) % sec_e;
-            }
-            theta_base_mult = 3;
-        } else if (is_vision) {
-            theta_scale_pwr = sector;
+        if (is_imrope) {
+          if (sector % 3 == 1 && sector < 3 * params.sections1) {
+              theta_base_mult = 1;
+          } else if (sector % 3 == 2 && sector < 3 * params.sections2) {
+              theta_base_mult = 2;
+          } else if (sector % 3 == 0 && sector < 3 * params.sections0) {
+              theta_base_mult = 0;
+          } else {
+              theta_base_mult = 3;
+          }
+        } else {
+          if (sector >= params.sections0 && sector < sec_w) {
+              theta_base_mult = 1;
+              if (is_vision) {
+                  theta_scale_pwr = sector - params.sections0;
+              }
+          } else if (sector >= sec_w && sector < sec_e) {
+              theta_base_mult = 2;
+              if (is_vision) {
+                  theta_scale_pwr = sector - sec_w;
+              }
+          } else if (sector >= sec_e) {
+              if (is_vision) {
+                  theta_scale_pwr = sector - sec_e;
+                  theta_scale_pwr = (i0 / 2) % sec_e;
+              }
+              theta_base_mult = 3;
+          } else if (is_vision) {
+              theta_scale_pwr = sector;
+          }
         }
     }
     let theta_base = f32(src1[params.offset_src1 + i2 + params.ne2 * theta_base_mult]) * pow(params.theta_scale, f32(theta_scale_pwr));

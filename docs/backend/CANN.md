@@ -313,7 +313,12 @@ Converting the matmul weight format from ND to NZ to improve performance. Enable
 
 ### GGML_CANN_ACL_GRAPH
 
-Operators are executed using ACL graph execution, rather than in op-by-op (eager) mode. Enabled by default.
+Operators are executed using ACL graph execution, rather than in op-by-op (eager) mode. Enabled by default. This option is only effective if `USE_ACL_GRAPH` was enabled at compilation time. To enable it, recompile using:
+
+```sh
+cmake -B build -DGGML_CANN=on -DCMAKE_BUILD_TYPE=release -DUSE_ACL_GRAPH=ON
+cmake --build build --config release
+```
 
 ### GGML_CANN_GRAPH_CACHE_CAPACITY
 
@@ -322,3 +327,7 @@ Maximum number of compiled CANN graphs kept in the LRU cache, default is 12. Whe
 ### GGML_CANN_PREFILL_USE_GRAPH
 
 Enable ACL graph execution during the prefill stage, default is false. This option is only effective when FA is enabled.
+
+### GGML_CANN_OPERATOR_FUSION
+
+Enable operator fusion during computation, default is false. This option fuses compatible operators (e.g., ADD + RMS_NORM) to reduce overhead and improve performance.

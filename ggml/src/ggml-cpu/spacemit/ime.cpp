@@ -485,8 +485,9 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS> class tensor_
             int32_t          start                  = ith * task_per_thread;
             int32_t          end                    = std::min((ith + 1) * task_per_thread, task_count);
             for (int32_t compute_idx = start; compute_idx < end; compute_idx++) {
-                int32_t                             gemm_idx = compute_idx / block_size_m;
-                int32_t                             m_idx    = compute_idx % block_size_m * block_size_m;
+                int32_t                             gemm_idx = compute_idx / per_gemm_block_count_m;
+                int32_t                             block_idx_in_gemm = compute_idx % per_gemm_block_count_m;
+                int32_t                             m_idx    = block_idx_in_gemm * block_size_m;
                 const qnbitgemm_spacemit_ime_args & data     = qnbitgemm_args[gemm_idx];
                 int32_t rows_tobe_handled = (gemm_m - m_idx) > block_size_m ? block_size_m : (gemm_m - m_idx);
 

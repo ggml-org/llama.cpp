@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #if defined(_WIN32)
+#    define WIN32_LEAN_AND_MEAN
 #    ifndef NOMINMAX
 #        define NOMINMAX
 #    endif
@@ -22,6 +23,8 @@
 
 #if defined(LLAMA_USE_CURL)
 #    include <curl/curl.h>
+#else
+#    include "http.h"
 #endif
 
 #include <signal.h>
@@ -397,7 +400,6 @@ class File {
 #    endif
 };
 
-#ifdef LLAMA_USE_CURL
 class HttpClient {
   public:
     int init(const std::string & url, const std::vector<std::string> & headers, const std::string & output_file,
@@ -427,6 +429,8 @@ class HttpClient {
 
         return 0;
     }
+
+#ifdef LLAMA_USE_CURL
 
     ~HttpClient() {
         if (chunk) {
@@ -531,6 +535,117 @@ class HttpClient {
 #endif
         return curl_easy_perform(curl);
     }
+
+#else // LLAMA_USE_CURL is not defined
+
+#define curl_off_t long long  // temporary hack
+
+  private:
+    // this is a direct translation of the cURL download() above
+    int download(const std::string & url, const std::vector<std::string> & headers_vec, const std::string & output_file,
+                 const bool progress, std::string * response_str = nullptr) {
+        try {
+            auto [cli, url_parts] = common_http_client(url);
+
+            httplib::Headers headers;
+            for (const auto & h : headers_vec) {
+                size_t pos = h.find(':');
+                if (pos != std::string::npos) {
+                    headers.emplace(h.substr(0, pos), h.substr(pos + 2));
+                }
+            }
+
+            File out;
+            if (!output_file.empty()) {
+                if (!out.open(output_file, "ab")) {
+                    printe("Failed to open file for writing\n");
+                    return 1;
+                }
+                if (out.lock()) {
+                    printe("Failed to exclusively lock file\n");
+                    return 1;
+                }
+            }
+
+            size_t resume_offset = 0;
+            if (!output_file.empty() && std::filesystem::exists(output_file)) {
+                resume_offset = std::filesystem::file_size(output_file);
+                if (resume_offset > 0) {
+                    headers.emplace("Range", "bytes=" + std::to_string(resume_offset) + "-");
+                }
+            }
+
+            progress_data data;
+            data.file_size = resume_offset;
+
+            long long total_size = 0;
+            long long received_this_session = 0;
+
+            auto response_handler =
+                [&](const httplib::Response & response) {
+                if (resume_offset > 0 && response.status != 206) {
+                    printe("\nServer does not support resuming. Restarting download.\n");
+                    out.file = freopen(output_file.c_str(), "wb", out.file);
+                    if (!out.file) {
+                        return false;
+                    }
+                    data.file_size = 0;
+                }
+                if (progress) {
+                    if (response.has_header("Content-Length")) {
+                        total_size = std::stoll(response.get_header_value("Content-Length"));
+                    } else if (response.has_header("Content-Range")) {
+                        auto range = response.get_header_value("Content-Range");
+                        auto slash = range.find('/');
+                        if (slash != std::string::npos) {
+                           total_size = std::stoll(range.substr(slash + 1));
+                        }
+                    }
+                }
+                return true;
+            };
+
+            auto content_receiver =
+                [&](const char * chunk, size_t length) {
+                    if (out.file && fwrite(chunk, 1, length, out.file) != length) {
+                        return false;
+                    }
+                    if (response_str) {
+                        response_str->append(chunk, length);
+                    }
+                    received_this_session += length;
+
+                    if (progress && total_size > 0) {
+                        update_progress(&data, total_size, received_this_session, 0, 0);
+                    }
+                    return true;
+                };
+
+            auto res = cli.Get(url_parts.path, headers, response_handler, content_receiver);
+
+            if (data.printed) {
+                 printe("\n");
+            }
+
+            if (!res) {
+                auto err = res.error();
+                printe("Fetching resource '%s' failed: %s\n", url.c_str(), httplib::to_string(err).c_str());
+                return 1;
+            }
+
+            if (res->status >= 400) {
+                printe("Fetching resource '%s' failed with status code: %d\n", url.c_str(), res->status);
+                return 1;
+            }
+
+        } catch (const std::exception & e) {
+            printe("HTTP request failed: %s\n", e.what());
+            return 1;
+        }
+        return 0;
+    }
+
+#endif // LLAMA_USE_CURL
 
     static std::string human_readable_time(double seconds) {
         int hrs  = static_cast<int>(seconds) / 3600;
@@ -644,8 +759,8 @@ class HttpClient {
         str->append(static_cast<char *>(ptr), size * nmemb);
         return size * nmemb;
     }
+
 };
-#endif
 
 class LlamaData {
   public:
@@ -673,7 +788,6 @@ class LlamaData {
     }
 
   private:
-#ifdef LLAMA_USE_CURL
     int download(const std::string & url, const std::string & output_file, const bool progress,
                  const std::vector<std::string> & headers = {}, std::string * response_str = nullptr) {
         HttpClient http;
@@ -683,14 +797,6 @@ class LlamaData {
 
         return 0;
     }
-#else
-    int download(const std::string &, const std::string &, const bool, const std::vector<std::string> & = {},
-                 std::string * = nullptr) {
-        printe("%s: llama.cpp built without libcurl, downloading from an url not supported.\n", __func__);
-
-        return 1;
-    }
-#endif
 
     // Helper function to handle model tag extraction and URL construction
     std::pair<std::string, std::string> extract_model_and_tag(std::string & model, const std::string & base_url) {

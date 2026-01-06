@@ -5,12 +5,6 @@ from utils import *
 server = ServerPreset.tinyllama2()
 
 
-@pytest.fixture(scope="session", autouse=True)
-def do_something():
-    # this will be run once per test session, before any tests
-    ServerPreset.load_all()
-
-
 @pytest.fixture(autouse=True)
 def create_server():
     global server
@@ -66,12 +60,12 @@ def test_server_slots():
     assert len(res.body) == server.n_slots
     assert server.n_ctx is not None and server.n_slots is not None
     assert res.body[0]["n_ctx"] == server.n_ctx / server.n_slots
-    assert "params" in res.body[0]
-    assert res.body[0]["params"]["seed"] == server.seed
+    assert "params" not in res.body[0]
 
 
 def test_load_split_model():
     global server
+    server.offline = False
     server.model_hf_repo = "ggml-org/models"
     server.model_hf_file = "tinyllamas/split/stories15M-q8_0-00001-of-00003.gguf"
     server.model_alias = "tinyllama-split"

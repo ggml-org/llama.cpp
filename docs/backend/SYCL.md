@@ -42,6 +42,9 @@ The following releases are verified and recommended:
 
 ## News
 
+- 2025.11
+  - Support malloc memory on device more than 4GB.
+
 - 2025.2
   - Optimize MUL_MAT Q4_0 on Intel GPU for all dGPUs and built-in GPUs since MTL. Increase the performance of LLM (llama-2-7b.Q4_0.gguf) 21%-87% on Intel GPUs (MTL, ARL-H, Arc, Flex, PVC).
     |GPU|Base tokens/s|Increased tokens/s|Percent|
@@ -100,6 +103,8 @@ SYCL backend supports Intel GPU Family:
 - Intel Built-in Arc GPU
 - Intel iGPU in Core CPU (11th Generation Core CPU and newer, refer to [oneAPI supported GPU](https://www.intel.com/content/www/us/en/developer/articles/system-requirements/intel-oneapi-base-toolkit-system-requirements.html#inpage-nav-1-1)).
 
+On older Intel GPUs, you may try [OpenCL](/docs/backend/OPENCL.md) although the performance is not optimal, and some GPUs may not support OpenCL nor have any GPGPU capabilities.
+
 #### Verified devices
 
 | Intel GPU                     | Status  | Verified Model                        |
@@ -145,11 +150,12 @@ The docker build option is currently limited to *Intel GPU* targets.
 ```sh
 # Using FP16
 docker build -t llama-cpp-sycl --build-arg="GGML_SYCL_F16=ON" --target light -f .devops/intel.Dockerfile .
+
+# Using FP32
+docker build -t llama-cpp-sycl --build-arg="GGML_SYCL_F16=OFF" --target light -f .devops/intel.Dockerfile .
 ```
 
 *Notes*:
-
-To build in default FP32 *(Slower than FP16 alternative)*, set `--build-arg="GGML_SYCL_F16=OFF"` in the previous command.
 
 You can also use the `.devops/llama-server-intel.Dockerfile`, which builds the *"server"* alternative.
 Check the [documentation for Docker](../docker.md) to see the available images.
@@ -160,7 +166,7 @@ Check the [documentation for Docker](../docker.md) to see the available images.
 # First, find all the DRI cards
 ls -la /dev/dri
 # Then, pick the card that you want to use (here for e.g. /dev/dri/card1).
-docker run -it --rm -v "$(pwd):/app:Z" --device /dev/dri/renderD128:/dev/dri/renderD128 --device /dev/dri/card1:/dev/dri/card1 llama-cpp-sycl -m "/app/models/YOUR_MODEL_FILE" -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 33
+docker run -it --rm -v "/path/to/models:/models" --device /dev/dri/renderD128:/dev/dri/renderD128 --device /dev/dri/card0:/dev/dri/card0 llama-cpp-sycl -m /models/7B/ggml-model-q4_0.gguf -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 33 -c 4096 -s 0
 ```
 
 *Notes:*
@@ -215,15 +221,31 @@ To target AMD GPUs with SYCL, the ROCm stack must be installed first.
 
 2. **Install Intel® oneAPI Base toolkit**
 
+SYCL backend depends on:
+  - Intel® oneAPI DPC++/C++ compiler/running-time.
+  - Intel® oneAPI DPC++/C++ library (oneDPL).
+  - Intel® oneAPI Deep Neural Network Library (oneDNN).
+  - Intel® oneAPI Math Kernel Library (oneMKL).
+
 - **For Intel GPU**
 
-The base toolkit can be obtained from the official [Intel® oneAPI Base Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) page.
+All above are included in both **Intel® oneAPI Base toolkit** and **Intel® Deep Learning Essentials** packages.
+
+It's recommended to install **Intel® Deep Learning Essentials** which only provides the necessary libraries with less size.
+
+The **Intel® oneAPI Base toolkit** and **Intel® Deep Learning Essentials** can be obtained from the official [Intel® oneAPI Base Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) page.
 
 Please follow the instructions for downloading and installing the Toolkit for Linux, and preferably keep the default installation values unchanged, notably the installation path *(`/opt/intel/oneapi` by default)*.
 
 Following guidelines/code snippets assume the default installation values. Otherwise, please make sure the necessary changes are reflected where applicable.
 
 Upon a successful installation, SYCL is enabled for the available intel devices, along with relevant libraries such as oneAPI oneDNN for Intel GPUs.
+
+|Verified release|
+|-|
+|2025.2.1|
+|2025.1|
+|2024.1|
 
 - **Adding support to Nvidia GPUs**
 
@@ -255,10 +277,11 @@ sycl-ls
 When targeting an intel GPU, the user should expect one or more devices among the available SYCL devices. Please make sure that at least one GPU is present via `sycl-ls`, for instance `[level_zero:gpu]` in the sample output below:
 
 ```
-[opencl:acc][opencl:0] Intel(R) FPGA Emulation Platform for OpenCL(TM), Intel(R) FPGA Emulation Device OpenCL 1.2  [2023.16.10.0.17_160000]
-[opencl:cpu][opencl:1] Intel(R) OpenCL, 13th Gen Intel(R) Core(TM) i7-13700K OpenCL 3.0 (Build 0) [2023.16.10.0.17_160000]
-[opencl:gpu][opencl:2] Intel(R) OpenCL Graphics, Intel(R) Arc(TM) A770 Graphics OpenCL 3.0 NEO  [23.30.26918.50]
-[level_zero:gpu][level_zero:0] Intel(R) Level-Zero, Intel(R) Arc(TM) A770 Graphics 1.3 [1.3.26918]
+[level_zero:gpu][level_zero:0] Intel(R) oneAPI Unified Runtime over Level-Zero, Intel(R) Arc(TM) A770 Graphics 12.55.8 [1.3.29735+27]
+[level_zero:gpu][level_zero:1] Intel(R) oneAPI Unified Runtime over Level-Zero, Intel(R) UHD Graphics 730 12.2.0 [1.3.29735+27]
+[opencl:cpu][opencl:0] Intel(R) OpenCL, 13th Gen Intel(R) Core(TM) i5-13400 OpenCL 3.0 (Build 0) [2025.20.8.0.06_160000]
+[opencl:gpu][opencl:1] Intel(R) OpenCL Graphics, Intel(R) Arc(TM) A770 Graphics OpenCL 3.0 NEO  [24.39.31294]
+[opencl:gpu][opencl:2] Intel(R) OpenCL Graphics, Intel(R) UHD Graphics 730 OpenCL 3.0 NEO  [24.39.31294]
 ```
 
 - **Nvidia GPU**
@@ -353,7 +376,7 @@ cmake --build build --config Release -j -v
 
 #### Retrieve and prepare model
 
-You can refer to the general [*Prepare and Quantize*](README.md#prepare-and-quantize) guide for model preparation, or download an already quantized model like [llama-2-7b.Q4_0.gguf](https://huggingface.co/TheBloke/Llama-2-7B-GGUF/blob/main/llama-2-7b.Q4_0.gguf) or [Meta-Llama-3-8B-Instruct-Q4_0.gguf](https://huggingface.co/aptha/Meta-Llama-3-8B-Instruct-Q4_0-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_0.gguf).
+You can refer to the general [*Prepare and Quantize*](README.md#prepare-and-quantize) guide for model preparation, or download an already quantized model like [llama-2-7b.Q4_0.gguf](https://huggingface.co/TheBloke/Llama-2-7B-GGUF/resolve/main/llama-2-7b.Q4_0.gguf?download=true) or [Meta-Llama-3-8B-Instruct-Q4_0.gguf](https://huggingface.co/aptha/Meta-Llama-3-8B-Instruct-Q4_0-GGUF/resolve/main/Meta-Llama-3-8B-Instruct-Q4_0.gguf).
 
 ##### Check device
 
@@ -466,7 +489,17 @@ If you already have a recent version of Microsoft Visual Studio, you can skip th
 
 3. Install Intel® oneAPI Base toolkit
 
-The base toolkit can be obtained from the official [Intel® oneAPI Base Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) page.
+SYCL backend depends on:
+  - Intel® oneAPI DPC++/C++ compiler/running-time.
+  - Intel® oneAPI DPC++/C++ library (oneDPL).
+  - Intel® oneAPI Deep Neural Network Library (oneDNN).
+  - Intel® oneAPI Math Kernel Library (oneMKL).
+
+All above are included in both **Intel® oneAPI Base toolkit** and **Intel® Deep Learning Essentials** packages.
+
+It's recommended to install **Intel® Deep Learning Essentials** which only provides the necessary libraries with less size.
+
+The **Intel® oneAPI Base toolkit** and **Intel® Deep Learning Essentials** can be obtained from the official [Intel® oneAPI Base Toolkit](https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit.html) page.
 
 Please follow the instructions for downloading and installing the Toolkit for Windows, and preferably keep the default installation values unchanged, notably the installation path *(`C:\Program Files (x86)\Intel\oneAPI` by default)*.
 
@@ -761,6 +794,8 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | GGML_SYCL_DISABLE_GRAPH | 0 or 1 (default) | Disable running computations through SYCL Graphs feature. Disabled by default because graph performance isn't yet better than non-graph performance. |
 | GGML_SYCL_DISABLE_DNN | 0 (default) or 1 | Disable running computations through oneDNN and always use oneMKL. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
+| UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Support malloc device memory more than 4GB.|
+
 
 
 ## Known Issues
@@ -794,7 +829,7 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 
   No. We can't support Ollama issue directly, because we aren't familiar with Ollama.
 
-  Sugguest reproducing on llama.cpp and report similar issue to llama.cpp. We will surpport it.
+  Suggest reproducing on llama.cpp and report similar issue to llama.cpp. We will support it.
 
   It's same for other projects including llama.cpp SYCL backend.
 
@@ -806,6 +841,14 @@ use 1 SYCL GPUs: [0] with Max compute units:512
   |-|-|
   | The default context is too big. It leads to excessive memory usage.|Set `-c 8192` or a smaller value.|
   | The model is too big and requires more memory than what is available.|Choose a smaller model or change to a smaller quantization, like Q5 -> Q4;<br>Alternatively, use more than one device to load model.|
+
+- `ggml_backend_sycl_buffer_type_alloc_buffer: can't allocate 5000000000 Bytes of memory on device`
+
+  You need to enable to support 4GB memory malloc by:
+  ```
+    export UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
+    set UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS=1
+  ```
 
 ### **GitHub contribution**:
 Please add the `SYCL :` prefix/tag in issues/PRs titles to help the SYCL contributors to check/address them without delay.
