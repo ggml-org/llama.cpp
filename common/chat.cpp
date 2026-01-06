@@ -1008,10 +1008,8 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
         include_grammar = false;
         if (extract_reasoning) {
-            auto analysis_segment_rule = p.rule("analysis", analysis_segment);
-            auto content_segment_rule  = p.rule("content", content_segment);
-            auto segment               = p.choice({ analysis_segment_rule, content_segment_rule });
-            return p.optional(segment + p.repeat(p.space() + segment, 0, -1));
+            auto segment = p.choice({ analysis_segment, content_segment });
+            return p.optional(segment + p.repeat(p.optional(p.space()) + segment, 0, -1));
         }
         // reasoning_format=NONE:
         // - Final/commentary channels: strip headers (use content_segment)
