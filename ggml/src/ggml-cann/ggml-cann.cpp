@@ -122,7 +122,7 @@ std::optional<std::string> get_env(const std::string & name) {
  * @brief Verify whether the environment variable is a valid value.
  */
 bool parse_bool(const std::string & value) {
-    std::unordered_set<std::string> valid_values = { "on", "1", "yes", "y", "enable", "true" };
+    static const std::unordered_set<std::string> valid_values = { "on", "1", "yes", "y", "enable", "true" };
     return valid_values.find(value) != valid_values.end();
 }
 
