@@ -1146,17 +1146,24 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
         // Analysis channel (reasoning)
         auto analysis_header = "<|channel|>analysis<|message|>";
-        auto end_segment = p.optional(p.literal("<|end|>") + p.space() + p.optional(p.literal("<|start|>assistant")));
+        auto end_segment = p.choice({
+            p.literal("<|end|>") + p.optional(p.literal("<|start|>assistant")),
+            p.literal("<|start|>assistant"),
+            p.eps()
+        });
         auto analysis_segment = p.literal(analysis_header) + p.reasoning(segment_content) + end_segment;
+
+        // Helper: content before <|message|> in a channel header that is not a tool call
+        auto channel_header_content = p.until_one_of({ " to=functions.", "<|message|>" });
 
         // Final/commentary channel (content) - without tool recipient
         auto content_header = p.choice({ p.literal("<|channel|>final"), p.literal("<|channel|>commentary") });
         auto content_segment =
-            content_header + p.until("<|message|>") + "<|message|>" + p.content(segment_content) + end_segment;
+            content_header + channel_header_content + "<|message|>" + p.content(segment_content) + end_segment;
 
         if (!inputs.json_schema.is_null()) {
             auto final_header = p.literal("<|channel|>final");
-            auto constraint   = p.optional(p.literal(" <|constrain|>") + p.until("<|message|>"));
+            auto constraint   = p.optional(p.literal(" <|constrain|>") + channel_header_content);
             return p.optional(analysis_segment) + final_header + constraint + "<|message|>" +
                    p.content(p.schema(p.json(), "response-format", inputs.json_schema));
         }
@@ -1177,7 +1184,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
                 auto channel_after_recipient =
                     p.literal("<|channel|>") + p.choice({ p.literal("analysis"), p.literal("commentary") });
-                auto constraint = p.space() + p.optional(p.literal("<|constrain|>") + p.until("<|message|>"));
+                auto constraint = p.space() + p.optional(p.literal("<|constrain|>") + channel_header_content);
                 auto args       = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", params));
 
                 // Pattern 1: recipient in role header
@@ -1210,7 +1217,10 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
         include_grammar = false;
         if (extract_reasoning) {
-            return p.optional(analysis_segment) + content_segment;
+            auto analysis_segment_rule = p.rule("analysis", analysis_segment);
+            auto content_segment_rule  = p.rule("content", content_segment);
+            auto segment               = p.choice({ analysis_segment_rule, content_segment_rule });
+            return p.optional(segment + p.repeat(p.space() + segment, 0, -1));
         }
         // reasoning_format=NONE:
         // - Final/commentary channels: strip headers (use content_segment)
