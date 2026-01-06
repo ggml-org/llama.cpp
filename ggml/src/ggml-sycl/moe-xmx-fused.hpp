@@ -186,6 +186,7 @@ void fused_xmx_moe_gemm_q8_0(
                         int local_token_idx = local_work / n_output_tiles;
                         int sorted_idx      = expert_start + local_token_idx;
                         int token_idx       = sorted_token_ids[sorted_idx];
+                        (void) token_idx;  // Suppress unused warning - kept for potential debugging
 
                         // Expert weight pointers
                         const int8_t *     expert_qs = all_expert_qs + expert * (out_dim * num_k_blocks * XMX_K);
@@ -434,6 +435,7 @@ sycl::event fused_xmx_moe_gemm_mxfp4_soa(
                         int local_token_idx = local_work / n_output_tiles;
                         int sorted_idx      = expert_start + local_token_idx;
                         int token_idx       = sorted_token_ids[sorted_idx];
+                        (void) token_idx;  // Suppress unused warning - kept for potential debugging
 
                         int col_start = tile_idx * TILE_N;
 
