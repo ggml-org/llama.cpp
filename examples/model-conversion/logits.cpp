@@ -161,9 +161,9 @@ int main(int argc, char ** argv) {
     std::vector<float> embd_out;
 
     if (embedding_mode) {
-        const int n_embd = llama_model_n_embd(model);
+        const int n_embd_out = llama_model_n_embd_out(model);
         const int n_embd_count = pooling_enabled ? 1 : batch.n_tokens;
-        const int n_embeddings = n_embd * n_embd_count;
+        const int n_embeddings = n_embd_out * n_embd_count;
         float * embeddings;
         type = "-embeddings";
 
@@ -177,7 +177,7 @@ int main(int argc, char ** argv) {
             embeddings = llama_get_embeddings(ctx);
         }
 
-        printf("Embedding dimension: %d\n", n_embd);
+        printf("Embedding dimension: %d\n", n_embd_out);
         printf("\n");
 
         // Print embeddings in the specified format
@@ -185,16 +185,16 @@ int main(int argc, char ** argv) {
             printf("embedding %d: ", j);
 
             // Print first 3 values
-            for (int i = 0; i < 3 && i < n_embd; i++) {
-                printf("%9.6f ", embeddings[j * n_embd + i]);
+            for (int i = 0; i < 3 && i < n_embd_out; i++) {
+                printf("%9.6f ", embeddings[j * n_embd_out + i]);
             }
 
             printf(" ... ");
 
             // Print last 3 values
-            for (int i = n_embd - 3; i < n_embd; i++) {
+            for (int i = n_embd_out - 3; i < n_embd_out; i++) {
                 if (i >= 0) {
-                    printf("%9.6f ", embeddings[j * n_embd + i]);
+                    printf("%9.6f ", embeddings[j * n_embd_out + i]);
                 }
             }
 
