@@ -81,7 +81,8 @@ jobs:
           cmake -B build \
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_BUILD_BORINGSSL=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BORINGSSL=ON \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=OFF \
             -DGGML_METAL_SHADER_DEBUG=ON \
@@ -119,7 +120,8 @@ jobs:
           cmake -B build \
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_BUILD_BORINGSSL=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BORINGSSL=ON \
             -DGGML_METAL=OFF \
             -DGGML_RPC=ON \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
@@ -1021,7 +1023,7 @@ jobs:
         id: cmake_build
         run: |
           cmake -S . -B build ${{ matrix.defines }} `
-            -DLLAMA_BUILD_BORINGSSL=ON
+            -DLLAMA_CURL=OFF -DLLAMA_BORINGSSL=ON
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
 
       - name: Add libopenblas.dll
@@ -1126,7 +1128,8 @@ jobs:
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -DLLAMA_BUILD_SERVER=ON ^
-            -DLLAMA_BUILD_BORINGSSL=ON ^
+            -DLLAMA_CURL=OFF ^
+            -DLLAMA_BORINGSSL=ON ^
             -DGGML_NATIVE=OFF ^
             -DGGML_BACKEND_DL=ON ^
             -DGGML_CPU_ALL_VARIANTS=ON ^
@@ -1233,7 +1236,8 @@ jobs:
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
             -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-${{ env.ROCM_VERSION }}/include/" `
             -DCMAKE_BUILD_TYPE=Release `
-            -DLLAMA_BUILD_BORINGSSL=ON `
+            -DLLAMA_CURL=OFF `
+            -DLLAMA_BORINGSSL=ON `
             -DROCM_DIR="${env:HIP_PATH}" `
             -DGGML_HIP=ON `
             -DGGML_HIP_ROCWMMA_FATTN=ON `

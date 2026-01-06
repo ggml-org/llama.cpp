@@ -35,7 +35,7 @@ target_compile_definitions(${TARGET} PRIVATE
 
 set(OPENSSL_NO_ASM ON CACHE BOOL "Disable OpenSSL ASM code when building BoringSSL or LibreSSL")
 
-if (LLAMA_BUILD_BORINGSSL)
+if (LLAMA_BORINGSSL)
     set(FIPS OFF CACHE BOOL "Enable FIPS (BoringSSL)")
 
     set(BORINGSSL_GIT "https://boringssl.googlesource.com/boringssl" CACHE STRING "BoringSSL git repository")
@@ -78,7 +78,7 @@ if (LLAMA_BUILD_BORINGSSL)
     set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
     target_link_libraries(${TARGET} PUBLIC ssl crypto)
 
-elseif (LLAMA_BUILD_LIBRESSL)
+elseif (LLAMA_LIBRESSL)
     set(LIBRESSL_VERSION "4.2.1" CACHE STRING "LibreSSL version")
 
     message(STATUS "Fetching LibreSSL version ${LIBRESSL_VERSION}")
