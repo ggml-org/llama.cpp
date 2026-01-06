@@ -47,9 +47,8 @@ static void sigint_handler(int signo) {
 
 static void show_additional_info(int /*argc*/, char ** argv) {
     LOG("CLI for LFM2.5-Audio-1.5B\n\n"
-        "Usage: %s [options] -m <model.gguf> --mmproj <mmproj.gguf> -mv <mv.gguf> -sys <system_prompt> [--audio "
-        "<audio>] [-p <user_prompt>]\n"
-        "  --audio, -p, --output can be required depending on <system_prompt>\n",
+        "Usage: %s [options] -m <model.gguf> --mmproj <mmproj.gguf> -mv <vocoder.gguf> --tts-speaker-file "
+        "<tokenizer.gguf>\n",
         argv[0]);
 }
 

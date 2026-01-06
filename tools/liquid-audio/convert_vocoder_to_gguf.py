@@ -72,6 +72,9 @@ class Lfm2AudioDecoderModelConverter:
         return tensors
 
     def add_tensor(self, name: str, data_torch: Tensor, old_dtype: torch.dtype):
+        if name.startswith("lfm") or name.startswith("lin"):
+            return
+
         is_1d = len(data_torch.shape) == 1
         is_bias = ".bias" in name
         can_quantize = not is_1d and not is_bias

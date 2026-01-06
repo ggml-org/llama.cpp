@@ -12,6 +12,7 @@
 #include "mtmd.h"
 #include "sampling.h"
 
+#include <algorithm>
 #include <atomic>
 #include <complex>
 #include <cstring>
@@ -65,11 +66,11 @@ struct audio_context {
         }
 
         // audio tokenizer
-        auto params_audio_tokenizer         = params;
-        params_audio_tokenizer.model.path   = params.vocoder.speaker_file;
-        params_audio_tokenizer.mmproj.path  = "";
-        params_audio_tokenizer.embedding    = true;
-        audio_tokenizer_llama_init          = common_init_from_params(params_audio_tokenizer);
+        auto params_audio_tokenizer        = params;
+        params_audio_tokenizer.model.path  = params.vocoder.speaker_file;
+        params_audio_tokenizer.mmproj.path = "";
+        params_audio_tokenizer.embedding   = true;
+        audio_tokenizer_llama_init         = common_init_from_params(params_audio_tokenizer);
         audio_tokenizer_model              = audio_tokenizer_llama_init->model();
         audio_tokenizer_lctx               = audio_tokenizer_llama_init->context();
 
@@ -120,11 +121,6 @@ class Runner::RunnerImpl {
                  int                          n_predict,
                  const text_callback_t &      text_callback,
                  const audio_callback_t &     audio_callback) {
-        // handling depends on system prompt
-        constexpr const char * asr_system_prompt           = "Perform ASR.";
-        constexpr const char * interleaved_system_prompt   = "Respond with interleaved text and audio.";
-        constexpr const char * tts_system_prompt_it_prefix = "Perform TTS.";
-
         std::vector<common_chat_msg> msgs;
         for (const auto & message : messages) {
             if (const auto & role = message.role; role == "system") {
@@ -135,20 +131,22 @@ class Runner::RunnerImpl {
                     ctx.audio_temperature = 0.8;
                     ctx.audio_top_k       = 4;
                     generator             = &Runner::RunnerImpl::generate_interleaved;
-                } else if (system_prompt.find(tts_system_prompt_it_prefix) == 0) {
+                } else if (std::find(begin(tts_system_prompts), end(tts_system_prompts), system_prompt) !=
+                           end(tts_system_prompts)) {
                     // TODO(tarek): check params with Marc
                     ctx.audio_temperature = 0.8;
                     ctx.audio_top_k       = 64;
                     generator             = &Runner::RunnerImpl::generate_sequential;
                 } else {
-                    return error(
-                        std::string("Unsupported system prompt. Supported prompts are:\n - ") + asr_system_prompt +
-                        "\n - " + interleaved_system_prompt + "\n - " + tts_system_prompt_it_prefix +
-                        "<voice instructions>" + "\n\n" +
-                        "Example of <voice instructions> can be 'Use the following voice: A male speaker "
-                        "delivers a very expressive and animated speech, with a low-pitch voice and a slightly "
-                        "close-sounding tone. The recording carries a slight background noise.', can be modified "
-                        "using natural language. e.g. change male to female, low-pitch to high-pitch...\n");
+                    std::vector<std::string> prompts = tts_system_prompts;
+                    prompts.push_back(asr_system_prompt);
+                    prompts.push_back(interleaved_system_prompt);
+                    std::string err;
+                    for (const auto & p : prompts) {
+                        err += " - " + p + "\n";
+                    }
+
+                    return error("Unsupported system prompt. Supported prompts are:\n" + err);
                 }
             } else if (role == "user") {
                 if (const auto & wav = message.wav; !wav.empty()) {

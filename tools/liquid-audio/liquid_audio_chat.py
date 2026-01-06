@@ -189,7 +189,7 @@ class AudioRecorder:
 
 SYSTEM_PROMPTS = {
     "asr": "Perform ASR.",
-    "tts": "Perform TTS.",
+    "tts": "Perform TTS. Use the UK female voice.",
     "interleaved": "Respond with interleaved text and audio.",
 }
 

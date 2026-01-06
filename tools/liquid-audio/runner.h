@@ -14,6 +14,16 @@ using audio_callback_t  = std::function<void(const std::vector<float> &)>;
 
 class Runner {
   public:
+    // handling depends on system prompt
+    static constexpr const char *                asr_system_prompt         = "Perform ASR.";
+    static constexpr const char *                interleaved_system_prompt = "Respond with interleaved text and audio.";
+    static inline const std::vector<std::string> tts_system_prompts        = {
+        "Perform TTS. Use the US male voice.",
+        "Perform TTS. Use the UK male voice.",
+        "Perform TTS. Use the US female voice.",
+        "Perform TTS. Use the UK female voice.",
+    };
+
     struct Message {
         std::string            role;
         std::string            content;
