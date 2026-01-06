@@ -1851,6 +1851,7 @@ static void quantize_fp32_q8x4x2(const struct htp_tensor * src,
 static void htp_quantize_fp32_q8x4x2(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = data;
     quantize_fp32_q8x4x2(&octx->src1, octx->src1_spad.data, &octx->src0_spad, n, i, octx->src1_nrows_per_thread);
+    atomic_fetch_add(&octx->shared_atomic_lock, 1);
 }
 
 // ** matmul callbacks for worker_pool
@@ -2166,12 +2167,16 @@ int op_matmul(struct htp_ops_context * octx) {
     octx->src0_nrows_per_thread = (src0_nrows + octx->n_threads - 1) / octx->n_threads;
     octx->src0_nrows_per_thread += (octx->src0_nrows_per_thread & 1);  // round up to even
 
+    atomic_store(&octx->shared_atomic_lock, 0);
+
     if (need_quant) {
         // Run quant jobs
         const uint32_t n_quant_jobs = MIN(src1_nrows, octx->n_threads);
         octx->src1_nrows_per_thread = (src1_nrows + n_quant_jobs - 1) / n_quant_jobs;
         worker_pool_run_func(octx->ctx->worker_pool, quant_job_func, octx, n_quant_jobs);
     }
+
+    FARF(HIGH, "matmul-%s : quant jobs finished! Atomic lock: %u\n", op_type, atomic_load(&octx->shared_atomic_lock));
 
     if (!(octx->flags & HTP_OPFLAGS_SKIP_COMPUTE)) {
         // Run matmul jobs
