@@ -11315,9 +11315,11 @@ static bool ggml_sycl_mul_mat_id_fused(ggml_backend_sycl_context & ctx,
         return false;  // Use MMVQ for single-token decode
     }
 
-    // For large batch sizes, host-side oneDNN batching is much faster
+    // For large batch sizes, host-side oneDNN batching is much faster (for non-graph mode)
     // See GGML_SYCL_FUSED_MOE_MAX_BATCH definition at file scope for details
-    if (batch_size > GGML_SYCL_FUSED_MOE_MAX_BATCH) {
+    // During graph recording, we MUST use this path for large batches since host-side routing
+    // requires synchronization that breaks graph recording.
+    if (batch_size > GGML_SYCL_FUSED_MOE_MAX_BATCH && !g_ggml_sycl_graph_recording) {
         GGML_SYCL_DEBUG("[MoE FUSED] Batch %ld > %ld, using oneDNN batching\n", (long) batch_size,
                         (long) GGML_SYCL_FUSED_MOE_MAX_BATCH);
         return false;  // Fall back to host-side oneDNN batching
@@ -11536,12 +11538,15 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     // Allocate temporary buffers
     sycl::half *      tokens_sorted = sycl::malloc_device<sycl::half>(total_pairs * in_dim, *stream);
     MoETokenMapping * token_map     = sycl::malloc_device<MoETokenMapping>(total_pairs, *stream);
-    int32_t *         sorted_token_ids =
-        (fused_enabled || tiled_enabled) ? sycl::malloc_device<int32_t>(total_pairs, *stream) : nullptr;
-    int32_t *    expert_counts  = sycl::malloc_device<int32_t>(n_experts, *stream);
+    // Allocate sorted_token_ids when fused/tiled paths may be used, or when graph recording
+    // with MXFP4 SoA (fused path auto-enabled for graph compatibility)
+    const bool        needs_sorted_token_ids =
+        fused_enabled || tiled_enabled || (g_ggml_sycl_graph_recording && src0->type == GGML_TYPE_MXFP4 && is_soa);
+    int32_t * sorted_token_ids = needs_sorted_token_ids ? sycl::malloc_device<int32_t>(total_pairs, *stream) : nullptr;
+    int32_t * expert_counts    = sycl::malloc_device<int32_t>(n_experts, *stream);
     // Allocate n_experts+1 for fused path (needs cumulative offsets including total)
-    int32_t *    expert_offsets = sycl::malloc_device<int32_t>(n_experts + 1, *stream);
-    sycl::half * sorted_output  = sycl::malloc_device<sycl::half>(total_pairs * out_dim, *stream);
+    int32_t * expert_offsets   = sycl::malloc_device<int32_t>(n_experts + 1, *stream);
+    sycl::half * sorted_output = sycl::malloc_device<sycl::half>(total_pairs * out_dim, *stream);
 
     if (!tokens_sorted || !token_map || !expert_counts || !expert_offsets || !sorted_output) {
         GGML_SYCL_DEBUG("[XMX MoE] Failed to allocate temporary buffers\n");
@@ -11566,7 +11571,7 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
         }
         return false;
     }
-    if ((fused_enabled || tiled_enabled) && !sorted_token_ids) {
+    if (needs_sorted_token_ids && !sorted_token_ids) {
         GGML_SYCL_DEBUG("[XMX MoE] Failed to allocate sorted_token_ids for fused path\n");
         sycl::free(tokens_sorted, *stream);
         sycl::free(token_map, *stream);
@@ -11638,10 +11643,10 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     // Phase 2: XMX GEMM per expert
     auto xmx_cfg = moe_xmx::MoEXMXConfig::from_capabilities(caps);
 
-    // For Q8_0 SoA with graph-compatible fused path, we skip the host sync here.
-    // For all other paths (MXFP4, AoS, Coalesced), we need to read counts/offsets.
+    // For Q8_0 SoA or MXFP4 SoA with graph-compatible fused path, we skip the host sync here.
+    // For all other paths (AoS, Coalesced), we need to read counts/offsets.
     // Note: Graph recording bail-out for non-compatible paths happens at function entry.
-    const bool use_graph_compatible_fused = (src0->type == GGML_TYPE_Q8_0 && is_soa);
+    const bool use_graph_compatible_fused = is_soa && (src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_MXFP4);
 
     // Read counts/offsets to host (only for non-graph-compatible paths)
     std::vector<int32_t> h_counts(n_experts), h_offsets(n_experts + 1);
@@ -11819,18 +11824,24 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
 
     // Try XMX tile-aligned MXFP4 path first (if enabled)
     // This path uses pre-computed tiled layout for better XMX utilization
-    if (tiled_enabled && src0->type == GGML_TYPE_MXFP4 && caps.supported) {
+    // Track allocation failures to avoid repeated OOM
+    static bool tiled_alloc_failed = false;
+
+    GGML_SYCL_DEBUG("[MoE] Tiled path check: tiled_enabled=%d, src0->type=%d (MXFP4=%d), caps.supported=%d\n",
+                    tiled_enabled ? 1 : 0, src0->type, GGML_TYPE_MXFP4, caps.supported ? 1 : 0);
+    if (tiled_enabled && !tiled_alloc_failed && src0->type == GGML_TYPE_MXFP4 && caps.supported) {
         // Get or create tiled layout from tensor extra
-        if (src0_extra && src0_extra->xmx_mxfp4_tiled[ctx.device] == nullptr) {
+        // Skip creation during graph recording (has .wait() calls) - fall through to SoA fused path
+        if (src0_extra && src0_extra->xmx_mxfp4_tiled[ctx.device] == nullptr && !g_ggml_sycl_graph_recording) {
             // Create tiled layout on first use
             moe_xmx_fused::MXFPXMXConfig     cfg  = moe_xmx_fused::MXFPXMXConfig::from_device(ctx.device);
             moe_xmx_fused::MXFPXMXLayoutInfo info = moe_xmx_fused::MXFPXMXLayoutInfo::compute(out_dim, in_dim, cfg);
 
             void * tiled_buf = sycl::malloc_device(info.total_bytes * n_experts, *stream);
             if (!tiled_buf) {
-                GGML_SYCL_DEBUG("[MoE] Failed to allocate tiled buffer (%zu bytes)\n",
+                GGML_SYCL_DEBUG("[MoE] Failed to allocate tiled buffer (%zu bytes), disabling tiled path\n",
                                 info.total_bytes * n_experts);
-                // Don't cache nullptr or set size - will fall back to SoA path
+                tiled_alloc_failed = true;  // Disable further allocation attempts
             } else {
                 // Validate layout and source data before conversion
                 GGML_ASSERT((is_soa || is_coalesced) && "MXFP4 tiled path requires SoA/Coalesced layout");
@@ -11838,37 +11849,66 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
 
                 // Validate source buffer bounds
                 const size_t expected_qs_size = static_cast<size_t>(soa_total_qs_mxfp4);
-                const size_t expected_e_size  = static_cast<size_t>(n_experts) * static_cast<size_t>(nblocks_per_expert);
-                const size_t total_expected   = expected_qs_size + expected_e_size;
+                const size_t expected_e_size = static_cast<size_t>(n_experts) * static_cast<size_t>(nblocks_per_expert);
+                const size_t total_expected  = expected_qs_size + expected_e_size;
                 const size_t src0_actual_size = ggml_nbytes(src0);
-                GGML_ASSERT(total_expected <= src0_actual_size &&
-                            "MXFP4 SoA layout size exceeds tensor allocation");
+                GGML_ASSERT(total_expected <= src0_actual_size && "MXFP4 SoA layout size exceeds tensor allocation");
 
                 // Convert each expert's SoA weights to tiled layout
-                const uint8_t * base_qs = static_cast<const uint8_t *>(src0->data);
-                const uint8_t * base_e  = base_qs + soa_total_qs_mxfp4;
+                // NOTE: src0->data is on device memory, reorder runs on host
+                // So we need to copy device data to host, reorder, then copy back
 
-                uint8_t * tiled_ptr = static_cast<uint8_t *>(tiled_buf);
-                GGML_ASSERT(tiled_ptr != nullptr);
+                // 1. Allocate host buffers
+                const size_t src_size         = total_expected;
+                const size_t tiled_total_size = info.total_bytes * n_experts;
+                uint8_t *    host_src         = sycl::malloc_host<uint8_t>(src_size, *stream);
+                uint8_t *    host_tiled       = sycl::malloc_host<uint8_t>(tiled_total_size, *stream);
 
-                for (size_t e = 0; e < static_cast<size_t>(n_experts); e++) {
-                    const size_t qs_offset    = e * static_cast<size_t>(mxfp4_qs_per_expert);
-                    const size_t e_offset     = e * static_cast<size_t>(nblocks_per_expert);
-                    const size_t tiled_offset = e * info.total_bytes;
+                if (!host_src || !host_tiled) {
+                    GGML_SYCL_DEBUG("[MoE] Failed to allocate host buffers for reorder\n");
+                    if (host_src) {
+                        sycl::free(host_src, *stream);
+                    }
+                    if (host_tiled) {
+                        sycl::free(host_tiled, *stream);
+                    }
+                    sycl::free(tiled_buf, *stream);
+                    tiled_buf = nullptr;
+                } else {
+                    // 2. Copy device SoA data to host
+                    stream->memcpy(host_src, src0->data, src_size).wait();
 
-                    const uint8_t * soa_qs    = base_qs + qs_offset;
-                    const uint8_t * soa_e     = base_e + e_offset;
-                    uint8_t *       tiled_out = tiled_ptr + tiled_offset;
+                    const uint8_t * base_qs = host_src;
+                    const uint8_t * base_e  = base_qs + soa_total_qs_mxfp4;
 
-                    moe_xmx_fused::reorder_mxfp4_to_xmx_layout(soa_qs, soa_e, tiled_out, info);
+                    // 3. Reorder on host
+                    for (size_t e = 0; e < static_cast<size_t>(n_experts); e++) {
+                        const size_t qs_offset    = e * static_cast<size_t>(mxfp4_qs_per_expert);
+                        const size_t e_offset     = e * static_cast<size_t>(nblocks_per_expert);
+                        const size_t tiled_offset = e * info.total_bytes;
+
+                        const uint8_t * soa_qs    = base_qs + qs_offset;
+                        const uint8_t * soa_e     = base_e + e_offset;
+                        uint8_t *       tiled_out = host_tiled + tiled_offset;
+
+                        moe_xmx_fused::reorder_mxfp4_to_xmx_layout(soa_qs, soa_e, tiled_out, info);
+                    }
+
+                    // 4. Copy tiled data to device
+                    stream->memcpy(tiled_buf, host_tiled, tiled_total_size).wait();
+
+                    // 5. Free host buffers
+                    sycl::free(host_src, *stream);
+                    sycl::free(host_tiled, *stream);
                 }
-                GGML_SYCL_DEBUG("[MoE] Converted %d experts to tiled layout (%zu bytes per expert)\n",
-                                n_experts, info.total_bytes);
 
-                src0_extra->xmx_mxfp4_tiled[ctx.device] = tiled_buf;
-                src0_extra->xmx_mxfp4_tiled_size        = info.total_bytes * n_experts;
-                GGML_SYCL_DEBUG("[MoE] Allocated tiled buffer: %zu bytes\n",
-                                info.total_bytes * n_experts);
+                if (tiled_buf) {
+                    GGML_SYCL_DEBUG("[MoE] Converted %d experts to tiled layout (%zu bytes per expert)\n", n_experts,
+                                    info.total_bytes);
+
+                    src0_extra->xmx_mxfp4_tiled[ctx.device] = tiled_buf;
+                    src0_extra->xmx_mxfp4_tiled_size        = info.total_bytes * n_experts;
+                }
             }
         }
 
@@ -11904,7 +11944,9 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
 
     // Try MXFP4 fused kernel path (single kernel for all experts)
     // Graph-compatible: uses event chaining instead of .wait() calls
-    if (fused_enabled && src0->type == GGML_TYPE_MXFP4 && is_soa) {
+    // Auto-enable during graph recording since this is the only graph-compatible MXFP4 path
+    // (tiled path is skipped during graph recording due to .wait() in layout conversion)
+    if ((fused_enabled || g_ggml_sycl_graph_recording) && src0->type == GGML_TYPE_MXFP4 && is_soa) {
         // Extract sorted_token_ids from token_map for fused kernel - async with event
         sycl::event extract_event = stream->parallel_for(
             sycl::range<1>(total_pairs), [=](sycl::id<1> idx) { sorted_token_ids[idx] = token_map[idx].original_idx; });
@@ -12135,6 +12177,19 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         return;
     }
     GGML_SYCL_DEBUG("[MoE] Falling back to host-side routing for type %d\n", src0->type);
+
+    // Host-side routing requires synchronization which is incompatible with graph recording.
+    // If we reach here during graph recording, we must abort because no graph-compatible
+    // path was available (XMX sorted MoE, fused ESIMD, and MMVQ all returned false).
+    if (g_ggml_sycl_graph_recording) {
+        GGML_LOG_ERROR(
+            "[MoE] No graph-compatible dispatch path for type=%d batch=%ld. "
+            "Host-side routing requires sync incompatible with graph recording.\n",
+            src0->type, (long) ne12);
+        GGML_ABORT(
+            "MoE operation requires host synchronization, incompatible with SYCL graph recording. "
+            "Set GGML_SYCL_DISABLE_GRAPH=1 to disable graphs or use SoA layout.");
+    }
 
     const queue_ptr stream = ctx.stream();
 
@@ -12463,7 +12518,8 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
     }
 
     // Debug: print output values after MoE operation
-    if (g_moe_debug_enabled) {
+    // Note: Skip during graph recording since .wait() is incompatible with command graphs
+    if (g_moe_debug_enabled && !g_ggml_sycl_graph_recording) {
         SYCL_CHECK(CHECK_TRY_ERROR(stream->wait()));
         std::vector<float> dst_host(std::min((size_t) 16, (size_t) ggml_nelements(dst)));
         SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_host.data(), dst->data, dst_host.size() * sizeof(float))));
