@@ -11467,7 +11467,6 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     static bool fused_enabled = getenv("GGML_SYCL_XMX_MOE_FUSED") != nullptr;
     // Enable XMX tile-aligned layout for MXFP4 MoE (requires XMX_MOE=1)
     static bool tiled_enabled = getenv("GGML_SYCL_XMX_MOE_TILED") != nullptr;
-    (void) tiled_enabled;  // Will be used when tiled layout path is implemented
 
     // Get XMX capabilities from cached device info
     auto & caps = ggml_sycl_info().devices[ctx.device].xmx_caps;
@@ -11535,13 +11534,14 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
                     (long) ids->nb[2], (long) ids->nb[3]);
 
     // Allocate temporary buffers
-    sycl::half *      tokens_sorted    = sycl::malloc_device<sycl::half>(total_pairs * in_dim, *stream);
-    MoETokenMapping * token_map        = sycl::malloc_device<MoETokenMapping>(total_pairs, *stream);
-    int32_t *         sorted_token_ids = fused_enabled ? sycl::malloc_device<int32_t>(total_pairs, *stream) : nullptr;
-    int32_t *         expert_counts    = sycl::malloc_device<int32_t>(n_experts, *stream);
+    sycl::half *      tokens_sorted = sycl::malloc_device<sycl::half>(total_pairs * in_dim, *stream);
+    MoETokenMapping * token_map     = sycl::malloc_device<MoETokenMapping>(total_pairs, *stream);
+    int32_t *         sorted_token_ids =
+        (fused_enabled || tiled_enabled) ? sycl::malloc_device<int32_t>(total_pairs, *stream) : nullptr;
+    int32_t *    expert_counts  = sycl::malloc_device<int32_t>(n_experts, *stream);
     // Allocate n_experts+1 for fused path (needs cumulative offsets including total)
-    int32_t *         expert_offsets   = sycl::malloc_device<int32_t>(n_experts + 1, *stream);
-    sycl::half *      sorted_output    = sycl::malloc_device<sycl::half>(total_pairs * out_dim, *stream);
+    int32_t *    expert_offsets = sycl::malloc_device<int32_t>(n_experts + 1, *stream);
+    sycl::half * sorted_output  = sycl::malloc_device<sycl::half>(total_pairs * out_dim, *stream);
 
     if (!tokens_sorted || !token_map || !expert_counts || !expert_offsets || !sorted_output) {
         GGML_SYCL_DEBUG("[XMX MoE] Failed to allocate temporary buffers\n");
@@ -11631,8 +11631,9 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
 
     // Phase 1b: Sort tokens by expert (with broadcast handling for ne11)
     // Use async version with dependency on memcpy for graph compatibility
-    sycl::event sort_event = moe_sort_tokens_by_expert_async(tokens_f16_input, tokens_sorted, expert_ids, expert_write_pos, token_map, n_tokens, n_ids,
-                              ne11, in_dim, n_experts, *stream, copy_write_pos_event);
+    sycl::event sort_event =
+        moe_sort_tokens_by_expert_async(tokens_f16_input, tokens_sorted, expert_ids, expert_write_pos, token_map,
+                                        n_tokens, n_ids, ne11, in_dim, n_experts, *stream, copy_write_pos_event);
 
     // Phase 2: XMX GEMM per expert
     auto xmx_cfg = moe_xmx::MoEXMXConfig::from_capabilities(caps);
@@ -11762,10 +11763,10 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
 
         // Compute tile mapping on GPU (no host sync needed for this)
         // Each expert's token count is converted to tile count via ceil division
-        constexpr int64_t TILE_M = 32;  // XMX tile height (TILES_M=4 * XMX_M=8)
+        constexpr int64_t TILE_M         = 32;  // XMX tile height (TILES_M=4 * XMX_M=8)
         // sort_event dependency ensures expert_counts are finalized before tile mapping
-        sycl::event tile_map_event = moe_compute_tile_mapping(expert_counts, expert_tile_offsets, total_tiles_dev,
-                                                              n_experts, TILE_M, *stream, sort_event);
+        sycl::event       tile_map_event = moe_compute_tile_mapping(expert_counts, expert_tile_offsets, total_tiles_dev,
+                                                                    n_experts, TILE_M, *stream, sort_event);
 
         // Compute maximum possible tiles for fixed grid size (graph-compatible)
         // max_tiles = ceil(total_pairs / TILE_M) = worst case where all tokens go to one expert
@@ -11816,12 +11817,59 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
         goto scatter_back;
     }
 
+    // Try XMX tile-aligned MXFP4 path first (if enabled)
+    // This path uses pre-computed tiled layout for better XMX utilization
+    if (tiled_enabled && src0->type == GGML_TYPE_MXFP4 && caps.supported) {
+        // Get or create tiled layout from tensor extra
+        if (src0_extra && src0_extra->xmx_mxfp4_tiled[ctx.device] == nullptr) {
+            // Create tiled layout on first use
+            moe_xmx_fused::MXFPXMXConfig     cfg  = moe_xmx_fused::MXFPXMXConfig::from_device(ctx.device);
+            moe_xmx_fused::MXFPXMXLayoutInfo info = moe_xmx_fused::MXFPXMXLayoutInfo::compute(out_dim, in_dim, cfg);
+
+            void * tiled_buf = sycl::malloc_device(info.total_bytes * n_experts, *stream);
+            // TODO: Convert each expert's weights to tiled layout
+            // For now, this is a placeholder - actual conversion in Task 9
+
+            src0_extra->xmx_mxfp4_tiled[ctx.device] = tiled_buf;
+            src0_extra->xmx_mxfp4_tiled_size        = info.total_bytes * n_experts;
+        }
+
+        if (src0_extra && src0_extra->xmx_mxfp4_tiled[ctx.device]) {
+            // Extract sorted_token_ids from token_map for tiled kernel - async with event
+            sycl::event extract_event = stream->parallel_for(sycl::range<1>(total_pairs), [=](sycl::id<1> idx) {
+                sorted_token_ids[idx] = token_map[idx].original_idx;
+            });
+
+            // Pre-quantize ALL sorted tokens for tiled kernel
+            moe_xmx::preprocess_tokens_q8(tokens_sorted, q_tokens, token_scales, total_pairs, in_dim, *stream);
+
+            moe_xmx_fused::MXFPXMXConfig     cfg  = moe_xmx_fused::MXFPXMXConfig::from_device(ctx.device);
+            moe_xmx_fused::MXFPXMXLayoutInfo info = moe_xmx_fused::MXFPXMXLayoutInfo::compute(out_dim, in_dim, cfg);
+
+            auto [ok, evt] = try_fused_xmx_moe_mxfp4_tiled(
+                extract_event, static_cast<const uint8_t *>(src0_extra->xmx_mxfp4_tiled[ctx.device]), q_tokens,
+                token_scales, sorted_token_ids, expert_offsets, sorted_output, static_cast<int>(total_pairs),
+                static_cast<int>(n_experts), out_dim, in_dim,
+                info.total_bytes,  // expert_tiled_stride
+                ctx.device, *stream);
+            if (ok) {
+                GGML_SYCL_DEBUG("[MoE] XMX MXFP4 tiled path succeeded\n");
+                // During graph recording, don't call wait() - use in-order queue semantics
+                if (!g_ggml_sycl_graph_recording) {
+                    evt.wait();
+                }
+                goto scatter_back;
+            }
+            GGML_SYCL_DEBUG("[MoE] XMX MXFP4 tiled path failed, falling back to SoA\n");
+        }
+    }
+
     // Try MXFP4 fused kernel path (single kernel for all experts)
     // Graph-compatible: uses event chaining instead of .wait() calls
     if (fused_enabled && src0->type == GGML_TYPE_MXFP4 && is_soa) {
         // Extract sorted_token_ids from token_map for fused kernel - async with event
-        sycl::event extract_event = stream->parallel_for(sycl::range<1>(total_pairs),
-            [=](sycl::id<1> idx) { sorted_token_ids[idx] = token_map[idx].original_idx; });
+        sycl::event extract_event = stream->parallel_for(
+            sycl::range<1>(total_pairs), [=](sycl::id<1> idx) { sorted_token_ids[idx] = token_map[idx].original_idx; });
 
         // Pre-quantize ALL sorted tokens for fused kernel
         // Uses in-order queue semantics - will execute after extract_event completes
@@ -11831,11 +11879,10 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
         const uint8_t * base_qs = static_cast<const uint8_t *>(src0->data);
         const uint8_t * base_e  = base_qs + soa_total_qs_mxfp4;
 
-        auto [fused_ok, gemm_event] =
-            try_fused_xmx_moe_mxfp4_soa(extract_event, base_qs, base_e, q_tokens, token_scales, sorted_token_ids,
-                                        expert_offsets, sorted_output, static_cast<int>(total_pairs),
-                                        static_cast<int>(n_experts), out_dim, in_dim, mxfp4_qs_per_expert,
-                                        nblocks_per_expert, ctx.device, *stream);
+        auto [fused_ok, gemm_event] = try_fused_xmx_moe_mxfp4_soa(
+            extract_event, base_qs, base_e, q_tokens, token_scales, sorted_token_ids, expert_offsets, sorted_output,
+            static_cast<int>(total_pairs), static_cast<int>(n_experts), out_dim, in_dim, mxfp4_qs_per_expert,
+            nblocks_per_expert, ctx.device, *stream);
 
         if (fused_ok) {
             GGML_SYCL_DEBUG("[MoE] Fused MXFP4 XMX path succeeded\n");
