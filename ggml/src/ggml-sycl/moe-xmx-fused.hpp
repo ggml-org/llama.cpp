@@ -50,29 +50,29 @@ struct MXFPXMXConfig {
     static constexpr int XMX_K = 32;  // Matches QK_MXFP4
 
     // Dynamic from hardware
-    int tiles_n;              // From xmx_caps.optimal_tiles_n
-    int num_persistent_wgs;   // From dev_info.nsm * 2
-    size_t slm_budget;        // From xmx_caps.slm_size
+    int    tiles_n;             // From xmx_caps.optimal_tiles_n
+    int    num_persistent_wgs;  // From dev_info.nsm * 2
+    size_t slm_budget;          // From xmx_caps.slm_size
 
     // Derived
-    int tile_n_total;         // XMX_N * tiles_n
-    bool use_double_buffer;   // If SLM budget permits
+    int  tile_n_total;       // XMX_N * tiles_n
+    bool use_double_buffer;  // If SLM budget permits
 
     static MXFPXMXConfig from_device(int device_id) {
-        const auto& dev = ggml_sycl_info().devices[device_id];
-        const auto& xmx = dev.xmx_caps;
+        const auto & dev = ggml_sycl_info().devices[device_id];
+        const auto & xmx = dev.xmx_caps;
 
         MXFPXMXConfig cfg;
-        cfg.tiles_n = xmx.optimal_tiles_n > 0 ? xmx.optimal_tiles_n : 4;
+        cfg.tiles_n            = xmx.optimal_tiles_n > 0 ? xmx.optimal_tiles_n : 4;
         cfg.num_persistent_wgs = dev.nsm * 2;
-        cfg.slm_budget = xmx.slm_size > 0 ? xmx.slm_size : 65536;
-        cfg.tile_n_total = XMX_N * cfg.tiles_n;
+        cfg.slm_budget         = xmx.slm_size > 0 ? xmx.slm_size : 65536;
+        cfg.tile_n_total       = XMX_N * cfg.tiles_n;
 
         // Double buffer if SLM can hold 2x weight tiles + LUT + tokens
         size_t weight_tile_bytes = cfg.tile_n_total * XMX_K / 2;  // MXFP4: 4 bits per element
-        size_t lut_bytes = 16;
-        size_t token_tile_bytes = XMX_M * XMX_K * sizeof(int8_t);
-        cfg.use_double_buffer = (2 * weight_tile_bytes + lut_bytes + token_tile_bytes) < cfg.slm_budget;
+        size_t lut_bytes         = 16;
+        size_t token_tile_bytes  = XMX_M * XMX_K * sizeof(int8_t);
+        cfg.use_double_buffer    = (2 * weight_tile_bytes + lut_bytes + token_tile_bytes) < cfg.slm_budget;
 
         return cfg;
     }
@@ -82,13 +82,13 @@ struct MXFPXMXConfig {
 // Layout: [tile_groups...] where each tile_group contains:
 //   scales[tiles_k][tile_n_total] followed by qs[tiles_k][tile_n_total][16]
 struct MXFPXMXLayoutInfo {
-    int64_t n_rows;            // out_dim
-    int64_t n_cols;            // in_dim
-    int64_t n_tile_groups_k;   // ceil(in_dim / (XMX_K * tiles_k_per_group))
-    int64_t n_tile_groups_n;   // ceil(out_dim / tile_n_total)
-    int64_t tile_n_total;      // XMX_N * tiles_n (from hardware)
-    int64_t tiles_k_per_group; // Number of K blocks per tile group
-    int64_t total_bytes;       // Size of converted buffer
+    int64_t n_rows;             // out_dim
+    int64_t n_cols;             // in_dim
+    int64_t n_tile_groups_k;    // ceil(in_dim / (XMX_K * tiles_k_per_group))
+    int64_t n_tile_groups_n;    // ceil(out_dim / tile_n_total)
+    int64_t tile_n_total;       // XMX_N * tiles_n (from hardware)
+    int64_t tiles_k_per_group;  // Number of K blocks per tile group
+    int64_t total_bytes;        // Size of converted buffer
 
     // Compute layout info for a weight tensor
     static MXFPXMXLayoutInfo compute(int64_t out_dim, int64_t in_dim, const MXFPXMXConfig & cfg) {
@@ -98,7 +98,7 @@ struct MXFPXMXLayoutInfo {
         info.tile_n_total      = cfg.tile_n_total;
         info.tiles_k_per_group = 1;  // One K block per group for simplicity
 
-        constexpr int XMX_K  = 32;
+        constexpr int XMX_K      = 32;
         int64_t       n_k_blocks = in_dim / XMX_K;
 
         info.n_tile_groups_k = n_k_blocks;  // One tile group per K block
@@ -120,19 +120,17 @@ struct MXFPXMXLayoutInfo {
 // XMX output: [tile_groups...] with scales and qs grouped by tile
 //
 // This runs on host at model load time (not in hot path)
-inline void reorder_mxfp4_to_xmx_layout(
-    const uint8_t* src_qs,        // SoA packed nibbles [nblocks * 16]
-    const uint8_t* src_e,         // SoA exponents [nblocks]
-    uint8_t* dst,                 // XMX tile-aligned output
-    const MXFPXMXLayoutInfo& info) {
-
-    constexpr int XMX_K = 32;
+inline void reorder_mxfp4_to_xmx_layout(const uint8_t *           src_qs,  // SoA packed nibbles [nblocks * 16]
+                                        const uint8_t *           src_e,   // SoA exponents [nblocks]
+                                        uint8_t *                 dst,     // XMX tile-aligned output
+                                        const MXFPXMXLayoutInfo & info) {
+    constexpr int XMX_K        = 32;
     constexpr int PACKED_BYTES = 16;  // 32 nibbles packed into 16 bytes
 
     const int64_t n_k_blocks = info.n_cols / XMX_K;
 
     // Iterate over tile groups
-    uint8_t* dst_ptr = dst;
+    uint8_t * dst_ptr = dst;
 
     for (int64_t tg_k = 0; tg_k < info.n_tile_groups_k; tg_k++) {
         for (int64_t tg_n = 0; tg_n < info.n_tile_groups_n; tg_n++) {
@@ -142,7 +140,7 @@ inline void reorder_mxfp4_to_xmx_layout(
                 if (out_col < info.n_rows) {
                     // SoA block index: out_col * n_k_blocks + k_block
                     int64_t src_block_idx = out_col * n_k_blocks + tg_k;
-                    *dst_ptr++ = src_e[src_block_idx];
+                    *dst_ptr++            = src_e[src_block_idx];
                 } else {
                     *dst_ptr++ = 0;  // Padding for out-of-bounds
                 }
@@ -152,8 +150,8 @@ inline void reorder_mxfp4_to_xmx_layout(
             for (int64_t tn = 0; tn < info.tile_n_total; tn++) {
                 int64_t out_col = tg_n * info.tile_n_total + tn;
                 if (out_col < info.n_rows) {
-                    int64_t src_block_idx = out_col * n_k_blocks + tg_k;
-                    const uint8_t* src_qs_block = src_qs + src_block_idx * PACKED_BYTES;
+                    int64_t         src_block_idx = out_col * n_k_blocks + tg_k;
+                    const uint8_t * src_qs_block  = src_qs + src_block_idx * PACKED_BYTES;
                     for (int b = 0; b < PACKED_BYTES; b++) {
                         *dst_ptr++ = src_qs_block[b];
                     }
@@ -166,6 +164,176 @@ inline void reorder_mxfp4_to_xmx_layout(
             }
         }
     }
+}
+
+// Fused XMX MoE GEMM for MXFP4 weights (XMX tile-aligned layout)
+// This kernel reads the tile-aligned layout created by reorder_mxfp4_to_xmx_layout
+template <int TILES_M = 4, int TILES_N = 4>
+sycl::event fused_xmx_moe_gemm_mxfp4_tiled(
+    sycl::event           dep_event,
+    const uint8_t *       all_expert_weights_tiled,  // XMX tile-aligned layout per expert
+    const int8_t *        q_tokens,                  // [num_tokens, in_dim]
+    const sycl::half *    token_scales,              // [num_tokens, in_dim/32]
+    const int32_t *       sorted_token_ids,
+    const int32_t *       expert_offsets,
+    sycl::half *          output,
+    int                   num_tokens,
+    int                   n_experts,
+    int64_t               out_dim,
+    int64_t               in_dim,
+    int64_t               expert_tiled_stride,  // Bytes between expert tiled weight buffers
+    const MXFPXMXConfig & cfg,
+    sycl::queue &         queue) {
+    constexpr int XMX_M = 8, XMX_N = 16, XMX_K = 32;
+    constexpr int SG_SIZE = 16;
+    constexpr int TILE_N  = TILES_N * XMX_N;
+
+    const int num_k_blocks   = in_dim / XMX_K;
+    const int n_output_tiles = (out_dim + TILE_N - 1) / TILE_N;
+
+    // Bytes per tile group in XMX layout: scales[TILE_N] + qs[TILE_N][16]
+    const int64_t bytes_per_tile_group = TILE_N * (1 + 16);
+
+    (void) num_tokens;
+    (void) TILES_M;
+
+    return queue.submit([&](sycl::handler & cgh) {
+        cgh.depends_on(dep_event);
+
+        // SLM allocations
+        sycl::local_accessor<int8_t, 1>  slm_token(sycl::range<1>(XMX_M * XMX_K), cgh);
+        sycl::local_accessor<float, 1>   slm_token_scale(sycl::range<1>(1), cgh);
+        sycl::local_accessor<int8_t, 1>  slm_weights(sycl::range<1>(TILE_N * XMX_K), cgh);
+        sycl::local_accessor<float, 1>   slm_weight_scales(sycl::range<1>(TILE_N), cgh);
+        sycl::local_accessor<int8_t, 1>  slm_kvalues(sycl::range<1>(16), cgh);
+        sycl::local_accessor<int32_t, 1> slm_acc(sycl::range<1>(cfg.num_persistent_wgs / SG_SIZE * XMX_M * XMX_N), cgh);
+
+        const int num_persistent_wgs = cfg.num_persistent_wgs;
+
+        cgh.parallel_for(
+            sycl::nd_range<1>(num_persistent_wgs * 256, 256),
+            [=](sycl::nd_item<1> item) [[intel::reqd_sub_group_size(SG_SIZE)]] {
+                auto sg       = item.get_sub_group();
+                int  group_id = item.get_group_linear_id();
+                int  sg_id    = sg.get_group_linear_id();
+                int  lane     = sg.get_local_linear_id();
+
+                // Load LUT
+                if (sg_id == 0 && lane < 16) {
+                    slm_kvalues[lane] = kvalues_mxfp4[lane];
+                }
+                sycl::group_barrier(item.get_group());
+
+                if (sg_id != 0) {
+                    return;
+                }
+
+                for (int expert = 0; expert < n_experts; expert++) {
+                    int expert_start  = expert_offsets[expert];
+                    int expert_end    = expert_offsets[expert + 1];
+                    int expert_tokens = expert_end - expert_start;
+                    if (expert_tokens == 0) {
+                        continue;
+                    }
+
+                    int64_t         expert_work  = static_cast<int64_t>(expert_tokens) * n_output_tiles;
+                    const uint8_t * expert_tiled = all_expert_weights_tiled + expert * expert_tiled_stride;
+
+                    for (int64_t local_work = group_id; local_work < expert_work; local_work += num_persistent_wgs) {
+                        int tile_idx        = local_work % n_output_tiles;
+                        int local_token_idx = local_work / n_output_tiles;
+                        int sorted_idx      = expert_start + local_token_idx;
+
+                        float float_acc[TILES_N * XMX_N] = { 0.0f };
+
+                        joint_matrix<sycl::sub_group, int32_t, use::accumulator, XMX_M, XMX_N> acc[TILES_N];
+                        for (int tn = 0; tn < TILES_N; tn++) {
+                            joint_matrix_fill(sg, acc[tn], 0);
+                        }
+
+                        for (int k_block = 0; k_block < num_k_blocks; k_block++) {
+                            // Load token
+                            for (int i = lane; i < XMX_M * XMX_K; i += SG_SIZE) {
+                                int row      = i / XMX_K;
+                                int col      = i % XMX_K;
+                                slm_token[i] = (row == 0) ? q_tokens[sorted_idx * in_dim + k_block * XMX_K + col] : 0;
+                            }
+                            if (lane == 0) {
+                                slm_token_scale[0] =
+                                    static_cast<float>(token_scales[sorted_idx * num_k_blocks + k_block]);
+                            }
+
+                            // Load weights from tile-aligned layout
+                            // Tile group offset: (k_block * n_tile_groups_n + tile_idx) * bytes_per_tile_group
+                            const uint8_t * tile_group =
+                                expert_tiled + (k_block * n_output_tiles + tile_idx) * bytes_per_tile_group;
+                            const uint8_t * scales_ptr = tile_group;
+                            const uint8_t * qs_ptr     = tile_group + TILE_N;
+
+                            for (int i = lane; i < TILE_N; i += SG_SIZE) {
+                                // Load scale (E8M0 -> float)
+                                slm_weight_scales[i] = sycl_e8m0_to_fp32_half(scales_ptr[i]);
+
+                                // Unpack nibbles
+                                const uint8_t * packed = qs_ptr + i * 16;
+                                for (int k = 0; k < 16; k++) {
+                                    uint8_t byte                    = packed[k];
+                                    slm_weights[i * XMX_K + k]      = slm_kvalues[byte & 0xF];
+                                    slm_weights[i * XMX_K + k + 16] = slm_kvalues[byte >> 4];
+                                }
+                            }
+                            sycl::group_barrier(sg);
+
+                            // XMX compute
+                            joint_matrix<sycl::sub_group, int8_t, use::a, XMX_M, XMX_K, layout::row_major> mat_a;
+                            joint_matrix<sycl::sub_group, int8_t, use::b, XMX_K, XMX_N, layout::col_major> mat_b;
+
+                            auto slm_token_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                                          sycl::access::decorated::no>(&slm_token[0]);
+                            joint_matrix_load(sg, mat_a, slm_token_ptr, XMX_K);
+
+                            for (int tn = 0; tn < TILES_N; tn++) {
+                                auto slm_weights_ptr =
+                                    sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                             sycl::access::decorated::no>(
+                                        &slm_weights[tn * XMX_N * XMX_K]);
+                                joint_matrix_load(sg, mat_b, slm_weights_ptr, XMX_K);
+                                joint_matrix_mad(sg, acc[tn], mat_a, mat_b, acc[tn]);
+                            }
+
+                            // Extract and accumulate with scales
+                            int32_t * sg_acc_ptr = &slm_acc[sg_id * XMX_M * XMX_N];
+                            float     t_scale    = slm_token_scale[0];
+
+                            for (int tn = 0; tn < TILES_N; tn++) {
+                                auto acc_slm_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                                            sycl::access::decorated::no>(sg_acc_ptr);
+                                joint_matrix_store(sg, acc[tn], acc_slm_ptr, XMX_N, layout::row_major);
+                                sycl::group_barrier(sg);
+
+                                for (int i = lane; i < XMX_N; i += SG_SIZE) {
+                                    float w_scale = slm_weight_scales[tn * XMX_N + i];
+                                    float_acc[tn * XMX_N + i] += sg_acc_ptr[i] * t_scale * w_scale;
+                                }
+                                joint_matrix_fill(sg, acc[tn], 0);
+                            }
+                            sycl::group_barrier(sg);
+                        }
+
+                        // Store output
+                        for (int tn = 0; tn < TILES_N; tn++) {
+                            for (int i = lane; i < XMX_N; i += SG_SIZE) {
+                                int out_col = tile_idx * TILE_N + tn * XMX_N + i;
+                                if (out_col < static_cast<int>(out_dim)) {
+                                    output[sorted_idx * out_dim + out_col] = sycl::half(float_acc[tn * XMX_N + i]);
+                                }
+                            }
+                        }
+                        sycl::group_barrier(sg);
+                    }
+                }
+            });
+    });
 }
 
 // Fused XMX MoE GEMM for Q8_0 weights
@@ -694,23 +862,22 @@ inline bool try_fused_xmx_moe_q8_0(const int8_t *     all_expert_qs,
 
 // Entry point for fused XMX MoE dispatch (MXFP4 SoA layout)
 // Returns pair<success, event> for graph-compatible async execution
-inline std::pair<bool, sycl::event> try_fused_xmx_moe_mxfp4_soa(
-                                        sycl::event        dep_event,
-                                        const uint8_t *    all_expert_qs,
-                                        const uint8_t *    all_expert_e,
-                                        const int8_t *     q_tokens,
-                                        const sycl::half * token_scales,
-                                        const int32_t *    sorted_token_ids,
-                                        const int32_t *    expert_offsets,
-                                        sycl::half *       output,
-                                        int                num_tokens,
-                                        int                n_experts,
-                                        int64_t            out_dim,
-                                        int64_t            in_dim,
-                                        int64_t            expert_qs_stride,
-                                        int64_t            expert_e_stride,
-                                        int                device_id,
-                                        sycl::queue &      queue) {
+inline std::pair<bool, sycl::event> try_fused_xmx_moe_mxfp4_soa(sycl::event        dep_event,
+                                                                const uint8_t *    all_expert_qs,
+                                                                const uint8_t *    all_expert_e,
+                                                                const int8_t *     q_tokens,
+                                                                const sycl::half * token_scales,
+                                                                const int32_t *    sorted_token_ids,
+                                                                const int32_t *    expert_offsets,
+                                                                sycl::half *       output,
+                                                                int                num_tokens,
+                                                                int                n_experts,
+                                                                int64_t            out_dim,
+                                                                int64_t            in_dim,
+                                                                int64_t            expert_qs_stride,
+                                                                int64_t            expert_e_stride,
+                                                                int                device_id,
+                                                                sycl::queue &      queue) {
     const auto & dev_info = ggml_sycl_info().devices[device_id];
     if (!dev_info.xmx_caps.supported) {
         return { false, sycl::event{} };
@@ -724,9 +891,8 @@ inline std::pair<bool, sycl::event> try_fused_xmx_moe_mxfp4_soa(
         num_tokens, n_experts, out_dim, in_dim, cfg.num_persistent_wgs, expert_qs_stride, expert_e_stride);
 
     sycl::event gemm_event = moe_xmx_fused::fused_xmx_moe_gemm_mxfp4_soa<4, 4>(
-        dep_event, all_expert_qs, all_expert_e, q_tokens, token_scales,
-        sorted_token_ids, expert_offsets, output, num_tokens, n_experts,
-        out_dim, in_dim, expert_qs_stride, expert_e_stride, cfg, queue);
+        dep_event, all_expert_qs, all_expert_e, q_tokens, token_scales, sorted_token_ids, expert_offsets, output,
+        num_tokens, n_experts, out_dim, in_dim, expert_qs_stride, expert_e_stride, cfg, queue);
 
     return { true, gemm_event };
 }
