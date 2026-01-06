@@ -1769,6 +1769,7 @@ void launch_xmx_moe_gemm_mxfp4_soa(const uint8_t *      weights_qs,    // [nbloc
                         joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
 
                         for (int tm = 0; tm < TILES_M; tm++) {
+                            // mat_a already loaded above
                             for (int tn = 0; tn < TILES_N; tn++) {
                                 int row = wg_row + tm * XMX_M;
                                 int col = wg_col + tn * XMX_N;
