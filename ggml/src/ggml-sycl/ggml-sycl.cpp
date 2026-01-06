@@ -11566,7 +11566,7 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
         }
         return false;
     }
-    if (fused_enabled && !sorted_token_ids) {
+    if ((fused_enabled || tiled_enabled) && !sorted_token_ids) {
         GGML_SYCL_DEBUG("[XMX MoE] Failed to allocate sorted_token_ids for fused path\n");
         sycl::free(tokens_sorted, *stream);
         sycl::free(token_map, *stream);
@@ -11827,11 +11827,19 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
             moe_xmx_fused::MXFPXMXLayoutInfo info = moe_xmx_fused::MXFPXMXLayoutInfo::compute(out_dim, in_dim, cfg);
 
             void * tiled_buf = sycl::malloc_device(info.total_bytes * n_experts, *stream);
-            // TODO: Convert each expert's weights to tiled layout
-            // For now, this is a placeholder - actual conversion in Task 9
+            if (!tiled_buf) {
+                GGML_SYCL_DEBUG("[MoE] Failed to allocate tiled buffer (%zu bytes)\n",
+                                info.total_bytes * n_experts);
+                // Don't cache nullptr or set size - will fall back to SoA path
+            } else {
+                // TODO: Convert each expert's weights to tiled layout
+                // For now, this is a placeholder - actual conversion in Task 9
 
-            src0_extra->xmx_mxfp4_tiled[ctx.device] = tiled_buf;
-            src0_extra->xmx_mxfp4_tiled_size        = info.total_bytes * n_experts;
+                src0_extra->xmx_mxfp4_tiled[ctx.device] = tiled_buf;
+                src0_extra->xmx_mxfp4_tiled_size        = info.total_bytes * n_experts;
+                GGML_SYCL_DEBUG("[MoE] Allocated tiled buffer: %zu bytes\n",
+                                info.total_bytes * n_experts);
+            }
         }
 
         if (src0_extra && src0_extra->xmx_mxfp4_tiled[ctx.device]) {
