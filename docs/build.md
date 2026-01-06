@@ -349,6 +349,8 @@ You can download it from your Linux distro's package manager or from here: [ROCm
       && cmake --build build -- -j 16
   ```
 
+  If it fails to compile, with a "target not supported" or similar error, it means your GPU does not support ROCm due to missing compiler support, even through it is an RDNA GPU. This can happen if you are trying to use an integrated GPU. In this case, build for Vulkan instead to use the GPU.
+
 - Using `CMake` for Windows (using x64 Native Tools Command Prompt for VS, and assuming a gfx1100-compatible AMD GPU):
   ```bash
   set PATH=%HIP_PATH%\bin;%PATH%
