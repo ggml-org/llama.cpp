@@ -1762,12 +1762,13 @@ void launch_xmx_moe_gemm_mxfp4_soa(const uint8_t *      weights_qs,    // [nbloc
                         joint_matrix<sycl::sub_group, int8_t, use::a, XMX_M, XMX_K, layout::row_major> mat_a;
                         joint_matrix<sycl::sub_group, int8_t, use::b, XMX_K, XMX_N, layout::col_major> mat_b;
 
-                        for (int tm = 0; tm < TILES_M; tm++) {
-                            auto slm_tokens_ptr =
-                                sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                         sycl::access::decorated::no>(&slm_tokens[tm * XMX_M * XMX_K]);
-                            joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
+                        // Load mat_a ONCE before TILES_M loop (matches ESIMD fused kernel)
+                        auto slm_tokens_ptr =
+                            sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                     sycl::access::decorated::no>(&slm_tokens[0]);
+                        joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
 
+                        for (int tm = 0; tm < TILES_M; tm++) {
                             for (int tn = 0; tn < TILES_N; tn++) {
                                 int row = wg_row + tm * XMX_M;
                                 int col = wg_col + tn * XMX_N;
