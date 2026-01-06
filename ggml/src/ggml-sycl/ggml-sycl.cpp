@@ -11832,8 +11832,19 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
                                 info.total_bytes * n_experts);
                 // Don't cache nullptr or set size - will fall back to SoA path
             } else {
-                // TODO: Convert each expert's weights to tiled layout
-                // For now, this is a placeholder - actual conversion in Task 9
+                // Convert each expert's SoA weights to tiled layout
+                // Variables already available: soa_total_qs_mxfp4, mxfp4_qs_per_expert, nblocks_per_expert
+                const uint8_t * base_qs = static_cast<const uint8_t *>(src0->data);
+                const uint8_t * base_e  = base_qs + soa_total_qs_mxfp4;
+
+                uint8_t * tiled_ptr = static_cast<uint8_t *>(tiled_buf);
+                for (int e = 0; e < n_experts; e++) {
+                    const uint8_t * soa_qs = base_qs + e * mxfp4_qs_per_expert;
+                    const uint8_t * soa_e  = base_e + e * nblocks_per_expert;
+
+                    moe_xmx_fused::reorder_mxfp4_to_xmx_layout(soa_qs, soa_e, tiled_ptr + e * info.total_bytes, info);
+                }
+                GGML_SYCL_DEBUG("[MoE] Converted %ld experts to tiled layout\n", (long) n_experts);
 
                 src0_extra->xmx_mxfp4_tiled[ctx.device] = tiled_buf;
                 src0_extra->xmx_mxfp4_tiled_size        = info.total_bytes * n_experts;
