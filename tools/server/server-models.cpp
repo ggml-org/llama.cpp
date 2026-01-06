@@ -1000,12 +1000,12 @@ server_http_proxy::server_http_proxy(
         int32_t timeout_write
         ) {
     // shared between reader and writer threads
-    auto cli  = std::make_shared<httplib::Client>(host, port);
+    auto cli  = std::make_shared<httplib::ClientImpl>(host, port);
     auto pipe = std::make_shared<pipe_t<msg_t>>();
 
     if (port == 443) {
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-        cli.reset(new httplib::SSLClient(host.c_str(), port));
+        cli.reset(new httplib::SSLClient(host, port));
 #else
         throw std::runtime_error("HTTPS requested but CPPHTTPLIB_OPENSSL_SUPPORT is not defined");
 #endif
@@ -1071,7 +1071,6 @@ server_http_proxy::server_http_proxy(
             } else {
                 req.set_header(key, value);
             }
-            SRV_INF("header %s: %s\n", key.c_str(), req.get_header_value(key).c_str());
         }
         req.body = body;
         req.response_handler = response_handler;
