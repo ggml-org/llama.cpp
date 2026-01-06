@@ -11,6 +11,7 @@
 #include "moe-xmx.hpp"  // For MoEXMXConfig and preprocessing
 
 #include <sycl/sycl.hpp>
+#include <utility>
 #include <vector>
 
 #if SYCL_XMX_MOE_AVAILABLE
@@ -37,6 +38,42 @@ struct FusedMoEConfig {
         cfg.tiles_m            = xmx.optimal_tiles_m > 0 ? xmx.optimal_tiles_m : 4;
         cfg.tiles_n            = xmx.optimal_tiles_n > 0 ? xmx.optimal_tiles_n : 4;
         cfg.slm_size           = xmx.slm_size > 0 ? xmx.slm_size : 65536;
+        return cfg;
+    }
+};
+
+// MXFP4-specific XMX configuration
+struct MXFPXMXConfig {
+    // Fixed XMX dimensions (Intel spec)
+    static constexpr int XMX_M = 8;
+    static constexpr int XMX_N = 16;
+    static constexpr int XMX_K = 32;  // Matches QK_MXFP4
+
+    // Dynamic from hardware
+    int tiles_n;              // From xmx_caps.optimal_tiles_n
+    int num_persistent_wgs;   // From dev_info.nsm * 2
+    size_t slm_budget;        // From xmx_caps.slm_size
+
+    // Derived
+    int tile_n_total;         // XMX_N * tiles_n
+    bool use_double_buffer;   // If SLM budget permits
+
+    static MXFPXMXConfig from_device(int device_id) {
+        const auto& dev = ggml_sycl_info().devices[device_id];
+        const auto& xmx = dev.xmx_caps;
+
+        MXFPXMXConfig cfg;
+        cfg.tiles_n = xmx.optimal_tiles_n > 0 ? xmx.optimal_tiles_n : 4;
+        cfg.num_persistent_wgs = dev.nsm * 2;
+        cfg.slm_budget = xmx.slm_size > 0 ? xmx.slm_size : 65536;
+        cfg.tile_n_total = XMX_N * cfg.tiles_n;
+
+        // Double buffer if SLM can hold 2x weight tiles + LUT + tokens
+        size_t weight_tile_bytes = cfg.tile_n_total * XMX_K / 2;  // MXFP4: 4 bits per element
+        size_t lut_bytes = 16;
+        size_t token_tile_bytes = XMX_M * XMX_K * sizeof(int8_t);
+        cfg.use_double_buffer = (2 * weight_tile_bytes + lut_bytes + token_tile_bytes) < cfg.slm_budget;
+
         return cfg;
     }
 };
@@ -291,7 +328,10 @@ constexpr int MXFP4_PACKED_BYTES = 16;  // 16 packed bytes = 32 elements (4-bit 
 //   - e offset: block_idx
 //
 template <int TILES_M = 4, int TILES_N = 4>
-void fused_xmx_moe_gemm_mxfp4_soa(
+sycl::event fused_xmx_moe_gemm_mxfp4_soa(
+    // Dependency event for graph compatibility
+    sycl::event dep_event,
+
     // Expert weight data (MXFP4 SoA format)
     const uint8_t * all_expert_qs,  // [n_experts, nblocks, 16] packed nibbles
     const uint8_t * all_expert_e,   // [n_experts, nblocks] E8M0 exponents
@@ -326,32 +366,15 @@ void fused_xmx_moe_gemm_mxfp4_soa(
     const int num_k_blocks   = in_dim / XMX_K;
     const int n_output_tiles = (out_dim + TILE_N - 1) / TILE_N;
 
-    // Copy expert_offsets to host ONCE before kernel launch
-    std::vector<int32_t> h_offsets(n_experts + 1);
-    queue.copy(expert_offsets, h_offsets.data(), n_experts + 1).wait();
-    int total_sorted = h_offsets[n_experts];
-
-    if (total_sorted == 0) {
-        return;
-    }
-
-    // Compute total work items across ALL experts using host-side offsets
-    int64_t total_work = 0;
-    for (int e = 0; e < n_experts; e++) {
-        int expert_tokens = h_offsets[e + 1] - h_offsets[e];
-        total_work += static_cast<int64_t>(expert_tokens) * n_output_tiles;
-    }
-
-    if (total_work == 0) {
-        return;
-    }
-
     // Suppress unused variable warnings
     (void) TILE_M;
     (void) num_tokens;
-    (void) total_work;
 
-    queue.submit([&](sycl::handler & cgh) {
+    // Graph-compatible: No host synchronization, kernel reads expert_offsets directly on GPU
+    // The persistent WG design handles variable work distribution dynamically
+    return queue.submit([&](sycl::handler & cgh) {
+        // Depend on the event for proper ordering in graphs
+        cgh.depends_on(dep_event);
         // SLM allocations
         // Token data for current K-block - needs full 8x32 matrix for joint_matrix_load
         sycl::local_accessor<int8_t, 1>  slm_token(sycl::range<1>(XMX_M * XMX_K), cgh);
@@ -578,8 +601,10 @@ inline bool try_fused_xmx_moe_q8_0(const int8_t *     all_expert_qs,
 }
 
 // Entry point for fused XMX MoE dispatch (MXFP4 SoA layout)
-// Returns true if fused path was used, false to fallback
-inline bool try_fused_xmx_moe_mxfp4_soa(const uint8_t *    all_expert_qs,
+// Returns pair<success, event> for graph-compatible async execution
+inline std::pair<bool, sycl::event> try_fused_xmx_moe_mxfp4_soa(
+                                        sycl::event        dep_event,
+                                        const uint8_t *    all_expert_qs,
                                         const uint8_t *    all_expert_e,
                                         const int8_t *     q_tokens,
                                         const sycl::half * token_scales,
@@ -596,7 +621,7 @@ inline bool try_fused_xmx_moe_mxfp4_soa(const uint8_t *    all_expert_qs,
                                         sycl::queue &      queue) {
     const auto & dev_info = ggml_sycl_info().devices[device_id];
     if (!dev_info.xmx_caps.supported) {
-        return false;
+        return { false, sycl::event{} };
     }
 
     moe_xmx_fused::FusedMoEConfig cfg = moe_xmx_fused::FusedMoEConfig::from_device(device_id);
@@ -606,11 +631,12 @@ inline bool try_fused_xmx_moe_mxfp4_soa(const uint8_t *    all_expert_qs,
         "tokens=%d experts=%d out=%ld in=%ld wgs=%d qs_stride=%ld e_stride=%ld\n",
         num_tokens, n_experts, out_dim, in_dim, cfg.num_persistent_wgs, expert_qs_stride, expert_e_stride);
 
-    moe_xmx_fused::fused_xmx_moe_gemm_mxfp4_soa<4, 4>(all_expert_qs, all_expert_e, q_tokens, token_scales,
-                                                      sorted_token_ids, expert_offsets, output, num_tokens, n_experts,
-                                                      out_dim, in_dim, expert_qs_stride, expert_e_stride, cfg, queue);
+    sycl::event gemm_event = moe_xmx_fused::fused_xmx_moe_gemm_mxfp4_soa<4, 4>(
+        dep_event, all_expert_qs, all_expert_e, q_tokens, token_scales,
+        sorted_token_ids, expert_offsets, output, num_tokens, n_experts,
+        out_dim, in_dim, expert_qs_stride, expert_e_stride, cfg, queue);
 
-    return true;
+    return { true, gemm_event };
 }
 
 #endif  // SYCL_XMX_MOE_AVAILABLE
