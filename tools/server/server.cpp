@@ -197,6 +197,9 @@ int main(int argc, char ** argv) {
     // Save & load slots
     ctx_http.get ("/slots",               ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",      ex_wrapper(routes.post_slots));
+    // CORS proxy
+    ctx_http.get ("/cors-proxy",          ex_wrapper(proxy_handler_get));
+    ctx_http.post("/cors-proxy",          ex_wrapper(proxy_handler_post));
 
     //
     // Start the server

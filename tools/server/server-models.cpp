@@ -1004,6 +1004,7 @@ server_http_proxy::server_http_proxy(
     auto pipe = std::make_shared<pipe_t<msg_t>>();
 
     // setup Client
+    cli->set_follow_location(true);
     cli->set_connection_timeout(0, 200000); // 200 milliseconds
     cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
     cli->set_read_timeout(timeout_write, 0);
@@ -1053,7 +1054,11 @@ server_http_proxy::server_http_proxy(
         req.method = method;
         req.path = path;
         for (const auto & [key, value] : headers) {
-            req.set_header(key, value);
+            if (key == "Host" || key == "host") {
+                req.set_header(key, host + ":" + std::to_string(port));
+            } else {
+                req.set_header(key, value);
+            }
         }
         req.body = body;
         req.response_handler = response_handler;
