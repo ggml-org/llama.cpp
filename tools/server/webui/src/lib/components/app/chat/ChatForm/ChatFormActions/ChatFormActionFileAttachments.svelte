@@ -5,16 +5,13 @@
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { FILE_TYPE_ICONS } from '$lib/constants/icons';
 	import { FileTypeCategory } from '$lib/enums';
-	import McpLogo from '$lib/components/app/misc/McpLogo.svelte';
 
 	interface Props {
 		class?: string;
 		disabled?: boolean;
 		hasAudioModality?: boolean;
 		hasVisionModality?: boolean;
-		showMcpOption?: boolean;
 		onFileUpload?: (fileType?: FileTypeCategory) => void;
-		onMcpClick?: () => void;
 		onSystemPromptClick?: () => void;
 	}
 
@@ -23,13 +20,11 @@
 		disabled = false,
 		hasAudioModality = false,
 		hasVisionModality = false,
-		showMcpOption = false,
 		onFileUpload,
-		onMcpClick,
 		onSystemPromptClick
 	}: Props = $props();
 
-	const fileUploadTooltipText = 'Add files or MCP servers';
+	const fileUploadTooltipText = 'Add files';
 
 	function handleFileUpload(fileType?: FileTypeCategory) {
 		onFileUpload?.(fileType);
@@ -126,18 +121,6 @@
 					</Tooltip.Content>
 				{/if}
 			</Tooltip.Root>
-
-			{#if showMcpOption}
-				<DropdownMenu.Separator />
-				<DropdownMenu.Item
-					class="flex cursor-pointer items-center gap-2"
-					onclick={() => onMcpClick?.()}
-				>
-					<McpLogo style="width: 1rem; height: 1rem;" />
-
-					<span>MCP Servers</span>
-				</DropdownMenu.Item>
-			{/if}
 
 			<DropdownMenu.Separator />
 			<Tooltip.Root>
