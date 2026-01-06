@@ -1873,6 +1873,15 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist_call_thoughts)
             .run();
 
+        // Tool calling with extra channel before
+        tst.test(
+                "<|channel|>analysis<|message|>I'm thinking<|end|><|start|>assistant<|channel|>commentary"
+                " to=functions.special_function <|message|>{\"arg1\": 1}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+
         // Parallel tool calls
         tst.test(
                " to=functions.special_function<|channel|>analysis<|message|>{\"arg1\": 1}\n"
