@@ -695,7 +695,10 @@ void launch_xmx_moe_gemm_q8_0_soa(const int8_t *       weights_qs,    // [out_di
                                     // Extract row 0 from accumulator (8x16 output, FP16)
                                     // Only row 0 is valid - we process one active row at a time
                                     for (int i = lane; i < XMX_N; i += SG_SIZE) {
-                                        output[row * out_dim + col + i] = sycl::half(float_acc[tm][tn][i]);
+                                        int out_col = col + i;
+                                        if (out_col < out_dim) {
+                                            output[row * out_dim + out_col] = sycl::half(float_acc[tm][tn][i]);
+                                        }
                                     }
                                 }
 
@@ -1560,8 +1563,11 @@ void launch_xmx_moe_gemm_mxfp4(const void * weights_qs,  // [in_dim/32, out_dim]
                                     // Extract row 0 from accumulator (8x16 output, FP16)
                                     // Only row 0 is valid - we process one active row at a time
                                     for (int i = lane; i < XMX_N; i += SG_SIZE) {
-                                        output[row * out_dim + col + i] =
-                                            sycl::half(float_acc[tm][tn][i]);
+                                        int out_col = col + i;
+                                        if (out_col < out_dim) {
+                                            output[row * out_dim + out_col] =
+                                                sycl::half(float_acc[tm][tn][i]);
+                                        }
                                     }
                                 }
 
@@ -1817,8 +1823,11 @@ void launch_xmx_moe_gemm_mxfp4_soa(const uint8_t *      weights_qs,    // [nbloc
                                 // Extract row 0 from accumulator (8x16 output, FP16)
                                 // Only row 0 is valid - we process one active row at a time
                                 for (int elem = lane; elem < XMX_N; elem += SG_SIZE) {
-                                    output[row * out_dim + col + elem] =
-                                        static_cast<sycl::half>(float_acc[tm][tn][elem]);
+                                    int out_col = col + elem;
+                                    if (out_col < out_dim) {
+                                        output[row * out_dim + out_col] =
+                                            static_cast<sycl::half>(float_acc[tm][tn][elem]);
+                                    }
                                 }
                             }
                             (void) acc[tm][tn];
@@ -2085,8 +2094,11 @@ void launch_xmx_moe_gemm_mxfp4_coalesced(
                                     // Extract row 0 from accumulator (8x16 output, FP16)
                                     // Only row 0 is valid - we process one active row at a time
                                     for (int elem = lane; elem < XMX_N; elem += SG_SIZE) {
-                                        output[row * out_dim + col + elem] =
-                                            static_cast<sycl::half>(float_acc[tm][tn][elem]);
+                                        int out_col = col + elem;
+                                        if (out_col < out_dim) {
+                                            output[row * out_dim + out_col] =
+                                                static_cast<sycl::half>(float_acc[tm][tn][elem]);
+                                        }
                                     }
                                 }
                                 (void) acc[tm][tn];
