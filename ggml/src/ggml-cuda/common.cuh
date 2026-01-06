@@ -1062,7 +1062,6 @@ struct ggml_cuda_graph {
     bool disable_due_to_gpu_arch = false;
     bool disable_due_to_too_many_updates = false;
     int number_consecutive_updates = 0;
-    bool enabled = false;
     std::vector<ggml_cuda_graph_node_properties> props;
 
     void record_update(bool use_graph, bool update_required) {
@@ -1077,11 +1076,9 @@ struct ggml_cuda_graph {
         }
     }
 
-    void check_disable() {
+    bool is_enabled() const {
         static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);
-        if (disable_due_to_gpu_arch || disable_cuda_graphs_due_to_env || disable_due_to_too_many_updates) {
-            enabled = false;
-        }
+        return !(disable_due_to_gpu_arch || disable_cuda_graphs_due_to_env || disable_due_to_too_many_updates);
     }
 #endif
 };

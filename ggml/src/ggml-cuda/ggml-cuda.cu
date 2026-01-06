@@ -3728,8 +3728,6 @@ static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx) {
         cuda_ctx->cuda_graph.reset(new ggml_cuda_graph());
     }
 
-    cuda_ctx->cuda_graph->enabled = true;
-
     if (cuda_ctx->cuda_graph->graph == nullptr) {
         if (ggml_cuda_info().devices[cuda_ctx->device].cc < GGML_CUDA_CC_AMPERE) {
             cuda_ctx->cuda_graph->disable_due_to_gpu_arch = true;
@@ -3737,14 +3735,10 @@ static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx) {
         }
     }
 
-    // Check if we should disable the graph for any reason
-    cuda_ctx->cuda_graph->check_disable();
-    bool use_cuda_graph = cuda_ctx->cuda_graph->enabled;
+    return cuda_ctx->cuda_graph->is_enabled();
 #else
-    bool use_cuda_graph = false;
+    return false;
 #endif // USE_CUDA_GRAPH
-
-    return use_cuda_graph;
 }
 
 static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
@@ -3758,7 +3752,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 #ifdef USE_CUDA_GRAPH
     use_cuda_graph = ggml_cuda_graph_set_enabled(cuda_ctx);
 
-    if (cuda_ctx->cuda_graph->enabled) {
+    if (cuda_ctx->cuda_graph->is_enabled()) {
         cuda_graph_update_required = ggml_cuda_graph_update_required(cuda_ctx, cgraph);
         use_cuda_graph             = ggml_cuda_graph_check_compability(cgraph);
 
