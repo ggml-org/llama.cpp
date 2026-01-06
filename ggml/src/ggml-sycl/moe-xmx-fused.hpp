@@ -78,6 +78,43 @@ struct MXFPXMXConfig {
     }
 };
 
+// XMX tile-aligned layout metadata
+// Layout: [tile_groups...] where each tile_group contains:
+//   scales[tiles_k][tile_n_total] followed by qs[tiles_k][tile_n_total][16]
+struct MXFPXMXLayoutInfo {
+    int64_t n_rows;            // out_dim
+    int64_t n_cols;            // in_dim
+    int64_t n_tile_groups_k;   // ceil(in_dim / (XMX_K * tiles_k_per_group))
+    int64_t n_tile_groups_n;   // ceil(out_dim / tile_n_total)
+    int64_t tile_n_total;      // XMX_N * tiles_n (from hardware)
+    int64_t tiles_k_per_group; // Number of K blocks per tile group
+    int64_t total_bytes;       // Size of converted buffer
+
+    // Compute layout info for a weight tensor
+    static MXFPXMXLayoutInfo compute(int64_t out_dim, int64_t in_dim, const MXFPXMXConfig & cfg) {
+        MXFPXMXLayoutInfo info;
+        info.n_rows            = out_dim;
+        info.n_cols            = in_dim;
+        info.tile_n_total      = cfg.tile_n_total;
+        info.tiles_k_per_group = 1;  // One K block per group for simplicity
+
+        constexpr int XMX_K  = 32;
+        int64_t       n_k_blocks = in_dim / XMX_K;
+
+        info.n_tile_groups_k = n_k_blocks;  // One tile group per K block
+        info.n_tile_groups_n = (out_dim + cfg.tile_n_total - 1) / cfg.tile_n_total;
+
+        // Per tile group: scales + packed qs
+        // scales: [tile_n_total] uint8
+        // qs: [tile_n_total][16] uint8 (16 bytes = 32 nibbles per block)
+        int64_t bytes_per_tile_group = info.tile_n_total * (1 + 16);  // 1 scale + 16 qs per column
+
+        info.total_bytes = info.n_tile_groups_k * info.n_tile_groups_n * bytes_per_tile_group;
+
+        return info;
+    }
+};
+
 // Fused XMX MoE GEMM for Q8_0 weights
 // Processes ALL experts in a single kernel launch using persistent work-groups
 template <int TILES_M = 4, int TILES_N = 4>
