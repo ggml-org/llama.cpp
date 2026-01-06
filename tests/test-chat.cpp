@@ -1875,7 +1875,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
 
         // Tool calling with extra channel before
         tst.test(
-                "<|channel|>analysis<|message|>I'm thinking<|end|><|start|>assistant<|channel|>commentary"
+                "<|channel|>analysis<|message|>I'm\nthinking<|end|><|start|>assistant<|channel|>commentary"
                 " to=functions.special_function <|message|>{\"arg1\": 1}")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
