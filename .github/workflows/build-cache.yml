@@ -4,7 +4,10 @@ on:
   workflow_dispatch: # allows manual triggering
   schedule:
     - cron: '0 * * * *'
-
+  workflow_run:
+    workflows: ["EditorConfig Checker"]
+    types:
+      - completed
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true

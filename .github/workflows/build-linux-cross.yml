@@ -2,7 +2,10 @@ name: Build on Linux using cross-compiler
 on:
   workflow_dispatch:
   workflow_call:
-
+  workflow_run:
+    workflows: ["EditorConfig Checker"]
+    types:
+      - completed
 jobs:
   # ubuntu-24-riscv64-cpu-cross:
   #   runs-on: ubuntu-24.04

@@ -19,6 +19,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths: ['.github/workflows/server.yml', '**/CMakeLists.txt', '**/Makefile', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.swift', '**/*.m', 'tools/server/**.*']
+  workflow_run:
+    workflows: ["EditorConfig Checker"]
+    types:
+      - completed
 
 env:
   LLAMA_LOG_COLORS: 1
@@ -32,6 +36,7 @@ concurrency:
 
 jobs:
   server:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     strategy:
@@ -95,6 +100,7 @@ jobs:
           pytest -v -x -m "not slow"
 
   server-windows:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: windows-2022
 
     steps:

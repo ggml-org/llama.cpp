@@ -2,7 +2,10 @@ name: Build relocatable cmake package
 on:
   workflow_dispatch:
   workflow_call:
-
+  workflow_run:
+    workflows: ["EditorConfig Checker"]
+    types:
+      - completed
 jobs:
   linux:
     runs-on: ubuntu-24.04

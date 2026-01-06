@@ -8,6 +8,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths: ['.github/workflows/python-lint.yml', '**/*.py']
+  workflow_run:
+    workflows: ["EditorConfig Checker"]
+    types:
+      - completed
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -15,6 +19,7 @@ concurrency:
 
 jobs:
   flake8-lint:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     name: Lint
     steps:

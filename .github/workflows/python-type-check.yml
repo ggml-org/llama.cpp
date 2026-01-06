@@ -8,11 +8,16 @@ on:
       - '**.py'
       - '**/requirements*.txt'
   pull_request:
+    types: [opened, synchronize, reopened]
     paths:
       - '.github/workflows/python-type-check.yml'
       - 'pyrightconfig.json'
       - '**.py'
       - '**/requirements*.txt'
+  workflow_run:
+    workflows: ["EditorConfig Checker"]
+    types:
+      - completed
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
