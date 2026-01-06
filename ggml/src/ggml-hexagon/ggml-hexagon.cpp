@@ -1846,7 +1846,11 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
-    if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    if (dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) {
         return false;
     }
 

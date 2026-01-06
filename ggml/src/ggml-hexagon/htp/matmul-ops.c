@@ -903,7 +903,7 @@ static void vec_dot_mxfp4x4x2_q8x4x2_rx2(const int n,
     hvx_vec_store_u(&s[0], 8, Q6_V_lo_W(p0));
 }
 
-static void vec_dot_f16_f16(const int n, float * restrict s, const void * restrict vx, const void * restrict vy) {
+static void vec_dot_f16_f16_aa(const int n, float * restrict s, const void * restrict vx, const void * restrict vy) {
     const HVX_Vector * restrict x = (const HVX_Vector *) vx;
     const HVX_Vector * restrict y = (const HVX_Vector *) vy;
 
@@ -933,7 +933,7 @@ static void vec_dot_f16_f16(const int n, float * restrict s, const void * restri
     hvx_vec_store_u(&s[0], 4, rsum);
 }
 
-static void vec_dot_f16_f16_rx2(const int n,
+static void vec_dot_f16_f16_aa_rx2(const int n,
                                 float * restrict s,
                                 const void * restrict vx,
                                 uint32_t vx_row_size,
@@ -980,7 +980,37 @@ static void vec_dot_f16_f16_rx2(const int n,
     hvx_vec_store_u(&s[0], 8, Q6_V_lo_W(p0));
 }
 
-static void vec_dot_f16_f32(const int n, float * restrict s, const void * restrict x, const void * restrict y) {
+static void vec_dot_f16_f16_uu(const int n, float * restrict s, const void * restrict vx, const void * restrict vy) {
+    const HVX_UVector * restrict x = (const HVX_UVector *) vx;
+    const HVX_UVector * restrict y = (const HVX_UVector *) vy;
+
+    uint32_t nvec = n / VLEN_FP16; // num full fp16 hvx vectors
+    uint32_t nloe = n % VLEN_FP16; // leftover elements
+
+    HVX_Vector rsum = Q6_V_vsplat_R(0);
+
+    uint32_t i = 0;
+
+    #pragma unroll(4)
+    for (i = 0; i < nvec; i++) {
+        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(x[i], y[i]);
+        rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
+    }
+
+    if (nloe) {
+        HVX_VectorPred bmask = Q6_Q_vsetq_R(nloe * 2);
+        HVX_Vector x_hf = Q6_V_vand_QV(bmask, x[i]);
+        HVX_Vector y_hf = Q6_V_vand_QV(bmask, y[i]);
+
+        HVX_VectorPair xy_qf = Q6_Wqf32_vmpy_VhfVhf(x_hf, y_hf);
+        rsum = Q6_Vqf32_vadd_Vqf32Vqf32(rsum, Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(xy_qf),  Q6_V_hi_W(xy_qf)));
+    }
+
+    rsum = Q6_Vsf_equals_Vqf32(hvx_vec_qf32_reduce_sum(rsum));
+    hvx_vec_store_u(&s[0], 4, rsum);
+}
+
+static void vec_dot_f16_f32_uu(const int n, float * restrict s, const void * restrict x, const void * restrict y) {
     const HVX_UVector * restrict vx = (const HVX_UVector * restrict) x;
     const HVX_UVector * restrict vy = (const HVX_UVector * restrict) y;
 
@@ -1032,7 +1062,15 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
     hvx_vec_store_u(&s[0], 4, rsum);
 }
 
-#define htp_matmul_preamble            \
+#define htp_matmul_tensors_preamble    \
+    struct htp_tensor * restrict src0    = &octx->src0;      \
+    struct htp_tensor * restrict src1    = &octx->src1;      \
+    struct htp_tensor * restrict src2    = &octx->src2;      \
+    struct htp_tensor * restrict dst     = &octx->dst;       \
+    struct htp_spad * restrict src0_spad = &octx->src0_spad; \
+    struct htp_spad * restrict src1_spad = &octx->src1_spad; \
+    struct htp_spad * restrict dst_spad  = &octx->dst_spad;  \
+                                                             \
     const uint32_t ne00 = src0->ne[0]; \
     const uint32_t ne01 = src0->ne[1]; \
     const uint32_t ne02 = src0->ne[2]; \
@@ -1042,6 +1080,11 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
     const uint32_t ne11 = src1->ne[1]; \
     const uint32_t ne12 = src1->ne[2]; \
     const uint32_t ne13 = src1->ne[3]; \
+                                       \
+    const uint32_t ne20 = src2->ne[0]; \
+    const uint32_t ne21 = src2->ne[1]; \
+    const uint32_t ne22 = src2->ne[2]; \
+    const uint32_t ne23 = src2->ne[3]; \
                                        \
     const uint32_t ne0 = dst->ne[0];   \
     const uint32_t ne1 = dst->ne[1];   \
@@ -1063,18 +1106,94 @@ static void vec_dot_f16_f32(const int n, float * restrict s, const void * restri
     const uint32_t nb2 = dst->nb[2];   \
     const uint32_t nb3 = dst->nb[3];
 
-// q8x4 src1 tensor is already in VTCM spad
-static void matmul(struct htp_matmul_type * mt,
-                   struct htp_tensor * restrict src0,
-                   struct htp_tensor * restrict src1,
-                   struct htp_tensor * restrict dst,
-                   struct htp_spad * restrict src0_spad,
-                   struct htp_spad * restrict src1_spad,
-                   struct htp_spad * restrict dst_spad,
-                   uint32_t    nth,
-                   uint32_t    ith,
-                   uint32_t    src0_nrows_per_thread,
-                   dma_queue * dma_queue) {
+#define htp_matmul_preamble            \
+    htp_matmul_tensors_preamble;       \
+    dma_queue *dma_queue           = octx->ctx->dma[ith];         \
+    uint32_t src0_nrows_per_thread = octx->src0_nrows_per_thread;
+
+// *** matmul with support for 4d tensors and full broadcasting
+
+static void matmul_4d(struct htp_matmul_type * mt, struct htp_ops_context * octx, uint32_t nth, uint32_t ith) {
+    htp_matmul_preamble;
+
+    uint64_t t1, t2;
+    t1 = HAP_perf_get_qtimer_count();
+
+    assert(ne12 % ne02 == 0);
+    assert(ne13 % ne03 == 0);
+
+    // This is the size of the first dimension of the result, so we can iterate that way. (see the ASSERT above, these are the same numbers)
+    const uint32_t nr0 = ne0;
+
+    // This is the size of the rest of the dimensions of the result
+    const uint32_t nr1 = ne1 * ne2 * ne3;
+
+    // distribute the thread work across the inner or outer loop based on which one is larger
+    uint32_t nchunk0 = nr0 > nr1 ? nth : 1;  // parallelize by src0 rows
+    uint32_t nchunk1 = nr0 > nr1 ? 1 : nth;  // parallelize by src1 rows
+
+    // The number of elements in each chunk
+    const uint32_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
+    const uint32_t dr1 = (nr1 + nchunk1 - 1) / nchunk1;
+
+    uint32_t current_chunk = ith;
+
+    const uint32_t ith0 = current_chunk % nchunk0;
+    const uint32_t ith1 = current_chunk / nchunk0;
+
+    const uint32_t ir0_start = dr0 * ith0;
+    const uint32_t ir0_end   = MIN(ir0_start + dr0, nr0);
+
+    const uint32_t ir1_start = dr1 * ith1;
+    const uint32_t ir1_end   = MIN(ir1_start + dr1, nr1);
+
+    // no work for this thread
+    if (ir0_start >= ir0_end || ir1_start >= ir1_end) {
+        return;
+    }
+
+    // block-tiling attempt
+    const uint32_t blck_0 = 64;
+    const uint32_t blck_1 = 64;
+
+    for (uint32_t iir1 = ir1_start; iir1 < ir1_end; iir1 += blck_1) {
+        for (uint32_t iir0 = ir0_start; iir0 < ir0_end; iir0 += blck_0) {
+            for (uint32_t ir1 = iir1; ir1 < MIN(iir1 + blck_1, ir1_end); ir1++) {
+                const uint32_t i13 = fastdiv(ir1, &octx->mm_div_ne12_ne1);
+                const uint32_t i12 = fastdiv(ir1 - i13 * ne12 * ne1, &octx->mm_div_ne1);
+                const uint32_t i11 = (ir1 - i13 * ne12 * ne1 - i12 * ne1);
+
+                // broadcast src0 into src1
+                const uint32_t i03 = fastdiv(i13, &octx->mm_div_r3);
+                const uint32_t i02 = fastdiv(i12, &octx->mm_div_r2);
+
+                const uint32_t i1 = i11;
+                const uint32_t i2 = i12;
+                const uint32_t i3 = i13;
+
+                const uint8_t * restrict src0_base = (const uint8_t *) src0->data + (0 + i02 * nb02 + i03 * nb03);
+                const uint8_t * restrict src1_col  = (const uint8_t *) src1->data + (i11 * nb11 + i12 * nb12 + i13 * nb13);
+                float * dst_col = (float *) ((uint8_t * restrict) dst->data + (i1 * nb1 + i2 * nb2 + i3 * nb3));
+
+                const uint32_t ir0_block_end = MIN(iir0 + blck_0, ir0_end);
+                for (uint32_t ir0 = iir0; ir0 < ir0_block_end; ir0++) {
+                    const uint8_t * restrict src0_row = src0_base + ir0 * nb01;
+                    mt->vec_dot(ne00, &dst_col[ir0], src0_row, src1_col);
+                }
+            }
+        }
+    }
+
+    t2 = HAP_perf_get_qtimer_count();
+
+    FARF(HIGH, "matmul-4d %d/%d: %ux%ux%ux%u (%u:%u %u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
+         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], ir0_start, ir0_end, ir1_start, ir1_end, src1->ne[0],
+         src1->ne[1], src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
+}
+
+// src1 tensor is already in VTCM spad
+static void matmul_2d(struct htp_matmul_type * mt, struct htp_ops_context * octx, uint32_t nth, uint32_t ith) {
     htp_matmul_preamble;
 
     const uint32_t src0_nrows = ne01 * ne02 * ne03;  // src0 rows
@@ -1164,17 +1283,7 @@ static void matmul(struct htp_matmul_type * mt,
 }
 
 // q8x4x2 src1 tensor is already in VTCM spad
-static void matvec(struct htp_matmul_type * mt,
-                   struct htp_tensor * restrict src0,
-                   struct htp_tensor * restrict src1,
-                   struct htp_tensor * restrict dst,
-                   struct htp_spad * restrict src0_spad,
-                   struct htp_spad * restrict src1_spad,
-                   struct htp_spad * restrict dst_spad,
-                   uint32_t    nth,
-                   uint32_t    ith,
-                   uint32_t    src0_nrows_per_thread,
-                   dma_queue * dma_queue) {
+static void matvec_2d(struct htp_matmul_type * mt, struct htp_ops_context * octx, uint32_t nth, uint32_t ith) {
     htp_matmul_preamble;
 
     const uint32_t src0_nrows = ne01;
@@ -1263,21 +1372,12 @@ struct mmid_row_mapping {
     uint32_t i2;
 };
 
-// q8x4 src1 tensor is already in VTCM spad
-static void matmul_id(struct htp_matmul_type * mt,
-                      struct htp_tensor * restrict src0,
-                      struct htp_tensor * restrict src1,
-                      struct htp_tensor * restrict ids,
-                      struct htp_tensor * restrict dst,
-                      struct htp_spad * restrict src0_spad,
-                      struct htp_spad * restrict src1_spad,
-                      struct htp_spad * restrict src2_spad,
-                      struct htp_spad * restrict dst_spad,
-                      uint32_t    nth,
-                      uint32_t    ith,
-                      uint32_t    src0_nrows_per_thread,
-                      dma_queue * dma_queue) {
+// src1 tensor is already in VTCM spad
+static void matmul_id(struct htp_matmul_type * mt, struct htp_ops_context * octx, uint32_t nth, uint32_t ith) {
     htp_matmul_preamble;
+
+    struct htp_tensor * restrict     ids = &octx->src2;
+    struct htp_spad * restrict src2_spad = &octx->src2_spad;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
@@ -1393,21 +1493,12 @@ static void matmul_id(struct htp_matmul_type * mt,
          dst->ne[2], dst->ne[3], (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-// q8x4 src1 tensor is already in VTCM spad
-static void matvec_id(struct htp_matmul_type * mt,
-                      struct htp_tensor * restrict src0,
-                      struct htp_tensor * restrict src1,
-                      struct htp_tensor * restrict src2,
-                      struct htp_tensor * restrict dst,
-                      struct htp_spad * restrict src0_spad,
-                      struct htp_spad * restrict src1_spad,
-                      struct htp_spad * restrict src2_spad,
-                      struct htp_spad * restrict dst_spad,
-                      uint32_t    nth,
-                      uint32_t    ith,
-                      uint32_t    src0_nrows_per_thread,
-                      dma_queue * dma_queue) {
+// src1 tensor is already in VTCM spad
+static void matvec_id(struct htp_matmul_type * mt, struct htp_ops_context * octx, uint32_t nth, uint32_t ith) {
     htp_matmul_preamble;
+
+    struct htp_tensor * restrict     ids = &octx->src2;
+    struct htp_spad * restrict src2_spad = &octx->src2_spad;
 
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
@@ -1491,98 +1582,6 @@ static void matvec_id(struct htp_matmul_type * mt,
          ith, nth, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0_start_row, src0_end_row, src1->ne[0],
          src1->ne[1], src1->ne[2], src1->ne[3], src2->ne[0], src2->ne[1], src2->ne[2], src2->ne[3], dst->ne[0],
          dst->ne[1], dst->ne[2], dst->ne[3], (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
-}
-
-// *** matmul in fp16
-
-static void matmul_f16_f32(struct htp_ops_context * octx, uint32_t nth, uint32_t ith) {
-    struct htp_tensor * restrict src0    = &octx->src0;
-    struct htp_tensor * restrict src1    = &octx->src1;
-    struct htp_tensor * restrict dst     = &octx->dst;
-    struct htp_spad * restrict src0_spad = &octx->src0_spad;
-    struct htp_spad * restrict src1_spad = &octx->src1_spad;
-    struct htp_spad * restrict dst_spad  = &octx->dst_spad;
-
-    dma_queue *dma_queue = octx->ctx->dma[ith];
-
-    uint32_t src0_nrows_per_thread = octx->src0_nrows_per_thread;
-
-    htp_matmul_preamble;
-
-    uint64_t t1, t2;
-    t1 = HAP_perf_get_qtimer_count();
-
-    assert(ne12 % ne02 == 0);
-    assert(ne13 % ne03 == 0);
-
-    // This is the size of the first dimension of the result, so we can iterate that way. (see the ASSERT above, these are the same numbers)
-    const uint32_t nr0 = ne0;
-
-    // This is the size of the rest of the dimensions of the result
-    const uint32_t nr1 = ne1 * ne2 * ne3;
-
-    // distribute the thread work across the inner or outer loop based on which one is larger
-    uint32_t nchunk0 = nr0 > nr1 ? nth : 1;  // parallelize by src0 rows
-    uint32_t nchunk1 = nr0 > nr1 ? 1 : nth;  // parallelize by src1 rows
-
-    // The number of elements in each chunk
-    const uint32_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
-    const uint32_t dr1 = (nr1 + nchunk1 - 1) / nchunk1;
-
-    uint32_t current_chunk = ith;
-
-    const uint32_t ith0 = current_chunk % nchunk0;
-    const uint32_t ith1 = current_chunk / nchunk0;
-
-    const uint32_t ir0_start = dr0 * ith0;
-    const uint32_t ir0_end   = MIN(ir0_start + dr0, nr0);
-
-    const uint32_t ir1_start = dr1 * ith1;
-    const uint32_t ir1_end   = MIN(ir1_start + dr1, nr1);
-
-    // no work for this thread
-    if (ir0_start >= ir0_end || ir1_start >= ir1_end) {
-        return;
-    }
-
-    // block-tiling attempt
-    const uint32_t blck_0 = 64;
-    const uint32_t blck_1 = 64;
-
-    for (uint32_t iir1 = ir1_start; iir1 < ir1_end; iir1 += blck_1) {
-        for (uint32_t iir0 = ir0_start; iir0 < ir0_end; iir0 += blck_0) {
-            for (uint32_t ir1 = iir1; ir1 < MIN(iir1 + blck_1, ir1_end); ir1++) {
-                const uint32_t i13 = fastdiv(ir1, &octx->mm_div_ne12_ne1);
-                const uint32_t i12 = fastdiv(ir1 - i13 * ne12 * ne1, &octx->mm_div_ne1);
-                const uint32_t i11 = (ir1 - i13 * ne12 * ne1 - i12 * ne1);
-
-                // broadcast src0 into src1
-                const uint32_t i03 = fastdiv(i13, &octx->mm_div_r3);
-                const uint32_t i02 = fastdiv(i12, &octx->mm_div_r2);
-
-                const uint32_t i1 = i11;
-                const uint32_t i2 = i12;
-                const uint32_t i3 = i13;
-
-                const uint8_t * restrict src0_base = (const uint8_t *) src0->data + (0 + i02 * nb02 + i03 * nb03);
-                const uint8_t * restrict src1_col  = (const uint8_t *) src1->data + (i11 * nb11 + i12 * nb12 + i13 * nb13);
-                float * dst_col = (float *) ((uint8_t * restrict) dst->data + (i1 * nb1 + i2 * nb2 + i3 * nb3));
-
-                const uint32_t ir0_block_end = MIN(iir0 + blck_0, ir0_end);
-                for (uint32_t ir0 = iir0; ir0 < ir0_block_end; ir0++) {
-                    const uint8_t * restrict src0_row = src0_base + ir0 * nb01;
-                    vec_dot_f16_f32(ne00, &dst_col[ir0], src0_row, src1_col);
-                }
-            }
-        }
-    }
-
-    t2 = HAP_perf_get_qtimer_count();
-
-    FARF(HIGH, "matmul-f16-f32 %d/%d: %ux%ux%ux%u (%u:%u %u:%u) * %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
-         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], ir0_start, ir0_end, ir1_start, ir1_end, src1->ne[0],
-         src1->ne[1], src1->ne[2], src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-         (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
 // *** dynamic quant
@@ -1864,19 +1863,19 @@ static void quantize_fp32_f16(const struct htp_tensor * src, uint8_t * restrict 
         ir_last, src_row_size, src_stride, dst_stride, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-static void htp_quantize_fp32_f16(unsigned int n, unsigned int i, void * data) {
-    struct htp_ops_context * octx = data;
-    quantize_fp32_f16(&octx->src1, octx->src1_spad.data, n, i, octx->src1_nrows_per_thread, octx->src1_spad.stride);
-}
-
 static void htp_quantize_fp32_q8x4x2(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = data;
     quantize_fp32_q8x4x2(&octx->src1, octx->src1_spad.data, &octx->src0_spad, n, i, octx->src1_nrows_per_thread);
 }
 
-// ** matmul callbacks for worker_pool
+static void htp_quantize_fp32_f16(unsigned int n, unsigned int i, void * data) {
+    struct htp_ops_context * octx = data;
+    quantize_fp32_f16(&octx->src1, octx->src1_spad.data, n, i, octx->src1_nrows_per_thread, octx->src1_spad.stride);
+}
 
-static void htp_matvec_q4x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
+// ** matmul/matvec callbacks for worker_pool
+
+static void htp_matvec_2d_q4x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = data;
 
     struct htp_matmul_type mt;
@@ -1884,11 +1883,10 @@ static void htp_matvec_q4x4x2_q8x4x2(unsigned int n, unsigned int i, void * data
     mt.vec_dot     = vec_dot_q4x4x2_q8x4x2;
     mt.vec_dot_rx2 = vec_dot_q4x4x2_q8x4x2_rx2;
 
-    matvec(&mt, &octx->src0, &octx->src1, &octx->dst, &octx->src0_spad, &octx->src1_spad, &octx->dst_spad, n, i,
-           octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matvec_2d(&mt, octx, n, i);
 }
 
-static void htp_matmul_q4x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
+static void htp_matmul_2d_q4x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = data;
 
     struct htp_matmul_type mt;
@@ -1896,11 +1894,10 @@ static void htp_matmul_q4x4x2_q8x4x2(unsigned int n, unsigned int i, void * data
     mt.vec_dot     = vec_dot_q4x4x2_q8x4x2;
     mt.vec_dot_rx2 = vec_dot_q4x4x2_q8x4x2_rx2;
 
-    matmul(&mt, &octx->src0, &octx->src1, &octx->dst, &octx->src0_spad, &octx->src1_spad, &octx->dst_spad, n, i,
-           octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matmul_2d(&mt, octx, n, i);
 }
 
-static void htp_matvec_q8x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
+static void htp_matvec_2d_q8x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = data;
 
     struct htp_matmul_type mt;
@@ -1908,11 +1905,10 @@ static void htp_matvec_q8x4x2_q8x4x2(unsigned int n, unsigned int i, void * data
     mt.vec_dot     = vec_dot_q8x4x2_q8x4x2;
     mt.vec_dot_rx2 = vec_dot_q8x4x2_q8x4x2_rx2;
 
-    matvec(&mt, &octx->src0, &octx->src1, &octx->dst, &octx->src0_spad, &octx->src1_spad, &octx->dst_spad, n, i,
-           octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matvec_2d(&mt, octx, n, i);
 }
 
-static void htp_matmul_q8x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
+static void htp_matmul_2d_q8x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = data;
 
     struct htp_matmul_type mt;
@@ -1920,11 +1916,10 @@ static void htp_matmul_q8x4x2_q8x4x2(unsigned int n, unsigned int i, void * data
     mt.vec_dot     = vec_dot_q8x4x2_q8x4x2;
     mt.vec_dot_rx2 = vec_dot_q8x4x2_q8x4x2_rx2;
 
-    matmul(&mt, &octx->src0, &octx->src1, &octx->dst, &octx->src0_spad, &octx->src1_spad, &octx->dst_spad, n, i,
-           octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matmul_2d(&mt, octx, n, i);
 }
 
-static void htp_matvec_mxfp4x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
+static void htp_matvec_2d_mxfp4x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = data;
 
     struct htp_matmul_type mt;
@@ -1932,11 +1927,10 @@ static void htp_matvec_mxfp4x4x2_q8x4x2(unsigned int n, unsigned int i, void * d
     mt.vec_dot     = vec_dot_mxfp4x4x2_q8x4x2;
     mt.vec_dot_rx2 = vec_dot_mxfp4x4x2_q8x4x2_rx2;
 
-    matvec(&mt, &octx->src0, &octx->src1, &octx->dst, &octx->src0_spad, &octx->src1_spad, &octx->dst_spad, n, i,
-           octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matvec_2d(&mt, octx, n, i);
 }
 
-static void htp_matmul_mxfp4x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
+static void htp_matmul_2d_mxfp4x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = data;
 
     struct htp_matmul_type mt;
@@ -1944,37 +1938,49 @@ static void htp_matmul_mxfp4x4x2_q8x4x2(unsigned int n, unsigned int i, void * d
     mt.vec_dot     = vec_dot_mxfp4x4x2_q8x4x2;
     mt.vec_dot_rx2 = vec_dot_mxfp4x4x2_q8x4x2_rx2;
 
-    matmul(&mt, &octx->src0, &octx->src1, &octx->dst, &octx->src0_spad, &octx->src1_spad, &octx->dst_spad, n, i,
-           octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matmul_2d(&mt, octx, n, i);
 }
 
-static void htp_matvec_f16_f16(unsigned int n, unsigned int i, void * data) {
+static void htp_matvec_2d_f16_f16(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = data;
 
     struct htp_matmul_type mt;
     mt.type        = "f16-f16";
-    mt.vec_dot     = vec_dot_f16_f16;
-    mt.vec_dot_rx2 = vec_dot_f16_f16_rx2;
+    mt.vec_dot     = vec_dot_f16_f16_aa;
+    mt.vec_dot_rx2 = vec_dot_f16_f16_aa_rx2;
 
-    matvec(&mt, &octx->src0, &octx->src1, &octx->dst, &octx->src0_spad, &octx->src1_spad, &octx->dst_spad, n, i,
-           octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matvec_2d(&mt, octx, n, i);
 }
 
-static void htp_matmul_f16_f16(unsigned int n, unsigned int i, void * data) {
+static void htp_matmul_2d_f16_f16(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = data;
 
     struct htp_matmul_type mt;
     mt.type        = "f16-f16";
-    mt.vec_dot     = vec_dot_f16_f16;
-    mt.vec_dot_rx2 = vec_dot_f16_f16_rx2;
+    mt.vec_dot     = vec_dot_f16_f16_aa;
+    mt.vec_dot_rx2 = vec_dot_f16_f16_aa_rx2;
 
-    matmul(&mt, &octx->src0, &octx->src1, &octx->dst, &octx->src0_spad, &octx->src1_spad, &octx->dst_spad, n, i,
-           octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matmul_2d(&mt, octx, n, i);
 }
 
-static void htp_matmul_f16_f32(unsigned int n, unsigned int i, void * data) {
+static void htp_matmul_4d_f16_f32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = data;
-    matmul_f16_f32(octx, n, i);
+
+    struct htp_matmul_type mt;
+    mt.type        = "f16-f32";
+    mt.vec_dot     = vec_dot_f16_f32_uu;
+
+    matmul_4d(&mt, octx, n, i);
+}
+
+static void htp_matmul_4d_f16_f16(unsigned int n, unsigned int i, void * data) {
+    struct htp_ops_context * octx = data;
+
+    struct htp_matmul_type mt;
+    mt.type        = "f16-f16";
+    mt.vec_dot     = vec_dot_f16_f16_uu;
+
+    matmul_4d(&mt, octx, n, i);
 }
 
 // ** matmul-id callbacks for worker_pool
@@ -1987,8 +1993,7 @@ static void htp_matvec_id_q4x4x2_q8x4x2(unsigned int n, unsigned int i, void * d
     mt.vec_dot     = vec_dot_q4x4x2_q8x4x2;
     mt.vec_dot_rx2 = vec_dot_q4x4x2_q8x4x2_rx2;
 
-    matvec_id(&mt, &octx->src0, &octx->src1, &octx->src2, &octx->dst, &octx->src0_spad, &octx->src1_spad,
-              &octx->src2_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matvec_id(&mt, octx, n, i);
 }
 
 static void htp_matmul_id_q4x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
@@ -1999,8 +2004,7 @@ static void htp_matmul_id_q4x4x2_q8x4x2(unsigned int n, unsigned int i, void * d
     mt.vec_dot     = vec_dot_q4x4x2_q8x4x2;
     mt.vec_dot_rx2 = vec_dot_q4x4x2_q8x4x2_rx2;
 
-    matmul_id(&mt, &octx->src0, &octx->src1, &octx->src2, &octx->dst, &octx->src0_spad, &octx->src1_spad,
-              &octx->src2_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matmul_id(&mt, octx, n, i);
 }
 
 static void htp_matvec_id_q8x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
@@ -2011,8 +2015,7 @@ static void htp_matvec_id_q8x4x2_q8x4x2(unsigned int n, unsigned int i, void * d
     mt.vec_dot     = vec_dot_q8x4x2_q8x4x2;
     mt.vec_dot_rx2 = vec_dot_q8x4x2_q8x4x2_rx2;
 
-    matvec_id(&mt, &octx->src0, &octx->src1, &octx->src2, &octx->dst, &octx->src0_spad, &octx->src1_spad,
-              &octx->src2_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matvec_id(&mt, octx, n, i);
 }
 
 static void htp_matmul_id_q8x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
@@ -2023,8 +2026,7 @@ static void htp_matmul_id_q8x4x2_q8x4x2(unsigned int n, unsigned int i, void * d
     mt.vec_dot     = vec_dot_q8x4x2_q8x4x2;
     mt.vec_dot_rx2 = vec_dot_q8x4x2_q8x4x2_rx2;
 
-    matmul_id(&mt, &octx->src0, &octx->src1, &octx->src2, &octx->dst, &octx->src0_spad, &octx->src1_spad,
-              &octx->src2_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matmul_id(&mt, octx, n, i);
 }
 
 static void htp_matvec_id_mxfp4x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
@@ -2035,8 +2037,7 @@ static void htp_matvec_id_mxfp4x4x2_q8x4x2(unsigned int n, unsigned int i, void 
     mt.vec_dot     = vec_dot_mxfp4x4x2_q8x4x2;
     mt.vec_dot_rx2 = vec_dot_mxfp4x4x2_q8x4x2_rx2;
 
-    matvec_id(&mt, &octx->src0, &octx->src1, &octx->src2, &octx->dst, &octx->src0_spad, &octx->src1_spad,
-              &octx->src2_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matvec_id(&mt, octx, n, i);
 }
 
 static void htp_matmul_id_mxfp4x4x2_q8x4x2(unsigned int n, unsigned int i, void * data) {
@@ -2047,8 +2048,7 @@ static void htp_matmul_id_mxfp4x4x2_q8x4x2(unsigned int n, unsigned int i, void 
     mt.vec_dot     = vec_dot_mxfp4x4x2_q8x4x2;
     mt.vec_dot_rx2 = vec_dot_mxfp4x4x2_q8x4x2_rx2;
 
-    matmul_id(&mt, &octx->src0, &octx->src1, &octx->src2, &octx->dst, &octx->src0_spad, &octx->src1_spad,
-              &octx->src2_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
+    matmul_id(&mt, octx, n, i);
 }
 
 // ** main matmul entry point
@@ -2058,11 +2058,7 @@ static inline bool htp_is_permuted(const struct htp_tensor * t) {
 }
 
 int op_matmul(struct htp_ops_context * octx) {
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    struct htp_tensor *       dst  = &octx->dst;
-
-    htp_matmul_preamble;
+    htp_matmul_tensors_preamble;
 
     const char * op_type;
 
@@ -2086,9 +2082,9 @@ int op_matmul(struct htp_ops_context * octx) {
             op_type        = "q4x4x2-fp32";
             quant_job_func = htp_quantize_fp32_q8x4x2;
             if (src1_nrows > 1) {
-                matmul_job_func = htp_matmul_q4x4x2_q8x4x2;
+                matmul_job_func = htp_matmul_2d_q4x4x2_q8x4x2;
             } else {
-                matmul_job_func = htp_matvec_q4x4x2_q8x4x2;
+                matmul_job_func = htp_matvec_2d_q4x4x2_q8x4x2;
             }
 
             src1_row_size = q8x4x2_row_size(ne10);  // row size post quantization
@@ -2115,9 +2111,9 @@ int op_matmul(struct htp_ops_context * octx) {
             op_type        = "q8x4x2-fp32";
             quant_job_func = htp_quantize_fp32_q8x4x2;
             if (src1_nrows > 1) {
-                matmul_job_func = htp_matmul_q8x4x2_q8x4x2;
+                matmul_job_func = htp_matmul_2d_q8x4x2_q8x4x2;
             } else {
-                matmul_job_func = htp_matvec_q8x4x2_q8x4x2;
+                matmul_job_func = htp_matvec_2d_q8x4x2_q8x4x2;
             }
 
             src1_row_size = q8x4x2_row_size(ne10);  // row size post quantization
@@ -2144,9 +2140,9 @@ int op_matmul(struct htp_ops_context * octx) {
             op_type        = "mxfp4x4x2-f32";
             quant_job_func = htp_quantize_fp32_q8x4x2;
             if (src1_nrows > 1) {
-                matmul_job_func = htp_matmul_mxfp4x4x2_q8x4x2;
+                matmul_job_func = htp_matmul_2d_mxfp4x4x2_q8x4x2;
             } else {
-                matmul_job_func = htp_matvec_mxfp4x4x2_q8x4x2;
+                matmul_job_func = htp_matvec_2d_mxfp4x4x2_q8x4x2;
             }
 
             src1_row_size = q8x4x2_row_size(ne10);  // row size post quantization
@@ -2179,7 +2175,7 @@ int op_matmul(struct htp_ops_context * octx) {
 
                 const size_t f16_total_size = f16_src1_spad_size + f16_src0_spad_size + f16_dst_spad_size;
 
-                // Generic matmul implementation does not support multi-batch src0 (N-vs-N broadcasting).
+                // Default matmul implementation does not support multi-batch src0 (N-vs-N broadcasting).
                 // It only supports 1-vs-N broadcasting (src0 is 2D) or standard 2D matmul.
                 const bool is_batched  = (ne02 > 1) || (ne03 > 1);
                 const bool is_permuted = htp_is_permuted(&octx->src0) || htp_is_permuted(&octx->src1);
@@ -2189,12 +2185,12 @@ int op_matmul(struct htp_ops_context * octx) {
                     op_type        = "f16-f16";
                     quant_job_func = htp_quantize_fp32_f16;
                     if (src1_nrows > 1) {
-                        matmul_job_func = htp_matmul_f16_f16;
+                        matmul_job_func = htp_matmul_2d_f16_f16;
                     } else {
-                        matmul_job_func = htp_matvec_f16_f16;
+                        matmul_job_func = htp_matvec_2d_f16_f16;
                     }
 
-                    src1_row_size = f16_src1_row_size;
+                    src1_row_size = f16_src1_row_size; // row size post conversion
 
                     octx->dst_spad.size_per_thread  = htp_round_up(HTP_SPAD_DST_NROWS * dst_row_size, 256);
                     octx->src0_spad.size_per_thread = htp_round_up(HTP_SPAD_SRC0_NROWS * src0_row_size_padded, 256);
@@ -2204,13 +2200,17 @@ int op_matmul(struct htp_ops_context * octx) {
                     octx->src0_spad.size = octx->src0_spad.size_per_thread * octx->n_threads;
                     octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
                 } else {
-                    // Fallback to f16-f32 (DDR) if src1 doesn't fit in VTCM or broadcasting is required
-                    op_type         = "f16-f32";
+                    // Fallback to f16/f32 (DDR) if src1 doesn't fit in VTCM or broadcasting is required
                     quant_job_func  = NULL;
-                    matmul_job_func = htp_matmul_f16_f32;
+                    if (src1->type == HTP_TYPE_F32) {
+                        op_type         = "f16-f32";
+                        matmul_job_func = htp_matmul_4d_f16_f32;
+                    } else {
+                        op_type         = "f16-f16";
+                        matmul_job_func = htp_matmul_4d_f16_f16;
+                    }
 
-                    // Revert src1_row_size to nb11 (src1 in DDR)
-                    src1_row_size = nb11;
+                    src1_row_size = nb11; // original row size in DDR
 
                     octx->dst_spad.size_per_thread  = htp_round_up(HTP_SPAD_DST_NROWS * dst_row_size, 256);
                     octx->src0_spad.size_per_thread = htp_round_up(HTP_SPAD_SRC0_NROWS * src0_row_size, 256);
@@ -2220,7 +2220,7 @@ int op_matmul(struct htp_ops_context * octx) {
                     octx->src1_spad.size = octx->src1_spad.size_per_thread * octx->n_threads;
                     octx->dst_spad.size  = octx->dst_spad.size_per_thread * octx->n_threads;
 
-                    // Init fastdiv for old path (supports broadcasting)
+                    // Init fastdiv for matmul_4d (supports broadcasting)
                     octx->mm_div_ne12_ne1 = init_fastdiv_values(src1->ne[2] * dst->ne[1]);
                     octx->mm_div_ne1      = init_fastdiv_values(dst->ne[1]);
                     octx->mm_div_r2       = init_fastdiv_values(src1->ne[2] / src0->ne[2]);
@@ -2281,12 +2281,9 @@ int op_matmul(struct htp_ops_context * octx) {
 // ** main matmul-id entry point
 
 int op_matmul_id(struct htp_ops_context * octx) {
-    const struct htp_tensor * src0 = &octx->src0;
-    const struct htp_tensor * src1 = &octx->src1;
-    const struct htp_tensor * ids  = &octx->src2;
-    struct htp_tensor *       dst  = &octx->dst;
+    htp_matmul_tensors_preamble;
 
-    htp_matmul_preamble;
+    struct htp_tensor * restrict ids = &octx->src2;
 
     const char * op_type;
 
