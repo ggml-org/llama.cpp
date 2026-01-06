@@ -854,6 +854,54 @@ bool common_arg_utils::is_autoy(const std::string & value) {
     return value == "auto" || value == "-1";
 }
 
+// Simple CSV parser that handles quoted fields and escaped quotes
+// example:
+//    input:  value1,"value, with, commas","value with ""escaped"" quotes",value4
+//    output: [value1] [value, with, commas] [value with "escaped" quotes] [value4]
+static std::vector<std::string> parse_csv_row(const std::string& input) {
+    std::vector<std::string> fields;
+    std::string field;
+    bool in_quotes = false;
+
+    for (size_t i = 0; i < input.length(); ++i) {
+        char ch = input[i];
+
+        if (ch == '"') {
+            if (!in_quotes) {
+                // start of quoted field (only valid if at beginning of field)
+                if (!field.empty()) {
+                    // quote appeared in middle of unquoted field, treat as literal
+                    field += '"';
+                } else {
+                    in_quotes = true; // start
+                }
+            } else {
+                if (i + 1 < input.length() && input[i + 1] == '"') {
+                    // escaped quote: ""
+                    field += '"';
+                    ++i; // skip the next quote
+                } else {
+                    in_quotes = false; // end
+                }
+            }
+        } else if (ch == ',') {
+            if (in_quotes) {
+                field += ',';
+            } else {
+                fields.push_back(std::move(field));
+                field.clear();
+            }
+        } else {
+            field += ch;
+        }
+    }
+
+    // Add the last field
+    fields.push_back(std::move(field));
+
+    return fields;
+}
+
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
     // per-example default params
     // we define here to make sure it's included in llama-gen-docs
@@ -1250,7 +1298,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--in-file"}, "FNAME",
         "an input file (use comma-separated values to specify multiple files)",
         [](common_params & params, const std::string & value) {
-            for (const auto & item : string_split<std::string>(value, ',')) {
+            for (const auto & item : parse_csv_row(value)) {
                 std::ifstream file(item);
                 if (!file) {
                     throw std::runtime_error(string_format("error: failed to open file '%s'\n", item.c_str()));
@@ -2002,7 +2050,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--image", "--audio"}, "FILE",
         "path to an image or audio file. use with multimodal models, use comma-separated values for multiple files\n",
         [](common_params & params, const std::string & value) {
-            for (const auto & item : string_split<std::string>(value, ',')) {
+            for (const auto & item : parse_csv_row(value)) {
                 params.image.emplace_back(item);
             }
         }
@@ -2259,37 +2307,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"--override-kv"}, "KEY=TYPE:VALUE,...",
-        "advanced option to override model metadata by key. to specify multiple overrides, either use comma-separated or repeat this argument.\n"
+        "advanced option to override model metadata by key. to specify multiple overrides, either use comma-separated values.\n"
         "types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false,tokenizer.ggml.add_eos_token=bool:false",
         [](common_params & params, const std::string & value) {
-            std::vector<std::string> kv_overrides;
-
-            std::string current;
-            bool escaping = false;
-
-            for (const char c : value) {
-                if (escaping) {
-                    current.push_back(c);
-                    escaping = false;
-                } else if (c == '\\') {
-                    escaping = true;
-                } else if (c == ',') {
-                    kv_overrides.push_back(current);
-                    current.clear();
-                } else {
-                    current.push_back(c);
-                }
-            }
-
-            if (escaping) {
-                current.push_back('\\');
-            }
-
-            kv_overrides.push_back(current);
-
-            for (const auto & kv_override : kv_overrides) {
-                if (!string_parse_kv_override(kv_override.c_str(), params.kv_overrides)) {
-                    throw std::runtime_error(string_format("error: Invalid type for KV override: %s\n", kv_override.c_str()));
+            for (const auto & item : parse_csv_row(value)) {
+                if (!string_parse_kv_override(item.c_str(), params.kv_overrides)) {
+                    throw std::runtime_error(string_format("error: Invalid type for KV override: %s\n", item.c_str()));
                 }
             }
         }
@@ -2306,7 +2329,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--lora"}, "FNAME",
         "path to LoRA adapter (use comma-separated values to load multiple adapters)",
         [](common_params & params, const std::string & value) {
-            for (const auto & item : string_split<std::string>(value, ',')) {
+            for (const auto & item : parse_csv_row(value)) {
                 params.lora_adapters.push_back({ item, 1.0, "", "", nullptr });
             }
         }
@@ -2317,7 +2340,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "path to LoRA adapter with user defined scaling (format: FNAME:SCALE,...)\n"
         "note: use comma-separated values",
         [](common_params & params, const std::string & value) {
-            for (const auto & item : string_split<std::string>(value, ',')) {
+            for (const auto & item : parse_csv_row(value)) {
                 auto parts = string_split<std::string>(item, ':');
                 if (parts.size() != 2) {
                     throw std::invalid_argument("lora-scaled format: FNAME:SCALE");
@@ -2331,7 +2354,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--control-vector"}, "FNAME",
         "add a control vector\nnote: use comma-separated values to add multiple control vectors",
         [](common_params & params, const std::string & value) {
-            for (const auto & item : string_split<std::string>(value, ',')) {
+            for (const auto & item : parse_csv_row(value)) {
                 params.control_vectors.push_back({ 1.0f, item, });
             }
         }
@@ -2341,7 +2364,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "add a control vector with user defined scaling SCALE\n"
         "note: use comma-separated values (format: FNAME:SCALE,...)",
         [](common_params & params, const std::string & value) {
-            for (const auto & item : string_split<std::string>(value, ',')) {
+            for (const auto & item : parse_csv_row(value)) {
                 auto parts = string_split<std::string>(item, ':');
                 if (parts.size() != 2) {
                     throw std::invalid_argument("control-vector-scaled format: FNAME:SCALE");
@@ -2439,7 +2462,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--context-file"}, "FNAME",
         "file to load context from (use comma-separated values to specify multiple files)",
         [](common_params & params, const std::string & value) {
-            for (const auto & item : string_split<std::string>(value, ',')) {
+            for (const auto & item : parse_csv_row(value)) {
                 std::ifstream file(item, std::ios::binary);
                 if (!file) {
                     throw std::runtime_error(string_format("error: failed to open file '%s'\n", item.c_str()));
@@ -2675,9 +2698,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_RERANKING"));
     add_opt(common_arg(
         {"--api-key"}, "KEY",
-        "API key to use for authentication (default: none)",
+        "API key to use for authentication, multiple keys can be provided as a comma-separated list (default: none)",
         [](common_params & params, const std::string & value) {
-            params.api_keys.push_back(value);
+            for (const auto & key : parse_csv_row(value)) {
+                if (!key.empty()) {
+                    params.api_keys.push_back(key);
+                }
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_API_KEY"));
     add_opt(common_arg(
@@ -2691,7 +2718,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             std::string key;
             while (std::getline(key_file, key)) {
                 if (!key.empty()) {
-                        params.api_keys.push_back(key);
+                    params.api_keys.push_back(key);
                 }
             }
             key_file.close();
@@ -2713,7 +2740,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SSL_CERT_FILE"));
     add_opt(common_arg(
         {"--chat-template-kwargs"}, "STRING",
-        string_format("sets additional params for the json template parser"),
+        "sets additional params for the json template parser, must be a valid json object string, e.g. '{\"key1\":\"value1\",\"key2\":\"value2\"}'",
         [](common_params & params, const std::string & value) {
             auto parsed = json::parse(value);
             for (const auto & item : parsed.items()) {
