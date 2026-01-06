@@ -412,6 +412,13 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
             SYCL_CHECK(
                 CHECK_TRY_ERROR(sycl::free(extra->data_device[i], *(streams[i]))));
         }
+        // Free XMX MXFP4 tiled cache
+        if (extra->xmx_mxfp4_tiled[i] != nullptr && streams.size()>0) {
+            ggml_sycl_set_device(i);
+            SYCL_CHECK(
+                CHECK_TRY_ERROR(sycl::free(extra->xmx_mxfp4_tiled[i], *(streams[i]))));
+            extra->xmx_mxfp4_tiled[i] = nullptr;
+        }
     }
     delete extra;
 }

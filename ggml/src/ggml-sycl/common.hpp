@@ -1102,6 +1102,10 @@ struct ggml_tensor_extra_gpu {
     int64_t tp_offset_ne[4]   = { 0 };  // Offset into the original tensor
     int     tp_rank           = 0;      // Which rank this shard belongs to
     int     tp_world_size     = 1;      // Total number of ranks
+
+    // XMX tile-aligned MXFP4 layout (cached at first use)
+    void*  xmx_mxfp4_tiled[GGML_SYCL_MAX_DEVICES] = {nullptr};
+    size_t xmx_mxfp4_tiled_size                   = 0;
 };
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams = {});
