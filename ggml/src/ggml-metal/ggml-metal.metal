@@ -9899,7 +9899,7 @@ kernel void kernel_pool_1d_max_f32(
         acc = max(acc, v);
     }
 
-    dst[dst_off + ow] = acc; 
+    dst[dst_off + ow] = acc;
 }
 
 kernel void kernel_pool_1d_avg_f32(
