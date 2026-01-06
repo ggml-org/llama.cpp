@@ -2848,12 +2848,12 @@ static void ggml_vk_load_shaders(vk_device& device) {
             l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
         }
 
-        l_mmq_wg_denoms = l_wg_denoms = { 128, 128, 1 };
-        m_mmq_wg_denoms = m_wg_denoms = { 64, 64, 1 };
-        s_mmq_wg_denoms = s_wg_denoms = { 32, 32, 1 };
+        l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
+        m_mmq_wg_denoms = m_wg_denoms = { 64,  64, 1 };
+        s_mmq_wg_denoms = s_wg_denoms = { 32,  32, 1 };
         l_align = 128;
-        m_align = 64;
-        s_align = 32;
+        m_align =  64;
+        s_align =  32;
 
         for (uint32_t i = 0; i < GGML_TYPE_COUNT; ++i) {
             ggml_type t = (ggml_type)i;
