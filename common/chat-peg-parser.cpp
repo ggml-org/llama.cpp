@@ -19,6 +19,13 @@ static std::string_view trim_trailing_space(std::string_view sv, int max = -1) {
     return sv;
 }
 
+static std::string_view trim(std::string_view sv) {
+    while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.front()))) {
+        sv.remove_prefix(1);
+    }
+    return trim_trailing_space(sv);
+}
+
 void common_chat_peg_mapper::from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result) {
     arena.visit(result, [this](const common_peg_ast_node & node) { map(node); });
 }
@@ -716,7 +723,7 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
         if (arg_count > 0) {
             arg_entry = ",";
         }
-        arg_entry += json(trim_trailing_space(node.text)).dump() + ":";
+        arg_entry += json(trim(node.text)).dump() + ":";
         ++arg_count;
 
         // If we have the tool name, add directly; otherwise buffer
@@ -731,7 +738,7 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
     }
 
     if (is_arg_value && current_tool) {
-        std::string value_content = std::string(trim_trailing_space(node.text));
+        std::string value_content = std::string(trim(node.text));
 
         std::string value_to_add;
         if (!value_content.empty()) {
@@ -754,30 +761,41 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
                         buffer_needs_closing_quote = true;
                     }
                 } else {
-                    // For non-string values (number, bool, null, object, array), add complete value
-                    value_to_add = parsed.dump();
+                    // For non-string values (number, bool, null, object, array), add raw value content
+                    // Using raw content instead of dump() ensures monotonicity for streaming
+                    // (prevents issues with spaces being removed by dump())
+                    value_to_add = value_content;
                 }
             } catch (...) {
-                // Not valid JSON - treat as string value
-                // Add opening quote if not already in a string
-                if (!current_tool->name.empty()) {
-                    if (!needs_closing_quote) {
-                        value_to_add        = "\"";
-                        needs_closing_quote = true;
-                    }
+                bool is_potential_container =
+                    !value_content.empty() && (value_content[0] == '[' || value_content[0] == '{');
+                if (node.is_partial && is_potential_container) {
+                    // During incremental parsing, if it looks like a JSON container, don't wrap in quotes yet
+                    // and don't escape. Just append raw. If it ends up being a container, we're good.
+                    // If it ends up being a string, it will be handled when is_partial becomes false.
+                    value_to_add = value_content;
                 } else {
-                    if (!buffer_needs_closing_quote) {
-                        value_to_add               = "\"";
-                        buffer_needs_closing_quote = true;
+                    // Not valid JSON and NOT a potential partial container - treat as string value
+                    // Add opening quote if not already in a string
+                    if (!current_tool->name.empty()) {
+                        if (!needs_closing_quote) {
+                            value_to_add        = "\"";
+                            needs_closing_quote = true;
+                        }
+                    } else {
+                        if (!buffer_needs_closing_quote) {
+                            value_to_add               = "\"";
+                            buffer_needs_closing_quote = true;
+                        }
                     }
+                    // Escape special characters in the string content
+                    std::string escaped = json(value_content).dump();
+                    // Remove the surrounding quotes from the escaped string
+                    if (escaped.size() >= 2 && escaped.front() == '"' && escaped.back() == '"') {
+                        escaped = escaped.substr(1, escaped.size() - 2);
+                    }
+                    value_to_add += escaped;
                 }
-                // Escape special characters in the string content
-                std::string escaped = json(value_content).dump();
-                // Remove the surrounding quotes from the escaped string
-                if (escaped.size() >= 2 && escaped.front() == '"' && escaped.back() == '"') {
-                    escaped = escaped.substr(1, escaped.size() - 2);
-                }
-                value_to_add += escaped;
             }
         }
 

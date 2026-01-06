@@ -1464,6 +1464,22 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .run();
 
+        // Test with TODO list (array of objects)
+        tst.test(
+               "<tool_call>\n"
+               "<function=todo_list>\n"
+               "<parameter=items>\n"
+               "[{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({
+                todo_list
+        })
+            .expect_tool_calls({
+                { "todo_list", "{\"items\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}", {} },
+            })
+            .run();
     }
     {
         auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V3.1.jinja", detailed_debug);
