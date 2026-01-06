@@ -62,6 +62,7 @@ enum htp_op {
     HTP_OP_FLASH_ATTN_EXT = 14,
     HTP_OP_SET_ROWS       = 15,
     HTP_OP_SCALE          = 16,
+    HTP_OP_GET_ROWS       = 17,
     INVALID
 };
 

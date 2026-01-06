@@ -2098,6 +2098,26 @@ static bool ggml_hexagon_supported_set_rows(const struct ggml_hexagon_session * 
     return true;
 }
 
+static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0]; // values
+    const struct ggml_tensor * src1 = op->src[1]; // indices
+    const struct ggml_tensor * dst  = op;
+
+    if (src0->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (src1->type != GGML_TYPE_I32 && src1->type != GGML_TYPE_I64) {
+        return false;
+    }
+
+    if (dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const int32_t * op_params = &op->op_params[0];
 
@@ -2276,6 +2296,17 @@ static inline size_t init_binary_req(htp_general_req * req, dspqueue_buffer * bu
 
     size_t n_bufs = 0;
     n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], _is_src0_constant ? DSPQBUF_TYPE_CONSTANT : DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
+
+    return n_bufs;
+}
+
+static inline size_t init_get_rows_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    req->op = HTP_OP_GET_ROWS;
+
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
     n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
     n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
 
@@ -2520,6 +2551,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             case GGML_OP_SET_ROWS:
                 ggml_hexagon_dispatch_op<init_set_rows_req>(sess, node, flags);
+                break;
+
+            case GGML_OP_GET_ROWS:
+                ggml_hexagon_dispatch_op<init_get_rows_req>(sess, node, flags);
                 break;
 
             default:
@@ -2895,6 +2930,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_SET_ROWS:
             supp = ggml_hexagon_supported_set_rows(sess, op);
+            break;
+
+        case GGML_OP_GET_ROWS:
+            supp = ggml_hexagon_supported_get_rows(sess, op);
             break;
 
         default:
