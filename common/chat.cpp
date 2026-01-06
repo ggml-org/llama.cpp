@@ -1177,7 +1177,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
                 auto channel_after_recipient =
                     p.literal("<|channel|>") + p.choice({ p.literal("analysis"), p.literal("commentary") });
-                auto constraint = p.optional(p.space() + p.literal("<|constrain|>") + p.until("<|message|>"));
+                auto constraint = p.space() + p.optional(p.literal("<|constrain|>") + p.until("<|message|>"));
                 auto args       = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", params));
 
                 // Pattern 1: recipient in role header
