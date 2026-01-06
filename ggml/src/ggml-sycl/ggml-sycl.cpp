@@ -11465,6 +11465,9 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     }
 
     static bool fused_enabled = getenv("GGML_SYCL_XMX_MOE_FUSED") != nullptr;
+    // Enable XMX tile-aligned layout for MXFP4 MoE (requires XMX_MOE=1)
+    static bool tiled_enabled = getenv("GGML_SYCL_XMX_MOE_TILED") != nullptr;
+    (void) tiled_enabled;  // Will be used when tiled layout path is implemented
 
     // Get XMX capabilities from cached device info
     auto & caps = ggml_sycl_info().devices[ctx.device].xmx_caps;
@@ -11488,11 +11491,11 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     GGML_SYCL_DEBUG("[XMX MoE] Weight layout: %s\n", is_coalesced ? "coalesced" : (is_soa ? "soa" : "aos"));
 
     // EARLY BAIL-OUT for graph recording compatibility
-    // Only Q8_0 SoA path is graph-compatible (uses fused kernel with fixed grid size).
+    // Q8_0 SoA and MXFP4 SoA paths are graph-compatible (use fused kernels with fixed grid size).
     // All other paths require host synchronization that breaks graph recording.
-    const bool is_graph_compatible = (src0->type == GGML_TYPE_Q8_0 && is_soa);
+    const bool is_graph_compatible = is_soa && (src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_MXFP4);
     if (g_ggml_sycl_graph_recording && !is_graph_compatible) {
-        GGML_SYCL_DEBUG("[XMX MoE] Non-Q8_0-SoA during graph recording, falling back to ESIMD\n");
+        GGML_SYCL_DEBUG("[XMX MoE] Non-SoA or unsupported type during graph recording, falling back to ESIMD\n");
         return false;
     }
 
@@ -11594,7 +11597,8 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
         sycl::free(sorted_output, *stream);
         return false;
     }
-    stream->memcpy(expert_write_pos, expert_offsets, n_experts * sizeof(int32_t)).wait();
+    // Make memcpy async for graph compatibility - sort will depend on this event
+    sycl::event copy_write_pos_event = stream->memcpy(expert_write_pos, expert_offsets, n_experts * sizeof(int32_t));
 
     // Phase 1a: Convert F32 tokens to F16 for XMX processing
     // Handle 2D non-contiguous token layouts with broadcast dimension ne11
@@ -11608,6 +11612,7 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
 
     if (!tokens_f16_input) {
         GGML_SYCL_DEBUG("[XMX MoE] Failed to allocate tokens_f16_input\n");
+        copy_write_pos_event.wait();  // Must wait before freeing
         sycl::free(tokens_sorted, *stream);
         sycl::free(token_map, *stream);
         if (sorted_token_ids) {
@@ -11625,8 +11630,9 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     moe_convert_f32_to_f16(tokens_f32, tokens_f16_input, n_tokens, in_dim, ne11, nb1, nb2, *stream);
 
     // Phase 1b: Sort tokens by expert (with broadcast handling for ne11)
-    moe_sort_tokens_by_expert(tokens_f16_input, tokens_sorted, expert_ids, expert_write_pos, token_map, n_tokens, n_ids,
-                              ne11, in_dim, n_experts, *stream);
+    // Use async version with dependency on memcpy for graph compatibility
+    sycl::event sort_event = moe_sort_tokens_by_expert_async(tokens_f16_input, tokens_sorted, expert_ids, expert_write_pos, token_map, n_tokens, n_ids,
+                              ne11, in_dim, n_experts, *stream, copy_write_pos_event);
 
     // Phase 2: XMX GEMM per expert
     auto xmx_cfg = moe_xmx::MoEXMXConfig::from_capabilities(caps);
@@ -11750,14 +11756,16 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
         int32_t * total_tiles_dev     = ctx.xmx_moe_buffers.total_tiles;
 
         // Pre-quantize ALL sorted tokens for fused kernel
+        // sort_event ensures sorted tokens are ready before quantization
+        // (In-order queue: quantization will naturally wait for sort)
         moe_xmx::preprocess_tokens_q8(tokens_sorted, q_tokens, token_scales, total_pairs, in_dim, *stream);
 
         // Compute tile mapping on GPU (no host sync needed for this)
         // Each expert's token count is converted to tile count via ceil division
-        constexpr int64_t TILE_M = 32;   // XMX tile height (TILES_M=4 * XMX_M=8)
-        sycl::event       offset_event;  // Empty event - in-order queue handles dependencies
-        sycl::event       tile_map_event = moe_compute_tile_mapping(expert_counts, expert_tile_offsets, total_tiles_dev,
-                                                                    n_experts, TILE_M, *stream, offset_event);
+        constexpr int64_t TILE_M = 32;  // XMX tile height (TILES_M=4 * XMX_M=8)
+        // sort_event dependency ensures expert_counts are finalized before tile mapping
+        sycl::event tile_map_event = moe_compute_tile_mapping(expert_counts, expert_tile_offsets, total_tiles_dev,
+                                                              n_experts, TILE_M, *stream, sort_event);
 
         // Compute maximum possible tiles for fixed grid size (graph-compatible)
         // max_tiles = ceil(total_pairs / TILE_M) = worst case where all tokens go to one expert
@@ -11809,29 +11817,33 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     }
 
     // Try MXFP4 fused kernel path (single kernel for all experts)
-    // Note: MXFP4 still uses the old fused path - graph compatibility TBD
+    // Graph-compatible: uses event chaining instead of .wait() calls
     if (fused_enabled && src0->type == GGML_TYPE_MXFP4 && is_soa) {
-        // Extract sorted_token_ids from token_map for fused kernel
-        stream
-            ->parallel_for(sycl::range<1>(total_pairs),
-                           [=](sycl::id<1> idx) { sorted_token_ids[idx] = token_map[idx].original_idx; })
-            .wait();
+        // Extract sorted_token_ids from token_map for fused kernel - async with event
+        sycl::event extract_event = stream->parallel_for(sycl::range<1>(total_pairs),
+            [=](sycl::id<1> idx) { sorted_token_ids[idx] = token_map[idx].original_idx; });
 
         // Pre-quantize ALL sorted tokens for fused kernel
+        // Uses in-order queue semantics - will execute after extract_event completes
         moe_xmx::preprocess_tokens_q8(tokens_sorted, q_tokens, token_scales, total_pairs, in_dim, *stream);
 
         // MXFP4 SoA weight pointers
         const uint8_t * base_qs = static_cast<const uint8_t *>(src0->data);
         const uint8_t * base_e  = base_qs + soa_total_qs_mxfp4;
 
-        bool fused_ok =
-            try_fused_xmx_moe_mxfp4_soa(base_qs, base_e, q_tokens, token_scales, sorted_token_ids, expert_offsets,
-                                        sorted_output, static_cast<int>(total_pairs), static_cast<int>(n_experts),
-                                        out_dim, in_dim, mxfp4_qs_per_expert, nblocks_per_expert, ctx.device, *stream);
+        auto [fused_ok, gemm_event] =
+            try_fused_xmx_moe_mxfp4_soa(extract_event, base_qs, base_e, q_tokens, token_scales, sorted_token_ids,
+                                        expert_offsets, sorted_output, static_cast<int>(total_pairs),
+                                        static_cast<int>(n_experts), out_dim, in_dim, mxfp4_qs_per_expert,
+                                        nblocks_per_expert, ctx.device, *stream);
 
         if (fused_ok) {
             GGML_SYCL_DEBUG("[MoE] Fused MXFP4 XMX path succeeded\n");
-            stream->wait();
+            // During graph recording, don't call wait() - use in-order queue semantics
+            // During normal execution, wait before scatter-back
+            if (!g_ggml_sycl_graph_recording) {
+                gemm_event.wait();
+            }
             goto scatter_back;
         }
         GGML_SYCL_DEBUG("[MoE] Fused MXFP4 XMX path failed, falling back to per-expert dispatch\n");
@@ -11963,7 +11975,8 @@ scatter_back:
                                    out_nb2, *stream);
 
     // Debug: print first few output values after scatter
-    if (g_ggml_sycl_debug) {
+    // Skip debug sync during graph recording to maintain graph compatibility
+    if (g_ggml_sycl_debug && !g_ggml_sycl_graph_recording) {
         stream->wait();  // Ensure scatter completes
         std::vector<float> h_out(4);
         stream->memcpy(h_out.data(), final_output, 4 * sizeof(float)).wait();
