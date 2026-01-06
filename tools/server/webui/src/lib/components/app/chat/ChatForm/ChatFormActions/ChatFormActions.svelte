@@ -17,7 +17,6 @@
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { activeMessages, usedModalities } from '$lib/stores/conversations.svelte';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
-	import { parseMcpServerSettings } from '$lib/config/mcp';
 
 	interface Props {
 		canSend?: boolean;
@@ -168,10 +167,6 @@
 	});
 
 	let showMcpDialog = $state(false);
-
-	// MCP servers state (simplified - just need to check if any exist)
-	let mcpServers = $derived(parseMcpServerSettings(currentConfig.mcpServers));
-	let hasMcpServers = $derived(mcpServers.length > 0);
 </script>
 
 <div class="flex w-full items-center gap-3 {className}" style="container-type: inline-size">
@@ -180,15 +175,11 @@
 			{disabled}
 			{hasAudioModality}
 			{hasVisionModality}
-			showMcpOption={!hasMcpServers}
-			onMcpClick={() => (showMcpDialog = true)}
 			{onFileUpload}
 			{onSystemPromptClick}
 		/>
 
-		{#if hasMcpServers}
-			<McpSelector {disabled} onSettingsClick={() => (showMcpDialog = true)} />
-		{/if}
+		<McpSelector {disabled} onSettingsClick={() => (showMcpDialog = true)} />
 	</div>
 
 	<div class="ml-auto flex items-center gap-1.5">
