@@ -22,10 +22,7 @@ using namespace sycl::ext::oneapi::experimental::matrix;
 // Device function: binary search to find expert from work-group ID
 // Given wg_id and expert_tile_offsets[], returns the expert index
 // such that expert_tile_offsets[expert] <= wg_id < expert_tile_offsets[expert + 1]
-inline int find_expert_for_workgroup(
-    int             wg_id,
-    const int32_t * expert_tile_offsets,
-    int             n_experts) {
+inline int find_expert_for_workgroup(int wg_id, const int32_t * expert_tile_offsets, int n_experts) {
     int lo = 0, hi = n_experts;
     while (lo < hi) {
         int mid = (lo + hi) / 2;
@@ -39,10 +36,7 @@ inline int find_expert_for_workgroup(
 }
 
 // Compute local tile index within expert's tile range
-inline int get_local_tile_index(
-    int             wg_id,
-    int             expert_idx,
-    const int32_t * expert_tile_offsets) {
+inline int get_local_tile_index(int wg_id, int expert_idx, const int32_t * expert_tile_offsets) {
     return wg_id - expert_tile_offsets[expert_idx];
 }
 
@@ -637,11 +631,13 @@ void launch_xmx_moe_gemm_q8_0_soa(const int8_t *       weights_qs,    // [out_di
                             joint_matrix<sycl::sub_group, int8_t, use::a, XMX_M, XMX_K, layout::row_major> mat_a;
                             joint_matrix<sycl::sub_group, int8_t, use::b, XMX_K, XMX_N, layout::col_major> mat_b;
 
+                            // Load mat_a ONCE before TILES_M loop (matches ESIMD fused kernel)
+                            auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                                           sycl::access::decorated::no>(&slm_tokens[0]);
+                            joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
+
                             for (int tm = 0; tm < TILES_M; tm++) {
-                                auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                                               sycl::access::decorated::no>(
-                                    &slm_tokens[tm * XMX_M * XMX_K]);
-                                joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
+                                // mat_a already loaded above
 
                                 for (int tn = 0; tn < TILES_N; tn++) {
                                     int row = wg_row + tm * XMX_M;
@@ -730,22 +726,21 @@ void launch_xmx_moe_gemm_q8_0_soa(const int8_t *       weights_qs,    // [out_di
 //   total_tiles: total work-groups to launch
 template <int TILES_M = 4, int TILES_N = 4>
 sycl::event launch_fused_xmx_moe_q8_0_soa(
-    sycl::queue &          queue,
-    sycl::event            dep_event,
-    const int8_t *         all_expert_qs,      // [n_experts * out_dim * in_dim] SoA qs
-    const sycl::half *     all_expert_d,       // [n_experts * out_dim * in_dim/32] SoA scales
-    const int8_t *         q_tokens,           // [total_pairs, in_dim] pre-quantized
-    const sycl::half *     token_scales,       // [total_pairs, in_dim/32]
-    sycl::half *           sorted_output,      // [total_pairs, out_dim]
-    const int32_t *        expert_offsets,     // [n_experts + 1] token offsets
-    const int32_t *        expert_tile_offsets,// [n_experts + 1] tile offsets
-    int32_t                total_tiles,
-    int64_t                n_experts,
-    int64_t                out_dim,
-    int64_t                in_dim,
-    int64_t                qs_stride_per_expert, // bytes of qs data per expert
-    const MoEXMXConfig &   cfg) {
-
+    sycl::queue &        queue,
+    sycl::event          dep_event,
+    const int8_t *       all_expert_qs,        // [n_experts * out_dim * in_dim] SoA qs
+    const sycl::half *   all_expert_d,         // [n_experts * out_dim * in_dim/32] SoA scales
+    const int8_t *       q_tokens,             // [total_pairs, in_dim] pre-quantized
+    const sycl::half *   token_scales,         // [total_pairs, in_dim/32]
+    sycl::half *         sorted_output,        // [total_pairs, out_dim]
+    const int32_t *      expert_offsets,       // [n_experts + 1] token offsets
+    const int32_t *      expert_tile_offsets,  // [n_experts + 1] tile offsets
+    int32_t              total_tiles,
+    int64_t              n_experts,
+    int64_t              out_dim,
+    int64_t              in_dim,
+    int64_t              qs_stride_per_expert,  // bytes of qs data per expert
+    const MoEXMXConfig & cfg) {
     constexpr int XMX_M   = 8;
     constexpr int XMX_N   = 16;
     constexpr int XMX_K   = 32;
@@ -759,12 +754,11 @@ sycl::event launch_fused_xmx_moe_q8_0_soa(
 
     // Launch grid: total_tiles * n_col_wgs work-groups
     // Each tile processes wg_out_rows tokens, each col_wg covers wg_out_cols output dims
-    sycl::range<2> global{ static_cast<size_t>(total_tiles * cfg.wg_size),
-                           static_cast<size_t>(n_col_wgs) };
+    sycl::range<2> global{ static_cast<size_t>(total_tiles * cfg.wg_size), static_cast<size_t>(n_col_wgs) };
     sycl::range<2> local{ static_cast<size_t>(cfg.wg_size), 1 };
 
-    const int     num_sgs       = cfg.wg_size / SG_SIZE;
-    const int64_t num_k_blocks  = in_dim / XMX_K;
+    const int     num_sgs            = cfg.wg_size / SG_SIZE;
+    const int64_t num_k_blocks       = in_dim / XMX_K;
     const int64_t nblocks_per_expert = out_dim * num_k_blocks;
 
     return queue.submit([&](sycl::handler & cgh) {
@@ -773,11 +767,11 @@ sycl::event launch_fused_xmx_moe_q8_0_soa(
         cgh.depends_on(dep_event);
 
         // SLM allocations (same as per-expert kernel)
-        constexpr int slm_weights_size = TILES_N * XMX_N * XMX_K;
+        constexpr int                   slm_weights_size = TILES_N * XMX_N * XMX_K;
         sycl::local_accessor<int8_t, 1> slm_weights(sycl::range<1>(slm_weights_size), cgh);
 
-        constexpr int slm_acc_per_sg = XMX_M * XMX_N * sizeof(int32_t);
-        const int     slm_acc_size   = num_sgs * slm_acc_per_sg;
+        constexpr int                   slm_acc_per_sg = XMX_M * XMX_N * sizeof(int32_t);
+        const int                       slm_acc_size   = num_sgs * slm_acc_per_sg;
         sycl::local_accessor<int8_t, 1> slm_acc(sycl::range<1>(slm_acc_size), cgh);
 
         sycl::local_accessor<int8_t, 1> slm_tokens(sycl::range<1>(TILES_M * XMX_M * XMX_K), cgh);
@@ -785,8 +779,7 @@ sycl::event launch_fused_xmx_moe_q8_0_soa(
         sycl::local_accessor<float, 1>  slm_weight_scales(sycl::range<1>(TILES_N * XMX_N), cgh);
 
         cgh.parallel_for(
-            sycl::nd_range<2>(global, local),
-            [=](sycl::nd_item<2> item) [[intel::reqd_sub_group_size(SG_SIZE)]] {
+            sycl::nd_range<2>(global, local), [=](sycl::nd_item<2> item) [[intel::reqd_sub_group_size(SG_SIZE)]] {
                 auto sg    = item.get_sub_group();
                 int  sg_id = sg.get_group_linear_id();
                 int  lane  = sg.get_local_linear_id();
@@ -837,18 +830,18 @@ sycl::event launch_fused_xmx_moe_q8_0_soa(
 
                     // Cooperative token loading to SLM
                     constexpr int slm_tokens_size = TILES_M * XMX_M * XMX_K;
-                    int items_per_sg = slm_tokens_size / num_sgs;
-                    int sg_offset    = sg_id * items_per_sg;
+                    int           items_per_sg    = slm_tokens_size / num_sgs;
+                    int           sg_offset       = sg_id * items_per_sg;
 
                     for (int i = 0; i < items_per_sg; i += SG_SIZE) {
                         int idx = sg_offset + i + lane;
                         if (idx < slm_tokens_size) {
-                            int tile_row   = idx / XMX_K;
-                            int tile_k     = idx % XMX_K;
-                            int local_row  = wg_row + tile_row;
+                            int tile_row  = idx / XMX_K;
+                            int tile_k    = idx % XMX_K;
+                            int local_row = wg_row + tile_row;
 
                             if (local_row < expert_token_count) {
-                                int global_row = global_row_start + tile_row;
+                                int global_row  = global_row_start + tile_row;
                                 slm_tokens[idx] = q_tokens[global_row * in_dim + k + tile_k];
                             } else {
                                 slm_tokens[idx] = 0;
@@ -886,7 +879,7 @@ sycl::event launch_fused_xmx_moe_q8_0_soa(
                             if (global_col < out_dim) {
                                 // SoA block indexing: block_idx = out_col * num_k_blocks + k_block
                                 int64_t block_idx = global_col * num_k_blocks + k_block;
-                                val = expert_qs[block_idx * XMX_K + k_elem];
+                                val               = expert_qs[block_idx * XMX_K + k_elem];
                             }
                             slm_weights[k_elem + out_col_local * XMX_K] = val;
                         }
@@ -898,7 +891,7 @@ sycl::event launch_fused_xmx_moe_q8_0_soa(
                         if (col_idx < TILES_N * XMX_N) {
                             int global_col = wg_col + col_idx;
                             if (global_col < out_dim) {
-                                int64_t block_idx = global_col * num_k_blocks + k_block;
+                                int64_t block_idx          = global_col * num_k_blocks + k_block;
                                 slm_weight_scales[col_idx] = static_cast<float>(expert_d[block_idx]);
                             } else {
                                 slm_weight_scales[col_idx] = 0.0f;
@@ -914,9 +907,9 @@ sycl::event launch_fused_xmx_moe_q8_0_soa(
                         joint_matrix<sycl::sub_group, int8_t, use::b, XMX_K, XMX_N, layout::col_major> mat_b;
 
                         for (int tm = 0; tm < TILES_M; tm++) {
-                            auto slm_tokens_ptr = sycl::address_space_cast<
-                                sycl::access::address_space::local_space, sycl::access::decorated::no>(
-                                &slm_tokens[tm * XMX_M * XMX_K]);
+                            auto slm_tokens_ptr =
+                                sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                         sycl::access::decorated::no>(&slm_tokens[tm * XMX_M * XMX_K]);
                             joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
 
                             for (int tn = 0; tn < TILES_N; tn++) {
@@ -924,17 +917,18 @@ sycl::event launch_fused_xmx_moe_q8_0_soa(
                                 int col       = wg_col + tn * XMX_N;
 
                                 if (local_row < expert_token_count && col < out_dim) {
-                                    auto slm_weights_ptr = sycl::address_space_cast<
-                                        sycl::access::address_space::local_space, sycl::access::decorated::no>(
-                                        &slm_weights[tn * XMX_N * XMX_K]);
+                                    auto slm_weights_ptr =
+                                        sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                                 sycl::access::decorated::no>(
+                                            &slm_weights[tn * XMX_N * XMX_K]);
                                     joint_matrix_load(sg, mat_b, slm_weights_ptr, XMX_K);
 
                                     joint_matrix_mad(sg, acc[tm][tn], mat_a, mat_b, acc[tm][tn]);
 
                                     int32_t * acc_slm_raw = reinterpret_cast<int32_t *>(&slm_acc[0]);
-                                    auto acc_slm_ptr = sycl::address_space_cast<
-                                        sycl::access::address_space::local_space, sycl::access::decorated::no>(
-                                        acc_slm_raw);
+                                    auto      acc_slm_ptr =
+                                        sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                                 sycl::access::decorated::no>(acc_slm_raw);
                                     joint_matrix_store(sg, acc[tm][tn], acc_slm_ptr, XMX_N, layout::row_major);
 
                                     sycl::group_barrier(sg);
@@ -1492,13 +1486,14 @@ void launch_xmx_moe_gemm_mxfp4(const void * weights_qs,  // [in_dim/32, out_dim]
                             joint_matrix<sycl::sub_group, int8_t, use::a, XMX_M, XMX_K, layout::row_major> mat_a;
                             joint_matrix<sycl::sub_group, int8_t, use::b, XMX_K, XMX_N, layout::col_major> mat_b;
 
+                            // Load mat_a ONCE before TILES_M loop (matches ESIMD fused kernel)
+                            auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                                           sycl::access::decorated::no>(&slm_tokens[0]);
+                            joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
+
                             // Compute tiles
                             for (int tm = 0; tm < TILES_M; tm++) {
-                                // Load mat_a from SLM tokens
-                                auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                                               sycl::access::decorated::no>(
-                                    &slm_tokens[tm * XMX_M * XMX_K]);
-                                joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
+                                // mat_a already loaded above
 
                                 for (int tn = 0; tn < TILES_N; tn++) {
                                     int row = wg_row + tm * XMX_M;
@@ -2038,11 +2033,13 @@ void launch_xmx_moe_gemm_mxfp4_coalesced(
                             joint_matrix<sycl::sub_group, int8_t, use::a, XMX_M, XMX_K, layout::row_major> mat_a;
                             joint_matrix<sycl::sub_group, int8_t, use::b, XMX_K, XMX_N, layout::col_major> mat_b;
 
+                            // Load mat_a ONCE before TILES_M loop (matches ESIMD fused kernel)
+                            auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                                           sycl::access::decorated::no>(&slm_tokens[0]);
+                            joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
+
                             for (int tm = 0; tm < TILES_M; tm++) {
-                                auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                                               sycl::access::decorated::no>(
-                                    &slm_tokens[tm * XMX_M * XMX_K]);
-                                joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
+                                // mat_a already loaded above
 
                                 for (int tn = 0; tn < TILES_N; tn++) {
                                     int row = wg_row + tm * XMX_M;
