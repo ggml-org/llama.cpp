@@ -897,4 +897,38 @@ inline std::pair<bool, sycl::event> try_fused_xmx_moe_mxfp4_soa(sycl::event     
     return { true, gemm_event };
 }
 
+// Entry point for fused XMX MoE dispatch (MXFP4 XMX tile-aligned layout)
+inline std::pair<bool, sycl::event> try_fused_xmx_moe_mxfp4_tiled(sycl::event        dep_event,
+                                                                  const uint8_t *    all_expert_weights_tiled,
+                                                                  const int8_t *     q_tokens,
+                                                                  const sycl::half * token_scales,
+                                                                  const int32_t *    sorted_token_ids,
+                                                                  const int32_t *    expert_offsets,
+                                                                  sycl::half *       output,
+                                                                  int                num_tokens,
+                                                                  int                n_experts,
+                                                                  int64_t            out_dim,
+                                                                  int64_t            in_dim,
+                                                                  int64_t            expert_tiled_stride,
+                                                                  int                device_id,
+                                                                  sycl::queue &      queue) {
+    const auto & dev_info = ggml_sycl_info().devices[device_id];
+    if (!dev_info.xmx_caps.supported) {
+        return { false, sycl::event{} };
+    }
+
+    moe_xmx_fused::MXFPXMXConfig cfg = moe_xmx_fused::MXFPXMXConfig::from_device(device_id);
+
+    GGML_SYCL_DEBUG(
+        "[MoE-Fused] Launching XMX MXFP4 tiled kernel: "
+        "tokens=%d experts=%d out=%ld in=%ld wgs=%d tiled_stride=%ld\n",
+        num_tokens, n_experts, out_dim, in_dim, cfg.num_persistent_wgs, expert_tiled_stride);
+
+    sycl::event evt = moe_xmx_fused::fused_xmx_moe_gemm_mxfp4_tiled<4, 4>(
+        dep_event, all_expert_weights_tiled, q_tokens, token_scales, sorted_token_ids, expert_offsets, output,
+        num_tokens, n_experts, out_dim, in_dim, expert_tiled_stride, cfg, queue);
+
+    return { true, evt };
+}
+
 #endif  // SYCL_XMX_MOE_AVAILABLE
