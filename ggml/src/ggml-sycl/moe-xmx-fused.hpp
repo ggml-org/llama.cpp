@@ -115,6 +115,59 @@ struct MXFPXMXLayoutInfo {
     }
 };
 
+// Convert MXFP4 weights from SoA layout to XMX tile-aligned layout
+// SoA input: qs[nblocks * 16], e[nblocks] where nblocks = out_dim * (in_dim/32)
+// XMX output: [tile_groups...] with scales and qs grouped by tile
+//
+// This runs on host at model load time (not in hot path)
+inline void reorder_mxfp4_to_xmx_layout(
+    const uint8_t* src_qs,        // SoA packed nibbles [nblocks * 16]
+    const uint8_t* src_e,         // SoA exponents [nblocks]
+    uint8_t* dst,                 // XMX tile-aligned output
+    const MXFPXMXLayoutInfo& info) {
+
+    constexpr int XMX_K = 32;
+    constexpr int PACKED_BYTES = 16;  // 32 nibbles packed into 16 bytes
+
+    const int64_t n_k_blocks = info.n_cols / XMX_K;
+
+    // Iterate over tile groups
+    uint8_t* dst_ptr = dst;
+
+    for (int64_t tg_k = 0; tg_k < info.n_tile_groups_k; tg_k++) {
+        for (int64_t tg_n = 0; tg_n < info.n_tile_groups_n; tg_n++) {
+            // Write scales for this tile group [tile_n_total]
+            for (int64_t tn = 0; tn < info.tile_n_total; tn++) {
+                int64_t out_col = tg_n * info.tile_n_total + tn;
+                if (out_col < info.n_rows) {
+                    // SoA block index: out_col * n_k_blocks + k_block
+                    int64_t src_block_idx = out_col * n_k_blocks + tg_k;
+                    *dst_ptr++ = src_e[src_block_idx];
+                } else {
+                    *dst_ptr++ = 0;  // Padding for out-of-bounds
+                }
+            }
+
+            // Write packed qs for this tile group [tile_n_total][16]
+            for (int64_t tn = 0; tn < info.tile_n_total; tn++) {
+                int64_t out_col = tg_n * info.tile_n_total + tn;
+                if (out_col < info.n_rows) {
+                    int64_t src_block_idx = out_col * n_k_blocks + tg_k;
+                    const uint8_t* src_qs_block = src_qs + src_block_idx * PACKED_BYTES;
+                    for (int b = 0; b < PACKED_BYTES; b++) {
+                        *dst_ptr++ = src_qs_block[b];
+                    }
+                } else {
+                    // Zero padding
+                    for (int b = 0; b < PACKED_BYTES; b++) {
+                        *dst_ptr++ = 0;
+                    }
+                }
+            }
+        }
+    }
+}
+
 // Fused XMX MoE GEMM for Q8_0 weights
 // Processes ALL experts in a single kernel launch using persistent work-groups
 template <int TILES_M = 4, int TILES_N = 4>
