@@ -652,13 +652,13 @@ static inline HVX_Vector hvx_vec_abs_fp32(HVX_Vector v) {
 }
 
 static inline HVX_Vector hvx_vec_neg_fp32(HVX_Vector v) {
-#if __HTP_ARCH__ > 75
+#if __HVX_ARCH__ > 75
     return Q6_Vsf_vfneg_Vsf(v);
 #else
     // neg by setting the fp32 sign bit
     HVX_Vector mask = Q6_V_vsplat_R(0x80000000);
     return Q6_V_vxor_VV(v, mask);
-#endif  // __HTP_ARCH__ > 75
+#endif  // __HVX_ARCH__ > 75
 }
 
 // ====================================================
