@@ -51,7 +51,7 @@ struct output_data {
         prompt = params.prompt;
 
         if (params.embedding) {
-            const int  n_embd          = llama_model_n_embd(model);
+            const int  n_embd          = llama_model_n_embd_out(model);
             const bool pooling_enabled = llama_pooling_type(ctx) != LLAMA_POOLING_TYPE_NONE;
             const int  n_embd_count    = pooling_enabled ? 1 : tokens.size();
             const int  n_embeddings    = n_embd * n_embd_count;
