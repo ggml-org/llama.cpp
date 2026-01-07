@@ -348,7 +348,6 @@
 				onSearchKeyDown={handleSearchKeyDown}
 				align="end"
 				contentClass="w-96 max-w-[calc(100vw-2rem)]"
-				listMaxHeight="max-h-[50dvh]"
 				emptyMessage="No models found."
 				isEmpty={filteredOptions.length === 0 && isCurrentModelInCache()}
 				disabled={disabled || updating}
