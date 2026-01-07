@@ -635,6 +635,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     int nthread
 ) {
     bpw_stop.store(false, std::memory_order_relaxed);
+
     // SIGINT/SIGTERM signal handlers
     struct signal_scope_guard {
         using handler_t = void (*)(int);
@@ -1565,9 +1566,26 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     if (q_elements == 0) { return {}; }
 
-    const double target_bpw = params->target_bpw;
-    size_t target_total_bytes = std::llround(target_bpw * (double)nq_elements / 8.0);
-    size_t budget_bytes = target_total_bytes >= nq_bytes ? target_total_bytes - nq_bytes : min_bytes;
+    size_t budget_bytes = 0;
+
+    if (params->target_size != -1) {
+        const auto metadata_size = gguf_get_meta_size(ml.meta.get());
+        // Budget for quantizable weights = target - metadata - Non-Quantizable Weights
+        int64_t available = (int64_t)params->target_size - (int64_t)metadata_size - (int64_t)nq_bytes;
+
+        // Clamp to the absolute minimum possible size for the variable tensors
+        if (available < (int64_t)min_bytes) {
+            LLAMA_LOG_WARN("%s: requested file size %zu is smaller than minimum possible model size (~%zu), clamping to minimum.\n",
+                func, (size_t)params->target_size, min_bytes + nq_bytes + metadata_size);
+            budget_bytes = min_bytes;
+        } else {
+            budget_bytes = (size_t)available;
+        }
+    } else {
+        const double target_bpw = params->target_bpw;
+        size_t target_total_bytes = std::llround(target_bpw * (double)nq_elements / 8.0);
+        budget_bytes = target_total_bytes >= nq_bytes ? target_total_bytes - nq_bytes : min_bytes;
+    }
 
     // Get the types' override
     auto emit_overrides = [&]() -> std::unordered_map<std::string, ggml_type> {
@@ -2004,7 +2022,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     }
 
     std::unordered_map<std::string, ggml_type> bpw_overrides = {};
-    if (params->target_bpw != -1.0f && !params->only_copy) {
+    if ((params->target_bpw != -1.0f || params->target_size != -1) && !params->only_copy) {
         if (params->imatrix) {
             if (params->activations) {
                 LLAMA_LOG_INFO("%s: imatrix has activations, process will be more accurate\n", __func__);
@@ -2012,15 +2030,20 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 LLAMA_LOG_INFO("%s: imatrix does not have activations, process may be less accurate\n", __func__);
             }
             if (params->no_importance) {
-                LLAMA_LOG_INFO("%s: distributing bpw budget equitably across all tensors\n", __func__);
+                LLAMA_LOG_INFO("%s: distributing budget equitably across all tensors\n", __func__);
             } else {
-                LLAMA_LOG_INFO("%s: assigning more bpw budget to important tensors\n", __func__);
+                LLAMA_LOG_INFO("%s: assigning more budget to important tensors\n", __func__);
             }
-            LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.4f bpw\n", __func__, params->target_bpw);
+            if (params->target_size >= 0) {
+                LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve file size %.2f MiB\n",
+                    __func__, (double)params->target_size / 1024.0 / 1024.0);
+            } else {
+                LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.4f bpw\n", __func__, params->target_bpw);
+            }
 
             bpw_overrides = target_bpw_type(ml, model, tensors, mapped, values_data, activations_data, params, nthread);
         } else {
-            LLAMA_LOG_WARN("%s: --target-bpw requires an imatrix but none was provided, option will be ignored\n", __func__);
+            LLAMA_LOG_WARN("%s: --target-bpw/--target-size require an imatrix but none was provided, ignoring\n", __func__);
         }
     }
 
@@ -2091,12 +2114,12 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             new_type = default_type;
 
             // get more optimal quantization type based on the tensor shape, layer, etc.
-            if (!params->pure && (ggml_is_quantized(default_type) || params->target_bpw != -1.0f)) {
+            if (!params->pure && (ggml_is_quantized(default_type) || params->target_bpw != -1.0f || params->target_size != -1)) {
                 int fallback = qs.n_fallback;
                 new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
 
-                // get quantization type overrides targeting a given bits per weight budget
-                if (params->target_bpw != -1.0f && !bpw_overrides.empty()) {
+                // get quantization type overrides targeting a bpw or file size budget
+                if ((params->target_bpw != -1.0f || params->target_size != -1) && !bpw_overrides.empty()) {
                     const auto override = bpw_overrides.find(name);
                     if (override != bpw_overrides.end() && override->second != new_type) {
                         LLAMA_LOG_DEBUG("(bpw override %s) ", ggml_type_name(new_type));
@@ -2104,7 +2127,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     }
                 }
 
-                // unless the user specifies a type, and the tensor shape will not require fallback quantisation
+                // unless the user specifies a type, and the tensor shape will not require fallback quantization
                 if (params->tensor_types && qs.n_fallback - fallback == 0) {
                     const std::vector<tensor_quantization> & tensor_types = *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
                     const std::string tensor_name(tensor->name);
@@ -2281,6 +2304,7 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.tensor_type                 =*/ nullptr,
         /*.prune_layers                =*/ nullptr,
         /*.target_bpw                  =*/ -1.0f,
+        /*.target_size                 =*/ -1,
         /*.keep_bpw_state              =*/ false,
         /*.bpw_state                   =*/ nullptr,
         /*.no_importance               =*/ false
