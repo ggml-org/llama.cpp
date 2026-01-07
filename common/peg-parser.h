@@ -112,6 +112,8 @@ class common_peg_ast_arena {
 
     void visit(common_peg_ast_id id, const common_peg_ast_visitor & visitor) const;
     void visit(const common_peg_parse_result & result, const common_peg_ast_visitor & visitor) const;
+
+    std::string dump();
 };
 
 struct common_peg_parse_result {

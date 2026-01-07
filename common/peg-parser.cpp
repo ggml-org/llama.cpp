@@ -892,10 +892,35 @@ common_peg_parse_result common_peg_arena::parse(common_peg_parser_id       id,
 
 common_peg_parser_id common_peg_arena::resolve_ref(common_peg_parser_id id) {
     const auto & parser = parsers_.at(id);
-    if (auto ref = std::get_if<common_peg_ref_parser>(&parser)) {
+    if (const auto *ref = std::get_if<common_peg_ref_parser>(&parser)) {
         return get_rule(ref->name);
     }
     return id;
+}
+
+static void bfs_node(common_peg_ast_arena &arena, std::ostringstream & oss, const common_peg_ast_node & node, int indent) {
+    for (int i = 0; i < indent; i++) {
+        oss << "  ";
+    }
+    oss << "NODE " << node.id;
+    if (!node.rule.empty()) {
+        oss << " (rule " << node.rule << ")";
+    }
+    if (!node.tag.empty()) {
+        oss << " (tag " << node.tag << ")";
+    }
+    oss << " ['" << node.text << "']\n";
+    for (const auto child : node.children) {
+        bfs_node(arena, oss, arena.get(child), indent + 1);
+    }
+}
+
+std::string common_peg_ast_arena::dump() {
+    std::ostringstream oss;
+    for (auto & node : nodes_) {
+        bfs_node(*this, oss, node, 0);
+    }
+    return oss.str();
 }
 
 void common_peg_arena::resolve_refs() {
