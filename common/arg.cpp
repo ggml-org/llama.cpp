@@ -679,7 +679,6 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
         "llama-quantize",
         "llama-qwen2vl-cli",
         "llama-retrieval",
-        "llama-run",
         "llama-save-load-state",
         "llama-server",
         "llama-simple",
