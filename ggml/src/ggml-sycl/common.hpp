@@ -1207,6 +1207,10 @@ struct ggml_tensor_extra_gpu {
                                                                             // tensors
     dpct::event_ptr  events[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS];  // events for synchronizing multiple GPUs
     optimize_feature optimized_feature = {};  // Must have = {} to ensure default member initializers apply
+
+    // Unified layout descriptor (new system - coexists with optimize_feature during migration)
+    tensor_layout_info layout;
+
     tp_layer_type    tp_type           = tp_layer_type::TP_NONE;  // Cached TP type (set once, avoids string compare)
     bool             tp_type_cached    = false;                   // Whether tp_type has been computed
 
