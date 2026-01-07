@@ -988,7 +988,7 @@ std::string common_peg_arena::dump_impl(common_peg_parser_id                    
     const auto & parser = parsers_.at(id);
 
     return std::visit(
-        [this, id, &visited](const auto & p) -> std::string {
+        [this, &visited](const auto & p) -> std::string {
             using T = std::decay_t<decltype(p)>;
 
             if constexpr (std::is_same_v<T, common_peg_epsilon_parser>) {
