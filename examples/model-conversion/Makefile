@@ -136,18 +136,17 @@ embedding-run-original-model-st: USE_SENTENCE_TRANSFORMERS=1
 embedding-run-original-model-st: embedding-run-original-model
 
 embedding-run-converted-model:
-	@./scripts/embedding/run-converted-model.sh $(CONVERTED_EMBEDDING_MODEL) \
-	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)") \
-	$(if $(USE_POOLING),--pooling)
-
-embedding-run-converted-model-st: USE_POOLING=1
-embedding-run-converted-model-st: embedding-run-converted-model
+	@POOLING_FLAG=$$(./scripts/utils/detect_pooling.py $(EMBEDDING_MODEL_PATH)); \
+	echo "pooling: $$POOLING_FLAG"; \
+	./scripts/embedding/run-converted-model.sh $(CONVERTED_EMBEDDING_MODEL) \
+	--pooling "$$POOLING_FLAG" \
+	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
 
 embedding-verify-logits: embedding-run-original-model embedding-run-converted-model
 	@./scripts/embedding/compare-embeddings-logits.sh \
 	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
 
-embedding-verify-logits-st: embedding-run-original-model-st embedding-run-converted-model-st
+embedding-verify-logits-st: embedding-run-original-model-st embedding-run-converted-model
 	@./scripts/embedding/compare-embeddings-logits.sh \
 	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
 
