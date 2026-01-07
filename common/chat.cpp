@@ -1020,9 +1020,9 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         });
         
         data.grammar_triggers = {
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "^(?:<\\|start\\|>assistant\\s*)?\\s*(to=functions\\.)"},
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "(?:<\\|end\\|>)(?:<\\|start\\|>assistant\\s*)?\\s*(to=functions\\.)"},
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "(?:<\\|start\\|>assistant\\s*)?(<\\|channel\\|>(?:commentary|analysis) to=functions\\.)"}
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "^(?:<\\|start\\|>assistant\\s*)?(\\s+to=functions)"},
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "(?:<\\|end\\|>)(?:<\\|start\\|>assistant\\s*)?(\\s+to=functions)"},
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "(?:<\\|start\\|>assistant\\s*)?(<\\|channel\\|>(?:commentary|analysis)\\s+to=functions)"}
         };
     }
 
