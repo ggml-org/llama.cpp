@@ -1,7 +1,10 @@
 import argparse
 import json
 import requests
+import logging
 
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger("server-test-model")
 
 def run_query(url, messages, tools=None, stream=False, tool_choice=None):
     payload = {
@@ -19,9 +22,9 @@ def run_query(url, messages, tools=None, stream=False, tool_choice=None):
         response.raise_for_status()
     except requests.exceptions.RequestException as e:
         if e.response is not None:
-            print(f"Response error: {e} for {e.response.content}")
+            logger.info(f"Response error: {e} for {e.response.content}")
         else:
-            print(f"Error connecting to server: {e}")
+            logger.info(f"Error connecting to server: {e}")
         return None
 
     full_content = ""
@@ -29,7 +32,7 @@ def run_query(url, messages, tools=None, stream=False, tool_choice=None):
     tool_calls = []
 
     if stream:
-        print(f"--- Streaming response (Tools: {bool(tools)}) ---")
+        logger.info(f"--- Streaming response (Tools: {bool(tools)}) ---")
         for line in response.iter_lines():
             if line:
                 decoded_line = line.decode("utf-8")
@@ -46,13 +49,13 @@ def run_query(url, messages, tools=None, stream=False, tool_choice=None):
                             content_chunk = delta.get("content", "")
                             if content_chunk:
                                 full_content += content_chunk
-                                print(content_chunk, end="", flush=True)
+                                logger.info(content_chunk, end="", flush=True)
 
                             # Reasoning
                             reasoning_chunk = delta.get("reasoning_content", "")
                             if reasoning_chunk:
                                 reasoning_content += reasoning_chunk
-                                print(f"\x1B[3m{reasoning_chunk}\x1B[0m", end="", flush=True)
+                                logger.info(f"\x1B[3m{reasoning_chunk}\x1B[0m", end="", flush=True)
 
                             # Tool calls
                             if "tool_calls" in delta:
@@ -85,18 +88,18 @@ def run_query(url, messages, tools=None, stream=False, tool_choice=None):
                                                 ] += tc["function"]["arguments"]
 
                     except json.JSONDecodeError:
-                        print(f"Failed to decode JSON: {data_str}")
-        print("\n--- End of Stream ---")
+                        logger.info(f"Failed to decode JSON: {data_str}")
+        logger.info("\n--- End of Stream ---")
     else:
-        print(f"--- Non-streaming response (Tools: {bool(tools)}) ---")
+        logger.info(f"--- Non-streaming response (Tools: {bool(tools)}) ---")
         data = response.json()
         if "choices" in data and len(data["choices"]) > 0:
             message = data["choices"][0].get("message", {})
             full_content = message.get("content", "")
             reasoning_content = message.get("reasoning_content", "")
             tool_calls = message.get("tool_calls", [])
-            print(full_content)
-        print("--- End of Response ---")
+            logger.info(full_content)
+        logger.info("--- End of Response ---")
 
     return {
         "content": full_content,
@@ -106,30 +109,30 @@ def run_query(url, messages, tools=None, stream=False, tool_choice=None):
 
 
 def test_chat(url, stream):
-    print(f"\n=== Testing Chat (Stream={stream}) ===")
+    logger.info(f"\n=== Testing Chat (Stream={stream}) ===")
     messages = [{"role": "user", "content": "What is the capital of France?"}]
     result = run_query(url, messages, stream=stream)
 
     if result:
         if result["content"]:
-            print("PASS: Output received.")
+            logger.info("PASS: Output received.")
         else:
-            print(
+            logger.info(
                 "WARN: No content received (valid if strict tool call, but unexpected here)."
             )
 
         if result.get("reasoning_content"):
-            print(
+            logger.info(
                 f"INFO: Reasoning content detected ({len(result['reasoning_content'])} chars)."
             )
         else:
-            print("INFO: No reasoning content detected (Standard model behavior).")
+            logger.info("INFO: No reasoning content detected (Standard model behavior).")
     else:
-        print("FAIL: No result.")
+        logger.info("FAIL: No result.")
 
 
 def test_tool_call(url, stream):
-    print(f"\n=== Testing Tool Call (Stream={stream}) ===")
+    logger.info(f"\n=== Testing Tool Call (Stream={stream}) ===")
     messages = [
         {
             "role": "user",
@@ -162,19 +165,19 @@ def test_tool_call(url, stream):
     if result:
         tcs = result.get("tool_calls")
         if tcs and len(tcs) > 0:
-            print("PASS: Tool calls detected.")
+            logger.info("PASS: Tool calls detected.")
             for tc in tcs:
                 func = tc.get("function", {})
-                print(f"  Tool: {func.get('name')}, Args: {func.get('arguments')}")
+                logger.info(f"  Tool: {func.get('name')}, Args: {func.get('arguments')}")
         else:
-            print(f"FAIL: No tool calls. Content: {result['content']}")
+            logger.info(f"FAIL: No tool calls. Content: {result['content']}")
 
         if result.get("reasoning_content"):
-            print(
+            logger.info(
                 f"INFO: Reasoning content detected during tool call ({len(result['reasoning_content'])} chars)."
             )
     else:
-        print("FAIL: Query failed.")
+        logger.info("FAIL: Query failed.")
 
 
 def main():
@@ -184,7 +187,7 @@ def main():
     args = parser.parse_args()
 
     base_url = f"http://{args.host}:{args.port}/v1/chat/completions"
-    print(f"Testing server at {base_url}")
+    logger.info(f"Testing server at {base_url}")
 
     # Non-streaming tests
     test_chat(base_url, stream=False)
