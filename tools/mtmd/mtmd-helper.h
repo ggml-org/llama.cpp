@@ -85,6 +85,10 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 int32_t n_batch,
                                                 llama_pos * new_n_past);
 
+// helper function to save audio data to a WAV file
+// returns true on success, false on failure
+MTMD_API bool mtmd_helper_save_wav(const char * fname, const float * data, size_t n_samples, int sample_rate);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

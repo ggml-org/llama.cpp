@@ -1,4 +1,5 @@
 #include "mtmd.h"
+#include "mtmd-helper.h"
 #include "runner.h"
 
 //
@@ -7,36 +8,7 @@
 #include "ggml.h"
 #include "log.h"
 
-#include <optional>
-
-// for wav
-#define MINIAUDIO_IMPLEMENTATION
-#define MA_NO_DEVICE_IO
-#define MA_NO_RESOURCE_MANAGER
-#define MA_NO_NODE_GRAPH
-#define MA_NO_ENGINE
-#define MA_NO_GENERATION
-#define MA_API static
-#include "miniaudio/miniaudio.h"
-
 namespace {
-bool save_wav(const std::string & fname, const std::vector<float> & data, int sample_rate) {
-    ma_encoder_config config = ma_encoder_config_init(ma_encoding_format_wav, ma_format_f32, 1, sample_rate);
-    ma_encoder        encoder;
-
-    ma_result res = ma_encoder_init_file(fname.c_str(), &config, &encoder);
-    if (res != MA_SUCCESS) {
-        LOG_ERR("%s: Failed to open file '%s' for writing (error %d).\n", __func__, fname.c_str(), res);
-        return false;
-    }
-
-    ma_uint64 frames_written;
-    ma_result result = ma_encoder_write_pcm_frames(&encoder, data.data(), data.size(), &frames_written);
-    ma_encoder_uninit(&encoder);
-
-    return result == MA_SUCCESS && frames_written == data.size();
-}
-
 std::vector<std::byte> load_file(const char * fname) {
     std::vector<std::byte> buf;
     FILE *                 f = fopen(fname, "rb");
@@ -166,7 +138,7 @@ int main(int argc, char ** argv) {
             LOG_ERR("ERR: --output is required for audio generation\n");
             return 1;
         }
-        if (!save_wav(params.out_file, generated_audio, runner.get_output_sample_rate())) {
+        if (!mtmd_helper_save_wav(params.out_file.c_str(), generated_audio.data(), generated_audio.size(), runner.get_output_sample_rate())) {
             exit(1);
         }
         LOG("=== GENERATED AUDIO ===\nSaved to %s\n\n", params.out_file.c_str());

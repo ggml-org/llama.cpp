@@ -12,10 +12,6 @@ target_link_libraries(${TARGET_CLI} PRIVATE ${TARGET_LIB})
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET_CLI} RUNTIME)
 endif()
-target_include_directories(${TARGET_CLI} PRIVATE ${PROJECT_SOURCE_DIR}/vendor) # for miniaudio
-if (NOT MSVC)
-    target_compile_options(${TARGET_CLI} PRIVATE -Wno-cast-qual) # miniaudio.h
-endif()
 
 # server
 set(TARGET_SERVER llama-liquid-audio-server)
