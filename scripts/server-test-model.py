@@ -6,6 +6,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger("server-test-model")
 
+
 def run_query(url, messages, tools=None, stream=False, tool_choice=None):
     payload = {
         "messages": messages,
