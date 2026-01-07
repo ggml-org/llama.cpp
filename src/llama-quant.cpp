@@ -788,20 +788,26 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     gen_name.empty() ? checkpoint_file = ml.arch_name : checkpoint_file = gen_name;
     checkpoint_file += "-" + std::string(hex) + "-mse.bpw_state";
 
-    if (params->keep_bpw_state && params->bpw_state) {
-        const auto * filename = static_cast<const char*>(params->bpw_state);
-        std::ifstream ifs(filename, std::ios::binary);
-        if (ifs.good()) {
-            checkpoint_file = std::string(filename);
-        } else {
+    if (params->state_file) {
+        const auto * filename = static_cast<const char*>(params->state_file);
+        bool is_valid = false;
+
+        if (std::ifstream(filename, std::ios::binary).good()) {
+            is_valid = true;
+        } else if (params->save_state) {
             std::ofstream ofs(filename, std::ios::binary | std::ios::app);
             if (ofs.is_open()) {
-                checkpoint_file = std::string(filename);
+                is_valid = true;
                 ofs.close();
-                std::remove(checkpoint_file.c_str());
-            } else {
-                LLAMA_LOG_WARN("%s: %s is not a valid file name. Using %s instead\n", func, filename, checkpoint_file.c_str());
+                std::remove(filename);
             }
+        }
+
+        if (is_valid) {
+            checkpoint_file = filename;
+        } else {
+            LLAMA_LOG_WARN("%s: '%s' is not a valid state file\n", func, filename);
+            checkpoint_file.clear();
         }
     }
 
