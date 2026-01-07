@@ -1445,7 +1445,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, bool value) {
             params.warmup = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL, LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_DEBUG}));
     add_opt(common_arg(
         {"--spm-infill"},
         string_format(
@@ -1761,7 +1761,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             else if (value == "rank") { params.pooling_type = LLAMA_POOLING_TYPE_RANK; }
             else { throw std::invalid_argument("invalid value"); }
         }
-    ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_POOLING"));
+    ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_DEBUG}).set_env("LLAMA_ARG_POOLING"));
     add_opt(common_arg(
         {"--attention"}, "{causal,non-causal}",
         "attention type for embeddings, use model default if unspecified",
@@ -2609,7 +2609,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.embd_normalize = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_EMBEDDING}));
+    ).set_examples({LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_DEBUG}));
     add_opt(common_arg(
         {"--embd-output-format"}, "FORMAT",
         "empty = default, \"array\" = [[],[]...], \"json\" = openai style, \"json+\" = same \"json\" + cosine similarity matrix, \"raw\" = plain whitespace-delimited output (one embedding per line)",
@@ -2687,7 +2687,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.embedding = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_EMBEDDINGS"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_DEBUG}).set_env("LLAMA_ARG_EMBEDDINGS"));
     add_opt(common_arg(
         {"--rerank", "--reranking"},
         string_format("enable reranking endpoint on server (default: %s)", "disabled"),
@@ -3378,6 +3378,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+        {"--save-logits"},
+        string_format("save final logits to files for verification (default: %s)", params.save_logits ? "true" : "false"),
+        [](common_params & params) {
+            params.save_logits = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_DEBUG}));
+    add_opt(common_arg(
+        {"--logits-output-dir"}, "PATH",
+        string_format("directory for saving logits output files (default: %s)", params.logits_output_dir.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.logits_output_dir = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_DEBUG}));
+    add_opt(common_arg(
+        {"--tensor-filter"}, "REGEX",
+        "filter tensor names for debug output (regex pattern, can be specified multiple times)",
+        [](common_params & params, const std::string & value) {
+            params.tensor_filter.push_back(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_DEBUG}));
 
     // presets
     add_opt(common_arg(

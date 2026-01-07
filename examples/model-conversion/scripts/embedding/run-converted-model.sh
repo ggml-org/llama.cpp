@@ -50,10 +50,9 @@ fi
 
 echo $CONVERTED_MODEL
 
-cmake --build ../../build --target llama-logits -j8
-# TODO: update logits.cpp to accept a --file/-f option for the prompt
+cmake --build ../../build --target llama-debug -j8
 if [ -n "$USE_POOLING" ]; then
-    ../../build/bin/llama-logits -m "$CONVERTED_MODEL" -embd-mode -pooling "$PROMPT"
+    ../../build/bin/llama-debug -m "$CONVERTED_MODEL" --embedding --pooling mean -p "$PROMPT" --save-logits
 else
-    ../../build/bin/llama-logits -m "$CONVERTED_MODEL" -embd-mode "$PROMPT"
+    ../../build/bin/llama-debug -m "$CONVERTED_MODEL" --embedding --pooling none -p "$PROMPT" --save-logits
 fi

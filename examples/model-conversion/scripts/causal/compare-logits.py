@@ -6,7 +6,7 @@ from pathlib import Path
 
 # Add utils directory to path for direct script execution
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
-from common import get_model_name_from_env_path  # type: ignore[import-not-found]
+from common import get_model_name_from_env_path, compare_tokens  # type: ignore[import-not-found]
 
 def quick_logits_check(pytorch_file, llamacpp_file):
     """Lightweight sanity check before NMSE"""
@@ -58,6 +58,13 @@ def main():
 
     print("Checked all required files were found. Proceeding...\n")
 
+    # Verify tokens as they are a prerequisite for logits comparison.
+    print("🔍 Token Comparison Check")
+    print("=" * 40)
+    if not compare_tokens(f"pytorch-{model_name}", f"llamacpp-{llamacpp_model_name}"):
+        print("\n❌ Token mismatch detected")
+        sys.exit(1)
+    print()
 
     print("🔍 GGML Model Validation for model ", model_name)
     print("=" * 40)

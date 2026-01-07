@@ -13,6 +13,6 @@ if [ -z "$CONVERTED_MODEL" ]; then
     exit 1
 fi
 
-cmake --build ../../build --target llama-logits -j8
+cmake --build ../../build --target llama-debug -j8
 
-../../build/bin/llama-logits -m $CONVERTED_MODEL -embd-mode "Hello world today"
+../../build/bin/llama-debug -m $CONVERTED_MODEL --embedding -p "Hello world today" --save-logits

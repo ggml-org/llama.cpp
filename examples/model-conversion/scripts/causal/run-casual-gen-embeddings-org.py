@@ -67,7 +67,7 @@ with torch.no_grad():
     last_hidden_states = outputs.hidden_states[-1]
 
     # Get embeddings for all tokens
-    token_embeddings = last_hidden_states[0].cpu().numpy()  # Remove batch dimension
+    token_embeddings = last_hidden_states[0].float().cpu().numpy()  # Remove batch dimension
 
     print(f"Hidden states shape: {last_hidden_states.shape}")
     print(f"Token embeddings shape: {token_embeddings.shape}")
