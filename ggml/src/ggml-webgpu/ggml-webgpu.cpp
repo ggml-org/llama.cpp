@@ -2899,6 +2899,7 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
         wgpu::CallbackMode::AllowSpontaneous,
         [](const wgpu::Device & device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
             GGML_UNUSED(device);
+            GGML_UNUSED(reason);
             GGML_UNUSED(message);
             //TODO: uncomment once proper free logic is in place
             //GGML_LOG_ERROR("ggml_webgpu: Device lost! Reason: %d, Message: %s\n", static_cast<int>(reason),
