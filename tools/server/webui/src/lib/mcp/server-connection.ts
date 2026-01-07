@@ -1,10 +1,19 @@
 /**
- * MCPServerConnection - Wrapper na SDK Client dla pojedynczego serwera MCP.
+ * MCPServerConnection - Single MCP server connection wrapper
  *
- * Zgodnie z architekturą MCP:
- * - Jeden MCPServerConnection = jedno połączenie = jeden SDK Client
- * - Izolacja między serwerami - każdy ma własny transport i capabilities
- * - Własny lifecycle (connect, disconnect)
+ * Wraps the MCP SDK Client for a single server connection. Each instance represents
+ * one isolated connection with its own transport, capabilities, and lifecycle.
+ *
+ * **Architecture:**
+ * - One MCPServerConnection = one connection = one SDK Client
+ * - Server isolation - each has its own transport and capabilities
+ * - Independent lifecycle (connect, disconnect)
+ *
+ * **Key Responsibilities:**
+ * - Transport creation (WebSocket, StreamableHTTP, SSE)
+ * - Tool discovery and caching
+ * - Tool execution with abort support
+ * - Connection state management
  */
 
 import { Client } from '@modelcontextprotocol/sdk/client';
@@ -55,8 +64,7 @@ export interface ToolExecutionResult {
 }
 
 /**
- * Represents a single connection to an MCP server.
- * Wraps the SDK Client and provides a clean interface for tool operations.
+ * Wraps the MCP SDK Client and provides a clean interface for tool operations.
  */
 export class MCPServerConnection {
 	private client: Client;

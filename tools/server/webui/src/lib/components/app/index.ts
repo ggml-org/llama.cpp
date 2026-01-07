@@ -48,7 +48,6 @@ export { default as ChatSettingsFooter } from './chat/ChatSettings/ChatSettingsF
 export { default as ChatSettingsFields } from './chat/ChatSettings/ChatSettingsFields.svelte';
 export { default as ChatSettingsImportExportTab } from './chat/ChatSettings/ChatSettingsImportExportTab.svelte';
 export { default as ChatSettingsParameterSourceIndicator } from './chat/ChatSettings/ChatSettingsParameterSourceIndicator.svelte';
-export { default as McpSettingsSection } from './mcp/McpSettingsSection.svelte';
 
 export { default as ChatSidebar } from './chat/ChatSidebar/ChatSidebar.svelte';
 export { default as ChatSidebarActions } from './chat/ChatSidebar/ChatSidebarActions.svelte';
@@ -90,6 +89,7 @@ export { default as ModelsSelector } from './models/ModelsSelector.svelte';
 // MCP
 
 export { default as McpSelector } from './mcp/McpSelector.svelte';
+export { default as McpSettingsSection } from './mcp/McpSettingsSection.svelte';
 
 // Server
 
