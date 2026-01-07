@@ -419,6 +419,39 @@ struct layout_policy {
     }
 };
 
+inline tensor_usage infer_tensor_usage(const char* name) {
+    if (!name) return tensor_usage::UNKNOWN;
+
+    // MoE expert weights (highest priority - check first)
+    if (strstr(name, "ffn_gate_exps") || strstr(name, "ffn_up_exps") ||
+        strstr(name, "ffn_down_exps"))
+        return tensor_usage::MOE_EXPERT_WEIGHT;
+
+    // MoE routing gate
+    if (strstr(name, "ffn_gate_inp"))
+        return tensor_usage::MOE_GATE;
+
+    // Attention weights
+    if (strstr(name, "attn_q") || strstr(name, "attn_k") ||
+        strstr(name, "attn_v") || strstr(name, "attn_output"))
+        return tensor_usage::ATTENTION_WEIGHT;
+
+    // FFN weights (non-MoE)
+    if (strstr(name, "ffn_gate.") || strstr(name, "ffn_up.") ||
+        strstr(name, "ffn_down."))
+        return tensor_usage::FFN_WEIGHT;
+
+    // Embeddings
+    if (strstr(name, "token_embd") || strstr(name, "output.weight"))
+        return tensor_usage::EMBEDDING;
+
+    // Norms
+    if (strstr(name, "_norm"))
+        return tensor_usage::NORM;
+
+    return tensor_usage::UNKNOWN;
+}
+
 // Global reorder mode setting (set from GGML_SYCL_REORDER_MODE env var)
 extern reorder_mode g_ggml_sycl_reorder_mode;
 
