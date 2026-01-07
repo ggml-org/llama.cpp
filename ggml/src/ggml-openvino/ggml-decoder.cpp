@@ -296,6 +296,9 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
         std::string name = std::string(node->name);
         if (node->op == GGML_OP_FLASH_ATTN_EXT) {
             auto * cache_k_perm = node->src[1];
+            if (cache_k_perm->op == GGML_OP_CPY) {
+                cache_k_perm = cache_k_perm->src[0];
+            }
             assert(cache_k_perm->op == GGML_OP_PERMUTE);
             auto * cache_k_view = cache_k_perm->src[0];
             assert(cache_k_view->op == GGML_OP_VIEW);
