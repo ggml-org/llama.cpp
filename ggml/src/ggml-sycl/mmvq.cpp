@@ -1503,7 +1503,7 @@ bool convert_tensor_to_coalesced(const ggml_tensor* tensor, dpct::queue_ptr stre
 
     ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
 
-    const reorder_mode current_mode = extra->optimized_feature.get_reorder();
+    const reorder_mode current_mode = get_effective_reorder_mode(extra);
 
     // Check if already coalesced
     if (current_mode == reorder_mode::COALESCED) {
@@ -3636,9 +3636,10 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                 {
                     auto * src0_extra = (ggml_tensor_extra_gpu *) src0->extra;
                     // Determine reorder mode, respecting TP-sharding (TP-sharded tensors use AoS)
+                    // Uses unified layout.mode with fallback to legacy optimized_feature
                     reorder_mode mode = reorder_mode::NONE;
                     if (src0_extra && !src0_extra->tp_sharded) {
-                        mode = src0_extra->optimized_feature.get_reorder();
+                        mode = get_effective_reorder_mode(src0_extra);
                     }
 
                     if (mode == reorder_mode::COALESCED) {

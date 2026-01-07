@@ -1236,6 +1236,32 @@ struct ggml_tensor_extra_gpu {
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams = {});
 
+// =============================================================================
+// Helper: Get effective reorder_mode from unified layout.mode or legacy path
+// =============================================================================
+static inline reorder_mode get_effective_reorder_mode(const ggml_tensor_extra_gpu * extra) {
+    if (!extra) {
+        return reorder_mode::NONE;
+    }
+
+    // Prefer unified layout.mode if explicitly set (not AOS default)
+    if (extra->layout.mode != layout_mode::AOS) {
+        switch (extra->layout.mode) {
+            case layout_mode::SOA:
+                return reorder_mode::SOA;
+            case layout_mode::COALESCED:
+                return reorder_mode::COALESCED;
+            case layout_mode::XMX_TILED:
+                return reorder_mode::NONE;  // XMX uses separate dispatch
+            default:
+                break;
+        }
+    }
+
+    // Fall back to legacy optimized_feature path
+    return extra->optimized_feature.get_reorder();
+}
+
 // Get the correct data pointer for a tensor on a specific device
 // For TP buffers, returns device-specific pointer; otherwise returns tensor->data
 // In TP mode, if returning tensor->data, stages it to USM memory first
