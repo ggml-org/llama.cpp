@@ -402,7 +402,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.expert_bias",                           # afmoe
             "model.layers.{bid}.feed_forward.expert_bias",                  # lfm2moe
             "model.layers.{bid}.block_sparse_moe.e_score_correction",       # minimax-m2
-            "backbone.layers.{bid}.mixer.gate.e_score_correction"           # nemotron-h-moe
+            "backbone.layers.{bid}.mixer.gate.e_score_correction",          # nemotron-h-moe
             "model.layers.{bid}.mlp.e_score_correction",                    # exaone-moe
         ),
 
@@ -1703,6 +1703,7 @@ class TensorNameMap:
         # NextN/MTP tensors for GLM4_MOE
         MODEL_TENSOR.NEXTN_EH_PROJ: (
             "model.layers.{bid}.eh_proj",
+            "mtp.fc", # exaone-moe
         ),
 
         MODEL_TENSOR.NEXTN_EMBED_TOKENS: (
@@ -1711,10 +1712,12 @@ class TensorNameMap:
 
         MODEL_TENSOR.NEXTN_ENORM: (
             "model.layers.{bid}.enorm",
+            "mtp.pre_fc_norm_embedding", # exaone-moe
         ),
 
         MODEL_TENSOR.NEXTN_HNORM: (
             "model.layers.{bid}.hnorm",
+            "mtp.pre_fc_norm_hidden", # exaone-moe
         ),
 
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD: (
@@ -1723,6 +1726,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM: (
             "model.layers.{bid}.shared_head.norm",
+            "mtp.norm", # exaone-moe
         ),
     }
 

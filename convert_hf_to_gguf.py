@@ -8504,6 +8504,11 @@ class Exaone4Model(TextModel):
 class ExaoneMoEModel(Exaone4Model):
     model_arch = gguf.MODEL_ARCH.EXAONE_MOE
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.block_count = self.hparams["num_hidden_layers"] + self.hparams.get("num_nextn_predict_layers", 0)
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         # We check whether the layer is MoE or not by referencing MoE module dynamically, not by the layer index
@@ -8515,6 +8520,11 @@ class ExaoneMoEModel(Exaone4Model):
         self.gguf_writer.add_expert_shared_feed_forward_length(moe_intermediate_size * num_shared_experts)
         self.gguf_writer.add_expert_weights_scale(self.hparams["routed_scaling_factor"])
         self.gguf_writer.add_expert_weights_norm(self.hparams["norm_topk_prob"])
+        # For here, we hard-code the number of NextN/MTP layers to 1 for K-EXAONE,
+        # so that we can convert MTP weights to GGUF format for speculative decoding.
+        # This is because HF config of K-EXAONE does not have `num_nextn_predict_layers` at now.
+        # Will be updated when HF config is updated.
+        self.gguf_writer.add_nextn_predict_layers(self.hparams.get("num_nextn_predict_layers", 1))
         
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
 
@@ -8522,7 +8532,9 @@ class ExaoneMoEModel(Exaone4Model):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith("mtp."):
-            return [] # ignore MTP layers for now
+            if name.find("layers.") != -1:
+                # assume it is `mtp.layers.0.[module_name]` format
+                name = name.replace(f"mtp.layers.{bid}", f"model.layers.{bid + self.hparams['num_hidden_layers']}")
 
         if name.endswith("e_score_correction_bias"):
             name = name.replace("e_score_correction_bias", "e_score_correction.bias")

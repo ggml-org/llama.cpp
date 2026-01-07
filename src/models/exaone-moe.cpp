@@ -20,7 +20,8 @@ llm_build_exaone_moe::llm_build_exaone_moe(const llama_model & model, const llm_
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    for (int il = 0; il < n_layer; ++il) {
+    const int n_transformer_layers = n_layer - hparams.nextn_predict_layers;
+    for (int il = 0; il < n_transformer_layers; ++il) {
         ggml_tensor * inpSA = inpL;
 
         // use RoPE for SWA layers
@@ -120,7 +121,6 @@ llm_build_exaone_moe::llm_build_exaone_moe(const llama_model & model, const llm_
         }
 
         cur = ggml_add(ctx0, cur, ffn_inp);
-        cb(cur, "ffn_out", il);
 
         cur = build_cvec(cur, il);
         cb(cur, "l_out", il);
