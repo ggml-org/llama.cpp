@@ -11,24 +11,25 @@
 //
 
 #include "common.hpp"
-#include "ccl-comm.hpp"
 
+#include "ccl-comm.hpp"
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
+
 #include <mutex>
 
 #if __has_include(<sycl/ext/oneapi/matrix/matrix.hpp>)
-#include <sycl/ext/oneapi/matrix/matrix.hpp>
+#    include <sycl/ext/oneapi/matrix/matrix.hpp>
 #endif
 
 int get_current_device_id() {
-  return dpct::dev_mgr::instance().current_device_id();
+    return dpct::dev_mgr::instance().current_device_id();
 }
 
 // Cached shared context and queues for TP mode
-static sycl::context * g_tp_shared_context = nullptr;
-static sycl::queue * g_tp_shared_queues[GGML_SYCL_MAX_DEVICES] = { nullptr };
-static std::mutex g_tp_context_mutex;
+static sycl::context * g_tp_shared_context                       = nullptr;
+static sycl::queue *   g_tp_shared_queues[GGML_SYCL_MAX_DEVICES] = { nullptr };
+static std::mutex      g_tp_context_mutex;
 
 // Initialize shared context and queues for TP mode
 static void ggml_sycl_init_tp_shared_context() {
@@ -44,20 +45,21 @@ static void ggml_sycl_init_tp_shared_context() {
 
     std::vector<sycl::device> tp_devices;
     for (int i = 0; i < num_local_devices; i++) {
-        int dev_id = g_sycl_tp_config.devices[i];
-        sycl::device dev = dpct::dev_mgr::instance().get_device(dev_id);
+        int          dev_id = g_sycl_tp_config.devices[i];
+        sycl::device dev    = dpct::dev_mgr::instance().get_device(dev_id);
         tp_devices.push_back(dev);
     }
     g_tp_shared_context = new sycl::context(tp_devices);
-    GGML_SYCL_DEBUG("SYCL TP: Created shared context for %d local devices (world_size=%d)\n",
-                   num_local_devices, g_sycl_tp_config.world_size);
+    GGML_SYCL_DEBUG("SYCL TP: Created shared context for %d local devices (world_size=%d)\n", num_local_devices,
+                    g_sycl_tp_config.world_size);
 
     // Create shared-context queues for each local TP device
     for (int i = 0; i < num_local_devices; i++) {
-        int dev_id = g_sycl_tp_config.devices[i];
-        sycl::device dev = dpct::dev_mgr::instance().get_device(dev_id);
+        int          dev_id        = g_sycl_tp_config.devices[i];
+        sycl::device dev           = dpct::dev_mgr::instance().get_device(dev_id);
         g_tp_shared_queues[dev_id] = new sycl::queue(*g_tp_shared_context, dev, sycl::property::queue::in_order());
-        GGML_SYCL_DEBUG("SYCL TP: Created shared-context queue for device %d at %p\n", dev_id, (void*)g_tp_shared_queues[dev_id]);
+        GGML_SYCL_DEBUG("SYCL TP: Created shared-context queue for device %d at %p\n", dev_id,
+                        (void *) g_tp_shared_queues[dev_id]);
     }
 }
 
@@ -115,7 +117,7 @@ struct StagedBuffer {
 };
 
 static std::unordered_map<const void *, StagedBuffer> g_tp_staging_cache;
-static std::mutex g_tp_staging_mutex;
+static std::mutex                                     g_tp_staging_mutex;
 
 // Get or create a staged copy of mmap'd data for a specific device in TP mode
 // Returns nullptr if not in TP mode or data is already USM
@@ -141,8 +143,8 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
         }
         // Size mismatch or device not staged - need to re-allocate
         if (it->second.size < size) {
-            GGML_SYCL_DEBUG("[STAGING] Size mismatch for %p: cached=%zu, requested=%zu, reallocating\n",
-                            src, it->second.size, size);
+            GGML_SYCL_DEBUG("[STAGING] Size mismatch for %p: cached=%zu, requested=%zu, reallocating\n", src,
+                            it->second.size, size);
             // Free all staged pointers (only local devices - already guarded by multiprocess check above)
             int num_local_devices = g_sycl_tp_config.is_multiprocess ? 1 : g_sycl_tp_config.world_size;
             for (int i = 0; i < num_local_devices; i++) {
@@ -168,8 +170,8 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
     StagedBuffer * entry;
     if (it == g_tp_staging_cache.end()) {
         g_tp_staging_cache[src] = {};
-        entry = &g_tp_staging_cache[src];
-        entry->size = size;
+        entry                   = &g_tp_staging_cache[src];
+        entry->size             = size;
         for (int i = 0; i < GGML_SYCL_MAX_DEVICES; i++) {
             entry->ptrs[i] = nullptr;
         }
@@ -186,7 +188,8 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
         }
 
         try {
-            GGML_SYCL_DEBUG("[STAGING] Allocating %zu bytes on device %d using tp_queue=%p...\n", size, device, (void*)tp_queue);
+            GGML_SYCL_DEBUG("[STAGING] Allocating %zu bytes on device %d using tp_queue=%p...\n", size, device,
+                            (void *) tp_queue);
             // Allocate device memory on this specific device using shared-context queue
             void * staged = sycl::malloc_device(size, *tp_queue);
             if (staged == nullptr) {
@@ -223,8 +226,8 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
             entry->ptrs[device] = staged;
             GGML_SYCL_DEBUG("[STAGING] Staged %zu bytes from %p to device %d: %p\n", size, src, device, staged);
         } catch (const sycl::exception & e) {
-            GGML_LOG_ERROR("[STAGING] Failed to allocate/copy %zu bytes on device %d: %s (code=%d)\n",
-                          size, device, e.what(), static_cast<int>(e.code().value()));
+            GGML_LOG_ERROR("[STAGING] Failed to allocate/copy %zu bytes on device %d: %s (code=%d)\n", size, device,
+                           e.what(), static_cast<int>(e.code().value()));
             return nullptr;
         }
     }
@@ -265,70 +268,68 @@ void ggml_sycl_clear_staging_cache() {
     g_tp_staging_cache.clear();
 }
 
-void* ggml_sycl_host_malloc(size_t size) try {
-  if (getenv("GGML_SYCL_NO_PINNED") != nullptr) {
-    return nullptr;
-  }
-
-  // Safety limit: don't try to allocate more than 4GB of pinned memory in a single call
-  // Large pinned allocations can crash the system before error handling kicks in
-  constexpr size_t MAX_PINNED_ALLOC = 4ULL * 1024 * 1024 * 1024; // 4GB
-  if (size > MAX_PINNED_ALLOC) {
-    GGML_LOG_WARN("[SYCL] Refusing to allocate %.1f GB of pinned memory (limit: 4GB). "
-                  "Use regular memory instead. lazy_moe requires chunked allocation.\n",
-                  size / (1024.0 * 1024.0 * 1024.0));
-    return nullptr;
-  }
-
-  void* ptr = nullptr;
-
-  // For TP mode: use a shared context so memory is accessible from all devices
-  if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
-    std::lock_guard<std::mutex> lock(g_tp_context_mutex);
-
-    // Initialize shared context and queues if needed
-    if (g_tp_shared_context == nullptr) {
-      ggml_sycl_init_tp_shared_context();
+void * ggml_sycl_host_malloc(size_t size) try {
+    if (getenv("GGML_SYCL_NO_PINNED") != nullptr) {
+        return nullptr;
     }
 
-    // Allocate host memory accessible from all TP devices
-    dpct::err0 err = CHECK_TRY_ERROR(
-        ptr = sycl::malloc_host(size, *g_tp_shared_context));
+    // Safety limit: don't try to allocate more than 4GB of pinned memory in a single call
+    // Large pinned allocations can crash the system before error handling kicks in
+    constexpr size_t MAX_PINNED_ALLOC = 4ULL * 1024 * 1024 * 1024;  // 4GB
+    if (size > MAX_PINNED_ALLOC) {
+        GGML_LOG_WARN(
+            "[SYCL] Refusing to allocate %.1f GB of pinned memory (limit: 4GB). "
+            "Use regular memory instead. lazy_moe requires chunked allocation.\n",
+            size / (1024.0 * 1024.0 * 1024.0));
+        return nullptr;
+    }
+
+    void * ptr = nullptr;
+
+    // For TP mode: use a shared context so memory is accessible from all devices
+    if (g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1) {
+        std::lock_guard<std::mutex> lock(g_tp_context_mutex);
+
+        // Initialize shared context and queues if needed
+        if (g_tp_shared_context == nullptr) {
+            ggml_sycl_init_tp_shared_context();
+        }
+
+        // Allocate host memory accessible from all TP devices
+        dpct::err0 err = CHECK_TRY_ERROR(ptr = sycl::malloc_host(size, *g_tp_shared_context));
+
+        if (err != 0) {
+            GGML_LOG_ERROR("WARNING: failed to allocate %.2f MB of TP shared host memory\n", size / 1024.0 / 1024.0);
+            return nullptr;
+        }
+        return ptr;
+    }
+
+    // Non-TP mode: use default queue for host malloc
+    dpct::err0 err = CHECK_TRY_ERROR(ptr = (void *) sycl::malloc_host(size, dpct::get_in_order_queue()));
 
     if (err != 0) {
-      GGML_LOG_ERROR("WARNING: failed to allocate %.2f MB of TP shared host memory\n", size / 1024.0 / 1024.0);
-      return nullptr;
+        // clear the error
+        GGML_LOG_ERROR("WARNING: failed to allocate %.2f MB of pinned memory: %s\n", size / 1024.0 / 1024.0,
+                       "syclGetErrorString is not supported");
+        return nullptr;
     }
+
     return ptr;
-  }
-
-  // Non-TP mode: use default queue for host malloc
-  dpct::err0 err = CHECK_TRY_ERROR(
-      ptr = (void*)sycl::malloc_host(size, dpct::get_in_order_queue()));
-
-  if (err != 0) {
-    // clear the error
-    GGML_LOG_ERROR("WARNING: failed to allocate %.2f MB of pinned memory: %s\n", size / 1024.0 / 1024.0,    "syclGetErrorString is not supported");
-    return nullptr;
-  }
-
-  return ptr;
-} catch (sycl::exception const& exc) {
-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-            << ", line:" << __LINE__ << std::endl;
-  std::exit(1);
+} catch (const sycl::exception & exc) {
+    std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
+    std::exit(1);
 }
 
-void ggml_sycl_host_free(void* ptr) try {
-  // allow to use dpct::get_in_order_queue() for host malloc
-  SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, dpct::get_in_order_queue())));
-} catch (sycl::exception const& exc) {
-  std::cerr << exc.what() << "Exception caught at file:" << __FILE__
-            << ", line:" << __LINE__ << std::endl;
-  std::exit(1);
+void ggml_sycl_host_free(void * ptr) try {
+    // allow to use dpct::get_in_order_queue() for host malloc
+    SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, dpct::get_in_order_queue())));
+} catch (const sycl::exception & exc) {
+    std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
+    std::exit(1);
 }
 
-bool gpu_has_xmx(sycl::device &dev) {
+bool gpu_has_xmx(sycl::device & dev) {
     return dev.has(sycl::aspect::ext_intel_matrix);
 }
 
@@ -349,39 +350,71 @@ XMXCapabilities query_xmx_capabilities(sycl::device & dev) {
     try {
         auto combinations = dev.get_info<info::device::matrix_combinations>();
 
-        for (const auto& combo : combinations) {
+        for (const auto & combo : combinations) {
             // Find int8 configuration (for Q8_0)
-            if (combo.atype == matrix_type::sint8 &&
-                combo.btype == matrix_type::sint8) {
+            if (combo.atype == matrix_type::sint8 && combo.btype == matrix_type::sint8) {
                 caps.supports_int8 = true;
-                caps.M = combo.msize;
-                caps.N = combo.nsize;
-                caps.K = combo.ksize;
+                caps.M             = combo.msize;
+                caps.N             = combo.nsize;
+                caps.K             = combo.ksize;
 
-                GGML_SYCL_DEBUG("[XMX] int8: M=%zu, N=%zu, K=%zu\n",
-                               caps.M, caps.N, caps.K);
+                GGML_SYCL_DEBUG("[XMX] int8: M=%zu, N=%zu, K=%zu\n", caps.M, caps.N, caps.K);
             }
 
-            if (combo.atype == matrix_type::fp16 &&
-                combo.btype == matrix_type::fp16) {
+            if (combo.atype == matrix_type::fp16 && combo.btype == matrix_type::fp16) {
                 caps.supports_fp16 = true;
             }
         }
-    } catch (const sycl::exception& e) {
+    } catch (const sycl::exception & e) {
         GGML_SYCL_DEBUG("[XMX] Query failed: %s\n", e.what());
     }
 #else
     // Fallback: assume Intel Arc defaults
     caps.supports_int8 = true;
     caps.supports_fp16 = true;
-    caps.M = 8;
-    caps.N = 16;
-    caps.K = 32;
+    caps.M             = 8;
+    caps.N             = 16;
+    caps.K             = 32;
     GGML_SYCL_DEBUG("[XMX] Using default config: M=8, N=16, K=32\n");
 #endif
 
-    // Compute optimal tile counts
-    if (caps.M > 0 && caps.N > 0) {
+    // Compute optimal tile counts based on SLM constraints
+    bool slm_calculation_success = false;
+
+    if (caps.M > 0 && caps.N > 0 && caps.K > 0 && caps.slm_size > 0) {
+        // Fixed XMX dimensions (Intel Arc default)
+        constexpr int XMX_M = 8;
+        constexpr int XMX_N = 16;
+        constexpr int XMX_K = 32;
+
+        // SLM reservation for LUT (MXFP4->INT8 lookup table)
+        constexpr size_t LUT_BYTES = 16;
+
+        // SLM reservation for token tile (M × K × sizeof(int8))
+        // Each work-group needs token data for XMX_M rows
+        size_t token_tile_bytes = XMX_M * caps.K * sizeof(int8_t);
+
+        // Remaining SLM budget after reserving LUT and tokens
+        size_t slm_for_weights = caps.slm_size - LUT_BYTES - token_tile_bytes;
+
+        // Calculate weight tile size for MXFP4 (4-bit quantization)
+        // Per tile in N dimension: XMX_N * XMX_K / 2 bytes
+        size_t weight_tile_bytes = caps.N * caps.K / 2;
+
+        // Max tiles_n that fit in available SLM (conservative: 50% of remaining budget)
+        // This ensures room for accumulation buffers and other SLM usage
+        if (weight_tile_bytes > 0 && slm_for_weights > 0) {
+            int max_tiles_from_slm  = static_cast<int>((slm_for_weights / 2) / weight_tile_bytes);
+            caps.optimal_tiles_n    = std::max(1, std::min(4, max_tiles_from_slm));
+            slm_calculation_success = true;
+
+            GGML_LOG_INFO("[XMX] SLM-aware optimal_tiles_n=%d (SLM=%zuKB, weight_tile=%zuB, token_tile=%zuB)\n",
+                          caps.optimal_tiles_n, caps.slm_size / 1024, weight_tile_bytes, token_tile_bytes);
+        }
+    }
+
+    // Fallback to default calculation if SLM info unavailable or calculation failed
+    if (!slm_calculation_success && caps.M > 0 && caps.N > 0) {
         caps.optimal_tiles_m = std::min(4, static_cast<int>(32 / caps.M));
         caps.optimal_tiles_n = std::min(4, static_cast<int>(64 / caps.N));
     }
@@ -390,14 +423,14 @@ XMXCapabilities query_xmx_capabilities(sycl::device & dev) {
 }
 
 int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block_size) {
-  const int64_t max_range = std::numeric_limits<int>::max();
-  int64_t sycl_down_blk_size = block_size;
-  int64_t global_range = accumulate_block_num * sycl_down_blk_size;
-  while(global_range > max_range) {
-      sycl_down_blk_size /= 2;
-      global_range = accumulate_block_num * sycl_down_blk_size;
-  }
-  return sycl_down_blk_size;
+    const int64_t max_range          = std::numeric_limits<int>::max();
+    int64_t       sycl_down_blk_size = block_size;
+    int64_t       global_range       = accumulate_block_num * sycl_down_blk_size;
+    while (global_range > max_range) {
+        sycl_down_blk_size /= 2;
+        global_range = accumulate_block_num * sycl_down_blk_size;
+    }
+    return sycl_down_blk_size;
 }
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams) {
@@ -407,19 +440,27 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
                 SYCL_CHECK(CHECK_TRY_ERROR(dpct::destroy_event(extra->events[i][is])));
             }
         }
-        if (extra->data_device[i] != nullptr && streams.size()>0) {
+        if (extra->data_device[i] != nullptr && streams.size() > 0) {
             ggml_sycl_set_device(i);
-            SYCL_CHECK(
-                CHECK_TRY_ERROR(sycl::free(extra->data_device[i], *(streams[i]))));
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(extra->data_device[i], *(streams[i]))));
         }
-        // Free XMX MXFP4 tiled cache
-        if (extra->xmx_mxfp4_tiled[i] != nullptr && streams.size()>0) {
+        // Free XMX MXFP4 tiled cache (legacy - will be migrated to layout system)
+        if (extra->xmx_mxfp4_tiled[i] != nullptr && streams.size() > 0) {
             ggml_sycl_set_device(i);
-            SYCL_CHECK(
-                CHECK_TRY_ERROR(sycl::free(extra->xmx_mxfp4_tiled[i], *(streams[i]))));
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(extra->xmx_mxfp4_tiled[i], *(streams[i]))));
             extra->xmx_mxfp4_tiled[i] = nullptr;
         }
     }
+
+    // Release unified layout-managed memory (handles SOA, COALESCED, XMX_TILED buffers)
+    if (extra->layout.owns_memory && extra->layout.data_ptr && streams.size() > 0) {
+        int dev = extra->layout.device_id;
+        if (dev >= 0 && dev < static_cast<int>(streams.size())) {
+            ggml_sycl_set_device(dev);
+            extra->layout.release(*(streams[dev]));
+        }
+    }
+
     delete extra;
 }
 
@@ -431,12 +472,16 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
 // after the MUL operation to prevent stale data issues.
 
 std::unordered_map<int, ffn_norm_cache_entry> g_tp_ffn_norm_cache;
-std::mutex g_tp_ffn_norm_cache_mutex;
-int g_tp_current_pass_id = 0;
-bool g_tp_enabled = false;
+std::mutex                                    g_tp_ffn_norm_cache_mutex;
+int                                           g_tp_current_pass_id = 0;
+bool                                          g_tp_enabled         = false;
 
-void ggml_sycl_tp_cache_ffn_norm(int layer, const void* data, int64_t ne0, int64_t ne1,
-                                  size_t size, queue_ptr stream) {
+void ggml_sycl_tp_cache_ffn_norm(int          layer,
+                                 const void * data,
+                                 int64_t      ne0,
+                                 int64_t      ne1,
+                                 size_t       size,
+                                 queue_ptr    stream) {
     if (!g_sycl_tp_config.enabled || g_sycl_tp_config.world_size <= 1) {
         return;
     }
@@ -449,18 +494,23 @@ void ggml_sycl_tp_cache_ffn_norm(int layer, const void* data, int64_t ne0, int64
 
     std::lock_guard<std::mutex> lock(g_tp_ffn_norm_cache_mutex);
 
-    auto it = g_tp_ffn_norm_cache.find(layer);
-    ffn_norm_cache_entry& entry = g_tp_ffn_norm_cache[layer];
+    auto                   it    = g_tp_ffn_norm_cache.find(layer);
+    ffn_norm_cache_entry & entry = g_tp_ffn_norm_cache[layer];
 
     // Reallocate if size changed
     if (entry.size != size) {
         // DEBUG: Check L31 weight BEFORE any free/realloc
         {
             uintptr_t l31_weight_addr = 0xffffd5575d400000ULL;
-            struct { uint16_t d_bits; uint8_t qs[16]; } wblk;
+
+            struct {
+                uint16_t d_bits;
+                uint8_t  qs[16];
+            } wblk;
+
             try {
-                stream->memcpy(&wblk, (void*)l31_weight_addr, sizeof(wblk)).wait();
-                uint16_t d_raw = wblk.d_bits;
+                stream->memcpy(&wblk, (void *) l31_weight_addr, sizeof(wblk)).wait();
+                uint16_t   d_raw = wblk.d_bits;
                 sycl::half d_half;
                 memcpy(&d_half, &d_raw, sizeof(sycl::half));
                 float d_f = static_cast<float>(d_half);
@@ -469,9 +519,10 @@ void ggml_sycl_tp_cache_ffn_norm(int layer, const void* data, int64_t ne0, int64
                             layer, d_f);
                 } else if (g_ggml_sycl_tp_debug) {
                     static int before_dbg = 0;
-                    if (before_dbg++ < 5)
-                        fprintf(stderr, "TP DEBUG FFN_NORM_CACHE layer %d: BEFORE realloc, L31 weight OK d=%f\n",
-                                layer, d_f);
+                    if (before_dbg++ < 5) {
+                        fprintf(stderr, "TP DEBUG FFN_NORM_CACHE layer %d: BEFORE realloc, L31 weight OK d=%f\n", layer,
+                                d_f);
+                    }
                 }
             } catch (...) {
                 // Ignore errors if address is invalid
@@ -479,7 +530,9 @@ void ggml_sycl_tp_cache_ffn_norm(int layer, const void* data, int64_t ne0, int64
         }
 
         if (entry.data != nullptr) {
-            if (g_ggml_sycl_tp_debug) fprintf(stderr, "TP DEBUG FFN_NORM_CACHE layer %d: freeing old cache at %p\n", layer, entry.data);
+            if (g_ggml_sycl_tp_debug) {
+                fprintf(stderr, "TP DEBUG FFN_NORM_CACHE layer %d: freeing old cache at %p\n", layer, entry.data);
+            }
             sycl::free(entry.data, *stream);
         }
         if (entry.data_dev1 != nullptr) {
@@ -491,35 +544,40 @@ void ggml_sycl_tp_cache_ffn_norm(int layer, const void* data, int64_t ne0, int64
         }
         // Allocate new buffers
         entry.data = sycl::malloc_device(size, *stream);
-        int dev1 = g_sycl_tp_config.devices[1];
+        int dev1   = g_sycl_tp_config.devices[1];
         ggml_sycl_set_device(dev1);
         queue_ptr stream1 = &dpct::get_device(dev1).default_queue();
-        entry.data_dev1 = sycl::malloc_device(size, *stream1);
+        entry.data_dev1   = sycl::malloc_device(size, *stream1);
         ggml_sycl_set_device(g_sycl_tp_config.devices[0]);
 
         // DEBUG: Check if allocation overlaps with L31 FFN gate weight
         if (g_ggml_sycl_tp_debug && (layer == 31 || layer == 0)) {
             uintptr_t l31_weight_addr = 0xffffd5575d400000ULL;
-            uintptr_t l31_weight_end = l31_weight_addr + 16515072;  // shard size
-            uintptr_t cache_start = (uintptr_t)entry.data;
-            uintptr_t cache_end = cache_start + size;
-            bool overlap = (cache_start < l31_weight_end && cache_end > l31_weight_addr);
-            fprintf(stderr, "TP DEBUG FFN_NORM_CACHE layer %d: alloc=%p size=%zu overlap_with_L31_weight=%d\n",
-                    layer, entry.data, size, overlap);
+            uintptr_t l31_weight_end  = l31_weight_addr + 16515072;  // shard size
+            uintptr_t cache_start     = (uintptr_t) entry.data;
+            uintptr_t cache_end       = cache_start + size;
+            bool      overlap         = (cache_start < l31_weight_end && cache_end > l31_weight_addr);
+            fprintf(stderr, "TP DEBUG FFN_NORM_CACHE layer %d: alloc=%p size=%zu overlap_with_L31_weight=%d\n", layer,
+                    entry.data, size, overlap);
             if (overlap) {
                 fprintf(stderr, "TP DEBUG FFN_NORM_CACHE OVERLAP! cache=[%p,%p) weight=[0x%llx,0x%llx)\n",
-                        (void*)cache_start, (void*)cache_end,
-                        (unsigned long long)l31_weight_addr, (unsigned long long)l31_weight_end);
+                        (void *) cache_start, (void *) cache_end, (unsigned long long) l31_weight_addr,
+                        (unsigned long long) l31_weight_end);
             }
         }
 
         // DEBUG: Check L31 weight AFTER realloc
         {
             uintptr_t l31_weight_addr = 0xffffd5575d400000ULL;
-            struct { uint16_t d_bits; uint8_t qs[16]; } wblk;
+
+            struct {
+                uint16_t d_bits;
+                uint8_t  qs[16];
+            } wblk;
+
             try {
-                stream->memcpy(&wblk, (void*)l31_weight_addr, sizeof(wblk)).wait();
-                uint16_t d_raw = wblk.d_bits;
+                stream->memcpy(&wblk, (void *) l31_weight_addr, sizeof(wblk)).wait();
+                uint16_t   d_raw = wblk.d_bits;
                 sycl::half d_half;
                 memcpy(&d_half, &d_raw, sizeof(sycl::half));
                 float d_f = static_cast<float>(d_half);
@@ -528,9 +586,10 @@ void ggml_sycl_tp_cache_ffn_norm(int layer, const void* data, int64_t ne0, int64
                             layer, d_f);
                 } else if (g_ggml_sycl_tp_debug) {
                     static int after_dbg = 0;
-                    if (after_dbg++ < 5)
-                        fprintf(stderr, "TP DEBUG FFN_NORM_CACHE layer %d: AFTER realloc, L31 weight OK d=%f\n",
-                                layer, d_f);
+                    if (after_dbg++ < 5) {
+                        fprintf(stderr, "TP DEBUG FFN_NORM_CACHE layer %d: AFTER realloc, L31 weight OK d=%f\n", layer,
+                                d_f);
+                    }
                 }
             } catch (...) {
                 // Ignore errors if address is invalid
@@ -544,10 +603,15 @@ void ggml_sycl_tp_cache_ffn_norm(int layer, const void* data, int64_t ne0, int64
     // DEBUG: Check L31 weight AFTER cache copy
     if (g_ggml_sycl_tp_debug && (layer == 31 || layer == 0)) {
         uintptr_t l31_weight_addr = 0xffffd5575d400000ULL;
-        struct { uint16_t d_bits; uint8_t qs[16]; } wblk;
+
+        struct {
+            uint16_t d_bits;
+            uint8_t  qs[16];
+        } wblk;
+
         try {
-            stream->memcpy(&wblk, (void*)l31_weight_addr, sizeof(wblk)).wait();
-            uint16_t d_raw = wblk.d_bits;
+            stream->memcpy(&wblk, (void *) l31_weight_addr, sizeof(wblk)).wait();
+            uint16_t   d_raw = wblk.d_bits;
             sycl::half d_half;
             memcpy(&d_half, &d_raw, sizeof(sycl::half));
             float d_f = static_cast<float>(d_half);
@@ -555,11 +619,12 @@ void ggml_sycl_tp_cache_ffn_norm(int layer, const void* data, int64_t ne0, int64
                 fprintf(stderr, "TP DEBUG FFN_NORM_CACHE layer %d: AFTER cache copy, L31 weight CORRUPTED d=%f\n",
                         layer, d_f);
             }
-        } catch (...) {}
+        } catch (...) {
+        }
     }
 
     // Also copy to device 1's buffer (via host staging)
-    void* host_buf = sycl::malloc_host(size, *stream);
+    void * host_buf = sycl::malloc_host(size, *stream);
     stream->memcpy(host_buf, data, size).wait();
     int dev1 = g_sycl_tp_config.devices[1];
     ggml_sycl_set_device(dev1);
@@ -568,14 +633,13 @@ void ggml_sycl_tp_cache_ffn_norm(int layer, const void* data, int64_t ne0, int64
     sycl::free(host_buf, *stream);
     ggml_sycl_set_device(g_sycl_tp_config.devices[0]);
 
-    entry.ne0 = ne0;
-    entry.ne1 = ne1;
-    entry.size = size;
+    entry.ne0     = ne0;
+    entry.ne1     = ne1;
+    entry.size    = size;
     entry.pass_id = g_tp_current_pass_id;
-
 }
 
-void* ggml_sycl_tp_get_cached_ffn_norm(int layer, int device) {
+void * ggml_sycl_tp_get_cached_ffn_norm(int layer, int device) {
     if (!g_sycl_tp_config.enabled || g_sycl_tp_config.world_size <= 1) {
         return nullptr;
     }
@@ -587,7 +651,7 @@ void* ggml_sycl_tp_get_cached_ffn_norm(int layer, int device) {
         return nullptr;
     }
 
-    const ffn_norm_cache_entry& entry = it->second;
+    const ffn_norm_cache_entry & entry = it->second;
 
     // NOTE: We do NOT check pass_id for staleness anymore.
     // The cache is updated whenever device 0 runs the MUL for ffn_norm.
@@ -640,48 +704,46 @@ void ggml_sycl_tp_new_pass() {
 ggml_sycl_tp_config g_sycl_tp_config = {};
 
 // Shared reduce buffer for ALL_REDUCE
-static float* g_tp_shared_reduce_buf = nullptr;
-static size_t g_tp_shared_reduce_buf_size = 0;
+static float *    g_tp_shared_reduce_buf      = nullptr;
+static size_t     g_tp_shared_reduce_buf_size = 0;
 static std::mutex g_tp_shared_reduce_mutex;
 
 // Persistent host buffers for CPU-based ALL_REDUCE (avoids per-call malloc/free)
-static float* g_tp_host_buf0 = nullptr;  // Buffer for device 0 data
-static float* g_tp_host_buf1 = nullptr;  // Buffer for device 1 data
-static size_t g_tp_host_buf_size = 0;
+static float * g_tp_host_buf0     = nullptr;  // Buffer for device 0 data
+static float * g_tp_host_buf1     = nullptr;  // Buffer for device 1 data
+static size_t  g_tp_host_buf_size = 0;
 
-void ggml_sycl_tp_init(const int* device_ids, int num_devices) {
+void ggml_sycl_tp_init(const int * device_ids, int num_devices) {
     if (num_devices < 1 || num_devices > GGML_SYCL_MAX_DEVICES) {
         GGML_LOG_ERROR("SYCL TP: Invalid number of devices: %d\n", num_devices);
         return;
     }
 
-    g_sycl_tp_config.enabled = true;
+    g_sycl_tp_config.enabled    = true;
     g_sycl_tp_config.world_size = num_devices;
-    g_sycl_tp_config.rank = 0;  // Default rank
+    g_sycl_tp_config.rank       = 0;  // Default rank
     for (int i = 0; i < num_devices; i++) {
         g_sycl_tp_config.devices[i] = device_ids[i];
     }
 
     // Check for multi-process mode (MPI)
-    const char* pmi_rank = std::getenv("PMI_RANK");
-    const char* pmi_size = std::getenv("PMI_SIZE");
+    const char * pmi_rank = std::getenv("PMI_RANK");
+    const char * pmi_size = std::getenv("PMI_SIZE");
     if (pmi_rank && pmi_size) {
         g_sycl_tp_config.is_multiprocess = true;
-        g_sycl_tp_config.mpi_rank = std::atoi(pmi_rank);
-        g_sycl_tp_config.mpi_world_size = std::atoi(pmi_size);
-        g_sycl_tp_config.rank = g_sycl_tp_config.mpi_rank;
-        g_sycl_tp_config.world_size = g_sycl_tp_config.mpi_world_size;
-        GGML_LOG_INFO("SYCL TP: Multi-process mode enabled, rank=%d/%d\n",
-                       g_sycl_tp_config.mpi_rank, g_sycl_tp_config.mpi_world_size);
+        g_sycl_tp_config.mpi_rank        = std::atoi(pmi_rank);
+        g_sycl_tp_config.mpi_world_size  = std::atoi(pmi_size);
+        g_sycl_tp_config.rank            = g_sycl_tp_config.mpi_rank;
+        g_sycl_tp_config.world_size      = g_sycl_tp_config.mpi_world_size;
+        GGML_LOG_INFO("SYCL TP: Multi-process mode enabled, rank=%d/%d\n", g_sycl_tp_config.mpi_rank,
+                      g_sycl_tp_config.mpi_world_size);
 
         // Initialize oneCCL for multi-process communication
         // In multi-process mode, each process has only ONE device visible (level_zero:$RANK)
         // Get the queue for device 0 (the only locally visible device)
-        int local_device = device_ids[0];
-        queue_ptr local_queue = &(dpct::dev_mgr::instance().get_device(local_device).default_queue());
-        ggml_sycl_ccl_init_multiprocess(g_sycl_tp_config.mpi_rank,
-                                        g_sycl_tp_config.mpi_world_size,
-                                        local_queue);
+        int       local_device = device_ids[0];
+        queue_ptr local_queue  = &(dpct::dev_mgr::instance().get_device(local_device).default_queue());
+        ggml_sycl_ccl_init_multiprocess(g_sycl_tp_config.mpi_rank, g_sycl_tp_config.mpi_world_size, local_queue);
     }
 
     GGML_SYCL_DEBUG("SYCL TP: Initialized with %d devices\n", num_devices);
@@ -699,35 +761,36 @@ void ggml_sycl_tp_init(const int* device_ids, int num_devices) {
 // =============================================================================
 
 std::unordered_map<int, tp_ffn_compute_buffers> g_tp_ffn_buffers;
-std::mutex g_tp_ffn_buffers_mutex;
+std::mutex                                      g_tp_ffn_buffers_mutex;
 
-tp_host_staging_buffer g_tp_host_staging = {nullptr, 0, 0};
-std::mutex g_tp_host_staging_mutex;
+tp_host_staging_buffer g_tp_host_staging = { nullptr, 0, 0 };
+std::mutex             g_tp_host_staging_mutex;
 
-tp_ffn_compute_buffers * ggml_sycl_tp_ensure_ffn_buffers(
-    int layer, int device, queue_ptr stream,
-    int64_t K_full_padded, int64_t N_hidden_shard_padded, int64_t batch, int64_t N_out) {
-
+tp_ffn_compute_buffers * ggml_sycl_tp_ensure_ffn_buffers(int       layer,
+                                                         int       device,
+                                                         queue_ptr stream,
+                                                         int64_t   K_full_padded,
+                                                         int64_t   N_hidden_shard_padded,
+                                                         int64_t   batch,
+                                                         int64_t   N_out) {
     std::lock_guard<std::mutex> lock(g_tp_ffn_buffers_mutex);
 
-    auto it = g_tp_ffn_buffers.find(layer);
+    auto                     it   = g_tp_ffn_buffers.find(layer);
     tp_ffn_compute_buffers * bufs = nullptr;
 
     if (it == g_tp_ffn_buffers.end()) {
         // Initialize empty entry
         g_tp_ffn_buffers[layer] = {};
-        bufs = &g_tp_ffn_buffers[layer];
+        bufs                    = &g_tp_ffn_buffers[layer];
     } else {
         bufs = &it->second;
     }
 
     // Check if we need to allocate or resize
-    bool needs_alloc = !bufs->allocated;
-    bool needs_resize = bufs->allocated && (
-        K_full_padded > bufs->K_full_padded ||
-        N_hidden_shard_padded > bufs->N_hidden_shard_padded ||
-        batch > bufs->batch_max ||
-        N_out > bufs->N_out);
+    bool needs_alloc  = !bufs->allocated;
+    bool needs_resize = bufs->allocated &&
+                        (K_full_padded > bufs->K_full_padded || N_hidden_shard_padded > bufs->N_hidden_shard_padded ||
+                         batch > bufs->batch_max || N_out > bufs->N_out);
 
     if (!needs_alloc && !needs_resize) {
         return bufs;  // Existing buffers are sufficient
@@ -735,66 +798,90 @@ tp_ffn_compute_buffers * ggml_sycl_tp_ensure_ffn_buffers(
 
     // Free old buffers if resizing
     if (needs_resize && bufs->allocated) {
-        if (bufs->input_q8_dev) sycl::free(bufs->input_q8_dev, *stream);
-        if (bufs->gate_out) sycl::free(bufs->gate_out, *stream);
-        if (bufs->up_out) sycl::free(bufs->up_out, *stream);
-        if (bufs->hidden_out) sycl::free(bufs->hidden_out, *stream);
-        if (bufs->hidden_q8_dev) sycl::free(bufs->hidden_q8_dev, *stream);
-        if (bufs->partial_out) sycl::free(bufs->partial_out, *stream);
+        if (bufs->input_q8_dev) {
+            sycl::free(bufs->input_q8_dev, *stream);
+        }
+        if (bufs->gate_out) {
+            sycl::free(bufs->gate_out, *stream);
+        }
+        if (bufs->up_out) {
+            sycl::free(bufs->up_out, *stream);
+        }
+        if (bufs->hidden_out) {
+            sycl::free(bufs->hidden_out, *stream);
+        }
+        if (bufs->hidden_q8_dev) {
+            sycl::free(bufs->hidden_q8_dev, *stream);
+        }
+        if (bufs->partial_out) {
+            sycl::free(bufs->partial_out, *stream);
+        }
         bufs->allocated = false;
     }
 
     // Use max of current and new dimensions (with headroom for batch)
-    int64_t new_batch_max = std::max(batch, bufs->batch_max) + 16;  // Headroom for varying batch sizes
-    int64_t new_K_padded = std::max(K_full_padded, bufs->K_full_padded);
+    int64_t new_batch_max       = std::max(batch, bufs->batch_max) + 16;  // Headroom for varying batch sizes
+    int64_t new_K_padded        = std::max(K_full_padded, bufs->K_full_padded);
     int64_t new_N_hidden_padded = std::max(N_hidden_shard_padded, bufs->N_hidden_shard_padded);
-    int64_t new_N_out = std::max(N_out, bufs->N_out);
+    int64_t new_N_out           = std::max(N_out, bufs->N_out);
 
     // Calculate buffer sizes
     const size_t q8_1_ts = sizeof(block_q8_1);
     const size_t q8_1_bs = QK8_1;
 
-    size_t input_q8_size = new_batch_max * new_K_padded * q8_1_ts / q8_1_bs;
-    size_t hidden_size = new_N_hidden_padded * new_batch_max * sizeof(float);
+    size_t input_q8_size  = new_batch_max * new_K_padded * q8_1_ts / q8_1_bs;
+    size_t hidden_size    = new_N_hidden_padded * new_batch_max * sizeof(float);
     size_t hidden_q8_size = new_batch_max * new_N_hidden_padded * q8_1_ts / q8_1_bs;
-    size_t partial_size = new_N_out * new_batch_max * sizeof(float);
+    size_t partial_size   = new_N_out * new_batch_max * sizeof(float);
 
     // Allocate all buffers
-    bufs->input_q8_dev = (char *)sycl::malloc_device(input_q8_size, *stream);
-    bufs->gate_out = (float *)sycl::malloc_device(hidden_size, *stream);
-    bufs->up_out = (float *)sycl::malloc_device(hidden_size, *stream);
-    bufs->hidden_out = (float *)sycl::malloc_device(hidden_size, *stream);
-    bufs->hidden_q8_dev = (char *)sycl::malloc_device(hidden_q8_size, *stream);
-    bufs->partial_out = (float *)sycl::malloc_device(partial_size, *stream);
+    bufs->input_q8_dev  = (char *) sycl::malloc_device(input_q8_size, *stream);
+    bufs->gate_out      = (float *) sycl::malloc_device(hidden_size, *stream);
+    bufs->up_out        = (float *) sycl::malloc_device(hidden_size, *stream);
+    bufs->hidden_out    = (float *) sycl::malloc_device(hidden_size, *stream);
+    bufs->hidden_q8_dev = (char *) sycl::malloc_device(hidden_q8_size, *stream);
+    bufs->partial_out   = (float *) sycl::malloc_device(partial_size, *stream);
 
     // Check allocation success
-    if (!bufs->input_q8_dev || !bufs->gate_out || !bufs->up_out ||
-        !bufs->hidden_out || !bufs->hidden_q8_dev || !bufs->partial_out) {
+    if (!bufs->input_q8_dev || !bufs->gate_out || !bufs->up_out || !bufs->hidden_out || !bufs->hidden_q8_dev ||
+        !bufs->partial_out) {
         GGML_LOG_ERROR("SYCL TP: Failed to allocate persistent FFN buffers for layer %d\n", layer);
         // Partial cleanup
-        if (bufs->input_q8_dev) sycl::free(bufs->input_q8_dev, *stream);
-        if (bufs->gate_out) sycl::free(bufs->gate_out, *stream);
-        if (bufs->up_out) sycl::free(bufs->up_out, *stream);
-        if (bufs->hidden_out) sycl::free(bufs->hidden_out, *stream);
-        if (bufs->hidden_q8_dev) sycl::free(bufs->hidden_q8_dev, *stream);
-        if (bufs->partial_out) sycl::free(bufs->partial_out, *stream);
+        if (bufs->input_q8_dev) {
+            sycl::free(bufs->input_q8_dev, *stream);
+        }
+        if (bufs->gate_out) {
+            sycl::free(bufs->gate_out, *stream);
+        }
+        if (bufs->up_out) {
+            sycl::free(bufs->up_out, *stream);
+        }
+        if (bufs->hidden_out) {
+            sycl::free(bufs->hidden_out, *stream);
+        }
+        if (bufs->hidden_q8_dev) {
+            sycl::free(bufs->hidden_q8_dev, *stream);
+        }
+        if (bufs->partial_out) {
+            sycl::free(bufs->partial_out, *stream);
+        }
         *bufs = {};
         return nullptr;
     }
 
     // Record sizes and dimensions
-    bufs->input_q8_size = input_q8_size;
-    bufs->hidden_size = hidden_size;
-    bufs->hidden_q8_size = hidden_q8_size;
-    bufs->partial_size = partial_size;
-    bufs->K_full_padded = new_K_padded;
+    bufs->input_q8_size         = input_q8_size;
+    bufs->hidden_size           = hidden_size;
+    bufs->hidden_q8_size        = hidden_q8_size;
+    bufs->partial_size          = partial_size;
+    bufs->K_full_padded         = new_K_padded;
     bufs->N_hidden_shard_padded = new_N_hidden_padded;
-    bufs->batch_max = new_batch_max;
-    bufs->N_out = new_N_out;
-    bufs->allocated = true;
+    bufs->batch_max             = new_batch_max;
+    bufs->N_out                 = new_N_out;
+    bufs->allocated             = true;
 
     GGML_SYCL_DEBUG("SYCL TP: Allocated persistent FFN buffers for layer %d (K=%lld, N_hidden=%lld, batch_max=%lld)\n",
-                    layer, (long long)new_K_padded, (long long)new_N_hidden_padded, (long long)new_batch_max);
+                    layer, (long long) new_K_padded, (long long) new_N_hidden_padded, (long long) new_batch_max);
 
     return bufs;
 }
@@ -806,12 +893,24 @@ void ggml_sycl_tp_free_ffn_buffers() {
         if (bufs.allocated) {
             // Use default queue for cleanup
             auto & q = dpct::get_in_order_queue();
-            if (bufs.input_q8_dev) sycl::free(bufs.input_q8_dev, q);
-            if (bufs.gate_out) sycl::free(bufs.gate_out, q);
-            if (bufs.up_out) sycl::free(bufs.up_out, q);
-            if (bufs.hidden_out) sycl::free(bufs.hidden_out, q);
-            if (bufs.hidden_q8_dev) sycl::free(bufs.hidden_q8_dev, q);
-            if (bufs.partial_out) sycl::free(bufs.partial_out, q);
+            if (bufs.input_q8_dev) {
+                sycl::free(bufs.input_q8_dev, q);
+            }
+            if (bufs.gate_out) {
+                sycl::free(bufs.gate_out, q);
+            }
+            if (bufs.up_out) {
+                sycl::free(bufs.up_out, q);
+            }
+            if (bufs.hidden_out) {
+                sycl::free(bufs.hidden_out, q);
+            }
+            if (bufs.hidden_q8_dev) {
+                sycl::free(bufs.hidden_q8_dev, q);
+            }
+            if (bufs.partial_out) {
+                sycl::free(bufs.partial_out, q);
+            }
         }
     }
     g_tp_ffn_buffers.clear();
@@ -832,10 +931,10 @@ float * ggml_sycl_tp_ensure_host_staging(size_t size, queue_ptr stream) {
     }
 
     // Allocate with headroom
-    size_t new_capacity = size + (size / 4);  // 25% headroom
-    g_tp_host_staging.buf = sycl::malloc_host<float>(new_capacity / sizeof(float), *stream);
+    size_t new_capacity        = size + (size / 4);  // 25% headroom
+    g_tp_host_staging.buf      = sycl::malloc_host<float>(new_capacity / sizeof(float), *stream);
     g_tp_host_staging.capacity = new_capacity;
-    g_tp_host_staging.size = size;
+    g_tp_host_staging.size     = size;
 
     GGML_SYCL_DEBUG("SYCL TP: Allocated persistent host staging buffer (%zu bytes)\n", new_capacity);
     return g_tp_host_staging.buf;
@@ -846,9 +945,9 @@ void ggml_sycl_tp_free_host_staging() {
 
     if (g_tp_host_staging.buf != nullptr) {
         sycl::free(g_tp_host_staging.buf, dpct::get_in_order_queue());
-        g_tp_host_staging.buf = nullptr;
+        g_tp_host_staging.buf      = nullptr;
         g_tp_host_staging.capacity = 0;
-        g_tp_host_staging.size = 0;
+        g_tp_host_staging.size     = 0;
     }
 }
 
@@ -857,15 +956,15 @@ void ggml_sycl_tp_free_host_staging() {
 // =============================================================================
 
 static ggml_sycl_tp_quant_comm_buffers g_tp_quant_comm_bufs = {};
-static std::mutex g_tp_quant_comm_mutex;
+static std::mutex                      g_tp_quant_comm_mutex;
 
 bool ggml_sycl_quant_allreduce_enabled() {
     static int enabled = -1;
     if (enabled < 0) {
-        const char* env = getenv("GGML_SYCL_QUANT_ALLREDUCE");
+        const char * env = getenv("GGML_SYCL_QUANT_ALLREDUCE");
         // Enable by default for TP mode (33% bandwidth reduction)
         // Disable with GGML_SYCL_QUANT_ALLREDUCE=0
-        enabled = (env != nullptr) ? atoi(env) : 1;
+        enabled          = (env != nullptr) ? atoi(env) : 1;
 
         if (enabled) {
             GGML_LOG_INFO("SYCL TP: INT16 Quantized AllReduce enabled (33%% bandwidth reduction)\n");
@@ -877,19 +976,19 @@ bool ggml_sycl_quant_allreduce_enabled() {
 // Get the minimum tensor size threshold for quantized allreduce
 // Returns threshold from GGML_SYCL_QUANT_THRESHOLD env var, or default
 static size_t get_quant_allreduce_threshold() {
-    static size_t threshold = 0;
-    static bool initialized = false;
+    static size_t threshold   = 0;
+    static bool   initialized = false;
     if (!initialized) {
-        const char* env = getenv("GGML_SYCL_QUANT_THRESHOLD");
+        const char * env = getenv("GGML_SYCL_QUANT_THRESHOLD");
         // Default: 65536 elements (256KB FP32)
         // Benchmarks show quant overhead hurts small tensors (tg128: 8.1 -> 6.3 t/s)
         // but helps or is neutral for larger tensors (pp512: ~same performance)
         // Crossover is around 32K-64K elements
-        threshold = (env != nullptr) ? (size_t)atol(env) : 65536;
-        initialized = true;
+        threshold        = (env != nullptr) ? (size_t) atol(env) : 65536;
+        initialized      = true;
         if (ggml_sycl_quant_allreduce_enabled()) {
-            GGML_LOG_INFO("SYCL TP: Quant AllReduce threshold = %zu elements (%.1f KB FP32)\n",
-                          threshold, (float)(threshold * sizeof(float)) / 1024.0f);
+            GGML_LOG_INFO("SYCL TP: Quant AllReduce threshold = %zu elements (%.1f KB FP32)\n", threshold,
+                          (float) (threshold * sizeof(float)) / 1024.0f);
         }
     }
     return threshold;
@@ -908,7 +1007,9 @@ bool ggml_sycl_should_use_quant_allreduce(size_t n_elements) {
 void ggml_sycl_tp_init_quant_comm_buffers(size_t initial_size) {
     std::lock_guard<std::mutex> lock(g_tp_quant_comm_mutex);
 
-    if (g_tp_quant_comm_bufs.allocated) return;
+    if (g_tp_quant_comm_bufs.allocated) {
+        return;
+    }
 
     // Pre-allocate with 25% headroom
     size_t alloc_size = initial_size + (initial_size / 4);
@@ -917,9 +1018,9 @@ void ggml_sycl_tp_init_quant_comm_buffers(size_t initial_size) {
 
     // Allocate host buffers (standard malloc - CPU-accessible)
     // INT16 = 2 bytes per element
-    g_tp_quant_comm_bufs.host_q0 = (int16_t*)std::malloc(alloc_size * sizeof(int16_t));
-    g_tp_quant_comm_bufs.host_q1 = (int16_t*)std::malloc(alloc_size * sizeof(int16_t));
-    g_tp_quant_comm_bufs.host_result = (float*)std::malloc(alloc_size * sizeof(float));
+    g_tp_quant_comm_bufs.host_q0     = (int16_t *) std::malloc(alloc_size * sizeof(int16_t));
+    g_tp_quant_comm_bufs.host_q1     = (int16_t *) std::malloc(alloc_size * sizeof(int16_t));
+    g_tp_quant_comm_bufs.host_result = (float *) std::malloc(alloc_size * sizeof(float));
 
     if (!g_tp_quant_comm_bufs.host_q0 || !g_tp_quant_comm_bufs.host_q1 || !g_tp_quant_comm_bufs.host_result) {
         GGML_LOG_ERROR("SYCL TP: Failed to allocate quant comm host buffers\n");
@@ -928,7 +1029,7 @@ void ggml_sycl_tp_init_quant_comm_buffers(size_t initial_size) {
 
     // Initialize all device buffer pointers to nullptr
     for (int i = 0; i < GGML_SYCL_MAX_DEVICES; i++) {
-        g_tp_quant_comm_bufs.dev_q[i] = nullptr;
+        g_tp_quant_comm_bufs.dev_q[i]      = nullptr;
         g_tp_quant_comm_bufs.dev_minmax[i] = nullptr;
     }
 
@@ -936,24 +1037,30 @@ void ggml_sycl_tp_init_quant_comm_buffers(size_t initial_size) {
     for (int i = 0; i < g_sycl_tp_config.world_size && i < 2; i++) {
         int dev = g_sycl_tp_config.devices[i];
         ggml_sycl_set_device(dev);
-        auto& q = dpct::get_in_order_queue();
+        auto & q = dpct::get_in_order_queue();
 
         // INT16 = 2 bytes per element
-        g_tp_quant_comm_bufs.dev_q[i] = sycl::malloc_device<int16_t>(alloc_size, q);
+        g_tp_quant_comm_bufs.dev_q[i]      = sycl::malloc_device<int16_t>(alloc_size, q);
         g_tp_quant_comm_bufs.dev_minmax[i] = sycl::malloc_device<float>(2, q);
 
         if (!g_tp_quant_comm_bufs.dev_q[i] || !g_tp_quant_comm_bufs.dev_minmax[i]) {
             GGML_LOG_ERROR("SYCL TP: Failed to allocate quant comm device buffers on device %d\n", dev);
             // Cleanup partial allocations
-            if (g_tp_quant_comm_bufs.host_q0) std::free(g_tp_quant_comm_bufs.host_q0);
-            if (g_tp_quant_comm_bufs.host_q1) std::free(g_tp_quant_comm_bufs.host_q1);
-            if (g_tp_quant_comm_bufs.host_result) std::free(g_tp_quant_comm_bufs.host_result);
+            if (g_tp_quant_comm_bufs.host_q0) {
+                std::free(g_tp_quant_comm_bufs.host_q0);
+            }
+            if (g_tp_quant_comm_bufs.host_q1) {
+                std::free(g_tp_quant_comm_bufs.host_q1);
+            }
+            if (g_tp_quant_comm_bufs.host_result) {
+                std::free(g_tp_quant_comm_bufs.host_result);
+            }
             g_tp_quant_comm_bufs = {};
             return;
         }
     }
 
-    g_tp_quant_comm_bufs.capacity = alloc_size;
+    g_tp_quant_comm_bufs.capacity  = alloc_size;
     g_tp_quant_comm_bufs.allocated = true;
 
     GGML_SYCL_DEBUG("SYCL TP: Pre-allocated INT16 quant comm buffers: %zu elements (%zu MB INT16, %zu MB FP32)\n",
@@ -965,7 +1072,7 @@ void ggml_sycl_tp_ensure_quant_comm_buffers(size_t n_elements) {
     std::lock_guard<std::mutex> lock(g_tp_quant_comm_mutex);
 
     if (g_tp_quant_comm_bufs.allocated && g_tp_quant_comm_bufs.capacity >= n_elements) {
-        return; // Existing buffers are sufficient
+        return;  // Existing buffers are sufficient
     }
 
     // Need to resize - free old and allocate new
@@ -974,15 +1081,25 @@ void ggml_sycl_tp_ensure_quant_comm_buffers(size_t n_elements) {
                         g_tp_quant_comm_bufs.capacity, n_elements);
 
         // Free host buffers
-        if (g_tp_quant_comm_bufs.host_q0) std::free(g_tp_quant_comm_bufs.host_q0);
-        if (g_tp_quant_comm_bufs.host_q1) std::free(g_tp_quant_comm_bufs.host_q1);
-        if (g_tp_quant_comm_bufs.host_result) std::free(g_tp_quant_comm_bufs.host_result);
+        if (g_tp_quant_comm_bufs.host_q0) {
+            std::free(g_tp_quant_comm_bufs.host_q0);
+        }
+        if (g_tp_quant_comm_bufs.host_q1) {
+            std::free(g_tp_quant_comm_bufs.host_q1);
+        }
+        if (g_tp_quant_comm_bufs.host_result) {
+            std::free(g_tp_quant_comm_bufs.host_result);
+        }
 
         // Free device buffers
-        auto& q = dpct::get_in_order_queue();
+        auto & q = dpct::get_in_order_queue();
         for (int i = 0; i < GGML_SYCL_MAX_DEVICES; i++) {
-            if (g_tp_quant_comm_bufs.dev_q[i]) sycl::free(g_tp_quant_comm_bufs.dev_q[i], q);
-            if (g_tp_quant_comm_bufs.dev_minmax[i]) sycl::free(g_tp_quant_comm_bufs.dev_minmax[i], q);
+            if (g_tp_quant_comm_bufs.dev_q[i]) {
+                sycl::free(g_tp_quant_comm_bufs.dev_q[i], q);
+            }
+            if (g_tp_quant_comm_bufs.dev_minmax[i]) {
+                sycl::free(g_tp_quant_comm_bufs.dev_minmax[i], q);
+            }
         }
         g_tp_quant_comm_bufs = {};
     }
@@ -992,27 +1109,39 @@ void ggml_sycl_tp_ensure_quant_comm_buffers(size_t n_elements) {
     // This is safe because we're single-threaded at this point
 }
 
-ggml_sycl_tp_quant_comm_buffers* ggml_sycl_tp_get_quant_comm_buffers() {
+ggml_sycl_tp_quant_comm_buffers * ggml_sycl_tp_get_quant_comm_buffers() {
     return g_tp_quant_comm_bufs.allocated ? &g_tp_quant_comm_bufs : nullptr;
 }
 
 void ggml_sycl_tp_free_quant_comm_buffers() {
     std::lock_guard<std::mutex> lock(g_tp_quant_comm_mutex);
 
-    if (!g_tp_quant_comm_bufs.allocated) return;
+    if (!g_tp_quant_comm_bufs.allocated) {
+        return;
+    }
 
     GGML_SYCL_DEBUG("SYCL TP: Freeing quant comm buffers\n");
 
     // Free host buffers (standard malloc)
-    if (g_tp_quant_comm_bufs.host_q0) std::free(g_tp_quant_comm_bufs.host_q0);
-    if (g_tp_quant_comm_bufs.host_q1) std::free(g_tp_quant_comm_bufs.host_q1);
-    if (g_tp_quant_comm_bufs.host_result) std::free(g_tp_quant_comm_bufs.host_result);
+    if (g_tp_quant_comm_bufs.host_q0) {
+        std::free(g_tp_quant_comm_bufs.host_q0);
+    }
+    if (g_tp_quant_comm_bufs.host_q1) {
+        std::free(g_tp_quant_comm_bufs.host_q1);
+    }
+    if (g_tp_quant_comm_bufs.host_result) {
+        std::free(g_tp_quant_comm_bufs.host_result);
+    }
 
     // Free device buffers
-    auto& q = dpct::get_in_order_queue();
+    auto & q = dpct::get_in_order_queue();
     for (int i = 0; i < GGML_SYCL_MAX_DEVICES; i++) {
-        if (g_tp_quant_comm_bufs.dev_q[i]) sycl::free(g_tp_quant_comm_bufs.dev_q[i], q);
-        if (g_tp_quant_comm_bufs.dev_minmax[i]) sycl::free(g_tp_quant_comm_bufs.dev_minmax[i], q);
+        if (g_tp_quant_comm_bufs.dev_q[i]) {
+            sycl::free(g_tp_quant_comm_bufs.dev_q[i], q);
+        }
+        if (g_tp_quant_comm_bufs.dev_minmax[i]) {
+            sycl::free(g_tp_quant_comm_bufs.dev_minmax[i], q);
+        }
     }
 
     g_tp_quant_comm_bufs = {};
@@ -1036,7 +1165,7 @@ void ggml_sycl_tp_free() {
     std::lock_guard<std::mutex> lock(g_tp_shared_reduce_mutex);
     if (g_tp_shared_reduce_buf != nullptr) {
         sycl::free(g_tp_shared_reduce_buf, dpct::get_in_order_queue());
-        g_tp_shared_reduce_buf = nullptr;
+        g_tp_shared_reduce_buf      = nullptr;
         g_tp_shared_reduce_buf_size = 0;
     }
     // Free persistent host buffers
@@ -1074,7 +1203,7 @@ int ggml_sycl_tp_world_size_internal() {
     return g_sycl_tp_config.enabled ? g_sycl_tp_config.world_size : 1;
 }
 
-float* ggml_sycl_tp_ensure_shared_reduce_buffer(size_t bytes) {
+float * ggml_sycl_tp_ensure_shared_reduce_buffer(size_t bytes) {
     std::lock_guard<std::mutex> lock(g_tp_shared_reduce_mutex);
 
     if (g_tp_shared_reduce_buf_size >= bytes && g_tp_shared_reduce_buf != nullptr) {
@@ -1087,14 +1216,14 @@ float* ggml_sycl_tp_ensure_shared_reduce_buffer(size_t bytes) {
     }
 
     // Allocate shared memory for zero-copy ALL_REDUCE
-    g_tp_shared_reduce_buf = sycl::malloc_shared<float>(bytes / sizeof(float), dpct::get_in_order_queue());
+    g_tp_shared_reduce_buf      = sycl::malloc_shared<float>(bytes / sizeof(float), dpct::get_in_order_queue());
     g_tp_shared_reduce_buf_size = bytes;
 
     GGML_SYCL_DEBUG("SYCL TP: Allocated %zu bytes for shared reduce buffer\n", bytes);
     return g_tp_shared_reduce_buf;
 }
 
-void ggml_sycl_tp_get_host_reduce_buffers(size_t bytes, float** buf0, float** buf1) {
+void ggml_sycl_tp_get_host_reduce_buffers(size_t bytes, float ** buf0, float ** buf1) {
     std::lock_guard<std::mutex> lock(g_tp_shared_reduce_mutex);
 
     if (g_tp_host_buf_size >= bytes && g_tp_host_buf0 != nullptr && g_tp_host_buf1 != nullptr) {
@@ -1112,9 +1241,9 @@ void ggml_sycl_tp_get_host_reduce_buffers(size_t bytes, float** buf0, float** bu
     }
 
     // Allocate new buffers (with some headroom to avoid frequent reallocs)
-    size_t alloc_size = bytes + (bytes / 4);  // 25% headroom
-    g_tp_host_buf0 = (float*)std::malloc(alloc_size);
-    g_tp_host_buf1 = (float*)std::malloc(alloc_size);
+    size_t alloc_size  = bytes + (bytes / 4);  // 25% headroom
+    g_tp_host_buf0     = (float *) std::malloc(alloc_size);
+    g_tp_host_buf1     = (float *) std::malloc(alloc_size);
     g_tp_host_buf_size = alloc_size;
 
     GGML_SYCL_DEBUG("SYCL TP: Allocated %zu bytes for persistent host reduce buffers\n", alloc_size);
@@ -1134,11 +1263,11 @@ void ggml_sycl_tp_get_host_reduce_buffers(size_t bytes, float** buf0, float** bu
 // 2. Two buffers for double-buffering (overlap src->host with host->dst)
 // 3. Event tracking to know when each buffer is safe to reuse
 
-static void* g_pp_transfer_buf[2] = {nullptr, nullptr};  // Double buffers
-static size_t g_pp_transfer_buf_size = 0;
-static std::mutex g_pp_transfer_mutex;
-static sycl::context* g_pp_transfer_ctx = nullptr;
-static int g_pp_current_buf = 0;  // Which buffer to use next (0 or 1)
+static void *                     g_pp_transfer_buf[2]   = { nullptr, nullptr };  // Double buffers
+static size_t                     g_pp_transfer_buf_size = 0;
+static std::mutex                 g_pp_transfer_mutex;
+static sycl::context *            g_pp_transfer_ctx = nullptr;
+static int                        g_pp_current_buf  = 0;  // Which buffer to use next (0 or 1)
 static std::optional<sycl::event> g_pp_pending_event[2];  // Pending events for each buffer
 
 // Internal: allocate double buffers
@@ -1166,18 +1295,23 @@ static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
 
     // Try to allocate pinned host memory for faster transfers
     try {
-        auto& q = dpct::get_in_order_queue();
-        g_pp_transfer_ctx = new sycl::context(q.get_context());
+        auto & q             = dpct::get_in_order_queue();
+        g_pp_transfer_ctx    = new sycl::context(q.get_context());
         g_pp_transfer_buf[0] = sycl::malloc_host(alloc_size, *g_pp_transfer_ctx);
         g_pp_transfer_buf[1] = sycl::malloc_host(alloc_size, *g_pp_transfer_ctx);
         if (g_pp_transfer_buf[0] != nullptr && g_pp_transfer_buf[1] != nullptr) {
             g_pp_transfer_buf_size = alloc_size;
-            GGML_SYCL_DEBUG("SYCL PP: Allocated 2x %zu bytes pinned host memory for double-buffered transfer\n", alloc_size);
+            GGML_SYCL_DEBUG("SYCL PP: Allocated 2x %zu bytes pinned host memory for double-buffered transfer\n",
+                            alloc_size);
             return true;
         }
         // Partial allocation - clean up
-        if (g_pp_transfer_buf[0]) sycl::free(g_pp_transfer_buf[0], *g_pp_transfer_ctx);
-        if (g_pp_transfer_buf[1]) sycl::free(g_pp_transfer_buf[1], *g_pp_transfer_ctx);
+        if (g_pp_transfer_buf[0]) {
+            sycl::free(g_pp_transfer_buf[0], *g_pp_transfer_ctx);
+        }
+        if (g_pp_transfer_buf[1]) {
+            sycl::free(g_pp_transfer_buf[1], *g_pp_transfer_ctx);
+        }
         g_pp_transfer_buf[0] = g_pp_transfer_buf[1] = nullptr;
     } catch (...) {
         // Pinned allocation failed
@@ -1191,8 +1325,12 @@ static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
     g_pp_transfer_buf[0] = std::malloc(alloc_size);
     g_pp_transfer_buf[1] = std::malloc(alloc_size);
     if (g_pp_transfer_buf[0] == nullptr || g_pp_transfer_buf[1] == nullptr) {
-        if (g_pp_transfer_buf[0]) std::free(g_pp_transfer_buf[0]);
-        if (g_pp_transfer_buf[1]) std::free(g_pp_transfer_buf[1]);
+        if (g_pp_transfer_buf[0]) {
+            std::free(g_pp_transfer_buf[0]);
+        }
+        if (g_pp_transfer_buf[1]) {
+            std::free(g_pp_transfer_buf[1]);
+        }
         g_pp_transfer_buf[0] = g_pp_transfer_buf[1] = nullptr;
         GGML_LOG_ERROR("SYCL PP: Failed to allocate 2x %zu bytes for transfer buffers\n", alloc_size);
         return false;
@@ -1203,7 +1341,7 @@ static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
     return true;
 }
 
-void* ggml_sycl_get_dev2dev_transfer_buffer(size_t bytes) {
+void * ggml_sycl_get_dev2dev_transfer_buffer(size_t bytes) {
     std::lock_guard<std::mutex> lock(g_pp_transfer_mutex);
 
     // Allocate if needed
@@ -1218,7 +1356,7 @@ void* ggml_sycl_get_dev2dev_transfer_buffer(size_t bytes) {
 }
 
 // Get buffer for double-buffered transfer, returns buffer index via out param
-void* ggml_sycl_get_dev2dev_transfer_buffer_double(size_t bytes, int* buf_idx) {
+void * ggml_sycl_get_dev2dev_transfer_buffer_double(size_t bytes, int * buf_idx) {
     std::lock_guard<std::mutex> lock(g_pp_transfer_mutex);
 
     // Allocate if needed
@@ -1230,7 +1368,7 @@ void* ggml_sycl_get_dev2dev_transfer_buffer_double(size_t bytes, int* buf_idx) {
     }
 
     // Get next buffer in ping-pong sequence
-    int idx = g_pp_current_buf;
+    int idx          = g_pp_current_buf;
     g_pp_current_buf = 1 - g_pp_current_buf;  // Toggle 0<->1
 
     // Wait for any pending operation on this buffer to complete
@@ -1289,7 +1427,7 @@ void ggml_sycl_free_dev2dev_transfer_buffer() {
         g_pp_transfer_ctx = nullptr;
     }
     g_pp_transfer_buf_size = 0;
-    g_pp_current_buf = 0;
+    g_pp_current_buf       = 0;
     GGML_SYCL_DEBUG("SYCL PP: Freed double-buffered transfer buffers\n");
 }
 
@@ -1309,19 +1447,18 @@ bool ggml_sycl_tp_enabled() {
     return g_sycl_tp_config.enabled && g_sycl_tp_config.world_size > 1;
 }
 
-void ggml_sycl_tp_get_slice(int64_t total_size, int rank, int world_size,
-                             int64_t* offset, int64_t* size) {
+void ggml_sycl_tp_get_slice(int64_t total_size, int rank, int world_size, int64_t * offset, int64_t * size) {
     int64_t slice_size = total_size / world_size;
-    *offset = rank * slice_size;
-    *size = (rank == world_size - 1) ? (total_size - *offset) : slice_size;
+    *offset            = rank * slice_size;
+    *size              = (rank == world_size - 1) ? (total_size - *offset) : slice_size;
 }
 
-tp_layer_type ggml_sycl_tp_get_layer_type(const ggml_tensor* tensor) {
+tp_layer_type ggml_sycl_tp_get_layer_type(const ggml_tensor * tensor) {
     if (tensor == nullptr || tensor->extra == nullptr) {
         return tp_layer_type::TP_NONE;
     }
 
-    auto* extra = static_cast<ggml_tensor_extra_gpu*>(tensor->extra);
+    auto * extra = static_cast<ggml_tensor_extra_gpu *>(tensor->extra);
     if (extra->tp_type_cached) {
         return extra->tp_type;
     }
@@ -1330,9 +1467,8 @@ tp_layer_type ggml_sycl_tp_get_layer_type(const ggml_tensor* tensor) {
     tp_layer_type tp_type = tp_layer_type::TP_NONE;
     if (tensor->name) {
         // Column-parallel: output dimension is sharded (Q, K, V, gate, up)
-        if (strstr(tensor->name, "attn_q") || strstr(tensor->name, "attn_k") ||
-            strstr(tensor->name, "attn_v") || strstr(tensor->name, "ffn_gate") ||
-            strstr(tensor->name, "ffn_up")) {
+        if (strstr(tensor->name, "attn_q") || strstr(tensor->name, "attn_k") || strstr(tensor->name, "attn_v") ||
+            strstr(tensor->name, "ffn_gate") || strstr(tensor->name, "ffn_up")) {
             tp_type = tp_layer_type::TP_COLUMN_PARALLEL;
         }
         // Row-parallel: input dimension is sharded (O, down)
@@ -1341,12 +1477,12 @@ tp_layer_type ggml_sycl_tp_get_layer_type(const ggml_tensor* tensor) {
         }
     }
 
-    extra->tp_type = tp_type;
+    extra->tp_type        = tp_type;
     extra->tp_type_cached = true;
     return tp_type;
 }
 
-bool ggml_sycl_tp_needs_allreduce(const ggml_tensor* tensor) {
+bool ggml_sycl_tp_needs_allreduce(const ggml_tensor * tensor) {
     if (!g_sycl_tp_config.enabled || g_sycl_tp_config.world_size <= 1) {
         return false;
     }
@@ -1355,38 +1491,44 @@ bool ggml_sycl_tp_needs_allreduce(const ggml_tensor* tensor) {
     return (tp_type == tp_layer_type::TP_ROW_PARALLEL);
 }
 
-void ggml_sycl_tp_get_sharded_dims(const ggml_tensor* tensor, int rank, int world_size,
-                                    int64_t* local_ne0, int64_t* local_ne1,
-                                    int64_t* offset_ne0, int64_t* offset_ne1) {
+void ggml_sycl_tp_get_sharded_dims(const ggml_tensor * tensor,
+                                   int                 rank,
+                                   int                 world_size,
+                                   int64_t *           local_ne0,
+                                   int64_t *           local_ne1,
+                                   int64_t *           offset_ne0,
+                                   int64_t *           offset_ne1) {
     tp_layer_type tp_type = ggml_sycl_tp_get_layer_type(tensor);
 
-    *local_ne0 = tensor->ne[0];
-    *local_ne1 = tensor->ne[1];
+    *local_ne0  = tensor->ne[0];
+    *local_ne1  = tensor->ne[1];
     *offset_ne0 = 0;
     *offset_ne1 = 0;
 
     if (tp_type == tp_layer_type::TP_COLUMN_PARALLEL) {
-        *local_ne1 = tensor->ne[1] / world_size;
+        *local_ne1  = tensor->ne[1] / world_size;
         *offset_ne1 = rank * (*local_ne1);
     } else if (tp_type == tp_layer_type::TP_ROW_PARALLEL) {
-        *local_ne0 = tensor->ne[0] / world_size;
+        *local_ne0  = tensor->ne[0] / world_size;
         *offset_ne0 = rank * (*local_ne0);
     }
 }
 
-bool ggml_sycl_tp_should_shard(const ggml_tensor* tensor) {
+bool ggml_sycl_tp_should_shard(const ggml_tensor * tensor) {
     if (!g_sycl_tp_config.enabled || g_sycl_tp_config.world_size <= 1) {
         return false;
     }
 
     tp_layer_type tp_type = ggml_sycl_tp_get_layer_type(tensor);
-    return (tp_type == tp_layer_type::TP_COLUMN_PARALLEL ||
-            tp_type == tp_layer_type::TP_ROW_PARALLEL);
+    return (tp_type == tp_layer_type::TP_COLUMN_PARALLEL || tp_type == tp_layer_type::TP_ROW_PARALLEL);
 }
 
-void ggml_sycl_tp_copy_weight_shard(void* dst_device, const void* src_host,
-                                     const ggml_tensor* tensor, int rank,
-                                     int world_size, queue_ptr stream) {
+void ggml_sycl_tp_copy_weight_shard(void *              dst_device,
+                                    const void *        src_host,
+                                    const ggml_tensor * tensor,
+                                    int                 rank,
+                                    int                 world_size,
+                                    queue_ptr           stream) {
     tp_layer_type tp_type = ggml_sycl_tp_get_layer_type(tensor);
 
     int64_t ne0 = tensor->ne[0];
@@ -1394,25 +1536,25 @@ void ggml_sycl_tp_copy_weight_shard(void* dst_device, const void* src_host,
 
     if (tp_type == tp_layer_type::TP_COLUMN_PARALLEL) {
         // Shard ne1 dimension
-        int64_t shard_ne1 = ne1 / world_size;
+        int64_t shard_ne1  = ne1 / world_size;
         int64_t offset_ne1 = rank * shard_ne1;
 
-        size_t row_size = ggml_row_size(tensor->type, ne0);
+        size_t row_size   = ggml_row_size(tensor->type, ne0);
         size_t shard_size = row_size * shard_ne1;
 
-        const char* src = static_cast<const char*>(src_host) + offset_ne1 * row_size;
+        const char * src = static_cast<const char *>(src_host) + offset_ne1 * row_size;
         stream->memcpy(dst_device, src, shard_size).wait();
     } else if (tp_type == tp_layer_type::TP_ROW_PARALLEL) {
         // Shard ne0 dimension - more complex due to quantization blocks
-        int64_t shard_ne0 = ne0 / world_size;
+        int64_t shard_ne0  = ne0 / world_size;
         int64_t offset_ne0 = rank * shard_ne0;
 
-        size_t full_row_size = ggml_row_size(tensor->type, ne0);
+        size_t full_row_size  = ggml_row_size(tensor->type, ne0);
         size_t shard_row_size = ggml_row_size(tensor->type, shard_ne0);
 
         // Copy row by row
-        char* dst = static_cast<char*>(dst_device);
-        const char* src = static_cast<const char*>(src_host);
+        char *       dst = static_cast<char *>(dst_device);
+        const char * src = static_cast<const char *>(src_host);
 
         for (int64_t row = 0; row < ne1; row++) {
             size_t src_offset = row * full_row_size + ggml_row_size(tensor->type, offset_ne0);
@@ -1425,7 +1567,7 @@ void ggml_sycl_tp_copy_weight_shard(void* dst_device, const void* src_host,
     }
 }
 
-size_t ggml_sycl_tp_get_shard_size(const ggml_tensor* tensor, int rank, int world_size) {
+size_t ggml_sycl_tp_get_shard_size(const ggml_tensor * tensor, int rank, int world_size) {
     tp_layer_type tp_type = ggml_sycl_tp_get_layer_type(tensor);
 
     int64_t ne0 = tensor->ne[0];
@@ -1459,9 +1601,9 @@ void ggml_sycl_all_reduce_sum(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             return;
         }
 
-        float* src_data = static_cast<float*>(src->data);
-        float* dst_data = static_cast<float*>(dst->data);
-        size_t count = ggml_nelements(dst);
+        float * src_data = static_cast<float *>(src->data);
+        float * dst_data = static_cast<float *>(dst->data);
+        size_t  count    = ggml_nelements(dst);
 
         // CCL allreduce: src_data -> dst_data with sum
         // Use the two-buffer overload: (send_buf, recv_buf, count, device)
@@ -1499,8 +1641,8 @@ void ggml_sycl_all_reduce_sum(ggml_backend_sycl_context & ctx, ggml_tensor * dst
         return;
     }
 
-    size_t dst_size = ggml_nbytes(dst);
-    int main_device = ctx.device;
+    size_t dst_size    = ggml_nbytes(dst);
+    int    main_device = ctx.device;
 
     // Get source data pointer (where MUL_MAT FALLBACK wrote the result)
     void * src_ptr = ggml_sycl_get_data_ptr(src, main_device);
@@ -1509,8 +1651,7 @@ void ggml_sycl_all_reduce_sum(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
     if (g_ggml_sycl_tp_debug) {
         fprintf(stderr, "ALL_REDUCE_SUM: Copying from src=%s (%p) to dst=%s (%p), size=%zu\n",
-                src->name ? src->name : "(null)", src_ptr,
-                dst->name ? dst->name : "(null)", dst_ptr, dst_size);
+                src->name ? src->name : "(null)", src_ptr, dst->name ? dst->name : "(null)", dst_ptr, dst_size);
     }
 
     // If src and dst point to same memory, nothing to do
@@ -1527,9 +1668,9 @@ void ggml_sycl_all_reduce_sum(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     if (g_ggml_sycl_tp_debug) {
         // Verify the copy
         float verify[4];
-        stream->memcpy(verify, dst_ptr, std::min(dst_size, 4*sizeof(float))).wait();
-        fprintf(stderr, "ALL_REDUCE_SUM: VERIFY dst[0..3]=[%.4f,%.4f,%.4f,%.4f]\n",
-                verify[0], verify[1], verify[2], verify[3]);
+        stream->memcpy(verify, dst_ptr, std::min(dst_size, 4 * sizeof(float))).wait();
+        fprintf(stderr, "ALL_REDUCE_SUM: VERIFY dst[0..3]=[%.4f,%.4f,%.4f,%.4f]\n", verify[0], verify[1], verify[2],
+                verify[3]);
     }
 
     GGML_UNUSED(ctx);
@@ -1551,7 +1692,7 @@ static bool g_pp_debug_initialized = false;
 
 static void pp_init_debug() {
     if (!g_pp_debug_initialized) {
-        const char* debug_env = std::getenv("GGML_SYCL_PP_DEBUG");
+        const char * debug_env = std::getenv("GGML_SYCL_PP_DEBUG");
         if (debug_env) {
             g_ggml_sycl_pp_debug = std::atoi(debug_env);
         }
@@ -1559,32 +1700,35 @@ static void pp_init_debug() {
     }
 }
 
-#define PP_DEBUG(fmt, ...) \
-    do { if (g_ggml_sycl_pp_debug >= 1) GGML_LOG_DEBUG("[PP] " fmt, ##__VA_ARGS__); } while(0)
+#define PP_DEBUG(fmt, ...)                              \
+    do {                                                \
+        if (g_ggml_sycl_pp_debug >= 1)                  \
+            GGML_LOG_DEBUG("[PP] " fmt, ##__VA_ARGS__); \
+    } while (0)
 
-#define PP_DEBUG_VERBOSE(fmt, ...) \
-    do { if (g_ggml_sycl_pp_debug >= 2) GGML_LOG_DEBUG("[PP-V] " fmt, ##__VA_ARGS__); } while(0)
+#define PP_DEBUG_VERBOSE(fmt, ...)                        \
+    do {                                                  \
+        if (g_ggml_sycl_pp_debug >= 2)                    \
+            GGML_LOG_DEBUG("[PP-V] " fmt, ##__VA_ARGS__); \
+    } while (0)
 
-void ggml_sycl_pp_init(const int* device_ids, int num_devices, int total_layers,
-                        const int* layers_per_stage) {
+void ggml_sycl_pp_init(const int * device_ids, int num_devices, int total_layers, const int * layers_per_stage) {
     pp_init_debug();
 
     if (num_devices < 1 || num_devices > GGML_SYCL_MAX_DEVICES) {
-        GGML_LOG_ERROR("SYCL PP: Invalid number of devices: %d (max: %d)\n",
-                       num_devices, GGML_SYCL_MAX_DEVICES);
+        GGML_LOG_ERROR("SYCL PP: Invalid number of devices: %d (max: %d)\n", num_devices, GGML_SYCL_MAX_DEVICES);
         return;
     }
 
     if (total_layers < 1 || total_layers > GGML_SYCL_PP_MAX_LAYERS) {
-        GGML_LOG_ERROR("SYCL PP: Invalid number of layers: %d (max: %d)\n",
-                       total_layers, GGML_SYCL_PP_MAX_LAYERS);
+        GGML_LOG_ERROR("SYCL PP: Invalid number of layers: %d (max: %d)\n", total_layers, GGML_SYCL_PP_MAX_LAYERS);
         return;
     }
 
     // Clear any previous config
     ggml_sycl_pp_free();
 
-    g_sycl_pp_config.enabled = true;
+    g_sycl_pp_config.enabled    = true;
     g_sycl_pp_config.num_stages = num_devices;
 
     // Copy device IDs
@@ -1601,13 +1745,12 @@ void ggml_sycl_pp_init(const int* device_ids, int num_devices, int total_layers,
             total += layers_per_stage[i];
         }
         if (total != total_layers) {
-            GGML_LOG_WARN("SYCL PP: layers_per_stage sum (%d) != total_layers (%d)\n",
-                          total, total_layers);
+            GGML_LOG_WARN("SYCL PP: layers_per_stage sum (%d) != total_layers (%d)\n", total, total_layers);
         }
     } else {
         // Distribute layers evenly
         int base_layers = total_layers / num_devices;
-        int remainder = total_layers % num_devices;
+        int remainder   = total_layers % num_devices;
 
         for (int i = 0; i < num_devices; i++) {
             // Give extra layers to earlier stages (handles remainder)
@@ -1631,10 +1774,8 @@ void ggml_sycl_pp_init(const int* device_ids, int num_devices, int total_layers,
     for (int i = 0; i < num_devices; i++) {
         int start_layer, end_layer;
         ggml_sycl_pp_get_stage_layers(i, &start_layer, &end_layer);
-        PP_DEBUG("  Stage %d: device %d, layers %d-%d (%d layers)\n",
-                 i, g_sycl_pp_config.devices[i],
-                 start_layer, end_layer - 1,
-                 g_sycl_pp_config.layers_per_stage[i]);
+        PP_DEBUG("  Stage %d: device %d, layers %d-%d (%d layers)\n", i, g_sycl_pp_config.devices[i], start_layer,
+                 end_layer - 1, g_sycl_pp_config.layers_per_stage[i]);
     }
 }
 
@@ -1664,15 +1805,14 @@ int ggml_sycl_pp_get_device_for_layer(int layer) {
     return g_sycl_pp_config.layer_to_device[layer];
 }
 
-void* ggml_sycl_pp_ensure_stage_buffer(int stage, size_t size) {
+void * ggml_sycl_pp_ensure_stage_buffer(int stage, size_t size) {
     if (stage < 0 || stage >= g_sycl_pp_config.num_stages) {
         GGML_LOG_ERROR("SYCL PP: Invalid stage %d\n", stage);
         return nullptr;
     }
 
     // Check if existing buffer is large enough
-    if (g_sycl_pp_config.stage_output_buf[stage] != nullptr &&
-        g_sycl_pp_config.stage_output_size >= size) {
+    if (g_sycl_pp_config.stage_output_buf[stage] != nullptr && g_sycl_pp_config.stage_output_size >= size) {
         return g_sycl_pp_config.stage_output_buf[stage];
     }
 
@@ -1684,16 +1824,19 @@ void* ggml_sycl_pp_ensure_stage_buffer(int stage, size_t size) {
     // Allocate shared memory for inter-stage transfer (Intel Arc has no P2P)
     // Using malloc_shared allows both source and destination devices to access
     g_sycl_pp_config.stage_output_buf[stage] = sycl::malloc_shared<char>(size, dpct::get_in_order_queue());
-    g_sycl_pp_config.stage_output_size = size;
+    g_sycl_pp_config.stage_output_size       = size;
 
     PP_DEBUG("Allocated stage %d buffer: %zu bytes (malloc_shared)\n", stage, size);
 
     return g_sycl_pp_config.stage_output_buf[stage];
 }
 
-sycl::event ggml_sycl_pp_stage_transfer(int src_device, int dst_device,
-                                         const void* src, size_t size,
-                                         queue_ptr src_queue, queue_ptr dst_queue) {
+sycl::event ggml_sycl_pp_stage_transfer(int          src_device,
+                                        int          dst_device,
+                                        const void * src,
+                                        size_t       size,
+                                        queue_ptr    src_queue,
+                                        queue_ptr    dst_queue) {
     if (!g_sycl_pp_config.enabled) {
         return sycl::event();
     }
@@ -1708,7 +1851,7 @@ sycl::event ggml_sycl_pp_stage_transfer(int src_device, int dst_device,
     }
 
     // Ensure we have a stage buffer
-    void* stage_buf = ggml_sycl_pp_ensure_stage_buffer(src_stage, size);
+    void * stage_buf = ggml_sycl_pp_ensure_stage_buffer(src_stage, size);
     if (stage_buf == nullptr) {
         GGML_LOG_ERROR("SYCL PP: Failed to allocate stage buffer\n");
         return sycl::event();
@@ -1764,10 +1907,10 @@ int ggml_sycl_pp_num_stages() {
     return g_sycl_pp_config.enabled ? g_sycl_pp_config.num_stages : 1;
 }
 
-void ggml_sycl_pp_get_stage_layers(int stage, int* start_layer, int* end_layer) {
+void ggml_sycl_pp_get_stage_layers(int stage, int * start_layer, int * end_layer) {
     if (!g_sycl_pp_config.enabled || stage < 0 || stage >= g_sycl_pp_config.num_stages) {
         *start_layer = 0;
-        *end_layer = 0;
+        *end_layer   = 0;
         return;
     }
 
@@ -1778,7 +1921,7 @@ void ggml_sycl_pp_get_stage_layers(int stage, int* start_layer, int* end_layer) 
     }
 
     *start_layer = start;
-    *end_layer = start + g_sycl_pp_config.layers_per_stage[stage];
+    *end_layer   = start + g_sycl_pp_config.layers_per_stage[stage];
 }
 
 int ggml_sycl_pp_get_stage_for_layer(int layer) {
@@ -1798,15 +1941,14 @@ int ggml_sycl_pp_get_stage_for_layer(int layer) {
 }
 
 void ggml_sycl_pp_set_chunked_prefill(int32_t chunk_size, bool enabled) {
-    g_sycl_pp_config.chunk_size = chunk_size;
+    g_sycl_pp_config.chunk_size              = chunk_size;
     g_sycl_pp_config.chunked_prefill_enabled = enabled;
 
-    PP_DEBUG("Chunked prefill: %s (chunk_size=%d)\n",
-             enabled ? "enabled" : "disabled", chunk_size);
+    PP_DEBUG("Chunked prefill: %s (chunk_size=%d)\n", enabled ? "enabled" : "disabled", chunk_size);
 }
 
 // Get the staging buffer for reading (after transfer is complete)
-void* ggml_sycl_pp_get_stage_buffer(int stage) {
+void * ggml_sycl_pp_get_stage_buffer(int stage) {
     if (stage < 0 || stage >= g_sycl_pp_config.num_stages) {
         return nullptr;
     }
@@ -1814,12 +1956,16 @@ void* ggml_sycl_pp_get_stage_buffer(int stage) {
 }
 
 // Get statistics for debugging/profiling
-void ggml_sycl_pp_get_stats(int64_t* transfers, int64_t* syncs) {
-    if (transfers) *transfers = g_sycl_pp_config.total_stage_transfers;
-    if (syncs) *syncs = g_sycl_pp_config.total_sync_waits;
+void ggml_sycl_pp_get_stats(int64_t * transfers, int64_t * syncs) {
+    if (transfers) {
+        *transfers = g_sycl_pp_config.total_stage_transfers;
+    }
+    if (syncs) {
+        *syncs = g_sycl_pp_config.total_sync_waits;
+    }
 }
 
 void ggml_sycl_pp_reset_stats() {
     g_sycl_pp_config.total_stage_transfers = 0;
-    g_sycl_pp_config.total_sync_waits = 0;
+    g_sycl_pp_config.total_sync_waits      = 0;
 }
