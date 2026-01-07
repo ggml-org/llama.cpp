@@ -305,6 +305,9 @@ class Cache {
 class DepthformerModel {
   public:
     void init(audio_decoder_ggml_ctx & ctx) {
+        config.n_layer = ctx.hyperparameters.at("depthformer_n_layer");
+        config.n_embd  = ctx.hyperparameters.at("depthformer_n_embd");
+
         // cache
         int n_cache_tensors = config.n_layer * 2;  // kv per layer
         cache.init(n_cache_tensors);
@@ -521,7 +524,7 @@ class DecoderModel {
         auto * out_embd = ggml_get_rows(ctx0, weights.audio_embedding.embd, out_tokens_offsets);
         out_embd        = ggml_cont(ctx0, ggml_permute(ctx0, out_embd, 1, 0, 2, 3));
         out_embd        = ggml_sum_rows(ctx0, out_embd);
-        out_embd        = ggml_reshape_1d(ctx0, out_embd, config.n_embd);
+        out_embd        = ggml_reshape_1d(ctx0, out_embd, ggml_nelements(out_embd));
 
         return out_embd;
     }
@@ -605,7 +608,6 @@ class DecoderModel {
 
   private:
     struct {
-        int n_embd     = 2048;
         int n_codebook = 8;
         int n_vocab    = 2049;
 
