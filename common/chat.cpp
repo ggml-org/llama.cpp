@@ -926,7 +926,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
     auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    auto include_grammar   = true;
+    auto include_grammar   = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && has_tools;
 
     // Build PEG parser for GPT-OSS format
     // Structure: segments separated by <|start|>assistant
@@ -990,7 +990,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
                 auto tool_in_channel =
                     p.tool(channel_with_recipient + p.tool_open(func_name + constraint + "<|message|>") + args);
 
-                tool_choice |= p.rule("tool-" + name, tool_in_role | tool_in_channel);
+                tool_choice |= p.trigger_rule("tool-" + name, tool_in_role | tool_in_channel);
             });
 
             auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
@@ -998,7 +998,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
             auto role_start = p.optional(p.space() + p.literal("<|start|>assistant"));
 
-            auto tool_call = p.trigger_rule("tool-call", p.repeat(role_start + tool_choice, min_calls, max_calls));
+            auto tool_call = p.rule("tool-call", p.repeat(role_start + tool_choice, min_calls, max_calls));
 
             if (extract_reasoning) {
                 return p.optional(analysis_segment) + p.optional(content_segment) + tool_call;
@@ -1006,7 +1006,6 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
             return p.content(p.until_one_of({ " to=functions.", "<|channel|>" })) + tool_call;
         }
 
-        include_grammar = false;
         if (extract_reasoning) {
             auto segment = p.choice({ analysis_segment, content_segment });
             return p.optional(segment + p.repeat(p.optional(p.space()) + segment, 0, -1));
@@ -1024,7 +1023,6 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
     if (include_grammar) {
         data.grammar_lazy = has_tools && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
-
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
@@ -1033,14 +1031,11 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
             });
             parser.build_grammar(builder, data.grammar_lazy);
         });
-
-        // Trigger on tool calls that appear in the commentary/analysis channel
-        data.grammar_triggers.push_back(
-            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<\\|channel\\|>(commentary|analysis) to" });
-
-        // Trigger tool calls that appear in the role section
-        data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL, "^ to" });
-        data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<\\|start\\|>assistant to" });
+        
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL, "(<\\|start\\|>assistant\\s*)? to=functions\\.[^<]+\\s*<\\|channel\\|>"},
+            { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL, "(<\\|start\\|>assistant\\s*)?<\\|channel\\|>(commentary|analysis) to=functions\\.[^<]+\\s*"}
+        };
     }
 
     return data;
