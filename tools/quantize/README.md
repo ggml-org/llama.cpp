@@ -58,8 +58,11 @@ Options:
 Advanced options:
 * `--tensor-type` quantize specific tensor(s) to specific quant types. Supports regex syntax. May be specified multiple times
 * `--prune-layers` prune (remove) the layers in the list
-* `--target-bpw` automatically choose quant types so that the overall model size matches a given bits per weight (bpw) average
-* `--no-importance` during bpw computation, treat each tensor equally instead of prioritizing some. It may yield better quality for some models
+* `--target-bpw` automatically choose quant types to meet an overall bits per weight (bpw) target
+* `--target-size` automatically choose quant types to meet a file size target
+* `--ignore-tensor-importance` during target computation, treat each tensor equally instead of prioritizing some. It may yield better quality for some models
+* `--save-state` save the target computation to a file. By default, it saves to `<model name>-<model hash>-mse.bpw_state` unless `--state-file` is also specified
+* `--state-file` file name to load from / save to target computations
 * `--override-kv` option to override model metadata by key in the quantized model. May be specified multiple times
 
 Examples:
@@ -100,8 +103,18 @@ Examples:
 ```
 
 ```bash
-# quantize model targeting a specific bpw average and save the bpw computations to the default file. Model type is optional and can be omitted
-./llama-quantize --target-bpw 4.567 --keep-bpw-state --imatrix imatrix.gguf input-model-f32.gguf 8
+# quantize model targeting a specific bpw average and save the target computations to the default file. Model type is optional and can be omitted
+./llama-quantize --target-bpw 4.5678 --save-state --imatrix imatrix.gguf input-model-f32.gguf 8
+```
+
+```bash
+# quantize model targeting a specific file size and save the target computations to a custom file. Model type is optional and can be omitted
+./llama-quantize --target-size 1.5gb --save-state --state-file my-state-file.dat --imatrix imatrix.gguf input-model-f32.gguf 8
+```
+
+```bash
+# quantize model targeting a specific bpw average reusing previous target computations
+./llama-quantize --target-bpw 2.5 ---state-file my-state-file.dat --imatrix imatrix.gguf input-model-f32.gguf 8
 ```
 
 ## Memory/Disk Requirements
