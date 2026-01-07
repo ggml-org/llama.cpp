@@ -394,6 +394,7 @@ extern "C" {
         void * tensor_types;                  // pointer to vector containing tensor types
         void * prune_layers;                  // pointer to vector containing layer indices to prune
         float target_bpw;                     // target bits per weight (bpw)
+        int64_t target_size;                  // target file size in bytes
         bool keep_bpw_state;                  // keep bpw state file
         void * bpw_state;                     // pointer to bpw state file
         bool no_importance;                   // allocate target bpw budget equitably across all tensors
