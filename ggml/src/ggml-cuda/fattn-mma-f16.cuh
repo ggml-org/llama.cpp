@@ -794,6 +794,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
     // Therefore, iterate over V in reverse and re-use the data if possible.
     static_assert(!mla || nstages <= 1, "combination of MLA and multi-stage loading not implemented");
     constexpr int reusable_cutoff = mla ? (DKQ - 1) - (DKQ - 1) % (2*nbatch_K2) - (DKQ - DV) : DV;
+#if !defined(LDMATRIX_TRANS_AVAILABLE)
+    T_A_VKQ A_identity;
+    make_identity_mat(A_identity);
+#endif // !defined(LDMATRIX_TRANS_AVAILABLE)
 
     // Calculate VKQ tile, need to use logical rather than physical elements for i0 due to transposition of V:
 #pragma unroll
@@ -827,9 +831,10 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
 #if defined(LDMATRIX_TRANS_AVAILABLE)
                 load_ldmatrix_trans(A, tile_V_i + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2, stride_tile_V);
 #else
-                using T_A_VKQ_TRANS = tile<A.I, A.J*sizeof(A.x[0])/sizeof(half), half, DATA_LAYOUT_J_MAJOR>;
-                constexpr int stride_tile_V_trans = stride_tile_V * (T_A_VKQ_TRANS::J/A.J);
-                load_generic(reinterpret_cast<T_A_VKQ_TRANS&>(A), reinterpret_cast<const half*>(tile_V_i + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2), stride_tile_V_trans);
+                // Use mma to transpose T_A_VKQ for RDNA.
+                T_A_VKQ A_trans;
+                load_ldmatrix(A_trans, tile_V_i + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2, stride_tile_V);
+                mma(A, A_trans, A_identity);
 #endif // defined(TURING_MMA_AVAILABLE)
                 if constexpr (T_B_KQ::I == 8) {
                     mma(VKQ_C[i_VKQ_0/i0_stride], A, B[k00/(np*T_A_VKQ::J)]);

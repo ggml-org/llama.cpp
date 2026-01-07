@@ -660,6 +660,19 @@ namespace ggml_cuda_mma {
     }
 #endif // defined(TURING_MMA_AVAILABLE)
 
+    static __device__ __forceinline__ void make_identity_mat(tile<16, 8, half2> & t) {
+#if defined(RDNA4)
+        const int row = t.get_i(0);
+        const int left_right = t.get_j(0) / 4;
+        const int up_down = row / 8;
+        const int idx = row % 8;
+        reinterpret_cast<half*>(t.x)[idx] = left_right == up_down ? 1.0f : 0.0f;
+#else
+        GGML_UNUSED_VARS(t);
+        NO_DEVICE_CODE;
+#endif // defined(RDNA4)
+    }
+
     template <int I, int J, typename T, data_layout dl>
     static __device__ __forceinline__ void load_generic(tile<I, J, T, dl> & t, const T * __restrict__ xs0, const int stride) {
 #if defined(AMD_MFMA_AVAILABLE)
