@@ -23,9 +23,9 @@
 #include "ops-utils.h"
 
 // Dot product of FP32 and FP16 vectors, accumulating to float
-static inline void hvx_dot_f32_f16_ua(float * restrict r, const void * restrict y, const void * restrict x, unsigned int n, float s) {
-    const HVX_UVector * restrict vy = (const HVX_UVector * restrict) y; // fp32
-    const HVX_Vector  * restrict vx = (const HVX_Vector  * restrict) x; // fp16
+static inline void hvx_dot_f32_f16_aa(float * restrict r, const void * restrict y, const void * restrict x, unsigned int n, float s) {
+    const HVX_Vector * restrict vy = (const HVX_Vector * restrict) y; // fp32
+    const HVX_Vector * restrict vx = (const HVX_Vector * restrict) x; // fp16
 
     uint32_t nvec = n / VLEN_FP16; // num full fp16 hvx vectors
     uint32_t nloe = n % VLEN_FP16; // leftover elements
@@ -77,9 +77,9 @@ static inline void hvx_dot_f32_f16_ua(float * restrict r, const void * restrict 
 }
 
 // Dot product of two F16 vectors, accumulating to float
-static inline void hvx_dot_f16_f16_ua(float * restrict r, const void * restrict x, const void * restrict y, unsigned int n, float s) {
-    const HVX_UVector * restrict vx = (const HVX_UVector * restrict) x; // fp16
-    const HVX_Vector  * restrict vy = (const HVX_Vector  * restrict) y; // fp16
+static inline void hvx_dot_f16_f16_aa(float * restrict r, const void * restrict x, const void * restrict y, unsigned int n, float s) {
+    const HVX_Vector * restrict vx = (const HVX_Vector * restrict) x; // fp16
+    const HVX_Vector * restrict vy = (const HVX_Vector * restrict) y; // fp16
 
     uint32_t nvec = n / VLEN_FP16; // num full fp16 hvx vectors
     uint32_t nloe = n % VLEN_FP16; // leftover elements
@@ -330,9 +330,9 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
                     const uint32_t cur_ic = ic + j;
                     const uint8_t * k_ptr = k_base + cur_ic * size_k_row_padded;
                     if (q->type == HTP_TYPE_F32) {
-                        hvx_dot_f32_f16_ua(&scores_arr[j], q_ptr_vtcm, k_ptr, DK, scale);
+                        hvx_dot_f32_f16_aa(&scores_arr[j], q_ptr_vtcm, k_ptr, DK, scale);
                     } else {
-                        hvx_dot_f16_f16_ua(&scores_arr[j], q_ptr_vtcm, k_ptr, DK, scale);
+                        hvx_dot_f16_f16_aa(&scores_arr[j], q_ptr_vtcm, k_ptr, DK, scale);
                     }
                 }
 
@@ -399,9 +399,9 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
                 const uint8_t * k_ptr = k_base + ic * size_k_row_padded;
 
                 if (q->type == HTP_TYPE_F32) {
-                    hvx_dot_f32_f16_ua(&s_val, q_ptr_vtcm, k_ptr, DK, scale);
+                    hvx_dot_f32_f16_aa(&s_val, q_ptr_vtcm, k_ptr, DK, scale);
                 } else {
-                    hvx_dot_f16_f16_ua(&s_val, q_ptr_vtcm, k_ptr, DK, scale);
+                    hvx_dot_f16_f16_aa(&s_val, q_ptr_vtcm, k_ptr, DK, scale);
                 }
 
                 if (logit_softcap != 0.0f) {
