@@ -14,6 +14,28 @@
 #include "vecdotq.hpp"
 #include "mmq-esimd.hpp"
 
+// =============================================================================
+// Helper: Get effective reorder_mode from unified layout.mode or legacy path
+// =============================================================================
+static inline reorder_mode get_effective_reorder_mode(const ggml_tensor_extra_gpu* extra) {
+    if (!extra) {
+        return reorder_mode::NONE;
+    }
+
+    // Prefer unified layout.mode if explicitly set (not AOS default)
+    if (extra->layout.mode != layout_mode::AOS) {
+        switch (extra->layout.mode) {
+            case layout_mode::SOA:       return reorder_mode::SOA;
+            case layout_mode::COALESCED: return reorder_mode::COALESCED;
+            case layout_mode::XMX_TILED: return reorder_mode::NONE;  // XMX uses separate dispatch
+            default:                     break;
+        }
+    }
+
+    // Fall back to legacy optimized_feature path
+    return extra->optimized_feature.get_reorder();
+}
+
 // Kernel names for VTune profiling
 template<bool check> class mmq_q4_0_kernel;
 template<int mmq_x, int mmq_y, int nwarps, bool check> class mmq_q4_0_soa_kernel;  // SoA layout variant
@@ -5545,20 +5567,19 @@ void ggml_sycl_op_mul_mat_q(
         // Fall through to standard MMQ
     }
 
-    // Check for SoA reordering (applies to supported quantization types)
-    // NOTE: SoA layout only works when processing the full tensor because the src0_dd_i
+    // Get the effective reorder mode from unified layout.mode or legacy path
+    // NOTE: Reordered layouts only work when processing the full tensor because the src0_dd_i
     // pointer calculation assumes AoS layout. For row slices (row_low > 0), the pointer
-    // arithmetic is incompatible with SoA layout.
+    // arithmetic is incompatible with reordered layouts.
     auto * src0_extra = (ggml_tensor_extra_gpu *) src0->extra;
     const int64_t nrows_full = src0->ne[1];
-    
+
     // We can support views if we correctly calculate the base pointer and offsets
-    const bool use_soa = src0_extra && src0_extra->optimized_feature.is_soa();
-    const bool use_coalesced = src0_extra && src0_extra->optimized_feature.is_coalesced();
+    const reorder_mode mode = get_effective_reorder_mode(src0_extra);
 
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
-            if (use_coalesced) {
+            if (mode == reorder_mode::COALESCED) {
                 const ggml_tensor * storage = get_storage_tensor(src0);
                 const int64_t storage_ne01 = storage->ne[1];
                 const int64_t storage_ne00 = storage->ne[0];
@@ -5579,7 +5600,7 @@ void ggml_sycl_op_mul_mat_q(
                     (long long)ne00, (long long)row_low, (long long)row_diff, (long long)src1_ncols, d_offset, global_row_low);
 
                 ggml_mul_mat_q4_0_q8_1_sycl_coalesced(storage_base, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_ncols, src1_padded_row_size, ne10, nrows_dst, d_offset, global_row_low, stream);
-            } else if (use_soa) {
+            } else if (mode == reorder_mode::SOA) {
                 // SoA layout: all qs values first, then all d (scale) values
                 // Pattern matches Q6_K - pass storage base, d_offset, and global_row_low
                 const ggml_tensor * storage = get_storage_tensor(src0);
@@ -5623,7 +5644,7 @@ void ggml_sycl_op_mul_mat_q(
             ggml_mul_mat_q5_1_q8_1_sycl(src0_dd_i, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_ncols, src1_padded_row_size, nrows_dst, stream);
             break;
         case GGML_TYPE_Q8_0:
-            if (use_coalesced) {
+            if (mode == reorder_mode::COALESCED) {
                 const ggml_tensor * storage = get_storage_tensor(src0);
                 const int64_t storage_ne01 = storage->ne[1];
                 const int64_t ncols = storage->ne[0];
@@ -5643,7 +5664,7 @@ void ggml_sycl_op_mul_mat_q(
                     (long long)ne00, (long long)row_low, (long long)row_diff, (long long)src1_ncols, d_offset, global_row_low);
 
                 ggml_mul_mat_q8_0_q8_1_sycl_coalesced(storage_base, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_ncols, src1_padded_row_size, ne10, nrows_dst, d_offset, global_row_low, stream);
-            } else if (use_soa) {
+            } else if (mode == reorder_mode::SOA) {
                 // SoA layout: all qs values first, then all d (scale) values
                 const ggml_tensor * storage = get_storage_tensor(src0);
                 const int64_t storage_ne01 = storage->ne[1];
@@ -5690,7 +5711,7 @@ void ggml_sycl_op_mul_mat_q(
             break;
         case GGML_TYPE_Q6_K:
             // Q6_K SoA requires full_tensor like Q4_0/Q8_0
-            if (use_coalesced) {
+            if (mode == reorder_mode::COALESCED) {
                 const ggml_tensor * storage = get_storage_tensor(src0);
                 const int64_t storage_ne01 = storage->ne[1];
                 const int64_t storage_ne00 = storage->ne[0];
@@ -5723,7 +5744,7 @@ void ggml_sycl_op_mul_mat_q(
                 GGML_SYCL_KTRACE("mmq_q6_k_coalesced", " ne00=%lld row_low=%lld row_diff=%lld ncols=%lld d_offset=%zu global_row=%d",
                     (long long)ne00, (long long)row_low, (long long)row_diff, (long long)src1_ncols, d_offset, global_row_low);
                 ggml_mul_mat_q6_K_q8_1_sycl_coalesced(coa_base, src1_ddq_i, dst_dd_i, ne00, row_diff, src1_ncols, src1_padded_row_size, ne10, nrows_dst, 0, 0, d_offset, global_row_low, stream);
-            } else if (use_soa) {
+            } else if (mode == reorder_mode::SOA) {
                 const ggml_tensor * storage = get_storage_tensor(src0);
                 const int64_t storage_ne01 = storage->ne[1];
                 const int64_t storage_ne00 = storage->ne[0];
