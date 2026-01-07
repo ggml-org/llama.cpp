@@ -92,8 +92,6 @@ template <class T> static void assert_equals(const T & expected, const T & actua
         oss_actual << actual;
         LOG_ERR("Expected: %s\n", oss_expected.str().c_str());
         LOG_ERR("Actual: %s\n", oss_actual.str().c_str());
-        std::cerr << "Expected: " << oss_expected.str() << "\n";
-        std::cerr << "Actual:   " << oss_actual.str() << "\n";
         common_log_flush(common_log_main());
         throw std::runtime_error("Test failed");
     }
@@ -1836,8 +1834,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                "up?")
             .reasoning_format(COMMON_REASONING_FORMAT_NONE)
             .expect_content(
-                "<|channel|>analysis<|message|>I'm\nthinking<|end|>\n<|channel|>final<|message|>Hello, world!\nWhat's "
-                "up?")
+                "<|channel|>analysis<|message|>I'm\nthinking<|end|>Hello, world!\nWhat's up?")
             .run();
 
         // Tool call with recipient in role header: " to=functions.NAME<|channel|>analysis<|message|>JSON"
@@ -1880,6 +1877,55 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
             .expect(message_assist_call_thoughts)
+            .run();
+
+        // Reasoning after final channel
+        // Tool calling after final channel
+        tst.test(
+            "<|channel|>final<|message|><|end|>"
+            "<|start|>assistant<|channel|>analysis<|message|>Thinking about edit..."
+        )
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("Thinking about edit...")
+            .expect_content("")
+            .run();
+
+        // Tool calling after final channel
+        tst.test(
+            "<|channel|>final<|message|><|end|>"
+            "<|start|>assistant<|channel|>analysis<|message|>Thinking about edit...<|end|>"
+            "<|start|>assistant<|channel|>commentary to=functions.edit <|constrain|>json"
+            "<|message|>{\"filePath\": \"file.js\", \"oldString\": \"if (part < railCount - 1) {\", \"newString\": \"if (part < 4) {\", \"replaceAll\": false}"
+            )
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({
+                {
+                    /* .name = */ "edit",
+                    /* .description = */ "Edit a file",
+                    /* .parameters = */ R"({
+                        "type": "object",
+                        "properties": {
+                            "oldString": {
+                                "type": "string",
+                                "description": "Old string to replace."
+                            },
+                            "newString": {
+                                "type": "string",
+                                "description": "New replacement string."
+                            },
+                            "replaceAll": {
+                                "type": "boolean",
+                                "description": "Whether to replace all occurences."
+                            }
+                        },
+                        "required": ["oldString", "newString"]
+                    })",
+                }
+            })
+            .expect_reasoning("Thinking about edit...")
+            .expect_tool_calls({
+                { "edit", R"({"filePath": "file.js", "oldString": "if (part < railCount - 1) {", "newString": "if (part < 4) {", "replaceAll": false})", {} }
+            })
             .run();
 
         // Parallel tool calls

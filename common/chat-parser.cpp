@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -877,6 +878,10 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &   parser,
                 auto mapper = common_chat_peg_mapper(msg);
                 mapper.from_ast(ctx.ast, result);
             }
+            if (ctx.debug) {
+                fprintf(stderr, "\nAST for partial parse (fail):\n%s\n", ctx.ast.dump().c_str());
+                fflush(stderr);
+            }
             return msg;
         }
         throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end) + ": " +
@@ -894,6 +899,11 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &   parser,
         auto mapper = common_chat_peg_mapper(msg);
         mapper.from_ast(ctx.ast, result);
     }
+    if (ctx.debug) {
+        fprintf(stderr, "\nAST for %s parse:\n%s\n", is_partial ? "partial" : "full", ctx.ast.dump().c_str());
+        fflush(stderr);
+    }
+
     if (!is_partial) {
         LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat<json>({ msg }).at(0).dump().c_str());
     }
