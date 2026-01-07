@@ -443,6 +443,45 @@ static void proc_matmul_req(struct htp_context *     ctx,
     send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
 }
 
+static void proc_get_rows_req(struct htp_context * ctx, struct htp_general_req * req, struct dspqueue_buffer * bufs) {
+    struct dspqueue_buffer rsp_bufs[1];
+
+    // We had written to the output buffer, we'd also need to flush it
+    rsp_bufs[0].fd     = bufs[2].fd;
+    rsp_bufs[0].ptr    = bufs[2].ptr;
+    rsp_bufs[0].offset = bufs[2].offset;
+    rsp_bufs[0].size   = bufs[2].size;
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
+                         DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
+
+    // Setup Op context
+    struct htp_ops_context octx = { 0 };
+    octx.ctx                    = ctx;
+    octx.src0                   = req->src0;
+    octx.src1                   = req->src1;
+    octx.dst                    = req->dst;
+    octx.flags                  = req->flags;
+    octx.op                     = req->op;
+
+    // Update data pointers
+    octx.src0.data = (uint32_t) bufs[0].ptr;
+    octx.src1.data = (uint32_t) bufs[1].ptr;
+    octx.dst.data  = (uint32_t) bufs[2].ptr;
+    octx.n_threads = ctx->n_threads;
+
+    struct profile_data prof;
+    profile_start(&prof);
+
+    uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
+        rsp_status = op_get_rows(&octx);
+        vtcm_release(ctx);
+    }
+
+    profile_stop(&prof);
+    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
+}
+
 static void proc_matmul_id_req(struct htp_context *     ctx,
                                struct htp_general_req * req,
                                struct dspqueue_buffer * bufs,
@@ -668,7 +707,7 @@ static void proc_rope_req(struct htp_context *     ctx,
                           uint32_t                 n_bufs) {
     struct dspqueue_buffer rsp_bufs[HTP_MAX_PACKET_BUFFERS];
 
-    int write_idx = (n_bufs == 4) ? 3 : 2;
+    int write_idx = n_bufs - 1;
 
     // We had written to the output buffer, we'd also need to flush it
     rsp_bufs[0].fd     = bufs[write_idx].fd;
@@ -714,6 +753,102 @@ static void proc_rope_req(struct htp_context *     ctx,
 
     profile_stop(&prof);
     send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
+}
+
+static void proc_set_rows_req(struct htp_context * ctx, struct htp_general_req * req, struct dspqueue_buffer * bufs) {
+    struct dspqueue_buffer rsp_bufs[1];
+
+    // We had written to the output buffer, we'd also need to flush it
+    rsp_bufs[0].fd     = bufs[2].fd;
+    rsp_bufs[0].ptr    = bufs[2].ptr;
+    rsp_bufs[0].offset = bufs[2].offset;
+    rsp_bufs[0].size   = bufs[2].size;
+    rsp_bufs[0].flags  = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
+                         DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT);  // Invalidate CPU
+
+    // Setup Op context
+    struct htp_ops_context octx = { 0 };
+    octx.ctx                    = ctx;
+    octx.src0                   = req->src0;
+    octx.src1                   = req->src1;
+    octx.dst                    = req->dst;
+    octx.flags                  = req->flags;
+    octx.op                     = req->op;
+
+    // Update data pointers
+    octx.src0.data = (uint32_t) bufs[0].ptr;
+    octx.src1.data = (uint32_t) bufs[1].ptr;
+    octx.dst.data  = (uint32_t) bufs[2].ptr;
+    octx.n_threads = ctx->n_threads;
+
+    struct profile_data prof;
+    profile_start(&prof);
+
+    uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
+        rsp_status = op_set_rows(&octx);
+        vtcm_release(ctx);
+    }
+
+    profile_stop(&prof);
+    send_htp_rsp(ctx, req->op, rsp_status, rsp_bufs, 1, &prof);
+}
+
+static void proc_flash_attn_ext_req(struct htp_context *     ctx,
+                                    struct htp_general_req * req,
+                                    struct dspqueue_buffer * bufs,
+                                    uint32_t                 n_bufs) {
+    // Setup Op context
+    struct htp_ops_context octx;
+    memset(&octx, 0, sizeof(octx));
+
+    octx.ctx   = ctx;
+    octx.n_threads = ctx->n_threads;
+
+    octx.src0  = req->src0;
+    octx.src1  = req->src1;
+    octx.src2  = req->src2;
+    octx.src3  = req->src3;
+    octx.src4  = req->src4;
+    octx.dst   = req->dst;
+    octx.flags = req->flags;
+    octx.op    = req->op;
+
+    memcpy(octx.op_params, req->op_params, sizeof(octx.op_params));
+
+    // Update data pointers
+    octx.src0.data = (uint32_t) bufs[0].ptr;
+    octx.src1.data = (uint32_t) bufs[1].ptr;
+    octx.src2.data = (uint32_t) bufs[2].ptr;
+
+    int last_buf = 3;
+
+    if (octx.src3.ne[0]) {
+        octx.src3.data = (uint32_t) bufs[last_buf++].ptr; // mask is valid
+    }
+
+    if (octx.src4.ne[0]) {
+        octx.src4.data = (uint32_t) bufs[last_buf++].ptr; // sinks is valid
+    }
+
+    octx.dst.data = (uint32_t) bufs[last_buf].ptr;
+
+    struct profile_data prof;
+    profile_start(&prof);
+
+    uint32_t rsp_status = HTP_STATUS_INTERNAL_ERR;
+    if (vtcm_acquire(ctx) == AEE_SUCCESS) {
+        rsp_status = op_flash_attn_ext(&octx);
+        vtcm_release(ctx);
+    }
+
+    profile_stop(&prof);
+
+    struct dspqueue_buffer rsp_buf = bufs[last_buf];
+    rsp_buf.flags = (DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER |         // Flush HTP
+                     DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT); // Invalidate CPU
+
+    send_htp_rsp(ctx, req->op, rsp_status, &bufs[last_buf], 1, &prof);
 }
 
 static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
@@ -790,6 +925,7 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                 break;
 
             case HTP_OP_RMS_NORM:
+            case HTP_OP_SCALE:
                 if (n_bufs != 2) {
                     FARF(ERROR, "Bad unary-req buffer list");
                     continue;
@@ -831,6 +967,30 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
                     continue;
                 }
                 proc_rope_req(ctx, &req, bufs, n_bufs);
+                break;
+
+            case HTP_OP_FLASH_ATTN_EXT:
+                if (!(n_bufs >= 4 && n_bufs <= 6)) {
+                    FARF(ERROR, "Bad flash-attn-ext-req buffer list");
+                    continue;
+                }
+                proc_flash_attn_ext_req(ctx, &req, bufs, n_bufs);
+                break;
+
+            case HTP_OP_SET_ROWS:
+                if (n_bufs != 3) {
+                    FARF(ERROR, "Bad set-rows-req buffer list");
+                    continue;
+                }
+                proc_set_rows_req(ctx, &req, bufs);
+                break;
+
+            case HTP_OP_GET_ROWS:
+                if (n_bufs != 3) {
+                    FARF(ERROR, "Bad get-rows-req buffer list");
+                    continue;
+                }
+                proc_get_rows_req(ctx, &req, bufs);
                 break;
 
             default:

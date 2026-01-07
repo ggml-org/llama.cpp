@@ -1773,6 +1773,37 @@ static bool hex_supported_dims2(const struct ggml_tensor * x, const struct ggml_
     return true;
 }
 
+static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * src1 = op->src[1];
+    const struct ggml_tensor * src2 = op->src[2];
+    const struct ggml_tensor * src3 = op->src[3];
+    const struct ggml_tensor * src4 = op->src[4];
+    const struct ggml_tensor * dst  = op;
+
+    // Check for F16 support only as requested
+    if ((src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_F32) || src1->type != GGML_TYPE_F16 || src2->type != GGML_TYPE_F16) {
+        return false;
+    }
+
+    if (src3 && src3->type != GGML_TYPE_F16) {  // mask
+        return false;
+    }
+
+    if (src4 && src4->type != GGML_TYPE_F32) {  // sinks
+        return false;
+    }
+
+    // For now we support F32 or F16 output as htp backend often converts output on the fly if needed,
+    // but the op implementation writes to F16 or F32.
+    // Let's assume dst can be F32 or F16.
+    if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) {
+        return false;
+    }
+
+    return opt_experimental;
+}
+
 static bool hex_supported_src0_type(ggml_type t) {
     return t == GGML_TYPE_F32;
 }
@@ -1815,12 +1846,11 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
 
-    if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    if (dst->type != GGML_TYPE_F32) {
         return false;
     }
 
-    // TODO: add support for non-cont tensors
-    if (!ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
+    if (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) {
         return false;
     }
 
@@ -1836,7 +1866,6 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
                 return false;  // typically the lm-head which would be too large for VTCM
             }
 
-            // if ((src0->ne[2] != src1->ne[2] || src0->ne[3] != src1->ne[3])) return false;
             if ((src1->ne[2] != 1 || src1->ne[3] != 1)) {
                 return false;
             }
@@ -1885,19 +1914,8 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
             }
             break;
 
-        case GGML_TYPE_F16:
-            if (!opt_experimental) {
-                return false;
-            }
-            break;
-
         default:
             return false;
-    }
-
-    // TODO: add support for non-cont tensors
-    if (!ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
-        return false;
     }
 
     return true;
@@ -2060,6 +2078,46 @@ static bool ggml_hexagon_supported_softmax(const struct ggml_hexagon_session * s
     return true;
 }
 
+static bool ggml_hexagon_supported_set_rows(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0]; // values
+    const struct ggml_tensor * src1 = op->src[1]; // indices
+    const struct ggml_tensor * dst  = op;
+
+    if (src0->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (src1->type != GGML_TYPE_I32 && src1->type != GGML_TYPE_I64) {
+        return false;
+    }
+
+    if (dst->type != GGML_TYPE_F16) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0]; // values
+    const struct ggml_tensor * src1 = op->src[1]; // indices
+    const struct ggml_tensor * dst  = op;
+
+    if (src0->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    if (src1->type != GGML_TYPE_I32 && src1->type != GGML_TYPE_I64) {
+        return false;
+    }
+
+    if (dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const int32_t * op_params = &op->op_params[0];
 
@@ -2154,6 +2212,11 @@ static size_t htp_req_buff_init(htp_tensor *h, dspqueue_buffer * d, const ggml_t
     d->offset = (uint8_t *) t->data - buf->base;
     d->size   = ggml_nbytes(t);
 
+    if (!d->size) {
+        // Some requests contain srcs where ggml_nbytes() returns 0 but the rest of the op is non-empty
+        d->size = 64;
+    }
+
     switch (type) {
         case DSPQBUF_TYPE_DSP_WRITE_CPU_READ:
             // Flush CPU
@@ -2239,6 +2302,17 @@ static inline size_t init_binary_req(htp_general_req * req, dspqueue_buffer * bu
     return n_bufs;
 }
 
+static inline size_t init_get_rows_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    req->op = HTP_OP_GET_ROWS;
+
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
+
+    return n_bufs;
+}
+
 template <bool _is_src0_constant>
 static inline size_t init_binary_id_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
     switch (t->op) {
@@ -2266,6 +2340,17 @@ static inline size_t init_binary_id_req(htp_general_req * req, dspqueue_buffer *
     return n_bufs;
 }
 
+static inline size_t init_set_rows_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    req->op = HTP_OP_SET_ROWS;
+
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
+
+    return n_bufs;
+}
+
 static inline size_t init_unary_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
     memcpy(&req->op_params, &t->op_params, sizeof(t->op_params));
 
@@ -2274,6 +2359,11 @@ static inline size_t init_unary_req(htp_general_req * req, dspqueue_buffer * buf
     switch (t->op) {
         case GGML_OP_RMS_NORM:
             req->op   = HTP_OP_RMS_NORM;
+            supported = true;
+            break;
+
+        case GGML_OP_SCALE:
+            req->op   = HTP_OP_SCALE;
             supported = true;
             break;
 
@@ -2326,6 +2416,21 @@ static inline size_t init_rope_req(htp_general_req * req, dspqueue_buffer * bufs
     n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
     n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
     n_bufs += htp_req_buff_init(&req->src2, &bufs[n_bufs], t->src[2], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
+
+    return n_bufs;
+}
+
+static inline size_t init_flash_attn_ext_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    memcpy(&req->op_params, &t->op_params, sizeof(t->op_params));
+    req->op = HTP_OP_FLASH_ATTN_EXT;
+
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src1, &bufs[n_bufs], t->src[1], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src2, &bufs[n_bufs], t->src[2], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src3, &bufs[n_bufs], t->src[3], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->src4, &bufs[n_bufs], t->src[4], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
     n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
 
     return n_bufs;
@@ -2417,6 +2522,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 ggml_hexagon_dispatch_op<init_binary_id_req<false>>(sess, node, flags);
                 break;
             case GGML_OP_RMS_NORM:
+            case GGML_OP_SCALE:
                 ggml_hexagon_dispatch_op<init_unary_req>(sess, node, flags);
                 break;
             case GGML_OP_UNARY:
@@ -2437,6 +2543,18 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             case GGML_OP_ROPE:
                 ggml_hexagon_dispatch_op<init_rope_req>(sess, node, flags);
+                break;
+
+            case GGML_OP_FLASH_ATTN_EXT:
+                ggml_hexagon_dispatch_op<init_flash_attn_ext_req>(sess, node, flags);
+                break;
+
+            case GGML_OP_SET_ROWS:
+                ggml_hexagon_dispatch_op<init_set_rows_req>(sess, node, flags);
+                break;
+
+            case GGML_OP_GET_ROWS:
+                ggml_hexagon_dispatch_op<init_get_rows_req>(sess, node, flags);
                 break;
 
             default:
@@ -2778,6 +2896,7 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
             break;
 
         case GGML_OP_RMS_NORM:
+        case GGML_OP_SCALE:
             supp = ggml_hexagon_supported_unary(sess, op);
             break;
 
@@ -2803,6 +2922,18 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
             }
         case GGML_OP_ROPE:
             supp = ggml_hexagon_supported_rope(sess, op);
+            break;
+
+        case GGML_OP_FLASH_ATTN_EXT:
+            supp = ggml_hexagon_supported_flash_attn_ext(sess, op);
+            break;
+
+        case GGML_OP_SET_ROWS:
+            supp = ggml_hexagon_supported_set_rows(sess, op);
+            break;
+
+        case GGML_OP_GET_ROWS:
+            supp = ggml_hexagon_supported_get_rows(sess, op);
             break;
 
         default:

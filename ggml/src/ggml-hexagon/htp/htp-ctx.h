@@ -11,11 +11,6 @@
 
 #define HTP_MAX_NTHREADS 10
 
-// FIXME: move these into matmul-ops
-#define HTP_SPAD_SRC0_NROWS 16
-#define HTP_SPAD_SRC1_NROWS 16
-#define HTP_SPAD_DST_NROWS  2
-
 // Main context for htp DSP backend
 struct htp_context {
     dspqueue_t            queue;
