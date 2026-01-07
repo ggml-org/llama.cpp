@@ -35,7 +35,7 @@ export { default as ChatSettingsFooter } from './chat/ChatSettings/ChatSettingsF
 export { default as ChatSettingsFields } from './chat/ChatSettings/ChatSettingsFields.svelte';
 export { default as ChatSettingsImportExportTab } from './chat/ChatSettings/ChatSettingsImportExportTab.svelte';
 export { default as ChatSettingsParameterSourceIndicator } from './chat/ChatSettings/ChatSettingsParameterSourceIndicator.svelte';
-export { default as McpSettingsSection } from './chat/ChatSettings/McpSettingsSection.svelte';
+export { default as McpSettingsSection } from './mcp/McpSettingsSection.svelte';
 
 export { default as ChatSidebar } from './chat/ChatSidebar/ChatSidebar.svelte';
 export { default as ChatSidebarConversationItem } from './chat/ChatSidebar/ChatSidebarConversationItem.svelte';

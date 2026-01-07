@@ -7,7 +7,6 @@
 		ChevronDown,
 		ChevronRight,
 		Pencil,
-		Check,
 		X,
 		ExternalLink
 	} from '@lucide/svelte';
@@ -15,7 +14,8 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import * as Card from '$lib/components/ui/card';
 	import * as Collapsible from '$lib/components/ui/collapsible';
-	import McpServerForm from './McpServerForm.svelte';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import McpServerForm from '$lib/components/app/mcp/McpServerForm.svelte';
 	import type { MCPServerSettingsEntry } from '$lib/types/mcp';
 	import {
 		mcpGetHealthCheckState,
@@ -36,7 +36,6 @@
 
 	let { server, displayName, faviconUrl, onToggle, onUpdate, onDelete }: Props = $props();
 
-	// Get health state from store
 	let healthState = $derived<HealthCheckState>(mcpGetHealthCheckState(server.id));
 	let isHealthChecking = $derived(healthState.status === 'loading');
 	let isConnected = $derived(healthState.status === 'success');
@@ -45,15 +44,14 @@
 	let tools = $derived(healthState.status === 'success' ? healthState.tools : []);
 	let toolsCount = $derived(tools.length);
 
-	// Expandable details state
 	let isExpanded = $state(false);
 
-	// Edit mode state - default to edit mode if no URL
+	let showDeleteDialog = $state(false);
+
 	let isEditing = $state(!server.url.trim());
 	let editUrl = $state(server.url);
 	let editHeaders = $state(server.headers || '');
 
-	// Validation
 	let urlError = $derived.by(() => {
 		if (!editUrl.trim()) return 'URL is required';
 		try {
@@ -66,7 +64,6 @@
 
 	let canSave = $derived(!urlError);
 
-	// Run health check on first mount if not already checked and server is enabled with URL
 	onMount(() => {
 		if (!mcpHasHealthCheck(server.id) && server.enabled && server.url.trim()) {
 			mcpRunHealthCheck(server);
@@ -84,11 +81,12 @@
 	}
 
 	function cancelEditing() {
-		// Only allow cancel if server has valid URL
 		if (server.url.trim()) {
 			editUrl = server.url;
 			editHeaders = server.headers || '';
 			isEditing = false;
+		} else {
+			onDelete();
 		}
 	}
 
@@ -99,51 +97,27 @@
 			headers: editHeaders.trim() || undefined
 		});
 		isEditing = false;
-		// Run health check after saving
+
 		if (server.enabled && editUrl.trim()) {
 			setTimeout(() => mcpRunHealthCheck({ ...server, url: editUrl.trim() }), 100);
 		}
 	}
 </script>
 
-<Card.Root class="!gap-1.5 bg-muted/30 p-4">
+<Card.Root class="!gap-4 bg-muted/30 p-4">
 	{#if isEditing}
-		<!-- Edit Mode -->
 		<div class="space-y-4">
 			<div class="flex items-center justify-between">
 				<p class="font-medium">Configure Server</p>
-				<div class="flex items-center gap-1">
-					{#if server.url.trim()}
-						<Button
-							variant="ghost"
-							size="icon"
-							class="h-7 w-7"
-							onclick={cancelEditing}
-							aria-label="Cancel"
-						>
-							<X class="h-3.5 w-3.5" />
-						</Button>
-					{/if}
-					<Button
-						variant="ghost"
-						size="icon"
-						class="h-7 w-7 text-green-600 hover:bg-green-100 hover:text-green-700 dark:text-green-500 dark:hover:bg-green-950"
-						onclick={saveEditing}
-						disabled={!canSave}
-						aria-label="Save"
-					>
-						<Check class="h-3.5 w-3.5" />
-					</Button>
-					<Button
-						variant="ghost"
-						size="icon"
-						class="hover:text-destructive-foreground h-7 w-7 text-destructive hover:bg-destructive"
-						onclick={onDelete}
-						aria-label="Delete"
-					>
-						<Trash2 class="h-3.5 w-3.5" />
-					</Button>
-				</div>
+				<Button
+					variant="ghost"
+					size="icon"
+					class="h-7 w-7"
+					onclick={cancelEditing}
+					aria-label="Cancel"
+				>
+					<X class="h-3.5 w-3.5" />
+				</Button>
 			</div>
 
 			<McpServerForm
@@ -154,12 +128,21 @@
 				urlError={editUrl ? urlError : null}
 				id={server.id}
 			/>
+
+			<div class="flex items-center justify-end">
+				<Button
+					variant="default"
+					size="sm"
+					onclick={saveEditing}
+					disabled={!canSave}
+					aria-label="Save"
+				>
+					{server.url.trim() ? 'Update' : 'Add'}
+				</Button>
+			</div>
 		</div>
 	{:else}
-		<!-- View Mode -->
-		<!-- Header Row -->
 		<div class="flex items-center justify-between gap-3">
-			<!-- Left: Favicon + Name + Status Badge -->
 			<div class="flex min-w-0 flex-1 items-center gap-2">
 				{#if faviconUrl}
 					<img
@@ -199,18 +182,15 @@
 				{/if}
 			</div>
 
-			<!-- Right: Switch -->
 			<div class="flex shrink-0 items-center">
 				<Switch checked={server.enabled} onCheckedChange={onToggle} />
 			</div>
 		</div>
 
-		<!-- Error Message -->
 		{#if isError && errorMessage}
 			<p class="mt-3 text-xs text-destructive">{errorMessage}</p>
 		{/if}
 
-		<!-- Actions Row (when no tools available) -->
 		{#if tools.length === 0 && server.url.trim()}
 			<div class="mt-3 flex items-center justify-end gap-1">
 				<Button
@@ -236,72 +216,92 @@
 					variant="ghost"
 					size="icon"
 					class="hover:text-destructive-foreground h-7 w-7 text-destructive hover:bg-destructive"
-					onclick={onDelete}
+					onclick={() => (showDeleteDialog = true)}
 					aria-label="Delete"
 				>
 					<Trash2 class="h-3.5 w-3.5" />
 				</Button>
 			</div>
 		{/if}
-	{/if}
 
-	<!-- Expandable Details + Actions Row (when tools available) -->
-	{#if tools.length > 0}
-		<Collapsible.Root bind:open={isExpanded}>
-			<div class="flex items-center justify-between gap-3">
-				<Collapsible.Trigger
-					class="flex flex-1 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-				>
-					{#if isExpanded}
-						<ChevronDown class="h-3.5 w-3.5" />
-					{:else}
-						<ChevronRight class="h-3.5 w-3.5" />
-					{/if}
-					<span>{toolsCount} tools available · Show details</span>
-				</Collapsible.Trigger>
-				<div class="flex shrink-0 items-center gap-1">
-					<Button
-						variant="ghost"
-						size="icon"
-						class="h-7 w-7"
-						onclick={startEditing}
-						aria-label="Edit"
+		{#if tools.length > 0}
+			<Collapsible.Root bind:open={isExpanded}>
+				<div class="flex items-center justify-between gap-3">
+					<Collapsible.Trigger
+						class="flex flex-1 items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
 					>
-						<Pencil class="h-3.5 w-3.5" />
-					</Button>
-					<Button
-						variant="ghost"
-						size="icon"
-						class="h-7 w-7"
-						onclick={handleHealthCheck}
-						disabled={isHealthChecking}
-						aria-label="Refresh"
-					>
-						<RefreshCw class="h-3.5 w-3.5" />
-					</Button>
-					<Button
-						variant="ghost"
-						size="icon"
-						class="hover:text-destructive-foreground h-7 w-7 text-destructive hover:bg-destructive"
-						onclick={onDelete}
-						aria-label="Delete"
-					>
-						<Trash2 class="h-3.5 w-3.5" />
-					</Button>
+						{#if isExpanded}
+							<ChevronDown class="h-3.5 w-3.5" />
+						{:else}
+							<ChevronRight class="h-3.5 w-3.5" />
+						{/if}
+						<span>{toolsCount} tools available · Show details</span>
+					</Collapsible.Trigger>
+					<div class="flex shrink-0 items-center gap-1">
+						<Button
+							variant="ghost"
+							size="icon"
+							class="h-7 w-7"
+							onclick={startEditing}
+							aria-label="Edit"
+						>
+							<Pencil class="h-3.5 w-3.5" />
+						</Button>
+						<Button
+							variant="ghost"
+							size="icon"
+							class="h-7 w-7"
+							onclick={handleHealthCheck}
+							disabled={isHealthChecking}
+							aria-label="Refresh"
+						>
+							<RefreshCw class="h-3.5 w-3.5" />
+						</Button>
+						<Button
+							variant="ghost"
+							size="icon"
+							class="hover:text-destructive-foreground h-7 w-7 text-destructive hover:bg-destructive"
+							onclick={() => (showDeleteDialog = true)}
+							aria-label="Delete"
+						>
+							<Trash2 class="h-3.5 w-3.5" />
+						</Button>
+					</div>
 				</div>
-			</div>
-			<Collapsible.Content class="mt-2">
-				<div class="max-h-64 space-y-3 overflow-y-auto">
-					{#each tools as tool (tool.name)}
-						<div>
-							<Badge variant="secondary">{tool.name}</Badge>
-							{#if tool.description}
-								<p class="mt-1 text-xs text-muted-foreground">{tool.description}</p>
-							{/if}
-						</div>
-					{/each}
-				</div>
-			</Collapsible.Content>
-		</Collapsible.Root>
+				<Collapsible.Content class="mt-2">
+					<div class="max-h-64 space-y-3 overflow-y-auto">
+						{#each tools as tool (tool.name)}
+							<div>
+								<Badge variant="secondary">{tool.name}</Badge>
+								{#if tool.description}
+									<p class="mt-1 text-xs text-muted-foreground">{tool.description}</p>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				</Collapsible.Content>
+			</Collapsible.Root>
+		{/if}
 	{/if}
 </Card.Root>
+
+<AlertDialog.Root bind:open={showDeleteDialog}>
+	<AlertDialog.Content>
+		<AlertDialog.Header>
+			<AlertDialog.Title>Delete Server</AlertDialog.Title>
+			<AlertDialog.Description>
+				Are you sure you want to delete <strong>{displayName}</strong>? This action cannot be
+				undone.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+		<AlertDialog.Footer>
+			<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+			<AlertDialog.Action
+				class="text-destructive-foreground bg-destructive hover:bg-destructive/90"
+				onclick={onDelete}
+			>
+				Delete
+			</AlertDialog.Action>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>

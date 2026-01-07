@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { Plus, X, Check } from '@lucide/svelte';
+	import { Plus, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
 	import { parseMcpServerSettings } from '$lib/config/mcp';
 	import type { MCPServerSettingsEntry } from '$lib/types/mcp';
 	import type { SettingsConfigType } from '$lib/types/settings';
 	import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
-	import McpServerCard from './McpServerCard.svelte';
+	import McpServerCard from '$lib/components/app/mcp/McpServerCard.svelte';
 	import McpServerForm from './McpServerForm.svelte';
 
 	interface Props {
@@ -121,9 +121,9 @@
 	<!-- Add New Server Form -->
 	{#if isAddingServer}
 		<Card.Root class="bg-muted/30 p-4">
-			<div class="mb-3 flex items-center justify-between">
-				<p class="font-medium">Add New Server</p>
-				<div class="flex items-center gap-1">
+			<div class="space-y-4">
+				<div class="flex items-center justify-between">
+					<p class="font-medium">Add New Server</p>
 					<Button
 						variant="ghost"
 						size="icon"
@@ -133,26 +133,29 @@
 					>
 						<X class="h-3.5 w-3.5" />
 					</Button>
+				</div>
+
+				<McpServerForm
+					url={newServerUrl}
+					headers={newServerHeaders}
+					onUrlChange={(v) => (newServerUrl = v)}
+					onHeadersChange={(v) => (newServerHeaders = v)}
+					urlError={newServerUrl ? newServerUrlError : null}
+					id="new-server"
+				/>
+
+				<div class="flex items-center justify-end">
 					<Button
-						variant="ghost"
-						size="icon"
-						class="h-7 w-7 text-green-600 hover:bg-green-100 hover:text-green-700 dark:text-green-500 dark:hover:bg-green-950"
+						variant="default"
+						size="sm"
 						onclick={saveNewServer}
 						disabled={!!newServerUrlError}
 						aria-label="Save"
 					>
-						<Check class="h-3.5 w-3.5" />
+						Add
 					</Button>
 				</div>
 			</div>
-			<McpServerForm
-				url={newServerUrl}
-				headers={newServerHeaders}
-				onUrlChange={(v) => (newServerUrl = v)}
-				onHeadersChange={(v) => (newServerHeaders = v)}
-				urlError={newServerUrl ? newServerUrlError : null}
-				id="new-server"
-			/>
 		</Card.Root>
 	{/if}
 
