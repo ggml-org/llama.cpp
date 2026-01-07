@@ -611,13 +611,13 @@ int main(int argc, char ** argv) {
             if (arg_idx == argc-1 || !parse_target_size(argv[++arg_idx], target_size)) {
                 usage(argv[0]);
             }
-        } else if (strcmp(argv[arg_idx], "--no-importance") == 0) {
-            params.no_importance = true;
-        } else if (strcmp(argv[arg_idx], "--keep-bpw-state") == 0) {
-            params.keep_bpw_state = true;
-        } else if (strcmp(argv[arg_idx], "--bpw-state") == 0) {
+        } else if (strcmp(argv[arg_idx], "--ignore-tensor-importance") == 0) {
+            params.ignore_tensor_importance = true;
+        } else if (strcmp(argv[arg_idx], "--save-state") == 0) {
+            params.save_state = true;
+        } else if (strcmp(argv[arg_idx], "--state-file") == 0) {
             if (arg_idx < argc-1) {
-                params.bpw_state = argv[++arg_idx];
+                params.state_file = argv[++arg_idx];
             } else {
                 usage(argv[0]);
             }
