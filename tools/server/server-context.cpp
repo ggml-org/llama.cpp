@@ -70,6 +70,7 @@ static bool server_task_type_need_logits(server_task_type task_type) {
 struct server_slot {
     int id;
 
+    common_params params_base;
     llama_batch batch_spec = {};
 
     // TODO: change to unique_ptrs for consistency:
@@ -106,6 +107,9 @@ struct server_slot {
     // non-empty if we went to evaluate draft tokens
     // ref: https://github.com/ggml-org/llama.cpp/pull/17808
     std::vector<int32_t> i_batch_dft;
+
+    // idx of prompt tokens to get logits (for echo=true)
+    std::vector<std::pair<int32_t, llama_token>> i_batch_prompt;
 
     std::vector<completion_token_output> generated_token_probs;
 
@@ -209,6 +213,12 @@ struct server_slot {
         return server_task_type_need_embd(task->type);
     }
 
+    bool need_prompt_logits() const {
+        GGML_ASSERT(task);
+
+        return task->params.echo && task->params.sampling.n_probs > 0;
+    }
+
     bool need_logits() const {
         GGML_ASSERT(task);
 
@@ -253,6 +263,12 @@ struct server_slot {
 
     bool can_speculate() const {
         return ctx_dft;
+    }
+
+    std::string token_to_piece(const llama_token & token) const {
+        bool is_special = params_base.special
+            || task->params.sampling.preserved_tokens.find(token) != task->params.sampling.preserved_tokens.end();
+        return common_token_to_piece(ctx, token, is_special);
     }
 
     void add_token(const completion_token_output & token) {
@@ -754,6 +770,7 @@ private:
             slot.ctx = ctx;
             slot.n_ctx = n_ctx_slot;
             slot.mctx = mctx;
+            slot.params_base = params_base;
             slot.prompt.tokens.has_mtmd = mctx != nullptr;
 
             if (model_dft) {
@@ -1965,11 +1982,6 @@ private:
         // track if given slot can be batched with slots already in the batch
         server_slot * slot_batched = nullptr;
 
-        auto accept_special_token = [&](server_slot & slot, llama_token token) {
-            return params_base.special ||
-                slot.task->params.sampling.preserved_tokens.find(token) != slot.task->params.sampling.preserved_tokens.end();
-        };
-
         // first, add sampled tokens from any ongoing sequences
         for (auto & slot : slots) {
             if (slot.state != SLOT_STATE_GENERATING) {
@@ -2054,6 +2066,8 @@ private:
                 if (slot_batched && !slot_batched->can_batch_with(slot)) {
                     continue;
                 }
+
+                slot.i_batch_prompt.clear();
 
                 // this slot still has a prompt to be processed
                 if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_STARTED) {
@@ -2436,8 +2450,13 @@ private:
                             cur_tok,
                             slot.prompt.tokens.pos_next(),
                             { slot.id },
-                            slot.need_embd());
+                            slot.need_embd() || slot.need_prompt_logits());
                         slot.prompt.tokens.push_back(cur_tok);
+
+                        // track prompt tokens that need logits output
+                        if (slot.need_prompt_logits()) {
+                            slot.i_batch_prompt.push_back({batch.n_tokens - 1, cur_tok});
+                        }
 
                         slot.n_prompt_tokens_processed++;
 
@@ -2642,10 +2661,23 @@ private:
                     }
                 }
 
-                // optionally send prompt processing progress
                 if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_DONE_PROMPT) {
+                    // optionally send prompt processing progress
                     if (slot.task->params.stream && slot.task->params.return_progress) {
                         send_partial_response(slot, {}, true);
+                    }
+
+                    // optinally get prompt logits (echo=true)
+                    if (!slot.i_batch_prompt.empty()) {
+                        GGML_ASSERT(slot.task->params.stream); // TODO: support non-streaming if needed
+                        for (auto & [tok_idx, id] : slot.i_batch_prompt) {
+                            completion_token_output result;
+                            result.tok          = id;
+                            result.text_to_send = slot.token_to_piece(id);
+                            result.prob         = 1.0f;
+                            populate_token_probs(slot, result, slot.task->params.post_sampling_probs, params_base.special, tok_idx);
+                            send_partial_response(slot, result, false);
+                        }
                     }
                 }
 
@@ -2699,7 +2731,7 @@ private:
 
                 completion_token_output result;
                 result.tok          = id;
-                result.text_to_send = common_token_to_piece(ctx, result.tok, accept_special_token(slot, result.tok));
+                result.text_to_send = slot.token_to_piece(result.tok);
                 result.prob         = 1.0f; // TODO: set it here instead of doing inside populate_token_probs
 
                 if (slot.task->params.sampling.n_probs > 0) {
@@ -2750,7 +2782,7 @@ private:
                     completion_token_output result;
 
                     result.tok          = ids[i];
-                    result.text_to_send = common_token_to_piece(ctx, result.tok, accept_special_token(slot, result.tok));
+                    result.text_to_send = slot.token_to_piece(result.tok);
                     result.prob         = 1.0f; // set later
 
                     // TODO: set result.probs
