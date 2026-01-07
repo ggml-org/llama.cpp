@@ -15249,6 +15249,10 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     // Enable SoA reordering for optimized MMQ kernels
     pre_reorder_all_tensors(sycl_ctx, cgraph);
 
+    // Finalize tensor layouts (convert to optimal layout based on usage)
+    // This must happen after tensor uploads and before graph recording
+    finalize_layouts(*sycl_ctx, cgraph);
+
     // SoA reordering support when graphs are disabled.
     // This enables proper comparison between graph/non-graph paths for debugging.
     // Check if GGML_SYCL_SOA_PROMPT is set (used for both prompt and decode phases when enabled).
