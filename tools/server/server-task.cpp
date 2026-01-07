@@ -78,6 +78,7 @@ json task_params::to_json(bool only_metrics) const {
             {"speculative.p_min",         speculative.p_min},
             {"timings_per_token",         timings_per_token},
             {"post_sampling_probs",       post_sampling_probs},
+            {"backend_sampling",          sampling.backend_sampling},
             {"lora",                      lora},
         };
     }
@@ -136,6 +137,7 @@ json task_params::to_json(bool only_metrics) const {
         {"speculative.p_min",         speculative.p_min},
         {"timings_per_token",         timings_per_token},
         {"post_sampling_probs",       post_sampling_probs},
+        {"backend_sampling",          sampling.backend_sampling},
         {"lora",                      lora},
     };
 }
@@ -204,6 +206,7 @@ task_params server_task::params_from_json_cmpl(
     params.sampling.seed               = json_value(data, "seed",                defaults.sampling.seed);
     params.sampling.n_probs            = json_value(data, "n_probs",             defaults.sampling.n_probs);
     params.sampling.min_keep           = json_value(data, "min_keep",            defaults.sampling.min_keep);
+    params.sampling.backend_sampling   = json_value(data, "backend_sampling",    defaults.sampling.backend_sampling);
     params.post_sampling_probs         = json_value(data, "post_sampling_probs", defaults.post_sampling_probs);
 
     params.speculative.n_min = json_value(data, "speculative.n_min", defaults.speculative.n_min);
@@ -811,6 +814,15 @@ json server_task_result_cmpl_final::to_json_anthropic() {
         msg.content = content;
     }
 
+    // thinking block comes first (Anthropic extended thinking format)
+    if (!msg.reasoning_content.empty()) {
+        content_blocks.push_back({
+            {"type", "thinking"},
+            {"thinking", msg.reasoning_content},
+            {"signature", ""}  // empty signature for local models (no cryptographic verification)
+        });
+    }
+
     if (!msg.content.empty()) {
         content_blocks.push_back({
             {"type", "text"},
@@ -859,20 +871,57 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
         stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
     }
 
-    bool has_text = !oaicompat_msg.content.empty();
+    bool has_thinking = !oaicompat_msg.reasoning_content.empty();
+    bool has_text     = !oaicompat_msg.content.empty();
     size_t num_tool_calls = oaicompat_msg.tool_calls.size();
 
-    bool text_block_started = false;
+    // content block indices: thinking (0) -> text (0 or 1) -> tool_use (n+)
+    size_t thinking_block_index = 0;
+    size_t text_block_index     = has_thinking ? 1 : 0;
+
+    bool thinking_block_started = false;
+    bool text_block_started     = false;
     std::unordered_set<size_t> tool_calls_started;
 
     for (const auto & diff : oaicompat_msg_diffs) {
+        // handle thinking/reasoning content
+        if (!diff.reasoning_content_delta.empty()) {
+            if (!thinking_block_started) {
+                events.push_back({
+                    {"event", "content_block_start"},
+                    {"data", {
+                        {"type", "content_block_start"},
+                        {"index", thinking_block_index},
+                        {"content_block", {
+                            {"type", "thinking"},
+                            {"thinking", ""}
+                        }}
+                    }}
+                });
+                thinking_block_started = true;
+            }
+
+            events.push_back({
+                {"event", "content_block_delta"},
+                {"data", {
+                    {"type", "content_block_delta"},
+                    {"index", thinking_block_index},
+                    {"delta", {
+                        {"type", "thinking_delta"},
+                        {"thinking", diff.reasoning_content_delta}
+                    }}
+                }}
+            });
+        }
+
+        // handle regular text content
         if (!diff.content_delta.empty()) {
             if (!text_block_started) {
                 events.push_back({
                     {"event", "content_block_start"},
                     {"data", {
                         {"type", "content_block_start"},
-                        {"index", 0},
+                        {"index", text_block_index},
                         {"content_block", {
                             {"type", "text"},
                             {"text", ""}
@@ -886,7 +935,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
                 {"event", "content_block_delta"},
                 {"data", {
                     {"type", "content_block_delta"},
-                    {"index", 0},
+                    {"index", text_block_index},
                     {"delta", {
                         {"type", "text_delta"},
                         {"text", diff.content_delta}
@@ -895,8 +944,9 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
             });
         }
 
+        // handle tool calls
         if (diff.tool_call_index != std::string::npos) {
-            size_t content_block_index = (has_text ? 1 : 0) + diff.tool_call_index;
+            size_t content_block_index = (has_thinking ? 1 : 0) + (has_text ? 1 : 0) + diff.tool_call_index;
 
             if (tool_calls_started.find(diff.tool_call_index) == tool_calls_started.end()) {
                 const auto & full_tool_call = oaicompat_msg.tool_calls[diff.tool_call_index];
@@ -932,18 +982,42 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
         }
     }
 
+    // close content blocks in order
+    if (has_thinking) {
+        // Anthropic API requires a signature_delta before closing thinking blocks
+        // We use an empty signature since we can't generate a cryptographic signature for local models
+        events.push_back({
+            {"event", "content_block_delta"},
+            {"data", {
+                {"type", "content_block_delta"},
+                {"index", thinking_block_index},
+                {"delta", {
+                    {"type", "signature_delta"},
+                    {"signature", ""}
+                }}
+            }}
+        });
+        events.push_back({
+            {"event", "content_block_stop"},
+            {"data", {
+                {"type", "content_block_stop"},
+                {"index", thinking_block_index}
+            }}
+        });
+    }
+
     if (has_text) {
         events.push_back({
             {"event", "content_block_stop"},
             {"data", {
                 {"type", "content_block_stop"},
-                {"index", 0}
+                {"index", text_block_index}
             }}
         });
     }
 
     for (size_t i = 0; i < num_tool_calls; i++) {
-        size_t content_block_index = (has_text ? 1 : 0) + i;
+        size_t content_block_index = (has_thinking ? 1 : 0) + (has_text ? 1 : 0) + i;
         events.push_back({
             {"event", "content_block_stop"},
             {"data", {
@@ -1151,11 +1225,10 @@ json server_task_result_rerank::to_json() {
 json server_task_result_cmpl_partial::to_json_anthropic() {
     json events = json::array();
     bool first = (n_decoded == 1);
-    bool text_block_started = false;
+    // use member variables to track block state across streaming calls
+    // (anthropic_thinking_block_started, anthropic_text_block_started)
 
     if (first) {
-        text_block_started = false;
-
         events.push_back({
             {"event", "message_start"},
             {"data", {
@@ -1177,28 +1250,69 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
         });
     }
 
+    // content block indices: thinking (0) -> text (0 or 1) -> tool_use (n+)
+    size_t thinking_block_index = 0;
+    // use anthropic_has_reasoning (set in update()) to know if ANY reasoning was generated
+    size_t text_block_index     = anthropic_has_reasoning ? 1 : 0;
+
+    // use local copies of streaming state (copied from task_result_state in update())
+    // these reflect the state BEFORE this chunk was processed
+    bool thinking_started = anthropic_thinking_block_started;
+    bool text_started     = anthropic_text_block_started;
+
     for (const auto & diff : oaicompat_msg_diffs) {
-        if (!diff.content_delta.empty()) {
-            if (!text_block_started) {
+        // handle thinking/reasoning content
+        if (!diff.reasoning_content_delta.empty()) {
+            if (!thinking_started) {
                 events.push_back({
                     {"event", "content_block_start"},
                     {"data", {
                         {"type", "content_block_start"},
-                        {"index", 0},
+                        {"index", thinking_block_index},
                         {"content_block", {
-                            {"type", "text"},
-                            {"text", ""}
+                            {"type", "thinking"},
+                            {"thinking", ""}
                         }}
                     }}
                 });
-                text_block_started = true;
+                thinking_started = true;
             }
 
             events.push_back({
                 {"event", "content_block_delta"},
                 {"data", {
                     {"type", "content_block_delta"},
-                    {"index", 0},
+                    {"index", thinking_block_index},
+                    {"delta", {
+                        {"type", "thinking_delta"},
+                        {"thinking", diff.reasoning_content_delta}
+                    }}
+                }}
+            });
+        }
+
+        // handle regular text content
+        if (!diff.content_delta.empty()) {
+            if (!text_started) {
+                events.push_back({
+                    {"event", "content_block_start"},
+                    {"data", {
+                        {"type", "content_block_start"},
+                        {"index", text_block_index},
+                        {"content_block", {
+                            {"type", "text"},
+                            {"text", ""}
+                        }}
+                    }}
+                });
+                text_started = true;
+            }
+
+            events.push_back({
+                {"event", "content_block_delta"},
+                {"data", {
+                    {"type", "content_block_delta"},
+                    {"index", text_block_index},
                     {"delta", {
                         {"type", "text_delta"},
                         {"text", diff.content_delta}
@@ -1207,8 +1321,10 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
             });
         }
 
+        // handle tool calls
         if (diff.tool_call_index != std::string::npos) {
-            size_t content_block_index = (text_block_started ? 1 : 0) + diff.tool_call_index;
+            // use anthropic_has_reasoning for thinking block count (persists across calls)
+            size_t content_block_index = (anthropic_has_reasoning ? 1 : 0) + (text_started ? 1 : 0) + diff.tool_call_index;
 
             if (!diff.tool_call_delta.name.empty()) {
                 events.push_back({

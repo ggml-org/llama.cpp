@@ -105,7 +105,7 @@ private:
     void add_model(server_model_meta && meta);
 
 public:
-    server_models(const common_params & params, int argc, char ** argv, char ** envp);
+    server_models(const common_params & params, int argc, char ** argv);
 
     void load_models();
 
@@ -147,8 +147,8 @@ struct server_models_routes {
     common_params params;
     json webui_settings = json::object();
     server_models models;
-    server_models_routes(const common_params & params, int argc, char ** argv, char ** envp)
-            : params(params), models(params, argc, argv, envp) {
+    server_models_routes(const common_params & params, int argc, char ** argv)
+            : params(params), models(params, argc, argv) {
         if (!this->params.webui_config_json.empty()) {
             try {
                 webui_settings = json::parse(this->params.webui_config_json);
@@ -183,7 +183,10 @@ public:
                       const std::string & path,
                       const std::map<std::string, std::string> & headers,
                       const std::string & body,
-                      const std::function<bool()> should_stop);
+                      const std::function<bool()> should_stop,
+                      int32_t timeout_read,
+                      int32_t timeout_write
+                      );
     ~server_http_proxy() {
         if (cleanup) {
             cleanup();

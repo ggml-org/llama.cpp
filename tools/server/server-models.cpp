@@ -21,11 +21,13 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
+#include <windows.h>
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+extern char **environ;
 #endif
 
 #if defined(__APPLE__) && defined(__MACH__)
@@ -99,6 +101,49 @@ static void unset_reserved_args(common_preset & preset, bool unset_model_args) {
     }
 }
 
+#ifdef _WIN32
+static std::string wide_to_utf8(const wchar_t * ws) {
+    if (!ws || !*ws) {
+        return {};
+    }
+
+    const int len = static_cast<int>(std::wcslen(ws));
+    const int bytes = WideCharToMultiByte(CP_UTF8, 0, ws, len, nullptr, 0, nullptr, nullptr);
+    if (bytes == 0) {
+        return {};
+    }
+
+    std::string utf8(bytes, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, ws, len, utf8.data(), bytes, nullptr, nullptr);
+
+    return utf8;
+}
+#endif
+
+static std::vector<std::string> get_environment() {
+    std::vector<std::string> env;
+
+#ifdef _WIN32
+    LPWCH env_block = GetEnvironmentStringsW();
+    if (!env_block) {
+        return env;
+    }
+    for (LPWCH e = env_block; *e; e += wcslen(e) + 1) {
+        env.emplace_back(wide_to_utf8(e));
+    }
+    FreeEnvironmentStringsW(env_block);
+#else
+    if (environ == nullptr) {
+        return env;
+    }
+    for (char ** e = environ; *e != nullptr; e++) {
+        env.emplace_back(*e);
+    }
+#endif
+
+    return env;
+}
+
 void server_model_meta::update_args(common_preset_context & ctx_preset, std::string bin_path) {
     // update params
     unset_reserved_args(preset, false);
@@ -117,14 +162,11 @@ void server_model_meta::update_args(common_preset_context & ctx_preset, std::str
 server_models::server_models(
         const common_params & params,
         int argc,
-        char ** argv,
-        char ** envp)
+        char ** argv)
             : ctx_preset(LLAMA_EXAMPLE_SERVER),
               base_params(params),
+              base_env(get_environment()),
               base_preset(ctx_preset.load_from_args(argc, argv)) {
-    for (char ** env = envp; *env != nullptr; env++) {
-        base_env.push_back(std::string(*env));
-    }
     // clean up base preset
     unset_reserved_args(base_preset, true);
     // set binary path
@@ -662,7 +704,10 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
             req.path,
             req.headers,
             req.body,
-            req.should_stop);
+            req.should_stop,
+            base_params.timeout_read,
+            base_params.timeout_write
+            );
     return proxy;
 }
 
@@ -950,13 +995,18 @@ server_http_proxy::server_http_proxy(
         const std::string & path,
         const std::map<std::string, std::string> & headers,
         const std::string & body,
-        const std::function<bool()> should_stop) {
+        const std::function<bool()> should_stop,
+        int32_t timeout_read,
+        int32_t timeout_write
+        ) {
     // shared between reader and writer threads
     auto cli  = std::make_shared<httplib::Client>(host, port);
     auto pipe = std::make_shared<pipe_t<msg_t>>();
 
     // setup Client
     cli->set_connection_timeout(0, 200000); // 200 milliseconds
+    cli->set_write_timeout(timeout_read, 0); // reversed for cli (client) vs srv (server)
+    cli->set_read_timeout(timeout_write, 0);
     this->status = 500; // to be overwritten upon response
     this->cleanup = [pipe]() {
         pipe->close_read();
