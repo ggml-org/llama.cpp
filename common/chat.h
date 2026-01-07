@@ -100,31 +100,6 @@ enum common_chat_tool_choice {
 
 enum common_chat_format {
     COMMON_CHAT_FORMAT_CONTENT_ONLY,
-    COMMON_CHAT_FORMAT_GENERIC,
-    COMMON_CHAT_FORMAT_MISTRAL_NEMO,
-    COMMON_CHAT_FORMAT_MAGISTRAL,
-    COMMON_CHAT_FORMAT_LLAMA_3_X,
-    COMMON_CHAT_FORMAT_DEEPSEEK_R1,
-    COMMON_CHAT_FORMAT_FIREFUNCTION_V2,
-    COMMON_CHAT_FORMAT_FUNCTIONARY_V3_2,
-    COMMON_CHAT_FORMAT_FUNCTIONARY_V3_1_LLAMA_3_1,
-    COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-    COMMON_CHAT_FORMAT_HERMES_2_PRO,
-    COMMON_CHAT_FORMAT_COMMAND_R7B,
-    COMMON_CHAT_FORMAT_GRANITE,
-    COMMON_CHAT_FORMAT_GPT_OSS,
-    COMMON_CHAT_FORMAT_SEED_OSS,
-    COMMON_CHAT_FORMAT_NEMOTRON_V2,
-    COMMON_CHAT_FORMAT_APERTUS,
-    COMMON_CHAT_FORMAT_LFM2_WITH_JSON_TOOLS,
-    COMMON_CHAT_FORMAT_GLM_4_5,
-    COMMON_CHAT_FORMAT_MINIMAX_M2,
-    COMMON_CHAT_FORMAT_KIMI_K2,
-    COMMON_CHAT_FORMAT_QWEN3_CODER_XML,
-    COMMON_CHAT_FORMAT_APRIEL_1_5,
-    COMMON_CHAT_FORMAT_XIAOMI_MIMO,
-    COMMON_CHAT_FORMAT_SOLAR_OPEN,
-    COMMON_CHAT_FORMAT_EXAONE_MOE,
 
     // These are intended to be parsed by the PEG parser
     COMMON_CHAT_FORMAT_PEG_SIMPLE,
@@ -234,3 +209,9 @@ template <class T> std::vector<common_chat_tool> common_chat_tools_parse_oaicomp
 template <class T> T common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & tools);
 
 template <class T> T common_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff);
+
+class common_chat_msg_partial_exception : public std::runtime_error {
+  public:
+    common_chat_msg_partial_exception(const std::string & message) : std::runtime_error(message) {}
+};
+

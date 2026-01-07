@@ -1,17 +1,18 @@
-#include "chat-parser.h"
 #include "chat-peg-parser.h"
 #include "chat.h"
 #include "common.h"
 #include "json-schema-to-grammar.h"
-#include "nlohmann/json.hpp"
 #include "peg-parser.h"
 #include "testing.h"
 #include "peg-parser/simple-tokenize.h"
 #include "peg-parser/testing.h"
+#include "peg-parser/simple-tokenize.h"
 
 #include <iostream>
 #include <numeric>
 #include <string>
+
+#include "nlohmann/json.hpp"
 
 using json = nlohmann::ordered_json;
 
@@ -638,63 +639,6 @@ void test_command7_parser_compare(testing & t) {
         }
     };
 
-    auto test_legacy = [&](const std::string & input, bool need_more_input, bool print_results) {
-        // Original common_chat_combinator_parser taken from chat.cpp
-        common_chat_msg_parser builder(input,
-                                       /* .is_partial = */ need_more_input,
-                                       {
-                                           /* .format = */ COMMON_CHAT_FORMAT_GENERIC,
-                                           /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
-                                           /* .reasoning_in_content = */ false,
-                                           /* .thinking_forced_open = */ false,
-                                       });
-
-        builder.try_parse_reasoning("<|START_THINKING|>", "<|END_THINKING|>");
-
-        static const common_regex start_action_regex("<\\|START_ACTION\\|>");
-        static const common_regex end_action_regex("<\\|END_ACTION\\|>");
-        static const common_regex start_response_regex("<\\|START_RESPONSE\\|>");
-        static const common_regex end_response_regex("<\\|END_RESPONSE\\|>");
-
-        if (auto res = builder.try_find_regex(start_action_regex)) {
-            // If we didn't extract thoughts, prelude includes them.
-            auto tool_calls = builder.consume_json_with_dumped_args({ { "parameters" } });
-            for (const auto & tool_call : tool_calls.value) {
-                std::string name      = tool_call.contains("tool_name") ? tool_call.at("tool_name") : "";
-                std::string id        = tool_call.contains("tool_call_id") ? tool_call.at("tool_call_id") : "";
-                std::string arguments = tool_call.contains("parameters") ? tool_call.at("parameters") : "";
-                if (!builder.add_tool_call(name, id, arguments) || tool_calls.is_partial) {
-                    throw common_chat_msg_partial_exception("incomplete tool call");
-                }
-            }
-            if (tool_calls.is_partial) {
-                throw common_chat_msg_partial_exception("incomplete tool call");
-            }
-            builder.consume_regex(end_action_regex);
-        } else if (auto res = builder.try_find_regex(start_response_regex)) {
-            if (!builder.try_find_regex(end_response_regex)) {
-                builder.add_content(builder.consume_rest());
-                throw common_chat_msg_partial_exception(end_response_regex.str());
-            }
-        } else {
-            builder.add_content(builder.consume_rest());
-        }
-
-        if (print_results) {
-            std::cout << "== Parsed (legacy) ==\n";
-            std::cout << "=== Reasoning ===\n";
-            std::cout << builder.result().reasoning_content << "\n";
-            std::cout << "\n\n=== Content ===\n";
-            std::cout << builder.result().content << "\n";
-            std::cout << "\n\n=== Tool Calls ===\n";
-            for (const auto & tc : builder.result().tool_calls) {
-                std::cout << "id: " << tc.id << "\n";
-                std::cout << "name: " << tc.name << "\n";
-                std::cout << "args: " << tc.arguments << "\n";
-            }
-        }
-    };
-
     std::string reasoning =
         "To plan an effective trip to Japan that includes both historical sites and modern attractions within a "
         "budget of $4000 for a two-week stay, we need to:\n\n"
@@ -748,32 +692,8 @@ void test_command7_parser_compare(testing & t) {
 
     std::string input = std::accumulate(tokens.begin(), tokens.end(), std::string());
 
-    // Run tests
-    t.test("legacy_parse", [&](testing & /* t */) { test_legacy(input, false, false); });
-
     t.test("current_parse", [&](testing & /* t */) { test_current(parser, input, false, false); });
-
-    // Run benchmarks
-    t.bench("legacy_parse_benchmark complete", [&]() { test_legacy(input, false, false); });
-
-    t.bench(
-        "legacy_parse_benchmark incremental",
-        [&]() {
-            std::string in;
-            for (auto i = 0u; i < tokens.size(); i++) {
-                in += tokens[i];
-
-                try {
-                    test_legacy(in, i + 1 < tokens.size(), false);
-                } catch (common_chat_msg_partial_exception & /* e */) {
-                    // Do nothing, this is expected
-                }
-            }
-        },
-        20);
-
     t.bench("current_parse_benchmark complete", [&]() { test_current(parser, input, false, false); }, 100);
-
     t.bench(
         "current_parse_benchmark incremental",
         [&]() {
