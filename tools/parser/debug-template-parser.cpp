@@ -33,7 +33,6 @@ enum class input_message_type {
 struct debug_options {
     std::string      template_path;
     bool             with_tools        = true;
-    bool             with_deepseek     = false;
     bool             generation_prompt = true;
     bool             enable_reasoning  = true;
     output_mode       mode             = output_mode::BOTH;
@@ -79,12 +78,11 @@ static std::string read_gguf_chat_template(const std::string & path) {
 }
 
 static void print_usage(const char * program_name) {
-    LOG_ERR("Usage: %s <template_path> [options]\n", program_name);
+    LOG_ERR("Usage: %s <template_or_gguf_path> [options]\n", program_name);
     LOG_ERR("\nOptions:\n");
     LOG_ERR("  --no-tools              Disable tool definitions\n");
-    LOG_ERR("  --deepseek              Use DeepSeek reasoning format\n");
     LOG_ERR("  --generation-prompt=0|1 Set add_generation_prompt (default: 1)\n");
-    LOG_ERR("  --enable-reasoning=0|1  Set enable_thinking context (default: 1)\n");
+    LOG_ERR("  --enable-reasoning=0|1  Enable reasoning parsing (default: 1)\n");
     LOG_ERR("  --output=MODE           Output mode: analysis, template, both (default: both)\n");
     LOG_ERR("  --input-message=TYPE    Message type to render:\n");
     LOG_ERR("                          content_only, reasoning_content, tool_call_only,\n");
@@ -112,8 +110,6 @@ static bool parse_options(int argc, char ** argv, debug_options & opts) {
 
         if (arg == "--no-tools") {
             opts.with_tools = false;
-        } else if (arg == "--deepseek") {
-            opts.with_deepseek = true;
         } else if (arg.rfind("--generation-prompt=", 0) == 0) {
             opts.generation_prompt = parse_bool_option(arg.substr(20));
         } else if (arg.rfind("--enable-reasoning=", 0) == 0) {
@@ -478,7 +474,7 @@ int main(int argc, char ** argv) {
             templates_params params;
             params.messages = json::array();
             params.reasoning_format =
-                opts.with_deepseek ? COMMON_REASONING_FORMAT_DEEPSEEK : COMMON_REASONING_FORMAT_NONE;
+                opts.enable_reasoning ? COMMON_REASONING_FORMAT_DEEPSEEK : COMMON_REASONING_FORMAT_NONE;
             params.enable_thinking       = opts.enable_reasoning;
             params.add_generation_prompt = opts.generation_prompt;
 
