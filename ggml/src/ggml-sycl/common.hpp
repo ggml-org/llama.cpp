@@ -386,6 +386,39 @@ struct tensor_layout_info {
     }
 };
 
+struct layout_policy {
+    static layout_mode get_optimal(ggml_type qtype, tensor_usage usage) {
+        // MoE experts: XMX tiled for GEMM performance
+        if (usage == tensor_usage::MOE_EXPERT_WEIGHT) {
+            if (qtype == GGML_TYPE_MXFP4 || qtype == GGML_TYPE_Q8_0) {
+                return layout_mode::XMX_TILED;
+            }
+        }
+
+        // Attention/FFN weights: COALESCED for decode (batch=1 MMVQ)
+        if (usage == tensor_usage::ATTENTION_WEIGHT || usage == tensor_usage::FFN_WEIGHT) {
+            if (qtype == GGML_TYPE_Q4_0 || qtype == GGML_TYPE_Q8_0 || qtype == GGML_TYPE_Q6_K) {
+                return layout_mode::COALESCED;
+            }
+        }
+
+        // Default: SOA is safe for all quantized types
+        return layout_mode::SOA;
+    }
+
+    // Check env var override: GGML_SYCL_LAYOUT_OVERRIDE=<mode>
+    static layout_mode get_with_override(ggml_type qtype, tensor_usage usage) {
+        static const char* override_env = std::getenv("GGML_SYCL_LAYOUT_OVERRIDE");
+        if (override_env) {
+            if (strcmp(override_env, "aos") == 0) return layout_mode::AOS;
+            if (strcmp(override_env, "soa") == 0) return layout_mode::SOA;
+            if (strcmp(override_env, "coalesced") == 0) return layout_mode::COALESCED;
+            if (strcmp(override_env, "xmx_tiled") == 0) return layout_mode::XMX_TILED;
+        }
+        return get_optimal(qtype, usage);
+    }
+};
+
 // Global reorder mode setting (set from GGML_SYCL_REORDER_MODE env var)
 extern reorder_mode g_ggml_sycl_reorder_mode;
 
