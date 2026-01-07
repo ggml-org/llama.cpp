@@ -848,55 +848,6 @@ float hvx_self_sum_f32(const uint8_t * restrict src, const int num_elems) {
     return hvx_vec_get_fp32(Q6_Vsf_equals_Vqf32(v));
 }
 
-void hvx_scale_f32(const uint8_t * restrict src, uint8_t * restrict dst, const int num_elems, const float scale) {
-    int left_over       = num_elems & (VLEN_FP32 - 1);
-    int num_elems_whole = num_elems - left_over;
-
-    int unaligned_addr = 0;
-    int unaligned_loop = 0;
-    if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
-        FARF(HIGH, "hvx_scale_f32: unaligned address in hvx op, possibly slower execution\n");
-        unaligned_addr = 1;
-    }
-
-    if ((1 == unaligned_addr) && (num_elems_whole != 0)) {
-        unaligned_loop = 1;
-        FARF(HIGH, "hvx_scale_f32: unaligned loop in hvx op, possibly slower execution\n");
-    }
-
-    HVX_Vector scale_vec = hvx_vec_splat_fp32(scale);
-
-    if (0 == unaligned_loop) {
-        HVX_Vector * vec_in1 = (HVX_Vector *) src;
-        HVX_Vector * vec_out = (HVX_Vector *) dst;
-
-        #pragma unroll(4)
-        for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
-            HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(*vec_in1++, scale_vec);
-            *vec_out++   = Q6_Vsf_equals_Vqf32(v);
-        }
-    } else {
-        #pragma unroll(4)
-        for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
-            HVX_Vector in = *(HVX_UVector *) (src + i * SIZEOF_FP32);
-
-            HVX_Vector out = Q6_Vqf32_vmpy_VsfVsf(in, scale_vec);
-
-            *(HVX_UVector *) (dst + i * SIZEOF_FP32) = Q6_Vsf_equals_Vqf32(out);
-        }
-    }
-
-    if (left_over > 0) {
-        const float * srcf = (const float *) src + num_elems_whole;
-        float *       dstf = (float *) dst + num_elems_whole;
-
-        HVX_Vector in = *(HVX_UVector *) srcf;
-
-        HVX_Vector out = Q6_Vqf32_vmpy_VsfVsf(in, scale_vec);
-        hvx_vec_store_u((void *) dstf, left_over * SIZEOF_FP32, Q6_Vsf_equals_Vqf32(out));
-    }
-}
-
 float hvx_self_max_f32(const uint8_t * restrict src, const int num_elems) {
     int left_over       = num_elems & (VLEN_FP32 - 1);
     int num_elems_whole = num_elems - left_over;
@@ -1065,3 +1016,5 @@ void hvx_clamp_scalar_f32(const uint8_t * restrict src,
         hvx_vec_store_u((void *) dstf, left_over * SIZEOF_FP32, in_vec);
     }
 }
+
+
