@@ -34,6 +34,7 @@ url_origin=$(git config --get remote.origin.url) || {
 }
 
 org_repo=$(echo $url_origin | cut -d/ -f4-)
+org_repo=${org_repo%.git}
 
 echo "org/repo: $org_repo"
 
