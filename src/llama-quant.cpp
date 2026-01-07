@@ -2305,9 +2305,9 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.prune_layers                =*/ nullptr,
         /*.target_bpw                  =*/ -1.0f,
         /*.target_size                 =*/ -1,
-        /*.keep_bpw_state              =*/ false,
-        /*.bpw_state                   =*/ nullptr,
-        /*.no_importance               =*/ false
+        /*.save_state                  =*/ false,
+        /*.state_file                  =*/ nullptr,
+        /*.ignore_tensor_importance    =*/ false
     };
 
     return result;
