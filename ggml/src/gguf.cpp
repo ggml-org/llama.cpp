@@ -558,26 +558,6 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
                 break;
             }
 
-            // check that the total number of bytes is representable
-            if (ok) {
-                // approximate the total number of bytes - exact value calculated later
-                // here we just want to verify that it fits in size_t
-                const int64_t ne_total = info.t.ne[0]*info.t.ne[1]*info.t.ne[2]*info.t.ne[3];
-                // using the fact that blck_size is usually small (e.g. 256), while type_size is also small (e.g. 4)
-                // we can just check if the total number of elements is < SIZE_MAX/type_size*blck_size
-                // taking into account that ne_total is int64_t, we cast to uint64_t for the check
-                // this is a conservative check
-                if ((uint64_t) ne_total > (uint64_t) SIZE_MAX / 32) { // 32 is max type_size*blck_size
-                     // re-calculate strictly
-                     const size_t type_size = ggml_type_size(info.t.type);
-                     const int64_t blck_size = ggml_blck_size(info.t.type);
-                     if (blck_size > 0 && (uint64_t) ne_total > (uint64_t) SIZE_MAX / type_size * blck_size) {
-                         GGML_LOG_ERROR("%s: total number of bytes in tensor '%s' is >= SIZE_MAX\n", __func__, info.t.name);
-                         ok = false;
-                         break;
-                     }
-                }
-            }
         }
         if (!ok) {
             break;
@@ -608,24 +588,8 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
 
             // calculate byte offsets given the tensor shape and type
             info.t.nb[0] = type_size;
-            // info.t.nb[1] = info.t.nb[0]*(info.t.ne[0]/blck_size);
-            {
-                size_t width = info.t.ne[0]/blck_size;
-                if (width > 0 && info.t.nb[0] > SIZE_MAX / width) {
-                    GGML_LOG_ERROR("%s: tensor '%s' nb[1] overflow\n", __func__, info.t.name);
-                    ok = false;
-                    break;
-                }
-                info.t.nb[1] = info.t.nb[0] * width;
-            }
-
+            info.t.nb[1] = info.t.nb[0]*(info.t.ne[0]/blck_size);
             for (int j = 2; j < GGML_MAX_DIMS; ++j) {
-                // info.t.nb[j] = info.t.nb[j - 1]*info.t.ne[j - 1];
-                if (info.t.ne[j - 1] > 0 && info.t.nb[j - 1] > SIZE_MAX / info.t.ne[j - 1]) {
-                     GGML_LOG_ERROR("%s: tensor '%s' nb[%d] overflow\n", __func__, info.t.name, j);
-                     ok = false;
-                     break;
-                }
                 info.t.nb[j] = info.t.nb[j - 1]*info.t.ne[j - 1];
             }
         }
