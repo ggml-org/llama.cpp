@@ -10974,8 +10974,8 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--sentence-transformers-dense-modules", action="store_true",
-        help=("Whether to include sentence-transformers dense modules."
-              "It can be used for sentence-transformers models, like google/embeddinggemma-300m"
+        help=("Whether to include sentence-transformers dense modules. "
+              "It can be used for sentence-transformers models, like google/embeddinggemma-300m. "
               "Default these modules are not included.")
     )
 
