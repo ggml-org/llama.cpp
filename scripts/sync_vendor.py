@@ -19,6 +19,10 @@ vendor = {
     "https://raw.githubusercontent.com/yhirose/cpp-httplib/refs/tags/v0.28.0/httplib.h": "vendor/cpp-httplib/httplib.h",
 
     "https://raw.githubusercontent.com/sheredom/subprocess.h/b49c56e9fe214488493021017bf3954b91c7c1f5/subprocess.h": "vendor/sheredom/subprocess.h",
+
+    # readline.cpp: multi-file library for interactive line editing
+    # sync manually - no upstream repository yet
+    # located in vendor/readline.cpp/
 }
 
 for url, filename in vendor.items():
