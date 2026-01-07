@@ -414,7 +414,7 @@ struct server_task_result_cmpl_partial : server_task_result {
 
     virtual void update(task_result_state & state) override {
         is_updated = true;
-        state.update_chat_msg(content, true, oaicompat_msg_diffs);
+        state.update_chat_msg(content, true, oaicompat_msg_diffs, res_type == TASK_RESPONSE_TYPE_OAI_CHAT);
         // track if the accumulated message has any reasoning content
         anthropic_has_reasoning = !state.chat_msg.reasoning_content.empty();
 
