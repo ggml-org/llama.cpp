@@ -28,7 +28,21 @@ llm_build_llama<embed>::llm_build_llama(const llama_model & model, const llm_gra
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    for (int il = 0; il < n_layer; ++il) {
+    // IQuestLoopCoder loop attention support
+    // ref: https://github.com/ggerganov/llama.cpp/issues/18517
+    // Note: Loop attention is unrolled statically in the graph
+    // For loop_num=2, we process all 80 layers twice (total 160 layer operations)
+    const uint32_t loop_num = hparams.loop_num > 0 ? hparams.loop_num : 1;
+    const bool is_loop_model = hparams.loop_num > 0;
+
+    // Global K/V storage for loop attention (from first loop iteration)
+    // Each layer stores its K/V from loop 0 for use in later loops
+    std::vector<ggml_tensor *> global_K_store(n_layer, nullptr);
+    std::vector<ggml_tensor *> global_V_store(n_layer, nullptr);
+
+    // Process layers with loop unrolling
+    for (uint32_t loop_idx = 0; loop_idx < loop_num; ++loop_idx) {
+        for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
 
         // norm
@@ -88,12 +102,129 @@ llm_build_llama<embed>::llm_build_llama(const llama_model & model, const llm_gra
                 cb(Qcur, "Qcur_normed", il);
                 cb(Kcur, "Kcur_normed", il);
             }
-            cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].bo,
-                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
-            cb(cur, "attn_out", il);
+
+            // IQuestLoopCoder loop attention mechanism
+            if (!is_loop_model || loop_idx == 0) {
+                // Loop 0 (or non-loop models): Standard attention
+                cur = build_attn(inp_attn,
+                        model.layers[il].wo, model.layers[il].bo,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+                cb(cur, "attn_out", il);
+
+                // Save K/V from loop 0 for later loops
+                if (is_loop_model && loop_idx == 0) {
+                    global_K_store[il] = Kcur;
+                    global_V_store[il] = Vcur;
+                }
+            } else {
+                // Loop 1+: Dual attention with gate mixing
+                // Compute local attention (current loop's K/V) WITH output projection
+                ggml_tensor * local_attn = build_attn(inp_attn,
+                        model.layers[il].wo, model.layers[il].bo,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+                cb(local_attn, "local_attn", il);
+
+                // Compute global attention (K/V from loop 0) WITH output projection
+                ggml_tensor * global_attn = build_attn(inp_attn,
+                        model.layers[il].wo, model.layers[il].bo,
+                        Qcur, global_K_store[il], global_V_store[il], nullptr, nullptr, nullptr, kq_scale, il);
+                cb(global_attn, "global_attn", il);
+
+                // Compute per-head gates: gate = sigmoid(Q @ gate_weight.T + gate_bias)
+                // gate_weight stored as [n_embd_head, n_head]
+                // Qcur shape: [n_embd_head, n_head, n_tokens]
+                // For each head h: sum over d of Q[:,h,:] * gate_weight[:,h]
+
+                // Cast gate_weight to f32 for compatibility with Q (which is f32)
+                ggml_tensor * gate_weight_f32 = ggml_cast(ctx0, model.layers[il].loop_gate_weight, GGML_TYPE_F32);
+                cb(gate_weight_f32, "gate_weight_f32", il);
+
+                // Simplified approach: element-wise multiply and sum
+                // gate_weight: [n_embd_head, n_head] -> reshape to [n_embd_head, n_head, 1]
+                ggml_tensor * gate_weight_3d = ggml_view_3d(ctx0, gate_weight_f32,
+                        n_embd_head, n_head, 1,
+                        gate_weight_f32->nb[1],
+                        gate_weight_f32->nb[1] * n_head,
+                        0);
+                cb(gate_weight_3d, "gate_weight_3d", il);
+
+                // Multiply Q [n_embd_head, n_head, n_tokens] * gate_weight [n_embd_head, n_head, 1]
+                // Result: [n_embd_head, n_head, n_tokens]
+                ggml_tensor * gate_prod = ggml_mul(ctx0, Qcur, gate_weight_3d);
+                cb(gate_prod, "gate_prod", il);
+
+                // Sum over embedding dimension: [n_embd_head, n_head, n_tokens] -> [n_head, n_tokens]
+                // Reshape to [n_embd_head, n_head * n_tokens] then sum_rows
+                gate_prod = ggml_reshape_2d(ctx0, gate_prod, n_embd_head, n_head * n_tokens);
+                ggml_tensor * gate_logits = ggml_sum_rows(ctx0, gate_prod);  // [1, n_head * n_tokens]
+                gate_logits = ggml_reshape_2d(ctx0, gate_logits, n_head, n_tokens);
+                cb(gate_logits, "gate_logits", il);
+
+                // Add gate bias [n_head] -> broadcast to [n_head, n_tokens]
+                // Cast bias to f32 for compatibility
+                ggml_tensor * gate_bias_f32 = ggml_cast(ctx0, model.layers[il].loop_gate_bias, GGML_TYPE_F32);
+                ggml_tensor * gate_bias_2d = ggml_view_2d(ctx0, gate_bias_f32,
+                        n_head, 1,
+                        gate_bias_f32->nb[0],
+                        0);
+                gate_logits = ggml_add(ctx0, gate_logits, gate_bias_2d);
+                cb(gate_logits, "gate_logits_biased", il);
+
+                // Apply sigmoid
+                ggml_tensor * gates = ggml_sigmoid(ctx0, gate_logits);  // [n_head, n_tokens]
+                cb(gates, "gates", il);
+
+                // Mix local and global attention: output = local + gate * (global - local)
+                // Use actual tensor dimensions from both tensors
+                const int64_t n_embd_out = local_attn->ne[0];  // Actual output embedding dimension
+                const int64_t n_tokens_attn = local_attn->ne[1];  // Tokens from attention output
+
+                const int64_t n_head_gates = gates->ne[0];  // Actual n_head from gates
+                const int64_t n_tokens_gates = gates->ne[1];  // Actual tokens from gates
+
+                // Compute embedding dimension per head from actual tensor
+                const int64_t n_embd_per_head = n_embd_out / n_head_gates;
+
+                // Broadcast gates to match attention output dimensions
+                // Step 1: Reshape gates from [n_head_gates, n_tokens_gates] to [n_head_gates, 1, n_tokens_gates]
+                ggml_tensor * gates_3d = ggml_reshape_3d(ctx0, gates, n_head_gates, 1, n_tokens_gates);
+                cb(gates_3d, "gates_3d", il);
+
+                // Step 2: Create template by reshaping local_attn using actual dimensions
+                ggml_tensor * template_3d = ggml_reshape_3d(ctx0, local_attn, n_head_gates, n_embd_per_head, n_tokens_attn);
+                cb(template_3d, "template_3d", il);
+
+                // Step 3: Repeat gates along middle dimension
+                GGML_ASSERT(n_tokens_gates == n_tokens_attn && "Token count mismatch between gates and attention");
+
+                ggml_tensor * gates_repeated = ggml_repeat(ctx0, gates_3d, template_3d);
+                cb(gates_repeated, "gates_repeated", il);
+
+                // Step 4: Make contiguous, then reshape back to 2D
+                gates_repeated = ggml_cont(ctx0, gates_repeated);
+                ggml_tensor * gates_expanded = ggml_reshape_2d(ctx0, gates_repeated, n_embd_out, n_tokens_attn);
+                cb(gates_expanded, "gates_expanded", il);
+
+                // Compute (global - local)
+                ggml_tensor * attn_diff = ggml_sub(ctx0, global_attn, local_attn);
+                cb(attn_diff, "attn_diff", il);
+
+                // Compute gate * (global - local)
+                ggml_tensor * gated_diff = ggml_mul(ctx0, gates_expanded, attn_diff);
+                cb(gated_diff, "gated_diff", il);
+
+                // Compute local + gate * (global - local)
+                ggml_tensor * mixed_attn = ggml_add(ctx0, local_attn, gated_diff);
+                cb(mixed_attn, "mixed_attn", il);
+
+                // Output projection already applied in build_attn calls above
+                cur = mixed_attn;
+                cb(cur, "attn_out", il);
+            }
         }
-        if (il == n_layer - 1 && inp_out_ids) {
+        // IQuestLoopCoder: Only apply ggml_get_rows at the very end (after all loops)
+        // to avoid breaking subsequent loop iterations
+        if (il == n_layer - 1 && inp_out_ids && loop_idx == loop_num - 1) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -144,6 +275,9 @@ llm_build_llama<embed>::llm_build_llama(const llama_model & model, const llm_gra
         // input for next layer
         inpL = cur;
     }
+
+    } // end loop iteration (IQuestLoopCoder)
+
     cur = inpL;
 
     cur = build_norm(cur,

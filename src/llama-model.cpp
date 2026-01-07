@@ -563,6 +563,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
     ml.get_key_or_arr(LLM_KV_ATTENTION_HEAD_COUNT_KV, hparams.n_head_kv_arr, hparams.n_layer, false);
 
+    // IQuestLoopCoder loop attention parameters (optional)
+    ml.get_key(LLM_KV_ATTENTION_LOOP_NUM, hparams.loop_num, false);
+    ml.get_key(LLM_KV_ATTENTION_LOOP_WINDOW_SIZE, hparams.loop_window_size, false);
+
     bool rope_finetuned = false;
     ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
     hparams.rope_finetuned = rope_finetuned;
@@ -2752,6 +2756,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.bk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "bias", i), {n_embd_gqa}, TENSOR_NOT_REQUIRED);
                         layer.bv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "bias", i), {n_embd_gqa}, TENSOR_NOT_REQUIRED);
                         layer.bo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd},     TENSOR_NOT_REQUIRED);
+
+                        // IQuestLoopCoder loop attention gates (optional, only for loop models)
+                        layer.loop_gate_weight = create_tensor(tn(LLM_TENSOR_ATTN_LOOP_GATE, "weight", i), {n_embd_head_k, n_head}, TENSOR_NOT_REQUIRED);
+                        layer.loop_gate_bias   = create_tensor(tn(LLM_TENSOR_ATTN_LOOP_GATE, "bias", i),   {n_head},               TENSOR_NOT_REQUIRED);
 
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
 

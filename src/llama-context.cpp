@@ -1956,6 +1956,16 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     }
     uint32_t res = std::max<uint32_t>(1024u, 8u*model.n_tensors());
     res += model.n_lora_nodes;
+
+    // IQuestLoopCoder loop attention increases graph size by loop_num factor
+    // Each loop iteration processes all layers, multiplying the graph size
+    const uint32_t loop_num = model.hparams.loop_num > 0 ? model.hparams.loop_num : 1;
+    if (loop_num > 1) {
+        // Loop 1+ requires extra nodes for dual attention and gate mixing
+        // Multiply by loop_num and add 50% buffer for gate operations
+        res = res * loop_num * 3 / 2;
+    }
+
     return res;
 }
 

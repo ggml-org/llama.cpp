@@ -251,6 +251,10 @@ struct llama_layer {
     struct ggml_tensor * bo   = nullptr;
     struct ggml_tensor * bqkv = nullptr;
 
+    // IQuestLoopCoder loop attention gates
+    struct ggml_tensor * loop_gate_weight = nullptr;  // [n_head, head_dim] per layer
+    struct ggml_tensor * loop_gate_bias   = nullptr;  // [n_head] per layer
+
     // relative position bias
     struct ggml_tensor * attn_rel_b       = nullptr;
     struct ggml_tensor * attn_rel_b_enc   = nullptr;

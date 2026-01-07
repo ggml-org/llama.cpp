@@ -198,6 +198,11 @@ struct llama_hparams {
     llama_token dec_start_token_id = LLAMA_TOKEN_NULL;
     uint32_t    dec_n_layer        = 0;
 
+    // IQuestLoopCoder loop attention parameters
+    // ref: https://github.com/ggerganov/llama.cpp/issues/18517
+    uint32_t loop_num          = 0;  // number of loop iterations (default: 2)
+    uint32_t loop_window_size  = 0;  // loop attention window size (default: 64)
+
     enum llama_pooling_type      pooling_type            = LLAMA_POOLING_TYPE_NONE;
     enum llama_rope_type         rope_type               = LLAMA_ROPE_TYPE_NONE;
     enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
