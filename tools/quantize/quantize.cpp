@@ -119,8 +119,8 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
 [[noreturn]]
 static void usage(const char * executable) {
     printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights] [--exclude-weights]\n", executable);
-    printf("        [--target-bpw n] [--no-importance] [--keep-bpw-state] [--bpw-state filename] [--output-tensor-type] [--token-embedding-type] [--tensor-type]\n");
-    printf("        [--prune-layers] [--keep-split] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
+    printf("        [--target-bpw n] [--target-size n] [--no-importance] [--keep-bpw-state] [--bpw-state filename] [--output-tensor-type] [--token-embedding-type]\n");
+    printf("        [--tensor-type] [--prune-layers] [--keep-split] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize: allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -133,8 +133,10 @@ static void usage(const char * executable) {
     printf("      Advanced option to selectively quantize tensors. May be specified multiple times.\n");
     printf("  --prune-layers L0,L1,L2...comma-separated list of layer numbers to prune from the model\n");
     printf("      Advanced option to remove all tensors from the given layers\n");
-    printf("  --target-bpw: target bits per weight (bpw). Must be a positive number between 0.0 and 16.0\n");
+    printf("  --target-bpw: target a total bits per weight (bpw). Must be a positive number between 0.0 and 16.0\n");
     printf("      Advanced option to automatically select quantization types to achieve a total bits per weight (bpw) target\n");
+    printf("  --target-size: target a file size. Must be a positive number\n");
+    printf("      Advanced option to automatically select quantization types to achieve a target file size\n");
     printf("  --no-importance: distribute bpw budget equitably across all tensors\n");
     printf("      Advanced option to disable assigning more bpw budget to important tensors. It may increase quality for some models\n");
     printf("  --keep-bpw-state: save the bpw computations to <model name>-<model hash>.bpw_state\n");
