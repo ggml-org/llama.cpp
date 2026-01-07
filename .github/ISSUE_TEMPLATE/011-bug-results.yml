@@ -98,7 +98,18 @@ body:
       label: Relevant log output
       description: >
           Please copy and paste any relevant log output, including the command that you entered and any generated text.
-          This will be automatically formatted into code, so no need for backticks.
-      render: shell
+          For very long logs (thousands of lines), preferably upload them as files instead.
+          On Linux you can redirect console output into a file by appending ` > llama.log 2>&1` to your command.
+      value: |
+        <details>
+        <summary>Logs</summary>
+        <!-- Copy-pasted short logs go into the "console" area here -->
+
+        ```console
+
+        ```
+        </details>
+
+        <!-- Long logs that you upload as files go here, outside the "console" area -->
     validations:
       required: true

@@ -1007,8 +1007,10 @@ private:
         return ret;
     }
 
-    void clear_slot(server_slot & slot) const {
-        GGML_ASSERT(!slot.is_processing());
+    void clear_slot(server_slot & slot, bool allow_processing = false) const {
+        if (!allow_processing) {
+            GGML_ASSERT(!slot.is_processing());
+        }
 
         SLT_WRN(slot, "clearing slot with %zu tokens\n", slot.prompt.tokens.size());
 
@@ -1144,6 +1146,25 @@ private:
                 // for now, the only error that may happen here is invalid grammar
                 send_error(task, "Failed to parse grammar", ERROR_TYPE_INVALID_REQUEST);
                 return false;
+            }
+
+            const bool need_logits = task.params.sampling.n_probs > 0;
+
+            bool backend_sampling = true;
+
+            backend_sampling &= task.params.sampling.backend_sampling;
+
+            // TODO: speculative decoding requires multiple samples per batch - not supported yet
+            backend_sampling &= !(slot.ctx_dft && task.params.speculative.n_max > 0);
+
+            // TODO: getting post/pre sampling logits is not yet supported with backend sampling
+            backend_sampling &= !need_logits;
+
+            // TODO: tmp until backend sampling is fully implemented
+            if (backend_sampling) {
+                llama_set_sampler(ctx, slot.id, common_sampler_get(slot.smpl.get()));
+            } else {
+                llama_set_sampler(ctx, slot.id, nullptr);
             }
 
             SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
@@ -1484,9 +1505,9 @@ private:
         res->n_tokens  = slot.task->n_tokens();
         res->res_type  = slot.task->params.res_type;
 
-        const int n_embd = llama_model_n_embd(model);
+        const int n_embd_out = llama_model_n_embd_out(model);
 
-        std::vector<float> embd_res(n_embd, 0.0f);
+        std::vector<float> embd_res(n_embd_out, 0.0f);
 
         for (int i = 0; i < batch.n_tokens; ++i) {
             if (!batch.logits[i] || batch.seq_id[i][0] != slot.id) {
@@ -1503,18 +1524,18 @@ private:
             if (embd == nullptr) {
                 SLT_ERR(slot, "failed to get embeddings, token = %d, seq_id = %d\n", batch.token[i], batch.seq_id[i][0]);
 
-                res->embedding.push_back(std::vector<float>(n_embd, 0.0f));
+                res->embedding.push_back(std::vector<float>(n_embd_out, 0.0f));
                 continue;
             }
 
             // normalize only when there is pooling
             if (llama_pooling_type(slot.ctx) != LLAMA_POOLING_TYPE_NONE) {
-                common_embd_normalize(embd, embd_res.data(), n_embd, slot.task->params.embd_normalize);
+                common_embd_normalize(embd, embd_res.data(), n_embd_out, slot.task->params.embd_normalize);
                 res->embedding.push_back(embd_res);
                 break;
             }
 
-            res->embedding.emplace_back(embd, embd + n_embd);
+            res->embedding.emplace_back(embd, embd + n_embd_out);
         }
 
         SLT_DBG(slot, "%s", "sending embeddings\n");
@@ -2313,6 +2334,12 @@ private:
                         slot.n_prompt_tokens_processed = 0;
 
                         slot.prompt.tokens.keep_first(n_past);
+
+                        // send initial 0% progress update if needed
+                        // this is to signal the client that the request has started processing
+                        if (slot.task->params.stream && slot.task->params.return_progress) {
+                            send_partial_response(slot, {}, true);
+                        }
                     }
 
                     if (!slot.can_split()) {
@@ -2330,7 +2357,7 @@ private:
                     if (!llama_memory_seq_rm(llama_get_memory(ctx), slot.id, p0, -1)) {
                         SLT_WRN(slot, "failed to truncate tokens with position >= %d - clearing the memory\n", p0);
 
-                        clear_slot(slot);
+                        clear_slot(slot, /*allow_processing=*/true);
 
                         // there is no common part left
                         slot.n_prompt_tokens_cache = 0;
@@ -2784,6 +2811,12 @@ server_response_reader server_context::get_response_reader() {
 
 server_context_meta server_context::get_meta() const {
     auto tool_use_src = common_chat_templates_source(impl->chat_templates.get(), "tool_use");
+
+    auto bos_id = llama_vocab_bos(impl->vocab);
+    auto eos_id = llama_vocab_eos(impl->vocab);
+    auto bos_token_str = bos_id != LLAMA_TOKEN_NULL ? common_token_to_piece(impl->ctx, bos_id, true) : "";
+    auto eos_token_str = eos_id != LLAMA_TOKEN_NULL ? common_token_to_piece(impl->ctx, eos_id, true) : "";
+
     return server_context_meta {
         /* build_info             */ build_info,
         /* model_name             */ impl->model_name,
@@ -2798,8 +2831,8 @@ server_context_meta server_context::get_meta() const {
         /* chat_template          */ common_chat_templates_source(impl->chat_templates.get()),
         /* chat_template_tool_use */ tool_use_src ? tool_use_src : "",
 
-        /* bos_token_str          */ common_token_to_piece(impl->ctx, llama_vocab_bos(impl->vocab), true),
-        /* eos_token_str          */ common_token_to_piece(impl->ctx, llama_vocab_eos(impl->vocab), true),
+        /* bos_token_str          */ bos_token_str,
+        /* eos_token_str          */ eos_token_str,
         /* fim_pre_token          */ llama_vocab_fim_pre(impl->vocab),
         /* fim_sub_token          */ llama_vocab_fim_suf(impl->vocab),
         /* fim_mid_token          */ llama_vocab_fim_mid(impl->vocab),
@@ -2946,18 +2979,21 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         // in streaming mode, the first error must be treated as non-stream response
         // this is to match the OAI API behavior
         // ref: https://github.com/ggml-org/llama.cpp/pull/16486#discussion_r2419657309
-        server_task_result_ptr first_result = rd.next(req.should_stop);
+        auto first_result = rd.next(req.should_stop);
         if (first_result == nullptr) {
+            GGML_ASSERT(req.should_stop());
             return res; // connection is closed
-        } else if (first_result->is_error()) {
+        }
+
+        if (first_result->is_error()) {
             res->error(first_result->to_json());
             return res;
-        } else {
-            GGML_ASSERT(
-                dynamic_cast<server_task_result_cmpl_partial*>(first_result.get()) != nullptr
-                || dynamic_cast<server_task_result_cmpl_final*>(first_result.get()) != nullptr
-            );
         }
+
+        GGML_ASSERT(
+            dynamic_cast<server_task_result_cmpl_partial*>(first_result.get()) != nullptr ||
+            dynamic_cast<server_task_result_cmpl_final*>  (first_result.get()) != nullptr
+        );
 
         // next responses are streamed
         // to be sent immediately
@@ -3014,6 +3050,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                 auto result = rd.next(req.should_stop);
                 if (result == nullptr) {
                     SRV_DBG("%s", "stopping streaming due to should_stop condition\n");
+                    GGML_ASSERT(req.should_stop());
                     return false; // should_stop condition met
                 }
 
@@ -3097,6 +3134,11 @@ void server_routes::init_routes() {
 
         // get the result
         auto result = res->rd.next(req.should_stop);
+        if (!result) {
+            // connection was closed
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
 
         if (result->is_error()) {
             res->error(result->to_json());
@@ -3197,6 +3239,11 @@ void server_routes::init_routes() {
 
         // get the result
         auto result = res->rd.next(req.should_stop);
+        if (!result) {
+            // connection was closed
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
 
         if (result->is_error()) {
             res->error(result->to_json());
@@ -3703,7 +3750,12 @@ void server_routes::init_routes() {
         }
 
         // get the result
-        server_task_result_ptr result = rd.next(req.should_stop);
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            // connection was closed
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
 
         if (result->is_error()) {
             res->error(result->to_json());
@@ -3732,7 +3784,12 @@ void server_routes::init_routes() {
         }
 
         // get the result
-        server_task_result_ptr result = rd.next(req.should_stop);
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            // connection was closed
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
 
         if (result->is_error()) {
             res->error(result->to_json());
@@ -3765,7 +3822,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const ser
         rd.post_task(std::move(task));
     }
 
-    server_task_result_ptr result = rd.next(req.should_stop);
+    auto result = rd.next(req.should_stop);
+    if (!result) {
+        // connection was closed
+        GGML_ASSERT(req.should_stop());
+        return res;
+    }
 
     if (result->is_error()) {
         res->error(result->to_json());
@@ -3796,7 +3858,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_restore(const 
         rd.post_task(std::move(task));
     }
 
-    server_task_result_ptr result = rd.next(req.should_stop);
+    auto result = rd.next(req.should_stop);
+    if (!result) {
+        // connection was closed
+        GGML_ASSERT(req.should_stop());
+        return res;
+    }
 
     if (result->is_error()) {
         res->error(result->to_json());
@@ -3818,7 +3885,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_erase(const se
         rd.post_task(std::move(task));
     }
 
-    server_task_result_ptr result = rd.next(req.should_stop);
+    auto result = rd.next(req.should_stop);
+    if (!result) {
+        // connection was closed
+        GGML_ASSERT(req.should_stop());
+        return res;
+    }
 
     if (result->is_error()) {
         res->error(result->to_json());

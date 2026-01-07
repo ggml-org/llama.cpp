@@ -42,6 +42,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_PHIMOE,           "phimoe"           },
     { LLM_ARCH_PLAMO,            "plamo"            },
     { LLM_ARCH_PLAMO2,           "plamo2"           },
+    { LLM_ARCH_PLAMO3,           "plamo3"           },
     { LLM_ARCH_CODESHELL,        "codeshell"        },
     { LLM_ARCH_ORION,            "orion"            },
     { LLM_ARCH_INTERNLM2,        "internlm2"        },
@@ -115,6 +116,9 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_RND1,             "rnd1"             },
     { LLM_ARCH_PANGU_EMBED,      "pangu-embedded"   },
     { LLM_ARCH_MISTRAL3,         "mistral3"         },
+    { LLM_ARCH_MIMO2,            "mimo2"           },
+    { LLM_ARCH_LLAMA_EMBED,      "llama-embed"      },
+    { LLM_ARCH_MAINCODER,        "maincoder"        },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -148,6 +152,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_VOCAB_SIZE,                        "%s.vocab_size"                        },
     { LLM_KV_CONTEXT_LENGTH,                    "%s.context_length"                    },
     { LLM_KV_EMBEDDING_LENGTH,                  "%s.embedding_length"                  },
+    { LLM_KV_EMBEDDING_LENGTH_OUT,              "%s.embedding_length_out"              },
     { LLM_KV_FEATURES_LENGTH,                   "%s.features_length"                   },
     { LLM_KV_BLOCK_COUNT,                       "%s.block_count"                       },
     { LLM_KV_LEADING_DENSE_BLOCK_COUNT,         "%s.leading_dense_block_count"         },
@@ -500,6 +505,7 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
         case LLM_ARCH_LLAMA:
         case LLM_ARCH_DECI:
         case LLM_ARCH_MISTRAL3:
+        case LLM_ARCH_LLAMA_EMBED:
             return {
                 LLM_TENSOR_TOKEN_EMBD,
                 LLM_TENSOR_OUTPUT_NORM,
@@ -1073,6 +1079,22 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_SSM_C_NORM,
                 LLM_TENSOR_ATTN_POST_NORM,
                 LLM_TENSOR_FFN_POST_NORM,
+            };
+        case LLM_ARCH_PLAMO3:
+            return {
+                LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_OUTPUT_NORM,
+                LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_ATTN_NORM,
+                LLM_TENSOR_ATTN_QKV,
+                LLM_TENSOR_ATTN_Q_NORM,
+                LLM_TENSOR_ATTN_K_NORM,
+                LLM_TENSOR_ATTN_OUT,
+                LLM_TENSOR_ATTN_POST_NORM,
+                LLM_TENSOR_FFN_NORM,
+                LLM_TENSOR_FFN_POST_NORM,
+                LLM_TENSOR_FFN_DOWN,
+                LLM_TENSOR_FFN_UP,
             };
         case LLM_ARCH_CODESHELL:
             return {
@@ -2054,6 +2076,7 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_TOKEN_EMBD,
                 LLM_TENSOR_OUTPUT_NORM_LFM2,
                 LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_DENSE_2_OUT,
             };
         case LLM_ARCH_LFM2MOE:
             return {
@@ -2188,10 +2211,48 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_VISEXP_FFN_DOWN,
                 LLM_TENSOR_VISEXP_FFN_UP,
             };
+        case LLM_ARCH_MIMO2:
+            return {
+                LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_OUTPUT_NORM,
+                LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_ATTN_NORM,
+                LLM_TENSOR_ATTN_Q,
+                LLM_TENSOR_ATTN_K,
+                LLM_TENSOR_ATTN_V,
+                LLM_TENSOR_ATTN_SINKS,
+                LLM_TENSOR_ATTN_OUT,
+                LLM_TENSOR_FFN_NORM,
+                LLM_TENSOR_FFN_GATE,
+                LLM_TENSOR_FFN_DOWN,
+                LLM_TENSOR_FFN_UP,
+                LLM_TENSOR_FFN_GATE_INP,
+                LLM_TENSOR_FFN_GATE_EXPS,
+                LLM_TENSOR_FFN_DOWN_EXPS,
+                LLM_TENSOR_FFN_UP_EXPS,
+                LLM_TENSOR_FFN_EXP_PROBS_B,
+            };
         case LLM_ARCH_GPTJ:
         case LLM_ARCH_UNKNOWN:
             return {
                 LLM_TENSOR_TOKEN_EMBD,
+            };
+        case LLM_ARCH_MAINCODER:
+            return {
+                LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_OUTPUT_NORM,
+                LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_ATTN_NORM,
+                LLM_TENSOR_ATTN_Q,
+                LLM_TENSOR_ATTN_Q_NORM,
+                LLM_TENSOR_ATTN_K,
+                LLM_TENSOR_ATTN_K_NORM,
+                LLM_TENSOR_ATTN_V,
+                LLM_TENSOR_ATTN_OUT,
+                LLM_TENSOR_FFN_NORM,
+                LLM_TENSOR_FFN_GATE,
+                LLM_TENSOR_FFN_DOWN,
+                LLM_TENSOR_FFN_UP,
             };
         default:
             GGML_ABORT("unknown architecture for tensor mapping");

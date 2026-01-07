@@ -319,7 +319,7 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
                 }
             }
         } else {
-            jmsg["content"] = json(); // null
+            jmsg["content"] = "";
         }
         if (!msg.reasoning_content.empty()) {
             jmsg["reasoning_content"] = msg.reasoning_content;
@@ -380,8 +380,8 @@ std::vector<common_chat_tool> common_chat_tools_parse_oaicompat(const json & too
                 const auto & function = tool.at("function");
                 result.push_back({
                     /* .name = */ function.at("name"),
-                    /* .description = */ function.at("description"),
-                    /* .parameters = */ function.at("parameters").dump(),
+                    /* .description = */ function.value("description", ""),
+                    /* .parameters = */ function.value("parameters", json::object()).dump(),
                 });
             }
         }
@@ -669,6 +669,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_QWEN3_CODER_XML: return "Qwen3 Coder";
         case COMMON_CHAT_FORMAT_APRIEL_1_5: return "Apriel 1.5";
         case COMMON_CHAT_FORMAT_XIAOMI_MIMO: return "Xiaomi MiMo";
+        case COMMON_CHAT_FORMAT_SOLAR_OPEN: return "Solar Open";
         case COMMON_CHAT_FORMAT_PEG_SIMPLE: return "peg-simple";
         case COMMON_CHAT_FORMAT_PEG_NATIVE: return "peg-native";
         case COMMON_CHAT_FORMAT_PEG_CONSTRUCTED: return "peg-constructed";
@@ -2064,7 +2065,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
             // Trigger on tool calls that appear in the commentary channel
             data.grammar_triggers.push_back({
                 COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
-                "<\\|channel\\|>(commentary|analysis) to"
+                "<\\|channel\\|>(?:commentary|analysis) to"
             });
 
             // Trigger tool calls that appear in the role section, either at the
@@ -2397,17 +2398,17 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
                 (inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call));
             // Trigger on some common known "good bad" outputs (only from the start and with a json that's about a specific argument name to avoid false positives)
             data.grammar_triggers.push_back({
-                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
+                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
                 // If thinking_forced_open, then we capture the </think> tag in the grammar,
                 // (important for required tool choice) and in the trigger's first capture (decides what is sent to the grammar)
-                std::string(data.thinking_forced_open ? "[\\s\\S]*?(</think>\\s*)" : "(?:<think>[\\s\\S]*?</think>\\s*)?") + (
+                std::string(data.thinking_forced_open ? "(</think>\\s*)" : "") + (
                     "\\s*("
                     "(?:<tool_call>"
                     "|<function"
                     "|(?:```(?:json|xml)?\n\\s*)?(?:<function_call>|<tools>|<xml><json>|<response>)?"
                     "\\s*\\{\\s*\"name\"\\s*:\\s*\"(?:" + string_join(escaped_names, "|") + ")\""
                     ")"
-                    ")[\\s\\S]*"
+                    ")"
                 ),
             });
             data.preserved_tokens = {
@@ -2513,6 +2514,27 @@ static common_chat_params common_chat_params_init_granite(const common_chat_temp
             };
         }
     }
+
+    return data;
+}
+
+static common_chat_params common_chat_params_init_solar_open(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+
+    // TODO: Reasoning effort
+    json additional_context = {};
+
+    data.prompt = apply(tmpl, inputs, std::nullopt, std::nullopt, additional_context);
+    data.format = COMMON_CHAT_FORMAT_SOLAR_OPEN;
+
+    data.preserved_tokens = {
+        "<|think|>",
+        "<|content|>",
+        "<|begin|>",
+        "<|end|>",
+    };
+
+    // TODO: Tool calling
 
     return data;
 }
@@ -2778,6 +2800,13 @@ static common_chat_params common_chat_templates_apply_jinja(
 
     if (src.find("[THINK]") != std::string::npos && src.find("[/THINK]") != std::string::npos) {
         return common_chat_params_init_magistral(tmpl, params);
+    }
+
+    // Solar Open
+    if (src.find("<|tool_response:begin|>") != std::string::npos &&
+        src.find("<|tool_response:name|>") != std::string::npos &&
+        src.find("<|tool_response:result|>") != std::string::npos) {
+        return common_chat_params_init_solar_open(tmpl, params);
     }
 
     // Plain handler (no tools)
