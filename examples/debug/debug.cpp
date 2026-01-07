@@ -13,6 +13,28 @@
 #include <fstream>
 #include <regex>
 
+static void print_usage(int, char ** argv) {
+    const std::string usage_template = R"(
+        example usage:
+
+          Print tensors:
+
+          {prog} -m model.gguf -p "Hello my name is" --verbose
+
+          The tensors to be printed can be filtered with --tensor-filter option.
+
+          Save logits/embeddings:
+
+          {prog} -m model.gguf -p "Hello my name is" --save-logits
+
+          Add --embedding to save embeddings)" "\n";
+
+    // Fix the source code indentation above that is introduced by the raw string literal.
+    std::string usage = std::regex_replace(usage_template, std::regex("\\n {8}"), "\n");
+    usage = std::regex_replace(usage, std::regex("\\{prog\\}"), argv[0]);
+    LOG("%s\n", usage.c_str());
+}
+
 static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data);
 
 struct callback_data {
@@ -359,7 +381,7 @@ static bool run(llama_context * ctx, const common_params & params) {
 int main(int argc, char ** argv) {
     common_params params;
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_DEBUG)) {
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_DEBUG, print_usage)) {
         return 1;
     }
 
