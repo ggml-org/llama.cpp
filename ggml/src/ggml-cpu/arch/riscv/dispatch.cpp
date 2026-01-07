@@ -78,6 +78,10 @@ static int dispatch_vlenb = probe_vlenb();
 
 #elif defined(__riscv_xtheadvector)
 
+void ggml_vec_dot_q5_K_q8_K_071(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy,  size_t by, int nrc) {
+    ggml_vec_dot_q5_K_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+}
+
 #define RVV_VEC_DOT_DISPATCH(func_name, ...)                                          \
     void func_name(int n, float * GGML_RESTRICT s, size_t bs,                         \
                    const void * GGML_RESTRICT vx, size_t bx,                          \
@@ -101,6 +105,7 @@ extern "C" {
 RVV_VEC_DOT_DISPATCH(ggml_vec_dot_q2_K_q8_K, 32, _256, 16, _128)
 RVV_VEC_DOT_DISPATCH(ggml_vec_dot_q3_K_q8_K, 32, _256, 16, _128)
 RVV_VEC_DOT_DISPATCH(ggml_vec_dot_q4_K_q8_K, 32, _256, 16, _128)
+RVV_VEC_DOT_DISPATCH(ggml_vec_dot_q5_K_q8_K, 16, _128)
 
 }
 
