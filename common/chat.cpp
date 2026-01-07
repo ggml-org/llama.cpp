@@ -678,8 +678,6 @@ const char * common_chat_format_name(common_chat_format format) {
             return "peg-simple";
         case COMMON_CHAT_FORMAT_PEG_NATIVE:
             return "peg-native";
-        case COMMON_CHAT_FORMAT_PEG_CONSTRUCTED:
-            return "peg-constructed";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1194,8 +1192,7 @@ common_chat_params common_chat_templates_apply(const struct common_chat_template
 }
 
 common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax) {
-    if (syntax.format == COMMON_CHAT_FORMAT_PEG_SIMPLE || syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE ||
-        syntax.format == COMMON_CHAT_FORMAT_PEG_CONSTRUCTED) {
+    if (syntax.format == COMMON_CHAT_FORMAT_PEG_SIMPLE || syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE) {
         return common_chat_peg_parse(syntax.parser, input, is_partial, syntax);
     }
     GGML_ABORT("Legacy parsers have been deprecated");
@@ -1222,7 +1219,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &   parser,
             // Try to extract any partial results from what was successfully parsed
             common_chat_msg msg;
             msg.role = "assistant";
-            if (syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE || syntax.format == COMMON_CHAT_FORMAT_PEG_CONSTRUCTED) {
+            if (syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE) {
                 auto mapper = common_chat_peg_unified_mapper(msg);
                 mapper.from_ast(ctx.ast, result);
             } else {
@@ -1242,7 +1239,7 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &   parser,
     common_chat_msg msg;
     msg.role = "assistant";
 
-    if (syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE || syntax.format == COMMON_CHAT_FORMAT_PEG_CONSTRUCTED) {
+    if (syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE) {
         auto mapper = common_chat_peg_unified_mapper(msg);
         mapper.from_ast(ctx.ast, result);
     } else {
