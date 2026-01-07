@@ -1944,7 +1944,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 switch (hparams.n_layer) {
                     case 32: type = LLM_TYPE_30B_A3B; break;
-                    case 48: type = LLM_TYPE_235B_A22B; break;
+                    case 48:
+                    case 49: type = LLM_TYPE_235B_A22B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
@@ -5587,10 +5588,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             layer.nextn.hnorm            = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM,   "weight", i), {n_embd}, flags);
 
                             layer.nextn.shared_head_norm = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", i), {n_embd}, flags | TENSOR_NOT_REQUIRED);
-                            // EXAONE-MoE uses shared embedding and lm_head with base model's. It does not have these tensors separately.
-                            // TODO: FIXME
-                            layer.nextn.embed_tokens     = tok_embd;
-                            layer.nextn.shared_head_head = output;
+                            layer.nextn.embed_tokens     = create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS,     "weight", i), {n_embd, n_vocab}, flags | TENSOR_NOT_REQUIRED);
+                            layer.nextn.shared_head_head = create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", i), {n_embd, n_vocab}, flags | TENSOR_NOT_REQUIRED);
                         }
                     }
                 } break;
