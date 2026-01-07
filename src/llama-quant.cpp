@@ -811,8 +811,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
     }
 
-    // Serializes vector<tensor_info> to disk
-    auto save_bpw_state = [&](const std::vector<tensor_info> & all_vec) {
+    // Serializes vector<tensor_info> state to disk
+    auto save_state = [&](const std::vector<tensor_info> & all_vec) {
         const std::string tmp = checkpoint_file + ".tmp";
         std::ofstream ofs(tmp, std::ios::binary | std::ios::trunc);
         if (!ofs) { return; }
@@ -847,11 +847,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         ofs.close();
         std::remove(checkpoint_file.c_str());
         std::rename(tmp.c_str(), checkpoint_file.c_str());
-        LLAMA_LOG_INFO("%s: saved progress for %lu tensors to %s\n", func, all_vec.size(), checkpoint_file.c_str());
+        LLAMA_LOG_INFO("%s: saved target progress for %lu tensors to %s\n", func, all_vec.size(), checkpoint_file.c_str());
     };
 
-    // Deserializes vector<tensor_info> from disk
-    auto load_bpw_state = [&]() -> std::unordered_map<std::string, saved_info> {
+    // Deserializes vector<tensor_info> state from disk
+    auto load_state = [&]() -> std::unordered_map<std::string, saved_info> {
         std::unordered_map<std::string, saved_info> out;
         std::ifstream ifs(checkpoint_file, std::ios::binary);
         if (!ifs) { return out; }
@@ -905,16 +905,15 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             out.emplace(std::move(name), std::move(si));
         }
 
-        LLAMA_LOG_INFO("%s: loaded bpw state for %lu tensors from %s\n", func, out.size(), checkpoint_file.c_str());
+        LLAMA_LOG_INFO("%s: loaded target state for %lu tensors from %s\n", func, out.size(), checkpoint_file.c_str());
         return out;
     };
-
 
     // Check for user interrupt and save progress
     auto check_signal_handler = [&](const std::vector<tensor_info> & all_vec) {
         if (bpw_stop.load(std::memory_order_relaxed)) {
             LLAMA_LOG_INFO("\n%s: saving progress for %lu tensors to %s\n", func, all_vec.size(), checkpoint_file.c_str());
-            save_bpw_state(all_vec);
+            save_state(all_vec);
             throw std::runtime_error("user interrupted the process");
         }
     };
@@ -1172,7 +1171,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return lambdas;
     };
 
-    const auto bpw_data = load_bpw_state();
+    std::unordered_map<std::string, saved_info> bpw_data;
+    if (params->state_file && !checkpoint_file.empty()) { bpw_data = load_state(); }
 
     // Parallelize tensor processing (courtesy of https://github.com/ddh0)
     auto process_tensor = [&](const llama_model_loader::llama_tensor_weight * tw,
@@ -1530,7 +1530,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     }
 
     check_signal_handler(all);
-    if (params->keep_bpw_state) { save_bpw_state(all); }
+    if (params->save_state) { save_state(all); }
 
     if (all.empty()) { return {}; }
 
@@ -1610,7 +1610,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     // Certain tensors have a higher impact on model quality, so we apply a lower penalty to them
     auto is_important = [&](const std::string & tensor_name) -> bool {
         bool important = tensor_name == "output.weight";
-        if (!important && !params->no_importance) {
+        if (!important && !params->ignore_tensor_importance) {
             important = tensor_name.find(".attn_v.weight") != std::string::npos ||
                         tensor_name.find(".time_mix_value.weight") != std::string::npos ||
                         tensor_name.find(".ffn_down.weight") != std::string::npos ||
@@ -2025,7 +2025,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             } else {
                 LLAMA_LOG_INFO("%s: imatrix does not have activations, process may be less accurate\n", __func__);
             }
-            if (params->no_importance) {
+            if (params->ignore_tensor_importance) {
                 LLAMA_LOG_INFO("%s: distributing budget equitably across all tensors\n", __func__);
             } else {
                 LLAMA_LOG_INFO("%s: assigning more budget to important tensors\n", __func__);
