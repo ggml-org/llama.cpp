@@ -1242,6 +1242,7 @@ size_t ggml_nbytes(const struct ggml_tensor * tensor) {
 
     size_t nbytes;
     const size_t blck_size = ggml_blck_size(tensor->type);
+
     if (blck_size == 1) {
         nbytes = ggml_type_size(tensor->type);
         for (int i = 0; i < GGML_MAX_DIMS; ++i) {
@@ -1252,6 +1253,63 @@ size_t ggml_nbytes(const struct ggml_tensor * tensor) {
         nbytes = tensor->ne[0]*tensor->nb[0]/blck_size;
         for (int i = 1; i < GGML_MAX_DIMS; ++i) {
             nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
+        }
+    }
+
+    return nbytes;
+}
+
+size_t ggml_nbytes_safe(const struct ggml_tensor * tensor) {
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        if (tensor->ne[i] <= 0) {
+            return 0;
+        }
+    }
+
+    size_t nbytes;
+    const size_t blck_size = ggml_blck_size(tensor->type);
+
+    if (blck_size == 1) {
+        nbytes = ggml_type_size(tensor->type);
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            size_t ne_minus_1 = tensor->ne[i] - 1;
+            size_t nb = tensor->nb[i];
+
+            if (nb > 0 && ne_minus_1 > SIZE_MAX / nb) {
+                return SIZE_MAX;
+            }
+            size_t add = ne_minus_1 * nb;
+
+            if (nbytes > SIZE_MAX - add) {
+                return SIZE_MAX;
+            }
+            nbytes += add;
+        }
+    }
+    else {
+        size_t ne0 = tensor->ne[0];
+        size_t nb0 = tensor->nb[0];
+
+        if (nb0 > 0 && ne0 > SIZE_MAX / nb0) {
+            return SIZE_MAX;
+        }
+        size_t mul = ne0 * nb0;
+        
+        nbytes = mul / blck_size;
+
+        for (int i = 1; i < GGML_MAX_DIMS; ++i) {
+            size_t ne_minus_1 = tensor->ne[i] - 1;
+            size_t nb = tensor->nb[i];
+
+            if (nb > 0 && ne_minus_1 > SIZE_MAX / nb) {
+                return SIZE_MAX;
+            }
+            size_t add = ne_minus_1 * nb;
+
+            if (nbytes > SIZE_MAX - add) {
+                return SIZE_MAX;
+            }
+            nbytes += add;
         }
     }
 

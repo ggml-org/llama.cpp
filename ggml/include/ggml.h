@@ -719,6 +719,7 @@ extern "C" {
     GGML_API int64_t ggml_nrows     (const struct ggml_tensor * tensor);
     GGML_API size_t  ggml_nbytes    (const struct ggml_tensor * tensor);
     GGML_API size_t  ggml_nbytes_pad(const struct ggml_tensor * tensor); // same as ggml_nbytes() but padded to GGML_MEM_ALIGN
+    GGML_API size_t  ggml_nbytes_safe(const struct ggml_tensor * tensor); // returns SIZE_MAX on overflow
 
     GGML_API int64_t ggml_blck_size(enum ggml_type type);
     GGML_API size_t  ggml_type_size(enum ggml_type type);             // size in bytes for all elements in a block
