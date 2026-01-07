@@ -83,6 +83,31 @@ static void hvx_fast_rms_norm_f32(const uint8_t * restrict src,
     }
 }
 
+static void scale_htp_f32(const float * restrict src,
+                          float * restrict dst,
+                          uint8_t * restrict spad,
+                          const uint32_t num_rows,
+                          const uint32_t row_elems,
+                          const size_t   row_size,
+                          int32_t *      op_params,
+                          int            opt_path) {
+    float scale = 0.f;
+    float bias  = 0.f;
+    memcpy(&scale, &op_params[0], sizeof(float));
+    memcpy(&bias,  &op_params[1], sizeof(float));
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const float * restrict src_local = src + (ir * row_elems);
+        float * restrict dst_local       = dst + (ir * row_elems);
+
+        if (ir + 1 < num_rows) {
+            htp_l2fetch(src_local + row_elems, 1, row_size, row_size);
+        }
+
+        hvx_scale_offset_f32((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems, scale, bias);
+    }
+}
+
 static void rms_norm_htp_f32(const float * restrict src,
                              float * restrict dst,
                              uint8_t * restrict spad,
@@ -110,7 +135,7 @@ static void rms_norm_htp_f32(const float * restrict src,
             const float mean  = sum / row_elems;
             const float scale = 1.0f / sqrtf(mean + epsilon);
 
-            hvx_scale_f32((const uint8_t *) src_local, (uint8_t *) dst_local, row_elems, scale);
+            hvx_scale_f32((uint8_t *) dst_local, (const uint8_t *) src_local, row_elems, scale);
         }
     }
 }
@@ -162,6 +187,9 @@ static void unary_job_f32_per_thread(const struct htp_tensor * src,
         case HTP_OP_RMS_NORM:
             rms_norm_htp_f32(src_th, dst_th, spad_th, src0_end_row - src0_start_row, ne0, nb1, op_params, opt_path);
             break;
+        case HTP_OP_SCALE:
+            scale_htp_f32(src_th, dst_th, spad_th, src0_end_row - src0_start_row, ne0, nb1, op_params, opt_path);
+            break;
 
         default:
             break;
@@ -194,6 +222,10 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
         case HTP_OP_RMS_NORM:
             unary_op_func = unary_job_dispatcher_f32;
             op_type       = "rmsnorm-f32";
+            break;
+        case HTP_OP_SCALE:
+            unary_op_func = unary_job_dispatcher_f32;
+            op_type       = "scale-f32";
             break;
 
         default:

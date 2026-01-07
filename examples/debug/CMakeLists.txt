@@ -1,5 +1,5 @@
-set(TARGET llama-logits)
-add_executable(${TARGET} logits.cpp)
+set(TARGET llama-debug)
+add_executable(${TARGET} debug.cpp)
 install(TARGETS ${TARGET} RUNTIME)
 target_link_libraries(${TARGET} PRIVATE common llama ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)

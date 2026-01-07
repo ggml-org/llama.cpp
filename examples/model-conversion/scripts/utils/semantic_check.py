@@ -4,8 +4,10 @@ import numpy as np
 import argparse
 import os
 import importlib
+from pathlib import Path
 
 from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM, AutoModel
+from common import compare_tokens  # type: ignore[import-not-found]
 
 unreleased_model_name = os.getenv('UNRELEASED_MODEL_NAME')
 
@@ -157,8 +159,24 @@ def main():
     else:
         prompt = args.prompt
 
+    python_emb_path = Path(args.python_embeddings)
+    cpp_emb_path = Path(args.cpp_embeddings)
+
+    # Extract base names (e.g., "pytorch-model-name-embeddings.bin" -> "pytorch-model-name")
+    python_model_name = python_emb_path.stem.replace("-embeddings", "")
+    cpp_model_name = cpp_emb_path.stem.replace("-embeddings", "")
+
     print("Semantic Similarity Test Between Python and llama.cpp Embedding Models")
     print("=" * 70)
+
+    # First verify tokens match before comparing embeddings
+    print("\n🔍 Token Comparison Check")
+    print("=" * 70)
+    data_dir = python_emb_path.parent
+    if not compare_tokens(python_model_name, cpp_model_name, type_suffix="-embeddings", output_dir=str(data_dir)):
+        print("\n❌ Token mismatch detected")
+        exit(1)
+    print()
 
     # Single prompt detailed comparison
     print(f"\nTesting with prompt: '{prompt}'")

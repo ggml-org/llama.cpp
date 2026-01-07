@@ -80,6 +80,7 @@ int32_t cpu_get_num_math();
 //
 
 enum llama_example {
+    LLAMA_EXAMPLE_DEBUG,
     LLAMA_EXAMPLE_COMMON,
     LLAMA_EXAMPLE_SPECULATIVE,
     LLAMA_EXAMPLE_COMPLETION,
@@ -215,6 +216,8 @@ struct common_params_sampling {
 
     std::vector<llama_logit_bias> logit_bias;     // logit biases to apply
     std::vector<llama_logit_bias> logit_bias_eog; // pre-calculated logit biases for EOG tokens
+
+    bool backend_sampling = false;
 
     bool has_logit_bias() const {
         return !logit_bias.empty();
@@ -369,6 +372,11 @@ struct common_params {
     std::string lookup_cache_static  = ""; // path of static ngram cache file for lookup decoding           // NOLINT
     std::string lookup_cache_dynamic = ""; // path of dynamic ngram cache file for lookup decoding          // NOLINT
     std::string logits_file          = ""; // file for saving *all* logits                                  // NOLINT
+
+    // llama-debug specific options
+    std::string logits_output_dir = "data"; // directory for saving logits output files                     // NOLINT
+    bool        save_logits       = false;  // whether to save logits to files                              // NOLINT
+    std::vector<std::string> tensor_filter; // filter tensor names for debug output (regex)                 // NOLINT
 
     std::vector<std::string> in_files;   // all input files
     std::vector<std::string> antiprompt; // strings upon which more user input is prompted (a.k.a. reverse prompts)
@@ -689,7 +697,9 @@ struct common_init_result {
 
     llama_model * model();
     llama_context * context();
+
     common_sampler * sampler(llama_seq_id seq_id);
+    void reset_samplers();
 
     std::vector<llama_adapter_lora_ptr> & lora();
 
