@@ -1086,6 +1086,7 @@ struct common_init_result::impl {
     std::vector<llama_adapter_lora_ptr> lora;
 
     std::vector<common_sampler_ptr> samplers;
+    std::vector<llama_sampler_seq_config> samplers_seq_config;
 };
 
 common_init_result::common_init_result(common_params & params) :
@@ -1162,10 +1163,19 @@ common_init_result::common_init_result(common_params & params) :
     //    params.sampling.dry_penalty_last_n = llama_n_ctx(lctx);
     //}
 
+    // init the backend samplers as part of the context creation
     pimpl->samplers.resize(cparams.n_seq_max);
+    pimpl->samplers_seq_config.resize(cparams.n_seq_max);
 
     for (int i = 0; i < (int) cparams.n_seq_max; ++i) {
         pimpl->samplers[i].reset(common_sampler_init(model, params.sampling));
+        pimpl->samplers_seq_config[i] = { i, common_sampler_get(pimpl->samplers[i].get()) };
+    }
+
+    // TODO: temporarily gated behind a flag
+    if (params.sampling.backend_sampling) {
+        cparams.samplers   = pimpl->samplers_seq_config.data();
+        cparams.n_samplers = pimpl->samplers_seq_config.size();
     }
 
     llama_context * lctx = llama_init_from_model(model, cparams);
@@ -1187,6 +1197,12 @@ llama_context * common_init_result::context() {
 
 common_sampler * common_init_result::sampler(llama_seq_id seq_id) {
     return pimpl->samplers[seq_id].get();
+}
+
+void common_init_result::reset_samplers() {
+    for (int i = 0; i < (int) pimpl->samplers.size(); ++i) {
+        llama_sampler_reset(common_sampler_get(pimpl->samplers[i].get()));
+    }
 }
 
 std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
@@ -1304,6 +1320,9 @@ common_init_result_ptr common_init_from_params(common_params & params) {
         llama_synchronize(lctx);
         llama_perf_context_reset(lctx);
         llama_set_warmup(lctx, false);
+
+        // reset samplers to reset RNG state after warmup to the seeded state
+        res->reset_samplers();
     }
 
     return res;
