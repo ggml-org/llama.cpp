@@ -10161,6 +10161,44 @@ static bool convert_tensor_layout(ggml_tensor* tensor, layout_mode target,
     return false;
 }
 
+// =============================================================================
+// FINALIZE LAYOUTS - Two-phase lifecycle: convert all weights to optimal layouts
+// =============================================================================
+static void finalize_layouts(ggml_backend_sycl_context& ctx, ggml_cgraph* cgraph) {
+    if (!cgraph) return;
+
+    int converted_count = 0;
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor* node = cgraph->nodes[i];
+        if (node->op != GGML_OP_MUL_MAT && node->op != GGML_OP_MUL_MAT_ID) {
+            continue;
+        }
+
+        ggml_tensor* src0 = node->src[0];
+        if (!src0 || !src0->extra) continue;
+
+        auto* extra = static_cast<ggml_tensor_extra_gpu*>(src0->extra);
+
+        // Infer usage from tensor name
+        tensor_usage usage = infer_tensor_usage(src0->name);
+
+        // Get optimal layout for this tensor
+        layout_mode target = layout_policy::get_with_override(src0->type, usage);
+
+        // Convert if needed
+        if (extra->layout.mode != target) {
+            if (convert_tensor_layout(src0, target, ctx.stream(), "FINALIZE_LAYOUTS")) {
+                converted_count++;
+            }
+        }
+    }
+
+    if (g_ggml_sycl_debug && converted_count > 0) {
+        fprintf(stderr, "[LAYOUT] Finalized %d tensors to optimal layouts\n", converted_count);
+    }
+}
+
 // Callback wrapper for expert cache reordering (MXFP4)
 // This matches the ggml_sycl::reorder_callback_fn signature
 // Converts from AoS (mmap layout) to either SoA or XMX tiled layout on GPU
