@@ -20,6 +20,8 @@
 #include "sycl_hw.hpp"
 #include "unified-cache.hpp"
 
+#include <sycl/sycl.hpp>
+
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -333,6 +335,55 @@ enum class reorder_mode : uint8_t {
     SOA          = 1,  // SoA layout: all qs bytes contiguous, then all d values
     COALESCED    = 2,  // Tile-based layout for MMVQ (word-major interleaved, requires SOA first)
     XMX_COALESCED = 3,  // XMX-optimized layout for MoE GEMM (K_TILE=32 aligned rows)
+};
+
+// =============================================================================
+// Unified Tensor Layout System (replaces scattered layout tracking)
+// =============================================================================
+
+enum class layout_mode : uint8_t {
+    AOS = 0,        // Original Array-of-Structures (mmap'd data)
+    SOA,            // Structure-of-Arrays (qs contiguous, then d values)
+    COALESCED,      // Warp-coalesced tile layout for MMVQ
+    XMX_TILED,      // XMX matrix engine tiled layout for MoE GEMM
+};
+
+enum class tensor_usage : uint8_t {
+    UNKNOWN = 0,
+    ATTENTION_WEIGHT,    // Q, K, V, O projections
+    FFN_WEIGHT,          // feed-forward non-MoE
+    MOE_EXPERT_WEIGHT,   // MoE expert gate/up/down
+    MOE_GATE,            // MoE routing gate
+    EMBEDDING,           // token embeddings
+    NORM,                // RMS/LayerNorm weights
+};
+
+struct tensor_layout_info {
+    layout_mode mode = layout_mode::AOS;
+    void* data_ptr = nullptr;      // Canonical data pointer
+    size_t size = 0;               // Buffer size in bytes
+    bool owns_memory = false;      // True = we allocated, must free
+    int device_id = -1;            // GPU device ID
+
+    // Quantization metadata (avoids recomputation)
+    ggml_type qtype = GGML_TYPE_F32;
+    int64_t n_elements = 0;
+    int64_t n_experts = 1;         // For MoE tensors
+
+    // XMX-specific (only valid when mode == XMX_TILED)
+    struct {
+        int64_t tile_n = 0;
+        int64_t tile_k = 0;
+        int64_t n_tile_groups = 0;
+    } xmx_info;
+
+    void release(sycl::queue& q) {
+        if (owns_memory && data_ptr) {
+            sycl::free(data_ptr, q);
+            data_ptr = nullptr;
+            owns_memory = false;
+        }
+    }
 };
 
 // Global reorder mode setting (set from GGML_SYCL_REORDER_MODE env var)
@@ -1106,6 +1157,11 @@ struct ggml_tensor_extra_gpu {
     // XMX tile-aligned MXFP4 layout (cached at first use)
     void*  xmx_mxfp4_tiled[GGML_SYCL_MAX_DEVICES] = {nullptr};
     size_t xmx_mxfp4_tiled_size                   = 0;
+
+    // Track async tile conversion completion for graph compatibility
+    sycl::event xmx_mxfp4_tiled_conversion_evt[GGML_SYCL_MAX_DEVICES];
+    bool xmx_mxfp4_tiled_conversion_complete[GGML_SYCL_MAX_DEVICES] = {false};
+    std::mutex xmx_tiled_conversion_mutex[GGML_SYCL_MAX_DEVICES];  // Protect concurrent access
 };
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams = {});
