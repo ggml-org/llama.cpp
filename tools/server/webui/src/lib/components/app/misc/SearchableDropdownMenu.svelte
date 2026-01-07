@@ -21,8 +21,6 @@
 		align?: 'start' | 'center' | 'end';
 		/** Content width class */
 		contentClass?: string;
-		/** Max height for the list area */
-		listMaxHeight?: string;
 		/** Empty state message */
 		emptyMessage?: string;
 		/** Whether to show empty state */
@@ -46,7 +44,6 @@
 		onSearchKeyDown,
 		align = 'start',
 		contentClass = 'w-72',
-		listMaxHeight = 'max-h-48',
 		emptyMessage = 'No items found',
 		isEmpty = false,
 		disabled = false,
@@ -80,7 +77,7 @@
 			/>
 		</div>
 
-		<div class={cn('overflow-y-auto', listMaxHeight)}>
+		<div class={cn('overflow-y-auto', 'max-h-[--bits-dropdown-menu-content-available-height]')}>
 			{@render children()}
 			{#if isEmpty}
 				<div class="px-2 py-3 text-center text-sm text-muted-foreground">{emptyMessage}</div>
