@@ -909,14 +909,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         return out;
     };
 
-    // Deletes checkpoint file unless --keep-bpw-state is set
-    auto delete_bpw_state = [&] {
-        std::ifstream ifs(checkpoint_file);
-        if (ifs.good() && !params->keep_bpw_state) {
-            LLAMA_LOG_INFO("%s: deleting %s\n", func, checkpoint_file.c_str());
-            std::remove(checkpoint_file.c_str());
-        }
-    };
 
     // Check for user interrupt and save progress
     auto check_signal_handler = [&](const std::vector<tensor_info> & all_vec) {
@@ -1779,8 +1771,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             cur_bytes += upgrade_cost;
         }
     }
-
-    delete_bpw_state();
 
     return emit_overrides();
 }
