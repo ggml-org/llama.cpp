@@ -499,6 +499,42 @@ static bool parse_target_bpw(const char * data, float & target_bpw) {
     return true;
 }
 
+static bool parse_target_size(const char * data, int64_t & target_size) {
+    if (!data) {
+        printf("\n%s: no target file size provided\n\n", __func__);
+        return false;
+    }
+
+    char * end = nullptr;
+    const double val = std::strtod(data, &end);
+    if (end == data || val < 0) {
+        printf("\n%s: invalid target file size '%s'\n\n", __func__, data);
+        return false;
+    }
+
+    std::string suffix(end);
+    for (auto & c : suffix) { c = std::tolower(c); }
+
+    int64_t mul = 0;
+    if (suffix.empty() || suffix == "b") {
+        mul = 1;
+    } else if (suffix == "k" || suffix == "kb") {
+        mul = 1024;
+    } else if (suffix == "m" || suffix == "mb") {
+        mul = 1024 * 1024;
+    } else if (suffix == "g" || suffix == "gb") {
+        mul = 1024 * 1024 * 1024;
+    } else if (suffix == "t" || suffix == "tb") {
+        mul = 1024LL * 1024 * 1024 * 1024;
+    } else {
+        printf("\n%s: invalid unit '%s' in '%s'. Allowed: b, kb, mb, gb, tb (kilo = 1024 bytes)\n\n", __func__, suffix.c_str(), data);
+        return false;
+    }
+
+    target_size = (int64_t)val * mul;
+    return true;
+}
+
 static const char * get_ftype(const float bpw) {
     const std::map<float, const char *> quant_bpw = {
         {1.5625, "IQ1_S"},
