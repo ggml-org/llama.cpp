@@ -1,11 +1,24 @@
 /**
- * MCPHostManager - Agregator wielu połączeń MCP.
+ * MCPHostManager - Multi-server MCP connection aggregator
  *
- * Zgodnie z architekturą MCP, Host:
- * - Koordynuje wiele instancji Client (MCPServerConnection)
- * - Agreguje tools/resources/prompts ze wszystkich serwerów
- * - Routuje tool calls do odpowiedniego serwera
- * - Zarządza lifecycle wszystkich połączeń
+ * Implements the "Host" role in MCP architecture, coordinating multiple server
+ * connections and providing a unified interface for tool operations.
+ *
+ * **Architecture & Relationships:**
+ * - **MCPHostManager** (this class): Host-level coordination layer
+ *   - Coordinates multiple Client instances (MCPServerConnection)
+ *   - Aggregates tools from all connected servers
+ *   - Routes tool calls to the appropriate server
+ *   - Manages lifecycle of all connections
+ *
+ * - **MCPServerConnection**: Individual server connection wrapper
+ * - **agenticStore**: Uses MCPHostManager for tool execution in agentic loops
+ *
+ * **Key Responsibilities:**
+ * - Parallel server initialization and shutdown
+ * - Tool name conflict detection and resolution
+ * - OpenAI-compatible tool definition generation
+ * - Automatic tool-to-server routing
  */
 
 import { MCPServerConnection, type ToolExecutionResult } from './server-connection';
@@ -44,12 +57,7 @@ export interface ServerStatus {
 }
 
 /**
- * MCPHostManager manages multiple MCP server connections.
- *
- * This corresponds to the "Host" role in MCP architecture:
- * - Coordinates multiple Client instances (MCPServerConnection)
- * - Aggregates tools from all connected servers
- * - Routes tool calls to the appropriate server
+ * Manages multiple MCP server connections and provides unified tool access.
  */
 export class MCPHostManager {
 	private connections = new Map<string, MCPServerConnection>();
