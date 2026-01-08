@@ -24,7 +24,7 @@
 		onSystemPromptClick
 	}: Props = $props();
 
-	const fileUploadTooltipText = 'Add files';
+	const fileUploadTooltipText = 'Add files or context';
 
 	function handleFileUpload(fileType?: FileTypeCategory) {
 		onFileUpload?.(fileType);

@@ -23,7 +23,7 @@ export { default as ChatMessageStatistics } from './chat/ChatMessages/ChatMessag
 export { default as ChatMessageSystem } from './chat/ChatMessages/ChatMessageSystem.svelte';
 export { default as ChatMessageThinkingBlock } from './chat/ChatMessages/ChatMessageThinkingBlock.svelte';
 export { default as ChatMessages } from './chat/ChatMessages/ChatMessages.svelte';
-export { default as CollapsibleInfoCard } from './chat/ChatMessages/CollapsibleInfoCard.svelte';
+export { default as CollapsibleContentBlock } from './chat/ChatMessages/CollapsibleContentBlock.svelte';
 export { default as MessageBranchingControls } from './chat/ChatMessages/ChatMessageBranchingControls.svelte';
 
 export { default as ChatScreen } from './chat/ChatScreen/ChatScreen.svelte';

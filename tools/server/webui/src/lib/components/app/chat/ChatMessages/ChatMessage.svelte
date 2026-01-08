@@ -134,7 +134,7 @@
 
 	function handleEdit() {
 		isEditing = true;
-		// Clear placeholder content for system messages
+		// Clear temporary placeholder content for system messages
 		editedContent =
 			message.role === 'system' && message.content === SYSTEM_MESSAGE_PLACEHOLDER
 				? ''
@@ -183,7 +183,7 @@
 			// System messages: update in place without branching
 			const newContent = editedContent.trim();
 
-			// If content is empty or still the placeholder, remove without deleting children
+			// If content is empty, remove without deleting children
 			if (!newContent) {
 				const conversationDeleted = await removeSystemPromptPlaceholder(message.id);
 				isEditing = false;

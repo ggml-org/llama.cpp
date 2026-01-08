@@ -7,17 +7,21 @@
 	 * similar to the reasoning/thinking block UI.
 	 */
 
-	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
+	import {
+		CollapsibleContentBlock,
+		MarkdownContent,
+		SyntaxHighlightedCode
+	} from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
 	import { Wrench, Loader2 } from '@lucide/svelte';
-	import CollapsibleInfoCard from './CollapsibleInfoCard.svelte';
+	import { AgenticSectionType } from '$lib/types/agentic';
 
 	interface Props {
 		content: string;
 	}
 
 	interface AgenticSection {
-		type: 'text' | 'tool_call' | 'tool_call_pending' | 'tool_call_streaming';
+		type: AgenticSectionType;
 		content: string;
 		toolName?: string;
 		toolArgs?: string;
@@ -66,7 +70,7 @@
 			if (match.index > lastIndex) {
 				const textBefore = rawContent.slice(lastIndex, match.index).trim();
 				if (textBefore) {
-					sections.push({ type: 'text', content: textBefore });
+					sections.push({ type: AgenticSectionType.TEXT, content: textBefore });
 				}
 			}
 
@@ -82,7 +86,7 @@
 			const toolResult = match[3].replace(/^\n+|\n+$/g, '');
 
 			sections.push({
-				type: 'tool_call',
+				type: AgenticSectionType.TOOL_CALL,
 				content: toolResult,
 				toolName,
 				toolArgs,
@@ -115,7 +119,7 @@
 			if (pendingIndex > 0) {
 				const textBefore = remainingContent.slice(0, pendingIndex).trim();
 				if (textBefore) {
-					sections.push({ type: 'text', content: textBefore });
+					sections.push({ type: AgenticSectionType.TEXT, content: textBefore });
 				}
 			}
 
@@ -132,7 +136,7 @@
 			const streamingResult = (pendingMatch[3] || '').replace(/^\n+|\n+$/g, '');
 
 			sections.push({
-				type: 'tool_call_pending',
+				type: AgenticSectionType.TOOL_CALL_PENDING,
 				content: streamingResult,
 				toolName,
 				toolArgs,
@@ -144,7 +148,7 @@
 			if (pendingIndex > 0) {
 				const textBefore = remainingContent.slice(0, pendingIndex).trim();
 				if (textBefore) {
-					sections.push({ type: 'text', content: textBefore });
+					sections.push({ type: AgenticSectionType.TEXT, content: textBefore });
 				}
 			}
 
@@ -169,7 +173,7 @@
 			}
 
 			sections.push({
-				type: 'tool_call_streaming',
+				type: AgenticSectionType.TOOL_CALL_STREAMING,
 				content: '',
 				toolName: partialWithNameMatch[1],
 				toolArgs: partialArgs || undefined,
@@ -181,7 +185,7 @@
 			if (pendingIndex > 0) {
 				const textBefore = remainingContent.slice(0, pendingIndex).trim();
 				if (textBefore) {
-					sections.push({ type: 'text', content: textBefore });
+					sections.push({ type: AgenticSectionType.TEXT, content: textBefore });
 				}
 			}
 
@@ -189,7 +193,7 @@
 			const nameMatch = earlyMatch[1]?.match(/<<<TOOL_NAME:([^>]+)>>>/);
 
 			sections.push({
-				type: 'tool_call_streaming',
+				type: AgenticSectionType.TOOL_CALL_STREAMING,
 				content: '',
 				toolName: nameMatch?.[1],
 				toolArgs: undefined,
@@ -207,13 +211,13 @@
 			}
 
 			if (remainingText) {
-				sections.push({ type: 'text', content: remainingText });
+				sections.push({ type: AgenticSectionType.TEXT, content: remainingText });
 			}
 		}
 
 		// If no tool calls found, return content as single text section
 		if (sections.length === 0 && rawContent.trim()) {
-			sections.push({ type: 'text', content: rawContent });
+			sections.push({ type: AgenticSectionType.TEXT, content: rawContent });
 		}
 
 		return sections;
@@ -231,13 +235,12 @@
 
 <div class="agentic-content">
 	{#each sections as section, index (index)}
-		{#if section.type === 'text'}
+		{#if section.type === AgenticSectionType.TEXT}
 			<div class="agentic-text">
 				<MarkdownContent content={section.content} />
 			</div>
-		{:else if section.type === 'tool_call_streaming'}
-			<!-- Streaming state - show CollapsibleInfoCard with live streaming args -->
-			<CollapsibleInfoCard
+		{:else if section.type === AgenticSectionType.TOOL_CALL_STREAMING}
+			<CollapsibleContentBlock
 				open={isExpanded(index, true)}
 				class="my-2"
 				icon={Loader2}
@@ -264,12 +267,12 @@
 						</div>
 					{/if}
 				</div>
-			</CollapsibleInfoCard>
-		{:else if section.type === 'tool_call' || section.type === 'tool_call_pending'}
-			{@const isPending = section.type === 'tool_call_pending'}
+			</CollapsibleContentBlock>
+		{:else if section.type === AgenticSectionType.TOOL_CALL || section.type === AgenticSectionType.TOOL_CALL_PENDING}
+			{@const isPending = section.type === AgenticSectionType.TOOL_CALL_PENDING}
 			{@const toolIcon = isPending ? Loader2 : Wrench}
 			{@const toolIconClass = isPending ? 'h-4 w-4 animate-spin' : 'h-4 w-4'}
-			<CollapsibleInfoCard
+			<CollapsibleContentBlock
 				open={isExpanded(index, isPending)}
 				class="my-2"
 				icon={toolIcon}
@@ -308,7 +311,7 @@
 						</div>
 					{/if}
 				</div>
-			</CollapsibleInfoCard>
+			</CollapsibleContentBlock>
 		{/if}
 	{/each}
 </div>
