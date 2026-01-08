@@ -1,5 +1,4 @@
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
-import { isTextFileByName } from './text-files';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
 import { FileTypeCategory } from '$lib/enums';
 import { modelsStore } from '$lib/stores/models.svelte';
@@ -84,17 +83,6 @@ export async function processFilesToChatUploaded(
 				}
 
 				results.push({ ...base, preview });
-			} else if (
-				getFileTypeCategory(file.type) === FileTypeCategory.TEXT ||
-				isTextFileByName(file.name)
-			) {
-				try {
-					const textContent = await readFileAsUTF8(file);
-					results.push({ ...base, textContent });
-				} catch (err) {
-					console.warn('Failed to read text file, adding without content:', err);
-					results.push(base);
-				}
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.PDF) {
 				// Extract text content from PDF for preview
 				try {
