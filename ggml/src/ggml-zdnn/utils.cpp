@@ -41,14 +41,14 @@ void ggml_zdnn_dequantize(const void * src, float * dst, ggml_type type, int64_t
 }
 
 // Check if a type can be directly mapped to a ZDNN type (without dequantization)
+// Only floating-point types can be transformed and used with NNPA
+// Integer types (I8, I32) are used for indices but cannot be transformed
+// Q8_0 is a quantized type that should be dequantized, not treated as native INT8
 bool ggml_zdnn_type_is_native(ggml_type type) {
     switch (type) {
         case GGML_TYPE_F32:
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
-        case GGML_TYPE_Q8_0:
-        case GGML_TYPE_I8:
-        case GGML_TYPE_I32:
             return true;
         default:
             return false;
