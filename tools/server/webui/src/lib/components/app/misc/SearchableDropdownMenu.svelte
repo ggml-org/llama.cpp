@@ -65,7 +65,13 @@
 </script>
 
 <DropdownMenu.Root bind:open onOpenChange={handleOpenChange}>
-	<DropdownMenu.Trigger {disabled}>
+	<DropdownMenu.Trigger
+		{disabled}
+		onclick={(e) => {
+			e.preventDefault();
+			e.stopPropagation();
+		}}
+	>
 		{@render trigger()}
 	</DropdownMenu.Trigger>
 
