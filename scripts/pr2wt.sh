@@ -4,7 +4,7 @@
 #
 # - creates a new remote using the fork's clone URL
 # - creates a local branch tracking the remote branch
-# - creates a new worktree in a parent folder, suffixed with "-pr-${PR}"
+# - creates a new worktree in a parent folder, suffixed with "-pr-$PR"
 #
 # sample usage:
 #   ./scripts/pr2wt.sh 12345
@@ -39,7 +39,7 @@ org_repo=${org_repo%.git}
 
 echo "org/repo: $org_repo"
 
-meta=$(curl -sSf -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${org_repo}/pulls/${PR}")
+meta=$(curl -sSf -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$org_repo/pulls/$PR")
 
 url_remote=$(echo "$meta" | jq -r '.head.repo.clone_url')
 head_ref=$(echo "$meta" | jq -r '.head.ref')
@@ -47,21 +47,29 @@ head_ref=$(echo "$meta" | jq -r '.head.ref')
 echo "url:      $url_remote"
 echo "head_ref: $head_ref"
 
-git remote rm  pr/${PR} 2> /dev/null
-git remote add pr/${PR} $url_remote
-git fetch      pr/${PR} $head_ref
+git remote rm  pr/$PR 2> /dev/null
+git remote add pr/$PR $url_remote
+git fetch      pr/$PR $head_ref
 
 dir=$(basename $(pwd))
 
 git branch -D pr/$PR 2> /dev/null
-git worktree add -b pr/$PR ../$dir-pr-$PR pr/$PR/${head_ref} 2> /dev/null
+git worktree add -b pr/$PR ../$dir-pr-$PR pr/$PR/$head_ref 2> /dev/null
 
 wt_path=$(cd ../$dir-pr-$PR && pwd)
 
 echo "git worktree created in $wt_path"
 
+cd $wt_path
+git branch --set-upstream-to=pr/$PR/$head_ref
+
+if [[ -z $(git status --porcelain) ]]; then
+    git reset --hard pr/$PR/$head_ref
+else
+    echo "warning: local copy has modifications"
+fi
+
 # if a command was provided, execute it
 if [[ $# -eq 2 ]]; then
-    cd ../$dir-pr-$PR
     eval "$2"
 fi
