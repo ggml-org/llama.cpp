@@ -6,9 +6,10 @@
 		DialogConfirmation
 	} from '$lib/components/app';
 	import { Switch } from '$lib/components/ui/switch';
+	import { MessageRole } from '$lib/enums';
 
 	interface Props {
-		role: 'user' | 'assistant';
+		role: MessageRole.USER | MessageRole.ASSISTANT;
 		justify: 'start' | 'end';
 		actionsPosition: 'left' | 'right';
 		siblingInfo?: ChatMessageSiblingInfo | null;
@@ -77,11 +78,11 @@
 				<ActionButton icon={Edit} tooltip="Edit" onclick={onEdit} />
 			{/if}
 
-			{#if role === 'assistant' && onRegenerate}
+			{#if role === MessageRole.ASSISTANT && onRegenerate}
 				<ActionButton icon={RefreshCw} tooltip="Regenerate" onclick={() => onRegenerate()} />
 			{/if}
 
-			{#if role === 'assistant' && onContinue}
+			{#if role === MessageRole.ASSISTANT && onContinue}
 				<ActionButton icon={ArrowRight} tooltip="Continue" onclick={onContinue} />
 			{/if}
 

@@ -14,7 +14,7 @@
 	} from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
 	import { Wrench, Loader2 } from '@lucide/svelte';
-	import { AgenticSectionType } from '$lib/types/agentic';
+	import { AgenticSectionType } from '$lib/enums';
 	import { AGENTIC_TAGS, AGENTIC_REGEX } from '$lib/constants/agentic';
 	import { formatJsonPretty } from '$lib/utils/formatters';
 
@@ -38,16 +38,20 @@
 
 	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
 
-	function isExpanded(index: number, isPending: boolean): boolean {
-		if (showToolCallInProgress && isPending) {
-			return true;
-		}
+	function getDefaultExpanded(isPending: boolean): boolean {
+		return showToolCallInProgress && isPending;
+	}
 
-		return expandedStates[index] ?? showToolCallInProgress;
+	function isExpanded(index: number, isPending: boolean): boolean {
+		if (expandedStates[index] !== undefined) {
+			return expandedStates[index];
+		}
+		return getDefaultExpanded(isPending);
 	}
 
 	function toggleExpanded(index: number, isPending: boolean) {
-		expandedStates[index] = !isExpanded(index, isPending);
+		const currentState = isExpanded(index, isPending);
+		expandedStates[index] = !currentState;
 	}
 
 	function parseAgenticContent(rawContent: string): AgenticSection[] {

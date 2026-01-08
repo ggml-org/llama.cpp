@@ -23,7 +23,7 @@ import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/webso
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { MCPServerConfig, ClientCapabilities, Implementation } from '$lib/types/mcp';
-import { MCPError } from '$lib/types/mcp';
+import { MCPError } from '$lib/errors';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 
 // Type for tool call result content item

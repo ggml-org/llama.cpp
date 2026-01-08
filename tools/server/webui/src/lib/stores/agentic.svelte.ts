@@ -21,13 +21,13 @@
  */
 
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { OpenAISseClient, type OpenAISseTurnResult } from '$lib/agentic/openai-sse-client';
-import {
-	toAgenticMessages,
-	type AgenticMessage,
-	type AgenticChatCompletionRequest,
-	type AgenticToolCallList
-} from '$lib/agentic/types';
+import { OpenAISseClient, type OpenAISseTurnResult } from '$lib/clients/openai-sse';
+import type {
+	AgenticMessage,
+	AgenticChatCompletionRequest,
+	AgenticToolCallList
+} from '$lib/types/agentic';
+import { toAgenticMessages } from '$lib/utils';
 import type { ApiChatCompletionToolCall, ApiChatMessageData } from '$lib/types/api';
 import type { ChatMessagePromptProgress, ChatMessageTimings } from '$lib/types/chat';
 import type { MCPToolCall } from '$lib/types/mcp';
