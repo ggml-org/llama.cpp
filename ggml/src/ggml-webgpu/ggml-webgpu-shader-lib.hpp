@@ -8,6 +8,7 @@
 #include <vector>
 
 #define GGML_WEBGPU_F16_SIZE_BYTES                   2
+#define GGML_WEBGPU_F32_SIZE_BYTES                   4
 #define GGML_WEBGPU_FLASH_ATTN_PREFERRED_KV_SG_TILES 8u
 #define GGML_WEBGPU_FLASH_ATTN_PREFERRED_WG_SIZE     128u
 // Matches GGML_PAD(..., 256) in src/llama-context.cpp for KV cache sizing.
@@ -48,26 +49,28 @@ inline size_t ggml_webgpu_flash_attn_wg_mem_bytes(uint32_t q_tile,
                                                   bool     has_mask,
                                                   bool     kv_direct) {
     const uint32_t max_head_dim = std::max(head_dim_qk, head_dim_v);
-    size_t         elems        = 0;
-    elems += q_tile * head_dim_qk;        // q_shmem
+    size_t         f16_elems    = 0;
+    size_t         f32_elems    = 0;
+    f16_elems += q_tile * head_dim_qk;        // q_shmem
     if (!kv_direct) {
-        elems += kv_tile * max_head_dim;  // kv_shmem
+        f16_elems += kv_tile * max_head_dim;  // kv_shmem
     }
-    elems += q_tile * head_dim_v;         // o_shmem
+    f16_elems += q_tile * head_dim_v;         // o_shmem
     if (has_mask) {
-        elems += q_tile * kv_tile;        // mask_shmem
+        f16_elems += q_tile * kv_tile;        // mask_shmem
     }
-    elems += q_tile * kv_tile;            // inter_shmem
-    elems += q_tile;                      // row_max_shmem
-    elems += q_tile;                      // exp_sum_shmem
-    return elems * GGML_WEBGPU_F16_SIZE_BYTES;
+    f16_elems += q_tile * kv_tile;            // inter_shmem
+    f32_elems += q_tile;                      // row_max_shmem
+    f32_elems += q_tile;                      // exp_sum_shmem
+    return f16_elems * GGML_WEBGPU_F16_SIZE_BYTES + f32_elems * GGML_WEBGPU_F32_SIZE_BYTES;
 }
 
 static uint32_t ggml_webgpu_flash_attn_max_kv_tile(const ggml_webgpu_flash_attn_shader_lib_context & context) {
     const size_t limit_bytes  = context.wg_mem_limit_bytes;
     const size_t q_tile       = context.sg_mat_m;
-    const size_t base_q_bytes = (context.head_dim_qk + context.head_dim_v + 2) * q_tile * GGML_WEBGPU_F16_SIZE_BYTES;
-    size_t       bytes_per_kv = 0;
+    const size_t base_q_bytes = (context.head_dim_qk + context.head_dim_v) * q_tile * GGML_WEBGPU_F16_SIZE_BYTES +
+                                2 * q_tile * GGML_WEBGPU_F32_SIZE_BYTES;
+    size_t bytes_per_kv = 0;
     if (!context.kv_direct) {
         bytes_per_kv += std::max(context.head_dim_qk, context.head_dim_v);
     }
@@ -138,7 +141,7 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
     uint32_t q_tile  = context.sg_mat_m;
     uint32_t kv_tile = std::min(ggml_webgpu_flash_attn_max_kv_tile(context),
                                 context.sg_mat_n * GGML_WEBGPU_FLASH_ATTN_PREFERRED_KV_SG_TILES);
-    if (context.kv_direct)  {
+    if (context.kv_direct) {
         GGML_ASSERT(kv_tile <= GGML_WEBGPU_KV_SEQ_PAD);
         // Avoids having to use bounds-checks and decreasing performance for direct KV loads
         while (GGML_WEBGPU_KV_SEQ_PAD % kv_tile != 0) {

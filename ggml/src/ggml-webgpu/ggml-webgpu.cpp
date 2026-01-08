@@ -771,12 +771,12 @@ static wgpu::Buffer ggml_webgpu_tensor_buf(const ggml_tensor * tensor) {
     return ctx->buffer;
 }
 
-static size_t ggml_webgpu_tensor_misalignment(webgpu_context & ctx, ggml_tensor * t) {
+static size_t ggml_webgpu_tensor_misalignment(webgpu_context & ctx, const ggml_tensor * t) {
     size_t offset = ggml_webgpu_tensor_offset(t);
     return offset & (ctx->limits.minStorageBufferOffsetAlignment - 1);
 }
 
-static size_t ggml_webgpu_tensor_align_offset(webgpu_context & ctx, ggml_tensor * t) {
+static size_t ggml_webgpu_tensor_align_offset(webgpu_context & ctx, const ggml_tensor * t) {
     size_t offset = ggml_webgpu_tensor_offset(t);
     return offset & ~(ctx->limits.minStorageBufferOffsetAlignment - 1);
 }
@@ -1118,8 +1118,8 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
         .head_dim_qk        = (uint32_t) Q->ne[0],
         .head_dim_v         = (uint32_t) V->ne[0],
         .kv_direct          = kv_direct,
-        .has_mask           = mask != nullptr,
-        .has_sinks          = sinks != nullptr,
+        .has_mask           = static_cast<bool>(has_mask),
+        .has_sinks          = static_cast<bool>(has_sinks),
         .uses_logit_softcap = logit_softcap != 0.0f,
     };
 
@@ -1137,12 +1137,12 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
             pipeline  = it->second;
             decisions = *static_cast<ggml_webgpu_flash_attn_shader_decisions *>(pipeline.context);
         } else {
-            ggml_webgpu_flash_attn_shader_lib_context shader_lib_ctx = { .kv_type            = K->type,
-                                                                         .head_dim_qk        = (uint32_t) Q->ne[0],
-                                                                         .head_dim_v         = (uint32_t) V->ne[0],
-                                                                         .kv_direct          = kv_direct,
-                                                                         .has_mask           = mask != nullptr,
-                                                                         .has_sinks          = sinks != nullptr,
+            ggml_webgpu_flash_attn_shader_lib_context shader_lib_ctx = { .kv_type     = K->type,
+                                                                         .head_dim_qk = (uint32_t) Q->ne[0],
+                                                                         .head_dim_v  = (uint32_t) V->ne[0],
+                                                                         .kv_direct   = kv_direct,
+                                                                         .has_mask    = static_cast<bool>(has_mask),
+                                                                         .has_sinks   = static_cast<bool>(has_sinks),
                                                                          .uses_logit_softcap = logit_softcap != 0.0f,
                                                                          .sg_mat_m           = ctx->sg_mat_m,
                                                                          .sg_mat_n           = ctx->sg_mat_n,
@@ -2903,7 +2903,7 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
             GGML_UNUSED(message);
             //TODO: uncomment once proper free logic is in place
             //GGML_LOG_ERROR("ggml_webgpu: Device lost! Reason: %d, Message: %s\n", static_cast<int>(reason),
-                           //std::string(message).c_str());
+            //std::string(message).c_str());
         });
     dev_desc.SetUncapturedErrorCallback(
         [](const wgpu::Device & device, wgpu::ErrorType reason, wgpu::StringView message) {

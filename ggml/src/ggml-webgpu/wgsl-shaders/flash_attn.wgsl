@@ -92,21 +92,21 @@ struct Params {
     m1: f32,
 };
 
-@group(0) @binding(0) var<storage, read> Q: array<f32>;
-@group(0) @binding(1) var<storage, read> K: array<KV_TYPE>;
-@group(0) @binding(2) var<storage, read> V: array<KV_TYPE>;
+@group(0) @binding(0) var<storage, read_write> Q: array<f32>;
+@group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
+@group(0) @binding(2) var<storage, read_write> V: array<KV_TYPE>;
 
 #if defined(MASK) && defined(SINKS)
-@group(0) @binding(3) var<storage, read> mask: array<f16>;
-@group(0) @binding(4) var<storage, read> sinks: array<f32>;
+@group(0) @binding(3) var<storage, read_write> mask: array<f16>;
+@group(0) @binding(4) var<storage, read_write> sinks: array<f32>;
 #define DST_BINDING 5
 #define PARAMS_BINDING 6
 #elif defined(MASK)
-@group(0) @binding(3) var<storage, read> mask: array<f16>;
+@group(0) @binding(3) var<storage, read_write> mask: array<f16>;
 #define DST_BINDING 4
 #define PARAMS_BINDING 5
 #elif defined(SINKS)
-@group(0) @binding(3) var<storage, read> sinks: array<f32>;
+@group(0) @binding(3) var<storage, read_write> sinks: array<f32>;
 #define DST_BINDING 4
 #define PARAMS_BINDING 5
 #else
@@ -117,7 +117,8 @@ struct Params {
 @group(0) @binding(DST_BINDING) var<storage, read_write> dst: array<f32>;
 @group(0) @binding(PARAMS_BINDING) var<uniform> params: Params;
 
-const FLOAT_MIN: f16 = -65504.0;
+// Just a very small float value.
+const FLOAT_MIN: f32 = -1.0e9;
 
 // The number of Q rows processed per workgroup
 var<workgroup> q_shmem: array<f16, Q_TILE * HEAD_DIM_QK>;
@@ -141,18 +142,18 @@ var<workgroup> mask_shmem: array<f16, Q_TILE * KV_TILE>;
 var<workgroup> inter_shmem: array<f16, Q_TILE * KV_TILE>;
 
 // Storage for row max and exp sum during online softmax
-var<workgroup> row_max_shmem: array<f16, Q_TILE>;
-var<workgroup> exp_sum_shmem: array<f16, Q_TILE>;
+var<workgroup> row_max_shmem: array<f32, Q_TILE>;
+var<workgroup> exp_sum_shmem: array<f32, Q_TILE>;
 
-fn calc_softmax_term(kv_idx: u32, q_tile_row: u32, slope: f16) -> f16 {
+fn calc_softmax_term(kv_idx: u32, q_tile_row: u32, slope: f32) -> f32 {
     var v = select(FLOAT_MIN,
-                   inter_shmem[kv_idx + q_tile_row * KV_TILE] * f16(params.scale),
+                   f32(inter_shmem[kv_idx + q_tile_row * KV_TILE]) * params.scale,
                    kv_idx < KV_TILE);
 #ifdef LOGIT_SOFTCAP
-    v = f16(params.logit_softcap) * tanh(v);
+    v = params.logit_softcap * tanh(v);
 #endif
 #ifdef MASK
-    let mask_val = select(0.0, mask_shmem[q_tile_row * KV_TILE + kv_idx], kv_idx < KV_TILE);
+    let mask_val = select(0.0, f32(mask_shmem[q_tile_row * KV_TILE + kv_idx]), kv_idx < KV_TILE);
     let mask_term = slope * mask_val;
     v += mask_term;
 #endif
@@ -171,6 +172,11 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     // initialize row max for online softmax
     for (var i = local_id.x; i < Q_TILE; i += WG_SIZE) {
         row_max_shmem[i] = FLOAT_MIN;
+        exp_sum_shmem[i] = 0.0;
+    }
+
+    for (var i = local_id.x; i < Q_TILE * HEAD_DIM_V; i += WG_SIZE) {
+        o_shmem[i] = 0.0;
     }
 
     // workgroups per head/batch
@@ -209,7 +215,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let dst_global_offset = dst_batch_offset + q_row_start * dst2_stride + head_idx * HEAD_DIM_V;
 
     let head = f32(head_idx);
-    let slope = f16(select(1.0, select(pow(params.m1, 2.0 * (head - params.n_head_log2) + 1.0), pow(params.m0, head + 1.0), head < params.n_head_log2), params.max_bias > 0));
+    let slope = select(1.0, select(pow(params.m1, 2.0 * (head - params.n_head_log2) + 1.0), pow(params.m0, head + 1.0), head < params.n_head_log2), params.max_bias > 0);
 
     // load q tile into shared memory
     for (var elem_idx = local_id.x; elem_idx < Q_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE) {
@@ -224,6 +230,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     }
 
     for (var kv_tile = 0u; kv_tile < params.seq_len_kv; kv_tile += KV_TILE) {
+      // clear inter_shmem to ensure zero-initialized accumulators
+      for (var elem_idx = local_id.x; elem_idx < Q_TILE * KV_TILE; elem_idx += WG_SIZE) {
+          inter_shmem[elem_idx] = 0.0;
+      }
 
       // load k tile into shared memory
 #if defined(KV_Q4_0)
@@ -300,14 +310,15 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
       // accumulate q block * k block into registers across the entire KV tile
       // TODO: this loop seems to be the current largest bottleneck
       for (var kv_block = subgroup_id; kv_block < KV_BLOCKS; kv_block += num_subgroups) {
-          var acc: subgroup_matrix_result<f16, SG_MAT_M, SG_MAT_N>;
+          let inter_offset = kv_block * SG_MAT_N;
+          var acc: subgroup_matrix_result<f16, SG_MAT_M, SG_MAT_N> = subgroupMatrixLoad<
+              subgroup_matrix_result<f16, SG_MAT_M, SG_MAT_N>>(&inter_shmem, inter_offset, false, KV_TILE);
 #ifdef KV_DIRECT
           let k_block_row = kv_tile + kv_block * SG_MAT_N;
           let k_global_offset = k_head_offset + k_block_row * params.stride_k1;
 #else
           let k_block_offset = kv_block * SG_MAT_N * HEAD_DIM_QK;
 #endif
-          let inter_offset = kv_block * SG_MAT_N;
           for (var head_dim_block = 0u; head_dim_block < HEAD_DIM_QK; head_dim_block += SG_MAT_K) {
               // load q submatrix from shared memory
               var q_sg_mat: subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K> = subgroupMatrixLoad<subgroup_matrix_left<f16, SG_MAT_M, SG_MAT_K>>(
@@ -373,7 +384,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
               final_max = subgroupMax(max(final_max, softmax_term));
           }
 
-          var total_exp_term: f16 = 0.0;
+          var total_exp_term: f32 = 0.0;
           // pass 2: compute exp sum and write P using final_max
           for (var kv_offset = 0u; kv_offset < KV_TILE; kv_offset += subgroup_size) {
               let kv_idx = kv_offset + sg_inv_id;
@@ -383,7 +394,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                                  kv_tile + kv_idx < params.seq_len_kv && kv_idx < KV_TILE);
               total_exp_term += subgroupAdd(cur_p);
               if (kv_idx < KV_TILE) {
-                  inter_shmem[kv_idx + q_tile_row * KV_TILE] = cur_p;
+                  inter_shmem[kv_idx + q_tile_row * KV_TILE] = f16(cur_p);
               }
           }
 
@@ -396,7 +407,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
           for (var elem_idx = sg_inv_id; elem_idx < HEAD_DIM_V; elem_idx += subgroup_size) {
               let idx = q_tile_row * HEAD_DIM_V + elem_idx;
-              o_shmem[idx] *= cur_exp;
+              o_shmem[idx] = f16(f32(o_shmem[idx]) * cur_exp);
           }
       }
 
@@ -537,8 +548,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
             var prev_max = row_max_shmem[q_tile_row];
 
-            // for non-sink threads, exp(-65504) effectively zeroes out their contribution to the sum
-            let sink_val = select(FLOAT_MIN, f16(sinks[params.offset_sinks + head_idx]), sg_inv_id == 0);
+            // for non-sink threads, exp(FLOAT_MIN) effectively zeroes out their contribution to the sum
+            let sink_val = select(FLOAT_MIN, sinks[params.offset_sinks + head_idx], sg_inv_id == 0);
             let new_max = subgroupMax(max(prev_max, sink_val));
             let max_exp = exp(prev_max - new_max);
             let sink_exp = exp(sink_val - new_max);
@@ -551,8 +562,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
             for (var elem_idx = sg_inv_id; elem_idx < HEAD_DIM_V; elem_idx += subgroup_size) {
                 let idx = q_tile_row * HEAD_DIM_V + elem_idx;
-                let val = o_shmem[idx] * max_exp;
-                o_shmem[idx] = val;
+                let val = f32(o_shmem[idx]) * max_exp;
+                o_shmem[idx] = f16(val);
             }
     }
 
@@ -573,8 +584,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
             for (var elem_idx = sg_inv_id; elem_idx < HEAD_DIM_V; elem_idx += subgroup_size) {
                 let o_val = o_shmem[q_tile_row * HEAD_DIM_V + elem_idx];
-                let scaled = o_val * scale;
-                dst[dst_global_offset + q_tile_row * dst2_stride + elem_idx] = f32(scaled);
+                let scaled = f32(o_val) * scale;
+                dst[dst_global_offset + q_tile_row * dst2_stride + elem_idx] = scaled;
             }
     }
 }
