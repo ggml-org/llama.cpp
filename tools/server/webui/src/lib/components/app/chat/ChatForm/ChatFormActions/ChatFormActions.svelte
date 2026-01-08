@@ -184,7 +184,6 @@
 
 	<div class="ml-auto flex items-center gap-1.5">
 		<ModelsSelector
-			class="max-w-[4rem]"
 			{disabled}
 			bind:this={selectorModelRef}
 			currentModel={conversationModel}
