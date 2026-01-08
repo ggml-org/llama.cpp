@@ -1,43 +1,9 @@
-import type {
-	ApiChatCompletionRequest,
-	ApiChatMessageContentPart,
-	ApiChatMessageData
-} from '$lib/types/api';
+import type { ApiChatMessageData } from '$lib/types/api';
+import type { AgenticMessage } from '$lib/types/agentic';
 
-export type AgenticToolCallPayload = {
-	id: string;
-	type: 'function';
-	function: {
-		name: string;
-		arguments: string;
-	};
-};
-
-export type AgenticMessage =
-	| {
-			role: 'system' | 'user';
-			content: string | ApiChatMessageContentPart[];
-	  }
-	| {
-			role: 'assistant';
-			content?: string | ApiChatMessageContentPart[];
-			tool_calls?: AgenticToolCallPayload[];
-	  }
-	| {
-			role: 'tool';
-			tool_call_id: string;
-			content: string;
-	  };
-
-export type AgenticAssistantMessage = Extract<AgenticMessage, { role: 'assistant' }>;
-export type AgenticToolCallList = NonNullable<AgenticAssistantMessage['tool_calls']>;
-
-export type AgenticChatCompletionRequest = Omit<ApiChatCompletionRequest, 'messages'> & {
-	messages: AgenticMessage[];
-	stream: true;
-	tools?: ApiChatCompletionRequest['tools'];
-};
-
+/**
+ * Converts API messages to agentic format.
+ */
 export function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 	return messages.map((message) => {
 		if (message.role === 'assistant' && message.tool_calls && message.tool_calls.length > 0) {

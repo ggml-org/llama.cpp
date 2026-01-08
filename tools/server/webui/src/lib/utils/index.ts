@@ -97,23 +97,5 @@ export { getLanguageFromFilename } from './syntax-highlight-language';
 // Text file utilities
 export { isTextFileByName, readFileAsText, isLikelyTextFile } from './text-files';
 
-// Debounce utilities
-export { debounce } from './debounce';
-
-// Image error fallback utilities
-export { getImageErrorFallbackHtml } from './image-error-fallback';
-
-// Data URL utilities
-export { createBase64DataUrl } from './data-url';
-
-// Cache utilities
-export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
-
-// Abort signal utilities
-export {
-	throwIfAborted,
-	isAbortError,
-	createLinkedController,
-	createTimeoutSignal,
-	withAbortSignal
-} from './abort';
+// Agentic utilities
+export { toAgenticMessages } from './agentic';

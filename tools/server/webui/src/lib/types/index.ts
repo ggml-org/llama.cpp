@@ -32,20 +32,14 @@ export type {
 	ApiRouterModelsUnloadResponse
 } from './api';
 
-// Chat types
+// Chat types - interfaces only (enums are in $lib/enums)
 export type {
 	ChatUploadedFile,
 	ChatAttachmentDisplayItem,
 	ChatAttachmentPreviewItem,
 	ChatMessageSiblingInfo,
 	ChatMessagePromptProgress,
-	ChatMessageTimings,
-	ChatStreamCallbacks,
-	ErrorDialogState,
-	LiveProcessingStats,
-	LiveGenerationStats,
-	AttachmentDisplayItemsOptions,
-	FileProcessingResult
+	ChatMessageTimings
 } from './chat.d';
 
 // Database types

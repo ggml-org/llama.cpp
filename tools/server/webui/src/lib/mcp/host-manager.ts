@@ -28,7 +28,7 @@ import type {
 	ClientCapabilities,
 	Implementation
 } from '$lib/types/mcp';
-import { MCPError } from '$lib/types/mcp';
+import { MCPError } from '$lib/errors';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 export interface MCPHostManagerConfig {

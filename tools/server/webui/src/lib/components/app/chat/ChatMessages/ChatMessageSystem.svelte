@@ -7,7 +7,7 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { isIMEComposing } from '$lib/utils';
 	import ChatMessageActions from './ChatMessageActions.svelte';
-	import { KeyboardKey, MessageRole } from '$lib/enums';
+	import { MessageRole } from '$lib/enums';
 
 	interface Props {
 		class?: string;

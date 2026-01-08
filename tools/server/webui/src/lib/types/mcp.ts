@@ -10,18 +10,6 @@ export type { Tool, CallToolResult };
 export type ClientCapabilities = SDKClientCapabilities;
 export type Implementation = SDKImplementation;
 
-export class MCPError extends Error {
-	code: number;
-	data?: unknown;
-
-	constructor(message: string, code: number, data?: unknown) {
-		super(message);
-		this.name = 'MCPError';
-		this.code = code;
-		this.data = data;
-	}
-}
-
 export type MCPTransportType = 'websocket' | 'streamable_http';
 
 export type MCPServerConfig = {

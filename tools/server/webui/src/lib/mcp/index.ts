@@ -8,8 +8,10 @@ export type {
 	ToolExecutionResult
 } from './server-connection';
 
+// Errors
+export { MCPError } from '$lib/errors';
+
 // Types
-export { MCPError } from '$lib/types/mcp';
 export type {
 	MCPClientConfig,
 	MCPServerConfig,

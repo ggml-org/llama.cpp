@@ -1,6 +1,3 @@
-import type { ErrorDialogType } from '$lib/enums';
-import type { DatabaseMessageExtra } from './database';
-
 export interface ChatUploadedFile {
 	id: string;
 	name: string;

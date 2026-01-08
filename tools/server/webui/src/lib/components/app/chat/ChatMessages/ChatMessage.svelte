@@ -10,12 +10,10 @@
 	import { DatabaseService } from '$lib/services';
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
 	import { MessageRole } from '$lib/enums';
-	import {
-		ChatMessageAssistant,
-		ChatMessageUser,
-		ChatMessageSystem
-	} from '$lib/components/app/chat';
-	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
+	import { copyToClipboard, isIMEComposing, formatMessageForClipboard } from '$lib/utils';
+	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
+	import ChatMessageUser from './ChatMessageUser.svelte';
+	import ChatMessageSystem from './ChatMessageSystem.svelte';
 
 	interface Props {
 		class?: string;
@@ -47,7 +45,9 @@
 	let shouldBranchAfterEdit = $state(false);
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
 
-	let showSaveOnlyOption = $derived(message.role === MessageRole.USER);
+	let thinkingContent = $derived.by(() => {
+		if (message.role === MessageRole.ASSISTANT) {
+			const trimmedThinking = message.thinking?.trim();
 
 	setMessageEditContext({
 		get isEditing() {
@@ -101,7 +101,7 @@
 
 		// If canceling a new system message with placeholder content, remove it without deleting children
 		if (message.role === MessageRole.SYSTEM) {
-			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
+			const conversationDeleted = await removeSystemPromptPlaceholder(message.id);
 
 			if (conversationDeleted) {
 				goto('/');
