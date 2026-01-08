@@ -554,10 +554,16 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         // gpt-neox n_rot = rotary_pct * (n_embd / n_head)
         // gpt-j n_rot = rotary_dim
 
-        hparams.n_embd_head_k = hparams.n_embd / hparams.n_head() * 2;  // todo zhangxi
+        hparams.n_embd_head_k = hparams.n_embd / hparams.n_head();
+        if (arch == LLM_ARCH_IFAIRY) {
+            hparams.n_embd_head_k *= 2;
+        }
         ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH, hparams.n_embd_head_k, false);
 
-        hparams.n_embd_head_v = hparams.n_embd / hparams.n_head() * 2;  // todo zhangxi
+        hparams.n_embd_head_v = hparams.n_embd / hparams.n_head();
+        if (arch == LLM_ARCH_IFAIRY) {
+            hparams.n_embd_head_v *= 2;
+        }
         ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH, hparams.n_embd_head_v, false);
 
         // sanity check for n_rot (optional)
@@ -19667,6 +19673,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_CHAMELEON:
         case LLM_ARCH_BAILINGMOE:
         case LLM_ARCH_NEO_BERT:
+        case LLM_ARCH_IFAIRY:
         case LLM_ARCH_SMOLLM3:
         case LLM_ARCH_ARCEE:
         case LLM_ARCH_ERNIE4_5:
