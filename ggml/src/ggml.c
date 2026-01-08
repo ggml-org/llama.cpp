@@ -1188,21 +1188,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
 static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
-    "ABS",
-    "SGN",
-    "NEG",
-    "STEP",
-    "TANH",
-    "ELU",
-    "RELU",
-    "SIGMOID",
-    "GELU",
-    "GELU_QUICK",
-    "SILU",
-    "HARDSWISH",
-    "HARDSIGMOID",
-    "EXP",
-    "GELU_ERF",
+    "ABS",     "SGN",  "NEG",        "STEP", "TANH",      "ELU",         "RELU", "IFAIRY_RELU2",
+    "SIGMOID", "GELU", "GELU_QUICK", "SILU", "HARDSWISH", "HARDSIGMOID", "EXP",  "GELU_ERF",
 };
 
 static_assert(GGML_UNARY_OP_COUNT == 16, "GGML_UNARY_OP_COUNT != 16");
