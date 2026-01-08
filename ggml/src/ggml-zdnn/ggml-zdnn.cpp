@@ -297,6 +297,12 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
 
         case GGML_OP_MUL_MAT:
             {
+                // zdnn_matmul_transpose_op requires PARMBLKFORMAT_1 (z16+)
+                // z15 support with zdnn_matmul_op is not yet implemented
+                if (!ctx_dev->has_parmblkformat_1) {
+                    return false;
+                }
+
                 const ggml_tensor * weights = op->src[0];
                 const ggml_tensor * inputs  = op->src[1];
 
@@ -523,9 +529,12 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
 
                 // Check which unary ops we support
                 // Note: EXP is not supported due to range violation issues in zdnn_exp
+                // Note: GELU requires z16+ (NNPA function code 53)
                 const enum ggml_unary_op unary_op = ggml_get_unary_op(op);
                 switch (unary_op) {
                     case GGML_UNARY_OP_GELU:
+                        // GELU requires z16+ (check if NNPA_GELU function is installed)
+                        return zdnn_is_nnpa_function_installed(1, 53, 0);  // NNPA_GELU = 53
                     case GGML_UNARY_OP_RELU:
                     case GGML_UNARY_OP_TANH:
                     case GGML_UNARY_OP_SIGMOID:

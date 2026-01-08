@@ -1,6 +1,18 @@
 #include "ggml.h"
 #include "mmf.hpp"
 
+// Cache the PARMBLKFORMAT_1 availability check (z16+ feature)
+static bool g_has_parmblkformat_1_checked = false;
+static bool g_has_parmblkformat_1 = false;
+
+static bool has_parmblkformat_1() {
+    if (!g_has_parmblkformat_1_checked) {
+        g_has_parmblkformat_1 = zdnn_is_nnpa_parmblk_fmt_installed(1, NNPA_PARMBLKFORMAT_1);
+        g_has_parmblkformat_1_checked = true;
+    }
+    return g_has_parmblkformat_1;
+}
+
 void ggml_zdnn_mul_mat_f(
     const ggml_backend_zdnn_context * ctx,
     const               ggml_tensor * src0,
@@ -64,6 +76,14 @@ void ggml_zdnn_mul_mat_f(
     GGML_ASSERT(weights_extra->pre_tfm_desc.dim2 == weights->ne[1] && "weights_extra->pre_tfm_desc.dim2 must match weights->ne[1]");
     GGML_ASSERT(inputs_extra->pre_tfm_desc.dim1  == inputs->ne[0]  && "inputs_extra->pre_tfm_desc.dim1 must match inputs->ne[0]");
     GGML_ASSERT(inputs_extra->pre_tfm_desc.dim2  == inputs->ne[1]  && "inputs_extra->pre_tfm_desc.dim2 must match inputs->ne[1]");
+
+    // zdnn_matmul_transpose_op requires PARMBLKFORMAT_1 (z16+)
+    // For z15, we would need to use zdnn_matmul_op with pre-transposed weights
+    if (!has_parmblkformat_1()) {
+        GGML_LOG_ERROR("%s: zdnn_matmul_transpose_op requires z16+ hardware (PARMBLKFORMAT_1)\n", __func__);
+        GGML_LOG_ERROR("%s: z15 support with zdnn_matmul_op is not yet implemented\n", __func__);
+        GGML_ABORT("z15 matmul not supported - requires z16+ hardware");
+    }
 
     ZDNN_CHECK(zdnn_matmul_transpose_op(&inputs_extra->ztensor, &weights_extra->ztensor, &bias_extra->ztensor,
                                         false, true, MATMUL_OP_ADDITION, &output_extra->ztensor));
