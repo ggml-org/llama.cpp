@@ -54,10 +54,12 @@
 
 	function handleOpenChange(newOpen: boolean) {
 		open = newOpen;
+
 		if (!newOpen) {
 			searchValue = '';
 			onSearchChange?.('');
 		}
+
 		onOpenChange?.(newOpen);
 	}
 </script>
@@ -79,6 +81,7 @@
 
 		<div class={cn('overflow-y-auto', 'max-h-[--bits-dropdown-menu-content-available-height]')}>
 			{@render children()}
+
 			{#if isEmpty}
 				<div class="px-2 py-3 text-center text-sm text-muted-foreground">{emptyMessage}</div>
 			{/if}
@@ -86,6 +89,7 @@
 
 		{#if footer}
 			<DropdownMenu.Separator />
+
 			{@render footer()}
 		{/if}
 	</DropdownMenu.Content>
