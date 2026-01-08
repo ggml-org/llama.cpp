@@ -12,10 +12,14 @@
 #define GGML_ZDNN_NAME    "zDNN"
 #define GGML_ZDNN_VERSION ZDNN_VERNUM
 
-#define ZDNN_CHECK(stmt)                \
-    do {                                \
-        zdnn_status status = (stmt);    \
-        GGML_ASSERT(status == ZDNN_OK); \
+#define ZDNN_CHECK(stmt)                                                            \
+    do {                                                                            \
+        zdnn_status status = (stmt);                                                \
+        if (status != ZDNN_OK) {                                                    \
+            GGML_LOG_ERROR("ZDNN error: %s returned %d (%s)\n",                     \
+                          #stmt, (int)status, zdnn_get_status_message(status));    \
+        }                                                                           \
+        GGML_ASSERT(status == ZDNN_OK);                                             \
     } while (0);
 
 struct ggml_backend_zdnn_device_context {
