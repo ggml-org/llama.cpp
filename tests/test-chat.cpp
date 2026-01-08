@@ -1783,6 +1783,10 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ special_function_tool })
             .expect(message_assist_call)
             .run();
+        tst.test("Hello, world!\nWhat's up?[TOOL_CALLS]special_function[ARGS]{\"arg1\": 1}")
+            .tools({ special_function_tool })
+            .expect(message_assist_call_content)
+            .run();
     }
 
     {
