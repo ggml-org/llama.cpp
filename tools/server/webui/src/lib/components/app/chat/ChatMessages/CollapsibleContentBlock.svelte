@@ -43,12 +43,16 @@
 	}: Props = $props();
 </script>
 
-<Collapsible.Root bind:open class={className}>
+<Collapsible.Root
+	{open}
+	onOpenChange={(value) => {
+		open = value;
+		onToggle?.();
+	}}
+	class={className}
+>
 	<Card class="gap-0 border-muted bg-muted/30 py-0">
-		<Collapsible.Trigger
-			class="flex w-full cursor-pointer items-center justify-between p-3"
-			onclick={onToggle}
-		>
+		<Collapsible.Trigger class="flex w-full cursor-pointer items-center justify-between p-3">
 			<div class="flex items-center gap-2 text-muted-foreground">
 				{#if Icon}
 					<Icon class={iconClass} />
