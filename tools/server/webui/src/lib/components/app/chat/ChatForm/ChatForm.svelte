@@ -51,7 +51,6 @@
 	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
 	let currentConfig = $derived(config());
-	let fileAcceptString = $state<string | undefined>(undefined);
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
 	let isRecording = $state(false);
 	let message = $state('');
@@ -109,12 +108,7 @@
 	}
 
 	function handleFileUpload() {
-		fileAcceptString = undefined;
-
-		// Use setTimeout to ensure the accept attribute is applied before opening dialog
-		setTimeout(() => {
-			fileInputRef?.click();
-		}, 10);
+		fileInputRef?.click();
 	}
 
 	async function handleKeydown(event: KeyboardEvent) {
@@ -274,11 +268,7 @@
 	});
 </script>
 
-<ChatFormFileInputInvisible
-	bind:this={fileInputRef}
-	bind:accept={fileAcceptString}
-	onFileSelect={handleFileSelect}
-/>
+<ChatFormFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
 
 <form
 	onsubmit={handleSubmit}
