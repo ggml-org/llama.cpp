@@ -15,6 +15,7 @@
 		mcpHasHealthCheck,
 		mcpRunHealthCheck
 	} from '$lib/stores/mcp.svelte';
+	import { extractServerNameFromUrl, getFaviconUrl } from '$lib/utils/mcp';
 
 	interface Props {
 		class?: string;
@@ -95,32 +96,13 @@
 
 	function getServerDisplayName(server: MCPServerSettingsEntry): string {
 		if (server.name) return server.name;
-		try {
-			const url = new URL(server.url);
-			const host = url.hostname.replace(/^(www\.|mcp\.)/, '');
-			const name = host.split('.')[0] || 'Unknown';
-			return name.charAt(0).toUpperCase() + name.slice(1);
-		} catch {
-			return 'New Server';
-		}
-	}
-
-	function getFaviconUrl(server: MCPServerSettingsEntry): string | null {
-		try {
-			const url = new URL(server.url);
-			const hostnameParts = url.hostname.split('.');
-			const rootDomain =
-				hostnameParts.length >= 2 ? hostnameParts.slice(-2).join('.') : url.hostname;
-			return `https://www.google.com/s2/favicons?domain=${rootDomain}&sz=32`;
-		} catch {
-			return null;
-		}
+		return extractServerNameFromUrl(server.url);
 	}
 
 	let mcpFavicons = $derived(
 		healthyEnabledMcpServers
 			.slice(0, 3)
-			.map((s) => ({ id: s.id, url: getFaviconUrl(s) }))
+			.map((s) => ({ id: s.id, url: getFaviconUrl(s.url) }))
 			.filter((f) => f.url !== null)
 	);
 
@@ -189,9 +171,9 @@
 
 			<div class="flex items-center justify-between gap-2 px-2 py-2">
 				<div class="flex min-w-0 flex-1 items-center gap-2">
-					{#if getFaviconUrl(server)}
+					{#if getFaviconUrl(server.url)}
 						<img
-							src={getFaviconUrl(server)}
+							src={getFaviconUrl(server.url)}
 							alt=""
 							class="h-4 w-4 shrink-0 rounded-sm"
 							onerror={(e) => {
