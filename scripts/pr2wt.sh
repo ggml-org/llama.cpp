@@ -9,6 +9,7 @@
 # sample usage:
 #   ./scripts/pr2wt.sh 12345
 #   ./scripts/pr2wt.sh 12345 opencode
+#   ./scripts/pr2wt.sh 12345 "cmake -B build && cmake --build build"
 
 function usage() {
     echo "usage: $0 <pr_number> [cmd]"
@@ -46,7 +47,7 @@ head_ref=$(echo "$meta" | jq -r '.head.ref')
 echo "url:      $url_remote"
 echo "head_ref: $head_ref"
 
-git remote rm  pr/${PR}
+git remote rm  pr/${PR} 2> /dev/null
 git remote add pr/${PR} $url_remote
 git fetch      pr/${PR} $head_ref
 
@@ -62,5 +63,5 @@ echo "git worktree created in $wt_path"
 # if a command was provided, execute it
 if [[ $# -eq 2 ]]; then
     cd ../$dir-pr-$PR
-    exec $2
+    eval "$2"
 fi

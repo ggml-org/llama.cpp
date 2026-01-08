@@ -309,6 +309,7 @@ extern "C" {
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
         bool use_mmap;        // use mmap if possible
+        bool use_direct_io;   // use direct io, takes precedence over use_mmap
         bool use_mlock;       // force system to keep model in RAM
         bool check_tensors;   // validate model tensor data
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
@@ -494,7 +495,7 @@ extern "C" {
                     struct llama_context_params * cparams,
                                           float * tensor_split,          // writable buffer for tensor split, needs at least llama_max_devices elements
         struct llama_model_tensor_buft_override * tensor_buft_overrides, // writable buffer for overrides, needs at least llama_max_tensor_buft_overrides elements
-                                         size_t   margin,                // margin of memory to leave per device in bytes
+                                         size_t * margins,               // margins of memory to leave per device in bytes
                                        uint32_t   n_ctx_min,             // minimum context size to set when trying to reduce memory use
                             enum ggml_log_level   log_level);            // minimum log level to print during fitting, lower levels go to debug log
 

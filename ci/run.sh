@@ -105,7 +105,20 @@ if [ ! -z ${GG_BUILD_VULKAN} ]; then
 fi
 
 if [ ! -z ${GG_BUILD_WEBGPU} ]; then
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_WEBGPU=1"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_WEBGPU=1 -DGGML_METAL=OFF -DGGML_BLAS=OFF"
+
+    if [ ! -z "${GG_BUILD_WEBGPU_DAWN_PREFIX}" ]; then
+        if [ -z "${CMAKE_PREFIX_PATH}" ]; then
+            export CMAKE_PREFIX_PATH="${GG_BUILD_WEBGPU_DAWN_PREFIX}"
+        else
+            export CMAKE_PREFIX_PATH="${GG_BUILD_WEBGPU_DAWN_PREFIX}:${CMAKE_PREFIX_PATH}"
+        fi
+    fi
+
+    # For some systems, Dawn_DIR needs to be set explicitly, e.g., the lib64 path
+    if [ ! -z "${GG_BUILD_WEBGPU_DAWN_DIR}" ]; then
+        CMAKE_EXTRA="${CMAKE_EXTRA} -DDawn_DIR=${GG_BUILD_WEBGPU_DAWN_DIR}"
+    fi
 fi
 
 if [ ! -z ${GG_BUILD_MUSA} ]; then

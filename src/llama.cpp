@@ -111,8 +111,20 @@ static std::vector<llama_device_memory_data> llama_get_device_memory_data(
         }
     }
     for (size_t i = 0; i < ret.size(); i++) {
-        size_t free, total;
+        size_t free;
+        size_t total;
         ggml_backend_dev_memory(model->devices[i], &free, &total);
+
+        // devices can return 0 bytes for free and total memory if they do not
+        // have any to report. in this case, we will use the host memory as a fallback
+        // fixes: https://github.com/ggml-org/llama.cpp/issues/18577
+        if (free == 0 && total == 0) {
+            ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+            if (cpu_dev == nullptr) {
+                throw std::runtime_error(format("%s: no CPU backend found", __func__));
+            }
+            ggml_backend_dev_memory(cpu_dev, &free, &total);
+        }
         ret[i].free  = free;
         ret[i].total = total;
     }
@@ -147,9 +159,8 @@ class llama_params_fit_exception : public std::runtime_error {
 static void llama_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t margin_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
+        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
     constexpr int64_t MiB = 1024*1024;
-    const int64_t margin = margin_s; // this function uses int64_t rather than size_t for memory sizes to more conveniently handle deficits
     typedef std::vector<llama_device_memory_data> dmds_t;
     const llama_model_params default_mparams = llama_model_default_params();
 
@@ -166,6 +177,12 @@ static void llama_params_fit_impl(
     if (nd == 0) {
         LLAMA_LOG_INFO("%s: no devices with dedicated memory found\n", __func__);
         return;
+    }
+
+    std::vector<int64_t> margins; // this function uses int64_t rather than size_t for memory sizes to more conveniently handle deficits
+    margins.reserve(nd);
+    for (size_t id = 0; id < nd; id++) {
+        margins.push_back(margins_s[id]);
     }
 
     std::vector<std::string> dev_names;
@@ -187,9 +204,10 @@ static void llama_params_fit_impl(
 
     int64_t sum_free            = 0;
     int64_t sum_projected_free  = 0;
-    int64_t min_projected_free  = INT64_MAX;
     int64_t sum_projected_used  = 0;
     int64_t sum_projected_model = 0;
+    std::vector<int64_t> projected_free_per_device;
+    projected_free_per_device.reserve(nd);
 
     if (nd > 1) {
         LLAMA_LOG_INFO("%s: projected memory use with initial parameters [MiB]:\n", __func__);
@@ -199,45 +217,63 @@ static void llama_params_fit_impl(
 
         const int64_t projected_used = dmd.mb.total();
         const int64_t projected_free = dmd.free - projected_used;
+        projected_free_per_device.push_back(projected_free);
 
         sum_free            += dmd.free;
         sum_projected_used  += projected_used;
         sum_projected_free  += projected_free;
-        min_projected_free   = std::min(min_projected_free, projected_free);
         sum_projected_model += dmd.mb.model;
 
         if (nd > 1) {
-            LLAMA_LOG_INFO("%s:   - %s: %6" PRId64 " total, %6" PRId64 " used, %6" PRId64 " %s\n",
-                __func__, dev_names[id].c_str(), dmd.total/MiB, projected_used/MiB, std::abs(projected_free)/MiB,
-                projected_free >= 0 ? "surplus" : "deficit");
+            LLAMA_LOG_INFO("%s:   - %s: %6" PRId64 " total, %6" PRId64 " used, %6" PRId64 " free vs. target of %6" PRId64 "\n",
+                __func__, dev_names[id].c_str(), dmd.total/MiB, projected_used/MiB, projected_free/MiB, margins[id]/MiB);
         }
     }
     assert(sum_free >= 0 && sum_projected_used >= 0);
     LLAMA_LOG_INFO("%s: projected to use %" PRId64 " MiB of device memory vs. %" PRId64 " MiB of free device memory\n",
         __func__, sum_projected_used/MiB, sum_free/MiB);
-    if (min_projected_free >= margin) {
-        if (nd == 1) {
+    if (nd == 1) {
+        if (projected_free_per_device[0] >= margins[0]) {
             LLAMA_LOG_INFO("%s: will leave %" PRId64 " >= %" PRId64 " MiB of free device memory, no changes needed\n",
-                __func__, min_projected_free/MiB, margin/MiB);
+                __func__, projected_free_per_device[0]/MiB, margins[0]/MiB);
             return;
         }
-        LLAMA_LOG_INFO("%s: will leave at least %" PRId64 " >= %" PRId64 " MiB of free memory on all devices, no changes needed\n",
-            __func__, min_projected_free/MiB, margin/MiB);
-        return;
+    } else {
+        bool changes_needed = false;
+        for (size_t id = 0; id < nd; id++) {
+            if (projected_free_per_device[id] < margins[id]) {
+                changes_needed = true;
+                break;
+            }
+        }
+        if (!changes_needed) {
+            LLAMA_LOG_INFO("%s: targets for free memory can be met on all devices, no changes needed\n", __func__);
+            return;
+        }
     }
 
     // step 2: try reducing memory use by reducing the context size
 
     {
-        int64_t global_surplus = sum_projected_free - int64_t(nd)*margin;
+        int64_t global_surplus = sum_projected_free;
+        for (size_t id = 0; id < nd; id++) {
+            global_surplus -= margins[id];
+        }
         if (global_surplus < 0) {
-            LLAMA_LOG_INFO(nd == 1 ?
-                "%s: cannot fulfill margin of %" PRId64 " MiB, need to reduce device memory by %" PRId64 " MiB\n" :
-                "%s: cannot fulfill margin of %" PRId64 " MiB on all devices, need to use %" PRId64 " MiB less in total\n",
-                __func__, margin/MiB, -global_surplus/MiB);
+            if (nd == 1) {
+                LLAMA_LOG_INFO("%s: cannot meet free memory target of %" PRId64 " MiB, need to reduce device memory by %" PRId64 " MiB\n",
+                    __func__, margins[0]/MiB, -global_surplus/MiB);
+            } else {
+                LLAMA_LOG_INFO(
+                    "%s: cannot meet free memory targets on all devices, need to use %" PRId64 " MiB less in total\n",
+                    __func__, -global_surplus/MiB);
+            }
             if (cparams->n_ctx == 0) {
                 if (hp_nct > n_ctx_min) {
-                    int64_t sum_used_target = sum_free - nd*margin_s;
+                    int64_t sum_used_target = sum_free;
+                    for (size_t id = 0; id < nd; id++) {
+                        sum_used_target -= margins[id];
+                    }
                     if (nd > 1) {
                         // for multiple devices we need to be more conservative in terms of how much context we think can fit:
                         //   - for dense models only whole layers can be assigned to devices
@@ -448,9 +484,9 @@ static void llama_params_fit_impl(
         const dmds_t dmds_cpu_moe = llama_get_device_memory_data(
             path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
 
-        for (const llama_device_memory_data & dmd : dmds_cpu_moe) {
-            global_surplus_cpu_moe += dmd.free;
-            global_surplus_cpu_moe -= int64_t(dmd.mb.total()) + margin;
+        for (size_t id = 0; id < nd; id++) {
+            global_surplus_cpu_moe += dmds_cpu_moe[id].free;
+            global_surplus_cpu_moe -= int64_t(dmds_cpu_moe[id].mb.total()) + margins[id];
         }
 
         if (global_surplus_cpu_moe > 0) {
@@ -469,7 +505,7 @@ static void llama_params_fit_impl(
     std::vector<int64_t> targets; // maximum acceptable memory use per device
     targets.reserve(nd);
     for (size_t id = 0; id < nd; id++) {
-        targets.push_back(dmds_full[id].free - margin);
+        targets.push_back(dmds_full[id].free - margins[id]);
         LLAMA_LOG_DEBUG("%s: id=%zu, target=%" PRId64 " MiB\n", __func__, id, targets[id]/MiB);
     }
 
@@ -701,11 +737,11 @@ static void llama_params_fit_impl(
 enum llama_params_fit_status llama_params_fit(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t margin_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
+        size_t * margins, uint32_t n_ctx_min, enum ggml_log_level log_level) {
     const int64_t t0_us = llama_time_us();
     llama_params_fit_status status = LLAMA_PARAMS_FIT_STATUS_SUCCESS;
     try {
-        llama_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margin_s, n_ctx_min, log_level);
+        llama_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, log_level);
         LLAMA_LOG_INFO("%s: successfully fit params to free device memory\n", __func__);
     } catch (const llama_params_fit_exception & e) {
         LLAMA_LOG_WARN("%s: failed to fit params to free device memory: %s\n", __func__, e.what());
@@ -794,7 +830,7 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
     model.t_start_us = tm.t_start_us;
 
     try {
-        llama_model_loader ml(fname, splits, params.use_mmap, params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
+        llama_model_loader ml(fname, splits, params.use_mmap, params.use_direct_io, params.check_tensors, params.no_alloc, params.kv_overrides, params.tensor_buft_overrides);
 
         ml.print_info();
 
