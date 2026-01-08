@@ -4,7 +4,6 @@
 #include "server-task.h"
 #include "server-queue.h"
 
-#include "arg.h"
 #include "common.h"
 #include "llama.h"
 #include "log.h"
@@ -16,7 +15,6 @@
 #include <cstddef>
 #include <cinttypes>
 #include <memory>
-#include <unordered_set>
 #include <filesystem>
 
 // fix problem with std::min and std::max
@@ -2927,9 +2925,11 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             if (task.params.n_cmpl > 1) {
                 task.n_children = task.params.n_cmpl - 1;
                 for (size_t j = 0; j < task.n_children; j++) {
-                    server_task child = task.create_child(
-                        task.id,
-                        rd.get_new_id());
+                    server_task child = task.create_child(task.id, rd.get_new_id());
+
+                    // use different sampling seed for each child
+                    child.params.sampling.seed += j + 1;
+
                     tasks.push_back(std::move(child));
                 }
             }
