@@ -33,6 +33,7 @@ FROM ubuntu:$UBUNTU_VERSION AS base
 
 RUN apt-get update \
     && apt-get install -y libgomp1 curl libvulkan1 mesa-vulkan-drivers \
+    libglvnd0 libgl1 libglx0 libegl1 libgles2 \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \

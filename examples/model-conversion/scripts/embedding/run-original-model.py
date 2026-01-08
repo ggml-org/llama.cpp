@@ -3,12 +3,14 @@
 import argparse
 import os
 import sys
-import numpy as np
 import importlib
-from pathlib import Path
 
 from transformers import AutoTokenizer, AutoConfig, AutoModel
 import torch
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from utils.common import save_output_data
 
 
 def parse_arguments():
@@ -169,6 +171,7 @@ def main():
                 return_tensors="pt"
             )
             tokens = encoded['input_ids'][0]
+            token_ids = tokens.cpu().tolist()
             token_strings = tokenizer.convert_ids_to_tokens(tokens)
             for i, (token_id, token_str) in enumerate(zip(tokens, token_strings)):
                 print(f"{token_id:6d} -> '{token_str}'")
@@ -185,6 +188,7 @@ def main():
             )
 
             tokens = encoded['input_ids'][0]
+            token_ids = tokens.cpu().tolist()
             token_strings = tokenizer.convert_ids_to_tokens(tokens)
             for i, (token_id, token_str) in enumerate(zip(tokens, token_strings)):
                 print(f"{token_id:6d} -> '{token_str}'")
@@ -228,24 +232,11 @@ def main():
 
         print()
 
-        data_dir = Path("data")
-        data_dir.mkdir(exist_ok=True)
-        bin_filename = data_dir / f"pytorch-{model_name}-embeddings.bin"
-        txt_filename = data_dir / f"pytorch-{model_name}-embeddings.txt"
-
         flattened_embeddings = all_embeddings.flatten()
-        flattened_embeddings.astype(np.float32).tofile(bin_filename)
-
-        with open(txt_filename, "w") as f:
-            idx = 0
-            for j in range(n_embd_count):
-                for value in all_embeddings[j]:
-                    f.write(f"{idx}: {value:.6f}\n")
-                    idx += 1
         print(f"Total values: {len(flattened_embeddings)} ({n_embd_count} embeddings × {n_embd} dimensions)")
         print("")
-        print(f"Saved bin embeddings to: {bin_filename}")
-        print(f"Saved txt embeddings to: {txt_filename}")
+
+        save_output_data(flattened_embeddings, token_ids, prompt_text, model_name, type_suffix="-embeddings")
 
 
 if __name__ == "__main__":

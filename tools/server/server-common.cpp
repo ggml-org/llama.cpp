@@ -1,10 +1,10 @@
 #include "common.h"
+#include "download.h"
 #include "log.h"
 #include "llama.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "chat.h"
-#include "arg.h" // for common_remote_get_content; TODO: use download.h only
 #include "base64.hpp"
 
 #include "server-common.h"
@@ -779,7 +779,7 @@ static void handle_media(
         // download remote image
         // TODO @ngxson : maybe make these params configurable
         common_remote_params params;
-        params.headers.push_back("User-Agent: llama.cpp/" + build_info);
+        params.headers.push_back({"User-Agent", "llama.cpp/" + build_info});
         params.max_size = 1024 * 1024 * 10; // 10MB
         params.timeout  = 10; // seconds
         SRV_INF("downloading image from '%s'\n", url.c_str());
@@ -1385,16 +1385,21 @@ json format_response_rerank(
 
 std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx) {
     std::vector<llama_token_data> cur;
+
     const auto * logits = llama_get_logits_ith(ctx, idx);
+    const llama_token * sampled_ids = llama_get_sampled_candidates_ith(ctx, idx);
 
-    const llama_model * model = llama_get_model(ctx);
-    const llama_vocab * vocab = llama_model_get_vocab(model);
+    const int n_logits = llama_get_sampled_logits_count_ith(ctx, idx);
 
-    const int n_vocab = llama_vocab_n_tokens(vocab);
-
-    cur.resize(n_vocab);
-    for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
-        cur[token_id] = llama_token_data{token_id, logits[token_id], 0.0f};
+    cur.resize(n_logits);
+    if (sampled_ids) {
+        for (int i = 0; i < n_logits; i++) {
+            cur[i] = llama_token_data{sampled_ids[i], logits[i], 0.0f};
+        }
+    } else {
+        for (llama_token token_id = 0; token_id < n_logits; token_id++) {
+            cur[token_id] = llama_token_data{token_id, logits[token_id], 0.0f};
+        }
     }
 
     // sort tokens by logits

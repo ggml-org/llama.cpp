@@ -1148,6 +1148,25 @@ private:
                 return false;
             }
 
+            const bool need_logits = task.params.sampling.n_probs > 0;
+
+            bool backend_sampling = true;
+
+            backend_sampling &= task.params.sampling.backend_sampling;
+
+            // TODO: speculative decoding requires multiple samples per batch - not supported yet
+            backend_sampling &= !(slot.ctx_dft && task.params.speculative.n_max > 0);
+
+            // TODO: getting post/pre sampling logits is not yet supported with backend sampling
+            backend_sampling &= !need_logits;
+
+            // TODO: tmp until backend sampling is fully implemented
+            if (backend_sampling) {
+                llama_set_sampler(ctx, slot.id, common_sampler_get(slot.smpl.get()));
+            } else {
+                llama_set_sampler(ctx, slot.id, nullptr);
+            }
+
             SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
         }
 
@@ -1486,9 +1505,9 @@ private:
         res->n_tokens  = slot.task->n_tokens();
         res->res_type  = slot.task->params.res_type;
 
-        const int n_embd = llama_model_n_embd(model);
+        const int n_embd_out = llama_model_n_embd_out(model);
 
-        std::vector<float> embd_res(n_embd, 0.0f);
+        std::vector<float> embd_res(n_embd_out, 0.0f);
 
         for (int i = 0; i < batch.n_tokens; ++i) {
             if (!batch.logits[i] || batch.seq_id[i][0] != slot.id) {
@@ -1505,18 +1524,18 @@ private:
             if (embd == nullptr) {
                 SLT_ERR(slot, "failed to get embeddings, token = %d, seq_id = %d\n", batch.token[i], batch.seq_id[i][0]);
 
-                res->embedding.push_back(std::vector<float>(n_embd, 0.0f));
+                res->embedding.push_back(std::vector<float>(n_embd_out, 0.0f));
                 continue;
             }
 
             // normalize only when there is pooling
             if (llama_pooling_type(slot.ctx) != LLAMA_POOLING_TYPE_NONE) {
-                common_embd_normalize(embd, embd_res.data(), n_embd, slot.task->params.embd_normalize);
+                common_embd_normalize(embd, embd_res.data(), n_embd_out, slot.task->params.embd_normalize);
                 res->embedding.push_back(embd_res);
                 break;
             }
 
-            res->embedding.emplace_back(embd, embd + n_embd);
+            res->embedding.emplace_back(embd, embd + n_embd_out);
         }
 
         SLT_DBG(slot, "%s", "sending embeddings\n");
