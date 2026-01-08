@@ -10011,7 +10011,6 @@ class ModernBertModel(BertModel):
         self.gguf_writer.add_add_eos_token(True)
         self.gguf_writer.add_add_sep_token(True)
         self._set_vocab_gpt2()
-        self._try_set_pooling_type()
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
