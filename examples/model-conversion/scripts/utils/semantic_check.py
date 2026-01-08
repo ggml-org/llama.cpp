@@ -7,7 +7,7 @@ import importlib
 from pathlib import Path
 
 from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM, AutoModel
-from common import compare_tokens  # type: ignore[import-not-found]
+from common import compare_tokens, exit_with_warning  # type: ignore[import-not-found]
 
 unreleased_model_name = os.getenv('UNRELEASED_MODEL_NAME')
 
@@ -174,8 +174,7 @@ def main():
     print("=" * 70)
     data_dir = python_emb_path.parent
     if not compare_tokens(python_model_name, cpp_model_name, type_suffix="-embeddings", output_dir=str(data_dir)):
-        print("\n❌ Token mismatch detected")
-        exit(1)
+        exit_with_warning("\n❌ Token mismatch detected", args.model_path)
     print()
 
     # Single prompt detailed comparison
@@ -237,7 +236,7 @@ def main():
     elif avg_cross_sim > 0.70:
         print("⚠️  FAIR: Models have some differences")
     else:
-        print("❌ POOR: Models are significantly different")
+        exit_with_warning("❌ POOR: Models are significantly different", args.model_path)
 
 if __name__ == "__main__":
     main()
