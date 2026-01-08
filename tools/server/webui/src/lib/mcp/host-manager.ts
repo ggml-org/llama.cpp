@@ -21,40 +21,16 @@
  * - Automatic tool-to-server routing
  */
 
-import { MCPServerConnection, type ToolExecutionResult } from './server-connection';
+import { MCPServerConnection } from './server-connection';
+import type { ToolExecutionResult } from '$lib/types/mcp';
 import type {
-	MCPClientConfig,
 	MCPToolCall,
-	ClientCapabilities,
-	Implementation
+	MCPHostManagerConfig,
+	OpenAIToolDefinition,
+	ServerStatus
 } from '$lib/types/mcp';
 import { MCPError } from '$lib/errors';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
-
-export interface MCPHostManagerConfig {
-	/** Server configurations keyed by server name */
-	servers: MCPClientConfig['servers'];
-	/** Client info to advertise to all servers */
-	clientInfo?: Implementation;
-	/** Default capabilities to advertise */
-	capabilities?: ClientCapabilities;
-}
-
-export interface OpenAIToolDefinition {
-	type: 'function';
-	function: {
-		name: string;
-		description?: string;
-		parameters: Record<string, unknown>;
-	};
-}
-
-export interface ServerStatus {
-	name: string;
-	isConnected: boolean;
-	toolCount: number;
-	error?: string;
-}
 
 /**
  * Manages multiple MCP server connections and provides unified tool access.
