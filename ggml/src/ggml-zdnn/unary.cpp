@@ -11,6 +11,11 @@ void ggml_zdnn_gelu(
     ggml_backend_zdnn_buffer * src0_extra = (ggml_backend_zdnn_buffer *)src0->extra;
     ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
 
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
+
     ZDNN_CHECK(zdnn_gelu(&src0_extra->ztensor, &dst_extra->ztensor));
     ZDNN_CHECK(zdnn_transform_origtensor(&dst_extra->ztensor, dst->data));
 
@@ -25,6 +30,11 @@ void ggml_zdnn_relu(
 
     ggml_backend_zdnn_buffer * src0_extra = (ggml_backend_zdnn_buffer *)src0->extra;
     ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
+
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
 
     // zdnn_relu takes a clipping value - pass NULL for no clipping
     ZDNN_CHECK(zdnn_relu(&src0_extra->ztensor, NULL, &dst_extra->ztensor));
@@ -42,6 +52,11 @@ void ggml_zdnn_tanh(
     ggml_backend_zdnn_buffer * src0_extra = (ggml_backend_zdnn_buffer *)src0->extra;
     ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
 
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
+
     ZDNN_CHECK(zdnn_tanh(&src0_extra->ztensor, &dst_extra->ztensor));
     ZDNN_CHECK(zdnn_transform_origtensor(&dst_extra->ztensor, dst->data));
 
@@ -57,6 +72,11 @@ void ggml_zdnn_sigmoid(
     ggml_backend_zdnn_buffer * src0_extra = (ggml_backend_zdnn_buffer *)src0->extra;
     ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
 
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
+
     ZDNN_CHECK(zdnn_sigmoid(&src0_extra->ztensor, &dst_extra->ztensor));
     ZDNN_CHECK(zdnn_transform_origtensor(&dst_extra->ztensor, dst->data));
 
@@ -71,6 +91,11 @@ void ggml_zdnn_exp(
 
     ggml_backend_zdnn_buffer * src0_extra = (ggml_backend_zdnn_buffer *)src0->extra;
     ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
+
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
 
     ZDNN_CHECK(zdnn_exp(&src0_extra->ztensor, &dst_extra->ztensor));
     ZDNN_CHECK(zdnn_transform_origtensor(&dst_extra->ztensor, dst->data));
@@ -111,6 +136,11 @@ void ggml_zdnn_neg(
     GGML_ASSERT(zeros_data != nullptr);
     ZDNN_CHECK(zdnn_transform_ztensor(&zeros_ztensor, zeros_data));
 
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
+
     // Compute 0 - src0
     ZDNN_CHECK(zdnn_sub(&zeros_ztensor, &src0_extra->ztensor, &dst_extra->ztensor));
     ZDNN_CHECK(zdnn_transform_origtensor(&dst_extra->ztensor, dst->data));
@@ -131,6 +161,11 @@ void ggml_zdnn_sqrt(
     ggml_backend_zdnn_buffer * src0_extra = (ggml_backend_zdnn_buffer *)src0->extra;
     ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
 
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
+
     ZDNN_CHECK(zdnn_sqrt(&src0_extra->ztensor, &dst_extra->ztensor));
     ZDNN_CHECK(zdnn_transform_origtensor(&dst_extra->ztensor, dst->data));
 
@@ -145,6 +180,11 @@ void ggml_zdnn_log(
 
     ggml_backend_zdnn_buffer * src0_extra = (ggml_backend_zdnn_buffer *)src0->extra;
     ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
+
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
 
     ZDNN_CHECK(zdnn_log(&src0_extra->ztensor, &dst_extra->ztensor));
     ZDNN_CHECK(zdnn_transform_origtensor(&dst_extra->ztensor, dst->data));
@@ -181,6 +221,11 @@ void ggml_zdnn_silu(
     // Compute sigmoid(src0) into temp
     ZDNN_CHECK(zdnn_sigmoid(&src0_extra->ztensor, &temp_ztensor));
 
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
+
     // Compute src0 * sigmoid(src0) into dst
     ZDNN_CHECK(zdnn_mul(&src0_extra->ztensor, &temp_ztensor, &dst_extra->ztensor));
     ZDNN_CHECK(zdnn_transform_origtensor(&dst_extra->ztensor, dst->data));
@@ -200,6 +245,11 @@ void ggml_zdnn_leaky_relu(
 
     ggml_backend_zdnn_buffer * src0_extra = (ggml_backend_zdnn_buffer *)src0->extra;
     ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
+
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
 
     // zdnn_leaky_relu takes: input, clipping_value (NULL for no clipping), alpha, output
     ZDNN_CHECK(zdnn_leaky_relu(&src0_extra->ztensor, NULL, negative_slope, &dst_extra->ztensor));

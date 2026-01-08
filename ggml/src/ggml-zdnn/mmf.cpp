@@ -85,6 +85,11 @@ void ggml_zdnn_mul_mat_f(
         GGML_ABORT("z15 matmul not supported - requires z16+ hardware");
     }
 
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (output_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&output_extra->ztensor);
+    }
+
     ZDNN_CHECK(zdnn_matmul_transpose_op(&inputs_extra->ztensor, &weights_extra->ztensor, &bias_extra->ztensor,
                                         false, true, MATMUL_OP_ADDITION, &output_extra->ztensor));
     // TODO: Remove in the future as we are currently DLF16 -> FP32 then in the next op, FP32 -> DLF16 again. Inefficient.

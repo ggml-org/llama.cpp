@@ -13,6 +13,11 @@ void ggml_zdnn_add(
     ggml_backend_zdnn_buffer * src1_extra = (ggml_backend_zdnn_buffer *)src1->extra;
     ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
 
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
+
     ZDNN_CHECK(zdnn_add(&src0_extra->ztensor, &src1_extra->ztensor, &dst_extra->ztensor));
     ZDNN_CHECK(zdnn_transform_origtensor(&dst_extra->ztensor, dst->data));
 
@@ -29,6 +34,11 @@ void ggml_zdnn_mul(
     ggml_backend_zdnn_buffer * src0_extra = (ggml_backend_zdnn_buffer *)src0->extra;
     ggml_backend_zdnn_buffer * src1_extra = (ggml_backend_zdnn_buffer *)src1->extra;
     ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
+
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
 
     ZDNN_CHECK(zdnn_mul(&src0_extra->ztensor, &src1_extra->ztensor, &dst_extra->ztensor));
     ZDNN_CHECK(zdnn_transform_origtensor(&dst_extra->ztensor, dst->data));
@@ -47,6 +57,11 @@ void ggml_zdnn_sub(
     ggml_backend_zdnn_buffer * src1_extra = (ggml_backend_zdnn_buffer *)src1->extra;
     ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
 
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
+
     ZDNN_CHECK(zdnn_sub(&src0_extra->ztensor, &src1_extra->ztensor, &dst_extra->ztensor));
     ZDNN_CHECK(zdnn_transform_origtensor(&dst_extra->ztensor, dst->data));
 
@@ -64,6 +79,11 @@ void ggml_zdnn_div(
     ggml_backend_zdnn_buffer * src1_extra = (ggml_backend_zdnn_buffer *)src1->extra;
     ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
 
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
+
     ZDNN_CHECK(zdnn_div(&src0_extra->ztensor, &src1_extra->ztensor, &dst_extra->ztensor));
     ZDNN_CHECK(zdnn_transform_origtensor(&dst_extra->ztensor, dst->data));
 
@@ -79,6 +99,11 @@ void ggml_zdnn_softmax(
 
     ggml_backend_zdnn_buffer * src0_extra = (ggml_backend_zdnn_buffer *)src0->extra;
     ggml_backend_zdnn_buffer * dst_extra  = (ggml_backend_zdnn_buffer *)dst->extra;
+
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
+    }
 
     // ZDNN softmax requires a save area
     void * save_area = ggml_aligned_malloc(ZDNN_SOFTMAX_SAVEAREA_SIZE);
@@ -109,6 +134,11 @@ void ggml_zdnn_rms_norm(
     if (src1 != nullptr && src1->extra != nullptr) {
         ggml_backend_zdnn_buffer * src1_extra = (ggml_backend_zdnn_buffer *)src1->extra;
         weight = &src1_extra->ztensor;
+    }
+
+    // Reset destination tensor if already transformed (required by zDNN)
+    if (dst_extra->ztensor.is_transformed) {
+        zdnn_reset_ztensor(&dst_extra->ztensor);
     }
 
     ZDNN_CHECK(zdnn_rmsnorm(&src0_extra->ztensor, weight, eps, &dst_extra->ztensor));
