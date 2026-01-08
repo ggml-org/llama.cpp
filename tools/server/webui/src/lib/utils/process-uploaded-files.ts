@@ -129,8 +129,14 @@ export async function processFilesToChatUploaded(
 				const preview = await readFileAsDataURL(file);
 				results.push({ ...base, preview });
 			} else {
-				// Other files: add as-is
-				results.push(base);
+				// Fallback: treat unknown files as text
+				try {
+					const textContent = await readFileAsUTF8(file);
+					results.push({ ...base, textContent });
+				} catch (err) {
+					console.warn('Failed to read file as text, adding without content:', err);
+					results.push(base);
+				}
 			}
 		} catch (error) {
 			console.error('Error processing file', file.name, error);
