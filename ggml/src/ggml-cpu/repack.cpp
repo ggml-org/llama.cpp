@@ -16,6 +16,10 @@
 #include <cassert>
 #include <cstdio>  // for GGML_ASSERT
 
+#if defined(GGML_USE_OPENMP)
+#include <omp.h>
+#endif
+
 #include "repack.h"
 
 #if defined(__GNUC__)
@@ -1429,7 +1433,7 @@ static int repack_q4_0_to_q4_0_4_bl(struct ggml_tensor * t, int interleave_block
     const int n_row_groups = nrow / nrows_interleaved;
 
 #ifdef GGML_USE_OPENMP
-    #pragma omp parallel for
+#pragma omp for schedule(static)
 #endif
     for (int bg = 0; bg < n_row_groups; bg++) {
         const int b = bg * nrows_interleaved;
@@ -1468,7 +1472,7 @@ static int repack_q4_K_to_q4_K_8_bl(struct ggml_tensor * t, int interleave_block
     const int n_row_groups = nrow / nrows_interleaved;
 
 #ifdef GGML_USE_OPENMP
-    #pragma omp parallel for
+#pragma omp for schedule(static)
 #endif
     for (int bg = 0; bg < n_row_groups; bg++) {
         const int b = bg * nrows_interleaved;
@@ -1507,7 +1511,7 @@ static int repack_q2_K_to_q2_K_8_bl(struct ggml_tensor * t, int interleave_block
     const int n_row_groups = nrow / nrows_interleaved;
 
 #ifdef GGML_USE_OPENMP
-    #pragma omp parallel for
+#pragma omp for schedule(static)
 #endif
     for (int bg = 0; bg < n_row_groups; bg++) {
         const int b = bg * nrows_interleaved;
@@ -1546,7 +1550,7 @@ static int repack_q4_0_to_q4_0_8_bl(struct ggml_tensor * t, int interleave_block
     const int n_row_groups = nrow / nrows_interleaved;
 
 #ifdef GGML_USE_OPENMP
-    #pragma omp parallel for
+#pragma omp for schedule(static)
 #endif
     for (int bg = 0; bg < n_row_groups; bg++) {
         const int b = bg * nrows_interleaved;
@@ -1621,7 +1625,7 @@ static int repack_iq4_nl_to_iq4_nl_4_bl(struct ggml_tensor * t, int interleave_b
     const int n_row_groups = nrow / nrows_interleaved;
 
 #ifdef GGML_USE_OPENMP
-    #pragma omp parallel for
+#pragma omp for schedule(static)
 #endif
     for (int bg = 0; bg < n_row_groups; bg++) {
         const int b = bg * nrows_interleaved;
@@ -1685,7 +1689,7 @@ static int repack_iq4_nl_to_iq4_nl_8_bl(struct ggml_tensor * t, int interleave_b
     const int n_row_groups = nrow / nrows_interleaved;
 
 #ifdef GGML_USE_OPENMP
-    #pragma omp parallel for
+#pragma omp for schedule(static)
 #endif
     for (int bg = 0; bg < n_row_groups; bg++) {
         const int b = bg * nrows_interleaved;
@@ -2188,9 +2192,21 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
     }
 
     int repack(struct ggml_tensor * t, const void * data, size_t data_size) override {
+        int ret = 0;
         GGML_LOG_DEBUG("%s: repack tensor %s with %s_%dx%d\n", __func__, t->name, ggml_type_name(t->type),
                        (int) NB_COLS, (int) INTER_SIZE);
-        return ggml::cpu::repack::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
+#ifdef GGML_USE_OPENMP
+        #pragma omp parallel
+        {
+            ggml_cpu_set_numa_thread_affinity(omp_get_thread_num());
+            int r = ggml::cpu::repack::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
+            #pragma omp master
+            ret = r;
+        }
+#else
+        ret = ggml::cpu::repack::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
+#endif
+        return ret;
     }
 };
 
