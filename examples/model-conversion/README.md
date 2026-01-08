@@ -198,20 +198,30 @@ model, and the other is a text file which allows for manual visual inspection.
 
 #### Using SentenceTransformer with numbered layers
 For models that have numbered SentenceTransformer layers (01_Pooling, 02_Dense,
-03_Dense, 04_Normalize), use the `-st` targets to apply all these layers:
+03_Dense, 04_Normalize), these will be applied automatically when running the
+converted model but currently there is a separate target to run the original
+version:
 
 ```console
 # Run original model with SentenceTransformer (applies all numbered layers)
 (venv) $ make embedding-run-original-model-st
-
-# Run converted model with pooling enabled
-(venv) $ make embedding-run-converted-model-st
 ```
 
 This will use the SentenceTransformer library to load and run the model, which
 automatically applies all the numbered layers in the correct order. This is
 particularly useful when comparing with models that should include these
 additional transformation layers beyond just the base model output.
+
+The type of normalization can be specified for the converted model but is not
+strictly necessary as the verification uses cosine similarity and the magnitude
+of the output vectors does not affect this. But the normalization type can be
+specified as an argument to the target which might be useful for manual
+inspection:
+```console
+(venv) $ make embedding-verify-logits-st EMBD_NORMALIZE=1
+```
+The original model will apply the normalization according to the normalization
+layer specified in the modules.json configuration file.
 
 ### Model conversion
 After updates have been made to [gguf-py](../../gguf-py) to add support for the

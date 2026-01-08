@@ -5,7 +5,7 @@ set -e
 # Parse command line arguments
 CONVERTED_MODEL=""
 PROMPTS_FILE=""
-USE_POOLING=""
+EMBD_NORMALIZE="2"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -13,9 +13,9 @@ while [[ $# -gt 0 ]]; do
             PROMPTS_FILE="$2"
             shift 2
             ;;
-        --pooling)
-            USE_POOLING="1"
-            shift
+        --embd-normalize)
+            EMBD_NORMALIZE="$2"
+            shift 2
             ;;
         *)
             if [ -z "$CONVERTED_MODEL" ]; then
@@ -51,8 +51,4 @@ fi
 echo $CONVERTED_MODEL
 
 cmake --build ../../build --target llama-debug -j8
-if [ -n "$USE_POOLING" ]; then
-    ../../build/bin/llama-debug -m "$CONVERTED_MODEL" --embedding --pooling mean -p "$PROMPT" --save-logits
-else
-    ../../build/bin/llama-debug -m "$CONVERTED_MODEL" --embedding --pooling none -p "$PROMPT" --save-logits
-fi
+../../build/bin/llama-debug -m "$CONVERTED_MODEL" --embedding -p "$PROMPT" --save-logits --embd-normalize $EMBD_NORMALIZE
