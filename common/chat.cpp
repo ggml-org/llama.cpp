@@ -1282,15 +1282,18 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     // Note: Mistral Small 3.2 uses [CALL_ID] which Ministral doesn't have, so we can distinguish them
     if (src.find("[SYSTEM_PROMPT]") != std::string::npos && src.find("[TOOL_CALLS]") != std::string::npos &&
         src.find("[ARGS]") != std::string::npos && src.find("[CALL_ID]") == std::string::npos) {
+        LOG_INF("Using specialized template: Ministral/Magistral Large 3\n");
         return common_chat_params_init_ministral_3(tmpl, params);
     }
 
     // GPT-OSS - has unique channel-based structure that needs dedicated handler
     if (src.find("<|channel|>") != std::string::npos) {
+        LOG_INF("Using specialized template: GPT-OSS\n");
         return common_chat_params_init_gpt_oss(tmpl, params);
     }
 
     try {
+        LOG_INF("Using autoparser for template analysis\n");
         template_analysis_result analysis    = template_analyzer::analyze_template(tmpl);
         auto                     auto_params = universal_peg_generator::generate_parser(analysis, tmpl, params);
         return auto_params;
