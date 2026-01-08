@@ -2305,6 +2305,16 @@ static inline size_t init_binary_req(htp_general_req * req, dspqueue_buffer * bu
     return n_bufs;
 }
 
+static inline size_t init_cpy_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
+    req->op = HTP_OP_CPY;
+
+    size_t n_bufs = 0;
+    n_bufs += htp_req_buff_init(&req->src0, &bufs[n_bufs], t->src[0], DSPQBUF_TYPE_CPU_WRITE_DSP_READ);
+    n_bufs += htp_req_buff_init(&req->dst,  &bufs[n_bufs], t,         DSPQBUF_TYPE_DSP_WRITE_CPU_READ);
+
+    return n_bufs;
+}
+
 static inline size_t init_get_rows_req(htp_general_req * req, dspqueue_buffer * bufs, const ggml_tensor * t) {
     req->op = HTP_OP_GET_ROWS;
 
@@ -2558,6 +2568,10 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
 
             case GGML_OP_GET_ROWS:
                 ggml_hexagon_dispatch_op<init_get_rows_req>(sess, node, flags);
+                break;
+
+            case GGML_OP_CPY:
+                ggml_hexagon_dispatch_op<init_cpy_req>(sess, node, flags);
                 break;
 
             default:
@@ -2861,6 +2875,27 @@ static bool ggml_hexagon_supported_buffers(ggml_hexagon_session *sess, const str
     return true;
 }
 
+static bool ggml_hexagon_supported_cpy(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    const struct ggml_tensor * src0 = op->src[0];
+    const struct ggml_tensor * dst  = op;
+
+    // for now we can do f32 -> f16 and f16 -> f32 (without reshaping)
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) return false;
+    if ( dst->type != GGML_TYPE_F32 &&  dst->type != GGML_TYPE_F16) return false;
+
+    const bool sametype   = (src0->type == dst->type);
+    const bool transposed = ggml_is_transposed(src0) || ggml_is_transposed(dst);
+    const bool sameshape  = !transposed && ggml_are_same_shape(src0, dst);
+
+    // can handle any shape and any same-type (pretty slow if reshaping is required)
+    if (sametype) return true;
+
+    // cannot handle re-shaping and type conversion at the same time
+    if (!sameshape) return false;
+
+    return true;
+}
+
 static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     auto sess = static_cast<ggml_hexagon_session *>(dev->context);
 
@@ -2937,6 +2972,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_GET_ROWS:
             supp = ggml_hexagon_supported_get_rows(sess, op);
+            break;
+
+        case GGML_OP_CPY:
+            supp = ggml_hexagon_supported_cpy(sess, op);
             break;
 
         default:

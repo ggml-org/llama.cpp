@@ -19,7 +19,7 @@ verbose=
 [ "$V" != "" ] && verbose="GGML_HEXAGON_VERBOSE=$V"
 
 experimental=
-[ "$E" != "" ] && experimental="GGML_HEXAGON_EXPERIMENTAL=$V"
+[ "$E" != "" ] && experimental="GGML_HEXAGON_EXPERIMENTAL=$E"
 
 sched=
 [ "$SCHED" != "" ] && sched="GGML_SCHED_DEBUG=2" cli_opts="$cli_opts -v"

@@ -31,6 +31,7 @@ add_library(${HTP_LIB} SHARED
     flash-attn-ops.c
     set-rows-ops.c
     get-rows-ops.c
+    cpy-ops.c
 )
 
 target_compile_definitions(${HTP_LIB} PRIVATE

@@ -139,7 +139,7 @@ static void binary_job_f32_per_thread(struct htp_ops_context * octx,
         const uint32_t nr0 = ne00 / ne10;
         if (nr0 > 1) {
             if ((1 == is_aligned) && (nr0 == ne00)) {
-                hvx_bcast_fp32_a(spad_data_th, *(float *) src1_ptr, nr0);
+                hvx_splat_fp32_a(spad_data_th, *(float *) src1_ptr, nr0);
             } else {
                 for (uint32_t r = 0; r < nr0; r++) {
                     memcpy(spad_data_th + r * nb11, (const uint8_t *) src1_ptr, nb11);
