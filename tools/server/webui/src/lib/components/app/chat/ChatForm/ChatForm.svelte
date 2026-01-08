@@ -14,17 +14,7 @@
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { activeMessages } from '$lib/stores/conversations.svelte';
-	import {
-		FileTypeCategory,
-		MimeTypeApplication,
-		FileExtensionAudio,
-		FileExtensionImage,
-		FileExtensionPdf,
-		FileExtensionText,
-		MimeTypeAudio,
-		MimeTypeImage,
-		MimeTypeText
-	} from '$lib/enums';
+	import { MimeTypeText } from '$lib/enums';
 	import { isIMEComposing, parseClipboardContent } from '$lib/utils';
 	import {
 		AudioRecorder,
@@ -114,37 +104,12 @@
 		return true;
 	}
 
-	function getAcceptStringForFileType(fileType: FileTypeCategory): string {
-		switch (fileType) {
-			case FileTypeCategory.IMAGE:
-				return [...Object.values(FileExtensionImage), ...Object.values(MimeTypeImage)].join(',');
-
-			case FileTypeCategory.AUDIO:
-				return [...Object.values(FileExtensionAudio), ...Object.values(MimeTypeAudio)].join(',');
-
-			case FileTypeCategory.PDF:
-				return [...Object.values(FileExtensionPdf), ...Object.values(MimeTypeApplication)].join(
-					','
-				);
-
-			case FileTypeCategory.TEXT:
-				return [...Object.values(FileExtensionText), MimeTypeText.PLAIN].join(',');
-
-			default:
-				return '';
-		}
-	}
-
 	function handleFileSelect(files: File[]) {
 		onFileUpload?.(files);
 	}
 
-	function handleFileUpload(fileType?: FileTypeCategory) {
-		if (fileType) {
-			fileAcceptString = getAcceptStringForFileType(fileType);
-		} else {
-			fileAcceptString = undefined;
-		}
+	function handleFileUpload() {
+		fileAcceptString = undefined;
 
 		// Use setTimeout to ensure the accept attribute is applied before opening dialog
 		setTimeout(() => {
