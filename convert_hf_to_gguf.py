@@ -8520,6 +8520,8 @@ class ExaoneMoEModel(Exaone4Model):
         self.gguf_writer.add_expert_shared_feed_forward_length(moe_intermediate_size * num_shared_experts)
         self.gguf_writer.add_expert_weights_scale(self.hparams["routed_scaling_factor"])
         self.gguf_writer.add_expert_weights_norm(self.hparams["norm_topk_prob"])
+        n_dense_layer = self.hparams.get("first_k_dense_replace", self.hparams.get("first_last_k_dense_replace", 0))
+        self.gguf_writer.add_leading_dense_block_count(n_dense_layer)
         # For here, we hard-code the number of NextN/MTP layers to 1 for K-EXAONE,
         # so that we can convert MTP weights to GGUF format for speculative decoding.
         # This is because HF config of K-EXAONE does not have `num_nextn_predict_layers` at now.

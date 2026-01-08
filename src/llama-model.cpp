@@ -1922,7 +1922,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
                 hparams.n_swa = 128;
                 hparams.set_swa_pattern(4);
-                hparams.n_layer_dense_lead = 1;
                 hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
                 hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
 
@@ -1939,6 +1938,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func, false);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm, false);
+                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
 
                 ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,              hparams.nextn_predict_layers, false);
 
