@@ -1019,36 +1019,6 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     return data;
 }
 
-// Generate a cache key for the autoparser based on template and relevant params
-// Excludes: messages (varies per request), now (timestamp)
-static std::string make_autoparser_cache_key(const std::string & tmpl_src, const templates_params & params) {
-    std::ostringstream oss;
-    // Template identity
-    oss << std::hash<std::string>{}(tmpl_src);
-    // Tools (JSON serialized)
-    oss << "|" << (params.tools.is_null() ? "" : params.tools.dump());
-    // Tool choice
-    oss << "|" << static_cast<int>(params.tool_choice);
-    // JSON schema
-    oss << "|" << (params.json_schema.is_null() ? "" : params.json_schema.dump());
-    // Boolean/enum flags
-    oss << "|" << params.parallel_tool_calls;
-    oss << "|" << static_cast<int>(params.reasoning_format);
-    oss << "|" << params.stream;
-    oss << "|" << params.grammar;
-    oss << "|" << params.add_generation_prompt;
-    oss << "|" << params.enable_thinking;
-    // Extra context
-    oss << "|" << (params.extra_context.is_null() ? "" : params.extra_context.dump());
-    // BOS/EOS flags
-    oss << "|" << params.add_bos;
-    oss << "|" << params.add_eos;
-    // Inference flags
-    oss << "|" << params.is_inference;
-    oss << "|" << params.add_inference;
-    return oss.str();
-}
-
 static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
                                                             const struct common_chat_templates_inputs & inputs) {
     templates_params params;
@@ -1192,10 +1162,7 @@ common_chat_params common_chat_templates_apply(const struct common_chat_template
 }
 
 common_chat_msg common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax) {
-    if (syntax.format == COMMON_CHAT_FORMAT_PEG_SIMPLE || syntax.format == COMMON_CHAT_FORMAT_PEG_NATIVE) {
-        return common_chat_peg_parse(syntax.parser, input, is_partial, syntax);
-    }
-    GGML_ABORT("Legacy parsers have been deprecated");
+    return common_chat_peg_parse(syntax.parser, input, is_partial, syntax);
 }
 
 common_chat_msg common_chat_peg_parse(const common_peg_arena &   parser,
