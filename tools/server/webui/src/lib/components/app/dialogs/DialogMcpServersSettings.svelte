@@ -1,6 +1,6 @@
 <script lang="ts">
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { McpSettingsSection } from '$lib/components/app';
+	import McpSettingsSection from '../mcp/McpSettingsSection.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import McpLogo from '../misc/McpLogo.svelte';

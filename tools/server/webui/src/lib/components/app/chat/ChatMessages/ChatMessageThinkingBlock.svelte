@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Brain } from '@lucide/svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import CollapsibleInfoCard from './CollapsibleInfoCard.svelte';
+	import { CollapsibleContentBlock } from '$lib/components/app';
 
 	interface Props {
 		class?: string;
@@ -28,7 +28,7 @@
 	});
 </script>
 
-<CollapsibleInfoCard
+<CollapsibleContentBlock
 	bind:open={isExpanded}
 	class="mb-6 {className}"
 	icon={Brain}
@@ -39,4 +39,4 @@
 			{reasoningContent ?? ''}
 		</div>
 	</div>
-</CollapsibleInfoCard>
+</CollapsibleContentBlock>
