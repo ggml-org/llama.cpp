@@ -204,8 +204,6 @@ void ggml_print_backtrace(void) {
 
 static ggml_abort_callback_t g_abort_callback = NULL;
 struct ggml_tensor *         ggml_debug_last_node = NULL;
-extern const char *          ggml_op_name(enum ggml_op op);
-extern const char *          ggml_type_name(enum ggml_type type);
 
 // Set the abort callback (passing null will restore original abort functionality: printing a message to stdout)
 GGML_API ggml_abort_callback_t ggml_set_abort_callback(ggml_abort_callback_t callback) {
@@ -478,6 +476,29 @@ void ggml_fp32_to_bf16_row(const float * x, ggml_bf16_t * y, int64_t n) {
     for (; i < n; i++) {
         y[i] = GGML_FP32_TO_BF16(x[i]);
     }
+}
+
+static void quantize_row_ifairy_from_float_ref(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    // Inputs are bf16-pair packed into a u32 container (GGML_TYPE_F32 storage):
+    // low  16 bits: real (bf16)
+    // high 16 bits: imag (bf16)
+    float * tmp = (float *) malloc(2 * (size_t) k * sizeof(float));
+    if (tmp == NULL) {
+        GGML_ABORT("out of memory");
+    }
+
+    float * real = tmp;
+    float * imag = tmp + k;
+
+    for (int64_t i = 0; i < k; ++i) {
+        ggml_bf16_t pair[2];
+        memcpy(pair, x + i, sizeof(pair));
+        real[i] = GGML_BF16_TO_FP32(pair[0]);
+        imag[i] = GGML_BF16_TO_FP32(pair[1]);
+    }
+
+    quantize_row_ifairy_ref(real, imag, (block_ifairy *) vy, k);
+    free(tmp);
 }
 
 bool ggml_guid_matches(ggml_guid_t guid_a, ggml_guid_t guid_b) {
@@ -892,7 +913,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         // complex weights are handled by dedicated kernels; there is no generic
         // single-buffer dequantization compatible with ggml_to_float_t
         .to_float                 = NULL,
-        .from_float_ref           = (ggml_from_float_t) quantize_row_ifairy_ref,
+        .from_float_ref           = quantize_row_ifairy_from_float_ref,
     },
     [GGML_TYPE_IFAIRY_Q16] = {
         .type_name                = "ifairy_q16",
@@ -4068,6 +4089,9 @@ static struct ggml_tensor * ggml_ifairy_rope_impl(struct ggml_context * ctx,
     memcpy(params + 9, &beta_fast, sizeof(float));
     memcpy(params + 10, &beta_slow, sizeof(float));
     if (mrope_used) {
+        if (sections == NULL) {
+            GGML_ABORT("mrope sections must be set when GGML_ROPE_TYPE_MROPE is enabled");
+        }
         memcpy(params + 11, sections, sizeof(int32_t) * GGML_MROPE_SECTIONS);
     } else {
         memset(params + 11, 0, sizeof(int32_t) * GGML_MROPE_SECTIONS);
@@ -7394,6 +7418,6 @@ bool ggml_threadpool_params_match(const struct ggml_threadpool_params * p0, cons
     if (p0->strict_cpu     != p1->strict_cpu )    return false;
     return memcmp(p0->cpumask, p1->cpumask, GGML_MAX_N_THREADS) == 0;
 }
-#if defined(GGML_IFAIRY_ARM_LUT)
+#ifdef GGML_IFAIRY_ARM_LUT
 #    include "ggml-ifairy-lut.h"
 #endif

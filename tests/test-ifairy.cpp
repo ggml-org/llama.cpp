@@ -35,13 +35,14 @@ void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_R
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <fstream>
 #include <random>
 #include <string>
 #include <thread>
 #include <vector>
 
-#if defined(_MSC_VER)
+#ifdef _MSC_VER
 #    pragma warning(disable : 4244 4267)  // possible loss of data
 #endif
 
@@ -50,7 +51,7 @@ void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_R
 // ============================================================================
 
 // 简单的 JSON 数组解析器
-std::vector<float> parse_json_float_array(const std::string & json_str, const std::string & key) {
+static std::vector<float> parse_json_float_array(const std::string & json_str, const std::string & key) {
     std::vector<float> result;
 
     // 查找 key
@@ -102,7 +103,7 @@ std::vector<float> parse_json_float_array(const std::string & json_str, const st
     return result;
 }
 
-int parse_json_int(const std::string & json_str, const std::string & key) {
+static int parse_json_int(const std::string & json_str, const std::string & key) {
     std::string search_key = "\"" + key + "\"";
     size_t      key_pos    = json_str.find(search_key);
     if (key_pos == std::string::npos) {
@@ -125,7 +126,7 @@ int parse_json_int(const std::string & json_str, const std::string & key) {
     return atoi(json_str.c_str() + num_start);
 }
 
-float parse_json_float(const std::string & json_str, const std::string & key) {
+static float parse_json_float(const std::string & json_str, const std::string & key) {
     std::string search_key = "\"" + key + "\"";
     size_t      key_pos    = json_str.find(search_key);
     if (key_pos == std::string::npos) {
@@ -148,7 +149,7 @@ float parse_json_float(const std::string & json_str, const std::string & key) {
     return strtof(json_str.c_str() + num_start, nullptr);
 }
 
-std::string read_file(const std::string & filename) {
+static std::string read_file(const std::string & filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
         fprintf(stderr, "Error: Cannot open file '%s'\n", filename.c_str());
@@ -170,7 +171,7 @@ static std::string ifairy_test_data_path(const char * filename) {
         return std::string(env) + "/" + filename;
     }
 
-    const std::string rel_path = std::string("tests/ifairy-test-data/") + filename;
+    std::string rel_path = std::string("tests/ifairy-test-data/") + filename;
     if (file_exists(rel_path)) {
         return rel_path;
     }
@@ -194,7 +195,7 @@ static std::string read_ifairy_test_file(const char * filename) {
 
 constexpr float MAX_ERROR = 1e-2f;  // 允许的最大误差
 
-bool compare_arrays(const float * a, const float * b, size_t n, float max_error = MAX_ERROR) {
+static bool compare_arrays(const float * a, const float * b, size_t n, float max_error = MAX_ERROR) {
     float  max_diff     = 0.0f;
     size_t max_diff_idx = 0;
 
@@ -237,7 +238,7 @@ static bool compare_u32_arrays(const uint32_t * a, const uint32_t * b, size_t n)
 }
 
 static void set_env_var(const char * name, const char * value) {
-#if defined(_WIN32)
+#ifdef _WIN32
     _putenv_s(name, value ? value : "");
 #else
     setenv(name, value ? value : "", 1);
@@ -245,7 +246,7 @@ static void set_env_var(const char * name, const char * value) {
 }
 
 static void unset_env_var(const char * name) {
-#if defined(_WIN32)
+#ifdef _WIN32
     _putenv_s(name, "");
 #else
     unsetenv(name);
@@ -265,9 +266,9 @@ struct scoped_env_var {
         }
     }
 
-    void set(const char * v) { set_env_var(name.c_str(), v); }
+    void set(const char * v) const { set_env_var(name.c_str(), v); }
 
-    void unset() { unset_env_var(name.c_str()); }
+    void unset() const { unset_env_var(name.c_str()); }
 
     ~scoped_env_var() {
         if (had) {
@@ -302,7 +303,7 @@ static void set_ifairy_code(block_ifairy & blk, int idx, uint8_t code) {
     packed |= (uint8_t) ((code & 0x3u) << (2 * part));
 }
 
-bool test_ifairy_lut_index() {
+static bool test_ifairy_lut_index() {
     printf("\n=== Test 2: iFairy 3-weight index encoding ===\n");
 
     const int64_t k              = QK_K;  // 256
@@ -364,7 +365,7 @@ bool test_ifairy_lut_index() {
 // 测试 2.1: LUT transform 缓存/并发基础覆盖
 // ============================================================================
 
-bool test_ifairy_lut_transform_cache() {
+static bool test_ifairy_lut_transform_cache() {
     printf("\n=== Test 2.1: iFairy LUT transform cache ===\n");
 
     struct ggml_init_params params = {
@@ -454,7 +455,7 @@ bool test_ifairy_lut_transform_cache() {
 // 测试 2.2: LUT transform 形状与 layout 策略基础覆盖
 // ============================================================================
 
-bool test_ifairy_lut_transform_invalid_shape() {
+static bool test_ifairy_lut_transform_invalid_shape() {
     printf("\n=== Test 2.2: iFairy LUT transform invalid shape ===\n");
 
     struct ggml_init_params params = {
@@ -491,7 +492,7 @@ bool test_ifairy_lut_transform_invalid_shape() {
     return true;
 }
 
-bool test_ifairy_lut_layout_auto_policy() {
+static bool test_ifairy_lut_layout_auto_policy() {
 #if !defined(GGML_IFAIRY_ARM_LUT) || !defined(__ARM_NEON) || !defined(__aarch64__)
     printf("\n=== Test 2.3: iFairy LUT layout auto policy (SKIP) ===\n");
     return true;
@@ -547,7 +548,7 @@ bool test_ifairy_lut_layout_auto_policy() {
 #endif
 }
 
-bool test_ifairy_lut_layout_auto_decode_default_merged64() {
+static bool test_ifairy_lut_layout_auto_decode_default_merged64() {
 #if !defined(GGML_IFAIRY_ARM_LUT) || !defined(__ARM_NEON) || !defined(__aarch64__)
     printf("\n=== Test 2.3.1: iFairy LUT auto decode default merged64 (SKIP) ===\n");
     return true;
@@ -604,7 +605,7 @@ bool test_ifairy_lut_layout_auto_decode_default_merged64() {
 // 测试 2.4: 索引对齐/误对齐缓冲
 // ============================================================================
 
-bool test_ifairy_lut_index_alignment() {
+static bool test_ifairy_lut_index_alignment() {
     printf("\n=== Test 2.4: iFairy LUT index alignment ===\n");
 
     const int64_t k              = QK_K;
@@ -639,7 +640,7 @@ bool test_ifairy_lut_index_alignment() {
 // 测试 2.5: 索引缓冲不足（模拟分配失败/长度不足）
 // ============================================================================
 
-bool test_ifairy_lut_index_encode_failure() {
+static bool test_ifairy_lut_index_encode_failure() {
     printf("\n=== Test 2.5: iFairy LUT index encode failure ===\n");
 
     const int64_t k              = QK_K;
@@ -671,7 +672,7 @@ bool test_ifairy_lut_index_encode_failure() {
 // 测试 2.6: LUT 关键 env 语义
 // ============================================================================
 
-bool test_ifairy_lut_env_semantics() {
+static bool test_ifairy_lut_env_semantics() {
 #if !defined(GGML_IFAIRY_ARM_LUT) || !defined(__ARM_NEON) || !defined(__aarch64__)
     printf("\n=== Test 2.6: iFairy LUT env semantics (SKIP) ===\n");
     return true;
@@ -732,7 +733,7 @@ bool test_ifairy_lut_env_semantics() {
 // 测试 1: 量化/反量化
 // ============================================================================
 
-bool test_quantization() {
+static bool test_quantization() {
     printf("\n=== Test 1: Quantization/Dequantization ===\n");
 
     // 读取测试数据
@@ -867,7 +868,7 @@ static bool test_ifairy_q16_tensor_quantization() {
 // 测试 3: ROPE 算子
 // ============================================================================
 
-bool test_rope() {
+static bool test_rope() {
     printf("\n=== Test 3: iFairy ROPE ===\n");
 
     // 读取测试数据
@@ -1029,7 +1030,8 @@ static bool run_ifairy_lut_scalar_case(int64_t M, int64_t N, int64_t K) {
 
         for (int64_t r = 0; r < M; ++r) {
             const block_ifairy * w_row = weights.data() + r * blocks_per_row;
-            float                acc_r = 0.0f, acc_i = 0.0f;
+            float                acc_r = 0.0f;
+            float                acc_i = 0.0f;
 
             for (int64_t b = 0; b < blocks_per_col; ++b) {
                 const float act_sr = GGML_FP16_TO_FP32(act_blk[b].d_real);
@@ -1037,7 +1039,8 @@ static bool run_ifairy_lut_scalar_case(int64_t M, int64_t N, int64_t K) {
                 for (int j = 0; j < QK_K; ++j) {
                     const int     k_idx = (int) (b * QK_K + j);
                     const uint8_t code  = get_ifairy_code(w_row, k_idx);
-                    float         wr = 0.0f, wi = 0.0f;
+                    float         wr    = 0.0f;
+                    float         wi    = 0.0f;
                     decode_ifairy_weight(code, w_scale_r, w_scale_i, wr, wi);
 
                     const int8_t ar_q = (int8_t) act_blk[b].x_real[j];
@@ -1059,7 +1062,7 @@ static bool run_ifairy_lut_scalar_case(int64_t M, int64_t N, int64_t K) {
     return compare_arrays(dst_lut.data(), dst_ref.data(), dst_ref.size(), 1e-3f);
 }
 
-bool test_ifairy_lut_scalar_matmul() {
+static bool test_ifairy_lut_scalar_matmul() {
     printf("\n=== Test 4: iFairy LUT scalar matmul ===\n");
 
     const bool ok = run_ifairy_lut_scalar_case(2, 2, QK_K);
@@ -1069,7 +1072,7 @@ bool test_ifairy_lut_scalar_matmul() {
     return ok;
 }
 
-bool test_ifairy_lut_scalar_small_dims() {
+static bool test_ifairy_lut_scalar_small_dims() {
     printf("\n=== Test 4.1: iFairy LUT scalar small dims ===\n");
 
     const bool ok = run_ifairy_lut_scalar_case(1, 1, QK_K);
@@ -1079,7 +1082,7 @@ bool test_ifairy_lut_scalar_small_dims() {
     return ok;
 }
 
-bool test_ifairy_lut_scalar_sym16_matmul() {
+static bool test_ifairy_lut_scalar_sym16_matmul() {
     printf("\n=== Test 4.2: iFairy LUT scalar sym16 matmul ===\n");
 
     scoped_env_var env_layout("GGML_IFAIRY_LUT_LAYOUT");
@@ -1236,8 +1239,8 @@ static bool run_ifairy_backend_mul_mat(std::vector<uint32_t> & packed_out,
     return run_ifairy_backend_mul_mat_shape(packed_out, tiling, 8, n_cols, 2 * QK_K, layout, kernel);
 }
 
-bool test_ifairy_lut_backend_tiling_regression() {
-#if !defined(GGML_IFAIRY_ARM_LUT)
+static bool test_ifairy_lut_backend_tiling_regression() {
+#ifndef GGML_IFAIRY_ARM_LUT
     printf("\n=== Test 5: iFairy LUT backend tiling regression (SKIP: GGML_IFAIRY_ARM_LUT not enabled) ===\n");
     return true;
 #else
@@ -1330,8 +1333,8 @@ bool test_ifairy_lut_backend_tiling_regression() {
 // 测试 5.1: CPU backend LUT 大维度回归
 // ============================================================================
 
-bool test_ifairy_lut_backend_large_dims() {
-#if !defined(GGML_IFAIRY_ARM_LUT)
+static bool test_ifairy_lut_backend_large_dims() {
+#ifndef GGML_IFAIRY_ARM_LUT
     printf("\n=== Test 5.1: iFairy LUT backend large dims (SKIP: GGML_IFAIRY_ARM_LUT not enabled) ===\n");
     return true;
 #else
@@ -1363,7 +1366,7 @@ bool test_ifairy_lut_backend_large_dims() {
 // 测试 5.2: CPU backend LUT kernel 选择一致性（auto vs sdot）
 // ============================================================================
 
-bool test_ifairy_lut_kernel_sdot_consistency() {
+static bool test_ifairy_lut_kernel_sdot_consistency() {
 #if !defined(GGML_IFAIRY_ARM_LUT) || !defined(__ARM_NEON) || !defined(__aarch64__)
     printf("\n=== Test 5.2: iFairy LUT kernel sdot consistency (SKIP) ===\n");
     return true;
@@ -1391,7 +1394,7 @@ bool test_ifairy_lut_kernel_sdot_consistency() {
 // 测试 5: 复数矩阵乘法
 // ============================================================================
 
-bool test_complex_matmul() {
+static bool test_complex_matmul() {
     printf("\n=== Test 6: Complex Matrix Multiplication ===\n");
 
     // 读取测试数据
@@ -1451,121 +1454,132 @@ bool test_complex_matmul() {
 // ============================================================================
 
 int main(int argc, char ** argv) {
-    printf("========================================\n");
-    printf("iFairy Model Unit Tests\n");
-    printf("========================================\n");
+    try {
+        printf("========================================\n");
+        printf("iFairy Model Unit Tests\n");
+        printf("========================================\n");
 
-    bool verbose = false;
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
-            verbose = true;
+        bool verbose = false;
+        for (int i = 1; i < argc; i++) {
+            if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--verbose") == 0) {
+                verbose = true;
+            }
         }
+        if (verbose) {
+            printf("Verbose mode enabled\n");
+        }
+
+        // 初始化 GGML CPU
+        ggml_cpu_init();
+
+        int num_failed = 0;
+
+        // 运行测试
+        if (!test_quantization()) {
+            fprintf(stderr, "Test 1 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_q16_tensor_quantization()) {
+            fprintf(stderr, "Test 1.1 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_index()) {
+            fprintf(stderr, "Test 2 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_transform_cache()) {
+            fprintf(stderr, "Test 2.1 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_transform_invalid_shape()) {
+            fprintf(stderr, "Test 2.2 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_layout_auto_policy()) {
+            fprintf(stderr, "Test 2.3 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_layout_auto_decode_default_merged64()) {
+            fprintf(stderr, "Test 2.3.1 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_index_alignment()) {
+            fprintf(stderr, "Test 2.4 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_index_encode_failure()) {
+            fprintf(stderr, "Test 2.5 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_env_semantics()) {
+            fprintf(stderr, "Test 2.6 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_rope()) {
+            fprintf(stderr, "Test 3 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_scalar_matmul()) {
+            fprintf(stderr, "Test 4 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_scalar_small_dims()) {
+            fprintf(stderr, "Test 4.1 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_scalar_sym16_matmul()) {
+            fprintf(stderr, "Test 4.2 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_backend_tiling_regression()) {
+            fprintf(stderr, "Test 5 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_backend_large_dims()) {
+            fprintf(stderr, "Test 5.1 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_ifairy_lut_kernel_sdot_consistency()) {
+            fprintf(stderr, "Test 5.2 FAILED\n");
+            num_failed++;
+        }
+
+        if (!test_complex_matmul()) {
+            fprintf(stderr, "Test 6 FAILED\n");
+            num_failed++;
+        }
+
+        // 总结
+        printf("\n========================================\n");
+        if (num_failed == 0) {
+            printf("All tests PASSED!\n");
+        } else {
+            printf("%d test(s) FAILED\n", num_failed);
+        }
+        printf("========================================\n");
+
+        return num_failed > 0 ? 1 : 0;
+    } catch (const std::exception & e) {
+        fprintf(stderr, "Unhandled exception: %s\n", e.what());
+        return 1;
+    } catch (...) {
+        fprintf(stderr, "Unhandled exception\n");
+        return 1;
     }
-
-    // 初始化 GGML CPU
-    ggml_cpu_init();
-
-    int num_failed = 0;
-
-    // 运行测试
-    if (!test_quantization()) {
-        fprintf(stderr, "Test 1 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_q16_tensor_quantization()) {
-        fprintf(stderr, "Test 1.1 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_lut_index()) {
-        fprintf(stderr, "Test 2 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_lut_transform_cache()) {
-        fprintf(stderr, "Test 2.1 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_lut_transform_invalid_shape()) {
-        fprintf(stderr, "Test 2.2 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_lut_layout_auto_policy()) {
-        fprintf(stderr, "Test 2.3 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_lut_layout_auto_decode_default_merged64()) {
-        fprintf(stderr, "Test 2.3.1 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_lut_index_alignment()) {
-        fprintf(stderr, "Test 2.4 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_lut_index_encode_failure()) {
-        fprintf(stderr, "Test 2.5 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_lut_env_semantics()) {
-        fprintf(stderr, "Test 2.6 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_rope()) {
-        fprintf(stderr, "Test 3 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_lut_scalar_matmul()) {
-        fprintf(stderr, "Test 4 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_lut_scalar_small_dims()) {
-        fprintf(stderr, "Test 4.1 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_lut_scalar_sym16_matmul()) {
-        fprintf(stderr, "Test 4.2 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_lut_backend_tiling_regression()) {
-        fprintf(stderr, "Test 5 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_lut_backend_large_dims()) {
-        fprintf(stderr, "Test 5.1 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_ifairy_lut_kernel_sdot_consistency()) {
-        fprintf(stderr, "Test 5.2 FAILED\n");
-        num_failed++;
-    }
-
-    if (!test_complex_matmul()) {
-        fprintf(stderr, "Test 6 FAILED\n");
-        num_failed++;
-    }
-
-    // 总结
-    printf("\n========================================\n");
-    if (num_failed == 0) {
-        printf("All tests PASSED!\n");
-    } else {
-        printf("%d test(s) FAILED\n", num_failed);
-    }
-    printf("========================================\n");
-
-    return num_failed > 0 ? 1 : 0;
 }

@@ -6,7 +6,7 @@
 #include "ggml-impl.h"
 #include "amx/amx.h"
 
-#if defined(GGML_IFAIRY_ARM_LUT)
+#ifdef GGML_IFAIRY_ARM_LUT
 #    include "ggml-ifairy-lut.h"
 #endif
 
@@ -111,7 +111,7 @@ static void ggml_backend_cpu_free(ggml_backend_t backend) {
     struct ggml_backend_cpu_context * cpu_ctx = (struct ggml_backend_cpu_context *)backend->context;
     delete[] cpu_ctx->work_data;
     delete cpu_ctx;
-#if defined(GGML_IFAIRY_ARM_LUT)
+#ifdef GGML_IFAIRY_ARM_LUT
     ggml_ifairy_lut_free();
 #endif
     delete backend;

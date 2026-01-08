@@ -2429,7 +2429,7 @@ size_t quantize_ifairy(const float * GGML_RESTRICT src_real,
                        const float *               quant_weights) {
     (void) quant_weights;  // not used
     const size_t row_size = ggml_row_size(GGML_TYPE_IFAIRY, n_per_row);
-    quantize_row_ifairy_ref(src_real, src_imag, dst, (int64_t) nrow * n_per_row);
+    quantize_row_ifairy_ref(src_real, src_imag, dst, nrow * n_per_row);
     return nrow * row_size;
 }
 

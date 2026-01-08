@@ -150,7 +150,7 @@ void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT
             const uint16_t * GGML_RESTRICT src = src_base;
             int                            cnt = QK_K * 2;  // number of bf16 halves to process
 
-            asm volatile(
+            __asm__ volatile(
                 "1:\n"
                 "ld1            {v0.8h}, [%[src]], #16\n"
                 "ushll          v1.4s, v0.4h, #0\n"
@@ -188,7 +188,7 @@ void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT
             float32x4_t                    vs_i = vdupq_n_f32(iscale_i);
             int                            cnt  = QK_K;  // number of complex values
 
-            asm volatile(
+            __asm__ volatile(
                 "1:\n"
                 "ld1            {v0.8h}, [%[src]], #16\n"
                 "ushll          v1.4s, v0.4h, #0\n"
@@ -237,7 +237,7 @@ void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_R
         const uint16_t * GGML_RESTRICT src = (const uint16_t *) (x + ib * QK_K);
         int                            cnt = QK_K * 2;  // number of bf16 halves to process
 
-        asm volatile(
+        __asm__ volatile(
             "1:\n"
             "ld1            {v0.8h}, [%[src]], #16\n"
             "ushll          v1.4s, v0.4h, #0\n"
@@ -279,7 +279,7 @@ void quantize_row_ifairy_q16_tensor(const float * GGML_RESTRICT x, void * GGML_R
         y[ib].d_real = d_real;
         y[ib].d_imag = d_imag;
 
-        asm volatile(
+        __asm__ volatile(
             "1:\n"
             "ld1            {v0.8h}, [%[src]], #16\n"
             "ushll          v1.4s, v0.4h, #0\n"
@@ -1659,37 +1659,37 @@ void ggml_vec_dot_ifairy_q16_K(int                        n,
     const int8x16_t v_lut_wr_i1 = vld1q_s8(lut_wr_idx1_data);
     const int8x16_t v_lut_wi_i1 = vld1q_s8(lut_wi_idx1_data);
 
-    register uint8x16_t v_mask_0f_reg asm("v27")   = v_mask_0f;
-    register int8x16_t  v_lut_wr_i0_reg asm("v28") = v_lut_wr_i0;
-    register int8x16_t  v_lut_wi_i0_reg asm("v29") = v_lut_wi_i0;
-    register int8x16_t  v_lut_wr_i1_reg asm("v30") = v_lut_wr_i1;
-    register int8x16_t  v_lut_wi_i1_reg asm("v31") = v_lut_wi_i1;
+    register uint8x16_t v_mask_0f_reg __asm__("v27")   = v_mask_0f;
+    register int8x16_t  v_lut_wr_i0_reg __asm__("v28") = v_lut_wr_i0;
+    register int8x16_t  v_lut_wi_i0_reg __asm__("v29") = v_lut_wi_i0;
+    register int8x16_t  v_lut_wr_i1_reg __asm__("v30") = v_lut_wr_i1;
+    register int8x16_t  v_lut_wi_i1_reg __asm__("v31") = v_lut_wi_i1;
 
     for (int i = 0; i < nb; ++i) {
         __builtin_prefetch(w + i + 1, 0, 1);
         __builtin_prefetch(x + i + 1, 0, 1);
 
         // 累加器初始化（绑定到 caller-saved NEON 寄存器，避免使用 v8..v15 触发函数序言保存/恢复）
-        register int32x4_t acc_ac0 asm("v20") = vzero;
-        register int32x4_t acc_ad0 asm("v21") = vzero;
-        register int32x4_t acc_bc0 asm("v22") = vzero;
-        register int32x4_t acc_bd0 asm("v23") = vzero;
-        register int32x4_t acc_ac1 asm("v24") = vzero;
-        register int32x4_t acc_ad1 asm("v25") = vzero;
-        register int32x4_t acc_bc1 asm("v26") = vzero;
-        register int32x4_t acc_bd1 asm("v7")  = vzero;
+        register int32x4_t acc_ac0 __asm__("v20") = vzero;
+        register int32x4_t acc_ad0 __asm__("v21") = vzero;
+        register int32x4_t acc_bc0 __asm__("v22") = vzero;
+        register int32x4_t acc_bd0 __asm__("v23") = vzero;
+        register int32x4_t acc_ac1 __asm__("v24") = vzero;
+        register int32x4_t acc_ad1 __asm__("v25") = vzero;
+        register int32x4_t acc_bc1 __asm__("v26") = vzero;
+        register int32x4_t acc_bd1 __asm__("v7")  = vzero;
 
         const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
-        const int8_t * GGML_RESTRICT  x_r_ptr = x[i].x_real;
-        const int8_t * GGML_RESTRICT  x_i_ptr = x[i].x_imag;
+        const uint8_t * GGML_RESTRICT x_r_ptr = x[i].x_real;
+        const uint8_t * GGML_RESTRICT x_i_ptr = x[i].x_imag;
 
         // QK_K = 256, 每次循环处理 128 个元素 (两个 64 组)，核心 dot 用内联汇编
         for (int j = 0; j < QK_K; j += 128) {
             const uint8_t * GGML_RESTRICT w_iter = w_ptr + (j >> 2);
-            const int8_t * GGML_RESTRICT  xr     = x_r_ptr + j;
-            const int8_t * GGML_RESTRICT  xi     = x_i_ptr + j;
+            const uint8_t * GGML_RESTRICT xr     = x_r_ptr + j;
+            const uint8_t * GGML_RESTRICT xi     = x_i_ptr + j;
 
-            asm volatile(
+            __asm__ volatile(
                 // ---- block 0: weights 0..63 ----
                 "ldr            q0, [%[w]]                  \n"  // w_all_0
                 "and            v1.16b, v0.16b, %[m0f].16b  \n"  // lo nibble

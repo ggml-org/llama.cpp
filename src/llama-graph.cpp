@@ -1526,7 +1526,7 @@ ggml_tensor * llm_graph_context::ifairy_build_attn(llm_graph_input_attn_kv * inp
                                                    ggml_tensor * k_cur,  // [n_embd_head_k * 2, n_head_k, n_tokens]
                                                    ggml_tensor * v_cur,  // [n_embd_head_v * 2, n_head_v, n_tokens]);
                                                    float         kq_scale,
-                                                   int           il) {
+                                                   int           il) const {
     ggml_build_forward_expand(gf, q_cur);
     ggml_build_forward_expand(gf, k_cur);
     ggml_build_forward_expand(gf, v_cur);

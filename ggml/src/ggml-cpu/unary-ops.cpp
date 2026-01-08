@@ -28,16 +28,16 @@ static inline float op_ifairy_relu2(float x) {
     if ((((ggml_fp16_t *) (&x))[0] & ((ggml_fp16_t *) (&x))[1]) >> 15) {
         // both real and imag are negative
         return 0.f;
-    } else {
-        float r = GGML_BF16_TO_FP32(((ggml_bf16_t *) (&x))[0]);
-        float i = GGML_BF16_TO_FP32(((ggml_bf16_t *) (&x))[1]);
-        r       = r * r;
-        i       = i * i;
-        float ret;
-        ((ggml_bf16_t *) (&ret))[1] = GGML_FP32_TO_BF16(i);
-        ((ggml_bf16_t *) (&ret))[0] = GGML_FP32_TO_BF16(r);
-        return ret;
     }
+
+    float r = GGML_BF16_TO_FP32(((ggml_bf16_t *) (&x))[0]);
+    float i = GGML_BF16_TO_FP32(((ggml_bf16_t *) (&x))[1]);
+    r       = r * r;
+    i       = i * i;
+    float ret;
+    ((ggml_bf16_t *) (&ret))[1] = GGML_FP32_TO_BF16(i);
+    ((ggml_bf16_t *) (&ret))[0] = GGML_FP32_TO_BF16(r);
+    return ret;
 }
 
 static inline float op_relu(float x) {

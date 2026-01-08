@@ -508,8 +508,8 @@ void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
 
     for (int i = 0; i < nb; ++i) {
         const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
-        const int8_t * GGML_RESTRICT  x_r_ptr = x[i].x_real;
-        const int8_t * GGML_RESTRICT  x_i_ptr = x[i].x_imag;
+        const int8_t * GGML_RESTRICT  x_r_ptr = (const int8_t *) x[i].x_real;
+        const int8_t * GGML_RESTRICT  x_i_ptr = (const int8_t *) x[i].x_imag;
 
         // 这四个是每个 block 内部的 dot 结果（int32 累加）
         int32_t sum_ac = 0;  // Σ xr * wr
@@ -548,6 +548,8 @@ void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
                     wr = 0;
                     wi = 1;
                     break;
+                default:
+                    GGML_UNREACHABLE();
             }
 
             const int xr = (int) x_r_ptr[j];

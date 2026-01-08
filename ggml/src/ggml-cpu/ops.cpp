@@ -8,6 +8,7 @@
 #include "vec.h"
 
 #include <float.h>
+#include <inttypes.h>
 #include <math.h>
 
 #include <algorithm>
@@ -5638,7 +5639,7 @@ static void ggml_compute_forward_rope_f32(
 
     const float theta_scale = powf(freq_base, -2.0f/n_dims);
 
-    float corr_dims[2];
+    float corr_dims[2] = { 0.0f, 0.0f };
     ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
 
     const bool is_neox = mode & GGML_ROPE_TYPE_NEOX;
@@ -5955,14 +5956,20 @@ static void ggml_compute_forward_rope_f16(
     }
 }
 
-inline static void rope_yarn_ifairy(float   theta_extrap,
-                                    float   freq_scale,
-                                    float   corr_dims[2],
-                                    int64_t i0,
-                                    float   ext_factor,
-                                    float   mscale,
-                                    float * cos_theta,
-                                    float * sin_theta) {
+inline static void rope_yarn_ifairy(float       theta_extrap,
+                                    float       freq_scale,
+                                    const float corr_dims[2],
+                                    int64_t     i0,
+                                    float       ext_factor,
+                                    float       mscale,
+                                    float *     cos_theta,
+                                    float *     sin_theta) {
+    GGML_UNUSED(freq_scale);
+    GGML_UNUSED(corr_dims);
+    GGML_UNUSED(i0);
+    GGML_UNUSED(ext_factor);
+    GGML_UNUSED(mscale);
+
     // Standard RoPE: theta = inv_freq * position_id
     float theta = theta_extrap;
     //printf("%f ", theta);
@@ -5973,13 +5980,16 @@ inline static void rope_yarn_ifairy(float   theta_extrap,
 static void ggml_rope_cache_init_ifairy(float         theta_base,
                                         float         freq_scale,
                                         const float * freq_factors,
-                                        float         corr_dims[2],
+                                        const float   corr_dims[2],
                                         int64_t       ne0,
                                         float         ext_factor,
                                         float         mscale,
                                         float *       cache,
                                         float         sin_sign,
                                         float         theta_scale) {
+    GGML_UNUSED(freq_factors);
+    GGML_UNUSED(theta_scale);
+
     // Standard RoPE: theta = inv_freq * position_id
     // inv_freq = 1.0 / (base ^ (i / head_dim))
     // theta_scale = base ^ (-2/n_dims), so base = theta_scale ^ (-n_dims/2)
@@ -6005,7 +6015,12 @@ static void ggml_compute_forward_rope_ifairy(const ggml_compute_params * params,
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];  // pos
 
-    float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
+    float freq_base;
+    float freq_scale;
+    float ext_factor;
+    float attn_factor;
+    float beta_fast;
+    float beta_slow;
     int   sections[4];
 
     //const int n_past     = ((int32_t *) dst->op_params)[0];
@@ -6049,10 +6064,9 @@ static void ggml_compute_forward_rope_ifairy(const ggml_compute_params * params,
 
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
 
-    float corr_dims[2];
-    //ggml_rope_yarn_corr_dims(n_dims , n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+    float corr_dims[2] = { 0.0f, 0.0f };
+    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
 
-    const bool is_neox   = mode & GGML_ROPE_TYPE_NEOX;
     const bool is_mrope  = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, multimodal rotary position embedding
     const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
 
@@ -6090,9 +6104,10 @@ static void ggml_compute_forward_rope_ifairy(const ggml_compute_params * params,
                                       ext_factor, attn_factor, cache, sin_sign, theta_scale);
             }
             for (int i = 0; i < n_dims * 2; i++) {
-                if (cache[i] != cache[i] || cache[i] > 1.f || cache[i] < -1.f) {
-                    GGML_ABORT("nan discovered in cache, index: %d, value: %f, n_dims = %d, ne00 = %d, ne0 = %d", i,
-                               cache[i], n_dims, ne00, ne0);
+                if (isnan(cache[i]) || cache[i] > 1.f || cache[i] < -1.f) {
+                    GGML_ABORT("nan discovered in cache, index: %d, value: %f, n_dims = %d, ne00 = %" PRId64
+                               ", ne0 = %" PRId64,
+                               i, cache[i], n_dims, ne00, ne0);
                 }
             }
             GGML_ASSERT(nb0 == 4);

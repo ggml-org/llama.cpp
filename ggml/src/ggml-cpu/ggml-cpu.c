@@ -456,7 +456,7 @@ typedef pthread_mutex_t    ggml_mutex_t;
 #endif
 
 // Threadpool def
-#if defined(GGML_IFAIRY_ARM_LUT)
+#ifdef GGML_IFAIRY_ARM_LUT
 struct ggml_ifairy_lut_threadpool_config {
     bool                        strict;
     bool                        dbg;
@@ -499,7 +499,7 @@ struct ggml_threadpool {
 
     enum ggml_status ec;
 
-#if defined(GGML_IFAIRY_ARM_LUT)
+#ifdef GGML_IFAIRY_ARM_LUT
     struct ggml_ifairy_lut_threadpool_config ifairy_lut_cfg;
 #endif
 };
@@ -602,7 +602,7 @@ void ggml_barrier(struct ggml_threadpool * tp) {
 #endif
 }
 
-#if defined(GGML_IFAIRY_ARM_LUT)
+#ifdef GGML_IFAIRY_ARM_LUT
 static void ggml_ifairy_lut_threadpool_config_update(struct ggml_threadpool * threadpool) {
     struct ggml_ifairy_lut_threadpool_config cfg;
 
@@ -3595,19 +3595,15 @@ struct ggml_cplan ggml_graph_plan(
                             cur = ggml_type_size(GGML_TYPE_F32) * node->src[0]->ne[0] * n_tasks;
                         }
                     } break;
+                case GGML_OP_SOFT_MAX:
+                case GGML_OP_ROPE:
+                case GGML_OP_ROPE_BACK:
                 case GGML_OP_IFAIRY_SPLIT:
                 case GGML_OP_IFAIRY_ADD:
                 case GGML_OP_IFAIRY_MUL:
                 case GGML_OP_IFAIRY_MERGE:
                 case GGML_OP_IFAIRY_ROPE:
                 case GGML_OP_IFAIRY_RMSNORM:
-                    {
-                        cur = ggml_type_size(GGML_TYPE_F32) * node->ne[0] * n_tasks;
-                    }
-                    break;
-                case GGML_OP_SOFT_MAX:
-                case GGML_OP_ROPE:
-                case GGML_OP_ROPE_BACK:
                     {
                         cur = ggml_type_size(GGML_TYPE_F32) * node->ne[0] * n_tasks;
                     } break;
@@ -3917,7 +3913,7 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
         threadpool->prio             = tpp->prio;
         threadpool->ec               = GGML_STATUS_SUCCESS;
 
-#if defined(GGML_IFAIRY_ARM_LUT)
+#ifdef GGML_IFAIRY_ARM_LUT
         threadpool->ifairy_lut_cfg.strict           = false;
         threadpool->ifairy_lut_cfg.dbg              = false;
         threadpool->ifairy_lut_cfg.lut_enabled      = true;
@@ -4006,7 +4002,7 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
         threadpool->ec               = GGML_STATUS_SUCCESS;
     }
 
-#if defined(GGML_IFAIRY_ARM_LUT)
+#ifdef GGML_IFAIRY_ARM_LUT
     ggml_ifairy_lut_threadpool_config_update(threadpool);
 
     const struct ggml_ifairy_lut_threadpool_config * cfg = &threadpool->ifairy_lut_cfg;

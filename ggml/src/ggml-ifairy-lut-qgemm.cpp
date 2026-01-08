@@ -123,8 +123,9 @@ static inline int16x4_t ggml_ifairy_sym16_apply_factor_s16(int16x4_t v, uint8_t 
                 const int16x4_t sign_mi = { 1, 1, -1, -1 };
                 return vmul_s16(p, sign_mi);
             }
+        default:
+            GGML_UNREACHABLE();
     }
-    return v;
 }
 #endif
 
