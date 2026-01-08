@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
 	import {
 		chatStore,
 		pendingEditMessageId,
@@ -97,7 +98,7 @@
 			const conversationDeleted = await removeSystemPromptPlaceholder(message.id);
 
 			if (conversationDeleted) {
-				goto('/');
+				goto(`${base}/`);
 			}
 
 			return;
@@ -189,7 +190,7 @@
 				const conversationDeleted = await removeSystemPromptPlaceholder(message.id);
 				isEditing = false;
 				if (conversationDeleted) {
-					goto('/');
+					goto(`${base}/`);
 				}
 				return;
 			}
