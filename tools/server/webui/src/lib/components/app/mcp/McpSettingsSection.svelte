@@ -6,7 +6,8 @@
 	import type { MCPServerSettingsEntry } from '$lib/types/mcp';
 	import type { SettingsConfigType } from '$lib/types/settings';
 	import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
-	import McpServerCard from '$lib/components/app/mcp/McpServerCard.svelte';
+	import { extractServerNameFromUrl, getFaviconUrl } from '$lib/utils/mcp';
+	import { McpServerCard } from '$lib/components/app/mcp/McpServerCard';
 	import McpServerForm from './McpServerForm.svelte';
 
 	interface Props {
@@ -80,27 +81,7 @@
 	// Get display name for server
 	function getServerDisplayName(server: MCPServerSettingsEntry): string {
 		if (server.name) return server.name;
-		try {
-			const url = new URL(server.url);
-			const host = url.hostname.replace(/^(www\.|mcp\.)/, '');
-			const name = host.split('.')[0] || 'Unknown';
-			return name.charAt(0).toUpperCase() + name.slice(1);
-		} catch {
-			return 'New Server';
-		}
-	}
-
-	// Get favicon URL for server
-	function getFaviconUrl(server: MCPServerSettingsEntry): string | null {
-		try {
-			const url = new URL(server.url);
-			const hostnameParts = url.hostname.split('.');
-			const rootDomain =
-				hostnameParts.length >= 2 ? hostnameParts.slice(-2).join('.') : url.hostname;
-			return `https://www.google.com/s2/favicons?domain=${rootDomain}&sz=32`;
-		} catch {
-			return null;
-		}
+		return extractServerNameFromUrl(server.url);
 	}
 </script>
 
@@ -172,7 +153,7 @@
 				<McpServerCard
 					{server}
 					displayName={getServerDisplayName(server)}
-					faviconUrl={getFaviconUrl(server)}
+					faviconUrl={getFaviconUrl(server.url)}
 					onToggle={(enabled) => updateServer(server.id, { enabled })}
 					onUpdate={(updates) => updateServer(server.id, updates)}
 					onDelete={() => removeServer(server.id)}
