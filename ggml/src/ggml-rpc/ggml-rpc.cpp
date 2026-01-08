@@ -276,15 +276,91 @@ struct ggml_backend_rpc_buffer_context {
 
 // RPC helper functions
 
-// Computes FNV-1a hash of the data
-static uint64_t fnv_hash(const uint8_t * data, size_t len) {
-    const uint64_t fnv_prime = 0x100000001b3ULL;
-    uint64_t hash = 0xcbf29ce484222325ULL;
+// Computes xxHash (64 bit) of data, using 64-bit arithmetic.
+// see: https://create.stephan-brumme.com/xxhash/ for more details
+// see: https://github.com/Cyan4973/xxHash for benchmark comparisons
+static uint64_t generate_hash(const uint8_t* data, size_t len) {
 
-    for (size_t i = 0; i < len; ++i) {
-        hash ^= data[i];
-        hash *= fnv_prime;
+    const uint64_t seed = 0ULL;
+
+    const uint64_t prime1 = 11400714785074694791ULL;
+    const uint64_t prime2 = 14029467366897019727ULL;
+    const uint64_t prime3 =  1609587929392839161ULL;
+    const uint64_t prime4 =  9650029242287828579ULL;
+    const uint64_t prime5 =   2870177450012600261ULL;
+
+    const uint8_t* p   = data;
+    const uint8_t* end = data + len;
+
+    uint64_t hash;
+
+    if (len >= 32) {
+        uint64_t state[4] = {
+            seed + prime1 + prime2,
+            seed + prime2,
+            seed,
+            seed - prime1
+        };
+
+        // process full 32-byte stripe(s): update state[0..3] with 4x64-bit words
+        while (static_cast<size_t>(end - p) >= 32) {
+            const uint64_t* block = reinterpret_cast<const uint64_t*>(p);
+            for (int i = 0; i < 4; ++i) {
+                uint64_t v = state[i] + block[i] * prime2;
+                state[i] = ((v << 31) | (v >> (64 - 31))) * prime1;
+            }
+            p += 32;
+        }
+
+        // fold 4x64-bit into 1x64-bit
+        hash  = ((state[0] <<  1) | (state[0] >> (64 -  1)));
+        hash += ((state[1] <<  7) | (state[1] >> (64 -  7)));
+        hash += ((state[2] << 12) | (state[2] >> (64 - 12)));
+        hash += ((state[3] << 18) | (state[3] >> (64 - 18)));
+
+        // mix in state lanes
+        for (int i = 0; i < 4; ++i) {
+            uint64_t v = state[i] * prime2;
+            hash ^= ((v << 31) | (v >> (64 - 31))) * prime1;
+            hash = hash * prime1 + prime4;
+        }
+    } else {
+        hash = seed + prime5;
     }
+
+    hash += static_cast<uint64_t>(len);
+
+    // process any remaining 8-byte chunk(s)
+    while (static_cast<size_t>(end - p) >= 8) {
+        const uint64_t chunk = *reinterpret_cast<const uint64_t*>(p);
+        uint64_t v = chunk * prime2;
+        hash ^= ((v << 31) | (v >> (64 - 31))) * prime1;
+        hash = ((hash << 27) | (hash >> (64 - 27))) * prime1 + prime4;
+        p += 8;
+    }
+
+    // process any remaining 4-byte chunk
+    if (static_cast<size_t>(end - p) >= 4) {
+        const uint32_t chunk = *reinterpret_cast<const uint32_t*>(p);
+        hash ^= chunk * prime1;
+        hash = ((hash << 23) | (hash >> (64 - 23))) * prime2 + prime3;
+        p += 4;
+    }
+
+    // process any remaining byte(s)
+    while (p < end) {
+        const uint8_t chunk = *p++;
+        hash ^= chunk * prime5;
+        hash = ((hash << 11) | (hash >> (64 - 11))) * prime1;
+    }
+
+    // final avalanche
+    hash ^= hash >> 33;
+    hash *= prime2;
+    hash ^= hash >> 29;
+    hash *= prime3;
+    hash ^= hash >> 32;
+
     return hash;
 }
 
@@ -640,7 +716,7 @@ static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggm
         rpc_msg_set_tensor_hash_req request;
         request.tensor = rpc_tensor;
         request.offset = offset;
-        request.hash = fnv_hash((const uint8_t*)data, size);
+        request.hash = generate_hash((const uint8_t*)data, size);
         rpc_msg_set_tensor_hash_rsp response;
         bool status = send_rpc_cmd(ctx->sock, RPC_CMD_SET_TENSOR_HASH, &request, sizeof(request), &response, sizeof(response));
         RPC_STATUS_ASSERT(status);
@@ -1238,7 +1314,7 @@ bool rpc_server::set_tensor(const std::vector<uint8_t> & input) {
 
     const void * data = input.data() + sizeof(rpc_tensor) + sizeof(offset);
     if (cache_dir && size > HASH_THRESHOLD) {
-        uint64_t hash = fnv_hash((const uint8_t*)data, size);
+        uint64_t hash = generate_hash((const uint8_t*)data, size);
         char hash_str[17];
         snprintf(hash_str, sizeof(hash_str), "%016" PRIx64, hash);
         // save to cache_dir/hash_str
