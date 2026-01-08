@@ -2395,6 +2395,7 @@ class StableLMModel(TextModel):
     "VLlama3ForCausalLM",
     "LlavaForConditionalGeneration",
     "VoxtralForConditionalGeneration",
+    "LlamaForCausalLMEagle3",
     "LlamaModel")
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
@@ -2477,10 +2478,6 @@ class LlamaModel(TextModel):
                 # Llama 3
                 self._set_vocab_gpt2()
 
-        # Restore original dir_model for EAGLE-3
-        if hasattr(self, 'is_eagle3') and self.is_eagle3:
-            self.dir_model = original_dir_model
-
         # Apply to CodeLlama only (and ignore for Llama 3 with a vocab size of 128256)
         if self.hparams.get("vocab_size", 32000) == 32016:
             special_vocab = gguf.SpecialVocab(
@@ -2503,6 +2500,10 @@ class LlamaModel(TextModel):
         # Apply to granite small models only
         if self.hparams.get("vocab_size", 32000) == 49152:
             self.gguf_writer.add_add_bos_token(False)
+
+        # Restore original dir_model for EAGLE-3
+        if hasattr(self, 'is_eagle3') and self.is_eagle3:
+            self.dir_model = original_dir_model
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
