@@ -16,7 +16,11 @@
 	import { usedModalities, conversationsStore } from '$lib/stores/conversations.svelte';
 	import { ServerModelStatus } from '$lib/enums';
 	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { DialogModelInformation, SearchableDropdownMenu } from '$lib/components/app';
+	import {
+		DialogModelInformation,
+		SearchableDropdownMenu,
+		TruncatedText
+	} from '$lib/components/app';
 	import type { ModelOption } from '$lib/types/models';
 
 	interface Props {
@@ -371,9 +375,10 @@
 					>
 						<Package class="h-3.5 w-3.5" />
 
-						<span class="truncate font-medium">
-							{selectedOption?.model || 'Select model'}
-						</span>
+						<TruncatedText
+							text={selectedOption?.model || 'Select model'}
+							class="min-w-0 font-medium"
+						/>
 
 						{#if updating}
 							<Loader2 class="h-3 w-3.5 animate-spin" />
@@ -437,7 +442,7 @@
 								}
 							}}
 						>
-							<span class="min-w-0 flex-1 truncate">{option.model}</span>
+							<TruncatedText text={option.model} class="min-w-0 flex-1 text-left" />
 
 							{#if missingModalities}
 								<span class="flex shrink-0 items-center gap-1 text-muted-foreground/70">
@@ -522,9 +527,7 @@
 			>
 				<Package class="h-3.5 w-3.5" />
 
-				<span class="truncate font-medium">
-					{selectedOption?.model}
-				</span>
+				<TruncatedText text={selectedOption?.model || ''} class="min-w-0 font-medium" />
 
 				{#if updating}
 					<Loader2 class="h-3 w-3.5 animate-spin" />

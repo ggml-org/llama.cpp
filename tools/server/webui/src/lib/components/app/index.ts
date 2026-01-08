@@ -70,6 +70,7 @@ export { default as RemoveButton } from './misc/RemoveButton.svelte';
 export { default as SearchInput } from './misc/SearchInput.svelte';
 export { default as SearchableDropdownMenu } from './misc/SearchableDropdownMenu.svelte';
 export { default as SyntaxHighlightedCode } from './misc/SyntaxHighlightedCode.svelte';
+export { default as TruncatedText } from './misc/TruncatedText.svelte';
 
 // Models
 
