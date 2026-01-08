@@ -48,6 +48,8 @@
 
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
+extern const char* LICENSES;
+
 using json = nlohmann::ordered_json;
 using namespace common_arg_utils;
 
@@ -1027,6 +1029,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &) {
             fprintf(stderr, "version: %d (%s)\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
             fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
+            exit(0);
+        }
+    ));
+    add_opt(common_arg(
+        {"--license"},
+        "show source code license and dependencies",
+        [](common_params &) {
+            printf("%s\n", LICENSES);
             exit(0);
         }
     ));
