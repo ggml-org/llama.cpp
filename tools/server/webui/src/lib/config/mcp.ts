@@ -1,4 +1,9 @@
-import type { MCPClientConfig, MCPServerConfig, MCPServerSettingsEntry } from '$lib/types/mcp';
+import type {
+	MCPClientConfig,
+	MCPServerConfig,
+	MCPServerSettingsEntry,
+	McpServerUsageStats
+} from '$lib/types/mcp';
 import type { SettingsConfigType } from '$lib/types/settings';
 import type { McpServerOverride } from '$lib/types/database';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
@@ -143,8 +148,6 @@ export function hasEnabledMcpServers(
 // ─────────────────────────────────────────────────────────────────────────────
 // MCP Server Usage Stats
 // ─────────────────────────────────────────────────────────────────────────────
-
-export type McpServerUsageStats = Record<string, number>;
 
 /**
  * Parse MCP server usage stats from settings.

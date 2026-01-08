@@ -22,7 +22,11 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { MCPServerConfig, ClientCapabilities, Implementation } from '$lib/types/mcp';
+import type {
+	MCPServerConnectionConfig,
+	ToolCallParams,
+	ToolExecutionResult
+} from '$lib/types/mcp';
 import { MCPError } from '$lib/errors';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 
@@ -40,27 +44,6 @@ interface ToolCallResult {
 	content?: ToolResultContentItem[];
 	isError?: boolean;
 	_meta?: Record<string, unknown>;
-}
-
-export interface MCPServerConnectionConfig {
-	/** Unique server name/identifier */
-	name: string;
-	/** Server configuration */
-	server: MCPServerConfig;
-	/** Client info to advertise */
-	clientInfo?: Implementation;
-	/** Capabilities to advertise */
-	capabilities?: ClientCapabilities;
-}
-
-export interface ToolCallParams {
-	name: string;
-	arguments: Record<string, unknown>;
-}
-
-export interface ToolExecutionResult {
-	content: string;
-	isError: boolean;
 }
 
 /**

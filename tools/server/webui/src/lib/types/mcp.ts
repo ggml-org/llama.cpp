@@ -70,3 +70,63 @@ export type MCPServerSettingsEntry = {
 	/** Server icon URL from metadata (fetched during health check). */
 	iconUrl?: string;
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Host Manager Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface MCPHostManagerConfig {
+	/** Server configurations keyed by server name */
+	servers: MCPClientConfig['servers'];
+	/** Client info to advertise to all servers */
+	clientInfo?: Implementation;
+	/** Default capabilities to advertise */
+	capabilities?: ClientCapabilities;
+}
+
+export interface OpenAIToolDefinition {
+	type: 'function';
+	function: {
+		name: string;
+		description?: string;
+		parameters: Record<string, unknown>;
+	};
+}
+
+export interface ServerStatus {
+	name: string;
+	isConnected: boolean;
+	toolCount: number;
+	error?: string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Usage Stats
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type McpServerUsageStats = Record<string, number>;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Server Connection Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface MCPServerConnectionConfig {
+	/** Unique server name/identifier */
+	name: string;
+	/** Server configuration */
+	server: MCPServerConfig;
+	/** Client info to advertise */
+	clientInfo?: Implementation;
+	/** Capabilities to advertise */
+	capabilities?: ClientCapabilities;
+}
+
+export interface ToolCallParams {
+	name: string;
+	arguments: Record<string, unknown>;
+}
+
+export interface ToolExecutionResult {
+	content: string;
+	isError: boolean;
+}

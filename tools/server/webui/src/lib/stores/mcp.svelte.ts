@@ -1,11 +1,7 @@
 import { browser } from '$app/environment';
-import {
-	MCPHostManager,
-	type OpenAIToolDefinition,
-	type ServerStatus
-} from '$lib/mcp/host-manager';
+import { MCPHostManager } from '$lib/mcp/host-manager';
 import { MCPServerConnection } from '$lib/mcp/server-connection';
-import type { ToolExecutionResult } from '$lib/mcp/server-connection';
+import type { OpenAIToolDefinition, ServerStatus, ToolExecutionResult } from '$lib/types/mcp';
 import { buildMcpClientConfig, incrementMcpServerUsage } from '$lib/config/mcp';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import type { MCPToolCall } from '$lib/types/mcp';
