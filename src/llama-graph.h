@@ -613,9 +613,9 @@ struct llm_graph_context {
                      int   il) const;
 
     ggml_tensor * ifairy_build_norm(
-             ggml_tensor * cur,
-             ggml_tensor * mw, // mw should be fp32, sized hidden_size * 2, shape [hidden_size_real, hidden_size_imag]
-                     int   il) const;
+        ggml_tensor * cur,
+        ggml_tensor * mw,  // mw should be fp32, sized hidden_size * 2, shape [hidden_size_real, hidden_size_imag]
+        int           il) const;
 
     ggml_tensor * build_ffn(
              ggml_tensor * cur,
@@ -634,12 +634,13 @@ struct llm_graph_context {
                      int   il) const;
 
     ggml_tensor * ifairy_build_ffn(
-             ggml_tensor * cur,
-             ggml_tensor * up,
-             ggml_tensor * gate,
-             ggml_tensor * down,
-             ggml_tensor * norm_weight, // norm_weight should be fp32, sized hidden_size * 2, shape [hidden_size_real, hidden_size_imag]
-                     int   il) const;
+        ggml_tensor * cur,
+        ggml_tensor * up,
+        ggml_tensor * gate,
+        ggml_tensor * down,
+        ggml_tensor *
+            norm_weight,  // norm_weight should be fp32, sized hidden_size * 2, shape [hidden_size_real, hidden_size_imag]
+        int il) const;
 
     // build MoE FFN without bias tensors
     ggml_tensor * build_moe_ffn(
@@ -728,13 +729,12 @@ struct llm_graph_context {
 
     llm_graph_input_attn_kv * build_attn_inp_kv() const;
 
-    ggml_tensor * ifairy_build_attn(
-        llm_graph_input_attn_kv * inp,
-        ggml_tensor * q_cur, // [n_embd_head_q * 2, n_head_q, n_tokens]
-        ggml_tensor * k_cur, // [n_embd_head_k * 2, n_head_k, n_tokens]
-        ggml_tensor * v_cur, // [n_embd_head_v * 2, n_head_v, n_tokens]);
-        float   kq_scale,
-        int   il);
+    ggml_tensor * ifairy_build_attn(llm_graph_input_attn_kv * inp,
+                                    ggml_tensor *             q_cur,  // [n_embd_head_q * 2, n_head_q, n_tokens]
+                                    ggml_tensor *             k_cur,  // [n_embd_head_k * 2, n_head_k, n_tokens]
+                                    ggml_tensor *             v_cur,  // [n_embd_head_v * 2, n_head_v, n_tokens]);
+                                    float                     kq_scale,
+                                    int                       il);
 
     ggml_tensor * build_attn(
             llm_graph_input_attn_kv * inp,

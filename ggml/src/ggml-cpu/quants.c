@@ -476,14 +476,21 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 // Complex 2-bit quantization dot product for Fairy±i model
 // Computes: result = sum((real_w + i*imag_w) * (real_act + i*imag_act)) (要对激活取共轭)
 // We use q8_K for both real and imaginary activation parts stored sequentially
-void ggml_vec_dot_ifairy_q16_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+void ggml_vec_dot_ifairy_q16_K_generic(int                        n,
+                                       float * GGML_RESTRICT      s,
+                                       size_t                     bs,
+                                       const void * GGML_RESTRICT vx,
+                                       size_t                     bx,
+                                       const void * GGML_RESTRICT vy,
+                                       size_t                     by,
+                                       int                        nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
     UNUSED(by);
     UNUSED(bs);
 
-    const block_ifairy     * GGML_RESTRICT w = (const block_ifairy *)     vx;
+    const block_ifairy * GGML_RESTRICT     w = (const block_ifairy *) vx;
     const block_ifairy_q16 * GGML_RESTRICT x = (const block_ifairy_q16 *) vy;
 
     const int nb = n / QK_K;
@@ -501,14 +508,14 @@ void ggml_vec_dot_ifairy_q16_K_generic(int n, float * GGML_RESTRICT s, size_t bs
 
     for (int i = 0; i < nb; ++i) {
         const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
-        const int8_t  * GGML_RESTRICT x_r_ptr = x[i].x_real;
-        const int8_t  * GGML_RESTRICT x_i_ptr = x[i].x_imag;
+        const int8_t * GGML_RESTRICT  x_r_ptr = x[i].x_real;
+        const int8_t * GGML_RESTRICT  x_i_ptr = x[i].x_imag;
 
         // 这四个是每个 block 内部的 dot 结果（int32 累加）
-        int32_t sum_ac = 0; // Σ xr * wr
-        int32_t sum_ad = 0; // Σ xi * wr
-        int32_t sum_bc = 0; // Σ xr * wi
-        int32_t sum_bd = 0; // Σ xi * wi
+        int32_t sum_ac = 0;  // Σ xr * wr
+        int32_t sum_ad = 0;  // Σ xi * wr
+        int32_t sum_bc = 0;  // Σ xr * wi
+        int32_t sum_bd = 0;  // Σ xi * wi
 
         // QK_K 个元素，每 4 个权重 packed 在一个 byte 里
         for (int j = 0; j < QK_K; ++j) {
@@ -525,17 +532,21 @@ void ggml_vec_dot_ifairy_q16_K_generic(int n, float * GGML_RESTRICT s, size_t bs
             int wr = 0;
             int wi = 0;
             switch (code) {
-                case 0: // 00 -> -1
-                    wr = -1; wi =  0;
+                case 0:  // 00 -> -1
+                    wr = -1;
+                    wi = 0;
                     break;
-                case 1: // 01 -> +1
-                    wr =  1; wi =  0;
+                case 1:  // 01 -> +1
+                    wr = 1;
+                    wi = 0;
                     break;
-                case 2: // 10 -> -i
-                    wr =  0; wi = -1;
+                case 2:  // 10 -> -i
+                    wr = 0;
+                    wi = -1;
                     break;
-                case 3: // 11 -> +i
-                    wr =  0; wi =  1;
+                case 3:  // 11 -> +i
+                    wr = 0;
+                    wi = 1;
                     break;
             }
 

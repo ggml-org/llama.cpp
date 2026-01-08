@@ -148,7 +148,7 @@ void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT
         // pass 1: find max |real| / |imag|
         {
             const uint16_t * GGML_RESTRICT src = src_base;
-            int cnt = QK_K * 2; // number of bf16 halves to process
+            int                            cnt = QK_K * 2;  // number of bf16 halves to process
 
             asm volatile(
                 "1:\n"
@@ -181,12 +181,12 @@ void quantize_row_ifairy_q16(const float * GGML_RESTRICT x, void * GGML_RESTRICT
 
         // pass 2: quantize
         {
-            const uint16_t * GGML_RESTRICT src = src_base;
-            int8_t * GGML_RESTRICT yr = (int8_t *) y[ib].x_real;
-            int8_t * GGML_RESTRICT yi = (int8_t *) y[ib].x_imag;
-            float32x4_t vs_r = vdupq_n_f32(iscale_r);
-            float32x4_t vs_i = vdupq_n_f32(iscale_i);
-            int cnt = QK_K; // number of complex values
+            const uint16_t * GGML_RESTRICT src  = src_base;
+            int8_t * GGML_RESTRICT         yr   = (int8_t *) y[ib].x_real;
+            int8_t * GGML_RESTRICT         yi   = (int8_t *) y[ib].x_imag;
+            float32x4_t                    vs_r = vdupq_n_f32(iscale_r);
+            float32x4_t                    vs_i = vdupq_n_f32(iscale_i);
+            int                            cnt  = QK_K;  // number of complex values
 
             asm volatile(
                 "1:\n"
@@ -1601,18 +1601,23 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 // where w_r, w_i are 2-bit quantized weights
 // and a_r, a_i are activations stored in separate ifairy_q16 blocks
 
-void ggml_vec_dot_ifairy_q16_K(
-        int n,
-        float * GGML_RESTRICT s, size_t bs,
-        const void * GGML_RESTRICT vx, size_t bx,
-        const void * GGML_RESTRICT vy, size_t by,
-        int nrc) {
-    (void)nrc; (void)bx; (void)by; (void)bs;
+void ggml_vec_dot_ifairy_q16_K(int                        n,
+                               float * GGML_RESTRICT      s,
+                               size_t                     bs,
+                               const void * GGML_RESTRICT vx,
+                               size_t                     bx,
+                               const void * GGML_RESTRICT vy,
+                               size_t                     by,
+                               int                        nrc) {
+    (void) nrc;
+    (void) bx;
+    (void) by;
+    (void) bs;
 
 #if defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
-    const block_ifairy     * GGML_RESTRICT w = vx;
-    const block_ifairy_q16 * GGML_RESTRICT x = vy;
-    const int nb = n / QK_K;
+    const block_ifairy * GGML_RESTRICT     w  = vx;
+    const block_ifairy_q16 * GGML_RESTRICT x  = vy;
+    const int                              nb = n / QK_K;
 
     // 最终累加的 Scalar 结果
     float sum_real_total = 0.0f;
@@ -1675,14 +1680,14 @@ void ggml_vec_dot_ifairy_q16_K(
         register int32x4_t acc_bd1 asm("v7")  = vzero;
 
         const uint8_t * GGML_RESTRICT w_ptr   = w[i].qs;
-        const int8_t  * GGML_RESTRICT x_r_ptr = x[i].x_real;
-        const int8_t  * GGML_RESTRICT x_i_ptr = x[i].x_imag;
+        const int8_t * GGML_RESTRICT  x_r_ptr = x[i].x_real;
+        const int8_t * GGML_RESTRICT  x_i_ptr = x[i].x_imag;
 
         // QK_K = 256, 每次循环处理 128 个元素 (两个 64 组)，核心 dot 用内联汇编
         for (int j = 0; j < QK_K; j += 128) {
             const uint8_t * GGML_RESTRICT w_iter = w_ptr + (j >> 2);
-            const int8_t  * GGML_RESTRICT xr = x_r_ptr + j;
-            const int8_t  * GGML_RESTRICT xi = x_i_ptr + j;
+            const int8_t * GGML_RESTRICT  xr     = x_r_ptr + j;
+            const int8_t * GGML_RESTRICT  xi     = x_i_ptr + j;
 
             asm volatile(
                 // ---- block 0: weights 0..63 ----
@@ -1779,7 +1784,7 @@ void ggml_vec_dot_ifairy_q16_K(
                 : [w] "r"(w_iter), [xr] "r"(xr), [xi] "r"(xi), [m0f] "w"(v_mask_0f_reg), [wr0] "w"(v_lut_wr_i0_reg),
                   [wi0] "w"(v_lut_wi_i0_reg), [wr1] "w"(v_lut_wr_i1_reg), [wi1] "w"(v_lut_wi_i1_reg)
                 : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v16", "v17", "v18", "v19", "memory");
-        } // j loop
+        }  // j loop
 
         // 合并两个累加 Bank
         acc_ac0 = vaddq_s32(acc_ac0, acc_ac1);

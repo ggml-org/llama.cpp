@@ -375,49 +375,49 @@ extern "C" {
 
     // NOTE: always add types at the end of the enum to keep backward compatibility
     enum ggml_type {
-        GGML_TYPE_F32     = 0,
-        GGML_TYPE_F16     = 1,
-        GGML_TYPE_Q4_0    = 2,
-        GGML_TYPE_Q4_1    = 3,
+        GGML_TYPE_F32        = 0,
+        GGML_TYPE_F16        = 1,
+        GGML_TYPE_Q4_0       = 2,
+        GGML_TYPE_Q4_1       = 3,
         // GGML_TYPE_Q4_2 = 4, support has been removed
         // GGML_TYPE_Q4_3 = 5, support has been removed
-        GGML_TYPE_Q5_0    = 6,
-        GGML_TYPE_Q5_1    = 7,
-        GGML_TYPE_Q8_0    = 8,
-        GGML_TYPE_Q8_1    = 9,
-        GGML_TYPE_Q2_K    = 10,
-        GGML_TYPE_Q3_K    = 11,
-        GGML_TYPE_Q4_K    = 12,
-        GGML_TYPE_Q5_K    = 13,
-        GGML_TYPE_Q6_K    = 14,
-        GGML_TYPE_Q8_K    = 15,
-        GGML_TYPE_IQ2_XXS = 16,
-        GGML_TYPE_IQ2_XS  = 17,
-        GGML_TYPE_IQ3_XXS = 18,
-        GGML_TYPE_IQ1_S   = 19,
-        GGML_TYPE_IQ4_NL  = 20,
-        GGML_TYPE_IQ3_S   = 21,
-        GGML_TYPE_IQ2_S   = 22,
-        GGML_TYPE_IQ4_XS  = 23,
-        GGML_TYPE_I8      = 24,
-        GGML_TYPE_I16     = 25,
-        GGML_TYPE_I32     = 26,
-        GGML_TYPE_I64     = 27,
-        GGML_TYPE_F64     = 28,
-        GGML_TYPE_IQ1_M   = 29,
-        GGML_TYPE_BF16    = 30,
+        GGML_TYPE_Q5_0       = 6,
+        GGML_TYPE_Q5_1       = 7,
+        GGML_TYPE_Q8_0       = 8,
+        GGML_TYPE_Q8_1       = 9,
+        GGML_TYPE_Q2_K       = 10,
+        GGML_TYPE_Q3_K       = 11,
+        GGML_TYPE_Q4_K       = 12,
+        GGML_TYPE_Q5_K       = 13,
+        GGML_TYPE_Q6_K       = 14,
+        GGML_TYPE_Q8_K       = 15,
+        GGML_TYPE_IQ2_XXS    = 16,
+        GGML_TYPE_IQ2_XS     = 17,
+        GGML_TYPE_IQ3_XXS    = 18,
+        GGML_TYPE_IQ1_S      = 19,
+        GGML_TYPE_IQ4_NL     = 20,
+        GGML_TYPE_IQ3_S      = 21,
+        GGML_TYPE_IQ2_S      = 22,
+        GGML_TYPE_IQ4_XS     = 23,
+        GGML_TYPE_I8         = 24,
+        GGML_TYPE_I16        = 25,
+        GGML_TYPE_I32        = 26,
+        GGML_TYPE_I64        = 27,
+        GGML_TYPE_F64        = 28,
+        GGML_TYPE_IQ1_M      = 29,
+        GGML_TYPE_BF16       = 30,
         // GGML_TYPE_Q4_0_4_4 = 31, support has been removed from gguf files
         // GGML_TYPE_Q4_0_4_8 = 32,
         // GGML_TYPE_Q4_0_8_8 = 33,
-        GGML_TYPE_TQ1_0   = 34,
-        GGML_TYPE_TQ2_0   = 35,
+        GGML_TYPE_TQ1_0      = 34,
+        GGML_TYPE_TQ2_0      = 35,
         // GGML_TYPE_IQ4_NL_4_4 = 36,
         // GGML_TYPE_IQ4_NL_4_8 = 37,
         // GGML_TYPE_IQ4_NL_8_8 = 38,
-        GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
-        GGML_TYPE_IFAIRY  = 40, // complex type used for the ifairy model weight
-        GGML_TYPE_IFAIRY_Q16 = 41, // complex type used for the ifairy model in activation
-        GGML_TYPE_COUNT   = 42,
+        GGML_TYPE_MXFP4      = 39,  // MXFP4 (1 block)
+        GGML_TYPE_IFAIRY     = 40,  // complex type used for the ifairy model weight
+        GGML_TYPE_IFAIRY_Q16 = 41,  // complex type used for the ifairy model in activation
+        GGML_TYPE_COUNT      = 42,
     };
 
     // precision
@@ -481,7 +481,7 @@ extern "C" {
         GGML_OP_REPEAT_BACK,
         GGML_OP_CONCAT,
         GGML_OP_SILU_BACK,
-        GGML_OP_NORM, // normalize
+        GGML_OP_NORM,  // normalize
         GGML_OP_RMS_NORM,
         GGML_OP_RMS_NORM_BACK,
         GGML_OP_GROUP_NORM,
@@ -560,9 +560,9 @@ extern "C" {
         GGML_OP_IFAIRY_ROPE,
         GGML_OP_IFAIRY_SPLIT,
         GGML_OP_IFAIRY_MERGE,
-        GGML_OP_IFAIRY_ADD, // 残差要用
+        GGML_OP_IFAIRY_ADD,  // 残差要用
         GGML_OP_IFAIRY_RMSNORM,
-        GGML_OP_IFAIRY_MUL, // 逐元素相乘，mlp中gate要用
+        GGML_OP_IFAIRY_MUL,  // 逐元素相乘，mlp中gate要用
 
         GGML_OP_COUNT,
     };
@@ -1079,9 +1079,7 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
-    GGML_API struct ggml_tensor * ggml_ifairy_relu2(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a);
+    GGML_API struct ggml_tensor * ggml_ifairy_relu2(struct ggml_context * ctx, struct ggml_tensor * a);
 
     GGML_API struct ggml_tensor * ggml_relu(
             struct ggml_context * ctx,
@@ -1660,37 +1658,25 @@ extern "C" {
             int                   n_dims,
             int                   mode);
 
-    GGML_API struct ggml_tensor * ggml_ifairy_rope(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b,
-            int                   n_dims,
-            int                   mode);
+    GGML_API struct ggml_tensor * ggml_ifairy_rope(struct ggml_context * ctx,
+                                                   struct ggml_tensor *  a,
+                                                   struct ggml_tensor *  b,
+                                                   int                   n_dims,
+                                                   int                   mode);
 
-    GGML_API struct ggml_tensor * ggml_ifairy_split(
-        struct ggml_context * ctx,
-        struct ggml_tensor * a
-    );
+    GGML_API struct ggml_tensor * ggml_ifairy_split(struct ggml_context * ctx, struct ggml_tensor * a);
 
-    GGML_API struct ggml_tensor * ggml_ifairy_merge(
-        struct ggml_context * ctx,
-        struct ggml_tensor * a
-    );
+    GGML_API struct ggml_tensor * ggml_ifairy_merge(struct ggml_context * ctx, struct ggml_tensor * a);
 
-    GGML_API struct ggml_tensor * ggml_ifairy_add(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b);
+    GGML_API struct ggml_tensor * ggml_ifairy_add(struct ggml_context * ctx,
+                                                  struct ggml_tensor *  a,
+                                                  struct ggml_tensor *  b);
 
-    GGML_API struct ggml_tensor * ggml_ifairy_mul(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            struct ggml_tensor  * b);
+    GGML_API struct ggml_tensor * ggml_ifairy_mul(struct ggml_context * ctx,
+                                                  struct ggml_tensor *  a,
+                                                  struct ggml_tensor *  b);
 
-    GGML_API struct ggml_tensor * ggml_ifairy_rms_norm(
-            struct ggml_context * ctx,
-            struct ggml_tensor  * a,
-            float                 eps);
+    GGML_API struct ggml_tensor * ggml_ifairy_rms_norm(struct ggml_context * ctx, struct ggml_tensor * a, float eps);
 
     // in-place, returns view(a)
     GGML_API struct ggml_tensor * ggml_rope_inplace(

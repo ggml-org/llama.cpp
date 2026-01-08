@@ -278,8 +278,7 @@ public:
     llama_kv_cache_context(llama_memory_status status);
 
     // used to create a full-cache context
-    llama_kv_cache_context(
-            llama_kv_cache * kv);
+    llama_kv_cache_context(llama_kv_cache * kv);
     // used to create an update context
     llama_kv_cache_context(
             llama_kv_cache * kv,
@@ -314,7 +313,7 @@ public:
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
-    
+
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, int32_t n_kv) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, int32_t n_kv) const;
 

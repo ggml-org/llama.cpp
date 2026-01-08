@@ -6,10 +6,10 @@
 #include <chrono>
 #include <cinttypes>
 #include <cstdint>
-#include <exception>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <random>
 #include <string>
 #include <vector>
@@ -110,7 +110,7 @@ static int main_impl(int argc, char ** argv) {
     const int64_t groups_per_block = (QK_K + 2) / 3;
     const int64_t groups           = blocks * groups_per_block;
 
-    std::mt19937                   rng(seed);
+    std::mt19937                    rng(seed);
     std::uniform_int_distribution<> idx_dist(0, 63);
     std::uniform_int_distribution<> lut_dist(-128, 127);
 
@@ -138,10 +138,10 @@ static int main_impl(int argc, char ** argv) {
     std::vector<float> dst((size_t) m * 2);
 
     auto run_once = [&]() {
-        ggml_ifairy_lut_qgemm_ex_merged64(
-            m, k, /*n*/ 1, qweights.data(), indexes.data(), lut.data(), lut_scales.data(),
-            /*act*/ nullptr, /*act_stride*/ 0, dst.data(), /*dst_col_stride*/ 0, /*dst_row_stride*/ 2 * sizeof(float),
-            /*pack_bf16*/ false, /*strict*/ false, /*add*/ false);
+        ggml_ifairy_lut_qgemm_ex_merged64(m, k, /*n*/ 1, qweights.data(), indexes.data(), lut.data(), lut_scales.data(),
+                                          /*act*/ nullptr, /*act_stride*/ 0, dst.data(), /*dst_col_stride*/ 0,
+                                          /*dst_row_stride*/ 2 * sizeof(float),
+                                          /*pack_bf16*/ false, /*strict*/ false, /*add*/ false);
     };
 
     for (int i = 0; i < warmup; ++i) {
@@ -152,8 +152,8 @@ static int main_impl(int argc, char ** argv) {
     for (int i = 0; i < iters; ++i) {
         run_once();
     }
-    const auto t1    = std::chrono::steady_clock::now();
-    const auto ns    = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+    const auto   t1  = std::chrono::steady_clock::now();
+    const auto   ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
     const double per = (double) ns / (double) iters;
 
     double checksum = 0.0;

@@ -35,27 +35,27 @@ static inline float op_div(float a, float b) {
  *   Bits 16-31: imag (BF16)
  */
 static inline float op_ifairy_add(float a, float b) {
-    float r = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[0]);
-    float i = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[1]);
-    r = r + GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[0]);
-    i = i + GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[1]);
+    float r = GGML_BF16_TO_FP32(((ggml_bf16_t *) (&a))[0]);
+    float i = GGML_BF16_TO_FP32(((ggml_bf16_t *) (&a))[1]);
+    r       = r + GGML_BF16_TO_FP32(((ggml_bf16_t *) (&b))[0]);
+    i       = i + GGML_BF16_TO_FP32(((ggml_bf16_t *) (&b))[1]);
     float ret;
-    ((ggml_bf16_t*)(&ret))[1] = GGML_FP32_TO_BF16(i);
-    ((ggml_bf16_t*)(&ret))[0] = GGML_FP32_TO_BF16(r);
+    ((ggml_bf16_t *) (&ret))[1] = GGML_FP32_TO_BF16(i);
+    ((ggml_bf16_t *) (&ret))[0] = GGML_FP32_TO_BF16(r);
     return ret;
 }
 
 static inline float op_ifairy_mul(float a, float b) {
-    float ra = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[0]);
-    float ia = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&a))[1]);
-    float rg = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[0]);
-    float ig = GGML_BF16_TO_FP32(((ggml_bf16_t*)(&b))[1]);
+    float ra = GGML_BF16_TO_FP32(((ggml_bf16_t *) (&a))[0]);
+    float ia = GGML_BF16_TO_FP32(((ggml_bf16_t *) (&a))[1]);
+    float rg = GGML_BF16_TO_FP32(((ggml_bf16_t *) (&b))[0]);
+    float ig = GGML_BF16_TO_FP32(((ggml_bf16_t *) (&b))[1]);
     // (ra - i ia) * (rg + i ig) = (ra*rg + ia*ig) + i(ra*ig - ia*rg)
-    float r = ra*rg + ia*ig;
-    float i = ia*rg - ra*ig;
+    float r  = ra * rg + ia * ig;
+    float i  = ia * rg - ra * ig;
     float ret;
-    ((ggml_bf16_t*)(&ret))[0] = GGML_FP32_TO_BF16(r);
-    ((ggml_bf16_t*)(&ret))[1] = GGML_FP32_TO_BF16(i);
+    ((ggml_bf16_t *) (&ret))[0] = GGML_FP32_TO_BF16(r);
+    ((ggml_bf16_t *) (&ret))[1] = GGML_FP32_TO_BF16(i);
     return ret;
 }
 

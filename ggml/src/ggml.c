@@ -1186,7 +1186,6 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
 
 static_assert(GGML_UNARY_OP_COUNT == 16, "GGML_UNARY_OP_COUNT != 16");
 
-
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "REGLU",
     "GEGLU",
@@ -2591,9 +2590,7 @@ struct ggml_tensor * ggml_elu_inplace(
 }
 
 // ggml_relu
-struct ggml_tensor * ggml_ifairy_relu2(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a) {
+struct ggml_tensor * ggml_ifairy_relu2(struct ggml_context * ctx, struct ggml_tensor * a) {
     return ggml_unary(ctx, a, GGML_UNARY_OP_IFAIRY_RELU2);
 }
 
@@ -3985,13 +3982,10 @@ static struct ggml_tensor * ggml_rope_impl(
     return result;
 }
 
-static struct ggml_tensor * ggml_ifairy_split_impl(
-    struct ggml_context * ctx,
-    struct ggml_tensor  * a
-){
-    a->ne[0] = a->ne[0] * 2;
+static struct ggml_tensor * ggml_ifairy_split_impl(struct ggml_context * ctx, struct ggml_tensor * a) {
+    a->ne[0]                    = a->ne[0] * 2;
     struct ggml_tensor * result = false ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
-    a->ne[0] = a->ne[0] / 2;
+    a->ne[0]                    = a->ne[0] / 2;
 
     result->op     = GGML_OP_IFAIRY_SPLIT;
     result->src[0] = a;
@@ -3999,11 +3993,10 @@ static struct ggml_tensor * ggml_ifairy_split_impl(
     return result;
 }
 
-static struct ggml_tensor * ggml_ifairy_add_impl(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        struct ggml_tensor  * b,
-        bool                  inplace) {
+static struct ggml_tensor * ggml_ifairy_add_impl(struct ggml_context * ctx,
+                                                 struct ggml_tensor *  a,
+                                                 struct ggml_tensor *  b,
+                                                 bool                  inplace) {
     GGML_ASSERT(ggml_can_repeat(b, a));
 
     struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
@@ -4015,11 +4008,10 @@ static struct ggml_tensor * ggml_ifairy_add_impl(
     return result;
 }
 
-static struct ggml_tensor * ggml_ifairy_mul_impl(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        struct ggml_tensor  * b,
-        bool                  inplace) {
+static struct ggml_tensor * ggml_ifairy_mul_impl(struct ggml_context * ctx,
+                                                 struct ggml_tensor *  a,
+                                                 struct ggml_tensor *  b,
+                                                 bool                  inplace) {
     GGML_ASSERT(ggml_can_repeat(b, a));
 
     struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
@@ -4031,15 +4023,12 @@ static struct ggml_tensor * ggml_ifairy_mul_impl(
     return result;
 }
 
-static struct ggml_tensor * ggml_ifairy_merge_impl(
-    struct ggml_context * ctx,
-    struct ggml_tensor  * a
-){
-    GGML_ASSERT(a -> ne[0] % 2 == 0);
+static struct ggml_tensor * ggml_ifairy_merge_impl(struct ggml_context * ctx, struct ggml_tensor * a) {
+    GGML_ASSERT(a->ne[0] % 2 == 0);
 
-    a->ne[0] = a->ne[0] / 2;
+    a->ne[0]                    = a->ne[0] / 2;
     struct ggml_tensor * result = false ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
-    a->ne[0] = a->ne[0] * 2;
+    a->ne[0]                    = a->ne[0] * 2;
 
     result->op     = GGML_OP_IFAIRY_MERGE;
     result->src[0] = a;
@@ -4047,20 +4036,19 @@ static struct ggml_tensor * ggml_ifairy_merge_impl(
     return result;
 }
 
-static struct ggml_tensor * ggml_ifairy_rope_impl(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        struct ggml_tensor  * b,
-        int                   n_dims,
-        int                   sections[GGML_MROPE_SECTIONS],
-        int                   mode,
-        int                   n_ctx_orig,
-        float                 freq_base,
-        float                 freq_scale,
-        float                 ext_factor,
-        float                 attn_factor,
-        float                 beta_fast,
-        float                 beta_slow) {
+static struct ggml_tensor * ggml_ifairy_rope_impl(struct ggml_context * ctx,
+                                                  struct ggml_tensor *  a,
+                                                  struct ggml_tensor *  b,
+                                                  int                   n_dims,
+                                                  int                   sections[GGML_MROPE_SECTIONS],
+                                                  int                   mode,
+                                                  int                   n_ctx_orig,
+                                                  float                 freq_base,
+                                                  float                 freq_scale,
+                                                  float                 ext_factor,
+                                                  float                 attn_factor,
+                                                  float                 beta_fast,
+                                                  float                 beta_slow) {
     GGML_ASSERT((mode & 1) == 0 && "mode & 1 == 1 is no longer supported");
 
     GGML_ASSERT(ggml_is_vector(b));
@@ -4068,21 +4056,21 @@ static struct ggml_tensor * ggml_ifairy_rope_impl(
 
     bool mrope_used = mode & GGML_ROPE_TYPE_MROPE;
 
-    a->ne[0] = a->ne[0] * 2;
+    a->ne[0]                    = a->ne[0] * 2;
     struct ggml_tensor * result = false ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
-    a->ne[0] = a->ne[0] / 2;
+    a->ne[0]                    = a->ne[0] / 2;
 
     int32_t params[15] = { /*n_past*/ 0, n_dims, mode, /*n_ctx*/ 0, n_ctx_orig };
-    memcpy(params +  5, &freq_base,    sizeof(float));
-    memcpy(params +  6, &freq_scale,   sizeof(float));
-    memcpy(params +  7, &ext_factor,   sizeof(float));
-    memcpy(params +  8, &attn_factor,  sizeof(float));
-    memcpy(params +  9, &beta_fast,    sizeof(float));
-    memcpy(params + 10, &beta_slow,    sizeof(float));
+    memcpy(params + 5, &freq_base, sizeof(float));
+    memcpy(params + 6, &freq_scale, sizeof(float));
+    memcpy(params + 7, &ext_factor, sizeof(float));
+    memcpy(params + 8, &attn_factor, sizeof(float));
+    memcpy(params + 9, &beta_fast, sizeof(float));
+    memcpy(params + 10, &beta_slow, sizeof(float));
     if (mrope_used) {
-        memcpy(params + 11, sections,  sizeof(int32_t) * GGML_MROPE_SECTIONS);
+        memcpy(params + 11, sections, sizeof(int32_t) * GGML_MROPE_SECTIONS);
     } else {
-        memset(params + 11, 0,         sizeof(int32_t) * GGML_MROPE_SECTIONS);
+        memset(params + 11, 0, sizeof(int32_t) * GGML_MROPE_SECTIONS);
     }
     ggml_set_op_params(result, params, sizeof(params));
 
@@ -4093,50 +4081,34 @@ static struct ggml_tensor * ggml_ifairy_rope_impl(
     return result;
 }
 
-struct ggml_tensor * ggml_ifairy_rope(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        struct ggml_tensor  * b,
-        int                   n_dims,
-        int                   mode) {
+struct ggml_tensor * ggml_ifairy_rope(struct ggml_context * ctx,
+                                      struct ggml_tensor *  a,
+                                      struct ggml_tensor *  b,
+                                      int                   n_dims,
+                                      int                   mode) {
     return ggml_ifairy_rope_impl(ctx, a, b, n_dims, NULL, mode, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
 }
 
-struct ggml_tensor * ggml_ifairy_add(
-    struct ggml_context * ctx,
-    struct ggml_tensor  * a,
-    struct ggml_tensor  * b
-){
+struct ggml_tensor * ggml_ifairy_add(struct ggml_context * ctx, struct ggml_tensor * a, struct ggml_tensor * b) {
     return ggml_ifairy_add_impl(ctx, a, b, false);
 }
 
-struct ggml_tensor * ggml_ifairy_mul(
-    struct ggml_context * ctx,
-    struct ggml_tensor  * a,
-    struct ggml_tensor  * b
-){
+struct ggml_tensor * ggml_ifairy_mul(struct ggml_context * ctx, struct ggml_tensor * a, struct ggml_tensor * b) {
     return ggml_ifairy_mul_impl(ctx, a, b, false);
 }
 
-struct ggml_tensor * ggml_ifairy_split(
-    struct ggml_context * ctx,
-    struct ggml_tensor  * a
-){
+struct ggml_tensor * ggml_ifairy_split(struct ggml_context * ctx, struct ggml_tensor * a) {
     return ggml_ifairy_split_impl(ctx, a);
 }
 
-struct ggml_tensor * ggml_ifairy_merge(
-    struct ggml_context * ctx,
-    struct ggml_tensor  * a
-){
+struct ggml_tensor * ggml_ifairy_merge(struct ggml_context * ctx, struct ggml_tensor * a) {
     return ggml_ifairy_merge_impl(ctx, a);
 }
 
-static struct ggml_tensor * ggml_ifairy_rms_norm_impl(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        float                 eps,
-        bool                  inplace) {
+static struct ggml_tensor * ggml_ifairy_rms_norm_impl(struct ggml_context * ctx,
+                                                      struct ggml_tensor *  a,
+                                                      float                 eps,
+                                                      bool                  inplace) {
     struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
 
     ggml_set_op_params(result, &eps, sizeof(eps));
@@ -4147,13 +4119,9 @@ static struct ggml_tensor * ggml_ifairy_rms_norm_impl(
     return result;
 }
 
-struct ggml_tensor * ggml_ifairy_rms_norm(
-        struct ggml_context * ctx,
-        struct ggml_tensor  * a,
-        float                 eps) {
+struct ggml_tensor * ggml_ifairy_rms_norm(struct ggml_context * ctx, struct ggml_tensor * a, float eps) {
     return ggml_ifairy_rms_norm_impl(ctx, a, eps, false);
 }
-
 
 struct ggml_tensor * ggml_rope(
         struct ggml_context * ctx,
@@ -7366,7 +7334,10 @@ size_t ggml_quantize_chunk(
         case GGML_TYPE_IQ1_M:   result = quantize_iq1_m  (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_NL:  result = quantize_iq4_nl (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
         case GGML_TYPE_IQ4_XS:  result = quantize_iq4_xs (src + start, (char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
-        case GGML_TYPE_IFAIRY:  result = quantize_ifairy (src + start, src + start ,(char *) dst + start_row * row_size, nrows, n_per_row, imatrix); break;
+        case GGML_TYPE_IFAIRY:
+            result = quantize_ifairy(src + start, src + start, (char *) dst + start_row * row_size, nrows, n_per_row,
+                                     imatrix);
+            break;
         case GGML_TYPE_F16:
             {
                 size_t elemsize = sizeof(ggml_fp16_t);

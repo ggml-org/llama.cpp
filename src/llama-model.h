@@ -208,10 +208,10 @@ struct llama_layer {
     struct ggml_tensor * ssm_c_norm      = nullptr;
 
     // attention
-    struct ggml_tensor * wq             = nullptr;
-    struct ggml_tensor * wk             = nullptr;
-    struct ggml_tensor * wv             = nullptr;
-    struct ggml_tensor * wo             = nullptr;
+    struct ggml_tensor * wq        = nullptr;
+    struct ggml_tensor * wk        = nullptr;
+    struct ggml_tensor * wv        = nullptr;
+    struct ggml_tensor * wo        = nullptr;
     struct ggml_tensor * wqkv      = nullptr;
     struct ggml_tensor * wq_a      = nullptr;
     struct ggml_tensor * wq_b      = nullptr;

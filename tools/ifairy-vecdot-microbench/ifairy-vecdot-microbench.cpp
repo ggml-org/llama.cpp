@@ -58,11 +58,11 @@ static ggml_half fp32_to_fp16(float v) {
 }
 
 static int main_impl(int argc, char ** argv) {
-    int      k      = 1536;
-    int      iters  = 200000;
-    int      warmup = 2000;
-    uint32_t seed   = 1;
-    bool     verify = true;
+    int      k              = 1536;
+    int      iters          = 200000;
+    int      warmup         = 2000;
+    uint32_t seed           = 1;
+    bool     verify         = true;
     bool     x_tensor_scale = true;
 
     for (int i = 1; i < argc; ++i) {
@@ -137,9 +137,9 @@ static int main_impl(int argc, char ** argv) {
 
     const int nb = k / QK_K;
 
-    std::mt19937 rng(seed);
-    std::uniform_int_distribution<int> code_dist(0, 3);
-    std::uniform_int_distribution<int> act_dist(-127, 127);
+    std::mt19937                          rng(seed);
+    std::uniform_int_distribution<int>    code_dist(0, 3);
+    std::uniform_int_distribution<int>    act_dist(-127, 127);
     std::uniform_real_distribution<float> scale_dist(0.01f, 1.50f);
 
     std::vector<block_ifairy> w((size_t) nb);
@@ -199,8 +199,8 @@ static int main_impl(int argc, char ** argv) {
         ggml_vec_dot_ifairy_q16_K_generic(k, out_ref_f32, 0, w.data(), 0, x.data(), 0, 1);
         ggml_vec_dot_ifairy_q16_K(k, out_opt_f32, 0, w.data(), 0, x.data(), 0, 1);
 
-        const float rr = bf16_to_f32(out_ref_bf16[0]);
-        const float ri = bf16_to_f32(out_ref_bf16[1]);
+        const float rr  = bf16_to_f32(out_ref_bf16[0]);
+        const float ri  = bf16_to_f32(out_ref_bf16[1]);
         const float orr = bf16_to_f32(out_opt_bf16[0]);
         const float ori = bf16_to_f32(out_opt_bf16[1]);
 
@@ -221,7 +221,7 @@ static int main_impl(int argc, char ** argv) {
     }
     const auto t1 = std::chrono::steady_clock::now();
 
-    const auto   ns = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+    const auto   ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
     const double per = (double) ns / (double) iters;
 
     const float out_r = bf16_to_f32(out_opt_bf16[0]);
@@ -229,8 +229,8 @@ static int main_impl(int argc, char ** argv) {
 
     const double checksum = (double) out_r + 131.0 * (double) out_i;
 
-    std::printf("ifairy-vecdot-microbench: k=%d nb=%d iters=%d warmup=%d seed=%" PRIu32 " x_scale=%s\n",
-                k, nb, iters, warmup, seed, x_tensor_scale ? "tensor" : "block");
+    std::printf("ifairy-vecdot-microbench: k=%d nb=%d iters=%d warmup=%d seed=%" PRIu32 " x_scale=%s\n", k, nb, iters,
+                warmup, seed, x_tensor_scale ? "tensor" : "block");
     std::printf("ns/iter=%.2f out=(%.6f, %.6f) checksum=%.6e\n", per, out_r, out_i, checksum);
     return 0;
 }

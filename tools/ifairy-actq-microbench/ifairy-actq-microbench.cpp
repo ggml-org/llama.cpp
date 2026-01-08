@@ -52,11 +52,11 @@ static bool parse_string_arg(std::string & out, int argc, char ** argv, int & i)
 }
 
 static int main_impl(int argc, char ** argv) {
-    int      k      = 1536;
-    int      iters  = 200000;
-    int      warmup = 2000;
-    uint32_t seed   = 1;
-    bool     verify = true;
+    int      k           = 1536;
+    int      iters       = 200000;
+    int      warmup      = 2000;
+    uint32_t seed        = 1;
+    bool     verify      = true;
     bool     tensor_impl = true;
 
     for (int i = 1; i < argc; ++i) {
@@ -131,7 +131,7 @@ static int main_impl(int argc, char ** argv) {
 
     const int nb = k / QK_K;
 
-    std::mt19937 rng(seed);
+    std::mt19937                          rng(seed);
     std::uniform_real_distribution<float> dist(-2.0f, 2.0f);
 
     std::vector<uint32_t> x_words((size_t) k);
@@ -194,8 +194,8 @@ static int main_impl(int argc, char ** argv) {
         checksum += 7.0 * (double) ((int8_t *) q[ib].x_imag)[0];
     }
 
-    std::printf("ifairy-actq-microbench: k=%d nb=%d iters=%d warmup=%d seed=%" PRIu32 " impl=%s\n", k, nb, iters, warmup,
-                seed, tensor_impl ? "tensor" : "block");
+    std::printf("ifairy-actq-microbench: k=%d nb=%d iters=%d warmup=%d seed=%" PRIu32 " impl=%s\n", k, nb, iters,
+                warmup, seed, tensor_impl ? "tensor" : "block");
     std::printf("ns/iter=%.2f checksum=%.6e\n", per, checksum);
     return 0;
 }

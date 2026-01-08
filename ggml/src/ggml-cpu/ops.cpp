@@ -1,15 +1,16 @@
 #include "ops.h"
 
+#include "binary-ops.h"
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
-#include "binary-ops.h"
 #include "ggml.h"
 #include "unary-ops.h"
 #include "vec.h"
 
 #include <float.h>
-#include <algorithm>
 #include <math.h>
+
+#include <algorithm>
 
 // ggml_compute_forward_dup
 
@@ -3588,10 +3589,7 @@ void ggml_compute_forward_rms_norm(
     }
 }
 
-static void ggml_compute_forward_rms_norm_ifairy(
-        const ggml_compute_params * params,
-        ggml_tensor * dst) {
-
+static void ggml_compute_forward_rms_norm_ifairy(const ggml_compute_params * params, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
 
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
@@ -3612,7 +3610,7 @@ static void ggml_compute_forward_rms_norm_ifairy(
     for (int64_t i03 = 0; i03 < ne03; i03++) {
         for (int64_t i02 = 0; i02 < ne02; i02++) {
             for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
-                const float * x = (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+                const float * x = (float *) ((char *) src0->data + i01 * nb01 + i02 * nb02 + i03 * nb03);
 
                 ggml_float sum = 0.0;
                 for (int64_t i00 = 0; i00 < ne00; i00++) {
@@ -3624,9 +3622,9 @@ static void ggml_compute_forward_rms_norm_ifairy(
 
                 const float mean = sum / (float) ne00;
 
-                float * y = (float *) ((char *) dst->data + i01*nb1 + i02*nb2 + i03*nb3);
+                float * y = (float *) ((char *) dst->data + i01 * nb1 + i02 * nb2 + i03 * nb3);
 
-                const float scale = 1.0f/sqrtf(mean + eps);
+                const float scale = 1.0f / sqrtf(mean + eps);
 
                 for (int64_t i00 = 0; i00 < ne00; i00++) {
                     const ggml_bf16_t * p  = (const ggml_bf16_t *) &x[i00];
@@ -3641,12 +3639,9 @@ static void ggml_compute_forward_rms_norm_ifairy(
     }
 }
 
-void ggml_compute_forward_ifairy_rmsnorm(
-    const ggml_compute_params * params,
-        ggml_tensor * dst){
+void ggml_compute_forward_ifairy_rmsnorm(const ggml_compute_params * params, ggml_tensor * dst) {
     ggml_compute_forward_rms_norm_ifairy(params, dst);
 }
-
 
 static void ggml_compute_forward_rms_norm_back_f32(
         const ggml_compute_params * params,
@@ -5959,49 +5954,59 @@ static void ggml_compute_forward_rope_f16(
         }
     }
 }
-inline static void rope_yarn_ifairy(
-    float theta_extrap, float freq_scale, float corr_dims[2], int64_t i0, float ext_factor, float mscale,
-    float * cos_theta, float * sin_theta) {
+
+inline static void rope_yarn_ifairy(float   theta_extrap,
+                                    float   freq_scale,
+                                    float   corr_dims[2],
+                                    int64_t i0,
+                                    float   ext_factor,
+                                    float   mscale,
+                                    float * cos_theta,
+                                    float * sin_theta) {
     // Standard RoPE: theta = inv_freq * position_id
     float theta = theta_extrap;
     //printf("%f ", theta);
-    *cos_theta = cosf(theta);
-    *sin_theta = sinf(theta);
+    *cos_theta  = cosf(theta);
+    *sin_theta  = sinf(theta);
 }
-static void ggml_rope_cache_init_ifairy(
-     float theta_base, float freq_scale, const float * freq_factors, float corr_dims[2], int64_t ne0, float ext_factor, float mscale,
-     float * cache, float sin_sign, float theta_scale) {
+
+static void ggml_rope_cache_init_ifairy(float         theta_base,
+                                        float         freq_scale,
+                                        const float * freq_factors,
+                                        float         corr_dims[2],
+                                        int64_t       ne0,
+                                        float         ext_factor,
+                                        float         mscale,
+                                        float *       cache,
+                                        float         sin_sign,
+                                        float         theta_scale) {
     // Standard RoPE: theta = inv_freq * position_id
     // inv_freq = 1.0 / (base ^ (i / head_dim))
     // theta_scale = base ^ (-2/n_dims), so base = theta_scale ^ (-n_dims/2)
-    int64_t head_dim = ne0 / 2;
-    float freq_base = 10000.f;//powf(theta_scale, -head_dim / 2.0f);
-    
+    int64_t head_dim  = ne0 / 2;
+    float   freq_base = 10000.f;  //powf(theta_scale, -head_dim / 2.0f);
+
     for (int64_t i0 = 0; i0 < ne0; i0 += 2) {
         int64_t head_idx = i0 / 2;
         // Calculate inv_freq = 1.0 / (base ^ (i / head_dim))
-        float inv_freq = 1.0f / powf(freq_base, (float)head_idx / head_dim);
+        float   inv_freq = 1.0f / powf(freq_base, (float) head_idx / head_dim);
         //printf("%f ", inv_freq);
         // theta = inv_freq * position_id
-        float theta = inv_freq * theta_base;
-        
-        rope_yarn_ifairy(
-            theta, freq_scale, corr_dims, i0, ext_factor, mscale, &cache[i0 + 0], &cache[i0 + 1]
-        );
+        float   theta    = inv_freq * theta_base;
+
+        rope_yarn_ifairy(theta, freq_scale, corr_dims, i0, ext_factor, mscale, &cache[i0 + 0], &cache[i0 + 1]);
         cache[i0 + 1] *= sin_sign;
     }
 }
 
-static void ggml_compute_forward_rope_ifairy(
-        const ggml_compute_params * params,
-        ggml_tensor * dst,
-        const bool forward) {
-
+static void ggml_compute_forward_rope_ifairy(const ggml_compute_params * params,
+                                             ggml_tensor *               dst,
+                                             const bool                  forward) {
     const ggml_tensor * src0 = dst->src[0];
-    const ggml_tensor * src1 = dst->src[1]; // pos
+    const ggml_tensor * src1 = dst->src[1];  // pos
 
     float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
-    int sections[4];
+    int   sections[4];
 
     //const int n_past     = ((int32_t *) dst->op_params)[0];
     const int n_dims     = ((int32_t *) dst->op_params)[1] / 2;
@@ -6009,13 +6014,13 @@ static void ggml_compute_forward_rope_ifairy(
     //const int n_ctx      = ((int32_t *) dst->op_params)[3];
     const int n_ctx_orig = ((int32_t *) dst->op_params)[4];
 
-    memcpy(&freq_base,   (int32_t *) dst->op_params +  5, sizeof(float));
-    memcpy(&freq_scale,  (int32_t *) dst->op_params +  6, sizeof(float));
-    memcpy(&ext_factor,  (int32_t *) dst->op_params +  7, sizeof(float));
-    memcpy(&attn_factor, (int32_t *) dst->op_params +  8, sizeof(float));
-    memcpy(&beta_fast,   (int32_t *) dst->op_params +  9, sizeof(float));
-    memcpy(&beta_slow,   (int32_t *) dst->op_params + 10, sizeof(float));
-    memcpy(&sections,    (int32_t *) dst->op_params + 11, sizeof(int)*4);
+    memcpy(&freq_base, (int32_t *) dst->op_params + 5, sizeof(float));
+    memcpy(&freq_scale, (int32_t *) dst->op_params + 6, sizeof(float));
+    memcpy(&ext_factor, (int32_t *) dst->op_params + 7, sizeof(float));
+    memcpy(&attn_factor, (int32_t *) dst->op_params + 8, sizeof(float));
+    memcpy(&beta_fast, (int32_t *) dst->op_params + 9, sizeof(float));
+    memcpy(&beta_slow, (int32_t *) dst->op_params + 10, sizeof(float));
+    memcpy(&sections, (int32_t *) dst->op_params + 11, sizeof(int) * 4);
 
     GGML_TENSOR_UNARY_OP_LOCALS
 
@@ -6033,22 +6038,22 @@ static void ggml_compute_forward_rope_ifairy(
     GGML_ASSERT(n_dims % 2 == 0);
 
     // rows per thread
-    const int dr = (nr + nth - 1)/nth;
+    const int dr = (nr + nth - 1) / nth;
 
     // row range for this thread
-    const int ir0 = dr*ith;
+    const int ir0 = dr * ith;
     const int ir1 = MIN(ir0 + dr, nr);
 
     // row index used to determine which thread to use
     int ir = 0;
 
-    const float theta_scale = powf(freq_base, -2.0f/n_dims);
+    const float theta_scale = powf(freq_base, -2.0f / n_dims);
 
     float corr_dims[2];
     //ggml_rope_yarn_corr_dims(n_dims , n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
 
-    const bool is_neox = mode & GGML_ROPE_TYPE_NEOX;
-    const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, multimodal rotary position embedding
+    const bool is_neox   = mode & GGML_ROPE_TYPE_NEOX;
+    const bool is_mrope  = mode & GGML_ROPE_TYPE_MROPE;  // ggml_rope_multi, multimodal rotary position embedding
     const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
 
     if (is_mrope) {
@@ -6056,7 +6061,7 @@ static void ggml_compute_forward_rope_ifairy(
     }
 
     if (is_vision) {
-        GGML_ASSERT(n_dims == ne0/2);
+        GGML_ASSERT(n_dims == ne0 / 2);
     }
 
     const float * freq_factors = NULL;
@@ -6068,26 +6073,26 @@ static void ggml_compute_forward_rope_ifairy(
 
     const int32_t * pos = (const int32_t *) src1->data;
 
-    for (int64_t i3 = 0; i3 < ne3; i3++) { // batch
-        for (int64_t i2 = 0; i2 < ne2; i2++) { // seq-len
+    for (int64_t i3 = 0; i3 < ne3; i3++) {      // batch
+        for (int64_t i2 = 0; i2 < ne2; i2++) {  // seq-len
 
-            float * cache = (float *) params->wdata + (ne0 + CACHE_LINE_SIZE_F32)*ith;
+            float * cache = (float *) params->wdata + (ne0 + CACHE_LINE_SIZE_F32) * ith;
             if (!is_mrope) {
                 const int64_t p = pos[i2];
-                ggml_rope_cache_init_ifairy(p, freq_scale, freq_factors, corr_dims, ne0, ext_factor, attn_factor, cache, sin_sign, theta_scale);
-            }
-            else {
+                ggml_rope_cache_init_ifairy(p, freq_scale, freq_factors, corr_dims, ne0, ext_factor, attn_factor, cache,
+                                            sin_sign, theta_scale);
+            } else {
                 const int64_t p_t = pos[i2];
                 const int64_t p_h = pos[i2 + ne2];
                 const int64_t p_w = pos[i2 + ne2 * 2];
                 const int64_t p_e = pos[i2 + ne2 * 3];
-                ggml_mrope_cache_init(
-                    p_t, p_h, p_w, p_e, sections, is_vision,
-                    freq_scale, freq_factors, corr_dims, ne0, ext_factor, attn_factor, cache, sin_sign, theta_scale);
+                ggml_mrope_cache_init(p_t, p_h, p_w, p_e, sections, is_vision, freq_scale, freq_factors, corr_dims, ne0,
+                                      ext_factor, attn_factor, cache, sin_sign, theta_scale);
             }
-            for(int i=0;i<n_dims*2;i++){
-                if(cache[i] != cache[i] || cache[i] > 1.f || cache[i] < -1.f){
-                    GGML_ABORT("nan discovered in cache, index: %d, value: %f, n_dims = %d, ne00 = %d, ne0 = %d", i, cache[i], n_dims, ne00, ne0);
+            for (int i = 0; i < n_dims * 2; i++) {
+                if (cache[i] != cache[i] || cache[i] > 1.f || cache[i] < -1.f) {
+                    GGML_ABORT("nan discovered in cache, index: %d, value: %f, n_dims = %d, ne00 = %d, ne0 = %d", i,
+                               cache[i], n_dims, ne00, ne0);
                 }
             }
             GGML_ASSERT(nb0 == 4);
@@ -6096,34 +6101,34 @@ static void ggml_compute_forward_rope_ifairy(
             GGML_ASSERT(ne01 == ne1);
             GGML_ASSERT(ne02 == ne2);
             GGML_ASSERT(ne03 == ne3);
-            for (int64_t i1 = 0; i1 < ne1; i1++) { // attn-heads
-                if (ir++ < ir0) continue;
-                if (ir   > ir1) break;
+            for (int64_t i1 = 0; i1 < ne1; i1++) {  // attn-heads
+                if (ir++ < ir0) {
+                    continue;
+                }
+                if (ir > ir1) {
+                    break;
+                }
 
-                
-                for (int64_t i0 = 0; i0 < n_dims; i0 ++) {
+                for (int64_t i0 = 0; i0 < n_dims; i0++) {
                     const float cos_theta = cache[2 * i0 + 0];
                     const float sin_theta = cache[2 * i0 + 1];
 
-                    const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
-                          float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
-                        
+                    const float * const src =
+                        (float *) ((char *) src0->data + i3 * nb03 + i2 * nb02 + i1 * nb01 + i0 * nb00);
+                    float * dst_data = (float *) ((char *) dst->data + i3 * nb3 + i2 * nb2 + i1 * nb1 + i0 * nb0);
 
-                    const float x0 = GGML_BF16_TO_FP32(((const ggml_bf16_t*)(src))[0]); //real
-                    const float x1 = GGML_BF16_TO_FP32(((const ggml_bf16_t*)(src))[1]); //imag
+                    const float x0 = GGML_BF16_TO_FP32(((const ggml_bf16_t *) (src))[0]);  //real
+                    const float x1 = GGML_BF16_TO_FP32(((const ggml_bf16_t *) (src))[1]);  //imag
 
-                    dst_data[0]      = x0*cos_theta - x1*sin_theta;
-                    dst_data[n_dims] = x0*sin_theta + x1*cos_theta;
+                    dst_data[0]      = x0 * cos_theta - x1 * sin_theta;
+                    dst_data[n_dims] = x0 * sin_theta + x1 * cos_theta;
                 }
             }
         }
     }
 }
 
-static void ggml_compute_forward_ifairy_split_impl(
-        const ggml_compute_params * params,
-        ggml_tensor * dst) {
-
+static void ggml_compute_forward_ifairy_split_impl(const ggml_compute_params * params, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
 
     GGML_TENSOR_UNARY_OP_LOCALS
@@ -6138,28 +6143,33 @@ static void ggml_compute_forward_ifairy_split_impl(
     const int n_dims = ne0 / 2;
 
     // rows per thread
-    const int dr = (nr + nth - 1)/nth;
+    const int dr = (nr + nth - 1) / nth;
 
     // row range for this thread
-    const int ir0 = dr*ith;
+    const int ir0 = dr * ith;
     const int ir1 = MIN(ir0 + dr, nr);
 
     // row index used to determine which thread to use
     int ir = 0;
     GGML_ASSERT(nb0 == 4);
 
-    for (int64_t i3 = 0; i3 < ne3; i3++) { // batch
-        for (int64_t i2 = 0; i2 < ne2; i2++) { // seq-len
-            for (int64_t i1 = 0; i1 < ne1; i1++) { // attn-heads
-                if (ir++ < ir0) continue;
-                if (ir   > ir1) break;
+    for (int64_t i3 = 0; i3 < ne3; i3++) {          // batch
+        for (int64_t i2 = 0; i2 < ne2; i2++) {      // seq-len
+            for (int64_t i1 = 0; i1 < ne1; i1++) {  // attn-heads
+                if (ir++ < ir0) {
+                    continue;
+                }
+                if (ir > ir1) {
+                    break;
+                }
 
-                for (int64_t i0 = 0; i0 < n_dims; i0 ++) {
-                    const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
-                          float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+                for (int64_t i0 = 0; i0 < n_dims; i0++) {
+                    const float * const src =
+                        (float *) ((char *) src0->data + i3 * nb03 + i2 * nb02 + i1 * nb01 + i0 * nb00);
+                    float * dst_data = (float *) ((char *) dst->data + i3 * nb3 + i2 * nb2 + i1 * nb1 + i0 * nb0);
 
-                    const float x0 = GGML_BF16_TO_FP32(((const ggml_bf16_t*)(src))[0]); //real
-                    const float x1 = GGML_BF16_TO_FP32(((const ggml_bf16_t*)(src))[1]); //imag
+                    const float x0 = GGML_BF16_TO_FP32(((const ggml_bf16_t *) (src))[0]);  //real
+                    const float x1 = GGML_BF16_TO_FP32(((const ggml_bf16_t *) (src))[1]);  //imag
 
                     if (!isfinite(x0) || !isfinite(x1)) {
                         ggml_abort(__FILE__, __LINE__, "ifairy_split: non-finite input (row=%lld idx=%lld src_op=%s)",
@@ -6169,23 +6179,19 @@ static void ggml_compute_forward_ifairy_split_impl(
                     dst_data[0]      = x0;
                     dst_data[n_dims] = x1;
                 }
-                
             }
         }
     }
 }
 
-void ggml_compute_forward_ifairy_split(const struct ggml_compute_params * params, struct ggml_tensor * dst){
+void ggml_compute_forward_ifairy_split(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
     ggml_compute_forward_ifairy_split_impl(params, dst);
 }
 
-static void ggml_compute_forward_ifairy_merge_impl(
-        const ggml_compute_params * params,
-        ggml_tensor * dst) {
-
+static void ggml_compute_forward_ifairy_merge_impl(const ggml_compute_params * params, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
 
-    const int n_dims     = src0->ne[0];
+    const int n_dims = src0->ne[0];
 
     GGML_TENSOR_UNARY_OP_LOCALS
 
@@ -6200,44 +6206,47 @@ static void ggml_compute_forward_ifairy_merge_impl(
     GGML_ASSERT(n_dims == ne0 * 2);
 
     // rows per thread
-    const int dr = (nr + nth - 1)/nth;
+    const int dr = (nr + nth - 1) / nth;
 
     // row range for this thread
-    const int ir0 = dr*ith;
+    const int ir0 = dr * ith;
     const int ir1 = MIN(ir0 + dr, nr);
 
     // row index used to determine which thread to use
     int ir = 0;
 
     GGML_ASSERT(nb0 == 4);
-    for (int64_t i3 = 0; i3 < ne3; i3++) { // batch
-        for (int64_t i2 = 0; i2 < ne2; i2++) { // seq-len
-            for (int64_t i1 = 0; i1 < ne1; i1++) { // attn-heads
-                if (ir++ < ir0) continue;
-                if (ir   > ir1) break;
-                
-                for (int64_t i0 = 0; i0 < n_dims / 2; i0 ++) {
-                    const float * const src = (float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
-                    float * dst_data  = (float *)((char *)  dst->data + i3*nb3  + i2*nb2  + i1*nb1  + i0*nb0);
+    for (int64_t i3 = 0; i3 < ne3; i3++) {          // batch
+        for (int64_t i2 = 0; i2 < ne2; i2++) {      // seq-len
+            for (int64_t i1 = 0; i1 < ne1; i1++) {  // attn-heads
+                if (ir++ < ir0) {
+                    continue;
+                }
+                if (ir > ir1) {
+                    break;
+                }
 
-                    const ggml_bf16_t x0 = GGML_FP32_TO_BF16(src[0]); //real
-                    const ggml_bf16_t x1 = GGML_FP32_TO_BF16(src[n_dims/2]); //imag
+                for (int64_t i0 = 0; i0 < n_dims / 2; i0++) {
+                    const float * const src =
+                        (float *) ((char *) src0->data + i3 * nb03 + i2 * nb02 + i1 * nb01 + i0 * nb00);
+                    float * dst_data = (float *) ((char *) dst->data + i3 * nb3 + i2 * nb2 + i1 * nb1 + i0 * nb0);
 
-                    ((ggml_bf16_t *)dst_data)[0]      = x0;
-                    ((ggml_bf16_t *)dst_data)[1]      = x1;
+                    const ggml_bf16_t x0 = GGML_FP32_TO_BF16(src[0]);           //real
+                    const ggml_bf16_t x1 = GGML_FP32_TO_BF16(src[n_dims / 2]);  //imag
+
+                    ((ggml_bf16_t *) dst_data)[0] = x0;
+                    ((ggml_bf16_t *) dst_data)[1] = x1;
                 }
             }
         }
     }
 }
 
-void ggml_compute_forward_ifairy_merge(const struct ggml_compute_params * params, struct ggml_tensor * dst){
+void ggml_compute_forward_ifairy_merge(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
     ggml_compute_forward_ifairy_merge_impl(params, dst);
 }
 
-void ggml_compute_forward_ifairy_rope(
-        const ggml_compute_params * params,
-        ggml_tensor * dst) {
+void ggml_compute_forward_ifairy_rope(const ggml_compute_params * params, ggml_tensor * dst) {
     ggml_compute_forward_rope_ifairy(params, dst, true);
 }
 
@@ -8391,7 +8400,6 @@ static void ggml_compute_forward_flash_attn_ext_f16(
             const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
             kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
 
-
             s = s*scale; // scale KQ value
 
             if (logit_softcap != 0.0f) {
@@ -8473,12 +8481,12 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 
         // V /= S
         const float S_inv = 1.0f/S;
-        if(S_inv != S_inv){
-                GGML_ABORT("nan discovered in flash attention");
-            }
-            if(isinf(S_inv)){
-                GGML_ABORT("inf discovered in flash attention");
-            }
+        if (S_inv != S_inv) {
+            GGML_ABORT("nan discovered in flash attention");
+        }
+        if (isinf(S_inv)) {
+            GGML_ABORT("inf discovered in flash attention");
+        }
         ggml_vec_scale_f32(DV, VKQ32, S_inv);
 
         // dst indices
@@ -9321,7 +9329,8 @@ void ggml_compute_forward_unary(
         case GGML_UNARY_OP_IFAIRY_RELU2:
             {
                 ggml_compute_forward_ifairy_relu2(params, dst);
-            } break;
+            }
+            break;
         case GGML_UNARY_OP_RELU:
             {
                 ggml_compute_forward_relu(params, dst);

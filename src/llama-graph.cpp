@@ -635,14 +635,12 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
     return res;
 }
 
-ggml_tensor * llm_graph_context::ifairy_build_norm(
-             ggml_tensor * cur,
-             ggml_tensor * mw,
-                     int   il) const{
+ggml_tensor * llm_graph_context::ifairy_build_norm(ggml_tensor * cur, ggml_tensor * mw, int il) const {
     cur = ggml_ifairy_split(ctx0, cur);
     cur = ggml_ifairy_rms_norm(ctx0, cur, hparams.f_norm_rms_eps);
     cb(cur, "norm", il);
-    cur = ggml_mul(ctx0, cur, mw); // mw should be fp32, sized hidden_size * 2, shape [hidden_size_real, hidden_size_imag]
+    cur = ggml_mul(ctx0, cur,
+                   mw);  // mw should be fp32, sized hidden_size * 2, shape [hidden_size_real, hidden_size_imag]
     cur = ggml_ifairy_merge(ctx0, cur);
     return cur;
 }
@@ -682,17 +680,16 @@ ggml_tensor * llm_graph_context::build_norm(
     return cur;
 }
 
-ggml_tensor * llm_graph_context::ifairy_build_ffn(
-             ggml_tensor * cur,
-             ggml_tensor * up,
-             ggml_tensor * gate,
-             ggml_tensor * down,
-             ggml_tensor * norm_weight,
-                     int   il) const{
+ggml_tensor * llm_graph_context::ifairy_build_ffn(ggml_tensor * cur,
+                                                  ggml_tensor * up,
+                                                  ggml_tensor * gate,
+                                                  ggml_tensor * down,
+                                                  ggml_tensor * norm_weight,
+                                                  int           il) const {
     ggml_tensor * gate_res = build_lora_mm(gate, cur);
     cb(gate_res, "ffn_gate", il);
     gate_res = ggml_ifairy_relu2(ctx0, gate_res);
-    cur = build_lora_mm(up, cur);
+    cur      = build_lora_mm(up, cur);
     cb(cur, "ffn_up", il);
     cur = ggml_ifairy_mul(ctx0, cur, gate_res);
     cur = ifairy_build_norm(cur, norm_weight, il);
@@ -1524,13 +1521,12 @@ llm_graph_input_attn_kv * llm_graph_context::build_attn_inp_kv() const {
     return (llm_graph_input_attn_kv *) res->add_input(std::move(inp));
 }
 
-ggml_tensor * llm_graph_context::ifairy_build_attn(
-        llm_graph_input_attn_kv * inp,
-        ggml_tensor * q_cur, // [n_embd_head_q * 2, n_head_q, n_tokens]
-        ggml_tensor * k_cur, // [n_embd_head_k * 2, n_head_k, n_tokens]
-        ggml_tensor * v_cur, // [n_embd_head_v * 2, n_head_v, n_tokens]);
-        float   kq_scale,
-        int   il){
+ggml_tensor * llm_graph_context::ifairy_build_attn(llm_graph_input_attn_kv * inp,
+                                                   ggml_tensor * q_cur,  // [n_embd_head_q * 2, n_head_q, n_tokens]
+                                                   ggml_tensor * k_cur,  // [n_embd_head_k * 2, n_head_k, n_tokens]
+                                                   ggml_tensor * v_cur,  // [n_embd_head_v * 2, n_head_v, n_tokens]);
+                                                   float         kq_scale,
+                                                   int           il) {
     ggml_build_forward_expand(gf, q_cur);
     ggml_build_forward_expand(gf, k_cur);
     ggml_build_forward_expand(gf, v_cur);
@@ -1555,7 +1551,6 @@ ggml_tensor * llm_graph_context::ifairy_build_attn(
 
     //LLAMA_LOG("before attention, k->ne0 = %ld, k->ne1 = %ld\n", k->ne[0], k->ne[1]);
     //LLAMA_LOG("before attention, v->ne0 = %ld, v->ne1 = %ld\n", v->ne[0], v->ne[1]);
-
 
     ggml_tensor * cur = build_attn_mha(q, k, v, NULL, kq_mask, NULL, NULL, kq_scale, il);
 

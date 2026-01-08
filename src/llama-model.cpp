@@ -1,22 +1,20 @@
 #include "llama-model.h"
 
-#include "llama-impl.h"
-#include "llama-mmap.h"
+#include "ggml-cpp.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
-#include "llama-model-loader.h"
-
-#include "llama-kv-cache.h"
+#include "llama-impl.h"
 #include "llama-kv-cache-iswa.h"
+#include "llama-kv-cache.h"
 #include "llama-memory-hybrid.h"
 #include "llama-memory-recurrent.h"
-
-#include "ggml-cpp.h"
+#include "llama-mmap.h"
+#include "llama-model-loader.h"
 
 #include <algorithm>
 #include <cassert>
-#include <cmath>
 #include <cfloat>
+#include <cmath>
 #include <cstring>
 #include <functional>
 #include <map>
@@ -556,10 +554,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         // gpt-neox n_rot = rotary_pct * (n_embd / n_head)
         // gpt-j n_rot = rotary_dim
 
-        hparams.n_embd_head_k = hparams.n_embd / hparams.n_head() * 2; // todo zhangxi
+        hparams.n_embd_head_k = hparams.n_embd / hparams.n_head() * 2;  // todo zhangxi
         ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH, hparams.n_embd_head_k, false);
 
-        hparams.n_embd_head_v = hparams.n_embd / hparams.n_head() * 2; // todo zhangxi 
+        hparams.n_embd_head_v = hparams.n_embd / hparams.n_head() * 2;  // todo zhangxi
         ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH, hparams.n_embd_head_v, false);
 
         // sanity check for n_rot (optional)
@@ -1595,10 +1593,14 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_rms_eps);
 
                 switch (hparams.n_layer) {
-                    case 24: type = LLM_TYPE_700M; break;
-                    default: type = LLM_TYPE_UNKNOWN;
+                    case 24:
+                        type = LLM_TYPE_700M;
+                        break;
+                    default:
+                        type = LLM_TYPE_UNKNOWN;
                 }
-            } break;
+            }
+            break;
         case LLM_ARCH_T5:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,      hparams.f_norm_rms_eps);
@@ -4511,31 +4513,32 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 } break;
             case LLM_ARCH_IFAIRY:
                 {
-                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD), {n_embd, n_vocab}, 0);
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD), { n_embd, n_vocab }, 0);
 
                     // output
-                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM), {n_embd * 2}, 0);
-                    output = create_tensor(tn(LLM_TENSOR_OUTPUT), {n_embd * 2, n_vocab}, 0);
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM), { n_embd * 2 }, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT), { n_embd * 2, n_vocab }, 0);
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
-                        
-                        layer.attn_norm     = create_tensor(tn(LLM_TENSOR_ATTN_NORM,    i), {n_embd * 2}, 0);
-                        layer.attn_sub_norm = create_tensor(tn(LLM_TENSOR_ATTN_SUB_NORM,  i), {n_embd * 2}, 0);
 
-                        layer.wq       = create_tensor(tn(LLM_TENSOR_ATTN_Q,    i), {n_embd, n_embd}, 0);
-                        layer.wk      = create_tensor(tn(LLM_TENSOR_ATTN_K,    i), {n_embd, n_embd_gqa / 2}, 0);
-                        layer.wv      = create_tensor(tn(LLM_TENSOR_ATTN_V,    i), {n_embd, n_embd_gqa / 2}, 0);
-                        layer.wo       = create_tensor(tn(LLM_TENSOR_ATTN_OUT,  i), {n_embd, n_embd}, 0);
+                        layer.attn_norm     = create_tensor(tn(LLM_TENSOR_ATTN_NORM, i), { n_embd * 2 }, 0);
+                        layer.attn_sub_norm = create_tensor(tn(LLM_TENSOR_ATTN_SUB_NORM, i), { n_embd * 2 }, 0);
 
-                        layer.ffn_norm     = create_tensor(tn(LLM_TENSOR_FFN_NORM,      i), {n_embd * 2}, 0);
-                        layer.ffn_sub_norm = create_tensor(tn(LLM_TENSOR_FFN_SUB_NORM, i), {n_ff * 2}, 0);
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, i), { n_embd, n_embd }, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, i), { n_embd, n_embd_gqa / 2 }, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V, i), { n_embd, n_embd_gqa / 2 }, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, i), { n_embd, n_embd }, 0);
 
-                        layer.ffn_gate       = create_tensor(tn(LLM_TENSOR_FFN_GATE,  i), {n_embd, n_ff}, 0);
-                        layer.ffn_down       = create_tensor(tn(LLM_TENSOR_FFN_DOWN,  i), {n_ff, n_embd}, 0);
-                        layer.ffn_up         = create_tensor(tn(LLM_TENSOR_FFN_UP,    i), {n_embd, n_ff}, 0);
+                        layer.ffn_norm     = create_tensor(tn(LLM_TENSOR_FFN_NORM, i), { n_embd * 2 }, 0);
+                        layer.ffn_sub_norm = create_tensor(tn(LLM_TENSOR_FFN_SUB_NORM, i), { n_ff * 2 }, 0);
+
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, i), { n_embd, n_ff }, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, i), { n_ff, n_embd }, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP, i), { n_embd, n_ff }, 0);
                     }
-                } break;
+                }
+                break;
             case LLM_ARCH_T5:
                 {
                     const auto n_rel_attn_bkts = hparams.n_rel_attn_bkts;
@@ -13705,6 +13708,7 @@ struct llm_build_bitnet : public llm_graph_context {
         ggml_build_forward_expand(gf, cur);
     }
 };
+
 struct llm_build_ifairy : public llm_graph_context {
     llm_build_ifairy(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -13717,20 +13721,17 @@ struct llm_build_ifairy : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv();
 
-        const float kq_scale = hparams.f_attention_scale == 0.0f
-                ? 1.0f/sqrtf(float(n_embd_head)/2)
-                : hparams.f_attention_scale;
+        const float kq_scale =
+            hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head) / 2) : hparams.f_attention_scale;
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
-            ggml_tensor * cur = ifairy_build_norm(inpL,
-                    model.layers[il].attn_norm,
-                    il);
+            ggml_tensor * cur = ifairy_build_norm(inpL, model.layers[il].attn_norm, il);
             cb(cur, "attn_norm", il);
-            
+
             ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
             cb(Qcur, "Qcur", il);
 
@@ -13740,10 +13741,10 @@ struct llm_build_ifairy : public llm_graph_context {
             ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
             cb(Vcur, "Vcur", il);
 
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head/2, n_head,    n_tokens);
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head/2, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head/2, n_head_kv, n_tokens);
-            
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head / 2, n_head, n_tokens);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head / 2, n_head_kv, n_tokens);
+            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head / 2, n_head_kv, n_tokens);
+
             Qcur = ggml_ifairy_rope(ctx0, Qcur, inp_pos, n_rot, 0);
             cb(Qcur, "Qcur_rope", il);
 
@@ -13753,22 +13754,17 @@ struct llm_build_ifairy : public llm_graph_context {
             Vcur = ggml_ifairy_split(ctx0, Vcur);
             cb(Vcur, "Vcur_split", il);
 
-            cur = ifairy_build_attn(inp_attn,
-                    Qcur, Kcur, Vcur,
-                    kq_scale,
-                    il);
+            cur = ifairy_build_attn(inp_attn, Qcur, Kcur, Vcur, kq_scale, il);
             cb(cur, "attn_out", il);
 
-            cur = ifairy_build_norm(cur,
-                    model.layers[il].attn_sub_norm,
-                    il);
+            cur = ifairy_build_norm(cur, model.layers[il].attn_sub_norm, il);
             cb(cur, "attn_post_norm", il);
 
             cur = build_lora_mm(model.layers[il].wo, cur);
             cb(cur, "attn_proj", il);
 
             if (il == n_layer - 1 && inp_out_ids) {
-                cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+                cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
 
@@ -13777,17 +13773,11 @@ struct llm_build_ifairy : public llm_graph_context {
 
             ggml_tensor * ffn_inp = cur;
 
-            cur = ifairy_build_norm(ffn_inp,
-                    model.layers[il].ffn_norm,
-                    il);
+            cur = ifairy_build_norm(ffn_inp, model.layers[il].ffn_norm, il);
             cb(cur, "ffn_norm", il);
 
-            cur = ifairy_build_ffn(cur,
-                    model.layers[il].ffn_up,
-                    model.layers[il].ffn_gate,
-                    model.layers[il].ffn_down,
-                    model.layers[il].ffn_sub_norm,
-                    il);
+            cur = ifairy_build_ffn(cur, model.layers[il].ffn_up, model.layers[il].ffn_gate, model.layers[il].ffn_down,
+                                   model.layers[il].ffn_sub_norm, il);
             cb(cur, "ffn_out", il);
 
             cur = ggml_ifairy_add(ctx0, cur, ffn_inp);
@@ -13799,15 +13789,13 @@ struct llm_build_ifairy : public llm_graph_context {
             inpL = cur;
         }
 
-        ggml_tensor * cur = ifairy_build_norm(inpL,
-                model.output_norm,
-                -1);
+        ggml_tensor * cur = ifairy_build_norm(inpL, model.output_norm, -1);
         cb(cur, "result_norm", -1);
         res->t_embd = cur;
         GGML_ASSERT(model.output);
         ggml_tensor * lm_head = model.output ? model.output : model.tok_embd;
-        cur = ggml_ifairy_split(ctx0, cur);
-        cur = build_lora_mm(lm_head, cur);
+        cur                   = ggml_ifairy_split(ctx0, cur);
+        cur                   = build_lora_mm(lm_head, cur);
 
         cb(cur, "result_output", -1);
         res->t_logits = cur;
@@ -13815,7 +13803,6 @@ struct llm_build_ifairy : public llm_graph_context {
         ggml_build_forward_expand(gf, cur);
     }
 };
-
 
 struct llm_build_t5_enc : public llm_graph_context {
     llm_build_t5_enc(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
@@ -19389,7 +19376,8 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
         case LLM_ARCH_IFAIRY:
             {
                 llm = std::make_unique<llm_build_ifairy>(*this, params);
-            } break;
+            }
+            break;
         case LLM_ARCH_T5:
             {
                 switch (params.gtype) {
