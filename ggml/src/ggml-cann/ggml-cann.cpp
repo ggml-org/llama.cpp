@@ -2542,27 +2542,6 @@ static bool ggml_backend_buft_is_cann(ggml_backend_buffer_type_t buft) {
 }
 
 /**
- * @brief Determines if a tensor operation should be offloaded to the CANN
- * backend.
- *
- * This function checks if a given tensor operation should be offloaded to the
- * CANN backend based on the operation type and the size of the tensor. It
- * returns true if the second dimension (ne[1]) of the tensor is greater than or
- * equal to the minimum batch size and the operation is not GGML_OP_GET_ROWS.
- *
- * @param backend Pointer to the CANN backend.
- * @param op Pointer to the tensor operation to check.
- * @return bool Returns true if the operation should be offloaded, otherwise
- * false.
- */
-static bool ggml_backend_cann_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-    const int min_batch_size = 32;
-    GGML_UNUSED(dev);
-
-    return op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS;
-}
-
-/**
  * @brief Records an event on the CANN backend stream.
  *
  * This function records the given event on the ACL runtime stream associated
@@ -2637,6 +2616,7 @@ struct ggml_backend_cann_device_context {
     int         device;
     std::string name;
     std::string description;
+    int op_offload_min_batch_size;
 };
 
 static const char * ggml_backend_cann_device_get_name(ggml_backend_dev_t dev) {
@@ -2711,6 +2691,26 @@ static ggml_backend_buffer_type_t ggml_backend_cann_device_get_buffer_type(ggml_
 static ggml_backend_buffer_type_t ggml_backend_cann_device_get_host_buffer_type(ggml_backend_dev_t dev) {
     GGML_UNUSED(dev);
     return ggml_backend_cann_host_buffer_type();
+}
+
+/**
+ * @brief Determines if a tensor operation should be offloaded to the CANN
+ * backend.
+ *
+ * This function checks if a given tensor operation should be offloaded to the
+ * CANN backend based on the operation type and the size of the tensor. It
+ * returns true if the second dimension (ne[1]) of the tensor is greater than or
+ * equal to the minimum batch size and the operation is not GGML_OP_GET_ROWS.
+ *
+ * @param backend Pointer to the CANN backend.
+ * @param op Pointer to the tensor operation to check.
+ * @return bool Returns true if the operation should be offloaded, otherwise
+ * false.
+ */
+static bool ggml_backend_cann_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    ggml_backend_cann_device_context * dev_ctx = (ggml_backend_cann_device_context *)dev->context;
+
+    return op->ne[1] >= dev_ctx->op_offload_min_batch_size && op->op != GGML_OP_GET_ROWS;
 }
 
 /**
@@ -2829,12 +2829,14 @@ ggml_backend_reg_t ggml_backend_cann_reg() {
         if (!initialized) {
             aclInit(nullptr);
             ggml_backend_cann_reg_context * ctx = new ggml_backend_cann_reg_context;
+            const int min_batch_size = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
 
             for (int i = 0; i < ggml_cann_info().device_count; i++) {
                 ggml_backend_cann_device_context * dev_ctx = new ggml_backend_cann_device_context();
                 dev_ctx->description                       = aclrtGetSocName();
                 dev_ctx->device                            = i;
                 dev_ctx->name                              = GGML_CANN_NAME + std::to_string(i);
+                dev_ctx->op_offload_min_batch_size         = min_batch_size;
                 ggml_cann_set_device(i);
                 ggml_backend_dev_t dev = new ggml_backend_device{ /* .iface   = */ ggml_backend_cann_device_interface,
                                                                   /* .reg     = */ &reg,
