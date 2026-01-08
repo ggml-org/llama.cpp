@@ -8511,7 +8511,6 @@ class ExaoneMoEModel(Exaone4Model):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        # We check whether the layer is MoE or not by referencing MoE module dynamically, not by the layer index
         self.gguf_writer.add_expert_count(self.hparams["num_experts"])
         moe_intermediate_size = self.hparams["moe_intermediate_size"]
         num_shared_experts = self.hparams["num_shared_experts"]
@@ -8527,7 +8526,7 @@ class ExaoneMoEModel(Exaone4Model):
         # This is because HF config of K-EXAONE does not have `num_nextn_predict_layers` at now.
         # Will be updated when HF config is updated.
         self.gguf_writer.add_nextn_predict_layers(self.hparams.get("num_nextn_predict_layers", 1))
-        
+
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
 
     _experts: list[dict[str, Tensor]] | None = None
@@ -8540,7 +8539,7 @@ class ExaoneMoEModel(Exaone4Model):
 
         if name.endswith("e_score_correction_bias"):
             name = name.replace("e_score_correction_bias", "e_score_correction.bias")
-        
+
         if name.find("mlp.experts") != -1:
             n_experts = self.hparams["num_experts"]
             assert bid is not None
