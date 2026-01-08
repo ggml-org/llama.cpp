@@ -45,7 +45,17 @@ OutputVector translate_set_rows(const NodeContext & context) {
         false);
     auto axes = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {2});
 
-    Output<Node> res = std::make_shared<ov::op::v3::ScatterUpdate>(dst, ind_squeezed, data_reshaped, axes);
+    Output<Node> res;
+    if (context.is_stateful()) {
+        int concat_axis = 1;
+        int64_t dim2 = dst.get_partial_shape()[2].get_length();
+        int64_t dim3 = dst.get_partial_shape()[3].get_length();
+        data = std::make_shared<ov::op::v1::Reshape>(
+            data, ov::op::v0::Constant::create(ov::element::i64, {4}, {(int64_t) 1, (int64_t) -1, dim2, dim3}), false);
+        res = std::make_shared<ov::op::v0::Concat>(OutputVector{dst, data}, concat_axis);
+    } else {
+        res = std::make_shared<ov::op::v3::ScatterUpdate>(dst, ind_squeezed, data_reshaped, axes);
+    }
 
     if (auto dst_reshape = std::dynamic_pointer_cast<ov::op::v1::Reshape>(dst.get_node_shared_ptr())) {
         // Fix the case of multiple sequences, reshape back to original shape [1, n_seq, ctx_per_seq, emb]

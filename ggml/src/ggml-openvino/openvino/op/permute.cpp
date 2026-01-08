@@ -29,7 +29,7 @@ OutputVector translate_permute(const NodeContext & context) {
     auto src = context.get_input(0);
     auto perm = ov::op::v0::Constant::create(ov::element::i64, {4}, {0, 2, 1, 3});
 
-    if (op_case == 1) {
+    if (op_case == 1 || context.is_stateful()) {
         res = std::make_shared<ov::op::v1::Transpose>(src, perm);
     } else if (op_case == 4) {
         auto output_shape = context.get_output_shape().to_shape();

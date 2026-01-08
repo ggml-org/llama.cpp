@@ -46,10 +46,14 @@ enum ggml_status ov_graph_compute(ggml_cgraph * cgraph) {
     // Use device from singleton (initialized during backend init)
     const auto & device = ggml_openvino_get_device_name();
     const auto is_static = ggml_openvino_is_npu();
-    return is_static ? ov_graph_compute_static(cgraph) : ov_graph_compute_dynamic(cgraph, device);
+    bool stateful = false;
+    if (getenv("GGML_OPENVINO_STATEFUL_EXECUTION") && !is_static) {
+        stateful = true;
+    }
+    return is_static ? ov_graph_compute_static(cgraph) : ov_graph_compute_dynamic(cgraph, device, stateful);
 }
 
-enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::string & device) {
+enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::string & device, bool stateful) {
     auto & core = ov_singleton_core();
     const auto & config = ggml_openvino_get_compile_config();
     static auto is_static = false;
@@ -99,6 +103,12 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
             ggml_decoder->add_extra_inputs();
             infer_request = infer_request_cache[key];
 
+            auto * inp_pos = get_inp_pos_tensor(cgraph);
+            int32_t * pos_data = (int32_t *) inp_pos->data;
+            if (pos_data[0] == 0) {
+                infer_request->reset_state();
+            }
+
             decoder_end_time = ggml_time_us();
             conversion_end_time = decoder_end_time;
             compile_end_time = decoder_end_time;
@@ -108,7 +118,7 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, const std::strin
             std::shared_ptr<ov::Model> model;
             auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
 
-            ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static);
+            ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights, is_static, stateful);
             decoder_end_time = ggml_time_us();
 
             auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
@@ -202,6 +212,7 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph) {
 
     static std::string device = "NPU";
     static auto is_static = true;
+    static auto stateful = false;
     static auto prefill_chunk_size = get_prefill_chunk_size();
     const auto & config = ggml_openvino_get_compile_config();
 
@@ -265,9 +276,9 @@ enum ggml_status ov_graph_compute_static(ggml_cgraph * cgraph) {
             auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
 
             auto ggml_decoder_prefill = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights,
-                                                                        is_static, true, prefill_chunk_size);
+                                                                        is_static, stateful, true, prefill_chunk_size);
             auto ggml_decoder_decode = std::make_shared<GgmlOvDecoder>(cgraph, m_params, c_params, model_weights,
-                                                                       is_static, false, prefill_chunk_size);
+                                                                       is_static, stateful, false, prefill_chunk_size);
             decoder_end_time = ggml_time_us();
 
             auto input_model_prefill = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder_prefill);
@@ -606,8 +617,17 @@ ov::Tensor get_ov_output_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, con
     if (ggml_decoder->is_static() && result_name == "result_output" && output_shape[2] == 0) {
         output_shape[2] = 1;
     }
-    ov::Tensor output_tensor(output_type, output_shape, ggml_tensor->data);
-    return output_tensor;
+    if (ggml_decoder->is_stateful() && result_name == "result_output") {
+        std::vector<long unsigned int> output_shape_3d;
+        for (size_t i=1; i<output_shape.size(); i++) {
+            output_shape_3d.push_back(output_shape[i]);
+        }
+        ov::Tensor output_tensor(output_type, output_shape_3d, ggml_tensor->data);
+        return output_tensor;
+    } else {
+        ov::Tensor output_tensor(output_type, output_shape, ggml_tensor->data);
+        return output_tensor;
+    }
 }
 
 size_t checksum(const void * data, size_t size) {

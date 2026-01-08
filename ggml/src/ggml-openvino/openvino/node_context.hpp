@@ -91,7 +91,10 @@ public:
     int get_op_case() const {
         return m_decoder->get_op_case(m_node_idx);
     }
+
     bool is_static() const { return m_decoder->is_static(); }
+
+    bool is_stateful() const { return m_decoder->is_stateful(); }
 
 private:
     std::shared_ptr<GgmlDecoder> m_decoder;

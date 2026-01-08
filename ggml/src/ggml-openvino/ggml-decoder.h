@@ -23,7 +23,7 @@ struct ModelParams {
     int32_t * rope_params = nullptr;
     std::vector<int> swa_layers;
 
-    // std::vector<std::string> kv_names;
+    std::vector<std::string> kv_names;
 
     bool operator==(const ModelParams & other) const {
         return n_seq == other.n_seq && n_heads == other.n_heads && n_heads_kv == other.n_heads_kv &&
@@ -66,6 +66,7 @@ public:
                   ComputeParams & compute_params,
                   std::map<std::string, std::shared_ptr<ov::Node>> & model_weights,
                   bool is_static,
+                  bool is_stateful = false,
                   bool is_prefill = false,
                   int prefill_chunk_size = 256);
 
@@ -171,9 +172,11 @@ public:
 
     virtual int32_t * get_rope_params() const override { return m_model_params.rope_params; }
 
-    // virtual std::map<std::string, std::string> get_kv_param_res_names() const override;
+    virtual std::map<std::string, std::string> get_kv_param_res_names() const override;
 
     virtual bool is_static() const override { return m_is_static; }
+
+    virtual bool is_stateful() const override { return m_is_stateful; }
 
     ov::PartialShape get_graph_input_shape(const ggml_tensor * op, const ggml_tensor * input) const;
 
@@ -200,6 +203,7 @@ public:
     void set_compute_params(const ComputeParams & compute_params) { m_compute_params = compute_params; }
 
     bool m_is_static = false;
+    bool m_is_stateful = false;
     bool m_is_prefill = false;
     int m_prefill_chunk_size = 0;
 

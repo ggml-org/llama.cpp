@@ -37,6 +37,9 @@ OutputVector translate_get_rows(const NodeContext & context) {
         auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {1});
         data = std::make_shared<ov::op::v0::Squeeze>(data, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
         res = std::make_shared<ov::op::v8::Gather>(data, indices, axis, 1);
+    } else if (context.is_stateful() && data.get_partial_shape().rank() == 3) {
+        auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {1});
+        res = std::make_shared<ov::op::v8::Gather>(data, indices, axis, 1);
     } else {
         auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
         res = std::make_shared<ov::op::v8::Gather>(data, indices, axis);
@@ -45,7 +48,9 @@ OutputVector translate_get_rows(const NodeContext & context) {
     if (res.get_element_type() != context.get_output_type()) {
         res = std::make_shared<ov::op::v0::Convert>(res, context.get_output_type());
     }
-    res = std::make_shared<ov::op::v0::Unsqueeze>(res, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
+    if (!(context.is_stateful())) {
+        res = std::make_shared<ov::op::v0::Unsqueeze>(res, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
+    }
     return rename_outputs_with_suffix({res}, context.get_name());
 }
 

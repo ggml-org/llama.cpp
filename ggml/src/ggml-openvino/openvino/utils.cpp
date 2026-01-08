@@ -15,6 +15,7 @@
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/sin.hpp>
+#include <openvino/op/squeeze.hpp>
 #include <openvino/op/subtract.hpp>
 #include <openvino/op/transpose.hpp>
 #include <string>
@@ -113,11 +114,20 @@ void ggml_rope_yarn_corr_dims(int n_dims,
 
 std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params,
                                                            std::shared_ptr<ov::Node> inp_pos,
-                                                           std::shared_ptr<ov::Node> rope_freqs_weight) {
-    inp_pos = std::make_shared<ov::op::v0::Convert>(inp_pos, ov::element::f32);
-    auto pos_perm =
-        std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{4}, std::vector<int64_t>{0, 3, 1, 2});
-    inp_pos = std::make_shared<ov::op::v1::Transpose>(inp_pos, pos_perm);
+                                                           std::shared_ptr<ov::Node> rope_freqs_weight,
+							   bool stateful) {
+    if (stateful) {
+        inp_pos = std::make_shared<ov::op::v0::Squeeze>(inp_pos, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
+        inp_pos = std::make_shared<ov::op::v0::Convert>(inp_pos, ov::element::f32);
+        auto pos_perm =
+            std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{3}, std::vector<int64_t>{2, 1, 0});
+        inp_pos = std::make_shared<ov::op::v1::Transpose>(inp_pos, pos_perm);
+    } else {
+        inp_pos = std::make_shared<ov::op::v0::Convert>(inp_pos, ov::element::f32);
+        auto pos_perm =
+            std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{4}, std::vector<int64_t>{0, 3, 1, 2});
+        inp_pos = std::make_shared<ov::op::v1::Transpose>(inp_pos, pos_perm);
+    }
 
     float freq_base;
     float freq_scale;
@@ -145,8 +155,14 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
         factor[i] = theta_scale * factor[i - 1];
     }
 
-    Output<Node> freq_factors =
-        std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{1, 1, 1, factor.size()}, factor);
+    Output<Node> freq_factors;
+    if (stateful) {
+        freq_factors =
+            std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{1, 1, factor.size()}, factor);
+    } else {
+        freq_factors =
+            std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{1, 1, 1, factor.size()}, factor);
+    }
     if (rope_freqs_weight) {
         freq_factors = std::make_shared<ov::op::v1::Divide>(freq_factors, rope_freqs_weight);
     }
@@ -161,7 +177,12 @@ std::pair<ov::Output<Node>, ov::Output<Node>> make_sin_cos(int32_t * rope_params
         theta = theta_interp;
     } else {
         auto ramp_mix = rope_yarn_ramp_mix(n_dims, corr_dims, ext_factor);
-        auto one = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {1.0f});
+        Output<Node> one;
+        if (stateful) {
+            one = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1}, {1.0f});
+        } else {
+            one = ov::op::v0::Constant::create(ov::element::f32, Shape{1, 1, 1, 1}, {1.0f});
+        }
         auto one_minus_ramp = std::make_shared<ov::op::v1::Subtract>(one, ramp_mix);
 
         theta = std::make_shared<ov::op::v1::Add>(std::make_shared<ov::op::v1::Multiply>(theta_interp, one_minus_ramp),

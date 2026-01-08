@@ -44,9 +44,11 @@ GgmlOvDecoder::GgmlOvDecoder(ggml_cgraph * cgraph,
                              ComputeParams & compute_params,
                              std::map<std::string, std::shared_ptr<ov::Node>> & model_weights,
                              bool is_static,
+                             bool is_stateful,
                              bool is_prefill,
                              int prefill_chunk_size) :
     m_is_static(is_static),
+    m_is_stateful(is_stateful),
     m_is_prefill(is_prefill),
     m_prefill_chunk_size(prefill_chunk_size),
     m_cgraph(cgraph),
@@ -157,19 +159,40 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
             ggml_backend_buffer * buffer = src->buffer;
 
             if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY || src->flags & GGML_TENSOR_FLAG_INPUT) {
+                ov::PartialShape stateful_kv_shape;
                 // GGML_BACKEND_BUFFER_USAGE_ANY are kv caches
                 if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
                     assert(src_name.find("cache_k") == 0 || src_name.find("cache_v") == 0);
+                    if (auto it = std::find(m_model_params.kv_names.begin(), m_model_params.kv_names.end(), src_name); it == m_model_params.kv_names.end()) {
+                        m_model_params.kv_names.push_back(src_name);
+                        if (is_stateful()) {
+                            // TODO: The shape modification for stateful model below is not validated for all supported models yet. More generic solution might be needed
+                            // to enable additional cases. Ideally, this could be removed from decoder and done as part of a transformation later.
+                            auto stateless_kv_shape = get_graph_input_shape(node, src);
+                            assert(stateless_kv_shape.size() == 4 && stateless_kv_shape[0] == 1 && stateless_kv_shape[1] == 1
+                                   && stateless_kv_shape[2].is_dynamic() && stateless_kv_shape[3] == (m_model_params.n_heads_kv*m_model_params.head_size));
+                            stateful_kv_shape = {stateless_kv_shape[0], ov::Dimension::dynamic(), m_model_params.n_heads_kv, m_model_params.head_size};
+                        }
+                    }
                 }
                 if (m_model_inputs.find(src_name) != m_model_inputs.end()) {
                     continue;
                 }
                 m_inputs[src_name] = src;
-                auto param_node =
-                    std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), get_graph_input_shape(node, src));
-                param_node->set_friendly_name(src_name);
-                param_node->output(0).get_tensor().set_names({src_name});
-                m_model_inputs[src_name] = param_node;
+                assert(stateful_kv_shape.rank().is_static());
+                if (stateful_kv_shape.rank().get_length() != 0) {
+                    auto param_node =
+                        std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), stateful_kv_shape);
+                    param_node->set_friendly_name(src_name);
+                    param_node->output(0).get_tensor().set_names({src_name});
+                    m_model_inputs[src_name] = param_node;
+                } else {
+                    auto param_node =
+                        std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), get_graph_input_shape(node, src));
+                    param_node->set_friendly_name(src_name);
+                    param_node->output(0).get_tensor().set_names({src_name});
+                    m_model_inputs[src_name] = param_node;
+                } 
             }
         }
     }
@@ -378,6 +401,8 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
     } else if (name.find("KQ_mask") == 0) {
         if (m_is_static) {
             input_shape = ov::PartialShape{1, 1, m_is_prefill ? m_prefill_chunk_size : 1, m_model_params.ctx};
+        } else if (m_is_stateful) {
+            input_shape = ov::PartialShape{1, 1, -1, -1};
         } else {
             input_shape = ov::PartialShape{-1, 1, -1, -1};
         }
@@ -465,15 +490,15 @@ const ggml_tensor * GgmlOvDecoder::get_tensor_from_name(const std::string & name
     return nullptr;
 }
 
-// std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const {
-//     std::map<std::string, std::string> kv_param_res_names;
-//     for (const auto & name : m_model_params.kv_names) {
-//         if (name.find("cache_k") == 0 || name.find("cache_v") == 0) {
-//             kv_param_res_names[name] = name;
-//         }
-//     }
-//     return kv_param_res_names;
-// }
+std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const {
+    std::map<std::string, std::string> kv_param_res_names;
+    for (const auto & name : m_model_params.kv_names) {
+        if (name.find("cache_k") == 0 || name.find("cache_v") == 0) {
+            kv_param_res_names[name] = name;
+        }
+    }
+    return kv_param_res_names;
+}
 
 std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_nodes(ggml_cgraph * cgraph) {
     std::map<std::string, std::shared_ptr<ov::Node>> model_weights;

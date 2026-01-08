@@ -18,6 +18,7 @@
 #include <openvino/op/convert.hpp>
 #include <openvino/op/cos.hpp>
 #include <openvino/op/divide.hpp>
+#include <openvino/op/gather.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/parameter.hpp>
 #include <openvino/op/range.hpp>
@@ -82,6 +83,20 @@ void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
             std::shared_ptr<ov::Node> mask_sliced;
             if (is_static) {
                 mask_sliced = mask;
+            } else if (ggml_model_decoder.is_stateful()) {
+                auto zero_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {0,0});
+                auto one_2d = ov::op::v0::Constant::create(ov::element::i64, {2}, {1,1});
+                auto zero_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+                auto two_1d = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
+                auto axes = ov::op::v0::Constant::create(ov::element::i64, {2}, {-2,-1});
+                auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
+                auto shape_of_inp_pos = std::make_shared<ov::op::v3::ShapeOf>(inp_pos);
+                auto gather_inp_pos = std::make_shared<ov::op::v8::Gather>(shape_of_inp_pos, two_1d, zero_1d);
+                auto stop = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{token_len_per_seq, gather_inp_pos}, 0);
+                mask_sliced =
+                    std::make_shared<ov::op::v8::Slice>(mask, zero_2d, stop, one_2d, axes);
+                mask_sliced = std::make_shared<ov::op::v0::Convert>(mask_sliced, ov::element::f16);
+                mask_sliced->set_friendly_name(sliced_name);
             } else {
                 auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
                 auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
@@ -226,11 +241,11 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
         manager.set_per_pass_validation(true);
         manager.register_pass<ov::pass::MarkCompressedFloatConstants>();
 
-        // if (!ggml_model_decoder->is_static()) {
-        //     const auto kv_param_res_names = ggml_model_decoder->get_kv_param_res_names();
-        //     const auto kv_param_res_pairs = get_kv_param_res_pairs(model, kv_param_res_names);
-        //     manager.register_pass<ov::pass::MakeStateful>(kv_param_res_pairs);
-        // }
+        if (ggml_model_decoder->is_stateful()) {
+            const auto kv_param_res_names = ggml_model_decoder->get_kv_param_res_names();
+            const auto kv_param_res_pairs = get_kv_param_res_pairs(model, kv_param_res_names);
+            manager.register_pass<ov::pass::MakeStateful>(kv_param_res_pairs);
+        }
 
         if (ggml_model_decoder->is_static()) {
             manager.register_pass<pass::EliminateZeroPoints>();

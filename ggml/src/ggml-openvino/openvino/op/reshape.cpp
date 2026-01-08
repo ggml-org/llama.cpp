@@ -32,10 +32,15 @@ OutputVector translate_reshape(const NodeContext & context) {
     auto output_shape = context.get_output_shape().to_shape();
     std::shared_ptr<ov::Node> new_shape_node;
     if (op_case == 1) {
-        new_shape_node = ov::op::v0::Constant::create(
-            ov::element::i64, {4},
-            std::vector<int64_t>{(int64_t) output_shape[0], -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
-
+        if (context.is_stateful()) {
+            new_shape_node = ov::op::v0::Constant::create(
+                ov::element::i64, {3},
+                std::vector<int64_t>{-1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
+        } else {
+            new_shape_node = ov::op::v0::Constant::create(
+                ov::element::i64, {4},
+                std::vector<int64_t>{(int64_t) output_shape[0], -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
+        }
     } else if (op_case == 2) {
         new_shape_node = ov::op::v0::Constant::create(
             ov::element::i64, {4},
@@ -50,8 +55,13 @@ OutputVector translate_reshape(const NodeContext & context) {
         return {context.get_input(0).get_node_shared_ptr()->input_value(0)};
 
     } else if (op_case == 5) {
-        std::vector<int64_t> shape_vec = {1, 1, -1, (int64_t) context.get_output_shape().to_shape()[3]};
-        new_shape_node = ov::op::v0::Constant::create(ov::element::i64, {4}, shape_vec);
+        if (context.is_stateful()) {
+            std::vector<int64_t> shape_vec = {1, -1, (int64_t) context.get_output_shape().to_shape()[3]};
+            new_shape_node = ov::op::v0::Constant::create(ov::element::i64, {3}, shape_vec);
+        } else {
+            std::vector<int64_t> shape_vec = {1, 1, -1, (int64_t) context.get_output_shape().to_shape()[3]};
+            new_shape_node = ov::op::v0::Constant::create(ov::element::i64, {4}, shape_vec);
+        }
 
         // // Alternative
         // auto token_len = context.get_input("token_len");

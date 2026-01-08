@@ -54,9 +54,18 @@ OutputVector translate_rope(const NodeContext & context) {
         // The input comes from a VIEW
         int slice_len = output_shape[2] * output_shape[3];
         data_node = process_view_input(context, 0, slice_len).get_node_shared_ptr();
-        auto data_shape = ov::op::v0::Constant::create(
-            ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
-        data_node = std::make_shared<ov::op::v1::Reshape>(data_node, data_shape, false);
+        if (context.is_stateful()) {
+            auto data_shape = ov::op::v0::Constant::create(
+                ov::element::i64, {3}, std::vector<int64_t>{-1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
+            data_node = std::make_shared<ov::op::v1::Reshape>(data_node, data_shape, false);
+        } else {
+            auto data_shape = ov::op::v0::Constant::create(
+                ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
+            data_node = std::make_shared<ov::op::v1::Reshape>(data_node, data_shape, false);
+        }
+        //auto data_shape = ov::op::v0::Constant::create(                                                                                                                                                                                                                                                                                                                
+        //    ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});                                                                                                                                                                                                                                                 
+        //data_node = std::make_shared<ov::op::v1::Reshape>(data_node, data_shape, false);
     }
 
     const int mode = op_params[2];
@@ -67,10 +76,19 @@ OutputVector translate_rope(const NodeContext & context) {
         auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
         auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
-        auto three = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
         auto end = ov::op::v0::Constant::create(ov::element::i64, {1}, {output_shape[3]});
-        auto even_slice = std::make_shared<ov::op::v8::Slice>(data_node, zero, end, two, three);
-        auto odd_slice = std::make_shared<ov::op::v8::Slice>(data_node, one, end, two, three);
+        Output<Node> even_slice;
+        Output<Node> odd_slice;
+        int32_t unsqueeze_dim = 4;
+        if (context.is_stateful()) {
+            unsqueeze_dim = 3;
+            even_slice = std::make_shared<ov::op::v8::Slice>(data_node, zero, end, two, two);
+            odd_slice = std::make_shared<ov::op::v8::Slice>(data_node, one, end, two, two);
+        } else {
+            auto three = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
+            even_slice = std::make_shared<ov::op::v8::Slice>(data_node, zero, end, two, three);
+            odd_slice = std::make_shared<ov::op::v8::Slice>(data_node, one, end, two, three);
+        }
 
         Output<Node> first_half =
             std::make_shared<ov::op::v1::Subtract>(std::make_shared<ov::op::v1::Multiply>(even_slice, cos_theta_node),
@@ -80,10 +98,10 @@ OutputVector translate_rope(const NodeContext & context) {
                                               std::make_shared<ov::op::v1::Multiply>(odd_slice, cos_theta_node));
 
         first_half = std::make_shared<ov::op::v0::Unsqueeze>(first_half,
-                                                             ov::op::v0::Constant::create(ov::element::i64, {1}, {4}));
+                                                             ov::op::v0::Constant::create(ov::element::i64, {1}, {unsqueeze_dim}));
         second_half = std::make_shared<ov::op::v0::Unsqueeze>(second_half,
-                                                              ov::op::v0::Constant::create(ov::element::i64, {1}, {4}));
-        auto stack = std::make_shared<ov::op::v0::Concat>(OutputVector{first_half, second_half}, 4);
+                                                              ov::op::v0::Constant::create(ov::element::i64, {1}, {unsqueeze_dim}));
+        auto stack = std::make_shared<ov::op::v0::Concat>(OutputVector{first_half, second_half}, unsqueeze_dim);
 
         auto data_shape = ov::op::v0::Constant::create(
             ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
@@ -102,7 +120,11 @@ OutputVector translate_rope(const NodeContext & context) {
             std::make_shared<ov::op::v1::Multiply>(slice_data_node_0, sin_theta_node),
             std::make_shared<ov::op::v1::Multiply>(slice_data_node_1, cos_theta_node));
 
-        res = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{first_half_node, second_half_node}, 3);
+        int32_t concat_dim = 3;
+        if (context.is_stateful()) {
+            concat_dim = 2;
+        }
+        res = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{first_half_node, second_half_node}, concat_dim);
     }
 
     return rename_outputs_with_suffix({res}, context.get_name());
