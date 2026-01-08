@@ -10011,6 +10011,7 @@ class ModernBertModel(BertModel):
         self.gguf_writer.add_add_eos_token(True)
         self.gguf_writer.add_add_sep_token(True)
         self._set_vocab_gpt2()
+        self._try_set_pooling_type()
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -10022,13 +10023,8 @@ class ModernBertModel(BertModel):
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # these layers act as MLM head, so we don't need them
-        if name.startswith("decoder."):
-            return []
-
         if name.startswith("model."):
             name = name[6:]
-        
         if self.cls_out_labels:
             # For BertForSequenceClassification (direct projection layer)
             if name == "classifier.weight":
