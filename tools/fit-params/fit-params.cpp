@@ -27,7 +27,7 @@ int main(int argc, char ** argv) {
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
     const llama_params_fit_status status = llama_params_fit(params.model.path.c_str(), &mparams, &cparams,
-        params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target, params.fit_params_min_ctx,
+        params.tensor_split, params.tensor_buft_overrides.data(), params.fit_params_target.data(), params.fit_params_min_ctx,
         params.verbosity >= 4 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
     if (status != LLAMA_PARAMS_FIT_STATUS_SUCCESS) {
         LOG_ERR("%s: failed to fit CLI arguments to free memory, exiting...\n", __func__);
