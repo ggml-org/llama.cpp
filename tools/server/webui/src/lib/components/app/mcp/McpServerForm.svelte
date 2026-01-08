@@ -2,6 +2,7 @@
 	import { Plus, X } from '@lucide/svelte';
 	import { Input } from '$lib/components/ui/input';
 	import { autoResizeTextarea } from '$lib/utils';
+	import { type HeaderPair, parseHeadersToArray, serializeHeaders } from '$lib/utils/mcp';
 
 	interface Props {
 		url: string;
@@ -20,37 +21,6 @@
 		urlError = null,
 		id = 'server'
 	}: Props = $props();
-
-	// Header pair type
-	type HeaderPair = { key: string; value: string };
-
-	// Parse headers JSON string to array of key-value pairs
-	function parseHeadersToArray(headersJson: string): HeaderPair[] {
-		if (!headersJson?.trim()) return [];
-		try {
-			const parsed = JSON.parse(headersJson);
-			if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-				return Object.entries(parsed).map(([key, value]) => ({
-					key,
-					value: String(value)
-				}));
-			}
-		} catch {
-			// Invalid JSON, return empty
-		}
-		return [];
-	}
-
-	// Serialize array of key-value pairs to JSON string
-	function serializeHeaders(pairs: HeaderPair[]): string {
-		const validPairs = pairs.filter((p) => p.key.trim());
-		if (validPairs.length === 0) return '';
-		const obj: Record<string, string> = {};
-		for (const pair of validPairs) {
-			obj[pair.key.trim()] = pair.value;
-		}
-		return JSON.stringify(obj);
-	}
 
 	// Local state for header pairs
 	let headerPairs = $state<HeaderPair[]>(parseHeadersToArray(headers));

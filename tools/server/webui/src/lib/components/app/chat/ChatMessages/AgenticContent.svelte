@@ -15,6 +15,8 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { Wrench, Loader2 } from '@lucide/svelte';
 	import { AgenticSectionType } from '$lib/types/agentic';
+	import { AGENTIC_TAGS, AGENTIC_REGEX } from '$lib/constants/agentic';
+	import { formatJsonPretty } from '$lib/utils/formatters';
 
 	interface Props {
 		content: string;
@@ -30,21 +32,17 @@
 
 	let { content }: Props = $props();
 
-	// Parse content into chronological sections
 	const sections = $derived(parseAgenticContent(content));
 
-	// Track expanded state for each tool call (default expanded)
 	let expandedStates: Record<number, boolean> = $state({});
 
-	// Get showToolCallInProgress setting
 	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
 
 	function isExpanded(index: number, isPending: boolean): boolean {
-		// If showToolCallInProgress is enabled and tool is pending, force expand
 		if (showToolCallInProgress && isPending) {
 			return true;
 		}
-		// Otherwise use stored state, defaulting to expanded only if showToolCallInProgress is true
+
 		return expandedStates[index] ?? showToolCallInProgress;
 	}
 
@@ -57,16 +55,12 @@
 
 		const sections: AgenticSection[] = [];
 
-		// Regex for completed tool calls (with END marker)
-		const completedToolCallRegex =
-			/<<<AGENTIC_TOOL_CALL_START>>>\n<<<TOOL_NAME:(.+?)>>>\n<<<TOOL_ARGS_BASE64:(.+?)>>>([\s\S]*?)<<<AGENTIC_TOOL_CALL_END>>>/g;
+		const completedToolCallRegex = new RegExp(AGENTIC_REGEX.COMPLETED_TOOL_CALL.source, 'g');
 
 		let lastIndex = 0;
 		let match;
 
-		// First pass: find all completed tool calls
 		while ((match = completedToolCallRegex.exec(rawContent)) !== null) {
-			// Add text before this tool call
 			if (match.index > lastIndex) {
 				const textBefore = rawContent.slice(lastIndex, match.index).trim();
 				if (textBefore) {
@@ -74,7 +68,6 @@
 				}
 			}
 
-			// Add completed tool call section
 			const toolName = match[1];
 			const toolArgsBase64 = match[2];
 			let toolArgs = '';
@@ -96,26 +89,16 @@
 			lastIndex = match.index + match[0].length;
 		}
 
-		// Check for pending tool call at the end (START without END)
 		const remainingContent = rawContent.slice(lastIndex);
 
-		// Full pending match (has NAME and ARGS)
-		const pendingMatch = remainingContent.match(
-			/<<<AGENTIC_TOOL_CALL_START>>>\n<<<TOOL_NAME:(.+?)>>>\n<<<TOOL_ARGS_BASE64:(.+?)>>>([\s\S]*)$/
-		);
+		const pendingMatch = remainingContent.match(AGENTIC_REGEX.PENDING_TOOL_CALL);
 
-		// Partial pending match (has START and NAME but ARGS still streaming)
-		// Capture everything after TOOL_ARGS_BASE64: until the end
-		const partialWithNameMatch = remainingContent.match(
-			/<<<AGENTIC_TOOL_CALL_START>>>\n<<<TOOL_NAME:(.+?)>>>\n<<<TOOL_ARGS_BASE64:([\s\S]*)$/
-		);
+		const partialWithNameMatch = remainingContent.match(AGENTIC_REGEX.PARTIAL_WITH_NAME);
 
-		// Very early match (just START marker, maybe partial NAME)
-		const earlyMatch = remainingContent.match(/<<<AGENTIC_TOOL_CALL_START>>>([\s\S]*)$/);
+		const earlyMatch = remainingContent.match(AGENTIC_REGEX.EARLY_MATCH);
 
 		if (pendingMatch) {
-			// Add text before pending tool call
-			const pendingIndex = remainingContent.indexOf('<<<AGENTIC_TOOL_CALL_START>>>');
+			const pendingIndex = remainingContent.indexOf(AGENTIC_TAGS.TOOL_CALL_START);
 			if (pendingIndex > 0) {
 				const textBefore = remainingContent.slice(0, pendingIndex).trim();
 				if (textBefore) {
@@ -123,7 +106,6 @@
 				}
 			}
 
-			// Add pending tool call
 			const toolName = pendingMatch[1];
 			const toolArgsBase64 = pendingMatch[2];
 			let toolArgs = '';
@@ -143,8 +125,7 @@
 				toolResult: streamingResult || undefined
 			});
 		} else if (partialWithNameMatch) {
-			// Has START and NAME, ARGS still streaming
-			const pendingIndex = remainingContent.indexOf('<<<AGENTIC_TOOL_CALL_START>>>');
+			const pendingIndex = remainingContent.indexOf(AGENTIC_TAGS.TOOL_CALL_START);
 			if (pendingIndex > 0) {
 				const textBefore = remainingContent.slice(0, pendingIndex).trim();
 				if (textBefore) {
@@ -152,7 +133,6 @@
 				}
 			}
 
-			// Try to decode partial base64 args
 			const partialArgsBase64 = partialWithNameMatch[2] || '';
 			let partialArgs = '';
 			if (partialArgsBase64) {
@@ -181,7 +161,7 @@
 			});
 		} else if (earlyMatch) {
 			// Just START marker, show streaming state
-			const pendingIndex = remainingContent.indexOf('<<<AGENTIC_TOOL_CALL_START>>>');
+			const pendingIndex = remainingContent.indexOf(AGENTIC_TAGS.TOOL_CALL_START);
 			if (pendingIndex > 0) {
 				const textBefore = remainingContent.slice(0, pendingIndex).trim();
 				if (textBefore) {
@@ -190,7 +170,7 @@
 			}
 
 			// Try to extract tool name if present
-			const nameMatch = earlyMatch[1]?.match(/<<<TOOL_NAME:([^>]+)>>>/);
+			const nameMatch = earlyMatch[1]?.match(AGENTIC_REGEX.TOOL_NAME_EXTRACT);
 
 			sections.push({
 				type: AgenticSectionType.TOOL_CALL_STREAMING,
@@ -205,7 +185,7 @@
 			let remainingText = rawContent.slice(lastIndex).trim();
 
 			// Check for partial marker at the end (e.g., "<<<" or "<<<AGENTIC" etc.)
-			const partialMarkerMatch = remainingText.match(/<<<[A-Z_]*$/);
+			const partialMarkerMatch = remainingText.match(AGENTIC_REGEX.PARTIAL_MARKER);
 			if (partialMarkerMatch) {
 				remainingText = remainingText.slice(0, partialMarkerMatch.index).trim();
 			}
@@ -221,15 +201,6 @@
 		}
 
 		return sections;
-	}
-
-	function formatToolArgs(args: string): string {
-		try {
-			const parsed = JSON.parse(args);
-			return JSON.stringify(parsed, null, 2);
-		} catch {
-			return args;
-		}
 	}
 </script>
 
@@ -256,7 +227,7 @@
 					</div>
 					{#if section.toolArgs}
 						<SyntaxHighlightedCode
-							code={formatToolArgs(section.toolArgs)}
+							code={formatJsonPretty(section.toolArgs)}
 							language="json"
 							maxHeight="20rem"
 							class="text-xs"
@@ -285,7 +256,7 @@
 					<div class="pt-3">
 						<div class="my-3 text-xs text-muted-foreground">Arguments:</div>
 						<SyntaxHighlightedCode
-							code={formatToolArgs(section.toolArgs)}
+							code={formatJsonPretty(section.toolArgs)}
 							language="json"
 							maxHeight="20rem"
 							class="text-xs"
