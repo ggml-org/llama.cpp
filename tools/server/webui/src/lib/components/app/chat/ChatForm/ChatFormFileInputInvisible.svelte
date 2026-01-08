@@ -1,11 +1,7 @@
 <script lang="ts">
-	import { generateModalityAwareAcceptString } from '$lib/utils';
-
 	interface Props {
 		accept?: string;
 		class?: string;
-		hasAudioModality?: boolean;
-		hasVisionModality?: boolean;
 		multiple?: boolean;
 		onFileSelect?: (files: File[]) => void;
 	}
@@ -13,8 +9,6 @@
 	let {
 		accept = $bindable(),
 		class: className = '',
-		hasAudioModality = false,
-		hasVisionModality = false,
 		multiple = true,
 		onFileSelect
 	}: Props = $props();
@@ -22,13 +16,7 @@
 	let fileInputElement: HTMLInputElement | undefined;
 
 	// Use modality-aware accept string by default, but allow override
-	let finalAccept = $derived(
-		accept ??
-			generateModalityAwareAcceptString({
-				hasVision: hasVisionModality,
-				hasAudio: hasAudioModality
-			})
-	);
+	let finalAccept = $derived(accept ?? '');
 
 	export function click() {
 		fileInputElement?.click();

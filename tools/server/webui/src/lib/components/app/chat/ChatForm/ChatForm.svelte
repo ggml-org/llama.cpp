@@ -10,7 +10,7 @@
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
 	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 	import { config } from '$lib/stores/settings.svelte';
-	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
+	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { activeMessages } from '$lib/stores/conversations.svelte';
@@ -102,40 +102,6 @@
 		}
 
 		return null;
-	});
-
-	// State for model props reactivity
-	let modelPropsVersion = $state(0);
-
-	// Fetch model props when active model changes (works for both MODEL and ROUTER mode)
-	$effect(() => {
-		if (activeModelId) {
-			const cached = modelsStore.getModelProps(activeModelId);
-			if (!cached) {
-				modelsStore.fetchModelProps(activeModelId).then(() => {
-					modelPropsVersion++;
-				});
-			}
-		}
-	});
-
-	// Derive modalities from active model (works for both MODEL and ROUTER mode)
-	let hasAudioModality = $derived.by(() => {
-		if (activeModelId) {
-			void modelPropsVersion; // Trigger reactivity on props fetch
-			return modelsStore.modelSupportsAudio(activeModelId);
-		}
-
-		return false;
-	});
-
-	let hasVisionModality = $derived.by(() => {
-		if (activeModelId) {
-			void modelPropsVersion; // Trigger reactivity on props fetch
-			return modelsStore.modelSupportsVision(activeModelId);
-		}
-
-		return false;
 	});
 
 	function checkModelSelected(): boolean {
@@ -346,8 +312,6 @@
 <ChatFormFileInputInvisible
 	bind:this={fileInputRef}
 	bind:accept={fileAcceptString}
-	{hasAudioModality}
-	{hasVisionModality}
 	onFileSelect={handleFileSelect}
 />
 
