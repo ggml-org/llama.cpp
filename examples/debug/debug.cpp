@@ -57,6 +57,16 @@ struct callback_data {
     }
 };
 
+static bool has_pooling(llama_context * ctx) {
+    switch (llama_pooling_type(ctx)) {
+        case LLAMA_POOLING_TYPE_NONE:
+        case LLAMA_POOLING_TYPE_UNSPECIFIED:
+            return false;
+        default:
+            return true;
+    }
+}
+
 struct output_data {
     float *                  data_ptr    = nullptr;
     int                      data_size   = 0;
@@ -74,7 +84,7 @@ struct output_data {
 
         if (params.embedding) {
             const int  n_embd          = llama_model_n_embd_out(model);
-            const bool pooling_enabled = llama_pooling_type(ctx) != LLAMA_POOLING_TYPE_NONE;
+            const bool pooling_enabled = has_pooling(ctx);
             const int  n_embd_count    = pooling_enabled ? 1 : tokens.size();
             const int  n_embeddings    = n_embd * n_embd_count;
 
