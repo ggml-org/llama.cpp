@@ -9875,9 +9875,9 @@ void ggml_compute_forward_solve_tri(const struct ggml_compute_params * params, s
 static void ggml_compute_forward_rwkv_wkv7_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
-    const int64_t T = dst->src[1]->ne[2];
+    const int64_t T = dst->src[4]->ne[2];
     const int64_t C = dst->ne[0];
-    const int64_t HEADS = dst->src[1]->ne[1];
+    const int64_t HEADS = dst->src[4]->ne[1];
     const int64_t n_seqs = dst->src[6]->ne[1];
     const int64_t head_size = C / HEADS;
 
@@ -9901,6 +9901,9 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
     float * v = (float *) dst->src[3]->data;
     float * a = (float *) dst->src[4]->data;
     float * b = (float *) dst->src[5]->data;
+
+    const bool fuse_exp = (bool) ((int32_t *) dst->op_params)[0];
+    constexpr float w_scale = -0.6065306597f; // -exp(-0.5)
 
     int64_t t_stride = HEADS * head_size; // Same to C
 
@@ -9938,7 +9941,7 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                             int64_t h_2d_i_j_offset = h_2d_i_offset + j;
 
                             float r_val = r[t_h_j_offset];
-                            float w_val = w[t_h_j_offset];
+                            float w_val = fuse_exp ? expf(w_scale / (1.0f + expf(-w[t_h_j_offset]))) : w[t_h_j_offset];
                             float k_val = k[t_h_j_offset];
                             float b_val = b[t_h_j_offset];
                             float kv_val = v_val * k_val;
@@ -9997,6 +10000,11 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                                 GGML_F32_VEC k_vec = GGML_F32_VEC_LOAD(&k[t_h_j_offset]);
                                 GGML_F32_VEC b_vec = GGML_F32_VEC_LOAD(&b[t_h_j_offset]);
 
+                                if (fuse_exp) {
+                                    w_vec = ggml_v_sigmoid(w_vec, w_scale);
+                                    w_vec = ggml_v_expf(w_vec);
+                                }
+
                                 k_vec = GGML_F32_VEC_MUL(v_vec, k_vec);
 
                                 GGML_F32_VEC state_vec = GGML_F32_VEC_LOAD(&state_prev[h_2d_i_j_offset]);
@@ -10016,7 +10024,7 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                             int64_t h_2d_i_j_offset = h_2d_i_offset + j;
 
                             float r_val = r[t_h_j_offset];
-                            float w_val = w[t_h_j_offset];
+                            float w_val = fuse_exp ? expf(w_scale / (1.0f + expf(-w[t_h_j_offset]))) : w[t_h_j_offset];
                             float k_val = k[t_h_j_offset];
                             float b_val = b[t_h_j_offset];
                             float kv_val = v[t_h_i_offset] * k_val;
@@ -10057,7 +10065,7 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
                         int64_t h_2d_i_j_offset = h_2d_i_offset + j;
 
                         float r_val = r[t_h_j_offset];
-                        float w_val = w[t_h_j_offset];
+                        float w_val = fuse_exp ? expf(w_scale / (1.0f + expf(-w[t_h_j_offset]))) : w[t_h_j_offset];
                         float k_val = k[t_h_j_offset];
                         float b_val = b[t_h_j_offset];
                         float kv_val = v_val * k_val;

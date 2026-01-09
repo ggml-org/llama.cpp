@@ -65,7 +65,9 @@ static __global__ void rwkv_wkv_f32(const int B, const int T, const int C, const
     }
 }
 
-template <int block_size>
+constexpr float w_scale = -0.6065306597f; // -exp(-0.5)
+
+template <int block_size, bool fuse_exp>
 static __global__ void rwkv_wkv7_f32(const int B, const int T, const int C, const int H, const float * r, const float * w, const float * k, const float * v, const float * a, const float * b, const float * s, float * dst) {
     const int tid = threadIdx.x;
     const int bid = blockIdx.x;
@@ -89,7 +91,7 @@ static __global__ void rwkv_wkv7_f32(const int B, const int T, const int C, cons
     for (int t = batch_i * n_seq_tokens * C + head_i * head_size + tid; t < (batch_i + 1) * n_seq_tokens * C + head_i * head_size + tid; t += C) {
         __syncthreads();
         _r[tid] = r[t];
-        _w[tid] = w[t];
+        _w[tid] = fuse_exp ? __expf(w_scale / (1.0f + __expf(-w[t]))) : w[t];
         _k[tid] = k[t];
         _a[tid] = a[t];
         _b[tid] = b[t];
@@ -179,9 +181,11 @@ void ggml_cuda_op_rwkv_wkv7(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const float * s_d = (const float *)dst->src[6]->data;
 
     const int64_t B = dst->src[6]->ne[1];
-    const int64_t T = dst->src[0]->ne[2];
+    const int64_t T = dst->src[4]->ne[2];
     const int64_t C = dst->ne[0];
-    const int64_t H = dst->src[0]->ne[1];
+    const int64_t H = dst->src[4]->ne[1];
+
+    const bool fuse_exp = (bool) ((int32_t *) dst->op_params)[0];
 
     float * dst_d = (float *)dst->data;
 
@@ -192,8 +196,16 @@ void ggml_cuda_op_rwkv_wkv7(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     GGML_ASSERT(C / H == CUDA_WKV_BLOCK_SIZE || C / H == CUDA_WKV_BLOCK_SIZE * 2);
 
     if (C / H == CUDA_WKV_BLOCK_SIZE) {
-        rwkv_wkv7_f32<CUDA_WKV_BLOCK_SIZE><<<B * H, C / H, 0, stream>>>(B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d);
+        if (fuse_exp) {
+            rwkv_wkv7_f32<CUDA_WKV_BLOCK_SIZE, true><<<B * H, C / H, 0, stream>>>(B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d);
+        } else {
+            rwkv_wkv7_f32<CUDA_WKV_BLOCK_SIZE, false><<<B * H, C / H, 0, stream>>>(B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d);
+        }   
     } else {
-        rwkv_wkv7_f32<CUDA_WKV_BLOCK_SIZE * 2><<<B * H, C / H, 0, stream>>>(B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d);
+        if (fuse_exp) {
+            rwkv_wkv7_f32<CUDA_WKV_BLOCK_SIZE * 2, true><<<B * H, C / H, 0, stream>>>(B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d);
+        } else {
+            rwkv_wkv7_f32<CUDA_WKV_BLOCK_SIZE * 2, false><<<B * H, C / H, 0, stream>>>(B, T, C, H, r_d, w_d, k_d, v_d, a_d, b_d, s_d, dst_d);
+        }
     }
 }

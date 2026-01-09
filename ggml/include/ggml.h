@@ -2437,7 +2437,8 @@ extern "C" {
             struct ggml_tensor  * v,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,
-            struct ggml_tensor  * state);
+            struct ggml_tensor  * state,
+            bool                  fuse_exp);
 
     /* Solves a specific equation of the form Ax=B, where A is a triangular matrix
     *  without zeroes on the diagonal (i.e. invertible).

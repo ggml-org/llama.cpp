@@ -3650,17 +3650,18 @@ struct test_rwkv_wkv7 : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const int64_t n_tokens = n_seq_tokens * n_seqs;
+        const int64_t n_embd = head_count * head_size;
         ggml_tensor * r   = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
-        ggml_tensor * w   = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
+        ggml_tensor * w   = ggml_new_tensor(ctx, type, 2, std::vector<int64_t>{ n_embd, n_tokens }.data());
         ggml_tensor * k   = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
-        ggml_tensor * v   = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
+        ggml_tensor * v   = ggml_new_tensor(ctx, type, 2, std::vector<int64_t>{ n_embd, n_tokens }.data());
         ggml_tensor * a   = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
         ggml_tensor * b   = ggml_new_tensor(ctx, type, 3, std::vector<int64_t>{ head_size, head_count, n_tokens }.data());
         // Outputs may become NaN with long seqlen without these normalization
         a = ggml_l2_norm(ctx, a, 1e-7F);
         b = ggml_l2_norm(ctx, b, 1e-7F);
         ggml_tensor * s   = ggml_new_tensor(ctx, type, 2, std::vector<int64_t>{ head_size * head_size * head_count, n_seqs }.data());
-        ggml_tensor * out = ggml_rwkv_wkv7(ctx, r, w, k, v, a, b, s);
+        ggml_tensor * out = ggml_rwkv_wkv7(ctx, r, w, k, v, a, b, s, true);
         return out;
     }
 };
