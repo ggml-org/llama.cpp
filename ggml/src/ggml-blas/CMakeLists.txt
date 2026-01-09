@@ -11,9 +11,10 @@ find_package(BLAS)
 if (BLAS_FOUND)
     message(STATUS "BLAS found, Libraries: ${BLAS_LIBRARIES}")
 
-    ggml_add_backend_library(ggml-blas
-                             ggml-blas.cpp
-                            )
+    file(GLOB GGML_SOURCES_BLAS "*.c" "*.cpp")
+    file(GLOB GGML_HEADERS_BLAS "*.h" "*.hpp")
+
+    ggml_add_backend_library(ggml-blas ${GGML_HEADERS_BLAS} ${GGML_SOURCES_BLAS})
 
     if (${GGML_BLAS_VENDOR} MATCHES "Apple")
         add_compile_definitions(ACCELERATE_NEW_LAPACK)
