@@ -4,12 +4,13 @@
 #
 # - creates a new remote using the fork's clone URL
 # - creates a local branch tracking the remote branch
-# - creates a new worktree in a parent folder, suffixed with "-pr-${PR}"
+# - creates a new worktree in a parent folder, suffixed with "-pr-$PR"
 #
 # sample usage:
 #   ./scripts/pr2wt.sh 12345
 #   ./scripts/pr2wt.sh 12345 opencode
 #   ./scripts/pr2wt.sh 12345 "cmake -B build && cmake --build build"
+#   ./scripts/pr2wt.sh 12345 "bash -l"
 
 function usage() {
     echo "usage: $0 <pr_number> [cmd]"
@@ -39,7 +40,7 @@ org_repo=${org_repo%.git}
 
 echo "org/repo: $org_repo"
 
-meta=$(curl -sSf -H "Accept: application/vnd.github+json" "https://api.github.com/repos/${org_repo}/pulls/${PR}")
+meta=$(curl -sSf -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$org_repo/pulls/$PR")
 
 url_remote=$(echo "$meta" | jq -r '.head.repo.clone_url')
 head_ref=$(echo "$meta" | jq -r '.head.ref')
@@ -47,21 +48,32 @@ head_ref=$(echo "$meta" | jq -r '.head.ref')
 echo "url:      $url_remote"
 echo "head_ref: $head_ref"
 
-git remote rm  pr/${PR} 2> /dev/null
-git remote add pr/${PR} $url_remote
-git fetch      pr/${PR} $head_ref
+url_remote_cur=$(git config --get "remote.pr/$PR.url" 2>/dev/null || true)
+
+if [[ "$url_remote_cur" != "$url_remote" ]]; then
+    git remote rm  pr/$PR 2> /dev/null
+    git remote add pr/$PR "$url_remote"
+fi
+
+git fetch "pr/$PR" "$head_ref"
 
 dir=$(basename $(pwd))
 
 git branch -D pr/$PR 2> /dev/null
-git worktree add -b pr/$PR ../$dir-pr-$PR pr/$PR/${head_ref} 2> /dev/null
+git worktree add -b pr/$PR ../$dir-pr-$PR pr/$PR/$head_ref 2> /dev/null
 
 wt_path=$(cd ../$dir-pr-$PR && pwd)
 
 echo "git worktree created in $wt_path"
 
-# if a command was provided, execute it
+cd $wt_path
+git branch --set-upstream-to=pr/$PR/$head_ref
+git pull   --ff-only || {
+    echo "error: failed to pull pr/$PR"
+    exit 1
+}
+
 if [[ $# -eq 2 ]]; then
-    cd ../$dir-pr-$PR
+    echo "executing: $2"
     eval "$2"
 fi
