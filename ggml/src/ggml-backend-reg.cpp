@@ -69,6 +69,10 @@
 #include "ggml-rpc.h"
 #endif
 
+#ifdef GGML_USE_REMOTINGFRONTEND
+#include "ggml-remoting-frontend.h"
+#endif
+
 #ifdef GGML_USE_CANN
 #include "ggml-cann.h"
 #endif
@@ -204,6 +208,10 @@ struct ggml_backend_registry {
 #ifdef GGML_USE_ZDNN
         register_backend(ggml_backend_zdnn_reg());
 #endif
+#ifdef GGML_USE_REMOTINGFRONTEND
+        register_backend(ggml_backend_remoting_frontend_reg());
+#endif
+
 #ifdef GGML_USE_OPENCL
         register_backend(ggml_backend_opencl_reg());
 #endif
@@ -620,6 +628,7 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("rpc", silent, dir_path);
     ggml_backend_load_best("sycl", silent, dir_path);
     ggml_backend_load_best("vulkan", silent, dir_path);
+    ggml_backend_load_best("remotingfrontend", silent, dir_path);
     ggml_backend_load_best("opencl", silent, dir_path);
     ggml_backend_load_best("hexagon", silent, dir_path);
     ggml_backend_load_best("musa", silent, dir_path);
