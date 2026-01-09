@@ -339,6 +339,11 @@ void ggml_zdnn_rope(
     memcpy(&freq_base,  (int32_t *) dst->op_params + 5, sizeof(float));
     memcpy(&freq_scale, (int32_t *) dst->op_params + 6, sizeof(float));
 
+    fprintf(stderr, "[zdnn_rope] n_dims=%d mode=%d freq_base=%g freq_scale=%g ne=[%lld,%lld,%lld,%lld]\n",
+            n_dims, mode, freq_base, freq_scale,
+            (long long)src0->ne[0], (long long)src0->ne[1],
+            (long long)src0->ne[2], (long long)src0->ne[3]);
+
     // Create lightweight ztensor wrappers for the raw data
     zdnn_tensor_desc src_desc, pos_desc, dst_desc;
     zdnn_ztensor src_zt, pos_zt, dst_zt;
