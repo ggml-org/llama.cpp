@@ -2615,10 +2615,6 @@ private:
             // on successful decode, restore the original batch size
             n_batch = llama_n_batch(ctx);
 
-            // technically, measuring the time here excludes the sampling time for the last batch
-            // but on the other hand, we don't want to do too many system calls to measure the time, so it's ok
-            const int64_t t_current = ggml_time_us();
-
             for (auto & slot : slots) {
                 // may need to copy state to other slots
                 if (slot.state == SLOT_STATE_DONE_PROMPT && slot.is_parent()) {
@@ -2685,6 +2681,9 @@ private:
 
                 common_sampler_accept(slot.smpl.get(), id, true);
 
+                // here we have synchronized the llama_context (due to the sampling above), so we can do time measurement
+                const int64_t t_current = ggml_time_us();
+
                 slot.n_decoded += 1;
 
                 if (slot.n_decoded == 1) {
@@ -2727,6 +2726,8 @@ private:
                 const auto ids = common_sampler_sample_and_accept_n(slot.smpl.get(), ctx, slot.i_batch_dft, slot.drafted);
                 slot.i_batch_dft.clear();
                 slot.drafted.clear();
+
+                const int64_t t_current = ggml_time_us();
 
                 slot.n_decoded += ids.size();
 
