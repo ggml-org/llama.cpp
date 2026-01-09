@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -1880,9 +1881,18 @@ static const char * ggml_backend_webgpu_device_get_description(ggml_backend_dev_
 
 static void ggml_backend_webgpu_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
-    // TODO: what do we actually want to return here? maxBufferSize might not be the full available memory.
-    *free                                    = ctx->webgpu_ctx->limits.maxBufferSize;
-    *total                                   = ctx->webgpu_ctx->limits.maxBufferSize;
+    // TODO: for now, return maxBufferSize as both free and total memory
+    // Track https://github.com/gpuweb/gpuweb/issues/5505 for updates.
+    uint64_t max_buffer_size = ctx->webgpu_ctx->limits.maxBufferSize;
+    // If we're on a 32-bit system, clamp to UINTPTR_MAX
+#if UINTPTR_MAX < UINT64_MAX
+    uint64_t max_ptr_size = static_cast<uint64_t>(UINTPTR_MAX);
+    if (max_buffer_size > max_ptr_size) {
+        max_buffer_size = max_ptr_size;
+    }
+#endif
+    *free  = static_cast<size_t>(max_buffer_size);
+    *total = static_cast<size_t>(max_buffer_size);
 }
 
 static enum ggml_backend_dev_type ggml_backend_webgpu_device_get_type(ggml_backend_dev_t dev) {
