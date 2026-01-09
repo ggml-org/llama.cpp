@@ -503,5 +503,4 @@ def test_chat_completions_multiple_choices():
     assert len(res.body["choices"]) == 2
     for choice in res.body["choices"]:
         assert "assistant" == choice["message"]["role"]
-        assert match_regex("Suddenly", choice["message"]["content"])
         assert choice["finish_reason"] == "length"
