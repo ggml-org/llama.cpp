@@ -67,7 +67,8 @@ wt_path=$(cd ../$dir-pr-$PR && pwd)
 echo "git worktree created in $wt_path"
 
 cd $wt_path
-git pull  --ff-only || {
+git branch --set-upstream-to=pr/$PR/$head_ref
+git pull   --ff-only || {
     echo "error: failed to pull pr/$PR"
     exit 1
 }
