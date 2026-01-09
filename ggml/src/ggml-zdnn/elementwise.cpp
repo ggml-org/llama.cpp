@@ -147,9 +147,34 @@ void ggml_zdnn_rms_norm(
     GGML_UNUSED(ctx);
 }
 
+// Helper: Initialize a lightweight ztensor wrapper for raw data (no AIU transform)
+// This creates a ztensor that points directly to existing data without allocation
+static void init_raw_ztensor(zdnn_tensor_desc * desc, zdnn_ztensor * zt,
+                             zdnn_data_types type, void * data,
+                             uint32_t dim4, uint32_t dim3, uint32_t dim2, uint32_t dim1) {
+    // Initialize descriptor
+    desc->layout = ZDNN_NHWC;
+    desc->format = ZDNN_FORMAT_4DFEATURE;
+    desc->type = type;
+    desc->dim4 = dim4;
+    desc->dim3 = dim3;
+    desc->dim2 = dim2;
+    desc->dim1 = dim1;
+
+    // Initialize ztensor to point to raw data (not transformed)
+    zt->pre_transformed_desc = desc;
+    zt->transformed_desc = desc;  // Same for raw data
+    zt->buffer = data;
+    zt->buffer_size = (size_t)dim4 * dim3 * dim2 * dim1 *
+                      (type == FP32 ? sizeof(float) : (type == INT32 ? sizeof(int32_t) : 1));
+    zt->is_transformed = false;
+    zt->rec_scale = 1.0f;
+    zt->offset = 0.0f;
+}
+
 // GET_ROWS: Extract rows from src0 using indices in src1
 // Used for embedding lookups
-// Note: Operates on raw float data, not ztensors
+// Uses ztensor API for type safety while operating on raw float data
 void ggml_zdnn_get_rows(
     const ggml_backend_zdnn_context * ctx,
     const ggml_tensor * src0,  // embedding table (F32/F16)
@@ -159,33 +184,44 @@ void ggml_zdnn_get_rows(
     GGML_ASSERT(src1->type == GGML_TYPE_I32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
-    // Get raw data pointers
-    const float * src_data = (const float *)src0->data;
-    const int32_t * indices = (const int32_t *)src1->data;
-    float * dst_data = (float *)dst->data;
+    // Create lightweight ztensor wrappers for the raw data
+    zdnn_tensor_desc src_desc, idx_desc, dst_desc;
+    zdnn_ztensor src_zt, idx_zt, dst_zt;
 
     // Check if we have batched indices (higher dimensions in src1)
     const bool batched = (src1->ne[1] > 1 || src1->ne[2] > 1);
 
     if (batched) {
-        // Use batched version for 4D tensors
-        ZDNN_CHECK(zdnn_get_rows_batched(
-            src_data,
-            src0->ne[0],  // embedding dimension
-            src0->ne[1],  // vocabulary size
-            src0->ne[2],  // batch dim 1 (usually 1)
-            src0->ne[3],  // batch dim 2 (usually 1)
-            indices,
-            src1->ne[0],  // indices per batch
-            src1->ne[1],  // batch dim 1
-            src1->ne[2],  // batch dim 2
-            dst_data));
+        // Initialize source ztensor (embedding table)
+        init_raw_ztensor(&src_desc, &src_zt, FP32, src0->data,
+                         src0->ne[3], src0->ne[2], src0->ne[1], src0->ne[0]);
+
+        // Initialize index ztensor
+        init_raw_ztensor(&idx_desc, &idx_zt, INT32, src1->data,
+                         1, src1->ne[2], src1->ne[1], src1->ne[0]);
+
+        // Initialize output ztensor
+        init_raw_ztensor(&dst_desc, &dst_zt, FP32, dst->data,
+                         dst->ne[3], dst->ne[2], dst->ne[1], dst->ne[0]);
+
+        ZDNN_CHECK(zdnn_get_rows_batched(&src_zt, &idx_zt, &dst_zt));
     } else {
-        // Use simple version for 2D case
-        const int64_t ne0 = src0->ne[0];  // embedding dimension
-        const int64_t ne1 = src0->ne[1];  // vocabulary size
+        // Simple 2D case
         const int64_t num_indices = ggml_nelements(src1);
-        ZDNN_CHECK(zdnn_get_rows(src_data, ne0, ne1, indices, num_indices, dst_data));
+
+        // Initialize source ztensor (embedding table: vocab_size x embed_dim)
+        init_raw_ztensor(&src_desc, &src_zt, FP32, src0->data,
+                         1, 1, src0->ne[1], src0->ne[0]);
+
+        // Initialize index ztensor (1D array of indices)
+        init_raw_ztensor(&idx_desc, &idx_zt, INT32, src1->data,
+                         1, 1, 1, num_indices);
+
+        // Initialize output ztensor (num_indices x embed_dim)
+        init_raw_ztensor(&dst_desc, &dst_zt, FP32, dst->data,
+                         1, 1, num_indices, src0->ne[0]);
+
+        ZDNN_CHECK(zdnn_get_rows(&src_zt, &idx_zt, &dst_zt));
     }
 
     GGML_UNUSED(ctx);
@@ -284,6 +320,7 @@ void ggml_zdnn_cpy(
 }
 
 // ROPE: Rotary Position Embedding
+// Uses ztensor API for type safety while operating on raw float data
 void ggml_zdnn_rope(
     const ggml_backend_zdnn_context * ctx,
     const ggml_tensor * src0,  // input tensor
@@ -302,18 +339,23 @@ void ggml_zdnn_rope(
     memcpy(&freq_base,  (int32_t *) dst->op_params + 5, sizeof(float));
     memcpy(&freq_scale, (int32_t *) dst->op_params + 6, sizeof(float));
 
-    // Get tensor dimensions
-    const int64_t ne0 = src0->ne[0];  // n_embd
-    const int64_t ne1 = src0->ne[1];  // n_head
-    const int64_t ne2 = src0->ne[2];  // n_seq
-    const int64_t ne3 = src0->ne[3];  // batch
+    // Create lightweight ztensor wrappers for the raw data
+    zdnn_tensor_desc src_desc, pos_desc, dst_desc;
+    zdnn_ztensor src_zt, pos_zt, dst_zt;
 
-    // Get raw data pointers
-    const float * input = (const float *)src0->data;
-    const int32_t * positions = (const int32_t *)src1->data;
-    float * output = (float *)dst->data;
+    // Initialize input ztensor [batch x seq x heads x embed_dim]
+    init_raw_ztensor(&src_desc, &src_zt, FP32, src0->data,
+                     src0->ne[3], src0->ne[2], src0->ne[1], src0->ne[0]);
 
-    ZDNN_CHECK(zdnn_rope(input, positions, ne0, ne1, ne2, ne3, n_dims, mode, freq_base, freq_scale, output));
+    // Initialize positions ztensor (1D: [seq_len])
+    init_raw_ztensor(&pos_desc, &pos_zt, INT32, src1->data,
+                     1, 1, 1, src1->ne[0]);
+
+    // Initialize output ztensor (same shape as input)
+    init_raw_ztensor(&dst_desc, &dst_zt, FP32, dst->data,
+                     dst->ne[3], dst->ne[2], dst->ne[1], dst->ne[0]);
+
+    ZDNN_CHECK(zdnn_rope(&src_zt, &pos_zt, n_dims, mode, freq_base, freq_scale, &dst_zt));
 
     GGML_UNUSED(ctx);
 }
