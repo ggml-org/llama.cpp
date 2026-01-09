@@ -4,16 +4,17 @@
 		ChatMessageActions,
 		ChatMessageStatistics,
 		ChatMessageThinkingBlock,
-		CopyToClipboardIcon,
 		MarkdownContent,
-		ModelsSelector
+		ModelsSelector,
+		BadgeChatStatistic
 	} from '$lib/components/app';
+	import type { DatabaseMessage, ApiChatCompletionToolCall } from '$lib/types';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import { autoResizeTextarea, copyToClipboard } from '$lib/utils';
 	import { fade } from 'svelte/transition';
-	import { Check, X, Wrench } from '@lucide/svelte';
+	import { Check, Clock, X, Wrench } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
@@ -21,6 +22,30 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { SvelteSet } from 'svelte/reactivity';
+
+	type ToolSegment =
+		| { kind: 'content'; content: string; parentId: string }
+		| { kind: 'thinking'; content: string }
+		| {
+				kind: 'tool';
+				toolCalls: ApiChatCompletionToolCall[];
+				parentId: string;
+				inThinking: boolean;
+		  };
+	type ToolParsed = { expression?: string; result?: string; duration_ms?: number };
+	type CollectedToolMessage = {
+		toolCallId?: string | null;
+		parsed: ToolParsed;
+	};
+	type MessageWithToolExtras = DatabaseMessage & {
+		_segments?: ToolSegment[];
+		_toolMessagesCollected?: CollectedToolMessage[];
+	};
+	type ToolMessageLike = Pick<DatabaseMessage, 'role' | 'content'> & {
+		toolCallId?: string | null;
+		parent?: string;
+	};
 
 	interface Props {
 		class?: string;
@@ -53,6 +78,9 @@
 		textareaElement?: HTMLTextAreaElement;
 		thinkingContent: string | null;
 		toolCallContent: ApiChatCompletionToolCall[] | string | null;
+		toolParentIds?: string[];
+		segments?: ToolSegment[] | null;
+		toolMessagesCollected?: CollectedToolMessage[] | null;
 	}
 
 	let {
@@ -80,18 +108,92 @@
 		siblingInfo = null,
 		textareaElement = $bindable(),
 		thinkingContent,
-		toolCallContent = null
+		toolCallContent = null,
+		toolParentIds = [message.id],
+		segments: segmentsProp = null,
+		toolMessagesCollected: toolMessagesCollectedProp = (message as MessageWithToolExtras)
+			._toolMessagesCollected ?? null
 	}: Props = $props();
+
+	// Keep segments/tool messages in sync with the merged assistant produced upstream.
+	let segments = $derived(segmentsProp ?? (message as MessageWithToolExtras)._segments ?? null);
+	let toolMessagesCollected = $derived(
+		toolMessagesCollectedProp ?? (message as MessageWithToolExtras)._toolMessagesCollected ?? null
+	);
+
+	let hasRegularContent = $derived.by(() => {
+		if (messageContent?.trim()) return true;
+		return (segments ?? []).some((s) => s.kind === 'content' && Boolean(s.content?.trim()));
+	});
 
 	const toolCalls = $derived(
 		Array.isArray(toolCallContent) ? (toolCallContent as ApiChatCompletionToolCall[]) : null
 	);
-	const fallbackToolCalls = $derived(typeof toolCallContent === 'string' ? toolCallContent : null);
 
 	const processingState = useProcessingState();
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
+	const toolMessages = $derived<ToolMessageLike[]>(
+		(() => {
+			const ids = new SvelteSet<string>();
+			if (toolCalls) {
+				for (const tc of toolCalls) {
+					if (tc.id) ids.add(tc.id);
+				}
+			}
+			const collected = toolMessagesCollected ?? [];
+			return conversationsStore.activeMessages
+				.filter(
+					(m) =>
+						m.role === 'tool' &&
+						(toolParentIds.includes(m.parent) || (m.toolCallId && ids.has(m.toolCallId)))
+				)
+				.concat(
+					collected.map((c) => ({
+						role: 'tool',
+						content: JSON.stringify(c.parsed),
+						toolCallId: c.toolCallId ?? undefined,
+						parent: toolParentIds[0]
+					}))
+				);
+		})()
+	);
+	const toolMessagesById = $derived<Record<string, ToolParsed>>(
+		(() => {
+			const map: Record<string, ToolParsed> = {};
+			for (const t of toolMessages) {
+				const parsed = parseToolMessage(t);
+				if (parsed && t.toolCallId) {
+					map[t.toolCallId] = parsed;
+				}
+			}
+			return map;
+		})()
+	);
+
+	const collectedById = $derived<Record<string, ToolParsed>>(
+		(() => {
+			const map: Record<string, ToolParsed> = {};
+			(toolMessagesCollected ?? []).forEach((c) => {
+				if (c.toolCallId) {
+					map[c.toolCallId] = c.parsed;
+				}
+			});
+			return map;
+		})()
+	);
+
+	function getToolResult(toolCall: ApiChatCompletionToolCall): ToolParsed | null {
+		const idSetMatch = toolCall.id ? toolMessagesById[toolCall.id] : null;
+		if (idSetMatch) return idSetMatch;
+		if (toolCall.id && collectedById[toolCall.id]) return collectedById[toolCall.id];
+		return null;
+	}
+
+	function advanceToolResult(toolCall: ApiChatCompletionToolCall) {
+		return getToolResult(toolCall) ?? null;
+	}
 	let displayedModel = $derived((): string | null => {
 		if (message.model) {
 			return message.model;
@@ -123,56 +225,71 @@
 		}
 	});
 
-	function formatToolCallBadge(toolCall: ApiChatCompletionToolCall, index: number) {
-		const callNumber = index + 1;
-		const functionName = toolCall.function?.name?.trim();
-		const label = functionName || `Call #${callNumber}`;
-
-		const payload: Record<string, unknown> = {};
-
-		const id = toolCall.id?.trim();
-		if (id) {
-			payload.id = id;
-		}
-
-		const type = toolCall.type?.trim();
-		if (type) {
-			payload.type = type;
-		}
-
-		if (toolCall.function) {
-			const fnPayload: Record<string, unknown> = {};
-
-			const name = toolCall.function.name?.trim();
-			if (name) {
-				fnPayload.name = name;
+	function parseArguments(
+		toolCall: ApiChatCompletionToolCall
+	): { pairs: { key: string; value: string }[] } | { raw: string } | null {
+		const rawArguments = toolCall.function?.arguments?.trim();
+		if (!rawArguments) return null;
+		try {
+			const parsed = JSON.parse(rawArguments);
+			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+				const pairs = Object.entries(parsed).map(([key, value]) => ({
+					key,
+					value: typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+				}));
+				return { pairs };
 			}
-
-			const rawArguments = toolCall.function.arguments?.trim();
-			if (rawArguments) {
-				try {
-					fnPayload.arguments = JSON.parse(rawArguments);
-				} catch {
-					fnPayload.arguments = rawArguments;
-				}
-			}
-
-			if (Object.keys(fnPayload).length > 0) {
-				payload.function = fnPayload;
-			}
+		} catch {
+			// ignore parse errors, fall back to raw
 		}
-
-		const formattedPayload = JSON.stringify(payload, null, 2);
-
-		return {
-			label,
-			tooltip: formattedPayload,
-			copyValue: formattedPayload
-		};
+		return { raw: rawArguments };
 	}
 
-	function handleCopyToolCall(payload: string) {
-		void copyToClipboard(payload, 'Tool call copied to clipboard');
+	function parseToolMessage(msg: ToolMessageLike): ToolParsed | null {
+		if (!msg.content) return null;
+		try {
+			const parsed = JSON.parse(msg.content);
+			if (parsed && typeof parsed === 'object') {
+				const duration =
+					typeof parsed.duration_ms === 'number' ? (parsed.duration_ms as number) : undefined;
+				return {
+					expression: parsed.expression ?? undefined,
+					result: parsed.result ?? undefined,
+					duration_ms: duration
+				};
+			}
+		} catch {
+			// not JSON; fall back
+		}
+		return { result: msg.content };
+	}
+
+	function formatDurationSeconds(durationMs?: number): string | null {
+		if (durationMs === undefined) return null;
+		if (!Number.isFinite(durationMs)) return null;
+		return `${(durationMs / 1000).toFixed(2)}s`;
+	}
+
+	function toFencedCodeBlock(code: string, language: string): string {
+		const matches = code.match(/`+/g) ?? [];
+		const maxBackticks = matches.reduce((max, s) => Math.max(max, s.length), 0);
+		const fence = '`'.repeat(Math.max(3, maxBackticks + 1));
+		return `${fence}${language}\n${code}\n${fence}`;
+	}
+
+	function getToolLabel(toolCall: ApiChatCompletionToolCall, index: number) {
+		const name = toolCall.function?.name ?? '';
+		if (name === 'calculator') return 'Calculator';
+		if (name === 'code_interpreter_javascript') return 'Code Interpreter (JavaScript)';
+		return name || `Call #${index + 1}`;
+	}
+
+	function segmentToolInThinking(segment: ToolSegment): boolean {
+		if (segment.kind !== 'tool') return false;
+		const maybe = segment as unknown as { inThinking?: unknown };
+		if (typeof maybe.inThinking === 'boolean') return maybe.inThinking;
+		// Back-compat fallback: if we don't know, treat as in-reasoning when there is a thinking block.
+		return Boolean(thinkingContent);
 	}
 </script>
 
@@ -183,10 +300,84 @@
 >
 	{#if thinkingContent}
 		<ChatMessageThinkingBlock
-			reasoningContent={thinkingContent}
-			isStreaming={!message.timestamp}
-			hasRegularContent={!!messageContent?.trim()}
-		/>
+			reasoningContent={segments && segments.length ? null : thinkingContent}
+			isStreaming={!message.timestamp || isLoading()}
+			{hasRegularContent}
+		>
+			{#if segments && segments.length}
+				{#each segments as segment, segIndex (segIndex)}
+					{#if segment.kind === 'thinking'}
+						<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
+							{segment.content}
+						</div>
+					{:else if segment.kind === 'tool' && segmentToolInThinking(segment)}
+						{#each segment.toolCalls as toolCall, index (toolCall.id ?? `${segIndex}-${index}`)}
+							{@const argsParsed = parseArguments(toolCall)}
+							{@const parsed = advanceToolResult(toolCall)}
+							{@const collectedResult = toolMessagesCollected
+								? toolMessagesCollected.find((c) => c.toolCallId === toolCall.id)?.parsed?.result
+								: undefined}
+							{@const collectedDurationMs = toolMessagesCollected
+								? toolMessagesCollected.find((c) => c.toolCallId === toolCall.id)?.parsed
+										?.duration_ms
+								: undefined}
+							{@const durationMs = parsed?.duration_ms ?? collectedDurationMs}
+							{@const durationText = formatDurationSeconds(durationMs)}
+							<div
+								class="mt-2 space-y-1 rounded-md border border-dashed border-muted-foreground/40 bg-muted/40 px-2.5 py-2"
+								data-testid="tool-call-block"
+							>
+								<div class="flex items-center justify-between gap-2">
+									<div class="flex items-center gap-1 text-xs font-semibold">
+										<Wrench class="h-3.5 w-3.5" />
+										<span>{getToolLabel(toolCall, index)}</span>
+									</div>
+									{#if durationText}
+										<BadgeChatStatistic icon={Clock} value={durationText} />
+									{/if}
+								</div>
+								{#if argsParsed}
+									<div class="text-[12px] text-muted-foreground">Arguments</div>
+									{#if 'pairs' in argsParsed}
+										{#each argsParsed.pairs as pair (pair.key)}
+											<div class="mt-1 rounded-sm bg-background/70 px-2 py-1.5">
+												<div class="text-[12px] font-semibold text-foreground">{pair.key}</div>
+												{#if pair.key === 'code' && toolCall.function?.name === 'code_interpreter_javascript'}
+													<MarkdownContent
+														class="mt-0.5 text-[12px] leading-snug"
+														content={toFencedCodeBlock(pair.value, 'javascript')}
+													/>
+												{:else}
+													<pre
+														class="mt-0.5 font-mono text-[12px] leading-snug break-words whitespace-pre-wrap">
+{pair.value}
+													</pre>
+												{/if}
+											</div>
+										{/each}
+									{:else}
+										<pre class="font-mono text-[12px] leading-snug break-words whitespace-pre-wrap">
+{argsParsed.raw}
+										</pre>
+									{/if}
+								{/if}
+								{#if parsed && parsed.result !== undefined}
+									<div class="text-[12px] text-muted-foreground">Result</div>
+									<div class="rounded-sm bg-background/80 px-2 py-1 font-mono text-[12px]">
+										{parsed.result}
+									</div>
+								{:else if collectedResult !== undefined}
+									<div class="text-[12px] text-muted-foreground">Result</div>
+									<div class="rounded-sm bg-background/80 px-2 py-1 font-mono text-[12px]">
+										{collectedResult}
+									</div>
+								{/if}
+							</div>
+						{/each}
+					{/if}
+				{/each}
+			{/if}
+		</ChatMessageThinkingBlock>
 	{/if}
 
 	{#if message?.role === 'assistant' && isLoading() && !message?.content?.trim()}
@@ -239,9 +430,78 @@
 		</div>
 	{:else if message.role === 'assistant'}
 		{#if config().disableReasoningFormat}
-			<pre class="raw-output">{messageContent || ''}</pre>
+			<pre class="raw-output">{messageContent}</pre>
+		{:else if segments && segments.length}
+			{#each segments as segment, segIndex (segIndex)}
+				{#if segment.kind === 'content'}
+					<MarkdownContent content={segment.content ?? ''} />
+				{:else if segment.kind === 'tool' && (!thinkingContent || !segmentToolInThinking(segment))}
+					{#each segment.toolCalls as toolCall, index (toolCall.id ?? `${segIndex}-${index}`)}
+						{@const argsParsed = parseArguments(toolCall)}
+						{@const parsed = advanceToolResult(toolCall)}
+						{@const collectedResult = toolMessagesCollected
+							? toolMessagesCollected.find((c) => c.toolCallId === toolCall.id)?.parsed?.result
+							: undefined}
+						{@const collectedDurationMs = toolMessagesCollected
+							? toolMessagesCollected.find((c) => c.toolCallId === toolCall.id)?.parsed?.duration_ms
+							: undefined}
+						{@const durationMs = parsed?.duration_ms ?? collectedDurationMs}
+						{@const durationText = formatDurationSeconds(durationMs)}
+						<div
+							class="mt-2 space-y-1 rounded-md border border-dashed border-muted-foreground/40 bg-muted/40 px-2.5 py-2"
+							data-testid="tool-call-block"
+						>
+							<div class="flex items-center justify-between gap-2">
+								<div class="flex items-center gap-1 text-xs font-semibold">
+									<Wrench class="h-3.5 w-3.5" />
+									<span>{getToolLabel(toolCall, index)}</span>
+								</div>
+								{#if durationText}
+									<BadgeChatStatistic icon={Clock} value={durationText} />
+								{/if}
+							</div>
+							{#if argsParsed}
+								<div class="text-[12px] text-muted-foreground">Arguments</div>
+								{#if 'pairs' in argsParsed}
+									{#each argsParsed.pairs as pair (pair.key)}
+										<div class="mt-1 rounded-sm bg-background/70 px-2 py-1.5">
+											<div class="text-[12px] font-semibold text-foreground">{pair.key}</div>
+											{#if pair.key === 'code' && toolCall.function?.name === 'code_interpreter_javascript'}
+												<MarkdownContent
+													class="mt-0.5 text-[12px] leading-snug"
+													content={toFencedCodeBlock(pair.value, 'javascript')}
+												/>
+											{:else}
+												<pre
+													class="mt-0.5 font-mono text-[12px] leading-snug break-words whitespace-pre-wrap">
+{pair.value}
+												</pre>
+											{/if}
+										</div>
+									{/each}
+								{:else}
+									<pre class="font-mono text-[12px] leading-snug break-words whitespace-pre-wrap">
+{argsParsed.raw}
+									</pre>
+								{/if}
+							{/if}
+							{#if parsed && parsed.result !== undefined}
+								<div class="text-[12px] text-muted-foreground">Result</div>
+								<div class="rounded-sm bg-background/80 px-2 py-1 font-mono text-[12px]">
+									{parsed.result}
+								</div>
+							{:else if collectedResult !== undefined}
+								<div class="text-[12px] text-muted-foreground">Result</div>
+								<div class="rounded-sm bg-background/80 px-2 py-1 font-mono text-[12px]">
+									{collectedResult}
+								</div>
+							{/if}
+						</div>
+					{/each}
+				{/if}
+			{/each}
 		{:else}
-			<MarkdownContent content={messageContent || ''} />
+			<MarkdownContent content={messageContent ?? ''} />
 		{/if}
 	{:else}
 		<div class="text-sm whitespace-pre-wrap">
@@ -289,48 +549,6 @@
 					{/if}
 				{/if}
 			</div>
-		{/if}
-
-		{#if config().showToolCalls}
-			{#if (toolCalls && toolCalls.length > 0) || fallbackToolCalls}
-				<span class="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-					<span class="inline-flex items-center gap-1">
-						<Wrench class="h-3.5 w-3.5" />
-
-						<span>Tool calls:</span>
-					</span>
-
-					{#if toolCalls && toolCalls.length > 0}
-						{#each toolCalls as toolCall, index (toolCall.id ?? `${index}`)}
-							{@const badge = formatToolCallBadge(toolCall, index)}
-							<button
-								type="button"
-								class="tool-call-badge inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-								title={badge.tooltip}
-								aria-label={`Copy tool call ${badge.label}`}
-								onclick={() => handleCopyToolCall(badge.copyValue)}
-							>
-								{badge.label}
-								<CopyToClipboardIcon
-									text={badge.copyValue}
-									ariaLabel={`Copy tool call ${badge.label}`}
-								/>
-							</button>
-						{/each}
-					{:else if fallbackToolCalls}
-						<button
-							type="button"
-							class="tool-call-badge tool-call-badge--fallback inline-flex cursor-pointer items-center gap-1 rounded-sm bg-muted-foreground/15 px-1.5 py-0.75"
-							title={fallbackToolCalls}
-							aria-label="Copy tool call payload"
-							onclick={() => handleCopyToolCall(fallbackToolCalls)}
-						>
-							{fallbackToolCalls}
-							<CopyToClipboardIcon text={fallbackToolCalls} ariaLabel="Copy tool call payload" />
-						</button>
-					{/if}
-				</span>
-			{/if}
 		{/if}
 	</div>
 

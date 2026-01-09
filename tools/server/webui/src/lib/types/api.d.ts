@@ -35,6 +35,15 @@ export interface ApiChatMessageData {
 	role: ChatRole;
 	content: string | ApiChatMessageContentPart[];
 	timestamp?: number;
+	/**
+	 * Optional reasoning/thinking content to be sent back to the server.
+	 *
+	 * llama-server accepts this non-OpenAI field and uses it to preserve the model's
+	 * internal "thinking" blocks across tool-call resumptions (notably for gpt-oss).
+	 */
+	reasoning_content?: string;
+	tool_call_id?: string;
+	tool_calls?: ApiChatCompletionToolCallDelta[];
 }
 
 /**
@@ -180,14 +189,21 @@ export interface ApiLlamaCppServerProps {
 	webui_settings?: Record<string, string | number | boolean>;
 }
 
+export interface ApiChatCompletionRequestMessage {
+	role: ChatRole;
+	content: string | ApiChatMessageContentPart[];
+	reasoning_content?: string;
+	tool_call_id?: string;
+	tool_calls?: ApiChatCompletionToolCallDelta[];
+}
+
 export interface ApiChatCompletionRequest {
-	messages: Array<{
-		role: ChatRole;
-		content: string | ApiChatMessageContentPart[];
-	}>;
+	messages: Array<ApiChatCompletionRequestMessage>;
 	stream?: boolean;
 	model?: string;
 	return_progress?: boolean;
+	tools?: ApiToolDefinition[];
+	tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
 	// Reasoning parameters
 	reasoning_format?: string;
 	// Generation parameters
@@ -233,6 +249,15 @@ export interface ApiChatCompletionToolCallDelta {
 
 export interface ApiChatCompletionToolCall extends ApiChatCompletionToolCallDelta {
 	function?: ApiChatCompletionToolCallFunctionDelta & { arguments?: string };
+}
+
+export interface ApiToolDefinition {
+	type: 'function';
+	function: {
+		name: string;
+		description?: string;
+		parameters: Record<string, unknown>;
+	};
 }
 
 export interface ApiChatCompletionStreamChunk {

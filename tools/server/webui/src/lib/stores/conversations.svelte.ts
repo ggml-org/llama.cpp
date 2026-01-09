@@ -245,8 +245,7 @@ class ConversationsStore {
 
 		const currentPath = filterByLeafNodeId(allMessages, leafNodeId, false) as DatabaseMessage[];
 
-		this.activeMessages.length = 0;
-		this.activeMessages.push(...currentPath);
+		this.activeMessages = [...currentPath];
 	}
 
 	/**
@@ -560,7 +559,7 @@ class ConversationsStore {
 	 * @param message - The message to add
 	 */
 	addMessageToActive(message: DatabaseMessage): void {
-		this.activeMessages.push(message);
+		this.activeMessages = [...this.activeMessages, message];
 	}
 
 	/**
@@ -572,7 +571,12 @@ class ConversationsStore {
 	updateMessageAtIndex(index: number, updates: Partial<DatabaseMessage>): void {
 		if (index !== -1 && this.activeMessages[index]) {
 			// Create new object to trigger Svelte 5 reactivity
-			this.activeMessages[index] = { ...this.activeMessages[index], ...updates };
+			const updated = { ...this.activeMessages[index], ...updates };
+			this.activeMessages = [
+				...this.activeMessages.slice(0, index),
+				updated,
+				...this.activeMessages.slice(index + 1)
+			];
 		}
 	}
 
@@ -600,7 +604,12 @@ class ConversationsStore {
 	 */
 	removeMessageAtIndex(index: number): DatabaseMessage | undefined {
 		if (index !== -1) {
-			return this.activeMessages.splice(index, 1)[0];
+			const removed = this.activeMessages[index];
+			this.activeMessages = [
+				...this.activeMessages.slice(0, index),
+				...this.activeMessages.slice(index + 1)
+			];
+			return removed;
 		}
 		return undefined;
 	}
