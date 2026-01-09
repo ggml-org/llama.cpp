@@ -2928,7 +2928,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
                     server_task child = task.create_child(task.id, rd.get_new_id());
 
                     // use different sampling seed for each child
-                    child.params.sampling.seed += j + 1;
+                    if (child.params.sampling.seed != LLAMA_DEFAULT_SEED) {
+                        child.params.sampling.seed += j + 1;
+                    }
 
                     tasks.push_back(std::move(child));
                 }
