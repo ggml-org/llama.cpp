@@ -1165,7 +1165,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 switch (hparams.n_layer) {
                     case 24: type = LLM_TYPE_7B; break;
-                    case 48: type = LLM_TYPE_109B; break;
+                    case 48: type = LLM_TYPE_120B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
