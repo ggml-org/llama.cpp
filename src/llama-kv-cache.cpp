@@ -815,6 +815,14 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
         // for non-continuous slots, we test the tokens one by one
         const uint32_t n_test = cont ? n_tokens : 1;
 
+        // For SWA caches: compute max position in this batch for sequence s
+        // This is used to determine which old cells are outside the future attention window
+        // (forward-looking: cells masked AFTER batch insertion can be reused)
+        llama_pos pos_batch_max = 0;
+        if (n_swa > 0) {
+            pos_batch_max = ubatch.pos[s * n_tokens + n_tokens - 1];
+        }
+
         while (true) {
             if (head_cur + n_test > cells.size()) {
                 n_tested += cells.size() - head_cur;
@@ -835,7 +843,7 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
                 //  - the cell is empty
                 //  - the cell is occupied only by one sequence:
                 //    - (disabled) mask causally, if the sequence is the same as the one we are inserting
-                //    - mask SWA, using current max pos for that sequence in the cache
+                //    - mask SWA, using the batch's max pos (forward-looking)
                 //                always insert in the cell with minimum pos
                 bool can_use = cells.is_empty(idx);
 
@@ -848,11 +856,11 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
                     //    can_use = pos_cell >= pos;
                     //}
 
-                    if (!can_use) {
-                        const llama_seq_id seq_id_cell = cells.seq_get(idx);
-
-                        // SWA mask
-                        if (is_masked_swa(pos_cell, cells.seq_pos_max(seq_id_cell) + 1)) {
+                    // SWA mask - check if cell position is outside attention window
+                    // Use batch's max position (forward-looking) to enable reusing cells
+                    // that will be masked after the new tokens are inserted
+                    if (!can_use && n_swa > 0) {
+                        if (is_masked_swa(pos_cell, pos_batch_max + 1)) {
                             can_use = true;
                         }
                     }
