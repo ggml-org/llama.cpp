@@ -10,6 +10,7 @@
 #   ./scripts/pr2wt.sh 12345
 #   ./scripts/pr2wt.sh 12345 opencode
 #   ./scripts/pr2wt.sh 12345 "cmake -B build && cmake --build build"
+#   ./scripts/pr2wt.sh 12345 "bash -l"
 
 function usage() {
     echo "usage: $0 <pr_number> [cmd]"
@@ -47,9 +48,14 @@ head_ref=$(echo "$meta" | jq -r '.head.ref')
 echo "url:      $url_remote"
 echo "head_ref: $head_ref"
 
-git remote rm  pr/$PR 2> /dev/null
-git remote add pr/$PR $url_remote
-git fetch      pr/$PR $head_ref
+url_remote_cur=$(git config --get "remote.pr/$PR.url" 2>/dev/null || true)
+
+if [[ "$url_remote_cur" != "$url_remote" ]]; then
+    git remote rm  pr/$PR 2> /dev/null
+    git remote add pr/$PR "$url_remote"
+fi
+
+git fetch "pr/$PR" "$head_ref"
 
 dir=$(basename $(pwd))
 
@@ -61,15 +67,12 @@ wt_path=$(cd ../$dir-pr-$PR && pwd)
 echo "git worktree created in $wt_path"
 
 cd $wt_path
-git branch --set-upstream-to=pr/$PR/$head_ref
+git pull  --ff-only || {
+    echo "error: failed to pull pr/$PR"
+    exit 1
+}
 
-if [[ -z $(git status --porcelain) ]]; then
-    git reset --hard pr/$PR/$head_ref
-else
-    echo "warning: local copy has modifications"
-fi
-
-# if a command was provided, execute it
 if [[ $# -eq 2 ]]; then
+    echo "executing: $2"
     eval "$2"
 fi
