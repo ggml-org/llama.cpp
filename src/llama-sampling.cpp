@@ -3311,7 +3311,7 @@ struct llama_sampler_adaptive_p {
     float              total_weight;      // sum(decay^i), converges to 1/(1-decay)
     std::vector<float> original_probs;    // pre-transform probs, cached for EMA update
     llama_token        pending_token_id;  // token ID of selected token
-    llama_token        pending_token_idx; // index of orig. prob. of selected token in original_probs
+    int32_t            pending_token_idx; // index of orig. prob. of selected token in original_probs
 };
 
 // adaptive probability transformation constants
