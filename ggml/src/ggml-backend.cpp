@@ -754,12 +754,6 @@ static bool ggml_backend_implicitly_synced(ggml_backend_t current_backend) {
      * For these backends, we can skip costly explicit synchronizations during compute split scheduling.
      */
 
-    static bool disable_scheduler_sync_opt = (getenv("GGML_SCHED_DISABLE_SYNC_OPT") != nullptr);
-
-    if (disable_scheduler_sync_opt) {
-        return false;
-    }
-
     // To not change any APIs or change what ggml-base links to, we can only detect backends by string matching
     auto backend_name = ggml_backend_name(current_backend);
     if (strncmp(backend_name, "CUDA", 4) == 0) {
