@@ -48,7 +48,7 @@
 
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
 
-extern unsigned char LICENSES[];
+extern const char* LICENSES[];
 
 using json = nlohmann::ordered_json;
 using namespace common_arg_utils;
@@ -1036,7 +1036,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--license"},
         "show source code license and dependencies",
         [](common_params &) {
-            printf("%s\n", (char*)LICENSES);
+            for (int i = 0; LICENSES[i]; ++i) {
+                printf("%s\n", LICENSES[i]);
+            }
             exit(0);
         }
     ));
