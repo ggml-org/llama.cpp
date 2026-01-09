@@ -65,10 +65,7 @@
 		await expect(textarea).toHaveValue(text);
 
 		const fileInput = document.querySelector('input[type="file"]');
-		const acceptAttr = fileInput?.getAttribute('accept');
-		await expect(fileInput).toHaveAttribute('accept');
-		await expect(acceptAttr).not.toContain('image/');
-		await expect(acceptAttr).not.toContain('audio/');
+		await expect(fileInput).not.toHaveAttribute('accept');
 
 		// Open file attachments dropdown
 		const fileUploadButton = canvas.getByText('Attach files');
