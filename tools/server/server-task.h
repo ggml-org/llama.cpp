@@ -121,8 +121,8 @@ struct server_task {
     int id_slot   = -1;
 
     // used by parallel sampling (multiple completions from same prompt)
-    size_t n_children =  0; // number of tasks reusing this prompt
-    int    id_parent  = -1;
+    int n_children =  0; // number of tasks reusing this prompt
+    int id_parent  = -1;
 
     // used by SERVER_TASK_TYPE_INFERENCE
     task_params   params;
@@ -173,11 +173,13 @@ struct server_task {
 
     server_task create_child(int id_parent, int id_child) const {
         server_task copy;
+
         copy.id        = id_child;
         copy.id_parent = id_parent;
         copy.params    = params;
         copy.type      = type;
         copy.tokens    = tokens.clone();
+
         return copy;
     }
 
