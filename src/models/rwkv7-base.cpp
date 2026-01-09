@@ -7,16 +7,24 @@ llm_build_rwkv7_base::llm_build_rwkv7_base(const llama_model & model, const llm_
 ggml_tensor * llm_build_rwkv7_base::build_rwkv7_channel_mix(const llama_layer * layer,
                                                             ggml_tensor *       cur,
                                                             ggml_tensor *       x_prev,
-                                                            llm_arch            arch) const {
+                                                            llm_arch            arch,
+                                                            int                 il) const {
     ggml_tensor * sx = ggml_sub(ctx0, x_prev, cur);
     switch (arch) {
         case LLM_ARCH_RWKV7:
             {
                 ggml_tensor * xk = ggml_add(ctx0, ggml_mul(ctx0, sx, layer->channel_mix_lerp_k), cur);
 
-                ggml_tensor * k = ggml_sqr(ctx0, ggml_relu(ctx0, build_lora_mm(layer->channel_mix_key, xk)));
-
-                cur = build_lora_mm(layer->channel_mix_value, k);
+                cur = build_ffn(
+                    xk,
+                    layer->channel_mix_key, nullptr, nullptr, // up
+                    nullptr, nullptr, nullptr, // gate
+                    layer->channel_mix_value, nullptr, nullptr, // down
+                    nullptr,
+                    LLM_FFN_RELU_SQR,
+                    LLM_FFN_SEQ,
+                    il
+                );
             }
             break;
         default:
