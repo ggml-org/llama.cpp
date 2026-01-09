@@ -63,9 +63,6 @@ OutputVector translate_rope(const NodeContext & context) {
                 ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
             data_node = std::make_shared<ov::op::v1::Reshape>(data_node, data_shape, false);
         }
-        //auto data_shape = ov::op::v0::Constant::create(                                                                                                                                                                                                                                                                                                                
-        //    ov::element::i64, {4}, std::vector<int64_t>{1, -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});                                                                                                                                                                                                                                                 
-        //data_node = std::make_shared<ov::op::v1::Reshape>(data_node, data_shape, false);
     }
 
     const int mode = op_params[2];
