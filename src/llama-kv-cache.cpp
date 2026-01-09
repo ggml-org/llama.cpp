@@ -815,6 +815,14 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
         // for non-continuous slots, we test the tokens one by one
         const uint32_t n_test = cont ? n_tokens : 1;
 
+        // For SWA caches: compute min position in this batch for sequence s
+        // This ensures all tokens in the batch have their full attention window
+        // (the token at min position has the most demanding context requirement)
+        llama_pos pos_batch_min = 0;
+        if (n_swa > 0) {
+            pos_batch_min = ubatch.pos[s * n_tokens];
+        }
+
         while (true) {
             if (head_cur + n_test > cells.size()) {
                 n_tested += cells.size() - head_cur;
@@ -835,7 +843,7 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
                 //  - the cell is empty
                 //  - the cell is occupied only by one sequence:
                 //    - (disabled) mask causally, if the sequence is the same as the one we are inserting
-                //    - mask SWA, using current max pos for that sequence in the cache
+                //    - mask SWA, using the batch's min pos (ensures all tokens have context)
                 //                always insert in the cell with minimum pos
                 bool can_use = cells.is_empty(idx);
 
@@ -848,11 +856,11 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
                     //    can_use = pos_cell >= pos;
                     //}
 
-                    if (!can_use) {
-                        const llama_seq_id seq_id_cell = cells.seq_get(idx);
-
-                        // SWA mask
-                        if (is_masked_swa(pos_cell, cells.seq_pos_max(seq_id_cell) + 1)) {
+                    // SWA mask - check if cell position is outside attention window
+                    // Use batch's min position to ensure all tokens have their full context
+                    // (min position token has the most demanding attention window)
+                    if (!can_use && n_swa > 0) {
+                        if (is_masked_swa(pos_cell, pos_batch_min + 1)) {
                             can_use = true;
                         }
                     }
