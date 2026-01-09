@@ -14,7 +14,7 @@ cli_pref=f'cd {pkg_path} && LD_LIBRARY_PATH={lib_path} ADSP_LIBRARY_PATH={lib_pa
 def run_cmd(cmd):
     p = subprocess.run(cmd, text = True, stdout = subprocess.PIPE, stderr = subprocess.STDOUT)
     sys.stdout.write(p.stdout)
-    assert(p.returncode == 0)
+    assert (p.returncode == 0)
 
 
 @pytest.mark.dependency()

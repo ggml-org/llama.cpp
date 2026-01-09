@@ -2744,7 +2744,7 @@ inline std::shared_ptr<Context> Context::builtins() {
     if (args.contains("object")) {
       auto & obj = args.at("object");
       if (!obj.is_object()) {
-        throw std::runtime_error("Can only get item pairs from a mapping");
+        throw std::runtime_error("Can only get item pairs from a mapping, got: " + obj.dump(2));
       }
       for (auto & key : obj.keys()) {
         items.push_back(Value::array({key, obj.at(key)}));

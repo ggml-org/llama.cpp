@@ -1,0 +1,77 @@
+{{ bos_token }}
+{%- if messages[0]['role'] == 'system' %}
+    {%- set system_message = messages[0]['content'] %}
+    {%- set loop_start_index = 1 %}
+{%- else %}
+    {%- set system_message = "" %}
+    {%- set loop_start_index = 0 %}
+{%- endif %}
+
+{%- if system_message or tools %}
+    {{- '<|im_start|>system\n' }}
+    {%- if system_message %}
+        {{- system_message }}
+    {%- endif %}
+    {%- if tools %}
+        {{- '\n\nMasz dostęp do następujących narzędzi. Definicje narzędzi znajdują się poniżej wewnątrz znaczników <|function_list|>:\n<|function_list|>\n' }}
+        {{- '[' }}
+        {%- for tool in tools %}
+            {{- tool | tojson }}
+            {%- if not loop.last %}
+                {{- ',\n' }}
+            {%- endif %}
+        {%- endfor %}
+        {{- ']\n<|function_list|>\n\nAby wywołać narzędzie, użyj formatu <tool_call>{"name": "nazwa_narzędzia", "arguments": {"argument": "wartość"}}</tool_call>. Wyniki działania narzędzi zostaną przekazane z markerem <|function_output|>.\n' }}
+    {%- endif %}
+    {%- if enable_thinking %}
+        {{- '\n\nZanim odpowiesz na pytanie, najpierw przemyśl swoje kroki i umieść swoje myśli wewnątrz tagów <think>...</think>. Musisz najpierw pomyśleć, zanim udzielisz odpowiedzi. ' -}}
+        {{- 'WAŻNE: Powinieneś myśleć w tym samym języku, co pytanie użytkownika. Jeśli pytanie jest zadane po polsku, powinieneś również myśleć po polsku. Jeśli pytanie jest po angielsku, myślisz również po angielsku itd. ' }}
+        {{- '** PAMIĘTAJ! ** Pytanie po polsku -> myślenie po polsku -> odpowiedź po polsku!' -}}
+        {{- '*** BARDZO WAŻNE!!! *** Jesteś Bielikiem, polskim modelem językowym. Twoją główną cechą jest umiejętność pisania po polsku. Jeśli użytkownik zadaje Ci pytania po polsku, ZAWSZE odpowiadaj po polsku. ' -}}
+        {{- 'Nawet, jeśli korzystasz z narzędzia, którego większość instrukcji jest po angielsku, powinieneś przede wszystkim odpowiadać po polsku, jeśli użytkownik zadaje pytanie w tym języku. ' -}}
+    {%- endif %}
+    {{- '<|im_end|>\n' }}
+{%- endif %}
+
+{%- for message in messages[loop_start_index:] %}
+    {%- if message['role'] == 'user' %}
+        {{- '<|im_start|>user\n' + message['content'] + '<|im_end|>\n' }}
+    {%- elif message['role'] == 'assistant' %}
+        {{- '<|im_start|>assistant\n' }}
+        {%- set content = message.content | default('') %}
+        {%- set reasoning_content = message.reasoning_content | default('') %}
+        {%- if not reasoning_content and '<think>' in content and '</think>' in content %}
+            {%- set reasoning_parts = content.split('</think>') %}
+            {%- set reasoning_content = reasoning_parts[0].split('<think>')[-1] %}
+            {%- set content = reasoning_parts[1:] | join('</think>') %}
+        {%- endif %}
+        {%- if reasoning_content %}
+            {{- '<think>\n' + reasoning_content.strip() + '\n</think>\n' }}
+        {%- endif %}
+        {{- content.lstrip() }}
+        {%- if message.tool_calls %}
+            {%- for tool_call in message.tool_calls %}
+                {%- if tool_call.function %}
+                    {%- set tool_call = tool_call.function %}
+                {%- endif %}
+                {{- '\n<tool_call>\n{"name": "' + tool_call.name + '", "arguments": ' + (tool_call.arguments if tool_call.arguments is string else tool_call.arguments | tojson) + '}\n</tool_call>' }}
+            {%- endfor %}
+        {%- endif %}
+        {{- '<|im_end|>\n' }}
+    {%- elif message['role'] == 'tool' %}
+        {%- if loop.index0 == 0 or messages[loop.index0 - 1]['role'] != 'tool' %}
+            {{- '<|im_start|>user\n' }}
+        {%- endif %}
+        {{- '<|function_output|>' + message['content'] }}
+        {%- if loop.last or messages[loop.index0 + 1]['role'] != 'tool' %}
+            {{- '<|im_end|>\n' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+
+{%- if add_generation_prompt %}
+    {{- '<|im_start|>assistant\n' }}
+    {%- if enable_thinking %}
+        {{- '<think>\n' }}
+    {%- endif %}
+{%- endif %}
