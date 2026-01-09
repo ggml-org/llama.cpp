@@ -459,6 +459,7 @@ class MODEL_ARCH(IntEnum):
     MIMO2            = auto()
     LLAMA_EMBED      = auto()
     MAINCODER        = auto()
+    VAETKI           = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -655,6 +656,7 @@ class MODEL_TENSOR(IntEnum):
     V_MMPROJ_MLP         = auto()
     V_MMPROJ_PEG         = auto()
     V_ENC_EMBD_CLS       = auto()
+    V_ENC_EMBD_CLS_POS   = auto()
     V_ENC_EMBD_PATCH     = auto()
     V_ENC_EMBD_NORM      = auto()
     V_ENC_EMBD_POS       = auto()
@@ -880,6 +882,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.MIMO2:            "mimo2",
     MODEL_ARCH.LLAMA_EMBED:      "llama-embed",
     MODEL_ARCH.MAINCODER:        "maincoder",
+    MODEL_ARCH.VAETKI:           "vaetki",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1073,6 +1076,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_MMPROJ_MLP:              "mm.model.mlp.{bid}",
     MODEL_TENSOR.V_MMPROJ_PEG:              "mm.model.peg.{bid}",
     MODEL_TENSOR.V_ENC_EMBD_CLS:            "v.class_embd",
+    MODEL_TENSOR.V_ENC_EMBD_CLS_POS:        "v.class_pos_embd",
     MODEL_TENSOR.V_ENC_EMBD_PATCH:          "v.patch_embd",
     MODEL_TENSOR.V_ENC_EMBD_NORM:           "v.norm_embd",
     MODEL_TENSOR.V_ENC_EMBD_POS:            "v.position_embd",
@@ -1191,6 +1195,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_MMPROJ_MLP,
         MODEL_TENSOR.V_MMPROJ_PEG,
         MODEL_TENSOR.V_ENC_EMBD_CLS,
+        MODEL_TENSOR.V_ENC_EMBD_CLS_POS,
         MODEL_TENSOR.V_ENC_EMBD_PATCH,
         MODEL_TENSOR.V_ENC_EMBD_NORM,
         MODEL_TENSOR.V_ENC_EMBD_POS,
@@ -3376,6 +3381,34 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.VAETKI: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q_A_NORM,
+        MODEL_TENSOR.ATTN_KV_A_NORM,
+        MODEL_TENSOR.ATTN_Q_A,
+        MODEL_TENSOR.ATTN_Q_B,
+        MODEL_TENSOR.ATTN_KV_A_MQA,
+        MODEL_TENSOR.ATTN_KV_B,
+        MODEL_TENSOR.ATTN_K_B,
+        MODEL_TENSOR.ATTN_V_B,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_PRE_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
     ],
     # TODO
 }

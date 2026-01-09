@@ -1120,6 +1120,9 @@ class TextModel(ModelBase):
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
             res = "qwen2"
+        if chkhsh == "f5f8b79793693cfcca1c36aac854ab481ae887cf7dde234b889f8f4bf009891a":
+            # ref: https://huggingface.co/nc-ai-consortium/VAETKI-VL-7B-A1B
+            res = "vaetki"
         if chkhsh == "b6dc8df998e1cfbdc4eac8243701a65afe638679230920b50d6f17d81c098166":
             # ref: https://huggingface.co/allenai/OLMo-1.7-7B-hf
             res = "olmo"
@@ -7659,6 +7662,236 @@ class DeepseekV2Model(TextModel):
 
         if self._experts is not None:
             # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("VaetkiForCausalLM")
+@ModelBase.register("VaetkiVLForCausalLM")
+class VaetkiModel(TextModel):
+    """VAETKI MoE model with MLA attention and 4-norm layer structure"""
+    model_arch = gguf.MODEL_ARCH.VAETKI
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Flatten text_config parameters to top level
+        if "text_config" in self.hparams:
+            text_config = self.hparams["text_config"]
+            for key, value in text_config.items():
+                if key not in self.hparams:
+                    self.hparams[key] = value
+
+    def set_vocab(self):
+        # VAETKI uses Metaspace-based BPE tokenizer, load vocab from tokenizer.json
+        import json
+        import re
+        from transformers import AutoTokenizer
+
+        dir_model = self.dir_model
+        hparams = self.hparams
+
+        tokenizer_json_path = dir_model / "tokenizer.json"
+        if not tokenizer_json_path.is_file():
+            raise FileNotFoundError(f"VAETKI tokenizer.json not found: {tokenizer_json_path}")
+
+        with open(tokenizer_json_path, "r", encoding="utf-8") as f:
+            tokenizer_json = json.load(f)
+
+        # Get vocab from tokenizer.json
+        vocab = tokenizer_json["model"]["vocab"]
+        merges = tokenizer_json["model"].get("merges", [])
+
+        vocab_size = hparams.get("vocab_size", len(vocab))
+
+        # Build reverse vocab
+        reverse_vocab = {v: k for k, v in vocab.items()}
+
+        # Get added tokens from tokenizer.json
+        added_tokens = {}
+        for token_info in tokenizer_json.get("added_tokens", []):
+            added_tokens[token_info["id"]] = {
+                "content": token_info["content"],
+                "special": token_info.get("special", False)
+            }
+
+        tokens: list[str] = []
+        toktypes: list[int] = []
+
+        for i in range(vocab_size):
+            if i in added_tokens:
+                token = added_tokens[i]["content"]
+                if added_tokens[i]["special"]:
+                    toktypes.append(gguf.TokenType.CONTROL)
+                else:
+                    # pre-normalize user-defined spaces (Metaspace → space)
+                    token = token.replace("\xe2\x96\x81", " ")
+                    toktypes.append(gguf.TokenType.USER_DEFINED)
+                tokens.append(token)
+            elif i in reverse_vocab:
+                token = reverse_vocab[i]
+                # Check for byte tokens (format: <0xXX>)
+                if re.fullmatch(r"<0x[0-9A-Fa-f]{2}>", token):
+                    toktypes.append(gguf.TokenType.BYTE)
+                else:
+                    toktypes.append(gguf.TokenType.NORMAL)
+                tokens.append(token)
+            else:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+
+        # Get pre-tokenizer type
+        tokenizer = AutoTokenizer.from_pretrained(dir_model, trust_remote_code=True)
+        tokpre = self.get_vocab_base_pre(tokenizer)
+
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        # Add merges (convert from [['a', 'b'], ...] to ['a b', ...] format)
+        if merges:
+            # tokenizer.json stores merges as list of pairs, GGUF expects space-separated strings
+            if isinstance(merges[0], list):
+                merges = [' '.join(pair) for pair in merges]
+            self.gguf_writer.add_token_merges(merges)
+
+        # Add special tokens
+        special_vocab = gguf.SpecialVocab(dir_model, load_merges=False)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        hparams = self.hparams
+        self.gguf_writer.add_block_count(hparams["num_hidden_layers"])
+        self.gguf_writer.add_context_length(hparams.get("max_position_embeddings", 32768))
+        self.gguf_writer.add_embedding_length(hparams["hidden_size"])
+        self.gguf_writer.add_feed_forward_length(hparams["intermediate_size"])
+        self.gguf_writer.add_head_count(hparams["num_attention_heads"])
+        # For MLA without absorption, n_head_kv = n_head (full MHA after decompression)
+        self.gguf_writer.add_head_count_kv(hparams["num_attention_heads"])
+        self.gguf_writer.add_layer_norm_rms_eps(hparams.get("rms_norm_eps", 1e-5))
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+
+        # MLA parameters (like DeepSeek2)
+        self.gguf_writer.add_q_lora_rank(hparams["q_lora_rank"])
+        self.gguf_writer.add_kv_lora_rank(hparams["kv_lora_rank"])
+
+        # For MLA without absorption, key_length/value_length are the full (MHA) dimensions
+        # key = qk_nope + qk_rope, value = v_head_dim
+        self.gguf_writer.add_key_length(hparams["qk_head_dim"])
+        self.gguf_writer.add_value_length(hparams["v_head_dim"])
+
+        # key_length_mla/value_length_mla are the MLA head dimensions (same as key/value for non-absorption)
+        self.gguf_writer.add_key_length_mla(hparams["qk_head_dim"])
+        self.gguf_writer.add_value_length_mla(hparams["v_head_dim"])
+        self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
+
+        # VAETKI uses hybrid attention with different rope_theta per layer type:
+        # - sliding_attention layers use rope_theta (local, default 10000.0)
+        # - full_attention layers use rope_theta_global (global, default 1000000.0)
+        # In llama.cpp: rope_freq_base is for non-SWA (full), rope_freq_base_swa is for SWA (sliding)
+        rope_theta_local = hparams.get("rope_theta", 10000.0)
+        rope_theta_global = hparams.get("rope_theta_global", 1000000.0)
+        self.gguf_writer.add_rope_freq_base(rope_theta_global)  # for full_attention layers
+        self.gguf_writer.add_rope_freq_base_swa(rope_theta_local)  # for sliding_attention layers
+
+        # MoE parameters
+        self.gguf_writer.add_leading_dense_block_count(hparams.get("first_k_dense_replace", 1))
+        self.gguf_writer.add_expert_count(hparams["n_routed_experts"])
+        self.gguf_writer.add_expert_used_count(hparams["num_experts_per_tok"])
+        self.gguf_writer.add_expert_shared_count(hparams.get("n_shared_experts", 1))
+        self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
+        self.gguf_writer.add_expert_weights_scale(hparams.get("routed_scaling_factor", 1.0))
+        # VAETKI uses sigmoid gating function (WBLTopkRouter uses router_logits.sigmoid())
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        # Normalize top-k probabilities (norm_topk_prob=true in config)
+        if hparams.get("norm_topk_prob", False):
+            self.gguf_writer.add_expert_weights_norm(True)
+
+        # Sliding window and hybrid attention pattern
+        if "sliding_window" in hparams:
+            self.gguf_writer.add_sliding_window(hparams["sliding_window"])
+
+            # Add sliding window pattern from layer_types
+            if "layer_types" in hparams:
+                # Convert layer_types to sliding_window_pattern (1 = sliding, 0 = full)
+                # Store as uint32 array to match llama.cpp hparams.swa_layers type
+                sliding_window_pattern = [1 if t == "sliding_attention" else 0 for t in hparams["layer_types"]]
+                self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip vision encoder tensors
+        if "vision_tower" in name or "vision_model" in name or "visual" in name:
+            return []
+        if name.startswith("model.vision_model.") or name.startswith("vision_model."):
+            return []
+
+        # Handle lm_head.weight (VAETKI does not use tied embeddings)
+        if name == "lm_head.weight":
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT), data_torch)]
+
+        # Remove language_model prefix
+        if name.startswith("model.language_model."):
+            name = name.replace("model.language_model.", "model.")
+        elif name.startswith("language_model."):
+            name = name.replace("language_model.", "model.")
+
+        # VAETKI WBLRMSNorm: add 1 to weights for standard RMSNorm compatibility
+        norm_weight_patterns = [
+            "input_layernorm.weight",
+            "post_attention_layernorm.weight",
+            "pre_mlp_layernorm.weight",
+            "post_mlp_layernorm.weight",
+            "q_a_layernorm.weight",
+            "kv_a_layernorm.weight",
+            "model.norm.weight",
+        ]
+        if any(pattern in name for pattern in norm_weight_patterns):
+            data_torch = data_torch + 1.0
+
+        # Handle MoE expert tensors
+        if ".mlp.experts." in name and ".shared_experts." not in name:
+            n_experts = self.hparams["n_routed_experts"]
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            # Check if all experts for this layer are collected (n_experts * 3 tensors: down/gate/up)
+            if len(self._experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+
+                # Merge experts into 3D tensors
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                    new_name = self.map_tensor_name(merged_name)
+                    tensors.append((new_name, data_torch))
+
+                return tensors
+            else:
+                return []
+
+        return super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._experts is not None:
+            # Check for unprocessed experts
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
