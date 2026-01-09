@@ -1,8 +1,9 @@
 #include "debug.h"
+
 #include "log.h"
 
-#include <string>
 #include <cmath>
+#include <string>
 
 std::string ggml_ne_string(const ggml_tensor * t) {
     std::string str;
@@ -15,9 +16,15 @@ std::string ggml_ne_string(const ggml_tensor * t) {
     return str;
 }
 
-float ggml_get_float_value(const uint8_t * data, ggml_type type, const size_t * nb, size_t i0, size_t i1, size_t i2, size_t i3) {
+float ggml_get_float_value(const uint8_t * data,
+                           ggml_type       type,
+                           const size_t *  nb,
+                           size_t          i0,
+                           size_t          i1,
+                           size_t          i2,
+                           size_t          i3) {
     size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
-    float v;
+    float  v;
     if (type == GGML_TYPE_F16) {
         v = ggml_fp16_to_fp32(*(const ggml_fp16_t *) &data[i]);
     } else if (type == GGML_TYPE_F32) {
@@ -55,19 +62,19 @@ void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const
     for (int64_t i3 = 0; i3 < ne[3]; i3++) {
         LOG_ERR("                                     [\n");
         for (int64_t i2 = 0; i2 < ne[2]; i2++) {
-            if (i2 == n && ne[2] > 2*n) {
+            if (i2 == n && ne[2] > 2 * n) {
                 LOG_ERR("                                      ..., \n");
                 i2 = ne[2] - n;
             }
             LOG_ERR("                                      [\n");
             for (int64_t i1 = 0; i1 < ne[1]; i1++) {
-                if (i1 == n && ne[1] > 2*n) {
+                if (i1 == n && ne[1] > 2 * n) {
                     LOG_ERR("                                       ..., \n");
                     i1 = ne[1] - n;
                 }
                 LOG_ERR("                                       [");
                 for (int64_t i0 = 0; i0 < ne[0]; i0++) {
-                    if (i0 == n && ne[0] > 2*n) {
+                    if (i0 == n && ne[0] > 2 * n) {
                         LOG_ERR("..., ");
                         i0 = ne[0] - n;
                     }
@@ -103,30 +110,38 @@ void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const
  * @param user_data user data to pass at each call back
  * @return true to receive data or continue the graph, false otherwise
  */
-template<bool abort>
-bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
+template <bool abort_on_nan> bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
     auto * cb_data = (base_callback_data *) user_data;
 
     const struct ggml_tensor * src0 = t->src[0];
     const struct ggml_tensor * src1 = t->src[1];
 
     if (ask) {
-        return true; // Always retrieve data
+        return true;  // Always retrieve data
     }
 
-    char src1_str[128] = {0};
+    bool matches_filter = cb_data->tensor_filters.empty();
+
+    if (!matches_filter) {
+        for (const auto & filter : cb_data->tensor_filters) {
+            if (std::regex_search(t->name, filter)) {
+                matches_filter = true;
+                break;
+            }
+        }
+    }
+
+    char src1_str[128] = { 0 };
     if (src1) {
         snprintf(src1_str, sizeof(src1_str), "%s{%s}", src1->name, ggml_ne_string(src1).c_str());
     }
 
-    LOG_ERR("%s: %24s = (%s) %10s(%s{%s}, %s}) = {%s}\n", __func__,
-         t->name, ggml_type_name(t->type), ggml_op_desc(t),
-         src0->name, ggml_ne_string(src0).c_str(),
-         src1 ? src1_str : "",
-         ggml_ne_string(t).c_str());
+    if (matches_filter) {
+        LOG_ERR("%s: %24s = (%s) %10s(%s{%s}, %s}) = {%s}\n", __func__, t->name, ggml_type_name(t->type),
+                ggml_op_desc(t), src0->name, ggml_ne_string(src0).c_str(), src1 ? src1_str : "",
+                ggml_ne_string(t).c_str());
+    }
 
-
-    // copy the data from the GPU memory if needed
     const bool is_host = ggml_backend_buffer_is_host(t->buffer);
 
     if (!is_host) {
@@ -135,16 +150,16 @@ bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
         ggml_backend_tensor_get(t, cb_data->data.data(), 0, n_bytes);
     }
 
-    if (!ggml_is_quantized(t->type)) {
+    if (!ggml_is_quantized(t->type) && matches_filter) {
         uint8_t * data = is_host ? (uint8_t *) t->data : cb_data->data.data();
-        ggml_print_tensor<abort>(data, t->type, t->ne, t->nb, 3);
+        ggml_print_tensor<abort_on_nan>(data, t->type, t->ne, t->nb, 3);
     }
 
     return true;
 }
 
 // Explicit template instantiations
-template bool ggml_debug<false>(ggml_tensor*, bool, void*);
-template bool ggml_debug<true>(ggml_tensor*, bool, void*);
-template void ggml_print_tensor<false>(uint8_t*, ggml_type, const int64_t*, const size_t*, int64_t);
-template void ggml_print_tensor<true>(uint8_t*, ggml_type, const int64_t*, const size_t*, int64_t);
+template bool ggml_debug<false>(ggml_tensor *, bool, void *);
+template bool ggml_debug<true>(ggml_tensor *, bool, void *);
+template void ggml_print_tensor<false>(uint8_t *, ggml_type, const int64_t *, const size_t *, int64_t);
+template void ggml_print_tensor<true>(uint8_t *, ggml_type, const int64_t *, const size_t *, int64_t);
