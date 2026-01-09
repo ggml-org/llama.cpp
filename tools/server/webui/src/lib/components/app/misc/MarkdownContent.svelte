@@ -21,10 +21,12 @@
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
 	import CodePreviewDialog from './CodePreviewDialog.svelte';
+	import { getImageErrorFallbackHtml } from '$lib/utils/image-error-fallback';
 
 	interface Props {
 		content: string;
 		class?: string;
+		disableMath?: boolean;
 	}
 
 	interface MarkdownBlock {
@@ -32,7 +34,7 @@
 		html: string;
 	}
 
-	let { content, class: className = '' }: Props = $props();
+	let { content, class: className = '', disableMath = false }: Props = $props();
 
 	let containerRef = $state<HTMLDivElement>();
 	let renderedBlocks = $state<MarkdownBlock[]>([]);
@@ -47,6 +49,21 @@
 	const themeStyleId = `highlight-theme-${(window.idxThemeStyle = (window.idxThemeStyle ?? 0) + 1)}`;
 
 	let processor = $derived(() => {
+		if (disableMath) {
+			// Processor without math/LaTeX support
+			return remark()
+				.use(remarkGfm) // GitHub Flavored Markdown
+				.use(remarkBreaks) // Convert line breaks to <br>
+				.use(remarkLiteralHtml) // Treat raw HTML as literal text with preserved indentation
+				.use(remarkRehype) // Convert Markdown AST to rehype
+				.use(rehypeHighlight) // Add syntax highlighting
+				.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
+				.use(rehypeEnhanceLinks) // Add target="_blank" to links
+				.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
+				.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
+		}
+
+		// Default processor with math/LaTeX support
 		return remark()
 			.use(remarkGfm) // GitHub Flavored Markdown
 			.use(remarkMath) // Parse $inline$ and $$block$$ math
@@ -299,6 +316,43 @@
 	}
 
 	/**
+	 * Attaches error handlers to images to show fallback UI when loading fails (e.g., CORS).
+	 * Uses data-error-bound attribute to prevent duplicate bindings.
+	 */
+	function setupImageErrorHandlers() {
+		if (!containerRef) return;
+
+		const images = containerRef.querySelectorAll<HTMLImageElement>('img:not([data-error-bound])');
+
+		for (const img of images) {
+			img.dataset.errorBound = 'true';
+			img.addEventListener('error', handleImageError);
+		}
+	}
+
+	/**
+	 * Handles image load errors by replacing the image with a fallback UI.
+	 * Shows a placeholder with a link to open the image in a new tab.
+	 */
+	function handleImageError(event: Event) {
+		const img = event.target as HTMLImageElement;
+		if (!img || !img.src) return;
+
+		// Don't handle data URLs or already-handled images
+		if (img.src.startsWith('data:') || img.dataset.errorHandled === 'true') return;
+		img.dataset.errorHandled = 'true';
+
+		const src = img.src;
+		// Create fallback element
+		const fallback = document.createElement('div');
+		fallback.className = 'image-load-error';
+		fallback.innerHTML = getImageErrorFallbackHtml(src);
+
+		// Replace image with fallback
+		img.parentNode?.replaceChild(fallback, img);
+	}
+
+	/**
 	 * Converts a single HAST node to an enhanced HTML string.
 	 * Applies link and code block enhancements to the output.
 	 * @param processorInstance - The remark/rehype processor instance
@@ -366,6 +420,7 @@
 
 		if ((hasRenderedBlocks || hasUnstableBlock) && containerRef) {
 			setupCodeBlockActions();
+			setupImageErrorHandlers();
 		}
 	});
 
@@ -405,8 +460,8 @@
 	}
 
 	/* Base typography styles */
-	div :global(p:not(:last-child)) {
-		margin-bottom: 1rem;
+	div :global(p) {
+		margin-block: 1rem;
 		line-height: 1.75;
 	}
 
@@ -608,23 +663,29 @@
 	div :global(.code-block-wrapper) {
 		margin: 1.5rem 0;
 		border-radius: 0.75rem;
-		overflow: hidden;
-		border: 1px solid var(--border);
+		overflow: auto;
+		border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
 		background: var(--code-background);
+		box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+		max-height: calc(100dvh - var(--chat-form-area-height));
+	}
+
+	:global(.dark) div :global(.code-block-wrapper) {
+		border-color: color-mix(in oklch, var(--border) 20%, transparent);
 	}
 
 	div :global(.code-block-header) {
 		display: flex;
 		justify-content: space-between;
 		align-items: center;
-		padding: 0.5rem 1rem;
-		background: hsl(var(--muted) / 0.5);
-		border-bottom: 1px solid var(--border);
+		padding: 0.5rem 1rem 0;
 		font-size: 0.875rem;
+		position: sticky;
+		top: 0;
 	}
 
 	div :global(.code-language) {
-		color: var(--code-foreground);
+		color: var(--color-foreground);
 		font-weight: 500;
 		font-family:
 			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
@@ -664,7 +725,7 @@
 
 	div :global(.code-block-wrapper pre) {
 		background: transparent;
-		padding: 1rem;
+		padding: 0.5rem;
 		margin: 0;
 		overflow-x: auto;
 		border-radius: 0;
@@ -866,5 +927,54 @@
 		div :global(blockquote:hover) {
 			background: var(--muted);
 		}
+	}
+
+	/* Image load error fallback */
+	div :global(.image-load-error) {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		margin: 1.5rem 0;
+		padding: 1.5rem;
+		border-radius: 0.5rem;
+		background: var(--muted);
+		border: 1px dashed var(--border);
+	}
+
+	div :global(.image-error-content) {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.75rem;
+		color: var(--muted-foreground);
+		text-align: center;
+	}
+
+	div :global(.image-error-content svg) {
+		opacity: 0.5;
+	}
+
+	div :global(.image-error-text) {
+		font-size: 0.875rem;
+	}
+
+	div :global(.image-error-link) {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+		padding: 0.5rem 1rem;
+		font-size: 0.875rem;
+		font-weight: 500;
+		color: var(--primary);
+		background: var(--background);
+		border: 1px solid var(--border);
+		border-radius: 0.375rem;
+		text-decoration: none;
+		transition: all 0.2s ease;
+	}
+
+	div :global(.image-error-link:hover) {
+		background: var(--muted);
+		border-color: var(--primary);
 	}
 </style>

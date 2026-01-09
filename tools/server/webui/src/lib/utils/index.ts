@@ -94,3 +94,6 @@ export { getLanguageFromFilename } from './syntax-highlight-language';
 
 // Text file utilities
 export { isTextFileByName, readFileAsText, isLikelyTextFile } from './text-files';
+
+// Agentic utilities
+export { toAgenticMessages } from './agentic';

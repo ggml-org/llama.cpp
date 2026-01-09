@@ -164,6 +164,32 @@ end
         end
     end
 
+    subgraph MCP["🔧 MCP (Model Context Protocol)"]
+        direction TB
+        subgraph MCPStoreBox["mcpStore"]
+            MCPStoreState["<b>State:</b><br/>client, isInitializing<br/>error, availableTools"]
+            MCPStoreLifecycle["<b>Lifecycle:</b><br/>ensureClient()<br/>shutdown()"]
+            MCPStoreExec["<b>Execution:</b><br/>execute()"]
+        end
+        subgraph MCPClient["MCPClient"]
+            MCP1Init["<b>Lifecycle:</b><br/>initialize()<br/>shutdown()"]
+            MCP1Tools["<b>Tools:</b><br/>listTools()<br/>getToolsDefinition()<br/>execute()"]
+            MCP1Transport["<b>Transport:</b><br/>StreamableHTTPClientTransport<br/>SSEClientTransport (fallback)"]
+        end
+        subgraph MCPSse["OpenAISseClient"]
+            MCP3Stream["<b>Streaming:</b><br/>streamChatCompletion()"]
+            MCP3Parse["<b>Parsing:</b><br/>tool call delta merging"]
+        end
+        subgraph MCPConfig["config/mcp"]
+            MCP4Parse["<b>Parsing:</b><br/>parseServersFromSettings()"]
+        end
+    end
+
+    subgraph ExternalMCP["🔌 External MCP Servers"]
+        EXT1["MCP Server 1<br/>(StreamableHTTP/SSE)"]
+        EXT2["MCP Server N"]
+    end
+
     subgraph Storage["💾 Storage"]
         ST1["IndexedDB"]
         ST2["conversations"]
@@ -240,6 +266,16 @@ end
     SV2 --> API3 & API4
     SV3 --> API2
 
+    %% ChatService → MCP (Agentic Mode)
+    SV1 --> MCPStoreBox
+    MCPStoreBox --> MCPClient
+    SV1 --> MCPSse
+    MCPSse --> API1
+    MCPConfig --> MCPStoreBox
+
+    %% MCP → External Servers
+    MCPClient --> EXT1 & EXT2
+
     %% Styling
     classDef routeStyle fill:#e1f5fe,stroke:#01579b,stroke-width:2px
     classDef componentStyle fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
@@ -250,6 +286,9 @@ end
     classDef reactiveStyle fill:#fffde7,stroke:#f9a825,stroke-width:1px
     classDef serviceStyle fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
     classDef serviceMStyle fill:#c8e6c9,stroke:#2e7d32,stroke-width:1px
+    classDef mcpStyle fill:#e0f2f1,stroke:#00695c,stroke-width:2px
+    classDef mcpMethodStyle fill:#b2dfdb,stroke:#00695c,stroke-width:1px
+    classDef externalStyle fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px,stroke-dasharray: 5 5
     classDef storageStyle fill:#fce4ec,stroke:#c2185b,stroke-width:2px
     classDef apiStyle fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
 
@@ -269,6 +308,9 @@ end
     class S5Lifecycle,S5Update,S5Reset,S5Sync,S5Utils methodStyle
     class ChatExports,ConvExports,ModelsExports,ServerExports,SettingsExports reactiveStyle
     class SV1,SV2,SV3,SV4,SV5 serviceStyle
+    class MCPStoreBox,MCPClient,MCPSse,MCPConfig mcpStyle
+    class MCPStoreState,MCPStoreLifecycle,MCPStoreExec,MCP1Init,MCP1Tools,MCP1Transport,MCP3Stream,MCP3Parse,MCP4Build,MCP4Parse mcpMethodStyle
+    class EXT1,EXT2 externalStyle
     class SV1Msg,SV1Stream,SV1Convert,SV1Utils serviceMStyle
     class SV2List,SV2LoadUnload,SV2Status serviceMStyle
     class SV3Fetch serviceMStyle

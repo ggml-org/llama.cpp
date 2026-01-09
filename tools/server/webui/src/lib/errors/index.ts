@@ -1,0 +1,1 @@
+export { MCPError } from './mcp';

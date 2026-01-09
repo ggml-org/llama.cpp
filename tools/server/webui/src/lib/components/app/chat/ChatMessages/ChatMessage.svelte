@@ -1,6 +1,17 @@
 <script lang="ts">
-	import { chatStore } from '$lib/stores/chat.svelte';
+	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
+	import {
+		chatStore,
+		pendingEditMessageId,
+		clearPendingEditMessageId,
+		removeSystemPromptPlaceholder
+	} from '$lib/stores/chat.svelte';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { DatabaseService } from '$lib/services';
 	import { config } from '$lib/stores/settings.svelte';
+	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
+	import { MessageRole } from '$lib/enums';
 	import { copyToClipboard, isIMEComposing, formatMessageForClipboard } from '$lib/utils';
 	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
 	import ChatMessageUser from './ChatMessageUser.svelte';
@@ -61,7 +72,7 @@
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
 
 	let thinkingContent = $derived.by(() => {
-		if (message.role === 'assistant') {
+		if (message.role === MessageRole.ASSISTANT) {
 			const trimmedThinking = message.thinking?.trim();
 
 			return trimmedThinking ? trimmedThinking : null;
@@ -69,31 +80,30 @@
 		return null;
 	});
 
-	let toolCallContent = $derived.by((): ApiChatCompletionToolCall[] | string | null => {
-		if (message.role === 'assistant') {
-			const trimmedToolCalls = message.toolCalls?.trim();
+	// Auto-start edit mode if this message is the pending edit target
+	$effect(() => {
+		const pendingId = pendingEditMessageId();
 
-			if (!trimmedToolCalls) {
-				return null;
-			}
-
-			try {
-				const parsed = JSON.parse(trimmedToolCalls);
-
-				if (Array.isArray(parsed)) {
-					return parsed as ApiChatCompletionToolCall[];
-				}
-			} catch {
-				// Harmony-only path: fall back to the raw string so issues surface visibly.
-			}
-
-			return trimmedToolCalls;
+		if (pendingId && pendingId === message.id && !isEditing) {
+			handleEdit();
+			clearPendingEditMessageId();
 		}
-		return null;
 	});
 
-	function handleCancelEdit() {
+	async function handleCancelEdit() {
 		isEditing = false;
+
+		// If canceling a new system message with placeholder content, remove it without deleting children
+		if (message.role === MessageRole.SYSTEM) {
+			const conversationDeleted = await removeSystemPromptPlaceholder(message.id);
+
+			if (conversationDeleted) {
+				goto(`${base}/`);
+			}
+
+			return;
+		}
+
 		editedContent = message.content;
 		editedExtras = message.extra ? [...message.extra] : [];
 		editedUploadedFiles = [];
@@ -126,7 +136,12 @@
 
 	function handleEdit() {
 		isEditing = true;
-		editedContent = message.content;
+		// Clear temporary placeholder content for system messages
+		editedContent =
+			message.role === MessageRole.SYSTEM && message.content === SYSTEM_MESSAGE_PLACEHOLDER
+				? ''
+				: message.content;
+		textareaElement?.focus();
 		editedExtras = message.extra ? [...message.extra] : [];
 		editedUploadedFiles = [];
 
@@ -166,7 +181,26 @@
 	}
 
 	async function handleSaveEdit() {
-		if (message.role === 'user' || message.role === 'system') {
+		if (message.role === MessageRole.SYSTEM) {
+			// System messages: update in place without branching
+			const newContent = editedContent.trim();
+
+			// If content is empty, remove without deleting children
+			if (!newContent) {
+				const conversationDeleted = await removeSystemPromptPlaceholder(message.id);
+				isEditing = false;
+				if (conversationDeleted) {
+					goto(`${base}/`);
+				}
+				return;
+			}
+
+			await DatabaseService.updateMessage(message.id, { content: newContent });
+			const index = conversationsStore.findMessageIndex(message.id);
+			if (index !== -1) {
+				conversationsStore.updateMessageAtIndex(index, { content: newContent });
+			}
+		} else if (message.role === MessageRole.USER) {
 			const finalExtras = await getMergedExtras();
 			onEditWithBranching?.(message, editedContent.trim(), finalExtras);
 		} else {
@@ -181,7 +215,7 @@
 	}
 
 	async function handleSaveEditOnly() {
-		if (message.role === 'user') {
+		if (message.role === MessageRole.USER) {
 			// For user messages, trim to avoid accidental whitespace
 			const finalExtras = await getMergedExtras();
 			onEditUserMessagePreserveResponses?.(message, editedContent.trim(), finalExtras);
@@ -208,7 +242,7 @@
 	}
 </script>
 
-{#if message.role === 'system'}
+{#if message.role === MessageRole.SYSTEM}
 	<ChatMessageSystem
 		bind:textareaElement
 		class={className}
@@ -229,7 +263,7 @@
 		{showDeleteDialog}
 		{siblingInfo}
 	/>
-{:else if message.role === 'user'}
+{:else if message.role === MessageRole.USER}
 	<ChatMessageUser
 		bind:textareaElement
 		class={className}
@@ -281,6 +315,5 @@
 		{showDeleteDialog}
 		{siblingInfo}
 		{thinkingContent}
-		{toolCallContent}
 	/>
 {/if}

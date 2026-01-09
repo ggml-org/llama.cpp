@@ -7,7 +7,7 @@
 		ChatFormHelperText,
 		ChatFormTextarea
 	} from '$lib/components/app';
-	import { INPUT_CLASSES } from '$lib/constants/input-classes';
+	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 	import { config } from '$lib/stores/settings.svelte';
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
@@ -42,6 +42,7 @@
 		onFileUpload?: (files: File[]) => void;
 		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
 		onStop?: () => void;
+		onSystemPromptAdd?: () => void;
 		showHelperText?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 	}
@@ -54,6 +55,7 @@
 		onFileUpload,
 		onSend,
 		onStop,
+		onSystemPromptAdd,
 		showHelperText = true,
 		uploadedFiles = $bindable([])
 	}: Props = $props();
@@ -389,6 +391,7 @@
 			onFileUpload={handleFileUpload}
 			onMicClick={handleMicClick}
 			onStop={handleStop}
+			onSystemPromptClick={onSystemPromptAdd}
 		/>
 	</div>
 </form>

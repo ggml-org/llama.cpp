@@ -5,6 +5,8 @@
 		ChatFormActionFileAttachments,
 		ChatFormActionRecord,
 		ChatFormActionSubmit,
+		DialogMcpServersSettings,
+		McpSelector,
 		ModelsSelector
 	} from '$lib/components/app';
 	import { FileTypeCategory } from '$lib/enums';
@@ -27,6 +29,7 @@
 		onFileUpload?: (fileType?: FileTypeCategory) => void;
 		onMicClick?: () => void;
 		onStop?: () => void;
+		onSystemPromptClick?: () => void;
 	}
 
 	let {
@@ -39,7 +42,8 @@
 		uploadedFiles = [],
 		onFileUpload,
 		onMicClick,
-		onStop
+		onStop,
+		onSystemPromptClick
 	}: Props = $props();
 
 	let currentConfig = $derived(config());
@@ -161,25 +165,33 @@
 			}
 		}
 	});
+
+	let showMcpDialog = $state(false);
 </script>
 
 <div class="flex w-full items-center gap-3 {className}" style="container-type: inline-size">
-	<ChatFormActionFileAttachments
-		class="mr-auto"
-		{disabled}
-		{hasAudioModality}
-		{hasVisionModality}
-		{onFileUpload}
-	/>
+	<div class="mr-auto flex items-center gap-1.5">
+		<ChatFormActionFileAttachments
+			{disabled}
+			{hasAudioModality}
+			{hasVisionModality}
+			{onFileUpload}
+			{onSystemPromptClick}
+		/>
 
-	<ModelsSelector
-		{disabled}
-		bind:this={selectorModelRef}
-		currentModel={conversationModel}
-		forceForegroundText={true}
-		useGlobalSelection={true}
-		onModelChange={handleModelChange}
-	/>
+		<McpSelector {disabled} onSettingsClick={() => (showMcpDialog = true)} />
+	</div>
+
+	<div class="ml-auto flex items-center gap-1.5">
+		<ModelsSelector
+			{disabled}
+			bind:this={selectorModelRef}
+			currentModel={conversationModel}
+			forceForegroundText={true}
+			useGlobalSelection={true}
+			onModelChange={handleModelChange}
+		/>
+	</div>
 
 	{#if isLoading}
 		<Button
@@ -202,3 +214,8 @@
 		/>
 	{/if}
 </div>
+
+<DialogMcpServersSettings
+	bind:open={showMcpDialog}
+	onOpenChange={(open) => (showMcpDialog = open)}
+/>
