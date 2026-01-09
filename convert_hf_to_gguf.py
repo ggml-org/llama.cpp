@@ -7481,7 +7481,7 @@ class VaetkiModel(TextModel):
                     toktypes.append(gguf.TokenType.CONTROL)
                 else:
                     # pre-normalize user-defined spaces (Metaspace → space)
-                    token = token.replace("\xe2\x96\x81", " ")
+                    token = token.replace("\u2581", " ")
                     toktypes.append(gguf.TokenType.USER_DEFINED)
                 tokens.append(token)
             elif i in reverse_vocab:
