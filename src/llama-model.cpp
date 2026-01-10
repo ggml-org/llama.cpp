@@ -1153,15 +1153,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
                 }
 
-                {
-                    uint32_t n_swa_temp = 0;
-                    ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, n_swa_temp, false);
-                    if (n_swa_temp > 0) {
-                        hparams.n_swa = n_swa_temp;
-                        ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
-                        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
-                        hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                    }
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+                ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
+                if (hparams.n_swa > 0) {
+                    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+                    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
                 }
 
                 switch (hparams.n_layer) {

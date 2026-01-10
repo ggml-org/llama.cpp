@@ -7843,6 +7843,15 @@ class VaetkiModel(TextModel):
         elif name.startswith("language_model."):
             name = name.replace("language_model.", "model.")
 
+        if name.endswith("q_b_proj.weight"):
+            n_head = self.hparams["num_attention_heads"]
+            qk_nope_head_dim = self.hparams["qk_nope_head_dim"]
+            qk_rope_head_dim = self.hparams["qk_rope_head_dim"]
+            qk_head_dim = qk_nope_head_dim + qk_rope_head_dim
+            data_torch = data_torch.view(n_head, qk_head_dim, -1)
+            data_torch = torch.cat([data_torch[:, qk_nope_head_dim:, :], data_torch[:, :qk_nope_head_dim, :]], dim=1)
+            data_torch = data_torch.reshape(n_head * qk_head_dim, -1)
+
         # VAETKI WBLRMSNorm: add 1 to weights for standard RMSNorm compatibility
         norm_weight_patterns = [
             "input_layernorm.weight",
