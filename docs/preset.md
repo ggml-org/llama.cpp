@@ -58,3 +58,40 @@ temp = 0.8
 ctx-size = 1024
 ; (and other configurations)
 ```
+
+### Named presets
+
+If you want to define multiple preset configurations for one or more GGUF models, you can create a blank HF repo containing a single `preset.ini` file that references the actual model(s):
+
+```ini
+[*]
+mmap = 1
+
+[gpt-oss-20b-hf]
+hf          = ggml-org/gpt-oss-20b-GGUF
+batch-size  = 2048
+ubatch-size = 2048
+top-p       = 1.0
+top-k       = 0
+min-p       = 0.01
+temp        = 1.0
+chat-template-kwargs = {"reasoning_effort": "high"}
+
+[gpt-oss-120b-hf]
+hf          = ggml-org/gpt-oss-120b-GGUF
+batch-size  = 2048
+ubatch-size = 2048
+top-p       = 1.0
+top-k       = 0
+min-p       = 0.01
+temp        = 1.0
+chat-template-kwargs = {"reasoning_effort": "high"}
+```
+
+You can then use it via `llama-cli` or `llama-server`, example:
+
+```sh
+llama-server -hf user/repo:gpt-oss-120b-hf
+```
+
+Please make sure to provide the correct `hf-repo` for each child preset. Otherwise, you may get error: `The specified tag is not a valid quantization scheme.`
