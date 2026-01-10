@@ -28,6 +28,7 @@ add_library(mtmd
             models/siglip.cpp
             models/vaetki.cpp
             models/whisper-enc.cpp
+            models/mobilenetv5.cpp
             models/youtuvl.cpp
             )
 

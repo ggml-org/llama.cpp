@@ -2,10 +2,11 @@
 
 #include "chat.h"
 #include "common.h"
+#include "download.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
-#include "download.h"
+#include "preset.h"
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -46,6 +47,8 @@
 #endif
 
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
+
+extern const char * LICENSES[];
 
 using json = nlohmann::ordered_json;
 using namespace common_arg_utils;
@@ -268,6 +271,55 @@ static void parse_tensor_buffer_overrides(const std::string & value, std::vector
     }
 }
 
+static std::string clean_file_name(const std::string & fname) {
+    std::string clean_fname = fname;
+    string_replace_all(clean_fname, "\\", "_");
+    string_replace_all(clean_fname, "/", "_");
+    return clean_fname;
+}
+
+static bool common_params_handle_remote_preset(common_params & params, llama_example ex) {
+    GGML_ASSERT(!params.model.hf_repo.empty());
+
+    // the returned hf_repo is without tag
+    auto [hf_repo, hf_tag] = common_download_split_repo_tag(params.model.hf_repo);
+
+    // "latest" tag (default if not specified) is translated to "default" preset
+    if (hf_tag == "latest") {
+        hf_tag = "default";
+    }
+
+    const bool offline = params.offline;
+    std::string model_endpoint = get_model_endpoint();
+    auto preset_url = model_endpoint + hf_repo + "/resolve/main/preset.ini";
+
+    // prepare local path for caching
+    auto preset_fname = clean_file_name(hf_repo + "_preset.ini");
+    auto preset_path = fs_get_cache_file(preset_fname);
+    const int status = common_download_file_single(preset_url, preset_path, params.hf_token, offline);
+    const bool has_preset = status >= 200 && status < 400;
+
+    // remote preset is optional, so we don't error out if not found
+    if (has_preset) {
+        LOG_INF("applying remote preset from %s\n", preset_url.c_str());
+        common_preset_context ctx(ex, /* only_remote_allowed */ true);
+        common_preset global;
+        auto remote_presets = ctx.load_from_ini(preset_path, global);
+        remote_presets = ctx.cascade(global, remote_presets);
+        if (remote_presets.find(hf_tag) != remote_presets.end()) {
+            common_preset preset = remote_presets.at(hf_tag);
+            LOG_INF("\n%s", preset.to_ini().c_str()); // to_ini already added trailing newline
+            preset.apply_to_params(params);
+        } else {
+            throw std::runtime_error("Remote preset.ini does not contain [" + std::string(hf_tag) + "] section");
+        }
+    } else {
+        LOG_INF("%s", "no remote preset found, skipping\n");
+    }
+
+    return has_preset;
+}
+
 struct handle_model_result {
     bool found_mmproj = false;
     common_params_model mmproj;
@@ -309,9 +361,7 @@ static handle_model_result common_params_handle_model(
             // make sure model path is present (for caching purposes)
             if (model.path.empty()) {
                 // this is to avoid different repo having same file name, or same file name in different subdirs
-                std::string filename = model.hf_repo + "_" + model.hf_file;
-                // to make sure we don't have any slashes in the filename
-                string_replace_all(filename, "/", "_");
+                std::string filename = clean_file_name(model.hf_repo + "_" + model.hf_file);
                 model.path = fs_get_cache_file(filename);
             }
 
@@ -425,61 +475,87 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         }
     };
 
-    std::set<std::string> seen_args;
+    auto parse_cli_args = [&]() {
+        std::set<std::string> seen_args;
 
-    for (int i = 1; i < argc; i++) {
-        const std::string arg_prefix = "--";
+        for (int i = 1; i < argc; i++) {
+            const std::string arg_prefix = "--";
 
-        std::string arg = argv[i];
-        if (arg.compare(0, arg_prefix.size(), arg_prefix) == 0) {
-            std::replace(arg.begin(), arg.end(), '_', '-');
-        }
-        if (arg_to_options.find(arg) == arg_to_options.end()) {
-            throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
-        }
-        if (!seen_args.insert(arg).second) {
-            LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
-        }
-        auto & tmp = arg_to_options[arg];
-        auto opt = *tmp.first;
-        bool is_positive = tmp.second;
-        if (opt.has_value_from_env()) {
-            fprintf(stderr, "warn: %s environment variable is set, but will be overwritten by command line argument %s\n", opt.env, arg.c_str());
-        }
-        try {
-            if (opt.handler_void) {
-                opt.handler_void(params);
-                continue;
+            std::string arg = argv[i];
+            if (arg.compare(0, arg_prefix.size(), arg_prefix) == 0) {
+                std::replace(arg.begin(), arg.end(), '_', '-');
             }
-            if (opt.handler_bool) {
-                opt.handler_bool(params, is_positive);
-                continue;
+            if (arg_to_options.find(arg) == arg_to_options.end()) {
+                throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
             }
+            if (!seen_args.insert(arg).second) {
+                LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+            }
+            auto & tmp = arg_to_options[arg];
+            auto opt = *tmp.first;
+            bool is_positive = tmp.second;
+            if (opt.has_value_from_env()) {
+                fprintf(stderr, "warn: %s environment variable is set, but will be overwritten by command line argument %s\n", opt.env, arg.c_str());
+            }
+            try {
+                if (opt.handler_void) {
+                    opt.handler_void(params);
+                    continue;
+                }
+                if (opt.handler_bool) {
+                    opt.handler_bool(params, is_positive);
+                    continue;
+                }
 
-            // arg with single value
-            check_arg(i);
-            std::string val = argv[++i];
-            if (opt.handler_int) {
-                opt.handler_int(params, std::stoi(val));
-                continue;
-            }
-            if (opt.handler_string) {
-                opt.handler_string(params, val);
-                continue;
-            }
+                // arg with single value
+                check_arg(i);
+                std::string val = argv[++i];
+                if (opt.handler_int) {
+                    opt.handler_int(params, std::stoi(val));
+                    continue;
+                }
+                if (opt.handler_string) {
+                    opt.handler_string(params, val);
+                    continue;
+                }
 
-            // arg with 2 values
-            check_arg(i);
-            std::string val2 = argv[++i];
-            if (opt.handler_str_str) {
-                opt.handler_str_str(params, val, val2);
-                continue;
+                // arg with 2 values
+                check_arg(i);
+                std::string val2 = argv[++i];
+                if (opt.handler_str_str) {
+                    opt.handler_str_str(params, val, val2);
+                    continue;
+                }
+            } catch (std::exception & e) {
+                throw std::invalid_argument(string_format(
+                    "error while handling argument \"%s\": %s\n\n"
+                    "usage:\n%s\n\nto show complete usage, run with -h",
+                    arg.c_str(), e.what(), opt.to_string().c_str()));
             }
-        } catch (std::exception & e) {
-            throw std::invalid_argument(string_format(
-                "error while handling argument \"%s\": %s\n\n"
-                "usage:\n%s\n\nto show complete usage, run with -h",
-                arg.c_str(), e.what(), opt.to_string().c_str()));
+        }
+    };
+
+    // parse the first time to get -hf option (used for remote preset)
+    parse_cli_args();
+
+    // maybe handle remote preset
+    if (!params.model.hf_repo.empty()) {
+        std::string cli_hf_repo = params.model.hf_repo;
+        bool has_preset = common_params_handle_remote_preset(params, ctx_arg.ex);
+
+        // special case: if hf_repo explicitly set by preset, we need to preserve it (ignore CLI value)
+        // this is useful when we have one HF repo pointing to other HF repos (one model - multiple GGUFs)
+        std::string preset_hf_repo = params.model.hf_repo;
+        bool preset_has_hf_repo = preset_hf_repo != cli_hf_repo;
+
+        if (has_preset) {
+            // re-parse CLI args to override preset values
+            parse_cli_args();
+        }
+
+        // preserve hf_repo from preset if needed
+        if (preset_has_hf_repo) {
+            params.model.hf_repo = preset_hf_repo;
         }
     }
 
@@ -962,6 +1038,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &) {
             fprintf(stderr, "version: %d (%s)\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
             fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
+            exit(0);
+        }
+    ));
+    add_opt(common_arg(
+        {"--license"},
+        "show source code license and dependencies",
+        [](common_params &) {
+            for (int i = 0; LICENSES[i]; ++i) {
+                printf("%s\n", LICENSES[i]);
+            }
             exit(0);
         }
     ));
