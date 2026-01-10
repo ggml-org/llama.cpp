@@ -391,6 +391,10 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_v_idxs(self_v_idxs, ubatch);
 
     mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+
+    if (self_block_table != nullptr) {
+        mctx->set_input_block_table(self_block_table);
+    }
 }
 
 bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
@@ -1512,7 +1516,9 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * sinks,
          ggml_tensor * v_mla,
                float   kq_scale,
-                 int   il) const {
+                 int   il,
+         ggml_tensor * block_table,
+             int32_t   block_size) const {
     const bool v_trans = v->nb[1] > v->nb[2];
 
     // split the batch into streams if needed
@@ -1542,12 +1548,21 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             v = ggml_cast(ctx0, v, GGML_TYPE_F16);
         }
 
-        cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
-                                  hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
-        cb(cur, LLAMA_TENSOR_NAME_FATTN, il);
-
-        ggml_flash_attn_ext_add_sinks(cur, sinks);
-        ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
+        if (block_table != nullptr && block_size > 0) {
+            // Use paged attention when block table is provided
+            cur = ggml_flash_attn_ext_paged(ctx0, q, k, v, kq_mask, block_table, kq_scale,
+                                            hparams.f_max_alibi_bias,
+                                            hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f,
+                                            block_size);
+            cb(cur, "fattn_paged", il);
+            // Note: paged attention uses src[4] for block_table, so sinks are not supported
+        } else {
+            cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
+                                      hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+            cb(cur, LLAMA_TENSOR_NAME_FATTN, il);
+            ggml_flash_attn_ext_add_sinks(cur, sinks);
+        }
+        ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
 
         if (v_mla) {
 #if 0
@@ -1733,6 +1748,14 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
         ggml_set_input(inp->self_kq_mask);
 
         inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+
+        // Create block table tensor for paged attention if enabled
+        if (mctx_cur->has_block_tracking() && cparams.flash_attn) {
+            const uint32_t block_size = mctx_cur->get_block_size();
+            const uint32_t max_blocks_per_seq = (n_kv + block_size - 1) / block_size;
+            const uint32_t n_seqs = ubatch.n_seqs_unq;
+            inp->self_block_table = mctx_cur->build_block_table_tensor(ctx0, n_seqs, max_blocks_per_seq);
+        }
     }
 
     return inp;
@@ -1782,7 +1805,10 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * block_table = inp->get_block_table();
+    int32_t block_size = block_table ? mctx_cur->get_block_size() : 0;
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il, block_table, block_size);
     cb(cur, "kqv_out", il);
 
     if (wo) {
