@@ -314,7 +314,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 
-    if (amd_wmma_available(cc) && !GGML_CUDA_CC_IS_RDNA3(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
+    if (amd_wmma_available(cc) && GGML_CUDA_CC_IS_RDNA4(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
         if (can_use_vector_kernel) {
             if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
                 if (Q->ne[1] == 1 && Q->ne[3] == 1 && !(gqa_ratio > 4 && K->ne[1] >= 8192)) {

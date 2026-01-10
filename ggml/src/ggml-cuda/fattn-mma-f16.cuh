@@ -829,6 +829,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
 #if defined(LDMATRIX_TRANS_AVAILABLE)
                 load_ldmatrix_trans(A, tile_V_i + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2, stride_tile_V);
 #else
+                // TODO: Try to transpose tile_V when loading gmem to smem.
                 // Use mma to transpose T_A_VKQ for RDNA.
                 T_A_VKQ A_trans;
                 load_ldmatrix(A_trans, tile_V_i + 2*k0*stride_tile_V + (i_VKQ_0 - i0_start)/2, stride_tile_V);
