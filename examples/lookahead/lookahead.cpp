@@ -121,7 +121,7 @@ int main(int argc, char ** argv) {
     // seq_id == 0           : the current input token
     // seq_id [1, W]         : tokens from the past N - 1 Jacobi iterations
     // seq_id [W + 1, W + G] : verification n-grams
-    llama_batch batch = llama_batch_init(params.n_ctx, 0, W + G + 1);
+    llama_batch batch = llama_batch_init(llama_n_ctx(ctx), 0, W + G + 1);
 
     // target model sampling context
     struct common_sampler * smpl = common_sampler_init(model, params.sampling);
