@@ -2,10 +2,10 @@
 
 #include "chat.h"
 #include "common.h"
+#include "download.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
-#include "download.h"
 #include "preset.h"
 
 // fix problem with std::min and std::max
@@ -47,6 +47,8 @@
 #endif
 
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
+
+extern const char * LICENSES[];
 
 using json = nlohmann::ordered_json;
 using namespace common_arg_utils;
@@ -1027,6 +1029,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &) {
             fprintf(stderr, "version: %d (%s)\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
             fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
+            exit(0);
+        }
+    ));
+    add_opt(common_arg(
+        {"--license"},
+        "show source code license and dependencies",
+        [](common_params &) {
+            for (int i = 0; LICENSES[i]; ++i) {
+                printf("%s\n", LICENSES[i]);
+            }
             exit(0);
         }
     ));
