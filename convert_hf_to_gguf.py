@@ -7982,8 +7982,8 @@ class VaetkiVisionModel(MmprojModel):
             c = c3 // 3
             return [
                 (self.map_tensor_name(name.replace("qkv", "q")), data_torch[:c]),
-                (self.map_tensor_name(name.replace("qkv", "k")), data_torch[c:c*2]),
-                (self.map_tensor_name(name.replace("qkv", "v")), data_torch[c*2:]),
+                (self.map_tensor_name(name.replace("qkv", "k")), data_torch[c:c * 2]),
+                (self.map_tensor_name(name.replace("qkv", "v")), data_torch[c * 2:]),
             ]
 
         return [(self.map_tensor_name(name), data_torch)]
