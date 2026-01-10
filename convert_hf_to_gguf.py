@@ -9839,13 +9839,17 @@ class GptOssModel(TextModel):
                 new_name = self.map_tensor_name(name.replace("_scales", ".weight"))
                 self.repack_mxfp4(new_name, blocks0, data_torch)
             elif "mlp.experts.gate_up_proj_blocks" in name:
-                blocks0, blocks1 = data_torch[:, ::2, :, :], data_torch[:, 1::2, :, :]
+                # de-interleave and concatenate blocks: HF has interleaved layout
+                gate_blocks = data_torch[:, ::2, :, :]   # gate at even indices
+                up_blocks = data_torch[:, 1::2, :, :]    # up at odd indices
+                blocks0 = torch.cat([gate_blocks, up_blocks], dim=1)
             elif "mlp.experts.gate_up_proj_scales" in name:
-                scales0, scales1 = data_torch[:, ::2, :], data_torch[:, 1::2, :]
-                new_name_gate = self.map_tensor_name(name.replace("gate_up_proj_scales", "gate_proj.weight"))
-                new_name_up = self.map_tensor_name(name.replace("gate_up_proj_scales", "up_proj.weight"))
-                self.repack_mxfp4(new_name_gate, blocks0, scales0)
-                self.repack_mxfp4(new_name_up, blocks1, scales1)
+                # de-interleave and concatenate scales: HF has interleaved layout
+                gate_scales = data_torch[:, ::2, :]   # gate at even indices
+                up_scales = data_torch[:, 1::2, :]    # up at odd indices
+                scales0 = torch.cat([gate_scales, up_scales], dim=1)
+                new_name = self.map_tensor_name(name.replace("_scales", ".weight"))
+                self.repack_mxfp4(new_name, blocks0, scales0)
         return []
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -9866,26 +9870,25 @@ class GptOssModel(TextModel):
                 # otherwise, it should already be repacked to ggml MXFP4 format
                 return []
 
-        # split the gate_up into gate and up
+        # keep gate_up merged (don't split into gate and up)
+        # HF has interleaved layout, we need concatenated layout for inference
         if "gate_up_proj" in name:
             if name.endswith("_bias"):
-                name_up = name.replace("gate_up_proj_bias", "up_proj.bias")
-                name_gate = name.replace("gate_up_proj_bias", "gate_proj.bias")
-                gate_proj_bias, up_proj_bias = data_torch[..., ::2], data_torch[..., 1::2]
-                return [
-                    (self.map_tensor_name(name_gate), gate_proj_bias),
-                    (self.map_tensor_name(name_up), up_proj_bias)
-                ]
+                name = name.replace("gate_up_proj_bias", "gate_up_proj.bias")
+                # de-interleave and concatenate: [n_expert, 2*n_ff_interleaved] -> [n_expert, 2*n_ff_concatenated]
+                gate_bias = data_torch[..., ::2]   # gate at even indices
+                up_bias = data_torch[..., 1::2]    # up at odd indices
+                data_torch = torch.cat([gate_bias, up_bias], dim=-1)
+                return [(self.map_tensor_name(name), data_torch)]
             elif "_blocks" not in name and "_scales" not in name:
                 logger.warning(f"{name} is not in MXFP4, performance may be degraded")
-                name_up = name.replace("gate_up_proj", "up_proj.weight")
-                name_gate = name.replace("gate_up_proj", "gate_proj.weight")
+                name = name.replace("gate_up_proj", "gate_up_proj.weight")
                 data_torch = data_torch.transpose(-1, -2)
-                gate_proj_weight, up_proj_weight = data_torch[:, ::2, :], data_torch[:, 1::2, :]
-                return [
-                    (self.map_tensor_name(name_gate), gate_proj_weight),
-                    (self.map_tensor_name(name_up), up_proj_weight)
-                ]
+                # de-interleave and concatenate: [n_expert, 2*n_ff_interleaved, n_embd] -> [n_expert, 2*n_ff_concatenated, n_embd]
+                gate_weight = data_torch[:, ::2, :]   # gate at even indices
+                up_weight = data_torch[:, 1::2, :]    # up at odd indices
+                data_torch = torch.cat([gate_weight, up_weight], dim=1)
+                return [(self.map_tensor_name(name), data_torch)]
             else:
                 # otherwise, it should already be repacked to ggml MXFP4 format
                 return []
