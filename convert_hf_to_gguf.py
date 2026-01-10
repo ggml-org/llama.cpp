@@ -2638,6 +2638,17 @@ class LlamaModel(TextModel):
         return [(self.map_tensor_name(name), data_torch)]
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        # EAGLE3: If no lm_head in draft model, load from target model
+        if hasattr(self, 'is_eagle3') and self.is_eagle3 and "lm_head.weight" not in self.model_tensors:
+            from safetensors import safe_open
+            for sf_file in self.target_model_dir.glob("*.safetensors"):
+                with safe_open(sf_file, framework="pt") as f:
+                    if "lm_head.weight" in f.keys():
+                        lm_head = f.get_tensor("lm_head.weight")
+                        logger.info(f"EAGLE3: No lm_head in draft model, loaded lm_head from {sf_file.name}, shape = {lm_head.shape}")
+                        yield ("output.weight", lm_head)
+                        break
+
         if rope_params := self.rope_parameters.get("full_attention", self.rope_parameters):
             if rope_params.get("rope_type", '').lower() == "llama3":
                 base = rope_params.get("rope_theta", 10000.0)
