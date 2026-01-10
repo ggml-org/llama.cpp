@@ -1120,9 +1120,6 @@ class TextModel(ModelBase):
         if chkhsh == "e636dc30a262dcc0d8c323492e32ae2b70728f4df7dfe9737d9f920a282b8aea":
             # ref: https://huggingface.co/Qwen/Qwen1.5-7B
             res = "qwen2"
-        if chkhsh == "f5f8b79793693cfcca1c36aac854ab481ae887cf7dde234b889f8f4bf009891a":
-            # ref: https://huggingface.co/nc-ai-consortium/VAETKI-VL-7B-A1B
-            res = "vaetki"
         if chkhsh == "b6dc8df998e1cfbdc4eac8243701a65afe638679230920b50d6f17d81c098166":
             # ref: https://huggingface.co/allenai/OLMo-1.7-7B-hf
             res = "olmo"
@@ -1258,6 +1255,9 @@ class TextModel(ModelBase):
         if chkhsh == "6c81ce329e0802883b22eabab0d3fa48357337ef1ecb45443828bf1f6254833f":
             # ref: https://huggingface.co/LGAI-EXAONE/K-EXAONE-236B-A23B
             res = "exaone-moe"
+        if chkhsh == "f5f8b79793693cfcca1c36aac854ab481ae887cf7dde234b889f8f4bf009891a":
+            # ref: https://huggingface.co/nc-ai-consortium/VAETKI-VL-7B-A1B
+            res = "vaetki"
 
         if res is None:
             logger.warning("\n")
