@@ -220,6 +220,9 @@ public:
     // Populate the block table tensor with current block mappings
     void set_input_block_table(ggml_tensor * dst, const slot_info & sinfo) const;
 
+    // Print block pool statistics (for debugging)
+    void print_block_stats() const;
+
 private:
     const llama_model & model;
     const llama_hparams & hparams;

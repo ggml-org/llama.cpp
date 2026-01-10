@@ -336,6 +336,12 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
                     v_block_tables[s].clear();
                 }
             }
+            LLAMA_LOG_DEBUG("%s: cleared all block tracking\n", __func__);
+        }
+
+        // Print stats in debug mode
+        if (debug > 0) {
+            print_block_stats();
         }
     }
 
@@ -2132,6 +2138,53 @@ void llama_kv_cache::set_input_block_table(ggml_tensor * dst, const slot_info & 
             }
         }
     }
+}
+
+void llama_kv_cache::print_block_stats() const {
+    if (!enable_block_tracking || block_size == 0) {
+        LLAMA_LOG_INFO("%s: block tracking not enabled\n", __func__);
+        return;
+    }
+
+    // Compute bytes per token (K + V per layer)
+    size_t bytes_per_token = 0;
+    for (const auto & layer : layers) {
+        const uint32_t il = layer.il;
+        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
+        const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
+        bytes_per_token += n_embd_k_gqa * ggml_type_size(layer.k->type);
+        bytes_per_token += n_embd_v_gqa * ggml_type_size(layer.v->type);
+    }
+
+    LLAMA_LOG_INFO("%s: === Block Pool Statistics ===\n", __func__);
+    LLAMA_LOG_INFO("%s: block_size = %u tokens, bytes_per_token = %zu\n",
+                   __func__, block_size, bytes_per_token);
+
+    for (uint32_t s = 0; s < n_stream && s < v_block_pools.size(); ++s) {
+        const auto & pool = v_block_pools[s];
+        const auto stats = pool.compute_stats(block_size, bytes_per_token);
+
+        LLAMA_LOG_INFO("%s: stream %u: blocks %u/%u (%.1f%% used), tokens %u/%u (%.1f%% util)\n",
+                       __func__, s,
+                       stats.n_blocks_used, stats.n_blocks_total,
+                       stats.n_blocks_total > 0 ? 100.0f * stats.n_blocks_used / stats.n_blocks_total : 0.0f,
+                       stats.n_tokens_used, stats.n_tokens_total,
+                       100.0f * stats.utilization);
+
+        if (stats.n_tokens_wasted > 0) {
+            LLAMA_LOG_INFO("%s:   wasted: %u tokens (%.1f%% fragmentation)\n",
+                           __func__, stats.n_tokens_wasted, 100.0f * stats.fragmentation);
+        }
+
+        if (bytes_per_token > 0 && stats.memory_allocated > 0) {
+            LLAMA_LOG_INFO("%s:   memory: %.2f MiB allocated, %.2f MiB used, %.2f MiB wasted\n",
+                           __func__,
+                           stats.memory_allocated / (1024.0f * 1024.0f),
+                           stats.memory_used / (1024.0f * 1024.0f),
+                           stats.memory_wasted / (1024.0f * 1024.0f));
+        }
+    }
+    LLAMA_LOG_INFO("%s: =============================\n", __func__);
 }
 
 void llama_kv_cache::update_block_tokens(const slot_info & sinfo) {
