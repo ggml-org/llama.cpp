@@ -122,8 +122,9 @@ void launch_fattn_esimd_f16_optimized(
     const int64_t nb13 = params.nb13;
     const int nb21 = params.nb21, nb22 = params.nb22;
     const int64_t nb23 = params.nb23;
-    const int ne30 = params.ne30, ne31 = params.ne31;
-    const int nb31 = params.nb31;
+    const int ne30 = params.ne30, ne31 = params.ne31, ne32 = params.ne32, ne33 = params.ne33;
+    const int nb31 = params.nb31, nb32 = params.nb32;
+    const int64_t nb33 = params.nb33;
 
     // PagedAttention parameters
     const bool use_paged_attn = params.use_paged_attn;
@@ -188,17 +189,17 @@ void launch_fattn_esimd_f16_optimized(
                                                   + (nb22 / sizeof(sycl::half)) * kv_head;
 
                 // Mask and output pointers
-                const int stride_mask = nb31 / sizeof(sycl::half);
-                const sycl::half * mask_base = mask_ptr ? mask_ptr + query_idx * stride_mask : nullptr;
+                const size_t stride_mask = nb31 / sizeof(sycl::half);
+                const size_t mask_head_stride = nb32 / sizeof(sycl::half);
+                const size_t mask_seq_stride = nb33 / sizeof(sycl::half);
+                const int mask_head = ne32 > 1 ? head % ne32 : 0;
+                const sycl::half * mask_base = mask_ptr ?
+                    mask_ptr + mask_seq_stride * (sequence % ne33)
+                             + mask_head_stride * mask_head
+                             + stride_mask * query_idx : nullptr;
 
-                // ALiBi slope computation
-                // For single-query mode (ne01 == 1) and non-unified KV (ne13 != 1): use ALiBi slope
-                // Otherwise: slope = 1.0f (mask already contains proper values)
-                // This matches the XMX kernel condition to avoid incorrectly applying ALiBi during prompt processing
-                float slope = 1.0f;
-                if (ne01 == 1 && ne13 != 1) {
-                    slope = esimd_get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
-                }
+                // ALiBi slope computation (returns 1.0f when max_bias <= 0)
+                const float slope = esimd_get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
 
                 // Multi-token decode: get this query's position for per-query causal masking
                 // Each query can only attend to KV positions <= its own position
@@ -470,8 +471,9 @@ void launch_fattn_esimd_f16(
     const int64_t nb13 = params.nb13;
     const int nb21 = params.nb21, nb22 = params.nb22;
     const int64_t nb23 = params.nb23;
-    const int ne30 = params.ne30, ne31 = params.ne31;
-    const int nb31 = params.nb31;
+    const int ne30 = params.ne30, ne31 = params.ne31, ne32 = params.ne32, ne33 = params.ne33;
+    const int nb31 = params.nb31, nb32 = params.nb32;
+    const int64_t nb33 = params.nb33;
 
     // PagedAttention parameters
     const bool use_paged_attn = params.use_paged_attn;
@@ -538,17 +540,17 @@ void launch_fattn_esimd_f16(
                                                   + (nb22 / sizeof(sycl::half)) * kv_head;
 
                 // Mask pointer
-                const int stride_mask = nb31 / sizeof(sycl::half);
-                const sycl::half * mask_base = mask_ptr ? mask_ptr + query_idx * stride_mask : nullptr;
+                const size_t stride_mask = nb31 / sizeof(sycl::half);
+                const size_t mask_head_stride = nb32 / sizeof(sycl::half);
+                const size_t mask_seq_stride = nb33 / sizeof(sycl::half);
+                const int mask_head = ne32 > 1 ? head % ne32 : 0;
+                const sycl::half * mask_base = mask_ptr ?
+                    mask_ptr + mask_seq_stride * (sequence % ne33)
+                             + mask_head_stride * mask_head
+                             + stride_mask * query_idx : nullptr;
 
-                // ALiBi slope computation
-                // For single-query mode (ne01 == 1) and non-unified KV (ne13 != 1): use ALiBi slope
-                // Otherwise: slope = 1.0f (mask already contains proper values)
-                // This matches the XMX kernel condition to avoid incorrectly applying ALiBi during prompt processing
-                float slope = 1.0f;
-                if (ne01 == 1 && ne13 != 1) {
-                    slope = esimd_get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
-                }
+                // ALiBi slope computation (returns 1.0f when max_bias <= 0)
+                const float slope = esimd_get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
 
                 // Multi-token decode: get this query's position for per-query causal masking
                 // Each query can only attend to KV positions <= its own position

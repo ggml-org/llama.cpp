@@ -107,7 +107,7 @@ static thread_local v2_auto_buffers g_v2_auto;
 
 // Pre-allocate V2 buffers before SYCL graph recording starts.
 // This ensures V2 dispatch works during graph recording (malloc/free forbidden during recording).
-// Called from ggml-sycl.cpp before graph recording, similar to graph_pre_reorder_all.
+// Called from ggml-sycl.cpp before graph recording.
 //
 // Parameters are estimated from cgraph FLASH_ATTN_EXT ops - we allocate for the maximum
 // expected context length found in the graph.
@@ -517,6 +517,18 @@ static int compute_sequence_boundaries_from_ids(
 
 // Check if flash attention is supported for the given operation
 bool ggml_sycl_flash_attn_ext_supported(const ggml_tensor * dst) {
+    // Enabled by default; allow explicit disable for debugging/regressions.
+    static const bool fa_ext_enabled = []() {
+        const char * env = std::getenv("GGML_SYCL_FLASH_ATTN_EXT");
+        if (!env) {
+            return true;
+        }
+        return !(strcmp(env, "0") == 0 || strcmp(env, "false") == 0);
+    }();
+    if (!fa_ext_enabled) {
+        return false;
+    }
+
     const ggml_tensor * Q = dst->src[0];
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];

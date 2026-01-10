@@ -206,11 +206,8 @@ static void flash_attn_xmx_f16_kernel(
     const int mask_head = ne32 > 1 ? head % ne32 : 0;
     const sycl::half * maskh = mask ?
         reinterpret_cast<const sycl::half*>(mask + nb33 * (sequence % ne33) + nb32 * mask_head + nb31 * ic0) : nullptr;
-    // Match CUDA fattn-tile.cuh: use slope = 1.0f when ncols > 1 (multi-query batching)
-    // or when in unified KV mode (ne13 == 1). This ensures the attention mask containing
-    // -INF values for cross-sequence positions is properly applied even for non-ALiBi models.
-    // For ALiBi models (max_bias > 0), the mask also contains position-based bias values.
-    const float slope = (ncols == 1 && ne13 != 1) ? get_alibi_slope(max_bias, head, n_head_log2, m0, m1) : 1.0f;
+    // Always apply ALiBi slope when enabled to match CPU semantics; get_alibi_slope returns 1.0f when max_bias <= 0.
+    const float slope = get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
 
     // =========================================================================
     // Multi-sequence KV bounds computation
