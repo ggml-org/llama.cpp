@@ -80,6 +80,12 @@ GGML_API size_t                       ggml_backend_alloc_ctx_tensors_from_buft_s
 GGML_API struct ggml_backend_buffer * ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
 GGML_API struct ggml_backend_buffer * ggml_backend_alloc_ctx_tensors(struct ggml_context * ctx, ggml_backend_t backend);
 
+// Probe a safe maximum allocation size for a buffer type.
+// upper_bound: cap the search (0 = use buft max size).
+// safety_margin: fraction in (0, 1]; the returned size is floor(best * safety_margin).
+GGML_API size_t ggml_backend_probe_max_alloc_size(
+    ggml_backend_buffer_type_t buft, size_t upper_bound, double safety_margin);
+
 #ifdef  __cplusplus
 }
 #endif

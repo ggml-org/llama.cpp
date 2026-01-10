@@ -2520,7 +2520,7 @@ static void dequantize_mul_mat_vec_q6_k(const void * __restrict__ vx, const floa
 }
 
 // Q4_0 SoA dispatch function - uses soa_base (full tensor) + row_low for correct slicing
-// vx: storage tensor base pointer from ggml_sycl_get_data_ptr()
+// vx: storage tensor base pointer from ggml_sycl_get_layout_ptr()
 // d_offset: pre-calculated byte offset from vx to scale values (using storage tensor dimensions)
 // row_low: starting row for this slice (relative to storage tensor)
 static void dequantize_mul_mat_vec_q4_0_sycl_reorder(const void *vx, const dfloat *y,
@@ -2557,7 +2557,7 @@ static void dequantize_mul_mat_vec_q4_0_sycl_reorder(const void *vx, const dfloa
 }
 
 // Q8_0 SoA dispatch function - uses soa_base (full tensor) + row_low for correct slicing
-// vx: storage tensor base pointer from ggml_sycl_get_data_ptr()
+// vx: storage tensor base pointer from ggml_sycl_get_layout_ptr()
 // d_offset: pre-calculated byte offset from vx to scale values (using storage tensor dimensions)
 // row_low: starting row for this slice (relative to storage tensor)
 static void dequantize_mul_mat_vec_q8_0_sycl_reorder(const void *vx, const dfloat *y,
@@ -3055,7 +3055,7 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                 // Use src0->extra directly, not dst->src[0]->extra
                 // Both should be the same pointer, but src0 is passed directly from the graph node
                 ggml_tensor_extra_gpu* extra = (ggml_tensor_extra_gpu*)src0->extra;
-                reorder_mode mode = extra ? extra->optimized_feature.get_reorder() : reorder_mode::NONE;
+                layout_mode mode = get_effective_layout_mode(extra);
                 // Unconditional debug for AOS path investigation
                 static int q4_0_dispatch_count = 0;
                 if (std::getenv("GGML_SYCL_AOS_DEBUG") && q4_0_dispatch_count++ < 50) {
@@ -3068,19 +3068,19 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                 if (std::getenv("GGML_SYCL_MMQ_DEBUG")) {
                     static int q4_0_mode_debug = 0;
                     if (q4_0_mode_debug++ < 10) {
-                        fprintf(stderr, "[DMMV] Q4_0 reorder mode=%d (0=NONE,1=SOA,2=COALESCED)\n",
+                        fprintf(stderr, "[DMMV] Q4_0 layout mode=%d (0=AOS,1=SOA,2=COALESCED,3=XMX_TILED)\n",
                                 (int)mode);
                     }
                 }
 
-                if (mode == reorder_mode::COALESCED) {
+                if (mode == GGML_LAYOUT_COALESCED) {
                     // Use direct dfloat path (no Q8 quantization overhead)
                     const int64_t ne01 = src0->ne[1];
                     GGML_SYCL_KTRACE("dmmv_q4_0_coalesced", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld",
                                      (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
                     dequantize_mul_mat_vec_q4_0_sycl_coalesced(src0_dd_i, src1_dfloat,
                                                               dst_dd_i, ne00, row_diff, ne01, row_low, stream);
-                } else if (mode == reorder_mode::SOA) {
+                } else if (mode == GGML_LAYOUT_SOA) {
                     // Use direct dfloat path (no Q8 quantization overhead)
                     const ggml_tensor * storage = get_storage_tensor(src0);
                     const int64_t storage_ne01 = storage->ne[1];
@@ -3089,7 +3089,7 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                     const int64_t total_qs_bytes = nblocks * (QK4_0 / 2);
                     const int64_t d_offset = total_qs_bytes;
 
-                    const void * storage_base = ggml_sycl_get_data_ptr(storage, ctx.device);
+                    const void * storage_base = ggml_sycl_get_layout_ptr_for(storage, ctx.device, mode);
 
                     int64_t view_row_offset = 0;
                     if (src0->view_src != nullptr) {
@@ -3124,7 +3124,7 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
             {
                 // Use src0->extra directly (same as Q4_0 fix)
                 ggml_tensor_extra_gpu* extra = (ggml_tensor_extra_gpu*)src0->extra;
-                reorder_mode mode = extra ? extra->optimized_feature.get_reorder() : reorder_mode::NONE;
+                layout_mode mode = get_effective_layout_mode(extra);
 
                 // DEBUG: Track SoA dispatch for Q8_0
                 if (g_ggml_sycl_debug) {
@@ -3132,14 +3132,14 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                             src0->name ? src0->name : "?", extra, (int)mode);
                 }
 
-                if (mode == reorder_mode::COALESCED) {
+                if (mode == GGML_LAYOUT_COALESCED) {
                     // Use direct dfloat path (no Q8 quantization overhead)
                     const int64_t ne01 = src0->ne[1];
                     GGML_SYCL_KTRACE("dmmv_q8_0_coalesced", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld",
                                      (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
                     dequantize_mul_mat_vec_q8_0_sycl_coalesced(src0_dd_i, src1_dfloat,
                                                               dst_dd_i, ne00, row_diff, ne01, row_low, stream);
-                } else if (mode == reorder_mode::SOA) {
+                } else if (mode == GGML_LAYOUT_SOA) {
                     // Use direct dfloat path (no Q8 quantization overhead)
                     const ggml_tensor * storage = get_storage_tensor(src0);
                     const int64_t storage_ne01 = storage->ne[1];
@@ -3148,7 +3148,7 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                     const int64_t total_qs_bytes = nblocks * QK8_0;
                     const int64_t d_offset = total_qs_bytes;
 
-                    const void * storage_base = ggml_sycl_get_data_ptr(storage, ctx.device);
+                    const void * storage_base = ggml_sycl_get_layout_ptr_for(storage, ctx.device, mode);
 
                     int64_t view_row_offset = 0;
                     if (src0->view_src != nullptr) {
@@ -3178,7 +3178,7 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
             {
                 // Use src0->extra directly (same as Q4_0/Q8_0 fix)
                 ggml_tensor_extra_gpu* extra = (ggml_tensor_extra_gpu*)src0->extra;
-                if (extra && extra->optimized_feature.is_reordered()) {
+                if (ggml_sycl_layout_is_reordered(extra)) {
                     // reorder is currently not supported for dmmv
                     GGML_ABORT("Unimplemented dequantize case case for q4_k reorder");
                 } else {
@@ -3194,13 +3194,13 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
         case GGML_TYPE_Q6_K:
             {
                 ggml_tensor_extra_gpu* extra = (ggml_tensor_extra_gpu*)src0->extra;
-                reorder_mode mode = extra ? extra->optimized_feature.get_reorder() : reorder_mode::NONE;
+                layout_mode mode = get_effective_layout_mode(extra);
 
-                if (mode == reorder_mode::COALESCED) {
+                if (mode == GGML_LAYOUT_COALESCED) {
                     const ggml_tensor * storage = get_storage_tensor(src0);
                     const int64_t storage_ne01 = storage->ne[1];
 
-                    const void * storage_base = ggml_sycl_get_data_ptr(storage, ctx.device);
+                    const void * storage_base = ggml_sycl_get_layout_ptr_for(storage, ctx.device, GGML_LAYOUT_COALESCED);
 
                     int64_t view_row_offset = 0;
                     if (src0->view_src != nullptr) {
@@ -3212,14 +3212,14 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                                      (long long)ne00, (long long)row_diff, (long long)storage_ne01, (long long)global_row_low);
                     dequantize_mul_mat_vec_q6_K_sycl_coalesced_variable(storage_base, src1_ddf_i, dst_dd_i,
                                                                         ne00, row_diff, storage_ne01, global_row_low, stream);
-                } else if (mode == reorder_mode::SOA) {
+                } else if (mode == GGML_LAYOUT_SOA) {
                     // Q6_K SoA layout: [all ql] [all qh] [all scales] [all d]
                     // CRITICAL: Must use storage tensor dimensions for offset calculation, not view dimensions
                     const ggml_tensor * storage = get_storage_tensor(src0);
                     const int64_t storage_ne01 = storage->ne[1];  // storage tensor rows (not view rows!)
 
                     // Get storage tensor base pointer
-                    const void * storage_base = ggml_sycl_get_data_ptr(storage, ctx.device);
+                    const void * storage_base = ggml_sycl_get_layout_ptr_for(storage, ctx.device, GGML_LAYOUT_SOA);
 
                     // Calculate global row_low: row_low is relative to src0, need to add view offset
                     int64_t view_row_offset = 0;

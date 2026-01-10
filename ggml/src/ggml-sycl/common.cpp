@@ -16,11 +16,59 @@
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 
+#include <cstdlib>
 #include <mutex>
 
 #if __has_include(<sycl/ext/oneapi/matrix/matrix.hpp>)
 #    include <sycl/ext/oneapi/matrix/matrix.hpp>
 #endif
+
+static bool ggml_sycl_layout_ptr_stats_enabled() {
+    static const bool enabled = []() {
+        const char * env = std::getenv("GGML_SYCL_LAYOUT_PTR_DEBUG");
+        return env && std::string(env) == "1";
+    }();
+    return enabled;
+}
+
+static std::atomic<uint64_t> g_layout_ptr_host_cache_target_hit{0};
+static std::atomic<uint64_t> g_layout_ptr_host_cache_aos_hit{0};
+static std::atomic<uint64_t> g_layout_ptr_host_cache_data_fallback{0};
+static std::atomic<uint64_t> g_layout_ptr_host_cache_miss{0};
+
+void ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event event) {
+    if (!ggml_sycl_layout_ptr_stats_enabled()) {
+        return;
+    }
+
+    switch (event) {
+        case ggml_sycl_layout_ptr_event::HOST_CACHE_TARGET_HIT:
+            g_layout_ptr_host_cache_target_hit.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case ggml_sycl_layout_ptr_event::HOST_CACHE_AOS_HIT:
+            g_layout_ptr_host_cache_aos_hit.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case ggml_sycl_layout_ptr_event::HOST_CACHE_DATA_FALLBACK:
+            g_layout_ptr_host_cache_data_fallback.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case ggml_sycl_layout_ptr_event::HOST_CACHE_MISS:
+            g_layout_ptr_host_cache_miss.fetch_add(1, std::memory_order_relaxed);
+            break;
+    }
+}
+
+void ggml_sycl_layout_ptr_stats_dump() {
+    if (!ggml_sycl_layout_ptr_stats_enabled()) {
+        return;
+    }
+
+    fprintf(stderr,
+            "[LAYOUT-PTR] host_cached target_hit=%llu aos_hit=%llu data_fallback=%llu miss=%llu\n",
+            static_cast<unsigned long long>(g_layout_ptr_host_cache_target_hit.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_layout_ptr_host_cache_aos_hit.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_layout_ptr_host_cache_data_fallback.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_layout_ptr_host_cache_miss.load(std::memory_order_relaxed)));
+}
 
 int get_current_device_id() {
     return dpct::dev_mgr::instance().current_device_id();
@@ -273,14 +321,13 @@ void * ggml_sycl_host_malloc(size_t size) try {
         return nullptr;
     }
 
-    // Safety limit: don't try to allocate more than 4GB of pinned memory in a single call
-    // Large pinned allocations can crash the system before error handling kicks in
-    constexpr size_t MAX_PINNED_ALLOC = 4ULL * 1024 * 1024 * 1024;  // 4GB
-    if (size > MAX_PINNED_ALLOC) {
+    const int    device_id      = get_current_device_id();
+    const size_t safe_max_alloc = ggml_sycl_get_safe_max_alloc_size(device_id);
+    if (safe_max_alloc > 0 && size > safe_max_alloc) {
         GGML_LOG_WARN(
-            "[SYCL] Refusing to allocate %.1f GB of pinned memory (limit: 4GB). "
-            "Use regular memory instead. lazy_moe requires chunked allocation.\n",
-            size / (1024.0 * 1024.0 * 1024.0));
+            "[SYCL] Refusing to allocate %.1f MB of pinned memory (limit: %.1f MB). "
+            "Use chunked allocations or fall back to regular host memory.\n",
+            size / (1024.0 * 1024.0), safe_max_alloc / (1024.0 * 1024.0));
         return nullptr;
     }
 
@@ -446,9 +493,41 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
         }
         // Free XMX MXFP4 tiled cache (legacy - will be migrated to layout system)
         if (extra->xmx_mxfp4_tiled[i] != nullptr && streams.size() > 0) {
-            ggml_sycl_set_device(i);
-            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(extra->xmx_mxfp4_tiled[i], *(streams[i]))));
+            const bool layout_alias = (extra->layout.mode == GGML_LAYOUT_XMX_TILED &&
+                                       extra->layout.data_ptr == extra->xmx_mxfp4_tiled[i]);
+            if (!layout_alias && extra->xmx_mxfp4_tiled_owned[i]) {
+                ggml_sycl_set_device(i);
+                SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(extra->xmx_mxfp4_tiled[i], *(streams[i]))));
+            }
             extra->xmx_mxfp4_tiled[i] = nullptr;
+            extra->xmx_mxfp4_tiled_owned[i] = false;
+        }
+        if (extra->xmx_mxfp4_tiled_aos_staging[i] != nullptr && streams.size() > 0) {
+            ggml_sycl_set_device(i);
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(extra->xmx_mxfp4_tiled_aos_staging[i], *(streams[i]))));
+            extra->xmx_mxfp4_tiled_aos_staging[i] = nullptr;
+            extra->xmx_mxfp4_tiled_aos_staging_size[i] = 0;
+        }
+
+        if (extra->moe_expert_ptrs_device[i] != nullptr && streams.size() > 0) {
+            ggml_sycl_set_device(i);
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(extra->moe_expert_ptrs_device[i], *(streams[i]))));
+            extra->moe_expert_ptrs_device[i] = nullptr;
+            extra->moe_expert_ptrs_size[i] = 0;
+        }
+        extra->moe_expert_ptrs_host[i].clear();
+
+        if (extra->moe_expert_ptrs_compact_device[i] != nullptr && streams.size() > 0) {
+            ggml_sycl_set_device(i);
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(extra->moe_expert_ptrs_compact_device[i], *(streams[i]))));
+            extra->moe_expert_ptrs_compact_device[i] = nullptr;
+            extra->moe_expert_ptrs_compact_size[i] = 0;
+            extra->moe_expert_ptrs_compact_capacity[i] = 0;
+        }
+        if (extra->moe_expert_ptrs_missing_device[i] != nullptr && streams.size() > 0) {
+            ggml_sycl_set_device(i);
+            SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(extra->moe_expert_ptrs_missing_device[i], *(streams[i]))));
+            extra->moe_expert_ptrs_missing_device[i] = nullptr;
         }
     }
 
@@ -457,7 +536,7 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
         int dev = extra->layout.device_id;
         if (dev >= 0 && dev < static_cast<int>(streams.size())) {
             ggml_sycl_set_device(dev);
-            extra->layout.release(*(streams[dev]));
+            ggml_sycl_release_layout(extra->layout, *(streams[dev]));
         }
     }
 

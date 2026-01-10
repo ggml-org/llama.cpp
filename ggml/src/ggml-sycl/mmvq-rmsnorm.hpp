@@ -367,20 +367,26 @@ static void ggml_sycl_mul_mat_vec_rmsnorm(
     // SKIP: compute_rms_scales_sycl
 
     // Phase 2: Fused MMVQ with SLM-cached normalization
-    const float * f32_input = (const float *)x->data;
-    const float * gamma_data = (const float *)gamma->data;
-    float * dst_data = (float *)dst->data;
+    const int device = ctx.device;
+    const float * f32_input  = (const float *) ggml_sycl_get_data_ptr(x, device);
+    const float * gamma_data = (const float *) ggml_sycl_get_layout_ptr(gamma, device);
+    float * dst_data         = (float *) ggml_sycl_get_data_ptr(dst, device);
+    const void * W_data      = ggml_sycl_get_layout_ptr_for(W, device, GGML_LAYOUT_AOS);
+    if (!W_data) {
+        GGML_SYCL_DEBUG("[MMVQ_RMSNORM] AOS layout unavailable for %s\n", W->name ? W->name : "?");
+        return;
+    }
 
     switch (W->type) {
         case GGML_TYPE_Q4_0:
             mul_mat_vec_q4_0_f32_rmsnorm_sycl(
-                W->data, f32_input, gamma_data, scales_buf.get(),
+                W_data, f32_input, gamma_data, scales_buf.get(),
                 dst_data, ncols, nrows, batch_size, stream
             );
             break;
         case GGML_TYPE_Q8_0:
             mul_mat_vec_q8_0_f32_rmsnorm_sycl(
-                W->data, f32_input, gamma_data, scales_buf.get(),
+                W_data, f32_input, gamma_data, scales_buf.get(),
                 dst_data, ncols, nrows, batch_size, stream
             );
             break;

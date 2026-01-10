@@ -10,6 +10,7 @@
 #include <vector>
 #include <unordered_map>
 #include <mutex>
+#include <condition_variable>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -25,16 +26,71 @@ enum class cache_entry_type {
     MOE_EXPERT      // MoE expert weight
 };
 
+// Cache entry readiness
+enum class cache_entry_state {
+    READY,
+    IN_PROGRESS,
+    FAILED,
+};
+
+// XMX layout metadata carried with cache entries/results
+struct cache_layout_xmx_info {
+    int64_t tile_n = 0;
+    int64_t tile_k = 0;
+    int64_t n_tile_groups = 0;
+};
+
+// Result status for layout-aware cache API
+enum class cache_layout_status {
+    READY,
+    IN_PROGRESS,
+    FAILED,
+    INVALID,
+};
+
+struct cache_layout_request;
+using cache_layout_fill_fn = sycl::event (*)(sycl::queue& queue,
+                                             void* dst, size_t dst_size,
+                                             const void* src, size_t src_size,
+                                             const void* ctx,
+                                             const std::vector<sycl::event>& deps);
+
+struct cache_layout_request {
+    const void* key_ptr    = nullptr;
+    const void* src_ptr    = nullptr;
+    size_t      src_size   = 0;
+    size_t      dst_size   = 0;
+    cache_entry_type type  = cache_entry_type::DENSE_WEIGHT;
+    int         layer_id   = -1;
+    int         expert_id  = -1;
+    ggml_layout_mode layout = GGML_LAYOUT_AOS;
+    bool        validate_content = false;
+    cache_layout_xmx_info xmx_info = {};
+    cache_layout_fill_fn  fill_fn  = nullptr;
+    const void*           fill_ctx = nullptr;
+};
+
+struct cache_layout_result {
+    void*               device_ptr = nullptr;
+    size_t              size       = 0;
+    ggml_layout_mode    layout     = GGML_LAYOUT_AOS;
+    cache_layout_xmx_info xmx_info = {};
+    sycl::event         event;
+    cache_layout_status status     = cache_layout_status::FAILED;
+};
+
 // Key for identifying a cached entry
 struct unified_cache_key {
     cache_entry_type type;
-    const void* key_ptr;     // Stable key: tensor->data for dense, mmap ptr for MoE
+    const void* key_ptr;     // Stable key: GGUF identity for dense, mmap ptr for MoE
     int layer_id;            // Layer ID (for expert identification)
     int expert_id;           // Expert ID (-1 for dense weights)
+    ggml_layout_mode layout; // Target layout for this entry
 
     bool operator==(const unified_cache_key& other) const {
         return type == other.type && key_ptr == other.key_ptr &&
-               layer_id == other.layer_id && expert_id == other.expert_id;
+               layer_id == other.layer_id && expert_id == other.expert_id &&
+               layout == other.layout;
     }
 };
 
@@ -43,11 +99,27 @@ struct unified_cache_key_hash {
         // Use key_ptr as primary hash for dense weights (fast lookup)
         // Use layer+expert for MoE experts
         if (k.type == cache_entry_type::DENSE_WEIGHT) {
-            return std::hash<const void*>()(k.key_ptr);
+            return std::hash<const void*>()(k.key_ptr) ^ (std::hash<int>()(k.layout) << 1);
         }
         return std::hash<int>()(k.layer_id) ^
                (std::hash<int>()(k.expert_id) << 16) ^
-               (std::hash<const void*>()(k.key_ptr) >> 32);
+               (std::hash<const void*>()(k.key_ptr) >> 32) ^
+               (std::hash<int>()(k.layout) << 1);
+    }
+};
+
+struct unified_cache_ptr_key {
+    const void* key_ptr;
+    ggml_layout_mode layout;
+
+    bool operator==(const unified_cache_ptr_key& other) const {
+        return key_ptr == other.key_ptr && layout == other.layout;
+    }
+};
+
+struct unified_cache_ptr_key_hash {
+    size_t operator()(const unified_cache_ptr_key& k) const {
+        return std::hash<const void*>()(k.key_ptr) ^ (std::hash<int>()(k.layout) << 1);
     }
 };
 
@@ -60,9 +132,14 @@ struct unified_cache_entry {
     cache_entry_type type;   // Dense or MoE
     int layer_id;            // Layer ID
     int expert_id;           // Expert ID (-1 for dense)
+    ggml_layout_mode layout; // Target layout for this entry
+    cache_layout_xmx_info xmx_info; // XMX metadata (when applicable)
     uint32_t access_count;   // Access frequency for LFU
     int64_t last_access;     // Timestamp for recency
     bool pinned;             // Protected from eviction
+    cache_entry_state state; // READY vs IN_PROGRESS
+    bool has_ready_event;    // True if ready_event is valid
+    sycl::event ready_event; // Completion event for IN_PROGRESS entries
     // NOTE: Reorder state is tracked in tensor->extra->optimized_feature, not here
 };
 
@@ -100,8 +177,8 @@ public:
     // Returns device pointer, or nullptr if cache is full and eviction failed
     //
     // key_ptr: Stable identifier for cache lookup
-    //   - For dense weights: tensor->data (device buffer address, stable across set_tensor calls)
-    //   - For MoE experts: mmap_ptr (stable across inference)
+    //   - For dense weights: GGUF-based identity pointer (ggml_backend_sycl_get_weight_cache_key)
+    //   - For MoE experts: per-expert cache key (cache_uuid + expert_id)
     // src_ptr: Source data to copy from (may change for same key_ptr)
     // If src_ptr differs from cached entry's src_ptr, data is re-uploaded
     //
@@ -110,22 +187,38 @@ public:
     void* ensure_cached(const void* key_ptr, const void* src_ptr, size_t size,
                         cache_entry_type type,
                         int layer_id = -1, int expert_id = -1,
+                        ggml_layout_mode layout = GGML_LAYOUT_AOS,
                         bool validate_content = false);
+    // Allocate cache entry without copying data (caller will fill device_ptr).
+    // Uses src_ptr/src_size only for content hash and change detection.
+    void* ensure_cached_alloc(const void* key_ptr, const void* src_ptr, size_t src_size, size_t alloc_size,
+                              cache_entry_type type,
+                              int layer_id, int expert_id,
+                              ggml_layout_mode layout,
+                              bool validate_content, bool* needs_fill);
+
+    // Ensure a weight is cached in a specific layout with graph-safe async fill.
+    cache_layout_result ensure_cached_layout(const cache_layout_request& request,
+                                             const std::vector<sycl::event>& deps);
 
     // Check if entry is cached (without loading)
-    bool is_cached(const void* mmap_ptr) const;
+    bool is_cached(const void* key_ptr, ggml_layout_mode layout) const;
+    bool is_cached_any(const void* key_ptr) const;
 
     // Get device pointer for cached entry (returns nullptr if not cached)
-    void* get(const void* key_ptr) const;
+    void* get(const void* key_ptr, ggml_layout_mode layout);
+
+    // Remove a cache entry (free device memory).
+    void remove(const void* key_ptr, cache_entry_type type, int layer_id, int expert_id, ggml_layout_mode layout);
 
     // NOTE: Reorder state is tracked in tensor->extra->optimized_feature, not in cache
 
     // === Pinning for Graphs ===
 
-    void pin(const void* mmap_ptr);
-    void unpin(const void* mmap_ptr);
+    void pin(const void* key_ptr, ggml_layout_mode layout);
+    void unpin(const void* key_ptr, ggml_layout_mode layout);
     void unpin_all();
-    bool is_pinned(const void* mmap_ptr) const;
+    bool is_pinned(const void* key_ptr, ggml_layout_mode layout) const;
 
     // === Memory Management ===
 
@@ -162,27 +255,45 @@ private:
     // Returns true if eviction succeeded, false if all entries are pinned
     bool evict_one(size_t new_size);
 
+    struct deferred_free_entry {
+        void *      ptr = nullptr;
+        size_t      size = 0;
+        bool        has_event = false;
+        sycl::event event;
+    };
+
     // Compute eviction score: higher = more valuable (keep longer)
     // score = access_count * exp(-decay * age)
     float compute_score(const unified_cache_entry& entry) const;
 
     // Copy data from mmap to device via staging
     void copy_to_device(void* dst, const void* src, size_t size);
+    sycl::event copy_to_device_async(void* dst, const void* src, size_t size,
+                                     const std::vector<sycl::event>& deps);
+    static bool event_complete(const sycl::event& evt);
+    sycl::event submit_barrier(const std::vector<sycl::event>& deps);
+    sycl::event submit_barrier_all();
+    void process_deferred_frees();
+    void enqueue_deferred_free(void * ptr, size_t size);
 
     sycl::queue& queue_;
     size_t budget_;                          // Total GPU memory budget
     std::atomic<size_t> used_{0};            // Current usage
     std::atomic<int64_t> time_{0};           // Monotonic counter
 
-    // Cache storage: mmap_ptr -> entry
+    // Cache storage: (key_ptr, layout) -> entry
     std::unordered_map<unified_cache_key, unified_cache_entry, unified_cache_key_hash> entries_;
 
-    // Fast lookup by mmap_ptr (for dense weights)
-    std::unordered_map<const void*, unified_cache_key> ptr_to_key_;
+    // Fast lookup by key_ptr + layout
+    std::unordered_map<unified_cache_ptr_key, unified_cache_key, unified_cache_ptr_key_hash> ptr_to_key_;
 
     // Staging buffer for mmap -> device transfers
     void* staging_ = nullptr;
     size_t staging_size_ = 0;
+    std::mutex staging_mutex_;
+
+    // Deferred frees to avoid releasing buffers while in flight.
+    std::vector<deferred_free_entry> deferred_frees_;
 
     // Stats
     mutable std::atomic<size_t> hits_{0};
@@ -191,6 +302,7 @@ private:
     static constexpr float DECAY_ALPHA = 0.01f;
 
     mutable std::mutex mutex_;
+    mutable std::condition_variable entry_cv_;
 };
 
 // === Cache Mode ===
@@ -225,6 +337,8 @@ bool unified_cache_enabled();
 // Set unified cache budget (call before first use)
 // In PER_DEVICE mode, this sets budget per device
 void set_unified_cache_budget(size_t bytes);
+// Set unified cache budget as percentage of free VRAM (call before first use)
+void set_unified_cache_budget_pct(int pct);
 
 // === MoE Expert Caching API (for compatibility with existing expert_cache usage) ===
 

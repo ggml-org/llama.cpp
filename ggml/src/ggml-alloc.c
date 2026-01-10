@@ -4,6 +4,7 @@
 #include "ggml-impl.h"
 #include <assert.h>
 #include <limits.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1247,4 +1248,75 @@ ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_conte
 
 ggml_backend_buffer_t ggml_backend_alloc_ctx_tensors(struct ggml_context * ctx, ggml_backend_t backend) {
     return ggml_backend_alloc_ctx_tensors_from_buft(ctx, ggml_backend_get_default_buffer_type(backend));
+}
+
+size_t ggml_backend_probe_max_alloc_size(ggml_backend_buffer_type_t buft, size_t upper_bound, double safety_margin) {
+    if (!buft) {
+        return 0;
+    }
+
+    if (!(safety_margin > 0.0 && safety_margin <= 1.0)) {
+        safety_margin = 1.0;
+    }
+
+    size_t max_size = ggml_backend_buft_get_max_size(buft);
+    if (upper_bound == 0 || upper_bound > max_size) {
+        upper_bound = max_size;
+    }
+
+    if (upper_bound == 0 || upper_bound == SIZE_MAX) {
+        return 0;
+    }
+
+    size_t alignment = ggml_backend_buft_get_alignment(buft);
+    if (alignment == 0) {
+        alignment = 1;
+    }
+
+    const size_t min_step = 1024 * 1024;  // 1 MiB granularity to avoid excessive probing
+    size_t       step     = alignment > min_step ? alignment : min_step;
+
+    if (upper_bound < step) {
+        step = alignment;
+        if (step == 0 || step > upper_bound) {
+            step = 1;
+        }
+    }
+
+    size_t units      = upper_bound / step;
+    size_t low        = 0;
+    size_t high       = units;
+    size_t best_units = 0;
+
+    while (low <= high) {
+        size_t mid  = low + (high - low) / 2;
+        size_t size = mid * step;
+        if (size == 0) {
+            low = 1;
+            continue;
+        }
+
+        ggml_backend_buffer_t buf = ggml_backend_buft_alloc_buffer(buft, size);
+        if (buf) {
+            best_units = mid;
+            ggml_backend_buffer_free(buf);
+            low = mid + 1;
+        } else {
+            if (mid == 0) {
+                break;
+            }
+            high = mid - 1;
+        }
+    }
+
+    size_t best = best_units * step;
+    if (best == 0) {
+        return 0;
+    }
+
+    size_t safe = (size_t) floor((double) best * safety_margin);
+    if (safe == 0) {
+        return 0;
+    }
+    return safe;
 }

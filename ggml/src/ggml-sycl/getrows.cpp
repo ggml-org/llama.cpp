@@ -16,6 +16,18 @@
 #include "dequantize.hpp"
 #include "ggml-impl.h"
 
+#include <cstdlib>
+#include <cstring>
+
+static bool ggml_sycl_wait_after_get_rows_q6_k_soa() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char * env = std::getenv("GGML_SYCL_WAIT_AFTER_GET_ROWS_Q6K");
+        cached = (env && std::strcmp(env, "0") != 0) ? 1 : 0;
+    }
+    return cached == 1;
+}
+
 template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static void k_get_rows(const void *                            src0,
                        const int32_t *                         src1,
@@ -315,10 +327,15 @@ static void get_rows_q6_k_soa_sycl(ggml_backend_sycl_context & ctx,
     const size_t s11 = nb11 / ggml_element_size(src1);
     const size_t s12 = nb12 / ggml_element_size(src1);
 
-    stream->parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims), [=](sycl::nd_item<3> item_ct1) {
+    sycl::event evt = stream->parallel_for(
+        sycl::nd_range<3>(block_nums * block_dims, block_dims),
+        [=](sycl::nd_item<3> item_ct1) {
         k_get_rows_q6_k_soa<float>(src0_dd, src1_dd, dst_dd, ne00, ne01, ne12, s1, s2, s3, nb01, nb02, nb03, s10, s11,
                                    s12, item_ct1);
     });
+    if (ggml_sycl_wait_after_get_rows_q6_k_soa()) {
+        evt.wait_and_throw();
+    }
 
     GGML_UNUSED(dst);
     GGML_UNUSED(ctx);
@@ -1051,7 +1068,7 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     // Use device-specific pointers for TP mode (KV cache is allocated per-device)
     const int       device   = ctx.device;
-    const void *    src0_d   = ggml_sycl_get_data_ptr(dst->src[0], device);
+    const void *    src0_d   = ggml_sycl_get_layout_ptr(dst->src[0], device);
     const int32_t * src1_i32 = (const int32_t *) ggml_sycl_get_data_ptr(dst->src[1], device);
     float *         dst_d    = (float *) ggml_sycl_get_data_ptr(dst, device);
 
@@ -1182,7 +1199,7 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             {
                 // Check reorder mode for proper kernel dispatch
                 ggml_tensor_extra_gpu * extra  = (ggml_tensor_extra_gpu *) dst->src[0]->extra;
-                bool                    is_soa = extra && extra->optimized_feature.is_soa();
+                bool                    is_soa = ggml_sycl_layout_is_soa(extra);
 
                 if (is_soa) {
                     // SoA layout: all qs first, then all d
@@ -1192,7 +1209,7 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                     const int64_t d_offset = ne01 * ne00 / 2;
                     get_rows_sycl_reorder<QK4_0, QR4_0, dequantize_q4_0_reorder>(
                         ctx, dst->src[0], dst->src[1], dst, src0_d, src1_i32, dst_d, d_offset, ctx.stream());
-                } else if (extra && extra->optimized_feature.is_coalesced()) {
+                } else if (ggml_sycl_layout_is_coalesced(extra)) {
                     // Coalesced layout: word-major within tiles
                     // d_offset = total qs bytes = ne01 * ne00 / 2 (for Q4_0: 16 bytes qs per 32 values)
                     const int64_t ne00     = dst->src[0]->ne[0];
@@ -1223,7 +1240,7 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             {
                 // Check reorder mode for proper kernel dispatch
                 ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *) dst->src[0]->extra;
-                if (extra && extra->optimized_feature.is_soa()) {
+                if (ggml_sycl_layout_is_soa(extra)) {
                     // SoA layout: all qs first, then all d
                     // d_offset = total qs bytes = ne01 * ne00 (for Q8_0: 32 bytes qs per 32 values)
                     const int64_t ne00     = dst->src[0]->ne[0];
@@ -1231,7 +1248,7 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
                     const int64_t d_offset = ne01 * ne00;
                     get_rows_sycl_reorder<QK8_0, QR8_0, dequantize_q8_0_reorder>(
                         ctx, dst->src[0], dst->src[1], dst, src0_d, src1_i32, dst_d, d_offset, ctx.stream());
-                } else if (extra && extra->optimized_feature.is_coalesced()) {
+                } else if (ggml_sycl_layout_is_coalesced(extra)) {
                     // Coalesced layout: word-major within tiles
                     // d_offset = total qs bytes = ne01 * ne00 (for Q8_0: 32 bytes qs per 32 values)
                     const int64_t ne00     = dst->src[0]->ne[0];
@@ -1250,13 +1267,13 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             {
                 // Check reorder mode for proper kernel dispatch
                 ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *) dst->src[0]->extra;
-                if (extra && extra->optimized_feature.is_coalesced()) {
+                if (ggml_sycl_layout_is_coalesced(extra)) {
                     // Coalesced layout: variable tile decomposition with word-major ordering
                     // Uses new variable tile kernel that computes row_quants_bytes correctly
                     GGML_SYCL_DEBUG("Calling get_rows_q6_k_coalesced_variable_sycl\n");
                     get_rows_q6_k_coalesced_variable_sycl<float>(ctx, dst->src[0], dst->src[1], dst, src0_d, src1_i32,
                                                                  dst_d, ctx.stream());
-                } else if (extra && extra->optimized_feature.is_soa()) {
+                } else if (ggml_sycl_layout_is_soa(extra)) {
                     // Standard SoA layout: [all ql (n*128)][all qh (n*64)][all scales (n*16)][all d (n*2)]
                     get_rows_q6_k_soa_sycl(ctx, dst->src[0], dst->src[1], dst, src0_d, src1_i32, dst_d, ctx.stream());
                 } else {

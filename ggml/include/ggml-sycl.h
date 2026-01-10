@@ -24,6 +24,9 @@ GGML_BACKEND_API bool ggml_backend_is_sycl(ggml_backend_t backend);
 // devide buffer
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(int device);
 
+// KV cache buffer type (enforces safe per-allocation cap for chunking)
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_kv_buffer_type(int device);
+
 // split tensor buffer that splits matrices by rows across multiple devices
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_split_buffer_type(const float * tensor_split);
 
@@ -39,6 +42,9 @@ GGML_BACKEND_API int ggml_backend_sycl_get_tp_rank(void);
 
 // Check if running in multi-process TP mode
 GGML_BACKEND_API bool ggml_backend_sycl_is_multiprocess_tp(void);
+
+// KV buffer type for a backend device (falls back to default buffer type if not SYCL)
+GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_kv_buffer_type_from_dev(ggml_backend_dev_t device);
 
 // Get the byte offset for reading this rank's shard from GGUF file
 // For column-parallel tensors, this is the offset into the tensor data
@@ -58,6 +64,41 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_host_buffer_type(v
 // This is used for TP compute buffers to allow cross-device data sharing.
 // Unlike host_buffer_type, this uses the SYCL buffer interface so it works with SYCL kernels.
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_host_compute_buffer_type(int device);
+
+// Weight residency policy: true when dense weights should remain host-backed and streamed via unified cache.
+GGML_BACKEND_API bool ggml_backend_sycl_weights_evictable(void);
+// Set unified cache budget as a percentage of free VRAM (clamped 1..100).
+GGML_BACKEND_API void ggml_backend_sycl_set_unified_cache_budget_pct(int pct);
+
+// Register a host-backed weight tensor for SYCL layout metadata/accessors.
+GGML_BACKEND_API void ggml_backend_sycl_register_host_weight_tensor(ggml_backend_dev_t dev, struct ggml_tensor * tensor);
+
+// Register GGUF metadata for stable weight identity in the unified cache.
+// tensor_name: GGUF tensor name
+// file_idx: GGUF split index
+// file_offs: byte offset in the GGUF file
+// tensor_nbytes: GGUF tensor byte size
+GGML_BACKEND_API void ggml_backend_sycl_register_weight_identity(
+    const char * tensor_name, uint16_t file_idx, size_t file_offs, size_t tensor_nbytes);
+
+// Weight usage categories for layout selection.
+enum ggml_backend_sycl_tensor_usage {
+    GGML_SYCL_TENSOR_USAGE_UNKNOWN = 0,
+    GGML_SYCL_TENSOR_USAGE_ATTENTION_WEIGHT,
+    GGML_SYCL_TENSOR_USAGE_FFN_WEIGHT,
+    GGML_SYCL_TENSOR_USAGE_MOE_EXPERT_WEIGHT,
+    GGML_SYCL_TENSOR_USAGE_MOE_GATE,
+    GGML_SYCL_TENSOR_USAGE_EMBEDDING,
+    GGML_SYCL_TENSOR_USAGE_NORM,
+};
+
+// Register per-tensor usage metadata (used for layout selection).
+GGML_BACKEND_API void ggml_backend_sycl_register_weight_usage(
+    const char * tensor_name, enum ggml_backend_sycl_tensor_usage usage);
+
+// Get a stable cache key pointer for a weight tensor on the specified device.
+GGML_BACKEND_API const void * ggml_backend_sycl_get_weight_cache_key(
+    const struct ggml_tensor * tensor, int device);
 
 GGML_BACKEND_API void ggml_backend_sycl_print_sycl_devices(void);
 GGML_BACKEND_API void ggml_backend_sycl_get_gpu_list(int *id_list, int max_len);

@@ -631,13 +631,13 @@ void launch_xmx_moe_gemm_q8_0_soa(const int8_t *       weights_qs,    // [out_di
                             joint_matrix<sycl::sub_group, int8_t, use::a, XMX_M, XMX_K, layout::row_major> mat_a;
                             joint_matrix<sycl::sub_group, int8_t, use::b, XMX_K, XMX_N, layout::col_major> mat_b;
 
-                            // Load mat_a ONCE before TILES_M loop (matches ESIMD fused kernel)
-                            auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                                           sycl::access::decorated::no>(&slm_tokens[0]);
-                            joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
-
                             for (int tm = 0; tm < TILES_M; tm++) {
-                                // mat_a already loaded above
+                                // Load mat_a PER TILE (each tm processes different row)
+                                // FIX: Was loading once before loop, causing wrong tokens for rows > 0
+                                // SLM layout: [TILES_M * XMX_M * XMX_K], so tile tm starts at offset tm * XMX_M * XMX_K
+                                auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                                                   sycl::access::decorated::no>(&slm_tokens[tm * XMX_M * XMX_K]);
+                                joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
 
                                 for (int tn = 0; tn < TILES_N; tn++) {
                                     int row = wg_row + tm * XMX_M;
@@ -692,12 +692,14 @@ void launch_xmx_moe_gemm_q8_0_soa(const int8_t *       weights_qs,    // [out_di
                                 int col = wg_col + tn * XMX_N;
 
                                 if (row < batch && col < out_dim) {
-                                    // Extract row 0 from accumulator (8x16 output, FP16)
-                                    // Only row 0 is valid - we process one active row at a time
-                                    for (int i = lane; i < XMX_N; i += SG_SIZE) {
-                                        int out_col = col + i;
-                                        if (out_col < out_dim) {
-                                            output[row * out_dim + out_col] = sycl::half(float_acc[tm][tn][i]);
+                                    // Extract all XMX_M * XMX_N elements from accumulator (8x16 output, FP16)
+                                    for (int i = lane; i < XMX_M * XMX_N; i += SG_SIZE) {
+                                        int tile_row = i / XMX_N;
+                                        int tile_col = i % XMX_N;
+                                        int out_row = row + tile_row;
+                                        int out_col = col + tile_col;
+                                        if (out_row < batch && out_col < out_dim) {
+                                            output[out_row * out_dim + out_col] = sycl::half(float_acc[tm][tn][i]);
                                         }
                                     }
                                 }
@@ -1486,14 +1488,14 @@ void launch_xmx_moe_gemm_mxfp4(const void * weights_qs,  // [in_dim/32, out_dim]
                             joint_matrix<sycl::sub_group, int8_t, use::a, XMX_M, XMX_K, layout::row_major> mat_a;
                             joint_matrix<sycl::sub_group, int8_t, use::b, XMX_K, XMX_N, layout::col_major> mat_b;
 
-                            // Load mat_a ONCE before TILES_M loop (matches ESIMD fused kernel)
-                            auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                                           sycl::access::decorated::no>(&slm_tokens[0]);
-                            joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
-
                             // Compute tiles
                             for (int tm = 0; tm < TILES_M; tm++) {
-                                // mat_a already loaded above
+                                // Load mat_a PER TILE (each tm processes different row)
+                                // BUG FIX: Was loading once before loop, causing wrong tokens for rows > 0
+                                // SLM layout: [TILES_M * XMX_M * XMX_K], so tile tm starts at offset tm * XMX_M * XMX_K
+                                auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                                               sycl::access::decorated::no>(&slm_tokens[tm * XMX_M * XMX_K]);
+                                joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
 
                                 for (int tn = 0; tn < TILES_N; tn++) {
                                     int row = wg_row + tm * XMX_M;
@@ -1560,12 +1562,14 @@ void launch_xmx_moe_gemm_mxfp4(const void * weights_qs,  // [in_dim/32, out_dim]
                                 int col = wg_col + tn * XMX_N;
 
                                 if (row < batch && col < out_dim) {
-                                    // Extract row 0 from accumulator (8x16 output, FP16)
-                                    // Only row 0 is valid - we process one active row at a time
-                                    for (int i = lane; i < XMX_N; i += SG_SIZE) {
-                                        int out_col = col + i;
-                                        if (out_col < out_dim) {
-                                            output[row * out_dim + out_col] =
+                                    // Extract all XMX_M * XMX_N elements from accumulator (8x16 output, FP16)
+                                    for (int i = lane; i < XMX_M * XMX_N; i += SG_SIZE) {
+                                        int tile_row = i / XMX_N;
+                                        int tile_col = i % XMX_N;
+                                        int out_row = row + tile_row;
+                                        int out_col = col + tile_col;
+                                        if (out_row < batch && out_col < out_dim) {
+                                            output[out_row * out_dim + out_col] =
                                                 sycl::half(float_acc[tm][tn][i]);
                                         }
                                     }
@@ -1762,14 +1766,15 @@ void launch_xmx_moe_gemm_mxfp4_soa(const uint8_t *      weights_qs,    // [nbloc
                         joint_matrix<sycl::sub_group, int8_t, use::a, XMX_M, XMX_K, layout::row_major> mat_a;
                         joint_matrix<sycl::sub_group, int8_t, use::b, XMX_K, XMX_N, layout::col_major> mat_b;
 
-                        // Load mat_a ONCE before TILES_M loop (matches ESIMD fused kernel)
-                        auto slm_tokens_ptr =
-                            sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                     sycl::access::decorated::no>(&slm_tokens[0]);
-                        joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
-
                         for (int tm = 0; tm < TILES_M; tm++) {
-                            // mat_a already loaded above
+                            // Load mat_a PER TILE (each tm processes different row)
+                            // FIX: Was loading once before loop, causing wrong tokens for rows > 0
+                            // SLM layout: [TILES_M * XMX_M * XMX_K], so tile tm starts at offset tm * XMX_M * XMX_K
+                            auto slm_tokens_ptr =
+                                sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                         sycl::access::decorated::no>(&slm_tokens[tm * XMX_M * XMX_K]);
+                            joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
+
                             for (int tn = 0; tn < TILES_N; tn++) {
                                 int row = wg_row + tm * XMX_M;
                                 int col = wg_col + tn * XMX_N;
@@ -1820,12 +1825,14 @@ void launch_xmx_moe_gemm_mxfp4_soa(const uint8_t *      weights_qs,    // [nbloc
                             int col = wg_col + tn * XMX_N;
 
                             if (row < batch && col < out_dim) {
-                                // Extract row 0 from accumulator (8x16 output, FP16)
-                                // Only row 0 is valid - we process one active row at a time
-                                for (int elem = lane; elem < XMX_N; elem += SG_SIZE) {
-                                    int out_col = col + elem;
-                                    if (out_col < out_dim) {
-                                        output[row * out_dim + out_col] =
+                                // Extract all XMX_M * XMX_N elements from accumulator (8x16 output, FP16)
+                                for (int elem = lane; elem < XMX_M * XMX_N; elem += SG_SIZE) {
+                                    int tile_row = elem / XMX_N;
+                                    int tile_col = elem % XMX_N;
+                                    int out_row = row + tile_row;
+                                    int out_col = col + tile_col;
+                                    if (out_row < batch && out_col < out_dim) {
+                                        output[out_row * out_dim + out_col] =
                                             static_cast<sycl::half>(float_acc[tm][tn][elem]);
                                     }
                                 }
@@ -2033,13 +2040,13 @@ void launch_xmx_moe_gemm_mxfp4_coalesced(
                             joint_matrix<sycl::sub_group, int8_t, use::a, XMX_M, XMX_K, layout::row_major> mat_a;
                             joint_matrix<sycl::sub_group, int8_t, use::b, XMX_K, XMX_N, layout::col_major> mat_b;
 
-                            // Load mat_a ONCE before TILES_M loop (matches ESIMD fused kernel)
-                            auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                                           sycl::access::decorated::no>(&slm_tokens[0]);
-                            joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
-
                             for (int tm = 0; tm < TILES_M; tm++) {
-                                // mat_a already loaded above
+                                // Load mat_a PER TILE (each tm processes different row)
+                                // FIX: Was loading once before loop, causing wrong tokens for rows > 0
+                                // SLM layout: [TILES_M * XMX_M * XMX_K], so tile tm starts at offset tm * XMX_M * XMX_K
+                                auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
+                                                                                   sycl::access::decorated::no>(&slm_tokens[tm * XMX_M * XMX_K]);
+                                joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
 
                                 for (int tn = 0; tn < TILES_N; tn++) {
                                     int row = wg_row + tm * XMX_M;
@@ -2091,12 +2098,14 @@ void launch_xmx_moe_gemm_mxfp4_coalesced(
                                 int col = wg_col + tn * XMX_N;
 
                                 if (row < batch && col < out_dim) {
-                                    // Extract row 0 from accumulator (8x16 output, FP16)
-                                    // Only row 0 is valid - we process one active row at a time
-                                    for (int elem = lane; elem < XMX_N; elem += SG_SIZE) {
-                                        int out_col = col + elem;
-                                        if (out_col < out_dim) {
-                                            output[row * out_dim + out_col] =
+                                    // Extract all XMX_M * XMX_N elements from accumulator (8x16 output, FP16)
+                                    for (int elem = lane; elem < XMX_M * XMX_N; elem += SG_SIZE) {
+                                        int tile_row = elem / XMX_N;
+                                        int tile_col = elem % XMX_N;
+                                        int out_row = row + tile_row;
+                                        int out_col = col + tile_col;
+                                        if (out_row < batch && out_col < out_dim) {
+                                            output[out_row * out_dim + out_col] =
                                                 static_cast<sycl::half>(float_acc[tm][tn][elem]);
                                         }
                                     }

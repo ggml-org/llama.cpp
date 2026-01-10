@@ -144,7 +144,7 @@ llama_kv_cache::llama_kv_cache(
                 LLAMA_LOG_DEBUG("%s: layer %3d: using TP buffer type for KV cache\n", __func__, il);
             } else {
                 auto * dev = model.dev_layer(il);
-                buft = ggml_backend_dev_buffer_type(dev);
+                buft = ggml_backend_sycl_kv_buffer_type_from_dev(dev);
                 dev_name = ggml_backend_dev_name(dev);
             }
 #else

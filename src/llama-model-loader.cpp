@@ -609,6 +609,15 @@ llama_model_loader::llama_model_loader(
     n_kv      = gguf_get_n_kv(meta.get());
     n_tensors = weights_map.size();
 
+#ifdef GGML_USE_SYCL
+    for (const auto & it : weights_map) {
+        const llama_tensor_weight & w      = it.second;
+        const ggml_tensor *         tensor = w.tensor;
+        ggml_backend_sycl_register_weight_identity(
+            ggml_get_name(tensor), w.idx, w.offs, ggml_nbytes(tensor));
+    }
+#endif
+
     fver = (enum llama_fver) gguf_get_version(meta.get());
 
     LLAMA_LOG_INFO("%s: loaded meta data with %d key-value pairs and %d tensors from %s (version %s)\n",

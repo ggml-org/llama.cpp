@@ -1,8 +1,19 @@
 #include "norm.hpp"
 #include "ggml-sycl/common.hpp"
 #include "ggml-sycl/presets.hpp"
+#include <cstdlib>
+#include <cstring>
 #include <vector>
 #include <cmath>
+
+static bool ggml_sycl_wait_after_rms_norm_mul() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char * env = std::getenv("GGML_SYCL_WAIT_AFTER_RMS_NORM_MUL");
+        cached = (env && std::strcmp(env, "0") != 0) ? 1 : 0;
+    }
+    return cached == 1;
+}
 
 static void norm_f32(const float* x, float* dst, const int ncols, const int64_t stride_row, const int64_t stride_channel,
         const int64_t stride_sample, const float eps, const sycl::nd_item<3>& item_ct1, sycl::float2* s_sum, int block_size) {
@@ -836,9 +847,10 @@ static void rms_norm_mul_f32_sycl(const float* x, const float* mul, float* dst,
     GGML_ASSERT(ncols % WARP_SIZE == 0);
 
     const sycl::range<3> global_dims(nsamples, nchannels, nrows);
+    sycl::event evt;
     if (ncols < 1024) {
         const sycl::range<3> block_dims(1, 1, WARP_SIZE);
-        stream->submit([&](sycl::handler& cgh) {
+        evt = stream->submit([&](sycl::handler& cgh) {
             cgh.parallel_for(
                 sycl::nd_range<3>(global_dims * block_dims, block_dims),
                 [=](sycl::nd_item<3> item_ct1)
@@ -856,7 +868,7 @@ static void rms_norm_mul_f32_sycl(const float* x, const float* mul, float* dst,
         const int work_group_size = ggml_sycl_info().max_work_group_sizes[device];
         assert(work_group_size % (WARP_SIZE * WARP_SIZE) == 0);
         const sycl::range<3> block_dims(1, 1, work_group_size);
-        stream->submit([&](sycl::handler& cgh) {
+        evt = stream->submit([&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> s_sum_acc(sycl::range<1>(work_group_size / WARP_SIZE), cgh);
             sycl::local_accessor<float, 1> s_x_acc(sycl::range<1>(ncols), cgh);  // Cache for input row
             cgh.parallel_for(
@@ -876,7 +888,7 @@ static void rms_norm_mul_f32_sycl(const float* x, const float* mul, float* dst,
         const int work_group_size = ggml_sycl_info().max_work_group_sizes[device];
         assert(work_group_size % (WARP_SIZE * WARP_SIZE) == 0);
         const sycl::range<3> block_dims(1, 1, work_group_size);
-        stream->submit([&](sycl::handler& cgh) {
+        evt = stream->submit([&](sycl::handler& cgh) {
             sycl::local_accessor<float, 1> s_sum_acc_ct1(sycl::range<1>(work_group_size / WARP_SIZE), cgh);
             cgh.parallel_for(
                 sycl::nd_range<3>(global_dims * block_dims, block_dims),
@@ -889,6 +901,10 @@ static void rms_norm_mul_f32_sycl(const float* x, const float* mul, float* dst,
                                      eps, item_ct1, get_pointer(s_sum_acc_ct1), work_group_size);
                 });
             });
+    }
+    if (ggml_sycl_wait_after_rms_norm_mul()) {
+        // Chain a barrier instead of waiting to keep graph recording compatible.
+        stream->ext_oneapi_submit_barrier({evt});
     }
 }
 
@@ -1224,8 +1240,8 @@ void ggml_sycl_op_rms_norm_fused(ggml_backend_sycl_context & ctx, ggml_tensor * 
     }
     GGML_ASSERT(mul_src != nullptr);
 
-    // Use device-specific data pointers for TP support
-    const float * mul_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(mul_src, ctx.device));
+    // Use layout-aware pointer for weight tensors to ensure unified cache staging.
+    const float * mul_dd = static_cast<const float *>(ggml_sycl_get_layout_ptr(mul_src, ctx.device));
 
     // Get mul weights dimensions and strides
     const int mul_ncols = mul_src->ne[0];
@@ -1307,8 +1323,8 @@ void ggml_sycl_op_rms_norm_fused_add(ggml_backend_sycl_context & ctx, ggml_tenso
     }
     GGML_ASSERT(mul_src != nullptr);
 
-    // Use device-specific data pointers for TP support
-    const float * mul_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(mul_src, ctx.device));
+    // Use layout-aware pointer for weight tensors to ensure unified cache staging.
+    const float * mul_dd = static_cast<const float *>(ggml_sycl_get_layout_ptr(mul_src, ctx.device));
 
     // Get mul weights dimensions and strides
     const int mul_ncols = mul_src->ne[0];
@@ -1330,8 +1346,8 @@ void ggml_sycl_op_rms_norm_fused_add(ggml_backend_sycl_context & ctx, ggml_tenso
     }
     GGML_ASSERT(add_src != nullptr);
 
-    // Use device-specific data pointers for TP support
-    const float * add_dd = static_cast<const float *>(ggml_sycl_get_data_ptr(add_src, ctx.device));
+    // Use layout-aware pointer for weight tensors to ensure unified cache staging.
+    const float * add_dd = static_cast<const float *>(ggml_sycl_get_layout_ptr(add_src, ctx.device));
 
     // Get add tensor dimensions and strides
     const int add_ncols = add_src->ne[0];

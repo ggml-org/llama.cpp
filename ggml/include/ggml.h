@@ -679,6 +679,35 @@ extern "C" {
                                             // For sharded tensors, tensor->ne contains LOCAL dimensions
     };
 
+    // Tensor layout modes (for backend-specific layout optimizations)
+    enum ggml_layout_mode {
+        GGML_LAYOUT_AOS = 0,   // Array-of-Structures (original/mmap)
+        GGML_LAYOUT_SOA,       // Structure-of-Arrays
+        GGML_LAYOUT_COALESCED, // Warp-coalesced tile layout
+        GGML_LAYOUT_XMX_TILED, // XMX tile-aligned layout
+    };
+
+    // Backend-managed layout metadata for a tensor
+    struct ggml_tensor_layout {
+        enum ggml_layout_mode mode;  // Current layout mode
+        void * data_ptr;             // Canonical data pointer for the layout
+        size_t size;                 // Buffer size in bytes
+        bool   owns_memory;          // True if backend allocated data_ptr
+        int    device_id;            // Device ID for device-resident layouts
+
+        // Quantization metadata (backend may use for layout conversion)
+        enum ggml_type qtype;
+        int64_t        n_elements;
+        int64_t        n_experts;
+
+        // XMX-specific metadata (valid when mode == GGML_LAYOUT_XMX_TILED)
+        struct {
+            int64_t tile_n;
+            int64_t tile_k;
+            int64_t n_tile_groups;
+        } xmx_info;
+    };
+
     // n-dimensional tensor
     struct ggml_tensor {
         enum ggml_type type;
@@ -710,8 +739,9 @@ extern "C" {
         char name[GGML_MAX_NAME];
 
         void * extra; // extra things e.g. for ggml-cuda.cu
+        struct ggml_tensor_layout * layout; // backend-managed layout descriptor (optional)
 
-        char padding[8];
+        char padding[GGML_MEM_ALIGN];
     };
 
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
@@ -875,6 +905,7 @@ extern "C" {
     GGML_API enum ggml_glu_op ggml_get_glu_op(const struct ggml_tensor * tensor);
 
     GGML_API void *  ggml_get_data    (const struct ggml_tensor * tensor);
+    GGML_API void *  ggml_tensor_get_layout_ptr(const struct ggml_tensor * tensor);
     GGML_API float * ggml_get_data_f32(const struct ggml_tensor * tensor);
 
     GGML_API const char *         ggml_get_name   (const struct ggml_tensor * tensor);

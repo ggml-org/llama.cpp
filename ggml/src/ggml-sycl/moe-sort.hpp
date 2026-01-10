@@ -63,11 +63,13 @@ inline void moe_convert_f32_to_f16(const char *  tokens_f32,  // Raw byte pointe
 // Sort tokens by expert ID for efficient batched GEMM
 // Returns total number of (token, expert) pairs processed
 template <int MAX_EXPERTS = 64>
-void moe_count_tokens_per_expert(const int32_t * expert_ids,     // [n_tokens * n_ids] expert assignments
-                                 int32_t *       expert_counts,  // [MAX_EXPERTS] output counts
-                                 int64_t         n_tokens,
-                                 int64_t         n_ids,
-                                 sycl::queue &   queue) {
+void moe_count_tokens_per_expert(const char *  ids_base,       // Raw ids base pointer
+                                 size_t        ids_nb0,        // Byte stride between id slots
+                                 size_t        ids_nb1,        // Byte stride between tokens
+                                 int32_t *     expert_counts,  // [MAX_EXPERTS] output counts
+                                 int64_t       n_tokens,
+                                 int64_t       n_ids,
+                                 sycl::queue & queue) {
     // Zero counts
     queue.memset(expert_counts, 0, MAX_EXPERTS * sizeof(int32_t)).wait();
 
@@ -75,7 +77,11 @@ void moe_count_tokens_per_expert(const int32_t * expert_ids,     // [n_tokens * 
     queue
         .parallel_for(sycl::range<1>(n_tokens * n_ids),
                       [=](sycl::id<1> idx) {
-                          int expert = expert_ids[idx];
+                          const int64_t token_idx = idx[0] / n_ids;
+                          const int64_t id_slot   = idx[0] % n_ids;
+                          const int32_t * id_ptr =
+                              reinterpret_cast<const int32_t *>(ids_base + token_idx * ids_nb1 + id_slot * ids_nb0);
+                          int expert = *id_ptr;
                           if (expert >= 0 && expert < MAX_EXPERTS) {
                               sycl::atomic_ref<int32_t, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                                sycl::access::address_space::global_space>(expert_counts[expert])
@@ -125,7 +131,9 @@ inline void moe_compute_expert_offsets(
 template <typename T>
 void moe_sort_tokens_by_expert(const T *         tokens_in,         // [n_tokens * ne11, hidden_dim] pre-converted rows
                                T *               tokens_sorted,     // [total_pairs, hidden_dim]
-                               const int32_t *   expert_ids,        // [n_tokens * n_ids]
+                               const char *      ids_base,          // Raw ids base pointer
+                               size_t            ids_nb0,           // Byte stride between id slots
+                               size_t            ids_nb1,           // Byte stride between tokens
                                int32_t *         expert_write_pos,  // [n_experts] atomic write positions
                                MoETokenMapping * token_map,         // [total_pairs] for scatter-back
                                int64_t           n_tokens,
@@ -140,7 +148,9 @@ void moe_sort_tokens_by_expert(const T *         tokens_in,         // [n_tokens
                       [=](sycl::id<1> idx) {
                           int64_t token_idx = idx / n_ids;
                           int64_t id_slot   = idx % n_ids;
-                          int     expert    = expert_ids[idx];
+                          const int32_t * id_ptr =
+                              reinterpret_cast<const int32_t *>(ids_base + token_idx * ids_nb1 + id_slot * ids_nb0);
+                          int     expert    = *id_ptr;
 
                           if (expert < 0 || expert >= n_experts) {
                               return;
@@ -254,12 +264,14 @@ inline sycl::event moe_convert_f32_to_f16_async(const char *  tokens_f32,
 
 // Async token counting - returns event for chaining
 template <int MAX_EXPERTS = 64>
-sycl::event moe_count_tokens_per_expert_async(const int32_t * expert_ids,
-                                               int32_t *       expert_counts,
-                                               int64_t         n_tokens,
-                                               int64_t         n_ids,
-                                               sycl::queue &   queue,
-                                               sycl::event     dep_event = {}) {
+sycl::event moe_count_tokens_per_expert_async(const char *  ids_base,
+                                               size_t        ids_nb0,
+                                               size_t        ids_nb1,
+                                               int32_t *     expert_counts,
+                                               int64_t       n_tokens,
+                                               int64_t       n_ids,
+                                               sycl::queue & queue,
+                                               sycl::event   dep_event = {}) {
     // Zero counts (with dependency on previous event if provided)
     sycl::event memset_event;
     if (dep_event.get_info<sycl::info::event::command_execution_status>() !=
@@ -273,7 +285,11 @@ sycl::event moe_count_tokens_per_expert_async(const int32_t * expert_ids,
     return queue.submit([&](sycl::handler & cgh) {
         cgh.depends_on(memset_event);
         cgh.parallel_for(sycl::range<1>(n_tokens * n_ids), [=](sycl::id<1> idx) {
-            int expert = expert_ids[idx];
+            const int64_t token_idx = idx[0] / n_ids;
+            const int64_t id_slot   = idx[0] % n_ids;
+            const int32_t * id_ptr =
+                reinterpret_cast<const int32_t *>(ids_base + token_idx * ids_nb1 + id_slot * ids_nb0);
+            int expert = *id_ptr;
             if (expert >= 0 && expert < MAX_EXPERTS) {
                 sycl::atomic_ref<int32_t, sycl::memory_order::relaxed, sycl::memory_scope::device,
                                  sycl::access::address_space::global_space>(expert_counts[expert])
@@ -373,7 +389,9 @@ inline sycl::event moe_compute_expert_offsets_gpu_simple(const int32_t * expert_
 template <typename T>
 sycl::event moe_sort_tokens_by_expert_async(const T *         tokens_in,
                                              T *               tokens_sorted,
-                                             const int32_t *   expert_ids,
+                                             const char *      ids_base,
+                                             size_t            ids_nb0,
+                                             size_t            ids_nb1,
                                              int32_t *         expert_write_pos,
                                              MoETokenMapping * token_map,
                                              int64_t           n_tokens,
@@ -392,7 +410,9 @@ sycl::event moe_sort_tokens_by_expert_async(const T *         tokens_in,
         cgh.parallel_for(sycl::range<1>(n_tokens * n_ids), [=](sycl::id<1> idx) {
             int64_t token_idx = idx / n_ids;
             int64_t id_slot   = idx % n_ids;
-            int     expert    = expert_ids[idx];
+            const int32_t * id_ptr =
+                reinterpret_cast<const int32_t *>(ids_base + token_idx * ids_nb1 + id_slot * ids_nb0);
+            int     expert    = *id_ptr;
 
             if (expert < 0 || expert >= n_experts) {
                 return;

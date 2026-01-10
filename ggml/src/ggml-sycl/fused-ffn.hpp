@@ -311,7 +311,7 @@ static void fused_ffn_gate_up_swiglu_sycl(
 // Try to use fused FFN kernel if conditions are met
 // Returns true if fusion was applied, false to fall back to separate kernels
 static bool try_fused_ffn_gate_up_swiglu(
-    [[maybe_unused]] ggml_backend_sycl_context & ctx,
+    ggml_backend_sycl_context & ctx,
     const ggml_tensor * gate_weight,   // W_gate [nrows_out, ncols_in]
     const ggml_tensor * up_weight,     // W_up [nrows_out, ncols_in]
     const void * input_q8,             // x quantized to Q8_1 [batch_size, ncols_in]
@@ -342,10 +342,14 @@ static bool try_fused_ffn_gate_up_swiglu(
     const int ncols_in = gate_weight->ne[0];
     const int nrows_out = gate_weight->ne[1];
 
-    // Get device pointers
-    const void * gate_data = gate_weight->data;
-    const void * up_data = up_weight->data;
-    float * dst_data = (float *) dst->data;
+    // Get device pointers (AOS only)
+    const int device = ctx.device;
+    const void * gate_data = ggml_sycl_get_layout_ptr_for(gate_weight, device, GGML_LAYOUT_AOS);
+    const void * up_data   = ggml_sycl_get_layout_ptr_for(up_weight, device, GGML_LAYOUT_AOS);
+    if (!gate_data || !up_data) {
+        return false;
+    }
+    float * dst_data = (float *) ggml_sycl_get_data_ptr(dst, device);
 
     // Use multi-row kernel by default (better GPU utilization via SLM caching)
     // Falls back to single-row kernel if GGML_SYCL_FFN_SINGLE_ROW=1

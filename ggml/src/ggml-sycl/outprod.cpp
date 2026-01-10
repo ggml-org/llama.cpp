@@ -22,10 +22,30 @@ void ggml_sycl_op_out_prod(ggml_backend_sycl_context& ctx, ggml_tensor* dst) {
     GGML_ASSERT(ne0 == ne00);   // Output rows match src0 rows
     GGML_ASSERT(ne1 == ne10);   // Output cols match src1 cols
 
+    const int device = ctx.device;
+
     // Get data pointers
-    const float* src0_d = (const float*)src0->data;
-    const float* src1_d = (const float*)src1->data;
-    float* dst_d = (float*)dst->data;
+    const float * src0_d = (const float *) ggml_sycl_get_data_ptr(src0, device);
+    const float * src1_d = (const float *) ggml_sycl_get_data_ptr(src1, device);
+    float *       dst_d  = (float *) ggml_sycl_get_data_ptr(dst, device);
+
+    // oneDNN can mis-handle this degenerate case; use a simple kernel instead.
+    if (ne1 == 1 && ne01 == 1) {
+        const int64_t n = ne0;
+        const int block_size = 256;
+        const int64_t num_blocks = (n + block_size - 1) / block_size;
+
+        stream->parallel_for(
+            sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks * block_size),
+                              sycl::range<3>(1, 1, block_size)),
+            [=](sycl::nd_item<3> item) {
+                const int64_t i = item.get_global_id(2);
+                if (i < n) {
+                    dst_d[i] = src0_d[i] * src1_d[0];
+                }
+            });
+        return;
+    }
 
     // Handle transposition of src1
     const bool src1_T = ggml_is_transposed(src1);

@@ -1021,8 +1021,9 @@ to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst, bool ful
     // SoA-aware reorder kernels compute d_offset from k parameter.
     // This only works when k == full tensor size. For row slices, use standard kernels.
     // Only SOA layout has reorder dequantization kernels (no COALESCED version).
-    const bool use_reorder =
-        full_tensor && dst->src[0]->extra && ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.is_soa();
+    const ggml_tensor_extra_gpu * extra =
+        dst->src[0]->extra ? static_cast<const ggml_tensor_extra_gpu *>(dst->src[0]->extra) : nullptr;
+    const bool use_reorder = full_tensor && ggml_sycl_layout_is_soa(extra);
 
     switch (type) {
         case GGML_TYPE_Q4_0:
@@ -1092,8 +1093,9 @@ to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor * dst, bool ful
     // SoA-aware reorder kernels compute d_offset from k parameter.
     // This only works when k == full tensor size. For row slices, use standard kernels.
     // Only SOA layout has reorder dequantization kernels (no COALESCED version).
-    const bool use_reorder =
-        full_tensor && dst->src[0]->extra && ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.is_soa();
+    const ggml_tensor_extra_gpu * extra =
+        dst->src[0]->extra ? static_cast<const ggml_tensor_extra_gpu *>(dst->src[0]->extra) : nullptr;
+    const bool use_reorder = full_tensor && ggml_sycl_layout_is_soa(extra);
 
     switch (type) {
         case GGML_TYPE_Q4_0:

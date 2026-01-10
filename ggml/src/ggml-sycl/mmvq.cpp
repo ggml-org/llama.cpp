@@ -672,15 +672,18 @@ static void mul_mat_vec_q(const void * __restrict__ vx, const void * __restrict_
 // For MUL_MAT_ID: reads ids[iid1][id] to determine which expert weights to use
 // This allows GPU-side expert routing without host sync
 template <int qk, int qi, typename block_q_t, int vdr, vec_dot_q_sycl_t vec_dot_q_sycl>
-static void mul_mat_vec_q_id(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
+static void mul_mat_vec_q_id(const void * __restrict__ vx,
+                              const void * const * __restrict__ expert_ptrs,
+                              const void * __restrict__ vy,
+                              float * __restrict__ dst,
                               const int32_t * __restrict__ ids, const int ncols, const int nrows_per_expert,
-                              const int n_ids, const int ne11,
+                              const int n_ids, const int n_tokens, const int ne11,
                               const int64_t stride_expert_x,
                               const int64_t ids_nb0, const int64_t ids_nb1,
                               const int64_t nb11, const int64_t nb12,
                               const int64_t nb1, const int64_t nb2,
                               const sycl::nd_item<3> & item_ct1) {
-    // batch_idx from block.y dimension (linearized over iid1 * n_ids + id)
+    // batch_idx from block.y dimension (linearized over id * n_tokens + iid1)
     const int batch_idx = item_ct1.get_group(1);
     // row within expert from block.z dimension
     const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
@@ -689,12 +692,15 @@ static void mul_mat_vec_q_id(const void * __restrict__ vx, const void * __restri
         return;
     }
 
-    // Decompose batch_idx into (iid1, id) - 2D iteration structure
-    const int iid1 = batch_idx / n_ids;  // Token position
-    const int id = batch_idx % n_ids;    // Expert selection index
+    // Decompose batch_idx into (iid1, id) - row-major by id
+    const int id = batch_idx / n_tokens;    // Expert selection index
+    const int iid1 = batch_idx - id * n_tokens;  // Token position
 
-    // Read expert ID from ids tensor using proper 2D indexing
-    const int32_t expert_id = *(const int32_t *)((const char*)ids + iid1 * ids_nb1 + id * ids_nb0);
+    int32_t expert_id = -1;
+    if (ids) {
+        // Read expert ID from ids tensor using proper 2D indexing
+        expert_id = *(const int32_t *)((const char*)ids + iid1 * ids_nb1 + id * ids_nb0);
+    }
 
     // Compute src1 and dst offsets matching host-side logic
     const int64_t i11 = id % ne11;
@@ -707,8 +713,17 @@ static void mul_mat_vec_q_id(const void * __restrict__ vx, const void * __restri
 
     assert(blocks_per_warp > 0);
 
-    // Expert weights: offset by expert_id * stride_expert_x
-    const block_q_t *  x = (const block_q_t *) ((const char*)vx + expert_id * stride_expert_x);
+    // Expert weights: from pointer table when provided, else stride-based
+    const block_q_t * x = nullptr;
+    if (expert_ptrs) {
+        if (ids) {
+            x = static_cast<const block_q_t *>(expert_ptrs[expert_id]);
+        } else {
+            x = static_cast<const block_q_t *>(expert_ptrs[batch_idx]);
+        }
+    } else if (expert_id >= 0) {
+        x = (const block_q_t *) ((const char*)vx + expert_id * stride_expert_x);
+    }
     // Input: offset using proper 2D indexing
     const block_q8_1 * y = (const block_q8_1 *) ((const char*)vy + i11 * nb11 + i12 * nb12);
 
@@ -1581,6 +1596,20 @@ bool convert_tensor_to_coalesced(const ggml_tensor* tensor, dpct::queue_ptr stre
     // SET THE FLAG - mark tensor as COALESCED (via private friend access)
     extra->optimized_feature.set_reorder_mode_(reorder_mode::COALESCED, tensor->name, caller);
 
+    // Keep unified layout descriptor in sync
+    extra->layout.mode = GGML_LAYOUT_COALESCED;
+    extra->layout.data_ptr = const_cast<void *>(tensor->data);
+    extra->layout.size = ggml_nbytes(tensor);
+    extra->layout.owns_memory = false;
+    if (extra->layout.device_id < 0) {
+        int device_id = -1;
+        SYCL_CHECK(CHECK_TRY_ERROR(device_id = get_current_device_id()));
+        extra->layout.device_id = device_id;
+    }
+    extra->layout.qtype = tensor->type;
+    extra->layout.n_elements = ggml_nelements(tensor);
+    extra->layout.n_experts = tensor->ne[2] > 0 ? tensor->ne[2] : 1;
+
     GGML_SYCL_DEBUG("[COALESCED-UNIFIED] Converted '%s' (%lldx%lld) type=%d caller=%s\n",
             tensor->name ? tensor->name : "?", (long long)ncols, (long long)nrows,
             tensor->type, caller ? caller : "UNKNOWN");
@@ -2290,9 +2319,13 @@ static void mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * vy, float *
 }
 
 // MoE dispatch: Q4_0 with expert routing via ids tensor (GPU-side, no host sync)
-static void mul_mat_vec_q4_0_q8_1_id_sycl(const void * vx, const void * vy, float * dst, const int32_t * ids,
+static void mul_mat_vec_q4_0_q8_1_id_sycl(const void * vx,
+                                          const void * const * expert_ptrs,
+                                          const void * vy,
+                                          float * dst,
+                                          const int32_t * ids,
                                           const int ncols, const int nrows_per_expert,
-                                          const int total_batches, const int n_ids, const int ne11,
+                                          const int total_batches, const int n_ids, const int n_tokens, const int ne11,
                                           const int64_t stride_expert_x,
                                           const int64_t ids_nb0, const int64_t ids_nb1,
                                           const int64_t nb11, const int64_t nb12,
@@ -2308,8 +2341,8 @@ static void mul_mat_vec_q4_0_q8_1_id_sycl(const void * vx, const void * vy, floa
         cgh.parallel_for<mmvq_id_kernel_name<GGML_TYPE_Q4_0>>(sycl::nd_range<3>(block_nums * block_dims, block_dims),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              mul_mat_vec_q_id<QK4_0, QI4_0, block_q4_0, VDR_Q4_0_Q8_1_MMVQ, vec_dot_q4_0_q8_1>(
-                                 vx, vy, dst, ids, ncols, nrows_per_expert,
-                                 n_ids, ne11, stride_expert_x,
+                                 vx, expert_ptrs, vy, dst, ids, ncols, nrows_per_expert,
+                                 n_ids, n_tokens, ne11, stride_expert_x,
                                  ids_nb0, ids_nb1, nb11, nb12, nb1, nb2, item_ct1);
                          });
     });
@@ -2439,9 +2472,13 @@ static void mul_mat_vec_q8_0_q8_1_sycl(const void *vx, const void *vy,
 }
 
 // MoE dispatch: Q8_0 with expert routing via ids tensor (GPU-side, no host sync)
-static void mul_mat_vec_q8_0_q8_1_id_sycl(const void * vx, const void * vy, float * dst, const int32_t * ids,
+static void mul_mat_vec_q8_0_q8_1_id_sycl(const void * vx,
+                                          const void * const * expert_ptrs,
+                                          const void * vy,
+                                          float * dst,
+                                          const int32_t * ids,
                                           const int ncols, const int nrows_per_expert,
-                                          const int total_batches, const int n_ids, const int ne11,
+                                          const int total_batches, const int n_ids, const int n_tokens, const int ne11,
                                           const int64_t stride_expert_x,
                                           const int64_t ids_nb0, const int64_t ids_nb1,
                                           const int64_t nb11, const int64_t nb12,
@@ -2456,8 +2493,8 @@ static void mul_mat_vec_q8_0_q8_1_id_sycl(const void * vx, const void * vy, floa
         cgh.parallel_for<mmvq_id_kernel_name<GGML_TYPE_Q8_0>>(sycl::nd_range<3>(block_nums * block_dims, block_dims),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              mul_mat_vec_q_id<QK8_0, QI8_0, block_q8_0, VDR_Q8_0_Q8_1_MMVQ, vec_dot_q8_0_q8_1>(
-                                 vx, vy, dst, ids, ncols, nrows_per_expert,
-                                 n_ids, ne11, stride_expert_x,
+                                 vx, expert_ptrs, vy, dst, ids, ncols, nrows_per_expert,
+                                 n_ids, n_tokens, ne11, stride_expert_x,
                                  ids_nb0, ids_nb1, nb11, nb12, nb1, nb2, item_ct1);
                          });
     });
@@ -2827,7 +2864,7 @@ static void mul_mat_vec_iq4_xs_q8_1_sycl(const void *vx, const void *vy,
 template <int qk, int qi, typename block_q_t, int vdr>
 static void mul_mat_vec_q_mxfp4_q8_1_id(const void * __restrict__ vx, const void * __restrict__ vy, float * __restrict__ dst,
                                          const int32_t * __restrict__ ids, const int ncols, const int nrows_per_expert,
-                                         const int n_ids, const int ne11,
+                                         const int n_ids, const int n_tokens, const int ne11,
                                          const int64_t stride_expert_x,
                                          const int64_t ids_nb0, const int64_t ids_nb1,
                                          const int64_t nb11, const int64_t nb12,
@@ -2840,9 +2877,9 @@ static void mul_mat_vec_q_mxfp4_q8_1_id(const void * __restrict__ vx, const void
         return;
     }
 
-    // Decompose batch_idx into (iid1, id) - 2D iteration structure
-    const int iid1 = batch_idx / n_ids;  // Token position
-    const int id = batch_idx % n_ids;    // Expert selection index
+    // Decompose batch_idx into (iid1, id) - row-major by id
+    const int id = batch_idx / n_tokens;  // Expert selection index
+    const int iid1 = batch_idx - id * n_tokens;  // Token position
 
     // Read expert ID from ids tensor using proper 2D indexing
     const int32_t expert_id = *(const int32_t *)((const char*)ids + iid1 * ids_nb1 + id * ids_nb0);
@@ -2885,9 +2922,13 @@ static void mul_mat_vec_q_mxfp4_q8_1_id(const void * __restrict__ vx, const void
 }
 
 // MoE dispatch: MXFP4 with expert routing via ids tensor (GPU-side, no host sync)
-static void mul_mat_vec_mxfp4_q8_1_id_sycl(const void * vx, const void * vy, float * dst, const int32_t * ids,
+static void mul_mat_vec_mxfp4_q8_1_id_sycl(const void * vx,
+                                           const void * const * expert_ptrs,
+                                           const void * vy,
+                                           float * dst,
+                                           const int32_t * ids,
                                            const int ncols, const int nrows_per_expert,
-                                           const int total_batches, const int n_ids, const int ne11,
+                                           const int total_batches, const int n_ids, const int n_tokens, const int ne11,
                                            const int64_t stride_expert_x,
                                            const int64_t ids_nb0, const int64_t ids_nb1,
                                            const int64_t nb11, const int64_t nb12,
@@ -2904,8 +2945,8 @@ static void mul_mat_vec_mxfp4_q8_1_id_sycl(const void * vx, const void * vy, flo
         cgh.parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              mul_mat_vec_q_id<QK_MXFP4, QI_MXFP4, block_mxfp4, VDR_MXFP4_Q8_1_MMVQ, vec_dot_mxfp4_q8_1>(
-                                 vx, vy, dst, ids, ncols, nrows_per_expert,
-                                 n_ids, ne11, stride_expert_x,
+                                 vx, expert_ptrs, vy, dst, ids, ncols, nrows_per_expert,
+                                 n_ids, n_tokens, ne11, stride_expert_x,
                                  ids_nb0, ids_nb1, nb11, nb12, nb1, nb2, item_ct1);
                          });
     });
@@ -2917,6 +2958,7 @@ static void mul_mat_vec_mxfp4_q8_1_id_sycl(const void * vx, const void * vy, flo
 // After reorder_qw_mxfp4: qs at offset 0, scales at offset (ncols/2)*total_rows
 static void mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
     const uint8_t * __restrict__ vx,      // Base pointer to reordered MXFP4 tensor (SoA layout)
+    const uint8_t * const * __restrict__ expert_ptrs,  // Optional per-expert base pointers (SoA layout)
     const void * __restrict__ vy,         // Base pointer to Q8_1 tensor (SoA layout)
     float * __restrict__ dst,
     const int32_t * __restrict__ ids,
@@ -2924,8 +2966,10 @@ static void mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
     const int ncols_y,                    // Q8_1 row size (for SoA ds offset)
     const int nrows_per_expert,
     const int n_ids,
+    const int n_tokens,
     const int ne11,
     const int64_t total_qs_size,          // Offset to MXFP4 scale region
+    const int64_t total_qs_size_per_expert,  // Offset to MXFP4 scale region (per-expert layout)
     const int64_t ids_nb0,
     const int64_t ids_nb1,
     const int64_t nb11,
@@ -2941,12 +2985,15 @@ static void mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
         return;
     }
 
-    // Decompose batch_idx into (iid1, id)
-    const int iid1 = batch_idx / n_ids;
-    const int id = batch_idx % n_ids;
+    // Decompose batch_idx into (iid1, id) - row-major by id
+    const int id = batch_idx / n_tokens;
+    const int iid1 = batch_idx - id * n_tokens;
 
-    // Read expert ID from ids tensor
-    const int32_t expert_id = *(const int32_t *)((const char*)ids + iid1 * ids_nb1 + id * ids_nb0);
+    int32_t expert_id = -1;
+    if (ids) {
+        // Read expert ID from ids tensor
+        expert_id = *(const int32_t *)((const char*)ids + iid1 * ids_nb1 + id * ids_nb0);
+    }
 
     // Compute src1 and dst offsets
     const int64_t i11 = id % ne11;
@@ -2956,14 +3003,26 @@ static void mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
 
     const int blocks_per_row = ncols / QK_MXFP4;
 
-    // SoA layout for MXFP4: compute absolute row offset for this expert
-    // total_rows = nrows_per_expert * num_experts, flattened during reorder
-    const int64_t abs_row = expert_id * nrows_per_expert + row;
-    const int64_t row_qs_offset = abs_row * blocks_per_row * (QK_MXFP4 / 2);  // 16 bytes per block
-    const int64_t row_scale_offset = total_qs_size + abs_row * blocks_per_row;
+    const bool use_expert_ptrs = (expert_ptrs != nullptr);
+    const uint8_t * base = nullptr;
+    if (use_expert_ptrs) {
+        if (ids) {
+            base = expert_ptrs[expert_id];
+        } else {
+            base = expert_ptrs[batch_idx];
+        }
+    } else {
+        base = vx;
+    }
+    const int64_t qs_offset = use_expert_ptrs ? total_qs_size_per_expert : total_qs_size;
 
-    const uint8_t * qs_row = vx + row_qs_offset;
-    const uint8_t * scale_row = vx + row_scale_offset;
+    // SoA layout for MXFP4: compute absolute row offset
+    const int64_t abs_row = use_expert_ptrs ? row : (expert_id * nrows_per_expert + row);
+    const int64_t row_qs_offset = abs_row * blocks_per_row * (QK_MXFP4 / 2);  // 16 bytes per block
+    const int64_t row_scale_offset = qs_offset + abs_row * blocks_per_row;
+
+    const uint8_t * qs_row = base + row_qs_offset;
+    const uint8_t * scale_row = base + row_scale_offset;
 
     // Q8_1 input: base pointer for this token (SoA layout)
     const char * y_base = (const char*)vy + i11 * nb11 + i12 * nb12;
@@ -3017,6 +3076,7 @@ static void mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
 // Both MXFP4 weights and Q8_1 inputs must be in SoA layout
 static void reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(
     const void * vx,
+    const void * const * expert_ptrs,
     const void * vy,
     float * dst,
     const int32_t * ids,
@@ -3026,6 +3086,7 @@ static void reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(
     const int num_experts,
     const int total_batches,
     const int n_ids,
+    const int n_tokens,
     const int ne11,
     const int64_t ids_nb0,
     const int64_t ids_nb1,
@@ -3043,18 +3104,148 @@ static void reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(
     // SoA layout for MXFP4: qs_size = (ncols / 2) * total_rows
     const int64_t total_rows = (int64_t)nrows_per_expert * num_experts;
     const int64_t total_qs_size = (ncols / 2) * total_rows;
+    const int64_t total_qs_size_per_expert = (ncols / 2) * nrows_per_expert;
 
     stream->submit([&](sycl::handler & cgh) {
         cgh.parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
                                  (const uint8_t *)vx,
+                                 (const uint8_t * const *) expert_ptrs,
                                  vy,
                                  dst, ids, ncols, ncols_y, nrows_per_expert,
-                                 n_ids, ne11, total_qs_size,
+                                 n_ids, n_tokens, ne11, total_qs_size, total_qs_size_per_expert,
                                  ids_nb0, ids_nb1, nb11, nb12, nb1, nb2,
                                  item_ct1);
                          });
+    });
+}
+
+static bool ggml_sycl_moe_ensure_compact_storage(ggml_backend_sycl_context & ctx,
+                                                 ggml_tensor_extra_gpu * extra,
+                                                 int64_t total_batches,
+                                                 bool allow_alloc) {
+    if (!extra || total_batches <= 0) {
+        return false;
+    }
+    if (ctx.device < 0 || ctx.device >= GGML_SYCL_MAX_DEVICES) {
+        return false;
+    }
+
+    sycl::queue * stream = ctx.stream();
+    const size_t bytes = static_cast<size_t>(total_batches) * sizeof(void *);
+
+    if (extra->moe_expert_ptrs_compact_device[ctx.device] != nullptr &&
+        extra->moe_expert_ptrs_compact_capacity[ctx.device] >= bytes) {
+        extra->moe_expert_ptrs_compact_size[ctx.device] = bytes;
+    } else {
+        if (!allow_alloc) {
+            return false;
+        }
+        if (extra->moe_expert_ptrs_compact_device[ctx.device] != nullptr) {
+            sycl::free(extra->moe_expert_ptrs_compact_device[ctx.device], *stream);
+            extra->moe_expert_ptrs_compact_device[ctx.device] = nullptr;
+            extra->moe_expert_ptrs_compact_capacity[ctx.device] = 0;
+            extra->moe_expert_ptrs_compact_size[ctx.device] = 0;
+        }
+        void * compact = sycl::malloc_device(bytes, *stream);
+        if (!compact) {
+            GGML_LOG_ERROR("[MOE] Failed to allocate compact pointer list (%zu bytes)\n", bytes);
+            return false;
+        }
+        extra->moe_expert_ptrs_compact_device[ctx.device] = compact;
+        extra->moe_expert_ptrs_compact_capacity[ctx.device] = bytes;
+        extra->moe_expert_ptrs_compact_size[ctx.device] = bytes;
+    }
+
+    if (extra->moe_expert_ptrs_missing_device[ctx.device] == nullptr) {
+        if (!allow_alloc) {
+            return false;
+        }
+        int * missing = sycl::malloc_device<int>(1, *stream);
+        if (!missing) {
+            GGML_LOG_ERROR("[MOE] Failed to allocate compact list missing flag\n");
+            return false;
+        }
+        extra->moe_expert_ptrs_missing_device[ctx.device] = missing;
+    }
+
+    return true;
+}
+
+bool ggml_sycl_moe_prepare_compact_list(ggml_backend_sycl_context & ctx,
+                                        const ggml_tensor * src0,
+                                        int64_t total_batches,
+                                        bool allow_alloc) {
+    if (!src0) {
+        return false;
+    }
+
+    auto * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+    if (!extra) {
+        return false;
+    }
+
+    return ggml_sycl_moe_ensure_compact_storage(ctx, extra, total_batches, allow_alloc);
+}
+
+static sycl::event ggml_sycl_build_moe_compact_list(sycl::queue & queue,
+                                                    void ** compact_ptrs,
+                                                    const void * const * expert_ptrs,
+                                                    const int32_t * ids,
+                                                    int64_t n_ids,
+                                                    int64_t n_tokens,
+                                                    int64_t n_experts,
+                                                    int64_t ids_nb0,
+                                                    int64_t ids_nb1,
+                                                    int * missing_flag,
+                                                    const std::vector<sycl::event> & deps) {
+    if (!compact_ptrs || !expert_ptrs || !ids || n_ids <= 0 || n_tokens <= 0) {
+        return sycl::event();
+    }
+
+    const size_t total_batches = static_cast<size_t>(n_ids * n_tokens);
+    sycl::event clear_event;
+    if (missing_flag) {
+        clear_event = queue.submit([&](sycl::handler & cgh) {
+            if (!deps.empty()) {
+                cgh.depends_on(deps);
+            }
+            cgh.single_task([=]() { *missing_flag = 0; });
+        });
+    }
+
+    std::vector<sycl::event> all_deps = deps;
+    if (missing_flag) {
+        all_deps.push_back(clear_event);
+    }
+
+    return queue.submit([&](sycl::handler & cgh) {
+        if (!all_deps.empty()) {
+            cgh.depends_on(all_deps);
+        }
+        cgh.parallel_for(sycl::range<1>(total_batches), [=](sycl::id<1> idx) {
+            const int64_t batch_idx = static_cast<int64_t>(idx[0]);
+            const int64_t id = batch_idx / n_tokens;
+            const int64_t iid1 = batch_idx - id * n_tokens;
+            const char * ids_base = reinterpret_cast<const char *>(ids);
+            const int32_t expert_id = *(const int32_t *)(ids_base + iid1 * ids_nb1 + id * ids_nb0);
+
+            void * expert_ptr = nullptr;
+            if (expert_id >= 0 && expert_id < n_experts) {
+                expert_ptr = const_cast<void *>(expert_ptrs[expert_id]);
+            }
+
+            compact_ptrs[batch_idx] = expert_ptr;
+
+            if (missing_flag && expert_ptr == nullptr) {
+                sycl::atomic_ref<int, sycl::memory_order::relaxed,
+                                 sycl::memory_scope::device,
+                                 sycl::access::address_space::global_space>
+                    missing_ref(*missing_flag);
+                missing_ref.store(1);
+            }
+        });
     });
 }
 
@@ -3063,6 +3254,7 @@ static void reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(
 // This must be called during decode phase, before graph recording starts.
 // MUL_MAT_ID normally allocates Q8_1 buffers dynamically via ggml_sycl_pool_alloc,
 // which is incompatible with SYCL graph recording.
+
 void ggml_sycl_moe_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cgraph * cgraph) {
     // Skip if already initialized with sufficient buffers
     if (ctx.moe_buffers.initialized) {
@@ -3156,12 +3348,10 @@ void ggml_sycl_moe_pre_allocate_buffers(ggml_backend_sycl_context & ctx, ggml_cg
 }
 #endif
 
-// MoE-aware MUL_MAT_ID dispatch: GPU-side expert routing without host sync
-// This allows SYCL graph recording to work with MoE models
-// Returns true if handled, false to fall back to host-side routing
 bool ggml_sycl_mul_mat_id_vec_q(
     ggml_backend_sycl_context & ctx,
-    const ggml_tensor *src0, const ggml_tensor *src1, const ggml_tensor *ids, ggml_tensor *dst) {
+    const ggml_tensor *src0, const ggml_tensor *src1, const ggml_tensor *ids, ggml_tensor *dst,
+    const layout_mode * forced_layout) {
 
     // Early batch size check - avoid expensive GGML_TENSOR_BINARY_OP_LOCALS for large batches
     // For large batch sizes, host-side routing with oneDNN batching is faster
@@ -3170,10 +3360,52 @@ bool ggml_sycl_mul_mat_id_vec_q(
     // Threshold determined empirically: MMVQ ~49 t/s for pp512, oneDNN ~675 t/s
     constexpr int64_t MMVQ_MOE_MAX_BATCH = 32;
     const int64_t batch_size = src1->ne[2];  // ne12 - number of tokens
-    if (batch_size > MMVQ_MOE_MAX_BATCH) {
+    const auto *  src0_extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+    const bool    host_weights = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+    const layout_mode layout = forced_layout
+                                   ? *forced_layout
+                                   : ggml_sycl_select_moe_mmvq_layout(src0, ctx.device, host_weights);
+    if (forced_layout) {
+        const layout_mode resolved = ggml_sycl_adjust_layout_for_tensor(src0, *forced_layout, ctx.device);
+        if (resolved != *forced_layout) {
+            GGML_SYCL_DEBUG("[MMVQ] Layout=%d unsupported for %s\n", (int) *forced_layout, src0->name);
+            return false;
+        }
+    }
+    if (!host_weights && src0_extra) {
+        const layout_mode effective = get_effective_layout_mode(src0_extra);
+        const bool allow_aos_fallback = forced_layout && layout == GGML_LAYOUT_AOS;
+        if (effective != layout && !allow_aos_fallback) {
+            GGML_SYCL_DEBUG("[MMVQ] Layout=%d mismatches effective=%d for %s\n",
+                            (int) layout, (int) effective, src0->name ? src0->name : "?");
+            return false;
+        }
+        if (effective != layout && allow_aos_fallback) {
+            GGML_SYCL_DEBUG("[MMVQ] Using AoS fallback for %s (effective=%d)\n",
+                            src0->name ? src0->name : "?", (int) effective);
+        }
+    }
+    if ((src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0) && layout != GGML_LAYOUT_AOS) {
+        GGML_SYCL_DEBUG("[MMVQ] Layout=%d unsupported for MoE type=%d (%s)\n",
+                        (int) layout, src0->type, src0->name ? src0->name : "?");
+        return false;
+    }
+    const bool    use_ptr_table = host_weights;
+
+    // XMX tiled layout is handled by XMX paths, not MMVQ
+    if (layout == GGML_LAYOUT_XMX_TILED) {
+        GGML_SYCL_DEBUG("[MMVQ] XMX tiled layout for %s, skipping MMVQ\n", src0->name);
+        return false;
+    }
+
+    if (batch_size > MMVQ_MOE_MAX_BATCH && layout == GGML_LAYOUT_AOS) {
         GGML_SYCL_DEBUG("[MMVQ] Batch %ld > %d, using host-side oneDNN batching\n",
                         (long)batch_size, MMVQ_MOE_MAX_BATCH);
         return false;  // Fall back to host-side routing with oneDNN batching
+    }
+    if (batch_size > MMVQ_MOE_MAX_BATCH) {
+        GGML_SYCL_DEBUG("[MMVQ] Batch %ld > %d, using MMVQ due to layout=%d\n",
+                        (long)batch_size, MMVQ_MOE_MAX_BATCH, (int) layout);
     }
 
     GGML_TENSOR_BINARY_OP_LOCALS;
@@ -3206,34 +3438,46 @@ bool ggml_sycl_mul_mat_id_vec_q(
     const int64_t total_src1_rows = ne11 * ne12;
     const size_t required_size = total_src1_rows * q8_1_row_size;
 
-    // Get pointers early for cache check
-    const void * src0_d = src0->data;
     const float * src1_d = (const float *)src1->data;
     const int32_t * ids_d = (const int32_t *)ids->data;
     float * dst_d = (float *)dst->data;
 
-    // Check if weights are in host/mmap memory - need to fall back to host-side dispatch
-    // which handles per-expert caching properly. MMVQ kernel requires all experts in
-    // contiguous GPU memory, which doesn't work with per-expert caching.
-    {
-        // Check buffer metadata first - authoritative source of truth for memory location
-        // ggml_backend_buffer_is_host() returns true for CPU/mmap buffers
-        // This is more reliable than sycl::get_pointer_type() which may return incorrect
-        // values (e.g., "shared") for mmap'd memory on Intel systems
-        if (src0->buffer && ggml_backend_buffer_is_host(src0->buffer)) {
-            GGML_SYCL_DEBUG("[MMVQ] Host buffer for %s, using expert cache path\n", src0->name);
-            return false;  // Use host-side dispatch with expert cache
+    const void * const * expert_ptrs = nullptr;
+    sycl::event table_event;
+    if (use_ptr_table) {
+        const bool ids_on_host = ids->buffer && ggml_backend_buffer_is_host(ids->buffer);
+        const bool allow_all_experts = g_ggml_sycl_graph_recording && !ids_on_host;
+        if (!ggml_sycl_update_moe_ptr_table(ctx, src0, ids, layout, &table_event, allow_all_experts)) {
+            GGML_SYCL_DEBUG("[MMVQ] Failed to update expert pointer table for %s\n", src0->name);
+            if (g_ggml_sycl_graph_recording && (!allow_all_experts || layout == GGML_LAYOUT_AOS)) {
+                ctx.moe_graphs_disabled_once = true;
+            }
+            return false;
         }
+        if (src0_extra && ctx.device >= 0 && ctx.device < GGML_SYCL_MAX_DEVICES) {
+            expert_ptrs = static_cast<const void * const *>(src0_extra->moe_expert_ptrs_device[ctx.device]);
+        }
+        if (!expert_ptrs) {
+            GGML_SYCL_DEBUG("[MMVQ] Missing expert pointer table for %s\n", src0->name);
+            if (g_ggml_sycl_graph_recording) {
+                ctx.moe_graphs_disabled_once = true;
+            }
+            return false;
+        }
+    }
 
-        // For SYCL buffers, also check ptr_type as safety fallback
-        sycl::usm::alloc ptr_type = sycl::get_pointer_type(src0_d, stream->get_context());
-        GGML_SYCL_DEBUG("[MMVQ] ptr_type for %s: type=%d (0=unknown, 1=device, 2=host, 3=shared)\n",
-                        src0->name, (int)ptr_type);
+    if (g_ggml_sycl_graph_recording && use_ptr_table && !expert_ptrs) {
+        GGML_SYCL_DEBUG("[MMVQ] Missing expert pointer table during graph recording for %s\n", src0->name);
+        ctx.moe_graphs_disabled_once = true;
+        return false;
+    }
 
-        if (ptr_type != sycl::usm::alloc::device) {
-            GGML_SYCL_DEBUG("[MMVQ] %s non-device ptr_type=%d, fallback to host-side dispatch\n",
-                            src0->name, (int)ptr_type);
-            return false;  // Let host-side handle per-expert caching
+    const void * src0_d = nullptr;
+    if (!use_ptr_table) {
+        src0_d = ggml_sycl_get_layout_ptr_for(src0, ctx.device, layout);
+        if (!src0_d) {
+            GGML_SYCL_DEBUG("[MMVQ] Missing layout=%d pointer for %s\n", (int) layout, src0->name);
+            return false;
         }
     }
 
@@ -3276,7 +3520,7 @@ bool ggml_sycl_mul_mat_id_vec_q(
         // Quantize all rows to Q8_1
         // Use SoA quantizer if weights are in any reordered layout (both SoA and COALESCED kernels expect SoA Y)
         ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
-        const bool y_soa = extra && extra->optimized_feature.is_reordered();
+        const bool y_soa = (layout == GGML_LAYOUT_SOA || layout == GGML_LAYOUT_COALESCED);
         if (y_soa) {
             GGML_SYCL_DEBUG("[MoE-Q8_1] Quantizing Y to SoA layout (X is_soa=%d)\n", y_soa);
             quantize_row_q8_1_sycl<quantize_and_reorder_q8_1_soa>(src1_d, (char*)q8_1_buffer, ne10, total_src1_rows, ne10_padded, stream);
@@ -3318,17 +3562,57 @@ bool ggml_sycl_mul_mat_id_vec_q(
     const int64_t q8_nb11 = q8_1_row_size;
     const int64_t q8_nb12 = ne11 * q8_1_row_size;
 
+    const bool allow_compact_alloc = !g_ggml_sycl_graph_recording;
+    const bool compact_ready = expert_ptrs && ggml_sycl_moe_prepare_compact_list(ctx, src0, total_batches, allow_compact_alloc);
+    const void * const * dispatch_ptrs = expert_ptrs;
+    const int32_t * dispatch_ids = ids_d;
+
+    if (compact_ready && expert_ptrs) {
+        auto * extra_mut = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+        void ** compact_ptrs = extra_mut ? static_cast<void **>(extra_mut->moe_expert_ptrs_compact_device[ctx.device]) : nullptr;
+        if (compact_ptrs) {
+            int * missing_device = (!g_ggml_sycl_graph_recording && extra_mut) ?
+                extra_mut->moe_expert_ptrs_missing_device[ctx.device] : nullptr;
+            std::vector<sycl::event> compact_deps;
+            compact_deps.push_back(table_event);
+            sycl::event build_event = ggml_sycl_build_moe_compact_list(*stream,
+                                                                       compact_ptrs,
+                                                                       expert_ptrs,
+                                                                       ids_d,
+                                                                       n_ids,
+                                                                       num_tokens,
+                                                                       ne02,
+                                                                       ids->nb[0],
+                                                                       ids->nb[1],
+                                                                       missing_device,
+                                                                       compact_deps);
+            if (!g_ggml_sycl_graph_recording && missing_device) {
+                int missing_host = 0;
+                stream->memcpy(&missing_host, missing_device, sizeof(int), build_event).wait();
+                if (missing_host) {
+                    GGML_SYCL_DEBUG("[MMVQ] Missing cached expert pointer(s) for %s, falling back\n", src0->name);
+                    ctx.moe_graphs_disabled_once = g_ggml_sycl_graph_recording;
+                    return false;
+                }
+            }
+            dispatch_ptrs = compact_ptrs;
+            dispatch_ids = nullptr;
+        } else if (g_ggml_sycl_graph_recording) {
+            GGML_SYCL_DEBUG("[MMVQ] Missing compact list buffer during graph recording for %s\n", src0->name);
+            ctx.moe_graphs_disabled_once = true;
+            return false;
+        }
+    }
+
     // Dispatch based on type
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
             mul_mat_vec_q4_0_q8_1_id_sycl(
-                src0_d, q8_1_buffer, dst_d, ids_d,
+                src0_d, dispatch_ptrs, q8_1_buffer, dst_d, dispatch_ids,
                 ne00,  // ncols
                 ne01,  // nrows_per_expert
                 total_batches,
-                n_ids,
-                ne11,
-                stride_expert_x,
+                n_ids, num_tokens, ne11, stride_expert_x,
                 ids->nb[0], ids->nb[1],  // ids strides
                 q8_nb11, q8_nb12,        // Q8_1 strides
                 nb1, nb2,                // dst strides
@@ -3336,13 +3620,11 @@ bool ggml_sycl_mul_mat_id_vec_q(
             break;
         case GGML_TYPE_Q8_0:
             mul_mat_vec_q8_0_q8_1_id_sycl(
-                src0_d, q8_1_buffer, dst_d, ids_d,
+                src0_d, dispatch_ptrs, q8_1_buffer, dst_d, dispatch_ids,
                 ne00,  // ncols
                 ne01,  // nrows_per_expert
                 total_batches,
-                n_ids,
-                ne11,
-                stride_expert_x,
+                n_ids, num_tokens, ne11, stride_expert_x,
                 ids->nb[0], ids->nb[1],  // ids strides
                 q8_nb11, q8_nb12,        // Q8_1 strides
                 nb1, nb2,                // dst strides
@@ -3352,8 +3634,8 @@ bool ggml_sycl_mul_mat_id_vec_q(
             {
                 // Check if weights are in SoA layout (CPU reorder sets this during upload)
                 auto * extra = (ggml_tensor_extra_gpu *)src0->extra;
-                const bool x_is_soa = extra && extra->optimized_feature.is_soa();
-                const bool x_is_reordered = extra && extra->optimized_feature.is_reordered();
+                const bool x_is_soa = (layout == GGML_LAYOUT_SOA || layout == GGML_LAYOUT_COALESCED);
+                const bool x_is_reordered = x_is_soa;
 
                 GGML_SYCL_DEBUG("[MMVQ-MXFP4] X: is_soa=%d is_reordered=%d extra=%p tensor=%s\n",
                                x_is_soa, x_is_reordered, extra, src0->name ? src0->name : "null");
@@ -3364,7 +3646,7 @@ bool ggml_sycl_mul_mat_id_vec_q(
                     GGML_ASSERT(x_is_reordered && "X is_soa but not is_reordered - flag inconsistency");
 
                     // DEBUG: Verify actual data layout on GPU
-                    if (g_ggml_sycl_debug >= 2) {
+                    if (g_ggml_sycl_debug >= 2 && !host_weights) {
                         // For MXFP4 SoA: qs region at offset 0, scales at offset (ncols/2)*total_rows
                         // For Q8_1 SoA: quants at offset 0..ne10-1, ds at offset ne10
                         const int64_t total_x_rows = ne01 * ne02;
@@ -3404,13 +3686,13 @@ bool ggml_sycl_mul_mat_id_vec_q(
                     GGML_SYCL_DEBUG("[MMVQ-MXFP4-SoA] X=SoA Y=SoA ne00=%lld ne10=%lld ne01=%lld ne02=%lld\n",
                                    (long long)ne00, (long long)ne10, (long long)ne01, (long long)ne02);
                     reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(
-                        src0_d, q8_1_buffer, dst_d, ids_d,
+                        src0_d, dispatch_ptrs, q8_1_buffer, dst_d, dispatch_ids,
                         ne00,  // ncols (MXFP4)
                         ne10,  // ncols_y (Q8_1 row size for SoA ds offset)
                         ne01,  // nrows_per_expert
                         ne02,  // num_experts
                         total_batches,
-                        n_ids,
+                        n_ids, num_tokens,
                         ne11,
                         ids->nb[0], ids->nb[1],  // ids strides
                         q8_nb11, q8_nb12,        // Q8_1 strides
@@ -3419,13 +3701,11 @@ bool ggml_sycl_mul_mat_id_vec_q(
                 } else {
                     // Original AoS layout
                     mul_mat_vec_mxfp4_q8_1_id_sycl(
-                        src0_d, q8_1_buffer, dst_d, ids_d,
+                        src0_d, dispatch_ptrs, q8_1_buffer, dst_d, dispatch_ids,
                         ne00,  // ncols
                         ne01,  // nrows_per_expert
                         total_batches,
-                        n_ids,
-                        ne11,
-                        stride_expert_x,
+                        n_ids, num_tokens, ne11, stride_expert_x,
                         ids->nb[0], ids->nb[1],  // ids strides
                         q8_nb11, q8_nb12,        // Q8_1 strides
                         nb1, nb2,                // dst strides
@@ -3452,6 +3732,32 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
     const int64_t ne00     = src0->ne[0];
     const int64_t ne01     = src0->ne[1];  // Total tensor rows, needed for SoA offset calculations
     const int64_t row_diff = row_high - row_low;
+
+    int device_id;
+    SYCL_CHECK(CHECK_TRY_ERROR(device_id = get_current_device_id()));
+
+    const auto * src0_extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+    const layout_mode layout = get_effective_layout_mode(src0_extra);
+    reorder_mode mmvq_mode = reorder_mode::NONE;
+    const void * layout_base = nullptr;
+    switch (layout) {
+        case GGML_LAYOUT_SOA:
+            mmvq_mode = reorder_mode::SOA;
+            layout_base = ggml_sycl_get_layout_ptr_for(src0, device_id, GGML_LAYOUT_SOA);
+            break;
+        case GGML_LAYOUT_COALESCED:
+            mmvq_mode = reorder_mode::COALESCED;
+            layout_base = ggml_sycl_get_layout_ptr_for(src0, device_id, GGML_LAYOUT_COALESCED);
+            break;
+        default:
+            mmvq_mode = reorder_mode::NONE;
+            break;
+    }
+    if (mmvq_mode != reorder_mode::NONE && !layout_base) {
+        GGML_SYCL_DEBUG("[MMVQ] Missing layout pointer for %s layout=%d, falling back to AoS\n",
+                        src0->name ? src0->name : "?", (int) layout);
+        mmvq_mode = reorder_mode::NONE;
+    }
 
     // DEBUG: Check dimensions and src1 values for layer 0 projections
     static int mmvq_dbg = 0;
@@ -3585,14 +3891,11 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                 blk_mid.qs[0]*d_mid, blk_mid.qs[1]*d_mid, blk_mid.qs[2]*d_mid, blk_mid.qs[3]*d_mid);
     }
 
-    int id;
-    SYCL_CHECK(CHECK_TRY_ERROR(id = get_current_device_id()));
-
     // DEBUG: Also print device ID and weight data for layer 0 attn_output
     static int mmvq_dev_dbg = 0;
     if (g_ggml_sycl_tp_debug && mmvq_dev_dbg++ < 10 && src0->name && strstr(src0->name, "blk.0.attn_output")) {
         fprintf(stderr, "TP DEBUG MMVQ device=%d for %s, src0_dd_i=%p, ne00=%lld, row_diff=%lld\n",
-                id, src0->name, (void*)src0_dd_i, (long long)ne00, (long long)row_diff);
+                device_id, src0->name, (void*)src0_dd_i, (long long)ne00, (long long)row_diff);
 
         // Read first Q4_0 block from weight (output row 0, first 32 input elements)
         struct block_q4_0_debug {
@@ -3634,20 +3937,14 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
         switch (src0->type) {
             case GGML_TYPE_Q4_0:
                 {
-                    auto * src0_extra = (ggml_tensor_extra_gpu *) src0->extra;
-                    // Determine reorder mode, respecting TP-sharding (TP-sharded tensors use AoS)
-                    // Uses unified layout.mode with fallback to legacy optimized_feature
-                    reorder_mode mode = reorder_mode::NONE;
-                    if (src0_extra && !src0_extra->tp_sharded) {
-                        mode = get_effective_reorder_mode(src0_extra);
-                    }
+                    reorder_mode mode = mmvq_mode;
 
                     if (mode == reorder_mode::COALESCED) {
                         GGML_SYCL_KTRACE("mmvq_q4_0_coalesced", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                         coalesced_mul_mat_vec_q4_0_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
                     } else if (mode == reorder_mode::SOA) {
                         GGML_SYCL_KTRACE("mmvq_q4_0_soa", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld", (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
-                        const void * soa_base = ggml_sycl_get_data_ptr(src0, ctx.device);
+                        const void * soa_base = layout_base;
                         reorder_mul_mat_vec_q4_0_q8_1_sycl(soa_base, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, ne01, row_low, stream);
                     } else {
                         GGML_SYCL_KTRACE("mmvq_q4_0_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
@@ -3669,17 +3966,12 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                 break;
             case GGML_TYPE_Q8_0:
                 {
-                    auto * src0_extra = (ggml_tensor_extra_gpu *) src0->extra;
-                    // Determine reorder mode, respecting TP-sharding (TP-sharded tensors use AoS)
-                    reorder_mode mode = reorder_mode::NONE;
-                    if (src0_extra && !src0_extra->tp_sharded) {
-                        mode = src0_extra->optimized_feature.get_reorder();
-                    }
+                    reorder_mode mode = mmvq_mode;
 
                     // Debug: trace dispatch decision AND verify actual data layout
                     static int q8_0_dispatch_count = 0;
                     if (false && q8_0_dispatch_count < 3) {  // DISABLED for testing
-                        const void * data_ptr = ggml_sycl_get_data_ptr(src0, ctx.device);
+                        const void * data_ptr = layout_base ? layout_base : static_cast<const void *>(src0_dd_i);
                         const size_t nblocks = (ne00 / QK8_0) * ne01;
 
                         // Read first 64 bytes from GPU to check layout
@@ -3746,7 +4038,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                         GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_q8_0_q8_1_sycl\n");
                         GGML_SYCL_KTRACE("mmvq_q8_0_soa", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld", (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
                         // For SoA layout, use base pointer (not pre-offset src0_dd_i) and pass row_low for correct block indexing
-                        const void * soa_base = ggml_sycl_get_data_ptr(src0, ctx.device);
+                        const void * soa_base = layout_base;
                         reorder_mul_mat_vec_q8_0_q8_1_sycl(soa_base, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, ne01, row_low, stream);
                     } else {
                         GGML_SYCL_KTRACE("mmvq_q8_0_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
@@ -3756,12 +4048,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                 break;
             case GGML_TYPE_MXFP4:
                 {
-                    auto * src0_extra = (ggml_tensor_extra_gpu *) src0->extra;
-                    // Determine reorder mode, respecting TP-sharding (TP-sharded tensors use AoS)
-                    reorder_mode mode = reorder_mode::NONE;
-                    if (src0_extra && !src0_extra->tp_sharded) {
-                        mode = src0_extra->optimized_feature.get_reorder();
-                    }
+                    reorder_mode mode = mmvq_mode;
 
                     if (mode == reorder_mode::COALESCED) {
                         GGML_SYCL_DEBUG("Calling coalesced_mul_mat_vec_mxfp4_q8_1_sycl\n");
@@ -3771,7 +4058,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                         GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_mxfp4_q8_1_sycl\n");
                         GGML_SYCL_KTRACE("mmvq_mxfp4_soa", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld", (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
                         // For SoA layout, use base pointer (not pre-offset src0_dd_i) and pass row_low for correct block indexing
-                        const void * soa_base = ggml_sycl_get_data_ptr(src0, ctx.device);
+                        const void * soa_base = layout_base;
                         reorder_mul_mat_vec_mxfp4_q8_1_sycl(soa_base, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, ne01, row_low, stream);
                     } else {
                         GGML_SYCL_KTRACE("mmvq_mxfp4_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
@@ -3789,15 +4076,14 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                 break;
             case GGML_TYPE_Q4_K:
                 {
-                    // Q4_K only has SOA kernel (no COALESCED version) - check is_soa() specifically
-                    auto * extra = (ggml_tensor_extra_gpu *) dst->src[0]->extra;
-                    if (extra && extra->optimized_feature.is_soa()) {
+                    // Q4_K only has SOA kernel (no COALESCED version) - check SoA specifically
+                    if (mmvq_mode == reorder_mode::SOA) {
                         GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_q4_k_q8_1_sycl\n");
                         GGML_SYCL_KTRACE("mmvq_q4_k_soa", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld", (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
                         // For SoA layout, use base pointer (not pre-offset src0_dd_i) and pass row_low for correct block indexing
-                        const void * soa_base = ggml_sycl_get_data_ptr(src0, ctx.device);
+                        const void * soa_base = layout_base;
                         reorder_mul_mat_vec_q4_k_q8_1_sycl(soa_base, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, ne01, row_low, stream);
-                    } else if (extra && extra->optimized_feature.is_coalesced()) {
+                    } else if (mmvq_mode == reorder_mode::COALESCED) {
                         // COALESCED layout not implemented for Q4_K
                         GGML_ABORT("mmvq Q4_K: COALESCED layout not implemented");
                     } else {
@@ -3814,8 +4100,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
             case GGML_TYPE_Q6_K:
                 {
                     // Q6_K supports SOA and COALESCED (variable tile) layouts
-                    auto * extra = (ggml_tensor_extra_gpu *) dst->src[0]->extra;
-
+                    
 #ifdef GGML_SYCL_Q6K_Y_DEBUG
                     // Debug: Verify Y (src1_ddq_i_bs) layout - should be block_q8_1 AoS format
                     // block_q8_1 layout: ds (half2 = 4 bytes) + qs[32] (32 bytes) = 36 bytes per block
@@ -3834,7 +4119,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
 
                         fprintf(stderr, "\n[Q6K_Y_DEBUG #%d] ne00=%lld row_diff=%lld is_soa=%d\n",
                                 q6k_debug_count, (long long)ne00, (long long)row_diff,
-                                extra && extra->optimized_feature.is_soa() ? 1 : 0);
+                                mmvq_mode == reorder_mode::SOA ? 1 : 0);
 
                         for (int blk = 0; blk < 2; blk++) {
                             float d_val = static_cast<float>(y_blocks[blk].d);
@@ -3857,17 +4142,17 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
                     }
 #endif
 
-                    if (extra && extra->optimized_feature.is_soa()) {
+                    if (mmvq_mode == reorder_mode::SOA) {
                         GGML_SYCL_DEBUG("Calling reorder_mul_mat_vec_q6_k_q8_1_sycl\n");
                         GGML_SYCL_KTRACE("mmvq_q6_k_soa", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld", (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
                         // For SoA layout, use base pointer (not pre-offset src0_dd_i) and pass row_low for correct block indexing
-                        const void * soa_base = ggml_sycl_get_data_ptr(src0, ctx.device);
+                        const void * soa_base = layout_base;
                         reorder_mul_mat_vec_q6_k_q8_1_sycl(soa_base, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, ne01, row_low, stream);
-                    } else if (extra && extra->optimized_feature.is_coalesced()) {
+                    } else if (mmvq_mode == reorder_mode::COALESCED) {
                         GGML_SYCL_DEBUG("Calling coalesced_mul_mat_vec_q6_k_q8_1_sycl\n");
                         GGML_SYCL_KTRACE("mmvq_q6_k_coalesced", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld", (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
                         // For coalesced layout, use base pointer (not pre-offset src0_dd_i) and pass row_low for correct block indexing
-                        const void * coalesced_base = ggml_sycl_get_data_ptr(src0, ctx.device);
+                        const void * coalesced_base = layout_base;
                         coalesced_mul_mat_vec_q6_k_q8_1_sycl(coalesced_base, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, ne01, row_low, stream);
                     } else {
                         GGML_SYCL_DEBUG("Calling mul_mat_vec_q6_k_q8_1_sycl\n");
@@ -3911,6 +4196,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
             case GGML_TYPE_IQ4_XS:
                 GGML_SYCL_KTRACE("mmvq_iq4_xs", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                 mul_mat_vec_iq4_xs_q8_1_sycl(src0_dd_i, src1_ddq_i_bs, dst_dd_i_bs, ne00, row_diff, stream);
+                break;
             default:
                 GGML_ABORT("fatal error");
         }
@@ -3923,7 +4209,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
             float out_vals[8];
             stream->memcpy(out_vals, dst_dd_i_bs, 8*sizeof(float)).wait();
             fprintf(stderr, "TP DEBUG MMVQ output device=%d %s col=%d dst[0..7]=[%f, %f, %f, %f, %f, %f, %f, %f]\n",
-                    id, src0->name, i, out_vals[0], out_vals[1], out_vals[2], out_vals[3],
+                    device_id, src0->name, i, out_vals[0], out_vals[1], out_vals[2], out_vals[3],
                     out_vals[4], out_vals[5], out_vals[6], out_vals[7]);
         }
 
@@ -3935,7 +4221,7 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
             float out_vals[8];
             stream->memcpy(out_vals, dst_dd_i_bs, 8*sizeof(float)).wait();
             fprintf(stderr, "DEBUG FFN_DOWN layer0 device=%d col=%d ne00=%lld row_diff=%lld dst[0..7]=[%f, %f, %f, %f, %f, %f, %f, %f]\n",
-                    id, (int)i, (long long)ne00, (long long)row_diff, out_vals[0], out_vals[1], out_vals[2], out_vals[3],
+                    device_id, (int)i, (long long)ne00, (long long)row_diff, out_vals[0], out_vals[1], out_vals[2], out_vals[3],
                     out_vals[4], out_vals[5], out_vals[6], out_vals[7]);
         }
     }

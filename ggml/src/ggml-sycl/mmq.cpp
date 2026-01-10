@@ -14,6 +14,8 @@
 #include "vecdotq.hpp"
 #include "mmq-esimd.hpp"
 
+#include <type_traits>
+
 // Kernel names for VTune profiling
 template<bool check> class mmq_q4_0_kernel;
 template<int mmq_x, int mmq_y, int nwarps, bool check> class mmq_q4_0_soa_kernel;  // SoA layout variant
@@ -70,6 +72,15 @@ typedef float (*vec_dot_q_mul_mat_sycl_t)(
     const int& i,
     const int& j,
     const int& k);
+
+template <typename T>
+struct mmq_use_qr_stride : std::false_type {};
+
+template <>
+struct mmq_use_qr_stride<block_q4_K> : std::true_type {};
+
+template <>
+struct mmq_use_qr_stride<block_q5_K> : std::true_type {};
 
 
 template <int mmq_y>
@@ -2422,13 +2433,12 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
                    nrows_x - row_x_0 - 1, item_ct1.get_local_id(2),
                    blocks_per_row_x);
 
-        // Y-tile stride: Use WARP_SIZE for all quant types.
-        // The vec_dot functions use modulo wrapping (e.g., (kyqs + l) % MMQ_TILE_NE_K)
-        // to handle phase overlap, so we don't need separate phase storage.
-        // Y-tile allocation is mmq_x * MMQ_TILE_NE_K = mmq_x * 32 elements.
-        //
-        // The vec_dot functions use MMQ_TILE_NE_K for indexing to match CUDA tile sizing
-        // and ensure consistent behavior across different WARP_SIZE configurations.
+    // Y-tile stride:
+    // - Most types use WARP_SIZE with modulo wrapping (phase data overwrites the same slots).
+    // - Q4_K/Q5_K expect QR*WARP_SIZE contiguous storage, so we must preserve both phases.
+    constexpr bool use_qr_stride = mmq_use_qr_stride<block_q_t>::value;
+    constexpr int y_stride = use_qr_stride ? (qr * WARP_SIZE) : WARP_SIZE;
+    constexpr int y_ds_stride = y_stride / QI8_1;
 
 #pragma unroll
         for (int ir = 0; ir < phases_per_iter; ++ir) {
@@ -2443,9 +2453,9 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
 
                 const block_q8_1 * by0 = &y[col_y_eff*blocks_per_col_y + ib0 * (qk/QK8_1) + kbxd];
 
-                // Use WARP_SIZE stride and modulo to match vec_dot's tile indexing
-                const int index_y = (item_ct1.get_local_id(1) + i) * WARP_SIZE +
-                                    kqs % WARP_SIZE;
+                // Use per-type stride to match vec_dot's tile indexing
+                const int index_y = (item_ct1.get_local_id(1) + i) * y_stride +
+                                    (kqs % y_stride);
                 tile_y_qs[index_y] = get_int_from_int8_aligned(
                     by0->qs, item_ct1.get_local_id(2) % QI8_1);
             }
@@ -2464,7 +2474,8 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
                     &y[col_y_eff * blocks_per_col_y + ib0 * (qk / QK8_1) +
                        ir * (WARP_SIZE / QI8_1) + kby]
                          .ds;
-                sycl::half2 *dsi_dst = &tile_y_ds[ids * (WARP_SIZE / QI8_1) + kby];
+                const int y_ds_phase = use_qr_stride ? ir * (WARP_SIZE / QI8_1) : 0;
+                sycl::half2 *dsi_dst = &tile_y_ds[ids * y_ds_stride + y_ds_phase + kby];
                 if (need_sum) {
                     *dsi_dst = *dsi_src;
                 } else {
@@ -5566,7 +5577,7 @@ void ggml_sycl_op_mul_mat_q(
                 const size_t total_qs_bytes = nblocks * (QK4_0 / 2);
                 const size_t d_offset = total_qs_bytes;
 
-                const void * storage_base = ggml_sycl_get_data_ptr(storage, device_id);
+                const void * storage_base = ggml_sycl_get_layout_ptr_for(storage, device_id, GGML_LAYOUT_COALESCED);
 
                 int64_t view_row_offset = 0;
                 if (src0->view_src != nullptr) {
@@ -5591,7 +5602,7 @@ void ggml_sycl_op_mul_mat_q(
                 const size_t d_offset = total_qs_bytes;
 
                 // Get storage base pointer
-                const void * storage_base = ggml_sycl_get_data_ptr(storage, device_id);
+                const void * storage_base = ggml_sycl_get_layout_ptr_for(storage, device_id, GGML_LAYOUT_SOA);
 
                 // Calculate global row_low (matches Q6_K pattern)
                 int64_t view_row_offset = 0;
@@ -5630,7 +5641,7 @@ void ggml_sycl_op_mul_mat_q(
                 const size_t total_qs_bytes = nblocks * QK8_0;
                 const size_t d_offset = total_qs_bytes;
 
-                const void * storage_base = ggml_sycl_get_data_ptr(storage, device_id);
+                const void * storage_base = ggml_sycl_get_layout_ptr_for(storage, device_id, GGML_LAYOUT_COALESCED);
 
                 int64_t view_row_offset = 0;
                 if (src0->view_src != nullptr) {
@@ -5653,7 +5664,7 @@ void ggml_sycl_op_mul_mat_q(
                 const size_t d_offset = total_qs_bytes;
                 
                 // Get storage base pointer
-                const void * storage_base = ggml_sycl_get_data_ptr(storage, device_id);
+                const void * storage_base = ggml_sycl_get_layout_ptr_for(storage, device_id, GGML_LAYOUT_SOA);
                 
                 // Calculate global row_low
                 int64_t view_row_offset = 0;
@@ -5711,7 +5722,7 @@ void ggml_sycl_op_mul_mat_q(
                 }
                 const size_t d_offset = static_cast<size_t>(storage_ne01) * row_quants_bytes;
 
-                const void * coa_base = ggml_sycl_get_data_ptr(storage, device_id);
+                const void * coa_base = ggml_sycl_get_layout_ptr_for(storage, device_id, GGML_LAYOUT_COALESCED);
 
                 int64_t view_row_offset = 0;
                 if (src0->view_src != nullptr) {
@@ -5735,7 +5746,7 @@ void ggml_sycl_op_mul_mat_q(
                 const size_t d_offset = nblocks * 208;       // after ql + qh + scales sections
                 
                 // Get storage base pointer
-                const void * soa_base = ggml_sycl_get_data_ptr(storage, device_id);
+                const void * soa_base = ggml_sycl_get_layout_ptr_for(storage, device_id, GGML_LAYOUT_SOA);
                 
                 // Calculate global row_low
                 int64_t view_row_offset = 0;

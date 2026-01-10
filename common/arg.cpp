@@ -2380,6 +2380,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_WEIGHT_CACHE_PCT"));
     add_opt(common_arg(
+        {"--unified-cache-pct"}, "N",
+        string_format("percentage of free VRAM for SYCL unified cache (default: %" PRIi32 ")",
+                      params.sycl_unified_cache_pct),
+        [](common_params & params, int value) {
+            if (value < 1 || value > 100) {
+                throw std::invalid_argument("--unified-cache-pct must be between 1 and 100");
+            }
+            params.sycl_unified_cache_pct = value;
+        }
+    ).set_env("LLAMA_ARG_UNIFIED_CACHE_PCT"));
+    add_opt(common_arg(
         {"--weight-granularity"}, "N",
         string_format("weight cache granularity: 0=layer, 1=tensor, 2=layer_group (default: %d)", params.weight_granularity),
         [](common_params & params, int value) {
@@ -2400,12 +2411,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_LAYER_GROUP_SIZE"));
     add_opt(common_arg(
-        {"--kv-offload"},
+        {"--kv-offload-auto"},
         "enable KV cache offload to CPU for long contexts",
         [](common_params & params) {
             params.kv_offload = true;
         }
-    ).set_env("LLAMA_ARG_KV_OFFLOAD"));
+    ).set_env("LLAMA_ARG_KV_OFFLOAD_AUTO"));
     add_opt(common_arg(
         {"--kv-offload-threshold"}, "N",
         string_format("context length (tokens) to trigger KV offload (default: %d)", params.kv_offload_threshold),

@@ -269,8 +269,8 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx, const ggml_t
 
     // Use device-specific data pointers for TP support
     const int device = ctx.device;
-    void * src0_d = ggml_sycl_get_data_ptr(src0, device);
-    void * src1_d = ggml_sycl_get_data_ptr(src1, device);
+    void * src0_d = ggml_sycl_get_layout_ptr(src0, device);
+    void * src1_d = ggml_sycl_get_layout_ptr(src1, device);
     void * dst_d  = ggml_sycl_get_data_ptr(dst, device);
 
     if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
@@ -548,4 +548,3 @@ void ggml_sycl_op_mul_add_fused(ggml_backend_sycl_context & ctx,
             k_mul_add_fused(x_d, scale_d, bias_d, dst_d, ne0, ne1, ne_scale0, ne_bias0, item);
         });
 }
-

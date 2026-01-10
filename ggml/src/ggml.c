@@ -1823,6 +1823,7 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         /*.data         =*/ obj_alloc_size > 0 ? (void *)(result + 1) : data,
         /*.name         =*/ { 0 },
         /*.extra        =*/ NULL,
+        /*.layout       =*/ NULL,
         /*.padding      =*/ { 0 },
     };
 
@@ -1924,6 +1925,16 @@ void ggml_unravel_index(const struct ggml_tensor * tensor, int64_t i, int64_t * 
 }
 
 void * ggml_get_data(const struct ggml_tensor * tensor) {
+    return tensor->data;
+}
+
+void * ggml_tensor_get_layout_ptr(const struct ggml_tensor * tensor) {
+    if (tensor == NULL) {
+        return NULL;
+    }
+    if (tensor->layout != NULL && tensor->layout->data_ptr != NULL) {
+        return tensor->layout->data_ptr;
+    }
     return tensor->data;
 }
 
