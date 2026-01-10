@@ -126,6 +126,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_31B_A3_5B:     return "31B.A3.5B";
         case LLM_TYPE_80B_A3B:       return "80B.A3B";
         case LLM_TYPE_100B_A6B:      return "100B.A6B";
+        case LLM_TYPE_100B_A10B:     return "100B.A10B";
         case LLM_TYPE_102B_A12B:     return "102B.A12B";
         case LLM_TYPE_106B_A12B:     return "106B.A12B";
         case LLM_TYPE_230B_A10B:     return "230B.A10B";
@@ -1164,8 +1165,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 }
 
                 switch (hparams.n_layer) {
-                    case 24: type = LLM_TYPE_7B; break;
-                    case 48: type = LLM_TYPE_120B; break;
+                    case 24: type = LLM_TYPE_7B_A1B; break;
+                    case 48: type = LLM_TYPE_100B_A10B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
