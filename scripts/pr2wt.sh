@@ -40,7 +40,7 @@ org_repo=${org_repo%.git}
 
 echo "org/repo: $org_repo"
 
-meta=$(curl -sSf -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$org_repo/pulls/$PR")
+meta=$(curl -sSLf -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$org_repo/pulls/$PR")
 
 url_remote=$(echo "$meta" | jq -r '.head.repo.clone_url')
 head_ref=$(echo "$meta" | jq -r '.head.ref')
