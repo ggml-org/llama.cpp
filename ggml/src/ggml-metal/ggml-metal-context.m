@@ -312,47 +312,63 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor, 
     }
 }
 
-void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+void ggml_metal_get_tensor_async(
+    ggml_metal_t ctx,
+    const struct ggml_tensor * tensor,
+    void * data,
+    size_t offset,
+    size_t size
+) {
+    if (!data || size == 0) {
+        return;
+    }
+
     @autoreleasepool {
         id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
-        id<MTLBuffer> buf_dst = [device newBufferWithBytesNoCopy:data
-                                                               length:size
-                                                              options:MTLResourceStorageModeShared
-                                                          deallocator:nil];
 
-        GGML_ASSERT(buf_dst);
-
+        // Source GPU buffer
         struct ggml_metal_buffer_id bid_src = ggml_metal_get_buffer_id(tensor);
         if (bid_src.metal == nil) {
-            GGML_ABORT("%s: failed to find buffer for tensor '%s'\n", __func__, tensor->name);
+            GGML_ABORT("%s: failed to find buffer for tensor '%s'\n",
+                       __func__, tensor->name);
         }
-
         bid_src.offs += offset;
 
-        // queue the copy operation into the queue of the Metal context
-        // this will be queued at the end, after any currently ongoing GPU operations
+        // CPU-visible staging buffer
+        id<MTLBuffer> staging = [device newBufferWithLength:size
+                                                    options:MTLResourceStorageModeShared];
+        GGML_ASSERT(staging);
+
+        // Queue GPU → staging copy
         id<MTLCommandQueue> queue = ggml_metal_device_get_queue(ctx->dev);
         id<MTLCommandBuffer> cmd_buf = [queue commandBuffer];
         id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
 
         [encoder copyFromBuffer:bid_src.metal
                    sourceOffset:bid_src.offs
-                       toBuffer:buf_dst
+                       toBuffer:staging
               destinationOffset:0
                            size:size];
-
         [encoder endEncoding];
+
+        // Copy staging → user buffer when complete
+        __block id<MTLBuffer> staging_ref = [staging retain]; // Ensure cleanup
+        [cmd_buf addCompletedHandler:^(id<MTLCommandBuffer> cb) {
+            if (cb.status == MTLCommandBufferStatusCompleted) {
+                memcpy(data, staging_ref.contents, size);
+            }
+            // Always release regardless of status
+            [staging_ref release];
+        }];
+
         [cmd_buf commit];
-        [buf_dst release];
 
-        // do not wait here for completion
-        //[cmd_buf waitUntilCompleted];
-
-        // instead, remember a reference to the command buffer and wait for it later if needed
+        // Track command buffer
         [ctx->cmd_bufs_ext addObject:cmd_buf];
         ctx->cmd_buf_last = cmd_buf;
-
         [cmd_buf retain];
+
+        [staging release]; // Balance the newBuffer call
     }
 }
 
