@@ -2,14 +2,9 @@
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
-#ifdef HTP_DEBUG
-#    define FARF_HIGH 1
-#endif
 #include <HAP_farf.h>
-#include <HAP_mem.h>
 #include <HAP_perf.h>
-#include <hexagon_protos.h>
-#include <hexagon_types.h>
+
 #include <math.h>
 #include <string.h>
 
@@ -19,7 +14,6 @@
 #include "htp-msg.h"
 #include "htp-ops.h"
 #include "hvx-utils.h"
-#include "ops-utils.h"
 
 struct htp_copy_context {
     struct htp_ops_context * octx;
@@ -79,6 +73,7 @@ static void cpy_thread_sametype_sameshape(struct htp_copy_context * ct, struct h
             for (uint32_t i01 = ir0; i01 < ir1; i01++) {
                 uint8_t* dst_ptr  = (uint8_t*) dst->data  + i01*nb1  + i02*nb2  + i03*nb3;
                 uint8_t* src0_ptr = (uint8_t*) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
+                hex_l2fetch(src0_ptr, ne00 * ct->src0_type_size, nb01, 2);
                 hvx_copy_uu(dst_ptr, src0_ptr, ne00, ct->src0_type_size);
             }
         }
@@ -100,7 +95,7 @@ static void cpy_thread_sametype_reshape(struct htp_copy_context * ct, struct htp
     int64_t i13 = 0;
 
     // number of blocks in a row
-    const int64_t nk00 = ct->src0_blocks_per_row; 
+    const int64_t nk00 = ct->src0_blocks_per_row;
     const int64_t nk0  = ct->dst_blocks_per_row;
 
     for (int64_t i03 = 0; i03 < ne03; i03++) {
@@ -170,6 +165,7 @@ static void cpy_thread_f16_f32_sameshape(struct htp_copy_context * ct, struct ht
             for (uint32_t i01 = ir0; i01 < ir1; i01++) {
                 uint8_t* dst_ptr  = (uint8_t*) dst->data  + i01*nb1  + i02*nb2  + i03*nb3;
                 uint8_t* src0_ptr = (uint8_t*) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
+                hex_l2fetch(src0_ptr, ne00 * sizeof(float), nb01, 2);
                 hvx_copy_fp16_fp32_uu(dst_ptr, src0_ptr, ne00);
             }
         }
@@ -191,6 +187,7 @@ static void cpy_thread_f32_f16_sameshape(struct htp_copy_context * ct, struct ht
             for (uint32_t i01 = ir0; i01 < ir1; i01++) {
                 uint8_t* dst_ptr  = (uint8_t*) dst->data  + i01*nb1  + i02*nb2  + i03*nb3;
                 uint8_t* src0_ptr = (uint8_t*) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
+                hex_l2fetch(src0_ptr, ne00 * sizeof(__fp16), nb01, 2);
                 hvx_copy_fp32_fp16_uu(dst_ptr, src0_ptr, ne00);
             }
         }

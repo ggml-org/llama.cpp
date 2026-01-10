@@ -2,19 +2,13 @@
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
-#include <hexagon_protos.h>
-#include <hexagon_types.h>
+#include <HAP_farf.h>
+#include <HAP_perf.h>
+
 #include <math.h>
 #include <string.h>
 
-#define GGML_COMMON_DECL_C
-#include "ggml-common.h"
-#include "htp-ctx.h"
-#include "htp-dma.h"
-#include "htp-msg.h"
-#include "htp-ops.h"
 #include "hvx-utils.h"
-#include "ops-utils.h"
 
 #if 0
 // Reference algo used in hvx-utils

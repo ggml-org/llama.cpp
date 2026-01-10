@@ -17,10 +17,8 @@ add_library(${HTP_LIB} SHARED
     main.c
     htp_iface_skel.c
     worker-pool.c
-    htp-dma.c
+    hex-dma.c
     hvx-sigmoid.c
-    hvx-inverse.c
-    hvx-exp.c
     hvx-utils.c
     matmul-ops.c
     binary-ops.c
@@ -36,6 +34,7 @@ add_library(${HTP_LIB} SHARED
 
 target_compile_definitions(${HTP_LIB} PRIVATE
     $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,HTP_DEBUG=1,NDEBUG=1>
+    $<IF:$<BOOL:${HEXAGON_HTP_DEBUG}>,FARF_HIGH=1,>
     FP32_QUANTIZE_GROUP_SIZE=${GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE})
 
 build_idl(htp_iface.idl ${HTP_LIB})

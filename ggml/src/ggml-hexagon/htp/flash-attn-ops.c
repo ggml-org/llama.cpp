@@ -2,25 +2,20 @@
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
-#ifdef HTP_DEBUG
-#    define FARF_HIGH 1
-#endif
 #include <HAP_farf.h>
-#include <HAP_mem.h>
 #include <HAP_perf.h>
-#include <hexagon_protos.h>
-#include <hexagon_types.h>
+
 #include <math.h>
 #include <string.h>
+
+#include "hex-dma.h"
+#include "hvx-utils.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-dma.h"
 #include "htp-msg.h"
 #include "htp-ops.h"
-#include "hvx-utils.h"
-#include "ops-utils.h"
 
 // Dot product of FP32 and FP16 vectors, accumulating to float
 static inline void hvx_dot_f32_f16_aa(float * restrict r, const void * restrict y, const void * restrict x, unsigned int n, float s) {
@@ -148,7 +143,7 @@ static inline void hvx_mad_f32_f16_aa(float * restrict y, const void * restrict 
 
         if (nloe) {
             HVX_Vector xy = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(xs, ptr_y[i]));
-            hvx_vec_store_u(&ptr_y[i], nloe * 4, xy);
+            hvx_vec_store_a(&ptr_y[i], nloe * 4, xy);
         }
     }
 }
@@ -225,18 +220,18 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
     const uint32_t DV = nev0;
 
     const size_t size_q_row = DK * ((q->type == HTP_TYPE_F32) ? 4 : 2);
-    const size_t size_q_row_padded = htp_round_up(size_q_row, 128);
+    const size_t size_q_row_padded = hex_round_up(size_q_row, 128);
 
     const size_t size_k_row = DK * sizeof(__fp16);
     const size_t size_v_row = DV * sizeof(__fp16);
     const size_t size_m_row = FLASH_ATTN_BLOCK_SIZE * sizeof(__fp16); // Treat block as one row for mask
 
-    const size_t size_k_row_padded = htp_round_up(size_k_row, 128);
-    const size_t size_v_row_padded = htp_round_up(size_v_row, 128);
+    const size_t size_k_row_padded = hex_round_up(size_k_row, 128);
+    const size_t size_v_row_padded = hex_round_up(size_v_row, 128);
 
     const size_t size_k_block = size_k_row_padded * FLASH_ATTN_BLOCK_SIZE;
     const size_t size_v_block = size_v_row_padded * FLASH_ATTN_BLOCK_SIZE;
-    const size_t size_m_block = htp_round_up(FLASH_ATTN_BLOCK_SIZE * sizeof(__fp16), 128);
+    const size_t size_m_block = hex_round_up(FLASH_ATTN_BLOCK_SIZE * sizeof(__fp16), 128);
 
     // Scratchpad buffers for Q, K, V, Mask, and VKQ32 accumulator
     uint8_t * spad_q = octx->src0_spad.data + octx->src0_spad.size_per_thread * ith;
@@ -523,16 +518,16 @@ int op_flash_attn_ext(struct htp_ops_context * octx) {
         octx->src3_div3 = init_fastdiv_values(mask->ne[3]);
     }
 
-    size_t size_q_row_padded = htp_round_up(q->ne[0] * (q->type == HTP_TYPE_F32 ? 4 : 2), 128);
-    size_t size_k_row_padded = htp_round_up(k->ne[0] * sizeof(__fp16), 128);
-    size_t size_v_row_padded = htp_round_up(v->ne[0] * sizeof(__fp16), 128);
+    size_t size_q_row_padded = hex_round_up(q->ne[0] * (q->type == HTP_TYPE_F32 ? 4 : 2), 128);
+    size_t size_k_row_padded = hex_round_up(k->ne[0] * sizeof(__fp16), 128);
+    size_t size_v_row_padded = hex_round_up(v->ne[0] * sizeof(__fp16), 128);
 
     size_t size_q_block = size_q_row_padded * 1; // single row for now
     size_t size_k_block = size_k_row_padded * FLASH_ATTN_BLOCK_SIZE;
     size_t size_v_block = size_v_row_padded * FLASH_ATTN_BLOCK_SIZE;
-    size_t size_m_block = htp_round_up(FLASH_ATTN_BLOCK_SIZE * sizeof(__fp16), 128);
+    size_t size_m_block = hex_round_up(FLASH_ATTN_BLOCK_SIZE * sizeof(__fp16), 128);
 
-    size_t size_vkq_acc = htp_round_up(v->ne[0] * sizeof(float), 128); // VKQ32
+    size_t size_vkq_acc = hex_round_up(v->ne[0] * sizeof(float), 128); // VKQ32
 
     octx->src0_spad.size_per_thread = size_q_block * 1;
     octx->src1_spad.size_per_thread = size_k_block * 2;

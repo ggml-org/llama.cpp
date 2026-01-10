@@ -1,0 +1,24 @@
+--------- beginning of main
+01-11 01:56:40.450  7411  7417 V adsprpc : 1003a2:86: CDSP0:[DU]: adsp_process_group_mem_unmap: uprocess pgid 1000005 fd 23 raddr fde90000 flags 65535
+01-11 01:56:40.450  7411  7417 V adsprpc : 1003a2:86: CDSP0:[DU]: adsp_process_group_mem_unmap found map for fd 23 buf 0xfde90000 len 0x2af28 flags 0x2
+01-11 01:56:40.450  7411  7417 V adsprpc : 1003a2:86: CDSP0:[DU]: fastrpc_invoke_fd_mmap_destroy fd 23 len 2af28
+01-11 01:56:40.450  7411  7417 V adsprpc : 1003a2:86: CDSP0:[DU]: fastrpc_invoke_static_map_fd_free fd 23
+01-11 01:56:40.450  7411  7417 V adsprpc : 1003a2:86: CDSP0:[DU]: fastrpc_invoke_static_map_fd_free destroy DSP mapping for fd 23
+01-11 01:56:40.450  7411  7417 V adsprpc : 8033a:86: CDSP0:[DU]: fastrpc_uthread_create done for tidQ 0x80334, tidA 7417 (fr/7411/7417/0), stack 0x00367CD0 (size 16384), prio 75 thread_group 0
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: thread_new_locked done with tidQ 0x80333, stack ptr 0x0036D980 for size 8192
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: thread_new_locked done with tidQ 0x80332, stack ptr 0x0036FE20 for size 8192
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: no matching pending jobs, collect would deadlock
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: no matching pending jobs, collect would deadlock
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: no matching pending jobs, collect would deadlock
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: no matching pending jobs, collect would deadlock
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: no matching pending jobs, collect would deadlock
+01-11 01:56:40.450  7411  7417 V adsprpc : 80332:86: CDSP0:[DU]: undefined symbol PLT  #83 hvx_exp_f32 in ./libggml-htp-v81.so
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: no matching pending jobs, collect would deadlock
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: no matching pending jobs, collect would deadlock
+01-11 01:56:40.450  7411  7417 V adsprpc : 80332:86: CDSP0:[DU]: plt object relocation failure
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: no matching pending jobs, collect would deadlock
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: _rtld_relocate_object symbol relocation failed 0
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: Error: dlopen_ex failed for libggml-htp-v81.so (flags 258)
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: PERF: unloading: ./libggml-htp-v81.so, dtor:0 us, total_unload_time_us: 1 us
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: Error 0x80000406: open_mod_table_open_dynamic failed for file:///libggml-htp-v81.so?htp_iface_skel_handle_invoke&_modver=1.0&_dom=nsp1000&_session=0
+01-11 01:56:40.450  7411  7417 V adsprpc : 80337:86: CDSP0:[DU]: Reset loading vote for libggml-htp-v81.so

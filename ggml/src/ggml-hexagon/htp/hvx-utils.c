@@ -2,24 +2,15 @@
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
-#ifdef HTP_DEBUG
-#    define FARF_HIGH 1
-#endif
-
 #include <HAP_farf.h>
-#include <HAP_mem.h>
 #include <HAP_perf.h>
-#include <HAP_ps.h>
-#include <hexagon_protos.h>
-#include <hexagon_types.h>
+
 #include <math.h>
 #include <string.h>
 
-#define GGML_COMMON_DECL_C
-#include "ggml-common.h"
 #include "hvx-utils.h"
 
-#define htp_binary_ops_preamble                                                                                \
+#define hvx_binary_ops_preamble                                                                                \
     int step_of_4 = num_elems >> 7;                                                                            \
     int step_of_2 = (num_elems - step_of_4 * VLEN_FP32 * 4) >> 6;                                              \
     int step_of_1 = (num_elems - step_of_4 * VLEN_FP32 * 4 - step_of_2 * VLEN_FP32 * 2) >> 5;                  \
@@ -38,8 +29,8 @@ void hvx_mul_f32(const uint8_t * restrict src0,
 
     int unaligned_addr = 0;
     int unaligned_loop = 0;
-    if ((0 == htp_is_aligned((void *) src0, VLEN)) || (0 == htp_is_aligned((void *) src1, VLEN)) ||
-        (0 == htp_is_aligned((void *) dst, VLEN))) {
+    if ((0 == hex_is_aligned((void *) src0, VLEN)) || (0 == hex_is_aligned((void *) src1, VLEN)) ||
+        (0 == hex_is_aligned((void *) dst, VLEN))) {
         FARF(HIGH, "hvx_mul_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
@@ -91,8 +82,8 @@ void hvx_mul_f32(const uint8_t * restrict src0,
             sline2p                        = sline2c;
         }
         if (step_of_1 > 1) {
-            slinec  = htp_is_aligned(vec_in1, VLEN) && left_over == 0 ? slinep : *vec_in1++;
-            sline2c = htp_is_aligned(vec_in2, VLEN) && left_over == 0 ? sline2p : *vec_in2++;
+            slinec  = hex_is_aligned(vec_in1, VLEN) && left_over == 0 ? slinep : *vec_in1++;
+            sline2c = hex_is_aligned(vec_in2, VLEN) && left_over == 0 ? sline2p : *vec_in2++;
 
             sline                          = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);
             sline2                         = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
@@ -101,10 +92,10 @@ void hvx_mul_f32(const uint8_t * restrict src0,
             sline2p                        = sline2c;
         }
         if (left_over > 0) {
-            slinec = (is_in_one_chunk(vec_in1, leftover_size, VLEN) ? slinep : *vec_in1++);
+            slinec = (hex_is_one_chunk(vec_in1, leftover_size, VLEN) ? slinep : *vec_in1++);
 
             sline   = Q6_V_valign_VVR(slinec, slinep, (size_t) src0);
-            sline2c = (is_in_one_chunk(vec_in2, leftover_size, VLEN) ? sline2p : *vec_in2++);
+            sline2c = (hex_is_one_chunk(vec_in2, leftover_size, VLEN) ? sline2p : *vec_in2++);
             sline2  = Q6_V_valign_VVR(sline2c, sline2p, (size_t) src1);
 
             HVX_Vector out = Q6_Vqf32_vmpy_VsfVsf(sline, sline2);
@@ -131,7 +122,7 @@ void hvx_mul_f32_opt(const uint8_t * restrict src0,
                      const uint8_t * restrict src1,
                      uint8_t * restrict dst,
                      const int num_elems) {
-    htp_binary_ops_preamble;
+    hvx_binary_ops_preamble;
 
     for (int i = 0; i < step_of_4; i++) {
         HVX_Vector v1a = *(HVX_Vector *) src0_curr;
@@ -293,8 +284,8 @@ void hvx_add_f32(const uint8_t * restrict src0,
 
     int unaligned_addr = 0;
     int unaligned_loop = 0;
-    if ((0 == htp_is_aligned((void *) src0, VLEN)) || (0 == htp_is_aligned((void *) src1, VLEN)) ||
-        (0 == htp_is_aligned((void *) dst, VLEN))) {
+    if ((0 == hex_is_aligned((void *) src0, VLEN)) || (0 == hex_is_aligned((void *) src1, VLEN)) ||
+        (0 == hex_is_aligned((void *) dst, VLEN))) {
         FARF(HIGH, "hvx_add_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
@@ -343,7 +334,7 @@ void hvx_add_f32_opt(const uint8_t * restrict src0,
                      const uint8_t * restrict src1,
                      uint8_t * restrict dst,
                      const int num_elems) {
-    htp_binary_ops_preamble;
+    hvx_binary_ops_preamble;
 
     for (int i = 0; i < step_of_4; i++) {
         HVX_Vector v1a = *(HVX_Vector *) src0_curr;
@@ -434,7 +425,7 @@ void hvx_add_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
 
     int unaligned_addr = 0;
     int unaligned_loop = 0;
-    if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
+    if ((0 == hex_is_aligned((void *) src, VLEN)) || (0 == hex_is_aligned((void *) dst, VLEN))) {
         FARF(HIGH, "hvx_add_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
@@ -496,7 +487,7 @@ void hvx_mul_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
 
     int unaligned_addr = 0;
     int unaligned_loop = 0;
-    if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
+    if ((0 == hex_is_aligned((void *) src, VLEN)) || (0 == hex_is_aligned((void *) dst, VLEN))) {
         FARF(HIGH, "hvx_mul_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
@@ -540,7 +531,7 @@ void hvx_mul_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
         }
 
         if (step_of_1 > 0) {
-            slinec = htp_is_aligned(input_v_ptr, VLEN) && left_over == 0 ? slinep : *input_v_ptr++;
+            slinec = hex_is_aligned(input_v_ptr, VLEN) && left_over == 0 ? slinep : *input_v_ptr++;
             sline  = Q6_V_valign_VVR(slinec, slinep, (size_t) src);
             *((HVX_UVector *) (output_v_ptr++)) = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(sline, val_vec));
 
@@ -548,7 +539,7 @@ void hvx_mul_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
         }
 
         if (leftover_size > 0) {
-            slinec = (is_in_one_chunk(input_v_ptr, leftover_size, VLEN) ? slinep : *input_v_ptr++);
+            slinec = (hex_is_one_chunk(input_v_ptr, leftover_size, VLEN) ? slinep : *input_v_ptr++);
 
             sline = Q6_V_valign_VVR(slinec, slinep, (size_t) src);
 
@@ -578,8 +569,8 @@ void hvx_sub_f32(const uint8_t * restrict src0,
 
     int unaligned_addr = 0;
     int unaligned_loop = 0;
-    if ((0 == htp_is_aligned((void *) src0, VLEN)) || (0 == htp_is_aligned((void *) src1, VLEN)) ||
-        (0 == htp_is_aligned((void *) dst, VLEN))) {
+    if ((0 == hex_is_aligned((void *) src0, VLEN)) || (0 == hex_is_aligned((void *) src1, VLEN)) ||
+        (0 == hex_is_aligned((void *) dst, VLEN))) {
         FARF(HIGH, "hvx_sub_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
@@ -628,7 +619,7 @@ void hvx_sub_f32_opt(const uint8_t * restrict src0,
                      const uint8_t * restrict src1,
                      uint8_t * restrict dst,
                      const int num_elems) {
-    htp_binary_ops_preamble;
+    hvx_binary_ops_preamble;
 
     for (int i = 0; i < step_of_4; i++) {
         HVX_Vector v1a = *(HVX_Vector *) src0_curr;
@@ -719,7 +710,7 @@ void hvx_sub_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
 
     int unaligned_addr = 0;
     int unaligned_loop = 0;
-    if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
+    if ((0 == hex_is_aligned((void *) src, VLEN)) || (0 == hex_is_aligned((void *) dst, VLEN))) {
         FARF(HIGH, "hvx_sub_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
@@ -766,11 +757,11 @@ float hvx_sum_of_squares_f32(const uint8_t * restrict src, const int num_elems) 
     int left_over       = num_elems & (VLEN_FP32 - 1);
     int num_elems_whole = num_elems - left_over;
 
-    if (0 == htp_is_aligned((void *) src, VLEN)) {
+    if (0 == hex_is_aligned((void *) src, VLEN)) {
         FARF(HIGH, "hvx_sum_of_squares_f32: unaligned address in hvx op, possibly slower execution\n");
     }
 
-    assert((1 == htp_is_aligned((void *) src, VLEN)) || (0 == num_elems_whole));
+    assert((1 == hex_is_aligned((void *) src, VLEN)) || (0 == num_elems_whole));
 
     HVX_Vector * restrict vec_in1 = (HVX_Vector *) src;
 
@@ -805,7 +796,7 @@ float hvx_self_sum_f32(const uint8_t * restrict src, const int num_elems) {
 
     int unaligned_addr = 0;
     int unaligned_loop = 0;
-    if (0 == htp_is_aligned((void *) src, VLEN)) {
+    if (0 == hex_is_aligned((void *) src, VLEN)) {
         FARF(HIGH, "hvx_self_sum_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
@@ -854,7 +845,7 @@ float hvx_self_max_f32(const uint8_t * restrict src, const int num_elems) {
 
     int unaligned_addr = 0;
     int unaligned_loop = 0;
-    if (0 == htp_is_aligned((void *) src, VLEN)) {
+    if (0 == hex_is_aligned((void *) src, VLEN)) {
         FARF(HIGH, "hvx_self_max_f32: unaligned address in hvx op, possibly slower execution\n");
         unaligned_addr = 1;
     }
@@ -900,7 +891,7 @@ void hvx_min_scalar_f32(const uint8_t * restrict src, const float val, uint8_t *
     size_t left_over       = num_elems & (VLEN_FP32 - 1);
     size_t num_elems_whole = num_elems - left_over;
     int unalign_address = 0;
-    if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
+    if ((0 == hex_is_aligned((void *) src, VLEN)) || (0 == hex_is_aligned((void *) dst, VLEN))) {
         FARF(HIGH, "hvx_min_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
         unalign_address = 1;
     }
@@ -950,7 +941,7 @@ void hvx_clamp_scalar_f32(const uint8_t * restrict src,
     size_t num_elems_whole = num_elems - left_over;
 
     int unalign_address = 0;
-    if ((0 == htp_is_aligned((void *) src, VLEN)) || (0 == htp_is_aligned((void *) dst, VLEN))) {
+    if ((0 == hex_is_aligned((void *) src, VLEN)) || (0 == hex_is_aligned((void *) dst, VLEN))) {
         FARF(HIGH, "hvx_clamp_scalar_f32: unaligned address in hvx op, possibly slower execution\n");
         unalign_address = 1;
     }

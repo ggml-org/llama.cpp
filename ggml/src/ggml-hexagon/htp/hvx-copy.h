@@ -1,48 +1,11 @@
 #ifndef HVX_COPY_H
 #define HVX_COPY_H
 
-#include <hexagon_types.h>
-#include <hexagon_protos.h>
-
 #include <assert.h>
 #include <stddef.h>
 #include <stdint.h>
 
-static inline void hvx_vec_store_u(void * restrict dst, uint32_t n, HVX_Vector v) {
-    // Rotate as needed.
-    v = Q6_V_vlalign_VVR(v, v, (size_t) dst);
-
-    uint32_t left_off  = (size_t) dst & 127;
-    uint32_t right_off = left_off + n;
-
-    HVX_VectorPred ql_not = Q6_Q_vsetq_R((size_t) dst);
-    HVX_VectorPred qr     = Q6_Q_vsetq2_R(right_off);
-
-    if (right_off > 128) {
-        Q6_vmem_QRIV(qr, (HVX_Vector *) dst + 1, v);
-        // all 1's
-        qr = Q6_Q_vcmp_eq_VbVb(v, v);
-    }
-
-    ql_not = Q6_Q_or_QQn(ql_not, qr);
-    Q6_vmem_QnRIV(ql_not, (HVX_Vector *) dst, v);
-}
-
-static inline void hvx_vec_store_a(void * restrict dst, uint32_t n, HVX_Vector v) {
-    assert((unsigned long) dst % 128 == 0);
-    HVX_VectorPred m = Q6_Q_or_QQn(Q6_Q_vsetq_R((unsigned long) dst), Q6_Q_vsetq2_R(n));
-    Q6_vmem_QnRIV(m, (HVX_Vector *) dst, v);
-}
-
-static inline HVX_Vector hvx_vec_splat_fp32(float v) {
-    union { float  f; uint32_t i; } u = { .f = v };
-    return Q6_V_vsplat_R(u.i);
-}
-
-static inline HVX_Vector hvx_vec_splat_fp16(float v) {
-    union { __fp16 f; uint16_t i; } u = { .f = v };
-    return Q6_Vh_vsplat_R(u.i);
-}
+#include "hvx-base.h"
 
 #define hvx_splat_loop_body(dst_type, vec_store)                 \
     do {                                                         \
