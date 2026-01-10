@@ -1336,7 +1336,6 @@ struct clip_model_loader {
         };
 
         model.class_embedding = get_tensor(TN_CLASS_EMBD, false);
-        model.class_pos_emb   = get_tensor(TN_CLASS_POS_EMBD, false);
 
         model.pre_ln_w = get_tensor(string_format(TN_LN_PRE, prefix, "weight"), false);
         model.pre_ln_b = get_tensor(string_format(TN_LN_PRE, prefix, "bias"),   false);
@@ -1554,6 +1553,7 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_VAETKI:
                 {
+                    model.class_pos_emb = get_tensor(TN_CLASS_POS_EMBD);
                     model.mm_0_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "weight"));
                     model.mm_0_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "bias"));
                     model.mm_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
