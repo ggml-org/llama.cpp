@@ -88,16 +88,18 @@ llm_build_openai_moe_iswa::llm_build_openai_moe_iswa(const llama_model & model, 
 
         // MoE branch
         cur = build_moe_ffn(cur,
-                model.layers[il].ffn_gate_inp,  model.layers[il].ffn_gate_inp_b,
-                model.layers[il].ffn_up_exps,   model.layers[il].ffn_up_exps_b,
-                model.layers[il].ffn_gate_exps, model.layers[il].ffn_gate_exps_b,
-                model.layers[il].ffn_down_exps, model.layers[il].ffn_down_exps_b,
+                model.layers[il].ffn_gate_inp,    model.layers[il].ffn_gate_inp_b,
+                model.layers[il].ffn_up_exps,     model.layers[il].ffn_up_exps_b,
+                model.layers[il].ffn_gate_exps,   model.layers[il].ffn_gate_exps_b,
+                model.layers[il].ffn_down_exps,   model.layers[il].ffn_down_exps_b,
                 nullptr,
                 n_expert, n_expert_used,
                 LLM_FFN_SWIGLU_OAI_MOE, false,
                 false, 0.0,
                 LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT,
-                il);
+                il,
+                nullptr, // probs_in
+                model.layers[il].ffn_gate_up_exps, model.layers[il].ffn_gate_up_exps_b);
         cb(cur, "ffn_moe_out", il);
 
         cur = ggml_add(ctx0, cur, ffn_inp);
