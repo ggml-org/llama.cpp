@@ -7821,7 +7821,10 @@ class VaetkiModel(TextModel):
                 # Convert layer_types to sliding_window_pattern (1 = sliding, 0 = full)
                 # Store as uint32 array to match llama.cpp hparams.swa_layers type
                 sliding_window_pattern = [1 if t == "sliding_attention" else 0 for t in hparams["layer_types"]]
-                self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
+                self.gguf_writer.add_array(
+                    gguf.Keys.Attention.SLIDING_WINDOW_PATTERN.format(arch=self.gguf_writer.arch),
+                    sliding_window_pattern
+                )
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Skip vision encoder tensors
