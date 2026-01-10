@@ -94,9 +94,16 @@ struct Params {
     m1: f32,
 };
 
+#if defined(KV_Q4_0) || defined(KV_Q8_0) || defined(KV_DIRECT)
 @group(0) @binding(0) var<storage, read_write> Q: array<f32>;
 @group(0) @binding(1) var<storage, read_write> K: array<KV_TYPE>;
 @group(0) @binding(2) var<storage, read_write> V: array<KV_TYPE>;
+#else
+@group(0) @binding(0) var<storage, read_write> Q4: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read_write> K4: array<vec4<KV_TYPE>>;
+@group(0) @binding(2) var<storage, read_write> V4: array<vec4<KV_TYPE>>;
+#endif
+
 
 #if defined(MASK) && defined(SINKS)
 @group(0) @binding(3) var<storage, read_write> mask: array<f16>;
@@ -162,6 +169,15 @@ fn calc_softmax_term(kv_idx: u32, q_tile_row: u32, slope: f32) -> f32 {
     return v;
 }
 
+fn load_f32x4(buf: ptr<storage, array<vec4<f32>>, read_write>, scalar_index: u32) -> vec4<f32> {
+    return (*buf)[scalar_index >> 2u];
+}
+
+fn load_kvx4(buf: ptr<storage, array<vec4<KV_TYPE>>, read_write>, scalar_index: u32) -> vec4<KV_TYPE> {
+    return (*buf)[scalar_index >> 2u];
+}
+
+
 
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
@@ -219,6 +235,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
     let head = f32(head_idx);
     let slope = select(1.0, select(pow(params.m1, 2.0 * (head - params.n_head_log2) + 1.0), pow(params.m0, head + 1.0), head < params.n_head_log2), params.max_bias > 0);
 
+#if defined(KV_Q4_0) || defined(KV_Q8_0) || defined(KV_DIRECT)
     // load q tile into shared memory
     for (var elem_idx = local_id.x; elem_idx < Q_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE) {
         let q_row = elem_idx / HEAD_DIM_QK;
@@ -230,6 +247,32 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             Q[global_q_row_offset + q_col],
             head_q_row < params.seq_len_q && q_col < HEAD_DIM_QK));
     }
+#else
+let Q_ROW_CHUNKS: u32 = HEAD_DIM_QK / 4u;          
+let Q_TOTAL_CHUNKS: u32 = Q_TILE * Q_ROW_CHUNKS;   
+
+for (var c = local_id.x; c < Q_TOTAL_CHUNKS; c += WG_SIZE) {
+    let q_row = c / Q_ROW_CHUNKS;
+    let q_col4 = c - q_row * Q_ROW_CHUNKS;   
+    let q_col = q_col4 * 4u;
+
+    let head_q_row = q_row_start + q_row;
+    let in_bounds = (head_q_row < params.seq_len_q);
+
+    let global_q_row_offset = q_head_offset + head_q_row * params.stride_q1;
+    let base = global_q_row_offset + q_col; // scalar index, multiple of 4
+
+    let qv = select(vec4<f32>(0.0), load_f32x4(&Q4, base), in_bounds);
+
+    let sh = q_row * HEAD_DIM_QK + q_col;
+    q_shmem[sh + 0u] = f16(qv.x);
+    q_shmem[sh + 1u] = f16(qv.y);
+    q_shmem[sh + 2u] = f16(qv.z);
+    q_shmem[sh + 3u] = f16(qv.w);
+}
+#endif
+
+
 
     for (var kv_tile = 0u; kv_tile < params.seq_len_kv; kv_tile     += KV_TILE) {
       // clear inter_shmem to ensure zero-initialized accumulators
@@ -295,16 +338,30 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 #elif defined(KV_DIRECT)
       // Direct global loads for KV
 #else
-      for (var elem_idx = local_id.x; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE) {
-          let k_row = elem_idx / HEAD_DIM_QK;
-          let k_col = elem_idx % HEAD_DIM_QK;
-          let global_k_row = kv_tile + k_row;
-          let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
-          kv_shmem[elem_idx] = f16(select(
-              0.0,
-              K[global_k_row_offset + k_col],
-              global_k_row < params.seq_len_kv && k_col < HEAD_DIM_QK));
-      }
+
+let K_ROW_CHUNKS: u32 = HEAD_DIM_QK / 4u;      
+let K_TOTAL_CHUNKS: u32 = KV_TILE * K_ROW_CHUNKS;     
+
+for (var c = local_id.x; c < K_TOTAL_CHUNKS; c += WG_SIZE) {
+    let k_row = c / K_ROW_CHUNKS;
+    let k_col4 = c - k_row * K_ROW_CHUNKS;
+    let k_col = k_col4 * 4u;
+
+    let global_k_row = kv_tile + k_row;
+    let in_bounds = (global_k_row < params.seq_len_kv);
+
+    let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
+    let base = global_k_row_offset + k_col;
+
+    // Wide load from packed K
+    let kv = select(vec4<KV_TYPE>(KV_TYPE(0.0)), load_kvx4(&K4, base), in_bounds);
+
+    let sh = k_row * HEAD_DIM_QK + k_col;
+    kv_shmem[sh + 0u] = f16(kv.x);
+    kv_shmem[sh + 1u] = f16(kv.y);
+    kv_shmem[sh + 2u] = f16(kv.z);
+    kv_shmem[sh + 3u] = f16(kv.w);
+}
 #endif
 
       workgroupBarrier();
@@ -506,16 +563,28 @@ acc = subgroupMatrixMultiplyAccumulate(q_cur, k_cur, acc);
 #elif defined(KV_DIRECT)
       // Direct global loads for KV
 #else
-      for (var elem_idx = local_id.x; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE) {
-          let v_row = elem_idx / HEAD_DIM_V;
-          let v_col = elem_idx % HEAD_DIM_V;
-          let global_v_row = kv_tile + v_row;
-          let global_v_row_offset = v_head_offset + global_v_row * params.stride_v1;
-          kv_shmem[elem_idx] = f16(select(
-              0.0,
-              V[global_v_row_offset + v_col],
-              global_v_row < params.seq_len_kv && v_col < HEAD_DIM_V));
-      }
+let V_ROW_CHUNKS: u32 = HEAD_DIM_V / 4u;
+let V_TOTAL_CHUNKS: u32 = KV_TILE * V_ROW_CHUNKS;
+
+for (var c = local_id.x; c < V_TOTAL_CHUNKS; c += WG_SIZE) {
+    let v_row = c / V_ROW_CHUNKS;
+    let v_col4 = c - v_row * V_ROW_CHUNKS;
+    let v_col = v_col4 * 4u;
+
+    let global_v_row = kv_tile + v_row;
+    let in_bounds = (global_v_row < params.seq_len_kv);
+
+    let global_v_row_offset = v_head_offset + global_v_row * params.stride_v1;
+    let base = global_v_row_offset + v_col;
+
+    let vv = select(vec4<KV_TYPE>(KV_TYPE(0.0)), load_kvx4(&V4, base), in_bounds);
+
+    let sh = v_row * HEAD_DIM_V + v_col;
+    kv_shmem[sh + 0u] = f16(vv.x);
+    kv_shmem[sh + 1u] = f16(vv.y);
+    kv_shmem[sh + 2u] = f16(vv.z);
+    kv_shmem[sh + 3u] = f16(vv.w);
+}
 #endif
 
       workgroupBarrier();
