@@ -3650,6 +3650,7 @@ class VisionProjectorType:
     MUSIC_FLAMINGO = "musicflamingo" # audio
     GLM4V = "glm4v"
     YOUTUVL = "youtuvl"
+    VAETKI = "vaetki"
 
 
 # Items here are (block size, type size)

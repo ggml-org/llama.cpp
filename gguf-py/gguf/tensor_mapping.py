@@ -1471,6 +1471,7 @@ class TensorNameMap:
             "vision_tower.ln_pre", # pixtral-hf
             "vision_encoder.ln_pre", # pixtral
             "vision_model.layernorm_pre", # llama4
+            "visual.pre_layernorm", # vaetki
         ),
 
         MODEL_TENSOR.V_POST_NORM: (
