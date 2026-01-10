@@ -33,11 +33,15 @@ import { config } from '$lib/stores/settings.svelte';
  * Uses timing data from `/chat/completions` streaming response for accurate
  * real-time token generation rate measurement.
  */
+// Maximum number of conversation states to keep in memory
+const MAX_CONVERSATION_STATES = 50;
+
 export class SlotsService {
 	private callbacks: Set<(state: ApiProcessingState | null) => void> = new Set();
 	private isStreamingActive: boolean = false;
 	private lastKnownState: ApiProcessingState | null = null;
 	private conversationStates: Map<string, ApiProcessingState | null> = new Map();
+	private conversationAccessOrder: string[] = []; // LRU tracking
 	private activeConversationId: string | null = null;
 
 	/**
@@ -86,9 +90,24 @@ export class SlotsService {
 	}
 
 	/**
-	 * Update processing state for a specific conversation
+	 * Update processing state for a specific conversation with LRU eviction
 	 */
 	updateConversationState(conversationId: string, state: ApiProcessingState | null): void {
+		// Update LRU access order
+		const existingIndex = this.conversationAccessOrder.indexOf(conversationId);
+		if (existingIndex !== -1) {
+			this.conversationAccessOrder.splice(existingIndex, 1);
+		}
+		this.conversationAccessOrder.push(conversationId);
+
+		// Evict oldest entries if over limit
+		while (this.conversationAccessOrder.length > MAX_CONVERSATION_STATES) {
+			const oldestId = this.conversationAccessOrder.shift();
+			if (oldestId && oldestId !== this.activeConversationId) {
+				this.conversationStates.delete(oldestId);
+			}
+		}
+
 		this.conversationStates.set(conversationId, state);
 
 		if (conversationId === this.activeConversationId) {
@@ -109,6 +128,12 @@ export class SlotsService {
 	 */
 	clearConversationState(conversationId: string): void {
 		this.conversationStates.delete(conversationId);
+
+		// Remove from LRU access order
+		const index = this.conversationAccessOrder.indexOf(conversationId);
+		if (index !== -1) {
+			this.conversationAccessOrder.splice(index, 1);
+		}
 
 		if (conversationId === this.activeConversationId) {
 			this.lastKnownState = null;

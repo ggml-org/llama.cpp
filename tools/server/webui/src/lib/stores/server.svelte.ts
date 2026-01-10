@@ -4,6 +4,18 @@ import { ChatService } from '$lib/services/chat';
 import { config } from '$lib/stores/settings.svelte';
 
 /**
+ * Cached server props with TTL support
+ */
+interface CachedServerProps {
+	data: ApiLlamaCppServerProps;
+	timestamp: number;
+	expiresAt: number;
+}
+
+// Cache TTL: 30 minutes (server props rarely change)
+const CACHE_TTL_MS = 30 * 60 * 1000;
+
+/**
  * ServerStore - Server state management and capability detection
  *
  * This store manages communication with the llama.cpp server to retrieve and maintain
@@ -60,7 +72,24 @@ class ServerStore {
 			const raw = localStorage.getItem(SERVER_PROPS_LOCALSTORAGE_KEY);
 			if (!raw) return null;
 
-			return JSON.parse(raw) as ApiLlamaCppServerProps;
+			const parsed = JSON.parse(raw);
+
+			// Handle both old format (direct props) and new format (with TTL)
+			if ('expiresAt' in parsed && 'data' in parsed) {
+				const cached = parsed as CachedServerProps;
+
+				// Check if cache has expired
+				if (Date.now() > cached.expiresAt) {
+					console.info('Server props cache expired, removing...');
+					localStorage.removeItem(SERVER_PROPS_LOCALSTORAGE_KEY);
+					return null;
+				}
+
+				return cached.data;
+			}
+
+			// Legacy format: migrate to new format on next persist
+			return parsed as ApiLlamaCppServerProps;
 		} catch (error) {
 			console.warn('Failed to read cached server props from localStorage:', error);
 			return null;
@@ -72,7 +101,12 @@ class ServerStore {
 
 		try {
 			if (props) {
-				localStorage.setItem(SERVER_PROPS_LOCALSTORAGE_KEY, JSON.stringify(props));
+				const cached: CachedServerProps = {
+					data: props,
+					timestamp: Date.now(),
+					expiresAt: Date.now() + CACHE_TTL_MS
+				};
+				localStorage.setItem(SERVER_PROPS_LOCALSTORAGE_KEY, JSON.stringify(cached));
 			} else {
 				localStorage.removeItem(SERVER_PROPS_LOCALSTORAGE_KEY);
 			}
