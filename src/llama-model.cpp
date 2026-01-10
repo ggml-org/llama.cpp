@@ -6464,19 +6464,21 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     const int64_t n_embd_target_features = 3 * hparams.eagle3_target_hidden_size;  
                     const int64_t n_embd_attn_input = 2 * n_embd;       
                     
-                    // Get vocab size from the d2t tensor in the GGUF file
-                    // d2t: draft to target mapping (size = draft_vocab_size)
+                    // Get vocab size from the d2t tensor in the GGUF file (optional - only needed if EAGLE3 has different vocab_size than target)
+                    // d2t: draft to target vocabulary mapping
+                    int64_t n_draft_vocab = n_vocab;  // Default: same as target vocab
                     const struct ggml_tensor * d2t_meta = ml.get_tensor_meta("d2t");
-                    if (!d2t_meta) {
-                        throw std::runtime_error("EAGLE3 model requires 'd2t' tensor but it was not found in the model file");
+                    if (d2t_meta) {
+                        n_draft_vocab = d2t_meta->ne[0]; // update draft vocab size
+                        d2t = create_tensor(tn(LLM_TENSOR_EAGLE3_D2T), {n_draft_vocab}, 0);
+                        LLAMA_LOG_INFO("%s: EAGLE3 using d2t mapping (draft_vocab_size = %lld)\n", __func__, (long long)n_draft_vocab);
+                    } else {
+                        d2t = nullptr; // no d2t, use default vocab size
+                        LLAMA_LOG_INFO("%s: EAGLE3 without d2t - sharing same vocab_size with target (vocab_size = %lld)\n", __func__, (long long)n_draft_vocab);
                     }
-                    const int64_t n_draft_vocab = d2t_meta->ne[0];   
                     
                     // Feature fusion layer: projects 3 target layers to draft hidden size
                     fc = create_tensor(tn(LLM_TENSOR_EAGLE3_FC, "weight"), {n_embd_target_features, n_embd}, 0);
-                    
-                    // Draft to target vocabulary mapping tensor
-                    d2t = create_tensor(tn(LLM_TENSOR_EAGLE3_D2T), {n_draft_vocab}, 0);
                     
                     // Output layer (uses draft vocab size)
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
