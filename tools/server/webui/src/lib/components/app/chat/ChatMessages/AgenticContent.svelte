@@ -86,8 +86,7 @@
 			}
 
 			const toolName = match[1];
-			const toolArgsBase64 = match[2];
-			const toolArgs = decodeBase64(toolArgsBase64);
+			const toolArgs = match[2]; // Direct JSON
 			const toolResult = match[3].replace(/^\n+|\n+$/g, '');
 
 			sections.push({
@@ -119,9 +118,8 @@
 			}
 
 			const toolName = pendingMatch[1];
-			const toolArgsBase64 = pendingMatch[2];
-			const toolArgs = decodeBase64(toolArgsBase64);
-			// Capture streaming result content (everything after args marker)
+			const toolArgs = pendingMatch[2]; // Direct JSON
+			// Capture streaming result content (everything after TOOL_ARGS_END marker)
 			const streamingResult = (pendingMatch[3] || '').replace(/^\n+|\n+$/g, '');
 
 			sections.push({
@@ -140,8 +138,7 @@
 				}
 			}
 
-			const partialArgsBase64 = partialWithNameMatch[2] || '';
-			const partialArgs = decodeBase64(partialArgsBase64);
+			const partialArgs = partialWithNameMatch[2] || ''; // Direct JSON streaming
 
 			sections.push({
 				type: AgenticSectionType.TOOL_CALL_STREAMING,
