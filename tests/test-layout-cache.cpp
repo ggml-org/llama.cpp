@@ -1,0 +1,223 @@
+// Unit tests for SYCL layout selection and unified cache behavior
+//
+// Usage:
+//   ONEAPI_DEVICE_SELECTOR=level_zero:1 ./build/bin/test-layout-cache
+
+#include <cstdio>
+#include <cstdlib>
+#include <vector>
+
+#include "ggml.h"
+#include "ggml-backend.h"
+#include "ggml-cpu.h"
+#include "ggml-sycl.h"
+
+#if !defined(GGML_USE_SYCL)
+int main() {
+    fprintf(stderr, "GGML_USE_SYCL not enabled; skipping test.\n");
+    return 0;
+}
+#else
+
+#include "ggml-quants.h"
+#include "ggml-sycl/common.hpp"
+
+static const char * layout_name(ggml_layout_mode mode) {
+    switch (mode) {
+        case GGML_LAYOUT_AOS:       return "AOS";
+        case GGML_LAYOUT_SOA:       return "SOA";
+        case GGML_LAYOUT_COALESCED: return "COALESCED";
+        case GGML_LAYOUT_XMX_TILED: return "XMX_TILED";
+        default:                    return "UNKNOWN";
+    }
+}
+
+static const char * usage_name(tensor_usage usage) {
+    switch (usage) {
+        case tensor_usage::UNKNOWN:           return "UNKNOWN";
+        case tensor_usage::ATTENTION_WEIGHT:  return "ATTENTION_WEIGHT";
+        case tensor_usage::FFN_WEIGHT:        return "FFN_WEIGHT";
+        case tensor_usage::MOE_EXPERT_WEIGHT: return "MOE_EXPERT_WEIGHT";
+        case tensor_usage::MOE_GATE:          return "MOE_GATE";
+        case tensor_usage::EMBEDDING:         return "EMBEDDING";
+        case tensor_usage::NORM:              return "NORM";
+        default:                              return "UNKNOWN";
+    }
+}
+
+static bool expect_usage(const char * label, tensor_usage got, tensor_usage expected) {
+    if (got != expected) {
+        fprintf(stderr, "%s: expected usage %s, got %s\n",
+                label, usage_name(expected), usage_name(got));
+        return false;
+    }
+    return true;
+}
+
+static bool expect_layout(const char * label, ggml_layout_mode got, ggml_layout_mode expected) {
+    if (got != expected) {
+        fprintf(stderr, "%s: expected layout %s, got %s\n",
+                label, layout_name(expected), layout_name(got));
+        return false;
+    }
+    return true;
+}
+
+static void fill_pattern(std::vector<uint8_t> & data) {
+    for (size_t i = 0; i < data.size(); ++i) {
+        data[i] = static_cast<uint8_t>((i * 131) ^ 0x5a);
+    }
+}
+
+static bool test_layout_selection(int device_id, bool xmx_supported) {
+    bool ok = true;
+
+    tensor_usage usage = infer_tensor_usage("attn_q.weight");
+    ok &= expect_usage("infer_tensor_usage(attn_q.weight)", usage, tensor_usage::ATTENTION_WEIGHT);
+    ok &= expect_layout("layout_policy(attn_q, Q8_0)",
+                        layout_policy::get_with_override(GGML_TYPE_Q8_0, usage, device_id),
+                        GGML_LAYOUT_COALESCED);
+
+    usage = infer_tensor_usage("ffn_gate_exps.weight");
+    ok &= expect_usage("infer_tensor_usage(ffn_gate_exps.weight)", usage, tensor_usage::MOE_EXPERT_WEIGHT);
+    const ggml_layout_mode expected_xmx = xmx_supported ? GGML_LAYOUT_XMX_TILED : GGML_LAYOUT_SOA;
+    ok &= expect_layout("layout_policy(ffn_gate_exps, MXFP4)",
+                        layout_policy::get_with_override(GGML_TYPE_MXFP4, usage, device_id),
+                        expected_xmx);
+
+    usage = infer_tensor_usage("ffn_up.weight");
+    ok &= expect_usage("infer_tensor_usage(ffn_up.weight)", usage, tensor_usage::FFN_WEIGHT);
+    ok &= expect_layout("layout_policy(ffn_up, Q4_0)",
+                        layout_policy::get_with_override(GGML_TYPE_Q4_0, usage, device_id),
+                        GGML_LAYOUT_COALESCED);
+
+    usage = infer_tensor_usage("tok_norm.weight");
+    ok &= expect_usage("infer_tensor_usage(tok_norm.weight)", usage, tensor_usage::NORM);
+    ok &= expect_layout("layout_policy(tok_norm, F32)",
+                        layout_policy::get_with_override(GGML_TYPE_F32, usage, device_id),
+                        GGML_LAYOUT_AOS);
+
+    return ok;
+}
+
+static bool test_aos_drop(int device_id) {
+    ggml_backend_t cpu_backend = ggml_backend_cpu_init();
+    if (!cpu_backend) {
+        fprintf(stderr, "Failed to init CPU backend\n");
+        return false;
+    }
+
+    ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(cpu_backend);
+    ggml_init_params params = {
+        /*.mem_size   =*/ 8 * 1024 * 1024,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        ggml_backend_free(cpu_backend);
+        fprintf(stderr, "Failed to init ggml context\n");
+        return false;
+    }
+
+    const int64_t ncols = QK8_0 * MMVQ_COALESCED_TILE_BLOCKS;
+    const int64_t nrows = 4;
+    ggml_tensor * weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, ncols, nrows);
+    ggml_set_name(weight, "attn_q.weight");
+
+    const size_t weight_buf_size = ggml_backend_buft_get_alloc_size(buft, weight);
+    ggml_backend_buffer_t weight_buffer = ggml_backend_buft_alloc_buffer(buft, weight_buf_size);
+    if (!weight_buffer) {
+        ggml_free(ctx);
+        ggml_backend_free(cpu_backend);
+        fprintf(stderr, "Failed to allocate CPU weight buffer\n");
+        return false;
+    }
+    ggml_backend_buffer_set_usage(weight_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ggml_backend_tensor_alloc(weight_buffer, weight, ggml_backend_buffer_get_base(weight_buffer));
+
+    const size_t weight_bytes = ggml_nbytes(weight);
+    std::vector<uint8_t> host_data(weight_bytes);
+    fill_pattern(host_data);
+    ggml_backend_tensor_set(weight, host_data.data(), 0, host_data.size());
+
+    const void * key_ptr = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
+    if (!key_ptr) {
+        ggml_backend_buffer_free(weight_buffer);
+        ggml_free(ctx);
+        ggml_backend_free(cpu_backend);
+        fprintf(stderr, "Failed to get cache key\n");
+        return false;
+    }
+
+    ggml_sycl::unified_cache * cache = ggml_sycl::get_unified_cache_for_device(device_id);
+    if (!cache) {
+        ggml_backend_buffer_free(weight_buffer);
+        ggml_free(ctx);
+        ggml_backend_free(cpu_backend);
+        fprintf(stderr, "Failed to get unified cache\n");
+        return false;
+    }
+
+    void * aos_ptr = ggml_sycl_get_weight_layout_ptr(weight, device_id, GGML_LAYOUT_AOS);
+    if (!aos_ptr || !cache->is_cached(key_ptr, GGML_LAYOUT_AOS)) {
+        ggml_backend_buffer_free(weight_buffer);
+        ggml_free(ctx);
+        ggml_backend_free(cpu_backend);
+        fprintf(stderr, "Failed to cache AOS layout\n");
+        return false;
+    }
+
+    void * coalesced_ptr = ggml_sycl_get_weight_layout_ptr(weight, device_id, GGML_LAYOUT_COALESCED);
+    if (!coalesced_ptr || !cache->is_cached(key_ptr, GGML_LAYOUT_COALESCED)) {
+        ggml_backend_buffer_free(weight_buffer);
+        ggml_free(ctx);
+        ggml_backend_free(cpu_backend);
+        fprintf(stderr, "Failed to cache COALESCED layout\n");
+        return false;
+    }
+
+    if (cache->is_cached(key_ptr, GGML_LAYOUT_AOS)) {
+        ggml_backend_buffer_free(weight_buffer);
+        ggml_free(ctx);
+        ggml_backend_free(cpu_backend);
+        fprintf(stderr, "AOS cache entry not dropped after COALESCED cache\n");
+        return false;
+    }
+
+    ggml_backend_buffer_free(weight_buffer);
+    ggml_free(ctx);
+    ggml_backend_free(cpu_backend);
+
+    return true;
+}
+
+int main() {
+    if (!std::getenv("ONEAPI_DEVICE_SELECTOR")) {
+        setenv("ONEAPI_DEVICE_SELECTOR", "level_zero:1", 1);
+    }
+
+    unsetenv("GGML_SYCL_LAYOUT_OVERRIDE");
+    setenv("GGML_SYCL_XMX_MOE", "1", 1);
+    setenv("GGML_SYCL_XMX_MOE_TILED", "1", 1);
+
+    const auto & info = ggml_sycl_info();
+    if (info.device_count <= 0) {
+        fprintf(stderr, "No SYCL devices available; skipping test.\n");
+        return 0;
+    }
+
+    const int device_id = 0;
+    const bool xmx_supported = info.devices[device_id].xmx_caps.supported &&
+                               info.devices[device_id].xmx_caps.supports_int8;
+
+    bool ok = true;
+    ok &= test_layout_selection(device_id, xmx_supported);
+    ok &= test_aos_drop(device_id);
+
+    if (ok) {
+        fprintf(stderr, "layout-cache tests passed.\n");
+    }
+    return ok ? 0 : 1;
+}
+#endif

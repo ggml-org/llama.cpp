@@ -19,6 +19,9 @@
 #include <ggml-alloc.h>
 #include <ggml-backend.h>
 #include <ggml-cpp.h>
+#if defined(GGML_USE_SYCL)
+#include <ggml-sycl.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -40,6 +43,7 @@
 #include <thread>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 
 #ifdef __EMSCRIPTEN__
 #   define N_THREADS 1
@@ -146,6 +150,24 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
     } else {
         GGML_ABORT("fatal error");
     }
+}
+
+static ggml_backend_buffer_t alloc_tensor_buffer(ggml_backend_buffer_type_t buft, ggml_tensor * tensor,
+                                                 ggml_backend_buffer_usage usage) {
+    if (!buft || !tensor) {
+        return nullptr;
+    }
+    const size_t size = ggml_backend_buft_get_alloc_size(buft, tensor);
+    ggml_backend_buffer_t buffer = ggml_backend_buft_alloc_buffer(buft, size);
+    if (!buffer) {
+        return nullptr;
+    }
+    ggml_backend_buffer_set_usage(buffer, usage);
+    if (ggml_backend_tensor_alloc(buffer, tensor, ggml_backend_buffer_get_base(buffer)) != GGML_STATUS_SUCCESS) {
+        ggml_backend_buffer_free(buffer);
+        return nullptr;
+    }
+    return buffer;
 }
 
 // generate an F16 mask where certain blocks are randomly masked with -INF value
@@ -1133,6 +1155,10 @@ struct test_case {
         }
     }
 
+    virtual void collect_weight_tensors(std::vector<ggml_tensor *> & weights) {
+        GGML_UNUSED(weights);
+    }
+
     virtual size_t op_size(ggml_tensor * t) {
         size_t size = ggml_nbytes(t);
         // add source tensors
@@ -1288,11 +1314,60 @@ struct test_case {
         // post-graph sentinel
         add_sentinel(ctx);
 
+        std::vector<ggml_backend_buffer_t> weight_buffers;
+        std::vector<ggml_tensor *> weight_tensors;
+        collect_weight_tensors(weight_tensors);
+        if (!weight_tensors.empty()) {
+            ggml_backend_dev_t dev = ggml_backend_get_device(backend1);
+            ggml_backend_buffer_type_t host_buft =
+                dev ? ggml_backend_dev_host_buffer_type(dev) : nullptr;
+            if (host_buft && dev && !ggml_backend_dev_supports_buft(dev, host_buft)) {
+                host_buft = nullptr;
+            }
+            ggml_backend_buffer_type_t weight_buft = host_buft ? host_buft : ggml_backend_get_default_buffer_type(backend1);
+            const char * backend_name = ggml_backend_name(backend1);
+            const bool is_sycl_backend = backend_name && std::strncmp(backend_name, "SYCL", 4) == 0;
+            const bool use_host_weights = host_buft != nullptr && weight_buft == host_buft;
+            std::unordered_set<ggml_tensor *> unique_weights;
+            unique_weights.reserve(weight_tensors.size());
+            for (ggml_tensor * t : weight_tensors) {
+                if (!t || t->view_src || t->data != nullptr) {
+                    continue;
+                }
+                if (!unique_weights.insert(t).second) {
+                    continue;
+                }
+                ggml_backend_buffer_t weight_buf =
+                    alloc_tensor_buffer(weight_buft, t, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+                if (!weight_buf) {
+                    printf("failed to allocate weight tensor buffer [%s] ", ggml_backend_name(backend1));
+                    for (ggml_backend_buffer_t buf_w : weight_buffers) {
+                        ggml_backend_buffer_free(buf_w);
+                    }
+                    ggml_free(ctx);
+                    return test_status_t::FAIL;
+                }
+#if defined(GGML_USE_SYCL)
+                if (is_sycl_backend && use_host_weights) {
+                    ggml_backend_sycl_register_host_weight_tensor(dev, t);
+                }
+#else
+                GGML_UNUSED(is_sycl_backend);
+                GGML_UNUSED(use_host_weights);
+                GGML_UNUSED(dev);
+#endif
+                weight_buffers.push_back(weight_buf);
+            }
+        }
+
         // allocate
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend1);
 
         if (buf == NULL) {
             printf("failed to allocate tensors [%s] ", ggml_backend_name(backend1));
+            for (ggml_backend_buffer_t buf_w : weight_buffers) {
+                ggml_backend_buffer_free(buf_w);
+            }
             ggml_free(ctx);
             return test_status_t::FAIL;
         }
@@ -1386,6 +1461,9 @@ struct test_case {
         const bool cmp_ok = ggml_backend_compare_graph_backend(backend1, backend2, gf, callback, &ud, run_whole_graph() ? out : nullptr);
 
         ggml_backend_buffer_free(buf);
+        for (ggml_backend_buffer_t buf_w : weight_buffers) {
+            ggml_backend_buffer_free(buf_w);
+        }
 
         ggml_free(ctx);
 
@@ -3690,6 +3768,7 @@ struct test_mul_mat_id : public test_case {
     const int64_t m;
     const int64_t n;
     const int64_t k;
+    ggml_tensor * weights_as = nullptr;
 
     std::string vars() override {
         return VARS_TO_STR8(type_a, type_b, n_mats, n_used, b, m, n, k);
@@ -3716,6 +3795,7 @@ struct test_mul_mat_id : public test_case {
         // C^T = A * B^T: (k, m) * (k, n) => (m, n)
         ggml_tensor * as = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
         ggml_set_name(as, "as");
+        weights_as = as;
 
         ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, n);
         ggml_set_name(ids, "ids");
@@ -3736,6 +3816,12 @@ struct test_mul_mat_id : public test_case {
     void initialize_tensors(ggml_context * ctx) override {
         init_mul_mat_id_tensors(ctx, n_mats);
     }
+
+    void collect_weight_tensors(std::vector<ggml_tensor *> & weights) override {
+        if (weights_as) {
+            weights.push_back(weights_as);
+        }
+    }
 };
 
 // GGML_OP_MUL_MAT_ID + GGML_OP_ADD or GGML_OP_MUL
@@ -3750,6 +3836,8 @@ struct test_mul_mat_id_fusion : public test_case {
     const int64_t k;
     const uint32_t o; // number of outputs
     const bool mul;
+    ggml_tensor * weights_as = nullptr;
+    std::vector<ggml_tensor *> extra_weights;
 
     std::string vars() override {
         return VARS_TO_STR10(type_a, type_b, n_mats, n_used, b, m, n, k, o, mul);
@@ -3774,8 +3862,10 @@ struct test_mul_mat_id_fusion : public test_case {
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         // C^T = A * B^T: (k, m) * (k, n) => (m, n)
+        extra_weights.clear();
         ggml_tensor * as = ggml_new_tensor_3d(ctx, type_a, k, m, n_mats);
         ggml_set_name(as, "as");
+        weights_as = as;
 
         ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, n);
         ggml_set_name(ids, "ids");
@@ -3795,6 +3885,7 @@ struct test_mul_mat_id_fusion : public test_case {
             ggml_tensor * out2 = ggml_mul_mat_id(ctx, a2, b, ids);
             ggml_set_name(out2, "out2");
             out = ggml_add(ctx, out, out2);
+            extra_weights.push_back(a2);
         }
 
         if (mul) {
@@ -3809,6 +3900,17 @@ struct test_mul_mat_id_fusion : public test_case {
 
     void initialize_tensors(ggml_context * ctx) override {
         init_mul_mat_id_tensors(ctx, n_mats);
+    }
+
+    void collect_weight_tensors(std::vector<ggml_tensor *> & weights) override {
+        if (weights_as) {
+            weights.push_back(weights_as);
+        }
+        for (ggml_tensor * t : extra_weights) {
+            if (t) {
+                weights.push_back(t);
+            }
+        }
     }
 
     bool run_whole_graph() override { return true; }

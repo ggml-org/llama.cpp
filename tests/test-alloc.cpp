@@ -583,6 +583,65 @@ static void test_reallocation() {
     }
 }
 
+//
+// max alloc size probe tests
+
+struct probe_backend_context {
+    size_t limit = 0;
+    int    alloc_count = 0;
+
+    ggml_backend_buffer_i buffer_interface;
+};
+
+static ggml_backend_buffer_t probe_backend_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    probe_backend_context * ctx = (probe_backend_context *) buft->context;
+    if (size > ctx->limit) {
+        return nullptr;
+    }
+    ctx->alloc_count++;
+    return ggml_backend_buffer_init(buft, ctx->buffer_interface, ctx, size);
+}
+
+static size_t probe_backend_buffer_type_get_alignment(ggml_backend_buffer_type_t) {
+    return 1;
+}
+
+static size_t probe_backend_buffer_type_get_max_size(ggml_backend_buffer_type_t) {
+    return SIZE_MAX;
+}
+
+static bool probe_backend_buffer_type_is_host(ggml_backend_buffer_type_t) {
+    return true;
+}
+
+static void probe_backend_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+    probe_backend_context * ctx = (probe_backend_context *) buffer->context;
+    ctx->alloc_count--;
+}
+
+static void test_probe_max_alloc_size() {
+    probe_backend_context ctx{};
+
+    ctx.buffer_interface.free_buffer = probe_backend_buffer_free_buffer;
+
+    ggml_backend_buffer_type buft{};
+    buft.context             = &ctx;
+    buft.iface.get_name      = dummy_backend_buffer_type_get_name;
+    buft.iface.alloc_buffer  = probe_backend_buffer_type_alloc_buffer;
+    buft.iface.get_alignment = probe_backend_buffer_type_get_alignment;
+    buft.iface.get_max_size  = probe_backend_buffer_type_get_max_size;
+    buft.iface.is_host       = probe_backend_buffer_type_is_host;
+
+    ctx.limit = 100;
+    GGML_ASSERT(ggml_backend_probe_max_alloc_size(&buft, 100, 1.0) == 100);
+    GGML_ASSERT(ggml_backend_probe_max_alloc_size(&buft, 150, 1.0) == 100);
+    GGML_ASSERT(ggml_backend_probe_max_alloc_size(&buft, 100, 0.9) == 90);
+
+    ctx.limit = 0;
+    GGML_ASSERT(ggml_backend_probe_max_alloc_size(&buft, 100, 1.0) == 0);
+    GGML_ASSERT(ctx.alloc_count == 0);
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -604,5 +663,6 @@ int main() {
     run("test_multiple_buffer_types", test_multiple_buffer_types);
     run("test_buffer_size_zero", test_buffer_size_zero);
     run("test_reallocation", test_reallocation);
+    run("test_probe_max_alloc_size", test_probe_max_alloc_size);
     return 0;
 }

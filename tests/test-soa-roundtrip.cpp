@@ -38,6 +38,12 @@ static void get_tolerances(ggml_type type, bool is_mmq, float & abs_tol, float &
     if (type == GGML_TYPE_Q4_0) {
         abs_tol = 0.8f;
         rel_tol = 0.30f;
+    } else if (type == GGML_TYPE_Q4_K) {
+        abs_tol = 1.0f;
+        rel_tol = 0.35f;
+    } else if (type == GGML_TYPE_Q5_K) {
+        abs_tol = 0.8f;
+        rel_tol = 0.30f;
     } else if (type == GGML_TYPE_Q6_K && !is_mmq) {
         abs_tol = 0.5f;
         rel_tol = 0.20f;
@@ -90,6 +96,10 @@ static bool run_reference_mul_mat(ggml_type weight_type, const void * weight_dat
         case GGML_TYPE_Q4_0:
             blocks_per_row = n_embd / QK4_0;
             break;
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+            blocks_per_row = n_embd / QK_K;
+            break;
         case GGML_TYPE_Q8_0:
             blocks_per_row = n_embd / QK8_0;
             break;
@@ -106,6 +116,14 @@ static bool run_reference_mul_mat(ggml_type weight_type, const void * weight_dat
         switch (weight_type) {
             case GGML_TYPE_Q4_0:
                 dequantize_row_q4_0(reinterpret_cast<const block_q4_0 *>(weight_data) + row_offset,
+                                    weight_f32.data(), n_embd);
+                break;
+            case GGML_TYPE_Q4_K:
+                dequantize_row_q4_K(reinterpret_cast<const block_q4_K *>(weight_data) + row_offset,
+                                    weight_f32.data(), n_embd);
+                break;
+            case GGML_TYPE_Q5_K:
+                dequantize_row_q5_K(reinterpret_cast<const block_q5_K *>(weight_data) + row_offset,
                                     weight_f32.data(), n_embd);
                 break;
             case GGML_TYPE_Q8_0:
@@ -433,6 +451,14 @@ int main() {
     // === Q4_0 Tests (invokes actual SoA DMMV/MMQ kernels) ===
     if (!test_dmmv("Q4_0", GGML_TYPE_Q4_0, n_embd, n_rows)) num_failed++;
     if (!test_mmq("Q4_0", GGML_TYPE_Q4_0, n_embd, n_rows)) num_failed++;
+
+    // === Q4_K Tests ===
+    if (!test_dmmv("Q4_K", GGML_TYPE_Q4_K, n_embd, n_rows)) num_failed++;
+    if (!test_mmq("Q4_K", GGML_TYPE_Q4_K, n_embd, n_rows)) num_failed++;
+
+    // === Q5_K Tests ===
+    if (!test_dmmv("Q5_K", GGML_TYPE_Q5_K, n_embd, n_rows)) num_failed++;
+    if (!test_mmq("Q5_K", GGML_TYPE_Q5_K, n_embd, n_rows)) num_failed++;
 
     // === Q8_0 Tests ===
     if (!test_dmmv("Q8_0", GGML_TYPE_Q8_0, n_embd, n_rows)) num_failed++;

@@ -467,6 +467,86 @@ if(GGML_SYCL)
     add_test(NAME test-mmvq-coalesced COMMAND $<TARGET_FILE:test-mmvq-coalesced>)
 endif()
 
+# test-tiled-weight-loading: Functional verification for XMX MXFP4 tiled MoE weights
+if(GGML_SYCL)
+    add_executable(test-tiled-weight-loading test-tiled-weight-loading.cpp)
+    target_link_libraries(test-tiled-weight-loading PRIVATE ggml)
+    target_include_directories(test-tiled-weight-loading PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-tiled-weight-loading PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-tiled-weight-loading PRIVATE "-fsycl")
+    install(TARGETS test-tiled-weight-loading RUNTIME)
+    add_test(NAME test-tiled-weight-loading COMMAND $<TARGET_FILE:test-tiled-weight-loading>)
+endif()
+
+# test-mxfp4-xmx-tiled: MXFP4 XMX tiled conversion unit test
+if(GGML_SYCL)
+    add_executable(test-mxfp4-xmx-tiled test-mxfp4-xmx-tiled.cpp)
+    target_link_libraries(test-mxfp4-xmx-tiled PRIVATE ggml)
+    target_include_directories(test-mxfp4-xmx-tiled PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_definitions(test-mxfp4-xmx-tiled PRIVATE GGML_SYCL_WARP_SIZE=32)
+    target_compile_options(test-mxfp4-xmx-tiled PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-mxfp4-xmx-tiled PRIVATE "-fsycl")
+    install(TARGETS test-mxfp4-xmx-tiled RUNTIME)
+    add_test(NAME test-mxfp4-xmx-tiled COMMAND $<TARGET_FILE:test-mxfp4-xmx-tiled>)
+endif()
+
+# test-moe-mul-mat-id: MoE MXFP4 MUL_MAT_ID CPU vs SYCL comparison
+if(GGML_SYCL)
+    add_executable(test-moe-mul-mat-id test-moe-mul-mat-id.cpp)
+    target_link_libraries(test-moe-mul-mat-id PRIVATE ggml ggml-cpu)
+    target_include_directories(test-moe-mul-mat-id PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-moe-mul-mat-id PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-moe-mul-mat-id PRIVATE "-fsycl")
+    install(TARGETS test-moe-mul-mat-id RUNTIME)
+    add_test(NAME test-moe-mul-mat-id COMMAND $<TARGET_FILE:test-moe-mul-mat-id>)
+endif()
+
+# test-moe-mul-mat-id-q4q8: MoE Q4_0/Q8_0 MUL_MAT_ID CPU vs SYCL comparison
+if(GGML_SYCL)
+    add_executable(test-moe-mul-mat-id-q4q8 test-moe-mul-mat-id-q4q8.cpp)
+    target_link_libraries(test-moe-mul-mat-id-q4q8 PRIVATE ggml ggml-cpu)
+    target_include_directories(test-moe-mul-mat-id-q4q8 PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-moe-mul-mat-id-q4q8 PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-moe-mul-mat-id-q4q8 PRIVATE "-fsycl")
+    install(TARGETS test-moe-mul-mat-id-q4q8 RUNTIME)
+    add_test(NAME test-moe-mul-mat-id-q4q8 COMMAND $<TARGET_FILE:test-moe-mul-mat-id-q4q8>)
+endif()
+
+# test-moe-mini-graph: embedding -> RMS -> MoE MUL_MAT_ID (MXFP4)
+if(GGML_SYCL)
+    add_executable(test-moe-mini-graph test-moe-mini-graph.cpp)
+    target_link_libraries(test-moe-mini-graph PRIVATE ggml ggml-cpu)
+    target_include_directories(test-moe-mini-graph PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-moe-mini-graph PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-moe-mini-graph PRIVATE "-fsycl")
+    install(TARGETS test-moe-mini-graph RUNTIME)
+    add_test(NAME test-moe-mini-graph COMMAND $<TARGET_FILE:test-moe-mini-graph>)
+endif()
+
+# test-layout-cache: layout selection + unified cache AoS drop
+if(GGML_SYCL)
+    add_executable(test-layout-cache test-layout-cache.cpp)
+    target_link_libraries(test-layout-cache PRIVATE ggml ggml-cpu)
+    target_include_directories(test-layout-cache PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_definitions(test-layout-cache PRIVATE GGML_SYCL_WARP_SIZE=32)
+    target_compile_options(test-layout-cache PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-layout-cache PRIVATE "-fsycl")
+    install(TARGETS test-layout-cache RUNTIME)
+    add_test(NAME test-layout-cache COMMAND $<TARGET_FILE:test-layout-cache>)
+endif()
+
 # test-q8-0-soa-gpu: GPU unit tests for Q8_0 SoA (tests actual SYCL kernels)
 if(GGML_SYCL)
     add_executable(test-q8-0-soa-gpu test-q8-0-soa-gpu.cpp)
@@ -681,6 +761,17 @@ if(GGML_SYCL)
     install(TARGETS test-ggml-sycl-soa RUNTIME)
     add_test(NAME test-ggml-sycl-soa COMMAND $<TARGET_FILE:test-ggml-sycl-soa>)
 
+    # test-rms-norm-fused-sycl: Validates fused RMS_NORM + MUL kernel on SYCL
+    add_executable(test-rms-norm-fused-sycl test-rms-norm-fused-sycl.cpp)
+    target_link_libraries(test-rms-norm-fused-sycl PRIVATE ggml)
+    target_include_directories(test-rms-norm-fused-sycl PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-rms-norm-fused-sycl PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-rms-norm-fused-sycl PRIVATE "-fsycl")
+    install(TARGETS test-rms-norm-fused-sycl RUNTIME)
+    add_test(NAME test-rms-norm-fused-sycl COMMAND $<TARGET_FILE:test-rms-norm-fused-sycl>)
+
     # test-soa-pool-aliasing: Tests for buffer pool aliasing with SoA weight reordering
     # Verifies that compute pool allocations return valid data when SoA is enabled
     add_executable(test-soa-pool-aliasing test-soa-pool-aliasing.cpp)
@@ -704,6 +795,18 @@ if(GGML_SYCL)
     target_link_options(test-soa-roundtrip PRIVATE "-fsycl")
     install(TARGETS test-soa-roundtrip RUNTIME)
     add_test(NAME test-soa-roundtrip COMMAND $<TARGET_FILE:test-soa-roundtrip>)
+
+    # test-sycl-host-kquant: Validates unified-cache host-weight layouts for Q4_K/Q5_K
+    add_executable(test-sycl-host-kquant test-sycl-host-kquant.cpp)
+    target_link_libraries(test-sycl-host-kquant PRIVATE ggml)
+    target_include_directories(test-sycl-host-kquant PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-host-kquant PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-host-kquant PRIVATE "-fsycl")
+    install(TARGETS test-sycl-host-kquant RUNTIME)
+    add_test(NAME test-sycl-host-kquant COMMAND $<TARGET_FILE:test-sycl-host-kquant>)
 
     # test-q6k-dispatch: Tests Q6_K MMVQ dispatch path using actual ggml backend API
     add_executable(test-q6k-dispatch test-q6k-dispatch.cpp)
