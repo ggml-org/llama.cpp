@@ -106,7 +106,7 @@ int main(int argc, char ** argv){
 
     std::vector<llama_token> draft;
 
-    llama_batch batch_tgt = llama_batch_init(params.n_ctx, 0, 1);
+    llama_batch batch_tgt = llama_batch_init(llama_n_ctx(ctx), 0, 1);
 
     const auto t_dec_start = ggml_time_us();
 
