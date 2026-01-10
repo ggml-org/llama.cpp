@@ -3499,39 +3499,17 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_GLM4V:
+        case PROJECTOR_TYPE_VAETKI:
             {
                 const int merge_ratio = hparams.n_merge;
                 const int pw = image_size_width  / patch_size;
                 const int ph = image_size_height / patch_size;
-                std::vector<int> positions(n_pos * 4);
+
+                const int pos_size = (model.proj_type == PROJECTOR_TYPE_VAETKI) ? num_patches : n_pos;
+                std::vector<int> positions(pos_size * 4);
                 int ptr = 0;
                 for (int y = 0; y < ph; y += merge_ratio) {
                     for (int x = 0; x < pw; x += merge_ratio) {
-                        for (int dy = 0; dy < 2; dy++) {
-                            for (int dx = 0; dx < 2; dx++) {
-                                positions[                  ptr] = y + dy;
-                                positions[    num_patches + ptr] = x + dx;
-                                positions[2 * num_patches + ptr] = y + dy;
-                                positions[3 * num_patches + ptr] = x + dx;
-                                ptr++;
-                            }
-                        }
-                    }
-                }
-
-                set_input_i32("positions", positions);
-            } break;
-        case PROJECTOR_TYPE_VAETKI:
-            {
-                const int merge_ratio = 2;
-                const int ipw = image_size_width  / patch_size;
-                const int iph = image_size_height / patch_size;
-
-                std::vector<int> positions(num_patches * 4);
-
-                int ptr = 0;
-                for (int y = 0; y < iph; y += merge_ratio) {
-                    for (int x = 0; x < ipw; x += merge_ratio) {
                         for (int dy = 0; dy < 2; dy++) {
                             for (int dx = 0; dx < 2; dx++) {
                                 positions[                  ptr] = y + dy;
