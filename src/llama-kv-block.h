@@ -83,6 +83,11 @@ struct llama_kv_block_stats {
 
 // Block pool: manages physical block allocation using a stack-based free list
 // Provides O(1) allocation and deallocation
+//
+// Thread Safety: This class is NOT thread-safe. It is designed to be used
+// within a single llama_context, which is always accessed from a single thread.
+// Each context has its own KV cache with its own block pools, so no concurrent
+// access occurs between contexts.
 class llama_kv_block_pool {
 public:
     llama_kv_block_pool() = default;
@@ -276,6 +281,8 @@ private:
 
 // Block table: maps logical blocks to physical blocks for each sequence
 // Supports dynamic growth as sequences extend
+//
+// Thread Safety: This class is NOT thread-safe. Same design as llama_kv_block_pool.
 class llama_kv_block_table {
 public:
     llama_kv_block_table() = default;
