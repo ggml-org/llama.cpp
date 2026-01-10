@@ -11,6 +11,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <set>
 #include <stdexcept>
 
 //
@@ -288,6 +289,52 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
             // If we freed up a slot, set head to it so searching can start there.
             if (new_head != cells.size() && new_head < head) {
                 head = new_head;
+            }
+        }
+    }
+
+    // Update block tracking after removal
+    if (enable_block_tracking && block_size > 0) {
+        if (seq_id >= 0) {
+            // Check if we removed the entire sequence (all positions)
+            const uint32_t stream_idx = seq_to_stream[seq_id];
+            if (stream_idx < v_block_tables.size() && stream_idx < v_block_pools.size()) {
+                auto & table = v_block_tables[stream_idx];
+                auto & pool = v_block_pools[stream_idx];
+                auto & cells = v_cells[stream_idx];
+
+                // Check if this sequence still has any cells
+                bool seq_has_cells = false;
+                for (uint32_t i = 0; i < cells.size() && !seq_has_cells; ++i) {
+                    if (cells.seq_has(i, seq_id)) {
+                        seq_has_cells = true;
+                    }
+                }
+
+                if (!seq_has_cells) {
+                    // Sequence is completely removed, deallocate all its blocks
+                    const auto * blocks = table.get_sequence_blocks(seq_id);
+                    if (blocks) {
+                        for (int32_t physical_block : *blocks) {
+                            if (physical_block >= 0) {
+                                pool.deallocate(physical_block);
+                                LLAMA_LOG_DEBUG("%s: deallocated block %d for seq %d\n",
+                                               __func__, physical_block, seq_id);
+                            }
+                        }
+                    }
+                    table.clear_sequence(seq_id);
+                }
+            }
+        } else {
+            // Removed all sequences - clear all block tracking
+            for (uint32_t s = 0; s < n_stream; ++s) {
+                if (s < v_block_pools.size()) {
+                    v_block_pools[s].clear();
+                }
+                if (s < v_block_tables.size()) {
+                    v_block_tables[s].clear();
+                }
             }
         }
     }
@@ -982,6 +1029,9 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
 
         head = sinfo.idxs[s].back() + 1;
     }
+
+    // Update block allocations for paged attention
+    update_block_tokens(sinfo);
 }
 
 bool llama_kv_cache::get_can_shift() const {
@@ -2089,10 +2139,66 @@ void llama_kv_cache::update_block_tokens(const slot_info & sinfo) {
         return;
     }
 
-    // This is a simplified implementation that tracks block usage
-    // A full implementation would track actual token counts per block
-    // For now, we just maintain identity mappings which is sufficient
-    // for correctness (just not optimal for memory efficiency)
+    // For each stream in the slot info, update block allocations
+    for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+        const uint32_t stream_idx = sinfo.strm[s];
+        if (stream_idx >= v_block_pools.size() || stream_idx >= v_block_tables.size()) {
+            continue;
+        }
+
+        auto & pool = v_block_pools[stream_idx];
+        auto & table = v_block_tables[stream_idx];
+        const auto & cells = v_cells[stream_idx];
+
+        // Track which logical blocks we've seen for each sequence
+        std::unordered_map<llama_seq_id, std::set<uint32_t>> seq_logical_blocks;
+
+        // Process each cell index in this stream
+        for (uint32_t ii = 0; ii < sinfo.idxs[s].size(); ++ii) {
+            const uint32_t cell_idx = sinfo.idxs[s][ii];
+            const uint32_t logical_block = cell_idx / block_size;
+
+            // Get sequence IDs for this cell
+            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq_max; ++seq_id) {
+                if (!cells.seq_has(cell_idx, seq_id)) {
+                    continue;
+                }
+
+                // Check if this logical block already has a physical block allocated
+                int32_t physical_block = table.get_physical(seq_id, logical_block);
+
+                if (physical_block < 0) {
+                    // Need to allocate a new physical block
+                    physical_block = pool.allocate();
+
+                    if (physical_block < 0) {
+                        // Pool exhausted - this shouldn't happen with proper sizing
+                        LLAMA_LOG_WARN("%s: block pool exhausted for stream %u\n", __func__, stream_idx);
+                        continue;
+                    }
+
+                    // Update block metadata
+                    auto & block = pool.get(physical_block);
+                    block.seq_id = seq_id;
+                    block.logical_idx = logical_block;
+                    block.n_tokens = 0;
+
+                    // Update block table mapping
+                    table.set_mapping(seq_id, logical_block, physical_block);
+
+                    LLAMA_LOG_DEBUG("%s: allocated block %d for seq %d, logical %u\n",
+                                   __func__, physical_block, seq_id, logical_block);
+                }
+
+                // Increment token count for this block
+                auto & block = pool.get(physical_block);
+                if (seq_logical_blocks[seq_id].insert(logical_block).second) {
+                    // First time seeing this logical block for this sequence in this batch
+                    block.n_tokens++;
+                }
+            }
+        }
+    }
 }
 
 //
