@@ -35,6 +35,40 @@ llama_kv_cache::llama_kv_cache(
     model(model), hparams(model.hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
 
+    // Check for paged attention memory reduction
+    // LLAMA_PAGED_ATTN=N sets block size
+    // LLAMA_PAGED_ATTN_MAX_BLOCKS=M limits to M blocks (memory savings)
+    const char * env_paged = getenv("LLAMA_PAGED_ATTN");
+    const char * env_max_blocks = getenv("LLAMA_PAGED_ATTN_MAX_BLOCKS");
+
+    uint32_t paged_block_size = 0;
+    uint32_t paged_max_blocks = 0;
+
+    if (env_paged) {
+        paged_block_size = (uint32_t) atoi(env_paged);
+    }
+
+    if (env_max_blocks) {
+        paged_max_blocks = (uint32_t) atoi(env_max_blocks);
+    }
+
+    // If paged attention with max blocks is configured, reduce kv_size
+    if (paged_block_size > 0 && paged_max_blocks > 0) {
+        uint32_t kv_size_paged = paged_max_blocks * paged_block_size;
+
+        // Ensure alignment with n_pad
+        if (n_pad > 1 && kv_size_paged % n_pad != 0) {
+            kv_size_paged = ((kv_size_paged + n_pad - 1) / n_pad) * n_pad;
+        }
+
+        if (kv_size_paged < kv_size) {
+            const float savings = 100.0f * (1.0f - (float)kv_size_paged / kv_size);
+            LLAMA_LOG_INFO("%s: paged attention reducing KV cache from %u to %u tokens (%.1f%% memory savings)\n",
+                           __func__, kv_size, kv_size_paged, savings);
+            kv_size = kv_size_paged;
+        }
+    }
+
     GGML_ASSERT(kv_size % n_pad == 0);
 
     const uint32_t n_layer_kv = hparams.n_layer_kv();
