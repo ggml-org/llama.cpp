@@ -289,6 +289,21 @@ struct oaicompat_parser_options {
     std::string media_path;
 };
 
+// parse the "content" field for /chat/completions endpoint
+// also used by /embeddings endpoint to parse content with multimodal data
+// NOTE:
+// - output content will be guaranteed to be text-only (can be chunks of text or single std::string)
+// - multimodal data (images/audio) will be extracted to out_files and replaced with media markers
+// ARGUMENTS:
+// - allow_null: whether to allow content to be null (useful for tools responses)
+// - force_output_string: whether to force output to be a single string instead of an array (used by embeddings endpoint)
+void oaicompat_content_parse(
+        json & content,
+        const oaicompat_parser_options & opt,
+        std::vector<raw_buffer> & out_files,
+        bool allow_null,
+        bool force_output_string);
+
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
