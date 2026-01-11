@@ -2,10 +2,10 @@
 
 #include "chat.h"
 #include "common.h"
+#include "download.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
-#include "download.h"
 #include "preset.h"
 
 // fix problem with std::min and std::max
@@ -47,6 +47,8 @@
 #endif
 
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
+
+extern const char * LICENSES[];
 
 using json = nlohmann::ordered_json;
 using namespace common_arg_utils;
@@ -279,12 +281,20 @@ static std::string clean_file_name(const std::string & fname) {
 static bool common_params_handle_remote_preset(common_params & params, llama_example ex) {
     GGML_ASSERT(!params.model.hf_repo.empty());
 
+    // the returned hf_repo is without tag
+    auto [hf_repo, hf_tag] = common_download_split_repo_tag(params.model.hf_repo);
+
+    // "latest" tag (default if not specified) is translated to "default" preset
+    if (hf_tag == "latest") {
+        hf_tag = "default";
+    }
+
     const bool offline = params.offline;
     std::string model_endpoint = get_model_endpoint();
-    auto preset_url = model_endpoint + params.model.hf_repo + "/resolve/main/preset.ini";
+    auto preset_url = model_endpoint + hf_repo + "/resolve/main/preset.ini";
 
     // prepare local path for caching
-    auto preset_fname = clean_file_name(params.model.hf_repo + "_preset.ini");
+    auto preset_fname = clean_file_name(hf_repo + "_preset.ini");
     auto preset_path = fs_get_cache_file(preset_fname);
     const int status = common_download_file_single(preset_url, preset_path, params.hf_token, offline);
     const bool has_preset = status >= 200 && status < 400;
@@ -293,14 +303,15 @@ static bool common_params_handle_remote_preset(common_params & params, llama_exa
     if (has_preset) {
         LOG_INF("applying remote preset from %s\n", preset_url.c_str());
         common_preset_context ctx(ex, /* only_remote_allowed */ true);
-        common_preset global; // unused for now
+        common_preset global;
         auto remote_presets = ctx.load_from_ini(preset_path, global);
-        if (remote_presets.find(COMMON_PRESET_DEFAULT_NAME) != remote_presets.end()) {
-            common_preset & preset = remote_presets.at(COMMON_PRESET_DEFAULT_NAME);
+        remote_presets = ctx.cascade(global, remote_presets);
+        if (remote_presets.find(hf_tag) != remote_presets.end()) {
+            common_preset preset = remote_presets.at(hf_tag);
             LOG_INF("\n%s", preset.to_ini().c_str()); // to_ini already added trailing newline
             preset.apply_to_params(params);
         } else {
-            throw std::runtime_error("Remote preset.ini does not contain [" + std::string(COMMON_PRESET_DEFAULT_NAME) + "] section");
+            throw std::runtime_error("Remote preset.ini does not contain [" + std::string(hf_tag) + "] section");
         }
     } else {
         LOG_INF("%s", "no remote preset found, skipping\n");
@@ -1027,6 +1038,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params &) {
             fprintf(stderr, "version: %d (%s)\n", LLAMA_BUILD_NUMBER, LLAMA_COMMIT);
             fprintf(stderr, "built with %s for %s\n", LLAMA_COMPILER, LLAMA_BUILD_TARGET);
+            exit(0);
+        }
+    ));
+    add_opt(common_arg(
+        {"--license"},
+        "show source code license and dependencies",
+        [](common_params &) {
+            for (int i = 0; LICENSES[i]; ++i) {
+                printf("%s\n", LICENSES[i]);
+            }
             exit(0);
         }
     ));

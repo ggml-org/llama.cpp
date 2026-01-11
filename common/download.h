@@ -17,6 +17,12 @@ struct common_remote_params {
 // get remote file content, returns <http_code, raw_response_body>
 std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params & params);
 
+// split HF repo with tag into <repo, tag>
+// for example: "user/model:tag" -> <"user/model", "tag">
+// if tag is not present, default to "latest"
+// example: "user/model" -> <"user/model", "latest">
+std::pair<std::string, std::string> common_download_split_repo_tag(const std::string & hf_repo_with_tag);
+
 struct common_cached_model_info {
     std::string manifest_path;
     std::string user;

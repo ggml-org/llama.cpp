@@ -161,6 +161,16 @@ static bool is_http_status_ok(int status) {
     return status >= 200 && status < 400;
 }
 
+std::pair<std::string, std::string> common_download_split_repo_tag(const std::string & hf_repo_with_tag) {
+    auto parts = string_split<std::string>(hf_repo_with_tag, ':');
+    std::string tag = parts.size() > 1 ? parts.back() : "latest";
+    std::string hf_repo = parts[0];
+    if (string_split<std::string>(hf_repo, '/').size() != 2) {
+        throw std::invalid_argument("error: invalid HF repo format, expected <user>/<model>[:quant]\n");
+    }
+    return {hf_repo, tag};
+}
+
 #ifdef LLAMA_USE_CURL
 
 //
@@ -922,12 +932,8 @@ common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag,
                                       const std::string & bearer_token,
                                       bool offline,
                                       const common_header_list & custom_headers) {
-    auto parts = string_split<std::string>(hf_repo_with_tag, ':');
-    std::string tag = parts.size() > 1 ? parts.back() : "latest";
-    std::string hf_repo = parts[0];
-    if (string_split<std::string>(hf_repo, '/').size() != 2) {
-        throw std::invalid_argument("error: invalid HF repo format, expected <user>/<model>[:quant]\n");
-    }
+    // the returned hf_repo is without tag
+    auto [hf_repo, tag] = common_download_split_repo_tag(hf_repo_with_tag);
 
     std::string url = get_model_endpoint() + "v2/" + hf_repo + "/manifests/" + tag;
 
