@@ -17,6 +17,7 @@
 #include <codecvt>
 #include <chrono>
 #include <cstdarg>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -1411,6 +1412,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.yarn_beta_fast    = params.yarn_beta_fast;
     cparams.yarn_beta_slow    = params.yarn_beta_slow;
     cparams.yarn_orig_ctx     = params.yarn_orig_ctx;
+    cparams.moe_n_expert_override = params.moe_n_expert_override;
+    cparams.n_layer_exit      = params.n_layer_exit;
     cparams.pooling_type      = params.pooling_type;
     cparams.attention_type    = params.attention_type;
     cparams.flash_attn_type   = params.flash_attn_type;
@@ -1424,6 +1427,15 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
+
+    // Set paged attention environment variables if CLI flags are used
+    // This allows CLI flags to override any existing env vars
+    if (params.paged_attn_block_size > 0) {
+        setenv("LLAMA_PAGED_ATTN", std::to_string(params.paged_attn_block_size).c_str(), 1);
+    }
+    if (params.paged_attn_max_blocks > 0) {
+        setenv("LLAMA_PAGED_ATTN_MAX_BLOCKS", std::to_string(params.paged_attn_max_blocks).c_str(), 1);
+    }
 
     return cparams;
 }

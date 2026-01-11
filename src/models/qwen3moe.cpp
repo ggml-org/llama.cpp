@@ -18,7 +18,11 @@ llm_build_qwen3moe::llm_build_qwen3moe(const llama_model & model, const llm_grap
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    for (int il = 0; il < n_layer; ++il) {
+    // Layer skip support: compute fewer layers for early exit speculation
+    const int64_t n_layer_exit = cparams.n_layer_exit;
+    const int64_t n_layer_to_use = (n_layer_exit > 0 && n_layer_exit < n_layer) ? n_layer_exit : n_layer;
+
+    for (int il = 0; il < n_layer_to_use; ++il) {
         ggml_tensor * inpSA = inpL;
 
         // norm
@@ -69,7 +73,8 @@ llm_build_qwen3moe::llm_build_qwen3moe(const llama_model & model, const llm_grap
                     model.layers[il].wo, model.layers[il].bo,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
         }
-        if (il == n_layer - 1 && inp_out_ids) {
+        // Handle last layer (or early exit layer)
+        if (il == n_layer_to_use - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }

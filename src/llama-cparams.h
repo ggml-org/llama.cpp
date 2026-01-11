@@ -14,6 +14,7 @@ struct llama_cparams {
     uint32_t n_seq_max;
     int32_t  n_threads;       // number of threads to use for generation
     int32_t  n_threads_batch; // number of threads to use for batch processing
+    int32_t  n_layer_exit;    // exit after this many layers, 0 = all (for layer skip speculation)
 
     float rope_freq_base;
     float rope_freq_scale;
@@ -34,6 +35,10 @@ struct llama_cparams {
     bool warmup;
     bool op_offload;
     bool kv_unified;
+
+    // MoE self-drafting: override n_expert_used
+    // 0 = use model default, 1+ = force exactly N active experts
+    int32_t moe_n_expert_override;
 
     enum llama_pooling_type pooling_type;
 

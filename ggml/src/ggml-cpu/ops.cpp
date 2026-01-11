@@ -8347,6 +8347,349 @@ void ggml_compute_forward_flash_attn_ext(
     }
 }
 
+// ggml_compute_forward_flash_attn_ext_paged
+// Paged attention with block table indirection and prefetching
+
+static void ggml_compute_forward_flash_attn_ext_paged_f16_one_chunk(
+        const ggml_compute_params * params,
+        ggml_tensor * dst,
+        int ir0, int ir1) {
+    const ggml_tensor * q           = dst->src[0];
+    const ggml_tensor * k           = dst->src[1];
+    const ggml_tensor * v           = dst->src[2];
+    const ggml_tensor * mask        = dst->src[3];
+    const ggml_tensor * block_table = dst->src[4];
+
+    GGML_TENSOR_LOCALS(int64_t, neq, q,   ne)
+    GGML_TENSOR_LOCALS(size_t,  nbq, q,   nb)
+    GGML_TENSOR_LOCALS(int64_t, nek, k,   ne)
+    GGML_TENSOR_LOCALS(size_t,  nbk, k,   nb)
+    GGML_TENSOR_LOCALS(int64_t, nev, v,   ne)
+    GGML_TENSOR_LOCALS(size_t,  nbv, v,   nb)
+    GGML_TENSOR_LOCALS(int64_t, ne,  dst, ne)
+    GGML_TENSOR_LOCALS(size_t,  nb,  dst, nb)
+
+    const int64_t DK = nek0;
+    const int64_t DV = nev0;
+    const int64_t N  = neq1;
+
+    GGML_ASSERT(ne0 == DV);
+    GGML_ASSERT(ne2 == N);
+
+    // input tensor rows must be contiguous
+    GGML_ASSERT(nbq0 == ggml_type_size(q->type));
+    GGML_ASSERT(nbk0 == ggml_type_size(k->type));
+    GGML_ASSERT(nbv0 == ggml_type_size(v->type));
+
+    GGML_ASSERT(neq0 == DK);
+    GGML_ASSERT(nek0 == DK);
+    GGML_ASSERT(nev0 == DV);
+
+    GGML_ASSERT(neq1 == N);
+
+    // dst cannot be transposed or permuted
+    GGML_ASSERT(nb0 == sizeof(float));
+    GGML_ASSERT(nb0 <= nb1);
+    GGML_ASSERT(nb1 <= nb2);
+    GGML_ASSERT(nb2 <= nb3);
+
+    // block table validation
+    GGML_ASSERT(block_table != NULL);
+    GGML_ASSERT(block_table->type == GGML_TYPE_I32);
+
+    const int32_t * bt_data    = (const int32_t *) block_table->data;
+    const int64_t   max_blocks = block_table->ne[0];
+    const int32_t   block_size = ggml_get_op_params_i32(dst, 4);
+
+    GGML_ASSERT(block_size > 0);
+
+    // broadcast factors
+    const int64_t rk2 = neq2/nek2;
+    const int64_t rk3 = neq3/nek3;
+
+    const int64_t rv2 = neq2/nev2;
+    const int64_t rv3 = neq3/nev3;
+
+    float scale         = 1.0f;
+    float max_bias      = 0.0f;
+    float logit_softcap = 0.0f;
+
+    memcpy(&scale,         (float *) dst->op_params + 0, sizeof(float));
+    memcpy(&max_bias,      (float *) dst->op_params + 1, sizeof(float));
+    memcpy(&logit_softcap, (float *) dst->op_params + 2, sizeof(float));
+
+    if (logit_softcap != 0) {
+        scale /= logit_softcap;
+    }
+
+    const uint32_t n_head      = neq2;
+    const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
+
+    const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
+    const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
+
+    ggml_type         const k_vec_dot_type = ggml_get_type_traits_cpu(k->type)->vec_dot_type;
+    ggml_from_float_t const q_to_vec_dot   = ggml_get_type_traits_cpu(k_vec_dot_type)->from_float;
+    ggml_vec_dot_t    const kq_vec_dot     = ggml_get_type_traits_cpu(k->type)->vec_dot;
+    ggml_to_float_t   const v_to_float     = ggml_get_type_traits(v->type)->to_float;
+
+    GGML_ASSERT((                            q_to_vec_dot) && "fattn: unsupported K-type");
+    GGML_ASSERT((v->type == GGML_TYPE_F32 || v_to_float  ) && "fattn: unsupported V-type");
+
+    int ith = params->ith;
+
+    // loop over n_batch and n_head
+    for (int ir = ir0; ir < ir1; ++ir) {
+        // q indices
+        const int iq3 = ir/(neq2*neq1);
+        const int iq2 = (ir - iq3*neq2*neq1)/neq1;
+        const int iq1 = (ir - iq3*neq2*neq1 - iq2*neq1);
+
+        const uint32_t h = iq2; // head index
+        const float slope = (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
+
+        float S = 0.0f;      // sum
+        float M = -INFINITY; // maximum KQ value
+
+        float       * VKQ32 = (float       *) params->wdata + ith*(1*DK + 2*DV + CACHE_LINE_SIZE_F32);
+        float       * V32   =                 (VKQ32 + 1*DV);
+        ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*DV);
+        ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*DV);
+
+        if (v->type == GGML_TYPE_F16) {
+            memset(VKQ16, 0, DV*sizeof(ggml_fp16_t));
+        } else {
+            memset(VKQ32, 0, DV*sizeof(float));
+        }
+
+        const ggml_fp16_t * mp = mask ? (ggml_fp16_t *)((char *) mask->data + iq1*mask->nb[1] + (iq2%mask->ne[2])*mask->nb[2] + (iq3%mask->ne[3])*mask->nb[3]) : NULL;
+
+        // k indices
+        const int ik3 = iq3 / rk3;
+        const int ik2 = iq2 / rk2;
+
+        // v indices
+        const int iv3 = iq3 / rv3;
+        const int iv2 = iq2 / rv2;
+
+        // sequence index for block table lookup (use batch index)
+        const int seq_idx = iq3;
+
+        const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
+        q_to_vec_dot(pq, Q_q, DK);
+
+        // online softmax / attention with paged KV access
+        // Track current block for prefetching optimization
+        int64_t current_logical_block = -1;
+        int32_t current_physical_block = -1;
+
+        for (int64_t ic = 0; ic < nek1; ++ic) {
+            const float mv = mp ? slope*GGML_CPU_FP16_TO_FP32(mp[ic]) : 0.0f;
+            if (mv == -INFINITY) {
+                continue;
+            }
+
+            // Paged access: map logical position to physical position
+            const int64_t logical_block  = ic / block_size;
+            const int64_t offset_in_block = ic % block_size;
+
+            // Bounds check for block table
+            if (logical_block >= max_blocks) {
+                continue;
+            }
+
+            // Check if we're starting a new block - opportunity for prefetching
+            if (logical_block != current_logical_block) {
+                current_logical_block = logical_block;
+                current_physical_block = bt_data[seq_idx * max_blocks + logical_block];
+
+                // Prefetch next block's K and V data while processing current block
+                const int64_t next_logical_block = logical_block + 1;
+                if (next_logical_block < max_blocks) {
+                    const int32_t next_physical_block = bt_data[seq_idx * max_blocks + next_logical_block];
+                    if (next_physical_block >= 0) {
+                        // Prefetch K data for next block (first position)
+                        const char * next_k_data = (const char *) k->data +
+                            ((int64_t)next_physical_block * block_size * nbk1 + ik2*nbk2 + ik3*nbk3);
+                        __builtin_prefetch(next_k_data, 0, 1);  // read, low temporal locality
+
+                        // Prefetch V data for next block (first position)
+                        const char * next_v_data = (const char *) v->data +
+                            ((int64_t)next_physical_block * block_size * nbv1 + iv2*nbv2 + iv3*nbv3);
+                        __builtin_prefetch(next_v_data, 0, 1);  // read, low temporal locality
+                    }
+                }
+            }
+
+            const int32_t physical_block = current_physical_block;
+
+            // Skip invalid blocks (marked as -1)
+            if (physical_block < 0) {
+                continue;
+            }
+
+            const int64_t physical_pos = physical_block * block_size + offset_in_block;
+
+            float s; // KQ value
+
+            // Use physical position for K access
+            const char * k_data = (const char *) k->data + (physical_pos*nbk1 + ik2*nbk2 + ik3*nbk3);
+            kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
+
+            s = s*scale;
+
+            if (logit_softcap != 0.0f) {
+                s = logit_softcap*tanhf(s);
+            }
+
+            s += mv;
+
+            const float Mold = M;
+
+            float ms = 1.0f;
+            float vs = 1.0f;
+
+            // Use physical position for V access
+            const char * v_data = ((const char *) v->data + (physical_pos*nbv1 + iv2*nbv2 + iv3*nbv3));
+
+            if (v->type == GGML_TYPE_F16) {
+                if (s > M) {
+                    M = s;
+                    ms = expf(Mold - M);
+                    ggml_vec_scale_f16(DV, VKQ16, ms);
+                } else {
+                    vs = expf(s - M);
+                }
+                ggml_vec_mad_f16(DV, VKQ16, (const ggml_fp16_t *) v_data, vs);
+            } else {
+                if (s > M) {
+                    M = s;
+                    ms = expf(Mold - M);
+                    ggml_vec_scale_f32(DV, VKQ32, ms);
+                } else {
+                    vs = expf(s - M);
+                }
+                if (v_to_float) {
+                    v_to_float(v_data, V32, DV);
+                    ggml_vec_mad_f32(DV, VKQ32, V32, vs);
+                } else {
+                    ggml_vec_mad_f32(DV, VKQ32, (const float *) v_data, vs);
+                }
+            }
+
+            S = S*ms + vs;
+        }
+
+        if (v->type == GGML_TYPE_F16) {
+            for (int64_t d = 0; d < DV; ++d) {
+                VKQ32[d] = GGML_CPU_FP16_TO_FP32(VKQ16[d]);
+            }
+        }
+
+        // V /= S
+        const float S_inv = S == 0.0f ? 0.0f : 1.0f/S;
+        ggml_vec_scale_f32(DV, VKQ32, S_inv);
+
+        // dst indices
+        const int i1 = iq1;
+        const int i2 = iq2;
+        const int i3 = iq3;
+
+        // permute(0, 2, 1, 3)
+        memcpy((char *) dst->data + (i3*ne2*ne1 + i2 + i1*ne1)*nb1, VKQ32, nb1);
+    }
+}
+
+static void ggml_compute_forward_flash_attn_ext_paged_f16(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * q = dst->src[0];
+    const ggml_tensor * k = dst->src[1];
+    const ggml_tensor * v = dst->src[2];
+
+    GGML_TENSOR_LOCALS(int64_t, neq, q,   ne)
+    GGML_TENSOR_LOCALS(size_t,  nbq, q,   nb)
+    GGML_TENSOR_LOCALS(int64_t, nek, k,   ne)
+    GGML_TENSOR_LOCALS(size_t,  nbk, k,   nb)
+    GGML_TENSOR_LOCALS(int64_t, nev, v,   ne)
+    GGML_TENSOR_LOCALS(size_t,  nbv, v,   nb)
+    GGML_TENSOR_LOCALS(int64_t, ne,  dst, ne)
+    GGML_TENSOR_LOCALS(size_t,  nb,  dst, nb)
+
+    const int64_t DK = nek0;
+    const int64_t DV = nev0;
+    const int64_t N  = neq1;
+
+    GGML_ASSERT(ne0 == DV);
+    GGML_ASSERT(ne2 == N);
+
+    GGML_ASSERT(nbq0 == ggml_type_size(q->type));
+    GGML_ASSERT(nbk0 == ggml_type_size(k->type));
+    GGML_ASSERT(nbv0 == ggml_type_size(v->type));
+
+    GGML_ASSERT(neq0 == DK);
+    GGML_ASSERT(nek0 == DK);
+    GGML_ASSERT(nev0 == DV);
+
+    GGML_ASSERT(neq1 == N);
+
+    GGML_ASSERT(nb0 == sizeof(float));
+    GGML_ASSERT(nb0 <= nb1);
+    GGML_ASSERT(nb1 <= nb2);
+    GGML_ASSERT(nb2 <= nb3);
+
+    const int64_t nr = neq1*neq2*neq3;
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const bool disable_chunking = ggml_is_numa();
+
+    int nth_scaled = nth * 4;
+    int64_t chunk_size = (nr + nth_scaled - 1) / nth_scaled;
+    int64_t nchunk     = (nr + chunk_size - 1) / chunk_size;
+
+    if (nth == 1 || nchunk < nth || disable_chunking) {
+        nchunk = nth;
+    }
+
+    if (ith == 0) {
+        ggml_threadpool_chunk_set(params->threadpool, nth);
+    }
+
+    ggml_barrier(params->threadpool);
+
+    const int64_t dr = (nr + nchunk - 1) / nchunk;
+
+    int current_chunk = ith;
+
+    while (current_chunk < nchunk) {
+        const int64_t ir0 = dr * current_chunk;
+        const int64_t ir1 = MIN(ir0 + dr, nr);
+
+        ggml_compute_forward_flash_attn_ext_paged_f16_one_chunk(params, dst, ir0, ir1);
+
+        current_chunk = ggml_threadpool_chunk_add(params->threadpool, 1);
+    }
+}
+
+void ggml_compute_forward_flash_attn_ext_paged(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    switch (ggml_get_op_params_i32(dst, 3)) {
+        case GGML_PREC_DEFAULT:
+        case GGML_PREC_F32:
+            {
+                ggml_compute_forward_flash_attn_ext_paged_f16(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_flash_attn_back
 
 static void ggml_compute_forward_flash_attn_back_f32(

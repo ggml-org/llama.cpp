@@ -3,6 +3,7 @@
 #include "llama-batch.h"
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
+#include "llama-kv-block.h"
 #include "llama-memory.h"
 
 #include <unordered_map>
@@ -199,6 +200,29 @@ public:
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
+    //
+    // block tracking API (for paged attention)
+    //
+
+    // Enable block-based tracking with the given block size (tokens per block)
+    void enable_blocks(uint32_t tokens_per_block);
+
+    // Check if block tracking is enabled
+    bool has_block_tracking() const;
+
+    // Get tokens per block (0 if not enabled)
+    uint32_t get_block_size() const;
+
+    // Build a block table tensor for graph construction
+    // Returns I32 tensor [max_blocks_per_seq, n_seqs]
+    ggml_tensor * build_block_table_tensor(ggml_context * ctx, uint32_t n_seqs, uint32_t max_blocks_per_seq) const;
+
+    // Populate the block table tensor with current block mappings
+    void set_input_block_table(ggml_tensor * dst, const slot_info & sinfo) const;
+
+    // Print block pool statistics (for debugging)
+    void print_block_stats() const;
+
 private:
     const llama_model & model;
     const llama_hparams & hparams;
@@ -251,6 +275,20 @@ private:
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
+
+    //
+    // block tracking for paged attention
+    //
+
+    bool enable_block_tracking = false;
+    uint32_t block_size = 0;  // tokens per block
+
+    // per-stream block pool and tables
+    std::vector<llama_kv_block_pool> v_block_pools;   // [n_stream]
+    std::vector<llama_kv_block_table> v_block_tables; // [n_stream]
+
+    // Update block token counts after apply_ubatch
+    void update_block_tokens(const slot_info & sinfo);
 
     size_t total_size() const;
 
@@ -354,6 +392,15 @@ public:
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+
+    //
+    // block tracking API (for paged attention) - forwarding methods
+    //
+
+    bool has_block_tracking() const;
+    uint32_t get_block_size() const;
+    ggml_tensor * build_block_table_tensor(ggml_context * ctx, uint32_t n_seqs, uint32_t max_blocks_per_seq) const;
+    void set_input_block_table(ggml_tensor * dst) const;
 
 private:
     llama_memory_status status;
