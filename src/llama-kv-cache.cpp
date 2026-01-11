@@ -1335,8 +1335,8 @@ void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch 
     const int32_t n_kv = dst->ne[0];
 
     for (int h = 0; h < 1; ++h) {
-        for (int i = 0; i < n_tokens; ++i) {
-            for (int j = 0; j < n_kv; ++j) {
+        for (int64_t i = 0; i < n_tokens; ++i) {
+            for (int32_t j = 0; j < n_kv; ++j) {
                 // the position when the cells is empty is irrelevant - it will be masked out later in the attention
                 const llama_pos p0 = cells.is_empty(j) ? -1 : cells.pos_get(j);
 

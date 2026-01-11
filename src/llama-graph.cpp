@@ -47,7 +47,7 @@ void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
             // the 3 first dims are the same, and 4th dim is all 0
             std::vector<llama_pos> pos_data(n_tokens*n_pos_per_embd);
             // copy the first dimension
-            for (int i = 0; i < n_tokens; ++i) {
+            for (int64_t i = 0; i < n_tokens; ++i) {
                 pos_data[               i] = ubatch->pos[i];
                 pos_data[    n_tokens + i] = ubatch->pos[i];
                 pos_data[2 * n_tokens + i] = ubatch->pos[i];
@@ -76,7 +76,7 @@ void llm_graph_input_attn_temp::set_input(const llama_ubatch * ubatch) {
         GGML_ASSERT(n_attn_temp_floor_scale != 0);
 
         std::vector<float> attn_scale_data(n_tokens, 0.0f);
-        for (int i = 0; i < n_tokens; ++i) {
+        for (int64_t i = 0; i < n_tokens; ++i) {
             const float pos = ubatch->pos[i];
             attn_scale_data[i] = std::log(
                 std::floor((pos + f_attn_temp_offset) / n_attn_temp_floor_scale) + 1.0
@@ -97,8 +97,8 @@ void llm_graph_input_pos_bucket::set_input(const llama_ubatch * ubatch) {
         int32_t * data = (int32_t *) pos_bucket->data;
 
         for (int h = 0; h < 1; ++h) {
-            for (int j = 0; j < n_tokens; ++j) {
-                for (int i = 0; i < n_tokens; ++i) {
+            for (int64_t j = 0; j < n_tokens; ++j) {
+                for (int64_t i = 0; i < n_tokens; ++i) {
                     data[h*(n_tokens*n_tokens) + j*n_tokens + i] = llama_relative_position_bucket(ubatch->pos[i], ubatch->pos[j], hparams.n_rel_attn_bkts, true);
                 }
             }
@@ -121,7 +121,7 @@ void llm_graph_input_out_ids::set_input(const llama_ubatch * ubatch) {
     int32_t * data = (int32_t *) out_ids->data;
 
     if (n_outputs == n_tokens) {
-        for (int i = 0; i < n_tokens; ++i) {
+        for (int64_t i = 0; i < n_tokens; ++i) {
             data[i] = i;
         }
 
@@ -132,7 +132,7 @@ void llm_graph_input_out_ids::set_input(const llama_ubatch * ubatch) {
 
     int n_outputs = 0;
 
-    for (int i = 0; i < n_tokens; ++i) {
+    for (int64_t i = 0; i < n_tokens; ++i) {
         if (ubatch->output[i]) {
             data[n_outputs++] = i;
         }
@@ -160,8 +160,8 @@ void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
         memset(mean->data, 0, n_tokens*n_seqs_unq*ggml_element_size(mean));
 
         std::vector<uint64_t> sums(n_seqs_unq, 0);
-        for (int i = 0; i < n_tokens; i += n_seq_tokens) {
-            for (int s = 0; s < ubatch->n_seq_id[i]; ++s) {
+        for (int64_t i = 0; i < n_tokens; i += n_seq_tokens) {
+            for (int64_t s = 0; s < ubatch->n_seq_id[i]; ++s) {
                 const llama_seq_id seq_id  = ubatch->seq_id[i][s];
                 const int32_t      seq_idx = ubatch->seq_idx[seq_id];
 
@@ -170,19 +170,19 @@ void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
         }
 
         std::vector<float> div(n_seqs_unq, 0.0f);
-        for (int s = 0; s < n_seqs_unq; ++s) {
+        for (int64_t s = 0; s < n_seqs_unq; ++s) {
             const uint64_t sum = sums[s];
             if (sum > 0) {
                 div[s] = 1.0f/float(sum);
             }
         }
 
-        for (int i = 0; i < n_tokens; i += n_seq_tokens) {
-            for (int s = 0; s < ubatch->n_seq_id[i]; ++s) {
+        for (int64_t i = 0; i < n_tokens; i += n_seq_tokens) {
+            for (int64_t s = 0; s < ubatch->n_seq_id[i]; ++s) {
                 const llama_seq_id seq_id  = ubatch->seq_id[i][s];
                 const int32_t      seq_idx = ubatch->seq_idx[seq_id];
 
-                for (int j = 0; j < n_seq_tokens; ++j) {
+                for (int64_t j = 0; j < n_seq_tokens; ++j) {
                     data[seq_idx*n_tokens + i + j] = div[seq_idx];
                 }
             }
@@ -213,10 +213,10 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
             (cparams.pooling_type == LLAMA_POOLING_TYPE_RANK && arch == LLM_ARCH_QWEN3) // qwen3 reranking & embedding models use last token
         );
 
-        for (int i = 0; i < n_tokens; ++i) {
+        for (int64_t i = 0; i < n_tokens; ++i) {
             const llama_pos pos = ubatch->pos[i];
 
-            for (int s = 0; s < ubatch->n_seq_id[i]; ++s) {
+            for (int64_t s = 0; s < ubatch->n_seq_id[i]; ++s) {
                 const llama_seq_id seq_id  = ubatch->seq_id[i][s];
                 const int32_t      seq_idx = ubatch->seq_idx[seq_id];
 
@@ -231,7 +231,7 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
             }
         }
 
-        for (int s = 0; s < n_seqs_unq; ++s) {
+        for (int64_t s = 0; s < n_seqs_unq; ++s) {
             if (target_row[s] >= 0) {
                 data[s] = target_row[s];
             }
@@ -249,7 +249,7 @@ void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
         int32_t * data = (int32_t *) s_copy->data;
 
         // assuming copy destinations ALWAYS happen ONLY on the cells between head and head+n
-        for (uint32_t i = 0; i < n_rs; ++i) {
+        for (int64_t i = 0; i < n_rs; ++i) {
             data[i] = mctx->s_copy(i);
         }
     }
@@ -324,13 +324,13 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
 
     const auto fill_mask = [&](float * data, int n_swa, llama_swa_type swa_type) {
         for (int h = 0; h < 1; ++h) {
-            for (int i1 = 0; i1 < n_tokens; ++i1) {
+            for (int64_t i1 = 0; i1 < n_tokens; ++i1) {
                 const llama_seq_id s1 = ubatch->seq_id[i1][0];
                 const llama_pos    p1 = ubatch->pos[i1];
 
                 const uint64_t idst = h*(n_kv*n_tokens) + i1*n_kv;
 
-                for (int i0 = 0; i0 < n_tokens; ++i0) {
+                for (int64_t i0 = 0; i0 < n_tokens; ++i0) {
                     const llama_seq_id s0 = ubatch->seq_id[i0][0];
                     const llama_pos p0    = ubatch->pos[i0];
 
@@ -455,11 +455,11 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
     float * data = (float *) cross_kq_mask->data;
 
     for (int h = 0; h < 1; ++h) {
-        for (int i = 0; i < n_tokens; ++i) {
-            for (int j = 0; j < n_enc; ++j) {
+        for (int64_t i = 0; i < n_tokens; ++i) {
+            for (int64_t j = 0; j < n_enc; ++j) {
                 float f = -INFINITY;
 
-                for (int s = 0; s < ubatch->n_seq_id[i]; ++s) {
+                for (int32_t s = 0; s < ubatch->n_seq_id[i]; ++s) {
                     const llama_seq_id seq_id = ubatch->seq_id[i][s];
 
                     if (cross->seq_ids_enc[j].find(seq_id) != cross->seq_ids_enc[j].end()) {
@@ -468,12 +468,6 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
                 }
 
                 data[h*(n_enc*n_tokens) + i*n_enc + j] = f;
-            }
-        }
-
-        for (int i = n_tokens; i < n_tokens; ++i) {
-            for (int j = 0; j < n_enc; ++j) {
-                data[h*(n_enc*n_tokens) + i*n_enc + j] = -INFINITY;
             }
         }
     }
@@ -492,7 +486,7 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
         int32_t * data = (int32_t *) inp_rs->s_copy->data;
 
         // assuming copy destinations ALWAYS happen ONLY on the cells between head and head+n
-        for (uint32_t i = 0; i < n_rs; ++i) {
+        for (int64_t i = 0; i < n_rs; ++i) {
             data[i] = mctx->get_recr()->s_copy(i);
         }
     }
@@ -1251,7 +1245,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     assert(n_expert_used > 0);
 
     // order the views before the adds
-    for (uint32_t i = 0; i < hparams.n_expert_used; ++i) {
+    for (int64_t i = 0; i < hparams.n_expert_used; ++i) {
         cur_experts[i] = ggml_view_2d(ctx0, experts, n_embd, n_tokens, experts->nb[2], i*experts->nb[1]);
 
         ggml_build_forward_expand(gf, cur_experts[i]);
@@ -1263,7 +1257,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     //       ref: https://github.com/ggml-org/llama.cpp/pull/14753
     ggml_tensor * moe_out = cur_experts[0];
 
-    for (uint32_t i = 1; i < hparams.n_expert_used; ++i) {
+    for (int64_t i = 1; i < hparams.n_expert_used; ++i) {
         moe_out = ggml_add(ctx0, moe_out, cur_experts[i]);
     }
 
