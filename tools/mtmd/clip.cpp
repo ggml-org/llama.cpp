@@ -3506,7 +3506,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
                 const int pw = image_size_width  / patch_size;
                 const int ph = image_size_height / patch_size;
 
-                const int pos_size = (model.proj_type == PROJECTOR_TYPE_VAETKI) ? num_patches : n_pos;
+                const int pos_size = num_patches;
                 std::vector<int> positions(pos_size * 4);
                 int ptr = 0;
                 for (int y = 0; y < ph; y += merge_ratio) {
