@@ -1395,7 +1395,7 @@ static bool show_statistics(const common_params & params) {
             w_lay, "Layer", sep,
             w_nam, "Tensor", sep,
             "Min", "Max", "Mean", "StdDev", sep,
-            "H_Norm", "ZD", sep,
+            "H Norm", "ZD", sep,
             "∑ E[A²]", "CosSim", "PCC");
         LOG_INF("%s\n", std::string(154, '-').c_str());
     } else {
@@ -1403,7 +1403,7 @@ static bool show_statistics(const common_params & params) {
             w_lay, "Layer", sep,
             w_nam, "Tensor", sep,
             "Min", "Max", "Mean", "StdDev", sep,
-            "H_Norm", "ZD", sep,
+            "H Norm", "ZD", sep,
             "∑ E[A²]", "L2 Dist", "CosSim", "PCC");
         LOG_INF("%s\n", std::string(167, '-').c_str());
     }
