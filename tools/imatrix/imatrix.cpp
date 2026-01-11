@@ -272,60 +272,99 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
 }
 
 static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
-    static const std::regex pattern(R"(blk\.(\d+)\.)");
+    std::unordered_map<std::string, size_t> tensor_map;
+    tensor_map.reserve(tstats.size());
+    for (size_t i = 0; i < tstats.size(); ++i) { tensor_map[tstats[i].tensor] = i; }
+
     for (auto & ts : tstats) {
-        ts.cossim = 1.0f;
-        ts.l2_dist = 0.0f;
+        std::string layer_str;
+        std::string dummy_tensor;
+        process_tensor_name(ts.tensor, layer_str, dummy_tensor);
 
-        if (std::smatch match; std::regex_search(ts.tensor, match, pattern)) {
-            const int blk = std::stoi(match[1]);
-            if (blk <= 0) { continue; }
-            std::string tname(ts.tensor);
-            tname.replace(match.position(1), match.length(1), std::to_string(blk - 1));
-            auto prev_it = std::find_if(tstats.begin(), tstats.end(),
-                [tname](const tensor_statistics & t) { return t.tensor == tname; });
-            if (prev_it == tstats.end()) {
-                LOG_WRN("%s: missing previous-layer tensor '%s' (current: '%s'). Statistics may not be accurate\n",
-                    __func__, tname.c_str(), ts.tensor.c_str());
-                continue;
-            }
+        // Robust block ID extraction
+        int blk = -1;
+        try { blk = std::stoi(layer_str); } catch (...) { continue; }
+        if (blk <= 0) { continue; }
 
-            const auto curr_avg = compute_tensor_averages(ts.stats);
-            const auto prev_avg = compute_tensor_averages(prev_it->stats);
-            if (curr_avg.empty() || curr_avg.size() != prev_avg.size()) {
-                LOG_WRN("%s: size mismatch between '%s' and its previous-layer tensor '%s' (%zu vs %zu). Statistics may not be accurate\n",
-                    __func__, ts.tensor.c_str(), tname.c_str(), curr_avg.size(), prev_avg.size());
-                continue;
-            }
+        // Reconstruct previous layer name
+        const size_t blk_start_pos = ts.tensor.find("blk." + layer_str);
+        if (blk_start_pos == std::string::npos) { continue; }
 
-            float dot_prod = 0.0f;
-            float norm1_sq = 0.0f;
-            float norm2_sq = 0.0f;
-            float l2_dist_sq = 0.0f;
+        std::string tname = ts.tensor;
+        tname.replace(blk_start_pos, layer_str.length() + 4, "blk." + std::to_string(blk - 1));
 
-            for (size_t i = 0; i < curr_avg.size(); ++i) {
-                const float c_val = curr_avg[i];
-                const float p_val = prev_avg[i];
-                dot_prod += c_val * p_val;
-                norm1_sq += c_val * c_val;
-                norm2_sq += p_val * p_val;
-                const float diff = c_val - p_val;
-                l2_dist_sq += diff * diff;
-            }
+        auto it = tensor_map.find(tname);
+        if (it == tensor_map.end()) {
+            LOG_WRN("%s: missing previous-layer tensor '%s'\n", __func__, tname.c_str());
+            continue;
+        }
 
-            // Compute Cosine Similarity
-            float cs = 0.0f;
-            if (norm1_sq > 0.0f && norm2_sq > 0.0f) {
-                cs = dot_prod / (std::sqrt(norm1_sq) * std::sqrt(norm2_sq));
-                cs = std::min(cs, 1.0f);
-                cs = std::max(cs, -1.0f);
-            } else if (norm1_sq == 0.0f && norm2_sq == 0.0f) {
-                cs = 1.0f;
-            }
-            ts.cossim = cs;
+        const auto & prev_ts = tstats[it->second];
+        const auto curr_avg = compute_tensor_averages(ts.stats);
+        const auto prev_avg = compute_tensor_averages(prev_ts.stats);
 
-            // Compute L2 Norm (Euclidean Distance)
-            ts.l2_dist = std::sqrt(l2_dist_sq);
+        if (curr_avg.empty() || curr_avg.size() != prev_avg.size()) { continue; }
+
+        double dot_prod = 0.0;
+        double norm1_sq = 0.0;
+        double norm2_sq = 0.0;
+        double l2_dist_sq = 0.0;
+
+        // Aux variables for Pearson (Spatial Covariance)
+        double sum_c = 0.0;
+        double sum_p = 0.0;
+        const size_t n = curr_avg.size();
+
+        // Pass 1: Sums for Means
+        for (size_t i = 0; i < n; ++i) {
+            sum_c += curr_avg[i];
+            sum_p += prev_avg[i];
+        }
+        const double mean_c = sum_c / n;
+        const double mean_p = sum_p / n;
+
+        double cov_sum = 0.0;
+        double var_c_sum = 0.0;
+        double var_p_sum = 0.0;
+
+        // Pass 2: Metrics
+        for (size_t i = 0; i < n; ++i) {
+            const double c_val = curr_avg[i];
+            const double p_val = prev_avg[i];
+
+            // Cosine Similarity & L2 basics
+            dot_prod += c_val * p_val;
+            norm1_sq += c_val * c_val;
+            norm2_sq += p_val * p_val;
+            const double diff = c_val - p_val;
+            l2_dist_sq += diff * diff;
+
+            // Pearson (Centered stats)
+            const double dc = c_val - mean_c;
+            const double dp = p_val - mean_p;
+            cov_sum += dc * dp;
+            var_c_sum += dc * dc;
+            var_p_sum += dp * dp;
+        }
+
+        ts.dot_prod = dot_prod;
+        ts.norm1_sq = norm1_sq;
+        ts.norm2_sq = norm2_sq;
+        ts.l2_dist_sq = l2_dist_sq;
+        ts.l2_dist = (float)std::sqrt(l2_dist_sq);
+
+        if (norm1_sq > 0.0 && norm2_sq > 0.0) {
+            ts.cossim = (float)(dot_prod / (std::sqrt(norm1_sq) * std::sqrt(norm2_sq)));
+            ts.cossim = std::clamp(ts.cossim, -1.0f, 1.0f);
+        } else {
+            ts.cossim = (norm1_sq == 0.0 && norm2_sq == 0.0) ? 1.0f : 0.0f;
+        }
+
+        if (var_c_sum > 0.0 && var_p_sum > 0.0) {
+            ts.pearson = (float)(cov_sum / (std::sqrt(var_c_sum) * std::sqrt(var_p_sum)));
+            ts.pearson = std::clamp(ts.pearson, -1.0f, 1.0f);
+        } else {
+            ts.pearson = (var_c_sum == 0.0 && var_p_sum == 0.0) ? 1.0f : 0.0f;
         }
     }
 }
