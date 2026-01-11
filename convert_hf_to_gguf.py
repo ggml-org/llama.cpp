@@ -7667,8 +7667,7 @@ class DeepseekV2Model(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("VaetkiForCausalLM")
-@ModelBase.register("VaetkiVLForCausalLM")
+@ModelBase.register("VaetkiForCausalLM", "VaetkiVLForCausalLM")
 class VaetkiModel(TextModel):
     """VAETKI MoE model with MLA attention and 4-norm layer structure"""
     model_arch = gguf.MODEL_ARCH.VAETKI
@@ -7922,7 +7921,7 @@ class VaetkiVisionModel(MmprojModel):
         if "embed_dim" in self.hparams_vision:
             self.hparams_vision["hidden_size"] = self.hparams_vision.get("embed_dim")
         if "image_size" not in self.hparams_vision:
-            self.hparams_vision["image_size"] = self.preprocessor_config.get("size", {}).get("shortest_edge", 560)
+            self.hparams_vision["image_size"] = 560 # unused, set for compatibility
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -7933,6 +7932,11 @@ class VaetkiVisionModel(MmprojModel):
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.VAETKI)
         self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("layer_norm_eps", 1e-5))
         self.gguf_writer.add_vision_spatial_merge_size(hparams.get("spatial_merge_size", 2))
+
+        # support dynamic size
+        image_size = self.preprocessor_config["size"]
+        self.gguf_writer.add_vision_image_min_pixels(image_size["shortest_edge"])
+        self.gguf_writer.add_vision_image_max_pixels(image_size["longest_edge"])
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if "class_pos_embd" in new_name:

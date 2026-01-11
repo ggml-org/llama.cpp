@@ -284,6 +284,8 @@ class Keys:
     class ClipVision:
         PROJECTOR_TYPE      = "clip.vision.projector_type" # for mixed modality models
         IMAGE_SIZE          = "clip.vision.image_size"
+        IMAGE_MIN_PIXELS    = "clip.vision.image_min_pixels"
+        IMAGE_MAX_PIXELS    = "clip.vision.image_max_pixels"
         PREPROC_IMAGE_SIZE  = "clip.vision.preproc_image_size"
         PATCH_SIZE          = "clip.vision.patch_size"
         EMBEDDING_LENGTH    = "clip.vision.embedding_length"
