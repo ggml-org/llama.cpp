@@ -9,7 +9,7 @@ namespace httplib {
 namespace detail {
 
 bool is_hex(char c, int &v) {
-  if (0x20 <= c && isdigit(c)) {
+  if (isdigit(c)) {
     v = c - '0';
     return true;
   } else if ('A' <= c && c <= 'F') {
@@ -47,6 +47,90 @@ std::string from_i_to_hex(size_t n) {
     n >>= 4;
   } while (n > 0);
   return ret;
+}
+
+std::string compute_etag(const FileStat &fs) {
+  if (!fs.is_file()) { return std::string(); }
+
+  // If mtime cannot be determined (negative value indicates an error
+  // or sentinel), do not generate an ETag. Returning a neutral / fixed
+  // value like 0 could collide with a real file that legitimately has
+  // mtime == 0 (epoch) and lead to misleading validators.
+  auto mtime_raw = fs.mtime();
+  if (mtime_raw < 0) { return std::string(); }
+
+  auto mtime = static_cast<size_t>(mtime_raw);
+  auto size = fs.size();
+
+  return std::string("W/\"") + from_i_to_hex(mtime) + "-" +
+         from_i_to_hex(size) + "\"";
+}
+
+// Format time_t as HTTP-date (RFC 9110 Section 5.6.7): "Sun, 06 Nov 1994
+// 08:49:37 GMT" This implementation is defensive: it validates `mtime`, checks
+// return values from `gmtime_r`/`gmtime_s`, and ensures `strftime` succeeds.
+std::string file_mtime_to_http_date(time_t mtime) {
+  if (mtime < 0) { return std::string(); }
+
+  struct tm tm_buf;
+#ifdef _WIN32
+  if (gmtime_s(&tm_buf, &mtime) != 0) { return std::string(); }
+#else
+  if (gmtime_r(&mtime, &tm_buf) == nullptr) { return std::string(); }
+#endif
+  char buf[64];
+  if (strftime(buf, sizeof(buf), "%a, %d %b %Y %H:%M:%S GMT", &tm_buf) == 0) {
+    return std::string();
+  }
+
+  return std::string(buf);
+}
+
+// Parse HTTP-date (RFC 9110 Section 5.6.7) to time_t. Returns -1 on failure.
+time_t parse_http_date(const std::string &date_str) {
+  struct tm tm_buf;
+
+  // Create a classic locale object once for all parsing attempts
+  const std::locale classic_locale = std::locale::classic();
+
+  // Try to parse using std::get_time (C++11, cross-platform)
+  auto try_parse = [&](const char *fmt) -> bool {
+    std::istringstream ss(date_str);
+    ss.imbue(classic_locale);
+
+    memset(&tm_buf, 0, sizeof(tm_buf));
+    ss >> std::get_time(&tm_buf, fmt);
+
+    return !ss.fail();
+  };
+
+  // RFC 9110 preferred format (HTTP-date): "Sun, 06 Nov 1994 08:49:37 GMT"
+  if (!try_parse("%a, %d %b %Y %H:%M:%S")) {
+    // RFC 850 format: "Sunday, 06-Nov-94 08:49:37 GMT"
+    if (!try_parse("%A, %d-%b-%y %H:%M:%S")) {
+      // asctime format: "Sun Nov  6 08:49:37 1994"
+      if (!try_parse("%a %b %d %H:%M:%S %Y")) {
+        return static_cast<time_t>(-1);
+      }
+    }
+  }
+
+#ifdef _WIN32
+  return _mkgmtime(&tm_buf);
+#else
+  return timegm(&tm_buf);
+#endif
+}
+
+bool is_weak_etag(const std::string &s) {
+  // Check if the string is a weak ETag (starts with 'W/"')
+  return s.size() > 3 && s[0] == 'W' && s[1] == '/' && s[2] == '"';
+}
+
+bool is_strong_etag(const std::string &s) {
+  // Check if the string is a strong ETag (starts and ends with '"', at least 2
+  // chars)
+  return s.size() >= 2 && s[0] == '"' && s.back() == '"';
 }
 
 size_t to_utf8(int code, char *buff) {
@@ -168,6 +252,15 @@ bool FileStat::is_dir() const {
   return ret_ >= 0 && S_ISDIR(st_.st_mode);
 }
 
+time_t FileStat::mtime() const {
+  return ret_ >= 0 ? static_cast<time_t>(st_.st_mtime)
+                   : static_cast<time_t>(-1);
+}
+
+size_t FileStat::size() const {
+  return ret_ >= 0 ? static_cast<size_t>(st_.st_size) : 0;
+}
+
 std::string encode_path(const std::string &s) {
   std::string result;
   result.reserve(s.size());
@@ -208,6 +301,149 @@ std::string file_extension(const std::string &path) {
 }
 
 bool is_space_or_tab(char c) { return c == ' ' || c == '\t'; }
+
+template <typename T>
+bool parse_header(const char *beg, const char *end, T fn);
+
+template <typename T>
+bool parse_header(const char *beg, const char *end, T fn) {
+  // Skip trailing spaces and tabs.
+  while (beg < end && is_space_or_tab(end[-1])) {
+    end--;
+  }
+
+  auto p = beg;
+  while (p < end && *p != ':') {
+    p++;
+  }
+
+  auto name = std::string(beg, p);
+  if (!detail::fields::is_field_name(name)) { return false; }
+
+  if (p == end) { return false; }
+
+  auto key_end = p;
+
+  if (*p++ != ':') { return false; }
+
+  while (p < end && is_space_or_tab(*p)) {
+    p++;
+  }
+
+  if (p <= end) {
+    auto key_len = key_end - beg;
+    if (!key_len) { return false; }
+
+    auto key = std::string(beg, key_end);
+    auto val = std::string(p, end);
+
+    if (!detail::fields::is_field_value(val)) { return false; }
+
+    if (case_ignore::equal(key, "Location") ||
+        case_ignore::equal(key, "Referer")) {
+      fn(key, val);
+    } else {
+      fn(key, decode_path_component(val));
+    }
+
+    return true;
+  }
+
+  return false;
+}
+
+bool parse_trailers(stream_line_reader &line_reader, Headers &dest,
+                           const Headers &src_headers) {
+  // NOTE: In RFC 9112, '7.1 Chunked Transfer Coding' mentions "The chunked
+  // transfer coding is complete when a chunk with a chunk-size of zero is
+  // received, possibly followed by a trailer section, and finally terminated by
+  // an empty line". https://www.rfc-editor.org/rfc/rfc9112.html#section-7.1
+  //
+  // In '7.1.3. Decoding Chunked', however, the pseudo-code in the section
+  // doesn't care for the existence of the final CRLF. In other words, it seems
+  // to be ok whether the final CRLF exists or not in the chunked data.
+  // https://www.rfc-editor.org/rfc/rfc9112.html#section-7.1.3
+  //
+  // According to the reference code in RFC 9112, cpp-httplib now allows
+  // chunked transfer coding data without the final CRLF.
+
+  // RFC 7230 Section 4.1.2 - Headers prohibited in trailers
+  thread_local case_ignore::unordered_set<std::string> prohibited_trailers = {
+      "transfer-encoding",
+      "content-length",
+      "host",
+      "authorization",
+      "www-authenticate",
+      "proxy-authenticate",
+      "proxy-authorization",
+      "cookie",
+      "set-cookie",
+      "cache-control",
+      "expect",
+      "max-forwards",
+      "pragma",
+      "range",
+      "te",
+      "age",
+      "expires",
+      "date",
+      "location",
+      "retry-after",
+      "vary",
+      "warning",
+      "content-encoding",
+      "content-type",
+      "content-range",
+      "trailer"};
+
+  case_ignore::unordered_set<std::string> declared_trailers;
+  auto trailer_header = get_header_value(src_headers, "Trailer", "", 0);
+  if (trailer_header && std::strlen(trailer_header)) {
+    auto len = std::strlen(trailer_header);
+    split(trailer_header, trailer_header + len, ',',
+          [&](const char *b, const char *e) {
+            const char *kbeg = b;
+            const char *kend = e;
+            while (kbeg < kend && (*kbeg == ' ' || *kbeg == '\t')) {
+              ++kbeg;
+            }
+            while (kend > kbeg && (kend[-1] == ' ' || kend[-1] == '\t')) {
+              --kend;
+            }
+            std::string key(kbeg, static_cast<size_t>(kend - kbeg));
+            if (!key.empty() &&
+                prohibited_trailers.find(key) == prohibited_trailers.end()) {
+              declared_trailers.insert(key);
+            }
+          });
+  }
+
+  size_t trailer_header_count = 0;
+  while (strcmp(line_reader.ptr(), "\r\n") != 0) {
+    if (line_reader.size() > CPPHTTPLIB_HEADER_MAX_LENGTH) { return false; }
+    if (trailer_header_count >= CPPHTTPLIB_HEADER_MAX_COUNT) { return false; }
+
+    constexpr auto line_terminator_len = 2;
+    auto line_beg = line_reader.ptr();
+    auto line_end =
+        line_reader.ptr() + line_reader.size() - line_terminator_len;
+
+    if (!parse_header(line_beg, line_end,
+                      [&](const std::string &key, const std::string &val) {
+                        if (declared_trailers.find(key) !=
+                            declared_trailers.end()) {
+                          dest.emplace(key, val);
+                          trailer_header_count++;
+                        }
+                      })) {
+      return false;
+    }
+
+    if (!line_reader.getline()) { return false; }
+  }
+
+  return true;
+}
 
 std::pair<size_t, size_t> trim(const char *b, const char *e, size_t left,
                                       size_t right) {
@@ -278,6 +514,42 @@ void split(const char *b, const char *e, char d, size_t m,
     auto r = trim(b, e, beg, i);
     if (r.first < r.second) { fn(&b[r.first], &b[r.second]); }
   }
+}
+
+bool split_find(const char *b, const char *e, char d, size_t m,
+                       std::function<bool(const char *, const char *)> fn) {
+  size_t i = 0;
+  size_t beg = 0;
+  size_t count = 1;
+
+  while (e ? (b + i < e) : (b[i] != '\0')) {
+    if (b[i] == d && count < m) {
+      auto r = trim(b, e, beg, i);
+      if (r.first < r.second) {
+        auto found = fn(&b[r.first], &b[r.second]);
+        if (found) { return true; }
+      }
+      beg = i + 1;
+      count++;
+    }
+    i++;
+  }
+
+  if (i) {
+    auto r = trim(b, e, beg, i);
+    if (r.first < r.second) {
+      auto found = fn(&b[r.first], &b[r.second]);
+      if (found) { return true; }
+    }
+  }
+
+  return false;
+}
+
+bool split_find(const char *b, const char *e, char d,
+                       std::function<bool(const char *, const char *)> fn) {
+  return split_find(b, e, d, (std::numeric_limits<size_t>::max)(),
+                    std::move(fn));
 }
 
 stream_line_reader::stream_line_reader(Stream &strm, char *fixed_buffer,
@@ -1892,6 +2164,27 @@ bool zstd_decompressor::decompress(const char *data, size_t data_length,
 }
 #endif
 
+std::unique_ptr<decompressor>
+create_decompressor(const std::string &encoding) {
+  std::unique_ptr<decompressor> decompressor;
+
+  if (encoding == "gzip" || encoding == "deflate") {
+#ifdef CPPHTTPLIB_ZLIB_SUPPORT
+    decompressor = detail::make_unique<gzip_decompressor>();
+#endif
+  } else if (encoding.find("br") != std::string::npos) {
+#ifdef CPPHTTPLIB_BROTLI_SUPPORT
+    decompressor = detail::make_unique<brotli_decompressor>();
+#endif
+  } else if (encoding == "zstd" || encoding.find("zstd") != std::string::npos) {
+#ifdef CPPHTTPLIB_ZSTD_SUPPORT
+    decompressor = detail::make_unique<zstd_decompressor>();
+#endif
+  }
+
+  return decompressor;
+}
+
 bool is_prohibited_header_name(const std::string &name) {
   using udl::operator""_t;
 
@@ -1926,53 +2219,6 @@ const char *get_header_value(const Headers &headers,
   std::advance(it, static_cast<ssize_t>(id));
   if (it != rng.second) { return it->second.c_str(); }
   return def;
-}
-
-template <typename T>
-bool parse_header(const char *beg, const char *end, T fn) {
-  // Skip trailing spaces and tabs.
-  while (beg < end && is_space_or_tab(end[-1])) {
-    end--;
-  }
-
-  auto p = beg;
-  while (p < end && *p != ':') {
-    p++;
-  }
-
-  auto name = std::string(beg, p);
-  if (!detail::fields::is_field_name(name)) { return false; }
-
-  if (p == end) { return false; }
-
-  auto key_end = p;
-
-  if (*p++ != ':') { return false; }
-
-  while (p < end && is_space_or_tab(*p)) {
-    p++;
-  }
-
-  if (p <= end) {
-    auto key_len = key_end - beg;
-    if (!key_len) { return false; }
-
-    auto key = std::string(beg, key_end);
-    auto val = std::string(p, end);
-
-    if (!detail::fields::is_field_value(val)) { return false; }
-
-    if (case_ignore::equal(key, "Location") ||
-        case_ignore::equal(key, "Referer")) {
-      fn(key, val);
-    } else {
-      fn(key, decode_path_component(val));
-    }
-
-    return true;
-  }
-
-  return false;
 }
 
 bool read_headers(Stream &strm, Headers &headers) {
@@ -2026,10 +2272,18 @@ bool read_content_with_length(Stream &strm, size_t len,
                                      ContentReceiverWithProgress out) {
   char buf[CPPHTTPLIB_RECV_BUFSIZ];
 
+  detail::BodyReader br;
+  br.stream = &strm;
+  br.content_length = len;
+  br.chunked = false;
+  br.bytes_read = 0;
+  br.last_error = Error::Success;
+
   size_t r = 0;
   while (r < len) {
     auto read_len = static_cast<size_t>(len - r);
-    auto n = strm.read(buf, (std::min)(read_len, CPPHTTPLIB_RECV_BUFSIZ));
+    auto to_read = (std::min)(read_len, CPPHTTPLIB_RECV_BUFSIZ);
+    auto n = detail::read_body_content(&strm, br, buf, to_read);
     if (n <= 0) { return false; }
 
     if (!out(buf, static_cast<size_t>(n), r, len)) { return false; }
@@ -2089,125 +2343,35 @@ template <typename T>
 ReadContentResult read_content_chunked(Stream &strm, T &x,
                                               size_t payload_max_length,
                                               ContentReceiverWithProgress out) {
-  const auto bufsiz = 16;
-  char buf[bufsiz];
+  detail::ChunkedDecoder dec(strm);
 
-  stream_line_reader line_reader(strm, buf, bufsiz);
-
-  if (!line_reader.getline()) { return ReadContentResult::Error; }
-
-  unsigned long chunk_len;
+  char buf[CPPHTTPLIB_RECV_BUFSIZ];
   size_t total_len = 0;
-  while (true) {
-    char *end_ptr;
 
-    chunk_len = std::strtoul(line_reader.ptr(), &end_ptr, 16);
+  for (;;) {
+    size_t chunk_offset = 0;
+    size_t chunk_total = 0;
+    auto n = dec.read_payload(buf, sizeof(buf), chunk_offset, chunk_total);
+    if (n < 0) { return ReadContentResult::Error; }
 
-    if (end_ptr == line_reader.ptr()) { return ReadContentResult::Error; }
-    if (chunk_len == ULONG_MAX) { return ReadContentResult::Error; }
+    if (n == 0) {
+      if (!dec.parse_trailers_into(x.trailers, x.headers)) {
+        return ReadContentResult::Error;
+      }
+      return ReadContentResult::Success;
+    }
 
-    if (chunk_len == 0) { break; }
-
-    // Check if adding this chunk would exceed the payload limit
     if (total_len > payload_max_length ||
-        payload_max_length - total_len < chunk_len) {
+        payload_max_length - total_len < static_cast<size_t>(n)) {
       return ReadContentResult::PayloadTooLarge;
     }
 
-    total_len += chunk_len;
-
-    if (!read_content_with_length(strm, chunk_len, nullptr, out)) {
+    if (!out(buf, static_cast<size_t>(n), chunk_offset, chunk_total)) {
       return ReadContentResult::Error;
     }
 
-    if (!line_reader.getline()) { return ReadContentResult::Error; }
-
-    if (strcmp(line_reader.ptr(), "\r\n") != 0) {
-      return ReadContentResult::Error;
-    }
-
-    if (!line_reader.getline()) { return ReadContentResult::Error; }
+    total_len += static_cast<size_t>(n);
   }
-
-  assert(chunk_len == 0);
-
-  // NOTE: In RFC 9112, '7.1 Chunked Transfer Coding' mentions "The chunked
-  // transfer coding is complete when a chunk with a chunk-size of zero is
-  // received, possibly followed by a trailer section, and finally terminated by
-  // an empty line". https://www.rfc-editor.org/rfc/rfc9112.html#section-7.1
-  //
-  // In '7.1.3. Decoding Chunked', however, the pseudo-code in the section
-  // does't care for the existence of the final CRLF. In other words, it seems
-  // to be ok whether the final CRLF exists or not in the chunked data.
-  // https://www.rfc-editor.org/rfc/rfc9112.html#section-7.1.3
-  //
-  // According to the reference code in RFC 9112, cpp-httplib now allows
-  // chunked transfer coding data without the final CRLF.
-  if (!line_reader.getline()) { return ReadContentResult::Success; }
-
-  // RFC 7230 Section 4.1.2 - Headers prohibited in trailers
-  thread_local case_ignore::unordered_set<std::string> prohibited_trailers = {
-      // Message framing
-      "transfer-encoding", "content-length",
-
-      // Routing
-      "host",
-
-      // Authentication
-      "authorization", "www-authenticate", "proxy-authenticate",
-      "proxy-authorization", "cookie", "set-cookie",
-
-      // Request modifiers
-      "cache-control", "expect", "max-forwards", "pragma", "range", "te",
-
-      // Response control
-      "age", "expires", "date", "location", "retry-after", "vary", "warning",
-
-      // Payload processing
-      "content-encoding", "content-type", "content-range", "trailer"};
-
-  // Parse declared trailer headers once for performance
-  case_ignore::unordered_set<std::string> declared_trailers;
-  if (has_header(x.headers, "Trailer")) {
-    auto trailer_header = get_header_value(x.headers, "Trailer", "", 0);
-    auto len = std::strlen(trailer_header);
-
-    split(trailer_header, trailer_header + len, ',',
-          [&](const char *b, const char *e) {
-            std::string key(b, e);
-            if (prohibited_trailers.find(key) == prohibited_trailers.end()) {
-              declared_trailers.insert(key);
-            }
-          });
-  }
-
-  size_t trailer_header_count = 0;
-  while (strcmp(line_reader.ptr(), "\r\n") != 0) {
-    if (line_reader.size() > CPPHTTPLIB_HEADER_MAX_LENGTH) {
-      return ReadContentResult::Error;
-    }
-
-    // Check trailer header count limit
-    if (trailer_header_count >= CPPHTTPLIB_HEADER_MAX_COUNT) {
-      return ReadContentResult::Error;
-    }
-
-    // Exclude line terminator
-    constexpr auto line_terminator_len = 2;
-    auto end = line_reader.ptr() + line_reader.size() - line_terminator_len;
-
-    parse_header(line_reader.ptr(), end,
-                 [&](const std::string &key, const std::string &val) {
-                   if (declared_trailers.find(key) != declared_trailers.end()) {
-                     x.trailers.emplace(key, val);
-                     trailer_header_count++;
-                   }
-                 });
-
-    if (!line_reader.getline()) { return ReadContentResult::Error; }
-  }
-
-  return ReadContentResult::Success;
 }
 
 bool is_chunked_transfer_encoding(const Headers &headers) {
@@ -2223,27 +2387,13 @@ bool prepare_content_receiver(T &x, int &status,
     std::string encoding = x.get_header_value("Content-Encoding");
     std::unique_ptr<decompressor> decompressor;
 
-    if (encoding == "gzip" || encoding == "deflate") {
-#ifdef CPPHTTPLIB_ZLIB_SUPPORT
-      decompressor = detail::make_unique<gzip_decompressor>();
-#else
-      status = StatusCode::UnsupportedMediaType_415;
-      return false;
-#endif
-    } else if (encoding.find("br") != std::string::npos) {
-#ifdef CPPHTTPLIB_BROTLI_SUPPORT
-      decompressor = detail::make_unique<brotli_decompressor>();
-#else
-      status = StatusCode::UnsupportedMediaType_415;
-      return false;
-#endif
-    } else if (encoding == "zstd") {
-#ifdef CPPHTTPLIB_ZSTD_SUPPORT
-      decompressor = detail::make_unique<zstd_decompressor>();
-#else
-      status = StatusCode::UnsupportedMediaType_415;
-      return false;
-#endif
+    if (!encoding.empty()) {
+      decompressor = detail::create_decompressor(encoding);
+      if (!decompressor) {
+        // Unsupported encoding or no support compiled in
+        status = StatusCode::UnsupportedMediaType_415;
+        return false;
+      }
     }
 
     if (decompressor) {
@@ -2329,7 +2479,7 @@ bool read_content(Stream &strm, T &x, size_t payload_max_length, int &status,
 ssize_t write_request_line(Stream &strm, const std::string &method,
                                   const std::string &path) {
   std::string s = method;
-  s += " ";
+  s += ' ';
   s += path;
   s += " HTTP/1.1\r\n";
   return strm.write(s.data(), s.size());
@@ -2338,7 +2488,7 @@ ssize_t write_request_line(Stream &strm, const std::string &method,
 ssize_t write_response_line(Stream &strm, int status) {
   std::string s = "HTTP/1.1 ";
   s += std::to_string(status);
-  s += " ";
+  s += ' ';
   s += httplib::status_message(status);
   s += "\r\n";
   return strm.write(s.data(), s.size());
@@ -2601,8 +2751,8 @@ bool redirect(T &cli, Request &req, Response &res,
 
   auto ret = cli.send(new_req, new_res, error);
   if (ret) {
-    req = new_req;
-    res = new_res;
+    req = std::move(new_req);
+    res = std::move(new_res);
 
     if (res.location.empty()) { res.location = location; }
   }
@@ -2613,9 +2763,9 @@ std::string params_to_query_str(const Params &params) {
   std::string query;
 
   for (auto it = params.begin(); it != params.end(); ++it) {
-    if (it != params.begin()) { query += "&"; }
+    if (it != params.begin()) { query += '&'; }
     query += encode_query_component(it->first);
-    query += "=";
+    query += '=';
     query += encode_query_component(it->second);
   }
   return query;
@@ -2646,6 +2796,38 @@ void parse_query_text(const char *data, std::size_t size,
 
 void parse_query_text(const std::string &s, Params &params) {
   parse_query_text(s.data(), s.size(), params);
+}
+
+// Normalize a query string by decoding and re-encoding each key/value pair
+// while preserving the original parameter order. This avoids double-encoding
+// and ensures consistent encoding without reordering (unlike Params which
+// uses std::multimap and sorts keys).
+std::string normalize_query_string(const std::string &query) {
+  std::string result;
+  split(query.data(), query.data() + query.size(), '&',
+        [&](const char *b, const char *e) {
+          std::string key;
+          std::string val;
+          divide(b, static_cast<std::size_t>(e - b), '=',
+                 [&](const char *lhs_data, std::size_t lhs_size,
+                     const char *rhs_data, std::size_t rhs_size) {
+                   key.assign(lhs_data, lhs_size);
+                   val.assign(rhs_data, rhs_size);
+                 });
+
+          if (!key.empty()) {
+            auto dec_key = decode_query_component(key);
+            auto dec_val = decode_query_component(val);
+
+            if (!result.empty()) { result += '&'; }
+            result += encode_query_component(dec_key);
+            if (!val.empty() || std::find(b, e, '=') != e) {
+              result += '=';
+              result += encode_query_component(dec_val);
+            }
+          }
+        });
+  return result;
 }
 
 bool parse_multipart_boundary(const std::string &content_type,
@@ -2840,7 +3022,7 @@ bool parse_accept_header(const std::string &s,
       return;
     }
 
-    entries.push_back(accept_entry);
+    entries.push_back(std::move(accept_entry));
   });
 
   // Return false if any invalid entry was found
@@ -2857,8 +3039,8 @@ bool parse_accept_header(const std::string &s,
 
   // Extract sorted media types
   content_types.reserve(entries.size());
-  for (const auto &entry : entries) {
-    content_types.push_back(entry.media_type);
+  for (auto &entry : entries) {
+    content_types.push_back(std::move(entry.media_type));
   }
 
   return true;
@@ -2869,7 +3051,7 @@ public:
   FormDataParser() = default;
 
   void set_boundary(std::string &&boundary) {
-    boundary_ = boundary;
+    boundary_ = std::move(boundary);
     dash_boundary_crlf_ = dash_ + boundary_ + crlf_;
     crlf_dash_boundary_ = crlf_ + dash_ + boundary_;
   }
@@ -3342,9 +3524,9 @@ std::string make_content_range_header_field(
 
   std::string field = "bytes ";
   field += std::to_string(st);
-  field += "-";
+  field += '-';
   field += std::to_string(ed);
-  field += "/";
+  field += '/';
   field += std::to_string(content_length);
   return field;
 }
@@ -3721,7 +3903,7 @@ bool parse_www_authenticate(const Response &res,
                                     static_cast<size_t>(m.length(2)))
                          : s.substr(static_cast<size_t>(m.position(3)),
                                     static_cast<size_t>(m.length(3)));
-          auth[key] = val;
+          auth[std::move(key)] = std::move(val);
         }
         return true;
       }
@@ -3734,7 +3916,7 @@ class ContentProviderAdapter {
 public:
   explicit ContentProviderAdapter(
       ContentProviderWithoutLength &&content_provider)
-      : content_provider_(content_provider) {}
+      : content_provider_(std::move(content_provider)) {}
 
   bool operator()(size_t offset, size_t, DataSink &sink) {
     return content_provider_(offset, sink);
@@ -3744,7 +3926,188 @@ private:
   ContentProviderWithoutLength content_provider_;
 };
 
+// NOTE: https://www.rfc-editor.org/rfc/rfc9110#section-5
+namespace fields {
+
+bool is_token_char(char c) {
+  return std::isalnum(c) || c == '!' || c == '#' || c == '$' || c == '%' ||
+         c == '&' || c == '\'' || c == '*' || c == '+' || c == '-' ||
+         c == '.' || c == '^' || c == '_' || c == '`' || c == '|' || c == '~';
+}
+
+bool is_token(const std::string &s) {
+  if (s.empty()) { return false; }
+  for (auto c : s) {
+    if (!is_token_char(c)) { return false; }
+  }
+  return true;
+}
+
+bool is_field_name(const std::string &s) { return is_token(s); }
+
+bool is_vchar(char c) { return c >= 33 && c <= 126; }
+
+bool is_obs_text(char c) { return 128 <= static_cast<unsigned char>(c); }
+
+bool is_field_vchar(char c) { return is_vchar(c) || is_obs_text(c); }
+
+bool is_field_content(const std::string &s) {
+  if (s.empty()) { return true; }
+
+  if (s.size() == 1) {
+    return is_field_vchar(s[0]);
+  } else if (s.size() == 2) {
+    return is_field_vchar(s[0]) && is_field_vchar(s[1]);
+  } else {
+    size_t i = 0;
+
+    if (!is_field_vchar(s[i])) { return false; }
+    i++;
+
+    while (i < s.size() - 1) {
+      auto c = s[i++];
+      if (c == ' ' || c == '\t' || is_field_vchar(c)) {
+      } else {
+        return false;
+      }
+    }
+
+    return is_field_vchar(s[i]);
+  }
+}
+
+bool is_field_value(const std::string &s) { return is_field_content(s); }
+
+} // namespace fields
+
 } // namespace detail
+
+const char *status_message(int status) {
+  switch (status) {
+  case StatusCode::Continue_100: return "Continue";
+  case StatusCode::SwitchingProtocol_101: return "Switching Protocol";
+  case StatusCode::Processing_102: return "Processing";
+  case StatusCode::EarlyHints_103: return "Early Hints";
+  case StatusCode::OK_200: return "OK";
+  case StatusCode::Created_201: return "Created";
+  case StatusCode::Accepted_202: return "Accepted";
+  case StatusCode::NonAuthoritativeInformation_203:
+    return "Non-Authoritative Information";
+  case StatusCode::NoContent_204: return "No Content";
+  case StatusCode::ResetContent_205: return "Reset Content";
+  case StatusCode::PartialContent_206: return "Partial Content";
+  case StatusCode::MultiStatus_207: return "Multi-Status";
+  case StatusCode::AlreadyReported_208: return "Already Reported";
+  case StatusCode::IMUsed_226: return "IM Used";
+  case StatusCode::MultipleChoices_300: return "Multiple Choices";
+  case StatusCode::MovedPermanently_301: return "Moved Permanently";
+  case StatusCode::Found_302: return "Found";
+  case StatusCode::SeeOther_303: return "See Other";
+  case StatusCode::NotModified_304: return "Not Modified";
+  case StatusCode::UseProxy_305: return "Use Proxy";
+  case StatusCode::unused_306: return "unused";
+  case StatusCode::TemporaryRedirect_307: return "Temporary Redirect";
+  case StatusCode::PermanentRedirect_308: return "Permanent Redirect";
+  case StatusCode::BadRequest_400: return "Bad Request";
+  case StatusCode::Unauthorized_401: return "Unauthorized";
+  case StatusCode::PaymentRequired_402: return "Payment Required";
+  case StatusCode::Forbidden_403: return "Forbidden";
+  case StatusCode::NotFound_404: return "Not Found";
+  case StatusCode::MethodNotAllowed_405: return "Method Not Allowed";
+  case StatusCode::NotAcceptable_406: return "Not Acceptable";
+  case StatusCode::ProxyAuthenticationRequired_407:
+    return "Proxy Authentication Required";
+  case StatusCode::RequestTimeout_408: return "Request Timeout";
+  case StatusCode::Conflict_409: return "Conflict";
+  case StatusCode::Gone_410: return "Gone";
+  case StatusCode::LengthRequired_411: return "Length Required";
+  case StatusCode::PreconditionFailed_412: return "Precondition Failed";
+  case StatusCode::PayloadTooLarge_413: return "Payload Too Large";
+  case StatusCode::UriTooLong_414: return "URI Too Long";
+  case StatusCode::UnsupportedMediaType_415: return "Unsupported Media Type";
+  case StatusCode::RangeNotSatisfiable_416: return "Range Not Satisfiable";
+  case StatusCode::ExpectationFailed_417: return "Expectation Failed";
+  case StatusCode::ImATeapot_418: return "I'm a teapot";
+  case StatusCode::MisdirectedRequest_421: return "Misdirected Request";
+  case StatusCode::UnprocessableContent_422: return "Unprocessable Content";
+  case StatusCode::Locked_423: return "Locked";
+  case StatusCode::FailedDependency_424: return "Failed Dependency";
+  case StatusCode::TooEarly_425: return "Too Early";
+  case StatusCode::UpgradeRequired_426: return "Upgrade Required";
+  case StatusCode::PreconditionRequired_428: return "Precondition Required";
+  case StatusCode::TooManyRequests_429: return "Too Many Requests";
+  case StatusCode::RequestHeaderFieldsTooLarge_431:
+    return "Request Header Fields Too Large";
+  case StatusCode::UnavailableForLegalReasons_451:
+    return "Unavailable For Legal Reasons";
+  case StatusCode::NotImplemented_501: return "Not Implemented";
+  case StatusCode::BadGateway_502: return "Bad Gateway";
+  case StatusCode::ServiceUnavailable_503: return "Service Unavailable";
+  case StatusCode::GatewayTimeout_504: return "Gateway Timeout";
+  case StatusCode::HttpVersionNotSupported_505:
+    return "HTTP Version Not Supported";
+  case StatusCode::VariantAlsoNegotiates_506: return "Variant Also Negotiates";
+  case StatusCode::InsufficientStorage_507: return "Insufficient Storage";
+  case StatusCode::LoopDetected_508: return "Loop Detected";
+  case StatusCode::NotExtended_510: return "Not Extended";
+  case StatusCode::NetworkAuthenticationRequired_511:
+    return "Network Authentication Required";
+
+  default:
+  case StatusCode::InternalServerError_500: return "Internal Server Error";
+  }
+}
+
+std::string to_string(const Error error) {
+  switch (error) {
+  case Error::Success: return "Success (no error)";
+  case Error::Unknown: return "Unknown";
+  case Error::Connection: return "Could not establish connection";
+  case Error::BindIPAddress: return "Failed to bind IP address";
+  case Error::Read: return "Failed to read connection";
+  case Error::Write: return "Failed to write connection";
+  case Error::ExceedRedirectCount: return "Maximum redirect count exceeded";
+  case Error::Canceled: return "Connection handling canceled";
+  case Error::SSLConnection: return "SSL connection failed";
+  case Error::SSLLoadingCerts: return "SSL certificate loading failed";
+  case Error::SSLServerVerification: return "SSL server verification failed";
+  case Error::SSLServerHostnameVerification:
+    return "SSL server hostname verification failed";
+  case Error::UnsupportedMultipartBoundaryChars:
+    return "Unsupported HTTP multipart boundary characters";
+  case Error::Compression: return "Compression failed";
+  case Error::ConnectionTimeout: return "Connection timed out";
+  case Error::ProxyConnection: return "Proxy connection failed";
+  case Error::ConnectionClosed: return "Connection closed by server";
+  case Error::Timeout: return "Read timeout";
+  case Error::ResourceExhaustion: return "Resource exhaustion";
+  case Error::TooManyFormDataFiles: return "Too many form data files";
+  case Error::ExceedMaxPayloadSize: return "Exceeded maximum payload size";
+  case Error::ExceedUriMaxLength: return "Exceeded maximum URI length";
+  case Error::ExceedMaxSocketDescriptorCount:
+    return "Exceeded maximum socket descriptor count";
+  case Error::InvalidRequestLine: return "Invalid request line";
+  case Error::InvalidHTTPMethod: return "Invalid HTTP method";
+  case Error::InvalidHTTPVersion: return "Invalid HTTP version";
+  case Error::InvalidHeaders: return "Invalid headers";
+  case Error::MultipartParsing: return "Multipart parsing failed";
+  case Error::OpenFile: return "Failed to open file";
+  case Error::Listen: return "Failed to listen on socket";
+  case Error::GetSockName: return "Failed to get socket name";
+  case Error::UnsupportedAddressFamily: return "Unsupported address family";
+  case Error::HTTPParsing: return "HTTP parsing failed";
+  case Error::InvalidRangeHeader: return "Invalid Range header";
+  default: break;
+  }
+
+  return "Invalid";
+}
+
+std::ostream &operator<<(std::ostream &os, const Error &obj) {
+  os << to_string(obj);
+  os << " (" << static_cast<std::underlying_type<Error>::type>(obj) << ')';
+  return os;
+}
 
 std::string hosted_at(const std::string &hostname) {
   std::vector<std::string> addrs;
@@ -3779,7 +4142,7 @@ void hosted_at(const std::string &hostname,
     auto dummy = -1;
     if (detail::get_ip_and_port(addr, sizeof(struct sockaddr_storage), ip,
                                 dummy)) {
-      addrs.push_back(ip);
+      addrs.emplace_back(std::move(ip));
     }
   }
 }
@@ -4319,6 +4682,67 @@ ssize_t Stream::write(const std::string &s) {
   return write(s.data(), s.size());
 }
 
+// BodyReader implementation
+ssize_t detail::BodyReader::read(char *buf, size_t len) {
+  if (!stream) {
+    last_error = Error::Connection;
+    return -1;
+  }
+  if (eof) { return 0; }
+
+  if (!chunked) {
+    // Content-Length based reading
+    if (bytes_read >= content_length) {
+      eof = true;
+      return 0;
+    }
+
+    auto remaining = content_length - bytes_read;
+    auto to_read = (std::min)(len, remaining);
+    auto n = stream->read(buf, to_read);
+
+    if (n < 0) {
+      last_error = stream->get_error();
+      if (last_error == Error::Success) { last_error = Error::Read; }
+      eof = true;
+      return n;
+    }
+    if (n == 0) {
+      // Unexpected EOF before content_length
+      last_error = stream->get_error();
+      if (last_error == Error::Success) { last_error = Error::Read; }
+      eof = true;
+      return 0;
+    }
+
+    bytes_read += static_cast<size_t>(n);
+    if (bytes_read >= content_length) { eof = true; }
+    return n;
+  }
+
+  // Chunked transfer encoding: delegate to shared decoder instance.
+  if (!chunked_decoder) { chunked_decoder.reset(new ChunkedDecoder(*stream)); }
+
+  size_t chunk_offset = 0;
+  size_t chunk_total = 0;
+  auto n = chunked_decoder->read_payload(buf, len, chunk_offset, chunk_total);
+  if (n < 0) {
+    last_error = stream->get_error();
+    if (last_error == Error::Success) { last_error = Error::Read; }
+    eof = true;
+    return n;
+  }
+
+  if (n == 0) {
+    // Final chunk observed. Leave trailer parsing to the caller (StreamHandle).
+    eof = true;
+    return 0;
+  }
+
+  bytes_read += static_cast<size_t>(n);
+  return n;
+}
+
 namespace detail {
 
 void calc_actual_timeout(time_t max_timeout_msec, time_t duration_msec,
@@ -4395,7 +4819,10 @@ ssize_t SocketStream::read(char *ptr, size_t size) {
     }
   }
 
-  if (!wait_readable()) { return -1; }
+  if (!wait_readable()) {
+    error_ = Error::Timeout;
+    return -1;
+  }
 
   read_buff_off_ = 0;
   read_buff_content_size_ = 0;
@@ -4404,6 +4831,11 @@ ssize_t SocketStream::read(char *ptr, size_t size) {
     auto n = read_socket(sock_, read_buff_.data(), read_buff_size_,
                          CPPHTTPLIB_RECV_FLAGS);
     if (n <= 0) {
+      if (n == 0) {
+        error_ = Error::ConnectionClosed;
+      } else {
+        error_ = Error::Read;
+      }
       return n;
     } else if (n <= static_cast<ssize_t>(size)) {
       memcpy(ptr, read_buff_.data(), static_cast<size_t>(n));
@@ -4415,7 +4847,15 @@ ssize_t SocketStream::read(char *ptr, size_t size) {
       return static_cast<ssize_t>(size);
     }
   } else {
-    return read_socket(sock_, ptr, size, CPPHTTPLIB_RECV_FLAGS);
+    auto n = read_socket(sock_, ptr, size, CPPHTTPLIB_RECV_FLAGS);
+    if (n <= 0) {
+      if (n == 0) {
+        error_ = Error::ConnectionClosed;
+      } else {
+        error_ = Error::Read;
+      }
+    }
+    return n;
   }
 }
 
@@ -4579,19 +5019,22 @@ bool RegexMatcher::match(Request &request) const {
   return std::regex_match(request.path, request.matches, regex_);
 }
 
-std::string make_host_and_port_string(const std::string &host, int port,
-                                             bool is_ssl) {
-  std::string result;
-
+// Enclose IPv6 address in brackets if needed
+std::string prepare_host_string(const std::string &host) {
   // Enclose IPv6 address in brackets (but not if already enclosed)
   if (host.find(':') == std::string::npos ||
       (!host.empty() && host[0] == '[')) {
     // IPv4, hostname, or already bracketed IPv6
-    result = host;
+    return host;
   } else {
     // IPv6 address without brackets
-    result = "[" + host + "]";
+    return "[" + host + "]";
   }
+}
+
+std::string make_host_and_port_string(const std::string &host, int port,
+                                             bool is_ssl) {
+  auto result = prepare_host_string(host);
 
   // Append port if not default
   if ((!is_ssl && port == 80) || (is_ssl && port == 443)) {
@@ -4601,6 +5044,29 @@ std::string make_host_and_port_string(const std::string &host, int port,
   }
 
   return result;
+}
+
+// Create "host:port" string always including port number (for CONNECT method)
+std::string
+make_host_and_port_string_always_port(const std::string &host, int port) {
+  return prepare_host_string(host) + ":" + std::to_string(port);
+}
+
+template <typename T>
+bool check_and_write_headers(Stream &strm, Headers &headers,
+                                    T header_writer, Error &error) {
+  for (const auto &h : headers) {
+    if (!detail::fields::is_field_name(h.first) ||
+        !detail::fields::is_field_value(h.second)) {
+      error = Error::InvalidHeaders;
+      return false;
+    }
+  }
+  if (header_writer(strm, headers) <= 0) {
+    error = Error::Write;
+    return false;
+  }
+  return true;
 }
 
 } // namespace detail
@@ -4694,7 +5160,7 @@ bool Server::set_mount_point(const std::string &mount_point,
   if (stat.is_dir()) {
     std::string mnt = !mount_point.empty() ? mount_point : "/";
     if (!mnt.empty() && mnt[0] == '/') {
-      base_dirs_.push_back({mnt, dir, std::move(headers)});
+      base_dirs_.push_back({std::move(mnt), dir, std::move(headers)});
       return true;
     }
   }
@@ -5010,7 +5476,7 @@ bool Server::write_response_core(Stream &strm, bool close_connection,
   {
     detail::BufferStream bstrm;
     if (!detail::write_response_line(bstrm, res.status)) { return false; }
-    if (!header_writer_(bstrm, res.headers)) { return false; }
+    if (header_writer_(bstrm, res.headers) <= 0) { return false; }
 
     // Flush buffer
     auto &data = bstrm.get_buffer();
@@ -5103,7 +5569,16 @@ bool Server::read_content(Stream &strm, Request &req, Response &res) {
           strm, req, res,
           // Regular
           [&](const char *buf, size_t n) {
-            if (req.body.size() + n > req.body.max_size()) { return false; }
+            // Prevent arithmetic overflow when checking sizes.
+            // Avoid computing (req.body.size() + n) directly because
+            // adding two unsigned `size_t` values can wrap around and
+            // produce a small result instead of indicating overflow.
+            // Instead, check using subtraction: ensure `n` does not
+            // exceed the remaining capacity `max_size() - size()`.
+            if (req.body.size() >= req.body.max_size() ||
+                n > req.body.max_size() - req.body.size()) {
+              return false;
+            }
             req.body.append(buf, n);
             return true;
           },
@@ -5186,10 +5661,39 @@ bool Server::read_content_core(
   // RFC 7230 Section 3.3.3: If this is a request message and none of the above
   // are true (no Transfer-Encoding and no Content-Length), then the message
   // body length is zero (no message body is present).
+  //
+  // For non-SSL builds, peek into the socket to detect clients that send a
+  // body without a Content-Length header (raw HTTP over TCP). If there is
+  // pending data that exceeds the configured payload limit, treat this as an
+  // oversized request and fail early (causing connection close). For SSL
+  // builds we cannot reliably peek the decrypted application bytes, so keep
+  // the original behaviour.
+#if !defined(CPPHTTPLIB_OPENSSL_SUPPORT) && !defined(_WIN32)
+  if (!req.has_header("Content-Length") &&
+      !detail::is_chunked_transfer_encoding(req.headers)) {
+    socket_t s = strm.socket();
+    if (s != INVALID_SOCKET) {
+      // Peek up to payload_max_length_ + 1 bytes. If more than
+      // payload_max_length_ bytes are pending, reject the request.
+      size_t to_peek =
+          (payload_max_length_ > 0)
+              ? (std::min)(payload_max_length_ + 1, static_cast<size_t>(4096))
+              : 1;
+      std::vector<char> peekbuf(to_peek);
+      ssize_t n = ::recv(s, peekbuf.data(), to_peek, MSG_PEEK);
+      if (n > 0 && static_cast<size_t>(n) > payload_max_length_) {
+        // Indicate failure so connection will be closed.
+        return false;
+      }
+    }
+    return true;
+  }
+#else
   if (!req.has_header("Content-Length") &&
       !detail::is_chunked_transfer_encoding(req.headers)) {
     return true;
   }
+#endif
 
   if (!detail::read_content(strm, req, payload_max_length_, res.status, nullptr,
                             out, true)) {
@@ -5207,7 +5711,7 @@ bool Server::read_content_core(
   return true;
 }
 
-bool Server::handle_file_request(const Request &req, Response &res) {
+bool Server::handle_file_request(Request &req, Response &res) {
   for (const auto &entry : base_dirs_) {
     // Prefix match
     if (!req.path.compare(0, entry.mount_point.size(), entry.mount_point)) {
@@ -5227,6 +5731,20 @@ bool Server::handle_file_request(const Request &req, Response &res) {
           for (const auto &kv : entry.headers) {
             res.set_header(kv.first, kv.second);
           }
+
+          auto etag = detail::compute_etag(stat);
+          if (!etag.empty()) { res.set_header("ETag", etag); }
+
+          auto mtime = stat.mtime();
+
+          auto last_modified = detail::file_mtime_to_http_date(mtime);
+          if (!last_modified.empty()) {
+            res.set_header("Last-Modified", last_modified);
+          }
+
+          if (check_if_not_modified(req, res, etag, mtime)) { return true; }
+
+          check_if_range(req, etag, mtime);
 
           auto mm = std::make_shared<detail::mmap>(path.c_str());
           if (!mm->is_open()) {
@@ -5255,6 +5773,79 @@ bool Server::handle_file_request(const Request &req, Response &res) {
     }
   }
   return false;
+}
+
+bool Server::check_if_not_modified(const Request &req, Response &res,
+                                          const std::string &etag,
+                                          time_t mtime) const {
+  // Handle conditional GET:
+  // 1. If-None-Match takes precedence (RFC 9110 Section 13.1.2)
+  // 2. If-Modified-Since is checked only when If-None-Match is absent
+  if (req.has_header("If-None-Match")) {
+    if (!etag.empty()) {
+      auto val = req.get_header_value("If-None-Match");
+
+      // NOTE: We use exact string matching here. This works correctly
+      // because our server always generates weak ETags (W/"..."), and
+      // clients typically send back the same ETag they received.
+      // RFC 9110 Section 8.8.3.2 allows weak comparison for
+      // If-None-Match, where W/"x" and "x" would match, but this
+      // simplified implementation requires exact matches.
+      auto ret = detail::split_find(val.data(), val.data() + val.size(), ',',
+                                    [&](const char *b, const char *e) {
+                                      return std::equal(b, e, "*") ||
+                                             std::equal(b, e, etag.begin());
+                                    });
+
+      if (ret) {
+        res.status = StatusCode::NotModified_304;
+        return true;
+      }
+    }
+  } else if (req.has_header("If-Modified-Since")) {
+    auto val = req.get_header_value("If-Modified-Since");
+    auto t = detail::parse_http_date(val);
+
+    if (t != static_cast<time_t>(-1) && mtime <= t) {
+      res.status = StatusCode::NotModified_304;
+      return true;
+    }
+  }
+  return false;
+}
+
+bool Server::check_if_range(Request &req, const std::string &etag,
+                                   time_t mtime) const {
+  // Handle If-Range for partial content requests (RFC 9110
+  // Section 13.1.5). If-Range is only evaluated when Range header is
+  // present. If the validator matches, serve partial content; otherwise
+  // serve full content.
+  if (!req.ranges.empty() && req.has_header("If-Range")) {
+    auto val = req.get_header_value("If-Range");
+
+    auto is_valid_range = [&]() {
+      if (detail::is_strong_etag(val)) {
+        // RFC 9110 Section 13.1.5: If-Range requires strong ETag
+        // comparison.
+        return (!etag.empty() && val == etag);
+      } else if (detail::is_weak_etag(val)) {
+        // Weak ETags are not valid for If-Range (RFC 9110 Section 13.1.5)
+        return false;
+      } else {
+        // HTTP-date comparison
+        auto t = detail::parse_http_date(val);
+        return (t != static_cast<time_t>(-1) && mtime <= t);
+      }
+    };
+
+    if (!is_valid_range()) {
+      // Validator doesn't match: ignore Range and serve full content
+      req.ranges.clear();
+      return false;
+    }
+  }
+
+  return true;
 }
 
 socket_t
@@ -5524,10 +6115,13 @@ void Server::apply_ranges(const Request &req, Response &res,
           res.set_header("Transfer-Encoding", "chunked");
           if (type == detail::EncodingType::Gzip) {
             res.set_header("Content-Encoding", "gzip");
+            res.set_header("Vary", "Accept-Encoding");
           } else if (type == detail::EncodingType::Brotli) {
             res.set_header("Content-Encoding", "br");
+            res.set_header("Vary", "Accept-Encoding");
           } else if (type == detail::EncodingType::Zstd) {
             res.set_header("Content-Encoding", "zstd");
+            res.set_header("Vary", "Accept-Encoding");
           }
         }
       }
@@ -5586,6 +6180,7 @@ void Server::apply_ranges(const Request &req, Response &res,
                                  })) {
           res.body.swap(compressed);
           res.set_header("Content-Encoding", content_encoding);
+          res.set_header("Vary", "Accept-Encoding");
         }
       }
     }
@@ -5663,6 +6258,10 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
 
   Request req;
   req.start_time_ = std::chrono::steady_clock::now();
+  req.remote_addr = remote_addr;
+  req.remote_port = remote_port;
+  req.local_addr = local_addr;
+  req.local_port = local_port;
 
   Response res;
   res.version = "HTTP/1.1";
@@ -5908,7 +6507,6 @@ ClientImpl::ClientImpl(const std::string &host, int port,
                               const std::string &client_cert_path,
                               const std::string &client_key_path)
     : host_(detail::escape_abstract_namespace_unix_domain(host)), port_(port),
-      host_and_port_(detail::make_host_and_port_string(host_, port, is_ssl())),
       client_cert_path_(client_cert_path), client_key_path_(client_key_path) {}
 
 ClientImpl::~ClientImpl() {
@@ -6006,6 +6604,26 @@ bool ClientImpl::create_and_connect_socket(Socket &socket,
   socket.sock = sock;
   return true;
 }
+
+bool ClientImpl::ensure_socket_connection(Socket &socket, Error &error) {
+  return create_and_connect_socket(socket, error);
+}
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+bool SSLClient::ensure_socket_connection(Socket &socket, Error &error) {
+  if (!ClientImpl::ensure_socket_connection(socket, error)) { return false; }
+
+  if (!proxy_host_.empty() && proxy_port_ != -1) { return true; }
+
+  if (!initialize_ssl(socket, error)) {
+    shutdown_socket(socket);
+    close_socket(socket);
+    return false;
+  }
+
+  return true;
+}
+#endif
 
 void ClientImpl::shutdown_ssl(Socket & /*socket*/,
                                      bool /*shutdown_gracefully*/) {
@@ -6119,7 +6737,7 @@ bool ClientImpl::send_(Request &req, Response &res, Error &error) {
     }
 
     if (!is_alive) {
-      if (!create_and_connect_socket(socket_, error)) {
+      if (!ensure_socket_connection(socket_, error)) {
         output_error_log(error, &req);
         return false;
       }
@@ -6137,9 +6755,11 @@ bool ClientImpl::send_(Request &req, Response &res, Error &error) {
           }
         }
 
-        if (!scli.initialize_ssl(socket_, error)) {
-          output_error_log(error, &req);
-          return false;
+        if (!proxy_host_.empty() && proxy_port_ != -1) {
+          if (!scli.initialize_ssl(socket_, error)) {
+            output_error_log(error, &req);
+            return false;
+          }
         }
       }
 #endif
@@ -6212,6 +6832,343 @@ Result ClientImpl::send_(Request &&req) {
 #endif
 }
 
+void ClientImpl::prepare_default_headers(Request &r, bool for_stream,
+                                                const std::string &ct) {
+  (void)for_stream;
+  for (const auto &header : default_headers_) {
+    if (!r.has_header(header.first)) { r.headers.insert(header); }
+  }
+
+  if (!r.has_header("Host")) {
+    if (address_family_ == AF_UNIX) {
+      r.headers.emplace("Host", "localhost");
+    } else {
+      r.headers.emplace(
+          "Host", detail::make_host_and_port_string(host_, port_, is_ssl()));
+    }
+  }
+
+  if (!r.has_header("Accept")) { r.headers.emplace("Accept", "*/*"); }
+
+  if (!r.content_receiver) {
+    if (!r.has_header("Accept-Encoding")) {
+      std::string accept_encoding;
+#ifdef CPPHTTPLIB_BROTLI_SUPPORT
+      accept_encoding = "br";
+#endif
+#ifdef CPPHTTPLIB_ZLIB_SUPPORT
+      if (!accept_encoding.empty()) { accept_encoding += ", "; }
+      accept_encoding += "gzip, deflate";
+#endif
+#ifdef CPPHTTPLIB_ZSTD_SUPPORT
+      if (!accept_encoding.empty()) { accept_encoding += ", "; }
+      accept_encoding += "zstd";
+#endif
+      r.set_header("Accept-Encoding", accept_encoding);
+    }
+
+#ifndef CPPHTTPLIB_NO_DEFAULT_USER_AGENT
+    if (!r.has_header("User-Agent")) {
+      auto agent = std::string("cpp-httplib/") + CPPHTTPLIB_VERSION;
+      r.set_header("User-Agent", agent);
+    }
+#endif
+  }
+
+  if (!r.body.empty()) {
+    if (!ct.empty() && !r.has_header("Content-Type")) {
+      r.headers.emplace("Content-Type", ct);
+    }
+    if (!r.has_header("Content-Length")) {
+      r.headers.emplace("Content-Length", std::to_string(r.body.size()));
+    }
+  }
+}
+
+ClientImpl::StreamHandle
+ClientImpl::open_stream(const std::string &method, const std::string &path,
+                        const Params &params, const Headers &headers,
+                        const std::string &body,
+                        const std::string &content_type) {
+  StreamHandle handle;
+  handle.response = detail::make_unique<Response>();
+  handle.error = Error::Success;
+
+  auto query_path = params.empty() ? path : append_query_params(path, params);
+  handle.connection_ = detail::make_unique<ClientConnection>();
+
+  {
+    std::lock_guard<std::mutex> guard(socket_mutex_);
+
+    auto is_alive = false;
+    if (socket_.is_open()) {
+      is_alive = detail::is_socket_alive(socket_.sock);
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+      if (is_alive && is_ssl()) {
+        if (detail::is_ssl_peer_could_be_closed(socket_.ssl, socket_.sock)) {
+          is_alive = false;
+        }
+      }
+#endif
+      if (!is_alive) {
+        shutdown_ssl(socket_, false);
+        shutdown_socket(socket_);
+        close_socket(socket_);
+      }
+    }
+
+    if (!is_alive) {
+      if (!ensure_socket_connection(socket_, handle.error)) {
+        handle.response.reset();
+        return handle;
+      }
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+      if (is_ssl()) {
+        auto &scli = static_cast<SSLClient &>(*this);
+        if (!proxy_host_.empty() && proxy_port_ != -1) {
+          if (!scli.initialize_ssl(socket_, handle.error)) {
+            handle.response.reset();
+            return handle;
+          }
+        }
+      }
+#endif
+    }
+
+    transfer_socket_ownership_to_handle(handle);
+  }
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+  if (is_ssl() && handle.connection_->ssl) {
+    handle.socket_stream_ = detail::make_unique<detail::SSLSocketStream>(
+        handle.connection_->sock, handle.connection_->ssl, read_timeout_sec_,
+        read_timeout_usec_, write_timeout_sec_, write_timeout_usec_);
+  } else {
+    handle.socket_stream_ = detail::make_unique<detail::SocketStream>(
+        handle.connection_->sock, read_timeout_sec_, read_timeout_usec_,
+        write_timeout_sec_, write_timeout_usec_);
+  }
+#else
+  handle.socket_stream_ = detail::make_unique<detail::SocketStream>(
+      handle.connection_->sock, read_timeout_sec_, read_timeout_usec_,
+      write_timeout_sec_, write_timeout_usec_);
+#endif
+  handle.stream_ = handle.socket_stream_.get();
+
+  Request req;
+  req.method = method;
+  req.path = query_path;
+  req.headers = headers;
+  req.body = body;
+
+  prepare_default_headers(req, true, content_type);
+
+  auto &strm = *handle.stream_;
+  if (detail::write_request_line(strm, req.method, req.path) < 0) {
+    handle.error = Error::Write;
+    handle.response.reset();
+    return handle;
+  }
+
+  if (!detail::check_and_write_headers(strm, req.headers, header_writer_,
+                                       handle.error)) {
+    handle.response.reset();
+    return handle;
+  }
+
+  if (!body.empty()) {
+    if (strm.write(body.data(), body.size()) < 0) {
+      handle.error = Error::Write;
+      handle.response.reset();
+      return handle;
+    }
+  }
+
+  if (!read_response_line(strm, req, *handle.response) ||
+      !detail::read_headers(strm, handle.response->headers)) {
+    handle.error = Error::Read;
+    handle.response.reset();
+    return handle;
+  }
+
+  handle.body_reader_.stream = handle.stream_;
+
+  auto content_length_str = handle.response->get_header_value("Content-Length");
+  if (!content_length_str.empty()) {
+    handle.body_reader_.content_length =
+        static_cast<size_t>(std::stoull(content_length_str));
+  }
+
+  auto transfer_encoding =
+      handle.response->get_header_value("Transfer-Encoding");
+  handle.body_reader_.chunked = (transfer_encoding == "chunked");
+
+  auto content_encoding = handle.response->get_header_value("Content-Encoding");
+  if (!content_encoding.empty()) {
+    handle.decompressor_ = detail::create_decompressor(content_encoding);
+  }
+
+  return handle;
+}
+
+ssize_t ClientImpl::StreamHandle::read(char *buf, size_t len) {
+  if (!is_valid() || !response) { return -1; }
+
+  if (decompressor_) { return read_with_decompression(buf, len); }
+  auto n = detail::read_body_content(stream_, body_reader_, buf, len);
+
+  if (n <= 0 && body_reader_.chunked && !trailers_parsed_ && stream_) {
+    trailers_parsed_ = true;
+    if (body_reader_.chunked_decoder) {
+      if (!body_reader_.chunked_decoder->parse_trailers_into(
+              response->trailers, response->headers)) {
+        return n;
+      }
+    } else {
+      detail::ChunkedDecoder dec(*stream_);
+      if (!dec.parse_trailers_into(response->trailers, response->headers)) {
+        return n;
+      }
+    }
+  }
+
+  return n;
+}
+
+ssize_t ClientImpl::StreamHandle::read_with_decompression(char *buf,
+                                                                 size_t len) {
+  if (decompress_offset_ < decompress_buffer_.size()) {
+    auto available = decompress_buffer_.size() - decompress_offset_;
+    auto to_copy = (std::min)(len, available);
+    std::memcpy(buf, decompress_buffer_.data() + decompress_offset_, to_copy);
+    decompress_offset_ += to_copy;
+    return static_cast<ssize_t>(to_copy);
+  }
+
+  decompress_buffer_.clear();
+  decompress_offset_ = 0;
+
+  constexpr size_t kDecompressionBufferSize = 8192;
+  char compressed_buf[kDecompressionBufferSize];
+
+  while (true) {
+    auto n = detail::read_body_content(stream_, body_reader_, compressed_buf,
+                                       sizeof(compressed_buf));
+
+    if (n <= 0) { return n; }
+
+    bool decompress_ok =
+        decompressor_->decompress(compressed_buf, static_cast<size_t>(n),
+                                  [this](const char *data, size_t data_len) {
+                                    decompress_buffer_.append(data, data_len);
+                                    return true;
+                                  });
+
+    if (!decompress_ok) {
+      body_reader_.last_error = Error::Read;
+      return -1;
+    }
+
+    if (!decompress_buffer_.empty()) { break; }
+  }
+
+  auto to_copy = (std::min)(len, decompress_buffer_.size());
+  std::memcpy(buf, decompress_buffer_.data(), to_copy);
+  decompress_offset_ = to_copy;
+  return static_cast<ssize_t>(to_copy);
+}
+
+void ClientImpl::StreamHandle::parse_trailers_if_needed() {
+  if (!response || !stream_ || !body_reader_.chunked || trailers_parsed_) {
+    return;
+  }
+
+  trailers_parsed_ = true;
+
+  const auto bufsiz = 128;
+  char line_buf[bufsiz];
+  detail::stream_line_reader line_reader(*stream_, line_buf, bufsiz);
+
+  if (!line_reader.getline()) { return; }
+
+  if (!detail::parse_trailers(line_reader, response->trailers,
+                              response->headers)) {
+    return;
+  }
+}
+
+// Inline method implementations for `ChunkedDecoder`.
+namespace detail {
+
+ChunkedDecoder::ChunkedDecoder(Stream &s) : strm(s) {}
+
+ssize_t ChunkedDecoder::read_payload(char *buf, size_t len,
+                                            size_t &out_chunk_offset,
+                                            size_t &out_chunk_total) {
+  if (finished) { return 0; }
+
+  if (chunk_remaining == 0) {
+    stream_line_reader lr(strm, line_buf, sizeof(line_buf));
+    if (!lr.getline()) { return -1; }
+
+    char *endptr = nullptr;
+    unsigned long chunk_len = std::strtoul(lr.ptr(), &endptr, 16);
+    if (endptr == lr.ptr()) { return -1; }
+    if (chunk_len == ULONG_MAX) { return -1; }
+
+    if (chunk_len == 0) {
+      chunk_remaining = 0;
+      finished = true;
+      out_chunk_offset = 0;
+      out_chunk_total = 0;
+      return 0;
+    }
+
+    chunk_remaining = static_cast<size_t>(chunk_len);
+    last_chunk_total = chunk_remaining;
+    last_chunk_offset = 0;
+  }
+
+  auto to_read = (std::min)(chunk_remaining, len);
+  auto n = strm.read(buf, to_read);
+  if (n <= 0) { return -1; }
+
+  auto offset_before = last_chunk_offset;
+  last_chunk_offset += static_cast<size_t>(n);
+  chunk_remaining -= static_cast<size_t>(n);
+
+  out_chunk_offset = offset_before;
+  out_chunk_total = last_chunk_total;
+
+  if (chunk_remaining == 0) {
+    stream_line_reader lr(strm, line_buf, sizeof(line_buf));
+    if (!lr.getline()) { return -1; }
+    if (std::strcmp(lr.ptr(), "\r\n") != 0) { return -1; }
+  }
+
+  return n;
+}
+
+bool ChunkedDecoder::parse_trailers_into(Headers &dest,
+                                                const Headers &src_headers) {
+  stream_line_reader lr(strm, line_buf, sizeof(line_buf));
+  if (!lr.getline()) { return false; }
+  return parse_trailers(lr, dest, src_headers);
+}
+
+} // namespace detail
+
+void
+ClientImpl::transfer_socket_ownership_to_handle(StreamHandle &handle) {
+  handle.connection_->sock = socket_.sock;
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+  handle.connection_->ssl = socket_.ssl;
+  socket_.ssl = nullptr;
+#endif
+  socket_.sock = INVALID_SOCKET;
+}
+
 bool ClientImpl::handle_request(Stream &strm, Request &req,
                                        Response &res, bool close_connection,
                                        Error &error) {
@@ -6227,9 +7184,11 @@ bool ClientImpl::handle_request(Stream &strm, Request &req,
 
   if (!is_ssl() && !proxy_host_.empty() && proxy_port_ != -1) {
     auto req2 = req;
-    req2.path = "http://" + host_and_port_ + req.path;
+    req2.path = "http://" +
+                detail::make_host_and_port_string(host_, port_, false) +
+                req.path;
     ret = process_request(strm, req2, res, close_connection, error);
-    req = req2;
+    req = std::move(req2);
     req.path = req_save.path;
   } else {
     ret = process_request(strm, req, res, close_connection, error);
@@ -6253,7 +7212,7 @@ bool ClientImpl::handle_request(Stream &strm, Request &req,
   }
 
   if (300 < res.status && res.status < 400 && follow_location_) {
-    req = req_save;
+    req = std::move(req_save);
     ret = redirect(req, res, error);
   }
 
@@ -6281,7 +7240,7 @@ bool ClientImpl::handle_request(Stream &strm, Request &req,
         Response new_res;
 
         ret = send(new_req, new_res, error);
-        if (ret) { res = new_res; }
+        if (ret) { res = std::move(new_res); }
       }
     }
   }
@@ -6514,42 +7473,11 @@ bool ClientImpl::write_request(Stream &strm, Request &req,
     }
   }
 
-  if (!req.has_header("Host")) {
-    // For Unix socket connections, use "localhost" as Host header (similar to
-    // curl behavior)
-    if (address_family_ == AF_UNIX) {
-      req.set_header("Host", "localhost");
-    } else {
-      req.set_header("Host", host_and_port_);
-    }
+  std::string ct_for_defaults;
+  if (!req.has_header("Content-Type") && !req.body.empty()) {
+    ct_for_defaults = "text/plain";
   }
-
-  if (!req.has_header("Accept")) { req.set_header("Accept", "*/*"); }
-
-  if (!req.content_receiver) {
-    if (!req.has_header("Accept-Encoding")) {
-      std::string accept_encoding;
-#ifdef CPPHTTPLIB_BROTLI_SUPPORT
-      accept_encoding = "br";
-#endif
-#ifdef CPPHTTPLIB_ZLIB_SUPPORT
-      if (!accept_encoding.empty()) { accept_encoding += ", "; }
-      accept_encoding += "gzip, deflate";
-#endif
-#ifdef CPPHTTPLIB_ZSTD_SUPPORT
-      if (!accept_encoding.empty()) { accept_encoding += ", "; }
-      accept_encoding += "zstd";
-#endif
-      req.set_header("Accept-Encoding", accept_encoding);
-    }
-
-#ifndef CPPHTTPLIB_NO_DEFAULT_USER_AGENT
-    if (!req.has_header("User-Agent")) {
-      auto agent = std::string("cpp-httplib/") + CPPHTTPLIB_VERSION;
-      req.set_header("User-Agent", agent);
-    }
-#endif
-  };
+  prepare_default_headers(req, false, ct_for_defaults);
 
   if (req.body.empty()) {
     if (req.content_provider_) {
@@ -6564,15 +7492,6 @@ bool ClientImpl::write_request(Stream &strm, Request &req,
           req.method == "PATCH") {
         req.set_header("Content-Length", "0");
       }
-    }
-  } else {
-    if (!req.has_header("Content-Type")) {
-      req.set_header("Content-Type", "text/plain");
-    }
-
-    if (!req.has_header("Content-Length")) {
-      auto length = std::to_string(req.body.size());
-      req.set_header("Content-Length", length);
     }
   }
 
@@ -6620,18 +7539,41 @@ bool ClientImpl::write_request(Stream &strm, Request &req,
       query_part = "";
     }
 
-    // Encode path and query
+    // Encode path part. If the original `req.path` already contained a
+    // query component, preserve its raw query string (including parameter
+    // order) instead of reparsing and reassembling it which may reorder
+    // parameters due to container ordering (e.g. `Params` uses
+    // `std::multimap`). When there is no query in `req.path`, fall back to
+    // building a query from `req.params` so existing callers that pass
+    // `Params` continue to work.
     auto path_with_query =
         path_encode_ ? detail::encode_path(path_part) : path_part;
 
-    detail::parse_query_text(query_part, req.params);
-    if (!req.params.empty()) {
-      path_with_query = append_query_params(path_with_query, req.params);
+    if (!query_part.empty()) {
+      // Normalize the query string (decode then re-encode) while preserving
+      // the original parameter order.
+      auto normalized = detail::normalize_query_string(query_part);
+      if (!normalized.empty()) { path_with_query += '?' + normalized; }
+
+      // Still populate req.params for handlers/users who read them.
+      detail::parse_query_text(query_part, req.params);
+    } else {
+      // No query in path; parse any query_part (empty) and append params
+      // from `req.params` when present (preserves prior behavior for
+      // callers who provide Params separately).
+      detail::parse_query_text(query_part, req.params);
+      if (!req.params.empty()) {
+        path_with_query = append_query_params(path_with_query, req.params);
+      }
     }
 
     // Write request line and headers
     detail::write_request_line(bstrm, req.method, path_with_query);
-    header_writer_(bstrm, req.headers);
+    if (!detail::check_and_write_headers(bstrm, req.headers, header_writer_,
+                                         error)) {
+      output_error_log(error, &req);
+      return false;
+    }
 
     // Flush buffer
     auto &data = bstrm.get_buffer();
@@ -8096,7 +9038,9 @@ bool SSLSocketStream::wait_writable() const {
 
 ssize_t SSLSocketStream::read(char *ptr, size_t size) {
   if (SSL_pending(ssl_) > 0) {
-    return SSL_read(ssl_, ptr, static_cast<int>(size));
+    auto ret = SSL_read(ssl_, ptr, static_cast<int>(size));
+    if (ret == 0) { error_ = Error::ConnectionClosed; }
+    return ret;
   } else if (wait_readable()) {
     auto ret = SSL_read(ssl_, ptr, static_cast<int>(size));
     if (ret < 0) {
@@ -8121,9 +9065,12 @@ ssize_t SSLSocketStream::read(char *ptr, size_t size) {
         }
       }
       assert(ret < 0);
+    } else if (ret == 0) {
+      error_ = Error::ConnectionClosed;
     }
     return ret;
   } else {
+    error_ = Error::Timeout;
     return -1;
   }
 }
@@ -8499,7 +9446,8 @@ bool SSLClient::connect_with_proxy(
           start_time, [&](Stream &strm) {
             Request req2;
             req2.method = "CONNECT";
-            req2.path = host_and_port_;
+            req2.path =
+                detail::make_host_and_port_string_always_port(host_, port_);
             if (max_timeout_msec_ > 0) {
               req2.start_time_ = std::chrono::steady_clock::now();
             }
@@ -8526,7 +9474,7 @@ bool SSLClient::connect_with_proxy(
         close_socket(socket);
 
         // Create a new socket for the authenticated CONNECT request
-        if (!create_and_connect_socket(socket, error)) {
+        if (!ensure_socket_connection(socket, error)) {
           success = false;
           output_error_log(error, nullptr);
           return false;
@@ -8539,7 +9487,8 @@ bool SSLClient::connect_with_proxy(
                 start_time, [&](Stream &strm) {
                   Request req3;
                   req3.method = "CONNECT";
-                  req3.path = host_and_port_;
+                  req3.path = detail::make_host_and_port_string_always_port(
+                      host_, port_);
                   req3.headers.insert(detail::make_digest_authentication_header(
                       req3, auth, 1, detail::random_string(10),
                       proxy_digest_auth_username_, proxy_digest_auth_password_,
@@ -9422,6 +10371,13 @@ Result Client::Options(const std::string &path) {
 }
 Result Client::Options(const std::string &path, const Headers &headers) {
   return cli_->Options(path, headers);
+}
+
+ClientImpl::StreamHandle
+Client::open_stream(const std::string &method, const std::string &path,
+                    const Params &params, const Headers &headers,
+                    const std::string &body, const std::string &content_type) {
+  return cli_->open_stream(method, path, params, headers, body, content_type);
 }
 
 bool Client::send(Request &req, Response &res, Error &error) {

@@ -123,6 +123,40 @@ class TensorNameMap:
         MODEL_TENSOR.CONV1D: (
             "backbone.embed", # roberta
         ),
+
+        MODEL_TENSOR.V_MM_EMBEDDING: (
+            "model.embed_vision.embedding", # gemma3n
+        ),
+        MODEL_TENSOR.V_MM_HARD_EMB_NORM: (
+            "model.embed_vision.hard_embedding_norm", # gemma3n
+        ),
+        MODEL_TENSOR.V_MM_INP_PROJ: (
+            "model.embed_vision.embedding_projection", # gemma3n
+        ),
+        MODEL_TENSOR.V_MM_SOFT_EMB_NORM: (
+            "model.embed_vision.soft_embedding_norm", # gemma3n
+        ),
+        MODEL_TENSOR.V_ENC_CONV_STEM: (
+            "model.vision_tower.timm_model.conv_stem.conv", # gemma3n
+        ),
+        MODEL_TENSOR.V_ENC_CONV_STEM_NORM: (
+            "model.vision_tower.timm_model.conv_stem.bn", # gemma3n
+        ),
+        MODEL_TENSOR.V_ENC_MSFA_EXP: (
+            "model.vision_tower.timm_model.msfa.ffn.pw_exp.conv", # gemma3n
+        ),
+        MODEL_TENSOR.V_ENC_MSFA_EXP_NORM: (
+            "model.vision_tower.timm_model.msfa.ffn.pw_exp.bn", # gemma3n
+        ),
+        MODEL_TENSOR.V_ENC_MSFA_PROJ: (
+            "model.vision_tower.timm_model.msfa.ffn.pw_proj.conv", # gemma3n
+        ),
+        MODEL_TENSOR.V_ENC_MSFA_PROJ_NORM: (
+            "model.vision_tower.timm_model.msfa.ffn.pw_proj.bn", # gemma3n
+        ),
+        MODEL_TENSOR.V_ENC_MSFA_NORM: (
+            "model.vision_tower.timm_model.msfa.norm", # gemma3n
+        ),
     }
 
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
@@ -1575,6 +1609,11 @@ class TensorNameMap:
         MODEL_TENSOR.A_ENC_CONV1D: (
             "audio_tower.conv{bid}", # ultravox
             "conformer.pre_encode.conv.{bid}", # lfm2
+            "model.audio_tower.subsample_conv_projection.conv_{bid}.conv", # gemma3n
+        ),
+
+        MODEL_TENSOR.A_ENC_CONV1D_NORM: (
+            "model.audio_tower.subsample_conv_projection.conv_{bid}.norm", # gemma3n
         ),
 
         MODEL_TENSOR.A_PRE_NORM: (),
@@ -1587,40 +1626,64 @@ class TensorNameMap:
         MODEL_TENSOR.A_ENC_ATTN_Q: (
             "audio_tower.layers.{bid}.self_attn.q_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_q", # lfm2
+            "conformer.layers.{bid}.attention.attn.q_proj", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K: (
             "audio_tower.layers.{bid}.self_attn.k_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_k", # lfm2
+            "conformer.layers.{bid}.attention.attn.k_proj", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_V: (
             "audio_tower.layers.{bid}.self_attn.v_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_v", # lfm2
+            "conformer.layers.{bid}.attention.attn.v_proj", # gemma3n
+        ),
+
+        MODEL_TENSOR.A_ENC_PER_DIM_SCALE: (
+            "conformer.layers.{bid}.attention.attn.per_dim_scale", # gemma3n
+        ),
+
+        MODEL_TENSOR.A_ENC_LAYER_PRE_NORM: (
+            "conformer.layers.{bid}.norm", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_INPUT_NORM: (
             "audio_tower.layers.{bid}.self_attn_layer_norm", # ultravox
             "conformer.layers.{bid}.norm_self_att", # lfm2
+            "conformer.layers.{bid}.attention.pre_attn_norm", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT: (
             "audio_tower.layers.{bid}.self_attn.out_proj", # ultravox
             "conformer.layers.{bid}.self_attn.linear_out", # lfm2
+            "conformer.layers.{bid}.attention.post", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT_NORM: (
             "audio_tower.layers.{bid}.final_layer_norm", # ultravox
             "conformer.layers.{bid}.norm_out", # lfm2
+            "conformer.layers.{bid}.attention.post_norm", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_FFN_NORM: (
             "conformer.layers.{bid}.norm_feed_forward1", # lfm2
+            "conformer.layers.{bid}.ffw_layer_start.pre_layer_norm", # gemma3n
+        ),
+
+        MODEL_TENSOR.A_ENC_FFN_POST_NORM: (
+            "conformer.layers.{bid}.ffw_layer_start.post_layer_norm", # gemma3n
+        ),
+
+        MODEL_TENSOR.A_ENC_FFN_SCALE: (
+            "conformer.layers.{bid}.ffw_layer_start.post_layer_scale", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_FFN_UP: (
             "audio_tower.layers.{bid}.fc1", # ultravox
             "conformer.layers.{bid}.feed_forward1.linear1", # lfm2
+            "conformer.layers.{bid}.ffw_layer_start.ffw_layer_1", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_FFN_GATE: (),
@@ -1628,22 +1691,35 @@ class TensorNameMap:
         MODEL_TENSOR.A_ENC_FFN_DOWN: (
             "audio_tower.layers.{bid}.fc2", # ultravox
             "conformer.layers.{bid}.feed_forward1.linear2", # lfm2
+            "conformer.layers.{bid}.ffw_layer_start.ffw_layer_2", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_FFN_UP_1: (
             "conformer.layers.{bid}.feed_forward2.linear1", # lfm2
+            "conformer.layers.{bid}.ffw_layer_end.ffw_layer_1", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_FFN_DOWN_1: (
             "conformer.layers.{bid}.feed_forward2.linear2", # lfm2
+            "conformer.layers.{bid}.ffw_layer_end.ffw_layer_2", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_FFN_NORM_1: (
             "conformer.layers.{bid}.norm_feed_forward2", # lfm2
+            "conformer.layers.{bid}.ffw_layer_end.pre_layer_norm", # gemma3n
+        ),
+
+        MODEL_TENSOR.A_ENC_FFN_POST_NORM_1: (
+            "conformer.layers.{bid}.ffw_layer_end.post_layer_norm", # gemma3n
+        ),
+
+        MODEL_TENSOR.A_ENC_FFN_SCALE_1: (
+            "conformer.layers.{bid}.ffw_layer_end.post_layer_scale", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_LINEAR_POS: (
             "conformer.layers.{bid}.self_attn.linear_pos", # lfm2
+            "conformer.layers.{bid}.attention.attn.relative_position_embedding.pos_proj", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_POS_BIAS_U: (
@@ -1656,6 +1732,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_OUT: (
             "conformer.pre_encode.out", # lfm2
+            "model.audio_tower.subsample_conv_projection.input_proj_linear", # gemma3n
         ),
 
         # note: some tensors below has "audio." pseudo-prefix, to prevent conflicts with vision tensors
@@ -1681,22 +1758,40 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_ENC_CONV_DW: (
             "conformer.layers.{bid}.conv.depthwise_conv", # lfm2
+            "conformer.layers.{bid}.lconv1d.depthwise_conv1d", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_CONV_NORM: (
             "conformer.layers.{bid}.conv.batch_norm", # lfm2
+            "conformer.layers.{bid}.lconv1d.pre_layer_norm", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_CONV_PW1: (
             "conformer.layers.{bid}.conv.pointwise_conv1", # lfm2
+            "conformer.layers.{bid}.lconv1d.linear_start", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_CONV_PW2: (
             "conformer.layers.{bid}.conv.pointwise_conv2", # lfm2
+            "conformer.layers.{bid}.lconv1d.linear_end", # gemma3n
         ),
 
         MODEL_TENSOR.A_ENC_NORM_CONV: (
             "conformer.layers.{bid}.norm_conv", # lfm2
+            "conformer.layers.{bid}.lconv1d.conv_norm", # gemma3n
+        ),
+
+        MODEL_TENSOR.A_MM_EMBEDDING: (
+            "model.embed_audio.embedding", # gemma3n
+        ),
+        MODEL_TENSOR.A_MM_HARD_EMB_NORM: (
+            "model.embed_audio.hard_embedding_norm", # gemma3n
+        ),
+        MODEL_TENSOR.A_MM_INP_PROJ: (
+            "model.embed_audio.embedding_projection", # gemma3n
+        ),
+        MODEL_TENSOR.A_MM_SOFT_EMB_NORM: (
+            "model.embed_audio.soft_embedding_norm", # gemma3n
         ),
 
         # NextN/MTP tensors for GLM4_MOE
