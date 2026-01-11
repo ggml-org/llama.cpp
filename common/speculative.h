@@ -6,10 +6,13 @@
 struct common_speculative;
 
 struct common_speculative_params {
-    int n_draft = 16;  // max drafted tokens
-    int n_reuse = 256;
+    int n_draft         = 16;  // max drafted tokens
+    int n_reuse         = 256;
 
-    float p_min = 0.75f; // min probability required to accept a token in the draft
+    float p_min         = 0.75f; // min probability required to accept a token in the draft
+
+    int self_mode       = 0; // 0: off, 1: self speculative lookup
+    int self_ngram_size = 12; // length of pattern to search for in self mode
 };
 
 struct common_speculative * common_speculative_init(
@@ -33,3 +36,19 @@ llama_tokens common_speculative_gen_draft(
         struct common_speculative_params   params,
                       const llama_tokens & prompt,
                              llama_token   id_last);
+
+/**
+ * Perform speculative generation using the model's own token history.
+ * Searches for a matching pattern in the token history and returns draft tokens.
+ *
+ * @param tokens    Token history to search in
+ * @param sampled   Last sampled token
+ * @param n_draft_min Minimum number of draft tokens required
+ * @param n_draft_max Maximum number of draft tokens to generate
+ * @return Vector of draft tokens, empty if no matching pattern is found
+ */
+llama_tokens common_speculative_gen_self_draft(
+                    const llama_tokens & tokens,
+                    llama_token          sampled,
+                    size_t         n_draft_min,
+                    size_t         n_draft_max);
