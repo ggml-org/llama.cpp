@@ -1,12 +1,48 @@
 # Security Policy
 
+ - [**Reporting a vulnerability**](#reporting-a-vulnerability)
+ - [**Requirements**](#requirements)
+ - [**Covered Topics**](#covered-topics)
  - [**Using llama.cpp securely**](#using-llamacpp-securely)
    - [Untrusted models](#untrusted-models)
    - [Untrusted inputs](#untrusted-inputs)
    - [Data privacy](#data-privacy)
    - [Untrusted environments or networks](#untrusted-environments-or-networks)
    - [Multi-Tenant environments](#multi-tenant-environments)
- - [**Reporting a vulnerability**](#reporting-a-vulnerability)
+
+## Reporting a vulnerability
+
+If you have discovered a security vulnerability in this project that falls inside the [covered topics](#covered-topics), please report it privately. **Do not disclose it as a public issue.** This gives us time to work with you to fix the issue before public exposure, reducing the chance that the exploit will be used before a patch is released.
+
+Please disclose it as a private [security advisory](https://github.com/ggml-org/llama.cpp/security/advisories/new).
+
+A team of volunteers on a reasonable-effort basis maintains this project. As such, please give us at least 90 days to work on a fix before public exposure.
+
+> [!IMPORTANT]
+> For collaborators: if you are interested in helping out with reviewing privting security disclosures, please see: https://github.com/ggml-org/llama.cpp/discussions/18080
+
+## Requirements
+
+Before submitting your report, ensure you meet the following requirements:
+
+- You have read this policy and fully understand it.
+- AI is only permitted in an assistive capacity as stated in [AGENTS.md](AGENTS.md). We do not accept reports that are written exclusively by AI.
+- Your report must include a working Proof-of-Concept in the form of a script and/or attached files.
+
+Maintainers reserve the right to close the report if these requirements are not fulfilled.
+
+## Covered Topics
+
+Only vulnerabilities that fall within these parts of the project are considered valid. For problems falling outside of this list, please report them as issues.
+
+- `src/**/*`
+- `ggml/**/*`
+- `gguf-py/**/*`
+- `tools/server/*` (note: Web UI is not covered)
+
+Note that none of the topics under [Using llama.cpp securely](#using-llamacpp-securely) are considered vulnerabilities in LLaMA C++.
+
+For vulnerabilities that fall within the `vendor` directory, please report them directly to the third-party project.
 
 ## Using llama.cpp securely
 
@@ -55,19 +91,3 @@ If you intend to run multiple models in parallel with shared memory, it is your 
 3. Model Sharing: In a multitenant model sharing design, tenants and users must understand the security risks of running code provided by others. Since there are no reliable methods to detect malicious models, sandboxing the model execution is the recommended approach to mitigate the risk.
 
 4. Hardware Attacks: GPUs or TPUs can also be attacked. [Researches](https://scholar.google.com/scholar?q=gpu+side+channel) has shown that side channel attacks on GPUs are possible, which can make data leak from other models or processes running on the same system at the same time.
-
-## Reporting a vulnerability
-
-Beware that none of the topics under [Using llama.cpp securely](#using-llamacpp-securely) are considered vulnerabilities of LLaMA C++.
-
-<!-- normal version -->
-However, If you have discovered a security vulnerability in this project, please report it privately. **Do not disclose it as a public issue.** This gives us time to work with you to fix the issue before public exposure, reducing the chance that the exploit will be used before a patch is released.
-
-Please disclose it as a private [security advisory](https://github.com/ggml-org/llama.cpp/security/advisories/new).
-
-Please note that using AI to identify vulnerabilities and generate reports is permitted. However, you must (1) explicitly disclose how AI was used and (2) conduct a thorough manual review before submitting the report.
-
-A team of volunteers on a reasonable-effort basis maintains this project. As such, please give us at least 90 days to work on a fix before public exposure.
-
-> [!IMPORTANT]
-> For collaborators: if you are interested in helping out with reviewing privting security disclosures, please see: https://github.com/ggml-org/llama.cpp/discussions/18080
