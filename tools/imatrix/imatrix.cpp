@@ -56,7 +56,12 @@ struct tensor_statistics {
     float entropy       = 0.0f;
     float zd_score      = 0.0f;
     float cossim        = 0.0f;
+    float pearson       = 0.0f;
     float l2_dist       = 0.0f;
+    double dot_prod     = 0.0;
+    double norm1_sq     = 0.0;
+    double norm2_sq     = 0.0;
+    double l2_dist_sq   = 0.0;
 };
 
 class IMatrixCollector {
