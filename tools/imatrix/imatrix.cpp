@@ -372,86 +372,51 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
 static void compute_layer_statistics(const std::vector<tensor_statistics> & tstats,
                                               std::map<int, float> & layer_cossim,
                                               std::map<int, float> & layer_l2_dist,
-                                              const std::unordered_map<std::string, Stats> & stats_map) {
+                                              std::map<int, float> & layer_pearson) {
     struct layer_aggregation {
         double sum_dot_prod = 0.0;
         double sum_norm1_sq = 0.0;
         double sum_norm2_sq = 0.0;
         double sum_l2_dist_sq = 0.0;
+        double sum_pearson = 0.0;
         int n_tensors = 0;
     };
 
-    static const std::regex pattern(R"(blk\.(\d+)\.)");
     std::map<int, layer_aggregation> l_agr;
+
     for (const auto & ts : tstats) {
-        std::smatch match;
-        if (!std::regex_search(ts.tensor, match, pattern)) { continue; }
-        const int blk = std::stoi(match[1]);
+        std::string layer_str;
+        std::string dummy;
+        process_tensor_name(ts.tensor, layer_str, dummy);
+        int blk = -1;
+        try { blk = std::stoi(layer_str); } catch(...) { continue; }
         if (blk <= 0) { continue; }
 
-        std::string prev_lyr(ts.tensor);
-        prev_lyr.replace(match.position(1), match.length(1), std::to_string(blk - 1));
-        auto it_curr = stats_map.find(ts.tensor);
-        auto it_prev = stats_map.find(prev_lyr);
-        if (it_curr == stats_map.end() || it_prev == stats_map.end()) { continue; }
+        if (ts.norm1_sq == 0.0 && ts.norm2_sq == 0.0 && ts.l2_dist_sq == 0.0) { continue; }
 
-        const auto curr_avg = compute_tensor_averages(it_curr->second);
-        const auto prev_avg = compute_tensor_averages(it_prev->second);
-        if (curr_avg.empty() || prev_avg.empty()) { continue; }
-
-        if (curr_avg.size() != prev_avg.size()) {
-            LOG_WRN("%s: size mismatch between '%s' and its previous-layer tensor '%s' (%zu vs %zu) - skipping this tensor pair in layer statistics\n",
-                __func__, ts.tensor.c_str(), prev_lyr.c_str(), curr_avg.size(), prev_avg.size());
-            continue;
-        }
-
-        // Compute statistics for each tensor pair individually
-        const size_t n = curr_avg.size();
-        GGML_ASSERT(n > 0);
-        double dot_prod = 0.0;
-        double norm1_sq = 0.0;
-        double norm2_sq = 0.0;
-        double l2_dist_sq = 0.0;
-        for (size_t i = 0; i < n; ++i) {
-            const double a = curr_avg[i];
-            const double b = prev_avg[i];
-            dot_prod += a * b;
-            norm1_sq += a * a;
-            norm2_sq += b * b;
-            const double d = a - b;
-            l2_dist_sq += d * d;
-        }
-
-        // Accumulate statistics for the layer
         auto & entry = l_agr[blk];
-        entry.sum_dot_prod += dot_prod;
-        entry.sum_norm1_sq += norm1_sq;
-        entry.sum_norm2_sq += norm2_sq;
-        entry.sum_l2_dist_sq += l2_dist_sq;
+        entry.sum_dot_prod += ts.dot_prod;
+        entry.sum_norm1_sq += ts.norm1_sq;
+        entry.sum_norm2_sq += ts.norm2_sq;
+        entry.sum_l2_dist_sq += ts.l2_dist_sq;
+        entry.sum_pearson += ts.pearson;
         entry.n_tensors++;
     }
 
-    // Compute aggregated layer statistics
-    for (const auto & kv : l_agr) {
-        const int layer = kv.first;
-        const auto & agg = kv.second;
+    for (const auto & [layer, agg] : l_agr) {
         if (agg.n_tensors == 0) { continue; }
 
-        // Compute aggregated Cosine Similarity
         float cossim = 0.0f;
         if (agg.sum_norm1_sq > 0.0 && agg.sum_norm2_sq > 0.0) {
             cossim = (float)(agg.sum_dot_prod / (std::sqrt(agg.sum_norm1_sq) * std::sqrt(agg.sum_norm2_sq)));
-            cossim = std::min(cossim, 1.0f);
-            cossim = std::max(cossim, -1.0f);
+            cossim = std::clamp(cossim, -1.0f, 1.0f);
         } else if (agg.sum_norm1_sq == 0.0 && agg.sum_norm2_sq == 0.0) {
-            cossim = 1.0f; // both vectors are zero then CosSim is 1
-        } else {
-            cossim = 0.0f; // One zero and the other non-zero then CosSim is 0
+            cossim = 1.0f;
         }
 
-        // Compute aggregated L2 Distance (Euclidean Distance)
         layer_cossim[layer] = cossim;
         layer_l2_dist[layer] = (float)std::sqrt(agg.sum_l2_dist_sq);
+        layer_pearson[layer] = (float)(agg.sum_pearson / agg.n_tensors);
     }
 }
 
