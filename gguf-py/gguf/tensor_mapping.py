@@ -554,6 +554,10 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.chunk_experts.gate_proj",           # grovemoe
         ),
 
+        MODEL_TENSOR.FFN_GATE_UP_EXP: (
+            "model.layers.{bid}.mlp.experts.gate_up_proj",              # gpt-oss
+        ),
+
         # Feed-forward down
         MODEL_TENSOR.FFN_DOWN: (
             "gpt_neox.layers.{bid}.mlp.dense_4h_to_h",                # gptneox
