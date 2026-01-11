@@ -287,9 +287,10 @@ void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGML_RESTR
 #endif
 }
 
-void ggml_quantize_mat_q8_K_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+void ggml_quantize_mat_q8_K_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k, int64_t nc) {
     assert(QK_K == 256);
     assert(k % QK_K == 0);
+    UNUSED(nc);
     const int nb = k / QK_K;
 
     block_q8_Kx4 * GGML_RESTRICT y = (block_q8_Kx4 *) vy;
@@ -507,7 +508,7 @@ void ggml_quantize_mat_q8_K_4x8(const float * GGML_RESTRICT x, void * GGML_RESTR
 #else
     UNUSED(nb);
     UNUSED(y);
-    ggml_quantize_mat_q8_K_4x8_generic(x, vy, k);
+    ggml_quantize_mat_q8_K_4x8_generic(x, vy, k, nc);
 #endif
 }
 
