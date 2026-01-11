@@ -33,13 +33,14 @@ ggml_cgraph * clip_graph_vaetki::build() {
 
     auto add_pos = [&](ggml_tensor * cur, const clip_layer &) -> ggml_tensor * {
         // split CLS and patch tokens
+        // use cur->nb[2] to support both fused QKV (nb[2]=3*n_embd) and separate Q/K/V (nb[2]=n_embd)
         ggml_tensor * cur_cls = ggml_view_3d(ctx0, cur, d_head, n_head, 1,
             ggml_row_size(cur->type, d_head),
-            ggml_row_size(cur->type, d_head * n_head), 0);
+            cur->nb[2], 0);
         ggml_tensor * cur_patch = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos_patches,
             ggml_row_size(cur->type, d_head),
-            ggml_row_size(cur->type, d_head * n_head),
-            ggml_row_size(cur->type, d_head * n_head));
+            cur->nb[2],
+            cur->nb[2]);
 
         // apply RoPE to CLS token using class_pos_emb
         if (cls_cos && cls_sin) {

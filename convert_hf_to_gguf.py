@@ -7969,20 +7969,6 @@ class VaetkiVisionModel(MmprojModel):
         if name.startswith("model.visual."):
             name = name.replace("model.visual.", "visual.")
 
-        # Split fused QKV tensors (build_vit fused QKV doesn't work for VAETKI)
-        if ".qkv." in name:
-            if data_torch.ndim == 2:
-                c3, _ = data_torch.shape
-            else:
-                c3 = data_torch.shape[0]
-            assert c3 % 3 == 0
-            c = c3 // 3
-            return [
-                (self.map_tensor_name(name.replace("qkv", "q")), data_torch[:c]),
-                (self.map_tensor_name(name.replace("qkv", "k")), data_torch[c:c * 2]),
-                (self.map_tensor_name(name.replace("qkv", "v")), data_torch[c * 2:]),
-            ]
-
         return [(self.map_tensor_name(name), data_torch)]
 
 
