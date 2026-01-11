@@ -33,6 +33,7 @@ extern "C" {
 #define HASH_TYPE_SHA256_STR "sha256"
 #define HASH_TYPE_SHA1_STR   "sha1"
 #define HASH_TYPE_XXH64_STR  "xxh64"
+#define HASH_TYPE_XXH3_STR   "xxh3"
 #define HASH_TYPE_UUID_STR   "uuid"
 
 
@@ -55,10 +56,11 @@ typedef enum {
 
 struct hash_params {
     std::string input;
-    bool xxh64 = false;
-    bool sha1 = false;
+    bool xxh64  = false;
+    bool xxh3   = false;
+    bool sha1   = false;
     bool sha256 = false;
-    bool uuid = false;
+    bool uuid   = false;
 
     bool no_layer = false;
 
@@ -68,6 +70,7 @@ struct hash_params {
 
 struct manifest_check_params {
     bool xxh64 = false;
+    bool xxh3  = false;
     bool sha1 = false;
     bool sha256 = false;
     bool uuid = false;
@@ -104,6 +107,7 @@ static void hash_print_usage(const char * executable) {
     printf("options:\n");
     printf("  -h, --help              show this help message and exit\n");
     printf("      --xxh64             use xxh64 hash\n");
+    printf("      --xxh3              use xxh3  hash\n");
     printf("      --sha1              use sha1 hash\n");
     printf("      --sha256            use sha256 hash\n");
     printf("      --all               use all hash\n");
@@ -136,6 +140,11 @@ static void hash_params_parse_ex(int argc, const char ** argv, hash_params & par
             params.xxh64 = true;
         }
 
+        if (arg == "--xxh3") {
+            arg_found = true;
+            params.xxh3 = true;
+        }
+
         if (arg == "--sha1") {
             arg_found = true;
             params.sha1 = true;
@@ -156,6 +165,7 @@ static void hash_params_parse_ex(int argc, const char ** argv, hash_params & par
             params.sha256 = true;
             params.sha1 = true;
             params.xxh64 = true;
+            params.xxh3 = true;
         }
 
         if (arg == "--no-layer") {
@@ -224,6 +234,8 @@ static bool manifest_type(const std::string & manifest_file, manifest_check_para
                 manifest_check.sha1 = true;
             } else if (file_hash_type == HASH_TYPE_XXH64_STR) {
                 manifest_check.xxh64 = true;
+            } else if (file_hash_type == HASH_TYPE_XXH3_STR) {
+                manifest_check.xxh3 = true;
             } else if (file_hash_type == HASH_TYPE_UUID_STR) {
                 manifest_check.uuid = true;
             }
@@ -306,6 +318,19 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
         }
     }
 
+    // xxh3 init
+    XXH3_state_t* xxh3_model_hash_state = NULL;
+    if (hash_params.xxh3) {
+        xxh3_model_hash_state = XXH3_createState();
+        if (xxh3_model_hash_state == NULL) {
+            abort();
+        }
+
+        if (XXH3_64bits_reset(xxh3_model_hash_state) == XXH_ERROR) {
+            abort();
+        }
+    }
+
     // sha1 init
     SHA1_CTX sha1_model_hash_ctx;
     if (hash_params.sha1) {
@@ -375,6 +400,44 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
             // Overall Model Hash
             if (XXH64_update(xxh64_model_hash_state, raw_data, n_bytes) == XXH_ERROR) abort();
         }
+
+        if (hash_params.xxh3) {
+
+            if (!hash_params.no_layer) {
+                // Per Layer Hash
+                XXH64_hash_t hash = XXH3_64bits(raw_data, n_bytes);
+
+                char hex_result[17];
+                for (int  offset = 0; offset < 8; offset++) {
+                    unsigned int shift_bits_by = (8 * (8 - offset - 1));
+                    snprintf( ( hex_result + (2*offset)), sizeof(hex_result) - (2*offset), "%02x", (unsigned char) (hash >> shift_bits_by)&0xff);
+                }
+
+                if (hash_params.manifest_is_usable) {
+                    hash_manifest_result_t verify_result = manifest_verify(hash_params.manifest_file, HASH_TYPE_XXH3_STR, hex_result, tensor_layer_name);
+
+                    switch (verify_result) {
+                        case HASH_MANIFEST_NOT_FOUND:
+                            break;
+                        case HASH_MANIFEST_MISMATCH:
+                            tensor_layer_in_manifest = true;
+                            tensor_layer_has_mismatch = true;
+                            break;
+                        case HASH_MANIFEST_OK:
+                            tensor_layer_in_manifest = true;
+                            break;
+                    }
+
+                    printf("%-8s  %-s  %s  -  %s\n", HASH_TYPE_XXH3_STR, hex_result, tensor_layer_name.c_str(), hash_manifest_result_to_str(verify_result));
+                } else {
+                    printf("%-8s  %-s  %s\n", HASH_TYPE_XXH3_STR, hex_result, tensor_layer_name.c_str());
+                }
+            }
+
+            // Overall Model Hash
+            if (XXH3_64bits_update(xxh3_model_hash_state, raw_data, n_bytes) == XXH_ERROR) abort();
+        }
+
 
         if (hash_params.sha1) {
 
@@ -482,6 +545,36 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
             printf("%-8s  %-s  %s  -  %s\n", HASH_TYPE_XXH64_STR, hex_result, fname.c_str(), hash_manifest_result_to_str(verify_result));
         } else {
             printf("%-8s  %-s  %s\n", HASH_TYPE_XXH64_STR, hex_result, fname.c_str());
+        }
+    }
+
+    if (hash_params.xxh3) {
+        XXH64_hash_t const hash = XXH3_64bits_digest(xxh3_model_hash_state);
+
+        char hex_result[17];
+        for (int  offset = 0; offset < 8; offset++) {
+            unsigned int shift_bits_by = (8 * (8 - offset - 1));
+            snprintf( ( hex_result + (2*offset)), sizeof(hex_result) - (2*offset), "%02x", (unsigned char) (hash >> shift_bits_by)&0xff);
+        }
+
+        if (hash_params.manifest_is_usable) {
+            hash_manifest_result_t verify_result = manifest_verify(hash_params.manifest_file, HASH_TYPE_XXH3_STR, hex_result, fname);
+
+            switch (verify_result) {
+                case HASH_MANIFEST_NOT_FOUND:
+                    break;
+                case HASH_MANIFEST_MISMATCH:
+                    model_in_manifest = true;
+                    model_has_mismatch = true;
+                    break;
+                case HASH_MANIFEST_OK:
+                    model_in_manifest = true;
+                    break;
+            }
+
+            printf("%-8s  %-s  %s  -  %s\n", HASH_TYPE_XXH3_STR, hex_result, fname.c_str(), hash_manifest_result_to_str(verify_result));
+        } else {
+            printf("%-8s  %-s  %s\n", HASH_TYPE_XXH3_STR, hex_result, fname.c_str());
         }
     }
 
@@ -636,7 +729,7 @@ int main(int argc, const char ** argv) {
             return HASH_EXIT_MANIFEST_FILE_ERROR;
         }
 
-        if (!manifest_check.sha256 && !manifest_check.sha1 && !manifest_check.xxh64 && !manifest_check.uuid) {
+        if (!manifest_check.sha256 && !manifest_check.sha1 && !manifest_check.xxh64 && !manifest_check.xxh3 && !manifest_check.uuid) {
             printf("ERROR manifest does not have any known hash format in %s", params.manifest_file.c_str());
             return HASH_EXIT_MANIFEST_UNKNOWN_HASH;
         }
@@ -655,6 +748,10 @@ int main(int argc, const char ** argv) {
             printf("  xxh64");
         }
 
+        if (manifest_check.xxh3) {
+            printf("  xxh3");
+        }
+
         if (manifest_check.uuid) {
             printf("  uuid");
         }
@@ -663,7 +760,7 @@ int main(int argc, const char ** argv) {
 
         // Autoselect the highest security hash if manifest is provided but
         // the user has not specifically defined the hash they care about
-        if (!params.xxh64 && !params.sha1 && !params.uuid && !params.sha256) {
+        if (!params.xxh64 && !params.xxh3 && !params.sha1 && !params.uuid && !params.sha256) {
             // User has not selected a specific value, pick most secure hash
             if (manifest_check.sha256) {
                 params.sha256 = true;
@@ -671,6 +768,8 @@ int main(int argc, const char ** argv) {
                 params.sha1 = true;
             } else if (manifest_check.xxh64) {
                 params.xxh64 = true;
+            } else if (manifest_check.xxh3) {
+                params.xxh3  = true;
             } else if (manifest_check.uuid) {
                 params.uuid = true;
             }
@@ -680,7 +779,7 @@ int main(int argc, const char ** argv) {
     }
 
     // By default if no swich argument provided, assume xxh64
-    if (!params.xxh64 && !params.sha1 && !params.uuid && !params.sha256) {
+    if (!params.xxh64 && !params.xxh3 && !params.sha1 && !params.uuid && !params.sha256) {
         params.xxh64 = true;
     }
 
