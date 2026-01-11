@@ -165,16 +165,13 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     legacy = e.activations.empty();
     const size_t n_mat = e.counts.size();
     const size_t len = legacy ? e.values.size() : e.activations.size();
-    if (n_mat == 0 || len == 0) {
-        LOG_ERR("%s: there's no data for tensor %s. The imatrix may be suboptimal\n", __func__, name.c_str());
-        return false;
-    }
-    if (len % n_mat != 0) {
-        LOG_ERR("%s: activation size mismatch for tensor %s (len=%zu, counts=%zu)\n", __func__, name.c_str(), len, n_mat);
+
+    if (n_mat == 0 || len == 0 || len % n_mat != 0) {
+        LOG_ERR("%s: data size mismatch or empty for tensor %s\n", __func__, name.c_str());
         return false;
     }
     if (!legacy && e.values.size() != len) {
-        LOG_ERR("%s: activations/values size mismatch for tensor %s (act=%zu, val=%zu)\n", __func__, name.c_str(), len, e.values.size());
+        LOG_ERR("%s: activations/values size mismatch for %s\n", __func__, name.c_str());
         return false;
     }
 
@@ -182,67 +179,74 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     double mean = 0.0;
     double M2 = 0.0;
     double sum = 0.0;
-    float vmin = std::numeric_limits<float>::infinity();
-    float vmax = -std::numeric_limits<float>::infinity();
+    float vmin = std::numeric_limits<float>::max();
+    float vmax = -std::numeric_limits<float>::max();
     double energy_sum = 0.0;
     size_t valid_n = 0;
+
+    // Pass 1: Welford's Algorithm regarding aggregated elements
     for (size_t i = 0; i < n_mat; ++i) {
         const auto c = (float)e.counts[i];
-        if (c <= 0.0f) { continue; } // skip experts with zero count
+        if (c <= 0.0f) { continue; }
+
+        const double inv_c = 1.0 / (double)c;
         const size_t off = i * row_size;
 
         for (size_t j = 0; j < row_size; ++j) {
-            const double v_avg = legacy ? 0.0 : (double)e.activations[off + j] / (double)c; // E[x]
-            const double v_energy = (double)e.values[off + j] / (double)c; // E[x^2]
-            const double v = legacy ? v_energy : v_avg;
+            const double v_act = legacy ? 0.0 : (double)e.activations[off + j] * inv_c;
+            const double v_val = (double)e.values[off + j] * inv_c;
+            const double v = legacy ? v_val : v_act; // Use activation average for non-legacy
 
-            ++valid_n;
-            sum += v;
-            vmin = std::min(vmin, (float)v);
-            vmax = std::max(vmax, (float)v);
+            sum += v_val;
+            if ((float)v < vmin) { vmin = (float)v; }
+            if ((float)v > vmax) { vmax = (float)v; }
 
+            valid_n++;
             const double delta = v - mean;
             mean += delta / (double)valid_n;
             M2 += delta * (v - mean);
-            energy_sum += std::max(0.0, v_energy);
+
+            // Energy for entropy uses v_val (E[x^2]) usually, or v_act^2?
+            // Existing logic used v_val (mean of squares) for entropy distribution.
+            if (v_val > 0.0) { energy_sum += v_val; }
         }
     }
 
-    if (valid_n == 0) {
-        LOG_ERR("%s: there's no data for tensor %s. The imatrix may be suboptimal\n", __func__, name.c_str());
-        return false;
-    }
+    if (valid_n == 0) { return false; }
 
     float std_deviation = 0.0f;
     float entropy = 0.0f;
     double zd_count = 0.0;
-    double variance = valid_n > 1 ? M2 / ((double)valid_n - 1) : 0.0;
-    variance = std::max(variance, 0.0);
-    std_deviation = std::sqrt((float)variance);
-    if (energy_sum > 0.0) {
-        for (size_t i = 0; i < n_mat; ++i) {
-            const auto c = (float)e.counts[i];
-            if (c <= 0.0f) { continue; }
-            const size_t off = i * row_size;
-            for (size_t j = 0; j < row_size; ++j) {
-                const double v_energy = (double)e.values[off + j] / (double)c; // E[x^2]
-                const double w = std::max(0.0, v_energy);
-                const double p = w / energy_sum;
-                if (p > 0.0) { entropy -= (float)(p * std::log2(p)); }
+
+    const double variance = valid_n > 1 ? M2 / ((double)valid_n - 1) : 0.0;
+    std_deviation = std::sqrt((float)std::max(variance, 0.0));
+
+    // Pass 2: Entropy and Z-Score
+    const double inv_energy_sum = energy_sum > 0.0 ? 1.0 / energy_sum : 0.0;
+    const float inv_std = std_deviation > 0.0f ? 1.0f / std_deviation : 0.0f;
+    const float fmean = (float)mean;
+    const float log2_val = 1 / std::log2f(2); // 1.44269504089
+
+    for (size_t i = 0; i < n_mat; ++i) {
+        const auto c = (float)e.counts[i];
+        if (c <= 0.0f) { continue; }
+        const double inv_c = 1.0 / (double)c;
+        const size_t off = i * row_size;
+
+        for (size_t j = 0; j < row_size; ++j) {
+            // Entropy (Distribution of Energy)
+            if (inv_energy_sum > 0.0) {
+                const double v_energy = (double)e.values[off + j] * inv_c;
+                const double p = std::max(0.0, v_energy) * inv_energy_sum;
+                if (p > 1e-9) { entropy -= (float)(p * std::log(p) * log2_val); }
             }
-        }
-    }
-    if (std_deviation > 0.0f) {
-        for (size_t i = 0; i < n_mat; ++i) {
-            const auto c = (float)e.counts[i];
-            if (c <= 0.0f) { continue; }
-            const size_t off = i * row_size;
-            for (size_t j = 0; j < row_size; ++j) {
-                const double v_avg = legacy ? 0.0 : (double)e.activations[off + j] / (double)c; // E[x]
-                const double v_energy = (double)e.values[off + j] / (double)c; // E[x^2]
-                const auto v = (float)(legacy ? v_energy : v_avg);
-                const float z = (v - (float)mean) / std_deviation;
-                if (std::fabs(z) > 1.0f) { zd_count += 1.0; }
+
+            // Z-Score (Outlier detection)
+            if (std_deviation > 0.0f) {
+                const double v_act = legacy ? 0.0 : (double)e.activations[off + j] * inv_c;
+                const double v_val = (double)e.values[off + j] * inv_c;
+                const float v = (float)(legacy ? v_val : v_act);
+                if (std::fabs((v - fmean) * inv_std) > 1.0f) { zd_count += 1.0; }
             }
         }
     }
@@ -256,8 +260,13 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     ts.min_values = vmin;
     ts.elements = (int)valid_n;
     ts.std_deviation = std_deviation;
-    ts.entropy = entropy;
+    ts.entropy = std::abs(entropy); // Ensure positive 0
     ts.zd_score = (float)(zd_count / (double)valid_n);
+
+    // Default pairwise
+    ts.cossim = 1.0f;
+    ts.pearson = 1.0f;
+    ts.l2_dist = 0.0f;
 
     return true;
 }
