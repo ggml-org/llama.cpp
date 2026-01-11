@@ -928,6 +928,16 @@ typedef struct {
     int64_t  np;
 } ggml_metal_kargs_pool_2d;
 
+
+typedef struct {
+    int32_t  k0;
+    int32_t  s0;
+    int32_t  p0;
+    int64_t  IW;
+    int64_t  OW;
+    int64_t  np;
+} ggml_metal_kargs_pool_1d;
+
 typedef struct {
      int64_t ne00;
     uint64_t nb01;
