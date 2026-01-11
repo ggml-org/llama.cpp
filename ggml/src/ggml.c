@@ -1030,6 +1030,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GATED_LINEAR_ATTN",
     "RWKV_WKV7",
     "SOLVE_TRI",
+    "LERP",
 
     "UNARY",
 
@@ -1047,7 +1048,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1139,6 +1140,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "gated_linear_attn(k, v, q, gate, s)",
     "rwkv_wkv7(r, w, k, v, a, b, s)",
     "A X = B, A triangular, solve X",
+    "x+(y-x)*t",
 
     "unary(x)",
 
@@ -1156,7 +1158,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
+static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -5738,6 +5740,34 @@ struct ggml_tensor * ggml_rwkv_wkv7(
     result->src[4] = a;
     result->src[5] = b;
     result->src[6] = state;
+
+    return result;
+}
+
+// ggml_lerp
+
+struct ggml_tensor * ggml_lerp(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * t) {
+    // assume a and b are the same shape for now
+    GGML_ASSERT(ggml_are_same_shape(a, b));
+
+    GGML_ASSERT(t->ne[0] == a->ne[0]);
+    GGML_ASSERT(a->ne[1] % t->ne[1] == 0);
+    GGML_ASSERT(a->ne[2] % t->ne[2] == 0);
+
+    // a/b can broadcast to t at dim3 for rwkv7
+    GGML_ASSERT(t->ne[3] % a->ne[3] == 0);
+
+    const int64_t ne[4] = { a->ne[0], a->ne[1], a->ne[2], t->ne[3] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    result->op     = GGML_OP_LERP;
+    result->src[0] = a;
+    result->src[1] = b;
+    result->src[2] = t;
 
     return result;
 }

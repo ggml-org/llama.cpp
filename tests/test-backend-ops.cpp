@@ -3666,6 +3666,35 @@ struct test_rwkv_wkv7 : public test_case {
     }
 };
 
+// GGML_OP_LERP
+struct test_lerp : public test_case {
+    const ggml_type type_t;
+    const ggml_type type_a;
+    const ggml_type type_b;
+    const std::array<int64_t, 4> ne0;
+    const std::array<int64_t, 4> ne1;
+    const std::array<int64_t, 4> ne2;
+
+    std::string vars() override {
+        return VARS_TO_STR6(type_a, type_b, type_t, ne0, ne1, ne2);
+    }
+
+    test_lerp(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
+            ggml_type type_t = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne0 = {10, 10, 1, 1},
+            std::array<int64_t, 4> ne1 = {10, 10, 1, 1},
+            std::array<int64_t, 4> ne2 = {10, 10, 1, 1})
+        : type_a(type_a), type_b(type_b), type_t(type_t), ne0(ne0), ne1(ne1), ne2(ne2) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type_a, 4, ne0.data());
+        ggml_tensor * b = ggml_new_tensor(ctx, type_b, 4, ne1.data());
+        ggml_tensor * c = ggml_new_tensor(ctx, type_t, 4, ne2.data());
+        ggml_tensor * out = ggml_lerp(ctx, a, b, c);
+        return out;
+    }
+};
+
 // GGML_OP_MUL_MAT
 struct test_mul_mat : public test_case {
     const ggml_type type_a;
@@ -7507,6 +7536,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 1));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 4));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 128, 4));
+
+    test_cases.emplace_back(new test_lerp(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F32, {256, 16, 1, 1}, {256, 16, 1, 1}, {256, 16, 1, 1}));
+    test_cases.emplace_back(new test_lerp(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F32, {256, 16, 1, 1}, {256, 16, 1, 1}, {256, 16, 1, 6}));
+    test_cases.emplace_back(new test_lerp(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F16, {256, 16, 1, 1}, {256, 16, 1, 1}, {256, 16, 1, 1}));
+    test_cases.emplace_back(new test_lerp(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F16, {256, 16, 1, 1}, {256, 16, 1, 1}, {256, 16, 1, 6}));
 
 #if 0
     // > 4GB A matrix. Too slow to be enabled by default.

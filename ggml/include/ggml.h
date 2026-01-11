@@ -551,6 +551,7 @@ extern "C" {
         GGML_OP_GATED_LINEAR_ATTN,
         GGML_OP_RWKV_WKV7,
         GGML_OP_SOLVE_TRI,
+        GGML_OP_LERP,
 
         GGML_OP_UNARY,
 
@@ -2460,6 +2461,14 @@ extern "C" {
         bool                  left,
         bool                  lower,
         bool                  uni);
+
+    // a + (b - a) * t
+    // used in rwkv7
+    GGML_API struct ggml_tensor * ggml_lerp(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * t);
 
     // custom operators
 
