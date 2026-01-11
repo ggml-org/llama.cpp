@@ -77,6 +77,11 @@ struct clip_graph_glm4v : clip_graph {
     ggml_cgraph * build() override;
 };
 
+struct clip_graph_vaetki : clip_graph {
+    clip_graph_vaetki(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct clip_graph_mobilenetv5 : clip_graph {
     clip_graph_mobilenetv5(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
