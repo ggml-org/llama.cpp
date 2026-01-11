@@ -1605,6 +1605,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sparam());
     add_opt(common_arg(
+        {"--tfs", "--tail-free"}, "Z",
+        string_format("tail-free sampling (default: %.2f, 0.0 = disabled)", (double) params.sampling.tfs_z),
+        [](common_params & params, const std::string & value) {
+            params.sampling.tfs_z = std::stof(value);
+            params.sampling.user_sampling_config |= common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_TAIL_FREE;
+        }
+    ).set_sparam());
+    add_opt(common_arg(
         {"--top-nsigma"}, "N",
         string_format("top-n-sigma sampling (default: %.1f, -1.0 = disabled)", params.sampling.top_n_sigma),
         [](common_params & params, const std::string & value) {
