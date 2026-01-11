@@ -7948,21 +7948,18 @@ class VaetkiVisionModel(MmprojModel):
 
         # Handle merger tensors with special index mapping
         # clip.cpp PROJECTOR_TYPE_VAETKI expects:
-        #   mm.model.mlp.0.* -> ln_q (pre-norm)
-        #   mm.model.mlp.1.* -> mlp.0 (up projection)
-        #   mm.model.mlp.3.* -> mlp.2 (down projection)
+        #   mm.input_norm.* -> ln_q (pre-norm)
+        #   mm.up.*         -> mlp.0 (up projection)
+        #   mm.down.*       -> mlp.2 (down projection)
         if "merger.ln_q" in name:
-            # ln_q -> mm.model.mlp.0 (used as norm in vaetki.cpp)
-            suffix = "weight" if name.endswith(".weight") else "bias"
-            return [(f"mm.model.mlp.0.{suffix}", data_torch)]
+            suffix = ".weight" if name.endswith(".weight") else ".bias"
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_INP_NORM, suffix=suffix), data_torch)]
         elif "merger.mlp.0" in name:
-            # mlp.0 -> mm.model.mlp.1 (up projection)
-            suffix = "weight" if name.endswith(".weight") else "bias"
-            return [(f"mm.model.mlp.1.{suffix}", data_torch)]
+            suffix = ".weight" if name.endswith(".weight") else ".bias"
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_UP, suffix=suffix), data_torch)]
         elif "merger.mlp.2" in name:
-            # mlp.2 -> mm.model.mlp.3 (down projection)
-            suffix = "weight" if name.endswith(".weight") else "bias"
-            return [(f"mm.model.mlp.3.{suffix}", data_torch)]
+            suffix = ".weight" if name.endswith(".weight") else ".bias"
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_DOWN, suffix=suffix), data_torch)]
 
         # Handle class_embedding and class_pos_emb (keep model.visual. prefix for mapping)
         if "class_embedding" in name or "class_pos_emb" in name:

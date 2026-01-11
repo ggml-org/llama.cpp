@@ -81,7 +81,7 @@ ggml_cgraph * clip_graph_vaetki::build() {
     cb(embeddings, "patches_only", -1);
 
     // merger
-    embeddings = build_norm(embeddings, model.mm_0_w, model.mm_0_b, NORM_TYPE_NORMAL, 1e-5, -1);
+    embeddings = build_norm(embeddings, model.mm_input_norm_w, model.mm_input_norm_b, NORM_TYPE_NORMAL, 1e-5, -1);
     cb(embeddings, "merger_normed", -1);
 
     // pixel shuffle
@@ -90,9 +90,9 @@ ggml_cgraph * clip_graph_vaetki::build() {
     cb(embeddings, "merger_reshaped", -1);
 
     embeddings = build_ffn(embeddings,
-        model.mm_1_w, model.mm_1_b,
+        model.mm_ffn_up_w, model.mm_ffn_up_b,
         nullptr, nullptr,
-        model.mm_3_w, model.mm_3_b,
+        model.mm_ffn_down_w, model.mm_ffn_down_b,
         FFN_GELU,
         -1);
     cb(embeddings, "merger_out", -1);

@@ -1555,12 +1555,12 @@ struct clip_model_loader {
             case PROJECTOR_TYPE_VAETKI:
                 {
                     model.class_pos_emb = get_tensor(TN_CLASS_POS_EMBD);
-                    model.mm_0_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "weight"));
-                    model.mm_0_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "bias"));
-                    model.mm_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
-                    model.mm_1_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "bias"));
-                    model.mm_3_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "weight"));
-                    model.mm_3_b = get_tensor(string_format(TN_MVLM_PROJ_MLP, 3, "bias"));
+                    model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
+                    model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);
+                    model.mm_ffn_up_w   = get_tensor(string_format(TN_MM_UP,   "weight"));
+                    model.mm_ffn_up_b   = get_tensor(string_format(TN_MM_UP,   "bias"));
+                    model.mm_ffn_down_w = get_tensor(string_format(TN_MM_DOWN, "weight"));
+                    model.mm_ffn_down_b = get_tensor(string_format(TN_MM_DOWN, "bias"));
                 } break;
             case PROJECTOR_TYPE_GLM4V:
                 {
