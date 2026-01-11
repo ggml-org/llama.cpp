@@ -297,7 +297,8 @@ function gg_sum_test_scripts {
 }
 
 function gg_get_model {
-    local gguf_0="$MNT/models/qwen3/0.6B/ggml-model-f16.gguf"
+    #local gguf_0="$MNT/models/qwen3/0.6B/ggml-model-f16.gguf"
+    local gguf_0="$MNT/models/qwen3/0.6B/ggml-model-q4_0.gguf"
     if [[ -s $gguf_0 ]]; then
         echo -n "$gguf_0"
     else
