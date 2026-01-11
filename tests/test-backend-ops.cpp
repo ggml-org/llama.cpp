@@ -3696,6 +3696,34 @@ struct test_rwkv_wkv7 : public test_case {
     }
 };
 
+// GGML_OP_DELTA_NET
+struct test_delta_net : public test_case {
+    const ggml_type type;
+
+    const int64_t n_heads;
+    const int64_t head_dim;
+    const int64_t n_tokens;
+    const int64_t n_seqs;
+
+    std::string vars() override {
+        return VARS_TO_STR5(type, n_heads, head_dim, n_tokens, n_seqs);
+    }
+
+    test_delta_net(ggml_type type = GGML_TYPE_F32,
+            int64_t n_heads = 8, int64_t head_dim = 64, int64_t n_tokens = 32, int64_t n_seqs = 2)
+        : type(type), n_heads(n_heads), head_dim(head_dim), n_tokens(n_tokens), n_seqs(n_seqs) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * q     = ggml_new_tensor_4d(ctx, type, head_dim, n_tokens, n_heads, n_seqs);
+        ggml_tensor * k     = ggml_new_tensor_4d(ctx, type, head_dim, n_tokens, n_heads, n_seqs);
+        ggml_tensor * v     = ggml_new_tensor_4d(ctx, type, head_dim, n_tokens, n_heads, n_seqs);
+        ggml_tensor * g     = ggml_new_tensor_4d(ctx, type, n_tokens, 1, n_heads, n_seqs);
+        ggml_tensor * beta  = ggml_new_tensor_4d(ctx, type, 1, n_tokens, n_heads, n_seqs);
+        ggml_tensor * state = ggml_new_tensor_4d(ctx, type, head_dim, head_dim * n_heads, 1, n_seqs);
+        return ggml_delta_net(ctx, q, k, v, g, beta, state);
+    }
+};
+
 // GGML_OP_MUL_MAT
 struct test_mul_mat : public test_case {
     const ggml_type type_a;
@@ -7553,6 +7581,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 1));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 4));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 128, 4));
+
+    test_cases.emplace_back(new test_delta_net(GGML_TYPE_F32, 8, 64, 1, 1));
+    test_cases.emplace_back(new test_delta_net(GGML_TYPE_F32, 8, 64, 32, 1));
+    test_cases.emplace_back(new test_delta_net(GGML_TYPE_F32, 8, 64, 32, 2));
+    test_cases.emplace_back(new test_delta_net(GGML_TYPE_F32, 8, 64, 128, 2));
 
 #if 0
     // > 4GB A matrix. Too slow to be enabled by default.

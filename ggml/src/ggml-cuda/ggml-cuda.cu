@@ -57,6 +57,7 @@
 #include "ggml-cuda/set-rows.cuh"
 #include "ggml-cuda/pad_reflect_1d.cuh"
 #include "ggml-cuda/solve_tri.cuh"
+#include "ggml-cuda/delta-net.cuh"
 #include "ggml-cuda/tri.cuh"
 #include "ggml-cuda/cumsum.cuh"
 #include "ggml-cuda/fill.cuh"
@@ -2738,6 +2739,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_SOLVE_TRI:
             ggml_cuda_op_solve_tri(ctx, dst);
             break;
+        case GGML_OP_DELTA_NET:
+            ggml_cuda_op_delta_net(ctx, dst);
+            break;
         case GGML_OP_FILL:
             ggml_cuda_op_fill(ctx, dst);
             break;
@@ -2904,6 +2908,13 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
             use_cuda_graph = false;
 #ifndef NDEBUG
             GGML_LOG_DEBUG("%s: disabling CUDA graphs due to batch size > 1 [%s] [%ld %ld %ld %ld]\n", __func__, node->name, node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
+#endif
+        }
+
+        if (node->op == GGML_OP_DELTA_NET) {
+            use_cuda_graph = false;
+#ifndef NDEBUG
+            GGML_LOG_DEBUG("%s: disabling CUDA graphs due to DELTA_NET recurrent state\n", __func__);
 #endif
         }
 
@@ -4649,6 +4660,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_DIAG:
         case GGML_OP_SOLVE_TRI:
             return true;
+        case GGML_OP_DELTA_NET:
+            return op->src[0]->ne[0] <= 256 && op->src[2]->ne[0] <= 256;
 
         default:
             return false;
