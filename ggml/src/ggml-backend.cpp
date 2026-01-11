@@ -736,6 +736,38 @@ struct ggml_backend_sched {
     int debug_prev_graph_size;
 };
 
+static void ggml_backend_synchronize_if_required(ggml_backend_t current_backend, bool backend_implicitly_synced) {
+
+    if (backend_implicitly_synced) {
+        return;
+    }
+
+    ggml_backend_synchronize(current_backend);
+}
+
+static bool ggml_backend_implicitly_synced(ggml_backend_t current_backend) {
+    /*
+     * Some backends have implicit synchronization mechanisms, which allows several parallel asynchronous memory copies without data races.
+     * An example for that is the CUDA backend with the CUDA stream.
+     * For these backends, we can skip costly explicit synchronizations during compute split scheduling.
+     */
+
+    static bool disable_scheduler_sync_opt = (getenv("GGML_SCHED_DISABLE_SYNC_OPT") != nullptr);
+
+    if (disable_scheduler_sync_opt) {
+        return false;
+    }
+
+    // To not change any APIs or change what ggml-base links to, we can only detect backends by string matching
+    auto backend_name = ggml_backend_name(current_backend);
+    if (strncmp(backend_name, "CUDA", 4) == 0) {
+        return true;
+    }
+
+    // sync other backends to ensure correctness
+    return false;
+}
+
 #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
 #define tensor_backend_id(tensor) sched->hv_tensor_backend_ids[hash_id(tensor)]
 #define tensor_id_copy(id, backend_id, copy_id) sched->hv_tensor_copies[(id) * sched->n_backends * sched->n_copies + (backend_id) * sched->n_copies + (copy_id)]
@@ -1452,6 +1484,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
+        // some backends can avoid costly syncs between async copies
+        bool backend_implicitly_synced = ggml_backend_implicitly_synced(split_backend);
 
         // copy the input tensors to the split backend
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
@@ -1464,15 +1498,16 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
                 } else {
-                    ggml_backend_synchronize(split_backend);
+                    ggml_backend_synchronize_if_required(split_backend, backend_implicitly_synced);
                 }
-                ggml_backend_tensor_copy(input, input_cpy);
+                ggml_backend_tensor_copy_async(input_backend, split_backend, input, input_cpy);
+                ggml_backend_synchronize_if_required(split_backend, backend_implicitly_synced);
             } else {
                 // wait for the split backend to finish using the input before overwriting it
                 if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                     ggml_backend_event_wait(split_backend, sched->events[split_backend_id][sched->cur_copy]);
                 } else {
-                    ggml_backend_synchronize(split_backend);
+                    ggml_backend_synchronize_if_required(split_backend, backend_implicitly_synced);
                 }
 
                 // when offloading MoE weights, we can reduce the amount of data copied by copying only the experts that are used
