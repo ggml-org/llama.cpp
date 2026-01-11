@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chat.h"
+#include "peg-parser.h"
 #include "chat-parser-xml-toolcall.h"
 #include "json-partial.h"
 #include "regex-partial.h"
@@ -131,3 +132,7 @@ class common_chat_msg_parser {
 
     void clear_tools();
 };
+
+common_chat_msg           common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
+common_chat_msg           common_chat_peg_parse(const common_peg_arena & parser, const std::string & input, bool is_partial, const common_chat_syntax & syntax);
+

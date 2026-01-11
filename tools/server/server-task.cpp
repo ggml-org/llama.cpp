@@ -4,6 +4,7 @@
 #include "common.h"
 #include "llama.h"
 #include "chat.h"
+#include "chat-parser.h"
 #include "sampling.h"
 #include "json-schema-to-grammar.h"
 

@@ -6,6 +6,7 @@
 //    cmake -B build && cmake --build build --parallel && ./build/bin/test-chat ../minja/build/tests/*.jinja 2>/dev/null
 //
 #include "chat.h"
+#include "chat-parser.h"
 
 #include "log.h"
 
