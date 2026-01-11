@@ -18,12 +18,12 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
         }
     }
 
-    if (turing_mma_available(cc) && Q->ne[1] <= 16/ncols2) {
+    if ((turing_mma_available(cc) || amd_wmma_available(cc)) && Q->ne[1] <= 16/ncols2) {
         ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 16/ncols2, ncols2>(ctx, dst);
         return;
     }
 
-    if (ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_TURING || Q->ne[1] <= 32/ncols2) {
+    if (ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_TURING || amd_wmma_available(cc) || Q->ne[1] <= 32/ncols2) {
         ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 32/ncols2, ncols2>(ctx, dst);
         return;
     }
@@ -309,6 +309,21 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             }
             if (!gqa_opt_applies && Q->ne[1] == 1) {
                 return BEST_FATTN_KERNEL_VEC;
+            }
+        }
+        return BEST_FATTN_KERNEL_MMA_F16;
+    }
+
+    if (amd_wmma_available(cc) && GGML_CUDA_CC_IS_RDNA4(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
+        if (can_use_vector_kernel) {
+            if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
+                if (Q->ne[1] <= 2) {
+                    return BEST_FATTN_KERNEL_VEC;
+                }
+            } else {
+                if (Q->ne[1] <= 2) {
+                    return BEST_FATTN_KERNEL_VEC;
+                }
             }
         }
         return BEST_FATTN_KERNEL_MMA_F16;
