@@ -8713,6 +8713,8 @@ static void ggml_compute_forward_ssm_conv_f32(
     const int ir1 = MIN(ir0 + dr, nr);
     const int ir  = ir1 - ir0;
 
+    bool do_conv_debug = false; // (ith == 0 && conv_debug_count++ < 3);
+
     for (int i3 = 0; i3 < n_s; ++i3) {
         for (int i2 = 0; i2 < n_t; ++i2) {
             // {d_conv - 1 + n_t, d_inner, n_seqs}
@@ -8733,6 +8735,13 @@ static void ggml_compute_forward_ssm_conv_f32(
                     sumf += s[i0 + i1*ncs] * c[i0 + i1*nc];
                 }
                 x[i1] = sumf;
+
+                // Debug output
+                if (do_conv_debug && i1 == 0 && i2 == 0 && i3 == 0) {
+                    fprintf(stderr, "DEBUG SSM_CONV: nc=%d, nr=%d, n_t=%d, n_s=%d\n", nc, nr, n_t, n_s);
+                    fprintf(stderr, "DEBUG SSM_CONV: s[0..3]=%f,%f,%f,%f, c[0..3]=%f,%f,%f,%f, x[0]=%f\n",
+                            s[0], s[1], s[2], s[3], c[0], c[1], c[2], c[3], x[0]);
+                }
             }
         }
     }
