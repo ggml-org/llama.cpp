@@ -7934,9 +7934,8 @@ class VaetkiVisionModel(MmprojModel):
         self.gguf_writer.add_vision_spatial_merge_size(hparams.get("spatial_merge_size", 2))
 
         # support dynamic size
-        image_size = self.preprocessor_config["size"]
-        self.gguf_writer.add_vision_image_min_pixels(image_size["shortest_edge"])
-        self.gguf_writer.add_vision_image_max_pixels(image_size["longest_edge"])
+        self.gguf_writer.add_vision_image_min_pixels(self.preprocessor_config["min_pixels"])
+        self.gguf_writer.add_vision_image_max_pixels(self.preprocessor_config["max_pixels"])
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if "class_pos_embd" in new_name:
