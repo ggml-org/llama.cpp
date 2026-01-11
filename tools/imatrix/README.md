@@ -41,7 +41,7 @@ Versions **b5942** and newer of `llama-imatrix` store data in GGUF format by def
 ./llama-imatrix -m ggml-model-f16.gguf -f calibration-data.txt -ngl 99
 
 # use the imatrix to perform a Q4_K_M quantization
-./llama-quantize --imatrix imatrix.gguf ggml-model-f16.gguf ./ggml-model-q4_k_m.gguf q4_k_m
+./llama-quantize --imatrix imatrix.gguf ggml-model-f16.gguf ./ggml-model-q4_k_m.gguf q4_k_m 99
 ```
 
 ```bash
@@ -70,7 +70,7 @@ Versions **b5942** and newer of `llama-imatrix` store data in GGUF format by def
 ```
 
 ```bash
-# analyse imatrix file and display summary statistics instead of running inference
+# analyze imatrix file and display summary statistics instead of running inference
 ./llama-imatrix --in-file imatrix.gguf --show-statistics
 ```
 
@@ -78,21 +78,22 @@ Versions **b5942** and newer of `llama-imatrix` store data in GGUF format by def
 
 #### Per tensor
 
-* **Σ(Act²)** *(legacy mode)* / **L₂ Norm** *(preferred)*: If in legacy mode, the raw sum of squares of activations (sum of `Act²`). In preferred mode, the Euclidean Distance (L₂ Norm) between this tensor’s average activations and those of the previous layer.
+* **∑ E[A²]**: The sum of squares of activations (Energy) for the tensor. Tensors with high "energy" contribute most to the final output. Quantization errors here propagate strongly. These tensors usually need higher precision (e.g., Q6_K vs Q4_K).
+* **L₂ Norm**: Euclidean Distance from the tensor in the previous layer. Measure of transformation magnitude; higher values indicate more significant transformation on the data.
 * **Min / Max / μ / σ**: Tensor elements Min, Max, Mean, and Standard Deviation.
-* **N**: Number of tensor elements considered.
-* **H Norm**: Shannon Entropy normalized over log₂(N). Defined as $H Norm=\frac{-\sum_{i=1}^N p_i \log_2 p_i}{log_2 N}$. Used to determine how well a prompt "exercises" the model's capabilities.
-* **H** *(legacy mode)* / **ECS** *(preferred)*: If legacy, Shannon Entropy defined as $H = -\sum_{i=1}^N p_i \log_2 p_i$. If preferred, *Euclidean-Cosine Score* defined as $ECS = K \cdot e^{-\alpha a} \cdot |b|^{\gamma}$ where `a = L₂ Norm`, `b = Cosine Similarity`, `α = 0.01`, `γ = 10` between this tensor’s elements and those of the previous layer. Higher score means more similarity and lower change.
-* **ZD**: % of elements whose Z-score is > 1.0 in magnitude (an indicator of outliers), as described in _3.1 Layer Importance Scores_ of [Layer-Wise Quantization](https://arxiv.org/abs/2406.17415)
-* **CosSim**: Cosine Similarity of the mean activations between this tensor’s elements and those of the previous layer.
+* **H Norm**: Shannon Entropy normalized over log₂(N). Defined as $H Norm=\frac{-\sum_{i=1}^N p_i \log_2 p_i}{log_2 N}$. Used to determine how well a prompt "exercises" the model's capabilities. Higher values indicate more uniform distribution of activations. Every neuron is firing equally; hard to prune.
+* **ZD**: % of elements whose ZD-score is > 1.0 (an indicator of outliers), as described in _3.1 Layer Importance Scores_ of [Layer-Wise Quantization](https://arxiv.org/abs/2406.17415).
+* **CosSim**: Cosine Similarity with the tensor in the previous layer. _~1.0_, the tensor output points in the exact same direction as the previous layer's tensor (the layer is refining magnitude, not direction). _< 1.0_, the layer is rotating the vector space (changing semantic meaning).
+* **PCC**: Pearson Correlation Coefficient with the tensor in the previous layer. Checks for linear correlation excluding the mean shift. Similar to CosSim but centers geometric data first. Indicates if the pattern of activation changes or just the offset.
 
 #### Per layer
 
 Aggregated metrics per block/layer:
 
-* **Σ(Act²)** *(legacy mode)* / **L₂ Norm** *(preferred)*: If in legacy mode, the sum of squared activations (sum of Act²) for the layer's concatenated tensors. In preferred mode, the Euclidean Distance (L₂ Norm) between this layer's average concatenated tensor activations the previous layer.
-* **ZD**: % of this layer's concatenated tensors' elements with |Z| > 1.
-* **CosSim**: Cosine Similarity of the mean activations between this layer's concatenated tensors' elements compared and the previous layer’s.
-* **ECS** *(preferred only)*: Euclidean-Cosine Score applied to the layer.
+* **∑ E[A²]:** Total energy of the layer's concatenated tensors. Indicates the layer's overall contribution amplitude.
+* **L₂ Norm:** Euclidean Distance of the layer's concatenated tensors from the previous layer’s. Global measure of transformation magnitude.
+* **ZD**: % of this layer's concatenated tensors' elements with |Z| > 1. Indicates general "spikiness" of the layer's activations.
+* **CosSim**: Cosine Similarity of this layer's concatenated tensors with the previous layer.
+* **PCC**: Average Pearson Correlation of the tensors in the layer.
 
 More information is available in https://github.com/ggml-org/llama.cpp/pull/14891
