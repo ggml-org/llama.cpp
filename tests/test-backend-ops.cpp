@@ -454,6 +454,28 @@ static bool ggml_is_view_op(enum ggml_op op) {
     return op == GGML_OP_VIEW || op == GGML_OP_RESHAPE || op == GGML_OP_PERMUTE || op == GGML_OP_TRANSPOSE;
 }
 
+static bool backend_has_feature(ggml_backend_t backend, const char * feature_name) {
+    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+
+    auto get_features = (ggml_backend_get_features_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_get_features");
+    if (!get_features) {
+        return false;
+    }
+
+    const ggml_backend_feature * features = get_features(reg);
+    if (!features) {
+        return false;
+    }
+
+    for (const ggml_backend_feature * f = features; f->name; ++f) {
+        if (strcmp(f->name, feature_name) == 0 && strcmp(f->value, "1") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 enum test_mode {
     MODE_TEST,
     MODE_PERF,
@@ -1101,12 +1123,21 @@ struct test_case {
         return 1e-7;
     }
 
+    virtual double max_nmse_err(ggml_backend_t backend) {
+        GGML_UNUSED(backend);
+        return max_nmse_err();
+    }
+
     virtual double max_maa_err() {
         return 1e-4;
     }
 
     virtual double max_err() {
         return max_nmse_err();
+    }
+
+    virtual double max_err(ggml_backend_t backend) {
+        return max_nmse_err(backend);
     }
 
     virtual double err(const float * a, const float * b, size_t n) {
@@ -1378,8 +1409,8 @@ struct test_case {
             }
 
             double err = ud->tc->err(f1.data(), f2.data(), f1.size());
-            if (err > ud->tc->max_err()) {
-                printf("[%s] ERR = %.9f > %.9f ", ggml_op_desc(t1), err, ud->tc->max_err());
+            if (err > ud->tc->max_err(ud->backend1)) {
+                printf("[%s] ERR = %.9f > %.9f ", ggml_op_desc(t1), err, ud->tc->max_err(ud->backend1));
                 //for (int i = 0; i < (int) f1.size(); i++) {
                 //    printf("%5d %9.6f %9.6f, diff = %9.6f\n", i, f1[i], f2[i], f1[i] - f2[i]);
                 //}
@@ -3686,6 +3717,14 @@ struct test_mul_mat : public test_case {
         return 5e-4;
     }
 
+    double max_nmse_err(ggml_backend_t backend) override {
+        // for blackwell we quantize activations to mxfp4 instead of q8_1 so we add higher tolerance
+        if (type_a == GGML_TYPE_MXFP4 && backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
+            return 2e-2;
+        }
+        return max_nmse_err();
+    }
+
     int64_t grad_nmax() override {
         return 20000;
     }
@@ -3812,6 +3851,14 @@ struct test_mul_mat_id : public test_case {
 
     double max_nmse_err() override {
         return 5e-4;
+    }
+
+    double max_nmse_err(ggml_backend_t backend) override {
+        // for blackwell we quantize activations to mxfp4 instead of q8_1 so we add higher tolerance
+        if (type_a == GGML_TYPE_MXFP4 && backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
+            return 2e-2;
+        }
+        return max_nmse_err();
     }
 
     uint64_t op_flops(ggml_tensor * t) override {
