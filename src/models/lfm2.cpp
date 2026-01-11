@@ -1,18 +1,26 @@
 #include "models.h"
-
+//
+#include "../llama-memory-hybrid-iswa.h"
 #include "../llama-memory-hybrid.h"
 
-
-llm_build_lfm2::llm_build_lfm2(const llama_model & model, const llm_graph_params & params) :
+template <bool iswa>
+llm_build_lfm2<iswa>::llm_build_lfm2(const llama_model & model, const llm_graph_params & params) :
     llm_graph_context(params),
     model(model) {
+    using inp_hybrid_type = std::conditional_t<iswa, llm_graph_input_mem_hybrid_iswa, llm_graph_input_mem_hybrid>;
+    inp_hybrid_type * inp_hybrid = nullptr;
+    if constexpr (iswa) {
+        inp_hybrid = build_inp_mem_hybrid_iswa();
+    } else {
+        inp_hybrid = build_inp_mem_hybrid();
+    }
+
     ggml_tensor * cur = build_inp_embd(model.tok_embd);
     cb(cur, "model.embed_tokens", -1);
 
     ggml_build_forward_expand(gf, cur);
 
     ggml_tensor * inp_pos     = build_inp_pos();
-    auto *        inp_hybrid  = build_inp_mem_hybrid();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
@@ -54,29 +62,27 @@ llm_build_lfm2::llm_build_lfm2(const llama_model & model, const llm_graph_params
     ggml_build_forward_expand(gf, cur);
 }
 
-ggml_tensor * llm_build_lfm2::build_moe_feed_forward(ggml_tensor * cur, int il) const {
-    return build_moe_ffn(cur,
-                        model.layers[il].ffn_gate_inp, model.layers[il].ffn_up_exps,
-                        model.layers[il].ffn_gate_exps, model.layers[il].ffn_down_exps,
-                        model.layers[il].ffn_exp_probs_b, n_expert, n_expert_used, LLM_FFN_SILU, true, false, 0.0,
-                        static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func), il);
+template <bool iswa> ggml_tensor * llm_build_lfm2<iswa>::build_moe_feed_forward(ggml_tensor * cur, int il) const {
+    return build_moe_ffn(cur, model.layers[il].ffn_gate_inp, model.layers[il].ffn_up_exps,
+                         model.layers[il].ffn_gate_exps, model.layers[il].ffn_down_exps,
+                         model.layers[il].ffn_exp_probs_b, n_expert, n_expert_used, LLM_FFN_SILU, true, false, 0.0,
+                         static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func), il);
 }
 
-ggml_tensor * llm_build_lfm2::build_dense_feed_forward(ggml_tensor * cur, int il) const {
+template <bool iswa> ggml_tensor * llm_build_lfm2<iswa>::build_dense_feed_forward(ggml_tensor * cur, int il) const {
     GGML_ASSERT(!model.layers[il].ffn_up_b);
     GGML_ASSERT(!model.layers[il].ffn_gate_b);
     GGML_ASSERT(!model.layers[il].ffn_down_b);
-    return build_ffn(cur,
-        model.layers[il].ffn_up, NULL, NULL,
-        model.layers[il].ffn_gate, NULL, NULL,
-        model.layers[il].ffn_down, NULL, NULL,
-        NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+    return build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
+                     model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
 }
 
-ggml_tensor * llm_build_lfm2::build_attn_block(ggml_tensor *             cur,
-                                               ggml_tensor *             inp_pos,
-                                               llm_graph_input_attn_kv * inp_attn,
-                                               int                       il) const {
+template <bool iswa>
+ggml_tensor * llm_build_lfm2<iswa>::build_attn_block(
+    ggml_tensor *                                                                     cur,
+    ggml_tensor *                                                                     inp_pos,
+    std::conditional_t<iswa, llm_graph_input_attn_kv_iswa, llm_graph_input_attn_kv> * inp_attn,
+    int                                                                               il) const {
     GGML_ASSERT(hparams.n_embd_v_gqa(il) == hparams.n_embd_k_gqa(il));
     const auto n_embd_head = hparams.n_embd_head_v;
     const auto n_head_kv   = hparams.n_head_kv(il);
@@ -104,17 +110,22 @@ ggml_tensor * llm_build_lfm2::build_attn_block(ggml_tensor *             cur,
     k = ggml_rope_ext(ctx0, k, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor,
                       attn_factor, beta_fast, beta_slow);
 
-    cur = build_attn(inp_attn,
-            model.layers[il].wo, NULL,
-            q, k, v, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
+    cur = build_attn(inp_attn, model.layers[il].wo, NULL, q, k, v, nullptr, nullptr, nullptr,
+                     1.0f / sqrtf(float(n_embd_head)), il);
 
     cb(cur, "model.layers.{}.self_attn.out_proj", il);
 
     return cur;
 }
 
-ggml_tensor * llm_build_lfm2::build_shortconv_block(ggml_tensor * cur, llm_graph_input_rs * inp_recr, int il) {
-    const auto *   mctx_cur     = static_cast<const llama_memory_hybrid_context *>(mctx)->get_recr();
+template <bool iswa>
+ggml_tensor * llm_build_lfm2<iswa>::build_shortconv_block(ggml_tensor * cur, llm_graph_input_rs * inp_recr, int il) {
+    const llama_memory_recurrent_context * mctx_cur;
+    if constexpr (iswa) {
+        mctx_cur = static_cast<const llama_memory_hybrid_iswa_context *>(mctx)->get_recr();
+    } else {
+        mctx_cur = static_cast<const llama_memory_hybrid_context *>(mctx)->get_recr();
+    }
     const uint32_t kv_head      = mctx_cur->get_head();
     const int64_t  n_seq_tokens = ubatch.n_seq_tokens;
     const int64_t  n_seqs       = ubatch.n_seqs;
@@ -173,3 +184,7 @@ ggml_tensor * llm_build_lfm2::build_shortconv_block(ggml_tensor * cur, llm_graph
 
     return y;
 }
+
+// Explicit template instantiations
+template struct llm_build_lfm2<true>;
+template struct llm_build_lfm2<false>;

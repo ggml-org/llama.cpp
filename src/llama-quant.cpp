@@ -860,6 +860,13 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         quantize &= name.find("time_mix_decay_w2.weight") == std::string::npos;
         quantize &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
 
+        // do not quantize conv weights
+        quantize &= name.find("conv.dw.weight") == std::string::npos;
+        quantize &= name.find("conv.pw1.weight") == std::string::npos;
+        quantize &= name.find("conv.pw2.weight") == std::string::npos;
+        quantize &= name.find("conv1d") == std::string::npos;
+        quantize &= name.find("conv_dw.weight") == std::string::npos;
+
         // do not quantize relative position bias (T5)
         quantize &= name.find("attn_rel_b.weight") == std::string::npos;
 
