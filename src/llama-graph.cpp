@@ -919,10 +919,7 @@ ggml_tensor * llm_graph_context::build_ffn(
             } break;
         case LLM_FFN_RELU_SQR:
             {
-                cur = ggml_relu(ctx0, cur);
-                cb(cur, "ffn_relu", il);
-
-                cur = ggml_sqr(ctx0, cur);
+                cur = ggml_relu_sqr(ctx0, cur);
                 cb(cur, "ffn_sqr(relu)", il);
             } break;
         case LLM_FFN_SWIGLU:
@@ -1225,8 +1222,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 // TODO: add support for gated squared relu
                 GGML_ABORT("fatal error: gated squared relu not implemented");
             } else {
-                cur = ggml_relu(ctx0, cur);
-                cur = ggml_sqr(ctx0, cur);
+                cur = ggml_relu_sqr(ctx0, cur);
                 cb(cur, "ffn_moe_relu_sqr", il);
             } break;
         default:

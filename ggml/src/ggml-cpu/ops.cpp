@@ -9144,6 +9144,10 @@ void ggml_compute_forward_unary(
             {
                 ggml_compute_forward_relu(params, dst);
             } break;
+        case GGML_UNARY_OP_RELU_SQR:
+            {
+                ggml_compute_forward_relu_sqr(params, dst);
+            } break;
         case GGML_UNARY_OP_SIGMOID:
             {
                 ggml_compute_forward_sigmoid(params, dst);

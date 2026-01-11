@@ -45,6 +45,11 @@ static __device__ __forceinline__ float op_relu(float x) {
     return fmaxf(x, 0);
 }
 
+static __device__ __forceinline__ float op_relu_sqr(float x) {
+    float r = fmaxf(x, 0);
+    return r * r;
+}
+
 static __device__ __forceinline__ float op_sigmoid(float x) {
     return 1.0f / (1.0f + expf(-x));
 }
@@ -184,6 +189,10 @@ void ggml_cuda_op_tanh(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
 void ggml_cuda_op_relu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary<op_relu>(ctx, dst);
+}
+
+void ggml_cuda_op_relu_sqr(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_unary<op_relu_sqr>(ctx, dst);
 }
 
 void ggml_cuda_op_sigmoid(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

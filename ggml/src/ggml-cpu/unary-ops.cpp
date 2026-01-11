@@ -28,6 +28,11 @@ static inline float op_relu(float x) {
     return (x > 0.f) ? x : 0.f;
 }
 
+static inline float op_relu_sqr(float x) {
+    float r = (x > 0.f) ? x : 0.f;
+    return r * r;
+}
+
 static inline float op_sigmoid(float x) {
     return 1.f / (1.f + expf(-x));
 }
@@ -260,6 +265,10 @@ void ggml_compute_forward_elu(const ggml_compute_params * params, ggml_tensor * 
 
 void ggml_compute_forward_relu(const ggml_compute_params * params, ggml_tensor * dst) {
     unary_op<op_relu>(params, dst);
+}
+
+void ggml_compute_forward_relu_sqr(const ggml_compute_params * params, ggml_tensor * dst) {
+    unary_op<op_relu_sqr>(params, dst);
 }
 
 void ggml_compute_forward_sigmoid(const ggml_compute_params * params, ggml_tensor * dst) {

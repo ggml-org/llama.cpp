@@ -1170,6 +1170,7 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "TANH",
     "ELU",
     "RELU",
+    "RELU_SQR",
     "SIGMOID",
     "GELU",
     "GELU_QUICK",
@@ -1187,7 +1188,7 @@ static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "TRUNC",
 };
 
-static_assert(GGML_UNARY_OP_COUNT == 22, "GGML_UNARY_OP_COUNT != 22");
+static_assert(GGML_UNARY_OP_COUNT == 23, "GGML_UNARY_OP_COUNT != 23");
 
 static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "REGLU",
@@ -2643,6 +2644,20 @@ struct ggml_tensor * ggml_relu_inplace(
         struct ggml_context * ctx,
         struct ggml_tensor  * a) {
     return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_RELU);
+}
+
+// ggml_relu_sqr
+
+struct ggml_tensor * ggml_relu_sqr(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary(ctx, a, GGML_UNARY_OP_RELU_SQR);
+}
+
+struct ggml_tensor * ggml_relu_sqr_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_RELU_SQR);
 }
 
 // ggml_leaky_relu
