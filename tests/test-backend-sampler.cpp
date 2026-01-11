@@ -21,8 +21,10 @@ struct test_args {
     std::string model;
     std::string test;
     std::string device = "auto";
+};
 
-    llama_model_ptr model_ptr;
+struct test_params {
+    llama_model_ptr model;
 };
 
 static llama_model_ptr load_model(const test_args & args) {
@@ -76,8 +78,8 @@ struct test_context {
     std::unordered_map<llama_seq_id, int32_t> seq_positions;
     std::unordered_map<llama_seq_id, int32_t> last_batch_info;
 
-    test_context(const test_args & args, std::vector<llama_sampler_seq_config> & configs, int32_t n_seq_max = -1) {
-        auto * model = args.model_ptr.get();
+    test_context(const test_params & params, std::vector<llama_sampler_seq_config> & configs, int32_t n_seq_max = -1) {
+        auto * model = params.model.get();
 
         GGML_ASSERT(model);
         GGML_ASSERT(!ctx);
@@ -259,7 +261,7 @@ struct test_context {
     }
 };
 
-static void test_backend_greedy_sampling(const test_args & args) {
+static void test_backend_greedy_sampling(const test_params & params) {
     const int seq_id = 0;
 
     struct llama_sampler_chain_params backend_sampler_params = llama_sampler_chain_default_params();
@@ -268,7 +270,7 @@ static void test_backend_greedy_sampling(const test_args & args) {
     llama_sampler_chain_add(backend_sampler_chain.get(), llama_sampler_init_greedy());
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain.get() }};
 
-    test_context test_ctx(args, backend_sampler_configs);
+    test_context test_ctx(params, backend_sampler_configs);
 
     if (!test_ctx.decode({{seq_id, "Some"}})) {
         GGML_ASSERT(false && "Failed to decode token");
@@ -294,7 +296,7 @@ static void test_backend_greedy_sampling(const test_args & args) {
     }
 }
 
-static void test_backend_top_k_sampling(const test_args & args) {
+static void test_backend_top_k_sampling(const test_params & params) {
     const int seq_id = 0;
     const int32_t k = 8;
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
@@ -302,7 +304,7 @@ static void test_backend_top_k_sampling(const test_args & args) {
     llama_sampler_chain_add(backend_sampler_chain.get(), llama_sampler_init_top_k(k));
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain.get() }};
 
-    test_context test_ctx(args, backend_sampler_configs);
+    test_context test_ctx(params, backend_sampler_configs);
 
     if (!test_ctx.decode({{seq_id, "Hello"}})) {
         GGML_ASSERT(false && "Failed to decode token");
@@ -336,7 +338,7 @@ static void test_backend_top_k_sampling(const test_args & args) {
     printf("backend top-k hybrid sampling test PASSED\n");
 }
 
-static void test_backend_temp_sampling(const test_args & args) {
+static void test_backend_temp_sampling(const test_params & params) {
     {
         const float temp_0 = 0.8f;
         struct llama_sampler_chain_params backend_chain_params_0 = llama_sampler_chain_default_params();
@@ -353,7 +355,7 @@ static void test_backend_temp_sampling(const test_args & args) {
             { 1, backend_sampler_chain_1.get() }
         };
 
-        test_context test_ctx(args, backend_sampler_configs);
+        test_context test_ctx(params, backend_sampler_configs);
 
         if (!test_ctx.decode({{0, "Some where over the"}, {1, "Once upon a"}})) {
             GGML_ASSERT(false && "Failed to decode token");
@@ -406,7 +408,7 @@ static void test_backend_temp_sampling(const test_args & args) {
             { seq_id, backend_sampler_chain.get() },
         };
 
-        test_context test_ctx(args, backend_sampler_configs);
+        test_context test_ctx(params, backend_sampler_configs);
 
         if (!test_ctx.decode({{seq_id, "Once"}})) {
             GGML_ASSERT(false && "Failed to decode token");
@@ -424,7 +426,7 @@ static void test_backend_temp_sampling(const test_args & args) {
     printf("backend temp sampling test PASSED\n");
 }
 
-static void test_backend_temp_ext_sampling(const test_args & args) {
+static void test_backend_temp_ext_sampling(const test_params & params) {
     {
         int seq_id = 0;
         const float temp = 0.8f;
@@ -438,7 +440,7 @@ static void test_backend_temp_ext_sampling(const test_args & args) {
             { seq_id, backend_sampler_chain.get() },
         };
 
-        test_context test_ctx(args, backend_sampler_configs);
+        test_context test_ctx(params, backend_sampler_configs);
 
         if (!test_ctx.decode({{seq_id, "Once upon a"}})) {
             GGML_ASSERT(false && "Failed to decode token");
@@ -465,7 +467,7 @@ static void test_backend_temp_ext_sampling(const test_args & args) {
             { seq_id, backend_sampler_chain.get() },
         };
 
-        test_context test_ctx(args, backend_sampler_configs);
+        test_context test_ctx(params, backend_sampler_configs);
 
         if (!test_ctx.decode({{seq_id, "Once"}})) {
             GGML_ASSERT(false && "Failed to decode token");
@@ -489,7 +491,7 @@ static void test_backend_temp_ext_sampling(const test_args & args) {
     printf("backend temp_ext sampling test PASSED\n");
 }
 
-static void test_backend_min_p_sampling(const test_args & args) {
+static void test_backend_min_p_sampling(const test_params & params) {
     const int seq_id = 0;
     const float p = 0.1;
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
@@ -497,7 +499,7 @@ static void test_backend_min_p_sampling(const test_args & args) {
     llama_sampler_chain_add(backend_sampler_chain.get(), llama_sampler_init_min_p(p, 0));
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain.get() }};
 
-    test_context test_ctx(args, backend_sampler_configs);
+    test_context test_ctx(params, backend_sampler_configs);
 
     if (!test_ctx.decode({{seq_id, "Hello"}})) {
         GGML_ASSERT(false && "Failed to decode token");
@@ -541,7 +543,7 @@ static void test_backend_min_p_sampling(const test_args & args) {
     printf("min-p sampling test PASSED\n");
 }
 
-static void test_backend_top_p_sampling(const test_args & args) {
+static void test_backend_top_p_sampling(const test_params & params) {
     const int seq_id = 0;
     const float p = 0.9;
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
@@ -549,7 +551,7 @@ static void test_backend_top_p_sampling(const test_args & args) {
     llama_sampler_chain_add(backend_sampler_chain.get(), llama_sampler_init_top_p(p, 0));
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain.get() }};
 
-    test_context test_ctx(args, backend_sampler_configs);
+    test_context test_ctx(params, backend_sampler_configs);
 
     if (!test_ctx.decode({{seq_id, "Hello"}})) {
         return;
@@ -591,7 +593,7 @@ static void test_backend_top_p_sampling(const test_args & args) {
     printf("top-p sampling test PASSED\n");
 }
 
-static void test_backend_multi_sequence_sampling(const test_args & args) {
+static void test_backend_multi_sequence_sampling(const test_params & params) {
     struct llama_sampler_chain_params chain_params_0 = llama_sampler_chain_default_params();
     llama_sampler_ptr sampler_chain_0(llama_sampler_chain_init(chain_params_0));
     llama_sampler_chain_add(sampler_chain_0.get(), llama_sampler_init_greedy());
@@ -606,7 +608,7 @@ static void test_backend_multi_sequence_sampling(const test_args & args) {
         { 1, sampler_chain_1.get() }
     };
 
-    test_context test_ctx(args, backend_sampler_configs);
+    test_context test_ctx(params, backend_sampler_configs);
 
     std::map<llama_seq_id, std::string> prompts = {
         {0, "Hello"},
@@ -657,7 +659,7 @@ static void test_backend_multi_sequence_sampling(const test_args & args) {
     printf("backend multi-sequence sampling test PASSED\n");
 }
 
-static void test_backend_dist_sampling(const test_args & args) {
+static void test_backend_dist_sampling(const test_params & params) {
     const int seq_id = 189;
     const int32_t seed = 88;
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
@@ -665,7 +667,7 @@ static void test_backend_dist_sampling(const test_args & args) {
     llama_sampler_chain_add(backend_sampler_chain.get(), llama_sampler_init_dist(seed));
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain.get() }};
 
-    test_context test_ctx(args, backend_sampler_configs);
+    test_context test_ctx(params, backend_sampler_configs);
 
     if (!test_ctx.decode({{seq_id, "Some"}})) {
         GGML_ASSERT(false && "Failed to decode token");
@@ -684,7 +686,7 @@ static void test_backend_dist_sampling(const test_args & args) {
     printf("backend dist sampling test PASSED\n");
 }
 
-static void test_backend_dist_sampling_and_cpu(const test_args & args) {
+static void test_backend_dist_sampling_and_cpu(const test_params & params) {
     const int seq_id = 0;
     const int32_t seed = 88;
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
@@ -692,7 +694,7 @@ static void test_backend_dist_sampling_and_cpu(const test_args & args) {
     llama_sampler_chain_add(backend_sampler_chain.get(), llama_sampler_init_dist(seed));
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain.get() }};
 
-    test_context test_ctx(args, backend_sampler_configs);
+    test_context test_ctx(params, backend_sampler_configs);
 
     if (!test_ctx.decode({{seq_id, "Some"}})) {
         GGML_ASSERT(false && "Failed to decode token");
@@ -713,8 +715,8 @@ static void test_backend_dist_sampling_and_cpu(const test_args & args) {
     printf("backend dist & cpu sampling test PASSED\n");
 }
 
-static void test_backend_logit_bias_sampling(const test_args & args) {
-    const auto * model = args.model_ptr.get();
+static void test_backend_logit_bias_sampling(const test_params & params) {
+    const auto * model = params.model.get();
     const auto * vocab = llama_model_get_vocab(model);
 
     const int seq_id = 0;
@@ -742,7 +744,7 @@ static void test_backend_logit_bias_sampling(const test_args & args) {
         { seq_id, backend_sampler_chain.get() },
     };
 
-    test_context test_ctx(args, backend_sampler_configs);
+    test_context test_ctx(params, backend_sampler_configs);
 
     if (!test_ctx.decode({{seq_id, "Hello"}})) {
         GGML_ASSERT(false && "Failed to decode token");
@@ -758,7 +760,7 @@ static void test_backend_logit_bias_sampling(const test_args & args) {
 
 // This test verifies that it is possible to have two different backend sampler,
 // one that uses the backend dist sampler, and another that uses CPU dist sampler.
-static void test_backend_mixed_sampling(const test_args & args) {
+static void test_backend_mixed_sampling(const test_params & params) {
     struct llama_sampler_chain_params chain_params_0 = llama_sampler_chain_default_params();
     llama_sampler_ptr sampler_chain_0(llama_sampler_chain_init(chain_params_0));
     llama_sampler_chain_add(sampler_chain_0.get(), llama_sampler_init_dist(88));
@@ -773,7 +775,7 @@ static void test_backend_mixed_sampling(const test_args & args) {
         { 1, sampler_chain_1.get() }
     };
 
-    test_context test_ctx(args, backend_sampler_configs);
+    test_context test_ctx(params, backend_sampler_configs);
 
     std::map<llama_seq_id, std::string> prompts = {
         {0, "Hello"},
@@ -808,7 +810,7 @@ static void test_backend_mixed_sampling(const test_args & args) {
     printf("backend mixed sampling test PASSED\n");
 }
 
-static void test_backend_set_sampler(const test_args & args) {
+static void test_backend_set_sampler(const test_params & params) {
     const int32_t seed = 88;
     const int seq_id = 0;
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
@@ -816,7 +818,7 @@ static void test_backend_set_sampler(const test_args & args) {
     llama_sampler_chain_add(backend_sampler_chain.get(), llama_sampler_init_dist(seed));
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain.get() }};
 
-    test_context test_ctx(args, backend_sampler_configs);
+    test_context test_ctx(params, backend_sampler_configs);
 
     if (!test_ctx.decode({{seq_id, "Hello"}})) {
         GGML_ASSERT(false && "Failed to decode token");
@@ -872,7 +874,7 @@ static void test_backend_set_sampler(const test_args & args) {
     printf("backend set sampler test PASSED\n");
 }
 
-static void test_backend_cpu_mixed_batch(const test_args & args) {
+static void test_backend_cpu_mixed_batch(const test_params & params) {
     // Sequence 0 uses backend sampling
     struct llama_sampler_chain_params chain_params_0 = llama_sampler_chain_default_params();
     llama_sampler_ptr sampler_chain_0(llama_sampler_chain_init(chain_params_0));
@@ -883,7 +885,7 @@ static void test_backend_cpu_mixed_batch(const test_args & args) {
     };
 
     // We need 2 sequences: seq 0 with backend sampling, seq 1 with CPU sampling
-    test_context test_ctx(args, backend_sampler_configs, 2);
+    test_context test_ctx(params, backend_sampler_configs, 2);
 
     std::map<llama_seq_id, std::string> prompts = {
         {0, "Hello"},  // Will use backend sampling
@@ -960,7 +962,7 @@ static void test_backend_cpu_mixed_batch(const test_args & args) {
     printf("backend-cpu mixed batch test PASSED\n");
 }
 
-static void test_backend_max_outputs(const test_args & args) {
+static void test_backend_max_outputs(const test_params & params) {
     const int seq_id = 0;
     const int32_t seed = 88;
     llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
@@ -968,7 +970,7 @@ static void test_backend_max_outputs(const test_args & args) {
     llama_sampler_chain_add(backend_sampler_chain.get(), llama_sampler_init_dist(seed));
     std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, backend_sampler_chain.get() }};
 
-    test_context test_ctx(args, backend_sampler_configs);
+    test_context test_ctx(params, backend_sampler_configs);
 
     llama_batch batch = llama_batch_init(512, 0, 1);
     std::string prompt = "Hello";
@@ -1000,7 +1002,7 @@ static void test_backend_max_outputs(const test_args & args) {
 
 struct backend_test_case {
     std::string name;
-    void (*fn)(const test_args &);
+    void (*fn)(const test_params &);
     bool enabled_by_default;
 };
 
@@ -1112,7 +1114,7 @@ static std::vector<const backend_test_case *> collect_tests_to_run(const std::st
     return selected;
 }
 
-static void run_tests(const std::vector<const backend_test_case *> & tests, const test_args & args) {
+static void run_tests(const std::vector<const backend_test_case *> & tests, const test_params & args) {
     for (const auto & test : tests) {
         fprintf(stderr, "\n=== %s ===\n", test->name.c_str());
         try {
@@ -1143,11 +1145,13 @@ int main(int argc, char ** argv) {
 
     llama_backend_init();
 
-    args.model_ptr = load_model(args);
+    test_params params = {
+        /*.model =*/ load_model(args),
+    };
 
     const std::vector<const backend_test_case *> tests = collect_tests_to_run(args.test);
     if (!tests.empty()) {
-        run_tests(tests, args);
+        run_tests(tests, params);
     }
 
     return 0;
