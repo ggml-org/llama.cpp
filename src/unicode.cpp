@@ -220,23 +220,6 @@ static inline std::wstring unicode_wstring_from_utf8(const std::string & s) {
     return conv.from_bytes(s);
 }
 
-static std::vector<std::string> unicode_byte_encoding_process(const std::vector<std::string> & bpe_words) {
-    std::vector<std::string> bpe_encoded_words;
-    for (const auto & word : bpe_words) {
-        std::string text_utf;
-        auto utf_word =  unicode_cpts_from_utf8(word);
-        for (size_t i = 0; i < utf_word.size(); ++i) {
-            text_utf += unicode_cpt_to_utf8(utf_word[i]);
-        }
-
-        std::string encoded_token;
-        for (char & c : text_utf) {
-            encoded_token += unicode_byte_to_utf8(c);
-        }
-        bpe_encoded_words.emplace_back(encoded_token);
-    }
-    return bpe_encoded_words;
-}
 
 // GPT2 system regex:  's|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+
 static std::vector<size_t> unicode_regex_split_custom_gpt2(const std::string & text, const std::vector<size_t> & offsets) {
@@ -956,6 +939,24 @@ bool unicode_cpt_is_han(uint32_t cpt) {
     return false;
 }
 
+std::vector<std::string> unicode_words_byte_encode(const std::vector<std::string> & bpe_words) {
+    std::vector<std::string> bpe_encoded_words;
+    for (const auto & word : bpe_words) {
+        std::string text_utf;
+        auto utf_word =  unicode_cpts_from_utf8(word);
+        for (size_t i = 0; i < utf_word.size(); ++i) {
+            text_utf += unicode_cpt_to_utf8(utf_word[i]);
+        }
+
+        std::string encoded_token;
+        for (char & c : text_utf) {
+            encoded_token += unicode_byte_to_utf8(c);
+        }
+        bpe_encoded_words.emplace_back(encoded_token);
+    }
+    return bpe_encoded_words;
+}
+
 std::vector<std::string> unicode_regex_split(const std::string & text, const std::vector<std::string> & regex_exprs) {
     // unicode categories
     static const std::map<std::string, int> k_ucat_enum = {
@@ -1143,5 +1144,5 @@ std::vector<std::string> unicode_regex_split(const std::string & text, const std
         start += offset;
     }
 
-    return unicode_byte_encoding_process(bpe_words);
+    return bpe_words;
 }

@@ -53,6 +53,7 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_AFMOE           = 42,
     LLAMA_VOCAB_PRE_TYPE_SOLAR_OPEN      = 43,
     LLAMA_VOCAB_PRE_TYPE_YOUTU           = 44,
+    LLAMA_VOCAB_PRE_TYPE_JINA_V2_ZH      = 45,
 };
 
 struct LLM_KV;
@@ -130,6 +131,8 @@ struct llama_vocab {
     bool get_remove_extra_whitespaces  () const;
     bool get_escape_whitespaces        () const;
     bool get_treat_whitespace_as_suffix() const;
+    bool get_apply_lowercase           () const;
+    bool get_use_byte_encoding         () const;
 
     int max_token_len() const;
 
