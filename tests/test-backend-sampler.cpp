@@ -11,7 +11,6 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
-#include <iostream>
 #include <fstream>
 #include <map>
 #include <string>
@@ -19,9 +18,9 @@
 #include <vector>
 
 struct backend_cli_args {
-    const char * model = nullptr;
-    const char * test = nullptr;
-    const char * device = "cpu";
+    std::string model;
+    std::string test;
+    std::string device = "auto";
 };
 
 struct test_model_context {
@@ -41,30 +40,36 @@ struct test_model_context {
 
         auto mparams = llama_model_default_params();
 
-        ggml_backend_dev_t devs[2];
-        if (std::string_view(args.device) == "gpu") {
-            ggml_backend_dev_t gpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
-            if (gpu == nullptr) {
-                fprintf(stderr, "Error: GPU requested but not available\n");
+        ggml_backend_dev_t devs[2] = { nullptr, nullptr };
+
+        if (args.device != "auto") {
+            if (args.device == "gpu") {
+                devs[0] = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+
+                if (devs[0] == nullptr) {
+                    fprintf(stderr, "Error: GPU requested but not available\n");
+                    return false;
+                }
+
+                mparams.n_gpu_layers = 999;
+            } else if (args.device == "cpu") {
+                devs[0] = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+
+                mparams.n_gpu_layers = 0;
+            } else {
+                fprintf(stderr, "Error: invalid device '%s'\n", args.device.c_str());
                 return false;
             }
-            devs[0] = gpu;
-            devs[1] = nullptr; // null terminator
+
             mparams.devices = devs;
-            mparams.n_gpu_layers = 999;
-        } else if (std::string_view(args.device) == "cpu") {
-            ggml_backend_dev_t cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-            devs[0] = cpu;
-            devs[1] = nullptr; // null terminator
-            mparams.devices = devs;
+
+            fprintf(stderr, "Using device: %s\n", ggml_backend_dev_name(devs[0]));
         }
 
-        fprintf(stderr, "Using device: %s\n", ggml_backend_dev_name(devs[0]));
-
-        model.reset(llama_model_load_from_file(args.model, mparams));
+        model.reset(llama_model_load_from_file(args.model.c_str(), mparams));
 
         if (!model) {
-            fprintf(stderr, "Warning: failed to load model '%s', skipping test\n", args.model);
+            fprintf(stderr, "Warning: failed to load model '%s', skipping test\n", args.model.c_str());
             return false;
         }
         n_vocab = llama_vocab_n_tokens(get_vocab());
@@ -1090,7 +1095,7 @@ static void test_backend_max_outputs(const backend_cli_args & args) {
 }
 
 struct backend_test_case {
-    const char * name;
+    std::string name;
     void (*fn)(const backend_cli_args &);
     bool enabled_by_default;
 };
@@ -1154,7 +1159,7 @@ static backend_cli_args parse_backend_cli(int argc, char ** argv) {
             out.device = arg + 9;
             continue;
         }
-        if (!out.model) {
+        if (out.model.empty()) {
             out.model = arg;
             continue;
         }
@@ -1163,28 +1168,28 @@ static backend_cli_args parse_backend_cli(int argc, char ** argv) {
         exit(EXIT_FAILURE);
     }
 
-    if (std::strcmp(out.device, "cpu") != 0 && std::strcmp(out.device, "gpu") != 0) {
-        fprintf(stderr, "Invalid device '%s'. Must be 'cpu' or 'gpu'\n", out.device);
+    if (out.device != "cpu" && out.device != "gpu" && out.device != "auto") {
+        fprintf(stderr, "Invalid device '%s'. Must be 'cpu', 'gpu' or 'auto'\n", out.device.c_str());
         exit(EXIT_FAILURE);
     }
 
     return out;
 }
 
-static std::vector<const backend_test_case *> collect_tests_to_run(const char * requested) {
+static std::vector<const backend_test_case *> collect_tests_to_run(const std::string & requested) {
     std::vector<const backend_test_case *> selected;
 
-    if (requested != nullptr) {
+    if (!requested.empty()) {
         for (const auto & test : BACKEND_TESTS) {
-            if (std::strcmp(test.name, requested) == 0) {
+            if (test.name == requested) {
                 selected.push_back(&test);
                 break;
             }
         }
         if (selected.empty()) {
-            fprintf(stderr, "Unknown test '%s'. Available tests:\n", requested);
+            fprintf(stderr, "Unknown test '%s'. Available tests:\n", requested.c_str());
             for (const auto & test : BACKEND_TESTS) {
-                fprintf(stderr, "  %s\n", test.name);
+                fprintf(stderr, "  %s\n", test.name.c_str());
             }
             exit(EXIT_FAILURE);
         }
@@ -1205,7 +1210,7 @@ static std::vector<const backend_test_case *> collect_tests_to_run(const char * 
 
 static void run_tests(const std::vector<const backend_test_case *> & tests, const backend_cli_args & args) {
     for (const auto * test : tests) {
-        fprintf(stderr, "\n=== %s ===\n", test->name);
+        fprintf(stderr, "\n=== %s ===\n", test->name.c_str());
         test->fn(args);
     }
 }
@@ -1214,17 +1219,17 @@ static void run_tests(const std::vector<const backend_test_case *> & tests, cons
 int main(int argc, char ** argv) {
     backend_cli_args args = parse_backend_cli(argc, argv);
 
-    if (args.model == nullptr) {
+    if (args.model.empty()) {
         args.model = get_model_or_exit(1, argv);
     }
 
     std::ifstream file(args.model);
     if (!file.is_open()) {
-        fprintf(stderr, "no model '%s' found\n", args.model);
+        fprintf(stderr, "no model '%s' found\n", args.model.c_str());
         return EXIT_FAILURE;
     }
 
-    fprintf(stderr, "using '%s'\n", args.model);
+    fprintf(stderr, "using '%s'\n", args.model.c_str());
 
     ggml_time_init();
 
