@@ -1,4 +1,5 @@
 #include "server-context.h"
+#include "debug.h"
 #include "server-common.h"
 #include "server-http.h"
 #include "server-task.h"
@@ -626,6 +627,8 @@ private:
 
     bool sleeping = false;
 
+    base_callback_data cb_data;
+
     void destroy() {
         llama_init.reset();
         ctx = nullptr;
@@ -750,6 +753,10 @@ private:
             mparams.warmup           = params_base.warmup;
             mparams.image_min_tokens = params_base.image_min_tokens;
             mparams.image_max_tokens = params_base.image_max_tokens;
+            if (std::getenv("MTMD_DEBUG_GRAPH") != nullptr) {
+                mparams.cb_eval_user_data = &cb_data;
+                mparams.cb_eval = ggml_debug<false>;
+            }
             mctx = mtmd_init_from_file(mmproj_path.c_str(), model, mparams);
             if (mctx == nullptr) {
                 SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());
