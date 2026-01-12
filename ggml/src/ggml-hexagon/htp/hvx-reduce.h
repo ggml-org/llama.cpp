@@ -148,6 +148,7 @@ static inline HVX_Vector hvx_vec_reduce_max2_fp32(HVX_Vector in, HVX_Vector _max
 
 #define HVX_REDUCE_MAX_OP(acc, val) Q6_Vsf_vmax_VsfVsf(acc, val)
 #define HVX_REDUCE_SUM_OP(acc, val) Q6_Vqf32_vadd_VsfVsf(Q6_Vsf_equals_Vqf32(acc), val)
+#define HVX_SUM_SQ_OP(acc, val) Q6_Vqf32_vadd_Vqf32Vqf32(acc, Q6_Vqf32_vmpy_VsfVsf(val, val))
 #define HVX_REDUCE_MAX_SCALAR(v) hvx_vec_get_fp32(v)
 #define HVX_REDUCE_SUM_SCALAR(v) hvx_vec_get_fp32(Q6_Vsf_equals_Vqf32(v))
 
@@ -193,43 +194,32 @@ static inline float hvx_reduce_sum_f32(const uint8_t * restrict src, const int n
     }
 }
 
+// Sum of squares variants
+
+static inline float hvx_sum_of_squares_f32_a(const uint8_t * restrict src, const int num_elems) {
+    HVX_Vector init_vec = Q6_V_vsplat_R(0);
+    assert((uintptr_t) src % 128 == 0);
+    hvx_reduce_loop_body(HVX_Vector, init_vec, init_vec, HVX_SUM_SQ_OP, hvx_vec_qf32_reduce_sum, HVX_REDUCE_SUM_SCALAR);
+}
+
+static inline float hvx_sum_of_squares_f32_u(const uint8_t * restrict src, const int num_elems) {
+    HVX_Vector init_vec = Q6_V_vsplat_R(0);
+    hvx_reduce_loop_body(HVX_UVector, init_vec, init_vec, HVX_SUM_SQ_OP, hvx_vec_qf32_reduce_sum, HVX_REDUCE_SUM_SCALAR);
+}
+
+static inline float hvx_sum_of_squares_f32(const uint8_t * restrict src, const int num_elems) {
+    if (hex_is_aligned((void *) src, 128)) {
+        return hvx_sum_of_squares_f32_a(src, num_elems);
+    } else {
+        return hvx_sum_of_squares_f32_u(src, num_elems);
+    }
+}
+
 #undef hvx_reduce_loop_body
 #undef HVX_REDUCE_MAX_OP
 #undef HVX_REDUCE_SUM_OP
 #undef HVX_REDUCE_MAX_SCALAR
 #undef HVX_REDUCE_SUM_SCALAR
-
-static inline float hvx_sum_of_squares_f32(const uint8_t * restrict src, const int num_elems) {
-    int left_over       = num_elems & (VLEN_FP32 - 1);
-    int num_elems_whole = num_elems - left_over;
-
-    assert((1 == hex_is_aligned((void *) src, VLEN)) || (0 == num_elems_whole));
-
-    HVX_Vector * restrict vec_in1 = (HVX_Vector *) src;
-
-    HVX_Vector sum_vec_acc = Q6_V_vsplat_R(0x00000000);
-    HVX_Vector zero_vec    = Q6_V_vsplat_R(0x00000000);
-
-    #pragma unroll(4)
-    for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
-        HVX_Vector v = Q6_Vqf32_vmpy_VsfVsf(*vec_in1, *vec_in1);
-        sum_vec_acc  = Q6_Vqf32_vadd_Vqf32Vqf32(sum_vec_acc, v);
-        vec_in1++;
-    }
-
-    if (left_over > 0) {
-        const float * srcf = (const float *) src + num_elems_whole;
-
-        HVX_Vector vec_left = *(HVX_UVector *) srcf;
-
-        HVX_Vector vec_left_sq = Q6_Vqf32_vmpy_VsfVsf(vec_left, vec_left);
-        HVX_Vector vec_tmp     = Q6_V_valign_VVR(vec_left_sq, zero_vec, left_over * SIZEOF_FP32);
-
-        sum_vec_acc = Q6_Vqf32_vadd_Vqf32Vqf32(sum_vec_acc, vec_tmp);
-    }
-
-    HVX_Vector v = hvx_vec_qf32_reduce_sum(sum_vec_acc);
-    return hvx_vec_get_fp32(Q6_Vsf_equals_Vqf32(v));
-}
+#undef HVX_SUM_SQ_OP
 
 #endif /* HVX_REDUCE_H */

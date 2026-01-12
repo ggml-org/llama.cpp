@@ -162,7 +162,6 @@ static void unary_job_f32_per_thread(const struct htp_tensor * src,
     int opt_path   = 0;
     if ((0 == hex_is_aligned((void *) src->data, VLEN)) || (0 == hex_is_aligned((void *) dst->data, VLEN))) {
         is_aligned = 0;
-        FARF(HIGH, "unary-f32: unaligned addresses in unary op, possibly slower execution\n");
     }
     if ((1 == is_aligned) && !(nb01 & (VLEN - 1))) {
         opt_path = 1;
