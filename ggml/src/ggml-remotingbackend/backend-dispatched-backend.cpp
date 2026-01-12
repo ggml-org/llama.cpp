@@ -1,5 +1,5 @@
 #include "backend-dispatched.h"
-#include "backend-internal.h"
+#include "backend-virgl-apir.h"
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "ggml-impl.h"
@@ -8,8 +8,8 @@
 #include <cstdint>
 
 uint32_t backend_backend_graph_compute(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
-    UNUSED(enc);
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(enc);
 
     static bool async_backend_initialized = false;
     static bool async_backend;
@@ -27,7 +27,7 @@ uint32_t backend_backend_graph_compute(apir_encoder * enc, apir_decoder * dec, v
 
     const void * shmem_data = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
     if (!shmem_data) {
-        ERROR("Couldn't get the shmem addr from virgl");
+        GGML_LOG_ERROR("Couldn't get the shmem addr from virgl");
         apir_decoder_set_fatal(dec);
         return 1;
     }
@@ -45,7 +45,7 @@ uint32_t backend_backend_graph_compute(apir_encoder * enc, apir_decoder * dec, v
         if (dev->iface.supports_op(dev, op)) {
             continue;
         }
-        ERROR("Graph node %d (%s) not supported by the backend :/", idx, ggml_op_desc(op));
+        GGML_LOG_ERROR("Graph node %d (%s) not supported by the backend :/", idx, ggml_op_desc(op));
 
         status = GGML_STATUS_ABORTED;
         apir_encode_ggml_status(enc, &status);

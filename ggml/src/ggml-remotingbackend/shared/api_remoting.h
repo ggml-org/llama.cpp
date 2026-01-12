@@ -16,7 +16,7 @@ enum ApirCommandType {
     APIR_COMMAND_TYPE_LoadLibrary = 1,
     APIR_COMMAND_TYPE_Forward     = 2,
 
-    APIR_COMMAND_TYPE_LENGTH = 3,
+    APIR_COMMAND_TYPE_LENGTH      = 3,
 };
 
 typedef uint64_t ApirCommandFlags;
@@ -28,7 +28,7 @@ enum ApirLoadLibraryReturnCode {
     APIR_LOAD_LIBRARY_ENV_VAR_MISSING                = 3,
     APIR_LOAD_LIBRARY_CANNOT_OPEN                    = 4,
     APIR_LOAD_LIBRARY_SYMBOL_MISSING                 = 5,
-    APIR_LOAD_LIBRARY_INIT_BASE_INDEX = 6,  // anything above this is a APIR backend library initialization return code
+    APIR_LOAD_LIBRARY_INIT_BASE_INDEX                = 6,  // anything above this is a APIR backend library initialization return code
 };
 
 enum ApirForwardReturnCode {
@@ -36,7 +36,7 @@ enum ApirForwardReturnCode {
     APIR_FORWARD_NO_DISPATCH_FCT = 1,
     APIR_FORWARD_TIMEOUT         = 2,
 
-    APIR_FORWARD_BASE_INDEX = 3,  // anything above this is a APIR backend library forward return code
+    APIR_FORWARD_BASE_INDEX      = 3,  // anything above this is a APIR backend library forward return code
 } ;
 
 __attribute__((unused)) static inline const char * apir_command_name(ApirCommandType type) {

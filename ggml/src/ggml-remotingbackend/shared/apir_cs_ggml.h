@@ -133,7 +133,7 @@ static inline void apir_encode_cgraph_data(apir_encoder * enc, std::vector<uint8
 }
 
 static inline ggml_cgraph * apir_decode_ggml_cgraph(apir_decoder * dec, size_t cgraph_size) {
-    UNUSED(cgraph_size);
+    GGML_UNUSED(cgraph_size);
 
     uint32_t n_nodes;
     apir_decode_uint32_t(dec, &n_nodes);

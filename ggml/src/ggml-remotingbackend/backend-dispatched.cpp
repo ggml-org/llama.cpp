@@ -1,6 +1,6 @@
 #include "backend-dispatched.h"
+#include "backend-virgl-apir.h"
 
-#include "backend-internal.h"
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "ggml-impl.h"
@@ -17,14 +17,14 @@ long long timer_count = 0;
 
 uint32_t backend_dispatch_initialize(void * ggml_backend_reg_fct_p, void * ggml_backend_init_fct_p) {
     if (reg != NULL) {
-        WARNING("%s: already initialized :/", __func__);
+        GGML_LOG_WARN("%s: already initialized :/", __func__);
         return APIR_BACKEND_INITIALIZE_ALREADY_INITED;
     }
     ggml_backend_reg_t (*ggml_backend_reg_fct)(void) = (ggml_backend_reg_t (*)()) ggml_backend_reg_fct_p;
 
     reg = ggml_backend_reg_fct();
     if (reg == NULL) {
-        ERROR("%s: backend registration failed :/", __func__);
+        GGML_LOG_ERROR("%s: backend registration failed :/", __func__);
         return APIR_BACKEND_INITIALIZE_BACKEND_REG_FAILED;
     }
 
@@ -36,13 +36,12 @@ uint32_t backend_dispatch_initialize(void * ggml_backend_reg_fct_p, void * ggml_
 
     bck = ggml_backend_fct(0);
     if (!bck) {
-        ERROR("%s: backend initialization failed :/", __func__);
+        GGML_LOG_ERROR("%s: backend initialization failed :/", __func__);
         return APIR_BACKEND_INITIALIZE_BACKEND_FAILED;
     }
 
     size_t free, total;
     dev->iface.get_memory(dev, &free, &total);
-    INFO("%s: free memory: %ld MB", __func__, (size_t) free / 1024 / 1024);
 
     return APIR_BACKEND_INITIALIZE_SUCCESS;
 }

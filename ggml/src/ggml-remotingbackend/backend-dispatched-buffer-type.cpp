@@ -1,5 +1,5 @@
 #include "backend-dispatched.h"
-#include "backend-internal.h"
+#include "backend-virgl-apir.h"
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "ggml-impl.h"
@@ -7,7 +7,7 @@
 #include <cstdint>
 
 uint32_t backend_buffer_type_get_name(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
+    GGML_UNUSED(ctx);
     ggml_backend_buffer_type_t buft;
     buft = apir_decode_ggml_buffer_type(dec);
 
@@ -21,7 +21,7 @@ uint32_t backend_buffer_type_get_name(apir_encoder * enc, apir_decoder * dec, vi
 }
 
 uint32_t backend_buffer_type_get_alignment(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
+    GGML_UNUSED(ctx);
     ggml_backend_buffer_type_t buft;
     buft = apir_decode_ggml_buffer_type(dec);
 
@@ -32,7 +32,7 @@ uint32_t backend_buffer_type_get_alignment(apir_encoder * enc, apir_decoder * de
 }
 
 uint32_t backend_buffer_type_get_max_size(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
+    GGML_UNUSED(ctx);
     ggml_backend_buffer_type_t buft;
     buft = apir_decode_ggml_buffer_type(dec);
 
@@ -43,7 +43,7 @@ uint32_t backend_buffer_type_get_max_size(apir_encoder * enc, apir_decoder * dec
 }
 
 uint32_t backend_buffer_type_is_host(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
+    GGML_UNUSED(ctx);
     ggml_backend_buffer_type_t buft;
     buft = apir_decode_ggml_buffer_type(dec);
 
@@ -54,8 +54,7 @@ uint32_t backend_buffer_type_is_host(apir_encoder * enc, apir_decoder * dec, vir
 }
 
 uint32_t backend_buffer_type_alloc_buffer(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
-
+    GGML_UNUSED(ctx);
     ggml_backend_buffer_type_t buft;
     buft = apir_decode_ggml_buffer_type(dec);
 
@@ -76,7 +75,7 @@ uint32_t backend_buffer_type_alloc_buffer(apir_encoder * enc, apir_decoder * dec
 }
 
 uint32_t backend_buffer_type_get_alloc_size(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
+    GGML_UNUSED(ctx);
     ggml_backend_buffer_type_t buft;
     buft = apir_decode_ggml_buffer_type(dec);
 

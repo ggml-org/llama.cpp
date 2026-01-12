@@ -1,5 +1,5 @@
 #include "backend-dispatched.h"
-#include "backend-internal.h"
+#include "backend-virgl-apir.h"
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "ggml-impl.h"
@@ -7,9 +7,9 @@
 #include <cstdint>
 
 uint32_t backend_device_get_device_count(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
-    UNUSED(ctx);
-    UNUSED(dec);
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(dec);
 
     int32_t dev_count = reg->iface.get_device_count(reg);
     apir_encode_int32_t(enc, &dev_count);
@@ -18,9 +18,9 @@ uint32_t backend_device_get_device_count(apir_encoder * enc, apir_decoder * dec,
 }
 
 uint32_t backend_device_get_count(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
-    UNUSED(ctx);
-    UNUSED(dec);
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(dec);
 
     int32_t dev_count = reg->iface.get_device_count(reg);
     apir_encode_int32_t(enc, &dev_count);
@@ -29,8 +29,8 @@ uint32_t backend_device_get_count(apir_encoder * enc, apir_decoder * dec, virgl_
 }
 
 uint32_t backend_device_get_name(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
-    UNUSED(dec);
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(dec);
 
     const char * string = dev->iface.get_name(dev);
 
@@ -42,8 +42,8 @@ uint32_t backend_device_get_name(apir_encoder * enc, apir_decoder * dec, virgl_a
 }
 
 uint32_t backend_device_get_description(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
-    UNUSED(dec);
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(dec);
 
     const char * string = dev->iface.get_description(dev);
 
@@ -55,8 +55,8 @@ uint32_t backend_device_get_description(apir_encoder * enc, apir_decoder * dec, 
 }
 
 uint32_t backend_device_get_type(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
-    UNUSED(dec);
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(dec);
 
     uint32_t type = dev->iface.get_type(dev);
     apir_encode_uint32_t(enc, &type);
@@ -65,8 +65,8 @@ uint32_t backend_device_get_type(apir_encoder * enc, apir_decoder * dec, virgl_a
 }
 
 uint32_t backend_device_get_memory(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
-    UNUSED(dec);
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(dec);
 
     size_t free, total;
     dev->iface.get_memory(dev, &free, &total);
@@ -78,7 +78,7 @@ uint32_t backend_device_get_memory(apir_encoder * enc, apir_decoder * dec, virgl
 }
 
 uint32_t backend_device_supports_op(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
+    GGML_UNUSED(ctx);
 
     const ggml_tensor * op = apir_decode_ggml_tensor_inplace(dec);
 
@@ -90,8 +90,8 @@ uint32_t backend_device_supports_op(apir_encoder * enc, apir_decoder * dec, virg
 }
 
 uint32_t backend_device_get_buffer_type(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
-    UNUSED(dec);
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(dec);
 
     ggml_backend_buffer_type_t bufft = dev->iface.get_buffer_type(dev);
 
@@ -101,8 +101,8 @@ uint32_t backend_device_get_buffer_type(apir_encoder * enc, apir_decoder * dec, 
 }
 
 uint32_t backend_device_get_props(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
-    UNUSED(dec);
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(dec);
 
     ggml_backend_dev_props props;
     dev->iface.get_props(dev, &props);
@@ -116,15 +116,15 @@ uint32_t backend_device_get_props(apir_encoder * enc, apir_decoder * dec, virgl_
 }
 
 uint32_t backend_device_buffer_from_ptr(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
-    UNUSED(ctx);
-    UNUSED(dec);
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(dec);
 
     uint32_t shmem_res_id;
     apir_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);
 
     void * shmem_ptr = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
     if (!shmem_ptr) {
-        ERROR("Couldn't get the shmem addr from virgl");
+        GGML_LOG_ERROR("Couldn't get the shmem addr from virgl");
         apir_decoder_set_fatal(dec);
         return 1;
     }

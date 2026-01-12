@@ -5,7 +5,6 @@
 
 #include <ggml-backend.h>
 
-#include "backend-utils.h"
 #include "backend-convert.h"
 #include "shared/apir_backend.h"
 #include "shared/apir_cs.h"
