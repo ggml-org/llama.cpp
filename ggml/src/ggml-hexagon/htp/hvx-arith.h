@@ -123,7 +123,7 @@ static inline void hvx_mul_f32_uu(uint8_t * restrict dst, const uint8_t * restri
 
 // Dispatchers
 
-static inline void hvx_add_f32(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const int num_elems) {
+static inline void hvx_add_f32(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const uint32_t num_elems) {
     if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src0, 128)) {
         if (hex_is_aligned((void *) src1, 128)) {
             hvx_add_f32_aa(dst, src0, src1, num_elems);
@@ -137,7 +137,7 @@ static inline void hvx_add_f32(uint8_t * restrict dst, const uint8_t * restrict 
     }
 }
 
-static inline void hvx_sub_f32(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const int num_elems) {
+static inline void hvx_sub_f32(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const uint32_t num_elems) {
     if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src0, 128)) {
         if (hex_is_aligned((void *) src1, 128)) {
             hvx_sub_f32_aa(dst, src0, src1, num_elems);
@@ -151,7 +151,7 @@ static inline void hvx_sub_f32(uint8_t * restrict dst, const uint8_t * restrict 
     }
 }
 
-static inline void hvx_mul_f32(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const int num_elems) {
+static inline void hvx_mul_f32(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const uint32_t num_elems) {
     if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src0, 128)) {
         if (hex_is_aligned((void *) src1, 128)) {
             hvx_mul_f32_aa(dst, src0, src1, num_elems);
@@ -165,23 +165,9 @@ static inline void hvx_mul_f32(uint8_t * restrict dst, const uint8_t * restrict 
     }
 }
 
-// Optimized aliases (assuming alignment)
-
-static inline void hvx_add_f32_opt(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const int num_elems) {
-    hvx_add_f32_aa(dst, src0, src1, num_elems);
-}
-
-static inline void hvx_sub_f32_opt(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const int num_elems) {
-    hvx_sub_f32_aa(dst, src0, src1, num_elems);
-}
-
-static inline void hvx_mul_f32_opt(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const int num_elems) {
-    hvx_mul_f32_aa(dst, src0, src1, num_elems);
-}
-
 // Mul-Mul Optimized
 
-static inline void hvx_mul_mul_f32_opt(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const uint8_t * restrict src2, const int num_elems) {
+static inline void hvx_mul_mul_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, const uint8_t * restrict src2, const uint32_t num_elems) {
     assert((unsigned long) dst % 128 == 0);
     assert((unsigned long) src0 % 128 == 0);
     assert((unsigned long) src1 % 128 == 0);

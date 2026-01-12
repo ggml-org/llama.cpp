@@ -169,7 +169,7 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
 
             //swiglu(x) = x1 * sigmoid(x0)
             hvx_sigmoid_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, nc);
-            hvx_mul_mul_f32_opt((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr,
+            hvx_mul_mul_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr,
                                 (const uint8_t *) src1_spad_ptr, nc);
         }
 
@@ -307,7 +307,7 @@ static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
             // x2 (dst_spad_data) = sigmoid(x1) = 1/(1+exp(-x1))
             hvx_sigmoid_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) dst_spad_ptr, nc);
             // out = x * sigmoid(alpha * x) * (y + 1.f)
-            hvx_mul_mul_f32_opt((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr,
+            hvx_mul_mul_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr,
                                 (const uint8_t *) src1_spad_ptr, nc);
         }
 
@@ -410,7 +410,7 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
             // gelu = x * sigmoid(1.702 * x) // current implementation
             hvx_mul_scalar_f32((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (float) 1.702, ne0);
             hvx_sigmoid_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) dst_spad_ptr, ne0);
-            hvx_mul_f32_opt((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr, ne0);
+            hvx_mul_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr, ne0);
         }
 
         dma_queue_push_vtcm_to_ddr(dma_queue,
@@ -516,7 +516,7 @@ static void unary_silu_fp32_per_thread(const struct htp_tensor * src0,
 
             // silu = x * sigmoid(x)
             hvx_sigmoid_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, ne0);
-            hvx_mul_f32_opt((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr, ne0);
+            hvx_mul_f32_aa((uint8_t *) dst_spad_ptr, (const uint8_t *) src0_spad_ptr, (const uint8_t *) dst_spad_ptr, ne0);
         }
 
         dma_queue_push_vtcm_to_ddr(dma_queue,
