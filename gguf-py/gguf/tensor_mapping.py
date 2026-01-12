@@ -1700,10 +1700,9 @@ class TensorNameMap:
             "conformer.layers.{bid}.norm_conv", # lfm2
         ),
 
-        # NextN/MTP tensors for GLM4_MOE
+        # NextN/MTP tensors for GLM4_MOE and exaone-moe
         MODEL_TENSOR.NEXTN_EH_PROJ: (
             "model.layers.{bid}.eh_proj",
-            "mtp.fc", # exaone-moe
         ),
 
         MODEL_TENSOR.NEXTN_EMBED_TOKENS: (
@@ -1712,12 +1711,10 @@ class TensorNameMap:
 
         MODEL_TENSOR.NEXTN_ENORM: (
             "model.layers.{bid}.enorm",
-            "mtp.pre_fc_norm_embedding", # exaone-moe
         ),
 
         MODEL_TENSOR.NEXTN_HNORM: (
             "model.layers.{bid}.hnorm",
-            "mtp.pre_fc_norm_hidden", # exaone-moe
         ),
 
         MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD: (
@@ -1726,7 +1723,6 @@ class TensorNameMap:
 
         MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM: (
             "model.layers.{bid}.shared_head.norm",
-            "mtp.norm", # exaone-moe
         ),
     }
 
