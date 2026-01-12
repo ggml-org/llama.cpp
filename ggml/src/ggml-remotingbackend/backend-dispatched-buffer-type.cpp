@@ -1,18 +1,19 @@
-#include <cstdint>
-#include "backend-internal.h"
 #include "backend-dispatched.h"
-
-#include "ggml-impl.h"
+#include "backend-internal.h"
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
+#include "ggml-impl.h"
 
-uint32_t
-backend_buffer_type_get_name(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+#include <cstdint>
+
+uint32_t backend_buffer_type_get_name(struct apir_encoder *       enc,
+                                      struct apir_decoder *       dec,
+                                      struct virgl_apir_context * ctx) {
     UNUSED(ctx);
     ggml_backend_buffer_type_t buft;
     buft = apir_decode_ggml_buffer_type(dec);
 
-    const char *string = buft->iface.get_name(buft);
+    const char * string = buft->iface.get_name(buft);
 
     const size_t string_size = strlen(string) + 1;
     apir_encode_array_size(enc, string_size);
@@ -21,8 +22,9 @@ backend_buffer_type_get_name(struct apir_encoder *enc, struct apir_decoder *dec,
     return 0;
 }
 
-uint32_t
-backend_buffer_type_get_alignment(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+uint32_t backend_buffer_type_get_alignment(struct apir_encoder *       enc,
+                                           struct apir_decoder *       dec,
+                                           struct virgl_apir_context * ctx) {
     UNUSED(ctx);
     ggml_backend_buffer_type_t buft;
     buft = apir_decode_ggml_buffer_type(dec);
@@ -33,8 +35,9 @@ backend_buffer_type_get_alignment(struct apir_encoder *enc, struct apir_decoder 
     return 0;
 }
 
-uint32_t
-backend_buffer_type_get_max_size(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+uint32_t backend_buffer_type_get_max_size(struct apir_encoder *       enc,
+                                          struct apir_decoder *       dec,
+                                          struct virgl_apir_context * ctx) {
     UNUSED(ctx);
     ggml_backend_buffer_type_t buft;
     buft = apir_decode_ggml_buffer_type(dec);
@@ -45,8 +48,9 @@ backend_buffer_type_get_max_size(struct apir_encoder *enc, struct apir_decoder *
     return 0;
 }
 
-uint32_t
-backend_buffer_type_is_host(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+uint32_t backend_buffer_type_is_host(struct apir_encoder *       enc,
+                                     struct apir_decoder *       dec,
+                                     struct virgl_apir_context * ctx) {
     UNUSED(ctx);
     ggml_backend_buffer_type_t buft;
     buft = apir_decode_ggml_buffer_type(dec);
@@ -57,8 +61,9 @@ backend_buffer_type_is_host(struct apir_encoder *enc, struct apir_decoder *dec, 
     return 0;
 }
 
-uint32_t
-backend_buffer_type_alloc_buffer(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+uint32_t backend_buffer_type_alloc_buffer(struct apir_encoder *       enc,
+                                          struct apir_decoder *       dec,
+                                          struct virgl_apir_context * ctx) {
     UNUSED(ctx);
 
     ggml_backend_buffer_type_t buft;
@@ -80,13 +85,14 @@ backend_buffer_type_alloc_buffer(struct apir_encoder *enc, struct apir_decoder *
     return 0;
 }
 
-uint32_t
-backend_buffer_type_get_alloc_size(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+uint32_t backend_buffer_type_get_alloc_size(struct apir_encoder *       enc,
+                                            struct apir_decoder *       dec,
+                                            struct virgl_apir_context * ctx) {
     UNUSED(ctx);
     ggml_backend_buffer_type_t buft;
     buft = apir_decode_ggml_buffer_type(dec);
 
-    const ggml_tensor *op = apir_decode_ggml_tensor_inplace(dec);
+    const ggml_tensor * op = apir_decode_ggml_tensor_inplace(dec);
 
     size_t value = buft->iface.get_alloc_size(buft, op);
 

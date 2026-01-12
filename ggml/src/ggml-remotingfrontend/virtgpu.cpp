@@ -1,43 +1,39 @@
-#include <stdio.h>
-#include <cassert>
-#include <cerrno>
-#include <unistd.h>
-
-#include <cstdlib>
-
 #include "virtgpu.h"
 
-static virt_gpu_result_t virtgpu_open_device(struct virtgpu *gpu, const drmDevicePtr dev);
-static virt_gpu_result_t virtgpu_open(struct virtgpu *gpu);
+#include <stdio.h>
+#include <unistd.h>
 
+#include <cassert>
+#include <cerrno>
+#include <cstdlib>
 
-static virt_gpu_result_t virtgpu_init_capset(struct virtgpu *gpu);
-static virt_gpu_result_t virtgpu_init_context(struct virtgpu *gpu);
+static virt_gpu_result_t virtgpu_open_device(struct virtgpu * gpu, const drmDevicePtr dev);
+static virt_gpu_result_t virtgpu_open(struct virtgpu * gpu);
 
-static int virtgpu_ioctl_context_init(struct virtgpu *gpu,
-                                      enum virgl_renderer_capset capset_id);
-static int
-virtgpu_ioctl_get_caps(struct virtgpu *gpu,
-                       enum virgl_renderer_capset id,
-                       uint32_t version,
-                       void *capset,
-                       size_t capset_size);
-static uint64_t virtgpu_ioctl_getparam(struct virtgpu *gpu, uint64_t param);
-static void virtgpu_init_renderer_info(struct virtgpu *gpu);
+static virt_gpu_result_t virtgpu_init_capset(struct virtgpu * gpu);
+static virt_gpu_result_t virtgpu_init_context(struct virtgpu * gpu);
 
-struct timer_data wait_host_reply_timer = {0, 0, 0, "wait_host_reply"};
+static int      virtgpu_ioctl_context_init(struct virtgpu * gpu, enum virgl_renderer_capset capset_id);
+static int      virtgpu_ioctl_get_caps(struct virtgpu *           gpu,
+                                       enum virgl_renderer_capset id,
+                                       uint32_t                   version,
+                                       void *                     capset,
+                                       size_t                     capset_size);
+static uint64_t virtgpu_ioctl_getparam(struct virtgpu * gpu, uint64_t param);
+static void     virtgpu_init_renderer_info(struct virtgpu * gpu);
 
-static void log_call_duration(long long call_duration_ns, const char *name);
+struct timer_data wait_host_reply_timer = { 0, 0, 0, "wait_host_reply" };
 
-const uint64_t APIR_HANDSHAKE_MAX_WAIT_MS = 2*1000; // 2s
-const uint64_t APIR_LOADLIBRARY_MAX_WAIT_MS = 60*1000; // 60s
+static void log_call_duration(long long call_duration_ns, const char * name);
 
-static int
-virtgpu_handshake(struct virtgpu *gpu) {
-    struct apir_encoder *encoder;
-    struct apir_decoder *decoder;
+const uint64_t APIR_HANDSHAKE_MAX_WAIT_MS   = 2 * 1000;   // 2s
+const uint64_t APIR_LOADLIBRARY_MAX_WAIT_MS = 60 * 1000;  // 60s
 
-    encoder = remote_call_prepare(gpu,  APIR_COMMAND_TYPE_HandShake, 0);
+static int virtgpu_handshake(struct virtgpu * gpu) {
+    struct apir_encoder * encoder;
+    struct apir_decoder * decoder;
+
+    encoder = remote_call_prepare(gpu, APIR_COMMAND_TYPE_HandShake, 0);
     if (!encoder) {
         FATAL("%s: failed to prepare the remote call encoder :/", __func__);
         return 1;
@@ -52,14 +48,16 @@ virtgpu_handshake(struct virtgpu *gpu) {
 
     /* *** */
 
-    uint32_t ret_magic;
+    uint32_t  ret_magic;
     long long call_duration_ns;
     ret_magic = remote_call(gpu, encoder, &decoder, APIR_HANDSHAKE_MAX_WAIT_MS, &call_duration_ns);
     log_call_duration(call_duration_ns, "API Remoting handshake");
 
     if (!decoder) {
-        FATAL("%s: failed to initiate the communication with the virglrenderer library. "
-              "Most likely, the wrong virglrenderer library was loaded in the hypervisor.", __func__);
+        FATAL(
+            "%s: failed to initiate the communication with the virglrenderer library. "
+            "Most likely, the wrong virglrenderer library was loaded in the hypervisor.",
+            __func__);
         return 1;
     }
 
@@ -69,8 +67,8 @@ virtgpu_handshake(struct virtgpu *gpu) {
     uint32_t host_minor;
 
     if (ret_magic != APIR_HANDSHAKE_MAGIC) {
-        FATAL("%s: handshake with the virglrenderer failed (code=%d | %s):/",
-              __func__, ret_magic, apir_backend_initialize_error(ret_magic));
+        FATAL("%s: handshake with the virglrenderer failed (code=%d | %s):/", __func__, ret_magic,
+              apir_backend_initialize_error(ret_magic));
     } else {
         apir_decode_uint32_t(decoder, &host_major);
         apir_decode_uint32_t(decoder, &host_minor);
@@ -94,13 +92,12 @@ virtgpu_handshake(struct virtgpu *gpu) {
     return 0;
 }
 
-static ApirLoadLibraryReturnCode
-virtgpu_load_library(struct virtgpu *gpu) {
-    struct apir_encoder *encoder;
-    struct apir_decoder *decoder;
+static ApirLoadLibraryReturnCode virtgpu_load_library(struct virtgpu * gpu) {
+    struct apir_encoder *     encoder;
+    struct apir_decoder *     decoder;
     ApirLoadLibraryReturnCode ret;
 
-    encoder = remote_call_prepare(gpu,  APIR_COMMAND_TYPE_LoadLibrary, 0);
+    encoder = remote_call_prepare(gpu, APIR_COMMAND_TYPE_LoadLibrary, 0);
     if (!encoder) {
         FATAL("%s: hypercall error: failed to prepare the remote call encoder :/", __func__);
         return APIR_LOAD_LIBRARY_HYPERCALL_INITIALIZATION_ERROR;
@@ -108,8 +105,8 @@ virtgpu_load_library(struct virtgpu *gpu) {
 
     long long call_duration_ns;
 
-    ret = (ApirLoadLibraryReturnCode) remote_call(gpu, encoder, &decoder,
-                                                  APIR_LOADLIBRARY_MAX_WAIT_MS, &call_duration_ns);
+    ret = (ApirLoadLibraryReturnCode) remote_call(gpu, encoder, &decoder, APIR_LOADLIBRARY_MAX_WAIT_MS,
+                                                  &call_duration_ns);
     log_call_duration(call_duration_ns, "API Remoting LoadLibrary");
 
     if (!decoder) {
@@ -128,8 +125,8 @@ virtgpu_load_library(struct virtgpu *gpu) {
     // something wrong happened, find out what.
 
     if (ret < APIR_LOAD_LIBRARY_INIT_BASE_INDEX) {
-        FATAL("%s: virglrenderer could not load the API Remoting backend library: %s (code %d)",
-              __func__, apir_load_library_error(ret), ret);
+        FATAL("%s: virglrenderer could not load the API Remoting backend library: %s (code %d)", __func__,
+              apir_load_library_error(ret), ret);
         return ret;
     }
 
@@ -138,19 +135,18 @@ virtgpu_load_library(struct virtgpu *gpu) {
     ApirLoadLibraryReturnCode apir_ret = (ApirLoadLibraryReturnCode) (ret - APIR_LOAD_LIBRARY_INIT_BASE_INDEX);
 
     if (apir_ret < APIR_LOAD_LIBRARY_INIT_BASE_INDEX) {
-        FATAL("%s: the API Remoting backend library couldn't load the backend library: apir code=%d | %s):/",
-              __func__, apir_ret, apir_load_library_error(apir_ret));
+        FATAL("%s: the API Remoting backend library couldn't load the backend library: apir code=%d | %s):/", __func__,
+              apir_ret, apir_load_library_error(apir_ret));
     } else {
         uint32_t lib_ret = apir_ret - APIR_LOAD_LIBRARY_INIT_BASE_INDEX;
-        FATAL("%s: the API Remoting backend library initialize its backend library: apir code=%d):/",
-              __func__, lib_ret);
+        FATAL("%s: the API Remoting backend library initialize its backend library: apir code=%d):/", __func__,
+              lib_ret);
     }
     return ret;
 }
 
-struct virtgpu *
-create_virtgpu() {
-    struct virtgpu *gpu = new struct virtgpu();
+struct virtgpu * create_virtgpu() {
+    struct virtgpu * gpu = new struct virtgpu();
 
     gpu->use_apir_capset = getenv("GGML_REMOTING_USE_APIR_CAPSET") != nullptr;
 
@@ -162,13 +158,13 @@ create_virtgpu() {
     }
 
     if (virtgpu_init_capset(gpu) != APIR_SUCCESS) {
-	FATAL("%s: failed to initialize the GPU capset :/", __func__);
-	return NULL;
+        FATAL("%s: failed to initialize the GPU capset :/", __func__);
+        return NULL;
     }
 
     if (virtgpu_init_context(gpu) != APIR_SUCCESS) {
-	FATAL("%s: failed to initialize the GPU context :/", __func__);
-	return NULL;
+        FATAL("%s: failed to initialize the GPU context :/", __func__);
+        return NULL;
     }
 
     if (virtgpu_shmem_create(gpu, SHMEM_REPLY_SIZE, &gpu->reply_shmem)) {
@@ -194,11 +190,9 @@ create_virtgpu() {
     return gpu;
 }
 
-static virt_gpu_result_t
-virtgpu_open(struct virtgpu *gpu)
-{
+static virt_gpu_result_t virtgpu_open(struct virtgpu * gpu) {
     drmDevicePtr devs[8];
-    int count = drmGetDevices2(0, devs, ARRAY_SIZE(devs));
+    int          count = drmGetDevices2(0, devs, ARRAY_SIZE(devs));
     if (count < 0) {
         ERROR("%s: failed to enumerate DRM devices", __func__);
         return APIR_ERROR_INITIALIZATION_FAILED;
@@ -207,8 +201,9 @@ virtgpu_open(struct virtgpu *gpu)
     virt_gpu_result_t result = APIR_ERROR_INITIALIZATION_FAILED;
     for (int i = 0; i < count; i++) {
         result = virtgpu_open_device(gpu, devs[i]);
-        if (result == APIR_SUCCESS)
+        if (result == APIR_SUCCESS) {
             break;
+        }
     }
 
     drmFreeDevices(devs, count);
@@ -216,10 +211,8 @@ virtgpu_open(struct virtgpu *gpu)
     return result;
 }
 
-static virt_gpu_result_t
-virtgpu_open_device(struct virtgpu *gpu, const drmDevicePtr dev)
-{
-    const char *node_path = dev->nodes[DRM_NODE_RENDER];
+static virt_gpu_result_t virtgpu_open_device(struct virtgpu * gpu, const drmDevicePtr dev) {
+    const char * node_path = dev->nodes[DRM_NODE_RENDER];
 
     int fd = open(node_path, O_RDWR | O_CLOEXEC);
     if (fd < 0) {
@@ -228,17 +221,16 @@ virtgpu_open_device(struct virtgpu *gpu, const drmDevicePtr dev)
     }
 
     drmVersionPtr version = drmGetVersion(fd);
-    if (!version || strcmp(version->name, "virtio_gpu") ||
-        version->version_major != 0) {
+    if (!version || strcmp(version->name, "virtio_gpu") || version->version_major != 0) {
         if (version) {
-            MESSAGE("unknown DRM driver %s version %d",
-                    version->name, version->version_major);
+            MESSAGE("unknown DRM driver %s version %d", version->name, version->version_major);
         } else {
             MESSAGE("failed to get DRM driver version");
         }
 
-        if (version)
+        if (version) {
             drmFreeVersion(version);
+        }
         close(fd);
         return APIR_ERROR_INITIALIZATION_FAILED;
     }
@@ -252,9 +244,7 @@ virtgpu_open_device(struct virtgpu *gpu, const drmDevicePtr dev)
     return APIR_SUCCESS;
 }
 
-static virt_gpu_result_t
-virtgpu_init_context(struct virtgpu *gpu)
-{
+static virt_gpu_result_t virtgpu_init_context(struct virtgpu * gpu) {
     assert(!gpu->capset.version);
     const int ret = virtgpu_ioctl_context_init(gpu, gpu->capset.id);
     if (ret) {
@@ -265,21 +255,18 @@ virtgpu_init_context(struct virtgpu *gpu)
     return APIR_SUCCESS;
 }
 
-static virt_gpu_result_t
-virtgpu_init_capset(struct virtgpu *gpu)
-{
+static virt_gpu_result_t virtgpu_init_capset(struct virtgpu * gpu) {
     if (gpu->use_apir_capset) {
-	MESSAGE("Using the APIR capset");
-	gpu->capset.id = VIRGL_RENDERER_CAPSET_APIR;
+        MESSAGE("Using the APIR capset");
+        gpu->capset.id = VIRGL_RENDERER_CAPSET_APIR;
     } else {
-	MESSAGE("Using the Venus capset");
-	gpu->capset.id = VIRGL_RENDERER_CAPSET_VENUS;
+        MESSAGE("Using the Venus capset");
+        gpu->capset.id = VIRGL_RENDERER_CAPSET_VENUS;
     }
     gpu->capset.version = 0;
 
-    int ret = \
-	virtgpu_ioctl_get_caps(gpu, gpu->capset.id, gpu->capset.version,
-			       &gpu->capset.data, sizeof(gpu->capset.data));
+    int ret =
+        virtgpu_ioctl_get_caps(gpu, gpu->capset.id, gpu->capset.version, &gpu->capset.data, sizeof(gpu->capset.data));
 
     if (ret) {
         MESSAGE("failed to get APIR v%d capset: %s", gpu->capset.version, strerror(errno));
@@ -291,73 +278,60 @@ virtgpu_init_capset(struct virtgpu *gpu)
     return APIR_SUCCESS;
 }
 
-static int
-virtgpu_ioctl_context_init(struct virtgpu *gpu,
-                           enum virgl_renderer_capset capset_id)
-{
+static int virtgpu_ioctl_context_init(struct virtgpu * gpu, enum virgl_renderer_capset capset_id) {
     struct drm_virtgpu_context_set_param ctx_set_params[3] = {
         {
-            .param = VIRTGPU_CONTEXT_PARAM_CAPSET_ID,
-            .value = capset_id,
-        },
+         .param = VIRTGPU_CONTEXT_PARAM_CAPSET_ID,
+         .value = capset_id,
+         },
         {
-            .param = VIRTGPU_CONTEXT_PARAM_NUM_RINGS,
-            .value = 1,
-        },
+         .param = VIRTGPU_CONTEXT_PARAM_NUM_RINGS,
+         .value = 1,
+         },
         {
-            .param = VIRTGPU_CONTEXT_PARAM_POLL_RINGS_MASK,
-            .value = 0, /* don't generate drm_events on fence signaling */
+         .param = VIRTGPU_CONTEXT_PARAM_POLL_RINGS_MASK,
+         .value = 0, /* don't generate drm_events on fence signaling */
         },
     };
 
     struct drm_virtgpu_context_init args = {
-        .num_params = ARRAY_SIZE(ctx_set_params),
-        .pad = 0,
-        .ctx_set_params = (uintptr_t)&ctx_set_params,
+        .num_params     = ARRAY_SIZE(ctx_set_params),
+        .pad            = 0,
+        .ctx_set_params = (uintptr_t) &ctx_set_params,
     };
 
     return virtgpu_ioctl(gpu, DRM_IOCTL_VIRTGPU_CONTEXT_INIT, &args);
 }
 
-static int
-virtgpu_ioctl_get_caps(struct virtgpu *gpu,
-                       enum virgl_renderer_capset id,
-                       uint32_t version,
-                       void *capset,
-                       size_t capset_size)
-{
+static int virtgpu_ioctl_get_caps(struct virtgpu *           gpu,
+                                  enum virgl_renderer_capset id,
+                                  uint32_t                   version,
+                                  void *                     capset,
+                                  size_t                     capset_size) {
     struct drm_virtgpu_get_caps args = {
-        .cap_set_id = id,
+        .cap_set_id  = id,
         .cap_set_ver = version,
-        .addr = (uintptr_t)capset,
-        .size = (__u32) capset_size,
-        .pad = 0,
+        .addr        = (uintptr_t) capset,
+        .size        = (__u32) capset_size,
+        .pad         = 0,
     };
 
     return virtgpu_ioctl(gpu, DRM_IOCTL_VIRTGPU_GET_CAPS, &args);
 }
 
-static uint64_t
-virtgpu_ioctl_getparam(struct virtgpu *gpu, uint64_t param)
-{
+static uint64_t virtgpu_ioctl_getparam(struct virtgpu * gpu, uint64_t param) {
     /* val must be zeroed because kernel only writes the lower 32 bits */
-    uint64_t val = 0;
+    uint64_t                    val  = 0;
     struct drm_virtgpu_getparam args = {
         .param = param,
-        .value = (uintptr_t)&val,
+        .value = (uintptr_t) &val,
     };
 
     const int ret = virtgpu_ioctl(gpu, DRM_IOCTL_VIRTGPU_GETPARAM, &args);
     return ret ? 0 : val;
 }
 
-
-struct apir_encoder *
-remote_call_prepare(
-    struct virtgpu *gpu,
-    ApirCommandType apir_cmd_type,
-    int32_t cmd_flags)
-{
+struct apir_encoder * remote_call_prepare(struct virtgpu * gpu, ApirCommandType apir_cmd_type, int32_t cmd_flags) {
     /*
      * Prepare the command encoder and its buffer
      */
@@ -382,7 +356,7 @@ remote_call_prepare(
 
     // for testing during the hypervisor transition
     if (!gpu->use_apir_capset) {
-	cmd_type += VENUS_COMMAND_TYPE_LENGTH;
+        cmd_type += VENUS_COMMAND_TYPE_LENGTH;
     }
     apir_encode_int32_t(&enc, &cmd_type);
     apir_encode_int32_t(&enc, &cmd_flags);
@@ -393,11 +367,7 @@ remote_call_prepare(
     return &enc;
 }
 
-void
-remote_call_finish(
-    struct virtgpu *gpu,
-    struct apir_encoder *enc,
-    struct apir_decoder *dec) {
+void remote_call_finish(struct virtgpu * gpu, struct apir_encoder * enc, struct apir_decoder * dec) {
     UNUSED(gpu);
 
     if (!enc) {
@@ -411,40 +381,37 @@ remote_call_finish(
     // encoder and decoder are statically allocated, nothing to do to release them
 }
 
-uint32_t
-remote_call(
-    struct virtgpu *gpu,
-    struct apir_encoder *encoder,
-    struct apir_decoder **decoder,
-    float max_wait_ms,
-    long long *call_duration_ns)
-{
+uint32_t remote_call(struct virtgpu *       gpu,
+                     struct apir_encoder *  encoder,
+                     struct apir_decoder ** decoder,
+                     float                  max_wait_ms,
+                     long long *            call_duration_ns) {
     /*
      * Prepare the reply notification pointer
      */
 
-    volatile std::atomic_uint *atomic_reply_notif = (volatile std::atomic_uint *) gpu->reply_shmem.mmap_ptr;
-    *atomic_reply_notif = 0;
+    volatile std::atomic_uint * atomic_reply_notif = (volatile std::atomic_uint *) gpu->reply_shmem.mmap_ptr;
+    *atomic_reply_notif                            = 0;
 
     /*
      * Trigger the execbuf ioctl
      */
 
     struct drm_virtgpu_execbuffer args = {
-        .flags = VIRTGPU_EXECBUF_RING_IDX,
-        .size = (uint32_t) (encoder->cur - encoder->start),
+        .flags   = VIRTGPU_EXECBUF_RING_IDX,
+        .size    = (uint32_t) (encoder->cur - encoder->start),
         .command = (uintptr_t) encoder->start,
 
-        .bo_handles = 0,
+        .bo_handles     = 0,
         .num_bo_handles = 0,
 
-        .fence_fd = 0,
-        .ring_idx = 0,
-        .syncobj_stride = 0,
-        .num_in_syncobjs = 0,
+        .fence_fd         = 0,
+        .ring_idx         = 0,
+        .syncobj_stride   = 0,
+        .num_in_syncobjs  = 0,
         .num_out_syncobjs = 0,
-        .in_syncobjs = 0,
-        .out_syncobjs = 0,
+        .in_syncobjs      = 0,
+        .out_syncobjs     = 0,
     };
 
     *decoder = NULL;
@@ -463,9 +430,9 @@ remote_call(
 
     struct timespec ts_start, ts_end;
     clock_gettime(CLOCK_MONOTONIC, &ts_start);
-    long long start_time = (long long)ts_start.tv_sec * 1000000000LL + ts_start.tv_nsec;
+    long long start_time = (long long) ts_start.tv_sec * 1000000000LL + ts_start.tv_nsec;
 
-    bool timedout = false;
+    bool     timedout    = false;
     uint32_t notif_value = 0;
     while (true) {
         notif_value = std::atomic_load_explicit(atomic_reply_notif, std::memory_order_acquire);
@@ -480,8 +447,8 @@ remote_call(
 
         if (max_wait_ms) {
             clock_gettime(CLOCK_MONOTONIC, &ts_end);
-            long long end_time = (long long)ts_end.tv_sec * 1000000000LL + ts_end.tv_nsec;
-            float duration_ms = (end_time - start_time) / 1000000;
+            long long end_time    = (long long) ts_end.tv_sec * 1000000000LL + ts_end.tv_nsec;
+            float     duration_ms = (end_time - start_time) / 1000000;
 
             if (duration_ms > max_wait_ms) {
                 timedout = true;
@@ -505,14 +472,14 @@ remote_call(
     static struct apir_decoder response_dec;
     response_dec.cur = (char *) gpu->reply_shmem.mmap_ptr + sizeof(*atomic_reply_notif);
     response_dec.end = (char *) gpu->reply_shmem.mmap_ptr + gpu->reply_shmem.mmap_size;
-    *decoder = &response_dec;
+    *decoder         = &response_dec;
 
     // extract the actual return value from the notif flag
     uint32_t returned_value = notif_value - 1;
     return returned_value;
 }
 
-static void log_call_duration(long long call_duration_ns, const char *name) {
+static void log_call_duration(long long call_duration_ns, const char * name) {
     double call_duration_ms = (double) call_duration_ns / 1e6;  // 1 millisecond = 1e6 nanoseconds
     double call_duration_s  = (double) call_duration_ns / 1e9;  // 1 second = 1e9 nanoseconds
 

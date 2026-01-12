@@ -1,11 +1,11 @@
-#include <mutex>
-#include <iostream>
-
 #include "ggml-remoting.h"
 
-static struct virtgpu *apir_initialize() {
-    static struct virtgpu *apir_gpu_instance = NULL;
-    static bool apir_initialized = false;
+#include <iostream>
+#include <mutex>
+
+static struct virtgpu * apir_initialize() {
+    static struct virtgpu * apir_gpu_instance = NULL;
+    static bool             apir_initialized  = false;
 
     if (apir_initialized) {
         return apir_gpu_instance;
@@ -22,7 +22,7 @@ static struct virtgpu *apir_initialize() {
 }
 
 static int ggml_backend_remoting_get_device_count() {
-    struct virtgpu *gpu = apir_initialize();
+    struct virtgpu * gpu = apir_initialize();
     if (!gpu) {
         WARNING("apir_initialize failed :/");
         return 0;
@@ -50,7 +50,7 @@ static void ggml_backend_remoting_reg_init_devices(ggml_backend_reg_t reg) {
         return;
     }
 
-    struct virtgpu *gpu = apir_initialize();
+    struct virtgpu * gpu = apir_initialize();
     if (!gpu) {
         FATAL("apir_initialize failed :/");
         return;
@@ -59,20 +59,19 @@ static void ggml_backend_remoting_reg_init_devices(ggml_backend_reg_t reg) {
     static bool initialized = false;
 
     {
-        static std::mutex mutex;
+        static std::mutex           mutex;
         std::lock_guard<std::mutex> lock(mutex);
         if (!initialized) {
-
             for (int i = 0; i < ggml_backend_remoting_get_device_count(); i++) {
-                ggml_backend_remoting_device_context *ctx = new ggml_backend_remoting_device_context;
-                char desc[256] = "API Remoting device";
+                ggml_backend_remoting_device_context * ctx       = new ggml_backend_remoting_device_context;
+                char                                   desc[256] = "API Remoting device";
 
-                ctx->device = i;
-                ctx->name = GGML_REMOTING_FRONTEND_NAME + std::to_string(i);
+                ctx->device      = i;
+                ctx->name        = GGML_REMOTING_FRONTEND_NAME + std::to_string(i);
                 ctx->description = desc;
-                ctx->gpu = gpu;
+                ctx->gpu         = gpu;
 
-                ggml_backend_dev_t dev = new ggml_backend_device {
+                ggml_backend_dev_t dev = new ggml_backend_device{
                     /* .iface   = */ ggml_backend_remoting_device_interface,
                     /* .reg     = */ reg,
                     /* .context = */ ctx,
@@ -90,7 +89,7 @@ static ggml_backend_dev_t ggml_backend_remoting_reg_get_device(ggml_backend_reg_
     return ggml_backend_remoting_get_device(device);
 }
 
-static const char *ggml_backend_remoting_reg_get_name(ggml_backend_reg_t reg) {
+static const char * ggml_backend_remoting_reg_get_name(ggml_backend_reg_t reg) {
     UNUSED(reg);
 
     return GGML_REMOTING_FRONTEND_NAME;
@@ -102,7 +101,6 @@ static const struct ggml_backend_reg_i ggml_backend_remoting_reg_i = {
     /* .get_device       = */ ggml_backend_remoting_reg_get_device,
     /* .get_proc_address = */ NULL,
 };
-
 
 static void showTime() {
     show_timer(&graph_compute_timer);
@@ -121,7 +119,7 @@ static void showTime() {
 }
 
 ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
-    struct virtgpu *gpu = apir_initialize();
+    struct virtgpu * gpu = apir_initialize();
     if (!gpu) {
         FATAL("apir_initialize failed :/");
         return NULL;

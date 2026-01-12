@@ -11,8 +11,11 @@
 #include "shared/apir_cs.h"
 #include "shared/apir_cs_ggml.h"
 
-typedef uint32_t (*backend_dispatch_t)(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx);
+
+typedef uint32_t (*backend_dispatch_t)(struct apir_encoder *       enc,
+                                       struct apir_decoder *       dec,
+                                       struct virgl_apir_context * ctx);
 
 #include "backend-dispatched.gen.h"
 
-uint32_t backend_dispatch_initialize(void *ggml_backend_reg_fct_p, void *ggml_backend_init_fct_p);
+uint32_t backend_dispatch_initialize(void * ggml_backend_reg_fct_p, void * ggml_backend_init_fct_p);
