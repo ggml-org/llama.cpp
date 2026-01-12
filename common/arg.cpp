@@ -1245,14 +1245,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
-        {"--n-layer-exit"}, "N",
-        string_format("exit after N layers (default: %d, 0 = compute all layers)\n"
-            "for layer skip / early exit speculation (CAS-Spec, CLaSp)", params.n_layer_exit),
-        [](common_params & params, int value) {
-            params.n_layer_exit = value;
-        }
-    ).set_env("LLAMA_ARG_N_LAYER_EXIT"));
-    add_opt(common_arg(
         {"--swa-full"},
         string_format("use full-size SWA cache (default: %s)\n"
             "[(more info)](https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)", params.swa_full ? "true" : "false"),
@@ -1313,20 +1305,38 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                                    string_format("error: unknown value for --flash-attn: '%s'\n", value.c_str()));
                            }
                        }).set_env("LLAMA_ARG_FLASH_ATTN"));
+    // KV cache sizing - allocate space for fewer tokens when full context isn't needed
+    // Note: This reduces upfront allocation, NOT per-token memory cost
     add_opt(common_arg(
-        {"--paged-attn"}, "N",
-        string_format("enable paged attention with block size N tokens (default: %d, 0 = disabled)", params.paged_attn_block_size),
+        {"--kv-cache-tokens"}, "N",
+        "limit KV cache to N tokens (reduces memory when full context not needed, 0 = use context size)",
+        [](common_params & params, int value) {
+            // Use block size of 64 by default for efficient memory alignment
+            params.paged_attn_block_size = 64;
+            params.paged_attn_max_blocks = (value + 63) / 64;  // Round up to nearest block
+        }
+    ).set_env("LLAMA_KV_CACHE_TOKENS"));
+    add_opt(common_arg(
+        {"--kv-block-size"}, "N",
+        string_format("KV cache block size in tokens for block tracking (default: %d, 0 = disabled)", params.paged_attn_block_size),
         [](common_params & params, int value) {
             params.paged_attn_block_size = value;
         }
-    ).set_env("LLAMA_PAGED_ATTN"));
+    ).set_env("LLAMA_KV_BLOCK_SIZE"));
     add_opt(common_arg(
-        {"--paged-attn-max-blocks"}, "N",
-        string_format("max blocks for paged attention memory reduction (default: %d, 0 = unlimited)", params.paged_attn_max_blocks),
+        {"--kv-max-blocks"}, "N",
+        string_format("max KV cache blocks to allocate (default: %d, 0 = unlimited)", params.paged_attn_max_blocks),
         [](common_params & params, int value) {
             params.paged_attn_max_blocks = value;
         }
-    ).set_env("LLAMA_PAGED_ATTN_MAX_BLOCKS"));
+    ).set_env("LLAMA_KV_MAX_BLOCKS"));
+    add_opt(common_arg(
+        {"--kv-cache-demand-paged"},
+        "use demand-paged KV cache (Linux: physical memory grows with usage, not allocated upfront)",
+        [](common_params & params) {
+            params.kv_cache_demand_paged = true;
+        }
+    ).set_env("LLAMA_KV_DEMAND_PAGED"));
     add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
         "prompt to start generation with; for system message, use -sys",
@@ -1923,14 +1933,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.yarn_beta_fast = std::stof(value);
         }
     ).set_env("LLAMA_ARG_YARN_BETA_FAST"));
-    add_opt(common_arg(
-        {"--moe-n-expert"}, "N",
-        string_format("MoE: override number of active experts (default: %d = model default)\n"
-                      "for MoE self-draft speculation, use 1 for draft context", params.moe_n_expert_override),
-        [](common_params & params, int value) {
-            params.moe_n_expert_override = value;
-        }
-    ).set_env("LLAMA_ARG_MOE_N_EXPERT"));
     add_opt(common_arg(
         {"-gan", "--grp-attn-n"}, "N",
         string_format("group-attention factor (default: %d)", params.grp_attn_n),

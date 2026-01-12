@@ -1019,7 +1019,6 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "FILL",
 
     "FLASH_ATTN_EXT",
-    "FLASH_ATTN_EXT_PAGED",
     "FLASH_ATTN_BACK",
     "SSM_CONV",
     "SSM_SCAN",
@@ -1048,7 +1047,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1129,7 +1128,6 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "fill(x, c)",
 
     "flash_attn_ext(x)",
-    "flash_attn_ext_paged(x)",
     "flash_attn_back(x)",
     "ssm_conv(x)",
     "ssm_scan(x)",
@@ -1158,7 +1156,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 96, "GGML_OP_COUNT != 96");
+static_assert(GGML_OP_COUNT == 95, "GGML_OP_COUNT != 95");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -5293,7 +5291,7 @@ struct ggml_tensor * ggml_flash_attn_ext(
 void ggml_flash_attn_ext_set_prec(
         struct ggml_tensor * a,
         enum ggml_prec       prec) {
-    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT || a->op == GGML_OP_FLASH_ATTN_EXT_PAGED);
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
 
     const int32_t prec_i32 = (int32_t) prec;
 
@@ -5302,7 +5300,7 @@ void ggml_flash_attn_ext_set_prec(
 
 enum ggml_prec ggml_flash_attn_ext_get_prec(
         const struct ggml_tensor * a) {
-    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT || a->op == GGML_OP_FLASH_ATTN_EXT_PAGED);
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
 
     const int32_t prec_i32 = ggml_get_op_params_i32(a, 3);
 
@@ -5369,7 +5367,7 @@ struct ggml_tensor * ggml_flash_attn_ext_paged(
     ggml_set_op_params_i32(result, 3, GGML_PREC_DEFAULT); // precision
     ggml_set_op_params_i32(result, 4, block_size);        // block size for paging
 
-    result->op     = GGML_OP_FLASH_ATTN_EXT_PAGED;
+    result->op     = GGML_OP_FLASH_ATTN_EXT;  // Uses same op; kernel detects paging via src[4] type
     result->src[0] = q;
     result->src[1] = k;
     result->src[2] = v;

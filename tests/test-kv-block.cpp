@@ -1,12 +1,10 @@
 // Unit tests for llama_kv_block_pool and llama_kv_block_table
-// Tests: allocation, deallocation, reference counting, sequence management
+// Tests: allocation, deallocation, sequence management
 
-// Include from src directory
 #include "../src/llama-kv-block.h"
 
 #include <cassert>
 #include <cstdio>
-#include <cstring>
 #include <vector>
 #include <set>
 
@@ -45,8 +43,7 @@ static bool test_pool_allocate_single() {
     TEST_ASSERT(idx >= 0 && idx < 10);
     TEST_ASSERT(pool.n_free() == 9);
     TEST_ASSERT(pool.n_used() == 1);
-    TEST_ASSERT(!pool.get(idx).is_free());
-    TEST_ASSERT(pool.get(idx).ref_count == 1);
+    TEST_ASSERT(pool.get(idx).allocated);
 
     printf("OK\n");
     return true;
@@ -92,8 +89,8 @@ static bool test_pool_deallocate() {
 
     pool.deallocate(idx1);
     TEST_ASSERT(pool.n_used() == 1);
-    TEST_ASSERT(pool.get(idx1).is_free());
-    TEST_ASSERT(!pool.get(idx2).is_free());
+    TEST_ASSERT(!pool.get(idx1).allocated);
+    TEST_ASSERT(pool.get(idx2).allocated);
 
     // Reallocate - should get same block back (LIFO)
     int32_t idx3 = pool.allocate();
@@ -122,32 +119,6 @@ static bool test_pool_batch_allocate() {
     return true;
 }
 
-static bool test_pool_reference_counting() {
-    printf("  test_pool_reference_counting... ");
-
-    llama_kv_block_pool pool;
-    pool.init(10);
-
-    int32_t idx = pool.allocate();
-    TEST_ASSERT(pool.get(idx).ref_count == 1);
-
-    pool.add_ref(idx);
-    TEST_ASSERT(pool.get(idx).ref_count == 2);
-    TEST_ASSERT(pool.get(idx).is_shared());
-
-    pool.deallocate(idx);
-    TEST_ASSERT(pool.get(idx).ref_count == 1);
-    TEST_ASSERT(!pool.get(idx).is_shared());
-    TEST_ASSERT(!pool.get(idx).is_free());
-
-    pool.deallocate(idx);
-    TEST_ASSERT(pool.get(idx).is_free());
-    TEST_ASSERT(pool.n_free() == 10);
-
-    printf("OK\n");
-    return true;
-}
-
 static bool test_pool_stats() {
     printf("  test_pool_stats... ");
 
@@ -166,7 +137,6 @@ static bool test_pool_stats() {
 
     TEST_ASSERT(stats.n_blocks_total == 100);
     TEST_ASSERT(stats.n_blocks_used == 10);
-    TEST_ASSERT(stats.n_blocks_free == 90);
     TEST_ASSERT(stats.n_tokens_total == 6400);  // 100 * 64
     TEST_ASSERT(stats.n_tokens_used == 9 * 64 + 32);  // 608
     TEST_ASSERT(stats.n_tokens_wasted == 32);  // 10 * 64 - 608
@@ -374,24 +344,10 @@ static bool test_table_total_mappings() {
 // Helper Function Tests
 //
 
-static bool test_helper_functions() {
-    printf("  test_helper_functions... ");
+static bool test_tokens_to_blocks() {
+    printf("  test_tokens_to_blocks... ");
 
     const uint32_t tpb = 64;  // tokens per block
-
-    TEST_ASSERT(cell_to_block(0, tpb) == 0);
-    TEST_ASSERT(cell_to_block(63, tpb) == 0);
-    TEST_ASSERT(cell_to_block(64, tpb) == 1);
-    TEST_ASSERT(cell_to_block(128, tpb) == 2);
-
-    TEST_ASSERT(block_to_cell(0, tpb) == 0);
-    TEST_ASSERT(block_to_cell(1, tpb) == 64);
-    TEST_ASSERT(block_to_cell(2, tpb) == 128);
-
-    TEST_ASSERT(cell_offset_in_block(0, tpb) == 0);
-    TEST_ASSERT(cell_offset_in_block(32, tpb) == 32);
-    TEST_ASSERT(cell_offset_in_block(64, tpb) == 0);
-    TEST_ASSERT(cell_offset_in_block(65, tpb) == 1);
 
     TEST_ASSERT(tokens_to_blocks(0, tpb) == 0);
     TEST_ASSERT(tokens_to_blocks(1, tpb) == 1);
@@ -425,11 +381,7 @@ static bool test_pool_table_integration() {
         int32_t phys = pool.allocate();
         TEST_ASSERT(phys >= 0);
 
-        uint32_t logical = table.append_block(seq_id, phys);
-
-        // Update block metadata
-        pool.get(phys).seq_id = seq_id;
-        pool.get(phys).logical_idx = logical;
+        table.append_block(seq_id, phys);
         pool.get(phys).n_tokens = tokens_per_block;
     }
 
@@ -445,45 +397,6 @@ static bool test_pool_table_integration() {
 
     TEST_ASSERT(pool.n_used() == 0);
     TEST_ASSERT(!table.has_sequence(seq_id));
-
-    printf("OK\n");
-    return true;
-}
-
-static bool test_cow_simulation() {
-    printf("  test_cow_simulation... ");
-
-    llama_kv_block_pool pool;
-    llama_kv_block_table table;
-
-    pool.init(100);
-
-    // Simulate copy-on-write for prefix sharing
-    // 1. Seq 0 allocates blocks
-    int32_t phys0 = pool.allocate();
-    int32_t phys1 = pool.allocate();
-    table.append_block(0, phys0);
-    table.append_block(0, phys1);
-
-    // 2. Seq 1 copies from seq 0 (shares blocks)
-    table.copy_sequence(0, 1);
-    pool.add_ref(phys0);
-    pool.add_ref(phys1);
-
-    TEST_ASSERT(pool.get(phys0).ref_count == 2);
-    TEST_ASSERT(pool.get(phys1).ref_count == 2);
-    TEST_ASSERT(pool.get(phys0).is_shared());
-
-    // 3. Seq 1 removes its reference
-    for (int32_t phys : {phys0, phys1}) {
-        pool.deallocate(phys);
-    }
-    table.clear_sequence(1);
-
-    // Blocks should still exist with ref_count = 1
-    TEST_ASSERT(pool.get(phys0).ref_count == 1);
-    TEST_ASSERT(!pool.get(phys0).is_shared());
-    TEST_ASSERT(!pool.get(phys0).is_free());
 
     printf("OK\n");
     return true;
@@ -505,7 +418,6 @@ int main() {
     if (test_pool_allocate_all()) n_pass++; else n_fail++;
     if (test_pool_deallocate()) n_pass++; else n_fail++;
     if (test_pool_batch_allocate()) n_pass++; else n_fail++;
-    if (test_pool_reference_counting()) n_pass++; else n_fail++;
     if (test_pool_stats()) n_pass++; else n_fail++;
     if (test_pool_clear()) n_pass++; else n_fail++;
 
@@ -520,11 +432,10 @@ int main() {
     if (test_table_total_mappings()) n_pass++; else n_fail++;
 
     printf("\nHelper Function Tests:\n");
-    if (test_helper_functions()) n_pass++; else n_fail++;
+    if (test_tokens_to_blocks()) n_pass++; else n_fail++;
 
     printf("\nIntegration Tests:\n");
     if (test_pool_table_integration()) n_pass++; else n_fail++;
-    if (test_cow_simulation()) n_pass++; else n_fail++;
 
     printf("\n========================================\n");
     printf("Results: %d passed, %d failed\n", n_pass, n_fail);

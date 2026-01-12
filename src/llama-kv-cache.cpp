@@ -35,37 +35,42 @@ llama_kv_cache::llama_kv_cache(
     model(model), hparams(model.hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
 
-    // Check for paged attention memory reduction
-    // LLAMA_PAGED_ATTN=N sets block size
-    // LLAMA_PAGED_ATTN_MAX_BLOCKS=M limits to M blocks (memory savings)
-    const char * env_paged = getenv("LLAMA_PAGED_ATTN");
+    // KV cache sizing: allocate for fewer tokens when full context isn't needed
+    // Note: This reduces upfront allocation, NOT per-token memory cost
+    // Use --kv-cache-tokens N or environment variables to configure
+    const char * env_block_size = getenv("LLAMA_PAGED_ATTN");
     const char * env_max_blocks = getenv("LLAMA_PAGED_ATTN_MAX_BLOCKS");
+    const char * env_demand_paged = getenv("LLAMA_KV_DEMAND_PAGED");
 
-    uint32_t paged_block_size = 0;
-    uint32_t paged_max_blocks = 0;
+    uint32_t kv_block_size = 0;
+    uint32_t kv_max_blocks = 0;
+    bool use_demand_paged = (env_demand_paged && atoi(env_demand_paged) != 0);
 
-    if (env_paged) {
-        paged_block_size = (uint32_t) atoi(env_paged);
+    if (use_demand_paged) {
+        LLAMA_LOG_INFO("%s: demand-paged KV cache enabled (physical memory grows with usage)\n", __func__);
+    }
+
+    if (env_block_size) {
+        kv_block_size = (uint32_t) atoi(env_block_size);
     }
 
     if (env_max_blocks) {
-        paged_max_blocks = (uint32_t) atoi(env_max_blocks);
+        kv_max_blocks = (uint32_t) atoi(env_max_blocks);
     }
 
-    // If paged attention with max blocks is configured, reduce kv_size
-    if (paged_block_size > 0 && paged_max_blocks > 0) {
-        uint32_t kv_size_paged = paged_max_blocks * paged_block_size;
+    // If configured, limit KV cache to specified number of tokens
+    if (kv_block_size > 0 && kv_max_blocks > 0) {
+        uint32_t kv_size_limited = kv_max_blocks * kv_block_size;
 
         // Ensure alignment with n_pad
-        if (n_pad > 1 && kv_size_paged % n_pad != 0) {
-            kv_size_paged = ((kv_size_paged + n_pad - 1) / n_pad) * n_pad;
+        if (n_pad > 1 && kv_size_limited % n_pad != 0) {
+            kv_size_limited = ((kv_size_limited + n_pad - 1) / n_pad) * n_pad;
         }
 
-        if (kv_size_paged < kv_size) {
-            const float savings = 100.0f * (1.0f - (float)kv_size_paged / kv_size);
-            LLAMA_LOG_INFO("%s: paged attention reducing KV cache from %u to %u tokens (%.1f%% memory savings)\n",
-                           __func__, kv_size, kv_size_paged, savings);
-            kv_size = kv_size_paged;
+        if (kv_size_limited < kv_size) {
+            LLAMA_LOG_INFO("%s: KV cache limited to %u tokens (model supports %u)\n",
+                           __func__, kv_size_limited, kv_size);
+            kv_size = kv_size_limited;
         }
     }
 
@@ -149,13 +154,18 @@ llama_kv_cache::llama_kv_cache(
 
         const char * dev_name = "CPU";
 
-        ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
+        ggml_backend_buffer_type_t buft;
 
         if (offload) {
             auto * dev = model.dev_layer(il);
             buft = ggml_backend_dev_buffer_type(dev);
-
             dev_name = ggml_backend_dev_name(dev);
+        } else if (use_demand_paged) {
+            // Use demand-paged buffer for CPU: physical memory allocated on first access
+            buft = ggml_backend_cpu_buffer_mmap_type();
+            dev_name = "CPU_DemandPaged";
+        } else {
+            buft = ggml_backend_cpu_buffer_type();
         }
 
         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
@@ -242,14 +252,14 @@ llama_kv_cache::llama_kv_cache(
     const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
     debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
 
-    // Enable paged attention block tracking via environment variable
-    // Usage: LLAMA_PAGED_ATTN=64 (block size in tokens)
-    const char * LLAMA_PAGED_ATTN = getenv("LLAMA_PAGED_ATTN");
-    if (LLAMA_PAGED_ATTN) {
-        const uint32_t block_size_env = (uint32_t) atoi(LLAMA_PAGED_ATTN);
+    // Enable block tracking for KV cache management
+    // Usage: --kv-block-size N or LLAMA_PAGED_ATTN=N (block size in tokens)
+    const char * env_kv_block_size = getenv("LLAMA_PAGED_ATTN");
+    if (env_kv_block_size) {
+        const uint32_t block_size_env = (uint32_t) atoi(env_kv_block_size);
         if (block_size_env > 0) {
             enable_blocks(block_size_env);
-            LLAMA_LOG_INFO("%s: paged attention enabled with block_size = %u\n", __func__, block_size_env);
+            LLAMA_LOG_INFO("%s: KV cache block tracking enabled (block_size = %u tokens)\n", __func__, block_size_env);
         }
     }
 }
@@ -1070,7 +1080,7 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
         head = sinfo.idxs[s].back() + 1;
     }
 
-    // Update block allocations for paged attention
+    // Update block tracking metadata
     update_block_tokens(sinfo);
 }
 
@@ -2084,7 +2094,7 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
 }
 
 //
-// llama_kv_cache block tracking for paged attention
+// llama_kv_cache block tracking for KV cache management
 //
 
 void llama_kv_cache::enable_blocks(uint32_t tokens_per_block) {
@@ -2264,13 +2274,8 @@ void llama_kv_cache::update_block_tokens(const slot_info & sinfo) {
                         continue;
                     }
 
-                    // Update block metadata
-                    auto & block = pool.get(physical_block);
-                    block.seq_id = seq_id;
-                    block.logical_idx = logical_block;
-                    block.n_tokens = 0;
-
-                    // Update block table mapping
+                    // Initialize block and update block table mapping
+                    pool.get(physical_block).n_tokens = 0;
                     table.set_mapping(seq_id, logical_block, physical_block);
 
                     LLAMA_LOG_DEBUG("%s: allocated block %d for seq %d, logical %u\n",
