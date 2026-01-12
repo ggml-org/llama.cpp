@@ -40,7 +40,15 @@ struct llama_context {
 
     ~llama_context();
 
+    // reserve a new backend scheduler
+    // recommended to call whenver the context changes in such a way that the compute graph is modified.
+    // for example:
+    //   - changing loras
+    //   - changing samplers
+    //   - changing attention type
+    //   - etc.
     void reserve();
+
     void synchronize();
 
     const llama_model   & get_model()   const;
