@@ -1463,12 +1463,14 @@ jobs:
             "${{ steps.cann-image.outputs.image }}" \
             bash -lc '
               set -e
-              yum install -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs git gcc gcc-c++ make cmake libcurl-devel
+              yum install -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs git gcc gcc-c++ make cmake openssl-devel
               yum clean all && rm -rf /var/cache/yum
               git config --global --add safe.directory "/workspace"
               export LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/$(uname -m)-linux/devlib/:${LD_LIBRARY_PATH}
               cmake -S . -B build \
                   -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+                  -DLLAMA_CURL=OFF \
+                  -DLLAMA_OPENSSL=ON \
                   -DGGML_CANN=on \
                   -DSOC_TYPE=${SOC_TYPE}
               cmake --build build -j $(nproc)
