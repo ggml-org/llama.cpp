@@ -10,11 +10,6 @@ import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 import { normalizePositiveNumber } from '$lib/utils/number';
 
 /**
- * Represents a key-value pair for HTTP headers.
- */
-export type HeaderPair = { key: string; value: string };
-
-/**
  * Detects the MCP transport type from a URL.
  * WebSocket URLs (ws:// or wss://) use 'websocket', others use 'streamable_http'.
  */
@@ -84,7 +79,7 @@ export function getFaviconUrl(serverUrl: string): string | null {
  * Parses a JSON string of headers into an array of key-value pairs.
  * Returns empty array if the JSON is invalid or empty.
  */
-export function parseHeadersToArray(headersJson: string): HeaderPair[] {
+export function parseHeadersToArray(headersJson: string): { key: string; value: string }[] {
 	if (!headersJson?.trim()) return [];
 
 	try {
@@ -106,7 +101,7 @@ export function parseHeadersToArray(headersJson: string): HeaderPair[] {
  * Serializes an array of header key-value pairs to a JSON string.
  * Filters out pairs with empty keys and returns empty string if no valid pairs.
  */
-export function serializeHeaders(pairs: HeaderPair[]): string {
+export function serializeHeaders(pairs: { key: string; value: string }[]): string {
 	const validPairs = pairs.filter((p) => p.key.trim());
 
 	if (validPairs.length === 0) return '';

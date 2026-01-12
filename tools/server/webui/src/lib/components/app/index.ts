@@ -39,8 +39,7 @@ export { default as ChatMessages } from './chat/ChatMessages/ChatMessages.svelte
 export { default as CollapsibleContentBlock } from './chat/ChatMessages/CollapsibleContentBlock.svelte';
 export { default as MessageBranchingControls } from './chat/ChatMessages/ChatMessageBranchingControls.svelte';
 export { default as ChatScreen } from './chat/ChatScreen/ChatScreen.svelte';
-export { default as ChatScreenDragOverlay } from './chat/ChatScreen/ChatScreenDragOverlay.svelte';
-export { default as ChatScreenForm } from './chat/ChatScreen/ChatScreenForm.svelte';
+export { default as KeyValuePairs } from './misc/KeyValuePairs.svelte';
 export { default as ChatScreenHeader } from './chat/ChatScreen/ChatScreenHeader.svelte';
 export { default as ChatScreenProcessingInfo } from './chat/ChatScreen/ChatScreenProcessingInfo.svelte';
 export { default as ChatSettings } from './chat/ChatSettings/ChatSettings.svelte';

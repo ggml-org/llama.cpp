@@ -72,9 +72,4 @@ export type {
 } from './settings';
 
 // Common types
-export type {
-	KeyValuePair,
-	BinaryDetectionOptions,
-	ClipboardTextAttachment,
-	ParsedClipboardContent
-} from './common';
+export type { KeyValuePair } from './common';
