@@ -28,7 +28,8 @@ static __global__ void reduce_rows_f32(const float * __restrict__ x, float * __r
     }
 
     // sum up partial sums
-    sum = two_stage_warp_reduce<WARP_REDUCE_SUM>(sum);
+    __shared__ float shared_vals[32];
+    sum = two_stage_warp_reduce<WARP_REDUCE_SUM>(sum, shared_vals);
 
     if (col != 0) {
         return;

@@ -531,7 +531,7 @@ enum warp_reduce_method {
     WARP_REDUCE_SUM,
 };
 
-template <warp_reduce_method reduce_method> static __device__ float two_stage_warp_reduce(float val) {
+template <warp_reduce_method reduce_method, const unsigned int block_size_template = 0> static __device__ float two_stage_warp_reduce(float val, float * shared_vals) {
 
     float (*reduce_fun)(float);
     switch (reduce_method) {
@@ -544,13 +544,13 @@ template <warp_reduce_method reduce_method> static __device__ float two_stage_wa
     }
 
     val = reduce_fun(val);
-    if (blockDim.x > WARP_SIZE) {
-        assert((blockDim.x <= 1024) && (blockDim.x % WARP_SIZE) == 0);
-        __shared__ float local_vals[32];
+    const unsigned int block_size = block_size_template == 0 ? blockDim.x : block_size_template;
+    if (block_size > WARP_SIZE) {
+        assert((block_size <= 1024) && (block_size % WARP_SIZE) == 0);
         const int        warp_id = threadIdx.x / WARP_SIZE;
         const int        lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
-            local_vals[warp_id] = val;
+            shared_vals[warp_id] = val;
         }
         __syncthreads();
         switch (reduce_method) {
@@ -561,8 +561,8 @@ template <warp_reduce_method reduce_method> static __device__ float two_stage_wa
                 val = 0.0f;
                 break;
         }
-        if (lane_id < (static_cast<int>(blockDim.x) / WARP_SIZE)) {
-            val = local_vals[lane_id];
+        if (lane_id < (static_cast<int>(block_size) / WARP_SIZE)) {
+            val = shared_vals[lane_id];
         }
         return reduce_fun(val);
     } else {
