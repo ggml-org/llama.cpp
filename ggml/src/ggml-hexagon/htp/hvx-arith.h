@@ -353,6 +353,96 @@ static inline void hvx_sub_scalar_f32(uint8_t * restrict dst, const uint8_t * re
     }
 }
 
+// MIN Scalar variants
+
+#define HVX_OP_MIN_SCALAR(v) Q6_Vsf_vmin_VsfVsf(val_vec, v)
+
+static inline void hvx_min_scalar_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
+    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_scalar_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a, HVX_OP_MIN_SCALAR);
+}
+
+static inline void hvx_min_scalar_f32_au(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
+    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    assert((unsigned long) dst % 128 == 0);
+    hvx_scalar_loop_body(HVX_Vector, HVX_UVector, hvx_vec_store_a, HVX_OP_MIN_SCALAR);
+}
+
+static inline void hvx_min_scalar_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
+    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    assert((unsigned long) src % 128 == 0);
+    hvx_scalar_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u, HVX_OP_MIN_SCALAR);
+}
+
+static inline void hvx_min_scalar_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
+    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    hvx_scalar_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u, HVX_OP_MIN_SCALAR);
+}
+
+static inline void hvx_min_scalar_f32(uint8_t * restrict dst, const uint8_t * restrict src, const float val, const int num_elems) {
+    if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src, 128)) {
+        hvx_min_scalar_f32_aa(dst, src, val, num_elems);
+    } else if (hex_is_aligned((void *) dst, 128)) {
+        hvx_min_scalar_f32_au(dst, src, val, num_elems);
+    } else if (hex_is_aligned((void *) src, 128)) {
+        hvx_min_scalar_f32_ua(dst, src, val, num_elems);
+    } else {
+        hvx_min_scalar_f32_uu(dst, src, val, num_elems);
+    }
+}
+
+// CLAMP Scalar variants
+
+#define HVX_OP_CLAMP_SCALAR(v) \
+    ({ \
+        HVX_VectorPred pred_cap_right = Q6_Q_vcmp_gt_VsfVsf(v, max_vec); \
+        HVX_VectorPred pred_cap_left  = Q6_Q_vcmp_gt_VsfVsf(min_vec, v); \
+        HVX_Vector tmp = Q6_V_vmux_QVV(pred_cap_right, max_vec, v); \
+        Q6_V_vmux_QVV(pred_cap_left, min_vec, tmp); \
+    })
+
+static inline void hvx_clamp_scalar_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const float min, const float max, uint32_t n) {
+    const HVX_Vector min_vec = hvx_vec_splat_fp32(min);
+    const HVX_Vector max_vec = hvx_vec_splat_fp32(max);
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_scalar_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a, HVX_OP_CLAMP_SCALAR);
+}
+
+static inline void hvx_clamp_scalar_f32_au(uint8_t * restrict dst, const uint8_t * restrict src, const float min, const float max, uint32_t n) {
+    const HVX_Vector min_vec = hvx_vec_splat_fp32(min);
+    const HVX_Vector max_vec = hvx_vec_splat_fp32(max);
+    assert((unsigned long) dst % 128 == 0);
+    hvx_scalar_loop_body(HVX_Vector, HVX_UVector, hvx_vec_store_a, HVX_OP_CLAMP_SCALAR);
+}
+
+static inline void hvx_clamp_scalar_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src, const float min, const float max, uint32_t n) {
+    const HVX_Vector min_vec = hvx_vec_splat_fp32(min);
+    const HVX_Vector max_vec = hvx_vec_splat_fp32(max);
+    assert((unsigned long) src % 128 == 0);
+    hvx_scalar_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u, HVX_OP_CLAMP_SCALAR);
+}
+
+static inline void hvx_clamp_scalar_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, const float min, const float max, uint32_t n) {
+    const HVX_Vector min_vec = hvx_vec_splat_fp32(min);
+    const HVX_Vector max_vec = hvx_vec_splat_fp32(max);
+    hvx_scalar_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u, HVX_OP_CLAMP_SCALAR);
+}
+
+static inline void hvx_clamp_scalar_f32(uint8_t * restrict dst, const uint8_t * restrict src, const float min, const float max, const int num_elems) {
+    if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src, 128)) {
+        hvx_clamp_scalar_f32_aa(dst, src, min, max, num_elems);
+    } else if (hex_is_aligned((void *) dst, 128)) {
+        hvx_clamp_scalar_f32_au(dst, src, min, max, num_elems);
+    } else if (hex_is_aligned((void *) src, 128)) {
+        hvx_clamp_scalar_f32_ua(dst, src, min, max, num_elems);
+    } else {
+        hvx_clamp_scalar_f32_uu(dst, src, min, max, num_elems);
+    }
+}
+
 #undef HVX_OP_ADD
 #undef HVX_OP_SUB
 #undef HVX_OP_MUL
@@ -361,5 +451,7 @@ static inline void hvx_sub_scalar_f32(uint8_t * restrict dst, const uint8_t * re
 #undef HVX_OP_SUB_SCALAR
 #undef HVX_OP_MUL_SCALAR
 #undef hvx_scalar_loop_body
+#undef HVX_OP_MIN_SCALAR
+#undef HVX_OP_CLAMP_SCALAR
 
 #endif // HVX_ARITH_H

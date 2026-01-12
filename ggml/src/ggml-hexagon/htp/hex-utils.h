@@ -1,17 +1,20 @@
 #ifndef HEX_UTILS_H
 #define HEX_UTILS_H
 
+#include <stdbool.h>
+#include <stdint.h>
+
 #include "hexagon_types.h"
 
 #include "hex-fastdiv.h"
 #include "hex-dump.h"
 
 #ifndef MAX
-#    define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
 #endif
 
 #ifndef MIN
-#    define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
 
 static inline uint64_t hex_get_cycles() {
