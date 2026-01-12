@@ -4,12 +4,12 @@
 	import * as Card from '$lib/components/ui/card';
 	import { getServerDisplayName, getFaviconUrl } from '$lib/utils/mcp';
 	import type { MCPServerSettingsEntry } from '$lib/types/mcp';
-	import { mcpStore, mcpGetServers } from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { McpServerCard } from '$lib/components/app/mcp/McpServerCard';
 	import McpServerForm from './McpServerForm.svelte';
 
 	// Get servers from store
-	let servers = $derived<MCPServerSettingsEntry[]>(mcpGetServers());
+	let servers = $derived<MCPServerSettingsEntry[]>(mcpStore.getServers());
 
 	// New server form state
 	let isAddingServer = $state(false);

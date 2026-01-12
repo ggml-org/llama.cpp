@@ -2,11 +2,7 @@
 	import { onMount } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
 	import type { MCPServerSettingsEntry } from '$lib/types/mcp';
-	import {
-		mcpGetHealthCheckState,
-		mcpHasHealthCheck,
-		type HealthCheckState
-	} from '$lib/stores/mcp.svelte';
+	import { mcpStore, type HealthCheckState } from '$lib/stores/mcp.svelte';
 	import { mcpClient } from '$lib/clients/mcp.client';
 	import McpServerCardHeader from './McpServerCardHeader.svelte';
 	import McpServerCardActions from './McpServerCardActions.svelte';
@@ -25,7 +21,7 @@
 
 	let { server, displayName, faviconUrl, onToggle, onUpdate, onDelete }: Props = $props();
 
-	let healthState = $derived<HealthCheckState>(mcpGetHealthCheckState(server.id));
+	let healthState = $derived<HealthCheckState>(mcpStore.getHealthCheckState(server.id));
 	let isHealthChecking = $derived(healthState.status === 'loading');
 	let isConnected = $derived(healthState.status === 'success');
 	let isError = $derived(healthState.status === 'error');
@@ -37,7 +33,7 @@
 	let editFormRef: McpServerCardEditForm | null = $state(null);
 
 	onMount(() => {
-		if (!mcpHasHealthCheck(server.id) && server.enabled && server.url.trim()) {
+		if (!mcpStore.hasHealthCheck(server.id) && server.enabled && server.url.trim()) {
 			mcpClient.runHealthCheck(server);
 		}
 	});

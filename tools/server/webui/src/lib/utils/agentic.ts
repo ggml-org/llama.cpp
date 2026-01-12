@@ -4,7 +4,7 @@ import type { SettingsConfigType } from '$lib/types/settings';
 import type { McpServerOverride } from '$lib/types/database';
 import { DEFAULT_AGENTIC_CONFIG } from '$lib/constants/agentic';
 import { normalizePositiveNumber } from '$lib/utils/number';
-import { hasEnabledMcpServers } from '$lib/utils/mcp';
+import { mcpStore } from '$lib/stores/mcp.svelte';
 
 /**
  * Gets the current agentic configuration.
@@ -30,7 +30,7 @@ export function getAgenticConfig(
 			: DEFAULT_AGENTIC_CONFIG.filterReasoningAfterFirstTurn;
 
 	return {
-		enabled: hasEnabledMcpServers(settings, perChatOverrides) && DEFAULT_AGENTIC_CONFIG.enabled,
+		enabled: mcpStore.hasEnabledServers(perChatOverrides) && DEFAULT_AGENTIC_CONFIG.enabled,
 		maxTurns,
 		maxToolPreviewLines,
 		filterReasoningAfterFirstTurn

@@ -218,19 +218,6 @@ class MCPStore {
 	}
 
 	/**
-	 * Check if a server is enabled considering per-chat overrides
-	 */
-	isServerEnabled(server: MCPServerSettingsEntry, perChatOverrides?: McpServerOverride[]): boolean {
-		if (perChatOverrides) {
-			const override = perChatOverrides.find((o) => o.serverId === server.id);
-			if (override !== undefined) {
-				return override.enabled;
-			}
-		}
-		return server.enabled;
-	}
-
-	/**
 	 * Check if there are any enabled MCP servers
 	 */
 	hasEnabledServers(perChatOverrides?: McpServerOverride[]): boolean {
@@ -270,66 +257,11 @@ class MCPStore {
 
 export const mcpStore = new MCPStore();
 
-export function mcpIsInitializing() {
-	return mcpStore.isInitializing;
-}
-
-export function mcpIsInitialized() {
-	return mcpStore.isInitialized;
-}
-
-export function mcpError() {
-	return mcpStore.error;
-}
-
-export function mcpIsEnabled() {
-	return mcpStore.isEnabled;
-}
-
-export function mcpAvailableTools() {
-	return mcpStore.availableTools;
-}
-
-export function mcpConnectedServerCount() {
-	return mcpStore.connectedServerCount;
-}
-
-export function mcpConnectedServerNames() {
-	return mcpStore.connectedServerNames;
-}
-
-export function mcpToolCount() {
-	return mcpStore.toolCount;
-}
-
-// State access functions (getters only - use mcpStore.method() for actions)
-export function mcpGetHealthCheckState(serverId: string) {
-	return mcpStore.getHealthCheckState(serverId);
-}
-
-export function mcpHasHealthCheck(serverId: string) {
-	return mcpStore.hasHealthCheck(serverId);
-}
-
-export function mcpGetServers() {
-	return mcpStore.getServers();
-}
-
-export function mcpIsServerEnabled(
-	server: MCPServerSettingsEntry,
-	perChatOverrides?: McpServerOverride[]
-) {
-	return mcpStore.isServerEnabled(server, perChatOverrides);
-}
-
-export function mcpHasEnabledServers(perChatOverrides?: McpServerOverride[]) {
-	return mcpStore.hasEnabledServers(perChatOverrides);
-}
-
-export function mcpGetUsageStats() {
-	return mcpStore.getUsageStats();
-}
-
-export function mcpGetServerUsageCount(serverId: string) {
-	return mcpStore.getServerUsageCount(serverId);
-}
+export const mcpIsInitializing = () => mcpStore.isInitializing;
+export const mcpIsInitialized = () => mcpStore.isInitialized;
+export const mcpError = () => mcpStore.error;
+export const mcpIsEnabled = () => mcpStore.isEnabled;
+export const mcpAvailableTools = () => mcpStore.availableTools;
+export const mcpConnectedServerCount = () => mcpStore.connectedServerCount;
+export const mcpConnectedServerNames = () => mcpStore.connectedServerNames;
+export const mcpToolCount = () => mcpStore.toolCount;
