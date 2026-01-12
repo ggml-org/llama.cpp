@@ -267,8 +267,8 @@ static void flash_attn_ext_f16_thread(struct htp_ops_context * octx, int ith, in
         float M = -INFINITY; // maximum KQ value
 
         // Clear accumulator
+        hvx_splat_fp32_a(spad_a, 0, DV);
         float * VKQ32 = (float *) spad_a;
-        memset(VKQ32, 0, DV * sizeof(float));
 
         const __fp16 * mp_base = NULL;
         if (mask) {
