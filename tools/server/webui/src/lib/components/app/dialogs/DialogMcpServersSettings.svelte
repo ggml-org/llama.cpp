@@ -1,6 +1,5 @@
 <script lang="ts">
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { config, settingsStore } from '$lib/stores/settings.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { McpLogo, McpSettingsSection } from '$lib/components/app';
 
@@ -11,38 +10,9 @@
 
 	let { onOpenChange, open = $bindable(false) }: Props = $props();
 
-	let localConfig = $state(config());
-
 	function handleClose() {
 		onOpenChange?.(false);
 	}
-
-	function handleConfigChange(key: string, value: string | boolean) {
-		localConfig = { ...localConfig, [key]: value };
-	}
-
-	function handleSave() {
-		// Save all changes to settingsStore
-		Object.entries(localConfig).forEach(([key, value]) => {
-			if (config()[key as keyof typeof localConfig] !== value) {
-				settingsStore.updateConfig(key as keyof typeof localConfig, value);
-			}
-		});
-		onOpenChange?.(false);
-	}
-
-	function handleCancel() {
-		// Reset to current config
-		localConfig = config();
-		onOpenChange?.(false);
-	}
-
-	$effect(() => {
-		if (open) {
-			// Reset local config when dialog opens
-			localConfig = config();
-		}
-	});
 </script>
 
 <Dialog.Root {open} onOpenChange={handleClose}>
@@ -63,12 +33,11 @@
 		</div>
 
 		<div class="flex-1 overflow-y-auto p-4 md:p-6">
-			<McpSettingsSection {localConfig} onConfigChange={handleConfigChange} />
+			<McpSettingsSection />
 		</div>
 
 		<div class="flex items-center justify-end gap-3 border-t p-4 md:p-6">
-			<Button variant="outline" onclick={handleCancel}>Cancel</Button>
-			<Button onclick={handleSave}>Save Changes</Button>
+			<Button onclick={handleClose}>Close</Button>
 		</div>
 	</Dialog.Content>
 </Dialog.Root>

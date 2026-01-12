@@ -2,8 +2,7 @@ import type {
 	MCPTransportType,
 	MCPClientConfig,
 	MCPServerConfig,
-	MCPServerSettingsEntry,
-	McpServerUsageStats
+	MCPServerSettingsEntry
 } from '$lib/types/mcp';
 import type { SettingsConfigType } from '$lib/types/settings';
 import type { McpServerOverride } from '$lib/types/database';
@@ -21,6 +20,7 @@ export type HeaderPair = { key: string; value: string };
  */
 export function detectMcpTransportFromUrl(url: string): MCPTransportType {
 	const normalized = url.trim().toLowerCase();
+
 	return normalized.startsWith('ws://') || normalized.startsWith('wss://')
 		? 'websocket'
 		: 'streamable_http';
@@ -34,6 +34,7 @@ export function generateMcpServerId(id: unknown, index: number): string {
 	if (typeof id === 'string' && id.trim()) {
 		return id.trim();
 	}
+
 	return `server-${index + 1}`;
 }
 
@@ -46,10 +47,21 @@ export function extractServerNameFromUrl(url: string): string {
 		const parsedUrl = new URL(url);
 		const host = parsedUrl.hostname.replace(/^(www\.|mcp\.)/, '');
 		const name = host.split('.')[0] || 'Unknown';
+
 		return name.charAt(0).toUpperCase() + name.slice(1);
 	} catch {
 		return 'New Server';
 	}
+}
+
+/**
+ * Gets a display name for an MCP server.
+ * Returns server.name if set, otherwise extracts name from URL.
+ */
+export function getServerDisplayName(server: MCPServerSettingsEntry): string {
+	if (server.name) return server.name;
+
+	return extractServerNameFromUrl(server.url);
 }
 
 /**
@@ -74,6 +86,7 @@ export function getFaviconUrl(serverUrl: string): string | null {
  */
 export function parseHeadersToArray(headersJson: string): HeaderPair[] {
 	if (!headersJson?.trim()) return [];
+
 	try {
 		const parsed = JSON.parse(headersJson);
 		if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
@@ -85,6 +98,7 @@ export function parseHeadersToArray(headersJson: string): HeaderPair[] {
 	} catch {
 		return [];
 	}
+
 	return [];
 }
 
@@ -94,11 +108,15 @@ export function parseHeadersToArray(headersJson: string): HeaderPair[] {
  */
 export function serializeHeaders(pairs: HeaderPair[]): string {
 	const validPairs = pairs.filter((p) => p.key.trim());
+
 	if (validPairs.length === 0) return '';
+
 	const obj: Record<string, string> = {};
+
 	for (const pair of validPairs) {
 		obj[pair.key.trim()] = pair.value;
 	}
+
 	return JSON.stringify(obj);
 }
 
@@ -186,7 +204,8 @@ function buildServerConfig(
 }
 
 /**
- * TODO - move stateful logic to store
+ * Checks if a server is enabled considering per-chat overrides.
+ * Per-chat override takes precedence over global setting.
  */
 function isServerEnabled(
 	server: MCPServerSettingsEntry,
@@ -198,6 +217,7 @@ function isServerEnabled(
 			return override.enabled;
 		}
 	}
+
 	return server.enabled;
 }
 
@@ -241,59 +261,13 @@ export function buildMcpClientConfig(
 }
 
 /**
- * TODO - move stateful logic to store
+ * Checks if there are any enabled MCP servers in the configuration.
+ * @param config - Global settings configuration
+ * @param perChatOverrides - Optional per-chat server overrides
  */
 export function hasEnabledMcpServers(
 	config: SettingsConfigType,
 	perChatOverrides?: McpServerOverride[]
 ): boolean {
 	return Boolean(buildMcpClientConfig(config, perChatOverrides));
-}
-
-/**
- * Parses MCP server usage stats from settings.
- * @param rawStats - The raw stats to parse
- * @returns MCP server usage stats or empty object if invalid
- */
-export function parseMcpServerUsageStats(rawStats: unknown): McpServerUsageStats {
-	if (!rawStats) return {};
-
-	if (typeof rawStats === 'string') {
-		const trimmed = rawStats.trim();
-		if (!trimmed) return {};
-
-		try {
-			const parsed = JSON.parse(trimmed);
-			if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-				return parsed as McpServerUsageStats;
-			}
-		} catch {
-			console.warn('[MCP] Failed to parse mcpServerUsageStats JSON, ignoring value');
-		}
-	}
-
-	return {};
-}
-
-/**
- * Gets usage count for a specific server.
- * @param config - Global settings configuration
- * @param serverId - The server ID to get the usage count for
- * @returns The usage count for the server
- */
-export function getMcpServerUsageCount(config: SettingsConfigType, serverId: string): number {
-	const stats = parseMcpServerUsageStats(config.mcpServerUsageStats);
-	return stats[serverId] || 0;
-}
-
-/**
- * Increments usage count for a server and returns updated stats JSON.
- * @param config - Global settings configuration
- * @param serverId - The server ID to increment the usage count for
- * @returns The updated stats JSON
- */
-export function incrementMcpServerUsage(config: SettingsConfigType, serverId: string): string {
-	const stats = parseMcpServerUsageStats(config.mcpServerUsageStats);
-	stats[serverId] = (stats[serverId] || 0) + 1;
-	return JSON.stringify(stats);
 }

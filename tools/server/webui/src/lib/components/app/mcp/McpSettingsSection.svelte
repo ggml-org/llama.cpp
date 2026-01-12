@@ -2,23 +2,14 @@
 	import { Plus, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
-	import { parseMcpServerSettings } from '$lib/utils/mcp';
+	import { getServerDisplayName, getFaviconUrl } from '$lib/utils/mcp';
 	import type { MCPServerSettingsEntry } from '$lib/types/mcp';
-	import type { SettingsConfigType } from '$lib/types/settings';
-	import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
-	import { extractServerNameFromUrl, getFaviconUrl } from '$lib/utils/mcp';
+	import { mcpStore, mcpGetServers } from '$lib/stores/mcp.svelte';
 	import { McpServerCard } from '$lib/components/app/mcp/McpServerCard';
 	import McpServerForm from './McpServerForm.svelte';
 
-	interface Props {
-		localConfig: SettingsConfigType;
-		onConfigChange: (key: string, value: string | boolean) => void;
-	}
-
-	let { localConfig, onConfigChange }: Props = $props();
-
-	// Get servers from localConfig
-	let servers = $derived<MCPServerSettingsEntry[]>(parseMcpServerSettings(localConfig.mcpServers));
+	// Get servers from store
+	let servers = $derived<MCPServerSettingsEntry[]>(mcpGetServers());
 
 	// New server form state
 	let isAddingServer = $state(false);
@@ -36,10 +27,6 @@
 		}
 	});
 
-	function serializeServers(updatedServers: MCPServerSettingsEntry[]) {
-		onConfigChange('mcpServers', JSON.stringify(updatedServers));
-	}
-
 	function showAddServerForm() {
 		isAddingServer = true;
 		newServerUrl = '';
@@ -54,34 +41,14 @@
 
 	function saveNewServer() {
 		if (newServerUrlError) return;
-		const newServer: MCPServerSettingsEntry = {
-			id: crypto.randomUUID ? crypto.randomUUID() : `server-${Date.now()}`,
+		mcpStore.addServer({
 			enabled: true,
 			url: newServerUrl.trim(),
-			headers: newServerHeaders.trim() || undefined,
-			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds
-		};
-		serializeServers([...servers, newServer]);
+			headers: newServerHeaders.trim() || undefined
+		});
 		isAddingServer = false;
 		newServerUrl = '';
 		newServerHeaders = '';
-	}
-
-	function updateServer(id: string, updates: Partial<MCPServerSettingsEntry>) {
-		const nextServers = servers.map((server) =>
-			server.id === id ? { ...server, ...updates } : server
-		);
-		serializeServers(nextServers);
-	}
-
-	function removeServer(id: string) {
-		serializeServers(servers.filter((server) => server.id !== id));
-	}
-
-	// Get display name for server
-	function getServerDisplayName(server: MCPServerSettingsEntry): string {
-		if (server.name) return server.name;
-		return extractServerNameFromUrl(server.url);
 	}
 </script>
 
@@ -154,9 +121,9 @@
 					{server}
 					displayName={getServerDisplayName(server)}
 					faviconUrl={getFaviconUrl(server.url)}
-					onToggle={(enabled) => updateServer(server.id, { enabled })}
-					onUpdate={(updates) => updateServer(server.id, updates)}
-					onDelete={() => removeServer(server.id)}
+					onToggle={(enabled) => mcpStore.updateServer(server.id, { enabled })}
+					onUpdate={(updates) => mcpStore.updateServer(server.id, updates)}
+					onDelete={() => mcpStore.removeServer(server.id)}
 				/>
 			{/each}
 		</div>

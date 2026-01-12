@@ -5,9 +5,9 @@
 	import {
 		mcpGetHealthCheckState,
 		mcpHasHealthCheck,
-		mcpRunHealthCheck,
 		type HealthCheckState
 	} from '$lib/stores/mcp.svelte';
+	import { mcpClient } from '$lib/clients/mcp.client';
 	import McpServerCardHeader from './McpServerCardHeader.svelte';
 	import McpServerCardActions from './McpServerCardActions.svelte';
 	import McpServerCardToolsList from './McpServerCardToolsList.svelte';
@@ -38,12 +38,12 @@
 
 	onMount(() => {
 		if (!mcpHasHealthCheck(server.id) && server.enabled && server.url.trim()) {
-			mcpRunHealthCheck(server);
+			mcpClient.runHealthCheck(server);
 		}
 	});
 
 	function handleHealthCheck() {
-		mcpRunHealthCheck(server);
+		mcpClient.runHealthCheck(server);
 	}
 
 	function startEditing() {
@@ -67,7 +67,7 @@
 		isEditing = false;
 
 		if (server.enabled && url) {
-			setTimeout(() => mcpRunHealthCheck({ ...server, url }), 100);
+			setTimeout(() => mcpClient.runHealthCheck({ ...server, url }), 100);
 		}
 	}
 

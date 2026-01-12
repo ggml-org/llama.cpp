@@ -210,6 +210,10 @@ class ChatStore {
 		return this.addFilesHandler;
 	}
 
+	clearPendingEditMessageId(): void {
+		this.pendingEditMessageId = null;
+	}
+
 	getAllLoadingChats(): string[] {
 		return Array.from(this.chatLoadingStates.keys());
 	}
@@ -339,6 +343,7 @@ class ChatStore {
 
 export const chatStore = new ChatStore();
 
+// State access functions (getters only - use chatStore.method() for actions)
 export const activeProcessingState = () => chatStore.activeProcessingState;
 export const currentResponse = () => chatStore.currentResponse;
 export const errorDialog = () => chatStore.errorDialogState;

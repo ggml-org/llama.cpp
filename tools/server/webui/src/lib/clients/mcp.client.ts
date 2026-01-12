@@ -36,10 +36,9 @@ import type {
 } from '$lib/types/mcp';
 import type { McpServerOverride } from '$lib/types/database';
 import { MCPError } from '$lib/errors';
-import { buildMcpClientConfig, incrementMcpServerUsage } from '$lib/utils/mcp';
-import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { buildMcpClientConfig, detectMcpTransportFromUrl } from '$lib/utils/mcp';
+import { config } from '$lib/stores/settings.svelte';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
-import { detectMcpTransportFromUrl } from '$lib/utils/mcp';
 
 export type HealthCheckState =
 	| { status: 'idle' }
@@ -68,6 +67,7 @@ export class MCPClient {
 	}) => void;
 
 	private onHealthCheckChange?: (serverId: string, state: HealthCheckState) => void;
+	private onServerUsage?: (serverId: string) => void;
 
 	/**
 	 *
@@ -97,6 +97,13 @@ export class MCPClient {
 	 */
 	setHealthCheckCallback(callback: (serverId: string, state: HealthCheckState) => void): void {
 		this.onHealthCheckChange = callback;
+	}
+
+	/**
+	 * Set callback for server usage tracking
+	 */
+	setServerUsageCallback(callback: (serverId: string) => void): void {
+		this.onServerUsage = callback;
 	}
 
 	private notifyStateChange(state: Parameters<NonNullable<typeof this.onStateChange>>[0]): void {
@@ -435,8 +442,7 @@ export class MCPClient {
 			throw new MCPError(`Server "${serverName}" is not connected`, -32000);
 		}
 
-		const updatedStats = incrementMcpServerUsage(config(), serverName);
-		settingsStore.updateConfig('mcpServerUsageStats', updatedStats);
+		this.onServerUsage?.(serverName);
 
 		const args = this.parseToolArguments(toolCall.function.arguments);
 		return MCPService.callTool(connection, { name: toolName, arguments: args }, signal);

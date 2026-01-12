@@ -8,14 +8,14 @@
 	import McpLogo from '$lib/components/app/misc/McpLogo.svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { parseMcpServerSettings, parseMcpServerUsageStats } from '$lib/utils/mcp';
+	import { parseMcpServerSettings, getServerDisplayName, getFaviconUrl } from '$lib/utils/mcp';
 	import type { MCPServerSettingsEntry } from '$lib/types/mcp';
 	import {
 		mcpGetHealthCheckState,
 		mcpHasHealthCheck,
-		mcpRunHealthCheck
+		mcpGetUsageStats
 	} from '$lib/stores/mcp.svelte';
-	import { extractServerNameFromUrl, getFaviconUrl } from '$lib/utils/mcp';
+	import { mcpClient } from '$lib/clients/mcp.client';
 
 	interface Props {
 		class?: string;
@@ -33,7 +33,7 @@
 
 	let hasMcpServers = $derived(mcpServers.length > 0);
 
-	let mcpUsageStats = $derived(parseMcpServerUsageStats(settingsStore.config.mcpServerUsageStats));
+	let mcpUsageStats = $derived(mcpGetUsageStats());
 
 	function getServerUsageCount(serverId: string): number {
 		return mcpUsageStats[serverId] || 0;
@@ -94,11 +94,6 @@
 		await conversationsStore.toggleMcpServerForChat(serverId, globalEnabled);
 	}
 
-	function getServerDisplayName(server: MCPServerSettingsEntry): string {
-		if (server.name) return server.name;
-		return extractServerNameFromUrl(server.url);
-	}
-
 	let mcpFavicons = $derived(
 		healthyEnabledMcpServers
 			.slice(0, 3)
@@ -111,7 +106,7 @@
 	onMount(() => {
 		for (const server of serversWithUrls) {
 			if (!mcpHasHealthCheck(server.id)) {
-				mcpRunHealthCheck(server);
+				mcpClient.runHealthCheck(server);
 			}
 		}
 	});
