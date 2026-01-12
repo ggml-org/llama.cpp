@@ -526,6 +526,50 @@ static __device__ __forceinline__ half2 warp_prefix_inclusive_sum(half2 a) {
 #endif // FP16_AVAILABLE
 }
 
+enum warp_reduce_method {
+    WARP_REDUCE_MAX,
+    WARP_REDUCE_SUM,
+};
+
+template <warp_reduce_method reduce_method> static __device__ float two_stage_warp_reduce(float val) {
+
+    float (*reduce_fun)(float);
+    switch (reduce_method) {
+        case WARP_REDUCE_MAX:
+            reduce_fun = warp_reduce_max;
+            break;
+        case WARP_REDUCE_SUM:
+            reduce_fun = warp_reduce_sum;
+            break;
+    }
+
+    val = reduce_fun(val);
+    if (blockDim.x > WARP_SIZE) {
+        assert((blockDim.x <= 1024) && (blockDim.x % WARP_SIZE) == 0);
+        __shared__ float local_vals[32];
+        const int        warp_id = threadIdx.x / WARP_SIZE;
+        const int        lane_id = threadIdx.x % WARP_SIZE;
+        if (lane_id == 0) {
+            local_vals[warp_id] = val;
+        }
+        __syncthreads();
+        switch (reduce_method) {
+            case WARP_REDUCE_MAX:
+                val = -INFINITY;
+                break;
+            case WARP_REDUCE_SUM:
+                val = 0.0f;
+                break;
+        }
+        if (lane_id < (static_cast<int>(blockDim.x) / WARP_SIZE)) {
+            val = local_vals[lane_id];
+        }
+        return reduce_fun(val);
+    } else {
+        return val;
+    }
+}
+
 static __device__ __forceinline__ half ggml_cuda_hmax(const half a, const half b) {
 #ifdef FP16_AVAILABLE
 
