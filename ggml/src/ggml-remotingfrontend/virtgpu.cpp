@@ -256,10 +256,10 @@ static virt_gpu_result_t virtgpu_init_context(virtgpu * gpu) {
 static virt_gpu_result_t virtgpu_init_capset(virtgpu * gpu) {
     if (gpu->use_apir_capset) {
         GGML_LOG_INFO("Using the APIR capset");
-        gpu->capset.id = VIRGL_RENDERER_CAPSET_APIR;
+        gpu->capset.id = VIRTGPU_DRM_CAPSET_APIR;
     } else {
         GGML_LOG_INFO("Using the Venus capset");
-        gpu->capset.id = VIRGL_RENDERER_CAPSET_VENUS;
+        gpu->capset.id = VIRTGPU_DRM_CAPSET_VENUS;
     }
     gpu->capset.version = 0;
 

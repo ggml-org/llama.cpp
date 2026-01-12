@@ -19,22 +19,25 @@
 
 #define VIRGL_RENDERER_UNSTABLE_APIS 1
 #include "apir_hw.h"
-#include "drm-uapi/virtgpu_drm.h"
+#include <drm/virtgpu_drm.h>
 #include "venus_hw.h"
 
-// must match https://gitlab.freedesktop.org/kpouget/virglrenderer/-/blob/main/src/virglrenderer_hw.h?ref_type=heads
-enum virgl_renderer_capset {
-    VIRGL_RENDERER_CAPSET_VIRGL  = 1,
-    VIRGL_RENDERER_CAPSET_VIRGL2 = 2,
-    /* 3 is reserved for gfxstream */
-    VIRGL_RENDERER_CAPSET_VENUS  = 4,
-    /* 5 is reserved for cross-domain */
-    VIRGL_RENDERER_CAPSET_DRM    = 6,
+#ifndef VIRTGPU_DRM_CAPSET_APIR
+// Will be defined include/drm/virtgpu_drm.h when
+// https://gitlab.freedesktop.org/virgl/virglrenderer/-/merge_requests/1590/diffs
+// is merged
+#define VIRTGPU_DRM_CAPSET_APIR 10
+#endif
 
-    VIRGL_RENDERER_CAPSET_APIR = 10,
-};
-
+// Mesa/Virlgrenderer Venus internal. Only necessary during the
+// Venus->APIR transition in Virglrenderer
 #define VENUS_COMMAND_TYPE_LENGTH 331
+
+#ifndef VIRTGPU_DRM_CAPSET_VENUS // only available with Linux >= v6.16
+#define VIRTGPU_DRM_CAPSET_VENUS 4
+#endif
+
+typedef uint32_t virgl_renderer_capset;
 
 /* from src/virtio/vulkan/vn_renderer_virtgpu.c */
 #define VIRTGPU_PCI_VENDOR_ID       0x1af4
