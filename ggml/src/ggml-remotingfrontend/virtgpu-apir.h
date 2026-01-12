@@ -5,11 +5,11 @@
 #include "virtgpu-shm.h"
 #include "virtgpu-utils.h"
 
-typedef struct {
+struct apir_buffer_context_t {
     apir_buffer_host_handle_t host_handle;
 
     struct virtgpu_shmem           shmem;
     apir_buffer_type_host_handle_t buft_host_handle;
-} apir_buffer_context_t;
+};
 
 #include "virtgpu-forward.gen.h"

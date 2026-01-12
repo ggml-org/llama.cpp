@@ -1,14 +1,14 @@
 #include "virtgpu-forward-impl.h"
 #include "virtgpu-shm.h"
 
-int apir_device_get_count(struct virtgpu * gpu) {
+int apir_device_get_count(virtgpu * gpu) {
     static int32_t dev_count = -1;
     if (dev_count != -1) {
         return dev_count;
     }
 
-    struct apir_encoder * encoder;
-    struct apir_decoder * decoder;
+    apir_encoder * encoder;
+    apir_decoder * decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_COUNT);
@@ -21,13 +21,13 @@ int apir_device_get_count(struct virtgpu * gpu) {
     return dev_count;
 }
 
-const char * apir_device_get_name(struct virtgpu * gpu) {
+const char * apir_device_get_name(virtgpu * gpu) {
     static char * string = nullptr;
     if (string) {
         return string;
     }
-    struct apir_encoder * encoder;
-    struct apir_decoder * decoder;
+    apir_encoder * encoder;
+    apir_decoder * decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_NAME);
@@ -36,8 +36,8 @@ const char * apir_device_get_name(struct virtgpu * gpu) {
     const size_t string_size = apir_decode_array_size_unchecked(decoder);
     string                   = (char *) apir_decoder_alloc_array(sizeof(char), string_size);
     if (!string) {
-        ERROR("%s: Could not allocate the device name buffer", __func__);
-        apir_decoder_set_fatal(decoder);
+        GGML_LOG_ERROR("%s: Could not allocate the device name buffer", __func__);
+        return NULL;
     }
     apir_decode_char_array(decoder, string, string_size);
 
@@ -46,9 +46,9 @@ const char * apir_device_get_name(struct virtgpu * gpu) {
     return string;
 }
 
-const char * apir_device_get_description(struct virtgpu * gpu) {
-    struct apir_encoder * encoder;
-    struct apir_decoder * decoder;
+const char * apir_device_get_description(virtgpu * gpu) {
+    apir_encoder * encoder;
+    apir_decoder * decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_DESCRIPTION);
@@ -58,8 +58,7 @@ const char * apir_device_get_description(struct virtgpu * gpu) {
     const size_t string_size = apir_decode_array_size_unchecked(decoder);
     char *       string      = (char *) apir_decoder_alloc_array(sizeof(char), string_size);
     if (!string) {
-        ERROR("%s: Could not allocate the device description buffer", __func__);
-        apir_decoder_set_fatal(decoder);
+        GGML_LOG_ERROR("%s: Could not allocate the device description buffer", __func__);
 
         return NULL;
     }
@@ -70,14 +69,14 @@ const char * apir_device_get_description(struct virtgpu * gpu) {
     return string;
 }
 
-uint32_t apir_device_get_type(struct virtgpu * gpu) {
+uint32_t apir_device_get_type(virtgpu * gpu) {
     static uint32_t dev_type = 255;
     if (dev_type != 255) {
         return dev_type;
     }
 
-    struct apir_encoder * encoder;
-    struct apir_decoder * decoder;
+    apir_encoder * encoder;
+    apir_decoder * decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_TYPE);
@@ -91,11 +90,11 @@ uint32_t apir_device_get_type(struct virtgpu * gpu) {
     return dev_type;
 }
 
-void apir_device_get_memory(struct virtgpu * gpu, size_t * free, size_t * total) {
+void apir_device_get_memory(virtgpu * gpu, size_t * free, size_t * total) {
     static size_t         dev_free  = 0;
     static size_t         dev_total = 0;
-    struct apir_encoder * encoder;
-    struct apir_decoder * decoder;
+    apir_encoder * encoder;
+    apir_decoder * decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_MEMORY);
@@ -113,9 +112,9 @@ void apir_device_get_memory(struct virtgpu * gpu, size_t * free, size_t * total)
     return;
 }
 
-bool apir_device_supports_op(struct virtgpu * gpu, const ggml_tensor * op) {
-    struct apir_encoder * encoder;
-    struct apir_decoder * decoder;
+bool apir_device_supports_op(virtgpu * gpu, const ggml_tensor * op) {
+    apir_encoder * encoder;
+    apir_decoder * decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_SUPPORTS_OP);
@@ -132,9 +131,9 @@ bool apir_device_supports_op(struct virtgpu * gpu, const ggml_tensor * op) {
     return supports_op;
 }
 
-apir_buffer_type_host_handle_t apir_device_get_buffer_type(struct virtgpu * gpu) {
-    struct apir_encoder * encoder;
-    struct apir_decoder * decoder;
+apir_buffer_type_host_handle_t apir_device_get_buffer_type(virtgpu * gpu) {
+    apir_encoder * encoder;
+    apir_decoder * decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_BUFFER_TYPE);
@@ -149,13 +148,13 @@ apir_buffer_type_host_handle_t apir_device_get_buffer_type(struct virtgpu * gpu)
     return buft_handle;
 }
 
-void apir_device_get_props(struct virtgpu * gpu,
-                           bool *           async,
-                           bool *           host_buffer,
-                           bool *           buffer_from_host_ptr,
-                           bool *           events) {
-    struct apir_encoder * encoder;
-    struct apir_decoder * decoder;
+void apir_device_get_props(virtgpu * gpu,
+                           bool *    async,
+                           bool *    host_buffer,
+                           bool *    buffer_from_host_ptr,
+                           bool *    events) {
+    apir_encoder * encoder;
+    apir_decoder * decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_PROPS);
@@ -172,9 +171,9 @@ void apir_device_get_props(struct virtgpu * gpu,
     return;
 }
 
-apir_buffer_context_t apir_device_buffer_from_ptr(struct virtgpu * gpu, size_t size, size_t max_tensor_size) {
-    struct apir_encoder * encoder;
-    struct apir_decoder * decoder;
+apir_buffer_context_t apir_device_buffer_from_ptr(virtgpu * gpu, size_t size, size_t max_tensor_size) {
+    apir_encoder * encoder;
+    apir_decoder * decoder;
     ApirForwardReturnCode ret;
 
     apir_buffer_context_t buffer_context;
@@ -182,7 +181,7 @@ apir_buffer_context_t apir_device_buffer_from_ptr(struct virtgpu * gpu, size_t s
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_BUFFER_FROM_PTR);
 
     if (virtgpu_shmem_create(gpu, size, &buffer_context.shmem)) {
-        FATAL("Couldn't allocate the guest-host shared buffer :/");
+        GGML_ABORT("Couldn't allocate the guest-host shared buffer :/");
     }
 
     apir_encode_virtgpu_shmem_res_id(encoder, buffer_context.shmem.res_id);

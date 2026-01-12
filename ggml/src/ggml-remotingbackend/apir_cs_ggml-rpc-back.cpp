@@ -27,7 +27,7 @@ std::unordered_set<ggml_backend_buffer_t> apir_get_track_backend_buffers() {
     return backend_buffers;
 }
 
-ggml_tensor * apir_deserialize_tensor(struct ggml_context * ctx, const apir_rpc_tensor * tensor) {
+ggml_tensor * apir_deserialize_tensor(ggml_context * ctx, const apir_rpc_tensor * tensor) {
     ggml_tensor * result =
         ggml_new_tensor_4d(ctx, (ggml_type) tensor->type, tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
     for (uint32_t i = 0; i < GGML_MAX_DIMS; i++) {
@@ -64,9 +64,9 @@ ggml_tensor * apir_deserialize_tensor(struct ggml_context * ctx, const apir_rpc_
 }
 
 ggml_tensor * apir_create_node(uint64_t                                                      id,
-                               struct ggml_context *                                         ctx,
+                               ggml_context *                                                ctx,
                                const std::unordered_map<uint64_t, const apir_rpc_tensor *> & tensor_ptrs,
-                               std::unordered_map<uint64_t, struct ggml_tensor *> &          tensor_map) {
+                               std::unordered_map<uint64_t, ggml_tensor *> &                 tensor_map) {
     if (id == 0) {
         return nullptr;
     }
@@ -74,7 +74,7 @@ ggml_tensor * apir_create_node(uint64_t                                         
         return tensor_map[id];
     }
     const apir_rpc_tensor * tensor = tensor_ptrs.at(id);
-    struct ggml_tensor *    result = apir_deserialize_tensor(ctx, tensor);
+    ggml_tensor *    result = apir_deserialize_tensor(ctx, tensor);
     if (result == nullptr) {
         return nullptr;
     }
@@ -92,13 +92,13 @@ ggml_cgraph * apir_deserialize_graph(uint32_t                n_nodes,
                                      const apir_rpc_tensor * tensors,
                                      const uint64_t *        nodes) {
     size_t buf_size = ggml_tensor_overhead() * (n_nodes + n_tensors) + ggml_graph_overhead_custom(n_nodes, false);
-    struct ggml_init_params params = {
+    ggml_init_params params = {
         /*.mem_size   =*/buf_size,
         /*.mem_buffer =*/NULL,
         /*.no_alloc   =*/true,
     };
-    struct ggml_context * ctx   = ggml_init(params);
-    struct ggml_cgraph *  graph = ggml_new_graph_custom(ctx, n_nodes, false);
+    ggml_context * ctx   = ggml_init(params);
+    ggml_cgraph *  graph = ggml_new_graph_custom(ctx, n_nodes, false);
     graph->n_nodes              = n_nodes;
     std::unordered_map<uint64_t, const apir_rpc_tensor *> tensor_ptrs;
     for (uint32_t i = 0; i < n_tensors; i++) {

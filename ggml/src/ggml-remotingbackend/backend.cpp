@@ -30,11 +30,6 @@ void apir_backend_deinit(void) {
         INFO("%s: free memory: %ld MB", __func__, (size_t) free / 1024 / 1024);
     }
 
-    show_timer(&graph_compute_timer);
-    show_timer(&set_tensor_timer);
-    show_timer(&get_tensor_timer);
-    /* *** */
-
     if (backend_library_handle) {
         INFO("%s: The GGML backend library was loaded. Unloading it.", __func__);
         dlclose(backend_library_handle);
@@ -101,27 +96,27 @@ ApirLoadLibraryReturnCode apir_backend_initialize() {
     return (ApirLoadLibraryReturnCode) (APIR_LOAD_LIBRARY_INIT_BASE_INDEX + ret);
 }
 
-uint32_t apir_backend_dispatcher(uint32_t                    cmd_type,
-                                 struct virgl_apir_context * ctx,
-                                 char *                      dec_cur,
-                                 const char *                dec_end,
-                                 char *                      enc_cur,
-                                 const char *                enc_end,
-                                 char **                     enc_cur_after) {
-    struct apir_encoder _enc = {
+uint32_t apir_backend_dispatcher(uint32_t             cmd_type,
+                                 virgl_apir_context * ctx,
+                                 char *               dec_cur,
+                                 const char *         dec_end,
+                                 char *               enc_cur,
+                                 const char *         enc_end,
+                                 char **              enc_cur_after) {
+    apir_encoder _enc = {
         .cur   = enc_cur,
         .start = enc_cur,
         .end   = enc_end,
         .fatal = false,
     };
-    struct apir_encoder * enc = &_enc;
+    apir_encoder * enc = &_enc;
 
-    struct apir_decoder _dec = {
+    apir_decoder _dec = {
         .cur = dec_cur,
         .end = dec_end,
         .fatal = false,
     };
-    struct apir_decoder * dec = &_dec;
+    apir_decoder * dec = &_dec;
 
     if (cmd_type >= APIR_BACKEND_DISPATCH_TABLE_COUNT) {
         ERROR("Received an invalid dispatch index (%d >= %d)\n", cmd_type, APIR_BACKEND_DISPATCH_TABLE_COUNT);
