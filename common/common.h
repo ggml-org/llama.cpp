@@ -80,6 +80,7 @@ int32_t cpu_get_num_math();
 //
 
 enum llama_example {
+    LLAMA_EXAMPLE_BATCHED,
     LLAMA_EXAMPLE_DEBUG,
     LLAMA_EXAMPLE_COMMON,
     LLAMA_EXAMPLE_SPECULATIVE,
