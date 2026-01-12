@@ -28,65 +28,6 @@
 
 #define p_atomic_read(_v) __atomic_load_n((_v), __ATOMIC_ACQUIRE)
 
-void thks_bye();
-void breakpoint();
-
-#ifndef NDEBUG
-inline void INFO(const char * format, ...) {
-    fprintf(stderr, "INFO: ");
-
-    va_list argptr;
-    va_start(argptr, format);
-    vfprintf(stderr, format, argptr);
-    fprintf(stderr, "\n");
-    va_end(argptr);
-}
-#else
-inline void INFO(...) {}
-#endif
-
-inline void MESSAGE(const char * format, ...) {
-    fprintf(stderr, "APIR: ");
-
-    va_list argptr;
-    va_start(argptr, format);
-    vfprintf(stderr, format, argptr);
-    fprintf(stderr, "\n");
-    va_end(argptr);
-}
-
-inline void WARNING(const char * format, ...) {
-    fprintf(stderr, "WARNING: ");
-
-    va_list argptr;
-    va_start(argptr, format);
-    vfprintf(stderr, format, argptr);
-    fprintf(stderr, "\n");
-    va_end(argptr);
-}
-
-inline void ERROR(const char * format, ...) {
-    fprintf(stderr, "ERROR: ");
-
-    va_list argptr;
-    va_start(argptr, format);
-    vfprintf(stderr, format, argptr);
-    fprintf(stderr, "\n");
-    va_end(argptr);
-}
-
-inline void FATAL(const char * format, ...) {
-    fprintf(stderr, "FATAL: ");
-
-    va_list argptr;
-    va_start(argptr, format);
-    vfprintf(stderr, format, argptr);
-    fprintf(stderr, "\n");
-    va_end(argptr);
-
-    abort();
-}
-
 static inline bool util_is_power_of_two_nonzero64(uint64_t v) {
     return IS_POT_NONZERO(v);
 }
@@ -97,8 +38,8 @@ static inline uint64_t align64(uint64_t value, uint64_t alignment) {
 }
 
 struct list_head {
-    struct list_head * prev;
-    struct list_head * next;
+    list_head * prev;
+    list_head * next;
 };
 
 struct util_sparse_array {
@@ -108,13 +49,38 @@ struct util_sparse_array {
     uintptr_t root;
 };
 
-void * util_sparse_array_get(struct util_sparse_array * arr, uint64_t idx);
-void   util_sparse_array_init(struct util_sparse_array * arr, size_t elem_size, size_t node_size);
+void * util_sparse_array_get(util_sparse_array * arr, uint64_t idx);
+void   util_sparse_array_init(util_sparse_array * arr, size_t elem_size, size_t node_size);
 
 inline void os_time_sleep(int64_t usecs) {
-    struct timespec time;
+    timespec time;
     time.tv_sec  = usecs / 1000000;
     time.tv_nsec = (usecs % 1000000) * 1000;
     while (clock_nanosleep(CLOCK_MONOTONIC, 0, &time, &time) == EINTR)
         ;
+}
+
+struct timer_data {
+    long long    start;
+    long long    total;
+    long long    count;
+};
+
+static inline void start_timer(timer_data * timer) {
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    timer->start = (long long) ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+// returns the duration in ns
+static inline long long stop_timer(timer_data * timer) {
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    long long timer_end = (long long) ts.tv_sec * 1000000000LL + ts.tv_nsec;
+
+    long long duration = (timer_end - timer->start);
+    timer->total += duration;
+    timer->count += 1;
+
+    return duration;
 }

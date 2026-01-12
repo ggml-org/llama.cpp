@@ -19,5 +19,5 @@ struct virtgpu_shmem {
     uint32_t gem_handle;
 };
 
-int  virtgpu_shmem_create(struct virtgpu * gpu, size_t size, struct virtgpu_shmem * shmem);
-void virtgpu_shmem_destroy(struct virtgpu * gpu, struct virtgpu_shmem * shmem);
+int  virtgpu_shmem_create(virtgpu * gpu, size_t size, virtgpu_shmem * shmem);
+void virtgpu_shmem_destroy(virtgpu * gpu, virtgpu_shmem * shmem);

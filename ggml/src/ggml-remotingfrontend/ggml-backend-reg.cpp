@@ -3,8 +3,8 @@
 #include <iostream>
 #include <mutex>
 
-static struct virtgpu * apir_initialize() {
-    static struct virtgpu * apir_gpu_instance = NULL;
+static virtgpu * apir_initialize() {
+    static virtgpu * apir_gpu_instance = NULL;
     static bool             apir_initialized  = false;
 
     if (apir_initialized) {
@@ -13,7 +13,7 @@ static struct virtgpu * apir_initialize() {
 
     apir_gpu_instance = create_virtgpu();
     if (!apir_gpu_instance) {
-        FATAL("failed to initialize the virtgpu :/");
+        GGML_ABORT("failed to initialize the virtgpu :/");
     }
 
     apir_initialized = true;
@@ -22,9 +22,9 @@ static struct virtgpu * apir_initialize() {
 }
 
 static int ggml_backend_remoting_get_device_count() {
-    struct virtgpu * gpu = apir_initialize();
+    virtgpu * gpu = apir_initialize();
     if (!gpu) {
-        WARNING("apir_initialize failed :/");
+        GGML_LOG_WARN("apir_initialize failed :/");
         return 0;
     }
 
@@ -46,13 +46,13 @@ ggml_backend_dev_t ggml_backend_remoting_get_device(size_t device) {
 
 static void ggml_backend_remoting_reg_init_devices(ggml_backend_reg_t reg) {
     if (devices.size() > 0) {
-        INFO("%s: already initialized", __func__);
+        GGML_LOG_INFO("%s: already initialized", __func__);
         return;
     }
 
-    struct virtgpu * gpu = apir_initialize();
+    virtgpu * gpu = apir_initialize();
     if (!gpu) {
-        FATAL("apir_initialize failed :/");
+        GGML_LOG_ERROR("apir_initialize failed :/");
         return;
     }
 
@@ -95,33 +95,17 @@ static const char * ggml_backend_remoting_reg_get_name(ggml_backend_reg_t reg) {
     return GGML_REMOTING_FRONTEND_NAME;
 }
 
-static const struct ggml_backend_reg_i ggml_backend_remoting_reg_i = {
+static const ggml_backend_reg_i ggml_backend_remoting_reg_i = {
     /* .get_name         = */ ggml_backend_remoting_reg_get_name,
     /* .get_device_count = */ ggml_backend_remoting_reg_get_device_count,
     /* .get_device       = */ ggml_backend_remoting_reg_get_device,
     /* .get_proc_address = */ NULL,
 };
 
-static void showTime() {
-    show_timer(&graph_compute_timer);
-    show_timer(&get_tensor_timer);
-    show_timer(&set_tensor_timer);
-    show_timer(&wait_host_reply_timer);
-
-    if (get_tensor_from_ptr_timer.count) {
-        show_timer(&get_tensor_from_ptr_timer);
-        show_timer(&set_tensor_from_ptr_timer);
-    }
-
-    if (cpy_tensor_timer.count) {
-        show_timer(&cpy_tensor_timer);
-    }
-}
-
 ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
-    struct virtgpu * gpu = apir_initialize();
+    virtgpu * gpu = apir_initialize();
     if (!gpu) {
-        FATAL("apir_initialize failed :/");
+        GGML_LOG_ERROR("apir_initialize failed :/");
         return NULL;
     }
 
@@ -139,10 +123,7 @@ ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
 
     ggml_backend_remoting_reg_init_devices(&reg);
 
-    int cr = atexit(showTime);
-    GGML_ASSERT(cr == 0);
-
-    MESSAGE("%s: initialzed", __func__);
+    GGML_LOG_INFO("%s: initialzed", __func__);
 
     return &reg;
 }

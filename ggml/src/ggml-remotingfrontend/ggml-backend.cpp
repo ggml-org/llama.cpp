@@ -10,33 +10,21 @@ static void ggml_backend_remoting_free(ggml_backend_t backend) {
     delete backend;
 }
 
-struct timer_data graph_compute_timer = { 0, 0, 0, "compute_timer" };
-
 static ggml_status ggml_backend_remoting_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
-    struct virtgpu * gpu = DEV_TO_GPU(backend->device);
+    virtgpu * gpu = DEV_TO_GPU(backend->device);
 
-    start_timer(&graph_compute_timer);
-
-    ggml_status status = apir_backend_graph_compute(gpu, cgraph);
-
-    stop_timer(&graph_compute_timer);
-
-    return status;
+    return apir_backend_graph_compute(gpu, cgraph);
 }
 
 static void ggml_backend_remoting_graph_optimize(ggml_backend_t backend, ggml_cgraph * cgraph) {
-    struct virtgpu * gpu = DEV_TO_GPU(backend->device);
+    virtgpu * gpu = DEV_TO_GPU(backend->device);
 #if true
     UNUSED(gpu);
     UNUSED(cgraph);
-
-    // not working yet
 #else
-    start_timer(&graph_compute_timer);
+    // not working yet
 
     apir_backend_graph_optimize(gpu, cgraph);
-
-    stop_timer(&graph_compute_timer);
 #endif
 }
 

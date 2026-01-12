@@ -7,11 +7,9 @@
 
 #include <cstdint>
 
-struct timer_data graph_compute_timer = { 0, 0, 0, "compute_timer" };
-
-uint32_t backend_backend_graph_compute(struct apir_encoder *       enc,
-                                       struct apir_decoder *       dec,
-                                       struct virgl_apir_context * ctx) {
+uint32_t backend_backend_graph_compute(apir_encoder *       enc,
+                                       apir_decoder *       dec,
+                                       virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(enc);
 
@@ -19,14 +17,12 @@ uint32_t backend_backend_graph_compute(struct apir_encoder *       enc,
     static bool async_backend;
 
     if (!async_backend_initialized) {
-        struct ggml_backend_dev_props props;
+        ggml_backend_dev_props props;
 
         dev->iface.get_props(dev, &props);
         async_backend             = props.caps.async;
         async_backend_initialized = true;
     }
-
-    start_timer(&graph_compute_timer);
 
     uint32_t shmem_res_id;
     apir_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);
@@ -40,7 +36,7 @@ uint32_t backend_backend_graph_compute(struct apir_encoder *       enc,
     size_t cgraph_size;
     apir_decode_size_t(dec, &cgraph_size);
 
-    struct apir_decoder secondary_dec = apir_new_decoder((const char *) shmem_data, cgraph_size);
+    apir_decoder secondary_dec = apir_new_decoder((const char *) shmem_data, cgraph_size);
 
     ggml_cgraph * cgraph = apir_decode_ggml_cgraph(&secondary_dec, cgraph_size);
 
@@ -56,7 +52,6 @@ uint32_t backend_backend_graph_compute(struct apir_encoder *       enc,
         status = GGML_STATUS_ABORTED;
         apir_encode_ggml_status(enc, &status);
 
-        stop_timer(&graph_compute_timer);
         return 0;
     }
 #endif
@@ -67,8 +62,6 @@ uint32_t backend_backend_graph_compute(struct apir_encoder *       enc,
     }
 
     apir_encode_ggml_status(enc, &status);
-
-    stop_timer(&graph_compute_timer);
 
     return 0;
 }

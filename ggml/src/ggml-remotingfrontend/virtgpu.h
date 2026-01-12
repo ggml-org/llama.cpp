@@ -47,45 +47,43 @@ enum virgl_renderer_capset {
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof((x)[0]))
 
-typedef enum virt_gpu_result_t {
+enum virt_gpu_result_t {
     APIR_SUCCESS                     = 0,
     APIR_ERROR_INITIALIZATION_FAILED = -1,
-} virt_gpu_result_t;
+};
 
 #define PRINTFLIKE(f, a) __attribute__((format(__printf__, f, a)))
 
 struct virtgpu {
-    struct remoting_dev_instance * instance;
-
     bool use_apir_capset;
 
     int fd;
 
     struct {
-        enum virgl_renderer_capset        id;
+        virgl_renderer_capset        id;
         uint32_t                          version;
-        struct virgl_renderer_capset_apir data;
+        virgl_renderer_capset_apir data;
     } capset;
 
-    struct util_sparse_array shmem_array;
+    util_sparse_array shmem_array;
 
     /* APIR communication pages */
-    struct virtgpu_shmem reply_shmem;
-    struct virtgpu_shmem data_shmem;
+    virtgpu_shmem reply_shmem;
+    virtgpu_shmem data_shmem;
 };
 
-static inline int virtgpu_ioctl(struct virtgpu * gpu, unsigned long request, void * args) {
+static inline int virtgpu_ioctl(virtgpu * gpu, unsigned long request, void * args) {
     return drmIoctl(gpu->fd, request, args);
 }
 
-struct virtgpu * create_virtgpu();
+virtgpu * create_virtgpu();
 
-struct apir_encoder * remote_call_prepare(struct virtgpu * gpu, ApirCommandType apir_cmd_type, int32_t cmd_flags);
+apir_encoder * remote_call_prepare(virtgpu * gpu, ApirCommandType apir_cmd_type, int32_t cmd_flags);
 
-uint32_t remote_call(struct virtgpu *       gpu,
-                     struct apir_encoder *  enc,
-                     struct apir_decoder ** dec,
-                     float                  max_wait_ms,
-                     long long *            call_duration_ns);
+uint32_t remote_call(virtgpu *       gpu,
+                     apir_encoder *  enc,
+                     apir_decoder ** dec,
+                     float           max_wait_ms,
+                     long long *     call_duration_ns);
 
-void remote_call_finish(struct virtgpu * gpu, struct apir_encoder * enc, struct apir_decoder * dec);
+void remote_call_finish(virtgpu * gpu, apir_encoder * enc, apir_decoder * dec);

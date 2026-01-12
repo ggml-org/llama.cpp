@@ -6,13 +6,9 @@
 
 #include <cstdint>
 
-struct timer_data get_tensor_timer = { 0, 0, 0, "get_tensor" };
-struct timer_data set_tensor_timer = { 0, 0, 0, "set_tensor" };
-struct timer_data cpy_tensor_timer = { 0, 0, 0, "set_tensor" };
-
-uint32_t backend_buffer_get_base(struct apir_encoder *       enc,
-                                 struct apir_decoder *       dec,
-                                 struct virgl_apir_context * ctx) {
+uint32_t backend_buffer_get_base(apir_encoder *       enc,
+                                 apir_decoder *       dec,
+                                 virgl_apir_context * ctx) {
     UNUSED(ctx);
     ggml_backend_buffer_t buffer;
     buffer = apir_decode_ggml_buffer(dec);
@@ -23,13 +19,11 @@ uint32_t backend_buffer_get_base(struct apir_encoder *       enc,
     return 0;
 }
 
-uint32_t backend_buffer_set_tensor(struct apir_encoder *       enc,
-                                   struct apir_decoder *       dec,
-                                   struct virgl_apir_context * ctx) {
+uint32_t backend_buffer_set_tensor(apir_encoder *       enc,
+                                   apir_decoder *       dec,
+                                   virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(enc);
-
-    start_timer(&set_tensor_timer);
 
     ggml_backend_buffer_t buffer;
     buffer = apir_decode_ggml_buffer(dec);
@@ -56,18 +50,14 @@ uint32_t backend_buffer_set_tensor(struct apir_encoder *       enc,
 
     buffer->iface.set_tensor(buffer, tensor, shmem_data, offset, size);
 
-    stop_timer(&set_tensor_timer);
-
     return 0;
 }
 
-uint32_t backend_buffer_get_tensor(struct apir_encoder *       enc,
-                                   struct apir_decoder *       dec,
-                                   struct virgl_apir_context * ctx) {
+uint32_t backend_buffer_get_tensor(apir_encoder *       enc,
+                                   apir_decoder *       dec,
+                                   virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(enc);
-
-    start_timer(&get_tensor_timer);
 
     ggml_backend_buffer_t buffer;
     buffer = apir_decode_ggml_buffer(dec);
@@ -93,17 +83,13 @@ uint32_t backend_buffer_get_tensor(struct apir_encoder *       enc,
 
     buffer->iface.get_tensor(buffer, tensor, shmem_data, offset, size);
 
-    stop_timer(&get_tensor_timer);
-
     return 0;
 }
 
-uint32_t backend_buffer_cpy_tensor(struct apir_encoder *       enc,
-                                   struct apir_decoder *       dec,
-                                   struct virgl_apir_context * ctx) {
+uint32_t backend_buffer_cpy_tensor(apir_encoder *       enc,
+                                   apir_decoder *       dec,
+                                   virgl_apir_context * ctx) {
     UNUSED(ctx);
-
-    start_timer(&cpy_tensor_timer);
 
     ggml_backend_buffer_t buffer;
     buffer = apir_decode_ggml_buffer(dec);
@@ -117,12 +103,10 @@ uint32_t backend_buffer_cpy_tensor(struct apir_encoder *       enc,
 
     apir_encode_bool_t(enc, &ret);
 
-    stop_timer(&cpy_tensor_timer);
-
     return 0;
 }
 
-uint32_t backend_buffer_clear(struct apir_encoder * enc, struct apir_decoder * dec, struct virgl_apir_context * ctx) {
+uint32_t backend_buffer_clear(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(enc);
 
@@ -137,9 +121,9 @@ uint32_t backend_buffer_clear(struct apir_encoder * enc, struct apir_decoder * d
     return 0;
 }
 
-uint32_t backend_buffer_free_buffer(struct apir_encoder *       enc,
-                                    struct apir_decoder *       dec,
-                                    struct virgl_apir_context * ctx) {
+uint32_t backend_buffer_free_buffer(apir_encoder *       enc,
+                                    apir_decoder *       dec,
+                                    virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(enc);
 

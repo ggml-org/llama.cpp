@@ -41,12 +41,12 @@ void apir_add_tensor(ggml_tensor *                       tensor,
                      std::vector<apir_rpc_tensor> &      tensors,
                      std::unordered_set<ggml_tensor *> & visited);
 
-ggml_tensor * apir_deserialize_tensor(struct ggml_context * ctx, const apir_rpc_tensor * tensor);
+ggml_tensor * apir_deserialize_tensor(ggml_context * ctx, const apir_rpc_tensor * tensor);
 
 ggml_tensor * apir_create_node(uint64_t                                                      id,
-                               struct ggml_context *                                         ctx,
+                               ggml_context *                                                ctx,
                                const std::unordered_map<uint64_t, const apir_rpc_tensor *> & tensor_ptrs,
-                               std::unordered_map<uint64_t, struct ggml_tensor *> &          tensor_map);
+                               std::unordered_map<uint64_t, ggml_tensor *> &                 tensor_map);
 
 ggml_cgraph * apir_deserialize_graph(uint32_t                n_nodes,
                                      uint32_t                n_tensors,

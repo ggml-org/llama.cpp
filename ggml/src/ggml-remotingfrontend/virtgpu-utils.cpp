@@ -46,7 +46,7 @@ static inline uint64_t util_logbase2_64(uint64_t n) {
 #endif
 }
 
-void util_sparse_array_init(struct util_sparse_array * arr, size_t elem_size, size_t node_size) {
+void util_sparse_array_init(util_sparse_array * arr, size_t elem_size, size_t node_size) {
     memset(arr, 0, sizeof(*arr));
     arr->elem_size      = elem_size;
     arr->node_size_log2 = util_logbase2_64(node_size);
@@ -70,7 +70,7 @@ static inline unsigned _util_sparse_array_node_level(uintptr_t handle) {
     return handle & NODE_LEVEL_MASK;
 }
 
-static inline void _util_sparse_array_node_finish(struct util_sparse_array * arr, uintptr_t node) {
+static inline void _util_sparse_array_node_finish(util_sparse_array * arr, uintptr_t node) {
     if (_util_sparse_array_node_level(node) > 0) {
         uintptr_t * children  = (uintptr_t *) _util_sparse_array_node_data(node);
         size_t      node_size = 1ull << arr->node_size_log2;
@@ -91,7 +91,7 @@ static inline uintptr_t _util_sparse_array_node(void * data, unsigned level) {
     return (uintptr_t) data | level;
 }
 
-inline uintptr_t _util_sparse_array_node_alloc(struct util_sparse_array * arr, unsigned level) {
+inline uintptr_t _util_sparse_array_node_alloc(util_sparse_array * arr, unsigned level) {
     size_t size;
     if (level == 0) {
         size = arr->elem_size << arr->node_size_log2;
@@ -119,7 +119,7 @@ static inline uintptr_t _util_sparse_array_set_or_free_node(uintptr_t * node_ptr
     }
 }
 
-void * util_sparse_array_get(struct util_sparse_array * arr, uint64_t idx) {
+void * util_sparse_array_get(util_sparse_array * arr, uint64_t idx) {
     const unsigned node_size_log2 = arr->node_size_log2;
     uintptr_t      root           = p_atomic_read(&arr->root);
     if (unlikely(!root)) {
