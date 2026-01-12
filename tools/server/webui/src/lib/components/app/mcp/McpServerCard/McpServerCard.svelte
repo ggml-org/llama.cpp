@@ -2,7 +2,8 @@
 	import { onMount } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
 	import type { MCPServerSettingsEntry, HealthCheckState } from '$lib/types';
-	import { MCPConnectionPhase } from '$lib/enums';
+	import { HealthCheckStatus } from '$lib/enums';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpClient } from '$lib/clients/mcp.client';
 	import McpServerCardHeader from './McpServerCardHeader.svelte';
 	import McpServerCardActions from './McpServerCardActions.svelte';
@@ -22,11 +23,39 @@
 	let { server, displayName, faviconUrl, onToggle, onUpdate, onDelete }: Props = $props();
 
 	let healthState = $derived<HealthCheckState>(mcpStore.getHealthCheckState(server.id));
-	let isHealthChecking = $derived(healthState.status === 'loading');
-	let isConnected = $derived(healthState.status === 'success');
-	let isError = $derived(healthState.status === 'error');
-	let errorMessage = $derived(healthState.status === 'error' ? healthState.message : undefined);
-	let tools = $derived(healthState.status === 'success' ? healthState.tools : []);
+	let isHealthChecking = $derived(healthState.status === HealthCheckStatus.Connecting);
+	let isConnected = $derived(healthState.status === HealthCheckStatus.Success);
+	let isError = $derived(healthState.status === HealthCheckStatus.Error);
+	let errorMessage = $derived(
+		healthState.status === HealthCheckStatus.Error ? healthState.message : undefined
+	);
+	let tools = $derived(healthState.status === HealthCheckStatus.Success ? healthState.tools : []);
+
+	let connectionLogs = $derived(
+		healthState.status === HealthCheckStatus.Connecting ||
+			healthState.status === HealthCheckStatus.Success ||
+			healthState.status === HealthCheckStatus.Error
+			? healthState.logs
+			: []
+	);
+	let serverInfo = $derived(
+		healthState.status === HealthCheckStatus.Success ? healthState.serverInfo : undefined
+	);
+	let capabilities = $derived(
+		healthState.status === HealthCheckStatus.Success ? healthState.capabilities : undefined
+	);
+	let transportType = $derived(
+		healthState.status === HealthCheckStatus.Success ? healthState.transportType : undefined
+	);
+	let protocolVersion = $derived(
+		healthState.status === HealthCheckStatus.Success ? healthState.protocolVersion : undefined
+	);
+	let connectionTimeMs = $derived(
+		healthState.status === HealthCheckStatus.Success ? healthState.connectionTimeMs : undefined
+	);
+	let instructions = $derived(
+		healthState.status === HealthCheckStatus.Success ? healthState.instructions : undefined
+	);
 
 	let isEditing = $state(!server.url.trim());
 	let showDeleteDialog = $state(false);

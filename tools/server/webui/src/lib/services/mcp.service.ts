@@ -50,10 +50,32 @@ interface ToolCallResult {
 
 export class MCPService {
 	/**
+	 * Create a connection log entry
+	 */
+	private static createLog(
+		phase: MCPConnectionPhase,
+		message: string,
+		level: MCPLogLevel = MCPLogLevel.Info,
+		details?: unknown
+	): MCPConnectionLog {
+		return {
+			timestamp: new Date(),
+			phase,
+			message,
+			level,
+			details
+		};
+	}
+
+	/**
 	 * Create transport based on server configuration.
 	 * Supports WebSocket, StreamableHTTP (modern), and SSE (legacy) transports.
+	 * Returns both transport and the type used.
 	 */
-	static createTransport(config: MCPServerConfig): Transport {
+	static createTransport(config: MCPServerConfig): {
+		transport: Transport;
+		type: MCPTransportType;
+	} {
 		if (!config.url) {
 			throw new Error('MCP server configuration is missing url');
 		}
@@ -64,26 +86,38 @@ export class MCPService {
 		if (config.headers) {
 			requestInit.headers = config.headers;
 		}
+
 		if (config.credentials) {
 			requestInit.credentials = config.credentials;
 		}
 
 		if (config.transport === 'websocket') {
 			console.log(`[MCPService] Creating WebSocket transport for ${url.href}`);
-			return new WebSocketClientTransport(url);
+
+			return {
+				transport: new WebSocketClientTransport(url),
+				type: MCPTransportType.Websocket
+			};
 		}
 
 		try {
 			console.log(`[MCPService] Creating StreamableHTTP transport for ${url.href}`);
-			return new StreamableHTTPClientTransport(url, {
-				requestInit,
-				sessionId: config.sessionId
-			});
+
+			return {
+				transport: new StreamableHTTPClientTransport(url, {
+					requestInit,
+					sessionId: config.sessionId
+				}),
+				type: MCPTransportType.StreamableHttp
+			};
 		} catch (httpError) {
 			console.warn(`[MCPService] StreamableHTTP failed, trying SSE transport...`, httpError);
 
 			try {
-				return new SSEClientTransport(url, { requestInit });
+				return {
+					transport: new SSEClientTransport(url, { requestInit }),
+					type: MCPTransportType.SSE
+				};
 			} catch (sseError) {
 				const httpMsg = httpError instanceof Error ? httpError.message : String(httpError);
 				const sseMsg = sseError instanceof Error ? sseError.message : String(sseError);
@@ -93,20 +127,58 @@ export class MCPService {
 	}
 
 	/**
-	 * Connect to a single MCP server.
-	 * Returns connection object with client, transport, and discovered tools.
+	 * Extract server info from SDK Implementation type
+	 */
+	private static extractServerInfo(impl: Implementation | undefined): MCPServerInfo | undefined {
+		if (!impl) return undefined;
+		return {
+			name: impl.name,
+			version: impl.version,
+			title: impl.title,
+			description: impl.description,
+			websiteUrl: impl.websiteUrl,
+			icons: impl.icons?.map((icon) => ({
+				src: icon.src,
+				mimeType: icon.mimeType,
+				sizes: icon.sizes
+			}))
+		};
+	}
+
+	/**
+	 * Connect to a single MCP server with detailed phase tracking.
+	 * Returns connection object with client, transport, discovered tools, and connection details.
+	 * @param onPhase - Optional callback for connection phase changes
 	 */
 	static async connect(
 		serverName: string,
 		serverConfig: MCPServerConfig,
 		clientInfo?: Implementation,
-		capabilities?: ClientCapabilities
+		capabilities?: ClientCapabilities,
+		onPhase?: MCPPhaseCallback
 	): Promise<MCPConnection> {
+		const startTime = performance.now();
 		const effectiveClientInfo = clientInfo ?? DEFAULT_MCP_CONFIG.clientInfo;
 		const effectiveCapabilities = capabilities ?? DEFAULT_MCP_CONFIG.capabilities;
 
+		// Phase: Creating transport
+		onPhase?.(
+			MCPConnectionPhase.TransportCreating,
+			this.createLog(
+				MCPConnectionPhase.TransportCreating,
+				`Creating transport for ${serverConfig.url}`
+			)
+		);
+
 		console.log(`[MCPService][${serverName}] Creating transport...`);
-		const transport = this.createTransport(serverConfig);
+		const { transport, type: transportType } = this.createTransport(serverConfig);
+
+		// Phase: Transport ready
+		onPhase?.(
+			MCPConnectionPhase.TransportReady,
+			this.createLog(MCPConnectionPhase.TransportReady, `Transport ready (${transportType})`),
+			{ transportType }
+		);
 
 		const client = new Client(
 			{
@@ -116,19 +188,83 @@ export class MCPService {
 			{ capabilities: effectiveCapabilities }
 		);
 
+		// Phase: Initializing
+		onPhase?.(
+			MCPConnectionPhase.Initializing,
+			this.createLog(MCPConnectionPhase.Initializing, 'Sending initialize request...')
+		);
+
 		console.log(`[MCPService][${serverName}] Connecting to server...`);
 		await client.connect(transport);
 
-		console.log(`[MCPService][${serverName}] Connected, listing tools...`);
-		const tools = await this.listTools({ client, transport, tools: [], serverName });
+		const serverVersion = client.getServerVersion();
+		const serverCapabilities = client.getServerCapabilities();
+		const instructions = client.getInstructions();
+		const serverInfo = this.extractServerInfo(serverVersion);
 
-		console.log(`[MCPService][${serverName}] Initialization complete with ${tools.length} tools`);
+		// Phase: Capabilities exchanged
+		onPhase?.(
+			MCPConnectionPhase.CapabilitiesExchanged,
+			this.createLog(
+				MCPConnectionPhase.CapabilitiesExchanged,
+				'Capabilities exchanged successfully',
+				MCPLogLevel.Info,
+				{
+					serverCapabilities,
+					serverInfo
+				}
+			),
+			{
+				serverInfo,
+				serverCapabilities,
+				clientCapabilities: effectiveCapabilities,
+				instructions
+			}
+		);
+
+		// Phase: Listing tools
+		onPhase?.(
+			MCPConnectionPhase.ListingTools,
+			this.createLog(MCPConnectionPhase.ListingTools, 'Listing available tools...')
+		);
+
+		console.log(`[MCPService][${serverName}] Connected, listing tools...`);
+		const tools = await this.listTools({
+			client,
+			transport,
+			tools: [],
+			serverName,
+			transportType,
+			connectionTimeMs: 0
+		});
+
+		const connectionTimeMs = Math.round(performance.now() - startTime);
+
+		// Phase: Connected
+		onPhase?.(
+			MCPConnectionPhase.Connected,
+			this.createLog(
+				MCPConnectionPhase.Connected,
+				`Connection established with ${tools.length} tools (${connectionTimeMs}ms)`
+			)
+		);
+
+		console.log(
+			`[MCPService][${serverName}] Initialization complete with ${tools.length} tools in ${connectionTimeMs}ms`
+		);
 
 		return {
 			client,
 			transport,
 			tools,
-			serverName
+			serverName,
+			transportType,
+			serverInfo,
+			serverCapabilities,
+			clientCapabilities: effectiveCapabilities,
+			protocolVersion: DEFAULT_MCP_CONFIG.protocolVersion,
+			instructions,
+			connectionTimeMs
 		};
 	}
 
