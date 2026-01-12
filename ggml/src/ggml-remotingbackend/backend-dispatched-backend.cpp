@@ -33,7 +33,9 @@ uint32_t backend_backend_graph_compute(struct apir_encoder *       enc,
 
     const void * shmem_data = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
     if (!shmem_data) {
-        FATAL("Couldn't get the shmem addr from virgl :/");
+        ERROR("Couldn't get the shmem addr from virgl");
+        apir_decoder_set_fatal(dec);
+        return 1;
     }
     size_t cgraph_size;
     apir_decode_size_t(dec, &cgraph_size);

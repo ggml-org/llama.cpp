@@ -17,13 +17,15 @@ long long timer_count = 0;
 
 uint32_t backend_dispatch_initialize(void * ggml_backend_reg_fct_p, void * ggml_backend_init_fct_p) {
     if (reg != NULL) {
-        FATAL("%s: already initialized :/", __func__);
+        WARNING("%s: already initialized :/", __func__);
+        return APIR_BACKEND_INITIALIZE_ALREADY_INITED;
     }
     ggml_backend_reg_t (*ggml_backend_reg_fct)(void) = (ggml_backend_reg_t (*)()) ggml_backend_reg_fct_p;
 
     reg = ggml_backend_reg_fct();
     if (reg == NULL) {
-        FATAL("%s: backend registration failed :/", __func__);
+        ERROR("%s: backend registration failed :/", __func__);
+        return APIR_BACKEND_INITIALIZE_BACKEND_REG_FAILED;
     }
 
     if (reg->iface.get_device_count(reg)) {

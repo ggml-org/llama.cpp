@@ -49,8 +49,3 @@ inline void WARNING(const char * format, ...) {
 inline void ERROR(const char * format, ...) {
     APIR_VA_PRINT("ERROR: ", format);
 }
-
-[[noreturn]] inline void FATAL(const char * format, ...) {
-    APIR_VA_PRINT("FATAL: ", format);
-    abort();
-}
