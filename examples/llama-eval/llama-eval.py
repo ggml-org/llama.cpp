@@ -576,7 +576,7 @@ if __name__ == "__main__":
         "--prompt_source",
         type=str,
         default="mmlu",
-        help=f"Eval types supported: all,{TASK_DICT.keys()}",
+        help=f"Eval types supported: all,{list(TASK_DICT.keys())}",
     )
     parser.add_argument(
         "--n_prompts", type=int, default=None, help="Number of prompts to evaluate"
