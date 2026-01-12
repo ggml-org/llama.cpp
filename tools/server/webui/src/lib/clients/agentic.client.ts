@@ -268,6 +268,9 @@ export class AgenticClient {
 			let lastStreamingToolCallName = '';
 			let lastStreamingToolCallArgsLength = 0;
 
+			// Track emitted tool call state for progressive streaming
+			const emittedToolCallStates = new Map<number, { emittedOnce: boolean; lastArgs: string }>();
+
 			let turnTimings: ChatMessageTimings | undefined;
 
 			const turnStats: ChatMessageAgenticTurnStats = {
@@ -297,6 +300,37 @@ export class AgenticClient {
 						onToolCallChunk: (serialized: string) => {
 							try {
 								turnToolCalls = JSON.parse(serialized) as ApiChatCompletionToolCall[];
+
+								// Emit agentic tags progressively for live UI updates
+								for (let i = 0; i < turnToolCalls.length; i++) {
+									const toolCall = turnToolCalls[i];
+									const toolName = toolCall.function?.name ?? '';
+									const toolArgs = toolCall.function?.arguments ?? '';
+
+									const state = emittedToolCallStates.get(i) || {
+										emittedOnce: false,
+										lastArgs: ''
+									};
+
+									if (!state.emittedOnce) {
+										// First emission: send full header + args
+										let output = `\n\n<<<AGENTIC_TOOL_CALL_START>>>`;
+										output += `\n<<<TOOL_NAME:${toolName}>>>`;
+										output += `\n<<<TOOL_ARGS_START>>>\n`;
+										output += toolArgs;
+										onChunk?.(output);
+										state.emittedOnce = true;
+										state.lastArgs = toolArgs;
+									} else if (toolArgs !== state.lastArgs) {
+										// Subsequent emissions: send only delta
+										const delta = toolArgs.slice(state.lastArgs.length);
+										onChunk?.(delta);
+										state.lastArgs = toolArgs;
+									}
+
+									emittedToolCallStates.set(i, state);
+								}
+
 								// Update store with streaming tool call state for UI visualization
 								// Only update when values actually change to avoid memory pressure
 								if (turnToolCalls.length > 0 && turnToolCalls[0]?.function) {
@@ -418,9 +452,9 @@ export class AgenticClient {
 					return;
 				}
 
-				// Start timing BEFORE emitToolCallStart to capture full perceived execution time
+				// Tool call tags were already emitted during streaming via onToolCallChunk
+				// Start timing for tool execution
 				const toolStartTime = performance.now();
-				this.emitToolCallStart(toolCall, onChunk);
 
 				const mcpCall: MCPToolCall = {
 					id: toolCall.id,
@@ -549,26 +583,6 @@ export class AgenticClient {
 				arguments: call?.function?.arguments ?? ''
 			}
 		}));
-	}
-
-	/**
-	 * Emit tool call start marker (shows "pending" state in UI).
-	 */
-	private emitToolCallStart(
-		toolCall: AgenticToolCallList[number],
-		emit?: (chunk: string) => void
-	): void {
-		if (!emit) return;
-
-		const toolName = toolCall.function.name;
-		const toolArgs = toolCall.function.arguments;
-		// Base64 encode args to avoid conflicts with markdown/HTML parsing
-		const toolArgsBase64 = btoa(unescape(encodeURIComponent(toolArgs)));
-
-		let output = `\n\n<<<AGENTIC_TOOL_CALL_START>>>`;
-		output += `\n<<<TOOL_NAME:${toolName}>>>`;
-		output += `\n<<<TOOL_ARGS_BASE64:${toolArgsBase64}>>>`;
-		emit(output);
 	}
 
 	/**
