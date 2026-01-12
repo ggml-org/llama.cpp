@@ -13,8 +13,7 @@
 		SyntaxHighlightedCode
 	} from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
-	import { agenticStreamingToolCall } from '$lib/stores/agentic.svelte';
-	import { Wrench, Loader2 } from '@lucide/svelte';
+	import { Wrench, Loader2, AlertTriangle } from '@lucide/svelte';
 	import { AgenticSectionType } from '$lib/enums';
 	import { AGENTIC_TAGS, AGENTIC_REGEX } from '$lib/constants/agentic';
 	import { formatJsonPretty } from '$lib/utils/formatters';
@@ -24,7 +23,6 @@
 	interface Props {
 		content: string;
 		isStreaming?: boolean;
-		toolCallTimings?: ChatMessageToolCallTiming[];
 	}
 
 	interface AgenticSection {
@@ -35,7 +33,7 @@
 		toolResult?: string;
 	}
 
-	let { content, isStreaming = false, toolCallTimings = [] }: Props = $props();
+	let { content, isStreaming = false }: Props = $props();
 
 	const sections = $derived(parseAgenticContent(content));
 
@@ -198,6 +196,46 @@
 			<div class="agentic-text">
 				<MarkdownContent content={section.content} />
 			</div>
+		{:else if section.type === AgenticSectionType.TOOL_CALL_STREAMING}
+			{@const streamingIcon = isStreaming ? Loader2 : AlertTriangle}
+			{@const streamingIconClass = isStreaming ? 'h-4 w-4 animate-spin' : 'h-4 w-4 text-yellow-500'}
+			{@const streamingSubtitle = isStreaming ? 'streaming...' : 'incomplete'}
+			<CollapsibleContentBlock
+				open={isExpanded(index, true)}
+				class="my-2"
+				icon={streamingIcon}
+				iconClass={streamingIconClass}
+				title={section.toolName || 'Tool call'}
+				subtitle={streamingSubtitle}
+				onToggle={() => toggleExpanded(index, true)}
+			>
+				<div class="pt-3">
+					<div class="my-3 flex items-center gap-2 text-xs text-muted-foreground">
+						<span>Arguments:</span>
+						{#if isStreaming}
+							<Loader2 class="h-3 w-3 animate-spin" />
+						{/if}
+					</div>
+					{#if section.toolArgs}
+						<SyntaxHighlightedCode
+							code={formatJsonPretty(section.toolArgs)}
+							language="json"
+							maxHeight="20rem"
+							class="text-xs"
+						/>
+					{:else if isStreaming}
+						<div class="rounded bg-muted/30 p-2 text-xs text-muted-foreground italic">
+							Receiving arguments...
+						</div>
+					{:else}
+						<div
+							class="rounded bg-yellow-500/10 p-2 text-xs text-yellow-600 italic dark:text-yellow-400"
+						>
+							Response was truncated
+						</div>
+					{/if}
+				</div>
+			</CollapsibleContentBlock>
 		{:else if section.type === AgenticSectionType.TOOL_CALL || section.type === AgenticSectionType.TOOL_CALL_PENDING}
 			{@const isPending = section.type === AgenticSectionType.TOOL_CALL_PENDING}
 			{@const toolIcon = isPending ? Loader2 : Wrench}
