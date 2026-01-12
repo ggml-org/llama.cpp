@@ -616,59 +616,93 @@ $ echo "source ~/.llama-completion.bash" >> ~/.bashrc
 - [miniaudio.h](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
 
 #### TSI compilation steps
+
+##### Prerequisites
+
+- **TOOLBOX_DIR**: Path to installed toolbox (contains ARM/Xtensa toolchains and common libraries)
+- **MLIR_COMPILER_DIR**: Path to MLIR compiler installation (for blob compilation)
+- Or use **MLIR_SDK_VERSION** which contains both (e.g., `/proj/rel/sw/sdk-r.0.2.2`)
+
+##### Quick build (recommended)
+
+The `tsi-pkg-build.sh` script handles all steps automatically:
+
 ```bash
-#Pull the repo frim tsisw as follows
+# Clone the repo
 git clone git@github.com:tsisw/llama.cpp.git
+cd llama.cpp
 
-#Ensure prerequisites are met as follows
-cd llama.cpp/
-#Ensure prerequisites are met as follows
-echo 'updating submodule'
-git submodule update --recursive --init
-cd ggml-tsi-kernel/
-module load tsi4 gcc/13.3.0
-export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.1.3
-echo 'creating python virtual env'
-/proj/local/Python-3.10.12/bin/python3 -m venv blob-creation
-source blob-creation/bin/activate
-echo 'installing mlir and python dependencies'
-pip install -r ${MLIR_SDK_VERSION}/compiler/python/requirements-common.txt
-pip install ${MLIR_SDK_VERSION}/compiler/python/mlir_external_packages-1.3.0-py3-none-any.whl
-pip install onnxruntime-training
-
-
-
-#build TSI kernels for the Tsavorite backend
-#First for FPGA
-cd fpga-kernel
-cmake -B build-fpga
-./create-all-kernels.sh
-#The for Posix Use cases
-cd ../posix-kernel/
-./create-all-kernels.sh
-
-#Change directory to top level llama.cpp
-cd ../../
-
-#Compile for posix with build-posix as a target folder
-
-cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix
-to enable STatus use below command
-cmake -B build-posix   -DCMAKE_BUILD_TYPE=Debug   -DGGML_TSAVORITE=ON   -DCMAKE_C_FLAGS="-DGGML_PERF"   -DCMAKE_CXX_FLAGS="-DGGML_PERF"
-
-cmake --build build-posix --config Release
-
-#Compile for fpga with build-fpga as a target folder
-export CC="/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc"
-export CXX="/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++"
-cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga
-cmake --build build-fpga --config Release
-
-#For easy build one can also use which creates a FPGA specific tar bundle tsi-ggml.tz
-#If you want to release the build update the TSI-VERSION in the file tsi-pkg-build.sh and add Release as parameter
-#when running ./tsi-pkg-build.sh (Note it will overwrite what exists in /proj/rel/sw/ggml so be sure you want to do
-#it. Example ./tsi-pkg-build.sh release
+# Option 1: Using SDK path (derives TOOLBOX_DIR and MLIR_COMPILER_DIR automatically)
+export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.2.2
 ./tsi-pkg-build.sh
 
+# Option 2: Explicit paths
+./tsi-pkg-build.sh "" /path/to/mlir-compiler/install /path/to/toolbox/install
+
+# Option 3: Environment variables
+export MLIR_COMPILER_DIR=/path/to/mlir-compiler/install
+export TOOLBOX_DIR=/path/to/toolbox/install
+./tsi-pkg-build.sh
+
+# For release build (copies to /proj/rel/sw/ggml)
+./tsi-pkg-build.sh release
+```
+
+##### Manual build steps
+
+```bash
+# Clone and setup
+git clone git@github.com:tsisw/llama.cpp.git
+cd llama.cpp
+git submodule update --recursive --init
+
+# Set paths (adjust as needed)
+export MLIR_COMPILER_DIR=/proj/rel/sw/sdk-r.0.2.2/compiler
+export TOOLBOX_DIR=/proj/rel/sw/sdk-r.0.2.2/toolbox/build/install
+
+# Create Python virtual environment for blob compilation
+cd ggml-tsi-kernel/
+/proj/local/Python-3.11.12/bin/python3 -m venv blob-creation
+source blob-creation/bin/activate
+pip install --upgrade pip torch==2.7.0
+pip install -r ${MLIR_COMPILER_DIR}/python/requirements-common.txt
+pip install ${MLIR_COMPILER_DIR}/python/mlir_external_packages-*.whl
+pip install onnxruntime-training
+
+# Build FPGA kernels (blobs)
+cd fpga-kernel
+cmake -B build-fpga \
+  -DTOOLBOX_DIR=${TOOLBOX_DIR} \
+  -DCOMPILER_INSTALL_DIR=${MLIR_COMPILER_DIR}
+./create-all-kernels.sh
+
+# Build Posix kernels
+cd ../posix-kernel/
+./create-all-kernels.sh
+cd ../../
+
+# Build llama.cpp for Posix (x86_64)
+cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix
+cmake --build build-posix --config Release
+
+# Build llama.cpp for FPGA (ARM cross-compilation using toolbox toolchain)
+cmake -B build-fpga \
+  -DCMAKE_TOOLCHAIN_FILE=${TOOLBOX_DIR}/lib/cmake/toolchains/arm.cmake \
+  -DGGML_TSAVORITE=ON \
+  -DGGML_TSAVORITE_TARGET=fpga \
+  -DLLAMA_CURL=OFF
+cmake --build build-fpga --config Release
+```
+
+##### Build variants
+
+```bash
+# Debug build with detailed performance logging
+cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix \
+  -DCMAKE_C_FLAGS="-DGGML_PERF_DETAIL" -DCMAKE_CXX_FLAGS="-DGGML_PERF_DETAIL"
+
+# Release build with performance metrics
+cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix \
+  -DCMAKE_C_FLAGS="-DGGML_PERF_RELEASE" -DCMAKE_CXX_FLAGS="-DGGML_PERF_RELEASE"
 ```
 
