@@ -1,73 +1,35 @@
 #pragma once
 
 /* device */
-uint32_t backend_device_get_device_count(apir_encoder *       enc,
-                                         apir_decoder *       dec,
-                                         virgl_apir_context * ctx);
-uint32_t backend_device_get_count(apir_encoder *       enc,
-                                  apir_decoder *       dec,
-                                  virgl_apir_context * ctx);
+uint32_t backend_device_get_device_count(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
+uint32_t backend_device_get_count(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
 uint32_t backend_device_get_name(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
-uint32_t backend_device_get_description(apir_encoder *       enc,
-                                        apir_decoder *       dec,
-                                        virgl_apir_context * ctx);
+uint32_t backend_device_get_description(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
 uint32_t backend_device_get_type(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
-uint32_t backend_device_get_memory(apir_encoder *       enc,
-                                   apir_decoder *       dec,
-                                   virgl_apir_context * ctx);
-uint32_t backend_device_supports_op(apir_encoder *       enc,
-                                    apir_decoder *       dec,
-                                    virgl_apir_context * ctx);
-uint32_t backend_device_get_buffer_type(apir_encoder *       enc,
-                                        apir_decoder *       dec,
-                                        virgl_apir_context * ctx);
-uint32_t backend_device_get_props(apir_encoder *       enc,
-                                  apir_decoder *       dec,
-                                  virgl_apir_context * ctx);
-uint32_t backend_device_buffer_from_ptr(apir_encoder *       enc,
-                                        apir_decoder *       dec,
-                                        virgl_apir_context * ctx);
+uint32_t backend_device_get_memory(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
+uint32_t backend_device_supports_op(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
+uint32_t backend_device_get_buffer_type(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
+uint32_t backend_device_get_props(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
+uint32_t backend_device_buffer_from_ptr(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
 
 /* buffer-type */
-uint32_t backend_buffer_type_get_name(apir_encoder *       enc,
-                                      apir_decoder *       dec,
-                                      virgl_apir_context * ctx);
-uint32_t backend_buffer_type_get_alignment(apir_encoder *       enc,
-                                           apir_decoder *       dec,
-                                           virgl_apir_context * ctx);
-uint32_t backend_buffer_type_get_max_size(apir_encoder *       enc,
-                                          apir_decoder *       dec,
-                                          virgl_apir_context * ctx);
-uint32_t backend_buffer_type_is_host(apir_encoder *       enc,
-                                     apir_decoder *       dec,
-                                     virgl_apir_context * ctx);
-uint32_t backend_buffer_type_alloc_buffer(apir_encoder *       enc,
-                                          apir_decoder *       dec,
-                                          virgl_apir_context * ctx);
-uint32_t backend_buffer_type_get_alloc_size(apir_encoder *       enc,
-                                            apir_decoder *       dec,
-                                            virgl_apir_context * ctx);
+uint32_t backend_buffer_type_get_name(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
+uint32_t backend_buffer_type_get_alignment(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
+uint32_t backend_buffer_type_get_max_size(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
+uint32_t backend_buffer_type_is_host(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
+uint32_t backend_buffer_type_alloc_buffer(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
+uint32_t backend_buffer_type_get_alloc_size(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
 
 /* buffer */
 uint32_t backend_buffer_get_base(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
-uint32_t backend_buffer_set_tensor(apir_encoder *       enc,
-                                   apir_decoder *       dec,
-                                   virgl_apir_context * ctx);
-uint32_t backend_buffer_get_tensor(apir_encoder *       enc,
-                                   apir_decoder *       dec,
-                                   virgl_apir_context * ctx);
-uint32_t backend_buffer_cpy_tensor(apir_encoder *       enc,
-                                   apir_decoder *       dec,
-                                   virgl_apir_context * ctx);
+uint32_t backend_buffer_set_tensor(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
+uint32_t backend_buffer_get_tensor(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
+uint32_t backend_buffer_cpy_tensor(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
 uint32_t backend_buffer_clear(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
-uint32_t backend_buffer_free_buffer(apir_encoder *       enc,
-                                    apir_decoder *       dec,
-                                    virgl_apir_context * ctx);
+uint32_t backend_buffer_free_buffer(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
 
 /* backend */
-uint32_t backend_backend_graph_compute(apir_encoder *       enc,
-                                       apir_decoder *       dec,
-                                       virgl_apir_context * ctx);
+uint32_t backend_backend_graph_compute(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
 
 static inline const char * backend_dispatch_command_name(ApirBackendCommandType type) {
     switch (type) {
