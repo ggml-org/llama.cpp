@@ -17,7 +17,7 @@
 #include "htp-msg.h"
 #include "htp-ops.h"
 
-typedef void (*hvx_elemwise_f32_func)(const uint8_t * src0, const uint8_t * src1, uint8_t * data_dst, const int num_elems);
+typedef void (*hvx_elemwise_f32_func)(uint8_t * data_dst, const uint8_t * src0, const uint8_t * src1, const int num_elems);
 
 static hvx_elemwise_f32_func func_table_HVX[]     = { hvx_mul_f32, hvx_add_f32, hvx_sub_f32 };
 static hvx_elemwise_f32_func func_table_HVX_opt[] = { hvx_mul_f32_opt, hvx_add_f32_opt, hvx_sub_f32_opt };
@@ -89,7 +89,6 @@ static void binary_job_f32_per_thread(struct htp_ops_context * octx,
     int opt_path   = 0;
     if ((0 == hex_is_aligned((void *) src0->data, VLEN)) || (0 == hex_is_aligned((void *) src1->data, VLEN)) ||
         (0 == hex_is_aligned((void *) dst->data, VLEN))) {
-        FARF(HIGH, "binary-f32: unaligned addresses in elementwise op, possibly slower execution\n");
         is_aligned = 0;
     }
     if ((1 == is_aligned) && !(nb01 & (VLEN - 1))) {
@@ -134,9 +133,9 @@ static void binary_job_f32_per_thread(struct htp_ops_context * octx,
                     memcpy(spad_data_th + r * nb11, (const uint8_t *) src1_ptr, nb11);
                 }
             }
-            func_HVX((const uint8_t *) src0_ptr, (const uint8_t *) spad_data_th, (uint8_t *) dst_ptr, ne00);
+            func_HVX((uint8_t *) dst_ptr, (const uint8_t *) src0_ptr, (const uint8_t *) spad_data_th, ne00);
         } else {
-            func_HVX((const uint8_t *) src0_ptr, (const uint8_t *) src1_ptr, (uint8_t *) dst_ptr, ne00);
+            func_HVX((uint8_t *) dst_ptr, (const uint8_t *) src0_ptr, (const uint8_t *) src1_ptr, ne00);
         }
 
         src0_ptr += src0_row_size;
@@ -174,11 +173,6 @@ static void binary_add_id_job_f32_per_thread(struct htp_ops_context * octx,
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
 
-    if ((0 == hex_is_aligned((void *) src0->data, VLEN)) || (0 == hex_is_aligned((void *) src1->data, VLEN)) ||
-        (0 == hex_is_aligned((void *) dst->data, VLEN))) {
-        FARF(HIGH, "add-id-f32: unaligned addresses, possibly slower execution\n");
-    }
-
     const uint8_t * restrict data_src0 = (const uint8_t *) src0->data;
     const uint8_t * restrict data_src1 = (const uint8_t *) src1->data;
     uint8_t * restrict data_dst        = (uint8_t *) dst->data;
@@ -210,9 +204,9 @@ static void binary_add_id_job_f32_per_thread(struct htp_ops_context * octx,
             for (uint32_t r = 0; r < nr0; r++) {
                 memcpy(spad_data + r * nb10, (const uint8_t *) src1_ptr, nb10);
             }
-            func_HVX((const uint8_t *) src0_ptr, (const uint8_t *) spad_data, (uint8_t *) dst_ptr, ne00);
+            func_HVX((uint8_t *) dst_ptr, (const uint8_t *) src0_ptr, (const uint8_t *) spad_data, ne00);
         } else {
-            func_HVX((const uint8_t *) src0_ptr, (const uint8_t *) src1_ptr, (uint8_t *) dst_ptr, ne00);
+            func_HVX((uint8_t *) dst_ptr, (const uint8_t *) src0_ptr, (const uint8_t *) src1_ptr, ne00);
         }
     }
 

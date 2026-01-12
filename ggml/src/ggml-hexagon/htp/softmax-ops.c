@@ -174,7 +174,7 @@ static float hvx_softmax_f32(const uint8_t * restrict src,
                              uint8_t * restrict spad,
                              const int   num_elems,
                              const float max) {
-    hvx_sub_scalar_f32(src, max, spad, num_elems);
+    hvx_sub_scalar_f32(spad, src, max, num_elems);
 
     hvx_exp_f32(spad, dst, num_elems, false);
 
