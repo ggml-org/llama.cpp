@@ -25,6 +25,11 @@
 #ifdef __APPLE__
 #include <sys/types.h>
 #include <sys/sysctl.h>
+#include <sys/mman.h>
+#endif
+
+#if defined(__linux__)
+#include <sys/mman.h>
 #endif
 
 
@@ -2265,3 +2270,86 @@ ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) 
     GGML_ASSERT((uintptr_t)ptr % TENSOR_ALIGNMENT == 0 && "buffer pointer must be aligned");
     return ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), ggml_backend_cpu_buffer_from_ptr_i, ptr, size);
 }
+
+// Demand-paged CPU buffer using mmap (Linux/macOS)
+// Physical memory is allocated by the kernel on first access, not upfront
+// This provides TRUE memory-proportional allocation for KV caches
+//
+// Linux: Uses MAP_NORESERVE for guaranteed lazy allocation
+// macOS: Uses mmap without MAP_NORESERVE (macOS does lazy allocation by default)
+// Windows: Falls back to regular allocation (would need VirtualAlloc implementation)
+
+#if defined(__linux__) || defined(__APPLE__)
+
+static void ggml_backend_cpu_buffer_mmap_free_buffer(ggml_backend_buffer_t buffer) {
+    if (buffer->context) {
+        munmap(buffer->context, buffer->size);
+    }
+}
+
+static const struct ggml_backend_buffer_i ggml_backend_cpu_buffer_mmap_i = {
+    /* .free_buffer     = */ ggml_backend_cpu_buffer_mmap_free_buffer,
+    /* .get_base        = */ ggml_backend_cpu_buffer_get_base,
+    /* .init_tensor     = */ NULL,
+    /* .memset_tensor   = */ ggml_backend_cpu_buffer_memset_tensor,
+    /* .set_tensor      = */ ggml_backend_cpu_buffer_set_tensor,
+    /* .get_tensor      = */ ggml_backend_cpu_buffer_get_tensor,
+    /* .cpy_tensor      = */ ggml_backend_cpu_buffer_cpy_tensor,
+    /* .clear           = */ ggml_backend_cpu_buffer_clear,
+    /* .reset           = */ NULL,
+};
+
+static const char * ggml_backend_cpu_buffer_mmap_type_get_name(ggml_backend_buffer_type_t buft) {
+    return "CPU_DemandPaged";
+    GGML_UNUSED(buft);
+}
+
+static ggml_backend_buffer_t ggml_backend_cpu_buffer_mmap_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+    // Round up to page size for mmap alignment
+    const size_t page_size = 4096;
+    size_t aligned_size = ((size + page_size - 1) / page_size) * page_size;
+
+    // Use mmap for demand paging - physical pages allocated on first touch
+    int flags = MAP_PRIVATE | MAP_ANON;
+#if defined(__linux__)
+    // MAP_NORESERVE: don't reserve swap space, allow overcommit (Linux-specific)
+    flags |= MAP_NORESERVE;
+#endif
+    // macOS does lazy allocation by default with MAP_PRIVATE | MAP_ANON
+
+    void * data = mmap(NULL, aligned_size, PROT_READ | PROT_WRITE, flags, -1, 0);
+
+    if (data == MAP_FAILED) {
+        GGML_LOG_ERROR("%s: mmap failed for size %zu\n", __func__, aligned_size);
+        return NULL;
+    }
+
+    return ggml_backend_buffer_init(buft, ggml_backend_cpu_buffer_mmap_i, data, aligned_size);
+}
+
+static struct ggml_backend_buffer_type ggml_backend_cpu_buffer_mmap_type_instance = {
+    /* .iface   = */ {
+        /* .get_name         = */ ggml_backend_cpu_buffer_mmap_type_get_name,
+        /* .alloc_buffer     = */ ggml_backend_cpu_buffer_mmap_type_alloc_buffer,
+        /* .get_alignment    = */ ggml_backend_cpu_buffer_type_get_alignment,
+        /* .get_max_size     = */ NULL,
+        /* .get_alloc_size   = */ NULL,
+        /* .is_host          = */ ggml_backend_cpu_buffer_type_is_host,
+    },
+    /* .device  = */ NULL,
+    /* .context = */ NULL,
+};
+
+ggml_backend_buffer_type_t ggml_backend_cpu_buffer_mmap_type(void) {
+    return &ggml_backend_cpu_buffer_mmap_type_instance;
+}
+
+#else
+
+// Fallback for Windows/other: just use regular CPU buffer
+// Windows would need VirtualAlloc with MEM_RESERVE for similar behavior
+ggml_backend_buffer_type_t ggml_backend_cpu_buffer_mmap_type(void) {
+    return ggml_backend_cpu_buffer_type();
+}
+
+#endif // __linux__ || __APPLE__

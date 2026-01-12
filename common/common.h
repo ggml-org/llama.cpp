@@ -328,8 +328,6 @@ struct common_params {
     float   yarn_beta_fast        = -1.0f; // YaRN low correction dim
     float   yarn_beta_slow        = -1.0f; // YaRN high correction dim
     int32_t yarn_orig_ctx         =     0; // YaRN original context length
-    int32_t moe_n_expert_override =     0; // MoE self-draft: override n_expert_used (0 = use model default)
-    int32_t n_layer_exit          =     0; // exit after this many layers, 0 = all (for layer skip speculation)
 
     // offload params
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
@@ -358,9 +356,10 @@ struct common_params {
     enum llama_attention_type    attention_type    = LLAMA_ATTENTION_TYPE_UNSPECIFIED; // attention type for embeddings
     enum llama_flash_attn_type   flash_attn_type   = LLAMA_FLASH_ATTN_TYPE_AUTO; // whether to use Flash Attention
 
-    // Paged attention parameters
-    uint32_t paged_attn_block_size = 0;   // block size in tokens (0 = disabled)
-    uint32_t paged_attn_max_blocks = 0;   // max blocks for memory reduction (0 = unlimited)
+    // KV cache sizing parameters (reduces upfront allocation, NOT per-token memory cost)
+    uint32_t paged_attn_block_size = 0;   // block size in tokens for tracking (0 = disabled)
+    uint32_t paged_attn_max_blocks = 0;   // max blocks to allocate (0 = use full context)
+    bool     kv_cache_demand_paged = false; // use demand-paged memory (Linux: true on-demand, memory grows with usage)
 
     struct common_params_sampling    sampling;
     struct common_params_speculative speculative;
