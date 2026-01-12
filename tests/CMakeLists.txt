@@ -1058,4 +1058,16 @@ if(GGML_SYCL)
     target_link_options(test-sycl-soa PRIVATE "-fsycl")
     install(TARGETS test-sycl-soa RUNTIME)
     add_test(NAME test-sycl-soa COMMAND $<TARGET_FILE:test-sycl-soa>)
+
+    # test-pinned-chunk-pool: Tests for 8GB chunked pinned host memory allocator
+    # Part of tiered memory architecture for MoE models
+    add_executable(test-pinned-chunk-pool test-pinned-chunk-pool.cpp)
+    target_link_libraries(test-pinned-chunk-pool PRIVATE ggml)
+    target_include_directories(test-pinned-chunk-pool PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-pinned-chunk-pool PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-pinned-chunk-pool PRIVATE "-fsycl")
+    install(TARGETS test-pinned-chunk-pool RUNTIME)
+    add_test(NAME test-pinned-chunk-pool COMMAND $<TARGET_FILE:test-pinned-chunk-pool>)
 endif()
