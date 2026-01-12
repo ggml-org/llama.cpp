@@ -144,7 +144,9 @@ uint32_t backend_device_buffer_from_ptr(struct apir_encoder *       enc,
 
     void * shmem_ptr = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
     if (!shmem_ptr) {
-        FATAL("Couldn't get the shmem addr from virgl :/");
+        ERROR("Couldn't get the shmem addr from virgl");
+        apir_decoder_set_fatal(dec);
+        return 1;
     }
 
     size_t size;

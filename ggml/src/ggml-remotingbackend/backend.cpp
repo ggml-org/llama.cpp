@@ -112,12 +112,14 @@ uint32_t apir_backend_dispatcher(uint32_t                    cmd_type,
         .cur   = enc_cur,
         .start = enc_cur,
         .end   = enc_end,
+        .fatal = false,
     };
     struct apir_encoder * enc = &_enc;
 
     struct apir_decoder _dec = {
         .cur = dec_cur,
         .end = dec_end,
+        .fatal = false,
     };
     struct apir_decoder * dec = &_dec;
 
@@ -126,11 +128,6 @@ uint32_t apir_backend_dispatcher(uint32_t                    cmd_type,
         return APIR_BACKEND_FORWARD_INDEX_INVALID;
     }
 
-#if 0
-    static long long count = 0;
-    INFO("[%lld] Calling %s", count, backend_dispatch_command_name((ApirBackendCommandType) cmd_type));
-    count += 1;
-#endif
     backend_dispatch_t forward_fct = apir_backend_dispatch_table[cmd_type];
     uint32_t           ret         = forward_fct(enc, dec, ctx);
 

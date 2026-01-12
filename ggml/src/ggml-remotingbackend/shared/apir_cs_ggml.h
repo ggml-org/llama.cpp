@@ -155,7 +155,8 @@ static inline void apir_encode_ggml_tensor_inline(struct apir_encoder * enc, con
     size_t tensor_size = sizeof(*tensor);
 
     if (tensor->extra) {
-        FATAL("Cannot pass tensors with extra");
+        ERROR("Cannot pass tensors with extra");
+        apir_encoder_set_fatal(enc);
     }
 
     if (tensor->src[0] && tensor->buffer) {

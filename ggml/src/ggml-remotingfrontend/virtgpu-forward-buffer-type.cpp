@@ -12,9 +12,10 @@ const char * apir_buffer_type_get_name(struct virtgpu * gpu, ggml_backend_buffer
     REMOTE_CALL(gpu, encoder, decoder, ret);
 
     const size_t string_size = apir_decode_array_size_unchecked(decoder);
-    char *       string      = (char *) apir_decoder_alloc_array(decoder, sizeof(char), string_size);
+    char *       string      = (char *) apir_decoder_alloc_array(sizeof(char), string_size);
     if (!string) {
-        FATAL("%s: Could not allocate the device name buffer", __func__);
+        ERROR("%s: Could not allocate the device name buffer", __func__);
+        apir_decoder_set_fatal(decoder);
     }
     apir_decode_char_array(decoder, string, string_size);
 

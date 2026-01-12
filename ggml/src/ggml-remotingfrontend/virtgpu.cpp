@@ -340,9 +340,10 @@ struct apir_encoder * remote_call_prepare(struct virtgpu * gpu, ApirCommandType 
 
     static struct apir_encoder enc;
     enc = {
-        encoder_buffer,
-        encoder_buffer,
-        encoder_buffer + sizeof(encoder_buffer),
+        .cur   = encoder_buffer,
+        .start = encoder_buffer,
+        .end   = encoder_buffer + sizeof(encoder_buffer),
+        .fatal = false,
     };
 
     /*
@@ -378,7 +379,13 @@ void remote_call_finish(struct virtgpu * gpu, struct apir_encoder * enc, struct 
         ERROR("Invalid (null) decoder :/");
     }
 
-    // encoder and decoder are statically allocated, nothing to do to release them
+    if (apir_encoder_get_fatal(enc)) {
+        ERROR("Failed to encode the output parameters.");
+    }
+
+    if (apir_decoder_get_fatal(dec)) {
+        ERROR("Failed to decode the input parameters.");
+    }
 }
 
 uint32_t remote_call(struct virtgpu *       gpu,

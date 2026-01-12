@@ -3,9 +3,6 @@
 #include <cassert>
 #include <cstring>
 
-// needs UNUSED to be defined
-// needs FATAL to be defined
-
 #define likely(x)   __builtin_expect(!!(x), 1)
 #define unlikely(x) __builtin_expect(!!(x), 0)
 
@@ -13,11 +10,14 @@ struct apir_encoder {
     char *       cur;
     const char * start;
     const char * end;
+    bool         fatal;
+
 };
 
 struct apir_decoder {
     const char * cur;
     const char * end;
+    bool         fatal;
 };
 
 /*
@@ -28,6 +28,7 @@ static struct apir_decoder apir_new_decoder(const char * ptr, size_t size) {
     struct apir_decoder dec = {
         .cur = ptr,
         .end = ptr + size,
+        .fatal = false,
     };
 
     return dec;
@@ -38,24 +39,53 @@ static struct apir_encoder apir_new_encoder(char * ptr, size_t size) {
         .cur   = ptr,
         .start = ptr,
         .end   = ptr + size,
+        .fatal = false,
     };
 
     return enc;
 }
 
 /*
+ * fatal flag handling
+ */
+
+static inline void apir_encoder_reset_fatal(struct apir_encoder * enc) {
+    enc->fatal = false;
+}
+
+static inline void apir_encoder_set_fatal(struct apir_encoder * enc) {
+    enc->fatal = true;
+}
+
+static inline bool apir_encoder_get_fatal(const struct apir_encoder * enc) {
+    return enc->fatal;
+}
+
+static inline void apir_decoder_reset_fatal(struct apir_decoder * dec) {
+    dec->fatal = false;
+}
+
+static inline void apir_decoder_set_fatal(struct apir_decoder * dec) {
+    dec->fatal = true;
+}
+
+static inline bool apir_decoder_get_fatal(const struct apir_decoder * dec) {
+    return dec->fatal;
+}
+
+/*
  * encode peek
  */
 
-static inline bool apir_decoder_peek_internal(const struct apir_decoder * dec,
-                                              size_t                      size,
-                                              void *                      val,
-                                              size_t                      val_size) {
+static inline bool apir_decoder_peek_internal(struct apir_decoder * dec,
+                                              size_t                size,
+                                              void *                val,
+                                              size_t                val_size) {
     assert(val_size <= size);
 
     if (unlikely(size > (size_t) (dec->end - dec->cur))) {
-        FATAL("READING TOO MUCH FROM THE DECODER :/");
-        //apir_decoder_set_fatal(dec);
+        ERROR("reading too much from the decoder ...");
+        apir_decoder_set_fatal(dec);
         memset(val, 0, val_size);
         return false;
     }
@@ -65,13 +95,14 @@ static inline bool apir_decoder_peek_internal(const struct apir_decoder * dec,
     return true;
 }
 
-static inline void apir_decoder_peek(const struct apir_decoder * dec, size_t size, void * val, size_t val_size) {
+static inline void apir_decoder_peek(struct apir_decoder * dec, size_t size, void * val, size_t val_size) {
     apir_decoder_peek_internal(dec, size, val, val_size);
 }
 
 static inline const void * apir_decoder_use_inplace(struct apir_decoder * dec, size_t size) {
     if (unlikely(size > (size_t) (dec->end - dec->cur))) {
-        FATAL("READING TOO MUCH FROM THE DECODER :/");
+        ERROR("reading too much from the decoder ...");
+        apir_decoder_set_fatal(dec);
         return NULL;
     }
     const void * addr = dec->cur;
@@ -188,7 +219,8 @@ static inline uint64_t apir_decode_array_size(struct apir_decoder * dec, uint64_
     uint64_t size;
     apir_decode_uint64_t(dec, &size);
     if (size != expected_size) {
-        FATAL("ENCODER IS FULL :/");
+        ERROR("Couldn't decode array from the decoder");
+        apir_decoder_set_fatal(dec);
         size = 0;
     }
     return size;
@@ -288,19 +320,17 @@ static inline void apir_decode_char_array(struct apir_decoder * dec, char * val,
     if (size) {
         val[size - 1] = '\0';
     } else {
-        //apir_decoder_set_fatal(dec);
-        FATAL("Couldn't decode the blog array");
+        ERROR("Couldn't decode the blog array");
+        apir_decoder_set_fatal(dec);
     }
 }
 
 /* (temp) buffer allocation */
 
-static inline void * apir_decoder_alloc_array(struct apir_decoder * dec, size_t size, size_t count) {
-    UNUSED(dec);
-
+static inline void * apir_decoder_alloc_array(size_t size, size_t count) {
     size_t alloc_size;
     if (unlikely(__builtin_mul_overflow(size, count, &alloc_size))) {
-        FATAL("overflow in array allocation of %zu * %zu bytes", size, count);
+        ERROR("overflow in array allocation of %zu * %zu bytes", size, count);
         return NULL;
     }
 

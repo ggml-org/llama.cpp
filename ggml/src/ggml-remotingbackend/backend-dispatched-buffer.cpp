@@ -50,21 +50,9 @@ uint32_t backend_buffer_set_tensor(struct apir_encoder *       enc,
     void * shmem_data = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
 
     if (!shmem_data) {
-        FATAL("Couldn't get the shmem addr from virgl :/");
+        ERROR("Couldn't get the shmem addr from virgl :/");
+        return 1;
     }
-
-#if 0
-  INFO("Calling (%p)->set_tensor(tensor=%p, data=%p, offset=%lu, size=%lu",
-       buffer, tensor, shmem_data, offset, size);
-#endif
-#if 0
-  void **addr = (void **)(uintptr_t) shmem_data;
-  for (int i = 0; i <= 10; i++) {
-    INFO("%s: %p | %llx", __func__, addr, *addr);
-    addr++;
-  }
-  INFO("\n");
-#endif
 
     buffer->iface.set_tensor(buffer, tensor, shmem_data, offset, size);
 
@@ -99,7 +87,8 @@ uint32_t backend_buffer_get_tensor(struct apir_encoder *       enc,
 
     void * shmem_data = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
     if (!shmem_data) {
-        FATAL("Couldn't get the shmem addr from virgl :/");
+        ERROR("Couldn't get the shmem addr from virgl :/");
+        return 1;
     }
 
     buffer->iface.get_tensor(buffer, tensor, shmem_data, offset, size);
