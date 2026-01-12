@@ -21,6 +21,8 @@ import yaml
 from typing import Dict, List, Any, Tuple
 from pathlib import Path
 import os
+import subprocess
+import shutil
 
 NL = '\n' # can't have f"{'\n'}" in f-strings
 
@@ -38,6 +40,33 @@ class RemotingCodebaseGenerator:
         self.functions = self.config['functions']
         self.naming_patterns = self.config['naming_patterns']
         self.config_data = self.config['config']
+
+        # Check if clang-format is available
+        self.clang_format_available = self._check_clang_format_available()
+
+    def _check_clang_format_available(self) -> bool:
+        """Check if clang-format is available in the system PATH."""
+        return shutil.which("clang-format") is not None
+
+    def _format_file_with_clang_format(self, file_path: Path) -> bool:
+        """Format a file with clang-format -i. Returns True if successful, False otherwise."""
+        if not self.clang_format_available:
+            return False
+
+        try:
+            subprocess.run(
+                ["clang-format", "-i", str(file_path)],
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"   ⚠️  Warning: clang-format failed for {file_path}: {e}")
+            return False
+        except Exception as e:
+            print(f"   ⚠️  Warning: Unexpected error formatting {file_path}: {e}")
+            return False
 
     def generate_enum_name(self, group_name: str, function_name: str) -> str:
         """Generate the APIR_COMMAND_TYPE enum name for a function."""
@@ -133,7 +162,7 @@ class RemotingCodebaseGenerator:
                 current_group = func['group_name']
 
             signature = "uint32_t"
-            params = "struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx"
+            params = "apir_encoder *enc, apir_decoder *dec, virgl_apir_context *ctx"
             decl_lines.append(f"{signature} {func['backend_function']}({params});")
 
         # Switch cases
@@ -254,6 +283,20 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
         virtgpu_forward_content = self.generate_virtgpu_forward_header()
         virtgpu_forward_path.write_text(virtgpu_forward_content)
         print(f"   ✅ {virtgpu_forward_path.resolve()}")
+
+        # Format generated files with clang-format
+        generated_files = [apir_backend_path, backend_dispatched_path, virtgpu_forward_path]
+
+        if not self.clang_format_available:
+            print("\n⚠️  Warning: clang-format not found in PATH. Generated files will not be formatted.")
+            print("   Install clang-format to enable automatic code formatting.")
+        else:
+            print("\n🎨 Formatting files with clang-format...")
+            for file_path in generated_files:
+                if self._format_file_with_clang_format(file_path):
+                    print(f"   ✅ Formatted {file_path.name}")
+                else:
+                    print(f"   ❌ Failed to format {file_path.name}")
 
         # Generate summary
         functions = self.get_enabled_functions()
