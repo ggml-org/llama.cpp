@@ -3,8 +3,7 @@
 #define BUFFER_TO_GPU(name) ((ggml_backend_remoting_buffer_context *) (name)->context)->gpu
 
 static void * ggml_backend_remoting_buffer_get_base(ggml_backend_buffer_t buffer) {
-    ggml_backend_remoting_buffer_context * context =
-        (ggml_backend_remoting_buffer_context *) buffer->context;
+    ggml_backend_remoting_buffer_context * context = (ggml_backend_remoting_buffer_context *) buffer->context;
     if (context->base) {
         return context->base;
     }

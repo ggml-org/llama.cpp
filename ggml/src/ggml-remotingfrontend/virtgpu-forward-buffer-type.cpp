@@ -1,8 +1,8 @@
 #include "virtgpu-forward-impl.h"
 
 const char * apir_buffer_type_get_name(virtgpu * gpu, ggml_backend_buffer_type_t buft) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_TYPE_GET_NAME);
@@ -25,8 +25,8 @@ const char * apir_buffer_type_get_name(virtgpu * gpu, ggml_backend_buffer_type_t
 }
 
 size_t apir_buffer_type_get_alignment(virtgpu * gpu, ggml_backend_buffer_type_t buft) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_TYPE_GET_ALIGNMENT);
@@ -44,8 +44,8 @@ size_t apir_buffer_type_get_alignment(virtgpu * gpu, ggml_backend_buffer_type_t 
 }
 
 size_t apir_buffer_type_get_max_size(virtgpu * gpu, ggml_backend_buffer_type_t buft) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_TYPE_GET_MAX_SIZE);
@@ -63,8 +63,8 @@ size_t apir_buffer_type_get_max_size(virtgpu * gpu, ggml_backend_buffer_type_t b
 }
 
 bool apir_buffer_type_is_host(virtgpu * gpu, ggml_backend_buffer_type_t buft) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_TYPE_IS_HOST);
@@ -81,11 +81,9 @@ bool apir_buffer_type_is_host(virtgpu * gpu, ggml_backend_buffer_type_t buft) {
     return is_host;
 }
 
-apir_buffer_context_t apir_buffer_type_alloc_buffer(virtgpu *           gpu,
-                                                    ggml_backend_buffer_type_t buft,
-                                                    size_t                     size) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+apir_buffer_context_t apir_buffer_type_alloc_buffer(virtgpu * gpu, ggml_backend_buffer_type_t buft, size_t size) {
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     apir_buffer_context_t buffer_context;
@@ -106,8 +104,8 @@ apir_buffer_context_t apir_buffer_type_alloc_buffer(virtgpu *           gpu,
 }
 
 size_t apir_buffer_type_get_alloc_size(virtgpu * gpu, ggml_backend_buffer_type_t buft, const ggml_tensor * op) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_TYPE_GET_ALLOC_SIZE);

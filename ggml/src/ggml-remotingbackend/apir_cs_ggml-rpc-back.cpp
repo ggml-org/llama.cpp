@@ -74,7 +74,7 @@ ggml_tensor * apir_create_node(uint64_t                                         
         return tensor_map[id];
     }
     const apir_rpc_tensor * tensor = tensor_ptrs.at(id);
-    ggml_tensor *    result = apir_deserialize_tensor(ctx, tensor);
+    ggml_tensor *           result = apir_deserialize_tensor(ctx, tensor);
     if (result == nullptr) {
         return nullptr;
     }
@@ -99,7 +99,7 @@ ggml_cgraph * apir_deserialize_graph(uint32_t                n_nodes,
     };
     ggml_context * ctx   = ggml_init(params);
     ggml_cgraph *  graph = ggml_new_graph_custom(ctx, n_nodes, false);
-    graph->n_nodes              = n_nodes;
+    graph->n_nodes       = n_nodes;
     std::unordered_map<uint64_t, const apir_rpc_tensor *> tensor_ptrs;
     for (uint32_t i = 0; i < n_tensors; i++) {
         tensor_ptrs[tensors[i].id] = &tensors[i];

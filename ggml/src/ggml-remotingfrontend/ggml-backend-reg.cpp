@@ -5,7 +5,7 @@
 
 static virtgpu * apir_initialize() {
     static virtgpu * apir_gpu_instance = NULL;
-    static bool             apir_initialized  = false;
+    static bool      apir_initialized  = false;
 
     if (apir_initialized) {
         return apir_gpu_instance;

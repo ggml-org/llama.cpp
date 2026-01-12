@@ -7,8 +7,8 @@ int apir_device_get_count(virtgpu * gpu) {
         return dev_count;
     }
 
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_COUNT);
@@ -26,8 +26,8 @@ const char * apir_device_get_name(virtgpu * gpu) {
     if (string) {
         return string;
     }
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_NAME);
@@ -47,8 +47,8 @@ const char * apir_device_get_name(virtgpu * gpu) {
 }
 
 const char * apir_device_get_description(virtgpu * gpu) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_DESCRIPTION);
@@ -75,8 +75,8 @@ uint32_t apir_device_get_type(virtgpu * gpu) {
         return dev_type;
     }
 
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_TYPE);
@@ -93,8 +93,8 @@ uint32_t apir_device_get_type(virtgpu * gpu) {
 void apir_device_get_memory(virtgpu * gpu, size_t * free, size_t * total) {
     static size_t         dev_free  = 0;
     static size_t         dev_total = 0;
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_MEMORY);
@@ -113,8 +113,8 @@ void apir_device_get_memory(virtgpu * gpu, size_t * free, size_t * total) {
 }
 
 bool apir_device_supports_op(virtgpu * gpu, const ggml_tensor * op) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_SUPPORTS_OP);
@@ -132,8 +132,8 @@ bool apir_device_supports_op(virtgpu * gpu, const ggml_tensor * op) {
 }
 
 apir_buffer_type_host_handle_t apir_device_get_buffer_type(virtgpu * gpu) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_BUFFER_TYPE);
@@ -153,8 +153,8 @@ void apir_device_get_props(virtgpu * gpu,
                            bool *    host_buffer,
                            bool *    buffer_from_host_ptr,
                            bool *    events) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_GET_PROPS);
@@ -172,8 +172,8 @@ void apir_device_get_props(virtgpu * gpu,
 }
 
 apir_buffer_context_t apir_device_buffer_from_ptr(virtgpu * gpu, size_t size, size_t max_tensor_size) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     apir_buffer_context_t buffer_context;
