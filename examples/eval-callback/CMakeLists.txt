@@ -6,10 +6,8 @@ target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 set(TEST_TARGET test-eval-callback)
 if(NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "s390x")
-        add_test(NAME ${TEST_TARGET}
-                        COMMAND llama-eval-callback --hf-repo ggml-org/models --hf-file tinyllamas/stories260K.gguf --model stories260K.gguf --prompt hello --seed 42 -ngl 0)
+    llama_dl_model("tinyllamas/stories15M-q4_0.gguf")
 else()
-        add_test(NAME ${TEST_TARGET}
-                        COMMAND llama-eval-callback --hf-repo ggml-org/models --hf-file tinyllamas/stories260K-be.gguf --model stories260K-be.gguf --prompt hello --seed 42 -ngl 0)
+    llama_dl_model("tinyllamas/stories15M-be.Q4_0.gguf")
 endif()
-set_property(TEST ${TEST_TARGET} PROPERTY LABELS eval-callback curl)
+add_test(NAME ${TEST_TARGET} COMMAND llama-eval-callback -m "${LLAMA_DL_MODEL}" --prompt hello --seed 42 -ngl 0)
