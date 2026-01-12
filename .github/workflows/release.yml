@@ -37,13 +37,6 @@ jobs:
           key: macOS-latest-cmake-arm64
           evict-old-files: 1d
 
-      - name: Dependencies
-        id: depends
-        continue-on-error: true
-        run: |
-          brew update
-          brew install curl
-
       - name: Build
         id: cmake_build
         run: |
@@ -52,6 +45,8 @@ jobs:
             -DCMAKE_INSTALL_RPATH='@loader_path' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_BORINGSSL=ON \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DGGML_RPC=ON \
@@ -90,13 +85,6 @@ jobs:
           key: macOS-latest-cmake-x64
           evict-old-files: 1d
 
-      - name: Dependencies
-        id: depends
-        continue-on-error: true
-        run: |
-          brew update
-          brew install curl
-
       - name: Build
         id: cmake_build
         run: |
@@ -107,6 +95,8 @@ jobs:
             -DCMAKE_INSTALL_RPATH='@loader_path' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_BORINGSSL=ON \
             -DGGML_METAL=OFF \
             -DGGML_RPC=ON \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
@@ -159,7 +149,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install build-essential libssl-dev
 
       - name: Build
         id: cmake_build
@@ -171,6 +161,8 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -212,7 +204,7 @@ jobs:
           wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
           sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
           sudo apt-get update -y
-          sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libcurl4-openssl-dev
+          sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libssl-dev
 
       - name: Build
         id: cmake_build
@@ -220,6 +212,8 @@ jobs:
           cmake -B build \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
@@ -269,34 +263,24 @@ jobs:
         run: |
           choco install ninja
 
-      - name: libCURL
-        id: get_libcurl
-        uses: ./.github/actions/windows-setup-curl
-        with:
-          architecture: ${{ matrix.arch == 'x64' && 'win64' || 'win64a' }}
-
       - name: Build
         shell: cmd
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch == 'x64' && 'x64' || 'amd64_arm64' }}
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -D CMAKE_TOOLCHAIN_FILE=cmake/${{ matrix.arch }}-windows-llvm.cmake ^
+            -DLLAMA_CURL=OFF ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
             -DGGML_NATIVE=OFF ^
             -DGGML_BACKEND_DL=ON ^
             -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
             -DGGML_OPENMP=ON ^
-            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" ^
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release
 
       - name: Pack artifacts
         id: pack_artifacts
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          Copy-Item $env:CURL_PATH\bin\libcurl-${{ matrix.arch }}.dll .\build\bin\Release\
           Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\${{ matrix.arch }}\Microsoft.VC143.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
           7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
@@ -744,12 +728,14 @@ jobs:
             "${{ steps.cann-image.outputs.image }}" \
             bash -lc '
               set -e
-              yum install -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs git gcc gcc-c++ make cmake libcurl-devel
+              yum install -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs git gcc gcc-c++ make cmake openssl-devel
               yum clean all && rm -rf /var/cache/yum
               git config --global --add safe.directory "/workspace"
               export LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/$(uname -m)-linux/devlib/:${LD_LIBRARY_PATH}
               cmake -S . -B build \
                   -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+                  -DLLAMA_CURL=OFF \
+                  -DLLAMA_OPENSSL=ON \
                   -DGGML_CANN=on \
                   -DSOC_TYPE=${SOC_TYPE}
               cmake --build build -j $(nproc)
