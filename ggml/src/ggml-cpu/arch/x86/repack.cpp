@@ -1946,7 +1946,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     static const uint32_t kmask1 = 0x3f3f3f3f;
     static const uint32_t kmask2 = 0x0f0f0f0f;
     static const uint32_t kmask3 = 0x03030303;
-    static const uint32_t kmask_3 = 0x30303030;
+    static const uint32_t kmask4 = 0x30303030;
 
     assert (n % qk == 0);
     assert (nr % 4 == 0);
@@ -2852,11 +2852,11 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const __m256i rhs_mat_0145_13_sp2 = _mm256_shuffle_epi32(rhs_mat_0145_13, 221); //B10(28-31) B11(28-31) B10(28-31) B11(28-31) B14(28-31) B15(28-31) B14(28-31) B15(28-31)
                     const __m256i rhs_mat_2367_13_sp2 = _mm256_shuffle_epi32(rhs_mat_2367_13, 221); //B12(28-31) B13(28-31) B12(28-31) B13(28-31) B16(28-31) B17(28-31) B16(28-31) B17(28-31)
 
-                    // Scales and Mins of corresponding sub blocks from different Q8_K structures are stored together
+                    // Scales and Mins of corresponding sub blocks from different Q4_K structures are stored together
                     // The below block is for eg to extract first sub block's scales and mins from different Q4_K structures for the sb loop
-                    const uint32_t utmp_03 = ((utmp[2] >> 4) & kmask2) | ((utmp[1] >> 2) & kmask_3);
+                    const uint32_t utmp_03 = ((utmp[2] >> 4) & kmask2) | ((utmp[1] >> 2) & kmask4);
                     const uint32_t utmp_02 = utmp[1] & kmask1;
-                    const uint32_t utmp_01 = (utmp[2] & kmask2) | ((utmp[0] >> 2) & kmask_3);
+                    const uint32_t utmp_01 = (utmp[2] & kmask2) | ((utmp[0] >> 2) & kmask4);
                     const uint32_t utmp_00 = utmp[0] & kmask1;
 
                     // Scales of first sub block in the sb loop
@@ -2864,9 +2864,9 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const __m256i scales_0 = _mm256_cvtepu8_epi16(_mm_unpacklo_epi8(mins_and_scales_0, mins_and_scales_0));
 
                     // The below block is for eg to extract second sub block's scales and mins from different Q4_K structures for the sb loop
-                    const uint32_t utmp_13 = ((utmp[5] >> 4) & kmask2) | ((utmp[4] >> 2) & kmask_3);
+                    const uint32_t utmp_13 = ((utmp[5] >> 4) & kmask2) | ((utmp[4] >> 2) & kmask4);
                     const uint32_t utmp_12 = utmp[4] & kmask1;
-                    const uint32_t utmp_11 = (utmp[5] & kmask2) | ((utmp[3] >> 2) & kmask_3);
+                    const uint32_t utmp_11 = (utmp[5] & kmask2) | ((utmp[3] >> 2) & kmask4);
                     const uint32_t utmp_10 = utmp[3] & kmask1;
 
                     // Scales of second sub block in the sb loop
@@ -3089,6 +3089,8 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 // dmin values - Load the eight dmin values of block_q4_Kx8
                 const __m256 col_dmin_f32 = GGML_F32Cx8_LOAD(b_ptr[b].dmin);
 
+                const uint32_t *utmp = (const uint32_t*) (b_ptr[b].scales);
+
                 // Loop to iterate over the eight sub blocks of a super block - two sub blocks are processed per iteration
                 for (int sb = 0; sb < QK_K / 64; sb++) {
 
@@ -3189,31 +3191,25 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const __m256i rhs_mat_0145_13_sp2 = _mm256_shuffle_epi32(rhs_mat_0145_13, 221); //B10(28-31) B11(28-31) B10(28-31) B11(28-31) B14(28-31) B15(28-31) B14(28-31) B15(28-31)
                     const __m256i rhs_mat_2367_13_sp2 = _mm256_shuffle_epi32(rhs_mat_2367_13, 221); //B12(28-31) B13(28-31) B12(28-31) B13(28-31) B16(28-31) B17(28-31) B16(28-31) B17(28-31)
 
-                    uint32_t utmp_0[4], utmp_1[4];
-
                     // Scales and Mins of corresponding sub blocks from different Q4_K structures are stored together
                     // The below block is for eg to extract first sub block's scales and mins from different Q4_K structures for the sb loop
-                    memcpy(utmp_0, b_ptr[b].scales + 24 * sb, 12);
-                    utmp_0[3] = ((utmp_0[2] >> 4) & kmask2) | (((utmp_0[1] >> 6) & kmask3) << 4);
-                    const uint32_t uaux_0 = utmp_0[1] & kmask1;
-                    utmp_0[1] = (utmp_0[2] & kmask2) | (((utmp_0[0] >> 6) & kmask3) << 4);
-                    utmp_0[2] = uaux_0;
-                    utmp_0[0] &= kmask1;
-
-                    // The below block is for eg to extract second sub block's scales and mins from different Q4_K structures when sb = 1
-                    memcpy(utmp_1, b_ptr[b].scales + 12 + sb * 24, 12);
-                    utmp_1[3] = ((utmp_1[2] >> 4) & kmask2) | (((utmp_1[1] >> 6) & kmask3) << 4);
-                    const uint32_t uaux_1 = utmp_1[1] & kmask1;
-                    utmp_1[1] = (utmp_1[2] & kmask2) | (((utmp_1[0] >> 6) & kmask3) << 4);
-                    utmp_1[2] = uaux_1;
-                    utmp_1[0] &= kmask1;
+                    const uint32_t utmp_03 = ((utmp[2] >> 4) & kmask2) | ((utmp[1] >> 2) & kmask4);
+                    const uint32_t utmp_02 = utmp[1] & kmask1;
+                    const uint32_t utmp_01 = (utmp[2] & kmask2) | ((utmp[0] >> 2) & kmask4);
+                    const uint32_t utmp_00 = utmp[0] & kmask1;
 
                     // Scales of first sub block in the sb loop
-                    const __m128i mins_and_scales_0 = _mm_set_epi32(utmp_0[3], utmp_0[2], utmp_0[1], utmp_0[0]);
+                    __m128i mins_and_scales_0 = _mm_set_epi32(utmp_03, utmp_02, utmp_01, utmp_00);
                     const __m256i scales_0 = _mm256_cvtepu8_epi16(_mm_unpacklo_epi8(mins_and_scales_0, mins_and_scales_0));
 
+                    // The below block is for eg to extract second sub block's scales and mins from different Q4_K structures for the sb loop
+                    const uint32_t utmp_13 = ((utmp[5] >> 4) & kmask2) | ((utmp[4] >> 2) & kmask4);
+                    const uint32_t utmp_12 = utmp[4] & kmask1;
+                    const uint32_t utmp_11 = (utmp[5] & kmask2) | ((utmp[3] >> 2) & kmask4);
+                    const uint32_t utmp_10 = utmp[3] & kmask1;
+
                     // Scales of second sub block in the sb loop
-                    const __m128i mins_and_scales_1 = _mm_set_epi32(utmp_1[3], utmp_1[2], utmp_1[1], utmp_1[0]);
+                    __m128i mins_and_scales_1 = _mm_set_epi32(utmp_13, utmp_12, utmp_11, utmp_10);
                     const __m256i scales_1 = _mm256_cvtepu8_epi16(_mm_unpacklo_epi8(mins_and_scales_1, mins_and_scales_1));
 
                     // Mins of first and second sub block of Q4_K block are arranged side by side
@@ -3224,6 +3220,8 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     const __m256i scale_0145_1 = _mm256_shuffle_epi32(scales_1, 68);
                     const __m256i scale_2367_1 = _mm256_shuffle_epi32(scales_1, 238);
+
+                    utmp += 6;
 
                     // Load the four block_q8_k quantized values interleaved with each other in chunks of eight bytes - A0,A1,A2,A3
                     // Loaded as set of 128 bit vectors and repeated into a 256 bit vector
@@ -3396,6 +3394,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     UNUSED(kmask1);
     UNUSED(kmask2);
     UNUSED(kmask3);
+    UNUSED(kmask4);
     ggml_gemm_q4_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 #endif
 }
