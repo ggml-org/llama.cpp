@@ -4,7 +4,7 @@
 #define CHUNK_SIZE 64
 
 llm_build_qwen3next::llm_build_qwen3next(const llama_model & model, const llm_graph_params & params) :
-    llm_graph_context_mamba(params), model(model) {
+    llm_graph_context_delta(params), model(model) {
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -752,7 +752,7 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     v_conv = ggml_cont_4d(ctx0, v_conv, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
 
     ggml_tensor * state = build_rs(inp, ssm_states_all, hparams.n_embd_s(), n_seqs);
-    state               = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim * num_v_heads, 1, n_seqs);
+    state               = ggml_reshape_4d(ctx0, state, head_v_dim, head_v_dim,  num_v_heads, n_seqs);
     cb(state, "state_predelta", il);
 
     // if head keys and value keys are different, repeat to force tensors into matching shapes
@@ -781,13 +781,10 @@ ggml_tensor * llm_build_qwen3next::build_layer_attn_linear(
     cb(k_conv, "k_conv_predelta", il);
     cb(v_conv, "v_conv_predelta", il);
 
-    // Choose between build_delta_net_chunking, build_delta_net_recurrent, and build_delta_net_autoregressive based on n_tokens
-    std::pair<ggml_tensor *, ggml_tensor *> attn_out; // pair of (output, new_state)
-    if (n_seq_tokens == 1) {
-        attn_out = build_delta_net_autoregressive(q_conv, k_conv, v_conv, gate, beta, state, il);
-    } else {
-        attn_out = build_delta_net_chunking(q_conv, k_conv, v_conv, gate, beta, state, causal_mask, identity, diag_mask, il);
-    }
+    std::pair<ggml_tensor *, ggml_tensor *> attn_out = build_delta_net_unified(ctx0, q_conv, k_conv, v_conv,
+            gate, beta, state, causal_mask, identity, diag_mask,
+            il, CHUNK_SIZE, hparams.f_norm_rms_eps);
+
     ggml_tensor * output    = attn_out.first;
     ggml_tensor * new_state = attn_out.second;
     cb(output, "attn_output", il);
