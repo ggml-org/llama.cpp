@@ -99,3 +99,6 @@ export { isTextFileByName, readFileAsText, isLikelyTextFile } from './text-files
 
 // Agentic utilities
 export { toAgenticMessages } from './agentic';
+
+// Base64 utilities
+export { decodeBase64 } from './base64';

@@ -12,9 +12,10 @@
 	import ChatMessageThinkingBlock from './ChatMessageThinkingBlock.svelte';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
+	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
-	import { autoResizeTextarea, copyToClipboard, isIMEComposing } from '$lib/utils';
-	import { tick } from 'svelte';
+	import { agenticStreamingToolCall } from '$lib/stores/agentic.svelte';
+	import { autoResizeTextarea, copyToClipboard } from '$lib/utils';
 	import { fade } from 'svelte/transition';
 	import { Check, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -73,40 +74,18 @@
 		thinkingContent
 	}: Props = $props();
 
-	// Check if content contains agentic tool call markers
-	const isAgenticContent = $derived(
+	const hasAgenticMarkers = $derived(
 		messageContent?.includes('<<<AGENTIC_TOOL_CALL_START>>>') ?? false
 	);
-
+	const hasStreamingToolCall = $derived(isChatStreaming() && agenticStreamingToolCall() !== null);
+	const isAgenticContent = $derived(hasAgenticMarkers || hasStreamingToolCall);
 	const processingState = useProcessingState();
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
 	let showRawOutput = $state(false);
-	let statsContainerEl: HTMLDivElement | undefined = $state();
 
-	function getScrollParent(el: HTMLElement): HTMLElement | null {
-		let parent = el.parentElement;
-		while (parent) {
-			const style = getComputedStyle(parent);
-			if (/(auto|scroll)/.test(style.overflowY)) {
-				return parent;
-			}
-			parent = parent.parentElement;
-		}
-		return null;
-	}
-
-	async function handleStatsViewChange() {
-		const el = statsContainerEl;
-		if (!el) {
-			return;
-		}
-
-		const scrollParent = getScrollParent(el);
-		if (!scrollParent) {
-			return;
-		}
+	let displayedModel = $derived(message.model ?? null);
 
 		const yBefore = el.getBoundingClientRect().top;
 
@@ -237,7 +216,11 @@
 		{#if showRawOutput}
 			<pre class="raw-output">{messageContent || ''}</pre>
 		{:else if isAgenticContent}
-			<AgenticContent content={messageContent || ''} />
+			<AgenticContent
+				content={messageContent || ''}
+				isStreaming={isChatStreaming()}
+				toolCallTimings={message.timings?.agentic?.toolCalls}
+			/>
 		{:else}
 			<MarkdownContent content={visibleMessageContent || ''} attachments={message.extra} />
 		{/if}
@@ -247,27 +230,13 @@
 		</div>
 	{/if}
 
-	{#if showProcessingInfoBottom}
-		<div class="mt-4 w-full max-w-[48rem]" in:fade>
-			<div class="processing-container">
-				<span class="processing-text">
-					{processingState.getPromptProgressText() ??
-						processingState.getProcessingMessage() ??
-						'Processing...'}
-				</span>
-			</div>
-		</div>
-	{/if}
-
-	<div class="info my-6 grid gap-4 tabular-nums">
+	<div class="info my-6 grid gap-4">
 		{#if displayedModel}
-			<div
-				bind:this={statsContainerEl}
-				class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground"
-			>
+			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				{#if isRouter}
 					<ModelsSelector
 						currentModel={displayedModel}
+						onModelChange={handleModelChange}
 						disabled={isLoading()}
 						onModelChange={async (modelId, modelName) => {
 							const status = modelsStore.getModelStatus(modelId);
@@ -290,7 +259,7 @@
 						promptMs={message.timings.prompt_ms}
 						predictedTokens={message.timings.predicted_n}
 						predictedMs={message.timings.predicted_ms}
-						onActiveViewChange={handleStatsViewChange}
+						agenticTimings={message.timings.agentic}
 					/>
 				{:else if isLoading() && currentConfig.showMessageStats}
 					{@const liveStats = processingState.getLiveProcessingStats()}

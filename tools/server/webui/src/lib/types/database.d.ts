@@ -11,7 +11,6 @@ export interface DatabaseConversation {
 	id: string;
 	lastModified: number;
 	name: string;
-	/** Per-chat MCP server overrides. If not set, global settings are used. */
 	mcpServerOverrides?: McpServerOverride[];
 }
 

@@ -1,7 +1,6 @@
 import type { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
-import type { DatabaseMessageExtra } from './database';
-import type { ParameterSource, SyncableParameterType, SettingsFieldType } from '$lib/enums';
+import type { ChatMessageTimings } from './chat';
+import type { OpenAIToolDefinition } from './mcp';
 
 export type SettingsConfigValue = string | number | boolean;
 
@@ -22,6 +21,7 @@ export interface SettingsChatServiceOptions {
 	systemMessage?: string;
 	// Disable reasoning parsing (use 'none' instead of 'auto')
 	disableReasoningParsing?: boolean;
+	tools?: OpenAIToolDefinition[];
 	// Generation parameters
 	temperature?: number;
 	max_tokens?: number;

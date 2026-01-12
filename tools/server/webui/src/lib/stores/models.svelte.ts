@@ -1,9 +1,9 @@
 import { SvelteSet } from 'svelte/reactivity';
+import { ModelsService } from '$lib/services/models.service';
 import { ServerModelStatus, ModelModality } from '$lib/enums';
 import { ModelsService, PropsService } from '$lib/services';
 import { serverStore } from '$lib/stores/server.svelte';
-import { TTLCache } from '$lib/utils';
-import { MODEL_PROPS_CACHE_TTL_MS, MODEL_PROPS_CACHE_MAX_ENTRIES } from '$lib/constants/cache';
+import { PropsService } from '$lib/services';
 
 /**
  * modelsStore - Reactive store for model management in both MODEL and ROUTER modes

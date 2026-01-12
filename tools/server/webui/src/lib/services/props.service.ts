@@ -1,5 +1,19 @@
-import { apiFetchWithParams } from '$lib/utils';
+import { getAuthHeaders } from '$lib/utils';
 
+/**
+ * PropsService - Server properties management
+ *
+ * This service handles communication with the /props endpoint to retrieve
+ * server configuration, model information, and capabilities.
+ *
+ * **Responsibilities:**
+ * - Fetch server properties from /props endpoint
+ * - Handle API authentication
+ * - Parse and validate server response
+ *
+ * **Used by:**
+ * - serverStore: Primary consumer for server state management
+ */
 export class PropsService {
 	/**
 	 *
@@ -10,38 +24,58 @@ export class PropsService {
 	 */
 
 	/**
-	 * Fetches global server properties from the `/props` endpoint.
-	 * In MODEL mode, returns modalities for the single loaded model.
-	 * In ROUTER mode, returns server-wide settings without model-specific modalities.
+	 * Fetches server properties from the /props endpoint
 	 *
 	 * @param autoload - If false, prevents automatic model loading (default: false)
-	 * @returns Server properties including default generation settings and capabilities
+	 * @returns {Promise<ApiLlamaCppServerProps>} Server properties
 	 * @throws {Error} If the request fails or returns invalid data
 	 */
 	static async fetch(autoload = false): Promise<ApiLlamaCppServerProps> {
-		const params: Record<string, string> = {};
+		const url = new URL('./props', window.location.href);
 		if (!autoload) {
-			params.autoload = 'false';
+			url.searchParams.set('autoload', 'false');
 		}
 
-		return apiFetchWithParams<ApiLlamaCppServerProps>('./props', params, { authOnly: true });
+		const response = await fetch(url.toString(), {
+			headers: getAuthHeaders()
+		});
+
+		if (!response.ok) {
+			throw new Error(
+				`Failed to fetch server properties: ${response.status} ${response.statusText}`
+			);
+		}
+
+		const data = await response.json();
+		return data as ApiLlamaCppServerProps;
 	}
 
 	/**
-	 * Fetches server properties for a specific model (ROUTER mode only).
-	 * Required in ROUTER mode because global `/props` does not include per-model modalities.
+	 * Fetches server properties for a specific model (ROUTER mode)
 	 *
 	 * @param modelId - The model ID to fetch properties for
 	 * @param autoload - If false, prevents automatic model loading (default: false)
-	 * @returns Server properties specific to the requested model
-	 * @throws {Error} If the request fails, model not found, or model not loaded
+	 * @returns {Promise<ApiLlamaCppServerProps>} Server properties for the model
+	 * @throws {Error} If the request fails or returns invalid data
 	 */
 	static async fetchForModel(modelId: string, autoload = false): Promise<ApiLlamaCppServerProps> {
-		const params: Record<string, string> = { model: modelId };
+		const url = new URL('./props', window.location.href);
+		url.searchParams.set('model', modelId);
 		if (!autoload) {
-			params.autoload = 'false';
+			url.searchParams.set('autoload', 'false');
 		}
 
-		return apiFetchWithParams<ApiLlamaCppServerProps>('./props', params, { authOnly: true });
+		const response = await fetch(url.toString(), {
+			headers: getAuthHeaders()
+		});
+
+		if (!response.ok) {
+			throw new Error(
+				`Failed to fetch model properties: ${response.status} ${response.statusText}`
+			);
+		}
+
+		const data = await response.json();
+		return data as ApiLlamaCppServerProps;
 	}
 }

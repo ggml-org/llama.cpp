@@ -8,7 +8,7 @@
 	import McpLogo from '$lib/components/app/misc/McpLogo.svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { parseMcpServerSettings, parseMcpServerUsageStats } from '$lib/config/mcp';
+	import { parseMcpServerSettings, parseMcpServerUsageStats } from '$lib/utils/mcp';
 	import type { MCPServerSettingsEntry } from '$lib/types/mcp';
 	import {
 		mcpGetHealthCheckState,

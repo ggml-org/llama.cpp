@@ -2,7 +2,7 @@
 	import { Plus, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
-	import { parseMcpServerSettings } from '$lib/config/mcp';
+	import { parseMcpServerSettings } from '$lib/utils/mcp';
 	import type { MCPServerSettingsEntry } from '$lib/types/mcp';
 	import type { SettingsConfigType } from '$lib/types/settings';
 	import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';

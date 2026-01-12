@@ -1,157 +1,100 @@
+/**
+ * ParameterSyncService - Handles synchronization between server defaults and user settings
+ *
+ * This service manages the complex logic of merging server-provided default parameters
+ * with user-configured overrides, ensuring the UI reflects the actual server state
+ * while preserving user customizations.
+ *
+ * **Key Responsibilities:**
+ * - Extract syncable parameters from server props
+ * - Merge server defaults with user overrides
+ * - Track parameter sources (server, user, default)
+ * - Provide sync utilities for settings store integration
+ */
+
 import { normalizeFloatingPoint } from '$lib/utils';
-import type { SyncableParameter, ParameterRecord, ParameterInfo, ParameterValue } from '$lib/types';
-import { SyncableParameterType, ParameterSource } from '$lib/enums';
+
+export type ParameterSource = 'default' | 'custom';
+export type ParameterValue = string | number | boolean;
+export type ParameterRecord = Record<string, ParameterValue>;
+
+export interface ParameterInfo {
+	value: string | number | boolean;
+	source: ParameterSource;
+	serverDefault?: string | number | boolean;
+	userOverride?: string | number | boolean;
+}
+
+export interface SyncableParameter {
+	key: string;
+	serverKey: string;
+	type: 'number' | 'string' | 'boolean';
+	canSync: boolean;
+}
 
 /**
- * Mapping of webui setting keys to server parameter keys.
- * Only parameters listed here can be synced from the server `/props` endpoint.
- * Each entry defines the webui key, corresponding server key, value type,
- * and whether sync is enabled.
+ * Mapping of webui setting keys to server parameter keys
+ * Only parameters that should be synced from server are included
  */
 export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
-	{
-		key: 'temperature',
-		serverKey: 'temperature',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{ key: 'top_k', serverKey: 'top_k', type: SyncableParameterType.NUMBER, canSync: true },
-	{ key: 'top_p', serverKey: 'top_p', type: SyncableParameterType.NUMBER, canSync: true },
-	{ key: 'min_p', serverKey: 'min_p', type: SyncableParameterType.NUMBER, canSync: true },
-	{
-		key: 'dynatemp_range',
-		serverKey: 'dynatemp_range',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{
-		key: 'dynatemp_exponent',
-		serverKey: 'dynatemp_exponent',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{
-		key: 'xtc_probability',
-		serverKey: 'xtc_probability',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{
-		key: 'xtc_threshold',
-		serverKey: 'xtc_threshold',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{ key: 'typ_p', serverKey: 'typ_p', type: SyncableParameterType.NUMBER, canSync: true },
-	{
-		key: 'repeat_last_n',
-		serverKey: 'repeat_last_n',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{
-		key: 'repeat_penalty',
-		serverKey: 'repeat_penalty',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{
-		key: 'presence_penalty',
-		serverKey: 'presence_penalty',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{
-		key: 'frequency_penalty',
-		serverKey: 'frequency_penalty',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{
-		key: 'dry_multiplier',
-		serverKey: 'dry_multiplier',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{ key: 'dry_base', serverKey: 'dry_base', type: SyncableParameterType.NUMBER, canSync: true },
-	{
-		key: 'dry_allowed_length',
-		serverKey: 'dry_allowed_length',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{
-		key: 'dry_penalty_last_n',
-		serverKey: 'dry_penalty_last_n',
-		type: SyncableParameterType.NUMBER,
-		canSync: true
-	},
-	{ key: 'max_tokens', serverKey: 'max_tokens', type: SyncableParameterType.NUMBER, canSync: true },
-	{ key: 'samplers', serverKey: 'samplers', type: SyncableParameterType.STRING, canSync: true },
+	{ key: 'temperature', serverKey: 'temperature', type: 'number', canSync: true },
+	{ key: 'top_k', serverKey: 'top_k', type: 'number', canSync: true },
+	{ key: 'top_p', serverKey: 'top_p', type: 'number', canSync: true },
+	{ key: 'min_p', serverKey: 'min_p', type: 'number', canSync: true },
+	{ key: 'dynatemp_range', serverKey: 'dynatemp_range', type: 'number', canSync: true },
+	{ key: 'dynatemp_exponent', serverKey: 'dynatemp_exponent', type: 'number', canSync: true },
+	{ key: 'xtc_probability', serverKey: 'xtc_probability', type: 'number', canSync: true },
+	{ key: 'xtc_threshold', serverKey: 'xtc_threshold', type: 'number', canSync: true },
+	{ key: 'typ_p', serverKey: 'typ_p', type: 'number', canSync: true },
+	{ key: 'repeat_last_n', serverKey: 'repeat_last_n', type: 'number', canSync: true },
+	{ key: 'repeat_penalty', serverKey: 'repeat_penalty', type: 'number', canSync: true },
+	{ key: 'presence_penalty', serverKey: 'presence_penalty', type: 'number', canSync: true },
+	{ key: 'frequency_penalty', serverKey: 'frequency_penalty', type: 'number', canSync: true },
+	{ key: 'dry_multiplier', serverKey: 'dry_multiplier', type: 'number', canSync: true },
+	{ key: 'dry_base', serverKey: 'dry_base', type: 'number', canSync: true },
+	{ key: 'dry_allowed_length', serverKey: 'dry_allowed_length', type: 'number', canSync: true },
+	{ key: 'dry_penalty_last_n', serverKey: 'dry_penalty_last_n', type: 'number', canSync: true },
+	{ key: 'max_tokens', serverKey: 'max_tokens', type: 'number', canSync: true },
+	{ key: 'samplers', serverKey: 'samplers', type: 'string', canSync: true },
 	{
 		key: 'pasteLongTextToFileLen',
 		serverKey: 'pasteLongTextToFileLen',
-		type: SyncableParameterType.NUMBER,
+		type: 'number',
 		canSync: true
 	},
-	{
-		key: 'pdfAsImage',
-		serverKey: 'pdfAsImage',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
+	{ key: 'pdfAsImage', serverKey: 'pdfAsImage', type: 'boolean', canSync: true },
 	{
 		key: 'showThoughtInProgress',
 		serverKey: 'showThoughtInProgress',
-		type: SyncableParameterType.BOOLEAN,
+		type: 'boolean',
 		canSync: true
 	},
-	{
-		key: 'keepStatsVisible',
-		serverKey: 'keepStatsVisible',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
-	{
-		key: 'showMessageStats',
-		serverKey: 'showMessageStats',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
+	{ key: 'keepStatsVisible', serverKey: 'keepStatsVisible', type: 'boolean', canSync: true },
+	{ key: 'showMessageStats', serverKey: 'showMessageStats', type: 'boolean', canSync: true },
 	{
 		key: 'askForTitleConfirmation',
 		serverKey: 'askForTitleConfirmation',
-		type: SyncableParameterType.BOOLEAN,
+		type: 'boolean',
 		canSync: true
 	},
-	{
-		key: 'disableAutoScroll',
-		serverKey: 'disableAutoScroll',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
+	{ key: 'disableAutoScroll', serverKey: 'disableAutoScroll', type: 'boolean', canSync: true },
 	{
 		key: 'renderUserContentAsMarkdown',
 		serverKey: 'renderUserContentAsMarkdown',
-		type: SyncableParameterType.BOOLEAN,
+		type: 'boolean',
 		canSync: true
 	},
-	{
-		key: 'autoMicOnEmpty',
-		serverKey: 'autoMicOnEmpty',
-		type: SyncableParameterType.BOOLEAN,
-		canSync: true
-	},
+	{ key: 'autoMicOnEmpty', serverKey: 'autoMicOnEmpty', type: 'boolean', canSync: true },
 	{
 		key: 'pyInterpreterEnabled',
 		serverKey: 'pyInterpreterEnabled',
-		type: SyncableParameterType.BOOLEAN,
+		type: 'boolean',
 		canSync: true
 	},
 	{
 		key: 'enableContinueGeneration',
 		serverKey: 'enableContinueGeneration',
-		type: SyncableParameterType.BOOLEAN,
+		type: 'boolean',
 		canSync: true
 	}
 ];
@@ -166,24 +109,14 @@ export class ParameterSyncService {
 	 */
 
 	/**
-	 * Round floating-point numbers to avoid JavaScript precision issues.
-	 * E.g., 0.1 + 0.2 = 0.30000000000000004 → 0.3
-	 *
-	 * @param value - Parameter value to normalize
-	 * @returns Precision-normalized value
+	 * Round floating-point numbers to avoid JavaScript precision issues
 	 */
 	private static roundFloatingPoint(value: ParameterValue): ParameterValue {
 		return normalizeFloatingPoint(value) as ParameterValue;
 	}
 
 	/**
-	 * Extract server default parameters that can be synced from `/props` response.
-	 * Handles both generation settings parameters and webui-specific settings.
-	 * Converts samplers array to semicolon-delimited string for UI display.
-	 *
-	 * @param serverParams - Raw generation settings from server `/props` endpoint
-	 * @param webuiSettings - Optional webui-specific settings from server
-	 * @returns Record of extracted parameter key-value pairs with normalized precision
+	 * Extract server default parameters that can be synced
 	 */
 	static extractServerDefaults(
 		serverParams: ApiLlamaCppServerProps['default_generation_settings']['params'] | null,
@@ -233,14 +166,8 @@ export class ParameterSyncService {
 	 */
 
 	/**
-	 * Merge server defaults with current user settings.
-	 * User overrides always take priority — only parameters not in `userOverrides`
-	 * set will be updated from server defaults.
-	 *
-	 * @param currentSettings - Current parameter values in the settings store
-	 * @param serverDefaults - Default values extracted from server props
-	 * @param userOverrides - Set of parameter keys explicitly overridden by the user
-	 * @returns Merged parameter record with user overrides preserved
+	 * Merge server defaults with current user settings
+	 * Returns updated settings that respect user overrides while using server defaults
 	 */
 	static mergeWithServerDefaults(
 		currentSettings: ParameterRecord,
@@ -268,15 +195,7 @@ export class ParameterSyncService {
 	 */
 
 	/**
-	 * Get parameter information including source and values.
-	 * Used by ChatSettingsParameterSourceIndicator to display the correct badge
-	 * (Custom vs Default) for each parameter in the settings UI.
-	 *
-	 * @param key - The parameter key to get info for
-	 * @param currentValue - The current value of the parameter
-	 * @param propsDefaults - Server default values from `/props`
-	 * @param userOverrides - Set of parameter keys explicitly overridden by the user
-	 * @returns Parameter info with source, server default, and user override values
+	 * Get parameter information including source and values
 	 */
 	static getParameterInfo(
 		key: string,
@@ -288,7 +207,7 @@ export class ParameterSyncService {
 		const isUserOverride = userOverrides.has(key);
 
 		// Simple logic: either using default (from props) or custom (user override)
-		const source = isUserOverride ? ParameterSource.CUSTOM : ParameterSource.DEFAULT;
+		const source: ParameterSource = isUserOverride ? 'custom' : 'default';
 
 		return {
 			value: currentValue,
@@ -299,41 +218,32 @@ export class ParameterSyncService {
 	}
 
 	/**
-	 * Check if a parameter can be synced from server.
-	 *
-	 * @param key - The parameter key to check
-	 * @returns True if the parameter is in the syncable parameters list
+	 * Check if a parameter can be synced from server
 	 */
 	static canSyncParameter(key: string): boolean {
 		return SYNCABLE_PARAMETERS.some((param) => param.key === key && param.canSync);
 	}
 
 	/**
-	 * Get all syncable parameter keys.
-	 *
-	 * @returns Array of parameter keys that can be synced from server
+	 * Get all syncable parameter keys
 	 */
 	static getSyncableParameterKeys(): string[] {
 		return SYNCABLE_PARAMETERS.filter((param) => param.canSync).map((param) => param.key);
 	}
 
 	/**
-	 * Validate a server parameter value against its expected type.
-	 *
-	 * @param key - The parameter key to validate
-	 * @param value - The value to validate
-	 * @returns True if value matches the expected type for this parameter
+	 * Validate server parameter value
 	 */
 	static validateServerParameter(key: string, value: ParameterValue): boolean {
 		const param = SYNCABLE_PARAMETERS.find((p) => p.key === key);
 		if (!param) return false;
 
 		switch (param.type) {
-			case SyncableParameterType.NUMBER:
+			case 'number':
 				return typeof value === 'number' && !isNaN(value);
-			case SyncableParameterType.STRING:
+			case 'string':
 				return typeof value === 'string';
-			case SyncableParameterType.BOOLEAN:
+			case 'boolean':
 				return typeof value === 'boolean';
 			default:
 				return false;
@@ -349,13 +259,7 @@ export class ParameterSyncService {
 	 */
 
 	/**
-	 * Create a diff between current settings and server defaults.
-	 * Shows which parameters differ from server values, useful for debugging
-	 * and for the "Reset to defaults" functionality.
-	 *
-	 * @param currentSettings - Current parameter values in the settings store
-	 * @param serverDefaults - Default values extracted from server props
-	 * @returns Record of parameter diffs with current value, server value, and whether they differ
+	 * Create a diff between current settings and server defaults
 	 */
 	static createParameterDiff(
 		currentSettings: ParameterRecord,
