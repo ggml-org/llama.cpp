@@ -27,6 +27,7 @@ export { default as CollapsibleContentBlock } from './chat/ChatMessages/Collapsi
 export { default as MessageBranchingControls } from './chat/ChatMessages/ChatMessageBranchingControls.svelte';
 
 export { default as ChatScreen } from './chat/ChatScreen/ChatScreen.svelte';
+export { default as KeyValuePairs } from './misc/KeyValuePairs.svelte';
 export { default as ChatScreenHeader } from './chat/ChatScreen/ChatScreenHeader.svelte';
 export { default as ChatScreenProcessingInfo } from './chat/ChatScreen/ChatScreenProcessingInfo.svelte';
 

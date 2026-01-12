@@ -66,3 +66,6 @@ export type {
 	SettingsChatServiceOptions,
 	SettingsConfigType
 } from './settings';
+
+// Common types
+export type { KeyValuePair } from './common';
