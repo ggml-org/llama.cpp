@@ -69,3 +69,28 @@ export type {
 
 // Common types
 export type { KeyValuePair } from './common';
+
+// MCP types
+export type {
+	ClientCapabilities,
+	ServerCapabilities,
+	Implementation,
+	MCPConnectionLog,
+	MCPServerInfo,
+	MCPCapabilitiesInfo,
+	MCPToolInfo,
+	MCPConnectionDetails,
+	MCPPhaseCallback,
+	MCPConnection,
+	HealthCheckState,
+	HealthCheckParams,
+	MCPServerConfig,
+	MCPClientConfig,
+	MCPServerSettingsEntry,
+	McpServerUsageStats,
+	MCPToolCall,
+	OpenAIToolDefinition,
+	ServerStatus,
+	ToolCallParams,
+	ToolExecutionResult
+} from './mcp';

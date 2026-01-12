@@ -1,4 +1,4 @@
-import type { ClientCapabilities, Implementation } from '$lib/types/mcp';
+import type { ClientCapabilities, Implementation } from '$lib/types';
 
 export const DEFAULT_MCP_CONFIG = {
 	protocolVersion: '2025-06-18',

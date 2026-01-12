@@ -1,5 +1,7 @@
+import type { MCPConnectionPhase, MCPLogLevel } from '$lib/enums/mcp';
 import type {
 	ClientCapabilities as SDKClientCapabilities,
+	ServerCapabilities as SDKServerCapabilities,
 	Implementation as SDKImplementation,
 	Tool,
 	CallToolResult
@@ -7,9 +9,148 @@ import type {
 
 export type { Tool, CallToolResult };
 export type ClientCapabilities = SDKClientCapabilities;
+export type ServerCapabilities = SDKServerCapabilities;
 export type Implementation = SDKImplementation;
 
-export type MCPTransportType = 'websocket' | 'streamable_http';
+/**
+ * Log entry for connection events
+ */
+export interface MCPConnectionLog {
+	timestamp: Date;
+	phase: MCPConnectionPhase;
+	message: string;
+	details?: unknown;
+	level: MCPLogLevel;
+}
+
+/**
+ * Server information returned after initialization
+ */
+export interface MCPServerInfo {
+	name: string;
+	version: string;
+	title?: string;
+	description?: string;
+	websiteUrl?: string;
+	icons?: Array<{ src: string; mimeType?: string; sizes?: string[] }>;
+}
+
+/**
+ * Detailed capabilities information
+ */
+export interface MCPCapabilitiesInfo {
+	server: {
+		tools?: { listChanged?: boolean };
+		prompts?: { listChanged?: boolean };
+		resources?: { subscribe?: boolean; listChanged?: boolean };
+		logging?: boolean;
+		completions?: boolean;
+		tasks?: boolean;
+	};
+	client: {
+		roots?: { listChanged?: boolean };
+		sampling?: boolean;
+		elicitation?: { form?: boolean; url?: boolean };
+		tasks?: boolean;
+	};
+}
+
+/**
+ * Tool information for display
+ */
+export interface MCPToolInfo {
+	name: string;
+	description?: string;
+	title?: string;
+}
+
+/**
+ * Full connection details for visualization
+ */
+export interface MCPConnectionDetails {
+	phase: MCPConnectionPhase;
+	transportType?: MCPTransportType;
+	protocolVersion?: string;
+	serverInfo?: MCPServerInfo;
+	capabilities?: MCPCapabilitiesInfo;
+	instructions?: string;
+	tools: MCPToolInfo[];
+	connectionTimeMs?: number;
+	error?: string;
+	logs: MCPConnectionLog[];
+}
+
+/**
+ * Callback for connection phase changes
+ */
+export type MCPPhaseCallback = (
+	phase: MCPConnectionPhase,
+	log: MCPConnectionLog,
+	details?: {
+		transportType?: MCPTransportType;
+		serverInfo?: MCPServerInfo;
+		serverCapabilities?: ServerCapabilities;
+		clientCapabilities?: ClientCapabilities;
+		protocolVersion?: string;
+		instructions?: string;
+	}
+) => void;
+
+/**
+ * Represents an active MCP server connection.
+ * Returned by MCPService.connect() and used for subsequent operations.
+ */
+export interface MCPConnection {
+	client: import('@modelcontextprotocol/sdk/client').Client;
+	transport: import('@modelcontextprotocol/sdk/shared/transport.js').Transport;
+	tools: import('@modelcontextprotocol/sdk/types.js').Tool[];
+	serverName: string;
+	transportType: MCPTransportType;
+	serverInfo?: MCPServerInfo;
+	serverCapabilities?: ServerCapabilities;
+	clientCapabilities?: ClientCapabilities;
+	protocolVersion?: string;
+	instructions?: string;
+	connectionTimeMs: number;
+}
+
+/**
+ * Extended health check state with detailed connection info
+ */
+export type HealthCheckState =
+	| { status: import('$lib/enums/mcp').HealthCheckStatus.Idle }
+	| {
+			status: import('$lib/enums/mcp').HealthCheckStatus.Connecting;
+			phase: MCPConnectionPhase;
+			logs: MCPConnectionLog[];
+	  }
+	| {
+			status: import('$lib/enums/mcp').HealthCheckStatus.Error;
+			message: string;
+			phase?: MCPConnectionPhase;
+			logs: MCPConnectionLog[];
+	  }
+	| {
+			status: import('$lib/enums/mcp').HealthCheckStatus.Success;
+			tools: MCPToolInfo[];
+			serverInfo?: MCPServerInfo;
+			capabilities?: MCPCapabilitiesInfo;
+			transportType?: MCPTransportType;
+			protocolVersion?: string;
+			instructions?: string;
+			connectionTimeMs?: number;
+			logs: MCPConnectionLog[];
+	  };
+
+/**
+ * Health check parameters
+ */
+export interface HealthCheckParams {
+	id: string;
+	url: string;
+	requestTimeoutSeconds: number;
+	headers?: string;
+}
 
 export type MCPServerConfig = {
 	transport?: MCPTransportType;

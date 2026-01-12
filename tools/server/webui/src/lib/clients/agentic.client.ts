@@ -37,7 +37,7 @@ import type {
 	ChatMessageToolCallTiming,
 	ChatMessageAgenticTurnStats
 } from '$lib/types/chat';
-import type { MCPToolCall } from '$lib/types/mcp';
+import type { MCPToolCall } from '$lib/types';
 import type { DatabaseMessage, DatabaseMessageExtra, McpServerOverride } from '$lib/types/database';
 
 export interface AgenticFlowCallbacks {

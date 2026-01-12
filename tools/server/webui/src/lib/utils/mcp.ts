@@ -1,11 +1,7 @@
-import type {
-	MCPTransportType,
-	MCPClientConfig,
-	MCPServerConfig,
-	MCPServerSettingsEntry
-} from '$lib/types/mcp';
+import type { MCPClientConfig, MCPServerConfig, MCPServerSettingsEntry } from '$lib/types';
 import type { SettingsConfigType } from '$lib/types/settings';
 import type { McpServerOverride } from '$lib/types/database';
+import { MCPTransportType } from '$lib/enums';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 import { normalizePositiveNumber } from '$lib/utils/number';
 
@@ -17,8 +13,8 @@ export function detectMcpTransportFromUrl(url: string): MCPTransportType {
 	const normalized = url.trim().toLowerCase();
 
 	return normalized.startsWith('ws://') || normalized.startsWith('wss://')
-		? 'websocket'
-		: 'streamable_http';
+		? MCPTransportType.Websocket
+		: MCPTransportType.StreamableHttp;
 }
 
 /**
