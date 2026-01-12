@@ -1,20 +1,19 @@
 <script lang="ts">
-	import { Clock, Gauge, WholeWord, BookOpenText, Sparkles } from '@lucide/svelte';
+	import { Clock, Gauge, WholeWord, BookOpenText, Sparkles, Wrench, Layers } from '@lucide/svelte';
 	import { BadgeChatStatistic } from '$lib/components/app';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { ChatMessageStatsView } from '$lib/enums';
+	import type { ChatMessageAgenticTimings } from '$lib/types/chat';
 
 	interface Props {
 		predictedTokens?: number;
 		predictedMs?: number;
 		promptTokens?: number;
 		promptMs?: number;
-		// Live mode: when true, shows stats during streaming
 		isLive?: boolean;
-		// Whether prompt processing is still in progress
 		isProcessingPrompt?: boolean;
-		// Initial view to show (defaults to READING in live mode)
 		initialView?: ChatMessageStatsView;
+		agenticTimings?: ChatMessageAgenticTimings;
 	}
 
 	let {
@@ -24,7 +23,8 @@
 		promptMs,
 		isLive = false,
 		isProcessingPrompt = false,
-		initialView = ChatMessageStatsView.GENERATION
+		initialView = ChatMessageStatsView.GENERATION,
+		agenticTimings
 	}: Props = $props();
 
 	let activeView: ChatMessageStatsView = $state(initialView);
@@ -80,6 +80,26 @@
 
 	// In live mode, generation tab is disabled until we have generation stats
 	let isGenerationDisabled = $derived(isLive && !hasGenerationStats);
+
+	let hasAgenticStats = $derived(agenticTimings !== undefined && agenticTimings.toolCallsCount > 0);
+
+	let agenticToolsPerSecond = $derived(
+		hasAgenticStats && agenticTimings!.toolsMs > 0
+			? (agenticTimings!.toolCallsCount / agenticTimings!.toolsMs) * 1000
+			: 0
+	);
+
+	let agenticToolsTimeInSeconds = $derived(
+		hasAgenticStats ? (agenticTimings!.toolsMs / 1000).toFixed(2) : '0.00'
+	);
+
+	let agenticTotalTimeMs = $derived(
+		hasAgenticStats
+			? agenticTimings!.toolsMs + agenticTimings!.llm.predicted_ms + agenticTimings!.llm.prompt_ms
+			: 0
+	);
+
+	let agenticTotalTimeInSeconds = $derived((agenticTotalTimeMs / 1000).toFixed(2));
 </script>
 
 <div class="inline-flex items-center text-xs text-muted-foreground">
@@ -129,6 +149,44 @@
 				</p>
 			</Tooltip.Content>
 		</Tooltip.Root>
+		{#if hasAgenticStats}
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					<button
+						type="button"
+						class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
+						ChatMessageStatsView.TOOLS
+							? 'bg-background text-foreground shadow-sm'
+							: 'hover:text-foreground'}"
+						onclick={() => (activeView = ChatMessageStatsView.TOOLS)}
+					>
+						<Wrench class="h-3 w-3" />
+						<span class="sr-only">Tools</span>
+					</button>
+				</Tooltip.Trigger>
+				<Tooltip.Content>
+					<p>Tool calls</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+			<Tooltip.Root>
+				<Tooltip.Trigger>
+					<button
+						type="button"
+						class="inline-flex h-5 w-5 items-center justify-center rounded-sm transition-colors {activeView ===
+						ChatMessageStatsView.SUMMARY
+							? 'bg-background text-foreground shadow-sm'
+							: 'hover:text-foreground'}"
+						onclick={() => (activeView = ChatMessageStatsView.SUMMARY)}
+					>
+						<Layers class="h-3 w-3" />
+						<span class="sr-only">Summary</span>
+					</button>
+				</Tooltip.Trigger>
+				<Tooltip.Content>
+					<p>Agentic summary</p>
+				</Tooltip.Content>
+			</Tooltip.Root>
+		{/if}
 	</div>
 
 	<div class="flex items-center gap-1 px-2">
@@ -148,8 +206,46 @@
 			<BadgeChatStatistic
 				class="bg-transparent"
 				icon={Gauge}
-				value="{tokensPerSecond.toFixed(2)} tokens/s"
+				value="{tokensPerSecond.toFixed(2)} t/s"
 				tooltipLabel="Generation speed"
+			/>
+		{:else if activeView === ChatMessageStatsView.TOOLS && hasAgenticStats}
+			<BadgeChatStatistic
+				class="bg-transparent"
+				icon={Wrench}
+				value="{agenticTimings!.toolCallsCount} calls"
+				tooltipLabel="Tool calls executed"
+			/>
+			<BadgeChatStatistic
+				class="bg-transparent"
+				icon={Clock}
+				value="{agenticToolsTimeInSeconds}s"
+				tooltipLabel="Tool execution time"
+			/>
+			<BadgeChatStatistic
+				class="bg-transparent"
+				icon={Gauge}
+				value="{agenticToolsPerSecond.toFixed(2)} calls/s"
+				tooltipLabel="Tool execution rate"
+			/>
+		{:else if activeView === ChatMessageStatsView.SUMMARY && hasAgenticStats}
+			<BadgeChatStatistic
+				class="bg-transparent"
+				icon={Layers}
+				value="{agenticTimings!.turns} turns"
+				tooltipLabel="Agentic turns (LLM calls)"
+			/>
+			<BadgeChatStatistic
+				class="bg-transparent"
+				icon={WholeWord}
+				value="{agenticTimings!.llm.predicted_n.toLocaleString()} tokens"
+				tooltipLabel="Total tokens generated"
+			/>
+			<BadgeChatStatistic
+				class="bg-transparent"
+				icon={Clock}
+				value="{agenticTotalTimeInSeconds}s"
+				tooltipLabel="Total time (LLM + tools)"
 			/>
 		{:else if hasPromptStats}
 			<BadgeChatStatistic

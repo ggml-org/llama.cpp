@@ -1,8 +1,8 @@
 import { SvelteSet } from 'svelte/reactivity';
-import { ModelsService } from '$lib/services/models';
-import { PropsService } from '$lib/services/props';
+import { ModelsService } from '$lib/services/models.service';
 import { ServerModelStatus, ModelModality } from '$lib/enums';
 import { serverStore } from '$lib/stores/server.svelte';
+import { PropsService } from '$lib/services';
 
 /**
  * modelsStore - Reactive store for model management in both MODEL and ROUTER modes
@@ -32,9 +32,13 @@ import { serverStore } from '$lib/stores/server.svelte';
  * - **Lazy loading**: ensureModelLoaded() loads models on demand
  */
 class ModelsStore {
-	// ─────────────────────────────────────────────────────────────────────────────
-	// State
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * State
+	 *
+	 *
+	 */
 
 	models = $state<ModelOption[]>([]);
 	routerModels = $state<ApiModelDataEntry[]>([]);
@@ -59,9 +63,13 @@ class ModelsStore {
 	 */
 	propsCacheVersion = $state(0);
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Computed Getters
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Computed Getters
+	 *
+	 *
+	 */
 
 	get selectedModel(): ModelOption | null {
 		if (!this.selectedModelId) return null;
@@ -95,22 +103,24 @@ class ModelsStore {
 		return props.model_path.split(/(\\|\/)/).pop() || null;
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Modalities
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Modalities
+	 *
+	 *
+	 */
 
 	/**
 	 * Get modalities for a specific model
 	 * Returns cached modalities from model props
 	 */
 	getModelModalities(modelId: string): ModelModalities | null {
-		// First check if modalities are stored in the model option
 		const model = this.models.find((m) => m.model === modelId || m.id === modelId);
 		if (model?.modalities) {
 			return model.modalities;
 		}
 
-		// Fall back to props cache
 		const props = this.modelPropsCache.get(modelId);
 		if (props?.modalities) {
 			return {
@@ -181,9 +191,13 @@ class ModelsStore {
 		return this.modelPropsFetching.has(modelId);
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Status Queries
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Status Queries
+	 *
+	 *
+	 */
 
 	isModelLoaded(modelId: string): boolean {
 		const model = this.routerModels.find((m) => m.id === modelId);
@@ -208,9 +222,13 @@ class ModelsStore {
 		return usage !== undefined && usage.size > 0;
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Data Fetching
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Data Fetching
+	 *
+	 *
+	 */
 
 	/**
 	 * Fetch list of models from server and detect server role
@@ -224,7 +242,6 @@ class ModelsStore {
 		this.error = null;
 
 		try {
-			// Ensure server props are loaded (for role detection and MODEL mode modalities)
 			if (!serverStore.props) {
 				await serverStore.fetch();
 			}
@@ -251,7 +268,6 @@ class ModelsStore {
 
 			this.models = models;
 
-			// In MODEL mode, populate modalities from serverStore.props (single model)
 			// WORKAROUND: In MODEL mode, /props returns modalities for the single model,
 			// but /v1/models doesn't include modalities. We bridge this gap here.
 			const serverProps = serverStore.props;
@@ -260,9 +276,7 @@ class ModelsStore {
 					vision: serverProps.modalities.vision ?? false,
 					audio: serverProps.modalities.audio ?? false
 				};
-				// Cache props for the single model
 				this.modelPropsCache.set(this.models[0].model, serverProps);
-				// Update model with modalities
 				this.models = this.models.map((model, index) =>
 					index === 0 ? { ...model, modalities } : model
 				);
@@ -302,7 +316,6 @@ class ModelsStore {
 	 * @returns Props data or null if fetch failed or model not loaded
 	 */
 	async fetchModelProps(modelId: string): Promise<ApiLlamaCppServerProps | null> {
-		// Return cached props if available
 		const cached = this.modelPropsCache.get(modelId);
 		if (cached) return cached;
 
@@ -310,7 +323,6 @@ class ModelsStore {
 			return null;
 		}
 
-		// Avoid duplicate fetches
 		if (this.modelPropsFetching.has(modelId)) return null;
 
 		this.modelPropsFetching.add(modelId);
@@ -335,7 +347,6 @@ class ModelsStore {
 		const loadedModelIds = this.loadedModelIds;
 		if (loadedModelIds.length === 0) return;
 
-		// Fetch props for each loaded model in parallel
 		const propsPromises = loadedModelIds.map((modelId) => this.fetchModelProps(modelId));
 
 		try {
@@ -357,7 +368,6 @@ class ModelsStore {
 				return { ...model, modalities };
 			});
 
-			// Increment version to trigger reactivity
 			this.propsCacheVersion++;
 		} catch (error) {
 			console.warn('Failed to fetch modalities for loaded models:', error);
@@ -382,16 +392,19 @@ class ModelsStore {
 				model.model === modelId ? { ...model, modalities } : model
 			);
 
-			// Increment version to trigger reactivity
 			this.propsCacheVersion++;
 		} catch (error) {
 			console.warn(`Failed to update modalities for model ${modelId}:`, error);
 		}
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Model Selection
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Model Selection
+	 *
+	 *
+	 */
 
 	/**
 	 * Select a model for new conversations
@@ -443,9 +456,13 @@ class ModelsStore {
 		return this.models.some((model) => model.model === modelName);
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Loading/Unloading Models
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Loading/Unloading Models
+	 *
+	 *
+	 */
 
 	/**
 	 * WORKAROUND: Polling for model status after load/unload operations.
@@ -486,7 +503,6 @@ class ModelsStore {
 				return;
 			}
 
-			// Wait before next poll
 			await new Promise((resolve) => setTimeout(resolve, ModelsStore.STATUS_POLL_INTERVAL));
 		}
 
@@ -511,8 +527,6 @@ class ModelsStore {
 
 		try {
 			await ModelsService.load(modelId);
-
-			// Poll until model is loaded
 			await this.pollForModelStatus(modelId, ServerModelStatus.LOADED);
 
 			await this.updateModelModalities(modelId);
@@ -562,9 +576,13 @@ class ModelsStore {
 		await this.loadModel(modelId);
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Utilities
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Utilities
+	 *
+	 *
+	 */
 
 	private toDisplayName(id: string): string {
 		const segments = id.split(/\\|\//);

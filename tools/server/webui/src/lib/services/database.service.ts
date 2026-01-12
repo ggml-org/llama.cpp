@@ -66,9 +66,13 @@ import { v4 as uuid } from 'uuid';
  * `currNode` tracks the currently active branch endpoint.
  */
 export class DatabaseService {
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Conversations
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Conversations
+	 *
+	 *
+	 */
 
 	/**
 	 * Creates a new conversation.
@@ -88,9 +92,13 @@ export class DatabaseService {
 		return conversation;
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Messages
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Messages
+	 *
+	 *
+	 */
 
 	/**
 	 * Creates a new message branch by adding a message and updating parent/child relationships.
@@ -328,9 +336,13 @@ export class DatabaseService {
 		});
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Navigation
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Navigation
+	 *
+	 *
+	 */
 
 	/**
 	 * Updates the conversation's current node (active branch).
@@ -359,9 +371,13 @@ export class DatabaseService {
 		await db.messages.update(id, updates);
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Import
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Import
+	 *
+	 *
+	 */
 
 	/**
 	 * Imports multiple conversations and their messages.

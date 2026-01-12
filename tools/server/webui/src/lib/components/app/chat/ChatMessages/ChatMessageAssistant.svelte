@@ -10,7 +10,8 @@
 	} from '$lib/components/app';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
-	import { isLoading } from '$lib/stores/chat.svelte';
+	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
+	import { agenticStreamingToolCall } from '$lib/stores/agentic.svelte';
 	import { autoResizeTextarea, copyToClipboard } from '$lib/utils';
 	import { fade } from 'svelte/transition';
 	import { Check, X } from '@lucide/svelte';
@@ -82,25 +83,18 @@
 		thinkingContent
 	}: Props = $props();
 
-	// Check if content contains agentic tool call markers
-	const isAgenticContent = $derived(
+	const hasAgenticMarkers = $derived(
 		messageContent?.includes('<<<AGENTIC_TOOL_CALL_START>>>') ?? false
 	);
-
+	const hasStreamingToolCall = $derived(isChatStreaming() && agenticStreamingToolCall() !== null);
+	const isAgenticContent = $derived(hasAgenticMarkers || hasStreamingToolCall);
 	const processingState = useProcessingState();
-
-	// Local state for raw output toggle (per message)
-	let showRawOutput = $state(false);
 
 	let currentConfig = $derived(config());
 	let isRouter = $derived(isRouterMode());
-	let displayedModel = $derived((): string | null => {
-		if (message.model) {
-			return message.model;
-		}
+	let showRawOutput = $state(false);
 
-		return null;
-	});
+	let displayedModel = $derived(message.model ?? null);
 
 	const { handleModelChange } = useModelChangeValidation({
 		getRequiredModalities: () => conversationsStore.getModalitiesUpToMessage(message.id),
@@ -108,9 +102,7 @@
 	});
 
 	function handleCopyModel() {
-		const model = displayedModel();
-
-		void copyToClipboard(model ?? '');
+		void copyToClipboard(displayedModel ?? '');
 	}
 
 	$effect(() => {
@@ -191,7 +183,11 @@
 		{#if showRawOutput}
 			<pre class="raw-output">{messageContent || ''}</pre>
 		{:else if isAgenticContent}
-			<AgenticContent content={messageContent || ''} />
+			<AgenticContent
+				content={messageContent || ''}
+				isStreaming={isChatStreaming()}
+				toolCallTimings={message.timings?.agentic?.toolCalls}
+			/>
 		{:else}
 			<MarkdownContent content={messageContent || ''} />
 		{/if}
@@ -201,18 +197,18 @@
 		</div>
 	{/if}
 
-	<div class="info my-6 grid gap-4 tabular-nums">
-		{#if displayedModel()}
+	<div class="info my-6 grid gap-4">
+		{#if displayedModel}
 			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				{#if isRouter}
 					<ModelsSelector
-						currentModel={displayedModel()}
+						currentModel={displayedModel}
 						onModelChange={handleModelChange}
 						disabled={isLoading()}
 						upToMessageId={message.id}
 					/>
 				{:else}
-					<ModelBadge model={displayedModel() || undefined} onclick={handleCopyModel} />
+					<ModelBadge model={displayedModel || undefined} onclick={handleCopyModel} />
 				{/if}
 
 				{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
@@ -221,6 +217,7 @@
 						promptMs={message.timings.prompt_ms}
 						predictedTokens={message.timings.predicted_n}
 						predictedMs={message.timings.predicted_ms}
+						agenticTimings={message.timings.agentic}
 					/>
 				{:else if isLoading() && currentConfig.showMessageStats}
 					{@const liveStats = processingState.getLiveProcessingStats()}

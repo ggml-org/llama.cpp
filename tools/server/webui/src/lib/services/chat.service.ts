@@ -34,9 +34,13 @@ import { AttachmentType } from '$lib/enums';
  * - Request lifecycle management (abort via AbortSignal)
  */
 export class ChatService {
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Messaging
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Messaging
+	 *
+	 *
+	 */
 
 	/**
 	 * Sends a chat completion request to the llama.cpp server.
@@ -63,6 +67,8 @@ export class ChatService {
 			onToolCallChunk,
 			onModel,
 			onTimings,
+			// Tools for function calling
+			tools,
 			// Generation parameters
 			temperature,
 			max_tokens,
@@ -116,10 +122,13 @@ export class ChatService {
 		const requestBody: ApiChatCompletionRequest = {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
 				role: msg.role,
-				content: msg.content
+				content: msg.content,
+				tool_calls: msg.tool_calls,
+				tool_call_id: msg.tool_call_id
 			})),
 			stream,
-			return_progress: stream ? true : undefined
+			return_progress: stream ? true : undefined,
+			tools: tools && tools.length > 0 ? tools : undefined
 		};
 
 		// Include model in request if provided (required in ROUTER mode)
@@ -247,9 +256,13 @@ export class ChatService {
 		}
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Streaming
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Streaming
+	 *
+	 *
+	 */
 
 	/**
 	 * Handles streaming response from the chat completion API
@@ -309,6 +322,8 @@ export class ChatService {
 				return;
 			}
 
+			console.log('[ChatService] Tool call delta received:', JSON.stringify(toolCalls));
+
 			aggregatedToolCalls = ChatService.mergeToolCallDeltas(
 				aggregatedToolCalls,
 				toolCalls,
@@ -322,6 +337,8 @@ export class ChatService {
 			hasOpenToolCallBatch = true;
 
 			const serializedToolCalls = JSON.stringify(aggregatedToolCalls);
+
+			console.log('[ChatService] Aggregated tool calls:', serializedToolCalls);
 
 			if (!serializedToolCalls) {
 				return;
@@ -563,9 +580,13 @@ export class ChatService {
 		return result;
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Conversion
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Conversion
+	 *
+	 *
+	 */
 
 	/**
 	 * Converts a database message with attachments to API chat message format.
@@ -677,9 +698,13 @@ export class ChatService {
 		};
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Utilities
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Utilities
+	 *
+	 *
+	 */
 
 	/**
 	 * Parses error response and creates appropriate error with context information

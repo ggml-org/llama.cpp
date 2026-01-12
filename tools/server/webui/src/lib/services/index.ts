@@ -1,5 +1,6 @@
-export { ChatService } from './chat';
-export { DatabaseService } from './database';
-export { ModelsService } from './models';
-export { PropsService } from './props';
-export { ParameterSyncService } from './parameter-sync';
+export { ChatService } from './chat.service';
+export { DatabaseService } from './database.service';
+export { ModelsService } from './models.service';
+export { PropsService } from './props.service';
+export { ParameterSyncService } from './parameter-sync.service';
+export { MCPService, type MCPConnection } from './mcp.service';
