@@ -121,6 +121,8 @@ set(GGML_OPENCL_KERNELS
     tsembd
     upscale
     tanh
+    expm1
+    softplus
     pad
     repeat
     mul_mat_f16_f32
