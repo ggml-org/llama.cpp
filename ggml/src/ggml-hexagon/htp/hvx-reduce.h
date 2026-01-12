@@ -1,9 +1,13 @@
 #ifndef HVX_REDUCE_H
 #define HVX_REDUCE_H
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <assert.h>
 
+#include "hex-utils.h"
+#include "hvx-base.h"
 #include "hvx-types.h"
 
 static inline HVX_Vector hvx_vec_int32_reduce_sum_n(HVX_Vector in, unsigned int n) {
@@ -116,5 +120,83 @@ static inline HVX_Vector hvx_vec_reduce_max2_fp32(HVX_Vector in, HVX_Vector _max
 
     return _max;
 }
+
+#define hvx_reduce_loop_body(src_type, init_vec, pad_vec, vec_op, reduce_op, scalar_reduce) \
+    do {                                                                                    \
+        src_type * restrict vsrc = (src_type *) src;                                        \
+        HVX_Vector acc = init_vec;                                                          \
+                                                                                            \
+        const uint32_t elem_size = sizeof(float);                                           \
+        const uint32_t epv  = 128 / elem_size;                                              \
+        const uint32_t nvec = num_elems / epv;                                              \
+        const uint32_t nloe = num_elems % epv;                                              \
+                                                                                            \
+        uint32_t i = 0;                                                                     \
+        _Pragma("unroll(4)")                                                                \
+        for (; i < nvec; i++) {                                                             \
+            acc = vec_op(acc, vsrc[i]);                                                     \
+        }                                                                                   \
+        if (nloe) {                                                                         \
+            const float * srcf = (const float *) src + i * epv;                             \
+            HVX_Vector in = *(HVX_UVector *) srcf;                                          \
+            HVX_Vector temp = Q6_V_valign_VVR(in, pad_vec, nloe * elem_size);               \
+            acc = vec_op(acc, temp);                                                        \
+        }                                                                                   \
+        HVX_Vector v = reduce_op(acc);                                                      \
+        return scalar_reduce(v);                                                            \
+    } while(0)
+
+#define HVX_REDUCE_MAX_OP(acc, val) Q6_Vsf_vmax_VsfVsf(acc, val)
+#define HVX_REDUCE_SUM_OP(acc, val) Q6_Vqf32_vadd_VsfVsf(Q6_Vsf_equals_Vqf32(acc), val)
+#define HVX_REDUCE_MAX_SCALAR(v) hvx_vec_get_fp32(v)
+#define HVX_REDUCE_SUM_SCALAR(v) hvx_vec_get_fp32(Q6_Vsf_equals_Vqf32(v))
+
+// Max variants
+
+static inline float hvx_reduce_max_f32_a(const uint8_t * restrict src, const int num_elems) {
+    HVX_Vector init_vec = hvx_vec_splat_fp32(((const float *) src)[0]);
+    assert((unsigned long) src % 128 == 0);
+    hvx_reduce_loop_body(HVX_Vector, init_vec, init_vec, HVX_REDUCE_MAX_OP, hvx_vec_reduce_max_fp32, HVX_REDUCE_MAX_SCALAR);
+}
+
+static inline float hvx_reduce_max_f32_u(const uint8_t * restrict src, const int num_elems) {
+    HVX_Vector init_vec = hvx_vec_splat_fp32(((const float *) src)[0]);
+    hvx_reduce_loop_body(HVX_UVector, init_vec, init_vec, HVX_REDUCE_MAX_OP, hvx_vec_reduce_max_fp32, HVX_REDUCE_MAX_SCALAR);
+}
+
+static inline float hvx_reduce_max_f32(const uint8_t * restrict src, const int num_elems) {
+    if (hex_is_aligned((void *) src, 128)) {
+        return hvx_reduce_max_f32_a(src, num_elems);
+    } else {
+        return hvx_reduce_max_f32_u(src, num_elems);
+    }
+}
+
+// Sum variants
+
+static inline float hvx_reduce_sum_f32_a(const uint8_t * restrict src, const int num_elems) {
+    HVX_Vector init_vec = Q6_V_vsplat_R(0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_reduce_loop_body(HVX_Vector, init_vec, init_vec, HVX_REDUCE_SUM_OP, hvx_vec_qf32_reduce_sum, HVX_REDUCE_SUM_SCALAR);
+}
+
+static inline float hvx_reduce_sum_f32_u(const uint8_t * restrict src, const int num_elems) {
+    HVX_Vector init_vec = Q6_V_vsplat_R(0);
+    hvx_reduce_loop_body(HVX_UVector, init_vec, init_vec, HVX_REDUCE_SUM_OP, hvx_vec_qf32_reduce_sum, HVX_REDUCE_SUM_SCALAR);
+}
+
+static inline float hvx_reduce_sum_f32(const uint8_t * restrict src, const int num_elems) {
+    if (hex_is_aligned((void *) src, 128)) {
+        return hvx_reduce_sum_f32_a(src, num_elems);
+    } else {
+        return hvx_reduce_sum_f32_u(src, num_elems);
+    }
+}
+
+#undef hvx_reduce_loop_body
+#undef HVX_REDUCE_MAX_OP
+#undef HVX_REDUCE_SUM_OP
+#undef HVX_REDUCE_MAX_SCALAR
+#undef HVX_REDUCE_SUM_SCALAR
 
 #endif /* HVX_REDUCE_H */

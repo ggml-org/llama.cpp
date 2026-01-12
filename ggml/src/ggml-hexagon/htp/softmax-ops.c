@@ -178,7 +178,7 @@ static float hvx_softmax_f32(const uint8_t * restrict src,
 
     hvx_exp_f32(spad, dst, num_elems, false);
 
-    float sum = hvx_self_sum_f32(dst, num_elems);
+    float sum = hvx_reduce_sum_f32(dst, num_elems);
 
     return sum;
 }
@@ -248,7 +248,7 @@ static void softmax_htp_f32(int nth, int ith, struct softmax_th_ctx * softmax_ct
                 if (1 == opt_path) {
                     hvx_fast_softmax_f32((const uint8_t *) wp0, (uint8_t *) dp, (uint8_t *) wp1, ne00);
                 } else {
-                    float max = hvx_self_max_f32((const uint8_t *) wp0, ne00);
+                    float max = hvx_reduce_max_f32((const uint8_t *) wp0, ne00);
                     float sum = hvx_softmax_f32((const uint8_t *) wp0, (uint8_t *) wp2, (uint8_t *) wp1, ne00, max);
                     sum       = sum > 0.0 ? (1.0 / sum) : 1;
                     hvx_scale_f32((uint8_t *) dp, (const uint8_t *) wp2, ne00, sum);
