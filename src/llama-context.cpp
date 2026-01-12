@@ -340,7 +340,7 @@ llama_context::llama_context(
             LLAMA_LOG_INFO("%s: pipeline parallelism enabled (n_copies=%d)\n", __func__, ggml_backend_sched_get_n_copies(sched.get()));
         }
 
-        reserve();
+        sched_reserve();
 
         if (!cparams.flash_attn) {
             if (ggml_is_quantized(params.type_v)) {
@@ -380,7 +380,13 @@ llama_context::~llama_context() {
     ggml_opt_free(opt_ctx);
 }
 
-void llama_context::reserve() {
+void llama_context::sched_reserve() {
+    if (!sched_need_reserve) {
+        return;
+    }
+
+    sched_need_reserve = false;
+
     LLAMA_LOG_INFO("%s: reserving ...\n", __func__);
 
     synchronize();
@@ -408,10 +414,8 @@ void llama_context::reserve() {
         }
     }
 
-    cross.v_embd.clear();
-
     // avoid reserving graphs with zero outputs - assume one output per sequence
-    n_outputs = n_seqs;
+    const int n_outputs = n_seqs;
 
     LLAMA_LOG_DEBUG("%s: worst-case: n_tokens = %d, n_seqs = %d, n_outputs = %d\n", __func__, n_tokens, n_seqs, n_outputs);
 
@@ -983,7 +987,7 @@ void llama_context::set_embeddings(bool value) {
     cparams.embeddings = value;
 
     // TODO: not sure yet if we want to reserve here
-    //reserve();
+    //sched_need_reserve = true;
 }
 
 void llama_context::set_causal_attn(bool value) {
@@ -995,17 +999,27 @@ void llama_context::set_causal_attn(bool value) {
 
     cparams.causal_attn = value;
 
-    reserve();
+    sched_need_reserve = true;
 }
 
 void llama_context::set_warmup(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
+    if (cparams.warmup == value) {
+        return;
+    }
+
     cparams.warmup = value;
+
+    sched_need_reserve = true;
 }
 
 bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
-    LLAMA_LOG_ERROR("%s: seq_id = %d, sampler = %p\n", __func__, (int) seq_id, (void *) sampler);
+    if (!sampler && sampling.samplers.count(seq_id) == 0) {
+        return true;
+    }
+
+    LLAMA_LOG_DEBUG("%s: seq_id = %d, sampler = %p\n", __func__, (int) seq_id, (void *) sampler);
 
     const bool can_offload =
         sampler &&
@@ -1024,11 +1038,17 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
 
         sampling.samplers[seq_id] = sampler;
 
+        sched_need_reserve = true;
+
         return true;
     }
 
     if (sampler && !can_offload) {
         LLAMA_LOG_WARN("%s: sampler '%s' for seq_id = %d, cannot be offloaded to the backend\n", __func__, llama_sampler_name(sampler), seq_id);
+
+        if (sampling.samplers.count(seq_id) > 0) {
+            sched_need_reserve = true;
+        }
 
         sampling.samplers.erase(seq_id);
 
@@ -1053,7 +1073,7 @@ void llama_context::set_adapter_lora(
 
     loras[adapter] = scale;
 
-    reserve();
+    sched_need_reserve = true;
 }
 
 bool llama_context::rm_adapter_lora(
@@ -1064,7 +1084,7 @@ bool llama_context::rm_adapter_lora(
     if (it != loras.end()) {
         loras.erase(it);
 
-        reserve();
+        sched_need_reserve = true;
 
         return true;
     }
@@ -1081,7 +1101,7 @@ void llama_context::clear_adapter_lora() {
 
     loras.clear();
 
-    reserve();
+    sched_need_reserve = true;
 }
 
 bool llama_context::apply_adapter_cvec(
@@ -1196,6 +1216,8 @@ int llama_context::encode(const llama_batch & batch_inp) {
     // TODO: this clear of the buffer can easily be forgotten - need something better
     embd_seq.clear();
 
+    sched_reserve();
+
     n_queued_tokens += n_tokens;
 
     // reserve output buffer
@@ -1235,7 +1257,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
     auto * t_embd = res->get_embd_pooled() ? res->get_embd_pooled() : res->get_embd();
 
     // extract logits
-   if (logits && t_logits) {
+    if (logits && t_logits) {
         ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
         GGML_ASSERT(backend_res != nullptr);
         GGML_ASSERT(logits != nullptr);
@@ -1508,6 +1530,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // TODO: this clear of the buffer can easily be forgotten - need something better
     embd_seq.clear();
     output_swaps.clear();
+
+    sched_reserve();
 
     bool did_optimize = false;
 

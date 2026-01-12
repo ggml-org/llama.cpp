@@ -1182,7 +1182,7 @@ private:
         SLT_DBG(slot, "launching slot : %s\n", safe_json_to_str(slot.to_json()).c_str());
 
         // initialize samplers
-        {
+        if (task.uses_sampling()) {
             slot.smpl.reset(common_sampler_init(model, task.params.sampling));
 
             if (slot.smpl == nullptr) {
@@ -1211,6 +1211,8 @@ private:
             }
 
             SLT_INF(slot, "sampler chain: %s\n", common_sampler_print(slot.smpl.get()).c_str());
+        } else {
+            slot.smpl.reset();
         }
 
         // initialize draft batch
@@ -2593,6 +2595,12 @@ private:
             llama_set_embeddings(ctx, slot_batched->need_embd());
         }
 
+        for (auto & slot : slots) {
+            if (!slot.is_processing() || !slot.smpl) {
+                llama_set_sampler(ctx, slot.id, nullptr);
+            }
+        }
+
         if (batch.n_tokens == 0) {
             SRV_WRN("%s", "no tokens to decode\n");
         }
@@ -2726,6 +2734,8 @@ private:
                         slot.i_batch = -1;
                         continue; // continue loop of slots
                     }
+
+                    GGML_ASSERT(slot.task->uses_sampling());
 
                     // prompt evaluated for next-token prediction
                     slot.state = SLOT_STATE_GENERATING;

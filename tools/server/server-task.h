@@ -156,6 +156,11 @@ struct server_task {
         return tokens.size();
     }
 
+    bool uses_sampling() const {
+        return type != SERVER_TASK_TYPE_EMBEDDING &&
+               type != SERVER_TASK_TYPE_RERANK;
+    }
+
     static task_params params_from_json_cmpl(
         const llama_vocab * vocab,
         const common_params & params_base,
