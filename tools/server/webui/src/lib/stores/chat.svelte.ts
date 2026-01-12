@@ -204,6 +204,10 @@ class ChatStore {
 		return this.addFilesHandler;
 	}
 
+	clearPendingEditMessageId(): void {
+		this.pendingEditMessageId = null;
+	}
+
 	getAllLoadingChats(): string[] {
 		return Array.from(this.chatLoadingStates.keys());
 	}
@@ -333,8 +337,8 @@ class ChatStore {
 
 export const chatStore = new ChatStore();
 
+// State access functions (getters only - use chatStore.method() for actions)
 export const activeProcessingState = () => chatStore.activeProcessingState;
-export const clearEditMode = () => chatStore.clearEditMode();
 export const currentResponse = () => chatStore.currentResponse;
 export const errorDialog = () => chatStore.errorDialogState;
 export const getAddFilesHandler = () => chatStore.getAddFilesHandler();
@@ -345,9 +349,4 @@ export const isChatLoading = (convId: string) => chatStore.isChatLoadingPublic(c
 export const isChatStreaming = () => chatStore.isStreaming();
 export const isEditing = () => chatStore.isEditing();
 export const isLoading = () => chatStore.isLoading;
-export const setEditModeActive = (handler: (files: File[]) => void) =>
-	chatStore.setEditModeActive(handler);
 export const pendingEditMessageId = () => chatStore.pendingEditMessageId;
-export const clearPendingEditMessageId = () => (chatStore.pendingEditMessageId = null);
-export const removeSystemPromptPlaceholder = (messageId: string) =>
-	chatStore.removeSystemPromptPlaceholder(messageId);

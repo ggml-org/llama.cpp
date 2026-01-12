@@ -1,12 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { base } from '$app/paths';
-	import {
-		chatStore,
-		pendingEditMessageId,
-		clearPendingEditMessageId,
-		removeSystemPromptPlaceholder
-	} from '$lib/stores/chat.svelte';
+	import { chatStore, pendingEditMessageId } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { DatabaseService } from '$lib/services';
 	import { config } from '$lib/stores/settings.svelte';
@@ -86,7 +81,7 @@
 
 		if (pendingId && pendingId === message.id && !isEditing) {
 			handleEdit();
-			clearPendingEditMessageId();
+			chatStore.clearPendingEditMessageId();
 		}
 	});
 
@@ -95,7 +90,7 @@
 
 		// If canceling a new system message with placeholder content, remove it without deleting children
 		if (message.role === MessageRole.SYSTEM) {
-			const conversationDeleted = await removeSystemPromptPlaceholder(message.id);
+			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 
 			if (conversationDeleted) {
 				goto(`${base}/`);
@@ -187,7 +182,7 @@
 
 			// If content is empty, remove without deleting children
 			if (!newContent) {
-				const conversationDeleted = await removeSystemPromptPlaceholder(message.id);
+				const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
 				isEditing = false;
 				if (conversationDeleted) {
 					goto(`${base}/`);

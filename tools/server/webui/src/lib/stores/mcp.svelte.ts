@@ -20,16 +20,37 @@
  */
 
 import { browser } from '$app/environment';
-import { mcpClient, type HealthCheckState, type HealthCheckParams } from '$lib/clients';
-import type {
-	OpenAIToolDefinition,
-	ServerStatus,
-	ToolExecutionResult,
-	MCPToolCall
-} from '$lib/types/mcp';
+import { mcpClient, type HealthCheckState } from '$lib/clients';
+import type { MCPServerSettingsEntry, McpServerUsageStats } from '$lib/types/mcp';
 import type { McpServerOverride } from '$lib/types/database';
-import { buildMcpClientConfig } from '$lib/utils/mcp';
-import { config } from '$lib/stores/settings.svelte';
+import { buildMcpClientConfig, parseMcpServerSettings } from '$lib/utils/mcp';
+import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
+
+/**
+ * Parses MCP server usage stats from settings.
+ * @param rawStats - The raw stats to parse
+ * @returns MCP server usage stats or empty object if invalid
+ */
+function parseMcpServerUsageStats(rawStats: unknown): McpServerUsageStats {
+	if (!rawStats) return {};
+
+	if (typeof rawStats === 'string') {
+		const trimmed = rawStats.trim();
+		if (!trimmed) return {};
+
+		try {
+			const parsed = JSON.parse(trimmed);
+			if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+				return parsed as McpServerUsageStats;
+			}
+		} catch {
+			console.warn('[MCP] Failed to parse mcpServerUsageStats JSON, ignoring value');
+		}
+	}
+
+	return {};
+}
 
 export type { HealthCheckState };
 
@@ -59,6 +80,10 @@ class MCPStore {
 
 			mcpClient.setHealthCheckCallback((serverId, state) => {
 				this._healthChecks = { ...this._healthChecks, [serverId]: state };
+			});
+
+			mcpClient.setServerUsageCallback((serverId) => {
+				this.incrementServerUsage(serverId);
 			});
 		}
 	}
@@ -105,67 +130,6 @@ class MCPStore {
 	}
 
 	/**
-	 * Ensure MCP is initialized with current config.
-	 * @param perChatOverrides - Optional per-chat MCP server overrides
-	 */
-	async ensureInitialized(perChatOverrides?: McpServerOverride[]): Promise<boolean> {
-		return mcpClient.ensureInitialized(perChatOverrides);
-	}
-
-	/**
-	 * Shutdown MCP connections and clear state
-	 */
-	async shutdown(): Promise<void> {
-		return mcpClient.shutdown();
-	}
-
-	/**
-	 * Get tool definitions for LLM (OpenAI function calling format)
-	 */
-	getToolDefinitions(): OpenAIToolDefinition[] {
-		return mcpClient.getToolDefinitionsForLLM();
-	}
-
-	/**
-	 * Get status of all servers
-	 */
-	getServersStatus(): ServerStatus[] {
-		return mcpClient.getServersStatus();
-	}
-
-	/**
-	 * Execute a tool call via MCP.
-	 */
-	async executeTool(toolCall: MCPToolCall, signal?: AbortSignal): Promise<ToolExecutionResult> {
-		return mcpClient.executeTool(toolCall, signal);
-	}
-
-	/**
-	 * Execute a tool by name with arguments.
-	 */
-	async executeToolByName(
-		toolName: string,
-		args: Record<string, unknown>,
-		signal?: AbortSignal
-	): Promise<ToolExecutionResult> {
-		return mcpClient.executeToolByName(toolName, args, signal);
-	}
-
-	/**
-	 * Check if a tool exists
-	 */
-	hasTool(toolName: string): boolean {
-		return mcpClient.hasTool(toolName);
-	}
-
-	/**
-	 * Get which server provides a specific tool
-	 */
-	getToolServer(toolName: string): string | undefined {
-		return mcpClient.getToolServer(toolName);
-	}
-
-	/**
 	 * Get health check state for a specific server
 	 */
 	getHealthCheckState(serverId: string): HealthCheckState {
@@ -177,13 +141,6 @@ class MCPStore {
 	 */
 	hasHealthCheck(serverId: string): boolean {
 		return serverId in this._healthChecks && this._healthChecks[serverId].status !== 'idle';
-	}
-
-	/**
-	 * Run health check for a specific server
-	 */
-	async runHealthCheck(server: HealthCheckParams): Promise<void> {
-		return mcpClient.runHealthCheck(server);
 	}
 
 	/**
@@ -207,6 +164,107 @@ class MCPStore {
 	 */
 	clearError(): void {
 		this._error = null;
+	}
+
+	/**
+	 *
+	 * Server Management (CRUD)
+	 *
+	 */
+
+	/**
+	 * Get all configured MCP servers from settings
+	 */
+	getServers(): MCPServerSettingsEntry[] {
+		return parseMcpServerSettings(config().mcpServers);
+	}
+
+	/**
+	 * Add a new MCP server
+	 */
+	addServer(
+		serverData: Omit<MCPServerSettingsEntry, 'id' | 'requestTimeoutSeconds'> & { id?: string }
+	): void {
+		const servers = this.getServers();
+		const newServer: MCPServerSettingsEntry = {
+			id: serverData.id || (crypto.randomUUID ? crypto.randomUUID() : `server-${Date.now()}`),
+			enabled: serverData.enabled,
+			url: serverData.url.trim(),
+			name: serverData.name,
+			headers: serverData.headers?.trim() || undefined,
+			requestTimeoutSeconds: DEFAULT_MCP_CONFIG.requestTimeoutSeconds
+		};
+		settingsStore.updateConfig('mcpServers', JSON.stringify([...servers, newServer]));
+	}
+
+	/**
+	 * Update an existing MCP server
+	 */
+	updateServer(id: string, updates: Partial<MCPServerSettingsEntry>): void {
+		const servers = this.getServers();
+		const nextServers = servers.map((server) =>
+			server.id === id ? { ...server, ...updates } : server
+		);
+		settingsStore.updateConfig('mcpServers', JSON.stringify(nextServers));
+	}
+
+	/**
+	 * Remove an MCP server by ID
+	 */
+	removeServer(id: string): void {
+		const servers = this.getServers();
+		settingsStore.updateConfig('mcpServers', JSON.stringify(servers.filter((s) => s.id !== id)));
+		this.clearHealthCheck(id);
+	}
+
+	/**
+	 * Check if a server is enabled considering per-chat overrides
+	 */
+	isServerEnabled(server: MCPServerSettingsEntry, perChatOverrides?: McpServerOverride[]): boolean {
+		if (perChatOverrides) {
+			const override = perChatOverrides.find((o) => o.serverId === server.id);
+			if (override !== undefined) {
+				return override.enabled;
+			}
+		}
+		return server.enabled;
+	}
+
+	/**
+	 * Check if there are any enabled MCP servers
+	 */
+	hasEnabledServers(perChatOverrides?: McpServerOverride[]): boolean {
+		return Boolean(buildMcpClientConfig(config(), perChatOverrides));
+	}
+
+	/**
+	 *
+	 * Server Usage Stats
+	 *
+	 */
+
+	/**
+	 * Get parsed usage stats for all servers
+	 */
+	getUsageStats(): McpServerUsageStats {
+		return parseMcpServerUsageStats(config().mcpServerUsageStats);
+	}
+
+	/**
+	 * Get usage count for a specific server
+	 */
+	getServerUsageCount(serverId: string): number {
+		const stats = this.getUsageStats();
+		return stats[serverId] || 0;
+	}
+
+	/**
+	 * Increment usage count for a server
+	 */
+	incrementServerUsage(serverId: string): void {
+		const stats = this.getUsageStats();
+		stats[serverId] = (stats[serverId] || 0) + 1;
+		settingsStore.updateConfig('mcpServerUsageStats', JSON.stringify(stats));
 	}
 }
 
@@ -244,6 +302,7 @@ export function mcpToolCount() {
 	return mcpStore.toolCount;
 }
 
+// State access functions (getters only - use mcpStore.method() for actions)
 export function mcpGetHealthCheckState(serverId: string) {
 	return mcpStore.getHealthCheckState(serverId);
 }
@@ -252,10 +311,25 @@ export function mcpHasHealthCheck(serverId: string) {
 	return mcpStore.hasHealthCheck(serverId);
 }
 
-export async function mcpRunHealthCheck(server: HealthCheckParams) {
-	return mcpStore.runHealthCheck(server);
+export function mcpGetServers() {
+	return mcpStore.getServers();
 }
 
-export function mcpClearHealthCheck(serverId: string) {
-	return mcpStore.clearHealthCheck(serverId);
+export function mcpIsServerEnabled(
+	server: MCPServerSettingsEntry,
+	perChatOverrides?: McpServerOverride[]
+) {
+	return mcpStore.isServerEnabled(server, perChatOverrides);
+}
+
+export function mcpHasEnabledServers(perChatOverrides?: McpServerOverride[]) {
+	return mcpStore.hasEnabledServers(perChatOverrides);
+}
+
+export function mcpGetUsageStats() {
+	return mcpStore.getUsageStats();
+}
+
+export function mcpGetServerUsageCount(serverId: string) {
+	return mcpStore.getServerUsageCount(serverId);
 }

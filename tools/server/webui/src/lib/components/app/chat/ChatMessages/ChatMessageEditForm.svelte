@@ -8,7 +8,7 @@
 	import { AttachmentType, FileTypeCategory, MimeTypeText } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
-	import { setEditModeActive, clearEditMode } from '$lib/stores/chat.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
@@ -266,10 +266,10 @@
 	});
 
 	$effect(() => {
-		setEditModeActive(processNewFiles);
+		chatStore.setEditModeActive(processNewFiles);
 
 		return () => {
-			clearEditMode();
+			chatStore.clearEditMode();
 		};
 	});
 </script>
