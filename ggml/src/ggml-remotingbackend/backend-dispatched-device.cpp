@@ -1,12 +1,14 @@
-#include <cstdint>
-#include "backend-internal.h"
 #include "backend-dispatched.h"
-
-#include "ggml-impl.h"
+#include "backend-internal.h"
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
+#include "ggml-impl.h"
 
-uint32_t backend_device_get_device_count(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+#include <cstdint>
+
+uint32_t backend_device_get_device_count(struct apir_encoder *       enc,
+                                         struct apir_decoder *       dec,
+                                         struct virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(ctx);
     UNUSED(dec);
@@ -17,7 +19,9 @@ uint32_t backend_device_get_device_count(struct apir_encoder *enc, struct apir_d
     return 0;
 }
 
-uint32_t backend_device_get_count(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+uint32_t backend_device_get_count(struct apir_encoder *       enc,
+                                  struct apir_decoder *       dec,
+                                  struct virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(ctx);
     UNUSED(dec);
@@ -28,11 +32,13 @@ uint32_t backend_device_get_count(struct apir_encoder *enc, struct apir_decoder 
     return 0;
 }
 
-uint32_t backend_device_get_name(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+uint32_t backend_device_get_name(struct apir_encoder *       enc,
+                                 struct apir_decoder *       dec,
+                                 struct virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(dec);
 
-    const char *string = dev->iface.get_name(dev);
+    const char * string = dev->iface.get_name(dev);
 
     const size_t string_size = strlen(string) + 1;
     apir_encode_array_size(enc, string_size);
@@ -41,12 +47,13 @@ uint32_t backend_device_get_name(struct apir_encoder *enc, struct apir_decoder *
     return 0;
 }
 
-uint32_t
-backend_device_get_description(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+uint32_t backend_device_get_description(struct apir_encoder *       enc,
+                                        struct apir_decoder *       dec,
+                                        struct virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(dec);
 
-    const char *string = dev->iface.get_description(dev);
+    const char * string = dev->iface.get_description(dev);
 
     const size_t string_size = strlen(string) + 1;
     apir_encode_array_size(enc, string_size);
@@ -55,8 +62,9 @@ backend_device_get_description(struct apir_encoder *enc, struct apir_decoder *de
     return 0;
 }
 
-uint32_t
-backend_device_get_type(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+uint32_t backend_device_get_type(struct apir_encoder *       enc,
+                                 struct apir_decoder *       dec,
+                                 struct virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(dec);
 
@@ -66,8 +74,9 @@ backend_device_get_type(struct apir_encoder *enc, struct apir_decoder *dec, stru
     return 0;
 }
 
-uint32_t
-backend_device_get_memory(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+uint32_t backend_device_get_memory(struct apir_encoder *       enc,
+                                   struct apir_decoder *       dec,
+                                   struct virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(dec);
 
@@ -80,11 +89,12 @@ backend_device_get_memory(struct apir_encoder *enc, struct apir_decoder *dec, st
     return 0;
 }
 
-uint32_t
-backend_device_supports_op(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+uint32_t backend_device_supports_op(struct apir_encoder *       enc,
+                                    struct apir_decoder *       dec,
+                                    struct virgl_apir_context * ctx) {
     UNUSED(ctx);
 
-    const ggml_tensor *op = apir_decode_ggml_tensor_inplace(dec);
+    const ggml_tensor * op = apir_decode_ggml_tensor_inplace(dec);
 
     bool supports_op = dev->iface.supports_op(dev, op);
 
@@ -93,8 +103,9 @@ backend_device_supports_op(struct apir_encoder *enc, struct apir_decoder *dec, s
     return 0;
 }
 
-uint32_t
-backend_device_get_buffer_type(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+uint32_t backend_device_get_buffer_type(struct apir_encoder *       enc,
+                                        struct apir_decoder *       dec,
+                                        struct virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(dec);
 
@@ -105,8 +116,9 @@ backend_device_get_buffer_type(struct apir_encoder *enc, struct apir_decoder *de
     return 0;
 }
 
-uint32_t
-backend_device_get_props(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+uint32_t backend_device_get_props(struct apir_encoder *       enc,
+                                  struct apir_decoder *       dec,
+                                  struct virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(dec);
 
@@ -121,15 +133,16 @@ backend_device_get_props(struct apir_encoder *enc, struct apir_decoder *dec, str
     return 0;
 }
 
-uint32_t
-backend_device_buffer_from_ptr(struct apir_encoder *enc, struct apir_decoder *dec, struct virgl_apir_context *ctx) {
+uint32_t backend_device_buffer_from_ptr(struct apir_encoder *       enc,
+                                        struct apir_decoder *       dec,
+                                        struct virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(dec);
 
     uint32_t shmem_res_id;
     apir_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);
 
-    void *shmem_ptr = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
+    void * shmem_ptr = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
     if (!shmem_ptr) {
         FATAL("Couldn't get the shmem addr from virgl :/");
     }
