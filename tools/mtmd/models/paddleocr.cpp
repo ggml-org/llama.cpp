@@ -1,23 +1,23 @@
 #include "models.h"
 
 ggml_cgraph * clip_graph_paddleocr::build() {
-    // 2D input positions
-    ggml_tensor * pos_h = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
-    ggml_set_name(pos_h, "pos_h");
-    ggml_set_input(pos_h);
+    const int n_pos            = n_patches;
+    const int num_position_ids = n_pos * 4; // m-rope requires 4 dim per position
 
-    ggml_tensor * pos_w = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_patches);
-    ggml_set_name(pos_w, "pos_w");
-    ggml_set_input(pos_w);
+    int mrope_sections[4] = {d_head/4, d_head/4, d_head/4, d_head/4};
 
-    ggml_tensor * learned_pos_embd = resize_position_embeddings();
+    ggml_tensor * positions = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, num_position_ids);
+    ggml_set_name(positions, "positions");
+    ggml_set_input(positions);
 
-    // build ViT with 2D position embeddings
     auto add_pos = [&](ggml_tensor * cur, const clip_layer &) {
-        // first half is X axis and second half is Y axis
-        return build_rope_2d(ctx0, cur, pos_w, pos_h, hparams.rope_theta, false);
+        return ggml_rope_multi(
+                    ctx0, cur, positions, nullptr,
+                    d_head/2, mrope_sections, GGML_ROPE_TYPE_VISION,
+                    32768, 10000, 1, 0, 1, 32, 1);
     };
 
+    ggml_tensor * learned_pos_embd = resize_position_embeddings();
     ggml_tensor * inp = build_inp();
     ggml_tensor * cur = build_vit(
                             inp, n_patches,
@@ -29,28 +29,16 @@ ggml_cgraph * clip_graph_paddleocr::build() {
     cb(cur, "vit_out", -1);
 
     {
-        // mlp_AR
-        float proj_norm_eps = 1e-5; // PaddleOCR uses hard-coded value eps=1e-5 for Projector
+        // mlp_AR paddleocr projector
+        float proj_norm_eps = 1e-5;
         cur = build_norm(cur,
                     model.mm_input_norm_w, model.mm_input_norm_b,
                     NORM_TYPE_NORMAL, proj_norm_eps, -1);
-        //cur = build_patch_merge_permute(cur, hparams.proj_scale_factor);
 
-        // stack and padding
-        int64_t stride          = hparams.proj_scale_factor * hparams.proj_scale_factor;
-        int64_t n_embd          = cur->ne[0];
-        int64_t n_tokens        = cur->ne[1];
-        int64_t n_tokens_padded = CLIP_ALIGN(n_tokens, stride);
-        int64_t n_pad           = n_tokens_padded - n_tokens;
-        if (n_pad > 0) {
-            cur = ggml_view_1d(ctx0, cur, ggml_nelements(cur), 0);
-            cur = ggml_pad(ctx0, cur, n_pad * n_embd, 0, 0, 0);
-        }
-        cur = ggml_view_2d(ctx0, cur,
-            n_embd * stride,
-            n_tokens_padded / stride,
-            ggml_row_size(cur->type, n_embd * stride), 0);
-        cb(cur, "after_stacked", -1);
+        const int scale_factor = model.hparams.n_merge;
+        int width  = img.nx / patch_size;
+        int height = img.ny / patch_size;
+        cur = ggml_reshape_3d(ctx0, cur, n_embd * scale_factor * scale_factor, width / scale_factor * height / scale_factor, 1);
 
         cur = build_ffn(cur,
                     model.mm_1_w, model.mm_1_b,

@@ -60,6 +60,7 @@ add_library(llama
             models/dream.cpp
             models/ernie4-5-moe.cpp
             models/ernie4-5.cpp
+            models/paddleocr.cpp
             models/exaone.cpp
             models/exaone4.cpp
             models/falcon-h1.cpp

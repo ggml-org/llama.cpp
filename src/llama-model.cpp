@@ -2056,7 +2056,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
+        case LLM_ARCH_PADDLEOCR:
             {
+                // paddleocr need mrope_section
+                ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
+
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 if (arch == LLM_ARCH_ERNIE4_5_MOE) {
                     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
@@ -5964,6 +5968,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 } break;
             case LLM_ARCH_ERNIE4_5:
             case LLM_ARCH_ERNIE4_5_MOE:
+            case LLM_ARCH_PADDLEOCR:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -7574,6 +7579,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_ernie4_5_moe>(*this, params);
             } break;
+        case LLM_ARCH_PADDLEOCR:
+            {
+                llm = std::make_unique<llm_build_paddleocr>(*this, params);
+            } break;
         case LLM_ARCH_HUNYUAN_MOE:
             {
                 llm = std::make_unique<llm_build_hunyuan_moe>(*this, params);
@@ -7866,6 +7875,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
+        case LLM_ARCH_PADDLEOCR:
             return LLAMA_ROPE_TYPE_MROPE;
         case LLM_ARCH_QWEN3VL:
         case LLM_ARCH_QWEN3VLMOE:

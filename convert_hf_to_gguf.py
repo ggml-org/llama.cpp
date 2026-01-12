@@ -3602,12 +3602,19 @@ class LLaDAModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM", "PaddleOCRVLForConditionalGeneration")
+@ModelBase.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
 class Ernie4_5Model(TextModel):
     model_arch = gguf.MODEL_ARCH.ERNIE4_5
 
     def set_vocab(self):
         self._set_vocab_sentencepiece()
+
+        tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
+        if tokenizer_config_file.is_file():
+            with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+                tokenizer_config_json = json.load(f)
+                if "add_prefix_space" in tokenizer_config_json:
+                    self.gguf_writer.add_add_space_prefix(tokenizer_config_json["add_prefix_space"])
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -3739,6 +3746,12 @@ class Ernie4_5MoeModel(Ernie4_5Model):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
+
+@ModelBase.register("PaddleOCRVLForConditionalGeneration")
+class PaddleOCRModel(Ernie4_5Model):
+    model_arch = gguf.MODEL_ARCH.PADDLEOCR
+
+
 @ModelBase.register("PaddleOCRVisionModel")
 class PaddleOCRVisionModel(MmprojModel):
     # PaddleOCR-VL uses a modified version of Siglip
@@ -3775,6 +3788,7 @@ class PaddleOCRVisionModel(MmprojModel):
             else:
                 return [(self.map_tensor_name(name), data_torch)]
         return [] # skip other tensors
+
 
 @ModelBase.register(
     "Qwen2VLModel",
