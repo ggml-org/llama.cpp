@@ -25,6 +25,8 @@ define quantize_model
 	@echo "Export the quantized model path to $(2) variable in your environment"
 endef
 
+DEVICE ?= auto
+
 ###
 ### Casual Model targets/recipes
 ###
@@ -53,13 +55,13 @@ causal-convert-mm-model:
 
 causal-run-original-model:
 	$(call validate_model_path,causal-run-original-model)
-	@MODEL_PATH="$(MODEL_PATH)" ./scripts/causal/run-org-model.py
+	@MODEL_PATH="$(MODEL_PATH)" ./scripts/causal/run-org-model.py --device "$(DEVICE)"
 
 causal-run-converted-model:
 	@CONVERTED_MODEL="$(CONVERTED_MODEL)" ./scripts/causal/run-converted-model.sh
 
 causal-verify-logits: causal-run-original-model causal-run-converted-model
-	@./scripts/causal/compare-logits.py
+	@MODEL_PATH="$(MODEL_PATH)" ./scripts/causal/compare-logits.py
 	@MODEL_PATH="$(MODEL_PATH)" ./scripts/utils/check-nmse.py -m ${MODEL_PATH}
 
 causal-run-original-embeddings:
@@ -136,16 +138,13 @@ embedding-run-original-model-st: embedding-run-original-model
 embedding-run-converted-model:
 	@./scripts/embedding/run-converted-model.sh $(CONVERTED_EMBEDDING_MODEL) \
 	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)") \
-	$(if $(USE_POOLING),--pooling)
-
-embedding-run-converted-model-st: USE_POOLING=1
-embedding-run-converted-model-st: embedding-run-converted-model
+	$(if $(EMBD_NORMALIZE),--embd-normalize "$(EMBD_NORMALIZE)")
 
 embedding-verify-logits: embedding-run-original-model embedding-run-converted-model
 	@./scripts/embedding/compare-embeddings-logits.sh \
 	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
 
-embedding-verify-logits-st: embedding-run-original-model-st embedding-run-converted-model-st
+embedding-verify-logits-st: embedding-run-original-model-st embedding-run-converted-model
 	@./scripts/embedding/compare-embeddings-logits.sh \
 	$(if $(PROMPTS_FILE),--prompts-file "$(PROMPTS_FILE)")
 

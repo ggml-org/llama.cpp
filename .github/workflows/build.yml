@@ -70,6 +70,7 @@ jobs:
         with:
           key: macOS-latest-cmake-arm64
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -106,6 +107,7 @@ jobs:
         with:
           key: macOS-latest-cmake-x64
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -142,6 +144,7 @@ jobs:
         with:
           key: macOS-latest-cmake-arm64-webgpu
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dawn Dependency
         id: dawn-depends
@@ -149,13 +152,13 @@ jobs:
           DAWN_VERSION="v2.0.0"
           DAWN_OWNER="reeselevine"
           DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release.zip"
-          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release"
+          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
           curl -L -o artifact.zip \
-            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
           mkdir dawn
           unzip artifact.zip
-          tar -xvf Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release.tar.gz -C dawn --strip-components=1
+          tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
 
       - name: Build
         id: cmake_build
@@ -195,6 +198,7 @@ jobs:
         with:
           key: ubuntu-cpu-cmake-${{ matrix.build }}
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build Dependencies
         id: build_depends
@@ -276,6 +280,7 @@ jobs:
         with:
           key: ubuntu-latest-cmake-sanitizer-${{ matrix.sanitizer }}
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -396,6 +401,7 @@ jobs:
         with:
           key: ubuntu-24-cmake-vulkan-deb
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -431,6 +437,7 @@ jobs:
         with:
           key: ubuntu-24-cmake-vulkan
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -490,6 +497,7 @@ jobs:
         with:
           key: ubuntu-24-cmake-webgpu
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -524,13 +532,13 @@ jobs:
           DAWN_VERSION="v2.0.0"
           DAWN_OWNER="reeselevine"
           DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-ubuntu-latest-Release.zip"
-          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-ubuntu-latest-Release"
+          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
           curl -L -o artifact.zip \
-            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
           mkdir dawn
           unzip artifact.zip
-          tar -xvf Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-ubuntu-latest-Release.tar.gz -C dawn --strip-components=1
+          tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
 
       - name: Build
         id: cmake_build
@@ -562,6 +570,7 @@ jobs:
         with:
           key: ubuntu-latest-wasm-webgpu
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Install Emscripten
         run: |
@@ -609,6 +618,7 @@ jobs:
         with:
           key: ubuntu-22-cmake-hip
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build with native CMake HIP support
         id: cmake_build
@@ -641,6 +651,7 @@ jobs:
         with:
           key: ubuntu-22-cmake-musa
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build with native CMake MUSA support
         id: cmake_build
@@ -688,6 +699,7 @@ jobs:
         with:
           key: ubuntu-22-cmake-sycl
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -738,6 +750,7 @@ jobs:
         with:
           key: ubuntu-22-cmake-sycl-fp16
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -771,6 +784,7 @@ jobs:
         with:
           key: macOS-latest-cmake-ios
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -802,6 +816,7 @@ jobs:
         with:
           key: macOS-latest-cmake-tvos
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -863,6 +878,7 @@ jobs:
         with:
           key: macOS-latest-swift
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Download xcframework artifact
         uses: actions/download-artifact@v4
@@ -905,6 +921,7 @@ jobs:
           key: windows-msys2
           variant: ccache
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Setup ${{ matrix.sys }}
         uses: msys2/setup-msys2@v2
@@ -973,6 +990,7 @@ jobs:
           key: windows-latest-cmake-${{ matrix.build }}
           variant: ccache
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Download OpenBLAS
         id: get_openblas
@@ -1077,8 +1095,10 @@ jobs:
           with:
             key: ubuntu-latest-cmake-cuda
             evict-old-files: 1d
+            save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
         - name: Build with CMake
+          # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
           run: |
             cmake -S . -B build -G Ninja \
               -DLLAMA_CURL=OFF \
@@ -1088,7 +1108,8 @@ jobs:
               -DCMAKE_CUDA_ARCHITECTURES=89-real \
               -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
               -DGGML_NATIVE=OFF \
-              -DGGML_CUDA=ON
+              -DGGML_CUDA=ON \
+              -DGGML_CUDA_CUB_3DOT2=ON
             cmake --build build
 
   windows-2022-cmake-cuda:
@@ -1109,6 +1130,7 @@ jobs:
           key: windows-cuda-${{ matrix.cuda }}
           variant: ccache
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Install Cuda Toolkit
         uses: ./.github/actions/windows-setup-cuda
@@ -1123,6 +1145,7 @@ jobs:
       - name: Build
         id: cmake_build
         shell: cmd
+        # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           cmake -S . -B build -G "Ninja Multi-Config" ^
@@ -1133,7 +1156,8 @@ jobs:
             -DGGML_BACKEND_DL=ON ^
             -DGGML_CPU_ALL_VARIANTS=ON ^
             -DGGML_CUDA=ON ^
-            -DGGML_RPC=ON
+            -DGGML_RPC=ON ^
+            -DGGML_CUDA_CUB_3DOT2=ON
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS% -t ggml
           cmake --build build --config Release
@@ -1160,6 +1184,7 @@ jobs:
           key: windows-latest-cmake-sycl
           variant: ccache
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Install
         run:  |
@@ -1221,6 +1246,7 @@ jobs:
         with:
           key: ${{ github.job }}
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -1392,7 +1418,6 @@ jobs:
           echo "FIXME: test on devices"
 
   openEuler-latest-cmake-cann:
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'Ascend NPU') }}
     defaults:
       run:
         shell: bash -el {0}
@@ -1466,6 +1491,7 @@ jobs:
         with:
           key: ggml-ci-x64-cpu-low-perf
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -1491,6 +1517,7 @@ jobs:
         with:
           key: ggml-ci-arm64-cpu-low-perf
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -1516,6 +1543,7 @@ jobs:
         with:
           key: ggml-ci-x64-cpu-high-perf
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -1541,6 +1569,7 @@ jobs:
         with:
           key: ggml-ci-arm64-cpu-high-perf
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -1566,6 +1595,7 @@ jobs:
         with:
           key: ggml-ci-arm64-cpu-high-perf-sve
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -1674,6 +1704,34 @@ jobs:
         run: |
           GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
+  ggml-ci-mac-webgpu:
+    runs-on: [self-hosted, macOS, ARM64]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          DAWN_VERSION="v2.0.0"
+          DAWN_OWNER="reeselevine"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release"
+          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
+          curl -L -o artifact.zip \
+            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
+          mkdir dawn
+          unzip artifact.zip
+          tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_WEBGPU=1 GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
+            bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
   ggml-ci-mac-vulkan:
     runs-on: [self-hosted, macOS, ARM64]
 
@@ -1701,6 +1759,7 @@ jobs:
          with:
            key: ggml-ci-arm64-cpu-kleidiai
            evict-old-files: 1d
+           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
        - name: Dependencies
          id: depends
@@ -1722,7 +1781,7 @@ jobs:
           sudo apt-get update
 
           # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache git-lfs
 
           # Set gcc-14 and g++-14 as the default compilers
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
@@ -1733,6 +1792,8 @@ jobs:
           # Install Rust stable version
           rustup install stable
           rustup default stable
+
+          git lfs install
 
       - name: Clone
         id: checkout
@@ -1819,7 +1880,7 @@ jobs:
           sudo apt-get update
 
           # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential wget ccache
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential wget ccache git-lfs
 
           # Set gcc-14 and g++-14 as the default compilers
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
@@ -1830,6 +1891,8 @@ jobs:
           # Install Rust stable version
           rustup install stable
           rustup default stable
+
+          git lfs install
 
       - name: GCC version check
         run: |
@@ -1911,7 +1974,7 @@ jobs:
           sudo apt-get update
 
           # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential wget ccache
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential wget ccache git-lfs
 
           # Set gcc-14 and g++-14 as the default compilers
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
@@ -1922,6 +1985,8 @@ jobs:
           # Install Rust stable version
           rustup install stable
           rustup default stable
+
+          git lfs install
 
       - name: GCC version check
         run: |
@@ -1983,7 +2048,7 @@ jobs:
           sudo apt-get update
 
           # Install necessary packages
-          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache git-lfs
 
           # Set gcc-14 and g++-14 as the default compilers
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
@@ -1994,6 +2059,8 @@ jobs:
           # Install Rust stable version
           rustup install stable
           rustup default stable
+
+          git lfs install
 
       - name: GCC version check
         run: |
@@ -2084,6 +2151,7 @@ jobs:
          with:
            key: ggml-ci-arm64-graviton4-kleidiai
            evict-old-files: 1d
+           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
        - name: Test
          id: ggml-ci

@@ -266,7 +266,7 @@ struct mtmd_context {
         }
 
         // set boi/eoi
-        if (proj == PROJECTOR_TYPE_GEMMA3) {
+        if (proj == PROJECTOR_TYPE_GEMMA3 || proj == PROJECTOR_TYPE_GEMMA3NV) {
             // <start_of_image> ... (image embeddings) ... <end_of_image>
             img_beg = "<start_of_image>";
             img_end = "<end_of_image>";
@@ -283,7 +283,7 @@ struct mtmd_context {
             // https://github.com/huggingface/transformers/blob/1cd110c6cb6a6237614130c470e9a902dbc1a4bd/docs/source/en/model_doc/pixtral.md
             img_end = "[IMG_END]";
 
-        } else if (proj == PROJECTOR_TYPE_QWEN2VL || proj == PROJECTOR_TYPE_QWEN25VL || proj == PROJECTOR_TYPE_QWEN3VL) {
+        } else if (proj == PROJECTOR_TYPE_QWEN2VL || proj == PROJECTOR_TYPE_QWEN25VL || proj == PROJECTOR_TYPE_QWEN3VL || proj == PROJECTOR_TYPE_YOUTUVL) {
             // <|vision_start|> ... (image embeddings) ... <|vision_end|>
             img_beg = "<|vision_start|>";
             img_end = "<|vision_end|>";
@@ -333,7 +333,12 @@ struct mtmd_context {
             case PROJECTOR_TYPE_QWEN25O:
             case PROJECTOR_TYPE_ULTRAVOX:
             case PROJECTOR_TYPE_VOXTRAL:
+            case PROJECTOR_TYPE_GLMA:
+            case PROJECTOR_TYPE_MUSIC_FLAMINGO:
                 audio_preproc = std::make_unique<mtmd_audio_preprocessor_whisper>(ctx_a);
+                break;
+            case PROJECTOR_TYPE_LFM2A:
+                audio_preproc = std::make_unique<mtmd_audio_preprocessor_conformer>(ctx_a);
                 break;
             default:
                 GGML_ABORT("unsupported audio projector type");
@@ -352,6 +357,9 @@ struct mtmd_context {
             // [BEGIN_AUDIO] ... (embeddings) ...
             aud_beg = "[BEGIN_AUDIO]";
 
+        } else if (proj == PROJECTOR_TYPE_MUSIC_FLAMINGO) {
+            // <sound> ... (embeddings) ...
+            aud_beg = "<sound>";
         }
     }
 
@@ -858,10 +866,15 @@ float * mtmd_get_output_embd(mtmd_context * ctx) {
 }
 
 bool mtmd_decode_use_non_causal(mtmd_context * ctx) {
-    if (ctx->ctx_v && clip_get_projector_type(ctx->ctx_v) == PROJECTOR_TYPE_GEMMA3) {
-        return true;
+    switch (ctx->proj_type_v()) {
+        case PROJECTOR_TYPE_QWEN2VL:
+        case PROJECTOR_TYPE_QWEN25VL:
+        case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_YOUTUVL:
+            return true;
+        default:
+            return false;
     }
-    return false;
 }
 
 bool mtmd_decode_use_mrope(mtmd_context * ctx) {
