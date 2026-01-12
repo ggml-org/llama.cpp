@@ -1106,10 +1106,12 @@ private:
                 throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
             }
             const char * prefix_replacement = &(tokenizer.prefix_replacements)[longest_prefix_offset];
-            // Use strnlen to safely bound the search within prefix_replacements
             size_t max_len = tokenizer.prefix_replacements_size - longest_prefix_offset;
-            size_t repl_len = strnlen(prefix_replacement, max_len);
-            if (repl_len == max_len && prefix_replacement[max_len - 1] != '\0') {
+            size_t repl_len = 0;
+            while (repl_len < max_len && prefix_replacement[repl_len] != '\0') {
+                repl_len++;
+            }
+            if (repl_len == max_len) {
                 throw std::runtime_error("Unterminated string in precompiled charsmap!");
             }
             return { prefix_replacement, repl_len, longest_prefix_length };
