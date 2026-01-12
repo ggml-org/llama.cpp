@@ -49,28 +49,23 @@
 	const themeStyleId = `highlight-theme-${(window.idxThemeStyle = (window.idxThemeStyle ?? 0) + 1)}`;
 
 	let processor = $derived(() => {
-		if (disableMath) {
-			// Processor without math/LaTeX support
-			return remark()
-				.use(remarkGfm) // GitHub Flavored Markdown
-				.use(remarkBreaks) // Convert line breaks to <br>
-				.use(remarkLiteralHtml) // Treat raw HTML as literal text with preserved indentation
-				.use(remarkRehype) // Convert Markdown AST to rehype
-				.use(rehypeHighlight) // Add syntax highlighting
-				.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
-				.use(rehypeEnhanceLinks) // Add target="_blank" to links
-				.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
-				.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		let proc: any = remark().use(remarkGfm); // GitHub Flavored Markdown
+
+		if (!disableMath) {
+			proc = proc.use(remarkMath); // Parse $inline$ and $$block$$ math
 		}
 
-		// Default processor with math/LaTeX support
-		return remark()
-			.use(remarkGfm) // GitHub Flavored Markdown
-			.use(remarkMath) // Parse $inline$ and $$block$$ math
+		proc = proc
 			.use(remarkBreaks) // Convert line breaks to <br>
 			.use(remarkLiteralHtml) // Treat raw HTML as literal text with preserved indentation
-			.use(remarkRehype) // Convert Markdown AST to rehype
-			.use(rehypeKatex) // Render math using KaTeX
+			.use(remarkRehype); // Convert Markdown AST to rehype
+
+		if (!disableMath) {
+			proc = proc.use(rehypeKatex); // Render math using KaTeX
+		}
+
+		return proc
 			.use(rehypeHighlight) // Add syntax highlighting
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
