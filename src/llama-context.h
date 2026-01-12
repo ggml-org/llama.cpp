@@ -229,7 +229,7 @@ private:
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
                           llm_graph_type   gtype,
-                           const llama_mtp_params & mtp_params) const;
+                  const llama_mtp_params & mtp_params) const;
 
     llm_graph_cb graph_get_cb() const;
 

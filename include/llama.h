@@ -1483,12 +1483,6 @@ extern "C" {
      */
     LLAMA_API void llama_mtp_cancel_sinfo_update(struct llama_context * ctx);
 
-    /**
-     * @brief Removes KV cache metadata for a specified sequence and token range.
-     *        This makes the physical cells logically available again without deleting the tensor data.
-     */
-    LLAMA_API void llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1);
-
 #ifdef __cplusplus
 }
 #endif

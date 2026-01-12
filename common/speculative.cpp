@@ -416,7 +416,7 @@ llama_tokens mtp_speculative_gen_draft(
     // This makes the physical cell available again for the main model's validation pass,
     // preventing a cache state corruption where two cells map to the same logical position.
     if (!drafts.empty()) {
-        llama_kv_cache_seq_rm(ctx, seq_id, n_past, current_n_past);
+        llama_memory_seq_rm(llama_get_memory(ctx), seq_id, n_past, current_n_past);
     }
 
     return drafts;

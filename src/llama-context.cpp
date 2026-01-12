@@ -3157,16 +3157,6 @@ void llama_mtp_cancel_sinfo_update(struct llama_context * ctx) {
     kvd->forced_sinfos = nullptr;
 }
 
-void llama_context::kv_cache_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
-    if (memory) {
-        static_cast<llama_kv_cache *>(memory.get())->seq_rm(seq_id, p0, p1);
-    }
-}
-
-void llama_kv_cache_seq_rm(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
-    ctx->kv_cache_seq_rm(seq_id, p0, p1);
-}
-
 /*
     Initializes the memory context for a decode operation.
     The logic follows a specific priority:
