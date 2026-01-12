@@ -13,7 +13,7 @@
 #define IEEE_VSF_MANTMASK (0x7FFFFF)
 #define IEEE_VSF_MIMPMASK (0x800000)
 
-static inline HVX_Vector hvx_vec_truncate_fp32(HVX_Vector in_vec) {
+static inline HVX_Vector hvx_vec_truncate_f32(HVX_Vector in_vec) {
     HVX_Vector mask_mant_v  = Q6_V_vsplat_R(IEEE_VSF_MANTMASK);
     HVX_Vector mask_impl_v  = Q6_V_vsplat_R(IEEE_VSF_MIMPMASK);
     HVX_Vector const_zero_v = Q6_V_vzero();
@@ -42,7 +42,7 @@ static inline HVX_Vector hvx_vec_truncate_fp32(HVX_Vector in_vec) {
     return (vout);
 }
 
-static inline HVX_Vector hvx_vec_floor_fp32(HVX_Vector in_vec) {
+static inline HVX_Vector hvx_vec_floor_f32(HVX_Vector in_vec) {
     HVX_Vector mask_mant_v    = Q6_V_vsplat_R(IEEE_VSF_MANTMASK);
     HVX_Vector mask_impl_v    = Q6_V_vsplat_R(IEEE_VSF_MIMPMASK);
     HVX_Vector const_mnlen_v  = Q6_V_vsplat_R(IEEE_VSF_MANTLEN);

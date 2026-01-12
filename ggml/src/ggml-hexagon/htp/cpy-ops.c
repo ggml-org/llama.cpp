@@ -166,7 +166,7 @@ static void cpy_thread_f16_f32_sameshape(struct htp_copy_context * ct, struct ht
                 uint8_t* dst_ptr  = (uint8_t*) dst->data  + i01*nb1  + i02*nb2  + i03*nb3;
                 uint8_t* src0_ptr = (uint8_t*) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
                 hex_l2fetch(src0_ptr, ne00 * sizeof(float), nb01, 2);
-                hvx_copy_fp16_fp32_uu(dst_ptr, src0_ptr, ne00);
+                hvx_copy_f16_f32_uu(dst_ptr, src0_ptr, ne00);
             }
         }
     }
@@ -188,7 +188,7 @@ static void cpy_thread_f32_f16_sameshape(struct htp_copy_context * ct, struct ht
                 uint8_t* dst_ptr  = (uint8_t*) dst->data  + i01*nb1  + i02*nb2  + i03*nb3;
                 uint8_t* src0_ptr = (uint8_t*) src0->data + i01*nb01 + i02*nb02 + i03*nb03;
                 hex_l2fetch(src0_ptr, ne00 * sizeof(__fp16), nb01, 2);
-                hvx_copy_fp32_fp16_uu(dst_ptr, src0_ptr, ne00);
+                hvx_copy_f32_f16_uu(dst_ptr, src0_ptr, ne00);
             }
         }
     }

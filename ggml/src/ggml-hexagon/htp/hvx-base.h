@@ -33,12 +33,12 @@ static inline void hvx_vec_store_a(void * restrict dst, uint32_t n, HVX_Vector v
     Q6_vmem_QnRIV(m, (HVX_Vector *) dst, v);
 }
 
-static inline HVX_Vector hvx_vec_splat_fp32(float v) {
+static inline HVX_Vector hvx_vec_splat_f32(float v) {
     union { float  f; uint32_t i; } u = { .f = v };
     return Q6_V_vsplat_R(u.i);
 }
 
-static inline HVX_Vector hvx_vec_splat_fp16(float v) {
+static inline HVX_Vector hvx_vec_splat_f16(float v) {
     union { __fp16 f; uint16_t i; } u = { .f = v };
     return Q6_Vh_vsplat_R(u.i);
 }
@@ -61,31 +61,31 @@ static inline HVX_Vector hvx_vec_repl4(HVX_Vector v) {
     return Q6_V_vdelta_VV(v, ctrl);
 }
 
-static inline float hvx_vec_get_fp32(HVX_Vector v) {
+static inline float hvx_vec_get_f32(HVX_Vector v) {
     float __attribute__((aligned(128))) x;
     hvx_vec_store_a(&x, 4, v);
     return x;
 }
 
-static inline HVX_Vector hvx_vec_abs_fp16(HVX_Vector v) {
+static inline HVX_Vector hvx_vec_abs_f16(HVX_Vector v) {
     // abs by clearing the fp16 sign bit
     HVX_Vector mask = Q6_Vh_vsplat_R(0x7fff);
     return Q6_V_vand_VV(v, mask);
 }
 
-static inline HVX_Vector hvx_vec_neg_fp16(HVX_Vector v) {
+static inline HVX_Vector hvx_vec_neg_f16(HVX_Vector v) {
     // neg by setting the fp16 sign bit
     HVX_Vector mask = Q6_Vh_vsplat_R(0x8000);
     return Q6_V_vxor_VV(v, mask);
 }
 
-static inline HVX_Vector hvx_vec_abs_fp32(HVX_Vector v) {
+static inline HVX_Vector hvx_vec_abs_f32(HVX_Vector v) {
     // abs by clearing the fp32 sign bit
     HVX_Vector mask = Q6_V_vsplat_R(0x7fffffff);
     return Q6_V_vand_VV(v, mask);
 }
 
-static inline HVX_Vector hvx_vec_neg_fp32(HVX_Vector v) {
+static inline HVX_Vector hvx_vec_neg_f32(HVX_Vector v) {
 #if __HVX_ARCH__ > 75
     return Q6_Vsf_vfneg_Vsf(v);
 #else
@@ -97,7 +97,7 @@ static inline HVX_Vector hvx_vec_neg_fp32(HVX_Vector v) {
 
 /* Q6_Vsf_equals_Vw is only available on v73+.*/
 #if __HVX_ARCH__ < 73
-static inline HVX_Vector hvx_int32_to_qfloat(HVX_Vector const in)
+static inline HVX_Vector hvx_i32_to_qf32(HVX_Vector const in)
 {
     HVX_Vector const vzero = Q6_V_vzero();
     HVX_VectorPred is_zero = Q6_Q_vcmp_eq_VwVw(in, vzero);
@@ -111,7 +111,7 @@ static inline HVX_Vector hvx_int32_to_qfloat(HVX_Vector const in)
 
 static inline HVX_Vector Q6_Vsf_equals_Vw(HVX_Vector const in)
 {
-    return Q6_Vsf_equals_Vqf32(hvx_int32_to_qfloat(in));
+    return Q6_Vsf_equals_Vqf32(hvx_i32_to_qf32(in));
 }
 #endif
 

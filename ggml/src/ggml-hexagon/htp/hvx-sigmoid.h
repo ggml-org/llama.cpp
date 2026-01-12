@@ -8,11 +8,11 @@
 #define FAST_SIGMOID_C2    (0x3e8d74bd)  // 0.276281267
 #define FAST_SIGMOID_C3    (0x3f000000)  // 0.5
 
-static inline HVX_Vector hvx_vec_fast_sigmoid_fp32(HVX_Vector v) {
+static inline HVX_Vector hvx_vec_fast_sigmoid_f32(HVX_Vector v) {
     v = Q6_Vqf32_vmpy_VsfVsf(v, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
     v = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(v), Q6_V_vsplat_R(FAST_SIGMOID_C3));
 
-    HVX_Vector in_int = hvx_vec_truncate_fp32(Q6_Vsf_equals_Vqf32(v));
+    HVX_Vector in_int = hvx_vec_truncate_f32(Q6_Vsf_equals_Vqf32(v));
     HVX_Vector x      = Q6_Vqf32_vsub_Vqf32Vsf(v, Q6_Vsf_equals_Vw(in_int));
     HVX_Vector xx     = Q6_Vqf32_vmpy_Vqf32Vqf32(x, x);
 
@@ -32,36 +32,34 @@ static inline HVX_Vector hvx_vec_fast_sigmoid_fp32(HVX_Vector v) {
     HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(v2, v1));
     HVX_Vector v5 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v3, v4));
 
-    HVX_Vector res = hvx_vec_inverse_fp32(v5);
+    HVX_Vector res = hvx_vec_inverse_f32(v5);
     res            = Q6_Vqf32_vmpy_VsfVsf(v3, res);
 
     return Q6_Vsf_equals_Vqf32(res);
 }
 
-static inline HVX_Vector hvx_vec_fast_sigmoid_fp32_guard(HVX_Vector v,
+static inline HVX_Vector hvx_vec_fast_sigmoid_f32_guard(HVX_Vector v,
                                                          HVX_Vector one,
                                                          HVX_Vector max_exp,
                                                          HVX_Vector min_exp) {
     const HVX_VectorPred pred_max = Q6_Q_vcmp_gt_VsfVsf(max_exp, v);
     const HVX_VectorPred pred_min = Q6_Q_vcmp_gt_VsfVsf(v, min_exp);
 
-    HVX_Vector out = hvx_vec_fast_sigmoid_fp32(v);
+    HVX_Vector out = hvx_vec_fast_sigmoid_f32(v);
     out            = Q6_V_vmux_QVV(pred_max, out, one);
     return Q6_V_vmux_QVV(pred_min, out, Q6_V_vzero());
 }
 
-static inline HVX_Vector hvx_vec_tanh_fp32(HVX_Vector x) {
+static inline HVX_Vector hvx_vec_tanh_f32(HVX_Vector x) {
     // tanh(x) = 2 * sigmoid(2x) - 1
-    HVX_Vector two = hvx_vec_splat_fp32(2.0f);
-    HVX_Vector one = hvx_vec_splat_fp32(1.0f);
+    HVX_Vector two = hvx_vec_splat_f32(2.0f);
+    HVX_Vector one = hvx_vec_splat_f32(1.0f);
     HVX_Vector x2  = Q6_Vqf32_vmpy_VsfVsf(x, two);
 
-    static const float kMinExp = -87.f;  // 0
-    static const float kMaxExp = 87.f;   // 1
-    HVX_Vector max_exp = hvx_vec_splat_fp32(kMaxExp);
-    HVX_Vector min_exp = hvx_vec_splat_fp32(kMinExp);
+    HVX_Vector max_exp = hvx_vec_splat_f32(87.f);
+    HVX_Vector min_exp = hvx_vec_splat_f32(-87.f);
 
-    HVX_Vector sig2x = hvx_vec_fast_sigmoid_fp32_guard(Q6_Vsf_equals_Vqf32(x2), one, max_exp, min_exp);
+    HVX_Vector sig2x = hvx_vec_fast_sigmoid_f32_guard(Q6_Vsf_equals_Vqf32(x2), one, max_exp, min_exp);
 
     HVX_Vector res = Q6_Vqf32_vmpy_VsfVsf(sig2x, two);
     res = Q6_Vqf32_vsub_Vqf32Vsf(res, one);
@@ -73,9 +71,9 @@ static inline HVX_Vector hvx_vec_tanh_fp32(HVX_Vector x) {
         dst_type * restrict vdst = (dst_type *) dst;            \
         src_type * restrict vsrc = (src_type *) src;            \
                                                                 \
-        const HVX_Vector one     = hvx_vec_splat_fp32(1.f);     \
-        const HVX_Vector max_exp = hvx_vec_splat_fp32(87.f);    \
-        const HVX_Vector min_exp = hvx_vec_splat_fp32(-87.f);   \
+        const HVX_Vector one     = hvx_vec_splat_f32(1.f);      \
+        const HVX_Vector max_exp = hvx_vec_splat_f32(87.f);     \
+        const HVX_Vector min_exp = hvx_vec_splat_f32(-87.f);    \
                                                                 \
         const uint32_t epv  = 128 / sizeof(float);              \
         const uint32_t nvec = n / epv;                          \
@@ -85,10 +83,10 @@ static inline HVX_Vector hvx_vec_tanh_fp32(HVX_Vector x) {
                                                                 \
         _Pragma("unroll(4)")                                    \
         for (; i < nvec; i++) {                                 \
-             vdst[i] = hvx_vec_fast_sigmoid_fp32_guard(vsrc[i], one, max_exp, min_exp); \
+             vdst[i] = hvx_vec_fast_sigmoid_f32_guard(vsrc[i], one, max_exp, min_exp); \
         }                                                       \
         if (nloe) {                                             \
-             HVX_Vector tmp = hvx_vec_fast_sigmoid_fp32_guard(vsrc[i], one, max_exp, min_exp); \
+             HVX_Vector tmp = hvx_vec_fast_sigmoid_f32_guard(vsrc[i], one, max_exp, min_exp); \
              vec_store((void *) &vdst[i], nloe * sizeof(float), tmp); \
         }                                                       \
     } while(0)

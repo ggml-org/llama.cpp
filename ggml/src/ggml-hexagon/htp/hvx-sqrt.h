@@ -12,7 +12,7 @@
 #define RSQRT_ONE_HALF     0x3f000000  // 0.5
 #define RSQRT_THREE_HALVES 0x3fc00000  // 1.5
 
-static inline HVX_Vector hvx_vec_rsqrt_fp32(HVX_Vector in_vec) {
+static inline HVX_Vector hvx_vec_rsqrt_f32(HVX_Vector in_vec) {
     //Algorithm :
     //  x2 = input*0.5
     //  y  = * (long *) &input

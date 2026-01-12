@@ -9,25 +9,25 @@
 #include "hex-utils.h"
 #include "hvx-types.h"
 
-static void hvx_vec_dump_fp16_n(char * pref, HVX_Vector v, uint32_t n) {
+static void hvx_vec_dump_f16_n(char * pref, HVX_Vector v, uint32_t n) {
     HVX_VectorAlias u = { .v = v };
 
     const uint32_t n0 = n / 16;
     const uint32_t n1 = n % 16;
     int            i  = 0;
     for (; i < n0; i++) {
-        hex_dump_fp16_line(pref, u.fp16 + (16 * i), 16);
+        hex_dump_f16_line(pref, u.fp16 + (16 * i), 16);
     }
     if (n1) {
-        hex_dump_fp16_line(pref, u.fp16 + (16 * i), n1);
+        hex_dump_f16_line(pref, u.fp16 + (16 * i), n1);
     }
 }
 
-static void hvx_vec_dump_fp16(char * pref, HVX_Vector v) {
-    hvx_vec_dump_fp16_n(pref, v, 64);
+static void hvx_vec_dump_f16(char * pref, HVX_Vector v) {
+    hvx_vec_dump_f16_n(pref, v, 64);
 }
 
-static void hvx_vec_dump_fp32_n(char * pref, HVX_Vector v, uint32_t n) {
+static void hvx_vec_dump_f32_n(char * pref, HVX_Vector v, uint32_t n) {
     union {
         HVX_Vector v;
         float      d[32];
@@ -37,14 +37,14 @@ static void hvx_vec_dump_fp32_n(char * pref, HVX_Vector v, uint32_t n) {
     const uint32_t n1 = n % 16;
     int            i  = 0;
     for (; i < n0; i++) {
-        hex_dump_fp32_line(pref, u.d + (16 * i), 16);
+        hex_dump_f32_line(pref, u.d + (16 * i), 16);
     }
     if (n1) {
-        hex_dump_fp32_line(pref, u.d + (16 * i), n1);
+        hex_dump_f32_line(pref, u.d + (16 * i), n1);
     }
 }
 
-static void hvx_vec_dump_fp32_hmt(char * pref, HVX_Vector v) {
+static void hvx_vec_dump_f32_hmt(char * pref, HVX_Vector v) {
     union {
         HVX_Vector v;
         float      d[32];
@@ -54,8 +54,8 @@ static void hvx_vec_dump_fp32_hmt(char * pref, HVX_Vector v) {
          u.d[2], u.d[3], u.d[12], u.d[13], u.d[14], u.d[15], u.d[28], u.d[29], u.d[30], u.d[31]);
 }
 
-static void hvx_vec_dump_fp32(char * pref, HVX_Vector v) {
-    hvx_vec_dump_fp32_n(pref, v, 32);
+static void hvx_vec_dump_f32(char * pref, HVX_Vector v) {
+    hvx_vec_dump_f32_n(pref, v, 32);
 }
 
 static void hvx_vec_dump_int32(char * pref, HVX_Vector v) {

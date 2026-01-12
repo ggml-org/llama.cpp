@@ -72,7 +72,7 @@ static int set_rows_thread_f32_f32(struct htp_ops_context * octx, const int nth,
                 const uintptr_t dst_ptr  = octx->dst.data  + i1*nb1 + i02*nb2  + i03*nb3;
 
                 // copy row
-                hvx_copy_fp32_uu((uint8_t *)dst_ptr, (const uint8_t *)src0_ptr, ne00);
+                hvx_copy_f32_uu((uint8_t *)dst_ptr, (const uint8_t *)src0_ptr, ne00);
             }
         }
     }
@@ -108,7 +108,7 @@ static int set_rows_thread_f16_f32(struct htp_ops_context * octx, const int nth,
                 const uint8_t* src0_ptr = (const uint8_t *) octx->src0.data + i*nb01 + i02*nb02 + i03*nb03;
                 uint8_t*       dst_ptr  = (uint8_t *)       octx->dst.data  + i1*nb1 + i02*nb2  + i03*nb3;
 
-                hvx_copy_fp16_fp32_uu(dst_ptr, src0_ptr, ne00);
+                hvx_copy_f16_f32_uu(dst_ptr, src0_ptr, ne00);
             }
         }
     }

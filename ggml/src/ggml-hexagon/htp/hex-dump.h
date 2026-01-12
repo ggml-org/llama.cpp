@@ -30,7 +30,7 @@ static inline void hex_dump_int32_line(char * pref, const int32_t * x, uint32_t 
     FARF(HIGH, "%s\n", str);
 }
 
-static inline void hex_dump_fp16_line(char * pref, const __fp16 * x, uint32_t n) {
+static inline void hex_dump_f16_line(char * pref, const __fp16 * x, uint32_t n) {
     char str[1024], *p = str, *p_end = str + sizeof(str);
     p += snprintf(p, p_end - p, "%s: ", pref);
     for (int i = 0; i < n; i++) {
@@ -39,7 +39,7 @@ static inline void hex_dump_fp16_line(char * pref, const __fp16 * x, uint32_t n)
     FARF(HIGH, "%s\n", str);
 }
 
-static inline void hex_dump_fp32_line(char * pref, const float * x, uint32_t n) {
+static inline void hex_dump_f32_line(char * pref, const float * x, uint32_t n) {
     char str[1024], *p = str, *p_end = str + sizeof(str);
     p += snprintf(p, p_end - p, "%s: ", pref);
     for (int i = 0; i < n; i++) {
@@ -54,10 +54,10 @@ static inline void hex_dump_f32(char * pref, const float * x, uint32_t n) {
 
     uint32_t i = 0;
     for (; i < n0; i++) {
-        hex_dump_fp32_line(pref, x + (16 * i), 16);
+        hex_dump_f32_line(pref, x + (16 * i), 16);
     }
     if (n1) {
-        hex_dump_fp32_line(pref, x + (16 * i), n1);
+        hex_dump_f32_line(pref, x + (16 * i), n1);
     }
 }
 
@@ -67,10 +67,10 @@ static inline void hex_dump_f16(char * pref, const __fp16 * x, uint32_t n) {
 
     uint32_t i = 0;
     for (; i < n0; i++) {
-        hex_dump_fp16_line(pref, x + (16 * i), 16);
+        hex_dump_f16_line(pref, x + (16 * i), 16);
     }
     if (n1) {
-        hex_dump_fp16_line(pref, x + (16 * i), n1);
+        hex_dump_f16_line(pref, x + (16 * i), n1);
     }
 }
 

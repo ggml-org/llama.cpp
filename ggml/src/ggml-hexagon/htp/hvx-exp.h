@@ -19,7 +19,7 @@
 #define EXP_RANGE_R (0x41a00000)  // 20.0
 #define EXP_RANGE_L (0xc1a00000)  // -20.0
 
-static inline HVX_Vector hvx_vec_exp_fp32(HVX_Vector in_vec) {
+static inline HVX_Vector hvx_vec_exp_f32(HVX_Vector in_vec) {
     HVX_Vector z_qf32_v;
     HVX_Vector x_v;
     HVX_Vector x_qf32_v;
@@ -58,8 +58,8 @@ static inline HVX_Vector hvx_vec_exp_fp32(HVX_Vector in_vec) {
     epsilon_v = Q6_Vsf_equals_Vqf32(epsilon_v);
 
     //    f_v is the floating point result and k_v is the integer result
-    f_v = hvx_vec_floor_fp32(epsilon_v);
-    k_v = hvx_vec_truncate_fp32(f_v);
+    f_v = hvx_vec_floor_f32(epsilon_v);
+    k_v = hvx_vec_truncate_f32(f_v);
 
     x_qf32_v = Q6_Vqf32_vadd_VsfVsf(in_vec, zero_v);
 
@@ -137,10 +137,10 @@ static inline HVX_Vector hvx_vec_exp_fp32(HVX_Vector in_vec) {
     return y_v;
 }
 
-static inline HVX_Vector hvx_vec_exp_fp32_guard(HVX_Vector in_vec, HVX_Vector max_exp, HVX_Vector inf) {
+static inline HVX_Vector hvx_vec_exp_f32_guard(HVX_Vector in_vec, HVX_Vector max_exp, HVX_Vector inf) {
     const HVX_VectorPred pred0 = Q6_Q_vcmp_gt_VsfVsf(in_vec, max_exp);
 
-    HVX_Vector out = hvx_vec_exp_fp32(in_vec);
+    HVX_Vector out = hvx_vec_exp_f32(in_vec);
 
     return Q6_V_vmux_QVV(pred0, inf, out);
 }
@@ -164,8 +164,8 @@ static inline void hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict 
     static const float kInf    = INFINITY;
     static const float kMaxExp = 88.02f;  // log(INF)
 
-    const HVX_Vector max_exp = hvx_vec_splat_fp32(kMaxExp);
-    const HVX_Vector inf     = hvx_vec_splat_fp32(kInf);
+    const HVX_Vector max_exp = hvx_vec_splat_f32(kMaxExp);
+    const HVX_Vector inf     = hvx_vec_splat_f32(kInf);
 
     if (0 == unaligned_loop) {
         HVX_Vector * p_vec_in1 = (HVX_Vector *) src;
@@ -174,10 +174,10 @@ static inline void hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict 
         #pragma unroll(4)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             if (true == negate) {
-                HVX_Vector neg_vec_in = hvx_vec_neg_fp32(*p_vec_in1++);
-                *p_vec_out++          = hvx_vec_exp_fp32_guard(neg_vec_in, max_exp, inf);
+                HVX_Vector neg_vec_in = hvx_vec_neg_f32(*p_vec_in1++);
+                *p_vec_out++          = hvx_vec_exp_f32_guard(neg_vec_in, max_exp, inf);
             } else {
-                *p_vec_out++ = hvx_vec_exp_fp32_guard(*p_vec_in1++, max_exp, inf);
+                *p_vec_out++ = hvx_vec_exp_f32_guard(*p_vec_in1++, max_exp, inf);
             }
         }
     } else {
@@ -186,10 +186,10 @@ static inline void hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict 
             HVX_Vector in = *(HVX_UVector *) (src + i * SIZEOF_FP32);
 
             if (true == negate) {
-                HVX_Vector neg_vec_in                    = hvx_vec_neg_fp32(in);
-                *(HVX_UVector *) (dst + i * SIZEOF_FP32) = hvx_vec_exp_fp32_guard(neg_vec_in, max_exp, inf);
+                HVX_Vector neg_vec_in                    = hvx_vec_neg_f32(in);
+                *(HVX_UVector *) (dst + i * SIZEOF_FP32) = hvx_vec_exp_f32_guard(neg_vec_in, max_exp, inf);
             } else {
-                *(HVX_UVector *) (dst + i * SIZEOF_FP32) = hvx_vec_exp_fp32_guard(in, max_exp, inf);
+                *(HVX_UVector *) (dst + i * SIZEOF_FP32) = hvx_vec_exp_f32_guard(in, max_exp, inf);
             }
         }
     }
@@ -201,11 +201,11 @@ static inline void hvx_exp_f32(const uint8_t * restrict src, uint8_t * restrict 
         HVX_Vector in = *(HVX_UVector *) srcf;
 
         if (true == negate) {
-            HVX_Vector neg_vec_in = hvx_vec_neg_fp32(in);
+            HVX_Vector neg_vec_in = hvx_vec_neg_f32(in);
 
-            vec_out = hvx_vec_exp_fp32_guard(neg_vec_in, max_exp, inf);
+            vec_out = hvx_vec_exp_f32_guard(neg_vec_in, max_exp, inf);
         } else {
-            vec_out = hvx_vec_exp_fp32_guard(in, max_exp, inf);
+            vec_out = hvx_vec_exp_f32_guard(in, max_exp, inf);
         }
 
         hvx_vec_store_u((void *) dstf, left_over * SIZEOF_FP32, vec_out);

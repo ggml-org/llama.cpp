@@ -12,7 +12,7 @@
         dst_type * restrict vdst = (dst_type *) dst;                                 \
         src_type * restrict vsrc = (src_type *) src;                                 \
                                                                                      \
-        HVX_Vector vs = hvx_vec_splat_fp32(scale);                                   \
+        HVX_Vector vs = hvx_vec_splat_f32(scale);                                    \
                                                                                      \
         const uint32_t elem_size = sizeof(float);                                    \
         const uint32_t epv = 128 / elem_size;                                        \
@@ -73,8 +73,8 @@ static inline void hvx_scale_f32(uint8_t * restrict dst, const uint8_t * restric
         dst_type * restrict vdst = (dst_type *) dst;                                 \
         src_type * restrict vsrc = (src_type *) src;                                 \
                                                                                      \
-        HVX_Vector vs = hvx_vec_splat_fp32(scale);                                   \
-        HVX_Vector vo = hvx_vec_splat_fp32(offset);                                  \
+        HVX_Vector vs = hvx_vec_splat_f32(scale);                                    \
+        HVX_Vector vo = hvx_vec_splat_f32(offset);                                   \
                                                                                      \
         const uint32_t elem_size = sizeof(float);                                    \
         const uint32_t epv = 128 / elem_size;                                        \

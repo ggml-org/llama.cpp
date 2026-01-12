@@ -93,8 +93,8 @@ static void hvx_fast_softmax_prep_f32(const uint8_t * restrict src,
     uint8_t * restrict dst_curr        = dst;
     const uint8_t * restrict mask_curr = mask;
 
-    HVX_Vector scale_vec = hvx_vec_splat_fp32(scale);
-    HVX_Vector slope_vec = hvx_vec_splat_fp32(slope);
+    HVX_Vector scale_vec = hvx_vec_splat_f32(scale);
+    HVX_Vector slope_vec = hvx_vec_splat_f32(slope);
 
     int step_of_1 = num_elems >> 5;
 
@@ -127,9 +127,9 @@ static void hvx_fast_softmax_f32(const uint8_t * restrict src,
     HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
 
     HVX_Vector sum_vec = Q6_V_vsplat_R(0x00000000);
-    HVX_Vector max_vec = hvx_vec_splat_fp32(((const float *) src)[0]);
+    HVX_Vector max_vec = hvx_vec_splat_f32(((const float *) src)[0]);
     HVX_Vector zero_v  = Q6_V_vzero();
-    HVX_Vector one_v   = hvx_vec_splat_fp32(1.0);
+    HVX_Vector one_v   = hvx_vec_splat_f32(1.0);
 
     int step_of_1 = num_elems >> 5;
 
@@ -139,7 +139,7 @@ static void hvx_fast_softmax_f32(const uint8_t * restrict src,
         max_vec       = Q6_Vsf_vmax_VsfVsf(max_vec, v1);
     }
 
-    HVX_Vector v = hvx_vec_reduce_max_fp32(max_vec);
+    HVX_Vector v = hvx_vec_reduce_max_f32(max_vec);
     max_vec      = hvx_vec_repl4(v);
 
     #pragma unroll(4)
@@ -147,18 +147,18 @@ static void hvx_fast_softmax_f32(const uint8_t * restrict src,
         HVX_Vector v1 = v_src[i];
         HVX_Vector v2 = Q6_Vqf32_vsub_VsfVsf(v1, max_vec);
 
-        HVX_Vector v3 = hvx_vec_exp_fp32(Q6_Vsf_equals_Vqf32(v2));
+        HVX_Vector v3 = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(v2));
 
         sum_vec = Q6_Vqf32_vadd_VsfVsf(Q6_Vsf_equals_Vqf32(sum_vec), v3);
 
         v_pad[i] = v3;
     }
 
-    v       = hvx_vec_qf32_reduce_sum(sum_vec);
+    v       = hvx_vec_reduce_sum_qf32(sum_vec);
     sum_vec = hvx_vec_repl4(Q6_Vsf_equals_Vqf32(v));
 
     HVX_VectorPred pos_sum   = Q6_Q_vcmp_gt_VwVw(sum_vec, zero_v);
-    HVX_Vector     v4        = hvx_vec_inverse_fp32(sum_vec);
+    HVX_Vector     v4        = hvx_vec_inverse_f32(sum_vec);
     HVX_Vector     scale_vec = Q6_V_vmux_QVV(pos_sum, v4, one_v);
 
     #pragma unroll(4)

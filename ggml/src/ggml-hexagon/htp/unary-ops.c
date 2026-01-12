@@ -47,7 +47,7 @@ static void hvx_fast_rms_norm_f32(const uint8_t * restrict src,
     HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
 
     HVX_Vector sum_v     = Q6_V_vsplat_R(0x00000000);
-    HVX_Vector epsilon_v = hvx_vec_splat_fp32(epsilon);
+    HVX_Vector epsilon_v = hvx_vec_splat_f32(epsilon);
 
     int step_of_1 = num_elems >> 5;
     #pragma unroll(4)
@@ -57,15 +57,15 @@ static void hvx_fast_rms_norm_f32(const uint8_t * restrict src,
         sum_v         = Q6_Vqf32_vadd_Vqf32Vqf32(sum_v, v2);
     }
 
-    HVX_Vector reduced_sum = hvx_vec_qf32_reduce_sum(sum_v);
+    HVX_Vector reduced_sum = hvx_vec_reduce_sum_qf32(sum_v);
     sum_v                  = hvx_vec_repl4(Q6_Vsf_equals_Vqf32(reduced_sum));
 
-    HVX_Vector t_v            = hvx_vec_splat_fp32((float) num_elems);
-    HVX_Vector denom_v        = hvx_vec_inverse_fp32(t_v);
+    HVX_Vector t_v            = hvx_vec_splat_f32((float) num_elems);
+    HVX_Vector denom_v        = hvx_vec_inverse_f32(t_v);
     HVX_Vector mean_v         = Q6_Vqf32_vmpy_VsfVsf(sum_v, denom_v);
     HVX_Vector mean_epsilon_v = Q6_Vqf32_vadd_Vqf32Vsf(mean_v, epsilon_v);
 
-    HVX_Vector scale_v = hvx_vec_rsqrt_fp32(Q6_Vsf_equals_Vqf32(mean_epsilon_v));
+    HVX_Vector scale_v = hvx_vec_rsqrt_f32(Q6_Vsf_equals_Vqf32(mean_epsilon_v));
 
     #pragma unroll(4)
     for (int i = 0; i < step_of_1; i++) {

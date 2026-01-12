@@ -69,7 +69,7 @@
     const uint32_t nb2 = dst->nb[2];   \
     const uint32_t nb3 = dst->nb[3];
 
-static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
+static void glu_swiglu_f32_per_thread(const struct htp_tensor * src0,
                                        const struct htp_tensor * src1,
                                        struct htp_tensor *       dst,
                                        const int32_t *           op_params,
@@ -196,7 +196,7 @@ static void glu_swiglu_fp32_per_thread(const struct htp_tensor * src0,
          (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
+static void glu_swiglu_oai_f32_per_thread(const struct htp_tensor * src0,
                                            const struct htp_tensor * src1,
                                            struct htp_tensor *       dst,
                                            const int32_t *           op_params,
@@ -335,7 +335,7 @@ static void glu_swiglu_oai_fp32_per_thread(const struct htp_tensor * src0,
 }
 
 
-static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
+static void unary_gelu_f32_per_thread(const struct htp_tensor * src0,
                                        struct htp_tensor *       dst,
                                        const int32_t *           op_params,
                                        struct htp_spad *         src0_spad,
@@ -435,15 +435,15 @@ static void unary_gelu_fp32_per_thread(const struct htp_tensor * src0,
          ne03, src0_start_row, src0_end_row, ne0, ne1, ne2, ne3, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-static void unary_gelu_fp32(unsigned int n, unsigned int i, void * data) {
+static void unary_gelu_f32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = (struct htp_ops_context *) data;
-    unary_gelu_fp32_per_thread(&octx->src0, &octx->dst, octx->op_params, &octx->src0_spad, &octx->dst_spad, n, i,
+    unary_gelu_f32_per_thread(&octx->src0, &octx->dst, octx->op_params, &octx->src0_spad, &octx->dst_spad, n, i,
                                octx->src0_nrows_per_thread, octx->ctx->dma[i]);
 }
 
 
 
-static void unary_silu_fp32_per_thread(const struct htp_tensor * src0,
+static void unary_silu_f32_per_thread(const struct htp_tensor * src0,
                                        struct htp_tensor *       dst,
                                        const int32_t *           op_params,
                                        struct htp_spad *         src0_spad,
@@ -541,25 +541,25 @@ static void unary_silu_fp32_per_thread(const struct htp_tensor * src0,
          ne03, src0_start_row, src0_end_row, ne0, ne1, ne2, ne3, (unsigned) HAP_perf_qtimer_count_to_us(t2 - t1));
 }
 
-static void unary_silu_fp32(unsigned int n, unsigned int i, void * data) {
+static void unary_silu_f32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = (struct htp_ops_context *) data;
-    unary_silu_fp32_per_thread(&octx->src0, &octx->dst, octx->op_params, &octx->src0_spad, &octx->dst_spad, n, i,
+    unary_silu_f32_per_thread(&octx->src0, &octx->dst, octx->op_params, &octx->src0_spad, &octx->dst_spad, n, i,
                                octx->src0_nrows_per_thread, octx->ctx->dma[i]);
 }
 
-static void glu_swiglu_fp32(unsigned int n, unsigned int i, void * data) {
+static void glu_swiglu_f32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = (struct htp_ops_context *) data;
-    glu_swiglu_fp32_per_thread(&octx->src0, &octx->src1, &octx->dst, octx->op_params, &octx->src0_spad,
+    glu_swiglu_f32_per_thread(&octx->src0, &octx->src1, &octx->dst, octx->op_params, &octx->src0_spad,
                                &octx->src1_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
 }
 
-static void glu_swiglu_oai_fp32(unsigned int n, unsigned int i, void * data) {
+static void glu_swiglu_oai_f32(unsigned int n, unsigned int i, void * data) {
     struct htp_ops_context * octx = (struct htp_ops_context *) data;
-    glu_swiglu_oai_fp32_per_thread(&octx->src0, &octx->src1, &octx->dst, octx->op_params, &octx->src0_spad,
+    glu_swiglu_oai_f32_per_thread(&octx->src0, &octx->src1, &octx->dst, octx->op_params, &octx->src0_spad,
                                    &octx->src1_spad, &octx->dst_spad, n, i, octx->src0_nrows_per_thread, octx->ctx->dma[i]);
 }
 
-static int execute_op_activations_fp32(struct htp_ops_context * octx) {
+static int execute_op_activations_f32(struct htp_ops_context * octx) {
     int err = HTP_STATUS_OK;
 
     const struct htp_tensor * src0 = &octx->src0;
@@ -576,21 +576,21 @@ static int execute_op_activations_fp32(struct htp_ops_context * octx) {
 
     switch (octx->op) {
         case HTP_OP_UNARY_SILU:
-            act_op_func = unary_silu_fp32;
+            act_op_func = unary_silu_f32;
             op_type     = "silu-f32";
             break;
 
         case HTP_OP_GLU_SWIGLU:
-            act_op_func = glu_swiglu_fp32;
+            act_op_func = glu_swiglu_f32;
             op_type     = "swiglu-f32";
             break;
 
         case HTP_OP_GLU_SWIGLU_OAI:
-            act_op_func = glu_swiglu_oai_fp32;
+            act_op_func = glu_swiglu_oai_f32;
             op_type     = "swiglu-oai-f32";
             break;
         case HTP_OP_UNARY_GELU:
-            act_op_func = unary_gelu_fp32;
+            act_op_func = unary_gelu_f32;
             op_type     = "gelu-f32";
             break;
         default:
@@ -663,7 +663,7 @@ int op_activations(struct htp_ops_context * octx) {
 
     switch (octx->src0.type) {
         case HTP_TYPE_F32:
-            err = execute_op_activations_fp32(octx);
+            err = execute_op_activations_f32(octx);
             break;
 
         default:

@@ -237,83 +237,83 @@ static inline void hvx_mul_mul_f32_aa(uint8_t * restrict dst, const uint8_t * re
 // Add Scalar Variants
 
 static inline void hvx_add_scalar_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
-    const HVX_Vector inf = hvx_vec_splat_fp32(INFINITY);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
+    const HVX_Vector inf = hvx_vec_splat_f32(INFINITY);
     assert((unsigned long) dst % 128 == 0);
     assert((unsigned long) src % 128 == 0);
     hvx_scalar_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a, HVX_OP_ADD_SCALAR);
 }
 
 static inline void hvx_add_scalar_f32_au(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
-    const HVX_Vector inf = hvx_vec_splat_fp32(INFINITY);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
+    const HVX_Vector inf = hvx_vec_splat_f32(INFINITY);
     assert((unsigned long) dst % 128 == 0);
     hvx_scalar_loop_body(HVX_Vector, HVX_UVector, hvx_vec_store_a, HVX_OP_ADD_SCALAR);
 }
 
 static inline void hvx_add_scalar_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
-    const HVX_Vector inf = hvx_vec_splat_fp32(INFINITY);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
+    const HVX_Vector inf = hvx_vec_splat_f32(INFINITY);
     assert((unsigned long) src % 128 == 0);
     hvx_scalar_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u, HVX_OP_ADD_SCALAR);
 }
 
 static inline void hvx_add_scalar_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
     static const float kInf = INFINITY;
-    const HVX_Vector inf = hvx_vec_splat_fp32(kInf);
+    const HVX_Vector inf = hvx_vec_splat_f32(kInf);
     hvx_scalar_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u, HVX_OP_ADD_SCALAR);
 }
 
 // Sub Scalar Variants
 
 static inline void hvx_sub_scalar_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
     assert((unsigned long) dst % 128 == 0);
     assert((unsigned long) src % 128 == 0);
     hvx_scalar_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a, HVX_OP_SUB_SCALAR);
 }
 
 static inline void hvx_sub_scalar_f32_au(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
     assert((unsigned long) dst % 128 == 0);
     hvx_scalar_loop_body(HVX_Vector, HVX_UVector, hvx_vec_store_a, HVX_OP_SUB_SCALAR);
 }
 
 static inline void hvx_sub_scalar_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
     assert((unsigned long) src % 128 == 0);
     hvx_scalar_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u, HVX_OP_SUB_SCALAR);
 }
 
 static inline void hvx_sub_scalar_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
     hvx_scalar_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u, HVX_OP_SUB_SCALAR);
 }
 
 // Mul Scalar Variants
 
 static inline void hvx_mul_scalar_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
     assert((unsigned long) dst % 128 == 0);
     assert((unsigned long) src % 128 == 0);
     hvx_scalar_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a, HVX_OP_MUL_SCALAR);
 }
 
 static inline void hvx_mul_scalar_f32_au(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
     assert((unsigned long) dst % 128 == 0);
     hvx_scalar_loop_body(HVX_Vector, HVX_UVector, hvx_vec_store_a, HVX_OP_MUL_SCALAR);
 }
 
 static inline void hvx_mul_scalar_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
     assert((unsigned long) src % 128 == 0);
     hvx_scalar_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u, HVX_OP_MUL_SCALAR);
 }
 
 static inline void hvx_mul_scalar_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
     hvx_scalar_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u, HVX_OP_MUL_SCALAR);
 }
 
@@ -358,26 +358,26 @@ static inline void hvx_sub_scalar_f32(uint8_t * restrict dst, const uint8_t * re
 #define HVX_OP_MIN_SCALAR(v) Q6_Vsf_vmin_VsfVsf(val_vec, v)
 
 static inline void hvx_min_scalar_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
     assert((unsigned long) dst % 128 == 0);
     assert((unsigned long) src % 128 == 0);
     hvx_scalar_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a, HVX_OP_MIN_SCALAR);
 }
 
 static inline void hvx_min_scalar_f32_au(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
     assert((unsigned long) dst % 128 == 0);
     hvx_scalar_loop_body(HVX_Vector, HVX_UVector, hvx_vec_store_a, HVX_OP_MIN_SCALAR);
 }
 
 static inline void hvx_min_scalar_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
     assert((unsigned long) src % 128 == 0);
     hvx_scalar_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u, HVX_OP_MIN_SCALAR);
 }
 
 static inline void hvx_min_scalar_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, const float val, uint32_t n) {
-    const HVX_Vector val_vec = hvx_vec_splat_fp32(val);
+    const HVX_Vector val_vec = hvx_vec_splat_f32(val);
     hvx_scalar_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u, HVX_OP_MIN_SCALAR);
 }
 
@@ -404,30 +404,30 @@ static inline void hvx_min_scalar_f32(uint8_t * restrict dst, const uint8_t * re
     })
 
 static inline void hvx_clamp_scalar_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, const float min, const float max, uint32_t n) {
-    const HVX_Vector min_vec = hvx_vec_splat_fp32(min);
-    const HVX_Vector max_vec = hvx_vec_splat_fp32(max);
+    const HVX_Vector min_vec = hvx_vec_splat_f32(min);
+    const HVX_Vector max_vec = hvx_vec_splat_f32(max);
     assert((unsigned long) dst % 128 == 0);
     assert((unsigned long) src % 128 == 0);
     hvx_scalar_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a, HVX_OP_CLAMP_SCALAR);
 }
 
 static inline void hvx_clamp_scalar_f32_au(uint8_t * restrict dst, const uint8_t * restrict src, const float min, const float max, uint32_t n) {
-    const HVX_Vector min_vec = hvx_vec_splat_fp32(min);
-    const HVX_Vector max_vec = hvx_vec_splat_fp32(max);
+    const HVX_Vector min_vec = hvx_vec_splat_f32(min);
+    const HVX_Vector max_vec = hvx_vec_splat_f32(max);
     assert((unsigned long) dst % 128 == 0);
     hvx_scalar_loop_body(HVX_Vector, HVX_UVector, hvx_vec_store_a, HVX_OP_CLAMP_SCALAR);
 }
 
 static inline void hvx_clamp_scalar_f32_ua(uint8_t * restrict dst, const uint8_t * restrict src, const float min, const float max, uint32_t n) {
-    const HVX_Vector min_vec = hvx_vec_splat_fp32(min);
-    const HVX_Vector max_vec = hvx_vec_splat_fp32(max);
+    const HVX_Vector min_vec = hvx_vec_splat_f32(min);
+    const HVX_Vector max_vec = hvx_vec_splat_f32(max);
     assert((unsigned long) src % 128 == 0);
     hvx_scalar_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u, HVX_OP_CLAMP_SCALAR);
 }
 
 static inline void hvx_clamp_scalar_f32_uu(uint8_t * restrict dst, const uint8_t * restrict src, const float min, const float max, uint32_t n) {
-    const HVX_Vector min_vec = hvx_vec_splat_fp32(min);
-    const HVX_Vector max_vec = hvx_vec_splat_fp32(max);
+    const HVX_Vector min_vec = hvx_vec_splat_f32(min);
+    const HVX_Vector max_vec = hvx_vec_splat_f32(max);
     hvx_scalar_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u, HVX_OP_CLAMP_SCALAR);
 }
 

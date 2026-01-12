@@ -41,7 +41,7 @@ static inline HVX_Vector hvx_vec_recip_xp1_O3_unsigned(HVX_Vector vx) {
 // (4) convert that to fp16
 // (5) put sign back in. Also, if the original value (w/o sign) was <0x81, replace
 //     the result with the max value.
-static inline HVX_Vector hvx_vec_inverse_fp16(HVX_Vector vals) {
+static inline HVX_Vector hvx_vec_inverse_f16(HVX_Vector vals) {
     HVX_Vector     em_mask  = Q6_Vh_vsplat_R(0x7FFF);
     HVX_Vector     avals    = Q6_V_vand_VV(vals, em_mask);
     HVX_VectorPred is_neg   = Q6_Q_vcmp_gt_VhVh(avals, vals);
@@ -86,9 +86,9 @@ static inline HVX_Vector hvx_vec_inverse_fp16(HVX_Vector vals) {
     return recip;
 }
 
-static inline HVX_Vector hvx_vec_inverse_fp32(HVX_Vector v_sf) {
+static inline HVX_Vector hvx_vec_inverse_f32(HVX_Vector v_sf) {
     HVX_Vector inv_aprox_sf = Q6_V_vsplat_R(0x7EEEEBB3);
-    HVX_Vector two_sf       = hvx_vec_splat_fp32(2.0);
+    HVX_Vector two_sf       = hvx_vec_splat_f32(2.0);
 
     // First approximation
     HVX_Vector i_sf = Q6_Vw_vsub_VwVw(inv_aprox_sf, v_sf);
@@ -106,35 +106,35 @@ static inline HVX_Vector hvx_vec_inverse_fp32(HVX_Vector v_sf) {
     return Q6_Vsf_equals_Vqf32(r_qf);
 }
 
-static inline HVX_Vector hvx_vec_inverse_fp32_guard(HVX_Vector v_sf, HVX_Vector nan_inf_mask) {
-    HVX_Vector out = hvx_vec_inverse_fp32(v_sf);
+static inline HVX_Vector hvx_vec_inverse_f32_guard(HVX_Vector v_sf, HVX_Vector nan_inf_mask) {
+    HVX_Vector out = hvx_vec_inverse_f32(v_sf);
 
-    HVX_Vector           masked_out = Q6_V_vand_VV(out, nan_inf_mask);
-    const HVX_VectorPred pred       = Q6_Q_vcmp_eq_VwVw(nan_inf_mask, masked_out);
+    HVX_Vector     masked_out = Q6_V_vand_VV(out, nan_inf_mask);
+    const HVX_VectorPred pred = Q6_Q_vcmp_eq_VwVw(nan_inf_mask, masked_out);
 
     return Q6_V_vmux_QVV(pred, Q6_V_vzero(), out);
 }
 
-#define hvx_inverse_f32_loop_body(dst_type, src_type, vec_store)            \
-    do {                                                                    \
-        dst_type * restrict vdst = (dst_type *) dst;                        \
-        src_type * restrict vsrc = (src_type *) src;                        \
-                                                                            \
-        const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);          \
-                                                                            \
-        const uint32_t nvec = n / VLEN_FP32;                                \
-        const uint32_t nloe = n % VLEN_FP32;                                \
-                                                                            \
-        uint32_t i = 0;                                                     \
-                                                                            \
-        _Pragma("unroll(4)")                                                \
-        for (; i < nvec; i++) {                                             \
-             vdst[i] = hvx_vec_inverse_fp32_guard(vsrc[i], nan_inf_mask);   \
-        }                                                                   \
-        if (nloe) {                                                         \
-            HVX_Vector out = hvx_vec_inverse_fp32_guard(vsrc[i], nan_inf_mask); \
-            vec_store((void *) &vdst[i], nloe * SIZEOF_FP32, out);          \
-        }                                                                   \
+#define hvx_inverse_f32_loop_body(dst_type, src_type, vec_store)             \
+    do {                                                                     \
+        dst_type * restrict vdst = (dst_type *) dst;                         \
+        src_type * restrict vsrc = (src_type *) src;                         \
+                                                                             \
+        const HVX_Vector nan_inf_mask = Q6_V_vsplat_R(0x7f800000);           \
+                                                                             \
+        const uint32_t nvec = n / VLEN_FP32;                                 \
+        const uint32_t nloe = n % VLEN_FP32;                                 \
+                                                                             \
+        uint32_t i = 0;                                                      \
+                                                                             \
+        _Pragma("unroll(4)")                                                 \
+        for (; i < nvec; i++) {                                              \
+             vdst[i] = hvx_vec_inverse_f32_guard(vsrc[i], nan_inf_mask);     \
+        }                                                                    \
+        if (nloe) {                                                          \
+            HVX_Vector v = hvx_vec_inverse_f32_guard(vsrc[i], nan_inf_mask); \
+            vec_store((void *) &vdst[i], nloe * SIZEOF_FP32, v);             \
+        }                                                                    \
     } while(0)
 
 static inline void hvx_inverse_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
