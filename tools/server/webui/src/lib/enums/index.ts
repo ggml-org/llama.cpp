@@ -23,6 +23,8 @@ export {
 	MimeTypeText
 } from './files';
 
+export { MCPConnectionPhase, MCPLogLevel, MCPTransportType, HealthCheckStatus } from './mcp';
+
 export { ModelModality } from './model';
 
 export { ServerRole, ServerModelStatus } from './server';

@@ -26,31 +26,61 @@
  */
 
 import { browser } from '$app/environment';
-import { MCPService, type MCPConnection } from '$lib/services/mcp.service';
+import { MCPService } from '$lib/services/mcp.service';
 import type {
 	MCPToolCall,
 	OpenAIToolDefinition,
 	ServerStatus,
 	ToolExecutionResult,
-	MCPClientConfig
-} from '$lib/types/mcp';
+	MCPClientConfig,
+	MCPConnection,
+	HealthCheckState,
+	HealthCheckParams,
+	ServerCapabilities,
+	ClientCapabilities,
+	MCPCapabilitiesInfo,
+	MCPConnectionLog
+} from '$lib/types';
+import { MCPConnectionPhase, MCPLogLevel, HealthCheckStatus } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
 import { MCPError } from '$lib/errors';
 import { buildMcpClientConfig, detectMcpTransportFromUrl } from '$lib/utils/mcp';
 import { config } from '$lib/stores/settings.svelte';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 
-export type HealthCheckState =
-	| { status: 'idle' }
-	| { status: 'loading' }
-	| { status: 'error'; message: string }
-	| { status: 'success'; tools: { name: string; description?: string }[] };
-
-export interface HealthCheckParams {
-	id: string;
-	url: string;
-	requestTimeoutSeconds: number;
-	headers?: string;
+/**
+ * Build capabilities info from server and client capabilities
+ */
+function buildCapabilitiesInfo(
+	serverCaps?: ServerCapabilities,
+	clientCaps?: ClientCapabilities
+): MCPCapabilitiesInfo {
+	return {
+		server: {
+			tools: serverCaps?.tools ? { listChanged: serverCaps.tools.listChanged } : undefined,
+			prompts: serverCaps?.prompts ? { listChanged: serverCaps.prompts.listChanged } : undefined,
+			resources: serverCaps?.resources
+				? {
+						subscribe: serverCaps.resources.subscribe,
+						listChanged: serverCaps.resources.listChanged
+					}
+				: undefined,
+			logging: !!serverCaps?.logging,
+			completions: !!serverCaps?.completions,
+			tasks: !!serverCaps?.tasks
+		},
+		client: {
+			roots: clientCaps?.roots ? { listChanged: clientCaps.roots.listChanged } : undefined,
+			sampling: !!clientCaps?.sampling,
+			elicitation: clientCaps?.elicitation
+				? {
+						form: !!clientCaps.elicitation.form,
+						url: !!clientCaps.elicitation.url
+					}
+				: undefined,
+			tasks: !!clientCaps?.tasks
+		}
+	};
 }
 
 export class MCPClient {
@@ -531,19 +561,28 @@ export class MCPClient {
 	/**
 	 * Run health check for a specific server configuration.
 	 * Creates a temporary connection to test connectivity and list tools.
+	 * Tracks connection phases and collects detailed connection info.
 	 */
 	async runHealthCheck(server: HealthCheckParams): Promise<void> {
 		const trimmedUrl = server.url.trim();
+		const logs: MCPConnectionLog[] = [];
+		let currentPhase: MCPConnectionPhase = MCPConnectionPhase.Idle;
 
 		if (!trimmedUrl) {
 			this.notifyHealthCheck(server.id, {
-				status: 'error',
-				message: 'Please enter a server URL first.'
+				status: HealthCheckStatus.Error,
+				message: 'Please enter a server URL first.',
+				logs: []
 			});
 			return;
 		}
 
-		this.notifyHealthCheck(server.id, { status: 'loading' });
+		// Initial connecting state
+		this.notifyHealthCheck(server.id, {
+			status: HealthCheckStatus.Connecting,
+			phase: MCPConnectionPhase.TransportCreating,
+			logs: []
+		});
 
 		const timeoutMs = Math.round(server.requestTimeoutSeconds * 1000);
 		const headers = this.parseHeaders(server.headers);
@@ -559,19 +598,57 @@ export class MCPClient {
 					headers
 				},
 				DEFAULT_MCP_CONFIG.clientInfo,
-				DEFAULT_MCP_CONFIG.capabilities
+				DEFAULT_MCP_CONFIG.capabilities,
+				// Phase callback for tracking progress
+				(phase, log) => {
+					currentPhase = phase;
+					logs.push(log);
+					this.notifyHealthCheck(server.id, {
+						status: HealthCheckStatus.Connecting,
+						phase,
+						logs: [...logs]
+					});
+				}
 			);
 
 			const tools = connection.tools.map((tool) => ({
 				name: tool.name,
-				description: tool.description
+				description: tool.description,
+				title: tool.title
 			}));
 
-			this.notifyHealthCheck(server.id, { status: 'success', tools });
+			const capabilities = buildCapabilitiesInfo(
+				connection.serverCapabilities,
+				connection.clientCapabilities
+			);
+
+			this.notifyHealthCheck(server.id, {
+				status: HealthCheckStatus.Success,
+				tools,
+				serverInfo: connection.serverInfo,
+				capabilities,
+				transportType: connection.transportType,
+				protocolVersion: connection.protocolVersion,
+				instructions: connection.instructions,
+				connectionTimeMs: connection.connectionTimeMs,
+				logs
+			});
+
 			await MCPService.disconnect(connection);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : 'Unknown error occurred';
-			this.notifyHealthCheck(server.id, { status: 'error', message });
+			logs.push({
+				timestamp: new Date(),
+				phase: MCPConnectionPhase.Error,
+				message: `Connection failed: ${message}`,
+				level: MCPLogLevel.Error
+			});
+			this.notifyHealthCheck(server.id, {
+				status: HealthCheckStatus.Error,
+				message,
+				phase: currentPhase,
+				logs
+			});
 		}
 	}
 

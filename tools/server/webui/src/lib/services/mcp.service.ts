@@ -24,25 +24,15 @@ import type {
 	ToolCallParams,
 	ToolExecutionResult,
 	Implementation,
-	ClientCapabilities
-} from '$lib/types/mcp';
+	ClientCapabilities,
+	MCPConnection,
+	MCPPhaseCallback,
+	MCPConnectionLog,
+	MCPServerInfo
+} from '$lib/types';
+import { MCPConnectionPhase, MCPLogLevel, MCPTransportType } from '$lib/enums';
 import { MCPError } from '$lib/errors';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
-
-/**
- * Represents an active MCP server connection.
- * Returned by MCPService.connect() and used for subsequent operations.
- */
-export interface MCPConnection {
-	/** MCP SDK Client instance */
-	client: Client;
-	/** Active transport */
-	transport: Transport;
-	/** Discovered tools from this server */
-	tools: Tool[];
-	/** Server identifier */
-	serverName: string;
-}
 
 interface ToolResultContentItem {
 	type: string;

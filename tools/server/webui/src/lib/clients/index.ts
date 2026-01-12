@@ -18,7 +18,6 @@
 
 // MCP Client
 export { MCPClient, mcpClient } from './mcp.client';
-export type { HealthCheckState, HealthCheckParams } from './mcp.client';
 
 // Chat Client
 export { ChatClient, chatClient } from './chat.client';

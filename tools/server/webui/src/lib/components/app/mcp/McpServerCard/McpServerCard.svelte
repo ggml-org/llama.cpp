@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
-	import type { MCPServerSettingsEntry } from '$lib/types/mcp';
-	import { mcpStore, type HealthCheckState } from '$lib/stores/mcp.svelte';
+	import type { MCPServerSettingsEntry, HealthCheckState } from '$lib/types';
+	import { MCPConnectionPhase } from '$lib/enums';
 	import { mcpClient } from '$lib/clients/mcp.client';
 	import McpServerCardHeader from './McpServerCardHeader.svelte';
 	import McpServerCardActions from './McpServerCardActions.svelte';

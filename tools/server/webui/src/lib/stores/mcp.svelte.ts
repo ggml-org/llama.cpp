@@ -20,8 +20,8 @@
  */
 
 import { browser } from '$app/environment';
-import { mcpClient, type HealthCheckState } from '$lib/clients';
-import type { MCPServerSettingsEntry, McpServerUsageStats } from '$lib/types/mcp';
+import { mcpClient } from '$lib/clients/mcp.client';
+import type { HealthCheckState, MCPServerSettingsEntry, McpServerUsageStats } from '$lib/types';
 import type { McpServerOverride } from '$lib/types/database';
 import { buildMcpClientConfig, parseMcpServerSettings } from '$lib/utils/mcp';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
@@ -51,8 +51,6 @@ function parseMcpServerUsageStats(rawStats: unknown): McpServerUsageStats {
 
 	return {};
 }
-
-export type { HealthCheckState };
 
 class MCPStore {
 	private _isInitializing = $state(false);

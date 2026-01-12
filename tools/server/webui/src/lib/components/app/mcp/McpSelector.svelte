@@ -9,7 +9,8 @@
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { parseMcpServerSettings, getServerDisplayName, getFaviconUrl } from '$lib/utils/mcp';
-	import type { MCPServerSettingsEntry } from '$lib/types/mcp';
+	import type { MCPServerSettingsEntry } from '$lib/types';
+	import { HealthCheckStatus } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpClient } from '$lib/clients/mcp.client';
 
@@ -156,7 +157,7 @@
 
 		{#each filteredMcpServers() as server (server.id)}
 			{@const healthState = mcpStore.getHealthCheckState(server.id)}
-			{@const hasError = healthState.status === 'error'}
+			{@const hasError = healthState.status === HealthCheckStatus.Error}
 			{@const isEnabledForChat = isServerEnabledForChat(server)}
 			{@const hasOverride = hasPerChatOverride(server.id)}
 
