@@ -465,12 +465,6 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
             data[i*n_enc + j] = f;
         }
     }
-
-    for (int i = n_tokens; i < n_tokens; ++i) {
-        for (int j = 0; j < n_enc; ++j) {
-            data[i*n_enc + j] = -INFINITY;
-        }
-    }
 }
 
 void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
