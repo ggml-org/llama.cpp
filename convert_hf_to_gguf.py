@@ -8534,8 +8534,25 @@ class ExaoneMoEModel(Exaone4Model):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith("mtp."):
             if name.find("layers.") != -1:
-                # assume it is `mtp.layers.0.[module_name]` format
+                # `mtp.layers.0.[module_name]` format
                 name = name.replace(f"mtp.layers.{bid}", f"model.layers.{bid + self.hparams['num_hidden_layers']}")
+            else:
+                # mtp fc/norm weights
+                remapper = {
+                    "mtp.fc": "model.layers.{bid}.eh_proj",
+                    "mtp.pre_fc_norm_embedding": "model.layers.{bid}.enorm",
+                    "mtp.pre_fc_norm_hidden": "model.layers.{bid}.hnorm",
+                    "mtp.norm": "model.layers.{bid}.shared_head.norm",
+                }
+                _n = Path(name)
+                new_name = remapper[_n.stem] + _n.suffix
+
+                # set shared weights for all NextN/MTP layers
+                tensors = []
+                for bid in range(self.hparams['num_hidden_layers'], self.block_count):
+                    new_name = new_name.format(bid=bid)
+                    tensors.append((self.map_tensor_name(new_name), data_torch))
+                return tensors
 
         if name.endswith("e_score_correction_bias"):
             name = name.replace("e_score_correction_bias", "e_score_correction.bias")
