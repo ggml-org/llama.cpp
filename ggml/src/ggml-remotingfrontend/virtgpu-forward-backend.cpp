@@ -7,8 +7,8 @@ static long long current_time_ms() {
 }
 
 ggml_status apir_backend_graph_compute(virtgpu * gpu, ggml_cgraph * cgraph) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BACKEND_GRAPH_COMPUTE);
@@ -30,7 +30,7 @@ ggml_status apir_backend_graph_compute(virtgpu * gpu, ggml_cgraph * cgraph) {
 
     apir_encode_size_t(encoder, &cgraph_size);
 
-    char *              shmem_data    = (char *) shmem->mmap_ptr;
+    char *       shmem_data    = (char *) shmem->mmap_ptr;
     apir_encoder secondary_enc = apir_new_encoder(shmem_data, cgraph_size);
 
     apir_encode_cgraph_data(&secondary_enc, cgraph_data);

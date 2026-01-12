@@ -112,8 +112,8 @@ uint32_t apir_backend_dispatcher(uint32_t             cmd_type,
     apir_encoder * enc = &_enc;
 
     apir_decoder _dec = {
-        .cur = dec_cur,
-        .end = dec_end,
+        .cur   = dec_cur,
+        .end   = dec_end,
         .fatal = false,
     };
     apir_decoder * dec = &_dec;

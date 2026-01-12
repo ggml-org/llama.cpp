@@ -6,9 +6,7 @@
 
 #include <cstdint>
 
-uint32_t backend_device_get_device_count(apir_encoder *       enc,
-                                         apir_decoder *       dec,
-                                         virgl_apir_context * ctx) {
+uint32_t backend_device_get_device_count(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(ctx);
     UNUSED(dec);
@@ -19,9 +17,7 @@ uint32_t backend_device_get_device_count(apir_encoder *       enc,
     return 0;
 }
 
-uint32_t backend_device_get_count(apir_encoder *       enc,
-                                  apir_decoder *       dec,
-                                  virgl_apir_context * ctx) {
+uint32_t backend_device_get_count(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(ctx);
     UNUSED(dec);
@@ -32,9 +28,7 @@ uint32_t backend_device_get_count(apir_encoder *       enc,
     return 0;
 }
 
-uint32_t backend_device_get_name(apir_encoder *       enc,
-                                 apir_decoder *       dec,
-                                 virgl_apir_context * ctx) {
+uint32_t backend_device_get_name(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(dec);
 
@@ -47,9 +41,7 @@ uint32_t backend_device_get_name(apir_encoder *       enc,
     return 0;
 }
 
-uint32_t backend_device_get_description(apir_encoder *       enc,
-                                        apir_decoder *       dec,
-                                        virgl_apir_context * ctx) {
+uint32_t backend_device_get_description(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(dec);
 
@@ -62,9 +54,7 @@ uint32_t backend_device_get_description(apir_encoder *       enc,
     return 0;
 }
 
-uint32_t backend_device_get_type(apir_encoder *       enc,
-                                 apir_decoder *       dec,
-                                 virgl_apir_context * ctx) {
+uint32_t backend_device_get_type(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(dec);
 
@@ -74,9 +64,7 @@ uint32_t backend_device_get_type(apir_encoder *       enc,
     return 0;
 }
 
-uint32_t backend_device_get_memory(apir_encoder *       enc,
-                                   apir_decoder *       dec,
-                                   virgl_apir_context * ctx) {
+uint32_t backend_device_get_memory(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(dec);
 
@@ -89,9 +77,7 @@ uint32_t backend_device_get_memory(apir_encoder *       enc,
     return 0;
 }
 
-uint32_t backend_device_supports_op(apir_encoder *       enc,
-                                    apir_decoder *       dec,
-                                    virgl_apir_context * ctx) {
+uint32_t backend_device_supports_op(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
 
     const ggml_tensor * op = apir_decode_ggml_tensor_inplace(dec);
@@ -103,9 +89,7 @@ uint32_t backend_device_supports_op(apir_encoder *       enc,
     return 0;
 }
 
-uint32_t backend_device_get_buffer_type(apir_encoder *       enc,
-                                        apir_decoder *       dec,
-                                        virgl_apir_context * ctx) {
+uint32_t backend_device_get_buffer_type(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(dec);
 
@@ -116,9 +100,7 @@ uint32_t backend_device_get_buffer_type(apir_encoder *       enc,
     return 0;
 }
 
-uint32_t backend_device_get_props(apir_encoder *       enc,
-                                  apir_decoder *       dec,
-                                  virgl_apir_context * ctx) {
+uint32_t backend_device_get_props(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(dec);
 
@@ -133,9 +115,7 @@ uint32_t backend_device_get_props(apir_encoder *       enc,
     return 0;
 }
 
-uint32_t backend_device_buffer_from_ptr(apir_encoder *       enc,
-                                        apir_decoder *       dec,
-                                        virgl_apir_context * ctx) {
+uint32_t backend_device_buffer_from_ptr(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(dec);
 

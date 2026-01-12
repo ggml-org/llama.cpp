@@ -4,8 +4,7 @@ static ggml_backend_buffer_t ggml_backend_remoting_buffer_type_alloc_buffer(ggml
                                                                             size_t                     size) {
     virtgpu * gpu = BUFT_TO_GPU(buft);
 
-    ggml_backend_remoting_buffer_context * context =
-        (ggml_backend_remoting_buffer_context *) malloc(sizeof(*context));
+    ggml_backend_remoting_buffer_context * context = (ggml_backend_remoting_buffer_context *) malloc(sizeof(*context));
     if (!context) {
         GGML_ABORT("Couldn't allocate the buffer context ...");
     }

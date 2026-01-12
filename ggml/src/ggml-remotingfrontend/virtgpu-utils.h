@@ -61,9 +61,9 @@ inline void os_time_sleep(int64_t usecs) {
 }
 
 struct timer_data {
-    long long    start;
-    long long    total;
-    long long    count;
+    long long start;
+    long long total;
+    long long count;
 };
 
 static inline void start_timer(timer_data * timer) {

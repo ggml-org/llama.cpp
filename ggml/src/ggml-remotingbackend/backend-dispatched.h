@@ -11,10 +11,7 @@
 #include "shared/apir_cs.h"
 #include "shared/apir_cs_ggml.h"
 
-
-typedef uint32_t (*backend_dispatch_t)(apir_encoder *       enc,
-                                       apir_decoder *       dec,
-                                       virgl_apir_context * ctx);
+typedef uint32_t (*backend_dispatch_t)(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx);
 
 #include "backend-dispatched.gen.h"
 

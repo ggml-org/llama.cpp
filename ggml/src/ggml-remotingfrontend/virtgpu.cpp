@@ -91,8 +91,8 @@ static int virtgpu_handshake(virtgpu * gpu) {
 }
 
 static ApirLoadLibraryReturnCode virtgpu_load_library(virtgpu * gpu) {
-    apir_encoder *     encoder;
-    apir_decoder *     decoder;
+    apir_encoder *            encoder;
+    apir_decoder *            decoder;
     ApirLoadLibraryReturnCode ret;
 
     encoder = remote_call_prepare(gpu, APIR_COMMAND_TYPE_LoadLibrary, 0);
@@ -124,7 +124,7 @@ static ApirLoadLibraryReturnCode virtgpu_load_library(virtgpu * gpu) {
 
     if (ret < APIR_LOAD_LIBRARY_INIT_BASE_INDEX) {
         GGML_ABORT("%s: virglrenderer could not load the API Remoting backend library: %s (code %d)", __func__,
-              apir_load_library_error(ret), ret);
+                   apir_load_library_error(ret), ret);
         return ret;
     }
 
@@ -133,12 +133,12 @@ static ApirLoadLibraryReturnCode virtgpu_load_library(virtgpu * gpu) {
     ApirLoadLibraryReturnCode apir_ret = (ApirLoadLibraryReturnCode) (ret - APIR_LOAD_LIBRARY_INIT_BASE_INDEX);
 
     if (apir_ret < APIR_LOAD_LIBRARY_INIT_BASE_INDEX) {
-        GGML_ABORT("%s: the API Remoting backend library couldn't load the backend library: apir code=%d | %s):/", __func__,
-              apir_ret, apir_load_library_error(apir_ret));
+        GGML_ABORT("%s: the API Remoting backend library couldn't load the backend library: apir code=%d | %s):/",
+                   __func__, apir_ret, apir_load_library_error(apir_ret));
     } else {
         uint32_t lib_ret = apir_ret - APIR_LOAD_LIBRARY_INIT_BASE_INDEX;
         GGML_ABORT("%s: the API Remoting backend library initialize its backend library: apir code=%d):/", __func__,
-              lib_ret);
+                   lib_ret);
     }
     return ret;
 }
@@ -319,7 +319,7 @@ static int virtgpu_ioctl_get_caps(virtgpu *             gpu,
 
 static uint64_t virtgpu_ioctl_getparam(virtgpu * gpu, uint64_t param) {
     /* val must be zeroed because kernel only writes the lower 32 bits */
-    uint64_t                    val  = 0;
+    uint64_t             val  = 0;
     drm_virtgpu_getparam args = {
         .param = param,
         .value = (uintptr_t) &val,

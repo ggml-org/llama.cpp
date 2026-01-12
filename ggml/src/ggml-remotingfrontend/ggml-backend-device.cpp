@@ -108,8 +108,7 @@ static ggml_backend_buffer_t ggml_backend_remoting_device_buffer_from_ptr(ggml_b
                                                                           size_t             max_tensor_size) {
     virtgpu * gpu = DEV_TO_GPU(dev);
 
-    ggml_backend_remoting_buffer_context * context =
-        (ggml_backend_remoting_buffer_context *) malloc(sizeof(*context));
+    ggml_backend_remoting_buffer_context * context = (ggml_backend_remoting_buffer_context *) malloc(sizeof(*context));
     if (!context) {
         GGML_ABORT("Couldn't allocate the buffer context ...");
     }

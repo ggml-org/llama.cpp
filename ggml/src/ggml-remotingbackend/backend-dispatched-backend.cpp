@@ -7,9 +7,7 @@
 
 #include <cstdint>
 
-uint32_t backend_backend_graph_compute(apir_encoder *       enc,
-                                       apir_decoder *       dec,
-                                       virgl_apir_context * ctx) {
+uint32_t backend_backend_graph_compute(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(enc);
 

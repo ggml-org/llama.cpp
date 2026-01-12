@@ -60,8 +60,8 @@ struct virtgpu {
     int fd;
 
     struct {
-        virgl_renderer_capset        id;
-        uint32_t                          version;
+        virgl_renderer_capset      id;
+        uint32_t                   version;
         virgl_renderer_capset_apir data;
     } capset;
 

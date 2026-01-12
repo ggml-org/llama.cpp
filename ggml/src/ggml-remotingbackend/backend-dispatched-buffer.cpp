@@ -6,9 +6,7 @@
 
 #include <cstdint>
 
-uint32_t backend_buffer_get_base(apir_encoder *       enc,
-                                 apir_decoder *       dec,
-                                 virgl_apir_context * ctx) {
+uint32_t backend_buffer_get_base(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     ggml_backend_buffer_t buffer;
     buffer = apir_decode_ggml_buffer(dec);
@@ -19,9 +17,7 @@ uint32_t backend_buffer_get_base(apir_encoder *       enc,
     return 0;
 }
 
-uint32_t backend_buffer_set_tensor(apir_encoder *       enc,
-                                   apir_decoder *       dec,
-                                   virgl_apir_context * ctx) {
+uint32_t backend_buffer_set_tensor(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(enc);
 
@@ -53,9 +49,7 @@ uint32_t backend_buffer_set_tensor(apir_encoder *       enc,
     return 0;
 }
 
-uint32_t backend_buffer_get_tensor(apir_encoder *       enc,
-                                   apir_decoder *       dec,
-                                   virgl_apir_context * ctx) {
+uint32_t backend_buffer_get_tensor(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(enc);
 
@@ -86,9 +80,7 @@ uint32_t backend_buffer_get_tensor(apir_encoder *       enc,
     return 0;
 }
 
-uint32_t backend_buffer_cpy_tensor(apir_encoder *       enc,
-                                   apir_decoder *       dec,
-                                   virgl_apir_context * ctx) {
+uint32_t backend_buffer_cpy_tensor(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
 
     ggml_backend_buffer_t buffer;
@@ -121,9 +113,7 @@ uint32_t backend_buffer_clear(apir_encoder * enc, apir_decoder * dec, virgl_apir
     return 0;
 }
 
-uint32_t backend_buffer_free_buffer(apir_encoder *       enc,
-                                    apir_decoder *       dec,
-                                    virgl_apir_context * ctx) {
+uint32_t backend_buffer_free_buffer(apir_encoder * enc, apir_decoder * dec, virgl_apir_context * ctx) {
     UNUSED(ctx);
     UNUSED(enc);
 

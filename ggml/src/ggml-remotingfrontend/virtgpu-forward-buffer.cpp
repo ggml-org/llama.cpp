@@ -1,8 +1,8 @@
 #include "virtgpu-forward-impl.h"
 
 void * apir_buffer_get_base(virtgpu * gpu, apir_buffer_context_t * buffer_context) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_GET_BASE);
@@ -25,8 +25,8 @@ void apir_buffer_set_tensor(virtgpu *               gpu,
                             const void *            data,
                             size_t                  offset,
                             size_t                  size) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_SET_TENSOR);
@@ -73,14 +73,14 @@ apir_buffer_get_tensor(virtgpu *gpu, apir_buffer_context_t *buffer_context,
     memcpy(data, buffer_base_addr+offset, size);
 }
 #else
-void apir_buffer_get_tensor(virtgpu *        gpu,
+void apir_buffer_get_tensor(virtgpu *               gpu,
                             apir_buffer_context_t * buffer_context,
                             const ggml_tensor *     tensor,
                             void *                  data,
                             size_t                  offset,
                             size_t                  size) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_GET_TENSOR);
@@ -119,8 +119,8 @@ bool apir_buffer_cpy_tensor(virtgpu *               gpu,
                             apir_buffer_context_t * buffer_context,
                             const ggml_tensor *     src,
                             const ggml_tensor *     dst) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_CPY_TENSOR);
@@ -140,8 +140,8 @@ bool apir_buffer_cpy_tensor(virtgpu *               gpu,
 }
 
 void apir_buffer_clear(virtgpu * gpu, apir_buffer_context_t * buffer_context, uint8_t value) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_CLEAR);
@@ -155,8 +155,8 @@ void apir_buffer_clear(virtgpu * gpu, apir_buffer_context_t * buffer_context, ui
 }
 
 void apir_buffer_free_buffer(virtgpu * gpu, apir_buffer_context_t * buffer_context) {
-    apir_encoder * encoder;
-    apir_decoder * decoder;
+    apir_encoder *        encoder;
+    apir_decoder *        decoder;
     ApirForwardReturnCode ret;
 
     REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_FREE_BUFFER);
