@@ -10,11 +10,7 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { parseMcpServerSettings, getServerDisplayName, getFaviconUrl } from '$lib/utils/mcp';
 	import type { MCPServerSettingsEntry } from '$lib/types/mcp';
-	import {
-		mcpGetHealthCheckState,
-		mcpHasHealthCheck,
-		mcpGetUsageStats
-	} from '$lib/stores/mcp.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpClient } from '$lib/clients/mcp.client';
 
 	interface Props {
@@ -33,7 +29,7 @@
 
 	let hasMcpServers = $derived(mcpServers.length > 0);
 
-	let mcpUsageStats = $derived(mcpGetUsageStats());
+	let mcpUsageStats = $derived(mcpStore.getUsageStats());
 
 	function getServerUsageCount(serverId: string): number {
 		return mcpUsageStats[serverId] || 0;
@@ -53,7 +49,7 @@
 
 	let healthyEnabledMcpServers = $derived(
 		enabledMcpServersForChat.filter((s) => {
-			const healthState = mcpGetHealthCheckState(s.id);
+			const healthState = mcpStore.getHealthCheckState(s.id);
 			return healthState.status !== 'error';
 		})
 	);
@@ -105,7 +101,7 @@
 
 	onMount(() => {
 		for (const server of serversWithUrls) {
-			if (!mcpHasHealthCheck(server.id)) {
+			if (!mcpStore.hasHealthCheck(server.id)) {
 				mcpClient.runHealthCheck(server);
 			}
 		}
@@ -159,7 +155,7 @@
 		{/snippet}
 
 		{#each filteredMcpServers() as server (server.id)}
-			{@const healthState = mcpGetHealthCheckState(server.id)}
+			{@const healthState = mcpStore.getHealthCheckState(server.id)}
 			{@const hasError = healthState.status === 'error'}
 			{@const isEnabledForChat = isServerEnabledForChat(server)}
 			{@const hasOverride = hasPerChatOverride(server.id)}

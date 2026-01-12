@@ -206,8 +206,9 @@ function buildServerConfig(
 /**
  * Checks if a server is enabled considering per-chat overrides.
  * Per-chat override takes precedence over global setting.
+ * Pure helper function - no side effects.
  */
-function isServerEnabled(
+export function checkServerEnabled(
 	server: MCPServerSettingsEntry,
 	perChatOverrides?: McpServerOverride[]
 ): boolean {
@@ -239,7 +240,7 @@ export function buildMcpClientConfig(
 
 	const servers: Record<string, MCPServerConfig> = {};
 	for (const [index, entry] of rawServers.entries()) {
-		if (!isServerEnabled(entry, perChatOverrides)) continue;
+		if (!checkServerEnabled(entry, perChatOverrides)) continue;
 
 		const normalized = buildServerConfig(entry);
 		if (normalized) {
@@ -258,16 +259,4 @@ export function buildMcpClientConfig(
 		requestTimeoutMs: Math.round(DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000),
 		servers
 	};
-}
-
-/**
- * Checks if there are any enabled MCP servers in the configuration.
- * @param config - Global settings configuration
- * @param perChatOverrides - Optional per-chat server overrides
- */
-export function hasEnabledMcpServers(
-	config: SettingsConfigType,
-	perChatOverrides?: McpServerOverride[]
-): boolean {
-	return Boolean(buildMcpClientConfig(config, perChatOverrides));
 }
