@@ -1138,6 +1138,7 @@ int getaddrinfo_with_timeout(const char *node, const char *service,
 
   return ret;
 #elif TARGET_OS_MAC
+  if (!node) { return EAI_NONAME; }
   // macOS implementation using CFHost API for asynchronous DNS resolution
   CFStringRef hostname_ref = CFStringCreateWithCString(
       kCFAllocatorDefault, node, kCFStringEncodingUTF8);
@@ -5569,14 +5570,11 @@ bool Server::read_content(Stream &strm, Request &req, Response &res) {
           strm, req, res,
           // Regular
           [&](const char *buf, size_t n) {
-            // Prevent arithmetic overflow when checking sizes.
-            // Avoid computing (req.body.size() + n) directly because
-            // adding two unsigned `size_t` values can wrap around and
-            // produce a small result instead of indicating overflow.
-            // Instead, check using subtraction: ensure `n` does not
-            // exceed the remaining capacity `max_size() - size()`.
-            if (req.body.size() >= req.body.max_size() ||
-                n > req.body.max_size() - req.body.size()) {
+            // Limit decompressed body size to payload_max_length_ to protect
+            // against "zip bomb" attacks where a small compressed payload
+            // decompresses to a massive size.
+            if (req.body.size() + n > payload_max_length_ ||
+                req.body.size() + n > req.body.max_size()) {
               return false;
             }
             req.body.append(buf, n);

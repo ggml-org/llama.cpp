@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.30.0"
-#define CPPHTTPLIB_VERSION_NUM "0x001E00"
+#define CPPHTTPLIB_VERSION "0.30.1"
+#define CPPHTTPLIB_VERSION_NUM "0x001E01"
 
 /*
  * Platform compatibility check
@@ -205,7 +205,10 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
+#ifndef _SSIZE_T_DEFINED
 using ssize_t = __int64;
+#define _SSIZE_T_DEFINED
+#endif
 #endif // _MSC_VER
 
 #ifndef S_ISREG
@@ -2443,16 +2446,20 @@ namespace detail {
 
 #if defined(_WIN32)
 inline std::wstring u8string_to_wstring(const char *s) {
-  std::wstring ws;
+  if (!s) { return std::wstring(); }
+
   auto len = static_cast<int>(strlen(s));
+  if (!len) { return std::wstring(); }
+
   auto wlen = ::MultiByteToWideChar(CP_UTF8, 0, s, len, nullptr, 0);
-  if (wlen > 0) {
-    ws.resize(wlen);
-    wlen = ::MultiByteToWideChar(
-        CP_UTF8, 0, s, len,
-        const_cast<LPWSTR>(reinterpret_cast<LPCWSTR>(ws.data())), wlen);
-    if (wlen != static_cast<int>(ws.size())) { ws.clear(); }
-  }
+  if (!wlen) { return std::wstring(); }
+
+  std::wstring ws;
+  ws.resize(wlen);
+  wlen = ::MultiByteToWideChar(
+      CP_UTF8, 0, s, len,
+      const_cast<LPWSTR>(reinterpret_cast<LPCWSTR>(ws.data())), wlen);
+  if (wlen != static_cast<int>(ws.size())) { ws.clear(); }
   return ws;
 }
 #endif
