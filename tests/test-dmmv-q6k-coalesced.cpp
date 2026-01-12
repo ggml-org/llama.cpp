@@ -164,7 +164,7 @@ int main() {
     setvbuf(stderr, nullptr, _IONBF, 0);
     printf("=== Q6_K DMMV Coalesced Tests ===\n");
 
-    setenv("GGML_SYCL_REORDER_MODE", "coalesced", 1);
+    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "coalesced", 1);
     setenv("GGML_SYCL_FORCE_DMMV", "1", 1);
 
     ggml_backend_t gpu_backend = ggml_backend_sycl_init(0);

@@ -40,37 +40,6 @@ static inline int get_int_from_int8(const int8_t * x8, const int i32) {
     return x32;
 }
 
-// Minimal struct definitions to inspect tensor extra (mirrors ggml-sycl/common.hpp)
-enum class test_reorder_mode : uint8_t {
-    NONE = 0,
-    SOA = 1,
-    COALESCED = 2,
-};
-
-struct test_optimize_feature {
-    test_reorder_mode reorder_ = test_reorder_mode::NONE;
-    void* data_owner_ = nullptr;
-
-    test_reorder_mode get_reorder() const {
-        if (data_owner_ != nullptr) {
-            return ((test_optimize_feature*)data_owner_)->get_reorder();
-        }
-        return reorder_;
-    }
-    bool is_soa() const { return get_reorder() == test_reorder_mode::SOA; }
-    bool is_coalesced() const { return get_reorder() == test_reorder_mode::COALESCED; }
-};
-
-#undef GGML_SYCL_MAX_DEVICES
-#define GGML_SYCL_MAX_DEVICES 48
-#define GGML_SYCL_MAX_STREAMS 8
-
-struct test_tensor_extra_gpu {
-    void* data_device[GGML_SYCL_MAX_DEVICES];
-    void* events[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS];
-    test_optimize_feature optimized_feature;
-};
-
 static void cpu_mul_mat_q6k_f32(const void* x_data, const float* y,
                                 float* dst, int nrows, int ncols, int n_tokens) {
     const block_q6_K* x = (const block_q6_K*)x_data;
@@ -131,8 +100,7 @@ static void cpu_mul_mat_q6k_q8_1(const void* x_data, const float* y,
 static bool test_mmq_q6k_coalesced(int n_tokens, bool verbose) {
     printf("\n--- MMQ Q6_K coalesced batch=%d ---\n", n_tokens);
 
-    setenv("GGML_SYCL_REORDER_MODE", "coalesced", 1);
-    setenv("GGML_SYCL_DISABLE_OPT", "0", 1);
+    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "coalesced", 1);
 
     ggml_backend_t backend = ggml_backend_sycl_init(0);
     if (!backend) {
@@ -234,13 +202,19 @@ static bool test_mmq_q6k_coalesced(int n_tokens, bool verbose) {
         return false;
     }
 
-    const uint8_t* raw = (const uint8_t*)weight->extra;
-    const size_t opt_offset = 48 * sizeof(void*) + 48 * 8 * sizeof(void*);
-    uint8_t reorder_byte = raw[opt_offset];
-    printf("  reorder_mode byte at offset %zu = %d (0=NONE, 1=SOA, 2=COALESCED)\n",
-           opt_offset, reorder_byte);
-    if (reorder_byte != 2) {
-        printf("  FAIL: expected COALESCED reorder mode (2), got %d\n", reorder_byte);
+    const ggml_tensor_layout * layout = weight->layout;
+    if (!layout) {
+        printf("  FAIL: tensor->layout is NULL - coalesced path will NOT be used\n");
+        ggml_backend_buffer_free(weight_buffer);
+        ggml_backend_buffer_free(compute_buffer);
+        ggml_free(ctx);
+        ggml_backend_free(backend);
+        return false;
+    }
+
+    printf("  layout->mode = %d (0=AoS, 1=SoA, 2=Coalesced)\n", (int) layout->mode);
+    if (layout->mode != GGML_LAYOUT_COALESCED) {
+        printf("  FAIL: expected COALESCED layout (2), got %d\n", (int) layout->mode);
         ggml_backend_buffer_free(weight_buffer);
         ggml_backend_buffer_free(compute_buffer);
         ggml_free(ctx);

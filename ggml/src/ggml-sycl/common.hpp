@@ -20,11 +20,10 @@
 #include "sycl_hw.hpp"
 #include "unified-cache.hpp"
 
-#include <sycl/sycl.hpp>
-
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -32,6 +31,7 @@
 #include <optional>
 #include <queue>
 #include <string>
+#include <sycl/sycl.hpp>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -80,6 +80,7 @@ const int32_t * ggml_sycl_get_seq_ids_host_kv(size_t * count);
 enum class ggml_sycl_layout_ptr_event : uint8_t {
     HOST_CACHE_TARGET_HIT,
     HOST_CACHE_AOS_HIT,
+    HOST_CACHE_LAYOUT_FALLBACK,
     HOST_CACHE_DATA_FALLBACK,
     HOST_CACHE_MISS,
 };
@@ -345,9 +346,9 @@ inline dpct::err0 ggml_sycl_set_device(const int device) try {
 
 //////////////////////
 enum class reorder_mode : uint8_t {
-    NONE         = 0,  // Original AoS layout (Array of Structures)
-    SOA          = 1,  // SoA layout: all qs bytes contiguous, then all d values
-    COALESCED    = 2,  // Tile-based layout for MMVQ (word-major interleaved, requires SOA first)
+    NONE          = 0,  // Original AoS layout (Array of Structures)
+    SOA           = 1,  // SoA layout: all qs bytes contiguous, then all d values
+    COALESCED     = 2,  // Tile-based layout for MMVQ (word-major interleaved, requires SOA first)
     XMX_COALESCED = 3,  // XMX-optimized layout for MoE GEMM (K_TILE=32 aligned rows)
 };
 
@@ -359,12 +360,12 @@ using layout_mode = ggml_layout_mode;
 
 enum class tensor_usage : uint8_t {
     UNKNOWN = 0,
-    ATTENTION_WEIGHT,    // Q, K, V, O projections
-    FFN_WEIGHT,          // feed-forward non-MoE
-    MOE_EXPERT_WEIGHT,   // MoE expert gate/up/down
-    MOE_GATE,            // MoE routing gate
-    EMBEDDING,           // token embeddings
-    NORM,                // RMS/LayerNorm weights
+    ATTENTION_WEIGHT,   // Q, K, V, O projections
+    FFN_WEIGHT,         // feed-forward non-MoE
+    MOE_EXPERT_WEIGHT,  // MoE expert gate/up/down
+    MOE_GATE,           // MoE routing gate
+    EMBEDDING,          // token embeddings
+    NORM,               // RMS/LayerNorm weights
 };
 
 using tensor_layout_info = ggml_tensor_layout;
@@ -372,7 +373,7 @@ using tensor_layout_info = ggml_tensor_layout;
 static inline void ggml_sycl_release_layout(tensor_layout_info & layout, sycl::queue & q) {
     if (layout.owns_memory && layout.data_ptr) {
         sycl::free(layout.data_ptr, q);
-        layout.data_ptr = nullptr;
+        layout.data_ptr    = nullptr;
         layout.owns_memory = false;
     }
 }
@@ -402,18 +403,18 @@ struct XMXCapabilities {
 XMXCapabilities query_xmx_capabilities(sycl::device & dev);
 
 struct sycl_device_info {
-    int    cc;   // compute capability
-    int    nsm;  // number of streaming multiprocessors (CUDA) maps to the maximum
-                 // number of compute units on a SYCL device.
+    int             cc;   // compute capability
+    int             nsm;  // number of streaming multiprocessors (CUDA) maps to the maximum
+                          // number of compute units on a SYCL device.
     // size_t  smpb;               // max. shared memory per block
-    size_t smpbo;  // max. shared memory per block (with opt-in)
-    bool   vmm;    // virtual memory support
-    size_t total_vram;
-    size_t max_alloc_size;       // device-reported max allocation size
-    size_t safe_max_alloc_size;  // probed safe allocation size
+    size_t          smpbo;                // max. shared memory per block (with opt-in)
+    bool            vmm;                  // virtual memory support
+    size_t          total_vram;
+    size_t          max_alloc_size;       // device-reported max allocation size
+    size_t          safe_max_alloc_size;  // probed safe allocation size
     //sycl_hw_info hw_info;     \\ device id and aarch, currently not used
-    bool   supports_soa_reorder = false;  // Device capability: can use SoA weight layout
-    XMXCapabilities xmx_caps;  // XMX matrix engine capabilities (queried at init)
+    bool            supports_soa_reorder = false;  // Device capability: can use SoA weight layout
+    XMXCapabilities xmx_caps;                      // XMX matrix engine capabilities (queried at init)
 };
 
 struct ggml_sycl_device_info {
@@ -427,18 +428,17 @@ struct ggml_sycl_device_info {
 };
 
 const ggml_sycl_device_info & ggml_sycl_info();
-size_t ggml_sycl_get_safe_max_alloc_size(int device);
+size_t                        ggml_sycl_get_safe_max_alloc_size(int device);
 
 struct layout_policy {
     static layout_mode get_optimal(ggml_type qtype, tensor_usage usage, int device_id = -1) {
-        static const bool xmx_moe_enabled = (std::getenv("GGML_SYCL_XMX_MOE") != nullptr);
-        static const bool xmx_tiled_enabled =
-            (xmx_moe_enabled && std::getenv("GGML_SYCL_XMX_MOE_TILED") != nullptr);
+        static const bool xmx_moe_enabled   = (std::getenv("GGML_SYCL_XMX_MOE") != nullptr);
+        static const bool xmx_tiled_enabled = (xmx_moe_enabled && std::getenv("GGML_SYCL_XMX_MOE_TILED") != nullptr);
 
         bool xmx_supported = true;
         if (device_id >= 0 && device_id < ggml_sycl_info().device_count) {
             const auto & caps = ggml_sycl_info().devices[device_id].xmx_caps;
-            xmx_supported = caps.supported && caps.supports_int8;
+            xmx_supported     = caps.supported && caps.supports_int8;
         }
 
         // MoE experts: pick the layout required by the preferred kernel.
@@ -479,73 +479,95 @@ struct layout_policy {
 
     // Check env var override: GGML_SYCL_LAYOUT_OVERRIDE=<mode>
     static layout_mode get_with_override(ggml_type qtype, tensor_usage usage, int device_id = -1) {
-        static const char* override_env = std::getenv("GGML_SYCL_LAYOUT_OVERRIDE");
+        const char * override_env = std::getenv("GGML_SYCL_LAYOUT_OVERRIDE");
         if (override_env) {
-            if (strcmp(override_env, "aos") == 0) return GGML_LAYOUT_AOS;
-            if (strcmp(override_env, "soa") == 0) return GGML_LAYOUT_SOA;
-            if (strcmp(override_env, "coalesced") == 0) return GGML_LAYOUT_COALESCED;
-            if (strcmp(override_env, "xmx_tiled") == 0) return GGML_LAYOUT_XMX_TILED;
+            if (strcmp(override_env, "aos") == 0) {
+                return GGML_LAYOUT_AOS;
+            }
+            if (strcmp(override_env, "soa") == 0) {
+                return GGML_LAYOUT_SOA;
+            }
+            if (strcmp(override_env, "coalesced") == 0) {
+                return GGML_LAYOUT_COALESCED;
+            }
+            if (strcmp(override_env, "xmx_tiled") == 0) {
+                return GGML_LAYOUT_XMX_TILED;
+            }
         }
         return get_optimal(qtype, usage, device_id);
     }
 };
 
-inline tensor_usage infer_tensor_usage(const char* name) {
-    if (!name) return tensor_usage::UNKNOWN;
+inline tensor_usage infer_tensor_usage(const char * name) {
+    if (!name) {
+        return tensor_usage::UNKNOWN;
+    }
 
     // MoE expert weights (highest priority - check first)
-    if (strstr(name, "ffn_gate_exps") || strstr(name, "ffn_up_exps") ||
-        strstr(name, "ffn_down_exps"))
+    if (strstr(name, "ffn_gate_exps") || strstr(name, "ffn_up_exps") || strstr(name, "ffn_down_exps")) {
         return tensor_usage::MOE_EXPERT_WEIGHT;
+    }
 
     // MoE routing gate
-    if (strstr(name, "ffn_gate_inp"))
+    if (strstr(name, "ffn_gate_inp")) {
         return tensor_usage::MOE_GATE;
+    }
 
     // Attention weights
-    if (strstr(name, "attn_q") || strstr(name, "attn_k") ||
-        strstr(name, "attn_v") || strstr(name, "attn_output"))
+    if (strstr(name, "attn_q") || strstr(name, "attn_k") || strstr(name, "attn_v") || strstr(name, "attn_output")) {
         return tensor_usage::ATTENTION_WEIGHT;
+    }
 
     // FFN weights (non-MoE)
-    if (strstr(name, "ffn_gate.") || strstr(name, "ffn_up.") ||
-        strstr(name, "ffn_down."))
+    if (strstr(name, "ffn_gate.") || strstr(name, "ffn_up.") || strstr(name, "ffn_down.")) {
         return tensor_usage::FFN_WEIGHT;
+    }
 
     // Embeddings
-    if (strstr(name, "token_embd") || strstr(name, "output.weight"))
+    if (strstr(name, "token_embd") || strstr(name, "output.weight")) {
         return tensor_usage::EMBEDDING;
+    }
 
     // Norms
-    if (strstr(name, "_norm"))
+    if (strstr(name, "_norm")) {
         return tensor_usage::NORM;
+    }
 
     return tensor_usage::UNKNOWN;
 }
 
 // Resolve usage from registered metadata (if available), else fall back to name inference.
-tensor_usage ggml_sycl_get_tensor_usage(const ggml_tensor * tensor);
-layout_mode ggml_sycl_adjust_layout_for_tensor(const ggml_tensor * tensor, layout_mode target, int device);
-layout_mode ggml_sycl_select_moe_mmvq_layout(const ggml_tensor * src0, int device, bool host_weights);
-void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, layout_mode target);
-bool ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context & ctx,
-                                    const ggml_tensor * src0,
-                                    const ggml_tensor * ids,
-                                    layout_mode layout,
-                                    sycl::event * out_event,
-                                    bool allow_all_experts = false);
-bool ggml_sycl_moe_prepare_compact_list(ggml_backend_sycl_context & ctx,
-                                        const ggml_tensor * src0,
-                                        int64_t total_batches,
-                                        bool allow_alloc);
+tensor_usage    ggml_sycl_get_tensor_usage(const ggml_tensor * tensor);
+layout_mode     ggml_sycl_adjust_layout_for_tensor(const ggml_tensor * tensor, layout_mode target, int device);
+layout_mode     ggml_sycl_select_moe_mmvq_layout(const ggml_tensor * src0, int device, bool host_weights);
+void *          ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, layout_mode target);
+bool            ggml_sycl_update_moe_ptr_table(ggml_backend_sycl_context &  ctx,
+                                               const ggml_tensor *          src0,
+                                               const ggml_tensor *          ids,
+                                               layout_mode                  layout,
+                                               sycl::event *                out_event,
+                                               bool                         allow_all_experts = false,
+                                               bool                         allow_overcommit  = true,
+                                               const std::vector<int32_t> * ids_host_override = nullptr,
+                                               bool                         skip_device_copy  = false);
+bool            ggml_sycl_moe_prepare_compact_list(ggml_backend_sycl_context & ctx,
+                                                   const ggml_tensor *         src0,
+                                                   int64_t                     total_batches,
+                                                   bool                        allow_alloc);
+const int32_t * ggml_sycl_get_moe_ids_device_ptr(ggml_backend_sycl_context & ctx,
+                                                 const ggml_tensor *         ids,
+                                                 sycl::event *               out_event,
+                                                 int64_t *                   out_nb0,
+                                                 int64_t *                   out_nb1);
 
-// Global reorder mode setting (set from GGML_SYCL_REORDER_MODE env var)
-extern reorder_mode g_ggml_sycl_reorder_mode;
-
-// Check if weight reordering is enabled (based on GGML_SYCL_REORDER_MODE)
-// Returns true if mode is SOA or COALESCED, false if NONE
+// Check if weight reordering is enabled.
+// GGML_SYCL_LAYOUT_OVERRIDE=aos disables reordering (debug/test override).
 inline bool ggml_sycl_reorder_enabled() {
-    return g_ggml_sycl_reorder_mode != reorder_mode::NONE;
+    const char * override_env = std::getenv("GGML_SYCL_LAYOUT_OVERRIDE");
+    if (override_env && strcmp(override_env, "aos") == 0) {
+        return false;
+    }
+    return true;
 }
 
 // Check if a tensor type supports coalesced memory layout conversion
@@ -564,9 +586,6 @@ inline bool is_coalesced_supported(ggml_type type) {
             return false;
     }
 }
-
-// Global reorder mode setting (from GGML_SYCL_REORDER_MODE env var)
-extern reorder_mode g_ggml_sycl_reorder_mode;
 
 // =============================================================================
 // UNIFIED REORDER API - The ONLY way to change tensor reorder state
@@ -620,6 +639,30 @@ struct optimize_feature {
     // PRIVATE: Only callable by friend functions!
     // This ONLY sets the flag - does NOT transform data.
     // The friend functions MUST transform data BEFORE calling this.
+    //
+    // Layout transition state machine:
+    //
+    // States (reorder_mode):
+    //   NONE          - Original AoS tensor layout
+    //   SOA           - SoA layout for MMVQ kernels
+    //   COALESCED     - Coalesced SoA layout for MMVQ kernels
+    //   XMX_COALESCED - XMX optimized layout for MoE expert weights
+    //
+    // Valid transitions (upgrade-only):
+    //   NONE -> SOA
+    //   SOA  -> COALESCED
+    //   NONE -> XMX_COALESCED
+    //
+    // Invalid transitions (warned):
+    //   SOA -> NONE, COALESCED -> SOA/NONE, XMX_COALESCED -> *
+    //
+    // Rationale:
+    // - Downgrading requires re-reading original AoS data from host/mmap.
+    // - Redundant conversions waste bandwidth and can thrash cache state.
+    //
+    // Expected callers:
+    // - reorder_tensor_to_soa() and convert_tensor_to_coalesced() for MMVQ paths
+    // - MoE XMX conversion path for XMX_COALESCED layouts
     void set_reorder_mode_(reorder_mode new_mode, const char * tensor_name, const char * caller) {
         if (new_mode == reorder_) {
             return;  // No change
@@ -1241,7 +1284,7 @@ template <typename T> struct ggml_sycl_pool_alloc {
 // backend interface
 
 struct ggml_tensor_extra_gpu {
-    uint64_t        cache_uuid = 0;                                        // Monotonic cache identity for weights
+    uint64_t         cache_uuid = 0;                                        // Monotonic cache identity for weights
     void *           data_device[GGML_SYCL_MAX_DEVICES];                    // 1 pointer for each device for split
                                                                             // tensors
     dpct::event_ptr  events[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS];  // events for synchronizing multiple GPUs
@@ -1250,8 +1293,8 @@ struct ggml_tensor_extra_gpu {
     // Unified layout descriptor (new system - coexists with optimize_feature during migration)
     tensor_layout_info layout;
 
-    tp_layer_type    tp_type           = tp_layer_type::TP_NONE;  // Cached TP type (set once, avoids string compare)
-    bool             tp_type_cached    = false;                   // Whether tp_type has been computed
+    tp_layer_type tp_type        = tp_layer_type::TP_NONE;  // Cached TP type (set once, avoids string compare)
+    bool          tp_type_cached = false;                   // Whether tp_type has been computed
 
     // Tensor Parallelism sharding info
     // When TP is enabled, this tensor may hold only a shard of the full weight
@@ -1264,29 +1307,32 @@ struct ggml_tensor_extra_gpu {
     int     tp_world_size     = 1;      // Total number of ranks
 
     // XMX tile-aligned MXFP4 layout (cached at first use)
-    void*  xmx_mxfp4_tiled[GGML_SYCL_MAX_DEVICES] = {nullptr};
-    size_t xmx_mxfp4_tiled_size                   = 0;
-    bool   xmx_mxfp4_tiled_owned[GGML_SYCL_MAX_DEVICES] = {false};
+    void * xmx_mxfp4_tiled[GGML_SYCL_MAX_DEVICES]       = { nullptr };
+    size_t xmx_mxfp4_tiled_size                         = 0;
+    bool   xmx_mxfp4_tiled_owned[GGML_SYCL_MAX_DEVICES] = { false };
 
     // Temporary AoS staging for MXFP4 tiled conversion (host -> device)
-    void*  xmx_mxfp4_tiled_aos_staging[GGML_SYCL_MAX_DEVICES] = {nullptr};
-    size_t xmx_mxfp4_tiled_aos_staging_size[GGML_SYCL_MAX_DEVICES] = {0};
+    void * xmx_mxfp4_tiled_aos_staging[GGML_SYCL_MAX_DEVICES]      = { nullptr };
+    size_t xmx_mxfp4_tiled_aos_staging_size[GGML_SYCL_MAX_DEVICES] = { 0 };
 
     // Track async tile conversion completion for graph compatibility
     sycl::event xmx_mxfp4_tiled_conversion_evt[GGML_SYCL_MAX_DEVICES];
-    bool xmx_mxfp4_tiled_conversion_complete[GGML_SYCL_MAX_DEVICES] = {false};
-    std::mutex xmx_tiled_conversion_mutex[GGML_SYCL_MAX_DEVICES];  // Protect concurrent access
+    bool        xmx_mxfp4_tiled_conversion_complete[GGML_SYCL_MAX_DEVICES] = { false };
+    std::mutex  xmx_tiled_conversion_mutex[GGML_SYCL_MAX_DEVICES];  // Protect concurrent access
 
     // MoE expert pointer table (device + host staging) for per-expert layout access
-    void *                 moe_expert_ptrs_device[GGML_SYCL_MAX_DEVICES] = { nullptr };
-    size_t                 moe_expert_ptrs_size[GGML_SYCL_MAX_DEVICES]   = { 0 };
-    std::vector<void *>    moe_expert_ptrs_host[GGML_SYCL_MAX_DEVICES];
+    void *              moe_expert_ptrs_device[GGML_SYCL_MAX_DEVICES] = { nullptr };
+    size_t              moe_expert_ptrs_size[GGML_SYCL_MAX_DEVICES]   = { 0 };
+    std::vector<void *> moe_expert_ptrs_host[GGML_SYCL_MAX_DEVICES];
 
     // MoE compact pointer list (row-major by id) and missing flag
-    void *                 moe_expert_ptrs_compact_device[GGML_SYCL_MAX_DEVICES] = { nullptr };
-    size_t                 moe_expert_ptrs_compact_size[GGML_SYCL_MAX_DEVICES]   = { 0 };
-    size_t                 moe_expert_ptrs_compact_capacity[GGML_SYCL_MAX_DEVICES] = { 0 };
-    int *                  moe_expert_ptrs_missing_device[GGML_SYCL_MAX_DEVICES] = { nullptr };
+    void * moe_expert_ptrs_compact_device[GGML_SYCL_MAX_DEVICES]   = { nullptr };
+    size_t moe_expert_ptrs_compact_size[GGML_SYCL_MAX_DEVICES]     = { 0 };
+    size_t moe_expert_ptrs_compact_capacity[GGML_SYCL_MAX_DEVICES] = { 0 };
+    int *  moe_expert_ptrs_missing_device[GGML_SYCL_MAX_DEVICES]   = { nullptr };
+
+    // MoE expert hotness tracking (per layer)
+    std::vector<float> moe_expert_scores;
 };
 
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams = {});
@@ -1419,18 +1465,17 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
 
     if (const char * dbg = std::getenv("GGML_SYCL_LAYOUT_PTR_DEBUG")) {
         if (std::string(dbg) == "1") {
-            static std::atomic<int> dbg_left{8};
-            int remaining = dbg_left.fetch_sub(1);
+            static std::atomic<int> dbg_left{ 8 };
+            int                     remaining = dbg_left.fetch_sub(1);
             if (remaining > 0) {
-                const bool is_weight = ggml_sycl_tensor_is_weight(tensor);
-                const bool host_buf = tensor->buffer && ggml_backend_buffer_is_host(tensor->buffer);
-                const int usage = tensor->buffer ? (int) ggml_backend_buffer_get_usage(tensor->buffer) : -1;
-                const char * buft_name = tensor->buffer ?
-                    ggml_backend_buft_name(ggml_backend_buffer_get_type(tensor->buffer)) : "null";
+                const bool   is_weight = ggml_sycl_tensor_is_weight(tensor);
+                const bool   host_buf  = tensor->buffer && ggml_backend_buffer_is_host(tensor->buffer);
+                const int    usage     = tensor->buffer ? (int) ggml_backend_buffer_get_usage(tensor->buffer) : -1;
+                const char * buft_name =
+                    tensor->buffer ? ggml_backend_buft_name(ggml_backend_buffer_get_type(tensor->buffer)) : "null";
                 GGML_LOG_INFO("[LAYOUT-PTR-DBG] tensor=%s is_weight=%d weights_evictable=%d host=%d usage=%d buft=%s\n",
-                              tensor->name, is_weight ? 1 : 0,
-                              ggml_backend_sycl_weights_evictable() ? 1 : 0, host_buf ? 1 : 0,
-                              usage, buft_name);
+                              tensor->name, is_weight ? 1 : 0, ggml_backend_sycl_weights_evictable() ? 1 : 0,
+                              host_buf ? 1 : 0, usage, buft_name);
             }
         }
     }
@@ -1438,12 +1483,11 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
     layout_mode target = GGML_LAYOUT_AOS;
     if (ggml_sycl_tensor_is_weight(tensor)) {
         const tensor_usage usage = ggml_sycl_get_tensor_usage(tensor);
-        target = layout_policy::get_with_override(tensor->type, usage, device);
+        target                   = layout_policy::get_with_override(tensor->type, usage, device);
     }
 
-    const bool host_cached = ggml_backend_sycl_weights_evictable() &&
-        ggml_sycl_tensor_is_weight(tensor) &&
-        tensor->buffer && ggml_backend_buffer_is_host(tensor->buffer);
+    const bool host_cached = ggml_backend_sycl_weights_evictable() && ggml_sycl_tensor_is_weight(tensor) &&
+                             tensor->buffer && ggml_backend_buffer_is_host(tensor->buffer);
     if (host_cached) {
         void * cached = ggml_sycl_get_weight_layout_ptr(tensor, device, target);
         if (cached) {
@@ -1457,12 +1501,32 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
                 return cached;
             }
         }
+        const ggml_tensor_layout * layout = ggml_sycl_get_layout_info(tensor);
+        if (layout != nullptr && layout->data_ptr != nullptr) {
+            if (layout->device_id < 0 || layout->device_id == device) {
+                if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
+                    const void * cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+                    if (cache_key && cache->is_cached(cache_key, layout->mode)) {
+                        ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event::HOST_CACHE_LAYOUT_FALLBACK);
+                        return ggml_tensor_get_layout_ptr(tensor);
+                    }
+                }
+            }
+        }
         ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event::HOST_CACHE_DATA_FALLBACK);
         return ggml_sycl_get_data_ptr(tensor, device);
     }
 
-    const ggml_tensor_layout * layout = ggml_sycl_get_layout_info(tensor);
-    if (layout != nullptr && layout->data_ptr != nullptr) {
+    const ggml_tensor_layout * layout        = ggml_sycl_get_layout_info(tensor);
+    bool                       layout_cached = true;
+    if (layout != nullptr && layout->data_ptr != nullptr && ggml_backend_sycl_weights_evictable() &&
+        ggml_sycl_tensor_is_weight(tensor)) {
+        if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
+            const void * cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+            layout_cached          = (cache_key != nullptr) && cache->is_cached(cache_key, layout->mode);
+        }
+    }
+    if (layout != nullptr && layout->data_ptr != nullptr && layout_cached) {
         if ((layout->device_id < 0 || layout->device_id == device) &&
             (!ggml_sycl_tensor_is_weight(tensor) || layout->mode == target)) {
             return ggml_tensor_get_layout_ptr(tensor);
@@ -1474,8 +1538,10 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
 
 // Resolve a weight layout pointer for a specific target layout.
 // Returns nullptr if the requested layout cannot be satisfied.
-inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor, int device, layout_mode target,
-                                           const char ** out_source = nullptr) {
+inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
+                                           int                 device,
+                                           layout_mode         target,
+                                           const char **       out_source = nullptr) {
     if (tensor == nullptr) {
         if (out_source) {
             *out_source = "null_tensor";
@@ -1489,18 +1555,18 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor, int devic
 
     if (const char * dbg = std::getenv("GGML_SYCL_LAYOUT_PTR_DEBUG")) {
         if (std::string(dbg) == "1") {
-            static std::atomic<int> dbg_left_for{8};
-            int remaining = dbg_left_for.fetch_sub(1);
+            static std::atomic<int> dbg_left_for{ 8 };
+            int                     remaining = dbg_left_for.fetch_sub(1);
             if (remaining > 0) {
-                const bool is_weight = ggml_sycl_tensor_is_weight(tensor);
-                const bool host_buf = tensor->buffer && ggml_backend_buffer_is_host(tensor->buffer);
-                const int usage = tensor->buffer ? (int) ggml_backend_buffer_get_usage(tensor->buffer) : -1;
-                const char * buft_name = tensor->buffer ?
-                    ggml_backend_buft_name(ggml_backend_buffer_get_type(tensor->buffer)) : "null";
-                GGML_LOG_INFO("[LAYOUT-PTR-DBG] tensor=%s is_weight=%d target=%d weights_evictable=%d host=%d usage=%d buft=%s\n",
-                              tensor->name, is_weight ? 1 : 0, (int) target,
-                              ggml_backend_sycl_weights_evictable() ? 1 : 0, host_buf ? 1 : 0,
-                              usage, buft_name);
+                const bool   is_weight = ggml_sycl_tensor_is_weight(tensor);
+                const bool   host_buf  = tensor->buffer && ggml_backend_buffer_is_host(tensor->buffer);
+                const int    usage     = tensor->buffer ? (int) ggml_backend_buffer_get_usage(tensor->buffer) : -1;
+                const char * buft_name =
+                    tensor->buffer ? ggml_backend_buft_name(ggml_backend_buffer_get_type(tensor->buffer)) : "null";
+                GGML_LOG_INFO(
+                    "[LAYOUT-PTR-DBG] tensor=%s is_weight=%d target=%d weights_evictable=%d host=%d usage=%d buft=%s\n",
+                    tensor->name, is_weight ? 1 : 0, (int) target, ggml_backend_sycl_weights_evictable() ? 1 : 0,
+                    host_buf ? 1 : 0, usage, buft_name);
             }
         }
     }
@@ -1512,8 +1578,16 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor, int devic
         }
     }
 
-    const ggml_tensor_layout * layout = ggml_sycl_get_layout_info(tensor);
-    if (layout != nullptr && layout->data_ptr != nullptr) {
+    const ggml_tensor_layout * layout        = ggml_sycl_get_layout_info(tensor);
+    bool                       layout_cached = true;
+    if (layout != nullptr && layout->data_ptr != nullptr && ggml_backend_sycl_weights_evictable() &&
+        ggml_sycl_tensor_is_weight(tensor)) {
+        if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
+            const void * cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+            layout_cached          = (cache_key != nullptr) && cache->is_cached(cache_key, layout->mode);
+        }
+    }
+    if (layout != nullptr && layout->data_ptr != nullptr && layout_cached) {
         if ((layout->device_id < 0 || layout->device_id == device) && layout->mode == target &&
             layout->data_ptr == tensor->data) {
             if (out_source) {
@@ -1523,7 +1597,7 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor, int devic
         }
     }
 
-    if (layout != nullptr && layout->data_ptr != nullptr) {
+    if (layout != nullptr && layout->data_ptr != nullptr && layout_cached) {
         if ((layout->device_id < 0 || layout->device_id == device) && layout->mode == target) {
             if (out_source) {
                 *out_source = "layout_ptr";
@@ -1532,9 +1606,8 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor, int devic
         }
     }
 
-    const bool host_cached = ggml_backend_sycl_weights_evictable() &&
-        ggml_sycl_tensor_is_weight(tensor) &&
-        tensor->buffer && ggml_backend_buffer_is_host(tensor->buffer);
+    const bool host_cached = ggml_backend_sycl_weights_evictable() && ggml_sycl_tensor_is_weight(tensor) &&
+                             tensor->buffer && ggml_backend_buffer_is_host(tensor->buffer);
 
     if (host_cached) {
         void * cached = ggml_sycl_get_weight_layout_ptr(tensor, device, target);
@@ -1581,9 +1654,19 @@ struct ggml_backend_sycl_context {
     // This is NOT tensor state - it's a static capability of the GPU.
     // Tensor state is tracked per-tensor in ggml_tensor_extra_gpu::optimized_feature
     bool        supports_soa_reorder;
-    bool        layouts_finalized = false;
+    bool        layouts_finalized       = false;
     uint64_t    layouts_finalized_epoch = 0;
-    uint64_t    exec_graph_hash = 0;
+    uint64_t    exec_graph_hash         = 0;
+    int         moe_layer_count         = 0;
+
+    struct moe_ids_cache_entry {
+        uint64_t             hash = 0;
+        std::vector<int32_t> host_ids;
+        void *               device_ids   = nullptr;
+        size_t               device_bytes = 0;
+    };
+
+    std::unordered_map<const ggml_tensor *, moe_ids_cache_entry> moe_ids_cache;
 
     queue_ptr qptrs[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS] = { { nullptr } };
 
@@ -1722,11 +1805,11 @@ struct ggml_backend_sycl_context {
 
 #ifdef GGML_SYCL_GRAPH
     std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
-    int  exec_graph_n_nodes    = 0;      // Track graph size for cache invalidation
-    bool exec_graph_is_decode  = false;  // Track which phase the cached graph was recorded for
-    int  warmup_decode_n_nodes = 0;      // Track which decode graph has been warmed up
-    int  warmup_prompt_n_nodes = 0;      // Track which prompt graph has been warmed up
-    bool moe_graphs_disabled   = false;  // Set when MoE preload fails; disables graphs for all splits
+    int  exec_graph_n_nodes       = 0;      // Track graph size for cache invalidation
+    bool exec_graph_is_decode     = false;  // Track which phase the cached graph was recorded for
+    int  warmup_decode_n_nodes    = 0;      // Track which decode graph has been warmed up
+    int  warmup_prompt_n_nodes    = 0;      // Track which prompt graph has been warmed up
+    bool moe_graphs_disabled      = false;  // Set when MoE preload fails; disables graphs for all splits
     bool moe_graphs_disabled_once = false;  // Set when we skip graphs for a single run
 
     // Pre-allocated buffers for MoE graph recording
@@ -1821,10 +1904,10 @@ struct ggml_backend_sycl_context {
         sycl::half * tokens_f16_input = nullptr;  // F32->F16 converted tokens [n_input_rows * in_dim]
         sycl::half * tokens_sorted    = nullptr;  // Sorted tokens [total_pairs * in_dim]
         void *       token_map        = nullptr;  // Token mapping for scatter-back [total_pairs] (MoETokenMapping*)
-        int32_t *         expert_counts    = nullptr;  // Per-expert token counts [n_experts]
-        int32_t *         expert_offsets   = nullptr;  // Prefix sum offsets [n_experts + 1]
-        int32_t *         expert_write_pos = nullptr;  // Atomic write positions [n_experts]
-        sycl::half *      sorted_output    = nullptr;  // XMX output [total_pairs * out_dim]
+        int32_t *    expert_counts    = nullptr;  // Per-expert token counts [n_experts]
+        int32_t *    expert_offsets   = nullptr;  // Prefix sum offsets [n_experts + 1]
+        int32_t *    expert_write_pos = nullptr;  // Atomic write positions [n_experts]
+        sycl::half * sorted_output    = nullptr;  // XMX output [total_pairs * out_dim]
 
         // Q8 quantization buffers
         int8_t *     q_tokens     = nullptr;  // Quantized tokens [total_pairs * in_dim]
@@ -1879,32 +1962,45 @@ struct ggml_backend_sycl_context {
         }
 
         void free_buffers(queue_ptr stream) {
-            if (tokens_f16_input)
+            if (tokens_f16_input) {
                 sycl::free(tokens_f16_input, *stream);
-            if (tokens_sorted)
+            }
+            if (tokens_sorted) {
                 sycl::free(tokens_sorted, *stream);
-            if (token_map)
+            }
+            if (token_map) {
                 sycl::free(static_cast<void *>(token_map), *stream);
-            if (expert_counts)
+            }
+            if (expert_counts) {
                 sycl::free(expert_counts, *stream);
-            if (expert_offsets)
+            }
+            if (expert_offsets) {
                 sycl::free(expert_offsets, *stream);
-            if (expert_write_pos)
+            }
+            if (expert_write_pos) {
                 sycl::free(expert_write_pos, *stream);
-            if (sorted_output)
+            }
+            if (sorted_output) {
                 sycl::free(sorted_output, *stream);
-            if (q_tokens)
+            }
+            if (q_tokens) {
                 sycl::free(q_tokens, *stream);
-            if (token_scales)
+            }
+            if (token_scales) {
                 sycl::free(token_scales, *stream);
-            if (expert_scale_buf)
+            }
+            if (expert_scale_buf) {
                 sycl::free(expert_scale_buf, *stream);
-            if (sorted_token_ids)
+            }
+            if (sorted_token_ids) {
                 sycl::free(sorted_token_ids, *stream);
-            if (expert_tile_offsets)
+            }
+            if (expert_tile_offsets) {
                 sycl::free(expert_tile_offsets, *stream);
-            if (total_tiles)
+            }
+            if (total_tiles) {
                 sycl::free(total_tiles, *stream);
+            }
 
             tokens_f16_input    = nullptr;
             tokens_sorted       = nullptr;
@@ -1958,6 +2054,7 @@ struct ggml_backend_sycl_context {
     // This provides lighter-weight sync than full queue wait
     std::optional<sycl::event> barrier_event;
     bool                       has_pending_barrier = false;
+    std::optional<sycl::event> last_graph_event;
 
     ggml_sycl_pool & host_pool(int device) {
         if (host_pools[device] == nullptr) {
@@ -1969,7 +2066,7 @@ struct ggml_backend_sycl_context {
     ggml_sycl_pool & host_pool() { return host_pool(device); }
 
     // Flag to disable graphs when weight streaming is active
-    bool weight_streaming_graphs_disabled = false;
+    bool                                                   weight_streaming_graphs_disabled = false;
     // Track graph-pinned cache entries (key_ptr + layout) for unpinning.
     std::vector<std::pair<const void *, ggml_layout_mode>> graph_pinned_entries;
 

@@ -2,8 +2,8 @@
  * Q8_0 SoA Production Test - AoS vs SoA Comparison
  *
  * Tests Q8_0 quantized matrix multiplication by comparing:
- * 1. GPU AoS (GGML_SYCL_DISABLE_OPT=1) vs CPU reference
- * 2. GPU SoA (default) vs CPU reference
+ * 1. GPU AoS (GGML_SYCL_LAYOUT_OVERRIDE=aos) vs CPU reference
+ * 2. GPU SoA (GGML_SYCL_LAYOUT_OVERRIDE=soa) vs CPU reference
  * 3. GPU SoA vs GPU AoS
  *
  * This helps isolate whether the bug is in SoA reordering or kernel access.
@@ -182,9 +182,9 @@ static bool run_gpu_compute(ggml_backend_t gpu_backend,
                             bool force_aos) {
     // Set environment for this run
     if (force_aos) {
-        setenv("GGML_SYCL_DISABLE_OPT", "1", 1);
+        setenv("GGML_SYCL_LAYOUT_OVERRIDE", "aos", 1);
     } else {
-        unsetenv("GGML_SYCL_DISABLE_OPT");
+        setenv("GGML_SYCL_LAYOUT_OVERRIDE", "soa", 1);
     }
 
     ggml_backend_buffer_type_t gpu_buft = ggml_backend_get_default_buffer_type(gpu_backend);
@@ -251,9 +251,9 @@ static void debug_gpu_weight_layout(ggml_backend_t gpu_backend,
                                     const block_q8_0_test* original_data,
                                     int ncols, int nrows, bool force_aos) {
     if (force_aos) {
-        setenv("GGML_SYCL_DISABLE_OPT", "1", 1);
+        setenv("GGML_SYCL_LAYOUT_OVERRIDE", "aos", 1);
     } else {
-        unsetenv("GGML_SYCL_DISABLE_OPT");
+        setenv("GGML_SYCL_LAYOUT_OVERRIDE", "soa", 1);
     }
 
     ggml_backend_buffer_type_t gpu_buft = ggml_backend_get_default_buffer_type(gpu_backend);

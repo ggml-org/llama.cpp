@@ -1011,8 +1011,45 @@ namespace dpct
                 result = platform_name;
             }
 
-            if (result.empty())
-                throw std::runtime_error("can not find preferred GPU platform");
+            if (result.empty()) {
+                // Fallback: pick any GPU platform, prefer Level-Zero if available.
+                std::string fallback_level_zero;
+                std::string fallback_any;
+
+                for (const auto& platform : platform_list) {
+                    auto devices = platform.get_devices();
+                    auto gpu_dev = std::find_if(devices.begin(), devices.end(), [](const sycl::device& d) {
+                        return d.is_gpu();
+                    });
+                    if (gpu_dev == devices.end()) {
+                        continue;
+                    }
+
+                    auto platform_name = platform.get_info<sycl::info::platform::name>();
+                    std::string platform_name_low_case;
+                    platform_name_low_case.resize(platform_name.size());
+                    std::transform(
+                        platform_name.begin(), platform_name.end(), platform_name_low_case.begin(), ::tolower);
+
+                    if (platform_name_low_case.find("level-zero") != std::string::npos) {
+                        fallback_level_zero = platform_name;
+                        break;
+                    }
+
+                    if (fallback_any.empty()) {
+                        fallback_any = platform_name;
+                    }
+                }
+
+                if (!fallback_level_zero.empty()) {
+                    return fallback_level_zero;
+                }
+                if (!fallback_any.empty()) {
+                    return fallback_any;
+                }
+
+                return "";
+            }
 
             return result;
         }
@@ -1087,7 +1124,7 @@ namespace dpct
                 auto Platform = Platforms.back();
                 Platforms.pop_back();
                 auto platform_name = Platform.get_info<sycl::info::platform::name>();
-                if (platform_name.compare(preferred_platform_name) != 0) {
+                if (!preferred_platform_name.empty() && platform_name.compare(preferred_platform_name) != 0) {
                     continue;
                 }
                 auto devices = Platform.get_devices();

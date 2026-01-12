@@ -4,6 +4,7 @@
 #include "llama-io.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "ggml-backend-impl.h"
 
 #ifdef GGML_USE_SYCL
 #include "ggml-sycl.h"
@@ -236,6 +237,18 @@ llama_kv_cache::llama_kv_cache(
         }
 
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
+        if (ggml_backend_buffer_is_multi_buffer(buf)) {
+            const size_t max_size = ggml_backend_buft_get_max_size(buft);
+            if (max_size > 0 && max_size != SIZE_MAX) {
+                const size_t total = ggml_backend_buffer_get_size(buf);
+                const size_t chunks = (total + max_size - 1) / max_size;
+                LLAMA_LOG_INFO("%s: %10s KV buffer split into %zu chunks (max %.2f MiB)\n", __func__,
+                               ggml_backend_buffer_name(buf), chunks, max_size / 1024.0 / 1024.0);
+            } else {
+                LLAMA_LOG_INFO("%s: %10s KV buffer split into multiple chunks\n", __func__,
+                               ggml_backend_buffer_name(buf));
+            }
+        }
 
         ggml_backend_buffer_clear(buf, 0);
         ctxs_bufs.emplace_back(std::move(ctx), buf);

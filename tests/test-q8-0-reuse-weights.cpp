@@ -155,9 +155,7 @@ int main(int argc, char** argv) {
     ggml_backend_tensor_set(weight_tensor, weight_q8.data(), 0, nblocks * sizeof(block_q8_0_test));
     printf("  Weight tensor set. Buffer base: %p\n", ggml_backend_buffer_get_base(gpu_weight_buf));
 
-    // Store reference to weight data pointer
-    void* weight_data_ptr = weight_tensor->data;
-    printf("  Weight tensor data ptr: %p\n", weight_data_ptr);
+    printf("  Weight tensor data ptr: %p\n", weight_tensor->data);
 
     bool all_passed = true;
 
@@ -166,13 +164,8 @@ int main(int argc, char** argv) {
     {
         struct ggml_context* ctx = ggml_init(params);
 
-        // Create weight tensor pointing to SAME buffer
-        struct ggml_tensor* weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, ncols, nrows);
-        weight->data = weight_data_ptr;  // Reuse existing data
-        weight->buffer = gpu_weight_buf;
-
         struct ggml_tensor* input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ncols, prompt_batch);
-        struct ggml_tensor* output = ggml_mul_mat(ctx, weight, input);
+        struct ggml_tensor* output = ggml_mul_mat(ctx, weight_tensor, input);
 
         // Allocate compute buffer
         size_t compute_size = ggml_nbytes(input) + ggml_nbytes(output) + 4096;
@@ -235,13 +228,8 @@ int main(int argc, char** argv) {
 
         struct ggml_context* ctx = ggml_init(params);
 
-        // Create weight tensor pointing to SAME buffer
-        struct ggml_tensor* weight = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, ncols, nrows);
-        weight->data = weight_data_ptr;  // Reuse existing data
-        weight->buffer = gpu_weight_buf;
-
         struct ggml_tensor* input = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ncols, decode_batch);
-        struct ggml_tensor* output = ggml_mul_mat(ctx, weight, input);
+        struct ggml_tensor* output = ggml_mul_mat(ctx, weight_tensor, input);
 
         // Allocate compute buffer
         size_t compute_size = ggml_nbytes(input) + ggml_nbytes(output) + 4096;

@@ -1340,6 +1340,9 @@ common_init_result::common_init_result(common_params & params) :
     if (params.sycl_unified_cache_pct > 0) {
         ggml_backend_sycl_set_unified_cache_budget_pct(params.sycl_unified_cache_pct);
     }
+    if (params.sycl_unified_cache_host_pct > 0) {
+        ggml_backend_sycl_set_unified_cache_host_budget_pct(params.sycl_unified_cache_host_pct);
+    }
 #endif
 
     auto mparams = common_model_params_to_llama(params);

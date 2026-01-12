@@ -192,12 +192,120 @@ static bool test_aos_drop(int device_id) {
     return true;
 }
 
+static bool test_layout_ptr_eviction_guard(int device_id) {
+    ggml_backend_t backend = ggml_backend_sycl_init(device_id);
+    if (!backend) {
+        fprintf(stderr, "Failed to init SYCL backend\n");
+        return false;
+    }
+
+    ggml_backend_buffer_type_t buft = ggml_backend_sycl_buffer_type(device_id);
+    if (!buft) {
+        ggml_backend_free(backend);
+        fprintf(stderr, "Failed to get SYCL buffer type\n");
+        return false;
+    }
+
+    ggml_init_params params = {
+        /*.mem_size   =*/ 2 * 1024 * 1024,
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * ctx = ggml_init(params);
+    if (!ctx) {
+        ggml_backend_free(backend);
+        fprintf(stderr, "Failed to init ggml context for eviction guard test\n");
+        return false;
+    }
+
+    ggml_tensor * weight = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4096);
+    ggml_set_name(weight, "attn_q.bias");
+
+    const size_t weight_buf_size = ggml_backend_buft_get_alloc_size(buft, weight);
+    ggml_backend_buffer_t weight_buffer = ggml_backend_buft_alloc_buffer(buft, weight_buf_size);
+    if (!weight_buffer) {
+        ggml_free(ctx);
+        ggml_backend_free(backend);
+        fprintf(stderr, "Failed to allocate SYCL weight buffer\n");
+        return false;
+    }
+    ggml_backend_buffer_set_usage(weight_buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+    ggml_backend_tensor_alloc(weight_buffer, weight, ggml_backend_buffer_get_base(weight_buffer));
+
+    auto * extra = new ggml_tensor_extra_gpu();
+    weight->extra = extra;
+
+    const void * key_ptr = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
+    if (!key_ptr) {
+        delete extra;
+        ggml_backend_buffer_free(weight_buffer);
+        ggml_free(ctx);
+        ggml_backend_free(backend);
+        fprintf(stderr, "Failed to get cache key for eviction guard test\n");
+        return false;
+    }
+
+    ggml_sycl::unified_cache * cache = ggml_sycl::get_unified_cache_for_device(device_id);
+    if (!cache) {
+        delete extra;
+        ggml_backend_buffer_free(weight_buffer);
+        ggml_free(ctx);
+        ggml_backend_free(backend);
+        fprintf(stderr, "Failed to get unified cache for eviction guard test\n");
+        return false;
+    }
+
+    std::vector<float> host_data(ggml_nelements(weight), 1.0f);
+    bool               needs_fill = false;
+    void *             layout_ptr = cache->ensure_cached_alloc(
+        key_ptr, host_data.data(), ggml_nbytes(weight), ggml_nbytes(weight),
+        ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false, &needs_fill);
+    if (!layout_ptr || !cache->is_cached(key_ptr, GGML_LAYOUT_AOS)) {
+        delete extra;
+        ggml_backend_buffer_free(weight_buffer);
+        ggml_free(ctx);
+        ggml_backend_free(backend);
+        fprintf(stderr, "Failed to cache AOS layout for eviction guard test\n");
+        return false;
+    }
+
+    extra->layout.mode       = GGML_LAYOUT_AOS;
+    extra->layout.data_ptr   = layout_ptr;
+    extra->layout.size       = ggml_nbytes(weight);
+    extra->layout.owns_memory = false;
+    extra->layout.device_id  = device_id;
+    extra->layout.qtype      = weight->type;
+    extra->layout.n_elements = ggml_nelements(weight);
+    extra->layout.n_experts  = 1;
+
+    cache->remove(key_ptr, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS);
+
+    void * resolved_ptr = ggml_sycl_get_layout_ptr(weight, device_id);
+    if (resolved_ptr != weight->data) {
+        delete extra;
+        ggml_backend_buffer_free(weight_buffer);
+        ggml_free(ctx);
+        ggml_backend_free(backend);
+        fprintf(stderr, "Evicted layout pointer was reused unexpectedly\n");
+        return false;
+    }
+
+    weight->extra = nullptr;
+    delete extra;
+    ggml_backend_buffer_free(weight_buffer);
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+
+    return true;
+}
+
 int main() {
     if (!std::getenv("ONEAPI_DEVICE_SELECTOR")) {
         setenv("ONEAPI_DEVICE_SELECTOR", "level_zero:1", 1);
     }
 
     unsetenv("GGML_SYCL_LAYOUT_OVERRIDE");
+    setenv("GGML_SYCL_WEIGHTS_EVICTABLE", "1", 1);
     setenv("GGML_SYCL_XMX_MOE", "1", 1);
     setenv("GGML_SYCL_XMX_MOE_TILED", "1", 1);
 
@@ -214,6 +322,7 @@ int main() {
     bool ok = true;
     ok &= test_layout_selection(device_id, xmx_supported);
     ok &= test_aos_drop(device_id);
+    ok &= test_layout_ptr_eviction_guard(device_id);
 
     if (ok) {
         fprintf(stderr, "layout-cache tests passed.\n");

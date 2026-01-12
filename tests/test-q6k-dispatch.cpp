@@ -5,7 +5,7 @@
 // Run: ONEAPI_DEVICE_SELECTOR=level_zero:1 ./build/bin/test-q6k-dispatch
 //
 // Environment variables:
-//   GGML_SYCL_DISABLE_OPT=1  - Disable SoA optimization (AoS mode)
+//   GGML_SYCL_LAYOUT_OVERRIDE=aos  - Force AoS (no reorder)
 //   GGML_SYCL_DISABLE_GRAPH=1 - Disable SYCL graphs
 //   (default)                - SoA optimization enabled
 
@@ -517,10 +517,10 @@ int main(int argc, char** argv) {
     printf("========================================\n\n");
 
     // Check environment
-    const char* disable_opt = getenv("GGML_SYCL_DISABLE_OPT");
-    const char* disable_graph = getenv("GGML_SYCL_DISABLE_GRAPH");
+    const char * override_env = getenv("GGML_SYCL_LAYOUT_OVERRIDE");
+    const char * disable_graph = getenv("GGML_SYCL_DISABLE_GRAPH");
     printf("Environment:\n");
-    printf("  GGML_SYCL_DISABLE_OPT: %s\n", disable_opt ? disable_opt : "(not set, SoA enabled)");
+    printf("  GGML_SYCL_LAYOUT_OVERRIDE: %s\n", override_env ? override_env : "(not set, auto)");
     printf("  GGML_SYCL_DISABLE_GRAPH: %s\n", disable_graph ? disable_graph : "(not set, graphs enabled)");
     printf("\n");
 

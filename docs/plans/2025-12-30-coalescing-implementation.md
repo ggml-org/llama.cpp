@@ -133,7 +133,7 @@ git commit -m "feat(sycl): Add is_coalesced() helper function"
 
 ---
 
-### Task 4: Add GGML_SYCL_REORDER_MODE environment variable
+### Task 4: Add GGML_SYCL_LAYOUT_OVERRIDE environment variable
 
 **Files:**
 - Modify: `ggml/src/ggml-sycl/ggml-sycl.cpp`
@@ -141,7 +141,7 @@ git commit -m "feat(sycl): Add is_coalesced() helper function"
 **Step 1: Find existing env var parsing**
 
 ```bash
-grep -n "GGML_SYCL_DISABLE_OPT\|getenv" ggml/src/ggml-sycl/ggml-sycl.cpp | head -20
+grep -n "GGML_SYCL_LAYOUT_OVERRIDE\|getenv" ggml/src/ggml-sycl/ggml-sycl.cpp | head -20
 ```
 
 **Step 2: Add reorder mode selection**
@@ -149,15 +149,15 @@ grep -n "GGML_SYCL_DISABLE_OPT\|getenv" ggml/src/ggml-sycl/ggml-sycl.cpp | head 
 Near existing env var parsing:
 ```cpp
 static reorder_mode get_reorder_mode() {
-    const char* mode = getenv("GGML_SYCL_REORDER_MODE");
+    const char* mode = getenv("GGML_SYCL_LAYOUT_OVERRIDE");
     if (mode == nullptr) {
         // Default: use SoA (existing behavior)
-        return getenv("GGML_SYCL_DISABLE_OPT") ? reorder_mode::NONE : reorder_mode::SOA;
+        return reorder_mode::SOA;
     }
-    if (strcmp(mode, "none") == 0) return reorder_mode::NONE;
+    if (strcmp(mode, "aos") == 0) return reorder_mode::NONE;
     if (strcmp(mode, "soa") == 0) return reorder_mode::SOA;
     if (strcmp(mode, "coalesced") == 0) return reorder_mode::COALESCED;
-    fprintf(stderr, "WARN: Unknown GGML_SYCL_REORDER_MODE '%s', using soa\n", mode);
+    fprintf(stderr, "WARN: Unknown GGML_SYCL_LAYOUT_OVERRIDE '%s', using soa\n", mode);
     return reorder_mode::SOA;
 }
 ```
@@ -166,7 +166,7 @@ static reorder_mode get_reorder_mode() {
 
 ```bash
 ./scripts/quick-rebuild.sh ggml-sycl.cpp
-GGML_SYCL_REORDER_MODE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   ./build/bin/llama-completion -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
   -ngl 99 --flash-attn on -p "Hi" -n 1 --seed 42 --temp 0
 ```
@@ -176,7 +176,7 @@ Expected: Runs (falls back to SoA since coalesced kernels don't exist yet)
 
 ```bash
 git add ggml/src/ggml-sycl/ggml-sycl.cpp
-git commit -m "feat(sycl): Add GGML_SYCL_REORDER_MODE environment variable"
+git commit -m "feat(sycl): Add GGML_SYCL_LAYOUT_OVERRIDE environment variable"
 ```
 
 ---
@@ -444,12 +444,12 @@ Expected: PASS
 
 ```bash
 # SoA output
-GGML_SYCL_REORDER_MODE=soa ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=soa ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   ./build/bin/llama-completion -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
   -ngl 99 --flash-attn on -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0 > /tmp/soa.txt
 
 # Coalesced output
-GGML_SYCL_REORDER_MODE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   ./build/bin/llama-completion -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
   -ngl 99 --flash-attn on -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0 > /tmp/coalesced.txt
 
@@ -474,7 +474,7 @@ git commit -m "test(sycl): Q4_0 coalesced DMMV test passing"
 **Step 1: Run coalesced benchmark**
 
 ```bash
-GGML_SYCL_REORDER_MODE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   ./build/bin/llama-bench -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
   -p 512 -n 128 -ngl 99 -fa 1
 ```
@@ -482,7 +482,7 @@ GGML_SYCL_REORDER_MODE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
 **Step 2: Compare with SoA baseline**
 
 ```bash
-GGML_SYCL_REORDER_MODE=soa ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=soa ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   ./build/bin/llama-bench -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
   -p 512 -n 128 -ngl 99 -fa 1
 ```
@@ -490,7 +490,7 @@ GGML_SYCL_REORDER_MODE=soa ONEAPI_DEVICE_SELECTOR=level_zero:1 \
 **Step 3: Run VTune on coalesced**
 
 ```bash
-GGML_SYCL_REORDER_MODE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   vtune -collect gpu-hotspots -knob gpu-sampling-interval=1 \
   -result-dir benchmark_results/vtune_coalesced_q4_0 \
   -- ./build/bin/llama-bench -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
@@ -534,7 +534,7 @@ git commit -m "perf: Q4_0 coalesced benchmark results"
 - Modify: `docs/ENV.md`
 - Modify: `OPTIMIZATION_REPORT.md`
 
-**Step 1: Add GGML_SYCL_REORDER_MODE to ENV.md**
+**Step 1: Add GGML_SYCL_LAYOUT_OVERRIDE to ENV.md**
 
 **Step 2: Add coalesced benchmark results to OPTIMIZATION_REPORT.md**
 

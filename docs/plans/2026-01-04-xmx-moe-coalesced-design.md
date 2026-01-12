@@ -6,7 +6,7 @@
 
 ## Problem Statement
 
-The XMX-accelerated MoE GEMM kernels currently reject coalesced memory layout (the branch default), forcing users to set `GGML_SYCL_REORDER_MODE=none` to use XMX acceleration. This creates a performance trade-off: either use XMX with slower AoS memory access, or use coalesced layout without XMX.
+The XMX-accelerated MoE GEMM kernels currently reject coalesced memory layout (the branch default), forcing users to set `GGML_SYCL_LAYOUT_OVERRIDE=aos` to use XMX acceleration. This creates a performance trade-off: either use XMX with slower AoS memory access, or use coalesced layout without XMX.
 
 **Current Coverage:**
 | Layout | Q8_0 | MXFP4 |
@@ -246,9 +246,9 @@ GGML_SYCL_XMX_MOE=1 ONEAPI_DEVICE_SELECTOR=level_zero:1 \
 
 ### Performance Validation
 ```bash
-for mode in none soa coalesced; do
+for mode in aos soa coalesced; do
   echo "=== Mode: $mode ==="
-  GGML_SYCL_REORDER_MODE=$mode GGML_SYCL_XMX_MOE=1 \
+  GGML_SYCL_LAYOUT_OVERRIDE=$mode GGML_SYCL_XMX_MOE=1 \
     ./build/bin/llama-bench \
     -m /Storage/GenAI/models/gpt-oss-20b-Q8_0.gguf \
     -p 512 -n 128 -ngl 99 -fa 1

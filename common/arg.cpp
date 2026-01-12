@@ -19,6 +19,12 @@
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
 
+#if defined(__GNUC__) || defined(__clang__)
+extern "C" void ggml_backend_sycl_set_debug(int level) __attribute__((weak));
+#else
+extern "C" void ggml_backend_sycl_set_debug(int level);
+#endif
+
 #include <algorithm>
 #include <cinttypes>
 #include <climits>
@@ -2251,6 +2257,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MAIN_GPU"));
     add_opt(common_arg(
+        {"--sycl-debug"}, "LEVEL",
+        "enable SYCL backend debug logging without using environment variables",
+        [](common_params &, int value) {
+            if (ggml_backend_sycl_set_debug) {
+                ggml_backend_sycl_set_debug(value);
+            }
+        }
+    ));
+    add_opt(common_arg(
         {"--pp-size"}, "N",
         string_format("number of pipeline stages for pipeline parallelism (0 = auto, default: %d)", params.pp_size),
         [](common_params & params, int value) {
@@ -2390,6 +2405,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.sycl_unified_cache_pct = value;
         }
     ).set_env("LLAMA_ARG_UNIFIED_CACHE_PCT"));
+    add_opt(common_arg(
+        {"--unified-cache-host-pct"}, "N",
+        string_format("percentage of total RAM for SYCL host cache (default: %" PRIi32 ")",
+                      params.sycl_unified_cache_host_pct),
+        [](common_params & params, int value) {
+            if (value < 1 || value > 100) {
+                throw std::invalid_argument("--unified-cache-host-pct must be between 1 and 100");
+            }
+            params.sycl_unified_cache_host_pct = value;
+        }
+    ).set_env("LLAMA_ARG_UNIFIED_CACHE_HOST_PCT"));
     add_opt(common_arg(
         {"--weight-granularity"}, "N",
         string_format("weight cache granularity: 0=layer, 1=tensor, 2=layer_group (default: %d)", params.weight_granularity),

@@ -709,7 +709,7 @@ int main() {
     // GPU tests (coalesced DMMV via ggml backend)
     printf("\n=== Part 2: GPU DMMV Tests (Coalesced) ===\n");
 
-    setenv("GGML_SYCL_REORDER_MODE", "coalesced", 1);
+    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "coalesced", 1);
     setenv("GGML_SYCL_FORCE_DMMV", "1", 1);
 
     ggml_backend_t gpu_backend = ggml_backend_sycl_init(0);

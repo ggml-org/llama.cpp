@@ -156,7 +156,7 @@ for (int t = 0; t < num_tiles; t++) {
 **Step 4: Quick test**
 
 ```bash
-GGML_SYCL_REORDER_MODE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   ./build/bin/llama-completion \
   -m /Storage/GenAI/models/mistral-7b-v0.1.Q6_K.gguf \
   -ngl 99 --flash-attn on \
@@ -496,7 +496,7 @@ case GGML_TYPE_Q6_K:
 **Step 1: Full correctness test**
 
 ```bash
-GGML_SYCL_REORDER_MODE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   ./build/bin/llama-completion \
   -m /Storage/GenAI/models/mistral-7b-v0.1.Q6_K.gguf \
   -ngl 99 --flash-attn on \
@@ -507,7 +507,7 @@ Expected output: `6, 7, 8, 9, 10, 11, 12, 13, 14, 15,`
 **Step 2: Compare with SoA baseline**
 
 ```bash
-GGML_SYCL_REORDER_MODE=soa ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=soa ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   ./build/bin/llama-completion \
   -m /Storage/GenAI/models/mistral-7b-v0.1.Q6_K.gguf \
   -ngl 99 --flash-attn on \
@@ -518,7 +518,7 @@ Expected: Same output as coalesced
 **Step 3: Verify Q4_0 still works (no regression)**
 
 ```bash
-GGML_SYCL_REORDER_MODE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   ./build/bin/llama-completion \
   -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
   -ngl 99 --flash-attn on \
@@ -529,12 +529,12 @@ GGML_SYCL_REORDER_MODE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
 
 ```bash
 # SoA baseline
-GGML_SYCL_REORDER_MODE=soa ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=soa ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   ./build/bin/llama-bench -m /Storage/GenAI/models/mistral-7b-v0.1.Q6_K.gguf \
   -p 512 -n 128 -ngl 99 -fa 1
 
 # Variable tile coalesced
-GGML_SYCL_REORDER_MODE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   ./build/bin/llama-bench -m /Storage/GenAI/models/mistral-7b-v0.1.Q6_K.gguf \
   -p 512 -n 128 -ngl 99 -fa 1
 ```

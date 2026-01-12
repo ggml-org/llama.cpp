@@ -347,9 +347,10 @@ struct common_params {
     // Weight streaming parameters
     bool    weight_streaming     = false;            // enable weight streaming for limited VRAM
     float   weight_cache_pct     = 50.0f;            // percentage of remaining VRAM for weight cache
-    int32_t weight_granularity   = 0;                // cache granularity: 0=layer, 1=tensor, 2=layer_group
-    int32_t layer_group_size     = 2;                // layers per group when granularity=2
-    int32_t sycl_unified_cache_pct = 90;             // % of free VRAM for SYCL unified cache
+    int32_t weight_granularity      = 0;                // cache granularity: 0=layer, 1=tensor, 2=layer_group
+    int32_t layer_group_size        = 2;                // layers per group when granularity=2
+    int32_t sycl_unified_cache_pct  = 90;               // % of free VRAM for SYCL unified cache
+    int32_t sycl_unified_cache_host_pct = 90;           // % of total RAM for SYCL host cache
 
     // KV cache offload parameters
     bool    kv_offload           = false;            // enable KV cache offload to CPU for long contexts

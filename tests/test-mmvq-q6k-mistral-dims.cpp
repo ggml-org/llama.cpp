@@ -161,8 +161,8 @@ int main() {
     printf("=== Q6_K MMVQ Mistral Dimensions Tests ===\n");
     printf("Testing with exact Mistral 7B layer dimensions\n\n");
 
-    setenv("GGML_SYCL_REORDER_MODE", "coalesced", 1);
-    printf("GGML_SYCL_REORDER_MODE=coalesced\n\n");
+    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "coalesced", 1);
+    printf("GGML_SYCL_LAYOUT_OVERRIDE=coalesced\n\n");
 
     ggml_backend_t gpu_backend = ggml_backend_sycl_init(0);
     if (!gpu_backend) {

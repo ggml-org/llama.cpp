@@ -69,6 +69,8 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_host_compute_buffe
 GGML_BACKEND_API bool ggml_backend_sycl_weights_evictable(void);
 // Set unified cache budget as a percentage of free VRAM (clamped 1..100).
 GGML_BACKEND_API void ggml_backend_sycl_set_unified_cache_budget_pct(int pct);
+// Set unified host cache budget as a percentage of total system RAM (clamped 1..100).
+GGML_BACKEND_API void ggml_backend_sycl_set_unified_cache_host_budget_pct(int pct);
 
 // Register a host-backed weight tensor for SYCL layout metadata/accessors.
 GGML_BACKEND_API void ggml_backend_sycl_register_host_weight_tensor(ggml_backend_dev_t dev, struct ggml_tensor * tensor);
@@ -107,6 +109,7 @@ GGML_BACKEND_API void ggml_backend_sycl_get_device_description(int device,
                                                        size_t description_size);
 GGML_BACKEND_API int  ggml_backend_sycl_get_device_count();
 GGML_BACKEND_API void ggml_backend_sycl_get_device_memory(int device, size_t *free, size_t *total);
+GGML_BACKEND_API void ggml_backend_sycl_set_debug(int level);
 
 // Device-to-host memcpy using the SYCL backend queue for the tensor's buffer.
 // This avoids mixing queues/contexts in tests.

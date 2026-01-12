@@ -9,8 +9,8 @@
 // Run: ONEAPI_DEVICE_SELECTOR=level_zero:1 ./build/bin/test-soa-pool-aliasing
 //
 // Compare:
-//   ONEAPI_DEVICE_SELECTOR=level_zero:1 ./build/bin/test-soa-pool-aliasing  # SoA enabled
-//   GGML_SYCL_DISABLE_OPT=1 ONEAPI_DEVICE_SELECTOR=level_zero:1 ./build/bin/test-soa-pool-aliasing  # SoA disabled
+//   ONEAPI_DEVICE_SELECTOR=level_zero:1 ./build/bin/test-soa-pool-aliasing  # Auto layout
+//   GGML_SYCL_LAYOUT_OVERRIDE=aos ONEAPI_DEVICE_SELECTOR=level_zero:1 ./build/bin/test-soa-pool-aliasing  # AoS only
 
 #include <cstdio>
 #include <cstdlib>
@@ -64,10 +64,11 @@ bool test_sequential_matmul() {
     printf("\n=== Test: Sequential MUL_MAT with pool buffer reuse ===\n");
     printf("This simulates a transformer layer with Q/K/V/O projections\n\n");
 
-    // Check SoA mode
-    const char* disable_opt = getenv("GGML_SYCL_DISABLE_OPT");
-    bool soa_disabled = (disable_opt && strcmp(disable_opt, "1") == 0);
-    printf("SoA optimization: %s\n", soa_disabled ? "DISABLED (AoS mode)" : "ENABLED");
+    // Check layout override mode
+    const char * override_env = getenv("GGML_SYCL_LAYOUT_OVERRIDE");
+    const bool   aos_only     = (override_env && strcmp(override_env, "aos") == 0);
+    printf("Layout override: %s\n", override_env ? override_env : "(auto)");
+    printf("Reorder enabled: %s\n", aos_only ? "no" : "yes");
 
     // Initialize SYCL backend
     ggml_backend_t backend = ggml_backend_sycl_init(0);
@@ -266,9 +267,10 @@ bool test_pool_buffer_cycling() {
     printf("\n=== Test: Pool buffer cycling with multiple iterations ===\n");
     printf("This tests that pool buffers work correctly across multiple graph executions\n\n");
 
-    const char* disable_opt = getenv("GGML_SYCL_DISABLE_OPT");
-    bool soa_disabled = (disable_opt && strcmp(disable_opt, "1") == 0);
-    printf("SoA optimization: %s\n", soa_disabled ? "DISABLED (AoS mode)" : "ENABLED");
+    const char * override_env = getenv("GGML_SYCL_LAYOUT_OVERRIDE");
+    const bool   aos_only     = (override_env && strcmp(override_env, "aos") == 0);
+    printf("Layout override: %s\n", override_env ? override_env : "(auto)");
+    printf("Reorder enabled: %s\n", aos_only ? "no" : "yes");
 
     ggml_backend_t backend = ggml_backend_sycl_init(0);
     if (!backend) {

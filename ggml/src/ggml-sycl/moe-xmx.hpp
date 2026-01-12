@@ -82,17 +82,22 @@ void preprocess_tokens_q8(const sycl::half * tokens,    // [batch, in_dim] fp16 
                           int64_t            in_dim,
                           sycl::queue &      queue);
 
-inline void preprocess_tokens_q8(const sycl::half * tokens,
-                                 int8_t *           q_tokens,
-                                 sycl::half *       scales,
-                                 int64_t            batch,
-                                 int64_t            in_dim,
-                                 sycl::queue &      queue) {
+inline sycl::event preprocess_tokens_q8_async(const sycl::half * tokens,
+                                              int8_t *           q_tokens,
+                                              sycl::half *       scales,
+                                              int64_t            batch,
+                                              int64_t            in_dim,
+                                              sycl::queue &      queue,
+                                              sycl::event        dep_event = {}) {
     constexpr int SG_SIZE = 16;
 
     int64_t num_blocks = batch * (in_dim / QK8_0);
 
-    queue.submit([&](sycl::handler & cgh) {
+    return queue.submit([&](sycl::handler & cgh) {
+        if (dep_event.get_info<sycl::info::event::command_execution_status>() !=
+            sycl::info::event_command_status::complete) {
+            cgh.depends_on(dep_event);
+        }
         cgh.parallel_for(sycl::nd_range<1>(num_blocks * SG_SIZE, SG_SIZE),
                          [=](sycl::nd_item<1> item) [[intel::reqd_sub_group_size(SG_SIZE)]] {
                              auto    sg       = item.get_sub_group();
@@ -129,6 +134,15 @@ inline void preprocess_tokens_q8(const sycl::half * tokens,
                              }
                          });
     });
+}
+
+inline void preprocess_tokens_q8(const sycl::half * tokens,
+                                 int8_t *           q_tokens,
+                                 sycl::half *       scales,
+                                 int64_t            batch,
+                                 int64_t            in_dim,
+                                 sycl::queue &      queue) {
+    (void) preprocess_tokens_q8_async(tokens, q_tokens, scales, batch, in_dim, queue);
 }
 
 // Extract fp16 scales from Q8_0 weight blocks
@@ -636,7 +650,8 @@ void launch_xmx_moe_gemm_q8_0_soa(const int8_t *       weights_qs,    // [out_di
                                 // FIX: Was loading once before loop, causing wrong tokens for rows > 0
                                 // SLM layout: [TILES_M * XMX_M * XMX_K], so tile tm starts at offset tm * XMX_M * XMX_K
                                 auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                                                   sycl::access::decorated::no>(&slm_tokens[tm * XMX_M * XMX_K]);
+                                                                               sycl::access::decorated::no>(
+                                    &slm_tokens[tm * XMX_M * XMX_K]);
                                 joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
 
                                 for (int tn = 0; tn < TILES_N; tn++) {
@@ -696,8 +711,8 @@ void launch_xmx_moe_gemm_q8_0_soa(const int8_t *       weights_qs,    // [out_di
                                     for (int i = lane; i < XMX_M * XMX_N; i += SG_SIZE) {
                                         int tile_row = i / XMX_N;
                                         int tile_col = i % XMX_N;
-                                        int out_row = row + tile_row;
-                                        int out_col = col + tile_col;
+                                        int out_row  = row + tile_row;
+                                        int out_col  = col + tile_col;
                                         if (out_row < batch && out_col < out_dim) {
                                             output[out_row * out_dim + out_col] = sycl::half(float_acc[tm][tn][i]);
                                         }
@@ -728,21 +743,23 @@ void launch_xmx_moe_gemm_q8_0_soa(const int8_t *       weights_qs,    // [out_di
 //   total_tiles: total work-groups to launch
 template <int TILES_M = 4, int TILES_N = 4>
 sycl::event launch_fused_xmx_moe_q8_0_soa(
-    sycl::queue &        queue,
-    sycl::event          dep_event,
-    const int8_t *       all_expert_qs,        // [n_experts * out_dim * in_dim] SoA qs
-    const sycl::half *   all_expert_d,         // [n_experts * out_dim * in_dim/32] SoA scales
-    const int8_t *       q_tokens,             // [total_pairs, in_dim] pre-quantized
-    const sycl::half *   token_scales,         // [total_pairs, in_dim/32]
-    sycl::half *         sorted_output,        // [total_pairs, out_dim]
-    const int32_t *      expert_offsets,       // [n_experts + 1] token offsets
-    const int32_t *      expert_tile_offsets,  // [n_experts + 1] tile offsets
-    int32_t              total_tiles,
-    int64_t              n_experts,
-    int64_t              out_dim,
-    int64_t              in_dim,
-    int64_t              qs_stride_per_expert,  // bytes of qs data per expert
-    const MoEXMXConfig & cfg) {
+    sycl::queue &          queue,
+    sycl::event            dep_event,
+    const int8_t *         all_expert_qs,        // [n_experts * out_dim * in_dim] SoA qs
+    const sycl::half *     all_expert_d,         // [n_experts * out_dim * in_dim/32] SoA scales
+    const int8_t * const * expert_ptrs,          // Optional pointer table (SoA per expert)
+    bool                   use_ptr_table,
+    const int8_t *         q_tokens,             // [total_pairs, in_dim] pre-quantized
+    const sycl::half *     token_scales,         // [total_pairs, in_dim/32]
+    sycl::half *           sorted_output,        // [total_pairs, out_dim]
+    const int32_t *        expert_offsets,       // [n_experts + 1] token offsets
+    const int32_t *        expert_tile_offsets,  // [n_experts + 1] tile offsets
+    int32_t                total_tiles,
+    int64_t                n_experts,
+    int64_t                out_dim,
+    int64_t                in_dim,
+    int64_t                qs_stride_per_expert,  // bytes of qs data per expert
+    const MoEXMXConfig &   cfg) {
     constexpr int XMX_M   = 8;
     constexpr int XMX_N   = 16;
     constexpr int XMX_K   = 32;
@@ -813,8 +830,19 @@ sycl::event launch_fused_xmx_moe_q8_0_soa(
                 int global_row_start = expert_token_start + wg_row;
 
                 // Get expert weight pointers (SoA layout)
-                const int8_t *     expert_qs = all_expert_qs + expert_idx * qs_stride_per_expert;
-                const sycl::half * expert_d  = all_expert_d + expert_idx * nblocks_per_expert;
+                const int8_t *     expert_qs = nullptr;
+                const sycl::half * expert_d  = nullptr;
+                if (use_ptr_table) {
+                    const int8_t * base = expert_ptrs ? expert_ptrs[expert_idx] : nullptr;
+                    if (!base) {
+                        return;
+                    }
+                    expert_qs = base;
+                    expert_d  = reinterpret_cast<const sycl::half *>(base + qs_stride_per_expert);
+                } else {
+                    expert_qs = all_expert_qs + expert_idx * qs_stride_per_expert;
+                    expert_d  = all_expert_d + expert_idx * nblocks_per_expert;
+                }
 
                 // Initialize accumulators
                 joint_matrix<sycl::sub_group, int32_t, use::accumulator, XMX_M, XMX_N> acc[TILES_M][TILES_N];
@@ -1494,7 +1522,8 @@ void launch_xmx_moe_gemm_mxfp4(const void * weights_qs,  // [in_dim/32, out_dim]
                                 // BUG FIX: Was loading once before loop, causing wrong tokens for rows > 0
                                 // SLM layout: [TILES_M * XMX_M * XMX_K], so tile tm starts at offset tm * XMX_M * XMX_K
                                 auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                                               sycl::access::decorated::no>(&slm_tokens[tm * XMX_M * XMX_K]);
+                                                                               sycl::access::decorated::no>(
+                                    &slm_tokens[tm * XMX_M * XMX_K]);
                                 joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
 
                                 for (int tn = 0; tn < TILES_N; tn++) {
@@ -1566,11 +1595,10 @@ void launch_xmx_moe_gemm_mxfp4(const void * weights_qs,  // [in_dim/32, out_dim]
                                     for (int i = lane; i < XMX_M * XMX_N; i += SG_SIZE) {
                                         int tile_row = i / XMX_N;
                                         int tile_col = i % XMX_N;
-                                        int out_row = row + tile_row;
-                                        int out_col = col + tile_col;
+                                        int out_row  = row + tile_row;
+                                        int out_col  = col + tile_col;
                                         if (out_row < batch && out_col < out_dim) {
-                                            output[out_row * out_dim + out_col] =
-                                                sycl::half(float_acc[tm][tn][i]);
+                                            output[out_row * out_dim + out_col] = sycl::half(float_acc[tm][tn][i]);
                                         }
                                     }
                                 }
@@ -1829,8 +1857,8 @@ void launch_xmx_moe_gemm_mxfp4_soa(const uint8_t *      weights_qs,    // [nbloc
                                 for (int elem = lane; elem < XMX_M * XMX_N; elem += SG_SIZE) {
                                     int tile_row = elem / XMX_N;
                                     int tile_col = elem % XMX_N;
-                                    int out_row = row + tile_row;
-                                    int out_col = col + tile_col;
+                                    int out_row  = row + tile_row;
+                                    int out_col  = col + tile_col;
                                     if (out_row < batch && out_col < out_dim) {
                                         output[out_row * out_dim + out_col] =
                                             static_cast<sycl::half>(float_acc[tm][tn][elem]);
@@ -2045,7 +2073,8 @@ void launch_xmx_moe_gemm_mxfp4_coalesced(
                                 // FIX: Was loading once before loop, causing wrong tokens for rows > 0
                                 // SLM layout: [TILES_M * XMX_M * XMX_K], so tile tm starts at offset tm * XMX_M * XMX_K
                                 auto slm_tokens_ptr = sycl::address_space_cast<sycl::access::address_space::local_space,
-                                                                                   sycl::access::decorated::no>(&slm_tokens[tm * XMX_M * XMX_K]);
+                                                                               sycl::access::decorated::no>(
+                                    &slm_tokens[tm * XMX_M * XMX_K]);
                                 joint_matrix_load(sg, mat_a, slm_tokens_ptr, XMX_K);
 
                                 for (int tn = 0; tn < TILES_N; tn++) {
@@ -2102,8 +2131,8 @@ void launch_xmx_moe_gemm_mxfp4_coalesced(
                                     for (int elem = lane; elem < XMX_M * XMX_N; elem += SG_SIZE) {
                                         int tile_row = elem / XMX_N;
                                         int tile_col = elem % XMX_N;
-                                        int out_row = row + tile_row;
-                                        int out_col = col + tile_col;
+                                        int out_row  = row + tile_row;
+                                        int out_col  = col + tile_col;
                                         if (out_row < batch && out_col < out_dim) {
                                             output[out_row * out_dim + out_col] =
                                                 static_cast<sycl::half>(float_acc[tm][tn][elem]);

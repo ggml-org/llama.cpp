@@ -184,8 +184,8 @@ TEST(CoalescedRoundtrip, Q4_0_Dequantize) {
 ### Integration Tests
 ```bash
 # A/B comparison script (scripts/test-coalesced.sh)
-GGML_SYCL_REORDER_MODE=soa ./build/bin/llama-completion ... > soa_output.txt
-GGML_SYCL_REORDER_MODE=coalesced ./build/bin/llama-completion ... > coalesced_output.txt
+GGML_SYCL_LAYOUT_OVERRIDE=soa ./build/bin/llama-completion ... > soa_output.txt
+GGML_SYCL_LAYOUT_OVERRIDE=coalesced ./build/bin/llama-completion ... > coalesced_output.txt
 diff soa_output.txt coalesced_output.txt  # Must match exactly
 ```
 
@@ -208,7 +208,7 @@ Each format (Q4_0, Q4_K, Q6_K, Q8_0, MXFP4) gets dedicated tests on real model i
 ### Phase 2: Infrastructure
 - Add `reorder_mode::COALESCED` to enum
 - Add `is_coalesced()` helper function
-- Add `GGML_SYCL_REORDER_MODE` environment variable
+- Add `GGML_SYCL_LAYOUT_OVERRIDE` environment variable
 - Default remains `soa` until coalesced is validated
 
 ### Phase 3: Kernel Implementation (one format at a time)
@@ -227,7 +227,7 @@ Each format (Q4_0, Q4_K, Q6_K, Q8_0, MXFP4) gets dedicated tests on real model i
 
 | Variable | Values | Default | Description |
 |----------|--------|---------|-------------|
-| `GGML_SYCL_REORDER_MODE` | `none`, `soa`, `coalesced` | `soa` | Weight reorder strategy |
+| `GGML_SYCL_LAYOUT_OVERRIDE` | `aos`, `soa`, `coalesced`, `xmx_tiled` | (unset) | Force weight layout for debugging |
 | `GGML_SYCL_VALIDATE_COALESCED` | `0`, `1` | `0` | Runtime output validation |
 
 ## Success Criteria

@@ -474,13 +474,13 @@ void moe_scatter_results(
 
 ## Memory Layout Support
 
-The kernel supports all three weight layouts via `GGML_SYCL_REORDER_MODE`:
+The kernel supports all three weight layouts via `GGML_SYCL_LAYOUT_OVERRIDE`:
 
 | Mode | Access Pattern | Performance |
 |------|---------------|-------------|
 | `coalesced` | Warp-coalesced 128-byte reads | Best (+35%) |
 | `soa` | Structure-of-Arrays | Good (+32%) |
-| `none` | Traditional AoS | Baseline |
+| `aos` | Traditional AoS | Baseline |
 
 ## Expected Performance
 

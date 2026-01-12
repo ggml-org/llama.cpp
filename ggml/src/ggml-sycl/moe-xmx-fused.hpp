@@ -170,20 +170,22 @@ inline void reorder_mxfp4_to_xmx_layout(const uint8_t *           src_qs,  // So
 // This kernel reads the tile-aligned layout created by reorder_mxfp4_to_xmx_layout
 template <int TILES_M = 4, int TILES_N = 4>
 sycl::event fused_xmx_moe_gemm_mxfp4_tiled(
-    sycl::event           dep_event,
-    const uint8_t *       all_expert_weights_tiled,  // XMX tile-aligned layout per expert
-    const int8_t *        q_tokens,                  // [num_tokens, in_dim]
-    const sycl::half *    token_scales,              // [num_tokens, in_dim/32]
-    const int32_t *       sorted_token_ids,
-    const int32_t *       expert_offsets,
-    sycl::half *          output,
-    int                   num_tokens,
-    int                   n_experts,
-    int64_t               out_dim,
-    int64_t               in_dim,
-    int64_t               expert_tiled_stride,  // Bytes between expert tiled weight buffers
-    const MXFPXMXConfig & cfg,
-    sycl::queue &         queue) {
+    sycl::event             dep_event,
+    const uint8_t *         all_expert_weights_tiled,  // XMX tile-aligned layout per expert
+    const uint8_t * const * expert_ptrs,               // Optional pointer table (XMX tiled per expert)
+    bool                    use_ptr_table,
+    const int8_t *          q_tokens,                  // [num_tokens, in_dim]
+    const sycl::half *      token_scales,              // [num_tokens, in_dim/32]
+    const int32_t *         sorted_token_ids,
+    const int32_t *         expert_offsets,
+    sycl::half *            output,
+    int                     num_tokens,
+    int                     n_experts,
+    int64_t                 out_dim,
+    int64_t                 in_dim,
+    int64_t                 expert_tiled_stride,  // Bytes between expert tiled weight buffers
+    const MXFPXMXConfig &   cfg,
+    sycl::queue &           queue) {
     constexpr int XMX_M = 8, XMX_N = 16, XMX_K = 32;
     constexpr int SG_SIZE = 16;
     constexpr int TILE_N  = TILES_N * XMX_N;
@@ -237,7 +239,15 @@ sycl::event fused_xmx_moe_gemm_mxfp4_tiled(
                     }
 
                     int64_t         expert_work  = static_cast<int64_t>(expert_tokens) * n_output_tiles;
-                    const uint8_t * expert_tiled = all_expert_weights_tiled + expert * expert_tiled_stride;
+                    const uint8_t * expert_tiled = nullptr;
+                    if (use_ptr_table) {
+                        expert_tiled = expert_ptrs ? expert_ptrs[expert] : nullptr;
+                        if (!expert_tiled) {
+                            return;
+                        }
+                    } else {
+                        expert_tiled = all_expert_weights_tiled + expert * expert_tiled_stride;
+                    }
 
                     for (int64_t local_work = group_id; local_work < expert_work; local_work += num_persistent_wgs) {
                         int tile_idx        = local_work % n_output_tiles;
@@ -592,8 +602,10 @@ sycl::event fused_xmx_moe_gemm_mxfp4_soa(
     sycl::event dep_event,
 
     // Expert weight data (MXFP4 SoA format)
-    const uint8_t * all_expert_qs,  // [n_experts, nblocks, 16] packed nibbles
-    const uint8_t * all_expert_e,   // [n_experts, nblocks] E8M0 exponents
+    const uint8_t *         all_expert_qs,  // [n_experts, nblocks, 16] packed nibbles
+    const uint8_t *         all_expert_e,   // [n_experts, nblocks] E8M0 exponents
+    const uint8_t * const * expert_ptrs,    // Optional pointer table (SoA per expert)
+    bool                    use_ptr_table,
 
     // Pre-quantized tokens (int8)
     const int8_t *     q_tokens,      // [num_tokens, in_dim]
@@ -684,8 +696,19 @@ sycl::event fused_xmx_moe_gemm_mxfp4_soa(
                     int64_t expert_work = static_cast<int64_t>(expert_tokens) * n_output_tiles;
 
                     // Expert weight pointers (SoA layout)
-                    const uint8_t * expert_qs = all_expert_qs + expert * expert_qs_stride;
-                    const uint8_t * expert_e  = all_expert_e + expert * expert_e_stride;
+                    const uint8_t * expert_qs = nullptr;
+                    const uint8_t * expert_e  = nullptr;
+                    if (use_ptr_table) {
+                        const uint8_t * base = expert_ptrs ? expert_ptrs[expert] : nullptr;
+                        if (!base) {
+                            return;
+                        }
+                        expert_qs = base;
+                        expert_e  = base + expert_qs_stride;
+                    } else {
+                        expert_qs = all_expert_qs + expert * expert_qs_stride;
+                        expert_e  = all_expert_e + expert * expert_e_stride;
+                    }
 
                     for (int64_t local_work = group_id; local_work < expert_work;
                          local_work += num_persistent_wgs_captured) {
@@ -862,22 +885,24 @@ inline bool try_fused_xmx_moe_q8_0(const int8_t *     all_expert_qs,
 
 // Entry point for fused XMX MoE dispatch (MXFP4 SoA layout)
 // Returns pair<success, event> for graph-compatible async execution
-inline std::pair<bool, sycl::event> try_fused_xmx_moe_mxfp4_soa(sycl::event        dep_event,
-                                                                const uint8_t *    all_expert_qs,
-                                                                const uint8_t *    all_expert_e,
-                                                                const int8_t *     q_tokens,
-                                                                const sycl::half * token_scales,
-                                                                const int32_t *    sorted_token_ids,
-                                                                const int32_t *    expert_offsets,
-                                                                sycl::half *       output,
-                                                                int                num_tokens,
-                                                                int                n_experts,
-                                                                int64_t            out_dim,
-                                                                int64_t            in_dim,
-                                                                int64_t            expert_qs_stride,
-                                                                int64_t            expert_e_stride,
-                                                                int                device_id,
-                                                                sycl::queue &      queue) {
+inline std::pair<bool, sycl::event> try_fused_xmx_moe_mxfp4_soa(sycl::event             dep_event,
+                                                                const uint8_t *         all_expert_qs,
+                                                                const uint8_t *         all_expert_e,
+                                                                const uint8_t * const * expert_ptrs,
+                                                                bool                    use_ptr_table,
+                                                                const int8_t *          q_tokens,
+                                                                const sycl::half *      token_scales,
+                                                                const int32_t *         sorted_token_ids,
+                                                                const int32_t *         expert_offsets,
+                                                                sycl::half *            output,
+                                                                int                     num_tokens,
+                                                                int                     n_experts,
+                                                                int64_t                 out_dim,
+                                                                int64_t                 in_dim,
+                                                                int64_t                 expert_qs_stride,
+                                                                int64_t                 expert_e_stride,
+                                                                int                     device_id,
+                                                                sycl::queue &           queue) {
     const auto & dev_info = ggml_sycl_info().devices[device_id];
     if (!dev_info.xmx_caps.supported) {
         return { false, sycl::event{} };
@@ -891,27 +916,29 @@ inline std::pair<bool, sycl::event> try_fused_xmx_moe_mxfp4_soa(sycl::event     
         num_tokens, n_experts, out_dim, in_dim, cfg.num_persistent_wgs, expert_qs_stride, expert_e_stride);
 
     sycl::event gemm_event = moe_xmx_fused::fused_xmx_moe_gemm_mxfp4_soa<4, 4>(
-        dep_event, all_expert_qs, all_expert_e, q_tokens, token_scales, sorted_token_ids, expert_offsets, output,
-        num_tokens, n_experts, out_dim, in_dim, expert_qs_stride, expert_e_stride, cfg, queue);
+        dep_event, all_expert_qs, all_expert_e, expert_ptrs, use_ptr_table, q_tokens, token_scales, sorted_token_ids,
+        expert_offsets, output, num_tokens, n_experts, out_dim, in_dim, expert_qs_stride, expert_e_stride, cfg, queue);
 
     return { true, gemm_event };
 }
 
 // Entry point for fused XMX MoE dispatch (MXFP4 XMX tile-aligned layout)
-inline std::pair<bool, sycl::event> try_fused_xmx_moe_mxfp4_tiled(sycl::event        dep_event,
-                                                                  const uint8_t *    all_expert_weights_tiled,
-                                                                  const int8_t *     q_tokens,
-                                                                  const sycl::half * token_scales,
-                                                                  const int32_t *    sorted_token_ids,
-                                                                  const int32_t *    expert_offsets,
-                                                                  sycl::half *       output,
-                                                                  int                num_tokens,
-                                                                  int                n_experts,
-                                                                  int64_t            out_dim,
-                                                                  int64_t            in_dim,
-                                                                  int64_t            expert_tiled_stride,
-                                                                  int                device_id,
-                                                                  sycl::queue &      queue) {
+inline std::pair<bool, sycl::event> try_fused_xmx_moe_mxfp4_tiled(sycl::event             dep_event,
+                                                                  const uint8_t *         all_expert_weights_tiled,
+                                                                  const uint8_t * const * expert_ptrs,
+                                                                  bool                    use_ptr_table,
+                                                                  const int8_t *          q_tokens,
+                                                                  const sycl::half *      token_scales,
+                                                                  const int32_t *         sorted_token_ids,
+                                                                  const int32_t *         expert_offsets,
+                                                                  sycl::half *            output,
+                                                                  int                     num_tokens,
+                                                                  int                     n_experts,
+                                                                  int64_t                 out_dim,
+                                                                  int64_t                 in_dim,
+                                                                  int64_t                 expert_tiled_stride,
+                                                                  int                     device_id,
+                                                                  sycl::queue &           queue) {
     const auto & dev_info = ggml_sycl_info().devices[device_id];
     if (!dev_info.xmx_caps.supported) {
         return { false, sycl::event{} };
@@ -925,8 +952,8 @@ inline std::pair<bool, sycl::event> try_fused_xmx_moe_mxfp4_tiled(sycl::event   
         num_tokens, n_experts, out_dim, in_dim, cfg.num_persistent_wgs, expert_tiled_stride);
 
     sycl::event evt = moe_xmx_fused::fused_xmx_moe_gemm_mxfp4_tiled<4, 4>(
-        dep_event, all_expert_weights_tiled, q_tokens, token_scales, sorted_token_ids, expert_offsets, output,
-        num_tokens, n_experts, out_dim, in_dim, expert_tiled_stride, cfg, queue);
+        dep_event, all_expert_weights_tiled, expert_ptrs, use_ptr_table, q_tokens, token_scales, sorted_token_ids,
+        expert_offsets, output, num_tokens, n_experts, out_dim, in_dim, expert_tiled_stride, cfg, queue);
 
     return { true, evt };
 }

@@ -8,13 +8,14 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 // Q4_0 SoA DMMV kernel - follows Q6_K pattern exactly
 // SoA layout: [all qs: nblocks * 16 bytes] [all d: nblocks * 2 bytes]
 // Each byte contains 2 x 4-bit values: low nibble = value[i], high nibble = value[i+16]
 static void dequantize_mul_mat_vec_q4_0_soa_direct(
     const void* __restrict__ vx,
-    const float* __restrict__ y,
+    const dfloat* __restrict__ y,
     float* __restrict__ dst,
     const int ncols,
     const int nrows,
@@ -47,7 +48,7 @@ static void dequantize_mul_mat_vec_q4_0_soa_direct(
         const uint8_t* qs = qs_base + block_idx * (QK4_0 / 2);  // 16 bytes per block
 
         // y values for this block
-        const float* y_block = y + block_in_row * QK4_0;
+        const dfloat* y_block = y + block_in_row * QK4_0;
 
         // Process all 32 values in this block (16 bytes, 2 values per byte)
         float block_sum = 0.0f;
@@ -58,8 +59,8 @@ static void dequantize_mul_mat_vec_q4_0_soa_direct(
             const float v1 = ((float)(qs_byte >> 4) - 8.0f) * d;
 
             // Q4_0 layout: low nibble = position j, high nibble = position j+16
-            block_sum += v0 * y_block[j];
-            block_sum += v1 * y_block[j + 16];
+            block_sum += v0 * (float) y_block[j];
+            block_sum += v1 * (float) y_block[j + 16];
         }
         tmp += block_sum;
     }
@@ -78,7 +79,7 @@ static void dequantize_mul_mat_vec_q4_0_soa_direct(
 // SoA layout: [all qs: nblocks * 32 bytes] [all d: nblocks * 2 bytes]
 static void dequantize_mul_mat_vec_q8_0_soa_direct(
     const void* __restrict__ vx,
-    const float* __restrict__ y,
+    const dfloat* __restrict__ y,
     float* __restrict__ dst,
     const int ncols,
     const int nrows,
@@ -111,14 +112,14 @@ static void dequantize_mul_mat_vec_q8_0_soa_direct(
         const int8_t* qs = qs_base + block_idx * QK8_0;  // 32 bytes per block
 
         // y values for this block
-        const float* y_block = y + block_in_row * QK8_0;
+        const dfloat* y_block = y + block_in_row * QK8_0;
 
         // Process all 32 values in this block (32 int8 values)
         float block_sum = 0.0f;
         #pragma unroll
         for (int j = 0; j < QK8_0; ++j) {
             const float v = static_cast<float>(qs[j]) * d;
-            block_sum += v * y_block[j];
+            block_sum += v * (float) y_block[j];
         }
         tmp += block_sum;
     }
@@ -2539,20 +2540,41 @@ static void dequantize_mul_mat_vec_q4_0_sycl_reorder(const void *vx, const dfloa
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+    const bool use_simple = std::getenv("GGML_SYCL_DMMV_SIMPLE_SOA") != nullptr;
+    const bool use_direct = std::getenv("GGML_SYCL_DMMV_DIRECT_SOA") != nullptr;
 
     {
         dpct::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        // Use new direct SoA kernel following Q6_K pattern
-        stream->submit([&](sycl::handler &cgh) {
-            cgh.parallel_for<class dmmv_q4_0_soa_direct_kernel>(
-                sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                    dequantize_mul_mat_vec_q4_0_soa_direct(
-                        vx, y, dst, ncols, nrows, d_offset, row_low, item_ct1);
-                });
-        });
+        if (use_simple) {
+            stream->submit([&](sycl::handler &cgh) {
+                cgh.parallel_for<class dmmv_q4_0_soa_simple_kernel>(
+                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                        dequantize_mul_mat_vec_reorder_simple<QK4_0, QR4_0, dequantize_q4_0_reorder>(
+                            vx, y, dst, ncols, nrows, d_offset, row_low, item_ct1);
+                    });
+            });
+        } else if (use_direct) {
+            stream->submit([&](sycl::handler &cgh) {
+                cgh.parallel_for<class dmmv_q4_0_soa_direct_kernel>(
+                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                        dequantize_mul_mat_vec_q4_0_soa_direct(vx, y, dst, ncols, nrows, d_offset, row_low,
+                                                              item_ct1);
+                    });
+            });
+        } else {
+            stream->submit([&](sycl::handler &cgh) {
+                cgh.parallel_for<class dmmv_q4_0_soa_reorder_kernel>(
+                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                        dequantize_mul_mat_vec_reorder<QK4_0, QR4_0, dequantize_q4_0_reorder>(
+                            vx, y, dst, ncols, nrows, d_offset, row_low, item_ct1);
+                    });
+            });
+        }
     }
 }
 
@@ -2568,20 +2590,41 @@ static void dequantize_mul_mat_vec_q8_0_sycl_reorder(const void *vx, const dfloa
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
     const sycl::range<3> block_nums(1, 1, block_num_y);
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+    const bool use_simple = std::getenv("GGML_SYCL_DMMV_SIMPLE_SOA") != nullptr;
+    const bool use_direct = std::getenv("GGML_SYCL_DMMV_DIRECT_SOA") != nullptr;
 
     {
         dpct::has_capability_or_fail(stream->get_device(),
                                      {sycl::aspect::fp16});
 
-        // Use new direct SoA kernel following Q6_K pattern
-        stream->submit([&](sycl::handler &cgh) {
-            cgh.parallel_for<class dmmv_q8_0_soa_direct_kernel>(
-                sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                    dequantize_mul_mat_vec_q8_0_soa_direct(
-                        vx, y, dst, ncols, nrows, d_offset, row_low, item_ct1);
-                });
-        });
+        if (use_simple) {
+            stream->submit([&](sycl::handler &cgh) {
+                cgh.parallel_for<class dmmv_q8_0_soa_simple_kernel>(
+                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                        dequantize_mul_mat_vec_reorder_simple<QK8_0, QR8_0, dequantize_q8_0_reorder>(
+                            vx, y, dst, ncols, nrows, d_offset, row_low, item_ct1);
+                    });
+            });
+        } else if (use_direct) {
+            stream->submit([&](sycl::handler &cgh) {
+                cgh.parallel_for<class dmmv_q8_0_soa_direct_kernel>(
+                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                        dequantize_mul_mat_vec_q8_0_soa_direct(vx, y, dst, ncols, nrows, d_offset, row_low,
+                                                              item_ct1);
+                    });
+            });
+        } else {
+            stream->submit([&](sycl::handler &cgh) {
+                cgh.parallel_for<class dmmv_q8_0_soa_reorder_kernel>(
+                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                    [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                        dequantize_mul_mat_vec_reorder<QK8_0, QR8_0, dequantize_q8_0_reorder>(
+                            vx, y, dst, ncols, nrows, d_offset, row_low, item_ct1);
+                    });
+            });
+        }
     }
 }
 
@@ -3083,9 +3126,9 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                 } else if (mode == GGML_LAYOUT_SOA) {
                     // Use direct dfloat path (no Q8 quantization overhead)
                     const ggml_tensor * storage = get_storage_tensor(src0);
-                    const int64_t storage_ne01 = storage->ne[1];
+                    const int64_t storage_rows = ggml_nrows(storage);
                     const int64_t ncols = storage->ne[0];
-                    const int64_t nblocks = storage_ne01 * (ncols / QK4_0);
+                    const int64_t nblocks = storage_rows * (ncols / QK4_0);
                     const int64_t total_qs_bytes = nblocks * (QK4_0 / 2);
                     const int64_t d_offset = total_qs_bytes;
 
@@ -3097,8 +3140,8 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                     }
                     const int global_row_low = row_low + view_row_offset;
 
-                    GGML_SYCL_KTRACE("dmmv_q4_0_soa", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld d_offset=%lld",
-                                     (long long)ne00, (long long)row_diff, (long long)storage_ne01, (long long)global_row_low, (long long)d_offset);
+                    GGML_SYCL_KTRACE("dmmv_q4_0_soa", " ne00=%lld row_diff=%lld storage_rows=%lld global_row_low=%lld d_offset=%lld",
+                                     (long long)ne00, (long long)row_diff, (long long)storage_rows, (long long)global_row_low, (long long)d_offset);
                     dequantize_mul_mat_vec_q4_0_sycl_reorder(storage_base, src1_dfloat, dst_dd_i,
                                                             ne00, row_diff, d_offset, global_row_low, stream);
                 } else {
@@ -3142,9 +3185,9 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                 } else if (mode == GGML_LAYOUT_SOA) {
                     // Use direct dfloat path (no Q8 quantization overhead)
                     const ggml_tensor * storage = get_storage_tensor(src0);
-                    const int64_t storage_ne01 = storage->ne[1];
+                    const int64_t storage_rows = ggml_nrows(storage);
                     const int64_t ncols = storage->ne[0];
-                    const int64_t nblocks = storage_ne01 * (ncols / QK8_0);
+                    const int64_t nblocks = storage_rows * (ncols / QK8_0);
                     const int64_t total_qs_bytes = nblocks * QK8_0;
                     const int64_t d_offset = total_qs_bytes;
 
@@ -3156,8 +3199,8 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                     }
                     const int global_row_low = row_low + view_row_offset;
 
-                    GGML_SYCL_KTRACE("dmmv_q8_0_soa", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld d_offset=%lld",
-                                     (long long)ne00, (long long)row_diff, (long long)storage_ne01, (long long)global_row_low, (long long)d_offset);
+                    GGML_SYCL_KTRACE("dmmv_q8_0_soa", " ne00=%lld row_diff=%lld storage_rows=%lld global_row_low=%lld d_offset=%lld",
+                                     (long long)ne00, (long long)row_diff, (long long)storage_rows, (long long)global_row_low, (long long)d_offset);
                     dequantize_mul_mat_vec_q8_0_sycl_reorder(storage_base, src1_dfloat, dst_dd_i,
                                                             ne00, row_diff, d_offset, global_row_low, stream);
                 } else {
@@ -3198,7 +3241,7 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
 
                 if (mode == GGML_LAYOUT_COALESCED) {
                     const ggml_tensor * storage = get_storage_tensor(src0);
-                    const int64_t storage_ne01 = storage->ne[1];
+                    const int64_t storage_rows = ggml_nrows(storage);
 
                     const void * storage_base = ggml_sycl_get_layout_ptr_for(storage, ctx.device, GGML_LAYOUT_COALESCED);
 
@@ -3208,15 +3251,15 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                     }
                     const int global_row_low = row_low + view_row_offset;
 
-                    GGML_SYCL_KTRACE("dmmv_q6_k_coalesced_variable", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld",
-                                     (long long)ne00, (long long)row_diff, (long long)storage_ne01, (long long)global_row_low);
+                    GGML_SYCL_KTRACE("dmmv_q6_k_coalesced_variable", " ne00=%lld row_diff=%lld storage_rows=%lld global_row_low=%lld",
+                                     (long long)ne00, (long long)row_diff, (long long)storage_rows, (long long)global_row_low);
                     dequantize_mul_mat_vec_q6_K_sycl_coalesced_variable(storage_base, src1_ddf_i, dst_dd_i,
-                                                                        ne00, row_diff, storage_ne01, global_row_low, stream);
+                                                                        ne00, row_diff, storage_rows, global_row_low, stream);
                 } else if (mode == GGML_LAYOUT_SOA) {
                     // Q6_K SoA layout: [all ql] [all qh] [all scales] [all d]
                     // CRITICAL: Must use storage tensor dimensions for offset calculation, not view dimensions
                     const ggml_tensor * storage = get_storage_tensor(src0);
-                    const int64_t storage_ne01 = storage->ne[1];  // storage tensor rows (not view rows!)
+                    const int64_t storage_rows = ggml_nrows(storage);
 
                     // Get storage tensor base pointer
                     const void * storage_base = ggml_sycl_get_layout_ptr_for(storage, ctx.device, GGML_LAYOUT_SOA);
@@ -3230,9 +3273,9 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
                     }
                     const int global_row_low = row_low + view_row_offset;
 
-                    GGML_SYCL_KTRACE("dmmv_q6_k_soa", " ne00=%lld row_diff=%lld storage_ne01=%lld global_row_low=%lld",
-                                     (long long)ne00, (long long)row_diff, (long long)storage_ne01, (long long)global_row_low);
-                    dequantize_mul_mat_vec_q6_K_sycl_soa(storage_base, src1_ddf_i, dst_dd_i, ne00, row_diff, storage_ne01, global_row_low, stream);
+                    GGML_SYCL_KTRACE("dmmv_q6_k_soa", " ne00=%lld row_diff=%lld storage_rows=%lld global_row_low=%lld",
+                                     (long long)ne00, (long long)row_diff, (long long)storage_rows, (long long)global_row_low);
+                    dequantize_mul_mat_vec_q6_K_sycl_soa(storage_base, src1_ddf_i, dst_dd_i, ne00, row_diff, storage_rows, global_row_low, stream);
                 } else {
                     GGML_SYCL_KTRACE("dmmv_q6_k_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
                     dequantize_mul_mat_vec_q6_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);

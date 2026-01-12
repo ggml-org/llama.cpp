@@ -250,6 +250,7 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+llama_build_and_test(test-tensor-data.cpp)
 
 # test-kv-block: tests for PagedAttention block management (links against llama for internal access)
 add_executable(test-kv-block test-kv-block.cpp ${PROJECT_SOURCE_DIR}/src/llama-kv-block.cpp)
@@ -547,6 +548,45 @@ if(GGML_SYCL)
     add_test(NAME test-layout-cache COMMAND $<TARGET_FILE:test-layout-cache>)
 endif()
 
+# test-unified-cache-bugs: regression tests for unified cache bug fixes
+if(GGML_SYCL)
+    add_executable(test-unified-cache-bugs test-unified-cache-bugs.cpp)
+    target_link_libraries(test-unified-cache-bugs PRIVATE ggml ggml-cpu)
+    target_include_directories(test-unified-cache-bugs PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-unified-cache-bugs PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-unified-cache-bugs PRIVATE "-fsycl")
+    install(TARGETS test-unified-cache-bugs RUNTIME)
+    add_test(NAME test-unified-cache-bugs COMMAND $<TARGET_FILE:test-unified-cache-bugs>)
+endif()
+
+# test-unified-cache-concurrent: concurrency stress tests for unified cache
+if(GGML_SYCL)
+    add_executable(test-unified-cache-concurrent test-unified-cache-concurrent.cpp)
+    target_link_libraries(test-unified-cache-concurrent PRIVATE ggml ggml-cpu)
+    target_include_directories(test-unified-cache-concurrent PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-unified-cache-concurrent PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-unified-cache-concurrent PRIVATE "-fsycl")
+    install(TARGETS test-unified-cache-concurrent RUNTIME)
+    add_test(NAME test-unified-cache-concurrent COMMAND $<TARGET_FILE:test-unified-cache-concurrent>)
+endif()
+
+# test-fattn-thread-local: ensure seq-id thread-local buffers free on thread exit
+if(GGML_SYCL)
+    add_executable(test-fattn-thread-local test-fattn-thread-local.cpp)
+    target_link_libraries(test-fattn-thread-local PRIVATE ggml ggml-cpu)
+    target_include_directories(test-fattn-thread-local PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-fattn-thread-local PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-fattn-thread-local PRIVATE "-fsycl")
+    install(TARGETS test-fattn-thread-local RUNTIME)
+    add_test(NAME test-fattn-thread-local COMMAND $<TARGET_FILE:test-fattn-thread-local>)
+endif()
+
 # test-q8-0-soa-gpu: GPU unit tests for Q8_0 SoA (tests actual SYCL kernels)
 if(GGML_SYCL)
     add_executable(test-q8-0-soa-gpu test-q8-0-soa-gpu.cpp)
@@ -571,6 +611,18 @@ if(GGML_SYCL)
     target_link_options(test-q8-0-production-kernels PRIVATE "-fsycl")
     install(TARGETS test-q8-0-production-kernels RUNTIME)
     add_test(NAME test-q8-0-production-kernels COMMAND $<TARGET_FILE:test-q8-0-production-kernels>)
+endif()
+
+# test-q8-0-dmmv-soa-bisect: Bisect SoA DMMV variants in production path
+if(GGML_SYCL)
+    add_executable(test-q8-0-dmmv-soa-bisect test-q8-0-dmmv-soa-bisect.cpp)
+    target_link_libraries(test-q8-0-dmmv-soa-bisect PRIVATE ggml ggml-cpu)
+    target_include_directories(test-q8-0-dmmv-soa-bisect PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include)
+    target_compile_options(test-q8-0-dmmv-soa-bisect PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-q8-0-dmmv-soa-bisect PRIVATE "-fsycl")
+    install(TARGETS test-q8-0-dmmv-soa-bisect RUNTIME)
+    add_test(NAME test-q8-0-dmmv-soa-bisect COMMAND $<TARGET_FILE:test-q8-0-dmmv-soa-bisect>)
 endif()
 
 # test-dmmv-q8-0: Comprehensive DMMV Q8_0 unit tests
@@ -719,6 +771,64 @@ if(GGML_SYCL)
     add_test(NAME test-q4-0-dmmv-soa-gpu COMMAND $<TARGET_FILE:test-q4-0-dmmv-soa-gpu>)
 endif()
 
+# test-dmmv-soa-q8-0: CPU unit tests for Q8_0 DMMV SoA dequantize functions
+# Tests actual dequantize_q8_0 vs dequantize_q8_0_reorder functions
+if(GGML_SYCL)
+    add_executable(test-dmmv-soa-q8-0 test-dmmv-soa-q8-0.cpp)
+    target_link_libraries(test-dmmv-soa-q8-0 PRIVATE ggml)
+    target_include_directories(test-dmmv-soa-q8-0 PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-dmmv-soa-q8-0 PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-dmmv-soa-q8-0 PRIVATE "-fsycl")
+    install(TARGETS test-dmmv-soa-q8-0 RUNTIME)
+    add_test(NAME test-dmmv-soa-q8-0 COMMAND $<TARGET_FILE:test-dmmv-soa-q8-0>)
+endif()
+
+# test-q8-0-dmmv-soa-gpu: GPU unit tests for Q8_0 DMMV SoA kernel
+# Tests production-like AoS/SoA DMMV kernel parity
+if(GGML_SYCL)
+    add_executable(test-q8-0-dmmv-soa-gpu test-q8-0-dmmv-soa-gpu.cpp)
+    target_link_libraries(test-q8-0-dmmv-soa-gpu PRIVATE ggml)
+    target_include_directories(test-q8-0-dmmv-soa-gpu PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-q8-0-dmmv-soa-gpu PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-q8-0-dmmv-soa-gpu PRIVATE "-fsycl")
+    install(TARGETS test-q8-0-dmmv-soa-gpu RUNTIME)
+    add_test(NAME test-q8-0-dmmv-soa-gpu COMMAND $<TARGET_FILE:test-q8-0-dmmv-soa-gpu>)
+endif()
+
+# test-q8-0-layout-cache-path: verifies SoA layout pointer comes from unified cache for DMMV
+if(GGML_SYCL)
+    add_executable(test-q8-0-layout-cache-path test-q8-0-layout-cache-path.cpp)
+    target_link_libraries(test-q8-0-layout-cache-path PRIVATE ggml)
+    target_include_directories(test-q8-0-layout-cache-path PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_definitions(test-q8-0-layout-cache-path PRIVATE GGML_SYCL_WARP_SIZE=32)
+    target_compile_options(test-q8-0-layout-cache-path PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-q8-0-layout-cache-path PRIVATE "-fsycl")
+    install(TARGETS test-q8-0-layout-cache-path RUNTIME)
+    add_test(NAME test-q8-0-layout-cache-path COMMAND $<TARGET_FILE:test-q8-0-layout-cache-path>)
+endif()
+
+# test-q8-0-layout-cache-path-mmvq: verifies SoA layout pointer comes from unified cache for MMVQ
+if(GGML_SYCL)
+    add_executable(test-q8-0-layout-cache-path-mmvq test-q8-0-layout-cache-path-mmvq.cpp)
+    target_link_libraries(test-q8-0-layout-cache-path-mmvq PRIVATE ggml)
+    target_include_directories(test-q8-0-layout-cache-path-mmvq PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_definitions(test-q8-0-layout-cache-path-mmvq PRIVATE GGML_SYCL_WARP_SIZE=32)
+    target_compile_options(test-q8-0-layout-cache-path-mmvq PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-q8-0-layout-cache-path-mmvq PRIVATE "-fsycl")
+    install(TARGETS test-q8-0-layout-cache-path-mmvq RUNTIME)
+    add_test(NAME test-q8-0-layout-cache-path-mmvq COMMAND $<TARGET_FILE:test-q8-0-layout-cache-path-mmvq>)
+endif()
+
 # test-soa-buffer-interaction: Tests for SoA buffer interaction bug
 # Tests if F32 tensors (like inp_embd) are correctly read/written when
 # Q4_0 weight tensors have SoA extras tracked in the same buffer context
@@ -760,6 +870,17 @@ if(GGML_SYCL)
     target_link_options(test-ggml-sycl-soa PRIVATE "-fsycl")
     install(TARGETS test-ggml-sycl-soa RUNTIME)
     add_test(NAME test-ggml-sycl-soa COMMAND $<TARGET_FILE:test-ggml-sycl-soa>)
+
+    add_executable(test-sycl-add-strided-view test-sycl-add-strided-view.cpp)
+    target_link_libraries(test-sycl-add-strided-view PRIVATE ggml)
+    target_include_directories(test-sycl-add-strided-view PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-add-strided-view PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-add-strided-view PRIVATE "-fsycl")
+    install(TARGETS test-sycl-add-strided-view RUNTIME)
+    add_test(NAME test-sycl-add-strided-view COMMAND $<TARGET_FILE:test-sycl-add-strided-view>)
+
 
     # test-rms-norm-fused-sycl: Validates fused RMS_NORM + MUL kernel on SYCL
     add_executable(test-rms-norm-fused-sycl test-rms-norm-fused-sycl.cpp)

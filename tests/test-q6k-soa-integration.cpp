@@ -6,7 +6,7 @@
 //
 // Production flow for Q6_K:
 // 1. ggml_backend_tensor_set() is called with AoS data
-// 2. buffer_set_tensor() checks if SoA reorder is enabled (GGML_SYCL_DISABLE_OPT=0)
+// 2. buffer_set_tensor() checks if reordering is enabled (GGML_SYCL_LAYOUT_OVERRIDE=aos disables)
 // 3. If enabled: reorder_q6_k_cpu() converts AoS→SoA in staging buffer
 // 4. Data is uploaded to GPU in SoA format
 // 5. DMMV kernel uses SoA layout for efficient memory access
@@ -25,10 +25,10 @@
 #include "ggml-backend.h"
 #include "ggml-sycl.h"
 
-// Check if GGML_SYCL_DISABLE_OPT is set (disables SoA reordering)
+// Check if AoS override is set (disables reordering)
 static bool is_soa_disabled() {
-    const char* env = std::getenv("GGML_SYCL_DISABLE_OPT");
-    return env && (std::string(env) == "1" || std::string(env) == "true");
+    const char * env = std::getenv("GGML_SYCL_LAYOUT_OVERRIDE");
+    return env && (std::string(env) == "aos");
 }
 
 // Q6_K block structure (must match ggml-common.h)
@@ -319,11 +319,11 @@ int main() {
 
     // Show which mode we're testing
     if (is_soa_disabled()) {
-        printf("MODE: AoS (GGML_SYCL_DISABLE_OPT=1)\n");
+        printf("MODE: AoS (GGML_SYCL_LAYOUT_OVERRIDE=aos)\n");
         printf("  - Weight data uploaded in original AoS format\n");
         printf("  - DMMV uses AoS kernel path\n\n");
     } else {
-        printf("MODE: SoA (default, GGML_SYCL_DISABLE_OPT not set)\n");
+        printf("MODE: SoA (default or GGML_SYCL_LAYOUT_OVERRIDE=soa)\n");
         printf("  - reorder_q6_k_cpu() converts AoS→SoA during upload\n");
         printf("  - DMMV uses SoA kernel path\n\n");
     }
@@ -366,9 +366,9 @@ int main() {
         }
     }
 
-    // Additional test: compare SoA vs AoS (with DISABLE_OPT)
+    // Additional test: compare SoA vs AoS (with override)
     printf("\n=== Comparison Note ===\n");
-    printf("To compare SoA vs AoS, run this test with and without GGML_SYCL_DISABLE_OPT=1\n");
+    printf("To compare SoA vs AoS, run this test with and without GGML_SYCL_LAYOUT_OVERRIDE=aos\n");
     printf("If results differ significantly, the bug is in the reorder or kernel path.\n");
 
     printf("\n=== SUMMARY ===\n");

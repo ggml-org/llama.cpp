@@ -511,9 +511,11 @@ static bool test_mmq_q6k_batch(int n_tokens, bool verbose) {
            max_rel_error * 100, mismatch_tok, mismatch_row, mismatch_gpu, mismatch_cpu);
     printf("  Thresholds: abs>%.2f AND rel>%.0f%%\n", ABS_TOL, REL_TOL * 100);
 
-    // Report SoA status
-    const char* disable_opt = getenv("GGML_SYCL_DISABLE_OPT");
-    printf("  SoA optimization: %s\n", (disable_opt && strcmp(disable_opt, "1") == 0) ? "disabled (AoS)" : "enabled");
+    // Report layout override status
+    const char * override_env = getenv("GGML_SYCL_LAYOUT_OVERRIDE");
+    const bool   aos_only     = (override_env && strcmp(override_env, "aos") == 0);
+    printf("  Layout override: %s\n", override_env ? override_env : "(auto)");
+    printf("  Reorder enabled: %s\n", aos_only ? "no" : "yes");
 
     // Cleanup
     ggml_backend_buffer_free(weight_buffer);

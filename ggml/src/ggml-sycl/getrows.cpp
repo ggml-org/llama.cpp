@@ -19,6 +19,36 @@
 #include <cstdlib>
 #include <cstring>
 
+static const ggml_tensor * get_storage_tensor(const ggml_tensor * t) {
+    const ggml_tensor * current = t;
+    while (current && current->view_src != nullptr) {
+        current = current->view_src;
+    }
+    return current;
+}
+
+static size_t get_view_byte_offset(const ggml_tensor * t) {
+    size_t offset = 0;
+    const ggml_tensor * current = t;
+    while (current && current->view_src != nullptr) {
+        offset += current->view_offs;
+        current = current->view_src;
+    }
+    return offset;
+}
+
+static int64_t get_view_row_offset(const ggml_tensor * t) {
+    int64_t offset = 0;
+    const ggml_tensor * current = t;
+    while (current && current->view_src != nullptr) {
+        if (current->nb[1] > 0) {
+            offset += static_cast<int64_t>(current->view_offs / current->nb[1]);
+        }
+        current = current->view_src;
+    }
+    return offset;
+}
+
 static bool ggml_sycl_wait_after_get_rows_q6_k_soa() {
     static int cached = -1;
     if (cached < 0) {
@@ -90,6 +120,7 @@ static void k_get_rows_reorder(const void *             src0,
                                size_t                   s10,
                                size_t                   s11,
                                size_t                   s12,
+                               int64_t                  row_offset,
                                int64_t                  d_offset,
                                const sycl::nd_item<3> & item_ct1) {
     const int i00 = (item_ct1.get_group(2) * item_ct1.get_local_range(2) + item_ct1.get_local_id(2)) * 2;
@@ -101,7 +132,7 @@ static void k_get_rows_reorder(const void *             src0,
         return;
     }
 
-    const int i01 = src1[i10 * s10 + i11 * s11 + i12 * s12];  // Row index in source tensor
+    const int64_t i01 = static_cast<int64_t>(src1[i10 * s10 + i11 * s11 + i12 * s12]) + row_offset;
 
     dst_t * dst_row = dst + i10 * s1 + i11 * s2 + i12 * s3;
 
@@ -246,6 +277,8 @@ static void k_get_rows_q6_k_soa(const void *             src0,
                                 size_t                   s10,
                                 size_t                   s11,
                                 size_t                   s12,
+                                int64_t                  row_offset,
+                                int64_t                  total_nrows,
                                 const sycl::nd_item<3> & item_ct1) {
     // Each thread processes 4 values (Q6_K block structure)
     // Thread layout: tid = ip * 32 + il, where ip in {0,1}, il in {0..31}
@@ -262,11 +295,11 @@ static void k_get_rows_q6_k_soa(const void *             src0,
         return;
     }
 
-    const int i01     = src1[i10 * s10 + i11 * s11 + i12 * s12];  // Row index
+    const int64_t i01 = static_cast<int64_t>(src1[i10 * s10 + i11 * s11 + i12 * s12]) + row_offset;  // Row index
     dst_t *   dst_row = dst + i10 * s1 + i11 * s2 + i12 * s3;
 
     // Global block index for SoA offset calculation
-    const int64_t n_blocks  = ne01 * blocks_per_row;  // Total blocks in tensor
+    const int64_t n_blocks  = total_nrows * blocks_per_row;  // Total blocks in tensor
     const int64_t ib_global = i01 * blocks_per_row + block_in_row;
 
     // Thread decomposition: ip (0 or 1), il (0..31)
@@ -310,6 +343,8 @@ static void get_rows_q6_k_soa_sycl(ggml_backend_sycl_context & ctx,
                                    const void *                src0_dd,
                                    const int32_t *             src1_dd,
                                    float *                     dst_dd,
+                                   int64_t                     row_offset,
+                                   int64_t                     total_nrows,
                                    queue_ptr                   stream) {
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -331,7 +366,7 @@ static void get_rows_q6_k_soa_sycl(ggml_backend_sycl_context & ctx,
         sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) {
         k_get_rows_q6_k_soa<float>(src0_dd, src1_dd, dst_dd, ne00, ne01, ne12, s1, s2, s3, nb01, nb02, nb03, s10, s11,
-                                   s12, item_ct1);
+                                   s12, row_offset, total_nrows, item_ct1);
     });
     if (ggml_sycl_wait_after_get_rows_q6_k_soa()) {
         evt.wait_and_throw();
@@ -362,6 +397,7 @@ static void k_get_rows_q6_k_coalesced(const void *             src0,
                                       size_t                   s10,
                                       size_t                   s11,
                                       size_t                   s12,
+                                      int64_t                  row_offset,
                                       int64_t                  d_offset,
                                       int64_t                  row_quants_bytes,
                                       const sycl::nd_item<3> & item_ct1) {
@@ -383,7 +419,7 @@ static void k_get_rows_q6_k_coalesced(const void *             src0,
         return;
     }
 
-    const int i01     = src1[i10 * s10 + i11 * s11 + i12 * s12];  // Row index
+    const int64_t i01 = static_cast<int64_t>(src1[i10 * s10 + i11 * s11 + i12 * s12]) + row_offset;  // Row index
     dst_t *   dst_row = dst + i10 * s1 + i11 * s2 + i12 * s3;
 
     // Global block index
@@ -492,6 +528,7 @@ static void get_rows_q6_k_coalesced_sycl(ggml_backend_sycl_context & ctx,
                                          const void *                src0_dd,
                                          const int32_t *             src1_dd,
                                          float *                     dst_dd,
+                                         int64_t                     row_offset,
                                          int64_t                     d_offset,
                                          int64_t                     row_quants_bytes,
                                          queue_ptr                   stream) {
@@ -512,7 +549,7 @@ static void get_rows_q6_k_coalesced_sycl(ggml_backend_sycl_context & ctx,
 
     stream->parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims), [=](sycl::nd_item<3> item_ct1) {
         k_get_rows_q6_k_coalesced<float>(src0_dd, src1_dd, dst_dd, ne00, ne01, ne12, s1, s2, s3, nb01, nb02, nb03, s10,
-                                         s11, s12, d_offset, row_quants_bytes, item_ct1);
+                                         s11, s12, row_offset, d_offset, row_quants_bytes, item_ct1);
     });
 
     GGML_UNUSED(dst);
@@ -532,6 +569,7 @@ static void k_get_rows_q6_k_coalesced_variable(const void * __restrict__ x,
                                                const int64_t            blocks_per_row,
                                                const int64_t            row_quants_bytes,
                                                const int64_t            total_nrows,
+                                               const int64_t            row_offset,
                                                const sycl::nd_item<3> & item) {
     // Thread layout: 64 threads (2 phases x 32 threads) per Q6_K block
     const int tid = item.get_local_id(2);
@@ -542,7 +580,7 @@ static void k_get_rows_q6_k_coalesced_variable(const void * __restrict__ x,
     const int row_idx  = item.get_group(2);  // Which row (from indices)
     const int block_id = item.get_group(1);  // Which block in the row
 
-    const int src_row = indices[row_idx];
+    const int64_t src_row = static_cast<int64_t>(indices[row_idx]) + row_offset;
 
     // === Variable tile decomposition ===
     // Find which tile this block belongs to
@@ -651,10 +689,11 @@ static void get_rows_q6_k_coalesced_variable_sycl(ggml_backend_sycl_context & ct
                                                   const void *                src0_dd,
                                                   const int32_t *             src1_dd,
                                                   dst_t *                     dst_dd,
+                                                  int64_t                     row_offset,
+                                                  int64_t                     total_nrows,
                                                   dpct::queue_ptr             stream) {
     const int64_t blocks_per_row = src0->ne[0] / QK_K;
     const int64_t nrows          = src1->ne[0];
-    const int64_t total_nrows    = src0->ne[1];
 
     // Compute variable row_quants_bytes using tile decomposition
     // This matches the MMVQ variable tile kernel calculation
@@ -678,7 +717,7 @@ static void get_rows_q6_k_coalesced_variable_sycl(ggml_backend_sycl_context & ct
 
     stream->parallel_for(sycl::nd_range<3>(grid * block, block), [=](sycl::nd_item<3> item) {
         k_get_rows_q6_k_coalesced_variable<dst_t>(src0_dd, src1_dd, dst_dd, blocks_per_row, row_quants_bytes,
-                                                  total_nrows, item);
+                                                  total_nrows, row_offset, item);
     });
 
     GGML_UNUSED(dst);
@@ -706,6 +745,7 @@ static void k_get_rows_q4_0_coalesced(const void *             src0,
                                       size_t                   s10,
                                       size_t                   s11,
                                       size_t                   s12,
+                                      int64_t                  row_offset,
                                       int64_t                  d_offset,
                                       const sycl::nd_item<3> & item_ct1) {
     constexpr int TILE_BLOCKS       = MMVQ_COALESCED_TILE_BLOCKS;
@@ -722,7 +762,7 @@ static void k_get_rows_q4_0_coalesced(const void *             src0,
         return;
     }
 
-    const int i01 = src1[i10 * s10 + i11 * s11 + i12 * s12];  // Row index in source tensor
+    const int64_t i01 = static_cast<int64_t>(src1[i10 * s10 + i11 * s11 + i12 * s12]) + row_offset;
 
     dst_t * dst_row = dst + i10 * s1 + i11 * s2 + i12 * s3;
 
@@ -777,6 +817,7 @@ static void get_rows_q4_0_coalesced_sycl(ggml_backend_sycl_context & ctx,
                                          const void *                src0_dd,
                                          const int32_t *             src1_dd,
                                          float *                     dst_dd,
+                                         int64_t                     row_offset,
                                          int64_t                     d_offset,
                                          queue_ptr                   stream) {
     GGML_TENSOR_BINARY_OP_LOCALS
@@ -797,7 +838,7 @@ static void get_rows_q4_0_coalesced_sycl(ggml_backend_sycl_context & ctx,
 
     stream->parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims), [=](sycl::nd_item<3> item_ct1) {
         k_get_rows_q4_0_coalesced<float>(src0_dd, src1_dd, dst_dd, ne00, ne01, ne12, s1, s2, s3, nb01, nb02, nb03, s10,
-                                         s11, s12, d_offset, item_ct1);
+                                         s11, s12, row_offset, d_offset, item_ct1);
     });
 
     // DEBUG: avoid queue waits during graph recording
@@ -827,6 +868,7 @@ static void k_get_rows_q8_0_coalesced(const void *             src0,
                                       size_t                   s10,
                                       size_t                   s11,
                                       size_t                   s12,
+                                      int64_t                  row_offset,
                                       int64_t                  d_offset,
                                       const sycl::nd_item<3> & item_ct1) {
     constexpr int TILE_BLOCKS       = MMVQ_COALESCED_TILE_BLOCKS;
@@ -841,7 +883,7 @@ static void k_get_rows_q8_0_coalesced(const void *             src0,
         return;
     }
 
-    const int i01 = src1[i10 * s10 + i11 * s11 + i12 * s12];
+    const int64_t i01 = static_cast<int64_t>(src1[i10 * s10 + i11 * s11 + i12 * s12]) + row_offset;
 
     dst_t * dst_row = dst + i10 * s1 + i11 * s2 + i12 * s3;
 
@@ -885,6 +927,7 @@ static void get_rows_q8_0_coalesced_sycl(ggml_backend_sycl_context & ctx,
                                          const void *                src0_dd,
                                          const int32_t *             src1_dd,
                                          float *                     dst_dd,
+                                         int64_t                     row_offset,
                                          int64_t                     d_offset,
                                          queue_ptr                   stream) {
     GGML_TENSOR_BINARY_OP_LOCALS
@@ -905,7 +948,7 @@ static void get_rows_q8_0_coalesced_sycl(ggml_backend_sycl_context & ctx,
 
     stream->parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims), [=](sycl::nd_item<3> item_ct1) {
         k_get_rows_q8_0_coalesced<float>(src0_dd, src1_dd, dst_dd, ne00, ne01, ne12, s1, s2, s3, nb01, nb02, nb03, s10,
-                                         s11, s12, d_offset, item_ct1);
+                                         s11, s12, row_offset, d_offset, item_ct1);
     });
 
     GGML_UNUSED(dst);
@@ -921,6 +964,7 @@ static void get_rows_sycl_reorder(ggml_backend_sycl_context & ctx,
                                   const void *                src0_dd,
                                   const int32_t *             src1_dd,
                                   float *                     dst_dd,
+                                  int64_t                     row_offset,
                                   int64_t                     d_offset,
                                   queue_ptr                   stream) {
     GGML_TENSOR_BINARY_OP_LOCALS
@@ -942,7 +986,7 @@ static void get_rows_sycl_reorder(ggml_backend_sycl_context & ctx,
 
     stream->parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims), [=](sycl::nd_item<3> item_ct1) {
         k_get_rows_reorder<qk, qr, dq_reorder, float>(src0_dd, src1_dd, dst_dd, ne00, ne01, ne12, s1, s2, s3, nb01,
-                                                      nb02, nb03, s10, s11, s12, d_offset, item_ct1);
+                                                      nb02, nb03, s10, s11, s12, row_offset, d_offset, item_ct1);
     });
 
     GGML_UNUSED(dst);
@@ -1067,10 +1111,19 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->nb[0] == ggml_type_size(dst->type));
 
     // Use device-specific pointers for TP mode (KV cache is allocated per-device)
-    const int       device   = ctx.device;
-    const void *    src0_d   = ggml_sycl_get_layout_ptr(dst->src[0], device);
-    const int32_t * src1_i32 = (const int32_t *) ggml_sycl_get_data_ptr(dst->src[1], device);
-    float *         dst_d    = (float *) ggml_sycl_get_data_ptr(dst, device);
+    const int           device       = ctx.device;
+    const ggml_tensor * src0         = dst->src[0];
+    const ggml_tensor * storage      = get_storage_tensor(src0);
+    const int64_t       storage_rows = ggml_nrows(storage);
+    const int64_t       row_offset   = get_view_row_offset(src0);
+    const size_t        view_offset  = get_view_byte_offset(src0);
+    const void *        aos_base     = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_AOS);
+    if (!aos_base) {
+        aos_base = ggml_sycl_get_layout_ptr(storage, device);
+    }
+    const void *        src0_d       = aos_base ? (const char *) aos_base + view_offset : nullptr;
+    const int32_t *     src1_i32     = (const int32_t *) ggml_sycl_get_data_ptr(dst->src[1], device);
+    float *             dst_d        = (float *) ggml_sycl_get_data_ptr(dst, device);
 
     // TP DEBUG (controlled by GGML_SYCL_TP_DEBUG environment variable)
     bool       is_tok_embd    = dst->src[0]->name && strstr(dst->src[0]->name, "token_embd");
@@ -1163,9 +1216,9 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
         // Read values at the row being extracted
         int64_t       ne0        = dst->src[0]->ne[0];  // Row width
-        size_t        row_offset = row_idx * ne0 * sizeof(float);
+        size_t        row_byte_offset = row_idx * ne0 * sizeof(float);
         float         src_vals[4];
-        const float * row_ptr = (const float *) ((const char *) src0_d + row_offset);
+        const float * row_ptr = (const float *) ((const char *) src0_d + row_byte_offset);
         ctx.stream()->memcpy(src_vals, row_ptr, 4 * sizeof(float)).wait();
 
         fprintf(stderr,
@@ -1198,28 +1251,42 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         case GGML_TYPE_Q4_0:
             {
                 // Check reorder mode for proper kernel dispatch
-                ggml_tensor_extra_gpu * extra  = (ggml_tensor_extra_gpu *) dst->src[0]->extra;
+                ggml_tensor_extra_gpu * extra  =
+                    (ggml_tensor_extra_gpu *) (src0->extra ? src0->extra : storage->extra);
                 bool                    is_soa = ggml_sycl_layout_is_soa(extra);
 
                 if (is_soa) {
                     // SoA layout: all qs first, then all d
-                    // d_offset = total qs bytes = ne01 * ne00 / 2 (for Q4_0: 16 bytes qs per 32 values)
-                    const int64_t ne00     = dst->src[0]->ne[0];
-                    const int64_t ne01     = dst->src[0]->ne[1];
-                    const int64_t d_offset = ne01 * ne00 / 2;
-                    get_rows_sycl_reorder<QK4_0, QR4_0, dequantize_q4_0_reorder>(
-                        ctx, dst->src[0], dst->src[1], dst, src0_d, src1_i32, dst_d, d_offset, ctx.stream());
+                    // d_offset = total qs bytes = storage_rows * ne00 / 2 (for Q4_0: 16 bytes qs per 32 values)
+                    const int64_t ne00     = src0->ne[0];
+                    const int64_t d_offset = storage_rows * ne00 / 2;
+                    const void *  soa_base = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_SOA);
+                    if (soa_base == nullptr) {
+                        get_rows_sycl<QK4_0, QR4_0, dequantize_q4_0>(ctx, src0, dst->src[1], dst,
+                                                                     (const float *) src0_d, src1_i32, dst_d,
+                                                                     ctx.stream());
+                    } else {
+                        get_rows_sycl_reorder<QK4_0, QR4_0, dequantize_q4_0_reorder>(
+                            ctx, src0, dst->src[1], dst, soa_base, src1_i32, dst_d, row_offset, d_offset,
+                            ctx.stream());
+                    }
                 } else if (ggml_sycl_layout_is_coalesced(extra)) {
                     // Coalesced layout: word-major within tiles
-                    // d_offset = total qs bytes = ne01 * ne00 / 2 (for Q4_0: 16 bytes qs per 32 values)
-                    const int64_t ne00     = dst->src[0]->ne[0];
-                    const int64_t ne01     = dst->src[0]->ne[1];
-                    const int64_t d_offset = ne01 * ne00 / 2;
-                    get_rows_q4_0_coalesced_sycl(ctx, dst->src[0], dst->src[1], dst, src0_d, src1_i32, dst_d, d_offset,
-                                                 ctx.stream());
+                    // d_offset = total qs bytes = storage_rows * ne00 / 2 (for Q4_0: 16 bytes qs per 32 values)
+                    const int64_t ne00     = src0->ne[0];
+                    const int64_t d_offset = storage_rows * ne00 / 2;
+                    const void *  coa_base = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_COALESCED);
+                    if (coa_base == nullptr) {
+                        get_rows_sycl<QK4_0, QR4_0, dequantize_q4_0>(ctx, src0, dst->src[1], dst,
+                                                                     (const float *) src0_d, src1_i32, dst_d,
+                                                                     ctx.stream());
+                    } else {
+                        get_rows_q4_0_coalesced_sycl(ctx, src0, dst->src[1], dst, coa_base, src1_i32, dst_d,
+                                                     row_offset, d_offset, ctx.stream());
+                    }
                 } else {
                     // AoS (original) layout
-                    get_rows_sycl<QK4_0, QR4_0, dequantize_q4_0>(ctx, dst->src[0], dst->src[1], dst,
+                    get_rows_sycl<QK4_0, QR4_0, dequantize_q4_0>(ctx, src0, dst->src[1], dst,
                                                                  (const float *) src0_d, src1_i32, dst_d, ctx.stream());
                 }
             }
@@ -1239,26 +1306,40 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         case GGML_TYPE_Q8_0:
             {
                 // Check reorder mode for proper kernel dispatch
-                ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *) dst->src[0]->extra;
+                ggml_tensor_extra_gpu * extra =
+                    (ggml_tensor_extra_gpu *) (src0->extra ? src0->extra : storage->extra);
                 if (ggml_sycl_layout_is_soa(extra)) {
                     // SoA layout: all qs first, then all d
-                    // d_offset = total qs bytes = ne01 * ne00 (for Q8_0: 32 bytes qs per 32 values)
-                    const int64_t ne00     = dst->src[0]->ne[0];
-                    const int64_t ne01     = dst->src[0]->ne[1];
-                    const int64_t d_offset = ne01 * ne00;
-                    get_rows_sycl_reorder<QK8_0, QR8_0, dequantize_q8_0_reorder>(
-                        ctx, dst->src[0], dst->src[1], dst, src0_d, src1_i32, dst_d, d_offset, ctx.stream());
+                    // d_offset = total qs bytes = storage_rows * ne00 (for Q8_0: 32 bytes qs per 32 values)
+                    const int64_t ne00     = src0->ne[0];
+                    const int64_t d_offset = storage_rows * ne00;
+                    const void *  soa_base = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_SOA);
+                    if (soa_base == nullptr) {
+                        get_rows_sycl<QK8_0, QR8_0, dequantize_q8_0>(ctx, src0, dst->src[1], dst,
+                                                                     (const float *) src0_d, src1_i32, dst_d,
+                                                                     ctx.stream());
+                    } else {
+                        get_rows_sycl_reorder<QK8_0, QR8_0, dequantize_q8_0_reorder>(
+                            ctx, src0, dst->src[1], dst, soa_base, src1_i32, dst_d, row_offset, d_offset,
+                            ctx.stream());
+                    }
                 } else if (ggml_sycl_layout_is_coalesced(extra)) {
                     // Coalesced layout: word-major within tiles
-                    // d_offset = total qs bytes = ne01 * ne00 (for Q8_0: 32 bytes qs per 32 values)
-                    const int64_t ne00     = dst->src[0]->ne[0];
-                    const int64_t ne01     = dst->src[0]->ne[1];
-                    const int64_t d_offset = ne01 * ne00;
-                    get_rows_q8_0_coalesced_sycl(ctx, dst->src[0], dst->src[1], dst, src0_d, src1_i32, dst_d, d_offset,
-                                                 ctx.stream());
+                    // d_offset = total qs bytes = storage_rows * ne00 (for Q8_0: 32 bytes qs per 32 values)
+                    const int64_t ne00     = src0->ne[0];
+                    const int64_t d_offset = storage_rows * ne00;
+                    const void *  coa_base = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_COALESCED);
+                    if (coa_base == nullptr) {
+                        get_rows_sycl<QK8_0, QR8_0, dequantize_q8_0>(ctx, src0, dst->src[1], dst,
+                                                                     (const float *) src0_d, src1_i32, dst_d,
+                                                                     ctx.stream());
+                    } else {
+                        get_rows_q8_0_coalesced_sycl(ctx, src0, dst->src[1], dst, coa_base, src1_i32, dst_d,
+                                                     row_offset, d_offset, ctx.stream());
+                    }
                 } else {
                     // AoS (original) layout
-                    get_rows_sycl<QK8_0, QR8_0, dequantize_q8_0>(ctx, dst->src[0], dst->src[1], dst,
+                    get_rows_sycl<QK8_0, QR8_0, dequantize_q8_0>(ctx, src0, dst->src[1], dst,
                                                                  (const float *) src0_d, src1_i32, dst_d, ctx.stream());
                 }
             }
@@ -1266,19 +1347,31 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         case GGML_TYPE_Q6_K:
             {
                 // Check reorder mode for proper kernel dispatch
-                ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *) dst->src[0]->extra;
+                ggml_tensor_extra_gpu * extra =
+                    (ggml_tensor_extra_gpu *) (src0->extra ? src0->extra : storage->extra);
                 if (ggml_sycl_layout_is_coalesced(extra)) {
                     // Coalesced layout: variable tile decomposition with word-major ordering
                     // Uses new variable tile kernel that computes row_quants_bytes correctly
                     GGML_SYCL_DEBUG("Calling get_rows_q6_k_coalesced_variable_sycl\n");
-                    get_rows_q6_k_coalesced_variable_sycl<float>(ctx, dst->src[0], dst->src[1], dst, src0_d, src1_i32,
-                                                                 dst_d, ctx.stream());
+                    const void * coa_base = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_COALESCED);
+                    if (coa_base == nullptr) {
+                        get_rows_q6_k_aos_sycl(ctx, src0, dst->src[1], dst, src0_d, src1_i32, dst_d, ctx.stream());
+                    } else {
+                        get_rows_q6_k_coalesced_variable_sycl<float>(ctx, src0, dst->src[1], dst, coa_base, src1_i32,
+                                                                     dst_d, row_offset, storage_rows, ctx.stream());
+                    }
                 } else if (ggml_sycl_layout_is_soa(extra)) {
                     // Standard SoA layout: [all ql (n*128)][all qh (n*64)][all scales (n*16)][all d (n*2)]
-                    get_rows_q6_k_soa_sycl(ctx, dst->src[0], dst->src[1], dst, src0_d, src1_i32, dst_d, ctx.stream());
+                    const void * soa_base = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_SOA);
+                    if (soa_base == nullptr) {
+                        get_rows_q6_k_aos_sycl(ctx, src0, dst->src[1], dst, src0_d, src1_i32, dst_d, ctx.stream());
+                    } else {
+                        get_rows_q6_k_soa_sycl(ctx, src0, dst->src[1], dst, soa_base, src1_i32, dst_d, row_offset,
+                                               storage_rows, ctx.stream());
+                    }
                 } else {
                     // AoS (original) layout - uses specialized kernel due to Q6_K block complexity
-                    get_rows_q6_k_aos_sycl(ctx, dst->src[0], dst->src[1], dst, src0_d, src1_i32, dst_d, ctx.stream());
+                    get_rows_q6_k_aos_sycl(ctx, src0, dst->src[1], dst, src0_d, src1_i32, dst_d, ctx.stream());
                 }
             }
             break;

@@ -7,13 +7,15 @@
 #ifndef GGML_SYCL_FATTN_DEBUG_HPP
 #define GGML_SYCL_FATTN_DEBUG_HPP
 
-#include <sycl/sycl.hpp>
+#include <sys/stat.h>
+
+#include <cfloat>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <vector>
 #include <string>
-#include <sys/stat.h>
+#include <sycl/sycl.hpp>
+#include <vector>
 
 // Environment variable to enable FA debug dumping
 // Set GGML_SYCL_FA_DEBUG=1 to enable
@@ -21,8 +23,8 @@
 inline int fattn_debug_level() {
     static int level = -1;
     if (level < 0) {
-        const char* env = getenv("GGML_SYCL_FA_DEBUG");
-        level = env ? atoi(env) : 0;
+        const char * env = getenv("GGML_SYCL_FA_DEBUG");
+        level            = env ? atoi(env) : 0;
         if (level > 0) {
             // Create debug directory
             mkdir("/tmp/fa_debug", 0755);
@@ -34,22 +36,24 @@ inline int fattn_debug_level() {
 
 // Debug context to track FA calls
 struct FattnDebugContext {
-    int call_id;           // Sequential call number
-    int n_queries;         // ne01
-    int n_heads;           // ne02
-    int n_kv_heads;        // ne12
-    int n_kv;              // ne11 (sequence length)
-    int D;                 // head dimension
+    int   call_id;     // Sequential call number
+    int   n_queries;   // ne01
+    int   n_heads;     // ne02
+    int   n_kv_heads;  // ne12
+    int   n_kv;        // ne11 (sequence length)
+    int   D;           // head dimension
     float scale;
-    bool is_fa_on;         // true for FA path, false for standard attention
+    bool  is_fa_on;    // true for FA path, false for standard attention
 
     // File for this call's output
-    FILE* file;
+    FILE * file;
 
     FattnDebugContext() : call_id(0), file(nullptr) {}
 
-    void open_file(const char* suffix) {
-        if (fattn_debug_level() <= 0) return;
+    void open_file(const char * suffix) {
+        if (fattn_debug_level() <= 0) {
+            return;
+        }
 
         char filename[256];
         snprintf(filename, sizeof(filename), "/tmp/fa_debug/fa_%s_call%04d.txt", suffix, call_id);
@@ -57,8 +61,8 @@ struct FattnDebugContext {
         if (file) {
             fprintf(file, "# FA Debug Dump - Call %d\n", call_id);
             fprintf(file, "# Mode: %s\n", is_fa_on ? "FA_ON" : "FA_OFF");
-            fprintf(file, "# n_queries=%d, n_heads=%d, n_kv_heads=%d, n_kv=%d, D=%d, scale=%.6f\n",
-                    n_queries, n_heads, n_kv_heads, n_kv, D, scale);
+            fprintf(file, "# n_queries=%d, n_heads=%d, n_kv_heads=%d, n_kv=%d, D=%d, scale=%.6f\n", n_queries, n_heads,
+                    n_kv_heads, n_kv, D, scale);
             fprintf(file, "#\n");
         }
     }
@@ -72,24 +76,29 @@ struct FattnDebugContext {
 };
 
 // Global debug context (thread-local for safety)
-inline FattnDebugContext& get_fattn_debug_ctx() {
+inline FattnDebugContext & get_fattn_debug_ctx() {
     thread_local FattnDebugContext ctx;
     return ctx;
 }
 
 // Dump Q tensor values
-inline void fattn_debug_dump_Q(
-    dpct::queue_ptr stream,
-    const char* Q_ptr,
-    int Q_type_size,  // sizeof(float) or sizeof(half)
-    int D, int n_queries, int n_heads,
-    int nb01, int nb02,
-    float scale) {
+inline void fattn_debug_dump_Q(dpct::queue_ptr stream,
+                               const char *    Q_ptr,
+                               int             Q_type_size,  // sizeof(float) or sizeof(half)
+                               int             D,
+                               int             n_queries,
+                               int             n_heads,
+                               int             nb01,
+                               int             nb02,
+                               float           scale) {
+    if (fattn_debug_level() <= 0) {
+        return;
+    }
 
-    if (fattn_debug_level() <= 0) return;
-
-    auto& ctx = get_fattn_debug_ctx();
-    if (!ctx.file) return;
+    auto & ctx = get_fattn_debug_ctx();
+    if (!ctx.file) {
+        return;
+    }
 
     fprintf(ctx.file, "\n=== Q INPUT (scaled by %.6f) ===\n", scale);
 
@@ -101,7 +110,7 @@ inline void fattn_debug_dump_Q(
     for (int h = 0; h < heads_to_dump; h++) {
         for (int q = 0; q < n_queries; q++) {
             // Copy Q[h][q] to host
-            const char* q_row = Q_ptr + nb02 * h + nb01 * q;
+            const char * q_row = Q_ptr + nb02 * h + nb01 * q;
 
             if (Q_type_size == sizeof(float)) {
                 stream->memcpy(host_Q.data(), q_row, D * sizeof(float)).wait();
@@ -131,27 +140,27 @@ inline void fattn_debug_dump_Q(
 }
 
 // Dump K tensor values (first few KV positions)
-inline void fattn_debug_dump_K(
-    dpct::queue_ptr stream,
-    const char* K_ptr,
-    int D, int n_kv, int n_kv_heads,
-    int nb11, int nb12) {
+inline void
+fattn_debug_dump_K(dpct::queue_ptr stream, const char * K_ptr, int D, int n_kv, int n_kv_heads, int nb11, int nb12) {
+    if (fattn_debug_level() <= 0) {
+        return;
+    }
 
-    if (fattn_debug_level() <= 0) return;
-
-    auto& ctx = get_fattn_debug_ctx();
-    if (!ctx.file) return;
+    auto & ctx = get_fattn_debug_ctx();
+    if (!ctx.file) {
+        return;
+    }
 
     fprintf(ctx.file, "\n=== K INPUT (first %d positions) ===\n", std::min(16, n_kv));
 
     int kv_heads_to_dump = (fattn_debug_level() >= 2) ? n_kv_heads : std::min(2, n_kv_heads);
-    int kv_to_dump = std::min(16, n_kv);
+    int kv_to_dump       = std::min(16, n_kv);
 
     std::vector<sycl::half> host_K(D);
 
     for (int kv_h = 0; kv_h < kv_heads_to_dump; kv_h++) {
         for (int kv = 0; kv < kv_to_dump; kv++) {
-            const sycl::half* k_row = reinterpret_cast<const sycl::half*>(K_ptr + nb12 * kv_h + nb11 * kv);
+            const sycl::half * k_row = reinterpret_cast<const sycl::half *>(K_ptr + nb12 * kv_h + nb11 * kv);
             stream->memcpy(host_K.data(), k_row, D * sizeof(sycl::half)).wait();
 
             fprintf(ctx.file, "K[kv_h=%d,kv=%d]: ", kv_h, kv);
@@ -170,27 +179,27 @@ inline void fattn_debug_dump_K(
 }
 
 // Dump V tensor values (first few KV positions)
-inline void fattn_debug_dump_V(
-    dpct::queue_ptr stream,
-    const char* V_ptr,
-    int D, int n_kv, int n_kv_heads,
-    int nb21, int nb22) {
+inline void
+fattn_debug_dump_V(dpct::queue_ptr stream, const char * V_ptr, int D, int n_kv, int n_kv_heads, int nb21, int nb22) {
+    if (fattn_debug_level() <= 0) {
+        return;
+    }
 
-    if (fattn_debug_level() <= 0) return;
-
-    auto& ctx = get_fattn_debug_ctx();
-    if (!ctx.file) return;
+    auto & ctx = get_fattn_debug_ctx();
+    if (!ctx.file) {
+        return;
+    }
 
     fprintf(ctx.file, "\n=== V INPUT (first %d positions) ===\n", std::min(16, n_kv));
 
     int kv_heads_to_dump = (fattn_debug_level() >= 2) ? n_kv_heads : std::min(2, n_kv_heads);
-    int kv_to_dump = std::min(16, n_kv);
+    int kv_to_dump       = std::min(16, n_kv);
 
     std::vector<sycl::half> host_V(D);
 
     for (int kv_h = 0; kv_h < kv_heads_to_dump; kv_h++) {
         for (int kv = 0; kv < kv_to_dump; kv++) {
-            const sycl::half* v_row = reinterpret_cast<const sycl::half*>(V_ptr + nb22 * kv_h + nb21 * kv);
+            const sycl::half * v_row = reinterpret_cast<const sycl::half *>(V_ptr + nb22 * kv_h + nb21 * kv);
             stream->memcpy(host_V.data(), v_row, D * sizeof(sycl::half)).wait();
 
             fprintf(ctx.file, "V[kv_h=%d,kv=%d]: ", kv_h, kv);
@@ -209,24 +218,28 @@ inline void fattn_debug_dump_V(
 }
 
 // Dump mask values
-inline void fattn_debug_dump_mask(
-    dpct::queue_ptr stream,
-    const char* mask_ptr,
-    int n_kv, int n_queries,
-    int nb31, int ne30) {
+inline void fattn_debug_dump_mask(dpct::queue_ptr stream,
+                                  const char *    mask_ptr,
+                                  int             n_kv,
+                                  int             n_queries,
+                                  int             nb31,
+                                  int             ne30) {
+    if (fattn_debug_level() <= 0 || !mask_ptr) {
+        return;
+    }
 
-    if (fattn_debug_level() <= 0 || !mask_ptr) return;
-
-    auto& ctx = get_fattn_debug_ctx();
-    if (!ctx.file) return;
+    auto & ctx = get_fattn_debug_ctx();
+    if (!ctx.file) {
+        return;
+    }
 
     fprintf(ctx.file, "\n=== MASK (first %d KV positions) ===\n", std::min(32, n_kv));
 
-    int kv_to_dump = std::min(32, n_kv);
+    int                     kv_to_dump = std::min(32, n_kv);
     std::vector<sycl::half> host_mask(kv_to_dump);
 
     for (int q = 0; q < n_queries; q++) {
-        const sycl::half* mask_row = reinterpret_cast<const sycl::half*>(mask_ptr + nb31 * q);
+        const sycl::half * mask_row = reinterpret_cast<const sycl::half *>(mask_ptr + nb31 * q);
         stream->memcpy(host_mask.data(), mask_row, kv_to_dump * sizeof(sycl::half)).wait();
 
         fprintf(ctx.file, "mask[q=%d]: ", q);
@@ -243,22 +256,22 @@ inline void fattn_debug_dump_mask(
 }
 
 // Dump attention output
-inline void fattn_debug_dump_output(
-    dpct::queue_ptr stream,
-    const float* dst_ptr,
-    int D, int n_queries, int n_heads) {
+inline void fattn_debug_dump_output(dpct::queue_ptr stream, const float * dst_ptr, int D, int n_queries, int n_heads) {
+    if (fattn_debug_level() <= 0) {
+        return;
+    }
 
-    if (fattn_debug_level() <= 0) return;
-
-    auto& ctx = get_fattn_debug_ctx();
-    if (!ctx.file) return;
+    auto & ctx = get_fattn_debug_ctx();
+    if (!ctx.file) {
+        return;
+    }
 
     fprintf(ctx.file, "\n=== FA OUTPUT ===\n");
 
     int heads_to_dump = (fattn_debug_level() >= 2) ? n_heads : std::min(4, n_heads);
 
     // Output layout: dst[d + D*(h + n_heads*q)]
-    size_t output_size = (size_t)D * n_queries * n_heads;
+    size_t             output_size = (size_t) D * n_queries * n_heads;
     std::vector<float> host_dst(output_size);
     stream->memcpy(host_dst.data(), dst_ptr, output_size * sizeof(float)).wait();
 
@@ -296,25 +309,28 @@ inline void fattn_debug_dump_output(
                 max_val = std::max(max_val, val);
             }
         }
-        int count = n_queries * D;
-        float mean = sum / count;
-        float var = sum_sq / count - mean * mean;
-        fprintf(ctx.file, "head[%d]: mean=%.6f, var=%.6f, min=%.6f, max=%.6f\n",
-                h, mean, var, min_val, max_val);
+        int   count = n_queries * D;
+        float mean  = sum / count;
+        float var   = sum_sq / count - mean * mean;
+        fprintf(ctx.file, "head[%d]: mean=%.6f, var=%.6f, min=%.6f, max=%.6f\n", h, mean, var, min_val, max_val);
     }
 }
 
 // Dump attention scores (QK) - for detailed debugging
-inline void fattn_debug_dump_QK(
-    dpct::queue_ptr stream,
-    const float* QK_ptr,  // [n_queries][n_kv] or portion thereof
-    int n_queries, int n_kv_batch, int kv_start,
-    int head) {
+inline void fattn_debug_dump_QK(dpct::queue_ptr stream,
+                                const float *   QK_ptr,  // [n_queries][n_kv] or portion thereof
+                                int             n_queries,
+                                int             n_kv_batch,
+                                int             kv_start,
+                                int             head) {
+    if (fattn_debug_level() < 2) {
+        return;  // Only in verbose mode
+    }
 
-    if (fattn_debug_level() < 2) return;  // Only in verbose mode
-
-    auto& ctx = get_fattn_debug_ctx();
-    if (!ctx.file) return;
+    auto & ctx = get_fattn_debug_ctx();
+    if (!ctx.file) {
+        return;
+    }
 
     fprintf(ctx.file, "\n=== QK SCORES [head=%d, kv_start=%d] ===\n", head, kv_start);
 
@@ -335,16 +351,21 @@ inline void fattn_debug_dump_QK(
 }
 
 // Dump softmax weights
-inline void fattn_debug_dump_softmax(
-    dpct::queue_ptr stream,
-    const sycl::half* S_ptr,  // [n_queries][n_kv_batch]
-    int n_queries, int n_kv_batch, int kv_start,
-    int head, int S_stride) {
+inline void fattn_debug_dump_softmax(dpct::queue_ptr    stream,
+                                     const sycl::half * S_ptr,  // [n_queries][n_kv_batch]
+                                     int                n_queries,
+                                     int                n_kv_batch,
+                                     int                kv_start,
+                                     int                head,
+                                     int                S_stride) {
+    if (fattn_debug_level() < 2) {
+        return;  // Only in verbose mode
+    }
 
-    if (fattn_debug_level() < 2) return;  // Only in verbose mode
-
-    auto& ctx = get_fattn_debug_ctx();
-    if (!ctx.file) return;
+    auto & ctx = get_fattn_debug_ctx();
+    if (!ctx.file) {
+        return;
+    }
 
     fprintf(ctx.file, "\n=== SOFTMAX WEIGHTS [head=%d, kv_start=%d] ===\n", head, kv_start);
 
@@ -353,8 +374,8 @@ inline void fattn_debug_dump_softmax(
 
     for (int q = 0; q < n_queries; q++) {
         fprintf(ctx.file, "S[q=%d]: ", q);
-        float sum = 0;
-        int kv_to_dump = std::min(16, n_kv_batch);
+        float sum        = 0;
+        int   kv_to_dump = std::min(16, n_kv_batch);
         for (int k = 0; k < kv_to_dump; k++) {
             float w = static_cast<float>(host_S[q * S_stride + k]);
             fprintf(ctx.file, "%.4f ", w);
@@ -368,4 +389,4 @@ inline void fattn_debug_dump_softmax(
     }
 }
 
-#endif // GGML_SYCL_FATTN_DEBUG_HPP
+#endif  // GGML_SYCL_FATTN_DEBUG_HPP

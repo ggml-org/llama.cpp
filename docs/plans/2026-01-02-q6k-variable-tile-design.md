@@ -183,7 +183,7 @@ void reorder_q6_K_coalesced_variable(
 
 ```bash
 # Pure Q6_K model (all layers use variable tiling)
-GGML_SYCL_REORDER_MODE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   ./build/bin/llama-completion -m mistral-7b-v0.1.Q6_K.gguf \
   -ngl 99 --flash-attn on -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0
 
@@ -194,10 +194,10 @@ GGML_SYCL_REORDER_MODE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
 
 ```bash
 # Compare vs SoA baseline
-GGML_SYCL_REORDER_MODE=soa ./build/bin/llama-bench \
+GGML_SYCL_LAYOUT_OVERRIDE=soa ./build/bin/llama-bench \
   -m mistral-7b-v0.1.Q6_K.gguf -p 512 -n 128 -ngl 99 -fa 1
 
-GGML_SYCL_REORDER_MODE=coalesced ./build/bin/llama-bench \
+GGML_SYCL_LAYOUT_OVERRIDE=coalesced ./build/bin/llama-bench \
   -m mistral-7b-v0.1.Q6_K.gguf -p 512 -n 128 -ngl 99 -fa 1
 ```
 

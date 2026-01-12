@@ -33,6 +33,7 @@ static bool ggml_sycl_layout_ptr_stats_enabled() {
 
 static std::atomic<uint64_t> g_layout_ptr_host_cache_target_hit{0};
 static std::atomic<uint64_t> g_layout_ptr_host_cache_aos_hit{0};
+static std::atomic<uint64_t> g_layout_ptr_host_cache_layout_fallback{0};
 static std::atomic<uint64_t> g_layout_ptr_host_cache_data_fallback{0};
 static std::atomic<uint64_t> g_layout_ptr_host_cache_miss{0};
 
@@ -47,6 +48,9 @@ void ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event event) {
             break;
         case ggml_sycl_layout_ptr_event::HOST_CACHE_AOS_HIT:
             g_layout_ptr_host_cache_aos_hit.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case ggml_sycl_layout_ptr_event::HOST_CACHE_LAYOUT_FALLBACK:
+            g_layout_ptr_host_cache_layout_fallback.fetch_add(1, std::memory_order_relaxed);
             break;
         case ggml_sycl_layout_ptr_event::HOST_CACHE_DATA_FALLBACK:
             g_layout_ptr_host_cache_data_fallback.fetch_add(1, std::memory_order_relaxed);
@@ -63,9 +67,10 @@ void ggml_sycl_layout_ptr_stats_dump() {
     }
 
     fprintf(stderr,
-            "[LAYOUT-PTR] host_cached target_hit=%llu aos_hit=%llu data_fallback=%llu miss=%llu\n",
+            "[LAYOUT-PTR] host_cached target_hit=%llu aos_hit=%llu layout_fallback=%llu data_fallback=%llu miss=%llu\n",
             static_cast<unsigned long long>(g_layout_ptr_host_cache_target_hit.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(g_layout_ptr_host_cache_aos_hit.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(g_layout_ptr_host_cache_layout_fallback.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(g_layout_ptr_host_cache_data_fallback.load(std::memory_order_relaxed)),
             static_cast<unsigned long long>(g_layout_ptr_host_cache_miss.load(std::memory_order_relaxed)));
 }

@@ -174,8 +174,8 @@ int main() {
     printf("This test specifically targets the 56-block case (Mistral FFN)\n\n");
 
     // Force coalesced mode
-    setenv("GGML_SYCL_REORDER_MODE", "coalesced", 1);
-    printf("GGML_SYCL_REORDER_MODE=coalesced\n\n");
+    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "coalesced", 1);
+    printf("GGML_SYCL_LAYOUT_OVERRIDE=coalesced\n\n");
 
     ggml_backend_t gpu_backend = ggml_backend_sycl_init(0);
     if (!gpu_backend) {

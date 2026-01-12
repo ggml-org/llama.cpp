@@ -283,9 +283,9 @@ static void test_dispatch_aos_vs_soa() {
         printf("    Row %lld: %.1f\n", (long long)row, expected);
     }
 
-    // Test with SoA disabled (AoS mode)
-    printf("\n  --- AoS Mode (GGML_SYCL_DISABLE_OPT=1) ---\n");
-    setenv("GGML_SYCL_DISABLE_OPT", "1", 1);
+    // Test with reordering disabled (AoS mode)
+    printf("\n  --- AoS Mode (GGML_SYCL_LAYOUT_OVERRIDE=aos) ---\n");
+    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "aos", 1);
 
     // Create new backend to pick up env var
     ggml_backend_free(backend);
@@ -293,9 +293,9 @@ static void test_dispatch_aos_vs_soa() {
 
     printf("  [Using simple known-value blocks instead of quantize_row_q6_K]\n");
 
-    // Test with SoA enabled (default)
-    printf("\n  --- SoA Mode (default) ---\n");
-    unsetenv("GGML_SYCL_DISABLE_OPT");
+    // Test with SoA enabled
+    printf("\n  --- SoA Mode (GGML_SYCL_LAYOUT_OVERRIDE=soa) ---\n");
+    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "soa", 1);
 
     ggml_backend_free(backend);
     printf("  Backend tests complete - see Tests 5-7 for actual kernel verification\n");

@@ -492,7 +492,7 @@ Expected: Builds successfully with no errors
 **Step 2: Test with Q6_K model**
 
 ```bash
-GGML_SYCL_REORDER_MODE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   ./build/bin/llama-completion -m /Storage/GenAI/models/mistral-7b-v0.1.Q6_K.gguf \
   -ngl 99 --flash-attn on -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0
 ```
@@ -502,7 +502,7 @@ Expected output: `1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15`
 **Step 3: Test with Q4_0 model (has Q6_K output layer)**
 
 ```bash
-GGML_SYCL_REORDER_MODE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
+GGML_SYCL_LAYOUT_OVERRIDE=coalesced ONEAPI_DEVICE_SELECTOR=level_zero:1 \
   ./build/bin/llama-completion -m /Storage/GenAI/models/mistral-7b-v0.1.Q4_0.gguf \
   -ngl 99 --flash-attn on -p '1, 2, 3, 4, 5,' -n 15 --seed 42 --temp 0
 ```
