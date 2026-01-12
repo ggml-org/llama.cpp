@@ -3356,6 +3356,12 @@ static void llama_sampler_adaptive_p_apply(struct llama_sampler * smpl, llama_to
     // after the softmax.
     //
     for (size_t i = 0; i < cur_p->size; ++i) {
+        if (cur_p->data[i].logit <= -1e9f) {
+            // don't transform logits with very large negative values
+            // (as set by e.g. min-p and top-p when using backend sampling)
+            // the value `-1e9f` is copied from `llama_sampler_min_p_backend_apply`
+            continue;
+        }
         float dist = std::abs((cur_p->data[i].p - adapted_target) * INV_WIDTH);
         cur_p->data[i].logit = PEAK_LOGIT_VALUE - SHARPNESS * dist * dist / (1.0f + dist);
     }
