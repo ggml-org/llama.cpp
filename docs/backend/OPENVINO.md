@@ -52,7 +52,7 @@ Accuracy and performance optimizations for quantized models are still work in pr
 
 - **Primary supported quantization scheme is `Q4_0`**
 - `Q4_0` and `Q4_1` tensors are requantized to int4 gs128 symmetric
-- `Q6_K` tensors are requentized to int8 except for the token embedding matrix
+- `Q6_K` tensors are requentized to int8 except for the token embedding matrix which is dequantized to fp16
 
 #### Additional Notes
 
