@@ -598,8 +598,8 @@ static __device__ T block_reduce(T val, T * shared_vals) {
             val = shared_vals[lane_id];
         }
         return block_reduce_policy<reduce_method_t, T>::reduce(val);
-    } 
-    
+    }
+
     return val;
 }
 
