@@ -131,7 +131,7 @@ For detailed info, please refer to [llama.cpp for SYCL](./backend/SYCL.md).
 
 ## CUDA
 
-This provides GPU acceleration using an NVIDIA GPU. Make sure to have the [CUDA toolkit](https://developer.nvidia.com/cuda-toolkit) installed.
+This provides GPU acceleration using an NVIDIA GPU. Make sure to have the [CUDA v12.4 toolkit](https://developer.nvidia.com/cuda-12-4-0-download-archive) installed.
 
 #### Download directly from NVIDIA
 You may find the official downloads here: [NVIDIA developer site](https://developer.nvidia.com/cuda-downloads).
