@@ -731,6 +731,26 @@ bool ggml_backend_sycl_has_tensor_cache(ggml_backend_t backend) {
     return g_tensor_cache != nullptr && g_tiered_enabled.load(std::memory_order_acquire);
 }
 
+void ggml_backend_sycl_get_cache_stats(ggml_backend_t backend, uint64_t * hits, uint64_t * misses) {
+    (void) backend;
+    std::lock_guard<std::mutex> lock(g_tensor_cache_mutex);
+    if (g_tensor_cache) {
+        if (hits) {
+            *hits = g_tensor_cache->cache_hits();
+        }
+        if (misses) {
+            *misses = g_tensor_cache->cache_misses();
+        }
+    } else {
+        if (hits) {
+            *hits = 0;
+        }
+        if (misses) {
+            *misses = 0;
+        }
+    }
+}
+
 // Query tensor location from unified cache for tiered memory dispatch.
 // Returns pointer to tensor data and its memory tier.
 // If not in tiered mode or tensor not found, returns nullptr.
@@ -739,7 +759,6 @@ bool ggml_backend_sycl_has_tensor_cache(ggml_backend_t backend) {
 // This is the integration point between mul_mat dispatch and unified_tensor_cache.
 static void * get_cached_tensor_ptr(const char * tensor_name, ggml_sycl::memory_tier * tier_out,
                                     bool * found_in_inventory) {
-    // Initialize output to false
     if (found_in_inventory) {
         *found_in_inventory = false;
     }
@@ -749,31 +768,40 @@ static void * get_cached_tensor_ptr(const char * tensor_name, ggml_sycl::memory_
     }
 
     if (!g_tiered_enabled.load(std::memory_order_acquire)) {
-        return nullptr;  // Not in tiered mode, use normal path
-    }
-
-    std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
-
-    // O(1) hash lookup instead of linear search
-    auto it = g_tensor_inventory_index.find(tensor_name);
-    if (it != g_tensor_inventory_index.end()) {
-        // Tensor found in inventory - tiered dispatch is applicable
-        if (found_in_inventory) {
-            *found_in_inventory = true;
-        }
-        // For now, return nullptr with PINNED_HOST tier as placeholder.
-        // Full integration will query unified_tensor_cache for actual pointer.
-        if (tier_out) {
-            *tier_out = ggml_sycl::memory_tier::PINNED_HOST;
-        }
-        // Return nullptr as placeholder - actual pointer retrieval
-        // will be implemented when unified_tensor_cache is fully integrated.
-        // The mul_mat dispatch will fall back to normal path when nullptr.
         return nullptr;
     }
 
-    // Tensor not in inventory (dynamic tensor, not a weight)
-    return nullptr;
+    // First check inventory index (fast path for inventory check)
+    {
+        std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
+        auto it = g_tensor_inventory_index.find(tensor_name);
+        if (it == g_tensor_inventory_index.end()) {
+            return nullptr;  // Not a tracked tensor
+        }
+        if (found_in_inventory) {
+            *found_in_inventory = true;
+        }
+    }
+
+    // Query unified_tensor_cache for actual pointer and tier
+    std::lock_guard<std::mutex> cache_lock(g_tensor_cache_mutex);
+    if (!g_tensor_cache) {
+        if (tier_out) {
+            *tier_out = ggml_sycl::memory_tier::MMAP;  // Fallback
+        }
+        return nullptr;
+    }
+
+    auto id_opt = g_tensor_cache->get_tensor_id(tensor_name);
+    if (!id_opt.has_value()) {
+        return nullptr;
+    }
+
+    auto location = g_tensor_cache->get_tensor_with_location(id_opt.value());
+    if (tier_out) {
+        *tier_out = location.tier;
+    }
+    return location.ptr;
 }
 
 static const void * ggml_sycl_get_moe_expert_cache_key(ggml_tensor_extra_gpu * extra, int expert_id) {

@@ -11,6 +11,7 @@
 #include "ggml.h"
 
 #include <cassert>
+#include <cstdint>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -234,6 +235,67 @@ static void test_inventory_clear() {
     printf("test_inventory_clear: PASSED (inventory replacement works)\n");
 }
 
+// Test cache stats API with null safety
+static void test_cache_stats_null_safety() {
+    ggml_backend_t backend = ggml_backend_sycl_init(0);
+    if (!backend) {
+        printf("test_cache_stats_null_safety: SKIPPED (no SYCL device)\n");
+        return;
+    }
+
+    // Should not crash with NULL outputs
+    ggml_backend_sycl_get_cache_stats(backend, nullptr, nullptr);
+
+    uint64_t hits = 99;
+    ggml_backend_sycl_get_cache_stats(backend, &hits, nullptr);
+    assert(hits == 0 && "No cache created yet, hits should be 0");
+
+    uint64_t misses = 99;
+    ggml_backend_sycl_get_cache_stats(backend, nullptr, &misses);
+    assert(misses == 0 && "No cache created yet, misses should be 0");
+
+    ggml_backend_free(backend);
+    printf("test_cache_stats_null_safety: PASSED\n");
+}
+
+// Test cache stats API returns zero initially
+static void test_cache_stats_api() {
+    ggml_backend_t backend = ggml_backend_sycl_init(0);
+    if (!backend) {
+        printf("test_cache_stats_api: SKIPPED (no SYCL device)\n");
+        return;
+    }
+
+    size_t free_vram = 0, total_vram = 0;
+    ggml_backend_sycl_get_device_memory(0, &free_vram, &total_vram);
+
+    // Create inventory exceeding VRAM to enable tiered mode
+    std::vector<std::string>           name_storage;
+    std::vector<ggml_sycl_tensor_info> tensors;
+    name_storage.reserve(2);
+    tensors.reserve(2);
+
+    // Each tensor = full VRAM, so 2 tensors = 2x VRAM
+    name_storage.push_back("blk.0.weight");
+    tensors.push_back({ name_storage.back().c_str(), free_vram });
+    name_storage.push_back("blk.1.weight");
+    tensors.push_back({ name_storage.back().c_str(), free_vram });
+
+    ggml_sycl_tensor_inventory inventory = { tensors.data(), tensors.size(), free_vram * 2 };
+    ggml_backend_sycl_set_tensor_inventory(backend, &inventory);
+
+    // Query cache stats - should have planned tiers
+    uint64_t hits = 0, misses = 0;
+    ggml_backend_sycl_get_cache_stats(backend, &hits, &misses);
+
+    // Initially zero (no lookups yet)
+    assert(hits == 0 && misses == 0 && "Initial cache stats should be zero");
+
+    ggml_backend_free(backend);
+    printf("test_cache_stats_api: PASSED (hits=%llu, misses=%llu)\n",
+           (unsigned long long) hits, (unsigned long long) misses);
+}
+
 int main() {
     printf("=== Tiered Dispatch Tests ===\n\n");
 
@@ -242,6 +304,8 @@ int main() {
     test_inventory_tensor_types();
     test_cache_instance_available();
     test_inventory_clear();
+    test_cache_stats_null_safety();
+    test_cache_stats_api();
 
     printf("\nAll tiered dispatch tests PASSED!\n");
     return 0;

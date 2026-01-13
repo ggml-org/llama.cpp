@@ -126,6 +126,11 @@ GGML_BACKEND_API bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend
 // Returns true if tiered mode is enabled AND the cache has been created.
 GGML_BACKEND_API bool ggml_backend_sycl_has_tensor_cache(ggml_backend_t backend);
 
+// Get cache hit/miss statistics for the unified tensor cache.
+// Used for monitoring tiered dispatch effectiveness.
+// hits/misses may be NULL if caller doesn't need that stat.
+GGML_BACKEND_API void ggml_backend_sycl_get_cache_stats(ggml_backend_t backend, uint64_t * hits, uint64_t * misses);
+
 // Get a stable cache key pointer for a weight tensor on the specified device.
 GGML_BACKEND_API const void * ggml_backend_sycl_get_weight_cache_key(const struct ggml_tensor * tensor, int device);
 
