@@ -163,6 +163,55 @@ void test_statistics() {
     std::cout << "test_statistics: PASSED\n";
 }
 
+// Include unified-cache header for host_cache integration test
+#include "unified-cache.hpp"
+
+void test_host_cache_uses_pool() {
+    // This test verifies host_cache allocates from pinned pool
+    // and doesn't fall back to std::malloc
+
+    sycl::queue q;
+
+    // Get host cache (should use pool internally)
+    auto * cache = ggml_sycl::get_host_cache(q);
+    assert(cache != nullptr && "host_cache should be created");
+
+    // Allocate several tensors through host_cache
+    // Using 256MB each to test significant allocations
+    const size_t        TENSOR_SIZE = 256 * 1024 * 1024;  // 256MB each
+    std::vector<void *> ptrs;
+
+    for (int i = 0; i < 10; i++) {
+        bool needs_fill = false;
+        bool pinned     = false;
+
+        // Use fake but non-null pointers for key_ptr and src_ptr
+        // (host_cache checks for nullptr and returns early)
+        const void * fake_key = reinterpret_cast<const void *>(static_cast<uintptr_t>(0x1000 + i));
+        const void * fake_src = reinterpret_cast<const void *>(static_cast<uintptr_t>(0x2000 + i));
+
+        void * ptr =
+            cache->ensure_cached_alloc(fake_key,     // key_ptr - stable identifier
+                                       fake_src,     // src_ptr - source data pointer (non-null to pass validation)
+                                       TENSOR_SIZE,  // src_size
+                                       TENSOR_SIZE,  // dst_size
+                                       ggml_sycl::cache_entry_type::MOE_EXPERT,
+                                       i,            // layer_id
+                                       i,            // expert_id
+                                       GGML_LAYOUT_AOS,
+                                       false,        // validate_content (skip hash computation for fake ptr)
+                                       &needs_fill, &pinned,
+                                       nullptr       // xmx_info
+            );
+
+        assert(ptr != nullptr && "Allocation should succeed");
+        assert(pinned && "Should be pinned allocation, not std::malloc fallback");
+        ptrs.push_back(ptr);
+    }
+
+    std::cout << "test_host_cache_uses_pool: PASSED\n";
+}
+
 int main() {
     try {
         test_basic_allocation();
@@ -171,6 +220,7 @@ int main() {
         test_alignment();
         test_chunk_count();
         test_statistics();
+        test_host_cache_uses_pool();
         std::cout << "\nAll tests PASSED!\n";
         return 0;
     } catch (const std::exception & e) {

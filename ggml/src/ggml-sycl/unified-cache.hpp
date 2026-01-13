@@ -8,12 +8,14 @@
 #define GGML_SYCL_UNIFIED_CACHE_HPP
 
 #include "dpct/helper.hpp"
+#include "pinned-pool.hpp"
 
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <vector>
@@ -79,7 +81,8 @@ struct cache_layout_result {
     ggml_layout_mode      layout     = GGML_LAYOUT_AOS;
     cache_layout_xmx_info xmx_info   = {};
     sycl::event           event;
-    cache_layout_status   status = cache_layout_status::FAILED;
+    cache_layout_status   status        = cache_layout_status::FAILED;
+    bool                  host_resident = false;  // true if pointer is in host memory (fallback when VRAM full)
 };
 
 // Key for identifying a cached entry
@@ -125,7 +128,7 @@ struct unified_cache_ptr_key_hash {
 
 // Metadata for a cached entry
 struct unified_cache_entry {
-    void *                device_ptr;       // GPU memory pointer
+    void *                device_ptr;       // GPU memory pointer (or host memory if host_resident)
     const void *          src_ptr;          // Source data pointer (for change detection)
     uint64_t              content_hash;     // Simple hash of content (first/last bytes)
     size_t                size;             // Size in bytes
@@ -141,25 +144,26 @@ struct unified_cache_entry {
     cache_entry_state     state;            // READY vs IN_PROGRESS
     bool                  has_ready_event;  // True if ready_event is valid
     sycl::event           ready_event;      // Completion event for IN_PROGRESS entries
+    bool                  host_resident;    // Entry lives in host memory, not device (fallback when VRAM full)
     // NOTE: Reorder state is tracked in tensor->extra->optimized_feature, not here
 };
 
 // Host cache entry (canonical layouts in host memory)
 struct host_cache_entry {
-    void *                host_ptr      = nullptr;
-    const void *          src_ptr       = nullptr;
-    uint64_t              content_hash  = 0;
-    size_t                size          = 0;
-    cache_entry_type      type          = cache_entry_type::DENSE_WEIGHT;
-    int                   layer_id      = -1;
-    int                   expert_id     = -1;
-    ggml_layout_mode      layout        = GGML_LAYOUT_AOS;
-    uint32_t              access_count  = 0;
-    int64_t               last_access   = 0;
-    bool                  pinned        = false;
-    bool                  owns_ptr      = true;
-    bool                  pinned_alloc  = false;  // true if allocated via sycl::malloc_host
-    cache_layout_xmx_info xmx_info      = {};
+    void *                host_ptr     = nullptr;
+    const void *          src_ptr      = nullptr;
+    uint64_t              content_hash = 0;
+    size_t                size         = 0;
+    cache_entry_type      type         = cache_entry_type::DENSE_WEIGHT;
+    int                   layer_id     = -1;
+    int                   expert_id    = -1;
+    ggml_layout_mode      layout       = GGML_LAYOUT_AOS;
+    uint32_t              access_count = 0;
+    int64_t               last_access  = 0;
+    bool                  pinned       = false;
+    bool                  owns_ptr     = true;
+    bool                  pinned_alloc = false;  // true if allocated via sycl::malloc_host
+    cache_layout_xmx_info xmx_info     = {};
 };
 
 // Host cache for canonical layouts (pinned-first, pageable fallback)
@@ -173,29 +177,31 @@ class host_cache {
     host_cache(host_cache &&)                  = delete;
     host_cache & operator=(host_cache &&)      = delete;
 
-    void * ensure_cached_alloc(const void *     key_ptr,
-                               const void *     src_ptr,
-                               size_t           src_size,
-                               size_t           dst_size,
-                               cache_entry_type type,
-                               int              layer_id,
-                               int              expert_id,
-                               ggml_layout_mode layout,
-                               bool             validate_content,
-                               bool *           needs_fill,
-                               bool *           pinned_alloc_out,
+    void * ensure_cached_alloc(const void *                  key_ptr,
+                               const void *                  src_ptr,
+                               size_t                        src_size,
+                               size_t                        dst_size,
+                               cache_entry_type              type,
+                               int                           layer_id,
+                               int                           expert_id,
+                               ggml_layout_mode              layout,
+                               bool                          validate_content,
+                               bool *                        needs_fill,
+                               bool *                        pinned_alloc_out,
                                const cache_layout_xmx_info * xmx_info);
 
-    bool is_cached(const void * key_ptr, ggml_layout_mode layout) const;
+    bool   is_cached(const void * key_ptr, ggml_layout_mode layout) const;
     void * get(const void * key_ptr, ggml_layout_mode layout);
-    void remove(const void * key_ptr, cache_entry_type type, int layer_id, int expert_id, ggml_layout_mode layout);
+    void   remove(const void * key_ptr, cache_entry_type type, int layer_id, int expert_id, ggml_layout_mode layout);
 
     void pin(const void * key_ptr, ggml_layout_mode layout);
     void unpin(const void * key_ptr, ggml_layout_mode layout);
     void unpin_all();
 
     size_t used() const { return used_.load(); }
+
     size_t budget() const { return budget_; }
+
     size_t evict(size_t bytes_needed);
 
   private:
@@ -204,11 +210,15 @@ class host_cache {
     void   free_entry(host_cache_entry & entry);
 
     sycl::queue &        queue_;
-    size_t               budget_     = 0;
+    size_t               budget_ = 0;
     std::atomic<size_t>  used_{ 0 };
     std::atomic<int64_t> time_{ 0 };
 
-    std::unordered_map<unified_cache_key, host_cache_entry, unified_cache_key_hash> entries_;
+    // Pinned memory pool (replaces direct malloc_host calls)
+    // Uses 8GB chunks to bypass Intel Level Zero's ~11GB per-allocation limit
+    std::unique_ptr<pinned_chunk_pool> pinned_pool_;
+
+    std::unordered_map<unified_cache_key, host_cache_entry, unified_cache_key_hash>          entries_;
     std::unordered_map<unified_cache_ptr_key, unified_cache_key, unified_cache_ptr_key_hash> ptr_to_key_;
 
     static constexpr float DECAY_ALPHA = 0.01f;
@@ -381,8 +391,8 @@ class unified_cache {
     size_t               budget_;       // Total GPU memory budget (after reservations)
     size_t               base_budget_;  // Raw cache budget before reservations
     size_t               reserved_;     // Runtime reservation applied to budget_
-    std::atomic<size_t>  used_{ 0 };  // Current usage
-    std::atomic<int64_t> time_{ 0 };  // Monotonic counter
+    std::atomic<size_t>  used_{ 0 };    // Current usage
+    std::atomic<int64_t> time_{ 0 };    // Monotonic counter
 
     // Cache storage: (key_ptr, layout) -> entry
     std::unordered_map<unified_cache_key, unified_cache_entry, unified_cache_key_hash> entries_;
@@ -399,10 +409,10 @@ class unified_cache {
     std::vector<deferred_free_entry> deferred_frees_;
 
     struct inflight_unpin_entry {
-        const void *  key_ptr   = nullptr;
-        ggml_layout_mode layout = GGML_LAYOUT_AOS;
-        bool           has_event = false;
-        sycl::event    event;
+        const void *     key_ptr   = nullptr;
+        ggml_layout_mode layout    = GGML_LAYOUT_AOS;
+        bool             has_event = false;
+        sycl::event      event;
     };
 
     // Entries pinned for in-flight kernels.
