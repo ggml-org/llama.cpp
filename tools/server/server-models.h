@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <functional>
 #include <memory>
+#include <set>
 
 /**
  * state diagram:
@@ -56,6 +57,7 @@ struct server_model_meta {
     int64_t last_used = 0; // for LRU unloading
     std::vector<std::string> args; // args passed to the model instance, will be populated by render_args()
     int exit_code = 0; // exit code of the model instance process (only valid if status == FAILED)
+    int stop_timeout = 0; // seconds to wait before force-killing the model instance during shutdown
 
     bool is_active() const {
         return status == SERVER_MODEL_STATUS_LOADED || status == SERVER_MODEL_STATUS_LOADING;
@@ -83,6 +85,10 @@ private:
     std::condition_variable cv;
     std::map<std::string, instance_t> mapping;
 
+    // for stopping models
+    std::condition_variable cv_stop;
+    std::set<std::string> stopping_models;
+
     common_preset_context ctx_preset;
 
     common_params base_params;
@@ -99,31 +105,33 @@ private:
     void add_model(server_model_meta && meta);
 
 public:
-    server_models(const common_params & params, int argc, char ** argv, char ** envp);
+    server_models(const common_params & params, int argc, char ** argv);
 
     void load_models();
 
-    // check if a model instance exists
+    // check if a model instance exists (thread-safe)
     bool has_model(const std::string & name);
 
-    // return a copy of model metadata
+    // return a copy of model metadata (thread-safe)
     std::optional<server_model_meta> get_meta(const std::string & name);
 
-    // return a copy of all model metadata
+    // return a copy of all model metadata (thread-safe)
     std::vector<server_model_meta> get_all_meta();
 
+    // load and unload model instances
+    // these functions are thread-safe
     void load(const std::string & name);
     void unload(const std::string & name);
     void unload_all();
 
-    // update the status of a model instance
-    void update_status(const std::string & name, server_model_status status);
+    // update the status of a model instance (thread-safe)
+    void update_status(const std::string & name, server_model_status status, int exit_code);
 
-    // wait until the model instance is fully loaded
+    // wait until the model instance is fully loaded (thread-safe)
     // return when the model is loaded or failed to load
     void wait_until_loaded(const std::string & name);
 
-    // load the model if not loaded, otherwise do nothing
+    // load the model if not loaded, otherwise do nothing (thread-safe)
     // return false if model is already loaded; return true otherwise (meta may need to be refreshed)
     bool ensure_model_loaded(const std::string & name);
 
@@ -139,8 +147,8 @@ struct server_models_routes {
     common_params params;
     json webui_settings = json::object();
     server_models models;
-    server_models_routes(const common_params & params, int argc, char ** argv, char ** envp)
-            : params(params), models(params, argc, argv, envp) {
+    server_models_routes(const common_params & params, int argc, char ** argv)
+            : params(params), models(params, argc, argv) {
         if (!this->params.webui_config_json.empty()) {
             try {
                 webui_settings = json::parse(this->params.webui_config_json);
@@ -175,7 +183,10 @@ public:
                       const std::string & path,
                       const std::map<std::string, std::string> & headers,
                       const std::string & body,
-                      const std::function<bool()> should_stop);
+                      const std::function<bool()> should_stop,
+                      int32_t timeout_read,
+                      int32_t timeout_write
+                      );
     ~server_http_proxy() {
         if (cleanup) {
             cleanup();

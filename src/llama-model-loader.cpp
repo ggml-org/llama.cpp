@@ -462,6 +462,29 @@ namespace GGUFMeta {
         return get_key_or_arr(llm_kv(kid), result, n, required);
     }
 
+    bool llama_model_loader::get_key_or_arr(enum llm_kv kid, uint32_t & result, bool required) {
+        const std::string key = llm_kv(kid);
+
+        const int id = gguf_find_key(meta.get(), key.c_str());
+
+        if (id < 0) {
+            if (required) {
+                throw std::runtime_error(format("key not found in model: %s", key.c_str()));
+            }
+            return false;
+        }
+
+        // throw and error if type is an array
+        if (gguf_get_kv_type(meta.get(), id) == GGUF_TYPE_ARRAY) {
+            if (required) {
+                throw std::runtime_error(format("expected scalar, found array for key: %s", key.c_str()));
+            }
+            return false;
+        }
+
+        return get_key(key, result, required);
+    }
+
     // TODO: this is not very clever - figure out something better
     template bool llama_model_loader::get_key_or_arr<std::array<int, 4>>(enum llm_kv kid, std::array<int, 4> & result, uint32_t n, bool required);
     template bool llama_model_loader::get_key_or_arr<std::array<uint32_t, 512>>(enum llm_kv kid, std::array<uint32_t, 512> & result, uint32_t n, bool required);
@@ -472,6 +495,7 @@ llama_model_loader::llama_model_loader(
         const std::string & fname,
         std::vector<std::string> & splits,
         bool use_mmap,
+        bool use_direct_io,
         bool check_tensors,
         bool no_alloc,
         const llama_model_kv_override * param_overrides_p,
@@ -504,8 +528,16 @@ llama_model_loader::llama_model_loader(
     get_key(llm_kv(LLM_KV_GENERAL_ARCHITECTURE), arch_name, false);
     llm_kv = LLM_KV(llm_arch_from_string(arch_name));
 
-    files.emplace_back(new llama_file(fname.c_str(), "rb", !use_mmap));
+    files.emplace_back(new llama_file(fname.c_str(), "rb", use_direct_io));
     contexts.emplace_back(ctx);
+
+    use_direct_io = use_direct_io && files.back()->has_direct_io();
+
+    // Disable mmap in case Direct I/O is enabled and available
+    if (use_direct_io && use_mmap) {
+        use_mmap = false;
+        LLAMA_LOG_WARN("%s: direct I/O is enabled, disabling mmap\n", __func__);
+    }
 
     // Save tensors data offset of the main file.
     // For subsidiary files, `meta` tensor data offset must not be used,
@@ -572,7 +604,7 @@ llama_model_loader::llama_model_loader(
                 }
             }
 
-            files.emplace_back(new llama_file(fname_split, "rb", !use_mmap));
+            files.emplace_back(new llama_file(fname_split, "rb", use_direct_io));
             contexts.emplace_back(ctx);
 
             // Save tensors data offset info of the shard.
@@ -716,6 +748,7 @@ llama_model_loader::llama_model_loader(
     }
 
     this->use_mmap = use_mmap;
+    this->use_direct_io = use_direct_io;
     this->check_tensors = check_tensors;
     this->no_alloc = no_alloc;
 }
@@ -1077,7 +1110,8 @@ bool llama_model_loader::load_all_data(
             const auto & file = files.at(weight->idx);
 
             if (ggml_backend_buffer_is_host(cur->buffer)) {
-                file->read_raw_at(cur->data, n_size, weight->offs);
+                file->seek(weight->offs, SEEK_SET);
+                file->read_raw(cur->data, n_size);
                 if (check_tensors) {
                     validation_result.emplace_back(std::async(std::launch::async, [cur, n_size] {
                         return std::make_pair(cur, ggml_validate_row_data(cur->type, cur->data, n_size));
@@ -1086,10 +1120,10 @@ bool llama_model_loader::load_all_data(
             } else {
                 // If upload_backend is valid load the tensor in chunks to pinned memory and upload the buffers asynchronously to the GPU.
                 if (upload_backend) {
-                    auto offset = (off_t) weight->offs;
+                    size_t offset = weight->offs;
                     alignment = file->read_alignment();
-                    off_t aligned_offset = offset & ~(alignment - 1);
-                    off_t offset_from_alignment = offset - aligned_offset;
+                    size_t aligned_offset = offset & ~(alignment - 1);
+                    size_t offset_from_alignment = offset - aligned_offset;
                     file->seek(aligned_offset, SEEK_SET);
 
                     // Calculate aligned read boundaries
@@ -1109,7 +1143,7 @@ bool llama_model_loader::load_all_data(
                         ggml_backend_event_synchronize(events[buffer_idx]);
 
                         // Read aligned chunk from file
-                        file->read_raw(reinterpret_cast<void *>(ptr_dest_aligned), read_size);
+                        file->read_raw_unsafe(reinterpret_cast<void *>(ptr_dest_aligned), read_size);
 
                         // Calculate actual data portion (excluding alignment padding)
                         uintptr_t ptr_data = ptr_dest_aligned;
@@ -1139,7 +1173,8 @@ bool llama_model_loader::load_all_data(
                     }
                 } else {
                     read_buf.resize(n_size);
-                    file->read_raw_at(read_buf.data(), n_size, weight->offs);
+                    file->seek(weight->offs, SEEK_SET);
+                    file->read_raw(read_buf.data(), n_size);
                     ggml_backend_tensor_set(cur, read_buf.data(), 0, n_size);
                     if (check_tensors && !ggml_validate_row_data(cur->type, read_buf.data(), n_size)) {
                         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));

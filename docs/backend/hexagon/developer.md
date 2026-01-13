@@ -49,7 +49,7 @@ Each Hexagon device behaves like a GPU from the offload and model splitting pers
 Here is an example of running GPT-OSS-20B model on a newer Snapdragon device with 16GB of DDR.
 
 ```
-M=gpt-oss-20b-Q4_0.gguf NDEV=4 D=HTP0,HTP1,HTP2,HTP3 P=surfing.txt scripts/snapdragon/adb/run-cli.sh -no-cnv -f surfing.txt -n 32
+M=gpt-oss-20b-Q4_0.gguf NDEV=4 D=HTP0,HTP1,HTP2,HTP3 P=surfing.txt scripts/snapdragon/adb/run-completion.sh -f surfing.txt -n 32
 ...
 LD_LIBRARY_PATH=/data/local/tmp/llama.cpp/lib
 ADSP_LIBRARY_PATH=/data/local/tmp/llama.cpp/lib
