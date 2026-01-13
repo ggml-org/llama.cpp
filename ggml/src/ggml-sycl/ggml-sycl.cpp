@@ -14261,6 +14261,18 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
         return false;
     }
 
+    // Check tiered dispatch for MoE expert weights
+    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
+        ggml_sycl::memory_tier tier;
+        bool                   in_inventory = false;
+        void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
+        if (cached_ptr != nullptr) {
+            GGML_SYCL_DEBUG("[SYCL] moe_xmx tiered hit: %s (tier=%d)\n", src0->name, static_cast<int>(tier));
+        } else if (in_inventory) {
+            GGML_SYCL_DEBUG("[SYCL] moe_xmx tiered pending: %s\n", src0->name);
+        }
+    }
+
     // Select the required layout for XMX sorted path (single optimal layout per kernel)
     ggml_tensor_extra_gpu * src0_extra          = (ggml_tensor_extra_gpu *) src0->extra;
     const bool              host_weights        = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
