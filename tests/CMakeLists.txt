@@ -202,9 +202,9 @@ llama_build_and_test(
 llama_build_and_test(test-regex-partial.cpp)
 
 if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "s390x")
-    llama_download_model("tinyllamas/stories15M-q4_0.gguf")
+    llama_download_model("tinyllamas/stories15M-q4_0.gguf" SHA256=66967fbece6dbe97886593fdbb73589584927e29119ec31f08090732d1861739)
 else()
-    llama_download_model("tinyllamas/stories15M-be.Q4_0.gguf")
+    llama_download_model("tinyllamas/stories15M-be.Q4_0.gguf" SHA256=9aec857937849d976f30397e97eb1cabb53eb9dcb1ce4611ba8247fb5f44c65d)
 endif()
 llama_build_and_test(test-thread-safety.cpp ARGS -m "${LLAMA_DOWNLOAD_MODEL}" -ngl 99 -p "The meaning of life is" -n 128 -c 256 -ub 32 -np 4 -t 2)
 
