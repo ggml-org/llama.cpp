@@ -205,8 +205,8 @@ struct clip_ctx {
             ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), 8192, false, true)
         );
 
-        if (cb_eval != nullptr) {
-            ggml_backend_sched_set_eval_callback(sched.get(), cb_eval, cb_eval_user_data);
+        if (ctx_params.cb_eval != nullptr) {
+            ggml_backend_sched_set_eval_callback(sched.get(), ctx_params.cb_eval, ctx_params.cb_eval_user_data);
         }
     }
 
