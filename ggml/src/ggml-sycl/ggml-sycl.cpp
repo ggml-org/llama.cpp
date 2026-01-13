@@ -7597,6 +7597,20 @@ static void ggml_sycl_repeat_back(ggml_backend_sycl_context & ctx, ggml_tensor *
 
 static void ggml_sycl_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+    const ggml_tensor * src0 = dst->src[0];  // Weight tensor
+
+    // Check for tiered dispatch
+    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
+        ggml_sycl::memory_tier tier;
+        bool in_inventory = false;
+        void * cached_ptr = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
+        if (cached_ptr != nullptr) {
+            GGML_LOG_DEBUG("[SYCL] get_rows tiered hit: %s (tier=%d)\n",
+                          src0->name, static_cast<int>(tier));
+            // Future: use cached_ptr for tiered path
+        }
+    }
+
     ggml_sycl_op_get_rows(ctx, dst);
 }
 
