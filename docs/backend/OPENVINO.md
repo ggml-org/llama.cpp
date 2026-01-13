@@ -93,6 +93,9 @@ The OpenVINO backend can be configured using the following environment variables
 | `GGML_OPENVINO_DUMP_IR` | Export OpenVINO IR files with timestamps. |
 | `GGML_OPENVINO_DEBUG_INPUT` | Enable input debugging. |
 | `GGML_OPENVINO_DEBUG_OUTPUT` | Enable output debugging. |
+| *`GGML_OPENVINO_STATEFUL_EXECUTION` | Enable stateful execution for better performance |
+
+*`GGML_OPENVINO_STATEFUL_EXECUTION` is an **Experimental** feature to allow stateful execution for managing the KV cache internally inside the OpenVINO model, improving performance on CPUs and GPUs. Stateful execution is not effective on NPUs, and not all models currently support this feature. This feature is experimental and has been validated only with the llama-simple, llama-cli, llama-bench, and llama-run applications and is recommended to enable for the best performance. Other applications, such as llama-server and llama-perplexity, are not yet supported.
 
 ### Example Usage
 
