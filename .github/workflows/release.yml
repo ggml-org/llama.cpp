@@ -749,12 +749,7 @@ jobs:
       - name: Pack artifacts
         run: |
           cp LICENSE ./build/bin/
-          if [ "${{ matrix.use_acl_graph }}" = "on" ]; then
-            aclgraph_suffix="-aclgraph"
-          else
-            aclgraph_suffix=""
-          fi
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${aclgraph_suffix}.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-${{ matrix.chip_type }}-openEuler-${{ matrix.arch }}${{ matrix.use_acl_graph == 'on' && '-aclgraph' || '' }}.tar.gz --transform "s,./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
