@@ -99,7 +99,7 @@ static __global__ void soft_max_f32(
     }
 
     // find the max value in the block
-    max_val = two_stage_warp_reduce<block_reduce_method::MAX, block_size_template>(max_val, buf_iw);
+    max_val = block_reduce<block_reduce_method::MAX, block_size_template>(max_val, buf_iw);
 
     float tmp = 0.0f; // partial sum
 
@@ -117,7 +117,7 @@ static __global__ void soft_max_f32(
     }
 
     // find the sum of exps in the block
-    tmp = two_stage_warp_reduce<block_reduce_method::SUM, block_size_template>(tmp, buf_iw);
+    tmp = block_reduce<block_reduce_method::SUM, block_size_template>(tmp, buf_iw);
 
     if (sinks) {
         tmp += expf(sinks[i02] - max_val);
@@ -171,7 +171,7 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
     }
 
     // Compute CTA-level max
-    local_max = two_stage_warp_reduce<block_reduce_method::MAX>(local_max, shared_vals);
+    local_max = block_reduce<block_reduce_method::MAX>(local_max, shared_vals);
 
     // Store CTA-level max to GMEM
     if (tid == 0) {
@@ -186,7 +186,7 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
     } else {
         local_max = -INFINITY;
     }
-    local_max = two_stage_warp_reduce<block_reduce_method::MAX>(local_max, shared_vals);
+    local_max = block_reduce<block_reduce_method::MAX>(local_max, shared_vals);
 
     // Compute softmax dividends, accumulate divisor
     float tmp_expf = 0.0f;
@@ -209,7 +209,7 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
     }
 
     // Reduce divisor within CTA
-    tmp_expf = two_stage_warp_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals);
+    tmp_expf = block_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals);
 
     // Store CTA-level sum to GMEM
     if (tid == 0) {
@@ -223,7 +223,7 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
     } else {
         tmp_expf = 0.0f;
     }
-    tmp_expf = two_stage_warp_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals);
+    tmp_expf = block_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals);
 
     // Divide dividend by global sum + store data
     for (int col = col_start; col < p.ncols;) {
