@@ -36,23 +36,15 @@ Accuracy and performance optimizations for quantized models are still work in pr
 
 ## Quantization Support Details
 
-### CPU
+### CPU and GPU
 
 - **`Q4_0`, `Q4_1`, `Q4_K_M`, `Q6_K` models are supported**
-- `Q6_K` tensors (6-bit, gs16 symmetric) are converted to int8 gs16 symmetric
-- `Q5_K` tensors (5-bit, gs32 asymmetric) are converted to int8 gs32 asymmetric
-
-### GPU
-
-- **`Q4_0`, `Q4_1`, `Q4_K_M`, `Q6_K` models are supported**
-- `Q6_K` tensors (6-bit, gs16 symmetric) are requantized to int8 gs32 symmetric
-- `Q5_K` tensors (5-bit, gs32 asymmetric) are converted to int8 gs32 asymmetric
+- `Q5_K` and `Q6_K` tensors are converted to `Q8_0_C`
 
 ### NPU
 
 - **Primary supported quantization scheme is `Q4_0`**
-- `Q4_0` and `Q4_1` tensors are requantized to int4 gs128 symmetric
-- `Q6_K` tensors are requentized to int8 except for the token embedding matrix which is dequantized to fp16
+- `Q6_K` tensors are requantized to `Q4_0_128` in general. For embedding weights, `Q6_K` tensors are requantized to `Q8_0_C` except for the token embedding matrix which is dequantized to fp16
 
 #### Additional Notes
 
