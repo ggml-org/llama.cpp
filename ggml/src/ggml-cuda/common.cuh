@@ -565,9 +565,9 @@ template <warp_reduce_method reduce_method, const unsigned int block_size_templa
             val = shared_vals[lane_id];
         }
         return reduce_fun(val);
-    } else {
-        return val;
-    }
+    } 
+    
+    return val;
 }
 
 static __device__ __forceinline__ half ggml_cuda_hmax(const half a, const half b) {
