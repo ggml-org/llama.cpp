@@ -7676,12 +7676,11 @@ class VaetkiModel(TextModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Flatten text_config parameters to top level
-        if "text_config" in self.hparams:
-            text_config = self.hparams["text_config"]
-            for key, value in text_config.items():
-                if key not in self.hparams:
-                    self.hparams[key] = value
+        # Set rope_parameters for hybrid attention (transformers 5.0 format)
+        self.rope_parameters = {
+            "full_attention": {"rope_theta": self.hparams.get("rope_theta_global", 1000000.0)},
+            "sliding_attention": {"rope_theta": self.hparams.get("rope_theta", 10000.0)}
+        }
 
     def set_vocab(self):
         # VAETKI uses Metaspace-based BPE tokenizer, load vocab from tokenizer.json
@@ -7765,15 +7764,9 @@ class VaetkiModel(TextModel):
         super().set_gguf_parameters()
 
         hparams = self.hparams
-        self.gguf_writer.add_block_count(hparams["num_hidden_layers"])
-        self.gguf_writer.add_context_length(hparams.get("max_position_embeddings", 32768))
-        self.gguf_writer.add_embedding_length(hparams["hidden_size"])
-        self.gguf_writer.add_feed_forward_length(hparams["intermediate_size"])
-        self.gguf_writer.add_head_count(hparams["num_attention_heads"])
+
         # For MLA without absorption, n_head_kv = n_head (full MHA after decompression)
         self.gguf_writer.add_head_count_kv(hparams["num_attention_heads"])
-        self.gguf_writer.add_layer_norm_rms_eps(hparams.get("rms_norm_eps", 1e-5))
-        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
 
         # MLA parameters (like DeepSeek2)
         self.gguf_writer.add_q_lora_rank(hparams["q_lora_rank"])
@@ -7789,25 +7782,18 @@ class VaetkiModel(TextModel):
         self.gguf_writer.add_value_length_mla(hparams["v_head_dim"])
         self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
 
-        # VAETKI uses hybrid attention with different rope_theta per layer type:
-        # - sliding_attention layers use rope_theta (local, default 10000.0)
-        # - full_attention layers use rope_theta_global (global, default 1000000.0)
-        # In llama.cpp: rope_freq_base is for non-SWA (full), rope_freq_base_swa is for SWA (sliding)
-        rope_theta_local = hparams.get("rope_theta", 10000.0)
-        rope_theta_global = hparams.get("rope_theta_global", 1000000.0)
-        self.gguf_writer.add_rope_freq_base(rope_theta_global)  # for full_attention layers
-        self.gguf_writer.add_rope_freq_base_swa(rope_theta_local)  # for sliding_attention layers
+        self.rope_parameters = {
+            "full_attention": {"rope_theta": self.hparams.get("rope_theta_global", 1000000.0)},
+            "sliding_attention": {"rope_theta": self.hparams.get("rope_theta", 10000.0)}
+        }
 
         # MoE parameters
         self.gguf_writer.add_leading_dense_block_count(hparams.get("first_k_dense_replace", 1))
         self.gguf_writer.add_expert_count(hparams["n_routed_experts"])
-        self.gguf_writer.add_expert_used_count(hparams["num_experts_per_tok"])
         self.gguf_writer.add_expert_shared_count(hparams.get("n_shared_experts", 1))
         self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
-        self.gguf_writer.add_expert_weights_scale(hparams.get("routed_scaling_factor", 1.0))
-        # VAETKI uses sigmoid gating function (WBLTopkRouter uses router_logits.sigmoid())
-        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
-        # Normalize top-k probabilities (norm_topk_prob=true in config)
+        if (routed_scale := hparams.get("routed_scaling_factor")) is not None:
+            self.gguf_writer.add_expert_weights_scale(routed_scale)
         if hparams.get("norm_topk_prob", False):
             self.gguf_writer.add_expert_weights_norm(True)
 
