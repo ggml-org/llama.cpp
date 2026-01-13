@@ -1,5 +1,5 @@
 @group(0) @binding(0)
-#ifdef VECTORIZE
+#ifdef VEC4
 var<storage, read_write> src: array<vec4<f32>>;
 #define VEC_SIZE 4
 #else
@@ -33,9 +33,9 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         @builtin(local_invocation_id) lid: vec3<u32>) {
     let row_idx = params.offset_src + wid.x * params.ne0;
     var local_pair = Pair(FLOAT_MIN, -1);
-#ifdef VECTORIZE
+#ifdef VEC4
     for (var col = lid.x; col < params.ne0/VEC_SIZE; col += WG_SIZE) {
-        let val = src[row_idx / VEC_SIZE + col];
+        let vec_val = src[row_idx / VEC_SIZE + col];
         for (var v = 0u; v < VEC_SIZE; v++) {
             let val = vec_val[v];
             if (val >= local_pair.value) {
@@ -52,7 +52,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
 #endif
     shared_max[lid.x] = local_pair;
     workgroupBarrier();
-    var offset: u32 = WG_SIZE / 2;
+    var offset: u32 = WG_SIZE >> 1;
     while (offset > 0) {
         if (lid.x < offset) {
             let a = shared_max[lid.x];
@@ -64,7 +64,7 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
             }
         }
         workgroupBarrier();
-        offset = offset / 2;
+        offset >>= 1;
     }
     if (lid.x == 0u) {
         dst[params.offset_dst + wid.x] = shared_max[0].index;

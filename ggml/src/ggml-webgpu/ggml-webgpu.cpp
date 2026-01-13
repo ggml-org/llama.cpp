@@ -267,46 +267,6 @@ struct webgpu_command {
 #endif
 };
 
-struct flash_attn_pipeline_key {
-    int      q_type;
-    int      kv_type;
-    int      dst_type;
-    uint32_t head_dim_qk;
-    uint32_t head_dim_v;
-    bool     kv_direct;
-    bool     has_mask;
-    bool     has_sinks;
-    bool     uses_logit_softcap;
-
-    bool operator==(const flash_attn_pipeline_key & other) const {
-        return q_type == other.q_type && kv_type == other.kv_type && dst_type == other.dst_type &&
-               head_dim_qk == other.head_dim_qk && head_dim_v == other.head_dim_v && kv_direct == other.kv_direct &&
-               has_mask == other.has_mask && has_sinks == other.has_sinks &&
-               uses_logit_softcap == other.uses_logit_softcap;
-    }
-};
-
-// Same hash combine function as in boost
-template <typename T> inline void ggml_webgpu_hash_combine(size_t & seed, const T & value) {
-    seed ^= std::hash<T>{}(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-}
-
-struct flash_attn_pipeline_key_hash {
-    size_t operator()(const flash_attn_pipeline_key & key) const {
-        size_t seed = 0;
-        ggml_webgpu_hash_combine(seed, key.q_type);
-        ggml_webgpu_hash_combine(seed, key.kv_type);
-        ggml_webgpu_hash_combine(seed, key.dst_type);
-        ggml_webgpu_hash_combine(seed, key.head_dim_qk);
-        ggml_webgpu_hash_combine(seed, key.head_dim_v);
-        ggml_webgpu_hash_combine(seed, key.kv_direct);
-        ggml_webgpu_hash_combine(seed, key.has_mask);
-        ggml_webgpu_hash_combine(seed, key.has_sinks);
-        ggml_webgpu_hash_combine(seed, key.uses_logit_softcap);
-        return seed;
-    }
-};
-
 // All the base objects needed to run operations on a WebGPU device
 struct webgpu_context_struct {
     wgpu::Instance instance;
@@ -336,9 +296,12 @@ struct webgpu_context_struct {
     std::map<int, std::map<int, std::map<int, webgpu_pipeline>>>
         mul_mat_vec_pipelines;                                                       // src0_type, src1_type, vectorized
 
-    std::unordered_map<flash_attn_pipeline_key, webgpu_pipeline, flash_attn_pipeline_key_hash> flash_attn_pipelines;
+    std::unordered_map<ggml_webgpu_flash_attn_pipeline_key, webgpu_pipeline, ggml_webgpu_flash_attn_pipeline_key_hash>
+        flash_attn_pipelines;
 
     std::unordered_map<int, webgpu_pipeline> argmax_pipelines;
+    std::unordered_map<int, webgpu_pipeline> cumsum_pipelines;
+    std::unordered_map<int, webgpu_pipeline> sum_rows_pipelines;
 
     std::map<int, std::map<int, webgpu_pipeline>> set_rows_pipelines;                 // dst_type, vectorized
     std::map<int, std::map<int, webgpu_pipeline>> get_rows_pipelines;                 // src_type, vectorized
@@ -1114,7 +1077,7 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
     bool kv_direct =
         (K->type == GGML_TYPE_F16) && (Q->ne[0] % ctx->sg_mat_k == 0) && (K->ne[1] % GGML_WEBGPU_KV_SEQ_PAD == 0);
 
-    flash_attn_pipeline_key key = {
+    ggml_webgpu_flash_attn_pipeline_key key = {
         .q_type             = Q->type,
         .kv_type            = K->type,
         .dst_type           = dst->type,
@@ -1552,11 +1515,9 @@ static webgpu_command ggml_webgpu_soft_max(webgpu_context & ctx,
 }
 
 static webgpu_command ggml_webgpu_argmax(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
-    std::vector<uint32_t> params = {
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
-        (uint32_t) src->ne[0]
-    };
+    std::vector<uint32_t> params = { (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
+                                     (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
+                                     (uint32_t) src->ne[0] };
 
     std::vector<wgpu::BindGroupEntry> entries = {
         { .binding = 0,
@@ -1570,22 +1531,101 @@ static webgpu_command ggml_webgpu_argmax(webgpu_context & ctx, ggml_tensor * src
     };
 
     ggml_webgpu_generic_shader_lib_context shader_lib_ctx = {
-        .vectorized = src->ne[0] % 4 == 0,
+        .vec4        = src->ne[0] % 4 == 0,
         .max_wg_size = ctx->limits.maxComputeInvocationsPerWorkgroup,
     };
     // TODO: remove guard once pipeline caches are per-thread
     std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
-    webgpu_pipeline                         pipeline;
-    auto it = ctx->argmax_pipelines.find(shader_lib_ctx.vectorized);
+    webgpu_pipeline                       pipeline;
+    auto                                  it = ctx->argmax_pipelines.find(shader_lib_ctx.vec4);
     if (it != ctx->argmax_pipelines.end()) {
-        pipeline  = it->second;
+        pipeline = it->second;
     } else {
         ggml_webgpu_processed_shader processed =
-            ggml_webgpu_preprocess_argmax(ctx->p, wgsl_argmax, shader_lib_ctx);
+            ggml_webgpu_preprocess_generic(ctx->p, wgsl_argmax, shader_lib_ctx, "argmax");
         pipeline = ggml_webgpu_create_pipeline(ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
-        ctx->argmax_pipelines.emplace(shader_lib_ctx.vectorized, pipeline);
+        ctx->argmax_pipelines.emplace(shader_lib_ctx.vec4, pipeline);
     }
     uint32_t wg_x = ggml_nelements(dst);
+    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
+}
+
+static webgpu_command ggml_webgpu_cumsum(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
+    std::vector<uint32_t> params = { (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
+                                     (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
+                                     (uint32_t) src->ne[0] };
+
+    std::vector<wgpu::BindGroupEntry> entries = {
+        { .binding = 0,
+         .buffer  = ggml_webgpu_tensor_buf(src),
+         .offset  = ggml_webgpu_tensor_align_offset(ctx, src),
+         .size    = ggml_webgpu_tensor_binding_size(ctx, src) },
+        { .binding = 1,
+         .buffer  = ggml_webgpu_tensor_buf(dst),
+         .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
+         .size    = ggml_webgpu_tensor_binding_size(ctx, dst) }
+    };
+
+    ggml_webgpu_generic_shader_lib_context shader_lib_ctx = {
+        .vec4        = false,
+        .max_wg_size = ctx->limits.maxComputeInvocationsPerWorkgroup,
+    };
+    // TODO: remove guard once pipeline caches are per-thread
+    std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+    webgpu_pipeline                       pipeline;
+    auto                                  it = ctx->cumsum_pipelines.find(1);
+    if (it != ctx->cumsum_pipelines.end()) {
+        pipeline = it->second;
+    } else {
+        ggml_webgpu_processed_shader processed =
+            ggml_webgpu_preprocess_generic(ctx->p, wgsl_cumsum, shader_lib_ctx, "cumsum");
+        pipeline = ggml_webgpu_create_pipeline(ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
+        ctx->cumsum_pipelines.emplace(1, pipeline);
+    }
+    uint32_t wg_x = ggml_nrows(dst);
+    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
+}
+
+static webgpu_command ggml_webgpu_sum_rows(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
+    bool total_sum = dst->op == GGML_OP_SUM;
+    std::vector<uint32_t> params = { (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
+                                     (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
+                                     total_sum ? 0 : (uint32_t) (src->nb[1] / ggml_type_size(src->type)),
+                                     total_sum ? 0 : (uint32_t) (src->nb[2] / ggml_type_size(src->type)),
+                                     total_sum ? 0 : (uint32_t) (src->nb[3] / ggml_type_size(src->type)),
+                                     total_sum ? static_cast<uint32_t>(ggml_nelements(src)) : (uint32_t) src->ne[0],
+                                     total_sum ? 1 :(uint32_t) src->ne[1],
+                                     total_sum ? 1 :(uint32_t) src->ne[2] };
+
+    std::vector<wgpu::BindGroupEntry> entries = {
+        { .binding = 0,
+         .buffer  = ggml_webgpu_tensor_buf(src),
+         .offset  = ggml_webgpu_tensor_align_offset(ctx, src),
+         .size    = ggml_webgpu_tensor_binding_size(ctx, src) },
+        { .binding = 1,
+         .buffer  = ggml_webgpu_tensor_buf(dst),
+         .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
+         .size    = ggml_webgpu_tensor_binding_size(ctx, dst) }
+    };
+
+    ggml_webgpu_generic_shader_lib_context shader_lib_ctx = {
+        .vec4        = false,
+        .max_wg_size = ctx->limits.maxComputeInvocationsPerWorkgroup,
+    };
+
+    // TODO: remove guard once pipeline caches are per-thread
+    std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+    webgpu_pipeline                       pipeline;
+    auto                                  it = ctx->sum_rows_pipelines.find(1);
+    if (it != ctx->sum_rows_pipelines.end()) {
+        pipeline = it->second;
+    } else {
+        ggml_webgpu_processed_shader processed =
+            ggml_webgpu_preprocess_generic(ctx->p, wgsl_sum_rows, shader_lib_ctx, "sum_rows");
+        pipeline = ggml_webgpu_create_pipeline(ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
+        ctx->sum_rows_pipelines.emplace(1, pipeline);
+    }
+    uint32_t wg_x = total_sum ? 1 : ggml_nrows(dst);
     return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
 }
 
@@ -1653,6 +1693,11 @@ static std::optional<webgpu_command> ggml_webgpu_encode_node(webgpu_context ctx,
             return ggml_webgpu_unary_op(ctx, src0, node);
         case GGML_OP_ARGMAX:
             return ggml_webgpu_argmax(ctx, src0, node);
+        case GGML_OP_CUMSUM:
+            return ggml_webgpu_cumsum(ctx, src0, node);
+        case GGML_OP_SUM:
+        case GGML_OP_SUM_ROWS:
+            return ggml_webgpu_sum_rows(ctx, src0, node);
         default:
             return std::nullopt;
     }
@@ -1925,7 +1970,7 @@ static void ggml_backend_webgpu_device_get_memory(ggml_backend_dev_t dev, size_t
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
     // TODO: for now, return maxBufferSize as both free and total memory
     // Track https://github.com/gpuweb/gpuweb/issues/5505 for updates.
-    uint64_t max_buffer_size = ctx->webgpu_ctx->limits.maxBufferSize;
+    uint64_t                             max_buffer_size = ctx->webgpu_ctx->limits.maxBufferSize;
     // If we're on a 32-bit system, clamp to UINTPTR_MAX
 #if UINTPTR_MAX < UINT64_MAX
     uint64_t max_ptr_size = static_cast<uint64_t>(UINTPTR_MAX);
@@ -2852,7 +2897,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                     case GGML_UNARY_OP_ROUND:
                     case GGML_UNARY_OP_TRUNC:
                     case GGML_UNARY_OP_XIELU:
-                        supports_op = supports_op =
+                        supports_op =
                             (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && (src0->type == op->type);
                         break;
                     default:
@@ -2861,8 +2906,14 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             }
             break;
         case GGML_OP_ARGMAX:
-            supports_op = op->type == GGML_TYPE_I32 &&
-                          src0->type == GGML_TYPE_F32;
+            supports_op = op->type == GGML_TYPE_I32 && src0->type == GGML_TYPE_F32;
+            break;
+        case GGML_OP_CUMSUM:
+            supports_op = op->type == GGML_TYPE_F32 && src0->type == op->type;
+            break;
+        case GGML_OP_SUM:
+        case GGML_OP_SUM_ROWS:
+            supports_op = op->type == GGML_TYPE_F32 && src0->type == op->type && ggml_is_contiguous_rows(src0);
             break;
         default:
             break;
@@ -3037,9 +3088,9 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     // Enable Dawn-specific toggles to increase native performance
     // TODO: Maybe WebGPU needs a "fast" mode where you can request compilers skip adding checks like these,
     //       only for native performance?
-    const char * const deviceEnabledToggles[]  = { "skip_validation", "disable_robustness", "disable_workgroup_init",
-                                                   "disable_polyfills_on_integer_div_and_mod" };
-    const char * const deviceDisabledToggles[] = { "timestamp_quantization" };
+    const char * const          deviceEnabledToggles[]  = { "disable_robustness", "disable_workgroup_init",
+                                                            "disable_polyfills_on_integer_div_and_mod" };
+    const char * const          deviceDisabledToggles[] = { "timestamp_quantization" };
     wgpu::DawnTogglesDescriptor deviceTogglesDesc;
     deviceTogglesDesc.enabledToggles      = deviceEnabledToggles;
     deviceTogglesDesc.enabledToggleCount  = 4;

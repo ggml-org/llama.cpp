@@ -14,6 +14,47 @@
 // Matches GGML_PAD(..., 256) in src/llama-context.cpp for KV cache sizing.
 #define GGML_WEBGPU_KV_SEQ_PAD                       256u
 
+// Same hash combine function as in boost
+template <typename T> inline void ggml_webgpu_hash_combine(size_t & seed, const T & value) {
+    seed ^= std::hash<T>{}(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+}
+
+struct ggml_webgpu_flash_attn_pipeline_key {
+    int      q_type;
+    int      kv_type;
+    int      dst_type;
+    uint32_t head_dim_qk;
+    uint32_t head_dim_v;
+    bool     kv_direct;
+    bool     has_mask;
+    bool     has_sinks;
+    bool     uses_logit_softcap;
+
+    bool operator==(const ggml_webgpu_flash_attn_pipeline_key & other) const {
+        return q_type == other.q_type && kv_type == other.kv_type && dst_type == other.dst_type &&
+               head_dim_qk == other.head_dim_qk && head_dim_v == other.head_dim_v && kv_direct == other.kv_direct &&
+               has_mask == other.has_mask && has_sinks == other.has_sinks &&
+               uses_logit_softcap == other.uses_logit_softcap;
+    }
+};
+
+
+struct ggml_webgpu_flash_attn_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_flash_attn_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.q_type);
+        ggml_webgpu_hash_combine(seed, key.kv_type);
+        ggml_webgpu_hash_combine(seed, key.dst_type);
+        ggml_webgpu_hash_combine(seed, key.head_dim_qk);
+        ggml_webgpu_hash_combine(seed, key.head_dim_v);
+        ggml_webgpu_hash_combine(seed, key.kv_direct);
+        ggml_webgpu_hash_combine(seed, key.has_mask);
+        ggml_webgpu_hash_combine(seed, key.has_sinks);
+        ggml_webgpu_hash_combine(seed, key.uses_logit_softcap);
+        return seed;
+    }
+};
+
 struct ggml_webgpu_flash_attn_shader_lib_context {
     ggml_type kv_type;
     uint32_t  head_dim_qk;
@@ -169,19 +210,20 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
 }
 
 struct ggml_webgpu_generic_shader_lib_context {
-    int vectorized;
+    int vec4;
     uint32_t max_wg_size;
 };
 
-inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_argmax(
+inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_generic(
     pre_wgsl::Preprocessor &                     preprocessor,
     const char *                                 shader_src,
-    const ggml_webgpu_generic_shader_lib_context & context) {
+    const ggml_webgpu_generic_shader_lib_context & context,
+    const std::string &                          base_variant) {
     std::vector<std::string> defines;
-    std::string              variant = "argmax";
+    std::string              variant = base_variant;
 
-    if (context.vectorized) {
-        defines.push_back("VECTORIZED");
+    if (context.vec4) {
+        defines.push_back("VEC4");
         variant += "_vec";
     }
 
@@ -192,5 +234,6 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_argmax(
     result.variant = variant;
     return result;
 }
+
 
 #endif  // GGML_WEBGPU_SHADER_LIB_HPP
