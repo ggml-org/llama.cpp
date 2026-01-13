@@ -18,7 +18,7 @@ The script will:
 """
 
 import yaml
-from typing import Dict, List, Any, Tuple
+from typing import Dict, List, Any
 from pathlib import Path
 import os
 import subprocess
