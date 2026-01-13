@@ -1094,4 +1094,16 @@ if(GGML_SYCL)
     target_link_options(test-expert-cache PRIVATE "-fsycl")
     install(TARGETS test-expert-cache RUNTIME)
     add_test(NAME test-expert-cache COMMAND $<TARGET_FILE:test-expert-cache>)
+
+    # test-dense-scheduler: Tests for double-buffered dense layer scheduler
+    # Part of tiered memory architecture for MoE models
+    add_executable(test-dense-scheduler test-dense-scheduler.cpp)
+    target_link_libraries(test-dense-scheduler PRIVATE ggml)
+    target_include_directories(test-dense-scheduler PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-dense-scheduler PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-dense-scheduler PRIVATE "-fsycl")
+    install(TARGETS test-dense-scheduler RUNTIME)
+    add_test(NAME test-dense-scheduler COMMAND $<TARGET_FILE:test-dense-scheduler>)
 endif()
