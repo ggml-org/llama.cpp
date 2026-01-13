@@ -13,20 +13,15 @@ The OpenVINO backend is implemented in ggml/src/ggml-openvino and provides a tra
 OpenVINO backend supports the following hardware:
 
 - Intel CPUs
-- Intel integrated GPUs
+- Intel integrated and discrete GPUs
 - Intel NPUs (Requires UD32+ driver)
 
 Although OpenVINO supports a wide range of [Intel hardware](https://docs.openvino.ai/2025/about-openvino/release-notes-openvino/system-requirements.html), the llama.cpp OpenVINO backend has been validated specifically on AI PCs such as the Intel® Core™ Ultra Series 1 and Series 2.
 
 ## Supported Model Precisions
 
-### Fully Supported
-
-- FP16 GGUF
-- BF16 GGUF
-
-### Quantized Models (Partial Support)
-
+- `FP16` 
+- `BF16` (on Intel Xeon)
 - `Q4_0`
 - `Q4_1`
 - `Q4_K_M`
@@ -46,7 +41,7 @@ Accuracy and performance optimizations for quantized models are still work in pr
 - **Primary supported quantization scheme is `Q4_0`**
 - `Q6_K` tensors are requantized to `Q4_0_128` in general. For embedding weights, `Q6_K` tensors are requantized to `Q8_0_C` except for the token embedding matrix which is dequantized to fp16
 
-#### Additional Notes
+### Additional Notes
 
 - Both `Q4_0` and `Q4_1` models use `Q6_K` for the token embedding tensor and the final matmul weight tensor (often the same tensor)
 - `Q4_0` models may produce some `Q4_1` tensors if an imatrix is provided during quantization using `llama-quantize`
