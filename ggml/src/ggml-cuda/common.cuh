@@ -526,28 +526,66 @@ static __device__ __forceinline__ half2 warp_prefix_inclusive_sum(half2 a) {
 #endif // FP16_AVAILABLE
 }
 
-enum warp_reduce_method {
-    WARP_REDUCE_MAX,
-    WARP_REDUCE_SUM,
+enum block_reduce_method {
+    MAX,
+    SUM,
 };
 
-template <warp_reduce_method reduce_method, const unsigned int block_size_template = 0, typename T>
-static __device__ T two_stage_warp_reduce(T val, T * shared_vals) {
-    T (*reduce_fun)(T);
-    switch (reduce_method) {
-        case WARP_REDUCE_MAX:
-            if constexpr (std::is_same_v<T, float>) {
-                reduce_fun = warp_reduce_max;
-            } else if constexpr (std::is_same_v<T, half2>) {
-                reduce_fun = warp_reduce_max;
-            }
-            break;
-        case WARP_REDUCE_SUM:
-            reduce_fun = warp_reduce_sum;
-            break;
+template<block_reduce_method method, typename T>
+struct block_reduce_policy;
+
+template <typename T, typename... Ts>
+constexpr bool is_any = (std::is_same_v<T, Ts> || ...);
+
+template<typename T>
+struct block_reduce_policy<SUM, T> {
+    static __device__ T reduce(T val) {
+        if constexpr(is_any<T, float, float2, half2, int>) {
+            return warp_reduce_sum(val);
+        } else {
+            static_assert(false, "Unsupported type for block reduce sum");
+        }
     }
 
-    val                           = reduce_fun(val);
+    static __device__ T sentinel() {
+        if constexpr (std::is_same_v<T, float>) {
+            return 0.0f;
+        } else if constexpr (std::is_same_v<T, float2>) {
+            return make_float2(0.0f, 0.0f);
+        } else if constexpr (std::is_same_v<T, half2>) {
+            return make_half2(0.0f, 0.0f);
+        } else if constexpr (std::is_same_v<T, int>) {
+            return 0;
+        } else {
+            static_assert(false, "Unsupported type for block reduce sum");
+        }
+    }
+};
+
+template<typename T>
+struct block_reduce_policy<MAX, T> {
+    static __device__ T reduce(T val) {
+        if constexpr (is_any<T, float, half2>) {
+            return warp_reduce_max(val);
+        } else {
+            static_assert(false, "Unsupported type for block reduce max");
+        }
+    }
+
+    static __device__ T sentinel() {
+        if constexpr (std::is_same_v<T, float>) {
+            return -INFINITY;
+        } else if constexpr (std::is_same_v<T, half2>) {
+            return make_half2(-INFINITY, -INFINITY);
+        } else {
+            static_assert(false, "Unsupported type for block reduce max");
+        }
+    }
+};
+
+template <block_reduce_method reduce_method, const unsigned int block_size_template = 0, typename T>
+static __device__ T two_stage_warp_reduce(T val, T * shared_vals) {
+    val                           = block_reduce_policy<reduce_method, T>::reduce(val);
     const unsigned int block_size = block_size_template == 0 ? blockDim.x : block_size_template;
     if (block_size > WARP_SIZE) {
         assert((block_size <= 1024) && (block_size % WARP_SIZE) == 0);
@@ -557,30 +595,11 @@ static __device__ T two_stage_warp_reduce(T val, T * shared_vals) {
             shared_vals[warp_id] = val;
         }
         __syncthreads();
-        switch (reduce_method) {
-            case WARP_REDUCE_MAX:
-                if constexpr (std::is_same_v<T, float>) {
-                    val = -INFINITY;
-                } else if constexpr (std::is_same_v<T, half2>) {
-                    val = make_half2(-INFINITY, -INFINITY);
-                }
-                break;
-            case WARP_REDUCE_SUM:
-                if constexpr (std::is_same_v<T, float>) {
-                    val = 0.0f;
-                } else if constexpr (std::is_same_v<T, float2>) {
-                    val = make_float2(0.0f, 0.0f);
-                } else if constexpr (std::is_same_v<T, half2>) {
-                    val = make_half2(0.0f, 0.0f);
-                } else if constexpr (std::is_same_v<T, int>) {
-                    val = make_int2(0, 0);
-                }
-                break;
-        }
+        val = block_reduce_policy<reduce_method, T>::sentinel();
         if (lane_id < (static_cast<int>(block_size) / WARP_SIZE)) {
             val = shared_vals[lane_id];
         }
-        return reduce_fun(val);
+        return block_reduce_policy<reduce_method, T>::reduce(val);
     } 
     
     return val;

@@ -26,7 +26,7 @@ static __global__ void norm_f32(
 
     // sum up partial sums
     extern __shared__ float2 s_sum2[];
-    mean_var = two_stage_warp_reduce<WARP_REDUCE_SUM, block_size>(mean_var, s_sum2);
+    mean_var = two_stage_warp_reduce<SUM, block_size>(mean_var, s_sum2);
 
     const float mean = mean_var.x / ncols;
     const float var = mean_var.y / ncols - mean * mean;
@@ -51,7 +51,7 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
     }
 
     extern __shared__ float s_sum[];
-    tmp = two_stage_warp_reduce<WARP_REDUCE_SUM, block_size>(tmp, s_sum);
+    tmp = two_stage_warp_reduce<SUM, block_size>(tmp, s_sum);
 
     const float mean = tmp / group_size;
     tmp = 0.0f;
@@ -62,7 +62,7 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
         tmp += xi * xi;
     }
 
-    tmp = two_stage_warp_reduce<WARP_REDUCE_SUM, block_size>(tmp, s_sum);
+    tmp = two_stage_warp_reduce<SUM, block_size>(tmp, s_sum);
 
     const float variance = tmp / group_size;
     const float scale = rsqrtf(variance + eps);
@@ -131,7 +131,7 @@ static __global__ void rms_norm_f32(const float * x,
 
     // sum up partial sums
     extern __shared__ float s_sum[];
-    tmp = two_stage_warp_reduce<WARP_REDUCE_SUM, block_size>(tmp, s_sum);
+    tmp = two_stage_warp_reduce<SUM, block_size>(tmp, s_sum);
 
     const float mean = tmp / ncols;
     const float scale = rsqrtf(mean + eps);
@@ -260,7 +260,7 @@ static __global__ void l2_norm_f32(
 
     // sum up partial sums
     extern __shared__ float s_sum[];
-    tmp = two_stage_warp_reduce<WARP_REDUCE_SUM, block_size>(tmp, s_sum);
+    tmp = two_stage_warp_reduce<SUM, block_size>(tmp, s_sum);
 
     // from https://pytorch.org/docs/stable/generated/torch.nn.functional.normalize.html
     const float scale = rsqrtf(fmaxf(tmp, eps * eps));
