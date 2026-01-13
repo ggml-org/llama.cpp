@@ -18,6 +18,7 @@
 #include "kv-offload.hpp"
 #include "presets.hpp"
 #include "sycl_hw.hpp"
+#include "tensor-types.hpp"
 #include "unified-cache.hpp"
 
 #include <atomic>
@@ -94,6 +95,15 @@ extern int g_ggml_sycl_prioritize_dmmv;
 
 // Track when SYCL graph recording is active
 extern thread_local bool g_ggml_sycl_graph_recording;
+
+// Tiered cache state for memory placement optimization
+extern std::atomic<bool> g_tiered_enabled;
+
+// Get cached tensor pointer for tiered dispatch
+// Returns nullptr if not in tiered mode or tensor not cached
+void * get_cached_tensor_ptr(const char * tensor_name,
+                             ggml_sycl::memory_tier * tier_out,
+                             bool * found_in_inventory);
 
 #if defined(__clang__) && __has_builtin(__builtin_expect)
 // Hint the optimizer to pipeline the more likely following instruction in branches

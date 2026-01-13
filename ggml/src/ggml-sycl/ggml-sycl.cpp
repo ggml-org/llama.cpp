@@ -642,7 +642,7 @@ static std::mutex                                   g_tensor_inventory_mutex;
 static std::vector<std::pair<std::string, size_t>>  g_tensor_inventory;
 static std::unordered_map<std::string, size_t>      g_tensor_inventory_index;  // name -> index for O(1) lookup
 static size_t                                       g_tensor_inventory_total_size = 0;
-static std::atomic<bool>                            g_tiered_enabled{ false };
+std::atomic<bool>                            g_tiered_enabled{ false };
 
 // Global unified_tensor_cache for tiered memory dispatch
 static std::unique_ptr<ggml_sycl::unified_tensor_cache> g_tensor_cache;
@@ -757,7 +757,7 @@ void ggml_backend_sycl_get_cache_stats(ggml_backend_t backend, uint64_t * hits, 
 // Sets found_in_inventory to indicate if tensor is tracked (avoids second mutex lock).
 // Uses O(1) hash lookup for performance in hot path.
 // This is the integration point between mul_mat dispatch and unified_tensor_cache.
-static void * get_cached_tensor_ptr(const char * tensor_name, ggml_sycl::memory_tier * tier_out,
+void * get_cached_tensor_ptr(const char * tensor_name, ggml_sycl::memory_tier * tier_out,
                                     bool * found_in_inventory) {
     if (found_in_inventory) {
         *found_in_inventory = false;

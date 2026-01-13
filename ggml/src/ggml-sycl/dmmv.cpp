@@ -3061,6 +3061,20 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
 
     const int64_t ne00 = src0->ne[0];
     const int64_t row_diff = row_high - row_low;
+
+    // Check tiered dispatch for weight tensor
+    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
+        ggml_sycl::memory_tier tier;
+        bool in_inventory = false;
+        void * cached_ptr = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
+        if (cached_ptr != nullptr) {
+            GGML_LOG_DEBUG("[SYCL] dmmv tiered hit: %s (tier=%d)\n",
+                          src0->name, static_cast<int>(tier));
+        } else if (in_inventory) {
+            GGML_LOG_DEBUG("[SYCL] dmmv tiered pending: %s\n", src0->name);
+        }
+    }
+
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     // on some GPUs it is faster to convert src1 to half and to use half precision intrinsics
 #ifdef GGML_SYCL_F16
