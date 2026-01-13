@@ -3737,6 +3737,7 @@ static bool ggml_cuda_graph_set_enabled(ggml_backend_cuda_context * cuda_ctx) {
 
     return cuda_ctx->cuda_graph->is_enabled();
 #else
+    GGML_UNUSED(cuda_ctx);
     return false;
 #endif // USE_CUDA_GRAPH
 }
