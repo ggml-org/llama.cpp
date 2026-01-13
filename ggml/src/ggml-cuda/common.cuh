@@ -531,34 +531,50 @@ enum warp_reduce_method {
     WARP_REDUCE_SUM,
 };
 
-template <warp_reduce_method reduce_method, const unsigned int block_size_template = 0> static __device__ float two_stage_warp_reduce(float val, float * shared_vals) {
-
-    float (*reduce_fun)(float);
+template <warp_reduce_method reduce_method, const unsigned int block_size_template = 0, typename T>
+static __device__ T two_stage_warp_reduce(T val, T * shared_vals) {
+    T (*reduce_fun)(T);
     switch (reduce_method) {
         case WARP_REDUCE_MAX:
-            reduce_fun = warp_reduce_max;
+            if constexpr (std::is_same_v<T, float>) {
+                reduce_fun = warp_reduce_max;
+            } else if constexpr (std::is_same_v<T, half2>) {
+                reduce_fun = warp_reduce_max;
+            }
             break;
         case WARP_REDUCE_SUM:
             reduce_fun = warp_reduce_sum;
             break;
     }
 
-    val = reduce_fun(val);
+    val                           = reduce_fun(val);
     const unsigned int block_size = block_size_template == 0 ? blockDim.x : block_size_template;
     if (block_size > WARP_SIZE) {
         assert((block_size <= 1024) && (block_size % WARP_SIZE) == 0);
-        const int        warp_id = threadIdx.x / WARP_SIZE;
-        const int        lane_id = threadIdx.x % WARP_SIZE;
+        const int warp_id = threadIdx.x / WARP_SIZE;
+        const int lane_id = threadIdx.x % WARP_SIZE;
         if (lane_id == 0) {
             shared_vals[warp_id] = val;
         }
         __syncthreads();
         switch (reduce_method) {
             case WARP_REDUCE_MAX:
-                val = -INFINITY;
+                if constexpr (std::is_same_v<T, float>) {
+                    val = -INFINITY;
+                } else if constexpr (std::is_same_v<T, half2>) {
+                    val = make_half2(-INFINITY, -INFINITY);
+                }
                 break;
             case WARP_REDUCE_SUM:
-                val = 0.0f;
+                if constexpr (std::is_same_v<T, float>) {
+                    val = 0.0f;
+                } else if constexpr (std::is_same_v<T, float2>) {
+                    val = make_float2(0.0f, 0.0f);
+                } else if constexpr (std::is_same_v<T, half2>) {
+                    val = make_half2(0.0f, 0.0f);
+                } else if constexpr (std::is_same_v<T, int>) {
+                    val = make_int2(0, 0);
+                }
                 break;
         }
         if (lane_id < (static_cast<int>(block_size) / WARP_SIZE)) {
