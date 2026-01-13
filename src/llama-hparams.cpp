@@ -2,6 +2,7 @@
 
 #include "ggml.h"
 
+#include <algorithm>
 #include <cassert>
 
 void llama_hparams::set_swa_pattern(uint32_t n_pattern, bool dense_first) {
@@ -69,6 +70,10 @@ uint32_t llama_hparams::n_embd_inp() const {
     }
 
     return n_embd_inp;
+}
+
+uint32_t llama_hparams::get_n_embd_out() const {
+    return n_embd_out > 0 ? n_embd_out : n_embd;
 }
 
 uint32_t llama_hparams::n_embd_k_gqa(uint32_t il) const {
@@ -229,4 +234,8 @@ bool llama_hparams::is_masked_swa(uint32_t n_swa, llama_swa_type swa_type, llama
     }
 
     return false;
+}
+
+bool llama_hparams::use_mrope() const {
+    return rope_sections[0] > 0 && rope_sections[1] > 0;
 }

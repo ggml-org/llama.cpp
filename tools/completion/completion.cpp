@@ -87,9 +87,6 @@ int main(int argc, char ** argv) {
     common_params params;
     g_params = &params;
 
-    // disable jinja by default
-    params.use_jinja = false;
-
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMPLETION, print_usage)) {
         return 1;
     }
@@ -178,7 +175,10 @@ int main(int argc, char ** argv) {
     struct ggml_threadpool_params tpp =
             ggml_threadpool_params_from_cpu_params(params.cpuparams);
 
-    set_process_priority(params.cpuparams.priority);
+    if (!set_process_priority(params.cpuparams.priority)) {
+        LOG_ERR("%s: error: failed to set process priority\n", __func__);
+        return 1;
+    }
 
     struct ggml_threadpool * threadpool_batch = NULL;
     if (!ggml_threadpool_params_match(&tpp, &tpp_batch)) {

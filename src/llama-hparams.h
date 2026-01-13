@@ -34,6 +34,7 @@ struct llama_hparams_convnext {
 
 struct llama_hparams {
     bool vocab_only;
+    bool no_alloc;
     bool rope_finetuned;
     bool use_par_res;
     bool swin_norm;
@@ -104,9 +105,9 @@ struct llama_hparams {
 
     float    rope_attn_factor = 1.0f;
     float    rope_freq_base_train;
-    float    rope_freq_base_train_swa;
+    float    rope_freq_base_train_swa  = 10000.0f;
     float    rope_freq_scale_train;
-    float    rope_freq_scale_train_swa;
+    float    rope_freq_scale_train_swa = 1.0f;
 
     uint32_t n_ctx_orig_yarn;
     float    rope_yarn_log_mul = 0.0f;
@@ -122,10 +123,11 @@ struct llama_hparams {
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
     // the size of the sliding window (0 - no SWA)
     uint32_t n_swa = 0;
-    // if swa_layers[il] == true, then layer il is SWA
-    // if swa_layers[il] == false, then layer il is dense (i.e. non-SWA)
+    // if swa_layers[il] == 1, then layer il is SWA
+    // if swa_layers[il] == 0, then layer il is dense (i.e. non-SWA)
     // by default, all layers are dense
-    std::array<bool, LLAMA_MAX_LAYERS> swa_layers;
+    // note: using uint32_t type for compatibility reason
+    std::array<uint32_t, LLAMA_MAX_LAYERS> swa_layers;
 
     // for State Space Models
     uint32_t ssm_d_conv  = 0;
@@ -159,6 +161,9 @@ struct llama_hparams {
 
     // for Classifiers
     uint32_t n_cls_out = 1;
+
+    // output embedding dimension (0 = use n_embd)
+    uint32_t n_embd_out = 0;
 
     // llama4 smallthinker
     uint32_t n_moe_layer_step        = 0;
@@ -232,6 +237,9 @@ struct llama_hparams {
     // dimension of main + auxiliary input embeddings
     uint32_t n_embd_inp() const;
 
+    // dimension of output embeddings
+    uint32_t get_n_embd_out() const;
+
     // dimension of key embeddings across all k-v heads
     uint32_t n_embd_k_gqa(uint32_t il = 0) const;
 
@@ -269,6 +277,8 @@ struct llama_hparams {
     // TODO: think of a better place for this function
     // TODO: pack the SWA params in a struct?
     static bool is_masked_swa(uint32_t n_swa, llama_swa_type swa_type, llama_pos p0, llama_pos p1);
+
+    bool use_mrope() const;
 };
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");

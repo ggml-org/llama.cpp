@@ -650,7 +650,7 @@ static void test_msgs_oaicompat_json_conversion() {
             "[\n"
             "  {\n"
             "    \"role\": \"assistant\",\n"
-            "    \"content\": null,\n"
+            "    \"content\": \"\",\n"
             "    \"tool_calls\": [\n"
             "      {\n"
             "        \"type\": \"function\",\n"
@@ -724,6 +724,30 @@ static void test_tools_oaicompat_json_conversion() {
             "]"
         ),
         common_chat_tools_to_json_oaicompat<json>({special_function_tool}).dump(2));
+
+    {
+        auto tools_no_params = common_chat_tools_parse_oaicompat(json::parse(
+            R"([{"type": "function", "function": {"name": "test_func", "description": "A test"}}])"));
+        assert_equals((size_t) 1, tools_no_params.size());
+        assert_equals(std::string("test_func"), tools_no_params[0].name);
+        assert_equals(std::string("A test"), tools_no_params[0].description);
+        assert_equals(std::string("{}"), tools_no_params[0].parameters);
+    }
+    {
+        auto tools_no_desc = common_chat_tools_parse_oaicompat(json::parse(
+            R"([{"type": "function", "function": {"name": "test_func", "parameters": {"type": "object"}}}])"));
+        assert_equals((size_t) 1, tools_no_desc.size());
+        assert_equals(std::string("test_func"), tools_no_desc[0].name);
+        assert_equals(std::string(""), tools_no_desc[0].description);
+    }
+    {
+        auto tools_minimal = common_chat_tools_parse_oaicompat(json::parse(
+            R"([{"type": "function", "function": {"name": "test_func"}}])"));
+        assert_equals((size_t) 1, tools_minimal.size());
+        assert_equals(std::string("test_func"), tools_minimal[0].name);
+        assert_equals(std::string(""), tools_minimal[0].description);
+        assert_equals(std::string("{}"), tools_minimal[0].parameters);
+    }
 }
 
 static void test_template_output_parsers() {
@@ -906,7 +930,8 @@ static void test_template_output_parsers() {
                       "      },\n"
                       "      \"id\": \"123456789\"\n"
                       "    }\n"
-                      "  ]\n"
+                      "  ],\n"
+                      "  \"content\": \"\"\n"
                       "}");
     }
     {
@@ -1713,7 +1738,8 @@ static void test_template_output_parsers() {
                       "      },\n"
                       "      \"id\": \"123456789\"\n"
                       "    }\n"
-                      "  ]\n"
+                      "  ],\n"
+                      "  \"content\": \"\"\n"
                       "}",
                       /* expect_grammar_triggered= */ false
         );
@@ -3588,6 +3614,163 @@ static void test_template_output_peg_parsers() {
             t.expect.content =R"({"amount": 123.45, "date": "2025-12-03"})";
         });
     }
+
+    {
+        // NVIDIA Nemotron-3 Nano
+        auto tmpls = read_templates("models/templates/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.jinja");
+
+        // Test basic message
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "Hello, world!\nWhat's up?";
+            t.expect = message_assist;
+        });
+
+        // Test basic message and reasoning with reasoning_format = none
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "I'm\nthinking\n</think>\nHello, world!\nWhat's up?";
+            t.expect.content = "I'm\nthinking\n</think>\nHello, world!\nWhat's up?";
+        });
+
+        // Test basic message and reasoning with reasoning_format = auto
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input = "I'm\nthinking\n</think>\nHello, world!\nWhat's up?";
+            t.params.enable_thinking = true;
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+
+            t.expect = message_assist_thoughts;
+        });
+
+        // Test tool call
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.enable_thinking = false;
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call;
+        });
+
+        // Test tool call with reasoning
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "I'm\nthinking\n</think>\n"
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {special_function_tool};
+
+            t.expect = message_assist_call_thoughts;
+        });
+
+        // Test parallel tool calls
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "<tool_call>\n"
+                "<function=special_function>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>\n"
+                "<tool_call>\n"
+                "<function=special_function_with_opt>\n"
+                "<parameter=arg1>\n"
+                "1\n"
+                "</parameter>\n"
+                "<parameter=arg2>\n"
+                "2\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.enable_thinking = false;
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.parallel_tool_calls = true;
+            t.params.tools = {special_function_tool, special_function_tool_with_optional_param};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "special_function",
+                /* .arguments = */ R"({"arg1": 1})",
+                /* .id = */        {},
+            }, {
+                /* .name = */      "special_function_with_opt",
+                /* .arguments = */ R"({"arg1": 1, "arg2": 2})",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test tool call with string parameter
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "<tool_call>\n"
+                "<function=python>\n"
+                "<parameter=code>\n"
+                "def hello():\n"
+                "    print(\"Hello, world!\")\n"
+                "\n"
+                "hello()\n"
+                "</parameter>\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.enable_thinking = false;
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {python_tool};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "python",
+                /* .arguments = */ "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test tool call with string parameter and no closing </parameter> tag
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+                "<tool_call>\n"
+                "<function=python>\n"
+                "<parameter=code>\n"
+                "def hello():\n"
+                "    print(\"Hello, world!\")\n"
+                "\n"
+                "hello()\n"
+                "</function>\n"
+                "</tool_call>";
+            t.params.enable_thinking = false;
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.tools = {python_tool};
+
+            t.expect.tool_calls = {{
+                /* .name = */      "python",
+                /* .arguments = */ "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}",
+                /* .id = */        {},
+            }};
+        });
+
+        // Test response format
+        test_peg_parser(tmpls.get(), [&](auto & t) {
+            t.input =
+              "I need to output the invoice details in JSON\n"
+              "</think>\n"
+              R"({"amount": 123.45, "date": "2025-12-03"})";
+            t.params.reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+            t.params.json_schema = invoice_schema;
+
+            t.expect.reasoning_content = "I need to output the invoice details in JSON";
+            t.expect.content = R"({"amount": 123.45, "date": "2025-12-03"})";
+        });
+    }
+
 }
 
 static void test_msg_diffs_compute() {

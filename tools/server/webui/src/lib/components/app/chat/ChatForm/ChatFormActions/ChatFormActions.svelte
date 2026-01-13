@@ -24,7 +24,7 @@
 		isRecording?: boolean;
 		hasText?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
-		onFileUpload?: (fileType?: FileTypeCategory) => void;
+		onFileUpload?: () => void;
 		onMicClick?: () => void;
 		onStop?: () => void;
 	}
@@ -173,6 +173,7 @@
 	/>
 
 	<ModelsSelector
+		{disabled}
 		bind:this={selectorModelRef}
 		currentModel={conversationModel}
 		forceForegroundText={true}
