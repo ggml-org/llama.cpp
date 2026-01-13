@@ -23,14 +23,9 @@ ggml_add_backend_library(ggml-remotingfrontend
                          virtgpu-forward-backend.cpp
                          virtgpu-forward-impl.h
                          apir_cs_ggml-rpc-front.cpp
-                         ../../include/ggml-remoting-frontend.h
-                        )
+                         ../../include/ggml-remoting-frontend.h)
 
-  # Debug: Show what pkg-config found
-  message(STATUS "DRM_INCLUDE_DIRS: ${DRM_INCLUDE_DIRS}")
-  message(STATUS "DRM_LIBRARIES: ${DRM_LIBRARIES}")
-  message(STATUS "DRM_CFLAGS_OTHER: ${DRM_CFLAGS_OTHER}")
-  target_include_directories(ggml-remotingfrontend PUBLIC /usr/include/libdrm/)
+target_include_directories(ggml-remotingfrontend PUBLIC /usr/include/libdrm/)
 
 target_link_libraries(ggml-remotingfrontend PUBLIC ${DRM_LIBRARIES})
 target_include_directories(ggml-remotingfrontend PUBLIC ${DRM_INCLUDE_DIRS})

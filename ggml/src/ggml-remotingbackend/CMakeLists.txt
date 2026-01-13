@@ -13,7 +13,6 @@ ggml_add_backend_library(ggml-remotingbackend
                          shared/api_remoting.h
                          shared/apir_backend.h
                          shared/apir_cs.h
-                         apir_cs_ggml-rpc-back.cpp
-                        )
+                         apir_cs_ggml-rpc-back.cpp)
 
 target_compile_options(ggml-remotingbackend PRIVATE -std=c++20)
