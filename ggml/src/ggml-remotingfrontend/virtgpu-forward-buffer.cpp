@@ -42,7 +42,7 @@ void apir_buffer_set_tensor(virtgpu *               gpu,
         shmem = &gpu->data_shmem;
 
     } else if (virtgpu_shmem_create(gpu, size, shmem)) {
-        GGML_ABORT("Couldn't allocate the guest-host shared buffer :/");
+        GGML_ABORT("Couldn't allocate the guest-host shared buffer");
     }
 
     memcpy(shmem->mmap_ptr, data, size);
@@ -96,7 +96,7 @@ void apir_buffer_get_tensor(virtgpu *               gpu,
         shmem = &gpu->data_shmem;
 
     } else if (virtgpu_shmem_create(gpu, size, shmem)) {
-        GGML_ABORT("Couldn't allocate the guest-host shared buffer :/");
+        GGML_ABORT("Couldn't allocate the guest-host shared buffer");
     }
 
     apir_encode_virtgpu_shmem_res_id(encoder, shmem->res_id);

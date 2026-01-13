@@ -35,11 +35,11 @@ void apir_backend_deinit(void) {
     if (dev) {
         size_t free, total;
         dev->iface.get_memory(dev, &free, &total);
-        GGML_LOG_INFO("%s: free memory: %ld MB", __func__, (size_t) free / 1024 / 1024);
+        GGML_LOG_INFO("%s: free memory: %ld MB\n", __func__, (size_t) free / 1024 / 1024);
     }
 
     if (backend_library_handle) {
-        GGML_LOG_INFO("%s: The GGML backend library was loaded. Unloading it.", __func__);
+        GGML_LOG_INFO("%s: The GGML backend library was loaded. Unloading it.\n", __func__);
         dlclose(backend_library_handle);
         backend_library_handle = NULL;
     }
@@ -59,14 +59,14 @@ ApirLoadLibraryReturnCode apir_backend_initialize() {
         if (apir_logfile) {
             ggml_log_set(log_to_file_callback, apir_logfile);
         } else {
-            GGML_LOG_INFO("Could not open the log file at '%s'", apir_log_to_file);
+            GGML_LOG_INFO("Could not open the log file at '%s'\n", apir_log_to_file);
         }
     }
     const char * library_name = getenv(APIR_LLAMA_CPP_GGML_LIBRARY_PATH_ENV);
     const char * library_reg  = getenv(APIR_LLAMA_CPP_GGML_LIBRARY_REG_ENV);
     const char * library_init = getenv(APIR_LLAMA_CPP_GGML_LIBRARY_INIT_ENV);
 
-    GGML_LOG_INFO("%s: loading %s (%s|%s)", __func__, library_name, library_reg, library_init);
+    GGML_LOG_INFO("%s: loading %s (%s|%s)\n", __func__, library_name, library_reg, library_init);
 
     if (!library_name) {
         GGML_LOG_ERROR("cannot open the GGML library: env var '%s' not defined\n", APIR_LLAMA_CPP_GGML_LIBRARY_PATH_ENV);
@@ -77,13 +77,13 @@ ApirLoadLibraryReturnCode apir_backend_initialize() {
     backend_library_handle = dlopen(library_name, RTLD_LAZY);
 
     if (!backend_library_handle) {
-        GGML_LOG_ERROR("cannot open the GGML library: %s", dlerror());
+        GGML_LOG_ERROR("cannot open the GGML library: %s\n", dlerror());
 
         return APIR_LOAD_LIBRARY_CANNOT_OPEN;
     }
 
     if (!library_reg) {
-        GGML_LOG_ERROR("cannot register the GGML library: env var '%s' not defined", APIR_LLAMA_CPP_GGML_LIBRARY_REG_ENV);
+        GGML_LOG_ERROR("cannot register the GGML library: env var '%s' not defined\n", APIR_LLAMA_CPP_GGML_LIBRARY_REG_ENV);
 
         return APIR_LOAD_LIBRARY_ENV_VAR_MISSING;
     }
@@ -91,14 +91,14 @@ ApirLoadLibraryReturnCode apir_backend_initialize() {
     void * ggml_backend_reg_fct = dlsym(backend_library_handle, library_reg);
     dlsym_error                 = dlerror();
     if (dlsym_error) {
-        GGML_LOG_ERROR("cannot find the GGML backend registration symbol '%s' (from %s): %s", library_reg,
+        GGML_LOG_ERROR("cannot find the GGML backend registration symbol '%s' (from %s): %s\n", library_reg,
               APIR_LLAMA_CPP_GGML_LIBRARY_REG_ENV, dlsym_error);
 
         return APIR_LOAD_LIBRARY_SYMBOL_MISSING;
     }
 
     if (!library_init) {
-        GGML_LOG_ERROR("cannot initialize the GGML library: env var '%s' not defined", library_init);
+        GGML_LOG_ERROR("cannot initialize the GGML library: env var '%s' not defined\n", library_init);
 
         return APIR_LOAD_LIBRARY_ENV_VAR_MISSING;
     }
@@ -106,7 +106,7 @@ ApirLoadLibraryReturnCode apir_backend_initialize() {
     void * ggml_backend_init_fct = dlsym(backend_library_handle, library_init);
     dlsym_error                  = dlerror();
     if (dlsym_error) {
-        GGML_LOG_ERROR("cannot find the GGML backend init symbol '%s' (from %s): %s", library_init,
+        GGML_LOG_ERROR("cannot find the GGML backend init symbol '%s' (from %s): %s\n", library_init,
               APIR_LLAMA_CPP_GGML_LIBRARY_INIT_ENV, dlsym_error);
 
         return APIR_LOAD_LIBRARY_SYMBOL_MISSING;

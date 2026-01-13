@@ -13,7 +13,7 @@ static virtgpu * apir_initialize() {
 
     apir_gpu_instance = create_virtgpu();
     if (!apir_gpu_instance) {
-        GGML_ABORT("failed to initialize the virtgpu :/");
+        GGML_ABORT("failed to initialize the virtgpu");
     }
 
     apir_initialized = true;
@@ -24,7 +24,7 @@ static virtgpu * apir_initialize() {
 static int ggml_backend_remoting_get_device_count() {
     virtgpu * gpu = apir_initialize();
     if (!gpu) {
-        GGML_LOG_WARN("apir_initialize failed :/");
+        GGML_LOG_WARN("apir_initialize failed\n");
         return 0;
     }
 
@@ -46,13 +46,13 @@ ggml_backend_dev_t ggml_backend_remoting_get_device(size_t device) {
 
 static void ggml_backend_remoting_reg_init_devices(ggml_backend_reg_t reg) {
     if (devices.size() > 0) {
-        GGML_LOG_INFO("%s: already initialized", __func__);
+        GGML_LOG_INFO("%s: already initialized\n", __func__);
         return;
     }
 
     virtgpu * gpu = apir_initialize();
     if (!gpu) {
-        GGML_LOG_ERROR("apir_initialize failed :/");
+        GGML_LOG_ERROR("apir_initialize failed\n");
         return;
     }
 
@@ -105,7 +105,7 @@ static const ggml_backend_reg_i ggml_backend_remoting_reg_i = {
 ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
     virtgpu * gpu = apir_initialize();
     if (!gpu) {
-        GGML_LOG_ERROR("apir_initialize failed :/");
+        GGML_LOG_ERROR("apir_initialize failed\n");
         return NULL;
     }
 
@@ -123,7 +123,7 @@ ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
 
     ggml_backend_remoting_reg_init_devices(&reg);
 
-    GGML_LOG_INFO("%s: initialzed", __func__);
+    GGML_LOG_INFO("%s: initialzed\n", __func__);
 
     return &reg;
 }
