@@ -1134,14 +1134,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,       hparams.n_lora_q);
                 ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,      hparams.n_lora_kv);
-                ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,    hparams.n_embd_head_k_mla, false);
-                ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,  hparams.n_embd_head_v_mla, false);
-
-                if (hparams.n_embd_head_k_mla != 0 && hparams.n_embd_head_v_mla != 0) {
-                    hparams.n_embd_head_k = hparams.n_embd_head_k_mla;
-                    hparams.n_embd_head_v = hparams.n_embd_head_v_mla;
-                    hparams.n_head_kv_arr = hparams.n_head_arr;
-                }
+                ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,    hparams.n_embd_head_k_mla);
+                ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,  hparams.n_embd_head_v_mla);
+                hparams.n_embd_head_k = hparams.n_embd_head_k_mla;
+                hparams.n_embd_head_v = hparams.n_embd_head_v_mla;
+                hparams.n_head_kv_arr = hparams.n_head_arr;
 
                 ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
@@ -1155,10 +1152,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
                 ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
-                if (hparams.n_swa > 0) {
-                    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
-                }
+
+                hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+                ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.swa_layers, hparams.n_layer);
 
                 switch (hparams.n_layer) {
                     case 24: type = LLM_TYPE_7B_A1B; break;
