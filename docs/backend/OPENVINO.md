@@ -52,7 +52,7 @@ Accuracy and performance optimizations for quantized models are still work in pr
 
 - **Primary supported quantization scheme is `Q4_0`**
 - `Q4_0` and `Q4_1` tensors are requantized to int4 gs128 symmetric
-- `Q6_K` tensors are dequantized to FP16
+- `Q6_K` tensors are requentized to int8 except for the token embedding matrix
 
 #### Additional Notes
 
@@ -72,30 +72,17 @@ The following models have been validated for functionality on Intel® Core™ Ul
 - [openbmb/MiniCPM-1B-sft-bf16](https://huggingface.co/openbmb/MiniCPM-1B-sft-bf16)
 - [tencent/Hunyuan-7B-Instruct](https://huggingface.co/tencent/Hunyuan-7B-Instruct)
 - [mistralai/Mistral-7B-Instruct-v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)
+- [bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF](https://huggingface.co/bartowski/DeepSeek-R1-Distill-Llama-8B-GGUF)
 
 ## Build Instructions
 
-### Prerequisites
+For detailed build instructions, refer to [build.md](../build.md#openvino)
 
-- OpenVINO runtime and development packages
-- CMake
-- C++17-compatible compiler
-
-### Build Example
-
-```bash
-cmake -B build/ReleaseOV \
-  -DGGML_OPENVINO=ON \
-  -DCMAKE_BUILD_TYPE=Release
-
-cmake --build build/ReleaseOV -j
-```
-
-# Runtime Configuration
+## Runtime Configuration
 
 The OpenVINO backend can be configured using the following environment variables at runtime to control device selection, caching, debugging, and profiling behavior.
 
-## Configuration Options
+### Configuration Options
 
 | Variable | Description |
 |--------|-------------|
@@ -107,9 +94,9 @@ The OpenVINO backend can be configured using the following environment variables
 | `GGML_OPENVINO_DEBUG_INPUT` | Enable input debugging. |
 | `GGML_OPENVINO_DEBUG_OUTPUT` | Enable output debugging. |
 
-## Example Usage
+### Example Usage
 
-### GPU Inference with Profiling
+#### GPU Inference with Profiling
 
 ```bash
 export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
@@ -122,7 +109,7 @@ export GGML_OPENVINO_DEVICE=GPU
   "The story of AI is "
 ```
 
-### llama-bench
+#### llama-bench
 
 ```bash
 GGML_OPENVINO_DEVICE=GPU ./llama-bench -fa 1
@@ -131,11 +118,16 @@ GGML_OPENVINO_DEVICE=GPU ./llama-bench -fa 1
 
 ### NPU Notes
 
-- Prompt processing is currently slower than CPU/GPU
 - Smaller context sizes are recommended (e.g. `-c 512`)
 - Static compilation mode is enabled automatically
 - Model caching is not yet supported
-  
+- Does not support llama-server -np > 1 (multiple parallel sequences)
+- Only supports llama-perplexity -b 512 or smaller
+
+## Llama.cpp Tools 
+
+The following tools work with the OpenVINO backend on CPU and GPU: llama-simple, llama-run, llama-cli, llama-server, llama-bench, llama-perplexity.
+
 ## Work in Progress
 
 - Performance and memory optimizations
