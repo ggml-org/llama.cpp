@@ -3,10 +3,7 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
-#include "ggml.h"
 
-#include <cmath>
-#include <cstdint>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -14,7 +11,7 @@
 #include <fstream>
 #include <regex>
 
-static void print_usage(int, char ** argv) {
+static void print_usage(int /*argc*/, char ** argv) {
     const std::string usage_template = R"(
         example usage:
 
@@ -34,6 +31,16 @@ static void print_usage(int, char ** argv) {
     std::string usage = std::regex_replace(usage_template, std::regex("\\n {8}"), "\n");
     usage = std::regex_replace(usage, std::regex("\\{prog\\}"), argv[0]);
     LOG("%s\n", usage.c_str());
+}
+
+static bool has_pooling(llama_context * ctx) {
+    switch (llama_pooling_type(ctx)) {
+        case LLAMA_POOLING_TYPE_NONE:
+        case LLAMA_POOLING_TYPE_UNSPECIFIED:
+            return false;
+        default:
+            return true;
+    }
 }
 
 struct output_data {
