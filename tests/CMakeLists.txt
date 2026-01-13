@@ -1158,4 +1158,17 @@ if(GGML_SYCL)
     target_link_options(test-tiered-dispatch PRIVATE "-fsycl")
     install(TARGETS test-tiered-dispatch RUNTIME)
     add_test(NAME test-tiered-dispatch COMMAND $<TARGET_FILE:test-tiered-dispatch>)
+
+    # test-tiered-memory-integration: Shell script integration test for tiered memory
+    # Tests real model loading and inference with tiered memory system
+    # Requires models in /Storage/GenAI/models/ (use --skip-large for CI)
+    if (NOT WIN32)
+        add_test(
+            NAME test-tiered-memory-integration
+            WORKING_DIRECTORY ${PROJECT_BINARY_DIR}
+            COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test-tiered-memory-integration.sh --skip-large
+        )
+        set_property(TEST test-tiered-memory-integration PROPERTY LABELS "sycl;integration")
+        set_property(TEST test-tiered-memory-integration PROPERTY ENVIRONMENT "LLAMA_BIN_DIR=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+    endif()
 endif()
