@@ -1070,4 +1070,16 @@ if(GGML_SYCL)
     target_link_options(test-pinned-chunk-pool PRIVATE "-fsycl")
     install(TARGETS test-pinned-chunk-pool RUNTIME)
     add_test(NAME test-pinned-chunk-pool COMMAND $<TARGET_FILE:test-pinned-chunk-pool>)
+
+    # test-tensor-placement: Tests for tensor classification and buffer type routing
+    # Part of tiered memory architecture for MoE models
+    add_executable(test-tensor-placement test-tensor-placement.cpp)
+    target_link_libraries(test-tensor-placement PRIVATE ggml)
+    target_include_directories(test-tensor-placement PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-tensor-placement PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-tensor-placement PRIVATE "-fsycl")
+    install(TARGETS test-tensor-placement RUNTIME)
+    add_test(NAME test-tensor-placement COMMAND $<TARGET_FILE:test-tensor-placement>)
 endif()

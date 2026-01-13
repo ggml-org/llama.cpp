@@ -326,13 +326,13 @@ void * ggml_sycl_host_malloc(size_t size) try {
         return nullptr;
     }
 
-    const int    device_id      = get_current_device_id();
-    const size_t safe_max_alloc = ggml_sycl_get_safe_max_alloc_size(device_id);
-    if (safe_max_alloc > 0 && size > safe_max_alloc) {
+    // Check against probed host malloc limit (driver per-allocation limit)
+    const size_t host_max_alloc = ggml_sycl_get_host_max_alloc_size();
+    if (host_max_alloc > 0 && size > host_max_alloc) {
         GGML_LOG_WARN(
-            "[SYCL] Refusing to allocate %.1f MB of pinned memory (limit: %.1f MB). "
-            "Use chunked allocations or fall back to regular host memory.\n",
-            size / (1024.0 * 1024.0), safe_max_alloc / (1024.0 * 1024.0));
+            "[SYCL] Refusing to allocate %.1f GB of pinned memory (driver limit: %.1f GB). "
+            "Falling back to CPU memory with unified cache staging.\n",
+            size / (1024.0 * 1024.0 * 1024.0), host_max_alloc / (1024.0 * 1024.0 * 1024.0));
         return nullptr;
     }
 

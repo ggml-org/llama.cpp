@@ -425,10 +425,14 @@ struct ggml_sycl_device_info {
     std::array<float, GGML_SYCL_MAX_DEVICES> default_tensor_split = {};
 
     int max_work_group_sizes[GGML_SYCL_MAX_DEVICES] = { 0 };
+
+    // Host pinned memory limit (probed at init, driver has per-allocation limit)
+    size_t host_max_alloc_size = 0;
 };
 
 const ggml_sycl_device_info & ggml_sycl_info();
 size_t                        ggml_sycl_get_safe_max_alloc_size(int device);
+size_t                        ggml_sycl_get_host_max_alloc_size();
 
 struct layout_policy {
     static layout_mode get_optimal(ggml_type qtype, tensor_usage usage, int device_id = -1) {

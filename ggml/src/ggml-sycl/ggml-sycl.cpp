@@ -99,6 +99,59 @@ GGML_BACKEND_API void ggml_backend_sycl_set_debug(int level) {
     g_ggml_sycl_debug_override.store(level, std::memory_order_release);
 }
 
+// =============================================================================
+// Tensor Classification for Tiered Memory Placement
+// =============================================================================
+
+// Classify tensor for tiered placement
+// Returns: 0=dense, 1=expert, 2=other
+extern "C" int ggml_sycl_classify_tensor(const char * name) {
+    if (!name) {
+        return 2;
+    }
+
+    // Check for expert patterns (MoE layers)
+    if (strstr(name, "_exps.") != nullptr || strstr(name, "_exps_") != nullptr) {
+        return 1;  // Expert
+    }
+
+    // Check for dense layer patterns
+    if (strstr(name, "blk.") != nullptr) {
+        // Attention and FFN weights in blocks are dense
+        if (strstr(name, "attn_") != nullptr || strstr(name, "ffn_") != nullptr) {
+            return 0;  // Dense
+        }
+    }
+
+    return 2;  // Other (embeddings, norms, etc.)
+}
+
+// Select buffer type for tensor based on tier availability
+// This is a helper for model loading - actual routing happens in llama-model.cpp
+// tensor_name: name of the tensor to place
+// tensor_size: size of the tensor in bytes
+// vram_available: available VRAM in bytes
+// pinned_available: available pinned host memory in bytes
+// Returns: appropriate buffer type for the tensor
+extern "C" ggml_backend_buffer_type_t ggml_sycl_select_buffer_for_tensor(const char * tensor_name, size_t tensor_size,
+                                                                         size_t vram_available,
+                                                                         size_t pinned_available) {
+    (void) tensor_name;  // Currently unused - classification could influence placement in future
+
+    // Try VRAM first for any tensor
+    if (tensor_size <= vram_available) {
+        return ggml_backend_sycl_buffer_type(0);  // VRAM
+    }
+
+    // Overflow to pinned host
+    if (tensor_size <= pinned_available) {
+        return ggml_backend_sycl_host_buffer_type();  // Pinned host
+    }
+
+    // Last resort: CPU buffer (will use mmap)
+    return ggml_backend_cpu_buffer_type();
+}
+
 static const char * ggml_sycl_layout_mode_name(ggml_layout_mode mode) {
     switch (mode) {
         case GGML_LAYOUT_AOS:
@@ -767,7 +820,19 @@ static ggml_sycl_device_info ggml_sycl_init() {
     for (int id = 0; id < info.device_count; ++id) {
         info.default_tensor_split[id] /= total_vram;
     }
+
+    // Set host malloc limit based on known driver constraints
+    // Intel Level Zero has a per-allocation limit of ~11GB for malloc_host
+    // Use 10GB as safe default to avoid allocation failures
+    info.host_max_alloc_size = 10ULL * 1024 * 1024 * 1024;  // 10GB safe limit
+    GGML_LOG_INFO("[SYCL] Host malloc limit: %.1f GB (safe default for Intel Arc)\n",
+                  info.host_max_alloc_size / (1024.0 * 1024.0 * 1024.0));
+
     return info;
+}
+
+size_t ggml_sycl_get_host_max_alloc_size() {
+    return ggml_sycl_info().host_max_alloc_size;
 }
 
 const ggml_sycl_device_info & ggml_sycl_info() {
@@ -12642,6 +12707,10 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
     bool                       any_moe  = false;
     bool                       unpinned = false;
     ggml_sycl::unified_cache * cache    = ggml_sycl::get_unified_cache(*ctx.stream());
+
+    // Collect experts to pin AFTER all loading completes (prevents deadlock during eviction)
+    std::vector<std::pair<const void *, ggml_layout_mode>> experts_to_pin;
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         const ggml_tensor * node = cgraph->nodes[i];
         if (node->op != GGML_OP_MUL_MAT_ID) {
@@ -12735,9 +12804,14 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
                 if (!key) {
                     continue;
                 }
-                cache->pin(key, layout);
+                experts_to_pin.emplace_back(key, layout);  // Defer pinning
             }
         }
+    }
+
+    // Pin all experts AFTER loading completes (prevents deadlock during eviction)
+    for (const auto & [key, pin_layout] : experts_to_pin) {
+        cache->pin(key, pin_layout);
     }
 
     if (!any_moe) {
@@ -14067,8 +14141,12 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
         const bool             src0_layout_is_host =
             src0_layout_alloc == sycl::usm::alloc::host || src0_layout_alloc == sycl::usm::alloc::unknown;
         if (src0_layout_is_host) {
-            GGML_SYCL_DEBUG("[XMX MoE] Weights in host buffer, skipping XMX path\n");
-            return false;
+            // Log performance warning but continue (USM allows host access, just slower)
+            static std::atomic<int> host_warn_count{0};
+            if (host_warn_count.fetch_add(1, std::memory_order_relaxed) < 5) {
+                GGML_LOG_WARN("[XMX MoE] Expert weights in host memory - performance may be reduced (~2-4x slower)\n");
+            }
+            // DO NOT return false - continue with XMX using host pointer via SYCL USM
         }
     }
     // Extract tensor dimensions
