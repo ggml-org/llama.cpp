@@ -38,7 +38,7 @@ struct ggml_webgpu_flash_attn_shader_decisions {
 struct ggml_webgpu_processed_shader {
     std::string                             wgsl;
     std::string                             variant;
-    ggml_webgpu_flash_attn_shader_decisions decisions;
+    void * decisions;
 };
 
 // This is exposed because it's necessary in supports_op
@@ -160,9 +160,36 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
     ggml_webgpu_processed_shader result;
     result.wgsl              = preprocessor.preprocess(shader_src, defines);
     result.variant           = variant;
-    result.decisions.q_tile  = q_tile;
-    result.decisions.kv_tile = kv_tile;
-    result.decisions.wg_size = wg_size;
+    ggml_webgpu_flash_attn_shader_decisions * decisions = new ggml_webgpu_flash_attn_shader_decisions();
+    decisions->q_tile  = q_tile;
+    decisions->kv_tile = kv_tile;
+    decisions->wg_size = wg_size;
+    result.decisions = decisions;
+    return result;
+}
+
+struct ggml_webgpu_generic_shader_lib_context {
+    int vectorized;
+    uint32_t max_wg_size;
+};
+
+inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_argmax(
+    pre_wgsl::Preprocessor &                     preprocessor,
+    const char *                                 shader_src,
+    const ggml_webgpu_generic_shader_lib_context & context) {
+    std::vector<std::string> defines;
+    std::string              variant = "argmax";
+
+    if (context.vectorized) {
+        defines.push_back("VECTORIZED");
+        variant += "_vec";
+    }
+
+    defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+    ggml_webgpu_processed_shader result;
+    result.wgsl    = preprocessor.preprocess(shader_src, defines);
+    result.variant = variant;
     return result;
 }
 

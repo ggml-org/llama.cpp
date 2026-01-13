@@ -338,6 +338,8 @@ struct webgpu_context_struct {
 
     std::unordered_map<flash_attn_pipeline_key, webgpu_pipeline, flash_attn_pipeline_key_hash> flash_attn_pipelines;
 
+    std::unordered_map<int, webgpu_pipeline> argmax_pipelines;
+
     std::map<int, std::map<int, webgpu_pipeline>> set_rows_pipelines;                 // dst_type, vectorized
     std::map<int, std::map<int, webgpu_pipeline>> get_rows_pipelines;                 // src_type, vectorized
 
@@ -1155,9 +1157,9 @@ static webgpu_command ggml_webgpu_flash_attn(webgpu_context & ctx,
             ggml_webgpu_processed_shader processed =
                 ggml_webgpu_preprocess_flash_attn_shader(ctx->p, wgsl_flash_attn, shader_lib_ctx);
             pipeline = ggml_webgpu_create_pipeline(ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
-            pipeline.context = new ggml_webgpu_flash_attn_shader_decisions(processed.decisions);
+            pipeline.context = processed.decisions;
             ctx->flash_attn_pipelines.emplace(key, pipeline);
-            decisions = processed.decisions;
+            decisions = *static_cast<ggml_webgpu_flash_attn_shader_decisions *>(processed.decisions);
         }
     }
 
@@ -1549,6 +1551,44 @@ static webgpu_command ggml_webgpu_soft_max(webgpu_context & ctx,
                                      ggml_nrows(dst));
 }
 
+static webgpu_command ggml_webgpu_argmax(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
+    std::vector<uint32_t> params = {
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
+        (uint32_t) src->ne[0]
+    };
+
+    std::vector<wgpu::BindGroupEntry> entries = {
+        { .binding = 0,
+         .buffer  = ggml_webgpu_tensor_buf(src),
+         .offset  = ggml_webgpu_tensor_align_offset(ctx, src),
+         .size    = ggml_webgpu_tensor_binding_size(ctx, src) },
+        { .binding = 1,
+         .buffer  = ggml_webgpu_tensor_buf(dst),
+         .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
+         .size    = ggml_webgpu_tensor_binding_size(ctx, dst) }
+    };
+
+    ggml_webgpu_generic_shader_lib_context shader_lib_ctx = {
+        .vectorized = src->ne[0] % 4 == 0,
+        .max_wg_size = ctx->limits.maxComputeInvocationsPerWorkgroup,
+    };
+    // TODO: remove guard once pipeline caches are per-thread
+    std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+    webgpu_pipeline                         pipeline;
+    auto it = ctx->argmax_pipelines.find(shader_lib_ctx.vectorized);
+    if (it != ctx->argmax_pipelines.end()) {
+        pipeline  = it->second;
+    } else {
+        ggml_webgpu_processed_shader processed =
+            ggml_webgpu_preprocess_argmax(ctx->p, wgsl_argmax, shader_lib_ctx);
+        pipeline = ggml_webgpu_create_pipeline(ctx->device, processed.wgsl.c_str(), processed.variant.c_str());
+        ctx->argmax_pipelines.emplace(shader_lib_ctx.vectorized, pipeline);
+    }
+    uint32_t wg_x = ggml_nelements(dst);
+    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x);
+}
+
 // Returns the encoded command, or std::nullopt if the operation is a no-op
 static std::optional<webgpu_command> ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node) {
     if (ggml_is_empty(node)) {
@@ -1611,6 +1651,8 @@ static std::optional<webgpu_command> ggml_webgpu_encode_node(webgpu_context ctx,
             return ggml_webgpu_soft_max(ctx, src0, src1, src2, node);
         case GGML_OP_UNARY:
             return ggml_webgpu_unary_op(ctx, src0, node);
+        case GGML_OP_ARGMAX:
+            return ggml_webgpu_argmax(ctx, src0, node);
         default:
             return std::nullopt;
     }
@@ -2818,7 +2860,10 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                 }
             }
             break;
-
+        case GGML_OP_ARGMAX:
+            supports_op = op->type == GGML_TYPE_I32 &&
+                          src0->type == GGML_TYPE_F32;
+            break;
         default:
             break;
     }
