@@ -15110,6 +15110,18 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx, ggml_tensor * 
         call_count++;
     }
 
+    // Check for tiered dispatch on expert weights
+    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
+        ggml_sycl::memory_tier tier;
+        bool                   in_inventory = false;
+        void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
+        if (cached_ptr != nullptr) {
+            GGML_LOG_DEBUG("[SYCL] mul_mat_id tiered hit: %s (tier=%d)\n", src0->name, static_cast<int>(tier));
+        } else if (in_inventory) {
+            GGML_LOG_DEBUG("[SYCL] mul_mat_id tiered pending: %s\n", src0->name);
+        }
+    }
+
     GGML_ASSERT(!ggml_backend_buffer_is_sycl_split(src0->buffer) && "mul_mat_id does not support split buffers");
 
     const ggml_tensor * ids = dst->src[2];
