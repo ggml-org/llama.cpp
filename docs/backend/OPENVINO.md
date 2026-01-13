@@ -108,8 +108,6 @@ GGML_OPENVINO_DEVICE=GPU ./llama-bench -fa 1
 
 ### NPU Notes
 
-- Smaller context sizes are recommended (e.g. `-c 512`)
-- Static compilation mode is enabled automatically
 - Model caching is not yet supported
 - Does not support llama-server -np > 1 (multiple parallel sequences)
 - Only supports llama-perplexity -b 512 or smaller
