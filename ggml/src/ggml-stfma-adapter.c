@@ -1,6 +1,7 @@
 #include "ggml-stfma-adapter.h"
 #include "ggml-stfma/include/sparse_ternary_fma.h"
 #include "ggml-common.h"
+#include "ggml-quants.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -307,7 +308,7 @@ void ggml_vec_dot_tq2_0_q8_K_stfma(
         }
         
         // Apply scale factors
-        const float d = y[i].d * GGML_FP16_TO_FP32(x[i].d);
+        const float d = y[i].d * ggml_fp16_to_fp32(x[i].d);
         sumf += (float)sumi * d;
     }
     
