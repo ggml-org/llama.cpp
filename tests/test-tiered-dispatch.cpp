@@ -151,6 +151,37 @@ static void test_inventory_tensor_types() {
            total_size / (1024.0 * 1024.0), tiered ? "true" : "false");
 }
 
+// Test that tensor cache instance is available when tiered mode is enabled
+static void test_cache_instance_available() {
+    ggml_backend_t backend = ggml_backend_sycl_init(0);
+    if (!backend) {
+        printf("test_cache_instance_available: SKIPPED (no SYCL device)\n");
+        return;
+    }
+
+    size_t free_vram = 0, total_vram = 0;
+    ggml_backend_sycl_get_device_memory(0, &free_vram, &total_vram);
+
+    std::vector<std::string>           name_storage;
+    std::vector<ggml_sycl_tensor_info> tensors;
+    size_t                             total_size = 0;
+
+    for (size_t i = 0; i < 50; i++) {
+        name_storage.push_back("blk." + std::to_string(i) + ".weight");
+        tensors.push_back({ name_storage.back().c_str(), free_vram / 25 });
+        total_size += free_vram / 25;
+    }
+
+    ggml_sycl_tensor_inventory inventory = { tensors.data(), tensors.size(), total_size };
+    ggml_backend_sycl_set_tensor_inventory(backend, &inventory);
+
+    bool has_cache = ggml_backend_sycl_has_tensor_cache(backend);
+    assert(has_cache && "Backend should have tensor cache when tiered enabled");
+
+    ggml_backend_free(backend);
+    printf("test_cache_instance_available: PASSED\n");
+}
+
 // Test clearing inventory (setting new inventory clears old)
 static void test_inventory_clear() {
     ggml_backend_t backend = ggml_backend_sycl_init(0);
@@ -209,6 +240,7 @@ int main() {
     test_tiered_mode_query();
     test_small_inventory_no_tiered();
     test_inventory_tensor_types();
+    test_cache_instance_available();
     test_inventory_clear();
 
     printf("\nAll tiered dispatch tests PASSED!\n");

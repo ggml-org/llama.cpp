@@ -122,6 +122,10 @@ GGML_BACKEND_API void ggml_backend_sycl_set_tensor_inventory(ggml_backend_t     
 // Returns true if model size exceeds VRAM and tiered mode was auto-enabled.
 GGML_BACKEND_API bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend);
 
+// Check if the unified tensor cache instance is available.
+// Returns true if tiered mode is enabled AND the cache has been created.
+GGML_BACKEND_API bool ggml_backend_sycl_has_tensor_cache(ggml_backend_t backend);
+
 // Get a stable cache key pointer for a weight tensor on the specified device.
 GGML_BACKEND_API const void * ggml_backend_sycl_get_weight_cache_key(const struct ggml_tensor * tensor, int device);
 

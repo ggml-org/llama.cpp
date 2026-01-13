@@ -77,6 +77,7 @@
 #include "ggml-sycl/sycl-profiling.hpp"
 #include "ggml-sycl/tensor-types.hpp"
 #include "ggml-sycl/unified-cache.hpp"
+#include "ggml-sycl/unified-tensor-cache.hpp"
 #include "ggml.h"
 
 static bool g_sycl_loaded                = false;
@@ -643,6 +644,10 @@ static std::unordered_map<std::string, size_t>      g_tensor_inventory_index;  /
 static size_t                                       g_tensor_inventory_total_size = 0;
 static std::atomic<bool>                            g_tiered_enabled{ false };
 
+// Global unified_tensor_cache for tiered memory dispatch
+static std::unique_ptr<ggml_sycl::unified_tensor_cache> g_tensor_cache;
+static std::mutex                                       g_tensor_cache_mutex;
+
 void ggml_backend_sycl_set_tensor_inventory(
     ggml_backend_t backend,
     const ggml_sycl_tensor_inventory * inventory
@@ -684,6 +689,30 @@ void ggml_backend_sycl_set_tensor_inventory(
     const size_t vram_budget = (size_t)(free_mem * 0.9);
     g_tiered_enabled.store(g_tensor_inventory_total_size > vram_budget, std::memory_order_release);
 
+    // If tiered mode enabled, create unified_tensor_cache
+    if (g_tiered_enabled.load(std::memory_order_acquire)) {
+        std::lock_guard<std::mutex> cache_lock(g_tensor_cache_mutex);
+        if (!g_tensor_cache) {
+            // Create cache with VRAM budget = 90% of free, host budget = 10GB
+            size_t cache_vram_budget = vram_budget;
+            size_t host_budget       = 10ULL * 1024 * 1024 * 1024;  // 10GB
+            g_tensor_cache           = std::make_unique<ggml_sycl::unified_tensor_cache>(
+                *(ctx->stream()), cache_vram_budget, host_budget);
+        }
+
+        // Build internal inventory from API inventory
+        ggml_sycl::tensor_inventory internal_inv;
+        internal_inv.tensors.reserve(inventory->count);
+        for (size_t i = 0; i < inventory->count; i++) {
+            if (inventory->tensors[i].name != nullptr) {
+                internal_inv.tensors.push_back(
+                    ggml_sycl::make_tensor_info(inventory->tensors[i].name, inventory->tensors[i].size));
+                internal_inv.total_size += inventory->tensors[i].size;
+            }
+        }
+        g_tensor_cache->set_inventory(internal_inv);
+    }
+
     GGML_LOG_INFO("[SYCL] Tensor inventory set: %zu tensors, %.2f GB total (VRAM: %.2f GB free, tiered: %s)\n",
                   g_tensor_inventory.size(),
                   g_tensor_inventory_total_size / (1024.0 * 1024.0 * 1024.0),
@@ -694,6 +723,12 @@ void ggml_backend_sycl_set_tensor_inventory(
 bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend) {
     (void) backend;  // Backend context not needed for current implementation
     return g_tiered_enabled.load(std::memory_order_acquire);
+}
+
+bool ggml_backend_sycl_has_tensor_cache(ggml_backend_t backend) {
+    (void) backend;
+    std::lock_guard<std::mutex> lock(g_tensor_cache_mutex);
+    return g_tensor_cache != nullptr && g_tiered_enabled.load(std::memory_order_acquire);
 }
 
 // Query tensor location from unified cache for tiered memory dispatch.
