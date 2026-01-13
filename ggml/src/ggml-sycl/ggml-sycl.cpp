@@ -10726,6 +10726,18 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx,
     GGML_ASSERT(src0->type == GGML_TYPE_F16);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
+    // Tiered dispatch check for batched matmul
+    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
+        ggml_sycl::memory_tier tier;
+        bool                   in_inventory = false;
+        void *                 cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
+        if (cached_ptr != nullptr) {
+            GGML_LOG_DEBUG("[SYCL] batched_sycl tiered hit: %s (tier=%d)\n", src0->name, static_cast<int>(tier));
+        } else if (in_inventory) {
+            GGML_LOG_DEBUG("[SYCL] batched_sycl tiered pending: %s\n", src0->name);
+        }
+    }
+
     GGML_TENSOR_BINARY_OP_LOCALS
 
     // TODO: see https://github.com/ggml-org/llama.cpp/pull/13155
