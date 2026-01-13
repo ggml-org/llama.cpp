@@ -4,10 +4,7 @@
 #include <vector>
 #include <regex>
 
-float common_ggml_get_float_value(const uint8_t * data, enum ggml_type type, const size_t * nb, size_t i0, size_t i1, size_t i2, size_t i3);
-
 // common debug functions and structs
-std::string common_ggml_ne_string(const ggml_tensor * t);
 
 // Print a tensor's detailed data
 // data - the tensor's data in byte format

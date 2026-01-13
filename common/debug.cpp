@@ -5,7 +5,7 @@
 #include <cmath>
 #include <string>
 
-std::string common_ggml_ne_string(const ggml_tensor * t) {
+static std::string common_ggml_ne_string(const ggml_tensor * t) {
     std::string str;
     for (int i = 0; i < GGML_MAX_DIMS; ++i) {
         str += std::to_string(t->ne[i]);
@@ -16,7 +16,7 @@ std::string common_ggml_ne_string(const ggml_tensor * t) {
     return str;
 }
 
-float common_ggml_get_float_value(const uint8_t * data,
+static float common_ggml_get_float_value(const uint8_t * data,
                            ggml_type       type,
                            const size_t *  nb,
                            size_t          i0,
