@@ -40,7 +40,7 @@ uint32_t backend_buffer_set_tensor(apir_encoder * enc, apir_decoder * dec, virgl
     void * shmem_data = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
 
     if (!shmem_data) {
-        GGML_LOG_ERROR("Couldn't get the shmem addr from virgl :/");
+        GGML_LOG_ERROR("Couldn't get the shmem addr from virgl\n");
         return 1;
     }
 
@@ -71,7 +71,7 @@ uint32_t backend_buffer_get_tensor(apir_encoder * enc, apir_decoder * dec, virgl
 
     void * shmem_data = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
     if (!shmem_data) {
-        GGML_LOG_ERROR("Couldn't get the shmem addr from virgl :/");
+        GGML_LOG_ERROR("Couldn't get the shmem addr from virgl\n");
         return 1;
     }
 
@@ -85,7 +85,7 @@ uint32_t backend_buffer_cpy_tensor(apir_encoder * enc, apir_decoder * dec, virgl
 
     ggml_backend_buffer_t buffer;
     buffer = apir_decode_ggml_buffer(dec);
-    GGML_LOG_INFO("%s <---->", __func__);
+
     const ggml_tensor * src;
     // safe to remove the const qualifier here
     src               = apir_decode_ggml_tensor(dec);
@@ -121,7 +121,7 @@ uint32_t backend_buffer_free_buffer(apir_encoder * enc, apir_decoder * dec, virg
     buffer = apir_decode_ggml_buffer(dec);
 
     if (!apir_untrack_backend_buffer(buffer)) {
-        GGML_LOG_WARN("%s: unknown buffer %p", __func__, (void *) buffer);
+        GGML_LOG_WARN("%s: unknown buffer %p\n", __func__, (void *) buffer);
         return 1;
     }
 

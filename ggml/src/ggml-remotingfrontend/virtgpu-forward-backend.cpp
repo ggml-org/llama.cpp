@@ -23,7 +23,7 @@ ggml_status apir_backend_graph_compute(virtgpu * gpu, ggml_cgraph * cgraph) {
         // prefer the init-time allocated page, if large enough
         shmem = &gpu->data_shmem;
     } else if (virtgpu_shmem_create(gpu, cgraph_size, shmem)) {
-        GGML_ABORT("Couldn't allocate the guest-host shared buffer :/");
+        GGML_ABORT("Couldn't allocate the guest-host shared buffer");
     }
 
     apir_encode_virtgpu_shmem_res_id(encoder, shmem->res_id);

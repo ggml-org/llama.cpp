@@ -160,7 +160,7 @@ static inline void apir_encode_ggml_tensor_inline(apir_encoder * enc, const ggml
     if (tensor->src[0] && tensor->buffer) {
         static int first = 1;
         if (first) {
-            GGML_LOG_WARN("Cannot pass tensors with src and buffer");
+            GGML_LOG_WARN("Cannot pass tensors with src and buffer\n");
             first = 0;
         }
     }
