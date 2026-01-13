@@ -7618,6 +7618,7 @@ llama_model_params llama_model_default_params() {
         /*.check_tensors               =*/ false,
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,
+        /*.repack_n_threads            =*/ 0,
     };
 
     return result;

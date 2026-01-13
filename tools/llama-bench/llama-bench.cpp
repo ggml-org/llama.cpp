@@ -1072,6 +1072,7 @@ struct cmd_params_instance {
         mparams.tensor_split = tensor_split.data();
         mparams.use_mmap     = use_mmap;
         mparams.no_host      = no_host;
+        mparams.repack_n_threads = n_threads;
 
         if (n_cpu_moe <= 0) {
             if (tensor_buft_overrides.empty()) {

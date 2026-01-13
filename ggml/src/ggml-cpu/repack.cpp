@@ -16,6 +16,8 @@
 #include <cassert>
 #include <cstdio>  // for GGML_ASSERT
 
+static int g_repack_n_threads = 1;
+
 #if defined(GGML_USE_OPENMP)
 #include <omp.h>
 #endif
@@ -51,6 +53,19 @@ static inline int nearest_int(float fval) {
 //
 
 extern "C" {
+
+#if defined(GGML_USE_OPENMP)
+void ggml_cpu_set_repack_n_threads(int n_threads) {
+    g_repack_n_threads = n_threads;
+}
+
+int ggml_cpu_get_repack_n_threads(void) {
+    return g_repack_n_threads;
+}
+#else
+void ggml_cpu_set_repack_n_threads(int n_threads) {}
+int ggml_cpu_get_repack_n_threads(void) { return 0; }
+#endif
 
 void ggml_quantize_mat_q8_0_4x4_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
@@ -2192,20 +2207,28 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
     }
 
     int repack(struct ggml_tensor * t, const void * data, size_t data_size) override {
-        int ret = 0;
+        int ret = -1;
         GGML_LOG_DEBUG("%s: repack tensor %s with %s_%dx%d\n", __func__, t->name, ggml_type_name(t->type),
                        (int) NB_COLS, (int) INTER_SIZE);
 #ifdef GGML_USE_OPENMP
-        #pragma omp parallel
-        {
-            ggml_cpu_set_numa_thread_affinity(omp_get_thread_num());
-            int r = ggml::cpu::repack::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
-            #pragma omp master
-            ret = r;
+        int n_threads = ggml_cpu_get_repack_n_threads();
+        GGML_ASSERT(n_threads >= 0);
+        if (n_threads == 0) {
+            n_threads = omp_get_max_threads();
         }
-#else
-        ret = ggml::cpu::repack::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
+        if (n_threads > 1) {
+            #pragma omp parallel num_threads(n_threads)
+            {
+                ggml_cpu_set_numa_thread_affinity(omp_get_thread_num());
+                int r = ggml::cpu::repack::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
+                #pragma omp master
+                ret = r;
+            }
+        }
 #endif
+        if (ret == -1) {
+            ret = ggml::cpu::repack::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
+        }
         return ret;
     }
 };
