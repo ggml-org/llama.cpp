@@ -301,7 +301,7 @@ static void norm_f32_cuda(
         norm_f32<WARP_SIZE><<<blocks_num, block_dims, 0, stream>>>(x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
     } else {
         const dim3 block_dims(1024, 1, 1);
-        norm_f32<1024><<<blocks_num, block_dims, 0, stream>>>(x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
+        norm_f32<1024><<<blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float): 0, stream>>>(x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
     }
 }
 
@@ -312,7 +312,7 @@ static void group_norm_f32_cuda(
         group_norm_f32<WARP_SIZE><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne_elements, eps);
     } else {
         const dim3 block_dims(1024, 1, 1);
-        group_norm_f32<1024><<<num_groups, block_dims, block_dims.x > WARP_SIZE ? 32: 0, stream>>>(x, dst, group_size, ne_elements, eps);
+        group_norm_f32<1024><<<num_groups, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float): 0, stream>>>(x, dst, group_size, ne_elements, eps);
     }
 }
 
@@ -322,10 +322,10 @@ static void rms_norm_f32_cuda(
     const dim3 blocks_num(nrows, nchannels, nsamples);
     if (ncols < 1024) {
         const dim3 block_dims(256, 1, 1);
-        rms_norm_f32<256, false><<<blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32: 0, stream>>>(x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
+        rms_norm_f32<256, false><<<blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float): 0, stream>>>(x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
     } else {
         const dim3 block_dims(1024, 1, 1);
-        rms_norm_f32<1024, false><<<blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32: 0, stream>>>(x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
+        rms_norm_f32<1024, false><<<blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float): 0, stream>>>(x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
     }
 }
 
@@ -368,12 +368,12 @@ static void rms_norm_mul_f32_cuda(const float *  x,
         const uint3 mul_nsamples_packed  = init_fastdiv_values(mul_nsamples);
         if (ncols < 1024) {
             const dim3 block_dims(256, 1, 1);
-            rms_norm_f32<256, true><<<blocks_num, block_dims, block_dims.x > WARP_SIZE? 32 : 0, stream>>>(
+            rms_norm_f32<256, true><<<blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float): 0, stream>>>(
                 x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
                 mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed);
         } else {
             const dim3 block_dims(1024, 1, 1);
-            rms_norm_f32<1024, true><<<blocks_num, block_dims, block_dims.x > WARP_SIZE? 32 : 0, stream>>>(
+            rms_norm_f32<1024, true><<<blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float): 0, stream>>>(
                 x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
                 mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed);
         }
@@ -389,14 +389,14 @@ static void rms_norm_mul_f32_cuda(const float *  x,
         const uint3 add_nsamples_packed  = init_fastdiv_values(add_nsamples);
         if (ncols < 1024) {
             const dim3 block_dims(256, 1, 1);
-            rms_norm_f32<256, true, true><<<blocks_num, block_dims, block_dims.x > WARP_SIZE? 32 : 0, stream>>>(
+            rms_norm_f32<256, true, true><<<blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float): 0, stream>>>(
                 x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
                 mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed, add,
                 add_stride_row, add_stride_channel, add_stride_sample, add_ncols_packed, add_nrows_packed,
                 add_nchannels_packed, add_nsamples_packed);
         } else {
             const dim3 block_dims(1024, 1, 1);
-            rms_norm_f32<1024, true, true><<<blocks_num, block_dims, block_dims.x > WARP_SIZE? 32 : 0, stream>>>(
+            rms_norm_f32<1024, true, true><<<blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float): 0, stream>>>(
                 x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
                 mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed, add,
                 add_stride_row, add_stride_channel, add_stride_sample, add_ncols_packed, add_nrows_packed,
