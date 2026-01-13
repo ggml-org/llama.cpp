@@ -161,8 +161,6 @@ struct clip_ctx {
     bool is_allocated = false;
 
     clip_ctx(clip_context_params & ctx_params) {
-        cb_eval = ctx_params.cb_eval;
-        cb_eval_user_data = ctx_params.cb_eval_user_data;
         flash_attn_type = ctx_params.flash_attn_type;
         backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
         if (!backend_cpu) {
