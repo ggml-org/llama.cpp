@@ -3525,6 +3525,167 @@ Hey there!<|im_end|>
         auto grammar = build_grammar(params.grammar);
         GGML_ASSERT(grammar && "Failed to build Qwen3-Coder grammar with union types");
     }
+
+    {
+        auto tmpls = read_templates("models/templates/DeepSeek-V3.2.jinja");
+        std::vector<std::string> end_tokens{ "<｜end▁of▁sentence｜>" };
+
+        assert_equals(COMMON_CHAT_FORMAT_DEEPSEEK_V3_2, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_DEEPSEEK_V3_2, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+
+        // Test parsing regular content
+        assert_msg_equals(message_assist,
+            common_chat_parse(
+                "Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_DEEPSEEK_V3_2}));
+
+        // Test parsing content with thinking
+        assert_msg_equals(message_assist_thoughts,
+            common_chat_parse(
+                "<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_2,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+
+        // Test parsing tool calls
+        assert_msg_equals(message_assist_call,
+            common_chat_parse(
+                "<｜DSML｜function_calls><｜DSML｜invoke name=\"special_function\"><｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜function_calls>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_DEEPSEEK_V3_2}));
+
+        // Test parsing tool calls with thinking
+        assert_msg_equals(message_assist_call_thoughts,
+            common_chat_parse(
+                "<think>I'm\nthinking</think><｜DSML｜function_calls><｜DSML｜invoke name=\"special_function\"><｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜function_calls>",
+                /* is_partial= */ false,
+                {
+                    /*  .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+                }));
+
+        // Test tool calls with extra content
+        assert_msg_equals(message_assist_call_content,
+            common_chat_parse(
+                "<｜DSML｜function_calls><｜DSML｜invoke name=\"special_function\"><｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜function_calls>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_DEEPSEEK_V3_2}
+            ));
+
+        // Test tool calls with extra content AND thinking
+        assert_msg_equals(message_assist_call_thoughts_content,
+            common_chat_parse(
+                "<think>I'm\nthinking</think><｜DSML｜function_calls><｜DSML｜invoke name=\"special_function\"><｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜function_calls>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {
+                    /*  .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+                }));
+
+        // Test streaming
+        test_parser_with_streaming(message_assist_call_thoughts_content,
+            "<think>I'm\nthinking\n</think>Hello, world!\nWhat's up?\n<｜DSML｜function_calls><｜DSML｜invoke name=\"special_function\"><｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜function_calls>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(message_assist_call_thoughts_unparsed,
+            "<think>I'm\nthinking</think>\n\n<｜DSML｜function_calls><｜DSML｜invoke name=\"special_function\"><｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜function_calls>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
+            }); });
+        test_parser_with_streaming(message_assist_call_thoughts_content,
+            "<think>I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?\n\n<｜DSML｜function_calls>\n<｜DSML｜invoke name=\"special_function\">\n<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜function_calls>\n",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK
+            }); });
+        test_parser_with_streaming(message_assist_call_withopt,
+            "<｜DSML｜function_calls>\n<｜DSML｜invoke name=\"special_function_with_opt\">\n<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n<｜DSML｜parameter name=\"arg2\" string=\"false\">2</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜function_calls>",
+            [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {
+                    /*  .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_2,
+                    /*  .reasoning_format = */ COMMON_REASONING_FORMAT_NONE
+            }); });
+        test_parser_with_streaming(
+            simple_assist_msg("", "", "complex_function", "{\"name\":\"\\\"John\\\" Doe\",\"age\":30,\"active\":true,\"score\":95.5}"),
+            "<｜DSML｜function_calls>\n"
+            "<｜DSML｜invoke name=\"complex_function\">\n"
+            "<｜DSML｜parameter name=\"name\" string=\"true\">\"John\" Doe</｜DSML｜parameter>\n"
+            "<｜DSML｜parameter name=\"age\" string=\"false\">30</｜DSML｜parameter>\n"
+            "<｜DSML｜parameter name=\"active\" string=\"false\">true</｜DSML｜parameter>\n"
+            "<｜DSML｜parameter name=\"score\" string=\"false\">95.5</｜DSML｜parameter>\n"
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜function_calls>",
+        [&](const std::string &msg) { return common_chat_parse(msg, /* is_partial= */ true, {COMMON_CHAT_FORMAT_DEEPSEEK_V3_2}); });
+
+        // Test template rendering
+        common_chat_templates_inputs conversation_with_tools = inputs_tools;
+        conversation_with_tools.messages.push_back(simple_assist_msg("Let's do it", "Think first", "complex_function", "{\"name\":\"John Doe\",\"age\":30,\"active\":true,\"score\":95.5}"));
+        conversation_with_tools.messages.push_back({
+            "tool",
+            "Tool response 1",
+            /* .content_parts = */ {},
+            /* .tool_calls = */ {},
+            /* .reasoning_content = */ "",
+            /* .tool_name = */ "complex_function",
+            /* .tool_call_id = */ "",
+        });
+        conversation_with_tools.messages.push_back(simple_assist_msg("Continue", "Think next", "web_search", "{\"query\":\"\\\"From Zero\\\" Linkin Park album tracklist complete songs\",\"limit\":3,\"type\":\"text\"}"));
+        conversation_with_tools.messages.push_back({
+            "tool",
+            "Tool response 2",
+            /* .content_parts = */ {},
+            /* .tool_calls = */ {},
+            /* .reasoning_content = */ "",
+            /* .tool_name = */ "web_search",
+            /* .tool_call_id = */ "",
+        });
+        conversation_with_tools.messages.push_back(simple_assist_msg("CC", "Think last", "read_file", "{\"args\": [{\"path\": \"src/providers/ThemeProvider.tsx\"}, {\"path\": \"src/components/Header.tsx\"}, {\"path\": \"src/components/ThemeToggle.tsx\"}, {\"path\": \"src/app/globals.css\"}, {\"path\": \"src/app/layout.tsx\"}]}"));
+        conversation_with_tools.messages.push_back({
+            "tool",
+            "Tool response 3",
+            /* .content_parts = */ {},
+            /* .tool_calls = */ {},
+            /* .reasoning_content = */ "",
+            /* .tool_name = */ "read_file",
+            /* .tool_call_id = */ "",
+        });
+        assert_equals(common_chat_templates_apply(tmpls.get(), conversation_with_tools).prompt, std::string("<｜begin▁of▁sentence｜>## Tools\n\nYou have access to a set of tools you can use to answer the user's question.\nYou can invoke functions by writing a \"<｜DSML｜function_calls>\" block like the following as part of your reply to the user:\n<｜DSML｜function_calls>\n<｜DSML｜invoke name=\"$FUNCTION_NAME\">\n<｜DSML｜parameter name=\"$PARAMETER_NAME\" string=\"true|false\">$PARAMETER_VALUE</｜DSML｜parameter>\n...\n</｜DSML｜invoke>\n<｜DSML｜invoke name=\"$FUNCTION_NAME2\">\n...\n</｜DSML｜invoke>\n</｜DSML｜function_calls>\n\nString and scalar parameters should be specified as is without any escaping or quotes, while lists and objects should use JSON format. The \"string\" attribute should be set to \"true\" for string type parameters and \"false\" for other types (numbers, booleans, arrays, objects).\n\nIf the thinking_mode is enabled, then after function results you should strongly consider outputting a thinking block. Here is an example:\n\n<｜DSML｜function_calls>\n...\n</｜DSML｜function_calls>\n\n<function_results>\n...\n</function_results>\n\n<think>...thinking about results</think>\n\nHere are the functions available in JSONSchema format:\n<functions>\n{\"type\": \"function\", \"function\": {\"name\": \"special_function\", \"description\": \"I'm special\", \"parameters\": {\"type\": \"object\", \"properties\": {\"arg1\": {\"type\": \"integer\", \"description\": \"The arg.\"}}, \"required\": [\"arg1\"]}}}\n</functions>\n<｜User｜>Hey there!<｜Assistant｜><think>Think first</think>Let's do it\n\n<｜DSML｜function_calls>\n<｜DSML｜invoke name=\"complex_function\">\n<｜DSML｜parameter name=\"name\" string=\"true\">John Doe</｜DSML｜parameter>\n<｜DSML｜parameter name=\"age\" string=\"false\">30</｜DSML｜parameter>\n<｜DSML｜parameter name=\"active\" string=\"false\">true</｜DSML｜parameter>\n<｜DSML｜parameter name=\"score\" string=\"false\">95.5</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜function_calls><｜end▁of▁sentence｜>\n\n<function_results>\n<result>Tool response 1</result>\n</function_results>\n\n<think>Think next</think>Continue\n\n<｜DSML｜function_calls>\n<｜DSML｜invoke name=\"web_search\">\n<｜DSML｜parameter name=\"query\" string=\"true\">\"From Zero\" Linkin Park album tracklist complete songs</｜DSML｜parameter>\n<｜DSML｜parameter name=\"limit\" string=\"false\">3</｜DSML｜parameter>\n<｜DSML｜parameter name=\"type\" string=\"true\">text</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜function_calls><｜end▁of▁sentence｜>\n\n<function_results>\n<result>Tool response 2</result>\n</function_results>\n\n<think>Think last</think>CC\n\n<｜DSML｜function_calls>\n<｜DSML｜invoke name=\"read_file\">\n<｜DSML｜parameter name=\"args\" string=\"false\">[{\"path\": \"src/providers/ThemeProvider.tsx\"}, {\"path\": \"src/components/Header.tsx\"}, {\"path\": \"src/components/ThemeToggle.tsx\"}, {\"path\": \"src/app/globals.css\"}, {\"path\": \"src/app/layout.tsx\"}]</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜function_calls><｜end▁of▁sentence｜>\n\n<function_results>\n<result>Tool response 3</result>\n</function_results>\n\n<think><｜User｜>\n<｜Assistant｜><think>"));
+
+        // Test template generation for regular content
+        test_templates(tmpls.get(), end_tokens, message_assist, tools,
+                      "</think>Hello, world!\nWhat's up?",
+                      /* expect_grammar_triggered= */ false);
+
+        // Test template generation for tool calls
+        test_templates(tmpls.get(), end_tokens, message_assist_call, tools,
+                      "</think>\n\n<｜DSML｜function_calls>\n<｜DSML｜invoke name=\"special_function\">\n<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜function_calls>",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                      /* ignore_whitespace_differences= */ true
+        );
+
+        // Test template generation for tools with optional parameters
+        test_templates(tmpls.get(), end_tokens, message_assist_call_noopt, tools,
+                      "</think>\n\n<｜DSML｜function_calls>\n<｜DSML｜invoke name=\"special_function_with_opt\">\n<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜function_calls>",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                      /* ignore_whitespace_differences= */ true
+        );
+        test_templates(tmpls.get(), end_tokens, message_assist_call_withopt, tools,
+                      "</think>\n\n<｜DSML｜function_calls>\n<｜DSML｜invoke name=\"special_function_with_opt\">\n<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n<｜DSML｜parameter name=\"arg2\" string=\"false\">2</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜function_calls>",
+                      /* expect_grammar_triggered= */ true,
+                      /* test_grammar_if_triggered= */ true,
+                      /* common_reasoning_format= */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                      /* ignore_whitespace_differences= */ true
+        );
+    }
 }
 
 static void test_template_output_peg_parsers() {

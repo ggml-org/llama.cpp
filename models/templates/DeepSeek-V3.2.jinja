@@ -1,0 +1,247 @@
+{#- DeepSeek V3.2 Chat Template -#}
+{#-
+  Standard minja interface:
+    - messages: list of message dicts (required)
+    - tools: list of tool definitions (optional, can be extracted from messages)
+    - add_generation_prompt: bool (optional, default: true)
+
+  Custom DeepSeek variables:
+    - enable_thinking: bool (optional, default: true)
+      When true, enables <think> blocks for reasoning_content
+      When false, disables thinking mode entirely
+-#}
+
+{#- ========================================================================== -#}
+{#- Setup: Special tokens and defaults -#}
+{#- ========================================================================== -#}
+
+{%- set add_generation_prompt = add_generation_prompt | default(true) -%}
+{%- set enable_thinking = enable_thinking | default(true) -%}
+{%- set bos_token = "<｜begin▁of▁sentence｜>" -%}
+{%- set eos_token = "<｜end▁of▁sentence｜>" -%}
+{%- set thinking_start_token = "<think>" -%}
+{%- set thinking_end_token = "</think>" -%}
+{%- set dsml_token = "｜DSML｜" -%}
+
+{#- ========================================================================== -#}
+{#- Backward compatibility: extract tools and response_format from messages -#}
+{#- ========================================================================== -#}
+
+{%- if not tools -%}
+  {%- set tools = namespace(value=[]) -%}
+  {%- for message in messages -%}
+    {%- if message.get('tools') -%}
+      {%- for tool in message.tools -%}
+        {%- set _ = tools.value.append(tool.function if tool.get('function') else tool) -%}
+      {%- endfor -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- set tools = tools.value -%}
+{%- endif -%}
+
+{%- set response_format = namespace(value=none) -%}
+{%- for message in messages -%}
+  {%- if message.get('response_format') -%}
+    {%- set response_format.value = message.response_format -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{#- ========================================================================== -#}
+{#- Macros -#}
+{#- ========================================================================== -#}
+
+{%- macro render_tools(tools) -%}
+## Tools{{- "\n\n" -}}You have access to a set of tools you can use to answer the user's question.
+You can invoke functions by writing a "<{{ dsml_token }}function_calls>" block like the following as part of your reply to the user:
+<{{ dsml_token }}function_calls>
+<{{ dsml_token }}invoke name="$FUNCTION_NAME">
+<{{ dsml_token }}parameter name="$PARAMETER_NAME" string="true|false">$PARAMETER_VALUE</{{ dsml_token }}parameter>
+...
+</{{ dsml_token }}invoke>
+<{{ dsml_token }}invoke name="$FUNCTION_NAME2">
+...
+</{{ dsml_token }}invoke>
+</{{ dsml_token }}function_calls>
+
+String and scalar parameters should be specified as is without any escaping or quotes, while lists and objects should use JSON format. The "string" attribute should be set to "true" for string type parameters and "false" for other types (numbers, booleans, arrays, objects).
+
+If the thinking_mode is enabled, then after function results you should strongly consider outputting a thinking block. Here is an example:
+
+<{{ dsml_token }}function_calls>
+...
+</{{ dsml_token }}function_calls>
+
+<function_results>
+...
+</function_results>
+
+{{ thinking_start_token }}...thinking about results{{ thinking_end_token }}{{- "\n\n" -}}Here are the functions available in JSONSchema format:
+<functions>
+  {%- for tool in tools -%}
+    {{ "\n" }}{{ tool | tojson(ensure_ascii=False) }}
+  {%- endfor -%}
+  {{ "\n" }}</functions>
+{%- endmacro -%}
+
+{%- macro encode_arguments_to_dsml(tool_call) -%}
+{%- set arguments = tool_call.function.arguments -%}
+{%- if arguments is mapping -%}
+  {#- Object arguments: iterate and render as DSML parameters -#}
+  {%- for key, value in arguments.items() -%}
+    {%- if not loop.first -%}{{ "\n" }}{%- endif -%}
+    <{{ dsml_token }}parameter name="{{ key }}" string="{{ 'true' if value is string else 'false' }}">{{ value if value is string else (value | tojson(ensure_ascii=False)) }}</{{ dsml_token }}parameter>
+  {%- endfor -%}
+{%- endif -%}
+{#- String arguments: skip rendering - this tells minja's detection we require object arguments -#}
+{%- endmacro -%}
+
+{%- macro render_response_format(response_format) -%}
+## Response Format:
+
+You MUST strictly adhere to the following schema to reply:
+{{ response_format | tojson(ensure_ascii=False) }}
+{%- endmacro -%}
+
+{#- ========================================================================== -#}
+{#- Preprocessing: Find last user message -#}
+{#- ========================================================================== -#}
+
+{%- set last_user_index = namespace(value=-1) -%}
+{%- for msg in messages -%}
+  {%- if msg.role in ["user", "developer"] -%}
+    {%- set last_user_index.value = loop.index0 -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{#- ========================================================================== -#}
+{#- Rendering: Output the formatted chat -#}
+{#- ========================================================================== -#}
+
+{#- BOS token -#}
+{{ bos_token }}
+
+{#- System message (if present) with tools and response format -#}
+{%- set has_system = messages|length > 0 and messages[0].role == "system" -%}
+{%- set first_is_developer = messages|length > 0 and messages[0].role == "developer" -%}
+{%- if has_system -%}
+  {{ messages[0].get('content', '') }}
+  {%- if tools -%}
+    {{ "\n\n" }}{{ render_tools(tools) }}{{ "\n" }}
+  {%- endif -%}
+  {%- if response_format.value -%}
+    {{ "\n\n" }}{{ render_response_format(response_format.value) }}
+  {%- endif -%}
+{%- elif not first_is_developer -%}
+  {#- If no system message and first message is NOT developer, render tools/response_format at the top -#}
+  {#- (Developer messages render tools themselves, so we skip this to avoid duplication) -#}
+  {%- if tools or response_format.value -%}
+    {%- if tools -%}
+      {{ render_tools(tools) }}{{ "\n" }}
+    {%- endif -%}
+    {%- if response_format.value -%}
+      {{ "\n\n" }}{{ render_response_format(response_format.value) }}
+    {%- endif -%}
+  {%- endif -%}
+{%- endif -%}
+
+{#- Main message loop -#}
+{%- set start_idx = 1 if has_system else 0 -%}
+{%- for message in messages[start_idx:] -%}
+  {%- set msg_index = loop.index0 + start_idx -%}
+
+  {#- ====================================================================== -#}
+  {#- Developer message -#}
+  {#- ====================================================================== -#}
+  {%- if message.role == "developer" -%}
+    <｜User｜>
+    {%- if tools -%}
+      {{ "\n\n" }}{{ render_tools(tools) }}{{ "\n\n" }}
+    {%- endif -%}
+    {%- if response_format.value -%}
+      {{ "\n\n" }}{{ render_response_format(response_format.value) }}
+    {%- endif -%}
+    {{ "\n" }}# The user's message is: {{ message.content }}<｜Assistant｜>
+    {%- if msg_index == last_user_index.value and enable_thinking -%}
+      {{ thinking_start_token }}
+    {%- else -%}
+      {{ thinking_end_token }}
+    {%- endif -%}
+
+  {#- ====================================================================== -#}
+  {#- User message -#}
+  {#- ====================================================================== -#}
+  {%- elif message.role == "user" -%}
+    <｜User｜>{{ message.content }}<｜Assistant｜>
+    {%- if msg_index == last_user_index.value and enable_thinking -%}
+      {{ thinking_start_token }}
+    {%- else -%}
+      {{ thinking_end_token }}
+    {%- endif -%}
+
+  {#- ====================================================================== -#}
+  {#- Tool message -#}
+  {#- ====================================================================== -#}
+  {%- elif message.role == "tool" -%}
+    {#- Find the previous assistant message -#}
+    {%- set prev_assistant_idx = namespace(value=-1) -%}
+    {%- for i in range(msg_index - 1, -1, -1) -%}
+      {%- if messages[i].role != "tool" and prev_assistant_idx.value == -1 -%}
+        {%- set prev_assistant_idx.value = i -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {%- set tool_call_order = msg_index - prev_assistant_idx.value -%}
+    {%- set assistant_msg = messages[prev_assistant_idx.value] -%}
+
+    {#- Open function_results block on first tool result -#}
+    {%- if tool_call_order == 1 -%}
+      {{ "\n\n" }}<function_results>
+    {%- endif -%}
+
+    {#- Add this tool result -#}
+    {{ "\n" }}<result>{{ message.content }}</result>
+
+    {#- Close function_results block on last tool result -#}
+    {%- if tool_call_order == (assistant_msg.get('tool_calls', []) | length) -%}
+      {{ "\n" }}</function_results>
+      {%- if msg_index >= last_user_index.value and enable_thinking -%}
+        {{ "\n\n" }}{{ thinking_start_token }}
+      {%- else -%}
+        {{ "\n\n" }}{{ thinking_end_token }}
+      {%- endif -%}
+    {%- endif -%}
+
+  {#- ====================================================================== -#}
+  {#- Assistant message -#}
+  {#- ====================================================================== -#}
+  {%- elif message.role == "assistant" -%}
+    {#- Render reasoning content if in thinking mode -#}
+    {%- if enable_thinking and msg_index > last_user_index.value -%}
+      {{ message.get('reasoning_content', '') }}{{ thinking_end_token }}
+    {%- endif -%}
+
+    {#- Render assistant content -#}
+    {{ message.get('content', '') }}
+
+    {#- Render tool calls if present -#}
+    {%- if message.get('tool_calls') -%}
+{{ "\n\n" }}<{{ dsml_token }}function_calls>
+{%- for tool_call in message.tool_calls -%}
+{{ "\n" }}<{{ dsml_token }}invoke name="{{ tool_call.function.name }}">{{ "\n" }}{{- encode_arguments_to_dsml(tool_call) -}}{{ "\n" }}</{{ dsml_token }}invoke>
+{%- endfor -%}
+{{ "\n" }}</{{ dsml_token }}function_calls>
+    {%- endif -%}
+
+    {#- EOS token -#}
+    {{ eos_token }}
+  {%- endif -%}
+{%- endfor -%}
+
+{#- Generation prompt (if requested) -#}
+{%- if add_generation_prompt -%}
+  <｜User｜>{{ "\n" }}<｜Assistant｜>
+  {%- if enable_thinking -%}
+    {{ thinking_start_token }}
+  {%- else -%}
+    {{ thinking_end_token }}
+  {%- endif -%}
+{%- endif -%}
