@@ -96,6 +96,10 @@ struct task_result_state {
     std::string generated_text; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
 
+    // for Anthropic API streaming: track content block state across chunks
+    bool anthropic_thinking_block_started = false;
+    bool anthropic_text_block_started = false;
+
     task_result_state(const common_chat_syntax & oaicompat_chat_syntax)
         : oaicompat_chat_syntax(oaicompat_chat_syntax) {}
 
@@ -117,8 +121,8 @@ struct server_task {
     int id_slot   = -1;
 
     // used by parallel sampling (multiple completions from same prompt)
-    size_t n_children =  0; // number of tasks reusing this prompt
-    int    id_parent  = -1;
+    int n_children =  0; // number of tasks reusing this prompt
+    int id_parent  = -1;
 
     // used by SERVER_TASK_TYPE_INFERENCE
     task_params   params;
@@ -169,11 +173,13 @@ struct server_task {
 
     server_task create_child(int id_parent, int id_child) const {
         server_task copy;
+
         copy.id        = id_child;
         copy.id_parent = id_parent;
         copy.params    = params;
         copy.type      = type;
         copy.tokens    = tokens.clone();
+
         return copy;
     }
 
@@ -337,6 +343,12 @@ struct server_task_result_cmpl_partial : server_task_result {
     std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
     bool is_updated = false;
 
+    // for Anthropic API: track if any reasoning content has been generated
+    bool anthropic_has_reasoning = false;
+    // Streaming state copied from task_result_state for this chunk
+    bool anthropic_thinking_block_started = false;
+    bool anthropic_text_block_started = false;
+
     virtual bool is_stop() override {
         return false; // in stream mode, partial responses are not considered stop
     }
@@ -346,6 +358,22 @@ struct server_task_result_cmpl_partial : server_task_result {
     virtual void update(task_result_state & state) override {
         is_updated = true;
         state.update_chat_msg(content, true, oaicompat_msg_diffs);
+        // track if the accumulated message has any reasoning content
+        anthropic_has_reasoning = !state.chat_msg.reasoning_content.empty();
+
+        // Copy current state for use in to_json_anthropic() (reflects state BEFORE this chunk)
+        anthropic_thinking_block_started = state.anthropic_thinking_block_started;
+        anthropic_text_block_started = state.anthropic_text_block_started;
+
+        // Pre-compute state updates based on diffs (for next chunk)
+        for (const auto & diff : oaicompat_msg_diffs) {
+            if (!diff.reasoning_content_delta.empty() && !state.anthropic_thinking_block_started) {
+                state.anthropic_thinking_block_started = true;
+            }
+            if (!diff.content_delta.empty() && !state.anthropic_text_block_started) {
+                state.anthropic_text_block_started = true;
+            }
+        }
     }
 
     json to_json_non_oaicompat();

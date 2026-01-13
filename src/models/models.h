@@ -312,6 +312,10 @@ struct llm_build_llama_iswa : public llm_graph_context {
     llm_build_llama_iswa(const llama_model & model, const llm_graph_params & params);
 };
 
+struct llm_build_maincoder : public llm_graph_context {
+    llm_build_maincoder(const llama_model & model, const llm_graph_params & params);
+};
+
 struct llm_build_mamba : public llm_graph_context_mamba {
     llm_build_mamba(const llama_model & model, const llm_graph_params & params);
 };
@@ -332,7 +336,6 @@ struct llm_build_mistral3 : public llm_graph_context {
     llm_build_mistral3(const llama_model & model, const llm_graph_params & params);
 };
 
-template <bool iswa>
 struct llm_build_modern_bert : public llm_graph_context {
     llm_build_modern_bert(const llama_model & model, const llm_graph_params & params);
 };
@@ -463,7 +466,8 @@ private:
                 ggml_tensor * cur,
                         int   il);
 
-    ggml_tensor * build_delta_net_chunking(
+    // returns pair of output and new state
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_chunking(
                 ggml_tensor * q,
                 ggml_tensor * k,
                 ggml_tensor * v,
@@ -475,7 +479,8 @@ private:
                 ggml_tensor * diag_mask,
                         int   il);
 
-    ggml_tensor * build_delta_net_autoregressive(
+    // returns pair of output and new state
+    std::pair<ggml_tensor *, ggml_tensor *> build_delta_net_autoregressive(
                 ggml_tensor * q,
                 ggml_tensor * k,
                 ggml_tensor * v,
@@ -489,6 +494,11 @@ private:
                 ggml_tensor * weights,
                 ggml_tensor * gate,
                         int   layer);
+
+    // returns pair of qkv, z
+    std::pair<ggml_tensor *, ggml_tensor *> build_qkvz(
+                ggml_tensor * input,
+                        int   il);
 
     const llama_model & model;
 };

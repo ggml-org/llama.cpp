@@ -219,8 +219,9 @@ endif()
 llama_build_and_test(test-gguf.cpp)
 llama_build_and_test(test-backend-ops.cpp)
 
-llama_build_and_test(test-model-load-cancel.cpp  LABEL "model")
-llama_build_and_test(test-autorelease.cpp        LABEL "model")
+llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
+llama_build_and_test(test-autorelease.cpp       LABEL "model")
+llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 
 # Test for state restore with fragmented KV cache
 # Requires a model, uses same args pattern as test-thread-safety

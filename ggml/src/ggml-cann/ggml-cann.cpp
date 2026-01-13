@@ -105,10 +105,10 @@ int32_t ggml_cann_get_device() {
 }
 
 /**
- * @brief Get the value of the specified environment variable (name).
+ * @brief Get the value of the specified environment variable (name) as lowercase.
  *        if not empty, return a std::string object
  */
-std::optional<std::string> get_env(const std::string & name) {
+std::optional<std::string> get_env_as_lowercase(const std::string & name) {
     const char * val = std::getenv(name.c_str());
     if (!val) {
         return std::nullopt;
@@ -122,7 +122,7 @@ std::optional<std::string> get_env(const std::string & name) {
  * @brief Verify whether the environment variable is a valid value.
  */
 bool parse_bool(const std::string & value) {
-    std::unordered_set<std::string> valid_values = { "on", "1", "yes", "y", "enable", "true" };
+    static const std::unordered_set<std::string> valid_values = { "on", "1", "yes", "y", "enable", "true" };
     return valid_values.find(value) != valid_values.end();
 }
 
@@ -259,7 +259,7 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
      * @param device The device ID to associate with this buffer pool.
      */
     explicit ggml_cann_pool_buf_prio(int device) : device(device) {
-        disable_clean = parse_bool(get_env("GGML_CANN_DISABLE_BUF_POOL_CLEAN").value_or(""));
+        disable_clean = parse_bool(get_env_as_lowercase("GGML_CANN_DISABLE_BUF_POOL_CLEAN").value_or(""));
     }
 
     /**
@@ -452,7 +452,7 @@ struct ggml_cann_pool_buf : public ggml_cann_pool {
      * @param device The device ID to associate with this buffer pool.
      */
     explicit ggml_cann_pool_buf(int device) : device(device) {
-        disable_clean = parse_bool(get_env("GGML_CANN_DISABLE_BUF_POOL_CLEAN").value_or(""));
+        disable_clean = parse_bool(get_env_as_lowercase("GGML_CANN_DISABLE_BUF_POOL_CLEAN").value_or(""));
     }
 
     /**
@@ -764,7 +764,7 @@ struct ggml_cann_pool_vmm : public ggml_cann_pool {
  * @return A unique pointer to the created CANN pool.
  */
 std::unique_ptr<ggml_cann_pool> ggml_backend_cann_context::new_pool_for_device(int device) {
-    std::string mem_pool_type = get_env("GGML_CANN_MEM_POOL").value_or("");
+    std::string mem_pool_type = get_env_as_lowercase("GGML_CANN_MEM_POOL").value_or("");
 
     if (mem_pool_type == "prio") {
         GGML_LOG_INFO("%s: device %d use buffer pool with priority queue\n", __func__, device);
@@ -1217,7 +1217,7 @@ static void ggml_backend_cann_buffer_set_tensor(ggml_backend_buffer_t buffer,
     // Why aclrtSynchronizeDevice?
 
     // Only check env once.
-    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or("on"));
+    static bool weight_to_nz = parse_bool(get_env_as_lowercase("GGML_CANN_WEIGHT_NZ").value_or("on"));
     if (!need_transform(tensor->type)) {
         ACL_CHECK(aclrtMemcpy((char *) tensor->data + offset, size, data, size, ACL_MEMCPY_HOST_TO_DEVICE));
         if (weight_to_nz && is_matmul_weight((const ggml_tensor *) tensor)) {
@@ -1442,7 +1442,7 @@ static size_t ggml_backend_cann_buffer_type_get_alloc_size(ggml_backend_buffer_t
     int64_t ne0  = tensor->ne[0];
 
     // Only check env once.
-    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or("on"));
+    static bool weight_to_nz = parse_bool(get_env_as_lowercase("GGML_CANN_WEIGHT_NZ").value_or("on"));
 
     // last line must bigger than 32, because every single op deal at
     // least 32 bytes.
@@ -1888,6 +1888,7 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context & ctx, struct gg
             break;
         case GGML_OP_OUT_PROD:
             ggml_cann_out_prod(ctx, dst);
+            break;
         case GGML_OP_SSM_CONV:
             ggml_cann_ssm_conv(ctx, dst);
             break;
@@ -2078,6 +2079,40 @@ static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
 }
 
 /**
+ * @brief Check if CANN backend can fuse the specified operation sequence
+ *
+ * This function determines whether an operation sequence starting from the specified node
+ * can be fused into an optimized operation in the CANN backend. Operation fusion can reduce
+ * memory access overhead and improve computational efficiency.
+ *
+ * @param cgraph Pointer to the computation graph
+ * @param node_idx Index of the starting node in the computation graph
+ * @param ops Sequence of operation types to check for fusion
+ * @return true if the operations can be fused
+ * @return false if the operations cannot be fused
+ */
+static bool ggml_cann_can_fuse(const struct ggml_cgraph *          cgraph,
+                               int                                 node_idx,
+                               std::initializer_list<enum ggml_op> ops) {
+    if (!ggml_can_fuse(cgraph, node_idx, ops)) {
+        return false;
+    }
+
+    // CANN backend supports fusing ADD + RMS_NORM operations
+    if ((ops.size() == 2) && ops.begin()[0] == GGML_OP_ADD && ops.begin()[1] == GGML_OP_RMS_NORM) {
+        ggml_tensor * add_node = cgraph->nodes[node_idx];
+        // TODO: support broadcast for ADD + RMS_NORM
+        if (add_node->src[0]->ne[0] != add_node->src[1]->ne[0] || add_node->src[0]->ne[1] != add_node->src[1]->ne[1] ||
+            add_node->src[0]->ne[2] != add_node->src[1]->ne[2] || add_node->src[0]->ne[3] != add_node->src[1]->ne[3]) {
+            return false;
+        }
+        return true;
+    }
+
+    return false;
+}
+
+/**
  * @brief Evaluate the computation graph and optionally capture or execute it using CANN graph API.
  *
  * If CANN graph execution is enabled and graph capture is required, this function begins
@@ -2101,9 +2136,18 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
 #endif  // USE_ACL_GRAPH
     // Only perform the graph execution if CANN graphs are not enabled, or we are capturing the graph.
     // With the use of CANN graphs, the execution will be performed by the graph launch.
+    static bool opt_fusion = parse_bool(get_env_as_lowercase("GGML_CANN_OPERATOR_FUSION").value_or(""));
+
     if (!use_cann_graph || cann_graph_capture_required) {
         for (int i = 0; i < cgraph->n_nodes; i++) {
             ggml_tensor * node = cgraph->nodes[i];
+            if (opt_fusion) {
+                if (ggml_cann_can_fuse(cgraph, i, { GGML_OP_ADD, GGML_OP_RMS_NORM })) {
+                    ggml_cann_op_add_rms_norm_fused(*cann_ctx, node, cgraph->nodes[i + 1]);
+                    i++;
+                    continue;
+                }
+            }
 
             if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE ||
                 node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
@@ -2157,7 +2201,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, 
 #ifdef USE_ACL_GRAPH
     bool use_cann_graph = true;
 
-    static bool prefill_use_graph = parse_bool(get_env("GGML_CANN_PREFILL_USE_GRAPH").value_or(""));
+    static bool prefill_use_graph = parse_bool(get_env_as_lowercase("GGML_CANN_PREFILL_USE_GRAPH").value_or(""));
     if (!prefill_use_graph) {
         // Do not use acl_graph for prefill.
         for (int i = 0; i < cgraph->n_nodes; i++) {
@@ -2498,27 +2542,6 @@ static bool ggml_backend_buft_is_cann(ggml_backend_buffer_type_t buft) {
 }
 
 /**
- * @brief Determines if a tensor operation should be offloaded to the CANN
- * backend.
- *
- * This function checks if a given tensor operation should be offloaded to the
- * CANN backend based on the operation type and the size of the tensor. It
- * returns true if the second dimension (ne[1]) of the tensor is greater than or
- * equal to the minimum batch size and the operation is not GGML_OP_GET_ROWS.
- *
- * @param backend Pointer to the CANN backend.
- * @param op Pointer to the tensor operation to check.
- * @return bool Returns true if the operation should be offloaded, otherwise
- * false.
- */
-static bool ggml_backend_cann_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-    const int min_batch_size = 32;
-    GGML_UNUSED(dev);
-
-    return op->ne[1] >= min_batch_size && op->op != GGML_OP_GET_ROWS;
-}
-
-/**
  * @brief Records an event on the CANN backend stream.
  *
  * This function records the given event on the ACL runtime stream associated
@@ -2593,6 +2616,7 @@ struct ggml_backend_cann_device_context {
     int         device;
     std::string name;
     std::string description;
+    int op_offload_min_batch_size;
 };
 
 static const char * ggml_backend_cann_device_get_name(ggml_backend_dev_t dev) {
@@ -2667,6 +2691,26 @@ static ggml_backend_buffer_type_t ggml_backend_cann_device_get_buffer_type(ggml_
 static ggml_backend_buffer_type_t ggml_backend_cann_device_get_host_buffer_type(ggml_backend_dev_t dev) {
     GGML_UNUSED(dev);
     return ggml_backend_cann_host_buffer_type();
+}
+
+/**
+ * @brief Determines if a tensor operation should be offloaded to the CANN
+ * backend.
+ *
+ * This function checks if a given tensor operation should be offloaded to the
+ * CANN backend based on the operation type and the size of the tensor. It
+ * returns true if the second dimension (ne[1]) of the tensor is greater than or
+ * equal to the minimum batch size and the operation is not GGML_OP_GET_ROWS.
+ *
+ * @param backend Pointer to the CANN backend.
+ * @param op Pointer to the tensor operation to check.
+ * @return bool Returns true if the operation should be offloaded, otherwise
+ * false.
+ */
+static bool ggml_backend_cann_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    ggml_backend_cann_device_context * dev_ctx = (ggml_backend_cann_device_context *)dev->context;
+
+    return op->ne[1] >= dev_ctx->op_offload_min_batch_size && op->op != GGML_OP_GET_ROWS;
 }
 
 /**
@@ -2785,12 +2829,14 @@ ggml_backend_reg_t ggml_backend_cann_reg() {
         if (!initialized) {
             aclInit(nullptr);
             ggml_backend_cann_reg_context * ctx = new ggml_backend_cann_reg_context;
+            const int min_batch_size = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
 
             for (int i = 0; i < ggml_cann_info().device_count; i++) {
                 ggml_backend_cann_device_context * dev_ctx = new ggml_backend_cann_device_context();
                 dev_ctx->description                       = aclrtGetSocName();
                 dev_ctx->device                            = i;
                 dev_ctx->name                              = GGML_CANN_NAME + std::to_string(i);
+                dev_ctx->op_offload_min_batch_size         = min_batch_size;
                 ggml_cann_set_device(i);
                 ggml_backend_dev_t dev = new ggml_backend_device{ /* .iface   = */ ggml_backend_cann_device_interface,
                                                                   /* .reg     = */ &reg,
