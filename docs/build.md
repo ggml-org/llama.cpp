@@ -701,7 +701,7 @@ To read documentation for how to build on IBM Z & LinuxONE, [click here](./build
 [OpenVINO](https://docs.openvino.ai/2025/index.html) is an open-source toolkit for optimizing and deploying high-performance AI inference, specifically designed for Intel hardware, including CPUs, GPUs, and NPUs, in the cloud, on-premises, and on the edge.
 The OpenVINO backend enhances performance by leveraging hardware-specific optimizations and can be enabled for use with llama.cpp.
 
-Follow the instructions below to install OpenVINO runtime and build llama.cpp with OpenVINO support.
+Follow the instructions below to install OpenVINO runtime and build llama.cpp with OpenVINO support. For more detailed information on OpenVINO backend, refer to [OPENVINO.md](backend/OPENVINO.md)
 
 ### Prerequisites
 
