@@ -186,7 +186,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor * node, bool naive) {
                 auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), param_shape);
                 param_node->set_friendly_name(src_name);
                 param_node->output(0).get_tensor().set_names({src_name});
-                m_model_inputs[src_name] = param_node;        
+                m_model_inputs[src_name] = param_node;
             }
         }
     }
