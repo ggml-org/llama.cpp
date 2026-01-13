@@ -175,6 +175,11 @@ test_small_model() {
         echo -e "${GREEN}OK: Tiered mode correctly disabled${NC}"
     fi
 
+    # Check cache stats in debug output
+    if echo "${stderr}" | grep -qi "cache\|tiered"; then
+        echo -e "${GREEN}OK: Cache/tiered diagnostics in output${NC}"
+    fi
+
     # Check output contains expected sequence
     if echo "${output}" | grep -q "6, 7, 8, 9, 10"; then
         echo -e "${GREEN}OK: Correct output sequence generated${NC}"
@@ -260,6 +265,11 @@ test_large_model() {
     else
         echo -e "${YELLOW}NOTE: Tiered mode not enabled${NC}"
         echo "(This may be expected if you have >20GB VRAM)"
+    fi
+
+    # Check cache stats in debug output
+    if echo "${stderr}" | grep -qi "cache\|tiered"; then
+        echo -e "${GREEN}OK: Cache/tiered diagnostics in output${NC}"
     fi
 
     # Check that output was generated (not empty)

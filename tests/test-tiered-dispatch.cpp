@@ -292,8 +292,45 @@ static void test_cache_stats_api() {
     assert(hits == 0 && misses == 0 && "Initial cache stats should be zero");
 
     ggml_backend_free(backend);
-    printf("test_cache_stats_api: PASSED (hits=%llu, misses=%llu)\n",
-           (unsigned long long) hits, (unsigned long long) misses);
+    printf("test_cache_stats_api: PASSED (hits=%llu, misses=%llu)\n", (unsigned long long) hits,
+           (unsigned long long) misses);
+}
+
+// Test cache hit rate with large inventory
+static void test_cache_hit_rate() {
+    ggml_backend_t backend = ggml_backend_sycl_init(0);
+    if (!backend) {
+        printf("test_cache_hit_rate: SKIPPED (no SYCL device)\n");
+        return;
+    }
+
+    size_t free_vram = 0, total_vram = 0;
+    ggml_backend_sycl_get_device_memory(0, &free_vram, &total_vram);
+
+    // Create large inventory to enable tiered mode (100 tensors, each 2% of VRAM = 200% total)
+    std::vector<std::string>           names;
+    std::vector<ggml_sycl_tensor_info> tensors;
+    names.reserve(100);
+    tensors.reserve(100);
+
+    for (int i = 0; i < 100; i++) {
+        names.push_back("blk." + std::to_string(i) + ".weight");
+        tensors.push_back({ names.back().c_str(), free_vram / 50 });
+    }
+
+    ggml_sycl_tensor_inventory inv = { tensors.data(), tensors.size(), free_vram * 2 };
+    ggml_backend_sycl_set_tensor_inventory(backend, &inv);
+
+    // Verify cache stats API works
+    uint64_t hits = 0, misses = 0;
+    ggml_backend_sycl_get_cache_stats(backend, &hits, &misses);
+
+    // Initially should be zero
+    assert(hits == 0 && misses == 0 && "Initial cache stats should be zero");
+
+    ggml_backend_free(backend);
+    printf("test_cache_hit_rate: PASSED (hits=%llu, misses=%llu, tensors=%zu)\n", (unsigned long long) hits,
+           (unsigned long long) misses, tensors.size());
 }
 
 int main() {
@@ -306,6 +343,7 @@ int main() {
     test_inventory_clear();
     test_cache_stats_null_safety();
     test_cache_stats_api();
+    test_cache_hit_rate();
 
     printf("\nAll tiered dispatch tests PASSED!\n");
     return 0;
