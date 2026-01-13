@@ -1,17 +1,30 @@
 #pragma once
 #include "common.h"
-
-float ggml_get_float_value(const uint8_t * data, enum ggml_type type, const size_t * nb, size_t i0, size_t i1, size_t i2, size_t i3);
-
-#ifdef __cplusplus
 #include <string>
 #include <vector>
 #include <regex>
 
+float common_ggml_get_float_value(const uint8_t * data, enum ggml_type type, const size_t * nb, size_t i0, size_t i1, size_t i2, size_t i3);
+
 // common debug functions and structs
-std::string ggml_ne_string(const ggml_tensor * t);
-template <bool abort> void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t n);
-template <bool abort> bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data);
+std::string common_ggml_ne_string(const ggml_tensor * t);
+
+// Print a tensor's detailed data
+// data - the tensor's data in byte format
+// type - the tensor's quantization type
+// ne   - the tensor dimensions array
+// nb   - the tensor strides array
+// n    - the number of rows/columns to fully print
+template <bool abort_on_nan> void common_ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t n);
+
+// Intended to use as callback for ggml_backend_sched_eval_callback
+// prints tensors that are processed in the computation graph
+// by default prints all tensors, but can be configured by creating a `base_callback_data` instance with
+// non-empty filter_patterns. See examples/debug.ccp for possible usage patterns
+// The template parameter determins whether an error should be thrown whenever a NaN is encountered
+// in a tensor (useful for stopping debug sessions on first erroneous tensor)
+// The callback data will be passed as the third parameter (user_data)
+template <bool abort_on_nan> bool common_ggml_debug(struct ggml_tensor * t, bool ask, void * user_data);
 struct base_callback_data {
     std::vector<uint8_t>    data;
     std::vector<std::regex> tensor_filters;
@@ -27,8 +40,7 @@ struct base_callback_data {
                 throw std::runtime_error("Invalid regex pattern '" + pattern + "': " + e.what());
             }
         }
-        params.cb_eval           = ggml_debug<false>;
+        params.cb_eval           = common_ggml_debug<false>;
         params.cb_eval_user_data = this;
     }
 };
-#endif

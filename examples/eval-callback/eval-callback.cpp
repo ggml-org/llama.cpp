@@ -44,7 +44,7 @@ int main(int argc, char ** argv) {
 
     // pass the callback to the backend scheduler
     // it will be executed for each node during the graph computation
-    params.cb_eval = ggml_debug<false>;
+    params.cb_eval = common_ggml_debug<false>;
     params.cb_eval_user_data = &cb_data;
     params.warmup = false;
 

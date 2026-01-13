@@ -153,7 +153,7 @@ struct clip_ctx {
     ggml_backend_t backend_cpu = nullptr;
     ggml_backend_buffer_ptr buf;
 
-    mtmd_backend_sched_eval_callback cb_eval = nullptr;
+    ggml_backend_sched_eval_callback cb_eval = nullptr;
     void * cb_eval_user_data = nullptr;
 
     int max_nodes = 8192;

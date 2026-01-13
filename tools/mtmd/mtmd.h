@@ -83,8 +83,6 @@ typedef struct mtmd_input_chunk  mtmd_input_chunk;
 typedef struct mtmd_input_chunks mtmd_input_chunks;
 typedef struct mtmd_input_text   mtmd_input_text;
 
-typedef bool (*mtmd_backend_sched_eval_callback)(struct ggml_tensor * t, bool ask, void * user_data);
-
 struct mtmd_context_params {
     bool use_gpu;
     bool print_timings;
@@ -99,7 +97,7 @@ struct mtmd_context_params {
     int image_max_tokens; // maximum number of tokens for image input (default: read from metadata)
 
     // callback function passed over to mtmd proper
-    mtmd_backend_sched_eval_callback cb_eval;
+    ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
 };
 
