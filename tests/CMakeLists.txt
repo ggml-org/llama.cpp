@@ -283,6 +283,18 @@ if(GGML_SYCL)
     add_test(NAME test-mmq-soa-q4-0-gpu COMMAND $<TARGET_FILE:test-mmq-soa-q4-0-gpu>)
 endif()
 
+# test-tensor-inventory-api: Tests for SYCL tensor inventory API (tiered memory placement)
+if(GGML_SYCL)
+    add_executable(test-tensor-inventory-api test-tensor-inventory-api.cpp)
+    target_link_libraries(test-tensor-inventory-api PRIVATE ggml)
+    target_include_directories(test-tensor-inventory-api PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include)
+    target_compile_options(test-tensor-inventory-api PRIVATE "-fsycl")
+    target_link_options(test-tensor-inventory-api PRIVATE "-fsycl")
+    install(TARGETS test-tensor-inventory-api RUNTIME)
+    add_test(NAME test-tensor-inventory-api COMMAND $<TARGET_FILE:test-tensor-inventory-api>)
+endif()
+
 # test-mmq-soa-q4-0-pipeline: Tests for Q4_0 MMQ pipeline (load_tiles + vec_dot)
 # Tests actual tile loading and vec_dot functions to find SoA vs AoS divergence
 if(GGML_SYCL)

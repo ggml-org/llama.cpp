@@ -635,6 +635,63 @@ const void * ggml_backend_sycl_get_weight_cache_key(const ggml_tensor * tensor, 
     return key_ptr;
 }
 
+// Tensor inventory storage for tiered memory placement
+static std::mutex                                g_tensor_inventory_mutex;
+static std::vector<std::pair<std::string, size_t>> g_tensor_inventory;
+static size_t                                    g_tensor_inventory_total_size = 0;
+static std::atomic<bool>                         g_tiered_enabled{ false };
+
+void ggml_backend_sycl_set_tensor_inventory(
+    ggml_backend_t backend,
+    const ggml_sycl_tensor_inventory * inventory
+) {
+    if (!backend || !inventory) {
+        return;
+    }
+
+    ggml_backend_sycl_context * ctx = (ggml_backend_sycl_context *) backend->context;
+    if (!ctx) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
+
+    // Clear existing inventory
+    g_tensor_inventory.clear();
+    g_tensor_inventory_total_size = 0;
+
+    // Store tensor inventory
+    g_tensor_inventory.reserve(inventory->count);
+    for (size_t i = 0; i < inventory->count; i++) {
+        if (inventory->tensors[i].name != nullptr) {
+            g_tensor_inventory.emplace_back(
+                std::string(inventory->tensors[i].name),
+                inventory->tensors[i].size
+            );
+            g_tensor_inventory_total_size += inventory->tensors[i].size;
+        }
+    }
+
+    // Check if tiered mode should be enabled based on VRAM budget
+    size_t free_mem = 0, total_mem = 0;
+    ggml_backend_sycl_get_device_memory(ctx->device, &free_mem, &total_mem);
+
+    // Enable tiered mode if total model size exceeds 90% of free VRAM
+    const size_t vram_budget = (size_t)(free_mem * 0.9);
+    g_tiered_enabled.store(g_tensor_inventory_total_size > vram_budget, std::memory_order_release);
+
+    GGML_LOG_INFO("[SYCL] Tensor inventory set: %zu tensors, %.2f GB total (VRAM: %.2f GB free, tiered: %s)\n",
+                  g_tensor_inventory.size(),
+                  g_tensor_inventory_total_size / (1024.0 * 1024.0 * 1024.0),
+                  free_mem / (1024.0 * 1024.0 * 1024.0),
+                  g_tiered_enabled.load() ? "enabled" : "disabled");
+}
+
+bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend) {
+    (void) backend;  // Backend context not needed for current implementation
+    return g_tiered_enabled.load(std::memory_order_acquire);
+}
+
 static const void * ggml_sycl_get_moe_expert_cache_key(ggml_tensor_extra_gpu * extra, int expert_id) {
     if (!extra || expert_id < 0) {
         return nullptr;
