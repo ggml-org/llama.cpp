@@ -535,10 +535,10 @@ template<block_reduce_method method_t, typename T>
 struct block_reduce_policy;
 
 template <typename T, typename... Ts>
-constexpr bool is_any = (std::is_same_v<T, Ts> || ...);
+inline constexpr bool is_any = (std::is_same_v<T, Ts> || ...);
 
 template<typename...>
-constexpr bool ggml_cuda_dependent_false_v = false;
+inline constexpr bool ggml_cuda_dependent_false_v = false;
 
 template <typename T> struct block_reduce_policy<block_reduce_method::SUM, T> {
     static __device__ T reduce(T val) {
