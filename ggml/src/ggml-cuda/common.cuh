@@ -689,7 +689,8 @@ static __device__ __forceinline__ void ggml_cuda_memcpy_1(void * __restrict__ ds
         } else if constexpr (nb_per_cpy == 8) {
             ((int2 *) dst)[i] = ((const int2 *) src)[i];
         } else if constexpr (nb_per_cpy == 16) {
-            ((int4 *) dst)[i] = ((const int4 *) src)[i];
+            ((int2 *) dst)[2*i]     = ((const int2 *) src)[2*i];
+            ((int2 *) dst)[2*i + 1] = ((const int2 *) src)[2*i + 1];
         } else {
             static_assert(nbytes == 0 && nbytes == -1, "bad nbytes");
         }
