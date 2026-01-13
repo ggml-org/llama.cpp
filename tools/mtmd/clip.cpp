@@ -3862,9 +3862,6 @@ void clip_debug_encode(clip_ctx * ctx, int h, int w, float fill_value) {
     for (int i = 0; i < h * w * 3; i++) {
         img.buf[i] = static_cast<float>(fill_value);
     }
-    // TODO convert to new schema without breaking common separation?
-    ctx->cb_eval = nullptr;
-    ctx->cb_eval_user_data = nullptr;
     clip_image_encode(ctx, 1, &img, nullptr);
     GGML_ASSERT(img.buf.empty() && "expected, always stop here");
 }
