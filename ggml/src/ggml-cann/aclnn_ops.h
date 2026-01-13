@@ -47,6 +47,7 @@
 #include <aclnnop/aclnn_sign.h>
 #include <aclnnop/aclnn_silu.h>
 #include <aclnnop/aclnn_sin.h>
+#include <aclnnop/aclnn_slice.h>
 #include <aclnnop/aclnn_sqrt.h>
 #include <aclnnop/aclnn_tanh.h>
 
@@ -935,6 +936,20 @@ template <typename... Args> void register_acl_resources(std::vector<any_acl_reso
 void ggml_cann_mul_mat_id(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
 /**
+ * @brief Performs fused ADD + RMS_NORM operation using the CANN backend.
+ *
+ * This function fuses the ADD and RMS_NORM operations into a single kernel call
+ * for better performance. It first adds two input tensors (x1 + x2), then applies
+ * RMS normalization to the result.
+ *
+ * @param ctx The context for the CANN backend operations.
+ * @param dst The ADD operation node, contains the two input tensors to be added.
+ * @param rms_norm_tensor The RMS_NORM operation node, contains the gamma weights
+ *                        and epsilon parameter.
+ */
+void ggml_cann_op_add_rms_norm_fused(ggml_backend_cann_context & ctx, ggml_tensor * add_node, ggml_tensor * rms_norm_node);
+
+/**
  * @brief   Check whether a tensor is a weight tensor for matrix multiplication.
  *
  * @details Checks whether the given tensor serves as weight parameters in matrix multiplication operations,
@@ -1031,6 +1046,8 @@ void ggml_cann_op_unary(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
 void ggml_cann_op_unary(std::function<void(ggml_backend_cann_context &, aclTensor *, aclTensor *)> unary_op,
                         ggml_backend_cann_context &                                                ctx,
                         ggml_tensor *                                                              dst);
+
+void ggml_cann_ssm_conv(ggml_backend_cann_context & ctx, ggml_tensor * dst);
 
 /**
  * @brief Applies a gated (GLU-style) unary operation using the CANN backend.

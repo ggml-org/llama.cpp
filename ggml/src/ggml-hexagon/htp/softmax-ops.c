@@ -238,7 +238,7 @@ static void softmax_htp_f32(int nth, int ith, struct softmax_th_ctx * softmax_ct
                     hvx_fast_softmax_prep_f32((const uint8_t *) sp, (uint8_t *) wp0, ne00, softmax_ctx->scale,
                                               (const uint8_t *) mp_f32, slope);
                 } else {
-                    hvx_scale_f32((const uint8_t *) sp, (uint8_t *) wp0, ne00, softmax_ctx->scale);
+                    hvx_scale_f32((uint8_t *) wp0, (const uint8_t *) sp, ne00, softmax_ctx->scale);
                     if (mp_f32) {
                         if (softmax_ctx->use_f16) {
                             for (int i = 0; i < ne00; ++i) {
@@ -258,7 +258,7 @@ static void softmax_htp_f32(int nth, int ith, struct softmax_th_ctx * softmax_ct
                     float max = hvx_self_max_f32((const uint8_t *) wp0, ne00);
                     float sum = hvx_softmax_f32((const uint8_t *) wp0, (uint8_t *) wp2, (uint8_t *) wp1, ne00, max);
                     sum       = sum > 0.0 ? (1.0 / sum) : 1;
-                    hvx_scale_f32((const uint8_t *) wp2, (uint8_t *) dp, ne00, sum);
+                    hvx_scale_f32((uint8_t *) dp, (const uint8_t *) wp2, ne00, sum);
                 }
             }
         }

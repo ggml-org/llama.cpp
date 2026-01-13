@@ -819,5 +819,23 @@ dequantize_block_iq4_xs(const void *__restrict__ vx, dst_t *__restrict__ yy,
     }
 }
 
+template<typename dst_t>
+static void dequantize_block_mxfp4(const void * __restrict__ vx, dst_t * __restrict__ yy,
+                                   const sycl::nd_item<3> &item_ct1) {
+    // auto                item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
+    const int64_t       i        = item_ct1.get_group(2);
+    const block_mxfp4 * x = (const block_mxfp4 *) vx + i*(QK_K/QK_MXFP4);
+
+    const int64_t    tid = item_ct1.get_local_id(2);
+    const int64_t il = tid/8; // 0...3
+    const int64_t ib = tid%8; // 0...7
+    dst_t * y = yy + i*QK_K + 32*ib + 4*il;
+    const uint8_t  * q4 = x[ib].qs + 4*il;
+    const float d = ggml_sycl_e8m0_to_fp32(x[ib].e);
+    for (int j = 0; j < 4; ++j) {
+        y[j+ 0] = d * kvalues_mxfp4[q4[j] & 0xf]*0.5f;
+        y[j+16] = d * kvalues_mxfp4[q4[j] >>  4]*0.5f;
+    }
+}
 
 #endif // GGML_SYCL_DEQUANTIZE_HPP

@@ -32,7 +32,7 @@
 /examples/export-docs/                  @ggerganov
 /examples/gen-docs/                     @ggerganov
 /examples/gguf/                         @ggerganov
-/examples/llama.android/                @ggerganov
+/examples/llama.android/                @ggerganov @hanyin-arm @naco-siren
 /examples/llama.swiftui/                @ggerganov
 /examples/llama.vim                     @ggerganov
 /examples/lookahead/                    @ggerganov
@@ -87,7 +87,8 @@
 /tests/                                 @ggerganov
 /tests/test-chat-.*                     @pwilkin
 /tools/batched-bench/                   @ggerganov
-/tools/main/                            @ggerganov
+/tools/cli/                             @ngxson
+/tools/completion/                      @ggerganov
 /tools/mtmd/                            @ngxson
 /tools/perplexity/                      @ggerganov
 /tools/quantize/                        @ggerganov

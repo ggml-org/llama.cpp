@@ -6,6 +6,7 @@
 #include <string>
 #include <unordered_set>
 #include <list>
+#include <map>
 
 // TODO: prevent including the whole server-common.h as we only use server_tokens
 #include "server-common.h"
@@ -23,6 +24,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_SAVE,
     SERVER_TASK_TYPE_SLOT_RESTORE,
     SERVER_TASK_TYPE_SLOT_ERASE,
+    SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
 };
 
@@ -60,7 +62,7 @@ struct task_params {
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
 
-    std::vector<common_adapter_lora_info> lora;
+    std::map<int, float> lora; // mapping adapter ID -> scale
 
     std::vector<std::string> antiprompt;
     std::vector<std::string> response_fields;
@@ -94,6 +96,10 @@ struct task_result_state {
     std::string generated_text; // append new chunks of generated text here
     std::vector<std::string> generated_tool_call_ids;
 
+    // for Anthropic API streaming: track content block state across chunks
+    bool anthropic_thinking_block_started = false;
+    bool anthropic_text_block_started = false;
+
     task_result_state(const common_chat_syntax & oaicompat_chat_syntax)
         : oaicompat_chat_syntax(oaicompat_chat_syntax) {}
 
@@ -105,20 +111,26 @@ struct task_result_state {
 };
 
 struct server_task {
-    int id    = -1; // to be filled by server_queue
-    int index = -1; // used when there are multiple prompts (batch request)
+    int id = -1; // to be filled by server_queue
+
+    // TODO @ngxson : remove this field and implement a mapping task_id -> idx in the response_reader
+    size_t index = 0; // used when there are multiple prompts (batch request)
 
     // used by SERVER_TASK_TYPE_CANCEL
     int id_target = -1;
     int id_slot   = -1;
 
     // used by parallel sampling (multiple completions from same prompt)
-    size_t n_children =  0; // number of tasks reusing this prompt
-    int    id_parent  = -1;
+    int n_children =  0; // number of tasks reusing this prompt
+    int id_parent  = -1;
 
     // used by SERVER_TASK_TYPE_INFERENCE
     task_params   params;
     server_tokens tokens;
+
+    // only used by CLI, this delegates the tokenization to the server
+    json                    cli_input = nullptr;
+    std::vector<raw_buffer> cli_files;
 
     server_task_type type;
 
@@ -134,7 +146,7 @@ struct server_task {
     bool metrics_reset_bucket = false;
 
     // used by SERVER_TASK_TYPE_SET_LORA
-    std::vector<common_adapter_lora_info> set_lora;
+    std::map<int, float> set_lora; // mapping adapter ID -> scale
 
     server_task() = default;
 
@@ -145,9 +157,10 @@ struct server_task {
     }
 
     static task_params params_from_json_cmpl(
-            const llama_context * ctx,
-            const common_params & params_base,
-            const json & data);
+        const llama_vocab * vocab,
+        const common_params & params_base,
+        const int n_ctx_slot,
+        const json & data);
 
     // utility function
     static std::unordered_set<int> get_list_id(const std::vector<server_task> & tasks) {
@@ -158,14 +171,15 @@ struct server_task {
         return ids;
     }
 
-    server_task create_child(int id_parent, int id_child, int idx) const {
+    server_task create_child(int id_parent, int id_child) const {
         server_task copy;
+
         copy.id        = id_child;
-        copy.index     = idx;
         copy.id_parent = id_parent;
         copy.params    = params;
         copy.type      = type;
         copy.tokens    = tokens.clone();
+
         return copy;
     }
 
@@ -208,6 +222,10 @@ struct result_prompt_progress {
 struct server_task_result {
     int id           = -1;
     int id_slot      = -1;
+
+    // TODO @ngxson : remove this field and implement a mapping task_id -> idx in the response_reader
+    size_t index = 0; // to be used for batched tasks
+
     virtual bool is_error() {
         // only used by server_task_result_error
         return false;
@@ -215,9 +233,6 @@ struct server_task_result {
     virtual bool is_stop() {
         // only used by server_task_result_cmpl_*
         return true;
-    }
-    virtual int get_index() {
-        return -1;
     }
     virtual void update(task_result_state &) {
         // only used by server_task_result_cmpl_*
@@ -251,8 +266,6 @@ struct completion_token_output {
 };
 
 struct server_task_result_cmpl_final : server_task_result {
-    int index = 0;
-
     std::string content;
     llama_tokens tokens;
 
@@ -285,10 +298,6 @@ struct server_task_result_cmpl_final : server_task_result {
     std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
     bool is_updated = false;
 
-    virtual int get_index() override {
-        return index;
-    }
-
     virtual bool is_stop() override {
         return true; // in stream mode, final responses are considered stop
     }
@@ -314,8 +323,6 @@ struct server_task_result_cmpl_final : server_task_result {
 };
 
 struct server_task_result_cmpl_partial : server_task_result {
-    int index = 0;
-
     std::string  content;
     llama_tokens tokens;
 
@@ -336,9 +343,11 @@ struct server_task_result_cmpl_partial : server_task_result {
     std::vector<common_chat_msg_diff> oaicompat_msg_diffs; // to be populated by update()
     bool is_updated = false;
 
-    virtual int get_index() override {
-        return index;
-    }
+    // for Anthropic API: track if any reasoning content has been generated
+    bool anthropic_has_reasoning = false;
+    // Streaming state copied from task_result_state for this chunk
+    bool anthropic_thinking_block_started = false;
+    bool anthropic_text_block_started = false;
 
     virtual bool is_stop() override {
         return false; // in stream mode, partial responses are not considered stop
@@ -349,6 +358,22 @@ struct server_task_result_cmpl_partial : server_task_result {
     virtual void update(task_result_state & state) override {
         is_updated = true;
         state.update_chat_msg(content, true, oaicompat_msg_diffs);
+        // track if the accumulated message has any reasoning content
+        anthropic_has_reasoning = !state.chat_msg.reasoning_content.empty();
+
+        // Copy current state for use in to_json_anthropic() (reflects state BEFORE this chunk)
+        anthropic_thinking_block_started = state.anthropic_thinking_block_started;
+        anthropic_text_block_started = state.anthropic_text_block_started;
+
+        // Pre-compute state updates based on diffs (for next chunk)
+        for (const auto & diff : oaicompat_msg_diffs) {
+            if (!diff.reasoning_content_delta.empty() && !state.anthropic_thinking_block_started) {
+                state.anthropic_thinking_block_started = true;
+            }
+            if (!diff.content_delta.empty() && !state.anthropic_text_block_started) {
+                state.anthropic_text_block_started = true;
+            }
+        }
     }
 
     json to_json_non_oaicompat();
@@ -361,17 +386,12 @@ struct server_task_result_cmpl_partial : server_task_result {
 };
 
 struct server_task_result_embd : server_task_result {
-    int index = 0;
     std::vector<std::vector<float>> embedding;
 
     int32_t n_tokens;
 
     // response formatting
     task_response_type res_type = TASK_RESPONSE_TYPE_NONE;
-
-    virtual int get_index() override {
-        return index;
-    }
 
     virtual json to_json() override;
 
@@ -381,20 +401,14 @@ struct server_task_result_embd : server_task_result {
 };
 
 struct server_task_result_rerank : server_task_result {
-    int index = 0;
     float score = -1e6;
 
     int32_t n_tokens;
-
-    virtual int get_index() override {
-        return index;
-    }
 
     virtual json to_json() override;
 };
 
 struct server_task_result_error : server_task_result {
-    int index = 0;
     error_type err_type = ERROR_TYPE_SERVER;
     std::string err_msg;
 
@@ -452,6 +466,17 @@ struct server_task_result_slot_save_load : server_task_result {
 
 struct server_task_result_slot_erase : server_task_result {
     size_t n_erased;
+
+    virtual json to_json() override;
+};
+
+struct server_task_result_get_lora : server_task_result {
+    struct lora {
+        common_adapter_lora_info info;
+        std::string  alora_invocation_string;
+        llama_tokens alora_invocation_tokens;
+    };
+    std::vector<lora> loras;
 
     virtual json to_json() override;
 };
