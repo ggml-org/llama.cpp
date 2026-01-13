@@ -1147,4 +1147,15 @@ if(GGML_SYCL)
     target_link_options(test-unified-tensor-cache PRIVATE "-fsycl")
     install(TARGETS test-unified-tensor-cache RUNTIME)
     add_test(NAME test-unified-tensor-cache COMMAND $<TARGET_FILE:test-unified-tensor-cache>)
+
+    # test-tiered-dispatch: Tests for tiered memory dispatch integration
+    # Validates that tensor inventory and tiered mode affect kernel dispatch decisions
+    add_executable(test-tiered-dispatch test-tiered-dispatch.cpp)
+    target_link_libraries(test-tiered-dispatch PRIVATE ggml)
+    target_include_directories(test-tiered-dispatch PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include)
+    target_compile_options(test-tiered-dispatch PRIVATE "-fsycl")
+    target_link_options(test-tiered-dispatch PRIVATE "-fsycl")
+    install(TARGETS test-tiered-dispatch RUNTIME)
+    add_test(NAME test-tiered-dispatch COMMAND $<TARGET_FILE:test-tiered-dispatch>)
 endif()

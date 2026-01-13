@@ -75,6 +75,7 @@
 #include "ggml-sycl/moe-xmx.hpp"
 #include "ggml-sycl/quantized-comm.hpp"
 #include "ggml-sycl/sycl-profiling.hpp"
+#include "ggml-sycl/tensor-types.hpp"
 #include "ggml-sycl/unified-cache.hpp"
 #include "ggml.h"
 
@@ -636,10 +637,11 @@ const void * ggml_backend_sycl_get_weight_cache_key(const ggml_tensor * tensor, 
 }
 
 // Tensor inventory storage for tiered memory placement
-static std::mutex                                g_tensor_inventory_mutex;
-static std::vector<std::pair<std::string, size_t>> g_tensor_inventory;
-static size_t                                    g_tensor_inventory_total_size = 0;
-static std::atomic<bool>                         g_tiered_enabled{ false };
+static std::mutex                                   g_tensor_inventory_mutex;
+static std::vector<std::pair<std::string, size_t>>  g_tensor_inventory;
+static std::unordered_map<std::string, size_t>      g_tensor_inventory_index;  // name -> index for O(1) lookup
+static size_t                                       g_tensor_inventory_total_size = 0;
+static std::atomic<bool>                            g_tiered_enabled{ false };
 
 void ggml_backend_sycl_set_tensor_inventory(
     ggml_backend_t backend,
@@ -656,18 +658,20 @@ void ggml_backend_sycl_set_tensor_inventory(
 
     std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
 
-    // Clear existing inventory
+    // Clear existing inventory and index
     g_tensor_inventory.clear();
+    g_tensor_inventory_index.clear();
     g_tensor_inventory_total_size = 0;
 
-    // Store tensor inventory
+    // Store tensor inventory with O(1) lookup index
     g_tensor_inventory.reserve(inventory->count);
+    g_tensor_inventory_index.reserve(inventory->count);
     for (size_t i = 0; i < inventory->count; i++) {
         if (inventory->tensors[i].name != nullptr) {
-            g_tensor_inventory.emplace_back(
-                std::string(inventory->tensors[i].name),
-                inventory->tensors[i].size
-            );
+            std::string name(inventory->tensors[i].name);
+            size_t      idx = g_tensor_inventory.size();
+            g_tensor_inventory.emplace_back(name, inventory->tensors[i].size);
+            g_tensor_inventory_index[name] = idx;
             g_tensor_inventory_total_size += inventory->tensors[i].size;
         }
     }
@@ -690,6 +694,51 @@ void ggml_backend_sycl_set_tensor_inventory(
 bool ggml_backend_sycl_is_tiered_enabled(ggml_backend_t backend) {
     (void) backend;  // Backend context not needed for current implementation
     return g_tiered_enabled.load(std::memory_order_acquire);
+}
+
+// Query tensor location from unified cache for tiered memory dispatch.
+// Returns pointer to tensor data and its memory tier.
+// If not in tiered mode or tensor not found, returns nullptr.
+// Sets found_in_inventory to indicate if tensor is tracked (avoids second mutex lock).
+// Uses O(1) hash lookup for performance in hot path.
+// This is the integration point between mul_mat dispatch and unified_tensor_cache.
+static void * get_cached_tensor_ptr(const char * tensor_name, ggml_sycl::memory_tier * tier_out,
+                                    bool * found_in_inventory) {
+    // Initialize output to false
+    if (found_in_inventory) {
+        *found_in_inventory = false;
+    }
+
+    if (!tensor_name) {
+        return nullptr;
+    }
+
+    if (!g_tiered_enabled.load(std::memory_order_acquire)) {
+        return nullptr;  // Not in tiered mode, use normal path
+    }
+
+    std::lock_guard<std::mutex> lock(g_tensor_inventory_mutex);
+
+    // O(1) hash lookup instead of linear search
+    auto it = g_tensor_inventory_index.find(tensor_name);
+    if (it != g_tensor_inventory_index.end()) {
+        // Tensor found in inventory - tiered dispatch is applicable
+        if (found_in_inventory) {
+            *found_in_inventory = true;
+        }
+        // For now, return nullptr with PINNED_HOST tier as placeholder.
+        // Full integration will query unified_tensor_cache for actual pointer.
+        if (tier_out) {
+            *tier_out = ggml_sycl::memory_tier::PINNED_HOST;
+        }
+        // Return nullptr as placeholder - actual pointer retrieval
+        // will be implemented when unified_tensor_cache is fully integrated.
+        // The mul_mat dispatch will fall back to normal path when nullptr.
+        return nullptr;
+    }
+
+    // Tensor not in inventory (dynamic tensor, not a weight)
+    return nullptr;
 }
 
 static const void * ggml_sycl_get_moe_expert_cache_key(ggml_tensor_extra_gpu * extra, int expert_id) {
@@ -13326,6 +13375,21 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx,
                               const layout_mode *         forced_layout = nullptr) {
     GGML_SYCL_PROFILE_SCOPE_GEMM("mul_mat");
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+
+    // Check if weight tensor is tracked for tiered memory dispatch
+    // Single mutex acquisition provides both cached pointer and inventory status
+    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
+        ggml_sycl::memory_tier tier;
+        bool   in_inventory = false;
+        void * cached_ptr   = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
+        if (cached_ptr != nullptr) {
+            // Future: use cached_ptr for tiered dispatch
+            GGML_LOG_DEBUG("[SYCL] Tiered cache hit for %s (tier=%d)\n", src0->name, static_cast<int>(tier));
+        } else if (in_inventory) {
+            // Tensor tracked but not yet cached - use normal path
+            GGML_LOG_DEBUG("[SYCL] Tiered: tensor %s in inventory, pending cache\n", src0->name);
+        }
+    }
 
     // DEBUG: Check if TP sharded weights have correct dimensions
     if (is_tp_sharded_tensor(src0)) {
