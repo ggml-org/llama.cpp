@@ -1700,7 +1700,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.norm_conv", # lfm2
         ),
 
-        # NextN/MTP tensors for GLM4_MOE and exaone-moe
+        # NextN/MTP tensors
         MODEL_TENSOR.NEXTN_EH_PROJ: (
             "model.layers.{bid}.eh_proj",
         ),

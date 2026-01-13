@@ -7,7 +7,7 @@ llm_build_exaone_moe::llm_build_exaone_moe(const llama_model & model, const llm_
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_v);
     GGML_ASSERT(n_embd_head == hparams.n_rot);
-    
+
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -30,7 +30,7 @@ llm_build_exaone_moe::llm_build_exaone_moe(const llama_model & model, const llm_
         // norm
         cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
-    
+
         // self-attention
         {
             ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
