@@ -864,23 +864,23 @@ void ggml_gemv_q8_0_4x8_q8_0(int                        n,
     UNUSED(blocklen);
 
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
-    const block_q8_0x4 * b_ptr = (const block_q8_0x4 *) vx;
+    const block_q8_0 * a_ptr = (const block_q8_0 *) vy;
 
-    for (int c = 0; c < nc; c += ncols_interleaved) {
-        const block_q8_0 * a_ptr = (const block_q8_0 *) vy;
-        float32x4_t        acc   = vdupq_n_f32(0);
+    for (int x = 0; x < nc / ncols_interleaved; x++) {
+        const block_q8_0x4 * b_ptr = (const block_q8_0x4 *) vx + (x * nb);
 
-        for (int b = 0; b < nb; b++) {
-            int8x16x4_t b_low  = vld1q_s8_x4((const int8_t *) b_ptr->qs);
-            int8x16x4_t b_high = vld1q_s8_x4((const int8_t *) b_ptr->qs + 64);
-            float16x4_t bd     = vld1_f16((const __fp16 *) b_ptr->d);
+        float32x4_t acc = vdupq_n_f32(0);
+        for (int l = 0; l < nb; l++) {
+            int8x16x4_t b_low  = vld1q_s8_x4((const int8_t *) b_ptr[l].qs);
+            int8x16x4_t b_high = vld1q_s8_x4((const int8_t *) b_ptr[l].qs + 64);
+            float16x4_t bd     = vld1_f16((const float16_t *) b_ptr[l].d);
 
-            int8x8x4_t  a_chunks = vld1_s8_x4(a_ptr->qs);
+            int8x8x4_t  a_chunks = vld1_s8_x4(a_ptr[l].qs);
             int8x16_t   a0       = vcombine_s8(a_chunks.val[0], a_chunks.val[0]);
             int8x16_t   a1       = vcombine_s8(a_chunks.val[1], a_chunks.val[1]);
             int8x16_t   a2       = vcombine_s8(a_chunks.val[2], a_chunks.val[2]);
             int8x16_t   a3       = vcombine_s8(a_chunks.val[3], a_chunks.val[3]);
-            float16x4_t ad       = vld1_dup_f16((const __fp16 *) &a_ptr->d);
+            float16x4_t ad       = vld1_dup_f16((const float16_t *) &a_ptr[l].d);
 
             int32x4_t ret0 = vdupq_n_s32(0);
             int32x4_t ret1 = vdupq_n_s32(0);
@@ -901,11 +901,8 @@ void ggml_gemv_q8_0_4x8_q8_0(int                        n,
             int32x4_t ret = vpaddq_s32(ret0, ret1);
 
             acc = vfmaq_f32(acc, vcvtq_f32_s32(ret), vmulq_f32(vcvt_f32_f16(ad), vcvt_f32_f16(bd)));
-            a_ptr++;
-            b_ptr++;
         }
-        vst1q_f32(s, acc);
-        s += ncols_interleaved;
+        vst1q_f32(s + x * ncols_interleaved, acc);
     }
     return;
 
