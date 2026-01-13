@@ -1403,6 +1403,118 @@ static void common_chat_parse_solar_open(common_chat_msg_parser & builder) {
     builder.add_content(builder.consume_rest());
 }
 
+static void common_chat_parse_exaone_moe_content(common_chat_msg_parser & builder) {
+    // 1) <tool_call>{ "name": "...", "arguments": {...} }</tool_call>
+    // 2) <tool_call>{ "id": "...", "type": "function", "function": { "name": "...", "arguments": {...} } }</tool_call>
+    static const common_regex tool_call_open(R"(<tool_call[^>]*>)");
+
+    if (!builder.syntax().parse_tool_calls) {
+        LOG_DBG("%s: not parse_tool_calls\n", __func__);
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+
+    LOG_DBG("%s: parse_tool_calls\n", __func__);
+
+    // Find all <tool_call></tool_call> blocks
+    while (auto first = builder.try_find_regex(tool_call_open, std::string::npos, /* add_prelude_to_content= */ true)) {
+        builder.move_to(first->groups[0].end);
+        builder.consume_spaces();
+
+        builder.try_consume_literal("```json");
+        builder.try_consume_literal("```");
+        builder.consume_spaces();
+
+        // Consume JSON object
+        auto data = builder.consume_json();
+
+        builder.consume_spaces();
+        builder.try_consume_literal("```");
+        builder.consume_spaces();
+
+        if (!builder.try_consume_literal("</tool_call>")) {
+            throw common_chat_msg_partial_exception("incomplete tool call");
+        }
+        builder.consume_spaces();
+
+        // Extract name and arguments
+        std::string name;
+        std::string id;
+        nlohmann::ordered_json arguments;
+
+        const auto extract_args = [&](const nlohmann::ordered_json & obj) -> bool {
+            if (!obj.contains("name") || !obj.contains("arguments")) {
+                return false;
+            }
+            name = obj.at("name").get<std::string>();
+            arguments = obj.at("arguments");
+            if (obj.contains("id") && obj.at("id").is_string()) {
+                id = obj.at("id").get<std::string>();
+            }
+            return true;
+        };
+
+        if (!extract_args(data.json)) {
+            if (data.json.contains("function") && data.json.at("function").is_object()) {
+                auto fn = data.json.at("function");
+                extract_args(fn);
+                if (id.empty() && data.json.contains("id") && data.json.at("id").is_string()) {
+                    id = data.json.at("id").get<std::string>();
+                }
+            }
+        }
+
+        // If name is empty, treat the JSON object as content
+        if (name.empty()) {
+            LOG_DBG("%s: tool call missing name, treating as content\n", __func__);
+            builder.add_content(data.json.dump());
+            continue;
+        }
+
+        std::string args_str = arguments.dump();
+        if (!builder.add_tool_call(name, id, args_str)) {
+            throw common_chat_msg_partial_exception("incomplete tool call");
+        }
+    }
+
+    builder.add_content(builder.consume_rest());
+}
+
+static void common_chat_parse_exaone_moe(common_chat_msg_parser & builder) {
+    LOG_DBG("%s: parsing exaone_moe\n", __func__);
+    // EXAONE MoE outputs reasoning content between "<think>" and "</think>" tags, followed by regular content
+    // First try to parse using the standard reasoning parsing method
+    LOG_DBG("%s: thinking_forced_open: %s\n", __func__, std::to_string(builder.syntax().thinking_forced_open).c_str());
+
+    auto start_pos = builder.pos();
+    auto found_end_think = builder.try_find_literal("</think>");
+    builder.move_to(start_pos);
+
+    if (builder.syntax().thinking_forced_open && !builder.is_partial() && !found_end_think) {
+        LOG_DBG("%s: no end_think, not partial, adding content\n", __func__);
+        common_chat_parse_exaone_moe_content(builder);
+    } else if (builder.try_parse_reasoning("<think>", "</think>")) {
+        // If reasoning was parsed successfully, the remaining content is regular content
+        LOG_DBG("%s: parsed reasoning, adding content\n", __func__);
+        common_chat_parse_exaone_moe_content(builder);
+    } else {
+        if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE) {
+          LOG_DBG("%s: reasoning_format none, adding content\n", __func__);
+          common_chat_parse_exaone_moe_content(builder);
+          return;
+        }
+        // If no reasoning tags found, check if we should treat everything as reasoning
+        if (builder.syntax().thinking_forced_open) {
+            // If thinking is forced open but no tags found, treat everything as reasoning
+            LOG_DBG("%s: thinking_forced_open, adding reasoning content\n", __func__);
+            builder.add_reasoning_content(builder.consume_rest());
+        } else {
+            LOG_DBG("%s: no thinking_forced_open, adding content\n", __func__);
+            common_chat_parse_exaone_moe_content(builder);
+        }
+    }
+}
+
 static void common_chat_parse_content_only(common_chat_msg_parser & builder) {
     builder.try_parse_reasoning("<think>", "</think>");
     builder.add_content(builder.consume_rest());
@@ -1489,6 +1601,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_SOLAR_OPEN:
             common_chat_parse_solar_open(builder);
+            break;
+        case COMMON_CHAT_FORMAT_EXAONE_MOE:
+            common_chat_parse_exaone_moe(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
