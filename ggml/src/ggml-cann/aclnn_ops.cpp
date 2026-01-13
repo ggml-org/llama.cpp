@@ -3874,11 +3874,9 @@ void ggml_cann_gated_linear_attn(ggml_backend_cann_context & ctx, ggml_tensor * 
     int64_t L = T / B;
 
     int64_t ne_qkg[2] = { 1, D };
-    // int64_t ne_qkg[2] = {D, 1};
     int64_t ne_s[2]   = { D, D };
     int64_t ne_st[2]  = { ne_s[1], ne_s[0] };
     int64_t ne_vo[2]  = { D, 1 };
-    // int64_t ne_vo[2] = {1, D};
     int64_t ne_q[1]   = { D };
     size_t  nb_base   = ggml_type_size(k->type);
     size_t  nb_qkg[2] = { nb_base, nb_base };
