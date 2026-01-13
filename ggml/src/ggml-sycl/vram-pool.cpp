@@ -16,21 +16,42 @@ vram_pool::vram_pool(sycl::queue & queue, size_t budget) : queue_(queue), budget
 
 vram_pool::~vram_pool() {
     std::lock_guard<std::mutex> lock(mutex_);
-    size_t                      count = allocations_.size();
+    size_t                      count  = allocations_.size();
+    size_t                      failed = 0;
 
     for (auto & [id, alloc] : allocations_) {
         if (alloc.ptr) {
-            sycl::free(alloc.ptr, queue_);
+            try {
+                sycl::free(alloc.ptr, queue_);
+            } catch (const sycl::exception & e) {
+                GGML_LOG_ERROR("[SYCL] Failed to free tensor_id %llu: %s\n", (unsigned long long) id, e.what());
+                failed++;
+            }
         }
     }
     allocations_.clear();
     used_ = 0;
 
-    GGML_LOG_INFO("[SYCL] VRAM pool destroyed, released %zu allocations\n", count);
+    if (count > 0) {
+        GGML_LOG_INFO("[SYCL] VRAM pool destroyed, released %zu allocations%s\n", count,
+                      failed > 0 ? " (some failed)" : "");
+    }
 }
 
 void * vram_pool::allocate(size_t size, uint64_t tensor_id, size_t alignment) {
     std::lock_guard<std::mutex> lock(mutex_);
+
+    // Validate alignment is power of 2 and non-zero
+    if (alignment == 0 || (alignment & (alignment - 1)) != 0) {
+        GGML_LOG_ERROR("[SYCL] Invalid alignment: %zu (must be power of 2)\n", alignment);
+        return nullptr;
+    }
+
+    // Check for potential overflow before alignment calculation
+    if (size > SIZE_MAX - alignment) {
+        GGML_LOG_ERROR("[SYCL] Requested size too large: %zu\n", size);
+        return nullptr;
+    }
 
     // Round up size to alignment
     size = (size + alignment - 1) & ~(alignment - 1);
@@ -38,11 +59,18 @@ void * vram_pool::allocate(size_t size, uint64_t tensor_id, size_t alignment) {
     // Check if already allocated
     auto it = allocations_.find(tensor_id);
     if (it != allocations_.end()) {
+        // Check if requested size matches (after alignment)
+        if (it->second.size != size) {
+            GGML_LOG_ERROR("[SYCL] tensor_id %llu already allocated with size %zu, requested %zu\n",
+                           (unsigned long long) tensor_id, it->second.size, size);
+            return nullptr;
+        }
         return it->second.ptr;  // Return existing allocation
     }
 
     // Check budget
     if (used_ + size > budget_) {
+        GGML_LOG_WARN("[SYCL] Allocation of %zu bytes exceeds budget (used: %zu, budget: %zu)\n", size, used_, budget_);
         return nullptr;
     }
 
@@ -56,6 +84,7 @@ void * vram_pool::allocate(size_t size, uint64_t tensor_id, size_t alignment) {
     }
 
     if (!ptr) {
+        GGML_LOG_ERROR("[SYCL] malloc_device returned nullptr for size %zu\n", size);
         return nullptr;
     }
 
@@ -70,10 +99,15 @@ void vram_pool::deallocate(uint64_t tensor_id) {
 
     auto it = allocations_.find(tensor_id);
     if (it == allocations_.end()) {
+        GGML_LOG_WARN("[SYCL] Attempted to deallocate non-existent tensor_id %llu\n", (unsigned long long) tensor_id);
         return;
     }
 
-    sycl::free(it->second.ptr, queue_);
+    try {
+        sycl::free(it->second.ptr, queue_);
+    } catch (const sycl::exception & e) {
+        GGML_LOG_ERROR("[SYCL] Failed to deallocate tensor_id %llu: %s\n", (unsigned long long) tensor_id, e.what());
+    }
     used_ -= it->second.size;
     allocations_.erase(it);
 }
