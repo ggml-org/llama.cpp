@@ -144,7 +144,7 @@ struct mtmd_cli_context {
         mparams.image_max_tokens = params.image_max_tokens;
         if (std::getenv("MTMD_DEBUG_GRAPH") != nullptr) {
             mparams.cb_eval_user_data = &cb_data;
-            mparams.cb_eval = common_ggml_debug<false>;
+            mparams.cb_eval = common_debug_cb_eval<false>;
         }
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_vision.get()) {

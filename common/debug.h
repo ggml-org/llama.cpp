@@ -12,7 +12,7 @@
 // ne   - the tensor dimensions array
 // nb   - the tensor strides array
 // n    - the number of rows/columns to fully print
-template <bool abort_on_nan> void common_ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t n);
+template <bool abort_on_nan> void common_debug_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t n);
 
 // Intended to use as callback for ggml_backend_sched_eval_callback
 // prints tensors that are processed in the computation graph
@@ -21,7 +21,7 @@ template <bool abort_on_nan> void common_ggml_print_tensor(uint8_t * data, ggml_
 // The template parameter determins whether an error should be thrown whenever a NaN is encountered
 // in a tensor (useful for stopping debug sessions on first erroneous tensor)
 // The callback data will be passed as the third parameter (user_data)
-template <bool abort_on_nan> bool common_ggml_debug(struct ggml_tensor * t, bool ask, void * user_data);
+template <bool abort_on_nan> bool common_debug_cb_eval(struct ggml_tensor * t, bool ask, void * user_data);
 struct base_callback_data {
     std::vector<uint8_t>    data;
     std::vector<std::regex> tensor_filters;
@@ -37,7 +37,7 @@ struct base_callback_data {
                 throw std::runtime_error("Invalid regex pattern '" + pattern + "': " + e.what());
             }
         }
-        params.cb_eval           = common_ggml_debug<false>;
+        params.cb_eval           = common_debug_cb_eval<false>;
         params.cb_eval_user_data = this;
     }
 };
