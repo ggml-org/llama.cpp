@@ -14,6 +14,8 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -60,6 +62,10 @@ class unified_tensor_cache {
 
     // Get planned tier for a tensor (by inventory index)
     memory_tier get_planned_tier(uint64_t tensor_id) const;
+
+    // Look up tensor ID by name
+    // Returns nullopt if tensor name not found in inventory
+    std::optional<uint64_t> get_tensor_id(const std::string & name) const;
 
     // === Phase 2: Tensor Access ===
 
@@ -142,6 +148,7 @@ class unified_tensor_cache {
     vram_pool vram_pool_;
 
     std::unordered_map<uint64_t, tensor_entry> entries_;
+    std::unordered_map<std::string, uint64_t>  name_to_id_;  // Tensor name -> ID lookup
     bool                                       tiered_enabled_ = false;
     uint64_t                                   time_           = 0;
 

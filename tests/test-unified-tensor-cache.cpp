@@ -14,6 +14,7 @@
 #include <cassert>
 #include <cstring>
 #include <iostream>
+#include <optional>
 #include <sycl/sycl.hpp>
 
 using namespace ggml_sycl;
@@ -184,6 +185,43 @@ void test_load_tensor_host_fallback() {
     std::cout << "test_load_tensor_host_fallback: PASSED\n";
 }
 
+void test_get_tensor_id_by_name() {
+    sycl::queue q;
+
+    constexpr size_t VRAM_BUDGET = 500 * 1024 * 1024;
+    constexpr size_t HOST_BUDGET = 1ULL * 1024 * 1024 * 1024;
+
+    unified_tensor_cache cache(q, VRAM_BUDGET, HOST_BUDGET);
+
+    // Create inventory with named tensors
+    tensor_inventory inventory;
+    inventory.tensors.push_back(make_tensor_info("token_embd.weight", 100 * 1024 * 1024));
+    inventory.tensors.push_back(make_tensor_info("blk.0.attn_q.weight", 50 * 1024 * 1024));
+    inventory.tensors.push_back(make_tensor_info("blk.0.ffn_down_exps.weight", 200 * 1024 * 1024));
+    inventory.total_size = 350 * 1024 * 1024;
+
+    cache.set_inventory(inventory);
+
+    // Test looking up tensor IDs by name
+    auto embd_id = cache.get_tensor_id("token_embd.weight");
+    assert(embd_id.has_value() && "token_embd.weight should be found");
+    assert(embd_id.value() == 0 && "token_embd.weight should have ID 0");
+
+    auto attn_id = cache.get_tensor_id("blk.0.attn_q.weight");
+    assert(attn_id.has_value() && "blk.0.attn_q.weight should be found");
+    assert(attn_id.value() == 1 && "blk.0.attn_q.weight should have ID 1");
+
+    auto ffn_id = cache.get_tensor_id("blk.0.ffn_down_exps.weight");
+    assert(ffn_id.has_value() && "blk.0.ffn_down_exps.weight should be found");
+    assert(ffn_id.value() == 2 && "blk.0.ffn_down_exps.weight should have ID 2");
+
+    // Test looking up non-existent tensor
+    auto missing_id = cache.get_tensor_id("nonexistent_tensor.weight");
+    assert(!missing_id.has_value() && "Non-existent tensor should return nullopt");
+
+    std::cout << "test_get_tensor_id_by_name: PASSED\n";
+}
+
 int main() {
     try {
         test_inventory_placement();
@@ -192,6 +230,7 @@ int main() {
         test_statistics();
         test_load_tensor_vram();
         test_load_tensor_host_fallback();
+        test_get_tensor_id_by_name();
         std::cout << "\nAll unified_tensor_cache tests PASSED!\n";
         return 0;
     } catch (const std::exception & e) {

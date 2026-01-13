@@ -38,12 +38,17 @@ unified_tensor_cache::~unified_tensor_cache() {
 void unified_tensor_cache::set_inventory(const tensor_inventory & inventory) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // Store tensor info
+    // Store tensor info and build name-to-ID mapping
     for (size_t i = 0; i < inventory.tensors.size(); i++) {
         tensor_entry entry;
         entry.info         = inventory.tensors[i];
         entry.planned_tier = memory_tier::MMAP;  // Will be computed
         entries_[i]        = entry;
+
+        // Build name -> ID mapping for lookups
+        if (!entry.info.name.empty()) {
+            name_to_id_[entry.info.name] = i;
+        }
     }
 
     // Check if tiered mode needed
@@ -107,6 +112,15 @@ memory_tier unified_tensor_cache::get_planned_tier(uint64_t tensor_id) const {
         return memory_tier::MMAP;
     }
     return it->second.planned_tier;
+}
+
+std::optional<uint64_t> unified_tensor_cache::get_tensor_id(const std::string & name) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto                        it = name_to_id_.find(name);
+    if (it == name_to_id_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
 }
 
 void unified_tensor_cache::load_tensor_data(uint64_t tensor_id, const void * src_ptr) {
