@@ -12,9 +12,9 @@
 #define APIR_HANDSHAKE_MAGIC 0xab1e
 
 enum ApirCommandType {
-    APIR_COMMAND_TYPE_HandShake   = 0,
-    APIR_COMMAND_TYPE_LoadLibrary = 1,
-    APIR_COMMAND_TYPE_Forward     = 2,
+    APIR_COMMAND_TYPE_HANDSHAKE   = 0,
+    APIR_COMMAND_TYPE_LOADLIBRARY = 1,
+    APIR_COMMAND_TYPE_FORWARD     = 2,
 
     APIR_COMMAND_TYPE_LENGTH      = 3,
 };
@@ -41,11 +41,11 @@ enum ApirForwardReturnCode {
 
 __attribute__((unused)) static inline const char * apir_command_name(ApirCommandType type) {
     switch (type) {
-        case APIR_COMMAND_TYPE_HandShake:
+        case APIR_COMMAND_TYPE_HANDSHAKE:
             return "HandShake";
-        case APIR_COMMAND_TYPE_LoadLibrary:
+        case APIR_COMMAND_TYPE_LOADLIBRARY:
             return "LoadLibrary";
-        case APIR_COMMAND_TYPE_Forward:
+        case APIR_COMMAND_TYPE_FORWARD:
             return "Forward";
         default:
             return "unknown";
@@ -84,7 +84,7 @@ __attribute__((unused)) static const char * apir_forward_error(ApirForwardReturn
     APIR_FORWARD_ERROR(APIR_FORWARD_TIMEOUT);
     APIR_FORWARD_ERROR(APIR_FORWARD_BASE_INDEX);
 
-    return "Unknown APIR_COMMAND_TYPE_Forward error";
+    return "Unknown APIR_COMMAND_TYPE_FORWARD error";
 
 #undef APIR_FORWARD_ERROR
 }
