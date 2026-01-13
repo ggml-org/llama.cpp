@@ -808,6 +808,33 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
 
+    // Check tiered dispatch for K/V cache tensors
+    if (g_tiered_enabled.load(std::memory_order_acquire)) {
+        // Check K tensor (name[0] checks if name is non-empty)
+        if (K && K->name[0]) {
+            ggml_sycl::memory_tier tier;
+            bool                   found = false;
+            void *                 ptr   = get_cached_tensor_ptr(K->name, &tier, &found);
+            if (ptr) {
+                GGML_SYCL_DEBUG("[SYCL] fattn K tiered hit: %s (tier=%d)\n", K->name, static_cast<int>(tier));
+            } else if (found) {
+                GGML_SYCL_DEBUG("[SYCL] fattn K tiered pending: %s\n", K->name);
+            }
+        }
+
+        // Check V tensor (name[0] checks if name is non-empty)
+        if (V && V->name[0]) {
+            ggml_sycl::memory_tier tier;
+            bool                   found = false;
+            void *                 ptr   = get_cached_tensor_ptr(V->name, &tier, &found);
+            if (ptr) {
+                GGML_SYCL_DEBUG("[SYCL] fattn V tiered hit: %s (tier=%d)\n", V->name, static_cast<int>(tier));
+            } else if (found) {
+                GGML_SYCL_DEBUG("[SYCL] fattn V tiered pending: %s\n", V->name);
+            }
+        }
+    }
+
     // Event-based synchronization moved to ubatch level (llama-context.cpp)
     // This flash_attn no longer waits on individual events - the wait happens
     // at the START of each ubatch before any kernels are submitted.
