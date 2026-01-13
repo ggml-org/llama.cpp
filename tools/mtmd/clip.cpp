@@ -9,7 +9,6 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "gguf.h"
-#include "mtmd.h"
 
 #include <cassert>
 #include <cmath>
