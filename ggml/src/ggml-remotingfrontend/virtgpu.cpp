@@ -31,7 +31,7 @@ static int virtgpu_handshake(virtgpu * gpu) {
     apir_encoder * encoder;
     apir_decoder * decoder;
 
-    encoder = remote_call_prepare(gpu, APIR_COMMAND_TYPE_HandShake, 0);
+    encoder = remote_call_prepare(gpu, APIR_COMMAND_TYPE_HANDSHAKE, 0);
     if (!encoder) {
         GGML_ABORT("%s: failed to prepare the remote call encoder", __func__);
         return 1;
@@ -95,7 +95,7 @@ static ApirLoadLibraryReturnCode virtgpu_load_library(virtgpu * gpu) {
     apir_decoder *            decoder;
     ApirLoadLibraryReturnCode ret;
 
-    encoder = remote_call_prepare(gpu, APIR_COMMAND_TYPE_LoadLibrary, 0);
+    encoder = remote_call_prepare(gpu, APIR_COMMAND_TYPE_LOADLIBRARY, 0);
     if (!encoder) {
         GGML_ABORT("%s: hypercall error: failed to prepare the remote call encoder", __func__);
         return APIR_LOAD_LIBRARY_HYPERCALL_INITIALIZATION_ERROR;
