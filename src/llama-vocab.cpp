@@ -468,12 +468,6 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?(?:\\p{L}\\p{M}*(?: \\p{L}\\p{M}*)*)+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]?|\\s*[\\r\\n]|\\s+(?!\\S)|\\s+",
                 };
                 break;
-            case LLAMA_VOCAB_PRE_TYPE_VAETKI:
-                regex_exprs = {
-                    "[^\r\n]+",
-                    "[\r\n]+",
-                };
-                break;
             default:
                 // default regex for BPE tokenization pre-processing
                 regex_exprs = {
@@ -531,23 +525,8 @@ struct llm_tokenizer_bpe_session {
 
     void tokenize(const std::string & text, std::vector<llama_token> & output) {
         int final_prev_index = -1;
-        const bool skip_byte_encoding = (vocab.get_pre_type() == LLAMA_VOCAB_PRE_TYPE_VAETKI);
 
-        std::string normalized;
-        const std::string * input = &text;
-        if (skip_byte_encoding) {
-            normalized.reserve(text.size() * 3);
-            for (char c : text) {
-                if (c == ' ') {
-                    normalized += "\xe2\x96\x81";
-                } else {
-                    normalized += c;
-                }
-            }
-            input = &normalized;
-        }
-
-        const auto word_collection = unicode_regex_split(*input, tokenizer.regex_exprs, skip_byte_encoding);
+        const auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs);
 
         symbols_final.clear();
 
@@ -637,13 +616,8 @@ struct llm_tokenizer_bpe_session {
 
                 if (token == LLAMA_TOKEN_NULL) {
                     for (auto j = str.begin(); j != str.end(); ++j) {
-                        llama_token token_byte;
-                        if (skip_byte_encoding) {
-                            token_byte = vocab.byte_to_token(static_cast<uint8_t>(*j));
-                        } else {
-                            std::string byte_str(1, *j);
-                            token_byte = vocab.text_to_token(byte_str);
-                        }
+                        std::string byte_str(1, *j);
+                        auto token_byte = vocab.text_to_token(byte_str);
                         if (token_byte != LLAMA_TOKEN_NULL) {
                             output.push_back(token_byte);
                         }
@@ -2068,11 +2042,6 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 tokenizer_pre == "solar-open") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_SOLAR_OPEN;
                 clean_spaces = false;
-            } else if (
-                tokenizer_pre == "vaetki") {
-                pre_type = LLAMA_VOCAB_PRE_TYPE_VAETKI;
-                clean_spaces = false;
-                add_space_prefix = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
@@ -2707,11 +2676,6 @@ uint8_t llama_vocab::impl::token_to_byte(llama_token id) const {
             return strtol(buf.c_str(), NULL, 16);
         }
         case LLAMA_VOCAB_TYPE_BPE: {
-            // VAETKI uses <0xXX> format for byte tokens
-            if (pre_type == LLAMA_VOCAB_PRE_TYPE_VAETKI) {
-                auto buf = token_data.text.substr(3, 2);
-                return strtol(buf.c_str(), NULL, 16);
-            }
             GGML_ABORT("fatal error");
         }
         case LLAMA_VOCAB_TYPE_WPM: {
@@ -3180,20 +3144,8 @@ int32_t llama_vocab::impl::token_to_piece(llama_token token, char * buf, int32_t
                     return _try_copy(token_text.data(), token_text.size());
                 }
                 if (attr & LLAMA_TOKEN_ATTR_NORMAL) {
-                    if (pre_type == LLAMA_VOCAB_PRE_TYPE_VAETKI) {
-                        std::string result = token_text;
-                        llama_unescape_whitespace(result);
-                        return _try_copy(result.data(), result.size());
-                    }
                     std::string result = llama_decode_text(token_text);
                     return _try_copy(result.data(), result.size());
-                }
-                if (attr & LLAMA_TOKEN_ATTR_BYTE) {
-                    // VAETKI uses <0xXX> format for byte tokens
-                    if (pre_type == LLAMA_VOCAB_PRE_TYPE_VAETKI) {
-                        char byte = (char) token_to_byte(token);
-                        return _try_copy(&byte, 1);
-                    }
                 }
                 break;
             }
@@ -3467,19 +3419,6 @@ llama_token llama_vocab::byte_to_token(uint8_t ch) const {
         }
         case LLAMA_VOCAB_TYPE_WPM:
         case LLAMA_VOCAB_TYPE_BPE: {
-            if (pimpl->pre_type == LLAMA_VOCAB_PRE_TYPE_VAETKI) {
-                const char buf[7] = { '<', '0', 'x', hex[ch >> 4], hex[ch & 15], '>', 0 };
-                auto token = pimpl->token_to_id.find(buf);
-                if (token != pimpl->token_to_id.end()) {
-                    return (*token).second;
-                }
-                const char buf2[2] = { (char)ch, 0 };
-                auto token2 = pimpl->token_to_id.find(buf2);
-                if (token2 != pimpl->token_to_id.end()) {
-                    return (*token2).second;
-                }
-                return LLAMA_TOKEN_NULL;
-            }
             return pimpl->token_to_id.at(unicode_byte_to_utf8(ch));
         }
         case LLAMA_VOCAB_TYPE_PLAMO2: {

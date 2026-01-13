@@ -956,7 +956,7 @@ bool unicode_cpt_is_han(uint32_t cpt) {
     return false;
 }
 
-std::vector<std::string> unicode_regex_split(const std::string & text, const std::vector<std::string> & regex_exprs, bool skip_byte_encoding) {
+std::vector<std::string> unicode_regex_split(const std::string & text, const std::vector<std::string> & regex_exprs) {
     // unicode categories
     static const std::map<std::string, int> k_ucat_enum = {
         { "\\p{N}", unicode_cpt_flags::NUMBER },
@@ -1143,8 +1143,5 @@ std::vector<std::string> unicode_regex_split(const std::string & text, const std
         start += offset;
     }
 
-    if (skip_byte_encoding) {
-        return bpe_words;
-    }
     return unicode_byte_encoding_process(bpe_words);
 }

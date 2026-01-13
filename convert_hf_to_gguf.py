@@ -1255,9 +1255,6 @@ class TextModel(ModelBase):
         if chkhsh == "6c81ce329e0802883b22eabab0d3fa48357337ef1ecb45443828bf1f6254833f":
             # ref: https://huggingface.co/LGAI-EXAONE/K-EXAONE-236B-A23B
             res = "exaone-moe"
-        if chkhsh == "f5f8b79793693cfcca1c36aac854ab481ae887cf7dde234b889f8f4bf009891a":
-            # ref: https://huggingface.co/nc-ai-consortium/VAETKI-VL-7B-A1B
-            res = "vaetki"
 
         if res is None:
             logger.warning("\n")
@@ -7681,84 +7678,6 @@ class VaetkiModel(TextModel):
             "full_attention": {"rope_theta": self.hparams.get("rope_theta_global", 1000000.0)},
             "sliding_attention": {"rope_theta": self.hparams.get("rope_theta", 10000.0)}
         }
-
-    def set_vocab(self):
-        # VAETKI uses Metaspace-based BPE tokenizer, load vocab from tokenizer.json
-        import json
-        import re
-        from transformers import AutoTokenizer
-
-        dir_model = self.dir_model
-        hparams = self.hparams
-
-        tokenizer_json_path = dir_model / "tokenizer.json"
-        if not tokenizer_json_path.is_file():
-            raise FileNotFoundError(f"VAETKI tokenizer.json not found: {tokenizer_json_path}")
-
-        with open(tokenizer_json_path, "r", encoding="utf-8") as f:
-            tokenizer_json = json.load(f)
-
-        # Get vocab from tokenizer.json
-        vocab = tokenizer_json["model"]["vocab"]
-        merges = tokenizer_json["model"].get("merges", [])
-
-        vocab_size = hparams.get("vocab_size", len(vocab))
-
-        # Build reverse vocab
-        reverse_vocab = {v: k for k, v in vocab.items()}
-
-        # Get added tokens from tokenizer.json
-        added_tokens = {}
-        for token_info in tokenizer_json.get("added_tokens", []):
-            added_tokens[token_info["id"]] = {
-                "content": token_info["content"],
-                "special": token_info.get("special", False)
-            }
-
-        tokens: list[str] = []
-        toktypes: list[int] = []
-
-        for i in range(vocab_size):
-            if i in added_tokens:
-                token = added_tokens[i]["content"]
-                if added_tokens[i]["special"]:
-                    toktypes.append(gguf.TokenType.CONTROL)
-                else:
-                    # pre-normalize user-defined spaces (Metaspace → space)
-                    token = token.replace("\u2581", " ")
-                    toktypes.append(gguf.TokenType.USER_DEFINED)
-                tokens.append(token)
-            elif i in reverse_vocab:
-                token = reverse_vocab[i]
-                # Check for byte tokens (format: <0xXX>)
-                if re.fullmatch(r"<0x[0-9A-Fa-f]{2}>", token):
-                    toktypes.append(gguf.TokenType.BYTE)
-                else:
-                    toktypes.append(gguf.TokenType.NORMAL)
-                tokens.append(token)
-            else:
-                tokens.append(f"[PAD{i}]")
-                toktypes.append(gguf.TokenType.UNUSED)
-
-        # Get pre-tokenizer type
-        tokenizer = AutoTokenizer.from_pretrained(dir_model, trust_remote_code=True)
-        tokpre = self.get_vocab_base_pre(tokenizer)
-
-        self.gguf_writer.add_tokenizer_model("gpt2")
-        self.gguf_writer.add_tokenizer_pre(tokpre)
-        self.gguf_writer.add_token_list(tokens)
-        self.gguf_writer.add_token_types(toktypes)
-
-        # Add merges (convert from [['a', 'b'], ...] to ['a b', ...] format)
-        if merges:
-            # tokenizer.json stores merges as list of pairs, GGUF expects space-separated strings
-            if isinstance(merges[0], list):
-                merges = [' '.join(pair) for pair in merges]
-            self.gguf_writer.add_token_merges(merges)
-
-        # Add special tokens
-        special_vocab = gguf.SpecialVocab(dir_model, load_merges=False)
-        special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
