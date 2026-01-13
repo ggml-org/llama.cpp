@@ -12739,6 +12739,19 @@ static bool graph_preload_moe_experts(ggml_backend_sycl_context & ctx, ggml_cgra
         }
 
         const bool        host_weights = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+
+        // Host-backed MoE weights are incompatible with SYCL graph recording.
+        // The memory access patterns during graph recording won't replay correctly.
+        // This happens when using tiered memory (pinned host pool) for MoE models.
+        if (host_weights) {
+            static bool warned_once = false;
+            if (!warned_once) {
+                GGML_LOG_INFO("[GRAPH-PRELOAD] MoE weights in host memory - disabling SYCL graphs for tiered memory mode\n");
+                warned_once = true;
+            }
+            return false;
+        }
+
         const layout_mode layout       = ggml_sycl_select_moe_graph_layout(src0, ctx.device, host_weights);
 
         const int64_t n_ids         = ids->ne[0];
