@@ -142,7 +142,7 @@ if (NOT DEFINED GGML_CUDA_GRAPHS)
 endif()
 
 # model download helper
-function(llama_dl_model NAME)
+function(llama_download_model NAME)
     set(DEST "${CMAKE_BINARY_DIR}/${NAME}")
     if(NOT EXISTS "${DEST}")
         include(FetchContent)
@@ -155,7 +155,7 @@ function(llama_dl_model NAME)
             TLS_VERIFY ON
         )
     endif()
-    set(LLAMA_DL_MODEL "${DEST}" PARENT_SCOPE)
+    set(LLAMA_DOWNLOAD_MODEL "${DEST}" PARENT_SCOPE)
 endfunction()
 
 # transition helpers

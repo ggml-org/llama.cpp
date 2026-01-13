@@ -202,11 +202,11 @@ llama_build_and_test(
 llama_build_and_test(test-regex-partial.cpp)
 
 if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "s390x")
-    llama_dl_model("tinyllamas/stories15M-q4_0.gguf")
+    llama_download_model("tinyllamas/stories15M-q4_0.gguf")
 else()
-    llama_dl_model("tinyllamas/stories15M-be.Q4_0.gguf")
+    llama_download_model("tinyllamas/stories15M-be.Q4_0.gguf")
 endif()
-llama_build_and_test(test-thread-safety.cpp ARGS -m "${LLAMA_DL_MODEL}" -ngl 99 -p "The meaning of life is" -n 128 -c 256 -ub 32 -np 4 -t 2)
+llama_build_and_test(test-thread-safety.cpp ARGS -m "${LLAMA_DOWNLOAD_MODEL}" -ngl 99 -p "The meaning of life is" -n 128 -c 256 -ub 32 -np 4 -t 2)
 
 llama_build_and_test(test-arg-parser.cpp)
 
@@ -223,7 +223,7 @@ llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 
 # Test for state restore with fragmented KV cache
 # Requires a model, uses same args pattern as test-thread-safety
-llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -m "${LLAMA_DL_MODEL}")
+llama_build_and_test(test-state-restore-fragmented.cpp LABEL "model" ARGS -m "${LLAMA_DOWNLOAD_MODEL}")
 
 if (NOT GGML_BACKEND_DL)
     # these tests use the backends directly and cannot be built with dynamic loading
