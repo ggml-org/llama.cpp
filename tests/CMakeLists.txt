@@ -1082,4 +1082,16 @@ if(GGML_SYCL)
     target_link_options(test-tensor-placement PRIVATE "-fsycl")
     install(TARGETS test-tensor-placement RUNTIME)
     add_test(NAME test-tensor-placement COMMAND $<TARGET_FILE:test-tensor-placement>)
+
+    # test-expert-cache: Tests for MoE expert VRAM cache with LRU/frequency eviction
+    # Part of tiered memory architecture for MoE models
+    add_executable(test-expert-cache test-expert-cache.cpp)
+    target_link_libraries(test-expert-cache PRIVATE ggml)
+    target_include_directories(test-expert-cache PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-expert-cache PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-expert-cache PRIVATE "-fsycl")
+    install(TARGETS test-expert-cache RUNTIME)
+    add_test(NAME test-expert-cache COMMAND $<TARGET_FILE:test-expert-cache>)
 endif()
