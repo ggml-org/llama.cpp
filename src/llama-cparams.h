@@ -36,6 +36,7 @@ struct llama_cparams {
     bool kv_unified;
 
     enum llama_pooling_type pooling_type;
+    enum llama_mtp_op_type mtp_op_type;
 
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;

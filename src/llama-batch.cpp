@@ -881,7 +881,6 @@ struct llama_batch llama_batch_init(int32_t n_tokens_alloc, int32_t embd, int32_
         /*n_seq_id    =*/ nullptr,
         /*seq_id      =*/ nullptr,
         /*logits      =*/ nullptr,
-        /*.mtp_params =*/ { MTP_OP_NONE },
     };
 
     if (embd) {

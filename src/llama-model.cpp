@@ -7649,7 +7649,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     }
 
     // add on pooling layer
-    if (params.mtp_params.op_type == MTP_OP_NONE) {
+    if (llm->cparams.mtp_op_type == MTP_OP_NONE) {
         llm->build_pooling(cls, cls_b, cls_out, cls_out_b);
     }
 

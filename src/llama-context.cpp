@@ -55,6 +55,7 @@ llama_context::llama_context(
     cparams.offload_kqv      = params.offload_kqv;
     cparams.no_perf          = params.no_perf;
     cparams.pooling_type     = params.pooling_type;
+    cparams.mtp_op_type      = MTP_OP_NONE;
     cparams.warmup           = false;
 
     cparams.n_ctx            = params.n_ctx           == 0    ? hparams.n_ctx_train           : params.n_ctx;
@@ -784,6 +785,12 @@ void llama_context::set_warmup(bool value) {
     cparams.warmup = value;
 }
 
+void llama_context::set_mtp_op_type(llama_mtp_op_type value) {
+    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+
+    cparams.mtp_op_type = value;
+}
+
 void llama_context::set_adapter_lora(
             llama_adapter_lora * adapter,
             float scale) {
@@ -822,8 +829,11 @@ bool llama_context::apply_adapter_cvec(
     return cvec.apply(model, data, len, n_embd, il_start, il_end);
 }
 
-llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret,
-                                                const llama_mtp_params & mtp_params) {
+llm_graph_result * llama_context::process_ubatch(
+            const llama_ubatch & ubatch,
+                llm_graph_type   gtype,
+        llama_memory_context_i * mctx,
+                   ggml_status & ret) {
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -835,7 +845,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
     // the new graph parameters
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
-    const auto gparams = graph_params(res, ubatch, mctx, gtype, mtp_params);
+    const auto gparams = graph_params(res, ubatch, mctx, gtype);
 
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
@@ -866,8 +876,8 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         }
     }
 
-    if (mtp_params.op_type != MTP_OP_NONE) { // If it is any MTP operation
-        if (!prepare_mtp_graph_inputs(res, ubatch, mtp_params)) {
+    if (cparams.mtp_op_type != MTP_OP_NONE) { // If it is any MTP operation
+        if (!prepare_mtp_graph_inputs(res, ubatch)) {
             ret = GGML_STATUS_FAILED;
             return nullptr;
         }
@@ -951,7 +961,8 @@ int llama_context::encode(const llama_batch & batch_inp) {
     cparams.causal_attn = false;
 
     ggml_status status;
-    const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_ENCODER, nullptr, status, { MTP_OP_NONE });
+    set_mtp_op_type(MTP_OP_NONE);
+    const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_ENCODER, nullptr, status);
 
     cparams.causal_attn = causal_attn_org;
 
@@ -1195,7 +1206,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         ggml_status status;
-        const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status, batch_inp.mtp_params);
+        const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
@@ -1248,8 +1259,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
             // back to the main context buffer, they will overwrite the valid logits
             // produced by the main model's pass, leading to incorrect sampling.
             // This condition explicitly prevents that copy for cache-only operations.
-            if (batch_inp.mtp_params.op_type != MTP_OP_WARMUP &&
-                batch_inp.mtp_params.op_type != MTP_OP_UPDATE_ACCEPTED) {
+            if (cparams.mtp_op_type != MTP_OP_WARMUP &&
+                cparams.mtp_op_type != MTP_OP_UPDATE_ACCEPTED) {
                 ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
                 GGML_ASSERT(backend_res != nullptr);
                 GGML_ASSERT(logits != nullptr);
@@ -1266,7 +1277,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         // extract embeddings
         if (t_embd && n_outputs > 0) {
-            if (batch_inp.mtp_params.op_type == MTP_OP_NONE) {
+            if (cparams.mtp_op_type == MTP_OP_NONE) {
                 ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
                 GGML_ASSERT(backend_embd != nullptr);
 
@@ -1521,7 +1532,7 @@ ggml_cgraph * llama_context::graph_reserve(
 
     auto * res = gf_res_reserve.get();
 
-    const auto gparams = graph_params(res, ubatch, mctx, LLM_GRAPH_TYPE_DEFAULT, { MTP_OP_NONE });
+    const auto gparams = graph_params(res, ubatch, mctx, LLM_GRAPH_TYPE_DEFAULT);
 
     res->reset();
 
@@ -1548,9 +1559,8 @@ ggml_cgraph * llama_context::graph_reserve(
 llm_graph_params llama_context::graph_params(
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
-                        const llama_memory_context_i * mctx,
-                        llm_graph_type   gtype,
-                        const llama_mtp_params & mtp_params) const {
+            const llama_memory_context_i * mctx,
+                          llm_graph_type   gtype) const {
     return {
         /*.arch        =*/ model.arch,
         /*.hparams     =*/ model.hparams,
@@ -1563,7 +1573,6 @@ llm_graph_params llama_context::graph_params(
         /*.loras       =*/ &loras,
         /*.mctx        =*/ mctx,
         /*.cross       =*/ &cross,
-        /*.mtp_params  =*/ mtp_params,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
         /*.res         =*/ res,
@@ -2326,7 +2335,7 @@ void llama_context::opt_epoch_iter(
 
             auto * res = gf_res_prev.get();
 
-            const auto gparams = graph_params(res, ubatch, mctx.get(), LLM_GRAPH_TYPE_DEFAULT, { MTP_OP_NONE });
+            const auto gparams = graph_params(res, ubatch, mctx.get(), LLM_GRAPH_TYPE_DEFAULT);
 
             res->reset();
 
@@ -2597,6 +2606,10 @@ void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {
     ctx->set_warmup(warmup);
+}
+
+void llama_set_mtp_op_type(llama_context * ctx, llama_mtp_op_type mtp_op_type) {
+    ctx->set_mtp_op_type(mtp_op_type);
 }
 
 void llama_synchronize(llama_context * ctx) {
@@ -3179,7 +3192,7 @@ std::unique_ptr<llama_memory_context_i> llama_context::initialize_decode_context
     } else {
         mctx = memory->init_batch(*balloc, cparams.n_ubatch, output_all);
 
-        if (batch_inp.mtp_params.op_type == MTP_OP_NONE) {
+        if (cparams.mtp_op_type == MTP_OP_NONE) {
             if (mctx && mctx->get_status() == LLAMA_MEMORY_STATUS_SUCCESS) {
                 kvd->last_main_model_sinfos = static_cast<llama_kv_cache_context *>(mctx.get())->get_sinfos();
             } else {
@@ -3193,15 +3206,14 @@ std::unique_ptr<llama_memory_context_i> llama_context::initialize_decode_context
 
 
 bool llama_context::prepare_mtp_graph_inputs(
-    llm_graph_result * res,
-    const llama_ubatch & ubatch,
-    const llama_mtp_params & mtp_params) {
+      llm_graph_result * res,
+    const llama_ubatch & ubatch) {
     
     const char * target_tensor_name = "result_embd_pooled";
     ggml_tensor* hidden_states_input = ggml_get_tensor(res->get_ctx(), target_tensor_name);
 
     const float * source_hidden_state = nullptr;
-    if (mtp_params.op_type == MTP_OP_WARMUP || mtp_params.op_type == MTP_OP_UPDATE_ACCEPTED) {
+    if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
         source_hidden_state = this->embd;
     } else { // MTP_OP_DRAFT_GEN
         source_hidden_state = this->draft_input_hidden_state;
@@ -3209,7 +3221,7 @@ bool llama_context::prepare_mtp_graph_inputs(
 
     if (source_hidden_state != nullptr && hidden_states_input != nullptr) {
         const char * op_type;
-        if (mtp_params.op_type == MTP_OP_WARMUP || mtp_params.op_type == MTP_OP_UPDATE_ACCEPTED) {
+        if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
             op_type = "MTP_UPDATE";
         } else { // MTP_OP_DRAFT_GEN
             op_type = "DRAFT_GEN";

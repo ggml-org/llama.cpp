@@ -9,10 +9,10 @@ llm_build_glm4_moe::llm_build_glm4_moe(const llama_model & model, const llm_grap
 
     ggml_tensor * cur;
 
-    if (params.mtp_params.op_type != MTP_OP_NONE) {
+    if (cparams.mtp_op_type != MTP_OP_NONE) {
         ggml_tensor* hidden_states_from_main_model;
 
-        if (params.mtp_params.op_type == MTP_OP_WARMUP || params.mtp_params.op_type == MTP_OP_UPDATE_ACCEPTED) {
+        if (cparams.mtp_op_type == MTP_OP_WARMUP || cparams.mtp_op_type == MTP_OP_UPDATE_ACCEPTED) {
             hidden_states_from_main_model = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd, n_tokens);
             ggml_set_name(hidden_states_from_main_model, "result_embd_pooled");
             ggml_set_input(hidden_states_from_main_model);

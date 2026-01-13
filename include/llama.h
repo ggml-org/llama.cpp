@@ -228,16 +228,12 @@ extern "C" {
     //               - if not:        only the last token is output
     //            )
     //
-    typedef enum {
+    enum llama_mtp_op_type {
         MTP_OP_NONE,
         MTP_OP_WARMUP,
         MTP_OP_UPDATE_ACCEPTED,
         MTP_OP_DRAFT_GEN,
-    } llama_mtp_op_type;
-
-    typedef struct llama_mtp_params {
-        llama_mtp_op_type op_type;
-    } llama_mtp_params;
+    };
 
     typedef struct llama_batch {
         int32_t n_tokens;
@@ -248,7 +244,6 @@ extern "C" {
         int32_t      *  n_seq_id;
         llama_seq_id ** seq_id;
         int8_t       *  logits;   // TODO: rename this to "output"
-        llama_mtp_params mtp_params;
     } llama_batch;
 
     enum llama_model_kv_override_type {
@@ -953,6 +948,9 @@ extern "C" {
     // Set whether the model is in warmup mode or not
     // If true, all model tensors are activated during llama_decode() to load and cache their weights.
     LLAMA_API void llama_set_warmup(struct llama_context * ctx, bool warmup);
+
+    // Set which, if any, MTP operation the context will use
+    LLAMA_API void llama_set_mtp_op_type(struct llama_context * ctx, enum llama_mtp_op_type mtp_op_type);
 
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);

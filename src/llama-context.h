@@ -90,6 +90,7 @@ struct llama_context {
     void set_embeddings (bool value);
     void set_causal_attn(bool value);
     void set_warmup(bool value);
+    void set_mtp_op_type(llama_mtp_op_type value);
 
     void set_adapter_lora(
             llama_adapter_lora * adapter,
@@ -117,8 +118,7 @@ struct llama_context {
                 const llama_ubatch & ubatch,
                     llm_graph_type   gtype,
             llama_memory_context_i * mctx,
-                       ggml_status & ret,
-                const llama_mtp_params & mtp_params);
+                       ggml_status & ret);
 
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);
@@ -228,8 +228,7 @@ private:
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
-                          llm_graph_type   gtype,
-                  const llama_mtp_params & mtp_params) const;
+                          llm_graph_type   gtype) const;
 
     llm_graph_cb graph_get_cb() const;
 
@@ -237,9 +236,8 @@ private:
     std::unique_ptr<llama_memory_context_i> initialize_decode_context(const llama_batch & batch_inp, const bool output_all);
 
     bool prepare_mtp_graph_inputs(
-        llm_graph_result * res,
-        const llama_ubatch & ubatch,
-        const llama_mtp_params & mtp_params);
+          llm_graph_result * res,
+        const llama_ubatch & ubatch);
 
     std::unique_ptr<struct llama_memory_context_i> mtp_memory_batch(const llama_batch & batch_inp);
 

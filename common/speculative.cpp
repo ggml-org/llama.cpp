@@ -376,7 +376,7 @@ llama_tokens mtp_speculative_gen_draft(
     if (!smpl) return drafts;
 
     llama_batch mtp_batch = llama_batch_init(1, 0, 1);
-    mtp_batch.mtp_params.op_type = MTP_OP_DRAFT_GEN;
+    llama_set_mtp_op_type(ctx, MTP_OP_DRAFT_GEN);
 
     llama_token current_input_id = id_last;
     int32_t current_n_past = n_past;
@@ -411,6 +411,7 @@ llama_tokens mtp_speculative_gen_draft(
         current_n_past++;
     }
     llama_batch_free(mtp_batch);
+    llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 
     // CRITICAL: Purge the metadata for the draft token we just wrote.
     // This makes the physical cell available again for the main model's validation pass,
@@ -432,15 +433,16 @@ void mtp_update_kv_cache(struct llama_context * ctx, const llama_batch& batch, b
 
     llama_batch mtp_batch = batch;
     if (is_prompt_warmup) {
-        mtp_batch.mtp_params.op_type = MTP_OP_WARMUP;
+        llama_set_mtp_op_type(ctx, MTP_OP_WARMUP);
     } else {
-        mtp_batch.mtp_params.op_type = MTP_OP_UPDATE_ACCEPTED;
+        llama_set_mtp_op_type(ctx, MTP_OP_UPDATE_ACCEPTED);
     }
 
     for (int i = 0; i < mtp_batch.n_tokens; ++i) {
         mtp_batch.logits[i] = true;
     }
     llama_decode(ctx, mtp_batch);
+    llama_set_mtp_op_type(ctx, MTP_OP_NONE);
 }
 
 void mtp_accept_tokens(
