@@ -1106,4 +1106,16 @@ if(GGML_SYCL)
     target_link_options(test-dense-scheduler PRIVATE "-fsycl")
     install(TARGETS test-dense-scheduler RUNTIME)
     add_test(NAME test-dense-scheduler COMMAND $<TARGET_FILE:test-dense-scheduler>)
+
+    # test-vram-pool: Tests for VRAM pool device memory allocator
+    # Part of Unified Tensor Cache for device memory management
+    add_executable(test-vram-pool test-vram-pool.cpp)
+    target_link_libraries(test-vram-pool PRIVATE ggml)
+    target_include_directories(test-vram-pool PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-vram-pool PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-vram-pool PRIVATE "-fsycl")
+    install(TARGETS test-vram-pool RUNTIME)
+    add_test(NAME test-vram-pool COMMAND $<TARGET_FILE:test-vram-pool>)
 endif()
