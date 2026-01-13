@@ -110,14 +110,12 @@
 #define TN_DEEPSTACK_FC2   "v.deepstack.%d.fc2.%s"      // qwen3vl deepstack
 
 // mimicpmv
-#define TN_RESAMPL_POS_EMBD_K "resampler.pos_embed_k"
-#define TN_RESAMPL_QUERY      "resampler.query"
-#define TN_RESAMPL_PROJ       "resampler.proj.weight"
-#define TN_RESAMPL_KV_PROJ    "resampler.kv.weight"
-#define TN_RESAMPL_ATTN       "resampler.attn.%s.%s"
-#define TN_RESAMPL_LN         "resampler.ln_%s.%s"
-#define TN_RESAMPL_FFN_UP     "resampler.ffn_up.%s"
-#define TN_RESAMPL_FFN_DOWN   "resampler.ffn_down.%s"
+#define TN_MINICPMV_POS_EMBD_K "resampler.pos_embed_k"
+#define TN_MINICPMV_QUERY      "resampler.query"
+#define TN_MINICPMV_PROJ       "resampler.proj.weight"
+#define TN_MINICPMV_KV_PROJ    "resampler.kv.weight"
+#define TN_MINICPMV_ATTN       "resampler.attn.%s.%s"
+#define TN_MINICPMV_LN         "resampler.ln_%s.%s"
 
 #define TN_GLM_ADAPER_CONV      "adapter.conv.%s"
 #define TN_GLM_ADAPTER_LINEAR   "adapter.linear.linear.%s"

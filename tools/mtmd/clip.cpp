@@ -1233,6 +1233,7 @@ struct clip_model_loader {
                         // TODO(megemini): paddleocr vl not specified?
                         hparams.set_limit_image_tokens(8, 4096);
                         hparams.set_warmup_n_tokens(28*28); // avoid OOM on warmup
+                    } break;
                 case PROJECTOR_TYPE_LFM2A:
                     {
                         // audio preprocessing params
@@ -1499,26 +1500,25 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_MINICPMV:
                 {
-                    // model.mm_model_pos_embed = get_tensor(new_clip->ctx_data, TN_RESAMPL_POS_EMBD);
-                    model.mm_model_pos_embed_k = get_tensor(TN_RESAMPL_POS_EMBD_K);
-                    model.mm_model_query = get_tensor(TN_RESAMPL_QUERY);
-                    model.mm_model_proj = get_tensor(TN_RESAMPL_PROJ);
-                    model.mm_model_kv_proj = get_tensor(TN_RESAMPL_KV_PROJ);
-                    model.mm_model_attn_q_w = get_tensor(string_format(TN_RESAMPL_ATTN, "q", "weight"));
-                    model.mm_model_attn_k_w = get_tensor(string_format(TN_RESAMPL_ATTN, "k", "weight"));
-                    model.mm_model_attn_v_w = get_tensor(string_format(TN_RESAMPL_ATTN, "v", "weight"));
-                    model.mm_model_attn_q_b = get_tensor(string_format(TN_RESAMPL_ATTN, "q", "bias"));
-                    model.mm_model_attn_k_b = get_tensor(string_format(TN_RESAMPL_ATTN, "k", "bias"));
-                    model.mm_model_attn_v_b = get_tensor(string_format(TN_RESAMPL_ATTN, "v", "bias"));
-                    model.mm_model_attn_o_w = get_tensor(string_format(TN_RESAMPL_ATTN, "out", "weight"));
-                    model.mm_model_attn_o_b = get_tensor(string_format(TN_RESAMPL_ATTN, "out", "bias"));
-                    model.mm_model_ln_q_w   = get_tensor(string_format(TN_RESAMPL_LN, "q", "weight"));
-                    model.mm_model_ln_q_b   = get_tensor(string_format(TN_RESAMPL_LN, "q", "bias"));
-                    model.mm_model_ln_kv_w  = get_tensor(string_format(TN_RESAMPL_LN, "kv", "weight"));
-                    model.mm_model_ln_kv_b  = get_tensor(string_format(TN_RESAMPL_LN, "kv", "bias"));
-                    model.mm_model_ln_post_w = get_tensor(string_format(TN_RESAMPL_LN, "post", "weight"));
-                    model.mm_model_ln_post_b = get_tensor(string_format(TN_RESAMPL_LN, "post", "bias"));
-                } break;
+                    // model.mm_model_pos_embed = get_tensor(new_clip->ctx_data, TN_MINICPMV_POS_EMBD);
+                    model.mm_model_pos_embed_k = get_tensor(TN_MINICPMV_POS_EMBD_K);
+                    model.mm_model_query = get_tensor(TN_MINICPMV_QUERY);
+                    model.mm_model_proj = get_tensor(TN_MINICPMV_PROJ);
+                    model.mm_model_kv_proj = get_tensor(TN_MINICPMV_KV_PROJ);
+                    model.mm_model_attn_q_w = get_tensor(string_format(TN_MINICPMV_ATTN, "q", "weight"));
+                    model.mm_model_attn_k_w = get_tensor(string_format(TN_MINICPMV_ATTN, "k", "weight"));
+                    model.mm_model_attn_v_w = get_tensor(string_format(TN_MINICPMV_ATTN, "v", "weight"));
+                    model.mm_model_attn_q_b = get_tensor(string_format(TN_MINICPMV_ATTN, "q", "bias"));
+                    model.mm_model_attn_k_b = get_tensor(string_format(TN_MINICPMV_ATTN, "k", "bias"));
+                    model.mm_model_attn_v_b = get_tensor(string_format(TN_MINICPMV_ATTN, "v", "bias"));
+                    model.mm_model_attn_o_w = get_tensor(string_format(TN_MINICPMV_ATTN, "out", "weight"));
+                    model.mm_model_attn_o_b = get_tensor(string_format(TN_MINICPMV_ATTN, "out", "bias"));
+                    model.mm_model_ln_q_w = get_tensor(string_format(TN_MINICPMV_LN, "q", "weight"));
+                    model.mm_model_ln_q_b = get_tensor(string_format(TN_MINICPMV_LN, "q", "bias"));
+                    model.mm_model_ln_kv_w = get_tensor(string_format(TN_MINICPMV_LN, "kv", "weight"));
+                    model.mm_model_ln_kv_b = get_tensor(string_format(TN_MINICPMV_LN, "kv", "bias"));
+                    model.mm_model_ln_post_w = get_tensor(string_format(TN_MINICPMV_LN, "post", "weight"));
+                    model.mm_model_ln_post_b = get_tensor(string_format(TN_MINICPMV_LN, "post", "bias"));                } break;
             case PROJECTOR_TYPE_GLM_EDGE:
                 {
                     model.mm_model_adapter_conv_w = get_tensor(string_format(TN_GLM_ADAPER_CONV, "weight"));
