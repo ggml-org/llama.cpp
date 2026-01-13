@@ -20,7 +20,8 @@ on:
       '**/*.swift',
       '**/*.m',
       '**/*.metal',
-      '**/*.comp'
+      '**/*.comp',
+      '**/*.glsl'
     ]
 
   pull_request:
@@ -40,7 +41,8 @@ on:
       '**/*.swift',
       '**/*.m',
       '**/*.metal',
-      '**/*.comp'
+      '**/*.comp',
+      '**/*.glsl'
     ]
 
 concurrency:
@@ -68,6 +70,7 @@ jobs:
         with:
           key: macOS-latest-cmake-arm64
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -104,6 +107,7 @@ jobs:
         with:
           key: macOS-latest-cmake-x64
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -140,6 +144,7 @@ jobs:
         with:
           key: macOS-latest-cmake-arm64-webgpu
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dawn Dependency
         id: dawn-depends
@@ -147,13 +152,13 @@ jobs:
           DAWN_VERSION="v2.0.0"
           DAWN_OWNER="reeselevine"
           DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release.zip"
-          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release"
+          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
           curl -L -o artifact.zip \
-            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
           mkdir dawn
           unzip artifact.zip
-          tar -xvf Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release.tar.gz -C dawn --strip-components=1
+          tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
 
       - name: Build
         id: cmake_build
@@ -193,6 +198,7 @@ jobs:
         with:
           key: ubuntu-cpu-cmake-${{ matrix.build }}
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build Dependencies
         id: build_depends
@@ -243,7 +249,7 @@ jobs:
           echo "Fetch llama2c model"
           wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
           ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
-          ./bin/llama-cli -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
+          ./bin/llama-completion -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
       - name: Test llama2c (s390x)
         id: llama2c_test_s390x
@@ -252,7 +258,7 @@ jobs:
           cd build
           echo "Fetch llama2c big-endian model"
           wget https://huggingface.co/ggml-org/models/resolve/main/tinyllamas/stories260K-be.gguf
-          ./bin/llama-cli -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
+          ./bin/llama-completion -m stories260K-be.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
 
   ubuntu-latest-cmake-sanitizer:
     runs-on: ubuntu-latest
@@ -274,6 +280,7 @@ jobs:
         with:
           key: ubuntu-latest-cmake-sanitizer-${{ matrix.sanitizer }}
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -394,6 +401,7 @@ jobs:
         with:
           key: ubuntu-24-cmake-vulkan-deb
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -429,6 +437,7 @@ jobs:
         with:
           key: ubuntu-24-cmake-vulkan
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -488,6 +497,7 @@ jobs:
         with:
           key: ubuntu-24-cmake-webgpu
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -522,13 +532,13 @@ jobs:
           DAWN_VERSION="v2.0.0"
           DAWN_OWNER="reeselevine"
           DAWN_REPO="dawn"
-          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-ubuntu-latest-Release.zip"
-          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-ubuntu-latest-Release"
+          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
           curl -L -o artifact.zip \
-            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
           mkdir dawn
           unzip artifact.zip
-          tar -xvf Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-ubuntu-latest-Release.tar.gz -C dawn --strip-components=1
+          tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
 
       - name: Build
         id: cmake_build
@@ -546,6 +556,47 @@ jobs:
           cd build
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 3600
+
+  ubuntu-24-wasm-webgpu:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ubuntu-latest-wasm-webgpu
+          evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+
+      - name: Install Emscripten
+        run: |
+          git clone https://github.com/emscripten-core/emsdk.git
+          cd emsdk
+          ./emsdk install latest
+          ./emsdk activate latest
+
+      - name: Fetch emdawnwebgpu
+        run: |
+          DAWN_TAG="v20251027.212519"
+          EMDAWN_PKG="emdawnwebgpu_pkg-${DAWN_TAG}.zip"
+          echo "Downloading ${EMDAWN_PKG}"
+          curl -L -o emdawn.zip \
+            "https://github.com/google/dawn/releases/download/${DAWN_TAG}/${EMDAWN_PKG}"
+          unzip emdawn.zip
+
+      - name: Build WASM WebGPU
+        run: |
+          source emsdk/emsdk_env.sh
+          emcmake cmake -B build-wasm \
+            -DGGML_WEBGPU=ON \
+            -DLLAMA_CURL=OFF \
+            -DEMDAWNWEBGPU_DIR=emdawnwebgpu_pkg
+
+          cmake --build build-wasm --target test-backend-ops -j $(nproc)
 
   ubuntu-22-cmake-hip:
     runs-on: ubuntu-22.04
@@ -567,6 +618,7 @@ jobs:
         with:
           key: ubuntu-22-cmake-hip
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build with native CMake HIP support
         id: cmake_build
@@ -599,6 +651,7 @@ jobs:
         with:
           key: ubuntu-22-cmake-musa
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build with native CMake MUSA support
         id: cmake_build
@@ -646,6 +699,7 @@ jobs:
         with:
           key: ubuntu-22-cmake-sycl
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -696,6 +750,7 @@ jobs:
         with:
           key: ubuntu-22-cmake-sycl-fp16
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -729,6 +784,7 @@ jobs:
         with:
           key: macOS-latest-cmake-ios
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -760,6 +816,7 @@ jobs:
         with:
           key: macOS-latest-cmake-tvos
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -821,6 +878,7 @@ jobs:
         with:
           key: macOS-latest-swift
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Download xcframework artifact
         uses: actions/download-artifact@v4
@@ -863,6 +921,7 @@ jobs:
           key: windows-msys2
           variant: ccache
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Setup ${{ matrix.sys }}
         uses: msys2/setup-msys2@v2
@@ -931,6 +990,7 @@ jobs:
           key: windows-latest-cmake-${{ matrix.build }}
           variant: ccache
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Download OpenBLAS
         id: get_openblas
@@ -1035,8 +1095,10 @@ jobs:
           with:
             key: ubuntu-latest-cmake-cuda
             evict-old-files: 1d
+            save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
         - name: Build with CMake
+          # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
           run: |
             cmake -S . -B build -G Ninja \
               -DLLAMA_CURL=OFF \
@@ -1046,7 +1108,8 @@ jobs:
               -DCMAKE_CUDA_ARCHITECTURES=89-real \
               -DCMAKE_EXE_LINKER_FLAGS=-Wl,--allow-shlib-undefined \
               -DGGML_NATIVE=OFF \
-              -DGGML_CUDA=ON
+              -DGGML_CUDA=ON \
+              -DGGML_CUDA_CUB_3DOT2=ON
             cmake --build build
 
   windows-2022-cmake-cuda:
@@ -1067,6 +1130,7 @@ jobs:
           key: windows-cuda-${{ matrix.cuda }}
           variant: ccache
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Install Cuda Toolkit
         uses: ./.github/actions/windows-setup-cuda
@@ -1081,6 +1145,7 @@ jobs:
       - name: Build
         id: cmake_build
         shell: cmd
+        # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           cmake -S . -B build -G "Ninja Multi-Config" ^
@@ -1091,7 +1156,8 @@ jobs:
             -DGGML_BACKEND_DL=ON ^
             -DGGML_CPU_ALL_VARIANTS=ON ^
             -DGGML_CUDA=ON ^
-            -DGGML_RPC=ON
+            -DGGML_RPC=ON ^
+            -DGGML_CUDA_CUB_3DOT2=ON
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS% -t ggml
           cmake --build build --config Release
@@ -1118,6 +1184,7 @@ jobs:
           key: windows-latest-cmake-sycl
           variant: ccache
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Install
         run:  |
@@ -1179,6 +1246,7 @@ jobs:
         with:
           key: ${{ github.job }}
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Build
         id: cmake_build
@@ -1350,7 +1418,6 @@ jobs:
           echo "FIXME: test on devices"
 
   openEuler-latest-cmake-cann:
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'Ascend NPU') }}
     defaults:
       run:
         shell: bash -el {0}
@@ -1360,25 +1427,56 @@ jobs:
         chip_type: ['910b', '310p']
         build: ['Release']
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
-    container: ascendai/cann:${{ matrix.chip_type == '910b' &&  '8.3.rc1.alpha001-910b-openeuler22.03-py3.11' || '8.2.rc1-310p-openeuler22.03-py3.11' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Dependencies
+      - name: Free up disk space
+        uses: ggml-org/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+
+      - name: Set container image
+        id: cann-image
         run: |
-          yum update -y
-          yum install -y git gcc gcc-c++ make cmake libcurl-devel
+          image="ascendai/cann:${{ matrix.chip_type == '910b' &&  '8.3.rc2-910b-openeuler24.03-py3.11' || '8.3.rc2-310p-openeuler24.03-py3.11' }}"
+          echo "image=${image}" >> "${GITHUB_OUTPUT}"
+
+      - name: Pull container image
+        run: docker pull "${{ steps.cann-image.outputs.image }}"
 
       - name: Build
+        env:
+          BUILD_TYPE: ${{ matrix.build }}
+          SOC_TYPE: ascend${{ matrix.chip_type }}
         run: |
-          export LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/$(uname -m)-linux/devlib/:${LD_LIBRARY_PATH}
+          HOST_UID=$(id -u)
+          HOST_GID=$(id -g)
 
-          cmake -S . -B build \
-              -DCMAKE_BUILD_TYPE=${{ matrix.build }} \
-              -DGGML_CANN=on \
-              -DSOC_TYPE=ascend${{ matrix.chip_type }}
-          cmake --build build -j $(nproc)
+          docker run --rm \
+            -v "${PWD}:/workspace" \
+            -w /workspace \
+            -e SOC_TYPE=${SOC_TYPE} \
+            -e BUILD_TYPE=${BUILD_TYPE} \
+            "${{ steps.cann-image.outputs.image }}" \
+            bash -lc '
+              set -e
+              yum install -y --setopt=install_weak_deps=False --setopt=tsflags=nodocs git gcc gcc-c++ make cmake openssl-devel
+              yum clean all && rm -rf /var/cache/yum
+              git config --global --add safe.directory "/workspace"
+              export LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/$(uname -m)-linux/devlib/:${LD_LIBRARY_PATH}
+              cmake -S . -B build \
+                  -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+                  -DLLAMA_CURL=OFF \
+                  -DLLAMA_OPENSSL=ON \
+                  -DGGML_CANN=on \
+                  -DSOC_TYPE=${SOC_TYPE}
+              cmake --build build -j $(nproc)
+
+              chown -R '"${HOST_UID}"':'"${HOST_GID}"' /workspace/build
+            '
 
 # TODO: simplify the following workflows using a matrix
 # TODO: run lighter CI on PRs and the full CI only on master (if needed)
@@ -1395,6 +1493,7 @@ jobs:
         with:
           key: ggml-ci-x64-cpu-low-perf
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -1420,6 +1519,7 @@ jobs:
         with:
           key: ggml-ci-arm64-cpu-low-perf
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -1445,6 +1545,7 @@ jobs:
         with:
           key: ggml-ci-x64-cpu-high-perf
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -1470,6 +1571,7 @@ jobs:
         with:
           key: ggml-ci-arm64-cpu-high-perf
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -1495,6 +1597,7 @@ jobs:
         with:
           key: ggml-ci-arm64-cpu-high-perf-sve
           evict-old-files: 1d
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
       - name: Dependencies
         id: depends
@@ -1562,33 +1665,33 @@ jobs:
         run: |
           bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
-  ggml-ci-x64-amd-vulkan:
-    runs-on: [self-hosted, Linux, X64, AMD]
+  # ggml-ci-x64-amd-vulkan:
+  #   runs-on: [self-hosted, Linux, X64, AMD]
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Clone
+  #       id: checkout
+  #       uses: actions/checkout@v4
 
-      - name: Test
-        id: ggml-ci
-        run: |
-          vulkaninfo --summary
-          GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+  #     - name: Test
+  #       id: ggml-ci
+  #       run: |
+  #         vulkaninfo --summary
+  #         GG_BUILD_VULKAN=1 bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
-  ggml-ci-x64-amd-rocm:
-    runs-on: [self-hosted, Linux, X64, AMD]
+  # ggml-ci-x64-amd-rocm:
+  #   runs-on: [self-hosted, Linux, X64, AMD]
 
-    steps:
-      - name: Clone
-        id: checkout
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Clone
+  #       id: checkout
+  #       uses: actions/checkout@v4
 
-      - name: Test
-        id: ggml-ci
-        run: |
-          amd-smi static
-          GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
+  #     - name: Test
+  #       id: ggml-ci
+  #       run: |
+  #         amd-smi static
+  #         GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS="gfx1101" bash ./ci/run.sh ~/results/llama.cpp /mnt/llama.cpp
 
   ggml-ci-mac-metal:
     runs-on: [self-hosted, macOS, ARM64]
@@ -1602,6 +1705,34 @@ jobs:
         id: ggml-ci
         run: |
           GG_BUILD_METAL=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
+
+  ggml-ci-mac-webgpu:
+    runs-on: [self-hosted, macOS, ARM64]
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          DAWN_VERSION="v2.0.0"
+          DAWN_OWNER="reeselevine"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-5e9a4865b1635796ccc77dd30057f2b4002a1355-macos-latest-Release"
+          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
+          curl -L -o artifact.zip \
+            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}.zip"
+          mkdir dawn
+          unzip artifact.zip
+          tar -xvf ${DAWN_ASSET_NAME}.tar.gz -C dawn --strip-components=1
+
+      - name: Test
+        id: ggml-ci
+        run: |
+          GG_BUILD_WEBGPU=1 GG_BUILD_WEBGPU_DAWN_PREFIX="$GITHUB_WORKSPACE/dawn" \
+            bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
   ggml-ci-mac-vulkan:
     runs-on: [self-hosted, macOS, ARM64]
@@ -1630,6 +1761,7 @@ jobs:
          with:
            key: ggml-ci-arm64-cpu-kleidiai
            evict-old-files: 1d
+           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
        - name: Dependencies
          id: depends
@@ -1641,6 +1773,345 @@ jobs:
          id: ggml-ci
          run: |
            GG_BUILD_KLEIDIAI=1 GG_BUILD_EXTRA_TESTS_0=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+
+  ubuntu-cpu-cmake-riscv64-native:
+    runs-on: RISCV64
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+
+          # Install necessary packages
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache git-lfs
+
+          # Set gcc-14 and g++-14 as the default compilers
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
+          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
+
+          # Install Rust stable version
+          rustup install stable
+          rustup default stable
+
+          git lfs install
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Check environment
+        run: |
+          uname -a
+          gcc --version
+          g++ --version
+          ldd --version
+          cmake --version
+          rustc --version
+
+      - name: Setup ccache
+        run: |
+          # Set unique cache directory for this job
+          export CCACHE_DIR="$HOME/.ccache/cpu-cmake-rv64-native"
+          mkdir -p "$CCACHE_DIR"
+
+          # Configure ccache for optimal performance
+          ccache --set-config=max_size=5G
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache --set-config=cache_dir="$CCACHE_DIR"
+
+          # Enable more aggressive caching
+          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
+          ccache --set-config=hash_dir=false
+
+          # Export for subsequent steps
+          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DGGML_RPC=ON \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
+
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L 'main|curl' --verbose --timeout 900
+
+      - name: Test llama2c conversion
+        id: llama2c_test
+        run: |
+          cd build
+          echo "Fetch tokenizer"
+          wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/tok512.bin
+          echo "Fetch llama2c model"
+          wget https://huggingface.co/karpathy/tinyllamas/resolve/main/stories260K/stories260K.bin
+          ./bin/llama-convert-llama2c-to-ggml --copy-vocab-from-model ./tok512.bin --llama2c-model stories260K.bin --llama2c-output-model stories260K.gguf
+          ./bin/llama-completion -m stories260K.gguf -p "One day, Lily met a Shoggoth" -n 500 -c 256
+
+  ubuntu-cmake-sanitizer-riscv64-native:
+    runs-on: RISCV64
+
+    continue-on-error: true
+
+    strategy:
+      matrix:
+        sanitizer: [ADDRESS, THREAD, UNDEFINED]
+        build_type: [Debug]
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+
+          # Install necessary packages
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential wget ccache git-lfs
+
+          # Set gcc-14 and g++-14 as the default compilers
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
+          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
+
+          # Install Rust stable version
+          rustup install stable
+          rustup default stable
+
+          git lfs install
+
+      - name: GCC version check
+        run: |
+          gcc --version
+          g++ --version
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Setup ccache
+        run: |
+          # Unique cache directory per matrix combination
+          export CCACHE_DIR="$HOME/.ccache/sanitizer-${{ matrix.sanitizer }}-${{ matrix.build_type }}"
+          mkdir -p "$CCACHE_DIR"
+
+          # Configure ccache
+          ccache --set-config=max_size=5G
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache --set-config=cache_dir="$CCACHE_DIR"
+          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
+          ccache --set-config=hash_dir=false
+
+          # Export for subsequent steps
+          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+
+      - name: Build
+        id: cmake_build
+        if: ${{ matrix.sanitizer != 'THREAD' }}
+        run: |
+          cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DGGML_OPENMP=ON \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
+
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
+
+      - name: Build (no OpenMP)
+        id: cmake_build_no_openmp
+        if: ${{ matrix.sanitizer == 'THREAD' }}
+        run: |
+          cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
+
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L main --verbose --timeout 900
+
+
+  ubuntu-llguidance-riscv64-native:
+    runs-on: RISCV64
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+
+          # Install necessary packages
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential wget ccache git-lfs
+
+          # Set gcc-14 and g++-14 as the default compilers
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
+          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
+
+          # Install Rust stable version
+          rustup install stable
+          rustup default stable
+
+          git lfs install
+
+      - name: GCC version check
+        run: |
+          gcc --version
+          g++ --version
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Setup ccache
+        run: |
+          export CCACHE_DIR="$HOME/.ccache/llguidance-riscv64"
+          mkdir -p "$CCACHE_DIR"
+
+          ccache --set-config=max_size=5G
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache --set-config=cache_dir="$CCACHE_DIR"
+          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
+          ccache --set-config=hash_dir=false
+
+          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DLLAMA_LLGUIDANCE=ON \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14
+
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L main --verbose --timeout 900
+
+
+  ubuntu-cmake-rpc-riscv64-native:
+    runs-on: RISCV64
+
+    continue-on-error: true
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+
+          # Install necessary packages
+          sudo apt-get install -y libatomic1 libtsan2 gcc-14 g++-14 rustup cmake build-essential libssl-dev wget ccache git-lfs
+
+          # Set gcc-14 and g++-14 as the default compilers
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 100
+          sudo ln -sf /usr/bin/gcc-14 /usr/bin/gcc
+          sudo ln -sf /usr/bin/g++-14 /usr/bin/g++
+
+          # Install Rust stable version
+          rustup install stable
+          rustup default stable
+
+          git lfs install
+
+      - name: GCC version check
+        run: |
+          gcc --version
+          g++ --version
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: Setup ccache
+        run: |
+          export CCACHE_DIR="$HOME/.ccache/rpc-riscv64"
+          mkdir -p "$CCACHE_DIR"
+
+          ccache --set-config=max_size=5G
+          ccache --set-config=compression=true
+          ccache --set-config=compression_level=6
+          ccache --set-config=cache_dir="$CCACHE_DIR"
+          ccache --set-config=sloppiness=file_macro,time_macros,include_file_mtime,include_file_ctime
+          ccache --set-config=hash_dir=false
+
+          echo "CCACHE_DIR=$CCACHE_DIR" >> $GITHUB_ENV
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+
+      - name: Build
+        id: cmake_build
+        run: |
+          cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
+            -DGGML_RPC=ON
+
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L main --verbose
 
   ggml-ci-arm64-graviton4-kleidiai:
      runs-on: ah-ubuntu_22_04-c8g_8x
@@ -1682,6 +2153,7 @@ jobs:
          with:
            key: ggml-ci-arm64-graviton4-kleidiai
            evict-old-files: 1d
+           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 
        - name: Test
          id: ggml-ci

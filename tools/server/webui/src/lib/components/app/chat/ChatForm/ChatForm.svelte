@@ -8,25 +8,21 @@
 		ChatFormTextarea
 	} from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/input-classes';
+	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
 	import { config } from '$lib/stores/settings.svelte';
-	import { FileTypeCategory, MimeTypeApplication } from '$lib/enums/files';
+	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
+	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { chatStore } from '$lib/stores/chat.svelte';
+	import { activeMessages } from '$lib/stores/conversations.svelte';
+	import { MimeTypeText } from '$lib/enums';
+	import { isIMEComposing, parseClipboardContent } from '$lib/utils';
 	import {
 		AudioRecorder,
 		convertToWav,
 		createAudioFile,
 		isAudioRecordingSupported
-	} from '$lib/utils/audio-recording';
+	} from '$lib/utils/browser-only';
 	import { onMount } from 'svelte';
-	import {
-		FileExtensionAudio,
-		FileExtensionImage,
-		FileExtensionPdf,
-		FileExtensionText,
-		MimeTypeAudio,
-		MimeTypeImage,
-		MimeTypeText
-	} from '$lib/enums/files';
-	import { isIMEComposing } from '$lib/utils/is-ime-composing';
 
 	interface Props {
 		class?: string;
@@ -53,48 +49,66 @@
 	}: Props = $props();
 
 	let audioRecorder: AudioRecorder | undefined;
+	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
 	let currentConfig = $derived(config());
-	let fileAcceptString = $state<string | undefined>(undefined);
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
 	let isRecording = $state(false);
 	let message = $state('');
-	let pasteLongTextToFileLength = $derived(Number(currentConfig.pasteLongTextToFileLen) || 2500);
+	let pasteLongTextToFileLength = $derived.by(() => {
+		const n = Number(currentConfig.pasteLongTextToFileLen);
+		return Number.isNaN(n) ? Number(SETTING_CONFIG_DEFAULT.pasteLongTextToFileLen) : n;
+	});
 	let previousIsLoading = $state(isLoading);
 	let recordingSupported = $state(false);
 	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
 
-	function getAcceptStringForFileType(fileType: FileTypeCategory): string {
-		switch (fileType) {
-			case FileTypeCategory.IMAGE:
-				return [...Object.values(FileExtensionImage), ...Object.values(MimeTypeImage)].join(',');
-			case FileTypeCategory.AUDIO:
-				return [...Object.values(FileExtensionAudio), ...Object.values(MimeTypeAudio)].join(',');
-			case FileTypeCategory.PDF:
-				return [...Object.values(FileExtensionPdf), ...Object.values(MimeTypeApplication)].join(
-					','
-				);
-			case FileTypeCategory.TEXT:
-				return [...Object.values(FileExtensionText), MimeTypeText.PLAIN].join(',');
-			default:
-				return '';
+	// Check if model is selected (in ROUTER mode)
+	let conversationModel = $derived(
+		chatStore.getConversationModel(activeMessages() as DatabaseMessage[])
+	);
+	let isRouter = $derived(isRouterMode());
+	let hasModelSelected = $derived(!isRouter || !!conversationModel || !!selectedModelId());
+
+	// Get active model ID for capability detection
+	let activeModelId = $derived.by(() => {
+		const options = modelOptions();
+
+		if (!isRouter) {
+			return options.length > 0 ? options[0].model : null;
 		}
+
+		// First try user-selected model
+		const selectedId = selectedModelId();
+		if (selectedId) {
+			const model = options.find((m) => m.id === selectedId);
+			if (model) return model.model;
+		}
+
+		// Fallback to conversation model
+		if (conversationModel) {
+			const model = options.find((m) => m.model === conversationModel);
+			if (model) return model.model;
+		}
+
+		return null;
+	});
+
+	function checkModelSelected(): boolean {
+		if (!hasModelSelected) {
+			// Open the model selector
+			chatFormActionsRef?.openModelSelector();
+			return false;
+		}
+
+		return true;
 	}
 
 	function handleFileSelect(files: File[]) {
 		onFileUpload?.(files);
 	}
 
-	function handleFileUpload(fileType?: FileTypeCategory) {
-		if (fileType) {
-			fileAcceptString = getAcceptStringForFileType(fileType);
-		} else {
-			fileAcceptString = undefined;
-		}
-
-		// Use setTimeout to ensure the accept attribute is applied before opening dialog
-		setTimeout(() => {
-			fileInputRef?.click();
-		}, 10);
+	function handleFileUpload() {
+		fileInputRef?.click();
 	}
 
 	async function handleKeydown(event: KeyboardEvent) {
@@ -102,6 +116,8 @@
 			event.preventDefault();
 
 			if ((!message.trim() && uploadedFiles.length === 0) || disabled || isLoading) return;
+
+			if (!checkModelSelected()) return;
 
 			const messageToSend = message.trim();
 			const filesToSend = [...uploadedFiles];
@@ -131,10 +147,36 @@
 		if (files.length > 0) {
 			event.preventDefault();
 			onFileUpload?.(files);
+
 			return;
 		}
 
 		const text = event.clipboardData.getData(MimeTypeText.PLAIN);
+
+		if (text.startsWith('"')) {
+			const parsed = parseClipboardContent(text);
+
+			if (parsed.textAttachments.length > 0) {
+				event.preventDefault();
+
+				message = parsed.message;
+
+				const attachmentFiles = parsed.textAttachments.map(
+					(att) =>
+						new File([att.content], att.name, {
+							type: MimeTypeText.PLAIN
+						})
+				);
+
+				onFileUpload?.(attachmentFiles);
+
+				setTimeout(() => {
+					textareaRef?.focus();
+				}, 10);
+
+				return;
+			}
+		}
 
 		if (
 			text.length > 0 &&
@@ -154,6 +196,7 @@
 	async function handleMicClick() {
 		if (!audioRecorder || !recordingSupported) {
 			console.warn('Audio recording not supported');
+
 			return;
 		}
 
@@ -186,6 +229,9 @@
 	async function handleSubmit(event: SubmitEvent) {
 		event.preventDefault();
 		if ((!message.trim() && uploadedFiles.length === 0) || disabled || isLoading) return;
+
+		// Check if model is selected first
+		if (!checkModelSelected()) return;
 
 		const messageToSend = message.trim();
 		const filesToSend = [...uploadedFiles];
@@ -222,15 +268,14 @@
 	});
 </script>
 
-<ChatFormFileInputInvisible
-	bind:this={fileInputRef}
-	bind:accept={fileAcceptString}
-	onFileSelect={handleFileSelect}
-/>
+<ChatFormFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
 
 <form
 	onsubmit={handleSubmit}
-	class="{INPUT_CLASSES} border-radius-bottom-none mx-auto max-w-[48rem] overflow-hidden rounded-3xl backdrop-blur-md {className}"
+	class="{INPUT_CLASSES} border-radius-bottom-none mx-auto max-w-[48rem] overflow-hidden rounded-3xl backdrop-blur-md {disabled
+		? 'cursor-not-allowed opacity-60'
+		: ''} {className}"
+	data-slot="chat-form"
 >
 	<ChatAttachmentsList
 		bind:uploadedFiles
@@ -238,6 +283,7 @@
 		limitToSingleRow
 		class="py-5"
 		style="scroll-padding: 1rem;"
+		activeModelId={activeModelId ?? undefined}
 	/>
 
 	<div
@@ -252,10 +298,13 @@
 		/>
 
 		<ChatFormActions
+			bind:this={chatFormActionsRef}
 			canSend={message.trim().length > 0 || uploadedFiles.length > 0}
+			hasText={message.trim().length > 0}
 			{disabled}
 			{isLoading}
 			{isRecording}
+			{uploadedFiles}
 			onFileUpload={handleFileUpload}
 			onMicClick={handleMicClick}
 			onStop={handleStop}

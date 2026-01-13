@@ -1,5 +1,5 @@
 <script lang="ts">
-	import autoResizeTextarea from '$lib/utils/autoresize-textarea';
+	import { autoResizeTextarea } from '$lib/utils';
 	import { onMount } from 'svelte';
 
 	interface Props {

@@ -1,0 +1,225 @@
+# Server WebUI build and tests
+name: Server WebUI
+
+on:
+  workflow_dispatch: # allows manual triggering
+    inputs:
+      sha:
+        description: 'Commit SHA1 to build'
+        required: false
+        type: string
+      slow_tests:
+        description: 'Run slow tests'
+        required: true
+        type: boolean
+  push:
+    branches:
+      - master
+    paths: ['.github/workflows/server-webui.yml', 'tools/server/webui/**.*', 'tools/server/tests/**.*', 'tools/server/public/**']
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: ['.github/workflows/server-webui.yml', 'tools/server/webui/**.*', 'tools/server/tests/**.*', 'tools/server/public/**']
+
+env:
+  LLAMA_LOG_COLORS: 1
+  LLAMA_LOG_PREFIX: 1
+  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_LOG_VERBOSITY: 10
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  webui-check:
+    name: WebUI Checks
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Setup Node.js
+        id: node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "tools/server/webui/package-lock.json"
+
+      - name: Install dependencies
+        id: setup
+        if: ${{ steps.node.conclusion == 'success' }}
+        run: npm ci
+        working-directory: tools/server/webui
+
+      - name: Run type checking
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        run: npm run check
+        working-directory: tools/server/webui
+
+      - name: Run linting
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        run: npm run lint
+        working-directory: tools/server/webui
+
+      - name: Build application
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        run: npm run build
+        working-directory: tools/server/webui
+
+      - name: Install Playwright browsers
+        id: playwright
+        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        run: npx playwright install --with-deps
+        working-directory: tools/server/webui
+
+      - name: Build Storybook
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        run: npm run build-storybook
+        working-directory: tools/server/webui
+
+      - name: Run Client tests
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        run: npm run test:client
+        working-directory: tools/server/webui
+
+      - name: Run Unit tests
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        run: npm run test:unit
+        working-directory: tools/server/webui
+
+      - name: Run UI tests
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        run: npm run test:ui -- --testTimeout=60000
+        working-directory: tools/server/webui
+
+      - name: Run E2E tests
+        if: ${{ always() && steps.playwright.conclusion == 'success' }}
+        run: npm run test:e2e
+        working-directory: tools/server/webui
+
+  server-build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        sanitizer: [ADDRESS, UNDEFINED] # THREAD is broken
+        build_type: [RelWithDebInfo]
+        include:
+          - build_type: Release
+            sanitizer: ""
+      fail-fast: false # While -DLLAMA_SANITIZE_THREAD=ON is broken
+
+    steps:
+      - name: Dependencies
+        id: depends
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install \
+            build-essential \
+            xxd \
+            git \
+            cmake \
+            curl \
+            wget \
+            language-pack-en \
+            libssl-dev
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Python setup
+        id: setup_python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Tests dependencies
+        id: test_dependencies
+        run: |
+          pip install -r tools/server/tests/requirements.txt
+
+      - name: Setup Node.js for WebUI
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: "tools/server/webui/package-lock.json"
+
+      - name: Install WebUI dependencies
+        run: npm ci
+        working-directory: tools/server/webui
+
+      - name: Build WebUI
+        run: npm run build
+        working-directory: tools/server/webui
+
+      - name: Build (no OpenMP)
+        id: cmake_build_no_openmp
+        if: ${{ matrix.sanitizer == 'THREAD' }}
+        run: |
+          cmake -B build \
+              -DGGML_NATIVE=OFF \
+              -DLLAMA_CURL=OFF \
+              -DLLAMA_OPENSSL=ON \
+              -DLLAMA_BUILD_SERVER=ON \
+              -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+              -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
+              -DGGML_OPENMP=OFF ;
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
+
+      - name: Build (sanitizers)
+        id: cmake_build_sanitizers
+        if: ${{ matrix.sanitizer != '' && matrix.sanitizer != 'THREAD' }}
+        run: |
+          cmake -B build \
+              -DGGML_NATIVE=OFF \
+              -DLLAMA_CURL=OFF \
+              -DLLAMA_OPENSSL=ON \
+              -DLLAMA_BUILD_SERVER=ON \
+              -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+              -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON ;
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
+
+      - name: Build (sanitizers)
+        id: cmake_build
+        if: ${{ matrix.sanitizer == '' }}
+        run: |
+          cmake -B build \
+              -DGGML_NATIVE=OFF \
+              -DLLAMA_CURL=OFF \
+              -DLLAMA_OPENSSL=ON \
+              -DLLAMA_BUILD_SERVER=ON \
+              -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ;
+          cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
+
+      - name: Tests
+        id: server_integration_tests
+        if: ${{ matrix.sanitizer == '' }}
+        env:
+          GITHUB_ACTIONS: "true"
+        run: |
+          cd tools/server/tests
+          ./tests.sh
+
+      - name: Tests (sanitizers)
+        id: server_integration_tests_sanitizers
+        if: ${{ matrix.sanitizer != '' }}
+        run: |
+          cd tools/server/tests
+          LLAMA_SANITIZE=1 ./tests.sh
+
+      - name: Slow tests
+        id: server_integration_tests_slow
+        if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
+        run: |
+          cd tools/server/tests
+          SLOW_TESTS=1 ./tests.sh

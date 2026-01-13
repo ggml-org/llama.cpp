@@ -32,8 +32,8 @@ json task_params::to_json(bool only_metrics) const {
     }
 
     json lora = json::array();
-    for (size_t i = 0; i < this->lora.size(); ++i) {
-        lora.push_back({{"id", i}, {"scale", this->lora[i].scale}});
+    for (auto & it : this->lora) {
+        lora.push_back({{"id", it.first}, {"scale", it.second}});
     }
 
     if (only_metrics) {
@@ -78,6 +78,7 @@ json task_params::to_json(bool only_metrics) const {
             {"speculative.p_min",         speculative.p_min},
             {"timings_per_token",         timings_per_token},
             {"post_sampling_probs",       post_sampling_probs},
+            {"backend_sampling",          sampling.backend_sampling},
             {"lora",                      lora},
         };
     }
@@ -136,6 +137,7 @@ json task_params::to_json(bool only_metrics) const {
         {"speculative.p_min",         speculative.p_min},
         {"timings_per_token",         timings_per_token},
         {"post_sampling_probs",       post_sampling_probs},
+        {"backend_sampling",          sampling.backend_sampling},
         {"lora",                      lora},
     };
 }
@@ -145,21 +147,21 @@ json task_params::to_json(bool only_metrics) const {
 //
 
 task_params server_task::params_from_json_cmpl(
-        const llama_context * ctx,
+        const llama_vocab * vocab,
         const common_params & params_base,
+        const int n_ctx_slot,
         const json & data) {
-    const llama_model * model = llama_get_model(ctx);
-    const llama_vocab * vocab = llama_model_get_vocab(model);
-
     task_params params;
 
     // Sampling parameter defaults are loaded from the global server context (but individual requests can still them)
     task_params defaults;
-    defaults.sampling    = params_base.sampling;
-    defaults.speculative = params_base.speculative;
-    defaults.n_keep      = params_base.n_keep;
-    defaults.n_predict   = params_base.n_predict;
-    defaults.antiprompt  = params_base.antiprompt;
+    defaults.sampling      = params_base.sampling;
+    defaults.speculative   = params_base.speculative;
+    defaults.n_keep        = params_base.n_keep;
+    defaults.n_predict     = params_base.n_predict;
+    defaults.n_cache_reuse = params_base.n_cache_reuse;
+    defaults.cache_prompt  = params_base.cache_prompt;
+    defaults.antiprompt    = params_base.antiprompt;
 
     // enabling this will output extra debug information in the HTTP responses from the server
     params.verbose           = params_base.verbosity > 9;
@@ -168,13 +170,15 @@ task_params server_task::params_from_json_cmpl(
     params.stream           = json_value(data,       "stream",             false);
     auto stream_opt         = json_value(data,       "stream_options",     json::object());
     params.include_usage    = json_value(stream_opt, "include_usage",      false);
-    params.cache_prompt     = json_value(data,       "cache_prompt",       true);
+    params.cache_prompt     = json_value(data,       "cache_prompt",       defaults.cache_prompt);
     params.return_tokens    = json_value(data,       "return_tokens",      false);
     params.return_progress  = json_value(data,       "return_progress",    false);
     params.n_predict        = json_value(data,       "n_predict",          json_value(data, "max_tokens", defaults.n_predict));
     params.n_indent         = json_value(data,       "n_indent",           defaults.n_indent);
     params.n_keep           = json_value(data,       "n_keep",             defaults.n_keep);
     params.n_discard        = json_value(data,       "n_discard",          defaults.n_discard);
+    params.n_cmpl           = json_value(data,       "n_cmpl",             json_value(data, "n", 1));
+    params.n_cache_reuse    = json_value(data,       "n_cache_reuse",      defaults.n_cache_reuse);
     //params.t_max_prompt_ms  = json_value(data,       "t_max_prompt_ms",    defaults.t_max_prompt_ms); // TODO: implement
     params.t_max_predict_ms = json_value(data,       "t_max_predict_ms",   defaults.t_max_predict_ms);
     params.response_fields  = json_value(data,       "response_fields",    std::vector<std::string>());
@@ -203,6 +207,7 @@ task_params server_task::params_from_json_cmpl(
     params.sampling.seed               = json_value(data, "seed",                defaults.sampling.seed);
     params.sampling.n_probs            = json_value(data, "n_probs",             defaults.sampling.n_probs);
     params.sampling.min_keep           = json_value(data, "min_keep",            defaults.sampling.min_keep);
+    params.sampling.backend_sampling   = json_value(data, "backend_sampling",    defaults.sampling.backend_sampling);
     params.post_sampling_probs         = json_value(data, "post_sampling_probs", defaults.post_sampling_probs);
 
     params.speculative.n_min = json_value(data, "speculative.n_min", defaults.speculative.n_min);
@@ -220,12 +225,12 @@ task_params server_task::params_from_json_cmpl(
 
     if (data.contains("lora")) {
         if (data.at("lora").is_array()) {
-            params.lora = parse_lora_request(params_base.lora_adapters, data.at("lora"));
+            params.lora = parse_lora_request(data.at("lora"));
         } else {
             throw std::runtime_error("Error: 'lora' must be an array of objects with 'id' and 'scale' fields");
         }
     } else {
-        params.lora = params_base.lora_adapters;
+        params.lora = {};
     }
 
     // TODO: add more sanity checks for the input parameters
@@ -240,11 +245,11 @@ task_params server_task::params_from_json_cmpl(
 
     if (params.sampling.penalty_last_n == -1) {
         // note: should be the slot's context and not the full context, but it's ok
-        params.sampling.penalty_last_n = llama_n_ctx(ctx);
+        params.sampling.penalty_last_n = n_ctx_slot;
     }
 
     if (params.sampling.dry_penalty_last_n == -1) {
-        params.sampling.dry_penalty_last_n = llama_n_ctx(ctx);
+        params.sampling.dry_penalty_last_n = n_ctx_slot;
     }
 
     if (params.sampling.dry_base < 1.0f) {
@@ -297,6 +302,9 @@ task_params server_task::params_from_json_cmpl(
         params.oaicompat_chat_syntax.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
         params.oaicompat_chat_syntax.thinking_forced_open = json_value(data, "thinking_forced_open", false);
         params.oaicompat_chat_syntax.parse_tool_calls = json_value(data, "parse_tool_calls", false);
+        if (data.contains("chat_parser")) {
+            params.oaicompat_chat_syntax.parser.load(data.at("chat_parser").get<std::string>());
+        }
     }
 
     {
@@ -450,8 +458,9 @@ task_params server_task::params_from_json_cmpl(
         }
     }
 
-    std::string model_name = params_base.model_alias.empty() ? DEFAULT_OAICOMPAT_MODEL : params_base.model_alias;
-    params.oaicompat_model = json_value(data, "model", model_name);
+    if (params.n_cmpl > params_base.n_parallel) {
+        throw std::runtime_error("n_cmpl cannot be greater than the number of slots, please increase -np");
+    }
 
     return params;
 }
@@ -565,6 +574,7 @@ std::vector<unsigned char> completion_token_output::str_to_bytes(const std::stri
 // server_task_result_cmpl_final
 //
 json server_task_result_cmpl_final::to_json() {
+    GGML_ASSERT(is_updated && "update() must be called before to_json()");
     switch (res_type) {
         case TASK_RESPONSE_TYPE_NONE:
             return to_json_non_oaicompat();
@@ -582,8 +592,8 @@ json server_task_result_cmpl_final::to_json() {
 json server_task_result_cmpl_final::to_json_non_oaicompat() {
     json res = json {
         {"index",               index},
-        {"content",             stream ? "" : content}, // in stream mode, content is already in last partial chunk
-        {"tokens",              stream ? llama_tokens {} : tokens},
+        {"content",             content},
+        {"tokens",              tokens},
         {"id_slot",             id_slot},
         {"stop",                true},
         {"model",               oaicompat_model},
@@ -619,7 +629,7 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
     json res = json {
         {"choices",            json::array({
             json{
-                {"text",          stream ? "" : content}, // in stream mode, content is already in last partial chunk
+                {"text",          content},
                 {"index",         index},
                 {"logprobs",      logprobs},
                 {"finish_reason", finish_reason},
@@ -663,7 +673,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
 
     json choice {
         {"finish_reason", finish_reason},
-        {"index", 0},
+        {"index", index},
         {"message", msg.to_json_oaicompat<json>()},
     };
 
@@ -698,6 +708,25 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
     }
 
     return res;
+}
+
+common_chat_msg task_result_state::update_chat_msg(
+        const std::string & text_added,
+        bool is_partial,
+        std::vector<common_chat_msg_diff> & diffs) {
+    generated_text += text_added;
+    auto msg_prv_copy = chat_msg;
+    SRV_DBG("Parsing chat message: %s\n", generated_text.c_str());
+    auto new_msg = common_chat_parse(
+        generated_text,
+        is_partial,
+        oaicompat_chat_syntax);
+    if (!new_msg.empty()) {
+        new_msg.set_tool_call_ids(generated_tool_call_ids, gen_tool_call_id);
+        chat_msg = new_msg;
+        diffs = common_chat_msg_diff::compute_diffs(msg_prv_copy, new_msg.empty() ? msg_prv_copy : new_msg);
+    }
+    return chat_msg;
 }
 
 json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
@@ -786,6 +815,15 @@ json server_task_result_cmpl_final::to_json_anthropic() {
         msg.content = content;
     }
 
+    // thinking block comes first (Anthropic extended thinking format)
+    if (!msg.reasoning_content.empty()) {
+        content_blocks.push_back({
+            {"type", "thinking"},
+            {"thinking", msg.reasoning_content},
+            {"signature", ""}  // empty signature for local models (no cryptographic verification)
+        });
+    }
+
     if (!msg.content.empty()) {
         content_blocks.push_back({
             {"type", "text"},
@@ -834,20 +872,57 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
         stop_reason = oaicompat_msg.tool_calls.empty() ? "end_turn" : "tool_use";
     }
 
-    bool has_text = !oaicompat_msg.content.empty();
+    bool has_thinking = !oaicompat_msg.reasoning_content.empty();
+    bool has_text     = !oaicompat_msg.content.empty();
     size_t num_tool_calls = oaicompat_msg.tool_calls.size();
 
-    bool text_block_started = false;
+    // content block indices: thinking (0) -> text (0 or 1) -> tool_use (n+)
+    size_t thinking_block_index = 0;
+    size_t text_block_index     = has_thinking ? 1 : 0;
+
+    bool thinking_block_started = false;
+    bool text_block_started     = false;
     std::unordered_set<size_t> tool_calls_started;
 
     for (const auto & diff : oaicompat_msg_diffs) {
+        // handle thinking/reasoning content
+        if (!diff.reasoning_content_delta.empty()) {
+            if (!thinking_block_started) {
+                events.push_back({
+                    {"event", "content_block_start"},
+                    {"data", {
+                        {"type", "content_block_start"},
+                        {"index", thinking_block_index},
+                        {"content_block", {
+                            {"type", "thinking"},
+                            {"thinking", ""}
+                        }}
+                    }}
+                });
+                thinking_block_started = true;
+            }
+
+            events.push_back({
+                {"event", "content_block_delta"},
+                {"data", {
+                    {"type", "content_block_delta"},
+                    {"index", thinking_block_index},
+                    {"delta", {
+                        {"type", "thinking_delta"},
+                        {"thinking", diff.reasoning_content_delta}
+                    }}
+                }}
+            });
+        }
+
+        // handle regular text content
         if (!diff.content_delta.empty()) {
             if (!text_block_started) {
                 events.push_back({
                     {"event", "content_block_start"},
                     {"data", {
                         {"type", "content_block_start"},
-                        {"index", 0},
+                        {"index", text_block_index},
                         {"content_block", {
                             {"type", "text"},
                             {"text", ""}
@@ -861,7 +936,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
                 {"event", "content_block_delta"},
                 {"data", {
                     {"type", "content_block_delta"},
-                    {"index", 0},
+                    {"index", text_block_index},
                     {"delta", {
                         {"type", "text_delta"},
                         {"text", diff.content_delta}
@@ -870,8 +945,9 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
             });
         }
 
+        // handle tool calls
         if (diff.tool_call_index != std::string::npos) {
-            size_t content_block_index = (has_text ? 1 : 0) + diff.tool_call_index;
+            size_t content_block_index = (has_thinking ? 1 : 0) + (has_text ? 1 : 0) + diff.tool_call_index;
 
             if (tool_calls_started.find(diff.tool_call_index) == tool_calls_started.end()) {
                 const auto & full_tool_call = oaicompat_msg.tool_calls[diff.tool_call_index];
@@ -907,18 +983,42 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
         }
     }
 
+    // close content blocks in order
+    if (has_thinking) {
+        // Anthropic API requires a signature_delta before closing thinking blocks
+        // We use an empty signature since we can't generate a cryptographic signature for local models
+        events.push_back({
+            {"event", "content_block_delta"},
+            {"data", {
+                {"type", "content_block_delta"},
+                {"index", thinking_block_index},
+                {"delta", {
+                    {"type", "signature_delta"},
+                    {"signature", ""}
+                }}
+            }}
+        });
+        events.push_back({
+            {"event", "content_block_stop"},
+            {"data", {
+                {"type", "content_block_stop"},
+                {"index", thinking_block_index}
+            }}
+        });
+    }
+
     if (has_text) {
         events.push_back({
             {"event", "content_block_stop"},
             {"data", {
                 {"type", "content_block_stop"},
-                {"index", 0}
+                {"index", text_block_index}
             }}
         });
     }
 
     for (size_t i = 0; i < num_tool_calls; i++) {
-        size_t content_block_index = (has_text ? 1 : 0) + i;
+        size_t content_block_index = (has_thinking ? 1 : 0) + (has_text ? 1 : 0) + i;
         events.push_back({
             {"event", "content_block_stop"},
             {"data", {
@@ -956,6 +1056,7 @@ json server_task_result_cmpl_final::to_json_anthropic_stream() {
 // server_task_result_cmpl_partial
 //
 json server_task_result_cmpl_partial::to_json() {
+    GGML_ASSERT(is_updated && "update() must be called before to_json()");
     switch (res_type) {
         case TASK_RESPONSE_TYPE_NONE:
             return to_json_non_oaicompat();
@@ -1043,7 +1144,7 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
             {"choices", json::array({
                 json {
                     {"finish_reason", nullptr},
-                    {"index", 0},
+                    {"index", index},
                     {"delta", delta},
                 },
             })},
@@ -1125,11 +1226,10 @@ json server_task_result_rerank::to_json() {
 json server_task_result_cmpl_partial::to_json_anthropic() {
     json events = json::array();
     bool first = (n_decoded == 1);
-    static bool text_block_started = false;
+    // use member variables to track block state across streaming calls
+    // (anthropic_thinking_block_started, anthropic_text_block_started)
 
     if (first) {
-        text_block_started = false;
-
         events.push_back({
             {"event", "message_start"},
             {"data", {
@@ -1151,28 +1251,69 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
         });
     }
 
+    // content block indices: thinking (0) -> text (0 or 1) -> tool_use (n+)
+    size_t thinking_block_index = 0;
+    // use anthropic_has_reasoning (set in update()) to know if ANY reasoning was generated
+    size_t text_block_index     = anthropic_has_reasoning ? 1 : 0;
+
+    // use local copies of streaming state (copied from task_result_state in update())
+    // these reflect the state BEFORE this chunk was processed
+    bool thinking_started = anthropic_thinking_block_started;
+    bool text_started     = anthropic_text_block_started;
+
     for (const auto & diff : oaicompat_msg_diffs) {
-        if (!diff.content_delta.empty()) {
-            if (!text_block_started) {
+        // handle thinking/reasoning content
+        if (!diff.reasoning_content_delta.empty()) {
+            if (!thinking_started) {
                 events.push_back({
                     {"event", "content_block_start"},
                     {"data", {
                         {"type", "content_block_start"},
-                        {"index", 0},
+                        {"index", thinking_block_index},
                         {"content_block", {
-                            {"type", "text"},
-                            {"text", ""}
+                            {"type", "thinking"},
+                            {"thinking", ""}
                         }}
                     }}
                 });
-                text_block_started = true;
+                thinking_started = true;
             }
 
             events.push_back({
                 {"event", "content_block_delta"},
                 {"data", {
                     {"type", "content_block_delta"},
-                    {"index", 0},
+                    {"index", thinking_block_index},
+                    {"delta", {
+                        {"type", "thinking_delta"},
+                        {"thinking", diff.reasoning_content_delta}
+                    }}
+                }}
+            });
+        }
+
+        // handle regular text content
+        if (!diff.content_delta.empty()) {
+            if (!text_started) {
+                events.push_back({
+                    {"event", "content_block_start"},
+                    {"data", {
+                        {"type", "content_block_start"},
+                        {"index", text_block_index},
+                        {"content_block", {
+                            {"type", "text"},
+                            {"text", ""}
+                        }}
+                    }}
+                });
+                text_started = true;
+            }
+
+            events.push_back({
+                {"event", "content_block_delta"},
+                {"data", {
+                    {"type", "content_block_delta"},
+                    {"index", text_block_index},
                     {"delta", {
                         {"type", "text_delta"},
                         {"text", diff.content_delta}
@@ -1181,8 +1322,10 @@ json server_task_result_cmpl_partial::to_json_anthropic() {
             });
         }
 
+        // handle tool calls
         if (diff.tool_call_index != std::string::npos) {
-            size_t content_block_index = (text_block_started ? 1 : 0) + diff.tool_call_index;
+            // use anthropic_has_reasoning for thinking block count (persists across calls)
+            size_t content_block_index = (anthropic_has_reasoning ? 1 : 0) + (text_started ? 1 : 0) + diff.tool_call_index;
 
             if (!diff.tool_call_delta.name.empty()) {
                 events.push_back({
@@ -1294,6 +1437,30 @@ json server_task_result_slot_erase::to_json() {
         { "id_slot",  id_slot },
         { "n_erased", n_erased },
     };
+}
+
+//
+// server_task_result_get_lora
+//
+
+json server_task_result_get_lora::to_json() {
+    json result = json::array();
+    for (size_t i = 0; i < loras.size(); ++i) {
+        auto & lora = loras[i];
+        json entry = {
+            {"id",            i},
+            {"path",          lora.info.path},
+            {"scale",         lora.info.scale},
+            {"task_name",     lora.info.task_name},
+            {"prompt_prefix", lora.info.prompt_prefix},
+        };
+        if (!lora.alora_invocation_tokens.empty()) {
+            entry["alora_invocation_string"] = lora.alora_invocation_string;
+            entry["alora_invocation_tokens"] = lora.alora_invocation_tokens;
+        }
+        result.push_back(std::move(entry));
+    }
+    return result;
 }
 
 //
