@@ -1,11 +1,11 @@
 <script lang="ts">
-	import { Download, Upload } from '@lucide/svelte';
+	import { Download, Upload, Trash2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { DialogConversationSelection } from '$lib/components/app';
-	import { DatabaseStore } from '$lib/stores/database';
-	import type { ExportedConversations } from '$lib/types/database';
-	import { createMessageCountMap } from '$lib/utils/conversation-utils';
-	import { chatStore } from '$lib/stores/chat.svelte';
+	import { createMessageCountMap } from '$lib/utils';
+	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
+	import { toast } from 'svelte-sonner';
+	import DialogConfirmation from '$lib/components/app/dialogs/DialogConfirmation.svelte';
 
 	let exportedConversations = $state<DatabaseConversation[]>([]);
 	let importedConversations = $state<DatabaseConversation[]>([]);
@@ -20,17 +20,20 @@
 		[]
 	);
 
+	// Delete functionality state
+	let showDeleteDialog = $state(false);
+
 	async function handleExportClick() {
 		try {
-			const allConversations = await DatabaseStore.getAllConversations();
+			const allConversations = conversations();
 			if (allConversations.length === 0) {
-				alert('No conversations to export');
+				toast.info('No conversations to export');
 				return;
 			}
 
 			const conversationsWithMessages = await Promise.all(
-				allConversations.map(async (conv) => {
-					const messages = await DatabaseStore.getConversationMessages(conv.id);
+				allConversations.map(async (conv: DatabaseConversation) => {
+					const messages = await conversationsStore.getConversationMessages(conv.id);
 					return { conv, messages };
 				})
 			);
@@ -48,7 +51,7 @@
 		try {
 			const allData: ExportedConversations = await Promise.all(
 				selectedConversations.map(async (conv) => {
-					const messages = await DatabaseStore.getConversationMessages(conv.id);
+					const messages = await conversationsStore.getConversationMessages(conv.id);
 					return { conv: $state.snapshot(conv), messages: $state.snapshot(messages) };
 				})
 			);
@@ -136,9 +139,7 @@
 				.snapshot(fullImportData)
 				.filter((item) => selectedIds.has(item.conv.id));
 
-			await DatabaseStore.importConversations(selectedData);
-
-			await chatStore.loadConversations();
+			await conversationsStore.importConversationsData(selectedData);
 
 			importedConversations = selectedConversations;
 			showImportSummary = true;
@@ -148,6 +149,36 @@
 			console.error('Import failed:', err);
 			alert('Failed to import conversations. Please check the file format.');
 		}
+	}
+
+	async function handleDeleteAllClick() {
+		try {
+			const allConversations = conversations();
+
+			if (allConversations.length === 0) {
+				toast.info('No conversations to delete');
+				return;
+			}
+
+			showDeleteDialog = true;
+		} catch (err) {
+			console.error('Failed to load conversations for deletion:', err);
+			toast.error('Failed to load conversations');
+		}
+	}
+
+	async function handleDeleteAllConfirm() {
+		try {
+			await conversationsStore.deleteAll();
+
+			showDeleteDialog = false;
+		} catch (err) {
+			console.error('Failed to delete conversations:', err);
+		}
+	}
+
+	function handleDeleteAllCancel() {
+		showDeleteDialog = false;
 	}
 </script>
 
@@ -233,6 +264,25 @@
 				</div>
 			{/if}
 		</div>
+
+		<div class="grid border-t border-border/30 pt-4">
+			<h4 class="mb-2 text-sm font-medium text-destructive">Delete All Conversations</h4>
+
+			<p class="mb-4 text-sm text-muted-foreground">
+				Permanently delete all conversations and their messages. This action cannot be undone.
+				Consider exporting your conversations first if you want to keep a backup.
+			</p>
+
+			<Button
+				class="text-destructive-foreground w-full justify-start justify-self-start bg-destructive hover:bg-destructive/80 md:w-auto"
+				onclick={handleDeleteAllClick}
+				variant="destructive"
+			>
+				<Trash2 class="mr-2 h-4 w-4" />
+
+				Delete all conversations
+			</Button>
+		</div>
 	</div>
 </div>
 
@@ -252,4 +302,16 @@
 	bind:open={showImportDialog}
 	onCancel={() => (showImportDialog = false)}
 	onConfirm={handleImportConfirm}
+/>
+
+<DialogConfirmation
+	bind:open={showDeleteDialog}
+	title="Delete all conversations"
+	description="Are you sure you want to delete all conversations? This action cannot be undone and will permanently remove all your conversations and messages."
+	confirmText="Delete All"
+	cancelText="Cancel"
+	variant="destructive"
+	icon={Trash2}
+	onConfirm={handleDeleteAllConfirm}
+	onCancel={handleDeleteAllCancel}
 />

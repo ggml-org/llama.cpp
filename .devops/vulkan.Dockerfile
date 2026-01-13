@@ -33,6 +33,7 @@ FROM ubuntu:$UBUNTU_VERSION AS base
 
 RUN apt-get update \
     && apt-get install -y libgomp1 curl libvulkan1 mesa-vulkan-drivers \
+    libglvnd0 libgl1 libglx0 libegl1 libgles2 \
     && apt autoremove -y \
     && apt clean -y \
     && rm -rf /tmp/* /var/tmp/* \
@@ -68,7 +69,7 @@ ENTRYPOINT ["/app/tools.sh"]
 ### Light, CLI only
 FROM base AS light
 
-COPY --from=build /app/full/llama-cli /app
+COPY --from=build /app/full/llama-cli /app/full/llama-completion /app
 
 WORKDIR /app
 

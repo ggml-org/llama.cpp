@@ -54,6 +54,7 @@
 /out/
 /tmp/
 /autogen-*.md
+/common/build-info.cpp
 
 # Deprecated
 
@@ -129,8 +130,11 @@ poetry.toml
 # Local scripts
 /run-vim.sh
 /run-chat.sh
+/run-spec.sh
 /.ccache/
 
 # IDE
 /*.code-workspace
 /.windsurf/
+# emscripten
+a.out.*

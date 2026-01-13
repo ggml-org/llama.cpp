@@ -9,6 +9,7 @@
 
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "mtmd-jit.h"
 #include "llama.h"
 
 #include <algorithm>
@@ -32,27 +33,9 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
 
-
-// internal functions for JIT llm init integration
-extern "C" {
-    // Retrieve the JIT-initialized llama context if available (NULL if not set)
-    struct llama_context * mtmd_get_llm_context(mtmd_context * ctx);
-
-    // Whether pre-encode/JIT-llm flow is enabled
-    bool mtmd_preencode_enabled(mtmd_context * ctx);
-
-    // Pre-encode the image chunk; returns 0 on success, or encode error
-    int32_t mtmd_preencode_image(mtmd_context * ctx, const mtmd_input_chunks * chunks);
-
-    // Invoke the registered JIT LLM init callback if not already invoked
-    void mtmd_invoke_llm_init_if_needed(mtmd_context * ctx);
-
-     // Query pre-encoded image state and identity
-    bool mtmd_has_preencoded_image(mtmd_context * ctx);
-
-    // Retrieve the encode timing (ms) for the media chunk's underlying encoder, returns 0 if unavailable
-    int64_t mtmd_get_image_encode_timing(mtmd_context * ctx, const mtmd_input_chunk * chunk);
-}
+#ifdef MTMD_INTERNAL_HEADER
+#error "mtmd-helper is a public library outside of mtmd. it must not include internal headers"
+#endif
 
 //
 // internal logging functions

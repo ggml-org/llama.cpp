@@ -7,6 +7,8 @@
 
 // !!! Internal header, to be used by mtmd only !!!
 
+#define MTMD_INTERNAL_HEADER
+
 struct clip_ctx;
 
 struct clip_image_size {
@@ -35,6 +37,7 @@ struct clip_context_params {
     int image_min_tokens;
     int image_max_tokens;
     bool clip_reduced_vram;  // offload clip weights to CPU and stream at runtime to backend device
+    bool warmup;
 };
 
 struct clip_init_result {
@@ -102,9 +105,10 @@ bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, const struct 
 
 int clip_is_minicpmv(const struct clip_ctx * ctx);
 bool clip_is_glm(const struct clip_ctx * ctx);
-bool clip_is_qwen2vl(const struct clip_ctx * ctx);
+bool clip_is_mrope(const struct clip_ctx * ctx);
 bool clip_is_llava(const struct clip_ctx * ctx);
-bool clip_is_gemma3(const struct clip_ctx * ctx);
+// note for contributor: this clip_is_(model) pattern is deprecated
+//                       do NOT add new functions like this
 
 bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec);
 

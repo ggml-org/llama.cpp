@@ -2,7 +2,8 @@
 	import { AlertTriangle, Server } from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import { serverProps, serverLoading, serverError, modelName } from '$lib/stores/server.svelte';
+	import { serverProps, serverLoading, serverError } from '$lib/stores/server.svelte';
+	import { singleModelName } from '$lib/stores/models.svelte';
 
 	interface Props {
 		class?: string;
@@ -13,7 +14,7 @@
 
 	let error = $derived(serverError());
 	let loading = $derived(serverLoading());
-	let model = $derived(modelName());
+	let model = $derived(singleModelName());
 	let serverData = $derived(serverProps());
 
 	function getStatusColor() {
