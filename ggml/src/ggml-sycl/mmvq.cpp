@@ -3783,6 +3783,20 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
                                 const int64_t               src1_padded_col_size,
                                 const dpct::queue_ptr &     stream) {
     GGML_SYCL_PROFILE_SCOPE_MMVQ("mmvq");
+
+    // Check tiered dispatch for weight tensor
+    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
+        ggml_sycl::memory_tier tier;
+        bool in_inventory = false;
+        void * cached_ptr = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
+        if (cached_ptr != nullptr) {
+            GGML_SYCL_DEBUG("[SYCL] mmvq tiered hit: %s (tier=%d)\n",
+                          src0->name, static_cast<int>(tier));
+        } else if (in_inventory) {
+            GGML_SYCL_DEBUG("[SYCL] mmvq tiered pending: %s\n", src0->name);
+        }
+    }
+
     const int64_t ne10 = src1->ne[0];
     GGML_ASSERT(ne10 % QK8_1 == 0);
 
