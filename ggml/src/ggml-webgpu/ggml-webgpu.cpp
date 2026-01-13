@@ -2763,6 +2763,7 @@ static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, co
     backend_ctx->webgpu_ctx = std::make_shared<webgpu_context_struct>(); 
     ensure_webgpu_device_initialized(backend_ctx);
 
+    // See GGML Backend Interface section
     auto * backend = new ggml_backend();
     *backend = {
         /* .guid      = */ ggml_backend_webgpu_guid(),
@@ -2770,7 +2771,8 @@ static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, co
         /* .device    = */ dev,
         /* .context   = */ backend_ctx,
     };
-    return backend;
+     return backend;
+
 }
 
 static ggml_backend_buffer_type_t ggml_backend_webgpu_device_get_buffer_type(ggml_backend_dev_t dev) {
