@@ -1055,10 +1055,10 @@ void ggml_gemv_q5_K_8x8_q8_K(int                        n,
 
                     // FUSED BIAS: Compute and subtract bias immediately
                     // bias = (bsums_lo * mins_lo + bsums_hi * mins_hi) * sb_min
-                    int32x4_t bias = vmull_s16(bsums_vec_lo, group_mins_lo);
-                    bias = vmlal_s16(bias, bsums_vec_hi, group_mins_hi);
+                    int32x4_t bias       = vmull_s16(bsums_vec_lo, group_mins_lo);
+                    bias                 = vmlal_s16(bias, bsums_vec_hi, group_mins_hi);
                     float32x4_t bias_f32 = vcvtq_f32_s32(bias);
-                    acc_f32[i] = vmlsq_f32(acc_f32[i], sb_min, bias_f32);
+                    acc_f32[i]           = vmlsq_f32(acc_f32[i], sb_min, bias_f32);
                 }
             }  // for sb
         }  // for b
@@ -1070,6 +1070,33 @@ void ggml_gemv_q5_K_8x8_q8_K(int                        n,
     return;
 #endif  // defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     ggml_gemv_q5_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemv_q6_K_8x8_q8_K(int                        n,
+                             float * GGML_RESTRICT      s,
+                             size_t                     bs,
+                             const void * GGML_RESTRICT vx,
+                             const void * GGML_RESTRICT vy,
+                             int                        nr,
+                             int                        nc) {
+    constexpr int qk = QK_K;
+    const int     nb = n / qk;
+
+    constexpr int ncols_interleaved = 8;
+    constexpr int blocklen          = 8;
+
+    assert(n % qk == 0);
+    assert(nc % ncols_interleaved == 0);
+
+    UNUSED(nb);
+    UNUSED(ncols_interleaved);
+    UNUSED(blocklen);
+
+#if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+    GGML_ABORT("ggml_gemv_q6_K_8x8_q8_K: ARM NEON DOTPROD implementation not yet available");
+    return;
+#endif  // defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+    ggml_gemv_q6_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 }
 
 void ggml_gemv_q8_0_4x4_q8_0(int                        n,
@@ -3146,8 +3173,8 @@ void ggml_gemm_q5_K_8x8_q8_K(int                        n,
                         const int8x16_t qs_lo_0 = vreinterpretq_s8_u8(vsliq_n_u8(vandq_u8(qs_cp_0, m4b), hbit_lo_0, 4));
                         int32x4_t       acc_0   = sb_acc[0];
                         acc_0                   = vmmlaq_s32(acc_0, qs_lo_0, q8s[0][0]);
-                        int32x4_t acc_2 = sb_acc[2];
-                        acc_2           = vmmlaq_s32(acc_2, qs_lo_0, q8s[1][0]);
+                        int32x4_t acc_2         = sb_acc[2];
+                        acc_2                   = vmmlaq_s32(acc_2, qs_lo_0, q8s[1][0]);
                         const int8x16_t qs_hi_0 = vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(qs_cp_0, 4), hbit_hi_0));
                         int32x4_t       acc_1   = sb_acc[1];
                         acc_1                   = vmmlaq_s32(acc_1, qs_hi_0, q8s[0][4]);
@@ -3269,6 +3296,34 @@ void ggml_gemm_q5_K_8x8_q8_K(int                        n,
     return;
 #endif  // defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_MATMUL_INT8)
     ggml_gemm_q5_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
+}
+
+void ggml_gemm_q6_K_8x8_q8_K(int                        n,
+                             float * GGML_RESTRICT      s,
+                             size_t                     bs,
+                             const void * GGML_RESTRICT vx,
+                             const void * GGML_RESTRICT vy,
+                             int                        nr,
+                             int                        nc) {
+    constexpr int qk = QK_K;
+    const int     nb = n / qk;
+
+    constexpr int ncols_interleaved = 8;
+    constexpr int blocklen          = 8;
+
+    assert(n % qk == 0);
+    assert(nr % 4 == 0);
+    assert(nc % ncols_interleaved == 0);
+
+    UNUSED(nb);
+    UNUSED(ncols_interleaved);
+    UNUSED(blocklen);
+
+#if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_MATMUL_INT8)
+    GGML_ABORT("ggml_gemm_q6_K_8x8_q8_K: NEON+MATMUL_INT8 implementation not available yet");
+    return;
+#endif  // defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_MATMUL_INT8)
+    ggml_gemm_q6_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 }
 
 void ggml_gemm_q8_0_4x4_q8_0(int                        n,
