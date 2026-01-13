@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <vector>
 
 static void test_set_inventory() {
@@ -88,17 +89,24 @@ static void test_large_inventory() {
         return;
     }
 
-    // Create a large inventory that should exceed VRAM
-    std::vector<ggml_sycl_tensor_info> tensors;
-    size_t                             total_size = 0;
+    // Get VRAM info
+    size_t free_vram = 0, total_vram = 0;
+    ggml_backend_sycl_get_device_memory(0, &free_vram, &total_vram);
 
-    // 100 tensors of 1GB each = 100GB total (should exceed any consumer GPU)
-    for (int i = 0; i < 100; i++) {
-        char name[64];
-        snprintf(name, sizeof(name), "blk.%d.weight", i);
-        size_t size = 1ULL * 1024 * 1024 * 1024;  // 1GB
-        tensors.push_back({ strdup(name), size });
-        total_size += size;
+    // Create inventory that exceeds 90% of VRAM
+    size_t num_tensors     = 100;
+    size_t size_per_tensor = free_vram / 50;  // Each tensor is 2% of VRAM, 100 = 200%
+    size_t total_size      = num_tensors * size_per_tensor;
+
+    // Use std::vector<std::string> to manage string lifetime safely
+    std::vector<std::string>           name_storage;
+    std::vector<ggml_sycl_tensor_info> tensors;
+    name_storage.reserve(num_tensors);
+    tensors.reserve(num_tensors);
+
+    for (size_t i = 0; i < num_tensors; i++) {
+        name_storage.push_back("blk." + std::to_string(i) + ".weight");
+        tensors.push_back({ name_storage.back().c_str(), size_per_tensor });
     }
 
     ggml_sycl_tensor_inventory inventory;
@@ -108,17 +116,13 @@ static void test_large_inventory() {
 
     ggml_backend_sycl_set_tensor_inventory(backend, &inventory);
 
-    // With 100GB model, tiered should be enabled
+    // Large inventory should enable tiered mode
     bool tiered = ggml_backend_sycl_is_tiered_enabled(backend);
-    printf("test_large_inventory: tiered_enabled=%s (expected: true for 100GB model)\n", tiered ? "true" : "false");
-    assert(tiered && "Large inventory should enable tiered mode");
+    assert(tiered && "Large inventory exceeding VRAM should enable tiered mode");
 
-    // Cleanup
-    for (auto & t : tensors) {
-        free(const_cast<char *>(t.name));
-    }
     ggml_backend_free(backend);
-    printf("test_large_inventory: PASSED\n");
+    printf("test_large_inventory: PASSED (tiered=%s, inventory=%.1fGB, VRAM=%.1fGB)\n", tiered ? "true" : "false",
+           total_size / (1024.0 * 1024.0 * 1024.0), free_vram / (1024.0 * 1024.0 * 1024.0));
 }
 
 int main() {

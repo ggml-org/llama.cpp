@@ -645,7 +645,7 @@ void ggml_backend_sycl_set_tensor_inventory(
     ggml_backend_t backend,
     const ggml_sycl_tensor_inventory * inventory
 ) {
-    if (!backend || !inventory) {
+    if (!backend || !inventory || (inventory->count > 0 && !inventory->tensors)) {
         return;
     }
 
