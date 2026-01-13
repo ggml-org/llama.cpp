@@ -1513,12 +1513,9 @@ static void llama_sampler_top_p_backend_apply(
     mask_reshaped = ggml_set_rows(ctx, mask_reshaped, ones, ggml_cast(ctx, idxf, GGML_TYPE_I32));
     mask = ggml_reshape_1d(ctx, mask_reshaped, mask->ne[0]);
 
-    // Use ggml_scale_bias (output = (a * s) + b) which in this case becomes:
-    // top_p_bias = (mask * 1e9f) - 1e9f.
-    // So entries in the mask that we want to discard will become -1e9f, and
-    // others will be 0 (meaning that will not effect the logits).
-    const float large_val = 1e9f;
-    struct ggml_tensor * top_p_bias = ggml_scale_bias(ctx, mask, large_val, -large_val);
+    // Apply -INFINITY bias for masked-out tokens
+    // log(1) = 0 (keep), log(0) = -INF (discard)
+    struct ggml_tensor * top_p_bias = ggml_log(ctx, mask);
     ggml_set_name(top_p_bias, "top_p_bias");
 
     data->logits = ggml_add(ctx, sorted_logits, top_p_bias);
@@ -1673,15 +1670,11 @@ static void llama_sampler_min_p_backend_apply(
     struct ggml_tensor * mask = ggml_step(ctx, sub);
     ggml_set_name(mask, "min_p_mask");
 
-    // Use ggml_scale_bias (output = (a * s) + b) which in this case becomes:
-    // min_p_bias = (mask * 1e9f) - 1e9f.
-    // So entries in the mask that we want to discard will become -1e9f, and
-    // others will be 0 (meaning that will not effect the logits).
-    const float large_val = 1e9f;
-    struct ggml_tensor * min_p_bias = ggml_scale_bias(ctx, mask, large_val, -large_val);
+    // Apply -INFINITY bias for masked-out tokens
+    // log(1) = 0 (keep), log(0) = -INF (discard)
+    struct ggml_tensor * min_p_bias = ggml_log(ctx, mask);
     ggml_set_name(min_p_bias, "min_p_bias");
 
-    // Add the min_p bias to the logits.
     data->logits = ggml_add(ctx, data->logits, min_p_bias);
     ggml_set_name(data->logits, "min_p_logits");
 
@@ -3356,10 +3349,9 @@ static void llama_sampler_adaptive_p_apply(struct llama_sampler * smpl, llama_to
     // after the softmax.
     //
     for (size_t i = 0; i < cur_p->size; ++i) {
-        if (cur_p->data[i].logit <= -1e9f) {
-            // don't transform logits with very large negative values
-            // (as set by e.g. min-p and top-p when using backend sampling)
-            // the value `-1e9f` is copied from `llama_sampler_min_p_backend_apply`
+        if (cur_p->data[i].logit == -INFINITY) {
+            // don't transform logits that are -INFINITY
+            // (as masked out by e.g. min-p and top-p when using backend sampling)
             continue;
         }
         float dist = std::abs((cur_p->data[i].p - adapted_target) * INV_WIDTH);
