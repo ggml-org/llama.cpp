@@ -526,7 +526,7 @@ static __device__ __forceinline__ half2 warp_prefix_inclusive_sum(half2 a) {
 #endif // FP16_AVAILABLE
 }
 
-enum block_reduce_method {
+enum class block_reduce_method {
     MAX,
     SUM,
 };
@@ -537,8 +537,7 @@ struct block_reduce_policy;
 template <typename T, typename... Ts>
 constexpr bool is_any = (std::is_same_v<T, Ts> || ...);
 
-template<typename T>
-struct block_reduce_policy<SUM, T> {
+template <typename T> struct block_reduce_policy<block_reduce_method::SUM, T> {
     static __device__ T reduce(T val) {
         if constexpr(is_any<T, float, float2, half2, int>) {
             return warp_reduce_sum(val);
@@ -562,8 +561,7 @@ struct block_reduce_policy<SUM, T> {
     }
 };
 
-template<typename T>
-struct block_reduce_policy<MAX, T> {
+template <typename T> struct block_reduce_policy<block_reduce_method::MAX, T> {
     static __device__ T reduce(T val) {
         if constexpr (is_any<T, float, half2>) {
             return warp_reduce_max(val);
