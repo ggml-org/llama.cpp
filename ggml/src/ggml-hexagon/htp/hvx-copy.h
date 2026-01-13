@@ -147,16 +147,11 @@ static inline void hvx_copy_f32_uu(uint8_t * restrict dst, const uint8_t * restr
                                                                                     \
         _Pragma("unroll(4)")                                                        \
         for (; i < nvec; i++) {                                                     \
-            HVX_Vector s0_qf = Q6_Vqf32_vsub_VsfVsf(vsrc[i*2+0], zero);             \
-            HVX_Vector s1_qf = Q6_Vqf32_vsub_VsfVsf(vsrc[i*2+1], zero);             \
-            HVX_Vector s_hf  = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(s1_qf, s0_qf)); \
-            vdst[i] = Q6_Vh_vdeal_Vh(s_hf);                                         \
+            vdst[i] = hvx_vec_f32_to_f16(vsrc[i*2+0], vsrc[i*2+1]);                 \
         }                                                                           \
         if (nloe) {                                                                 \
-            HVX_Vector s0_qf = Q6_Vqf32_vsub_VsfVsf(vsrc[i*2+0], zero);             \
-            HVX_Vector s1_qf = Q6_Vqf32_vsub_VsfVsf(vsrc[i*2+1], zero);             \
-            HVX_Vector s_hf  = Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(s1_qf, s0_qf)); \
-            vec_store((void *) &vdst[i], nloe * elem_size, Q6_Vh_vdeal_Vh(s_hf));   \
+            HVX_Vector v = hvx_vec_f32_to_f16(vsrc[i*2+0], vsrc[i*2+1]);            \
+            vec_store((void *) &vdst[i], nloe * elem_size, v);                      \
         }                                                                           \
     } while(0)
 

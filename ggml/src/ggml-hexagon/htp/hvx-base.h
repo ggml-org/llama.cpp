@@ -43,7 +43,6 @@ static inline HVX_Vector hvx_vec_splat_f16(float v) {
     return Q6_Vh_vsplat_R(u.i);
 }
 
-
 static inline HVX_Vector hvx_vec_repl4(HVX_Vector v) {
     // vdelta control to replicate first 4 bytes across all elements
     static const uint8_t __attribute__((aligned(128))) repl[128] = {
@@ -95,9 +94,35 @@ static inline HVX_Vector hvx_vec_neg_f32(HVX_Vector v) {
 #endif  // __HVX_ARCH__ > 75
 }
 
+static inline HVX_VectorPred hvx_vec_is_nan_f16(HVX_Vector v) {
+    const HVX_Vector vnan_exp  = Q6_Vh_vsplat_R(0x7C00);
+    const HVX_Vector vnan_frac = Q6_Vh_vsplat_R(0x7FFF);
+
+    // get pred of which are NaN, i.e., exponent bits all 1s and fraction bits non 0s
+    HVX_VectorPred p_exp  = Q6_Q_vcmp_eq_VhVh(Q6_V_vand_VV(v, vnan_exp), vnan_exp);
+    HVX_VectorPred p_frac = Q6_Q_not_Q(Q6_Q_vcmp_eq_VhVh(Q6_V_vand_VV(v, vnan_frac), vnan_exp));
+    return Q6_Q_and_QQ(p_exp, p_frac);
+}
+
+static inline HVX_Vector hvx_vec_f32_to_f16(HVX_Vector v0, HVX_Vector v1) {
+    const HVX_Vector zero = Q6_V_vsplat_R(0);
+    HVX_Vector q0 = Q6_Vqf32_vadd_VsfVsf(v0, zero);
+    HVX_Vector q1 = Q6_Vqf32_vadd_VsfVsf(v1, zero);
+    HVX_Vector  v = Q6_Vh_vdeal_Vh(Q6_Vhf_equals_Wqf32(Q6_W_vcombine_VV(q1, q0)));
+
+#if __HVX_ARCH__ < 79
+    // replace NaNs with -INF, older arches produce NaNs for (-INF + 0.0)
+    const HVX_Vector neg_inf = hvx_vec_splat_f16(-INFINITY);
+    HVX_VectorPred nan = hvx_vec_is_nan_f16(v);
+    v = Q6_V_vmux_QVV(nan, neg_inf, v);
+#endif
+
+    return v;
+}
+
 /* Q6_Vsf_equals_Vw is only available on v73+.*/
 #if __HVX_ARCH__ < 73
-static inline HVX_Vector hvx_i32_to_qf32(HVX_Vector const in)
+static inline HVX_Vector hvx_vec_i32_to_qf32(HVX_Vector const in)
 {
     HVX_Vector const vzero = Q6_V_vzero();
     HVX_VectorPred is_zero = Q6_Q_vcmp_eq_VwVw(in, vzero);
@@ -111,7 +136,7 @@ static inline HVX_Vector hvx_i32_to_qf32(HVX_Vector const in)
 
 static inline HVX_Vector Q6_Vsf_equals_Vw(HVX_Vector const in)
 {
-    return Q6_Vsf_equals_Vqf32(hvx_i32_to_qf32(in));
+    return Q6_Vsf_equals_Vqf32(hvx_vec_i32_to_qf32(in));
 }
 #endif
 
@@ -138,6 +163,5 @@ static inline HVX_Vector hvx_vec_i16_from_hf_rnd_sat(HVX_Vector vin) {
     // now round down to 16
     return Q6_Vh_vround_VwVw_sat(vsf_1, vsf_0);
 }
-
 
 #endif /* HVX_BASE_H */
