@@ -1,0 +1,144 @@
+# OpenVINO Backend for llama.cpp
+
+This document describes the OpenVINO backend for `llama.cpp`, which enables hardware-accelerated inference on **Intel® CPUs, GPUs, and NPUs** while remaining compatible with the existing **GGUF model ecosystem**.
+
+The backend translates GGML compute graphs into OpenVINO graphs and leverages graph compilation, kernel fusion, and device-specific optimizations to improve inference performance on supported Intel hardware.
+
+## Overview
+
+The OpenVINO backend is implemented in ggml/src/ggml-openvino and provides a translation layer for core GGML operations. It supports FP16 and BF16 models, as well as selected quantized GGUF formats. This backend enables accelerated inference on Intel CPUs, integrated and discrete GPUs, and NPUs, while integrating seamlessly with the existing `llama.cpp` execution flow.
+
+## Supported Devices
+
+OpenVINO backend supports the following hardware:
+
+- Intel CPUs
+- Intel integrated GPUs
+- Intel NPUs (Requires UD32+ driver)
+
+Although OpenVINO supports a wide range of [Intel hardware](https://docs.openvino.ai/2025/about-openvino/release-notes-openvino/system-requirements.html), the llama.cpp OpenVINO backend has been validated specifically on AI PCs such as the Intel® Core™ Ultra Series 1 and Series 2.
+
+## Supported Model Precisions
+
+### Fully Supported
+
+- FP16 GGUF
+- BF16 GGUF
+
+### Quantized Models (Partial Support)
+
+- `Q4_0`
+- `Q4_1`
+- `Q4_K_M`
+- `Q6_K`
+
+Accuracy and performance optimizations for quantized models are still work in progress.
+
+## Quantization Support Details
+
+### CPU
+
+- **`Q4_0`, `Q4_1`, `Q4_K_M`, `Q6_K` models are supported**
+- `Q6_K` tensors (6-bit, gs16 symmetric) are converted to int8 gs16 symmetric
+- `Q5_K` tensors (5-bit, gs32 asymmetric) are converted to int8 gs32 asymmetric
+
+### GPU
+
+- **`Q4_0`, `Q4_1`, `Q4_K_M`, `Q6_K` models are supported**
+- `Q6_K` tensors (6-bit, gs16 symmetric) are requantized to int8 gs32 symmetric
+- `Q5_K` tensors (5-bit, gs32 asymmetric) are converted to int8 gs32 asymmetric
+
+### NPU
+
+- **Primary supported quantization scheme is `Q4_0`**
+- `Q4_0` and `Q4_1` tensors are requantized to int4 gs128 symmetric
+- `Q6_K` tensors are dequantized to FP16
+
+#### Additional Notes
+
+- Both `Q4_0` and `Q4_1` models use `Q6_K` for the token embedding tensor and the final matmul weight tensor (often the same tensor)
+- `Q4_0` models may produce some `Q4_1` tensors if an imatrix is provided during quantization using `llama-quantize`
+- `Q4_K_M` models may include both `Q6_K` and `Q5_K` tensors (observed in Phi-3)
+
+## Validated Models
+
+The following models have been validated for functionality on Intel® Core™ Ultra Series 1 and Series 2:
+
+- [Llama-3.2-1B-Instruct-GGUF](https://huggingface.co/MaziyarPanahi/Llama-3.2-1B-Instruct-GGUF)
+- [Llama-3.1-8B-Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct)
+- [microsoft/Phi-3-mini-4k-instruct-gguf](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf)
+- [Qwen/Qwen2.5-1.5B-Instruct-GGUF](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF)
+- [Qwen/Qwen3-8B](https://huggingface.co/Qwen/Qwen3-8B)
+- [openbmb/MiniCPM-1B-sft-bf16](https://huggingface.co/openbmb/MiniCPM-1B-sft-bf16)
+- [tencent/Hunyuan-7B-Instruct](https://huggingface.co/tencent/Hunyuan-7B-Instruct)
+- [mistralai/Mistral-7B-Instruct-v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)
+
+## Build Instructions
+
+### Prerequisites
+
+- OpenVINO runtime and development packages
+- CMake
+- C++17-compatible compiler
+
+### Build Example
+
+```bash
+cmake -B build/ReleaseOV \
+  -DGGML_OPENVINO=ON \
+  -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build/ReleaseOV -j
+```
+
+# Runtime Configuration
+
+The OpenVINO backend can be configured using the following environment variables at runtime to control device selection, caching, debugging, and profiling behavior.
+
+## Configuration Options
+
+| Variable | Description |
+|--------|-------------|
+| `GGML_OPENVINO_DEVICE` | Specify the target device (`CPU`, `GPU`, `NPU`). If not set, the backend automatically selects the first available device in priority order: **GPU → CPU → NPU**. When set to `NPU`, static compilation mode is enabled for optimal performance. |
+| `GGML_OPENVINO_CACHE_DIR` | Directory for OpenVINO model caching (recommended: `/tmp/ov_cache`). Enables model caching when set. **Not supported on NPU devices.** |
+| `GGML_OPENVINO_PROFILING` | Enable execution-time profiling. |
+| `GGML_OPENVINO_DUMP_CGRAPH` | Dump the GGML compute graph to `cgraph.txt`. |
+| `GGML_OPENVINO_DUMP_IR` | Export OpenVINO IR files with timestamps. |
+| `GGML_OPENVINO_DEBUG_INPUT` | Enable input debugging. |
+| `GGML_OPENVINO_DEBUG_OUTPUT` | Enable output debugging. |
+
+## Example Usage
+
+### GPU Inference with Profiling
+
+```bash
+export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
+export GGML_OPENVINO_PROFILING=1
+export GGML_OPENVINO_DEVICE=GPU
+
+./build/ReleaseOV/bin/llama-simple \
+  -m ~/models/Llama-3.2-1B-Instruct.fp16.gguf \
+  -n 50 \
+  "The story of AI is "
+```
+
+### llama-bench
+
+```bash
+GGML_OPENVINO_DEVICE=GPU ./llama-bench -fa 1
+```
+-fa 1 is required when running llama-bench with the OpenVINO backend.
+
+### NPU Notes
+
+- Prompt processing is currently slower than CPU/GPU
+- Smaller context sizes are recommended (e.g. `-c 512`)
+- Static compilation mode is enabled automatically
+- Model caching is not yet supported
+  
+## Work in Progress
+
+- Performance and memory optimizations
+- Broader quantization coverage
+- Support for additional model architectures
+- Extensive accuracy validation
