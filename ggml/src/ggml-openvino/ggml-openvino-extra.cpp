@@ -268,34 +268,33 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
     }
 
     // Normal extraction (no requant) - determine format based on tensor type
+    layout.is_u4 = false;
+    layout.weights_per_block = 32;
+    layout.is_symmetric = false;
+
     switch (tensor->type) {
     case GGML_TYPE_Q4_0:
         layout.is_u4 = true;
-        layout.weights_per_block = 32;
         layout.is_symmetric = true;
         break;
+
     case GGML_TYPE_Q4_1:
-        layout.is_u4 = true;
-        layout.weights_per_block = 32;
-        break;
     case GGML_TYPE_Q4_K:
         layout.is_u4 = true;
-        layout.weights_per_block = 32;
         break;
+
     case GGML_TYPE_Q8_0:
-        layout.is_u4 = false;
-        layout.weights_per_block = 32;
         layout.is_symmetric = true;
         break;
+
     case GGML_TYPE_Q6_K:
-        layout.is_u4 = false;
         layout.weights_per_block = 16;
         layout.is_symmetric = true;
         break;
+
     case GGML_TYPE_Q5_K:
-        layout.is_u4 = false;
-        layout.weights_per_block = 32;
         break;
+
     default:
         // Unsupported quantization type
         return layout;
