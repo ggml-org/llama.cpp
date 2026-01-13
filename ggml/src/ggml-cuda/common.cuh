@@ -531,7 +531,7 @@ enum class block_reduce_method {
     SUM,
 };
 
-template<block_reduce_method method, typename T>
+template<block_reduce_method method_t, typename T>
 struct block_reduce_policy;
 
 template <typename T, typename... Ts>
@@ -581,9 +581,9 @@ template <typename T> struct block_reduce_policy<block_reduce_method::MAX, T> {
     }
 };
 
-template <block_reduce_method reduce_method, const unsigned int block_size_template = 0, typename T>
+template <block_reduce_method reduce_method_t, const unsigned int block_size_template = 0, typename T>
 static __device__ T two_stage_warp_reduce(T val, T * shared_vals) {
-    val                           = block_reduce_policy<reduce_method, T>::reduce(val);
+    val                           = block_reduce_policy<reduce_method_t, T>::reduce(val);
     const unsigned int block_size = block_size_template == 0 ? blockDim.x : block_size_template;
     if (block_size > WARP_SIZE) {
         assert((block_size <= 1024) && (block_size % WARP_SIZE) == 0);
@@ -593,11 +593,11 @@ static __device__ T two_stage_warp_reduce(T val, T * shared_vals) {
             shared_vals[warp_id] = val;
         }
         __syncthreads();
-        val = block_reduce_policy<reduce_method, T>::sentinel();
+        val = block_reduce_policy<reduce_method_t, T>::sentinel();
         if (lane_id < (static_cast<int>(block_size) / WARP_SIZE)) {
             val = shared_vals[lane_id];
         }
-        return block_reduce_policy<reduce_method, T>::reduce(val);
+        return block_reduce_policy<reduce_method_t, T>::reduce(val);
     } 
     
     return val;
