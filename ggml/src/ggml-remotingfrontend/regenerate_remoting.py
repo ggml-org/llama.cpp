@@ -23,8 +23,10 @@ from pathlib import Path
 import os
 import subprocess
 import shutil
+import logging
 
 NL = '\n' # can't have f"{'\n'}" in f-strings
+
 
 class RemotingCodebaseGenerator:
     def __init__(self, yaml_path: str = "ggmlremoting_functions.yaml"):
@@ -62,10 +64,10 @@ class RemotingCodebaseGenerator:
             )
             return True
         except subprocess.CalledProcessError as e:
-            print(f"   ⚠️  Warning: clang-format failed for {file_path}: {e}")
+            logging.exception(f"   ⚠️  Warning: clang-format failed for {file_path}", e)
             return False
         except Exception as e:
-            print(f"   ⚠️  Warning: Unexpected error formatting {file_path}: {e}")
+            logging.exception(f"   ⚠️  Warning: Unexpected error formatting {file_path}: {e}", e)
             return False
 
     def generate_enum_name(self, group_name: str, function_name: str) -> str:
@@ -139,7 +141,7 @@ class RemotingCodebaseGenerator:
 
         # Add the count
         total_count = len(functions)
-        enum_lines.append(f"\n  // last command_type index + 1")
+        enum_lines.append("\n  // last command_type index + 1")
         enum_lines.append(f"  APIR_BACKEND_DISPATCH_TABLE_COUNT = {total_count},")
         enum_lines.append("} ApirBackendCommandType;")
 
@@ -186,9 +188,7 @@ class RemotingCodebaseGenerator:
                 table_lines.append("")
                 current_group = func['group_name']
 
-
             table_lines.append(f"  /* {func['enum_name']}  = */ {func['backend_function']},")
-        total_count = len(functions)
 
         header_content = f'''\
 #pragma once
@@ -240,8 +240,8 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
 
     def regenerate_codebase(self) -> None:
         """Regenerate the entire remoting codebase."""
-        print("🔄 Regenerating GGML Remoting Codebase...")
-        print("=" * 50)
+        logging.info("🔄 Regenerating GGML Remoting Codebase...")
+        logging.info("=" * 50)
 
         # Detect if we're running from frontend directory
         current_dir = os.getcwd()
@@ -249,12 +249,12 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
 
         if is_frontend_dir:
             # Running from ggml/src/ggml-remotingfrontend
-            print("📍 Detected frontend directory execution")
+            logging.info("📍 Detected frontend directory execution")
             backend_base = Path("../ggml-remotingbackend")
             frontend_base = Path(".")
         else:
             # Running from project root (fallback to original behavior)
-            print("📍 Detected project root execution")
+            logging.info("📍 Detected project root execution")
             base_path = self.config_data.get('base_path', 'ggml/src')
             backend_base = Path(base_path) / "ggml-remotingbackend"
             frontend_base = Path(base_path) / "ggml-remotingfrontend"
@@ -270,51 +270,52 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
         virtgpu_forward_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Generate header files
-        print("📁 Generating header files...")
+        logging.info("📁 Generating header files...")
 
         apir_backend_content = self.generate_apir_backend_header()
         apir_backend_path.write_text(apir_backend_content)
-        print(f"   ✅ {apir_backend_path.resolve()}")
+        logging.info(f"   ✅ {apir_backend_path.resolve()}")
 
         backend_dispatched_content = self.generate_backend_dispatched_header()
         backend_dispatched_path.write_text(backend_dispatched_content)
-        print(f"   ✅ {backend_dispatched_path.resolve()}")
+        logging.info(f"   ✅ {backend_dispatched_path.resolve()}")
 
         virtgpu_forward_content = self.generate_virtgpu_forward_header()
         virtgpu_forward_path.write_text(virtgpu_forward_content)
-        print(f"   ✅ {virtgpu_forward_path.resolve()}")
+        logging.info(f"   ✅ {virtgpu_forward_path.resolve()}")
 
         # Format generated files with clang-format
         generated_files = [apir_backend_path, backend_dispatched_path, virtgpu_forward_path]
 
         if not self.clang_format_available:
-            print("\n⚠️  Warning: clang-format not found in PATH. Generated files will not be formatted.")
-            print("   Install clang-format to enable automatic code formatting.")
+            logging.warn("\n⚠️  Warning: clang-format not found in PATH. Generated files will not be formatted."
+                         "   Install clang-format to enable automatic code formatting.")
         else:
-            print("\n🎨 Formatting files with clang-format...")
+            logging.info("\n🎨 Formatting files with clang-format...")
             for file_path in generated_files:
                 if self._format_file_with_clang_format(file_path):
-                    print(f"   ✅ Formatted {file_path.name}")
+                    logging.info(f"   ✅ Formatted {file_path.name}")
                 else:
-                    print(f"   ❌ Failed to format {file_path.name}")
+                    logging.warn(f"   ❌ Failed to format {file_path.name}")
 
         # Generate summary
         functions = self.get_enabled_functions()
         total_functions = len(functions)
 
-        print("\n📊 Generation Summary:")
-        print("=" * 50)
-        print(f"   Total functions: {total_functions}")
-        print(f"   Function groups: {len(self.functions)}")
-        print(f"   Header files: 3")
-        print(f"   Working directory: {current_dir}")
+        logging.info("\n📊 Generation Summary:")
+        logging.info("=" * 50)
+        logging.info(f"   Total functions: {total_functions}")
+        logging.info(f"   Function groups: {len(self.functions)}")
+        logging.info("   Header files: 3")
+        logging.info(f"   Working directory: {current_dir}")
+
 
 def main():
     try:
         generator = RemotingCodebaseGenerator()
         generator.regenerate_codebase()
     except Exception as e:
-        print(f"❌ Error: {e}")
+        logging.exception(f"❌ Error:", e)
         exit(1)
 
 if __name__ == "__main__":
