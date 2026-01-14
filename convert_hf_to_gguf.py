@@ -965,6 +965,9 @@ class TextModel(ModelBase):
 
         return seems_special
 
+    def override_tokenizer_settings(self, tokenizer):
+        return tokenizer
+
     # used for GPT-2 BPE and WordPiece vocabs
     def get_vocab_base(self) -> tuple[list[str], list[int], str]:
         tokens: list[str] = []
@@ -972,6 +975,7 @@ class TextModel(ModelBase):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        tokenizer = self.override_tokenizer_settings(tokenizer)
         vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
         assert max(tokenizer.vocab.values()) < vocab_size
 
@@ -7456,6 +7460,7 @@ class DeepseekModel(TextModel):
 @ModelBase.register(
     "DeepseekV2ForCausalLM",
     "DeepseekV3ForCausalLM",
+    "DeepseekV32ForCausalLM",
     "KimiVLForConditionalGeneration",
     "YoutuForCausalLM",
     "YoutuVLForConditionalGeneration"
@@ -7463,9 +7468,20 @@ class DeepseekModel(TextModel):
 class DeepseekV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
 
+    def override_tokenizer_settings(self, tokenizer):
+        # override add_bos_token setting to get pre-tokenizer recognized
+        if self.hparams.get("model_type") == "deepseek_v32":
+            tokenizer.add_bos_token = True
+        return tokenizer
+
     def set_vocab(self):
         try:
             self._set_vocab_gpt2()
+            # in DeepSeek V3.2 adding BOS token is disabled in tokenizer configuration
+            # instead the BOS token is added in encode_messages() Python code
+            # therefore we have to override this setting
+            if self.hparams.get("model_type") == "deepseek_v32":
+                self.gguf_writer.add_add_bos_token(True)
             return
         except Exception:
             pass
@@ -7576,7 +7592,7 @@ class DeepseekV2Model(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # skip vision tensors and remove "language_model." for Kimi-VL
-        if "vision_tower" in name or "multi_modal_projector" in name:
+        if "vision_tower" in name or "multi_modal_projector" in name or "self_attn.indexer" in name:
             return []
         if name.startswith("siglip2.") or name.startswith("merger."):
             return []
