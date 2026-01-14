@@ -3298,8 +3298,9 @@ struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, floa
 struct llama_sampler_adaptive_p {
     const float        target;            // target probability (0.0 - 1.0; negative = disabled)
     const float        decay;             // EMA decay; history ~= 1/(1-decay) tokens (0.0 - 0.99)
-    const uint32_t     seed;              // RNG seed
-    std::mt19937       rng;               // RNG
+    const uint32_t     seed;              // original RND seed
+    uint32_t           seed_cur;          // actual RND seed
+    std::mt19937       rng;               // RNG state
     float              weighted_sum;      // sum(p_i * decay^i)
     float              total_weight;      // sum(decay^i), converges to 1/(1-decay)
     std::vector<float> original_probs;    // pre-transform probs, cached for EMA update
@@ -3320,16 +3321,16 @@ static const char * llama_sampler_adaptive_p_name(const struct llama_sampler * /
 static void llama_sampler_adaptive_p_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_adaptive_p *) smpl->ctx;
 
+    llama_sampler_softmax_impl(cur_p, false);
+
     if (ctx->target < 0.0f) {
         // at negative target values, adaptive-p is no-op
         // we simply sample from the existing distribution
-        llama_sampler_softmax_impl(cur_p, false);
         cur_p->selected = llama_sample_dist(cur_p, ctx->rng);
         return;
     }
 
-    // softmax and store the original probabilities
-    llama_sampler_softmax_impl(cur_p, false);
+    // store the original probabilities
     ctx->original_probs.resize(cur_p->size);
     for (size_t i = 0; i < cur_p->size; ++i) {
         ctx->original_probs[i] = cur_p->data[i].p;
@@ -3435,7 +3436,8 @@ struct llama_sampler * llama_sampler_init_adaptive_p(
         /* .ctx   = */ new llama_sampler_adaptive_p {
             /* .target            = */ target,
             /* .decay             = */ clamped_decay,
-            /* .seed              = */ seed_cur,
+            /* .seed              = */ seed,
+            /* .seed_cur          = */ seed_cur,
             /* .rng               = */ std::mt19937(seed_cur),
             /* .weighted_sum      = */ target / (1.0f - clamped_decay),
             /* .total_weight      = */ 1.0f / (1.0f - clamped_decay),
