@@ -164,7 +164,7 @@ class SpecialVocab:
         if normalizer_type == 'Lowercase':
             self.normalizer_lowercase = True
         elif normalizer_type == 'BertNormalizer':
-            if normalizer.get('lowercase', False):
+            if normalizer.get('lowercase', True):
                 self.normalizer_lowercase = True
         elif normalizer_type == 'Sequence':
             for norm in normalizer.get('normalizers', []):
