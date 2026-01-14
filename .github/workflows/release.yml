@@ -45,7 +45,6 @@ jobs:
             -DCMAKE_INSTALL_RPATH='@loader_path' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_CURL=OFF \
             -DLLAMA_BUILD_BORINGSSL=ON \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
@@ -95,7 +94,6 @@ jobs:
             -DCMAKE_INSTALL_RPATH='@loader_path' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_CURL=OFF \
             -DLLAMA_BUILD_BORINGSSL=ON \
             -DGGML_METAL=OFF \
             -DGGML_RPC=ON \
@@ -161,8 +159,6 @@ jobs:
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
-            -DLLAMA_CURL=OFF \
-            -DLLAMA_OPENSSL=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
 
@@ -212,8 +208,6 @@ jobs:
           cmake -B build \
             -DCMAKE_INSTALL_RPATH='$ORIGIN' \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
-            -DLLAMA_CURL=OFF \
-            -DLLAMA_OPENSSL=ON \
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
@@ -269,7 +263,6 @@ jobs:
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch == 'x64' && 'x64' || 'amd64_arm64' }}
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -D CMAKE_TOOLCHAIN_FILE=cmake/${{ matrix.arch }}-windows-llvm.cmake ^
-            -DLLAMA_CURL=OFF ^
             -DLLAMA_BUILD_BORINGSSL=ON ^
             -DGGML_NATIVE=OFF ^
             -DGGML_BACKEND_DL=ON ^
@@ -358,7 +351,7 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          cmake -S . -B build ${{ matrix.defines }} -DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_BACKEND_DL=ON -DLLAMA_CURL=OFF
+          cmake -S . -B build ${{ matrix.defines }} -DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_BACKEND_DL=ON -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release --target ${{ matrix.target }}
 
       - name: Pack artifacts
@@ -412,7 +405,7 @@ jobs:
             -DGGML_NATIVE=OFF ^
             -DGGML_CPU=OFF ^
             -DGGML_CUDA=ON ^
-            -DLLAMA_CURL=OFF ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
             -DGGML_CUDA_CUB_3DOT2=ON
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
           cmake --build build --config Release -j %NINJA_JOBS% --target ggml-cuda
@@ -481,7 +474,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release ^
             -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON ^
             -DGGML_CPU=OFF -DGGML_SYCL=ON ^
-            -DLLAMA_CURL=OFF
+            -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --target ggml-sycl -j
 
       - name: Build the release package
@@ -608,7 +601,7 @@ jobs:
             -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}" `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_HIP=ON `
-            -DLLAMA_CURL=OFF
+            -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --target ggml-hip -j ${env:NUMBER_OF_PROCESSORS}
           md "build\bin\rocblas\library\"
           md "build\bin\hipblaslt\library"
@@ -649,7 +642,7 @@ jobs:
           cmake -B build -G Xcode \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
-            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=OFF \
             -DLLAMA_BUILD_EXAMPLES=OFF \
             -DLLAMA_BUILD_TOOLS=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
@@ -734,8 +727,6 @@ jobs:
               export LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${ASCEND_TOOLKIT_HOME}/$(uname -m)-linux/devlib/:${LD_LIBRARY_PATH}
               cmake -S . -B build \
                   -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-                  -DLLAMA_CURL=OFF \
-                  -DLLAMA_OPENSSL=ON \
                   -DGGML_CANN=on \
                   -DSOC_TYPE=${SOC_TYPE}
               cmake --build build -j $(nproc)
