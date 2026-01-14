@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Cable, ExternalLink } from '@lucide/svelte';
+	import { Cable, ExternalLink, Globe, Zap, Radio } from '@lucide/svelte';
 	import { Switch } from '$lib/components/ui/switch';
 	import type { MCPServerInfo, MCPCapabilitiesInfo } from '$lib/types';
 	import { MCPTransportType } from '$lib/enums';
@@ -30,6 +30,12 @@
 		[MCPTransportType.Websocket]: 'WebSocket',
 		[MCPTransportType.StreamableHttp]: 'HTTP',
 		[MCPTransportType.SSE]: 'SSE'
+	};
+
+	const transportIcons: Record<MCPTransportType, typeof Cable> = {
+		[MCPTransportType.Websocket]: Zap,
+		[MCPTransportType.StreamableHttp]: Globe,
+		[MCPTransportType.SSE]: Radio
 	};
 </script>
 
@@ -78,7 +84,11 @@
 			{#if capabilities || transportType}
 				<div class="flex flex-wrap items-center gap-1">
 					{#if transportType}
+						{@const TransportIcon = transportIcons[transportType]}
 						<Badge variant="outline" class="h-5 gap-1 px-1.5 text-[10px]">
+							{#if TransportIcon}
+								<TransportIcon class="h-3 w-3" />
+							{/if}
 							{transportLabels[transportType] || transportType}
 						</Badge>
 					{/if}
