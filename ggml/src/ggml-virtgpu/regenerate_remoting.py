@@ -64,10 +64,10 @@ class RemotingCodebaseGenerator:
             )
             return True
         except subprocess.CalledProcessError as e:
-            logging.exception(f"   ⚠️  Warning: clang-format failed for {file_path}")
+            logging.exception(f"   ⚠️  clang-format failed for {file_path}")
             return False
         except Exception as e:
-            logging.exception(f"   ⚠️  Warning: Unexpected error formatting {file_path}: {e}")
+            logging.exception(f"   ⚠️  Unexpected error formatting {file_path}: {e}")
             return False
 
     def generate_enum_name(self, group_name: str, function_name: str) -> str:
@@ -287,7 +287,7 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
         generated_files = [apir_backend_path, backend_dispatched_path, virtgpu_forward_path]
 
         if not self.clang_format_available:
-            logging.warn("\n⚠️  Warning: clang-format not found in PATH. Generated files will not be formatted."
+            logging.warning("\n⚠️clang-format not found in PATH. Generated files will not be formatted."
                          "   Install clang-format to enable automatic code formatting.")
         else:
             logging.info("\n🎨 Formatting files with clang-format...")
@@ -295,7 +295,7 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
                 if self._format_file_with_clang_format(file_path):
                     logging.info(f"   ✅ Formatted {file_path.name}")
                 else:
-                    logging.warn(f"   ❌ Failed to format {file_path.name}")
+                    logging.warning(f"   ❌ Failed to format {file_path.name}")
 
         # Generate summary
         functions = self.get_enabled_functions()
@@ -316,6 +316,7 @@ def main():
     except Exception as e:
         logging.exception(f"❌ Error: {e}")
         exit(1)
+
 
 if __name__ == "__main__":
     main()
