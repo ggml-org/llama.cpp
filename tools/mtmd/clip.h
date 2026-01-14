@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml.h"
+#include "mtmd.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -37,6 +38,8 @@ struct clip_context_params {
     int image_min_tokens;
     int image_max_tokens;
     bool warmup;
+    ggml_backend_sched_eval_callback cb_eval;
+    void * cb_eval_user_data;
 };
 
 struct clip_init_result {
