@@ -1840,7 +1840,7 @@ static block_q5_Kx8 make_block_q5_Kx8(block_q5_K * in, unsigned int blck_size_in
     // Repeat for low bits 8 bytes at a time as well, since
     // the high bits are interleaved in Q5_K and the index is
     // qh_idx = (qs_idx % 32);
-    // qh_val = qh[qs_idx] >> (qs_idx / 32);
+    // qh_val = qh[qh_idx] >> (qs_idx / 32);
     for (int i = 0; i < end / 4; ++i) {
         int src_id     = i % 8;
         int src_offset = (i / 8) * blck_size_interleave;
@@ -2724,9 +2724,10 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
                 const auto * src1_col = (const char *) wdata + (i11 * nbw1 + i12 * nbw2);
 
-                gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(
-                    ne00, (float *) ((char *) dst->data + (i1 * nb1 + i2 * nb2)) + src0_cur_start, ne01,
-                    src0_cur + src0_cur_start * nb01, src1_col, 1, src0_cur_end - src0_cur_start);
+                gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00,
+                        (float *)((char *) dst->data + (i1 * nb1 + i2 * nb2)) + src0_cur_start, ne01,
+                        src0_cur + src0_cur_start * nb01,
+                        src1_col, 1, src0_cur_end - src0_cur_start);
             }
         }
 #undef MMID_MATRIX_ROW
