@@ -95,6 +95,10 @@ struct mtmd_context_params {
     // limit number of image tokens, only for vision models with dynamic resolution
     int image_min_tokens; // minimum number of tokens for image input (default: read from metadata)
     int image_max_tokens; // maximum number of tokens for image input (default: read from metadata)
+
+    // callback function passed over to mtmd proper
+    ggml_backend_sched_eval_callback cb_eval;
+    void * cb_eval_user_data;
 };
 
 MTMD_API const char * mtmd_default_marker(void);
@@ -273,12 +277,12 @@ struct bitmap {
         ptr.reset(mtmd_bitmap_init(nx, ny, data));
     }
     ~bitmap() = default;
-    uint32_t nx() { return mtmd_bitmap_get_nx(ptr.get()); }
-    uint32_t ny() { return mtmd_bitmap_get_ny(ptr.get()); }
-    const unsigned char * data() { return mtmd_bitmap_get_data(ptr.get()); }
-    size_t n_bytes() { return mtmd_bitmap_get_n_bytes(ptr.get()); }
-    std::string id() { return mtmd_bitmap_get_id(ptr.get()); }
-    void set_id(const char * id) { mtmd_bitmap_set_id(ptr.get(), id); }
+    uint32_t nx() const { return mtmd_bitmap_get_nx(ptr.get()); }
+    uint32_t ny() const { return mtmd_bitmap_get_ny(ptr.get()); }
+    const unsigned char * data() const { return mtmd_bitmap_get_data(ptr.get()); }
+    size_t n_bytes() const { return mtmd_bitmap_get_n_bytes(ptr.get()); }
+    std::string id() const { return mtmd_bitmap_get_id(ptr.get()); }
+    void set_id(const char * id) const { mtmd_bitmap_set_id(ptr.get(), id); }
 };
 
 struct bitmaps {
@@ -302,8 +306,8 @@ struct input_chunks {
     input_chunks() = default;
     input_chunks(mtmd_input_chunks * chunks) : ptr(chunks) {}
     ~input_chunks() = default;
-    size_t size() { return mtmd_input_chunks_size(ptr.get()); }
-    const mtmd_input_chunk * operator[](size_t idx) {
+    size_t size() const { return mtmd_input_chunks_size(ptr.get()); }
+    const mtmd_input_chunk * operator[](size_t idx) const {
         return mtmd_input_chunks_get(ptr.get(), idx);
     }
 };
