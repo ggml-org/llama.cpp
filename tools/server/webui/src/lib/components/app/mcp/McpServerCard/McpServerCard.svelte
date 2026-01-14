@@ -12,7 +12,6 @@
 	import McpServerCardDeleteDialog from './McpServerCardDeleteDialog.svelte';
 	import McpServerInfo from './McpServerInfo.svelte';
 	import McpConnectionLogs from './McpConnectionLogs.svelte';
-	import Badge from '$lib/components/ui/badge/badge.svelte';
 
 	interface Props {
 		server: MCPServerSettingsEntry;
@@ -64,12 +63,6 @@
 	let isEditing = $state(!server.url.trim());
 	let showDeleteDialog = $state(false);
 	let editFormRef: McpServerCardEditForm | null = $state(null);
-
-	const transportLabels: Record<string, string> = {
-		websocket: 'WebSocket',
-		streamable_http: 'HTTP',
-		sse: 'SSE'
-	};
 
 	onMount(() => {
 		if (!mcpStore.hasHealthCheck(server.id) && server.enabled && server.url.trim()) {
@@ -128,6 +121,7 @@
 			{onToggle}
 			{serverInfo}
 			{capabilities}
+			{transportType}
 		/>
 
 		{#if isError && errorMessage}
@@ -155,19 +149,11 @@
 		</div>
 
 		<div class="mt-4 flex justify-between gap-4">
-			{#if transportType || protocolVersion}
+			{#if protocolVersion}
 				<div class="flex flex-wrap items-center gap-1">
-					{#if transportType}
-						<Badge variant="outline" class="h-5 gap-1 px-1.5 text-[10px]">
-							{transportLabels[transportType] || transportType}
-						</Badge>
-					{/if}
-
-					{#if protocolVersion}
-						<Badge variant="outline" class="h-5 gap-1 px-1.5 text-[10px]">
-							MCP {protocolVersion}
-						</Badge>
-					{/if}
+					<span class="text-[10px] text-muted-foreground">
+						Protocol version: {protocolVersion}
+					</span>
 				</div>
 			{/if}
 
