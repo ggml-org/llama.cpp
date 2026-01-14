@@ -98,7 +98,7 @@ ApirLoadLibraryReturnCode apir_backend_initialize() {
     }
 
     if (!library_init) {
-        GGML_LOG_ERROR("cannot initialize the GGML library: env var '%s' not defined\n", library_init);
+        GGML_LOG_ERROR("cannot initialize the GGML library: env var '%s' not defined\n", APIR_LLAMA_CPP_GGML_LIBRARY_INIT_ENV);
 
         return APIR_LOAD_LIBRARY_ENV_VAR_MISSING;
     }
