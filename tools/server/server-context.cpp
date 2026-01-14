@@ -127,6 +127,17 @@ struct server_slot {
         return res;
     }
 
+    void prompt_clear(bool allow_processing) {
+        if (!allow_processing) {
+            GGML_ASSERT(!is_processing());
+        }
+
+        SLT_INF(*this, "clearing prompt with %zu tokens\n", prompt.tokens.size());
+
+        llama_memory_seq_rm(llama_get_memory(ctx), id, -1, -1);
+        prompt.tokens.clear();
+    }
+
     std::vector<common_adapter_lora_info> lora;
     int32_t alora_invocation_start = -1;
 
@@ -176,23 +187,13 @@ struct server_slot {
         n_draft_total = 0;
         n_draft_accepted = 0;
 
+        task_prev = std::move(task);
         task.reset();
-        task_prev.reset();
+
+        llama_set_sampler(ctx, id, nullptr);
 
         // clear alora start
         alora_invocation_start = -1;
-    }
-
-    // remove cached prompt + tokens
-    void clear(bool allow_processing) {
-        if (!allow_processing) {
-            GGML_ASSERT(!is_processing());
-        }
-
-        SLT_INF(*this, "clearing slot with %zu tokens\n", prompt.tokens.size());
-
-        llama_memory_seq_rm(llama_get_memory(ctx), id, -1, -1);
-        prompt.tokens.clear();
     }
 
     void init_sampler() const {
@@ -321,11 +322,10 @@ struct server_slot {
 
             // do not keep context of the child slots - the parent's context is enough
             if (is_child()) {
-                clear(false);
+                prompt_clear(false);
             }
 
-            task_prev = std::move(task);
-            task.reset();
+            reset();
 
             callback_on_release(id);
         }
@@ -773,6 +773,7 @@ private:
 
         slots.clear();
 
+        // initialize slots
         for (int i = 0; i < params_base.n_parallel; i++) {
             server_slot slot;
 
@@ -1021,7 +1022,7 @@ private:
                 ret->prompt_save(*prompt_cache);
 
                 if (!ret->prompt_load(*prompt_cache, task.tokens)) {
-                    ret->clear(false);
+                    ret->prompt_clear(false);
                 }
 
                 prompt_cache->update();
@@ -1053,7 +1054,7 @@ private:
             if (slot.prompt.n_tokens() > 0) {
                 SRV_WRN("purging slot %d with %zu tokens\n", slot.id, slot.prompt.tokens.size());
 
-                slot.clear(false);
+                slot.prompt_clear(false);
 
                 res = true;
 
@@ -1079,8 +1080,6 @@ private:
     }
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
-        slot.reset();
-
         // process per-request lora adapters
         if (!task.params.lora.empty()) {
             auto task_loras = construct_lora_list(task.params.lora);
@@ -1838,7 +1837,7 @@ private:
                     // Erase token cache
                     const size_t n_erased = slot->prompt.tokens.size();
 
-                    slot->clear(false);
+                    slot->prompt_clear(false);
 
                     auto res = std::make_unique<server_task_result_slot_erase>();
                     res->id       = task.id;
@@ -2395,7 +2394,7 @@ private:
                     if (!llama_memory_seq_rm(llama_get_memory(ctx), slot.id, p0, -1)) {
                         SLT_WRN(slot, "failed to truncate tokens with position >= %d - clearing the memory\n", p0);
 
-                        slot.clear(true);
+                        slot.prompt_clear(true);
 
                         // there is no common part left
                         slot.n_prompt_tokens_cache = 0;
@@ -2567,12 +2566,6 @@ private:
             llama_set_embeddings(ctx, slot_batched->task->need_embd());
         }
 
-        for (auto & slot : slots) {
-            if (!slot.is_processing() || !slot.smpl) {
-                llama_set_sampler(ctx, slot.id, nullptr);
-            }
-        }
-
         if (batch.n_tokens == 0) {
             SRV_WRN("%s", "no tokens to decode\n");
         }
@@ -2628,7 +2621,7 @@ private:
 
                                 // note: it's complicated to keep track of how much of the current batch has been
                                 //       processed before the error occurred, so we simply clear the entire context
-                                slot.clear(false);
+                                slot.prompt_clear(false);
                             }
                         }
 
