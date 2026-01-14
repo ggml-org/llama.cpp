@@ -173,7 +173,7 @@ int main(void) {
     assert(params.cpuparams.n_threads == 1010);
 #endif // _WIN32
 
-    printf("test-arg-parser: test curl-related functions\n\n");
+    printf("test-arg-parser: test download functions\n\n");
     const char * GOOD_URL = "http://ggml.ai/";
     const char * BAD_URL  = "http://ggml.ai/404";
 
