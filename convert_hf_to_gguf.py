@@ -7711,14 +7711,6 @@ class VaetkiModel(TextModel):
 
         self.gguf_writer.add_add_space_prefix(False)
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Set rope_parameters for hybrid attention (transformers 5.0 format)
-        self.rope_parameters = {
-            "full_attention": {"rope_theta": self.hparams.get("rope_theta_global", 1000000.0)},
-            "sliding_attention": {"rope_theta": self.hparams.get("rope_theta", 10000.0)}
-        }
-
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
@@ -7776,10 +7768,6 @@ class VaetkiModel(TextModel):
             return []
         if name.startswith("model.vision_model.") or name.startswith("vision_model."):
             return []
-
-        # Handle lm_head.weight (VAETKI does not use tied embeddings)
-        if name == "lm_head.weight":
-            return [(self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT), data_torch)]
 
         # Remove language_model prefix
         if name.startswith("model.language_model."):
