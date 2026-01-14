@@ -59,7 +59,7 @@ struct block_q5_Kx8 {
     ggml_half dmin[8];           // super-block scale for quantized mins
     uint8_t   scales[96];        // scales and mins, quantized with 6 bits
     uint8_t   qh[QK_K * 8 / 8];  // high bits of 5-bit quants
-    uint8_t   qs[QK_K * 8 / 2];  // 4--bit quants
+    uint8_t   qs[QK_K * 8 / 2];  // low bits of 5-bit quants (in groups of 4)
 };
 
 static_assert(sizeof(block_q5_Kx8) == sizeof(ggml_half) * 16 + K_SCALE_SIZE * 8 + QK_K * 5,
