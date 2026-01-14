@@ -151,11 +151,15 @@ struct clip_ctx {
     ggml_backend_t backend = nullptr;
     ggml_backend_t backend_cpu = nullptr;
     ggml_backend_buffer_ptr buf;
+    std::vector<ggml_backend_buffer_ptr> additional_buffers;  // for tensor overrides
 
     int max_nodes = 8192;
     ggml_backend_sched_ptr sched;
     clip_flash_attn_type flash_attn_type = CLIP_FLASH_ATTN_TYPE_AUTO;
     bool is_allocated = false;
+
+    bool     clip_reduced_vram   = false;
+    int64_t  image_encode_timing = 0;
 
     // for debugging
     bool debug_graph = false;
@@ -201,8 +205,10 @@ struct clip_ctx {
         backend_ptrs.push_back(backend_cpu);
         backend_buft.push_back(ggml_backend_get_default_buffer_type(backend_cpu));
 
+        clip_reduced_vram = ctx_params.clip_reduced_vram;
+
         sched.reset(
-            ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), 8192, false, true)
+            ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, true)
         );
     }
 
@@ -1849,8 +1855,67 @@ struct clip_model_loader {
 
             // alloc memory and offload data
             ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(ctx_clip.backend);
-            ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
-            ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            ggml_backend_buffer_type_t cpu_buft = ggml_backend_get_default_buffer_type(ctx_clip.backend_cpu);
+
+            if (ctx_clip.clip_reduced_vram) {
+                LOG_INF("%s: clip_reduced_vram enabled, offloading all clip tensors to CPU\n", __func__);
+                std::map<ggml_backend_buffer_type_t, std::vector<ggml_tensor *>> tensors_by_buft;
+                // Determine buffer type for each tensor
+                for (auto & t : tensors_to_load) {
+                    struct ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
+                    tensors_by_buft[cpu_buft].push_back(cur);
+                }
+
+                // For each buffer type, create a context and allocate tensors
+                bool first_buffer = true;
+                for (auto & [buft, tensor_list] : tensors_by_buft)
+                {
+                    // Create a temporary context for this buffer type
+                    struct ggml_init_params temp_params = {
+                        /*.mem_size =*/tensor_list.size() * ggml_tensor_overhead(),
+                        /*.mem_buffer =*/NULL,
+                        /*.no_alloc =*/true,
+                    };
+                    ggml_context_ptr temp_ctx(ggml_init(temp_params));
+                    if (!temp_ctx) {
+                        throw std::runtime_error(string_format("%s: failed to create temporary context\n", __func__));
+                    }
+
+                    // Create tensor references in the temporary context
+                    for (auto * orig_tensor : tensor_list) {
+                        ggml_tensor * temp_tensor = ggml_dup_tensor(temp_ctx.get(), orig_tensor);
+                        ggml_set_name(temp_tensor, orig_tensor->name);
+                    }
+
+                    // Allocate buffer for this context
+                    auto buffer = ggml_backend_buffer_ptr(ggml_backend_alloc_ctx_tensors_from_buft(temp_ctx.get(), buft));
+                    if (!buffer) {
+                        throw std::runtime_error(string_format("%s: failed to allocate buffer for %s\n", __func__, ggml_backend_buft_name(buft)));
+                    }
+                    ggml_backend_buffer_set_usage(buffer.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+                    // Copy tensor pointers to original tensors
+                    for (auto * orig_tensor : tensor_list) {
+                        ggml_tensor * temp_tensor = ggml_get_tensor(temp_ctx.get(), orig_tensor->name);
+                        orig_tensor->buffer       = temp_tensor->buffer;
+                        orig_tensor->data         = temp_tensor->data;
+                    }
+
+                    // transfer ownership of the buffer to ctx_clip so it lives as long as the model
+                    if (first_buffer) {
+                        ctx_clip.buf = std::move(buffer);
+                        first_buffer = false;
+                    } else {
+                        ctx_clip.additional_buffers.push_back(std::move(buffer));
+                    }
+                }
+            }
+            else {
+                // Baseline: no overrides are needed
+                ctx_clip.buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ctx_clip.ctx_data.get(), buft));
+                ggml_backend_buffer_set_usage(ctx_clip.buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            }
+
             for (auto & t : tensors_to_load) {
                 ggml_tensor * cur = ggml_get_tensor(ctx_clip.ctx_data.get(), t->name);
                 const size_t offset = tensor_offset[t->name];
@@ -3324,6 +3389,7 @@ bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f3
 }
 
 bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
+    int64_t                      t0   = ggml_time_ms();
     const clip_image_f32_batch & imgs = *imgs_c_ptr;
     int batch_size = imgs.entries.size();
 
@@ -3340,9 +3406,23 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 
     // build the inference graph
     ctx->debug_print_tensors.clear();
-    ggml_backend_sched_reset(ctx->sched.get());
     ggml_cgraph * gf = clip_image_build_graph(ctx, imgs);
-    ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
+
+    // if clip_reduced_vram enabled: use a temporary scheduler to free VRAM right after encode
+    ggml_backend_sched_t   sched_to_use = nullptr;
+    ggml_backend_sched_ptr sched_local;
+    if (ctx->clip_reduced_vram) {
+        sched_local.reset(ggml_backend_sched_new(ctx->backend_ptrs.data(), ctx->backend_buft.data(), (int) ctx->backend_ptrs.size(), ctx->max_nodes,
+                                                 /*parallel*/ false, /*op_offload*/ true));
+        ggml_backend_sched_reset(sched_local.get());
+        sched_to_use = sched_local.get();
+    }
+    else {
+        ggml_backend_sched_reset(ctx->sched.get());
+        sched_to_use = ctx->sched.get();
+    }
+
+    ggml_backend_sched_alloc_graph(sched_to_use, gf);
 
     // set inputs
     const auto & model   = ctx->model;
@@ -3703,7 +3783,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         }
     }
 
-    auto status = ggml_backend_sched_graph_compute(ctx->sched.get(), gf);
+    auto status = ggml_backend_sched_graph_compute(sched_to_use, gf);
     if (status != GGML_STATUS_SUCCESS) {
         LOG_ERR("%s: ggml_backend_sched_graph_compute failed with error %d\n", __func__, status);
         return false;
@@ -3736,6 +3816,17 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     if (vec != nullptr) {
         ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
     }
+
+    // if a temporary scheduler was used, freeing it here releases its compute buffers/VRAM
+    if (ctx->clip_reduced_vram) {
+        // ensure all device work is finished before destroying the temporary scheduler
+        ggml_backend_sched_synchronize(sched_to_use);
+        // explicit scope reset to free underlying resources now
+        sched_local.reset();
+        // synchronize CPU backend for completeness, is it required?
+        ggml_backend_synchronize(ctx->backend_cpu);
+    }
+    ctx->image_encode_timing = ggml_time_ms() - t0;
 
     return true;
 }
@@ -3886,4 +3977,8 @@ void clip_debug_encode(clip_ctx * ctx, int h, int w, float fill_value) {
     clip_image_encode(ctx, 1, &img, nullptr);
     ctx->debug_graph = cur_debug_graph;
     GGML_ASSERT(img.buf.empty() && "expected, always stop here");
+}
+
+int64_t clip_get_image_encode_timing(const struct clip_ctx * ctx) {
+    return ctx->image_encode_timing;
 }

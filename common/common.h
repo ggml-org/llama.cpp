@@ -573,6 +573,8 @@ struct common_params {
     bool has_speculative() const {
         return !speculative.model.path.empty() || !speculative.model.hf_repo.empty();
     }
+
+    bool clip_reduced_vram = false;  // keep weights' of vision models offloaded to CPU and stream at runtime to required device
 };
 
 // call once at the start of a program if it uses libcommon

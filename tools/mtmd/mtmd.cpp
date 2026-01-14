@@ -1,6 +1,7 @@
 #include "clip.h"
 #include "clip-impl.h"
 #include "mtmd.h"
+#include "mtmd-jit.h"
 #include "mtmd-audio.h"
 
 #include "llama.h"
@@ -111,6 +112,7 @@ mtmd_context_params mtmd_context_params_default() {
         /* warmup            */ true,
         /* image_min_tokens  */ -1,
         /* image_max_tokens  */ -1,
+        /* clip_reduced_vram */ false,
     };
     return params;
 }
@@ -125,6 +127,10 @@ struct mtmd_context {
     int n_threads;
     std::string media_marker;
     const int n_embd_text;
+
+    bool clip_reduced_vram       = false;  
+    bool has_pre_encoded_image   = false;
+    bool llm_context_initialized = false;
 
     // these are not token, but strings used to mark the beginning and end of image/audio embeddings
     std::string img_beg;
@@ -151,6 +157,11 @@ struct mtmd_context {
 
     std::unique_ptr<mtmd_audio_preprocessor> audio_preproc;
 
+    // JIT llm init integration when clip_reduced_vram is enabled
+    mtmd_llm_init_cb llm_init_cb        = nullptr;
+    void *           llm_init_user_data = nullptr;
+    llama_context *  llm_lctx           = nullptr;  // set via mtmd_set_llm_context when clip_reduced_vram is enabled
+
     // TODO @ngxson : add timings
 
     mtmd_context(const char * mmproj_fname,
@@ -175,6 +186,7 @@ struct mtmd_context {
             /* flash_attn_type   */ CLIP_FLASH_ATTN_TYPE_AUTO,
             /* image_min_tokens  */ ctx_params.image_min_tokens,
             /* image_max_tokens  */ ctx_params.image_max_tokens,
+            /* clip_reduced_vram */ ctx_params.clip_reduced_vram,
             /* warmup            */ ctx_params.warmup,
         };
 
@@ -184,6 +196,9 @@ struct mtmd_context {
         if (!ctx_v && !ctx_a) {
             throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
         }
+
+        // store for helper flow control
+        clip_reduced_vram = ctx_params.clip_reduced_vram;
 
         // if both vision and audio mmproj are present, we need to validate their n_embd
         if (ctx_v && ctx_a) {
@@ -419,6 +434,60 @@ mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
 
 void mtmd_free(mtmd_context * ctx) {
     delete ctx;
+}
+
+extern "C" MTMD_API void mtmd_set_llm_init_callback(mtmd_context * ctx, mtmd_llm_init_cb cb, void * user_data) {
+    ctx->llm_init_cb        = cb;
+    ctx->llm_init_user_data = user_data;
+}
+
+extern "C" MTMD_API void mtmd_set_llm_context(mtmd_context * ctx, struct llama_context * lctx) {
+    ctx->llm_lctx = lctx;
+}
+
+extern "C" struct llama_context * mtmd_get_llm_context(mtmd_context * ctx) {
+    return ctx->llm_lctx;
+}
+
+extern "C" bool mtmd_preencode_enabled(mtmd_context * ctx) {
+    return ctx->clip_reduced_vram;
+}
+
+extern "C" int32_t mtmd_preencode_image(mtmd_context * ctx, const mtmd_input_chunks * chunks) {
+    const size_t n = chunks ? chunks->entries.size() : 0;
+    for (size_t i = 0; i < n; ++i) {
+        const mtmd_input_chunk & c = chunks->entries[i];
+        if (c.type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+            int32_t ret = mtmd_encode_chunk(ctx, &c);
+            if (ret != 0)
+                return ret;
+            ctx->has_pre_encoded_image = true;
+            return 0;
+        }
+    }
+    return 0; // no image, nothing to do
+}
+
+extern "C" void mtmd_invoke_llm_init_if_needed(mtmd_context * ctx) {
+    if (!ctx->llm_context_initialized && ctx->llm_init_cb) {
+        ctx->llm_init_cb(ctx->llm_init_user_data);
+        ctx->llm_context_initialized = true;
+    }
+}
+
+extern "C" bool mtmd_has_preencoded_image(mtmd_context * ctx) {
+    return ctx->has_pre_encoded_image;
+}
+
+extern "C" int64_t mtmd_get_image_encode_timing(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
+    if (!ctx || !chunk) {
+        return 0;
+    }
+    clip_ctx * c = ctx->get_clip_ctx(chunk);
+    if (!c) {
+        return 0;
+    }
+    return clip_get_image_encode_timing(c);
 }
 
 struct mtmd_tokenizer {

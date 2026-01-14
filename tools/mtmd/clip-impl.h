@@ -576,3 +576,4 @@ void clip_debug_encode(clip_ctx * ctx, int h, int w, float fill_value);
 //
 
 projector_type clip_get_projector_type(const struct clip_ctx * ctx);
+int64_t        clip_get_image_encode_timing(const struct clip_ctx * ctx);

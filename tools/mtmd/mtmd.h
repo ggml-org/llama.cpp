@@ -66,6 +66,8 @@ struct mtmd_image_tokens;
 struct mtmd_input_chunk;
 struct mtmd_input_chunks;
 
+typedef void (*mtmd_llm_init_cb)(void * user_data);
+
 struct mtmd_input_text {
     const char * text;
     bool add_special;
@@ -95,6 +97,8 @@ struct mtmd_context_params {
     // limit number of image tokens, only for vision models with dynamic resolution
     int image_min_tokens; // minimum number of tokens for image input (default: read from metadata)
     int image_max_tokens; // maximum number of tokens for image input (default: read from metadata)
+
+    bool clip_reduced_vram;  // offload clip weights to CPU and stream at runtime to backend device
 };
 
 MTMD_API const char * mtmd_default_marker(void);
