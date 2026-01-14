@@ -67,3 +67,18 @@ export function formatJsonPretty(jsonString: string): string {
 		return jsonString;
 	}
 }
+
+/**
+ * Format time as HH:MM:SS in 24-hour format
+ *
+ * @param date - Date object to format
+ * @returns Formatted time string (HH:MM:SS)
+ */
+export function formatTime(date: Date): string {
+	return date.toLocaleTimeString('en-US', {
+		hour12: false,
+		hour: '2-digit',
+		minute: '2-digit',
+		second: '2-digit'
+	});
+}
