@@ -246,7 +246,6 @@ void ggml_vec_dot_bf16(int n, float * GGML_RESTRICT s, size_t bs, ggml_bf16_t * 
             GGML_BF16_VEC vx1 = GGML_BF16_VEC_LOAD(x + i + 8);
             GGML_BF16_VEC vy0 = GGML_BF16_VEC_LOAD(y + i);
             GGML_BF16_VEC vy1 = GGML_BF16_VEC_LOAD(y + i + 8);
-        
             GGML_BF16_FMA_LO(sum[0], vx0, vy0);
             GGML_BF16_FMA_HI(sum[1], vx0, vy0);
             GGML_BF16_FMA_LO(sum[2], vx1, vy1);
