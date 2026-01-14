@@ -10,6 +10,9 @@
 	import McpServerCardToolsList from './McpServerCardToolsList.svelte';
 	import McpServerCardEditForm from './McpServerCardEditForm.svelte';
 	import McpServerCardDeleteDialog from './McpServerCardDeleteDialog.svelte';
+	import McpServerInfo from './McpServerInfo.svelte';
+	import McpConnectionLogs from './McpConnectionLogs.svelte';
+	import Badge from '$lib/components/ui/badge/badge.svelte';
 
 	interface Props {
 		server: MCPServerSettingsEntry;
@@ -38,6 +41,7 @@
 			? healthState.logs
 			: []
 	);
+
 	let serverInfo = $derived(
 		healthState.status === HealthCheckStatus.Success ? healthState.serverInfo : undefined
 	);
@@ -60,6 +64,12 @@
 	let isEditing = $state(!server.url.trim());
 	let showDeleteDialog = $state(false);
 	let editFormRef: McpServerCardEditForm | null = $state(null);
+
+	const transportLabels: Record<string, string> = {
+		websocket: 'WebSocket',
+		streamable_http: 'HTTP',
+		sse: 'SSE'
+	};
 
 	onMount(() => {
 		if (!mcpStore.hasHealthCheck(server.id) && server.enabled && server.url.trim()) {
@@ -101,7 +111,7 @@
 	}
 </script>
 
-<Card.Root class="!gap-4 bg-muted/30 p-4">
+<Card.Root class="!gap-3 bg-muted/30 p-4">
 	{#if isEditing}
 		<McpServerCardEditForm
 			bind:this={editFormRef}
@@ -114,38 +124,60 @@
 		<McpServerCardHeader
 			{displayName}
 			{faviconUrl}
-			serverUrl={server.url}
 			enabled={server.enabled}
-			{isHealthChecking}
-			{isConnected}
-			{isError}
 			{onToggle}
+			{serverInfo}
+			{capabilities}
 		/>
 
 		{#if isError && errorMessage}
-			<p class="mt-3 text-xs text-destructive">{errorMessage}</p>
+			<p class="mt-2 text-xs text-destructive">{errorMessage}</p>
 		{/if}
 
-		{#if tools.length === 0 && server.url.trim()}
-			<div class="mt-3 flex items-center justify-end gap-1">
-				<McpServerCardActions
-					{isHealthChecking}
-					onEdit={startEditing}
-					onRefresh={handleHealthCheck}
-					onDelete={handleDeleteClick}
-				/>
-			</div>
+		{#if isConnected && serverInfo?.description}
+			<p class="mt-3 line-clamp-2 text-xs text-muted-foreground">
+				{serverInfo.description}
+			</p>
 		{/if}
 
-		{#if tools.length > 0}
-			<McpServerCardToolsList
-				{tools}
+		<div class="mt-2 grid gap-3">
+			{#if isConnected && instructions}
+				<McpServerInfo {instructions} class="mt-3" />
+			{/if}
+
+			{#if tools.length > 0}
+				<McpServerCardToolsList {tools} />
+			{/if}
+
+			{#if connectionLogs.length > 0}
+				<McpConnectionLogs logs={connectionLogs} {connectionTimeMs} />
+			{/if}
+		</div>
+
+		<div class="mt-4 flex justify-between gap-4">
+			{#if transportType || protocolVersion}
+				<div class="flex flex-wrap items-center gap-1">
+					{#if transportType}
+						<Badge variant="outline" class="h-5 gap-1 px-1.5 text-[10px]">
+							{transportLabels[transportType] || transportType}
+						</Badge>
+					{/if}
+
+					{#if protocolVersion}
+						<Badge variant="outline" class="h-5 gap-1 px-1.5 text-[10px]">
+							MCP {protocolVersion}
+						</Badge>
+					{/if}
+				</div>
+			{/if}
+
+			<McpServerCardActions
 				{isHealthChecking}
 				onEdit={startEditing}
 				onRefresh={handleHealthCheck}
 				onDelete={handleDeleteClick}
 			/>
-		{/if}
+		</div>
 	{/if}
 </Card.Root>
 

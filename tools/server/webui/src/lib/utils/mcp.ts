@@ -1,9 +1,11 @@
 import type { MCPClientConfig, MCPServerConfig, MCPServerSettingsEntry } from '$lib/types';
 import type { SettingsConfigType } from '$lib/types/settings';
 import type { McpServerOverride } from '$lib/types/database';
-import { MCPTransportType } from '$lib/enums';
+import { MCPTransportType, MCPLogLevel } from '$lib/enums';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 import { normalizePositiveNumber } from '$lib/utils/number';
+import { Info, AlertTriangle, XCircle } from '@lucide/svelte';
+import type { Component } from 'svelte';
 
 /**
  * Detects the MCP transport type from a URL.
@@ -250,4 +252,38 @@ export function buildMcpClientConfig(
 		requestTimeoutMs: Math.round(DEFAULT_MCP_CONFIG.requestTimeoutSeconds * 1000),
 		servers
 	};
+}
+
+/**
+ * Get the appropriate icon component for a log level
+ *
+ * @param level - MCP log level
+ * @returns Lucide icon component
+ */
+export function getMcpLogLevelIcon(level: MCPLogLevel): Component {
+	switch (level) {
+		case MCPLogLevel.Error:
+			return XCircle;
+		case MCPLogLevel.Warn:
+			return AlertTriangle;
+		default:
+			return Info;
+	}
+}
+
+/**
+ * Get the appropriate CSS class for a log level
+ *
+ * @param level - MCP log level
+ * @returns Tailwind CSS class string
+ */
+export function getMcpLogLevelClass(level: MCPLogLevel): string {
+	switch (level) {
+		case MCPLogLevel.Error:
+			return 'text-destructive';
+		case MCPLogLevel.Warn:
+			return 'text-yellow-600 dark:text-yellow-500';
+		default:
+			return 'text-muted-foreground';
+	}
 }

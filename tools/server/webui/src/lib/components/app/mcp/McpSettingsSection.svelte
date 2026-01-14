@@ -66,7 +66,6 @@
 		{/if}
 	</div>
 
-	<!-- Add New Server Form -->
 	{#if isAddingServer}
 		<Card.Root class="bg-muted/30 p-4">
 			<div class="space-y-4">
@@ -113,7 +112,6 @@
 		</div>
 	{/if}
 
-	<!-- Server Cards -->
 	{#if servers.length > 0}
 		<div class="space-y-3">
 			{#each servers as server (server.id)}
