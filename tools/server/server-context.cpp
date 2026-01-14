@@ -196,9 +196,13 @@ struct server_slot {
     }
 
     void init_sampler() const {
-        const int64_t t_start = ggml_time_us();
-
         common_sampler_reset(smpl.get());
+
+        if (!task->need_sampling()) {
+            return;
+        }
+
+        const int64_t t_start = ggml_time_us();
 
         int n_text = 0;
 
