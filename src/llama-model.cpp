@@ -1942,16 +1942,12 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
 
                 ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,                hparams.rope_freq_base_train_swa, false);
-                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa, true);
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,          hparams.n_swa);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
-                ml.get_key(LLM_KV_EXPERT_COUNT,                      hparams.n_expert);
-                ml.get_key(LLM_KV_EXPERT_USED_COUNT,                 hparams.n_expert_used);
                 ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,               hparams.n_expert_shared, false);
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
                 ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
-                ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,                hparams.n_expert_groups, false);
-                ml.get_key(LLM_KV_EXPERT_GROUP_USED_COUNT,           hparams.n_group_used, false);
-                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func, false);
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,                hparams.expert_gating_func);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
                 ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,               hparams.expert_weights_norm, false);
                 ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
