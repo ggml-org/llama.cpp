@@ -161,6 +161,10 @@ struct clip_ctx {
     bool     clip_reduced_vram   = false;
     int64_t  image_encode_timing = 0;
 
+    // video modality
+    bool  is_video_modality   = false;
+    float seconds_per_grid_ts = 2.0f;
+
     // for debugging
     bool debug_graph = false;
     std::vector<ggml_tensor *> debug_print_tensors;
@@ -208,7 +212,7 @@ struct clip_ctx {
         clip_reduced_vram = ctx_params.clip_reduced_vram;
 
         sched.reset(
-            ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, true)
+            ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), 8192, false, true)
         );
     }
 
@@ -3909,6 +3913,153 @@ bool clip_is_mrope(const struct clip_ctx * ctx) {
         default:
             return false;
     }
+}
+
+bool clip_supports_video(const struct clip_ctx * ctx) {
+    switch (ctx->proj_type()) {
+        case PROJECTOR_TYPE_QWEN2VL:
+        case PROJECTOR_TYPE_QWEN25VL:
+        case PROJECTOR_TYPE_QWEN3VL:
+            return true;
+        default:
+            return false;
+    }
+}
+
+void clip_set_seconds_per_grid_ts(struct clip_ctx * ctx, float seconds) {
+    ctx->seconds_per_grid_ts = seconds;
+}
+
+float clip_get_seconds_per_grid_ts(struct clip_ctx * ctx) {
+    return ctx->seconds_per_grid_ts;
+}
+
+void clip_set_is_video_modality(struct clip_ctx * ctx, bool is_video) {
+    ctx->is_video_modality = is_video;
+}
+
+bool clip_get_is_video_modality(struct clip_ctx * ctx) {
+    return ctx->is_video_modality;
+}
+
+void clip_image_f32_set_video_metadata(struct clip_image_f32 * img, bool is_video_frame, uint32_t frame_idx, uint32_t total_frames, float temporal_position) {
+    img->is_video_frame    = is_video_frame;
+    img->frame_idx         = frame_idx;
+    img->total_frames      = total_frames;
+    img->temporal_position = temporal_position;
+}
+
+bool clip_image_batch_encode_video(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs_c_ptr, float * vec) {
+    // This implements Qwen-VL style video processing:
+    // - Temporal patch size = 2: merge consecutive frames into 6-channel super-frames
+    // - Preserves temporal metadata for 3D M-RoPE position encoding
+    // - Uses clip_image_batch_encode for each super-frame (inherits clip_reduced_vram optimization)
+
+    ctx->debug_print_tensors.clear();
+
+    const clip_image_f32_batch & imgs = *imgs_c_ptr;
+    const int frame_count = (int) imgs.entries.size();
+
+    if (frame_count <= 0) {
+        LOG_ERR("%s: Invalid frame count %d\n", __func__, frame_count);
+        return false;
+    }
+
+    // Temporal patch size = 2 (merge pairs of consecutive frames)
+    const int temporal_patch_size = 2;
+    const int merged_frame_count = (frame_count + temporal_patch_size - 1) / temporal_patch_size;
+
+    const int frame_w = imgs.entries[0]->nx;
+    const int frame_h = imgs.entries[0]->ny;
+    const int pixels_per_frame = frame_w * frame_h;
+    const int channel_count = 3;
+    const int frame_stride = pixels_per_frame * channel_count;
+
+    // Validate all frames have the same dimensions
+    for (int i = 1; i < frame_count; ++i) {
+        if (imgs.entries[i]->nx != frame_w || imgs.entries[i]->ny != frame_h) {
+            LOG_ERR("%s: All video frames must share identical dimensions. Frame 0: %dx%d, frame %d: %dx%d\n",
+                    __func__, frame_w, frame_h, i, imgs.entries[i]->nx, imgs.entries[i]->ny);
+            return false;
+        }
+    }
+
+    // Build super-frames with 6 channels (concatenate two consecutive RGB frames)
+    std::vector<clip_image_f32_ptr> super_frames;
+    super_frames.reserve(merged_frame_count);
+
+    for (int merged_idx = 0; merged_idx < merged_frame_count; ++merged_idx) {
+        const int frame_idx0 = merged_idx * temporal_patch_size;
+        const int frame_idx1 = std::min(frame_idx0 + 1, frame_count - 1);
+
+        const clip_image_f32 * frame0 = imgs.entries[frame_idx0].get();
+        const clip_image_f32 * frame1 = imgs.entries[frame_idx1].get();
+
+        clip_image_f32_ptr merged(clip_image_f32_init());
+        merged->nx = frame_w;
+        merged->ny = frame_h;
+        merged->buf.resize(frame_stride * temporal_patch_size);
+
+        float * dst = merged->buf.data();
+        const float * src0 = frame0->buf.data();
+        const float * src1 = frame1->buf.data();
+
+        // Interleave channels: [R0, G0, B0, R1, G1, B1] per pixel
+        for (int p = 0; p < pixels_per_frame; ++p) {
+            const size_t src_base = p * channel_count;
+            const size_t dst_base = p * channel_count * temporal_patch_size;
+
+            dst[dst_base + 0] = src0[src_base + 0];
+            dst[dst_base + 1] = src0[src_base + 1];
+            dst[dst_base + 2] = src0[src_base + 2];
+
+            dst[dst_base + 3] = src1[src_base + 0];
+            dst[dst_base + 4] = src1[src_base + 1];
+            dst[dst_base + 5] = src1[src_base + 2];
+        }
+
+        // Preserve video metadata for downstream 3D M-RoPE handling
+        const float temporal_position = frame0->temporal_position;
+        clip_image_f32_set_video_metadata(
+            merged.get(),
+            /*is_video_frame=*/true,
+            /*frame_idx=*/merged_idx,
+            /*total_frames=*/merged_frame_count,
+            temporal_position);
+
+        super_frames.push_back(std::move(merged));
+    }
+
+    if (super_frames.empty()) {
+        LOG_ERR("%s: Failed to build super-frames for video encoding\n", __func__);
+        return false;
+    }
+
+    const size_t embd_dim = clip_n_mmproj_embd(ctx);
+    const size_t tokens_per_superframe = clip_n_output_tokens(ctx, super_frames[0].get());
+
+    LOG_DBG("%s: encoding %d super-frames (from %d frames), tokens_per_superframe=%zu, embd_dim=%zu\n",
+            __func__, merged_frame_count, frame_count, tokens_per_superframe, embd_dim);
+
+    // Encode each super-frame sequentially
+    // clip_image_batch_encode handles clip_reduced_vram optimization internally
+    size_t output_offset = 0;
+    for (int merged_idx = 0; merged_idx < merged_frame_count; ++merged_idx) {
+        clip_image_f32_batch single_batch;
+        single_batch.entries.push_back(std::move(super_frames[merged_idx]));
+
+        float * frame_out = vec + output_offset;
+        if (!clip_image_batch_encode(ctx, n_threads, &single_batch, frame_out)) {
+            LOG_ERR("%s: Failed to encode super-frame %d\n", __func__, merged_idx);
+            return false;
+        }
+        output_offset += tokens_per_superframe * embd_dim;
+    }
+
+    LOG_DBG("%s: successfully encoded %d super-frames, total tokens=%zu\n",
+            __func__, merged_frame_count, tokens_per_superframe * merged_frame_count);
+
+    return true;
 }
 
 bool clip_is_llava(const struct clip_ctx * ctx) {

@@ -59,6 +59,11 @@
 #define KEY_A_NUM_MEL_BINS      "clip.audio.num_mel_bins"
 #define KEY_A_PROJ_STACK_FACTOR "clip.audio.projector.stack_factor"
 
+// video-specific
+#define KEY_VIDEO_SECONDS_PER_GRID "clip.vision.video.seconds_per_grid"
+#define KEY_VIDEO_MAX_FRAMES       "clip.vision.video.max_frames"
+#define KEY_VIDEO_FPS              "clip.vision.video.fps"
+
 
 //
 // tensor name constants
@@ -283,6 +288,11 @@ struct clip_image_u8 {
     int ny;
 
     std::vector<uint8_t> buf;
+
+    // video frame metadata
+    bool     is_video_frame     = false;
+    uint32_t frame_idx          = 0;
+    uint32_t total_frames       = 0;
 };
 
 // For images, buf.size() == nx*ny*3
@@ -294,6 +304,12 @@ struct clip_image_f32 {
     int ny;
 
     std::vector<float> buf;
+
+    // video frame metadata
+    bool     is_video_frame     = false;
+    uint32_t frame_idx          = 0;
+    uint32_t total_frames       = 0;
+    float    temporal_position  = 0.0f;  // absolute time in seconds
 };
 
 //

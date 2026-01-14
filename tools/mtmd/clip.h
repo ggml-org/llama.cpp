@@ -38,6 +38,7 @@ struct clip_context_params {
     int image_max_tokens;
     bool clip_reduced_vram;  // offload clip weights to CPU and stream at runtime to backend device
     bool warmup;
+    bool is_video_modality;  // set to true when processing video input
 };
 
 struct clip_init_result {
@@ -106,9 +107,18 @@ bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, const struct 
 int clip_is_minicpmv(const struct clip_ctx * ctx);
 bool clip_is_glm(const struct clip_ctx * ctx);
 bool clip_is_mrope(const struct clip_ctx * ctx);
+bool clip_supports_video(const struct clip_ctx * ctx);
 bool clip_is_llava(const struct clip_ctx * ctx);
 // note for contributor: this clip_is_(model) pattern is deprecated
 //                       do NOT add new functions like this
+
+// video modality support
+bool clip_image_batch_encode_video(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, float * vec);
+void clip_set_seconds_per_grid_ts(struct clip_ctx * ctx, float seconds);
+float clip_get_seconds_per_grid_ts(struct clip_ctx * ctx);
+void clip_set_is_video_modality(struct clip_ctx * ctx, bool is_video);
+bool clip_get_is_video_modality(struct clip_ctx * ctx);
+void clip_image_f32_set_video_metadata(struct clip_image_f32 * img, bool is_video_frame, uint32_t frame_idx, uint32_t total_frames, float temporal_position);
 
 bool clip_encode_float_image (struct clip_ctx * ctx, int n_threads, float * img, int h, int w, float * vec);
 

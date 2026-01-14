@@ -5,6 +5,8 @@ find_package(Threads REQUIRED)
 add_library(mtmd
             mtmd.cpp
             mtmd-audio.cpp
+            mtmd-video.cpp
+            mtmd-video.h
             mtmd.h
             mtmd-jit.h
             mtmd-helper.cpp
@@ -54,6 +56,7 @@ endif()
 set(MTMD_PUBLIC_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd.h
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd-helper.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/mtmd-video.h
     )
 
 set_target_properties(mtmd

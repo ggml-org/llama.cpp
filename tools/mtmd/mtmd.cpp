@@ -30,24 +30,50 @@ struct mtmd_bitmap {
     std::vector<unsigned char> data;
     std::string id; // optional user-defined id, for ex: can be set to image hash, useful for KV cache tracking
     bool is_audio = false; // true if the bitmap is audio
+
+    // video frame metadata
+    bool     is_video_frame = false;  // true if this is a video frame
+    uint32_t frame_idx      = 0;      // frame index in the video sequence
+    uint32_t total_frames   = 0;      // total number of frames in the video
 };
 
 struct mtmd_image_tokens {
     uint32_t nx; // number of tokens in x direction
     uint32_t ny; // number of tokens in y direction
     bool use_mrope_pos = false; // use M-RoPE position counting (the whole image is 1 temporal position)
-    uint32_t n_tokens() const { return nx * ny; }
+    uint32_t n_tokens() const {
+        // For video batches, return total tokens across all frames
+        if (is_video_frame && total_frames > 1) {
+            return total_tokens_video;
+        }
+        return nx * ny;
+    }
     clip_image_f32_batch batch_f32; // preprocessed image patches
     std::string id; // optional user-defined ID, useful for KV cache tracking
 
+    // Video frame metadata
+    bool     is_video_frame     = false;
+    uint32_t frame_idx          = 0;
+    uint32_t total_frames       = 0;
+    uint32_t total_tokens_video = 0;  // total tokens across all frames in video batch
+    // 3D M-RoPE temporal metadata
+    float    temporal_position  = 0.0f;  // absolute time in seconds
+    float    seconds_per_grid   = 2.0f;  // temporal grid spacing
+
     mtmd_image_tokens clone() {
-        return mtmd_image_tokens{
-            nx,
-            ny,
-            use_mrope_pos,
-            batch_f32.clone(),
-            id
-        };
+        mtmd_image_tokens result;
+        result.nx                 = nx;
+        result.ny                 = ny;
+        result.use_mrope_pos      = use_mrope_pos;
+        result.batch_f32          = batch_f32.clone();
+        result.id                 = id;
+        result.is_video_frame     = is_video_frame;
+        result.frame_idx          = frame_idx;
+        result.total_frames       = total_frames;
+        result.total_tokens_video = total_tokens_video;
+        result.temporal_position  = temporal_position;
+        result.seconds_per_grid   = seconds_per_grid;
+        return result;
     }
 };
 using mtmd_image_tokens_ptr = std::unique_ptr<mtmd_image_tokens>;
@@ -92,6 +118,14 @@ const char * mtmd_default_marker() {
     return "<__media__>";
 }
 
+const char * mtmd_cosmos_marker_video() {
+    return "<|vision_start|><|video_pad|><|vision_end|>";
+}
+
+const char * mtmd_cosmos_marker() {
+    return "<|vision_start|><|image_pad|><|vision_end|>";
+}
+
 static clip_flash_attn_type mtmd_get_clip_flash_attn_type(enum llama_flash_attn_type flash_attn_type) {
     switch (flash_attn_type) {
         case LLAMA_FLASH_ATTN_TYPE_AUTO:     return CLIP_FLASH_ATTN_TYPE_AUTO;
@@ -103,16 +137,18 @@ static clip_flash_attn_type mtmd_get_clip_flash_attn_type(enum llama_flash_attn_
 
 mtmd_context_params mtmd_context_params_default() {
     mtmd_context_params params {
-        /* use_gpu           */ true,
-        /* print_timings     */ true,
-        /* n_threads         */ 4,
-        /* image_marker      */ MTMD_DEFAULT_IMAGE_MARKER,
-        /* media_marker      */ mtmd_default_marker(),
-        /* flash_attn_type   */ LLAMA_FLASH_ATTN_TYPE_AUTO,
-        /* warmup            */ true,
-        /* image_min_tokens  */ -1,
-        /* image_max_tokens  */ -1,
-        /* clip_reduced_vram */ false,
+        /* use_gpu             */ true,
+        /* print_timings       */ true,
+        /* n_threads           */ 4,
+        /* image_marker        */ MTMD_DEFAULT_IMAGE_MARKER,
+        /* media_marker        */ mtmd_default_marker(),
+        /* flash_attn_type     */ LLAMA_FLASH_ATTN_TYPE_AUTO,
+        /* warmup              */ true,
+        /* image_min_tokens    */ -1,
+        /* image_max_tokens    */ -1,
+        /* clip_reduced_vram   */ false,
+        /* is_video_modality   */ false,
+        /* seconds_per_grid_ts */ 2.0f,
     };
     return params;
 }
@@ -154,6 +190,18 @@ struct mtmd_context {
 
     bool use_mrope = false; // for Qwen2VL, we need to use M-RoPE
 
+    // video modality parameters
+    float seconds_per_grid_ts = 2.0f;   // temporal grid spacing for 3D M-RoPE
+    bool  is_video_modality   = false;  // true when processing video input
+
+    // Video frame batching for Qwen2VL/Qwen25VL
+    bool                  collecting_video_frames = false;
+    uint32_t              video_frames_expected   = 0;
+    uint32_t              video_frames_collected  = 0;
+    clip_image_f32_batch  video_batch_f32;
+    std::vector<uint32_t> video_frame_indices;
+    float                 video_temporal_position_start = 0.0f;
+
     // string template for slice image delimiters with row/col (idefics3)
     std::string sli_img_start_tmpl;
 
@@ -169,11 +217,13 @@ struct mtmd_context {
     mtmd_context(const char * mmproj_fname,
                    const llama_model * text_model,
                    const mtmd_context_params & ctx_params) :
-        text_model   (text_model),
-        print_timings(ctx_params.print_timings),
-        n_threads    (ctx_params.n_threads),
-        media_marker (ctx_params.media_marker),
-        n_embd_text  (llama_model_n_embd_inp(text_model))
+        text_model         (text_model),
+        print_timings      (ctx_params.print_timings),
+        n_threads          (ctx_params.n_threads),
+        media_marker       (ctx_params.media_marker),
+        n_embd_text        (llama_model_n_embd_inp(text_model)),
+        seconds_per_grid_ts(ctx_params.seconds_per_grid_ts),
+        is_video_modality  (ctx_params.is_video_modality)
     {
         if (std::string(ctx_params.image_marker) != MTMD_DEFAULT_IMAGE_MARKER) {
             throw std::runtime_error("custom image_marker is not supported anymore, use media_marker instead");
@@ -520,7 +570,11 @@ struct mtmd_tokenizer {
     int32_t tokenize(mtmd_input_chunks * output) {
         cur.entries.clear();
         std::vector<std::string> parts = split_text(input_text, ctx->media_marker);
-        size_t i_bm = 0; // index of the current bitmap
+        size_t i_bm = 0; 
+
+        // Check if we're in video mode - all video frames should be processed as a single batch
+        bool video_mode = !bitmaps.empty() && bitmaps[0]->is_video_frame && ctx->is_video_modality;
+
         for (auto & part : parts) {
             if (part == ctx->media_marker) {
                 // this is a marker, we should add the next bitmap
@@ -529,10 +583,26 @@ struct mtmd_tokenizer {
                             __func__, bitmaps.size(), parts.size() - 1);
                     return 1;
                 }
-                const mtmd_bitmap * bitmap = bitmaps[i_bm++];
-                int32_t res = add_media(bitmap);
-                if (res != 0) {
-                    return res;
+
+                if (video_mode && i_bm == 0) {
+                    // Video mode: process ALL video frame bitmaps at once with a single marker
+                    GGML_ASSERT(clip_supports_video(ctx->ctx_v));
+                    LOG_DBG("%s: Video mode: processing %zu frames as single batch\n", __func__, bitmaps.size());
+                    for (size_t i = 0; i < bitmaps.size(); i++) {
+                        const mtmd_bitmap * bitmap = bitmaps[i];
+                        int32_t res = add_media(bitmap);
+                        if (res != 0) {
+                            return res;
+                        }
+                    }
+                    i_bm = bitmaps.size();  // Mark all bitmaps as consumed
+                } else {
+                    // Image mode: process one bitmap per marker
+                    const mtmd_bitmap * bitmap = bitmaps[i_bm++];
+                    int32_t res = add_media(bitmap);
+                    if (res != 0) {
+                        return res;
+                    }
                 }
             } else {
                 // this is a text part, we should add it as text
@@ -946,6 +1016,18 @@ bool mtmd_decode_use_mrope(mtmd_context * ctx) {
     return ctx->use_mrope;
 }
 
+bool mtmd_is_video_modality(mtmd_context * ctx) {
+    return ctx->is_video_modality;
+}
+
+float mtmd_get_seconds_per_grid_ts(mtmd_context * ctx) {
+    return ctx->seconds_per_grid_ts;
+}
+
+void mtmd_set_seconds_per_grid_ts(mtmd_context * ctx, float seconds) {
+    ctx->seconds_per_grid_ts = seconds;
+}
+
 bool mtmd_support_vision(mtmd_context * ctx) {
     return ctx->ctx_v != nullptr;
 }
@@ -1021,6 +1103,30 @@ void mtmd_bitmap_set_id(mtmd_bitmap * bitmap, const char * id) {
     } else {
         bitmap->id.clear();
     }
+}
+
+bool mtmd_bitmap_is_video_frame(const mtmd_bitmap * bitmap) {
+    return bitmap->is_video_frame;
+}
+
+uint32_t mtmd_bitmap_get_video_frame_idx(const mtmd_bitmap * bitmap) {
+    return bitmap->frame_idx;
+}
+
+uint32_t mtmd_bitmap_get_video_total_frames(const mtmd_bitmap * bitmap) {
+    return bitmap->total_frames;
+}
+
+void mtmd_bitmap_set_is_video_frame(mtmd_bitmap * bitmap, bool is_video_frame) {
+    bitmap->is_video_frame = is_video_frame;
+}
+
+void mtmd_bitmap_set_frame_idx(mtmd_bitmap * bitmap, uint32_t frame_idx) {
+    bitmap->frame_idx = frame_idx;
+}
+
+void mtmd_bitmap_set_total_frames(mtmd_bitmap * bitmap, uint32_t total_frames) {
+    bitmap->total_frames = total_frames;
 }
 
 void mtmd_bitmap_free(mtmd_bitmap * bitmap) {
@@ -1154,10 +1260,34 @@ const char * mtmd_image_tokens_get_id(const mtmd_image_tokens * image_tokens) {
 llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
     if (image_tokens->use_mrope_pos) {
         // for M-RoPE, temporal dimension = max(t,h,w)
-        // t is omitted as we don't support video input
+        // for video input, include temporal dimension
+        if (image_tokens->is_video_frame && image_tokens->total_frames > 0) {
+            uint32_t t = image_tokens->total_frames;
+            return std::max({t, image_tokens->nx, image_tokens->ny});
+        }
         return std::max(image_tokens->nx, image_tokens->ny);
     }
     return image_tokens->n_tokens();
+}
+
+bool mtmd_image_tokens_is_video_frame(const mtmd_image_tokens * image_tokens) {
+    return image_tokens->is_video_frame;
+}
+
+uint32_t mtmd_image_tokens_get_frame_idx(const mtmd_image_tokens * image_tokens) {
+    return image_tokens->frame_idx;
+}
+
+uint32_t mtmd_image_tokens_get_total_frames(const mtmd_image_tokens * image_tokens) {
+    return image_tokens->total_frames;
+}
+
+float mtmd_image_tokens_get_temporal_position(const mtmd_image_tokens * image_tokens) {
+    return image_tokens->temporal_position;
+}
+
+float mtmd_image_tokens_get_seconds_per_grid(const mtmd_image_tokens * image_tokens) {
+    return image_tokens->seconds_per_grid;
 }
 
 // test function

@@ -575,6 +575,13 @@ struct common_params {
     }
 
     bool clip_reduced_vram = false;  // keep weights' of vision models offloaded to CPU and stream at runtime to required device
+
+    // video modality parameters
+    std::string video;                       // path to a video file
+    float       video_fps        = 1.0f;     // frames per second to extract from video (default: 1 FPS)
+    int         video_max_frames = 0;        // maximum number of frames to extract (0 = unlimited)
+    float       ts_per_grid      = 2.0f;     // seconds per temporal grid for 3D M-RoPE (default: 2.0)
+    bool        no_think         = false;    // disable chain-of-thought hints in chat templates that support it
 };
 
 // call once at the start of a program if it uses libcommon

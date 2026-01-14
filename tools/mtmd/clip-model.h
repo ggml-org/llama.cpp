@@ -74,6 +74,11 @@ struct clip_hparams {
     int32_t audio_window_len  = -1;
     int32_t audio_hop_len     = -1;
 
+    // video modality parameters
+    float   seconds_per_grid_ts = 2.0f;  // temporal grid spacing for 3D M-RoPE
+    int32_t max_video_frames    = 64;    // default max frames for video
+    float   video_fps           = 1.0f;  // default FPS for video extraction
+
     // legacy
     bool has_llava_projector = false;
     int minicpmv_version = 0;

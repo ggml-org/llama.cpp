@@ -8,10 +8,13 @@
 #include "chat.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "mtmd-video.h"
 
 #include <vector>
 #include <limits.h>
 #include <cinttypes>
+#include <map>
+#include <fstream>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
@@ -38,10 +41,11 @@ static volatile bool g_is_interrupted = false;
 static void show_additional_info(int /*argc*/, char ** argv) {
     LOG(
         "Experimental CLI for multimodal\n\n"
-        "Usage: %s [options] -m <model> --mmproj <mmproj> --image <image> --audio <audio> -p <prompt>\n\n"
+        "Usage: %s [options] -m <model> --mmproj <mmproj> --image <image> --video <video> --audio <audio> -p <prompt>\n\n"
         "  -m and --mmproj are required\n"
         "  -hf user/repo can replace both -m and --mmproj in most cases\n"
-        "  --image, --audio and -p are optional, if NOT provided, the CLI will run in chat mode\n"
+        "  --image, --video, --audio and -p are optional, if NOT provided, the CLI will run in chat mode\n"
+        "  --video requires ffmpeg to be installed and available in PATH\n"
         "  to disable using GPU for mmproj model, add --no-mmproj-offload\n",
         argv[0]
     );
@@ -225,14 +229,24 @@ struct mtmd_cli_context {
     void init_vision_context(common_params & params) {
         const char * clip_path = params.mmproj.path.c_str();
         mtmd_context_params mparams = mtmd_context_params_default();
-        mparams.use_gpu           = params.mmproj_use_gpu;
-        mparams.print_timings     = true;
-        mparams.n_threads         = params.cpuparams.n_threads;
-        mparams.flash_attn_type   = params.flash_attn_type;
-        mparams.warmup            = params.warmup;
-        mparams.image_min_tokens  = params.image_min_tokens;
-        mparams.image_max_tokens  = params.image_max_tokens;
-        mparams.clip_reduced_vram = params.clip_reduced_vram;
+        mparams.use_gpu             = params.mmproj_use_gpu;
+        mparams.print_timings       = true;
+        mparams.n_threads           = params.cpuparams.n_threads;
+        mparams.flash_attn_type     = params.flash_attn_type;
+        mparams.warmup              = params.warmup;
+        mparams.image_min_tokens    = params.image_min_tokens;
+        mparams.image_max_tokens    = params.image_max_tokens;
+        mparams.clip_reduced_vram   = params.clip_reduced_vram;
+        mparams.seconds_per_grid_ts = params.ts_per_grid;  // pass temporal grid spacing
+        mparams.is_video_modality   = !params.video.empty();
+
+        // Set cosmos marker for video input if needed
+        if (params.chat_template == "cosmos" && !params.video.empty()) {
+            mparams.media_marker = mtmd_cosmos_marker_video();
+        } else if (params.chat_template == "cosmos") {
+            mparams.media_marker = mtmd_cosmos_marker();
+        }
+
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_vision.get()) {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);
@@ -258,6 +272,48 @@ struct mtmd_cli_context {
         }
         bitmaps.entries.push_back(std::move(bmp));
         return true;
+    }
+
+    bool load_video(const std::string & video_path, float fps = 1.0f, int max_frames = 0, float ts_per_grid = 2.0f) {
+        mtmd_video_opts opts;
+        opts.fps = fps;
+        opts.max_frames = max_frames;
+
+        mtmd_video_result result;
+        std::string err;
+
+        if (!mtmd_video_extract_frames(video_path, opts, result, err)) {
+            LOG_ERR("%s: Failed to extract frames from video: %s\n", __func__, err.c_str());
+            return false;
+        }
+
+        // Load each frame as an image with video metadata
+        bool success = true;
+        uint32_t total_frames = static_cast<uint32_t>(result.frames.size());
+
+        for (uint32_t i = 0; i < total_frames; ++i) {
+            const auto & frame_path = result.frames[i];
+            if (!load_media(frame_path.string())) {
+                LOG_ERR("%s: Failed to load frame: %s\n", __func__, frame_path.string().c_str());
+                success = false;
+                break;
+            }
+            // Set video frame metadata on the last loaded bitmap
+            if (!bitmaps.entries.empty())
+            {
+                auto & last_bitmap = bitmaps.entries.back();
+                mtmd_bitmap_set_is_video_frame(last_bitmap.ptr.get(), true);
+                mtmd_bitmap_set_frame_idx(last_bitmap.ptr.get(), i);
+                mtmd_bitmap_set_total_frames(last_bitmap.ptr.get(), total_frames);
+                // Set a unique ID for the video frame
+                std::string frame_id = video_path + "_frame_" + std::to_string(i);
+                mtmd_bitmap_set_id(last_bitmap.ptr.get(), frame_id.c_str());
+            }
+        }
+
+        // Cleanup temp directory after use
+        mtmd_video_cleanup(result);
+        return success;
     }
 };
 
@@ -381,7 +437,7 @@ int main(int argc, char ** argv) {
     mtmd_cli_context ctx(params);
     LOG_INF("%s: loading model: %s\n", __func__, params.model.path.c_str());
 
-    bool is_single_turn = !params.prompt.empty() && !params.image.empty();
+    bool is_single_turn = !params.prompt.empty() && (!params.image.empty() || !params.video.empty());
 
     int n_predict = params.n_predict < 0 ? INT_MAX : params.n_predict;
 
@@ -423,7 +479,24 @@ int main(int argc, char ** argv) {
 
     if (is_single_turn) {
         g_is_generating = true;
-        if (params.prompt.find(mtmd_default_marker()) == std::string::npos) {
+        
+        // Handle video input - for video, we use a SINGLE marker for ALL frames
+        if (!params.video.empty()) {
+            // Determine video marker based on chat template
+            std::string video_marker = (params.chat_template == "cosmos") 
+                ? mtmd_cosmos_marker_video() 
+                : mtmd_default_marker();
+            
+            if (params.prompt.find(video_marker) == std::string::npos) {
+                // For video input, add only ONE marker regardless of frame count
+                params.prompt = video_marker + params.prompt;
+            }
+            
+            if (!ctx.load_video(params.video, params.video_fps, params.video_max_frames, params.ts_per_grid)) {
+                return 1; // error is already printed
+            }
+        }
+        else if (params.prompt.find(mtmd_default_marker()) == std::string::npos) {
             for (size_t i = 0; i < params.image.size(); i++) {
                 // most models require the marker before each image
                 // ref: https://github.com/ggml-org/llama.cpp/pull/17616
@@ -450,6 +523,7 @@ int main(int argc, char ** argv) {
         LOG("\n Running in chat mode, available commands:");
         if (mtmd_support_vision(ctx.ctx_vision.get())) {
             LOG("\n   /image <path>    load an image");
+            LOG("\n   /video <path>    load a video (requires ffmpeg)");
         }
         if (mtmd_support_audio(ctx.ctx_vision.get())) {
             LOG("\n   /audio <path>    load an audio");
@@ -488,7 +562,24 @@ int main(int argc, char ** argv) {
             g_is_generating = true;
             bool is_image = line == "/image" || line.find("/image ") == 0;
             bool is_audio = line == "/audio" || line.find("/audio ") == 0;
-            if (is_image || is_audio) {
+            bool is_video = line == "/video" || line.find("/video ") == 0;
+            if (is_video) {
+                if (line.size() < 8) {
+                    LOG_ERR("ERR: Missing video filename\n");
+                    continue;
+                }
+                std::string video_path = line.substr(7);
+                if (ctx.load_video(video_path, params.video_fps, params.video_max_frames, params.ts_per_grid)) {
+                    LOG("video %s loaded\n", video_path.c_str());
+                    // Use video marker based on chat template
+                    std::string video_marker = (params.chat_template == "cosmos") 
+                        ? mtmd_cosmos_marker_video() 
+                        : mtmd_default_marker();
+                    content += video_marker;
+                }
+                // else, error is already printed
+                continue;
+            } else if (is_image || is_audio) {
                 if (line.size() < 8) {
                     LOG_ERR("ERR: Missing media filename\n");
                     continue;

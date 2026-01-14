@@ -2160,6 +2160,41 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.image_max_tokens = value;
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_IMAGE_MAX_TOKENS"));
+    add_opt(common_arg(
+        {"--video"}, "FILE",
+        "path to a video file for video modality input (requires ffmpeg in PATH)",
+        [](common_params & params, const std::string & value) {
+            params.video = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_VIDEO"));
+    add_opt(common_arg(
+        {"--video-fps"}, "N",
+        string_format("frames per second to extract from video (default: %.1f)", params.video_fps),
+        [](common_params & params, const std::string & value) {
+            params.video_fps = std::stof(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_VIDEO_FPS"));
+    add_opt(common_arg(
+        {"-vmaxf", "--video-max-frames"}, "N",
+        "maximum number of frames to extract from video (default: 0 = unlimited)",
+        [](common_params & params, int value) {
+            params.video_max_frames = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_VIDEO_MAX_FRAMES"));
+    add_opt(common_arg(
+        {"--ts-per-grid"}, "N",
+        string_format("seconds per temporal grid for 3D M-RoPE video encoding (default: %.1f)", params.ts_per_grid),
+        [](common_params & params, const std::string & value) {
+            params.ts_per_grid = std::stof(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_MTMD}).set_env("LLAMA_ARG_TS_PER_GRID"));
+    add_opt(common_arg(
+        {"--no-think"},
+        "disable chain-of-thought hints in chat templates (e.g., for Cosmos models)",
+        [](common_params & params) {
+            params.no_think = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_MTMD}));
     if (llama_supports_rpc()) {
         add_opt(common_arg(
             {"--rpc"}, "SERVERS",
