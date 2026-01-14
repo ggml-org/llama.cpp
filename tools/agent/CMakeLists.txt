@@ -5,6 +5,7 @@ set(AGENT_SOURCES
     agent-loop.cpp
     tool-registry.cpp
     permission.cpp
+    permission-async.cpp
     skills/skills-manager.cpp
     agents-md/agents-md-manager.cpp
     subagent/subagent-types.cpp
