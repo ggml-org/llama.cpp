@@ -707,6 +707,7 @@ static inline unsigned char ggml_endian_byte(int i) {
 #define GGML_BF16x8_LOAD(p) vec_xl(0, (const unsigned short *)(p))
 
 #define GGML_BF16_VEC          GGML_BF16x8
+#define GGML_BF16_VEC_ZERO     GGML_BF16x8_ZERO
 #define GGML_BF16_VEC_LOAD     GGML_BF16x8_LOAD
 #define GGML_BF16_TO_F32_LO(v) ((vector float) vec_mergel(GGML_BF16_VEC_ZERO, (v)))
 #define GGML_BF16_TO_F32_HI(v) ((vector float) vec_mergeh(GGML_BF16_VEC_ZERO, (v)))
