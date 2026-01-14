@@ -2,6 +2,7 @@
 	import { Cable, ExternalLink } from '@lucide/svelte';
 	import { Switch } from '$lib/components/ui/switch';
 	import type { MCPServerInfo, MCPCapabilitiesInfo } from '$lib/types';
+	import { MCPTransportType } from '$lib/enums';
 	import { Badge } from '$lib/components/ui/badge';
 	import McpCapabilitiesBadges from './McpCapabilitiesBadges.svelte';
 
@@ -12,9 +13,24 @@
 		onToggle: (enabled: boolean) => void;
 		serverInfo?: MCPServerInfo;
 		capabilities?: MCPCapabilitiesInfo;
+		transportType?: MCPTransportType;
 	}
 
-	let { displayName, faviconUrl, enabled, onToggle, serverInfo, capabilities }: Props = $props();
+	let {
+		displayName,
+		faviconUrl,
+		enabled,
+		onToggle,
+		serverInfo,
+		capabilities,
+		transportType
+	}: Props = $props();
+
+	const transportLabels: Record<MCPTransportType, string> = {
+		[MCPTransportType.Websocket]: 'WebSocket',
+		[MCPTransportType.StreamableHttp]: 'HTTP',
+		[MCPTransportType.SSE]: 'SSE'
+	};
 </script>
 
 <div class="space-y-3">
@@ -59,8 +75,18 @@
 				{/if}
 			</div>
 
-			{#if capabilities}
-				<McpCapabilitiesBadges {capabilities} />
+			{#if capabilities || transportType}
+				<div class="flex flex-wrap items-center gap-1">
+					{#if transportType}
+						<Badge variant="outline" class="h-5 gap-1 px-1.5 text-[10px]">
+							{transportLabels[transportType] || transportType}
+						</Badge>
+					{/if}
+
+					{#if capabilities}
+						<McpCapabilitiesBadges {capabilities} />
+					{/if}
+				</div>
 			{/if}
 		</div>
 
