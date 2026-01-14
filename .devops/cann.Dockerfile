@@ -42,6 +42,7 @@ RUN source /usr/local/Ascend/ascend-toolkit/set_env.sh --force \
         -DGGML_CANN=ON \
         -DCMAKE_BUILD_TYPE=Release \
         -DSOC_TYPE=ascend${CHIP_TYPE} \
+        -DUSE_ACL_GRAPH=ON \
         . && \
     cmake --build build --config Release -j$(nproc)
 

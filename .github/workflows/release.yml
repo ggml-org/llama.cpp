@@ -681,14 +681,25 @@ jobs:
   openEuler-cann:
     strategy:
       matrix:
-        arch: [x86, aarch64]
-        chip_type: ['910b', '310p']
-        build: ['Release']
-        use_acl_graph: ['on', 'off']
-        exclude:
-          # 310P does not support USE_ACL_GRAPH=on
-          - chip_type: '310p'
+        include:
+          # 910b with aclgraph (both architectures)
+          - arch: x86
+            chip_type: '910b'
+            build: 'Release'
             use_acl_graph: 'on'
+          - arch: aarch64
+            chip_type: '910b'
+            build: 'Release'
+            use_acl_graph: 'on'
+          # 310p without aclgraph (both architectures)
+          - arch: x86
+            chip_type: '310p'
+            build: 'Release'
+            use_acl_graph: 'off'
+          - arch: aarch64
+            chip_type: '310p'
+            build: 'Release'
+            use_acl_graph: 'off'
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
@@ -870,10 +881,8 @@ jobs:
 
             **openEuler:**
             - [openEuler x86 (310p)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-310p-openEuler-x86.tar.gz)
-            - [openEuler x86 (910b)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-910b-openEuler-x86.tar.gz)
             - [openEuler x86 (910b, ACL Graph)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-910b-openEuler-x86-aclgraph.tar.gz)
             - [openEuler aarch64 (310p)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-310p-openEuler-aarch64.tar.gz)
-            - [openEuler aarch64 (910b)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-910b-openEuler-aarch64.tar.gz)
             - [openEuler aarch64 (910b, ACL Graph)](https://github.com/ggml-org/llama.cpp/releases/download/${{ steps.tag.outputs.name }}/llama-${{ steps.tag.outputs.name }}-bin-910b-openEuler-aarch64-aclgraph.tar.gz)
 
       - name: Upload release
