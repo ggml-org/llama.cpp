@@ -103,18 +103,17 @@ class Runner::RunnerImpl {
         for (const auto & message : messages) {
             if (const auto & role = message.role; role == "system") {
                 if (const auto & system_prompt = message.content; system_prompt == asr_system_prompt) {
-                    generator = &Runner::RunnerImpl::generate_sequential;
                 } else if (system_prompt == interleaved_system_prompt) {
                     // TODO(tarek): check params with Marc
                     ctx.audio_temperature = 0.8;
                     ctx.audio_top_k       = 4;
-                    generator             = &Runner::RunnerImpl::generate_interleaved;
+                    std::array modalities{ MTMD_OUTPUT_MODALITY_AUDIO, MTMD_OUTPUT_MODALITY_TEXT };
+                    mtmd_set_output_modalities(ctx.mtmd_ctx_audio.get(), modalities.data(), modalities.size());
                 } else if (std::find(begin(tts_system_prompts), end(tts_system_prompts), system_prompt) !=
                            end(tts_system_prompts)) {
                     // TODO(tarek): check params with Marc
                     ctx.audio_temperature = 0.8;
                     ctx.audio_top_k       = 64;
-                    generator             = &Runner::RunnerImpl::generate_sequential;
                 } else {
                     std::vector<std::string> prompts = tts_system_prompts;
                     prompts.push_back(asr_system_prompt);
@@ -167,7 +166,7 @@ class Runner::RunnerImpl {
             audio_callback(audio);
         };
 
-        if (!stop_requested && (this->*generator)(n_predict, text_callback_perf, audio_callback_perf) != 0) {
+        if (!stop_requested && generate_common(n_predict, text_callback_perf, audio_callback_perf) != 0) {
             return error("failed to generate");
         }
 
@@ -250,19 +249,13 @@ class Runner::RunnerImpl {
     std::optional<int64_t> first_text_received, first_audio_received;
     std::optional<int64_t> last_text_received, last_audio_received;
 
-    int (Runner::RunnerImpl::*generator)(int, const text_callback_t &, const audio_callback_t &) = nullptr;
-
     int error(const std::string & msg) {
         LOG_ERR("ERR: %s\n", msg.c_str());
         last_error_ = msg;
         return 1;
     }
 
-    int generate_common(int                                                              n_predict,
-                        const std::function<Modality(const llama_token &, Modality)> &   text_handler,
-                        const std::function<Modality(const audio_token_t &, Modality)> & audio_handler,
-                        const text_callback_t &                                          text_callback,
-                        const audio_callback_t &                                         audio_callback) {
+    int generate_common(int n_predict, const text_callback_t & text_callback, const audio_callback_t & audio_callback) {
         Modality    current_modality = Modality::TEXT;
         llama_batch batch            = llama_batch_get_one(nullptr, 1);  // doesn't own pointers, no need for free.
 
@@ -285,8 +278,7 @@ class Runner::RunnerImpl {
             auto * mctx = ctx.mtmd_ctx_audio.get();
 
             if (mtmd_get_output_modality(mctx) == MTMD_OUTPUT_MODALITY_TEXT) {
-                llama_token next_text_token = 0;
-                next_text_token             = common_sampler_sample(ctx.smpl, ctx.lctx, -1);
+                llama_token next_text_token = common_sampler_sample(ctx.smpl, ctx.lctx, -1);
                 common_sampler_accept(ctx.smpl, next_text_token, true);
 
                 if (llama_vocab_is_eog(ctx.vocab, next_text_token)) {
@@ -294,9 +286,8 @@ class Runner::RunnerImpl {
                     break;  // end of generation
                 }
 
-                current_modality = text_handler(next_text_token, current_modality);
-
-                if (next_text_token != 130 && next_text_token != 128) {  // text_end, audio_start
+                // output
+                {
                     auto token_str = common_token_to_piece(ctx.lctx, next_text_token);
                     text_callback(token_str);
                     LOG("%s", token_str.c_str());
@@ -330,64 +321,6 @@ class Runner::RunnerImpl {
         LOG("\n");
 
         return 0;
-    }
-
-    int generate_interleaved(int                      n_predict,
-                             const text_callback_t &  text_callback,
-                             const audio_callback_t & audio_callback) {
-        constexpr auto interleaved_n_text  = 6;
-        constexpr auto interleaved_n_audio = 12;
-        int            modality_left       = interleaved_n_text;
-        bool           text_done           = false;
-
-        return generate_common(
-            n_predict,
-            [&](const llama_token & next_text_token, Modality current_modality) {
-                modality_left -= 1;
-                if (next_text_token == 130) {  // <|text_end|>
-                    text_done = true;
-                }
-
-                if (modality_left == 0 or text_done) {
-                    modality_left    = interleaved_n_audio;
-                    current_modality = Modality::AUDIO_OUT;
-                }
-
-                return current_modality;
-            },
-            [&](const audio_token_t & next_token, Modality current_modality) {
-                if (ctx.verbosity) {
-                    log_audio_tokens(next_token);
-                }
-
-                modality_left -= 1;
-                if (modality_left == 0 and not text_done) {
-                    current_modality = Modality::TEXT;
-                    modality_left    = interleaved_n_text;
-                }
-                return current_modality;
-            },
-            text_callback, audio_callback);
-    }
-
-    int generate_sequential(int                      n_predict,
-                            const text_callback_t &  text_callback,
-                            const audio_callback_t & audio_callback) {
-        return generate_common(
-            n_predict,
-            [&](const llama_token & next_text_token, Modality current_modality) {
-                if (next_text_token == 128) {  // <|audio_start|>
-                    current_modality = Modality::AUDIO_OUT;
-                }
-                return current_modality;
-            },
-            [&](const audio_token_t & next_token, Modality current_modality) {
-                if (ctx.verbosity) {
-                    log_audio_tokens(next_token);
-                }
-                return current_modality;
-            },
-            text_callback, audio_callback);
     }
 
     void perf_context_reset() {

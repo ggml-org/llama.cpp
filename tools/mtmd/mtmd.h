@@ -274,6 +274,9 @@ MTMD_API int mtmd_get_audio_samples(mtmd_context * ctx, int16_t * samples);
 // accept text token, can switch modality
 MTMD_API void mtmd_audio_output_accept_token(mtmd_context * ctx, llama_token id);
 
+// set output modalities sequence for generation
+MTMD_API void mtmd_set_output_modalities(mtmd_context * ctx, mtmd_output_modality * ptr, size_t len);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif

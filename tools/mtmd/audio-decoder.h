@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mtmd.h"
+
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -29,6 +31,11 @@ struct mtmd_audio_decoder {
                        size_t                     n_embd,
                        float                      temperature,
                        int                        top_k) = 0;
+
+    // returns next modality after text token
+    virtual mtmd_output_modality accept_text_token(llama_token token) = 0;
+
+    virtual void set_modalities(const std::vector<mtmd_output_modality> & modalities) = 0;
 };
 
 using mtmd_audio_decoder_ptr = std::unique_ptr<mtmd_audio_decoder>;

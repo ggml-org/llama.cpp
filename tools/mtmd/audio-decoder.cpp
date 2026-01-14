@@ -664,6 +664,13 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
     ggml_threadpool * threadpool                  = nullptr;
     void (*threadpool_free_fn)(ggml_threadpool *) = nullptr;
 
+    // output modality switch
+    std::vector<mtmd_output_modality> modalities;
+
+    static constexpr auto interleaved_n_text  = 6;
+    static constexpr auto interleaved_n_audio = 12;
+    int                   modality_left       = interleaved_n_text;
+
     audio_decoder_lfm25(const std::string & vocoder_path,
                         const std::string & tokenizer_path,
                         int                 n_threads,
@@ -710,7 +717,14 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
                size_t                     n_embd,
                float                      temperature,
                int                        top_k) override {
-        result.is_final = false;
+        modality_left -= 1;
+
+        if (is_interleaved_mode() && modality_left == 0) {
+            modality_left   = interleaved_n_text;
+            result.is_final = true;
+        } else {
+            result.is_final = false;
+        }
 
         auto               t0 = ggml_time_ms();
         std::vector<float> embd(embd_ptr, embd_ptr + n_embd);
@@ -739,7 +753,42 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
 
     int get_sample_rate() const override { return 24000; }
 
+    mtmd_output_modality accept_text_token(llama_token token) override {
+        modality_left -= 1;
+
+        if (token == 130) {  // <|text_end|>
+            modality_left = INT_MAX;
+            return MTMD_OUTPUT_MODALITY_AUDIO;
+        }
+
+        if (is_interleaved_mode()) {
+            if (modality_left == 0) {
+                modality_left = interleaved_n_audio;
+                return MTMD_OUTPUT_MODALITY_AUDIO;
+            }
+        } else if (token == 128) {  // <|audio_start|>
+            modality_left = INT_MAX;
+            return MTMD_OUTPUT_MODALITY_AUDIO;
+        }
+
+        return MTMD_OUTPUT_MODALITY_TEXT;
+    }
+
+    void set_modalities(const std::vector<mtmd_output_modality> & modalities) override {
+        this->modalities = modalities;
+        if (is_interleaved_mode()) {
+            modality_left = interleaved_n_text;
+        } else {
+            modality_left = INT_MAX;
+        }
+    }
+
   private:
+    bool is_interleaved_mode() const {
+        return std::find(modalities.begin(), modalities.end(), MTMD_OUTPUT_MODALITY_TEXT) != modalities.end() &&
+               std::find(modalities.begin(), modalities.end(), MTMD_OUTPUT_MODALITY_AUDIO) != modalities.end();
+    }
+
     template <typename T> ggml_type get_ggml_type() {
         if constexpr (std::is_same_v<T, float>) {
             return GGML_TYPE_F32;

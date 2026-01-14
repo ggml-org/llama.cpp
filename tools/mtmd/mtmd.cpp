@@ -1236,10 +1236,12 @@ void mtmd_audio_output_accept_token(mtmd_context * ctx, llama_token id) {
     if (!ctx || !ctx->audio_decoder) {
         return;
     }
-    LOG_DBG("%s: %d\n", __func__, id);
 
-    // for lfm25
-    if (id == 128 || id == 130) {  // <|audio_start|> or <|text_end|>
-        ctx->output_modality = MTMD_OUTPUT_MODALITY_AUDIO;
-    }
+    ctx->output_modality = ctx->audio_decoder->accept_text_token(id);
+}
+
+void mtmd_set_output_modalities(mtmd_context * ctx, mtmd_output_modality * ptr, size_t len) {
+    GGML_ASSERT(mtmd_support_audio_output(ctx));
+    std::vector modalities(ptr, ptr + len);
+    ctx->audio_decoder->set_modalities(modalities);
 }
