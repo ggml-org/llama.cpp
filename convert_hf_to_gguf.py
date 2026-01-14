@@ -7671,6 +7671,46 @@ class VaetkiModel(TextModel):
 
     _experts: list[dict[str, Tensor]] | None = None
 
+    def set_vocab(self):
+        # VAETKI: hybrid tokenizer with SPM-style ▁ space markers + BPE rank-based merges + <0xXX> byte fallback
+        # manual token loading because VAETKI doesn't fit standard BPE or SPM vocab loading
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
+
+        tokens: list[str] = []
+        toktypes: list[int] = []
+
+        reverse_vocab = {id_: tok for tok, id_ in tokenizer.vocab.items()}
+        added_vocab = tokenizer.get_added_vocab()
+        added_tokens_decoder = tokenizer.added_tokens_decoder
+
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            else:
+                token: str = reverse_vocab[i]
+                if token in added_vocab:
+                    if not added_tokens_decoder[i].normalized:
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
+                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                else:
+                    toktypes.append(gguf.TokenType.NORMAL)
+                tokens.append(token)
+
+        self.gguf_writer.add_tokenizer_model("vaetki")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+        self.gguf_writer.add_add_space_prefix(False)
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Set rope_parameters for hybrid attention (transformers 5.0 format)
