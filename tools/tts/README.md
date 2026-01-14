@@ -4,7 +4,7 @@ This example demonstrates the Text To Speech feature. It uses a
 [outeai](https://www.outeai.com/).
 
 ## Quickstart
-If you have built llama.cpp with `-DLLAMA_CURL=ON` you can simply run the
+If you have built llama.cpp with SSL support you can simply run the
 following command and the required models will be downloaded automatically:
 ```console
 $ build/bin/llama-tts --tts-oute-default -p "Hello world" && aplay output.wav

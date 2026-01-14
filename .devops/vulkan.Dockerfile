@@ -5,8 +5,8 @@ FROM ubuntu:$UBUNTU_VERSION AS build
 # Install build tools
 RUN apt update && apt install -y git build-essential cmake wget xz-utils
 
-# Install cURL and Vulkan SDK dependencies
-RUN apt install -y libcurl4-openssl-dev curl \
+# Install SSL and Vulkan SDK dependencies
+RUN apt install -y libssl-dev curl \
     libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev libvulkan-dev glslc
 
 # Build it

@@ -6,7 +6,7 @@ FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS build
 
 ARG GGML_SYCL_F16=OFF
 RUN apt-get update && \
-    apt-get install -y git libcurl4-openssl-dev
+    apt-get install -y git libssl-dev
 
 WORKDIR /app
 

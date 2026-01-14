@@ -12,7 +12,7 @@ FROM ${BASE_CUDA_DEV_CONTAINER} AS build
 ARG CUDA_DOCKER_ARCH=default
 
 RUN apt-get update && \
-    apt-get install -y build-essential cmake python3 python3-pip git libcurl4-openssl-dev libgomp1
+    apt-get install -y build-essential cmake python3 python3-pip git libssl-dev libgomp1
 
 WORKDIR /app
 

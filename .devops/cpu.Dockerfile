@@ -5,7 +5,7 @@ FROM ubuntu:$UBUNTU_VERSION AS build
 ARG TARGETARCH
 
 RUN apt-get update && \
-    apt-get install -y build-essential git cmake libcurl4-openssl-dev
+    apt-get install -y build-essential git cmake libssl-dev
 
 WORKDIR /app
 
