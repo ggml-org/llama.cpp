@@ -3298,8 +3298,8 @@ struct llama_sampler * llama_sampler_init_dry_testing(int32_t context_size, floa
 struct llama_sampler_adaptive_p {
     const float        target;            // target probability (0.0 - 1.0; negative = disabled)
     const float        decay;             // EMA decay; history ~= 1/(1-decay) tokens (0.0 - 0.99)
-    const uint32_t     seed;              // original RND seed
-    uint32_t           seed_cur;          // actual RND seed
+    const uint32_t     seed;              // original RNG seed
+    uint32_t           seed_cur;          // actual RNG seed
     std::mt19937       rng;               // RNG state
     float              weighted_sum;      // sum(p_i * decay^i)
     float              total_weight;      // sum(decay^i), converges to 1/(1-decay)
