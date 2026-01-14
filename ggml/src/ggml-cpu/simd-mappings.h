@@ -699,16 +699,19 @@ static inline unsigned char ggml_endian_byte(int i) {
             0, p - GGML_F16_EPR)
 
 //BF16 POWER9
-#define GGML_BF16_STEP   16
-#define GGML_BF16x8 vector unsigned short
-#define GGML_BF16_VEC_ZERO vec_splats((unsigned short)0)
-#define GGML_BF16_VEC GGML_BF16x8
-#define GGML_BF16_VEC_LOAD(p) \
-  vec_xl(0, (const unsigned short *)(p))
+#define GGML_BF16_STEP 16
+#define GGML_BF16_EPR  8
+
+#define GGML_BF16x8         vector unsigned short
+#define GGML_BF16x8_ZERO    vec_splats((unsigned short)0)
+#define GGML_BF16x8_LOAD(p) vec_xl(0, (const unsigned short *)(p))
+
+#define GGML_BF16_VEC          GGML_BF16x8
+#define GGML_BF16_VEC_LOAD     GGML_BF16x8_LOAD
 #define GGML_BF16_TO_F32_LO(v) ((vector float) vec_mergel(GGML_BF16_VEC_ZERO, (v)))
 #define GGML_BF16_TO_F32_HI(v) ((vector float) vec_mergeh(GGML_BF16_VEC_ZERO, (v)))
 #define GGML_BF16_FMA_LO(acc, x, y) \
-  (acc) = GGML_F32x4_FMA((acc), GGML_BF16_TO_F32_LO(x), GGML_BF16_TO_F32_LO(y))
+    (acc) = GGML_F32x4_FMA((acc), GGML_BF16_TO_F32_LO(x), GGML_BF16_TO_F32_LO(y))
 #define GGML_BF16_FMA_HI(acc, x, y) \
     (acc) = GGML_F32x4_FMA((acc), GGML_BF16_TO_F32_HI(x), GGML_BF16_TO_F32_HI(y))
 
