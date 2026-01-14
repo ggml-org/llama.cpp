@@ -69,6 +69,69 @@ cmake --build build --config Release
   - **Debian / Ubuntu:** `sudo apt-get install libcurl4-openssl-dev`  # (or `libcurl4-gnutls-dev` if you prefer GnuTLS)
   - **Fedora / RHEL / Rocky / Alma:** `sudo dnf install libcurl-devel`
   - **Arch / Manjaro:** `sudo pacman -S curl`  # includes libcurl headers
+- Build llama.cpp using MSVC _19.44.35219.0_ - Visual Studio 17 2022:
+  - Install development instance of _libcurl_.
+    ```bat
+    git clone https://github.com/microsoft/vcpkg.git
+    cd vcpkg
+    bootstrap-vcpkg.bat
+    vcpkg.exe install curl:x64-windows --vcpkg-root %cd% --disable-metrics
+    cd ..
+    ```
+  - Build _ccache_ executable - optional.
+    ```bat
+    git clone https://github.com/ccache/ccache.git
+    cd ccache
+    cmake -B build -DCMAKE_BUILD_TYPE=Release
+    cmake --build build --config Release -j 4
+    cd ..
+    ```
+  - To suppress warnings, add the following to `if (MSVC)`... in the top-level _CMakeLists.txt_.
+    ```cmake
+    add_compile_options(
+        /wd4101  # unreferenced local variable
+        /wd4244  # conversion from 'type1' to 'type2', possible loss of data
+        /wd4267  # conversion from 'size_t' to a smaller type, possible loss of data
+        /wd4305  # truncation from 'type1' to 'type2'
+        /wd4319  # zero extending 'uint32_t' to 'size_t' of greater size
+        /wd4334  # result of 32-bit shift implicitly converted to 64 bits
+        /wd4804  # unsafe use of type 'bool'
+        /wd4996  # the POSIX name for this item is deprecated
+    )
+    ```
+  - Build configuration - windows-cpu release build with shared libs enabled.
+    ```bat
+    :: Use full file paths for libcurl and ccache.
+    SET CURL_PATH=%USERPROFILE%\Projects\llama.cpp\vcpkg\packages\curl_x64-windows
+    SET CCACHE_PATH=%USERPROFILE%\Projects\llama.cpp\ccache\build\Release
+    cmake -S . -B build -G "Visual Studio 17 2022" ^
+    -DBUILD_SHARED_LIBS=ON ^
+    -DCMAKE_BUILD_TYPE=Release ^
+    -DGGML_NATIVE=OFF ^
+    -DGGML_BACKEND_DL=ON ^
+    -DGGML_CPU_ALL_VARIANTS=ON ^
+    -DGGML_OPENMP=ON ^
+    -DCURL_LIBRARY=%CURL_PATH%\lib\libcurl.lib ^
+    -DCURL_INCLUDE_DIR=%CURL_PATH%\include ^
+    -DCMAKE_C_COMPILER_LAUNCHER=%CCACHE_PATH%\ccache.exe ^
+    -DCMAKE_CXX_COMPILER_LAUNCHER=%CCACHE_PATH%\ccache.exe
+    ```
+  - Build
+    ```bat
+    cmake --build build --config Release
+    ```
+  - Pack
+    ```bat
+    copy %CURL_PATH%\bin\libcurl.dll build\bin\Release
+    :: Use qualified 7zip path if not in PATH - e.g. vcpkg\downloads\tools\7zip-25.01-windows\7z
+    <qualified path>\7z a llama-bin-win-cpu-x64.zip build\bin\Release\*
+    ```
+  - Run WebUI
+    ```bat
+    cd build\bin\Release
+    :: local HTTP server accessed via browser: http://localhost:8080
+    llama-server -hf ggml-org/gemma-3-1b-it-GGUF
+    ```
 
 ## BLAS Build
 
