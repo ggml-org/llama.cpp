@@ -63,7 +63,7 @@ class RemotingCodebaseGenerator:
                 text=True
             )
             return True
-        except subprocess.CalledProcessError as e:
+        except subprocess.CalledProcessError:
             logging.exception(f"   ⚠️  clang-format failed for {file_path}")
             return False
         except Exception as e:
@@ -288,7 +288,7 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
 
         if not self.clang_format_available:
             logging.warning("\n⚠️clang-format not found in PATH. Generated files will not be formatted."
-                         "   Install clang-format to enable automatic code formatting.")
+                            "   Install clang-format to enable automatic code formatting.")
         else:
             logging.info("\n🎨 Formatting files with clang-format...")
             for file_path in generated_files:
