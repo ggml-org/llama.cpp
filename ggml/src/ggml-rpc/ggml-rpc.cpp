@@ -1128,6 +1128,8 @@ static void ggml_backend_rpc_event_record(ggml_backend_t backend, ggml_backend_e
 
 static void ggml_backend_rpc_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
     // this is noop for RPC as we have a single stream
+    GGML_UNUSED(backend);
+    GGML_UNUSED(event);
 }
 
 static ggml_backend_i ggml_backend_rpc_interface = {
