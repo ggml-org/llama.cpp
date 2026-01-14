@@ -92,7 +92,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L 'main|curl' --verbose --timeout 900
+          ctest -L main --verbose --timeout 900
 
   macOS-latest-cmake-x64:
     runs-on: macos-15-intel
@@ -237,7 +237,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L 'main|curl' --verbose --timeout 900
+          ctest -L main --verbose --timeout 900
 
       - name: Test llama2c conversion
         id: llama2c_test
@@ -1499,7 +1499,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install build-essential
 
       - name: Test
         id: ggml-ci
@@ -1525,7 +1525,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install build-essential
 
       - name: Test
         id: ggml-ci
@@ -1551,7 +1551,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install build-essential
 
       - name: Test
         id: ggml-ci
@@ -1577,7 +1577,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install build-essential
 
       - name: Test
         id: ggml-ci
@@ -1603,7 +1603,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install build-essential
 
       - name: Test
         id: ggml-ci
@@ -1767,7 +1767,7 @@ jobs:
          id: depends
          run: |
            sudo apt-get update
-           sudo apt-get install -y build-essential libcurl4-openssl-dev
+           sudo apt-get install -y build-essential
 
        - name: Test
          id: ggml-ci
@@ -1853,7 +1853,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
-          ctest -L 'main|curl' --verbose --timeout 900
+          ctest -L main --verbose --timeout 900
 
       - name: Test llama2c conversion
         id: llama2c_test
@@ -2129,7 +2129,6 @@ jobs:
            sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a \
            apt-get install -y \
             build-essential \
-            libcurl4-openssl-dev \
             python3-venv \
             gpg \
             wget \
