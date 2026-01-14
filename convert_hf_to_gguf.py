@@ -7748,19 +7748,11 @@ class VaetkiModel(TextModel):
         if hparams.get("norm_topk_prob", False):
             self.gguf_writer.add_expert_weights_norm(True)
 
-        # Sliding window and hybrid attention pattern
-        if "sliding_window" in hparams:
-            self.gguf_writer.add_sliding_window(hparams["sliding_window"])
-
-            # Add sliding window pattern from layer_types
-            if "layer_types" in hparams:
-                # Convert layer_types to sliding_window_pattern (1 = sliding, 0 = full)
-                # Store as uint32 array to match llama.cpp hparams.swa_layers type
-                sliding_window_pattern = [1 if t == "sliding_attention" else 0 for t in hparams["layer_types"]]
-                self.gguf_writer.add_array(
-                    gguf.Keys.Attention.SLIDING_WINDOW_PATTERN.format(arch=self.gguf_writer.arch),
-                    sliding_window_pattern
-                )
+        self.gguf_writer.add_sliding_window(hparams["sliding_window"])
+        sliding_window_pattern = []
+        for t in self.hparams["layer_types"]:
+            sliding_window_pattern.append(int(t == "sliding_attention"))
+        self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Skip vision encoder tensors
