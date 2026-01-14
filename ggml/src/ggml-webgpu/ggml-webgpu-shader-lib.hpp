@@ -9,10 +9,19 @@
 
 #define GGML_WEBGPU_F16_SIZE_BYTES                   2
 #define GGML_WEBGPU_F32_SIZE_BYTES                   4
+#define GGML_WEBGPU_I32_SIZE_BYTES                   4
 #define GGML_WEBGPU_FLASH_ATTN_PREFERRED_KV_SG_TILES 8u
 #define GGML_WEBGPU_FLASH_ATTN_PREFERRED_WG_SIZE     128u
 // Matches GGML_PAD(..., 256) in src/llama-context.cpp for KV cache sizing.
 #define GGML_WEBGPU_KV_SEQ_PAD                       256u
+
+#define GGML_WEBGPU_ARGSORT_MERGE_MAX_WG_SIZE 512u
+
+struct ggml_webgpu_processed_shader {
+    std::string wgsl;
+    std::string variant;
+    void *      decisions;
+};
 
 // Same hash combine function as in boost
 template <typename T> inline void ggml_webgpu_hash_combine(size_t & seed, const T & value) {
@@ -37,7 +46,6 @@ struct ggml_webgpu_flash_attn_pipeline_key {
                uses_logit_softcap == other.uses_logit_softcap;
     }
 };
-
 
 struct ggml_webgpu_flash_attn_pipeline_key_hash {
     size_t operator()(const ggml_webgpu_flash_attn_pipeline_key & key) const {
@@ -74,12 +82,6 @@ struct ggml_webgpu_flash_attn_shader_decisions {
     uint32_t q_tile  = 0;
     uint32_t kv_tile = 0;
     uint32_t wg_size = 0;
-};
-
-struct ggml_webgpu_processed_shader {
-    std::string                             wgsl;
-    std::string                             variant;
-    void * decisions;
 };
 
 // This is exposed because it's necessary in supports_op
@@ -199,26 +201,26 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
     defines.push_back(std::string("WG_SIZE=") + std::to_string(wg_size));
 
     ggml_webgpu_processed_shader result;
-    result.wgsl              = preprocessor.preprocess(shader_src, defines);
-    result.variant           = variant;
+    result.wgsl                                         = preprocessor.preprocess(shader_src, defines);
+    result.variant                                      = variant;
     ggml_webgpu_flash_attn_shader_decisions * decisions = new ggml_webgpu_flash_attn_shader_decisions();
-    decisions->q_tile  = q_tile;
-    decisions->kv_tile = kv_tile;
-    decisions->wg_size = wg_size;
-    result.decisions = decisions;
+    decisions->q_tile                                   = q_tile;
+    decisions->kv_tile                                  = kv_tile;
+    decisions->wg_size                                  = wg_size;
+    result.decisions                                    = decisions;
     return result;
 }
 
 struct ggml_webgpu_generic_shader_lib_context {
-    int vec4;
+    int      vec4;
     uint32_t max_wg_size;
 };
 
-inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_generic(
-    pre_wgsl::Preprocessor &                     preprocessor,
-    const char *                                 shader_src,
+inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_generic_shader(
+    pre_wgsl::Preprocessor &                       preprocessor,
+    const char *                                   shader_src,
     const ggml_webgpu_generic_shader_lib_context & context,
-    const std::string &                          base_variant) {
+    const std::string &                            base_variant) {
     std::vector<std::string> defines;
     std::string              variant = base_variant;
 
@@ -235,5 +237,56 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_generic(
     return result;
 }
 
+struct ggml_webgpu_argsort_shader_lib_context {
+    uint32_t max_wg_size;
+    size_t   wg_mem_limit_bytes;
+    int32_t  order;
+};
+
+struct ggml_webgpu_argsort_shader_decisions {
+    uint32_t wg_size = 0;
+};
+
+inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_argsort_shader(
+    pre_wgsl::Preprocessor &                       preprocessor,
+    const char *                                   shader_src,
+    const ggml_webgpu_argsort_shader_lib_context & context) {
+    std::vector<std::string> defines;
+    std::string              variant = "argsort";
+    defines.push_back(std::string("ORDER=") + std::to_string(context.order));
+    variant += std::string("_order") + std::to_string(context.order);
+    uint32_t wg_size = 1;
+    while (wg_size * 2 <= context.max_wg_size &&
+           wg_size * GGML_WEBGPU_I32_SIZE_BYTES <= context.wg_mem_limit_bytes / 2) {
+        wg_size *= 2;
+    }
+    defines.push_back(std::string("WG_SIZE=") + std::to_string(wg_size));
+    ggml_webgpu_processed_shader result;
+    result.wgsl                                      = preprocessor.preprocess(shader_src, defines);
+    result.variant                                   = variant;
+    ggml_webgpu_argsort_shader_decisions * decisions = new ggml_webgpu_argsort_shader_decisions();
+    decisions->wg_size                               = wg_size;
+    result.decisions                                 = decisions;
+    return result;
+}
+
+inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_argsort_merge_shader(
+    pre_wgsl::Preprocessor &                       preprocessor,
+    const char *                                   shader_src,
+    const ggml_webgpu_argsort_shader_lib_context & context) {
+    std::vector<std::string> defines;
+    std::string              variant = "argsort_merge";
+    defines.push_back(std::string("ORDER=") + std::to_string(context.order));
+    variant += std::string("_order") + std::to_string(context.order);
+    uint32_t wg_size = std::min(GGML_WEBGPU_ARGSORT_MERGE_MAX_WG_SIZE, context.max_wg_size);
+    defines.push_back(std::string("WG_SIZE=") + std::to_string(wg_size));
+    ggml_webgpu_processed_shader result;
+    result.wgsl                                      = preprocessor.preprocess(shader_src, defines);
+    result.variant                                   = variant;
+    ggml_webgpu_argsort_shader_decisions * decisions = new ggml_webgpu_argsort_shader_decisions();
+    decisions->wg_size                               = wg_size;
+    result.decisions                                 = decisions;
+    return result;
+}
 
 #endif  // GGML_WEBGPU_SHADER_LIB_HPP
