@@ -7,12 +7,11 @@ import os
 
 logger = logging.getLogger("opencl-embed-kernel")
 
-INCLUDE_PATTERN = re.compile(r'#include\s+"(.*)"')
+INCLUDE_PATTERN = re.compile(r'#include\s+"(.*)".*')
 
 
 def parse_file_line(ifile, ofile, base_path: str):
     for i in ifile:
-        i = i.rstrip()
         if m := INCLUDE_PATTERN.match(i):
             include_file = os.path.join(base_path, m.group(1))
             logger.info(f"Embedding file: {include_file}")
