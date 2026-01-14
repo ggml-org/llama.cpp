@@ -113,6 +113,8 @@
 | `--top-k N` | top-k sampling (default: 40, 0 = disabled)<br/>(env: LLAMA_ARG_TOP_K) |
 | `--top-p N` | top-p sampling (default: 0.9, 1.0 = disabled) |
 | `--min-p N` | min-p sampling (default: 0.1, 0.0 = disabled) |
+| `--adaptive-target N` | adaptive-p: select tokens near this probability (valid range 0.0 to 1.0; negative = disabled) |
+| `--adaptive-decay N` | adaptive-p: EMA decay for adaptation; effective history length ≈ 1/(1-decay) tokens (valid range 0.0 - 0.99) |
 | `--top-nsigma N` | top-n-sigma sampling (default: -1.0, -1.0 = disabled) |
 | `--xtc-probability N` | xtc probability (default: 0.0, 0.0 = disabled) |
 | `--xtc-threshold N` | xtc threshold (default: 0.1, 1.0 = disabled) |
