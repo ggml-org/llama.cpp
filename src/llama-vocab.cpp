@@ -525,7 +525,6 @@ struct llm_tokenizer_bpe_session {
 
     void tokenize(const std::string & text, std::vector<llama_token> & output) {
         int final_prev_index = -1;
-
         const auto word_collection = unicode_regex_split(text, tokenizer.regex_exprs);
 
         symbols_final.clear();
@@ -617,9 +616,9 @@ struct llm_tokenizer_bpe_session {
                 if (token == LLAMA_TOKEN_NULL) {
                     for (auto j = str.begin(); j != str.end(); ++j) {
                         std::string byte_str(1, *j);
-                        auto token_byte = vocab.text_to_token(byte_str);
-                        if (token_byte != LLAMA_TOKEN_NULL) {
-                            output.push_back(token_byte);
+                        auto token_multibyte = vocab.text_to_token(byte_str);
+                        if (token_multibyte != LLAMA_TOKEN_NULL) {
+                            output.push_back(token_multibyte);
                         }
                     }
                 } else {
