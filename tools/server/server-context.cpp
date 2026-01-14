@@ -260,7 +260,7 @@ struct server_slot {
 
     // Checks if a draft model is active or self-speculation using context-tokens
     bool can_speculate() const {
-        return ctx_dft || task->params.speculative.use_self;
+        return ctx_dft || task->params.speculative.self_mode;
     }
 
     void add_token(const completion_token_output & token) {
@@ -397,6 +397,7 @@ struct server_slot {
                     "draft acceptance rate = %0.5f (%5d accepted / %5d generated)\n",
                     draft_ratio, n_draft_accepted, n_draft_total
             );
+            common_speculative_print_stats(spec);
         }
     }
 
@@ -774,7 +775,9 @@ private:
                     return false;
                 }
 
-                slot.spec = common_speculative_init(slot.ctx, slot.ctx_dft);
+                slot.spec = common_speculative_init(slot.ctx, slot.ctx_dft,
+                        params_base.speculative.self_mode,
+                        params_base.speculative.self_cfg);
                 if (slot.spec == nullptr) {
                     SRV_ERR("%s", "failed to create speculator\n");
                     return false;
@@ -782,6 +785,11 @@ private:
                 for (auto & pair : params_base.speculative.replacements) {
                     common_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
                 }
+            } else if (params_base.speculative.self_mode) {
+                SLT_INF(slot, "init spec for self-speculative decoding, slot %d\n", i);
+                slot.spec = common_speculative_init(nullptr, nullptr,
+                        params_base.speculative.self_mode,
+                        params_base.speculative.self_cfg);
             }
 
             SLT_INF(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
@@ -2071,8 +2079,6 @@ private:
                 params_spec.n_draft   = n_draft_max;
                 params_spec.n_reuse   = slot.ctx_dft ? (llama_n_ctx(slot.ctx_dft) - slot.task->params.speculative.n_max) : 0;
                 params_spec.p_min     = slot.task->params.speculative.p_min;
-                params_spec.self_mode       = slot.task->params.speculative.use_self;
-                params_spec.self_ngram_size = std::max(5, slot.task->params.speculative.n_min);
                 const llama_tokens & cached_text_tokens = slot.prompt.tokens.get_text_tokens();
                 llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, slot.sampled);
 
@@ -2815,6 +2821,9 @@ private:
 
                 // update how many tokens out of those tested were accepted
                 slot.n_draft_accepted += ids.size() - 1;
+
+                // inform the speculative decoding about the accepted tokens
+                common_speculative_send_accepted(slot.spec, ids.size() - 1);
 
                 // rollback to the state before sampling the draft tokens
                 slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_draft);
