@@ -695,7 +695,7 @@ void rpc_dispatcher::start(const std::string & endpoint) {
         WSADATA wsaData;
         int res = WSAStartup(MAKEWORD(2, 2), &wsaData);
         if (res != 0) {
-            return nullptr;
+            GGML_ABORT("WSAStartup failed");
         }
         win32_init = true;
     }
@@ -1127,8 +1127,7 @@ static void ggml_backend_rpc_event_record(ggml_backend_t backend, ggml_backend_e
 }
 
 static void ggml_backend_rpc_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
-    ggml_backend_rpc_context * ctx = (ggml_backend_rpc_context *)backend->context;
-    ctx->dispatcher->event_synchronize(event);
+    // this is noop for RPC as we have a single stream
 }
 
 static ggml_backend_i ggml_backend_rpc_interface = {
@@ -2204,19 +2203,19 @@ static bool ggml_backend_rpc_device_supports_buft(ggml_backend_dev_t dev, ggml_b
 
 static ggml_backend_event_t ggml_backend_rpc_device_event_new(ggml_backend_dev_t dev) {
     ggml_backend_rpc_device_context * ctx = (ggml_backend_rpc_device_context *)dev->context;
-    auto dispatcher = get_dispatcher(ctx->endpoint.c_str());
+    auto dispatcher = get_dispatcher(ctx->endpoint);
     return dispatcher->event_new(dev);
 }
 
 static void ggml_backend_rpc_device_event_free(ggml_backend_dev_t dev, ggml_backend_event_t event) {
     ggml_backend_rpc_device_context * ctx = (ggml_backend_rpc_device_context *)dev->context;
-    auto dispatcher = get_dispatcher(ctx->endpoint.c_str());
+    auto dispatcher = get_dispatcher(ctx->endpoint);
     dispatcher->event_free(event);
 }
 
 static void ggml_backend_rpc_device_event_synchronize(ggml_backend_dev_t dev, ggml_backend_event_t event) {
     ggml_backend_rpc_device_context * ctx = (ggml_backend_rpc_device_context *)dev->context;
-    auto dispatcher = get_dispatcher(ctx->endpoint.c_str());
+    auto dispatcher = get_dispatcher(ctx->endpoint);
     dispatcher->event_synchronize(event);
 }
 
