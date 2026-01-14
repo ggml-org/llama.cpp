@@ -5,6 +5,7 @@
 #include "log.h"
 #include "common.h"
 #include "sampling.h"
+#include "ngram-map.cpp"
 
 #include <cstring>
 #include <algorithm>
@@ -12,6 +13,13 @@
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
+
+struct common_speculative_self {
+    uint16_t         size_ngram = 12;      // size of n-grams to lookup in self-mode
+    uint16_t         size_mgram = 48;      // size of m-grams to draft in self-mode
+    const uint16_t   check_rate = 3;       // check for speculative decoding without draft model for each check_rate token
+    size_t           idx_last_check  =  0; // index of last check in context history
+};
 
 struct common_speculative {
     struct llama_context * ctx_tgt; // only used for retokenizing from ctx_dft
@@ -22,20 +30,44 @@ struct common_speculative {
     llama_tokens prompt_dft;
     bool vocab_dft_compatible = true; // whether retokenization is needed
     std::map<std::string, std::string> tgt_dft_replacements = {};
+
+    const uint16_t   self_mode  = 0; // 0: off, 1: self speculative, 2: n-grams (keys) only, 3: n-grams/m-grams (key-values)
+    common_ngram_map        map;        // draft ngram map for speculative decoding without draft model
+    common_speculative_self self_state; // state of self-speculation (simple implementation, not ngram-map)
 };
 
 struct common_speculative * common_speculative_init(
         struct llama_context * ctx_tgt,
-        struct llama_context * ctx_dft) {
+        struct llama_context * ctx_dft,
+        uint16_t                    self_mode, // 0: off, 1: self speculative, 2: n-grams (keys) only, 3: n-grams/m-grams (key-values)
+        const std::vector<uint16_t> self_cfg   // ngram size, mgram size, keys only (0|1), min hits
+    ) {
+    uint16_t ngram_size_key   = self_cfg.size() >= 1 ? self_cfg[0] : 12;
+    uint16_t mgram_size_value = self_cfg.size() >= 2 ? self_cfg[1] : 48;
+    uint16_t check_rate = self_cfg.size() >= 3 ? self_cfg[2] : 3;
+    bool     key_only = (self_mode != 3);
+    uint16_t min_hits = self_cfg.size() >= 4 ? self_cfg[3] : 1;
+    common_ngram_map ngram_map = common_ngram_map(ngram_size_key, mgram_size_value, key_only, check_rate, min_hits);
+    common_speculative_self self_state = common_speculative_self{
+        /* .size_ngram      = */ ngram_size_key,
+        /* .size_mgram      = */ mgram_size_value,
+        /* .check_rate      = */ check_rate,
+        /* .idx_last_check  = */ 0,
+    };
     auto * result = new common_speculative {
         /* .ctx_tgt    = */ ctx_tgt,
         /* .ctx_dft    = */ ctx_dft,
         /* .smpl       = */ nullptr,
-        /* .batch      = */ llama_batch_init(llama_n_batch(ctx_dft), 0, 1),
+        /* .batch      = */ llama_batch_init(ctx_dft ? llama_n_batch(ctx_dft) : 64, 0, 1),
         /* .prompt_dft = */ {},
         /* .vocab_dft_compatible = */ false,
+        /* .tgt_dft_replacements = */ {},
+        /* .self_mode       = */ self_mode,
+        /* .map             = */ ngram_map,
+        /* .self_state      = */ self_state
     };
 
+    LOG_INF("common_speculative_init: created speculative decoder, map.n = %d\n", result->map.size_key);
     // TODO: optimize or pass from outside?
 #if 0
     {
@@ -64,7 +96,9 @@ struct common_speculative * common_speculative_init(
             COMMON_SAMPLER_TYPE_TOP_K,
         };
 
-        result->smpl = common_sampler_init(llama_get_model(ctx_dft), params);
+        if (ctx_dft) {
+            result->smpl = common_sampler_init(llama_get_model(ctx_dft), params);
+        }
     }
 #endif
 
@@ -89,6 +123,9 @@ void common_speculative_free(struct common_speculative * spec) {
 bool common_speculative_are_compatible(
     const struct llama_context * ctx_tgt,
     const struct llama_context * ctx_dft) {
+    if (ctx_tgt == nullptr && ctx_dft == nullptr) {
+        return true;
+    }
     const struct llama_model * model_tgt = llama_get_model(ctx_tgt);
     const struct llama_model * model_dft = llama_get_model(ctx_dft);
 
@@ -181,22 +218,25 @@ static std::string replace_to_tgt(
     return result;
 }
 
+llama_tokens common_speculative_gen_self_draft(
+        common_speculative * spec,
+        const llama_tokens & tokens, llama_token sampled);
 
 llama_tokens common_speculative_gen_draft(
         struct common_speculative * spec,
         struct common_speculative_params params,
         const llama_tokens & prompt_tgt_main_model, // specified in target model vocab
         llama_token id_last) {
-    if (params.self_mode == 1) {
+    if (spec->self_mode) {
         // Look in the current context for a n-gram and return the following tokens as the draft.
-        llama_tokens draft_self = common_speculative_gen_self_draft(prompt_tgt_main_model, id_last,
-                params.self_ngram_size, params.n_draft);
+        llama_tokens draft_self = common_speculative_gen_self_draft(spec,
+                prompt_tgt_main_model, id_last);
         if (!draft_self.empty()) {
             return draft_self;
         }
     }
-    if (spec == nullptr) {
-        return {};
+    if (spec == nullptr || spec->ctx_dft == nullptr) {
+        return {}; // no draft model, return
     }
 
     auto & batch  = spec->batch;
@@ -372,14 +412,54 @@ llama_tokens common_speculative_gen_draft(
     return result;
 }
 
-llama_tokens common_speculative_gen_self_draft(const llama_tokens & tokens, llama_token sampled,
-        size_t n_draft_min, size_t n_draft_max) {
+void common_speculative_send_accepted(struct common_speculative * spec, const uint16_t n_accepted) {
+    // use new function to update the ngram map statistics.
+    common_ngram_map_send_accepted(spec->map, n_accepted);
+}
+
+// self-speculative decoding
+//
+
+/**
+ * Perform speculative generation using the model's own token history.
+ * Searches for a matching pattern in the token history and returns draft tokens.
+ *
+ * @param spec      configuration of speculative drafts
+ * @param tokens    Token history to search in
+ * @param sampled   Last sampled token
+ * @return Vector of draft tokens, empty if no matching pattern is found
+ */
+llama_tokens common_speculative_gen_self_draft(
+        common_speculative * spec,
+        const llama_tokens & tokens, llama_token sampled) {
+
+    common_ngram_map & map = spec->map;
+    if (spec->self_mode != 1) {
+        // Use common_ngram_map_draft to generate a draft from the current context.
+        llama_tokens draft_tokens;
+        common_ngram_map_draft(map, tokens, sampled, draft_tokens);
+        return draft_tokens;
+    }
+
+    // Simple implementation of self-speculative decoding without draft model, without ngram-map.
+    //
+    common_speculative_self & self_state = spec->self_state;
     const size_t cur_len = tokens.size();
+    // Only check every check_rate tokens to save compute
+    // i.e., perform check if (cur_len - idx_last_check) >= check_rate
+    if (self_state.idx_last_check + self_state.check_rate > cur_len) {
+        llama_tokens draft_tokens;
+        return draft_tokens;
+    }
+
+    size_t n_draft_min = self_state.size_ngram; // size of n-gram to lookup in token history
+    size_t n_draft_max = self_state.size_mgram; // the m-gram following the found n-gram is used for draft
 
     // vector for tokens we want to verify.
     // return empty vector if there is no match.
     llama_tokens draft_tokens;
 
+    // We need at least n_draft_min + n_draft_max + 1 tokens.
     if (cur_len <= static_cast<size_t>(n_draft_min + n_draft_max + 1)) {
         return draft_tokens;
     }
@@ -391,6 +471,9 @@ llama_tokens common_speculative_gen_self_draft(const llama_tokens & tokens, llam
         pattern.push_back(tokens[j]);
     }
     pattern.push_back(sampled); // add the last token to the pattern
+
+    // We do a search in the token history.
+    self_state.idx_last_check = tokens.size();
 
     size_t match_pos = 0; // we ignore position 0, position 0 == no match
     // search backwards, but skip the current match (we are currently there)
@@ -427,4 +510,10 @@ llama_tokens common_speculative_gen_self_draft(const llama_tokens & tokens, llam
         draft_tokens.push_back(tokens[match_pos + n_draft_min + j]);
     }
     return draft_tokens;
+}
+
+void common_speculative_print_stats(const struct common_speculative * spec) {
+    if (spec->map.drafts_generated_tokens > 0) { // only print if we have some stats
+        common_ngram_map_print_stats(spec->map);
+    }
 }

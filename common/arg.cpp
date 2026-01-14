@@ -3393,10 +3393,46 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-self"}, "<0|1>",
-        "use self-speculation without a draft model (default: 0, no self speculation without draft model)",
+        {"--spec-self"}, "N",
+        "mode of self-speculation without a draft model: disabled(0), fixed(1), keys-only(2), key-values(3) (default: %d)\n",
         [](common_params & params, int value) {
-            params.speculative.use_self = value;
+            if (value < 0 || value > 3) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.speculative.self_mode = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--spec-self-config"}, "N0,N1,N2,...",
+        "speculative self decoding config: ngram size (key), mgram size (value), check rate, min hits (default: %d,%d,%d,%d)",
+        [](common_params & params, const std::string & value) {
+            std::string arg_next = value;
+
+            // split string by , and /
+            const std::regex regex{ R"([,/]+)" };
+            std::sregex_token_iterator it{ arg_next.begin(), arg_next.end(), regex, -1 };
+            std::vector<std::string> split_arg{ it, {} };
+            if (split_arg.size() > 4) {
+                throw std::invalid_argument(
+                    string_format("got %d input configs, but self-speculative decoding config require at most 4 values", (int)split_arg.size())
+                );
+            }
+            for (size_t i = 0; i < split_arg.size(); ++i) {
+                int val = std::stoi(split_arg[i]);
+                if (i == 0 && (val < 1 || val > 255)) {
+                    throw std::invalid_argument("ngram size must be between 1 and 255");
+                }
+                if (i == 1 && (val < 1 || val > 255)) {
+                    throw std::invalid_argument("mgram size must be between 1 and 255");
+                }
+                if (i == 2 && val == 0) {
+                    throw std::invalid_argument("check rate must be greater than 0");
+                }
+                if (i == 3 && (val < 1 || val > 255)) {
+                    throw std::invalid_argument("min hits must be between 1 and 255");
+                }
+                params.speculative.self_cfg[i] = (uint16_t) val;
+            }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(

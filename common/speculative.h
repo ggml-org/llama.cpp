@@ -10,14 +10,13 @@ struct common_speculative_params {
     int n_reuse         = 256;
 
     float p_min         = 0.75f; // min probability required to accept a token in the draft
-
-    int self_mode       = 0; // 0: off, 1: self speculative lookup
-    int self_ngram_size = 12; // length of pattern to search for in self mode
 };
 
 struct common_speculative * common_speculative_init(
         struct llama_context * ctx_tgt,
-        struct llama_context * ctx_dft
+        struct llama_context * ctx_dft,
+        const uint16_t         self_mode = 0, // 0: off, 1: self speculative, 2: n-grams (keys) only, 3: n-grams/m-grams (key-values)
+        const std::vector<uint16_t> self_cfg = { 12, 48, 3, 1 } // ngram size, mgram size, check rate, min hits
 );
 
 void common_speculative_free(struct common_speculative * spec);
@@ -37,18 +36,10 @@ llama_tokens common_speculative_gen_draft(
                       const llama_tokens & prompt,
                              llama_token   id_last);
 
-/**
- * Perform speculative generation using the model's own token history.
- * Searches for a matching pattern in the token history and returns draft tokens.
- *
- * @param tokens    Token history to search in
- * @param sampled   Last sampled token
- * @param n_draft_min Minimum number of draft tokens required
- * @param n_draft_max Maximum number of draft tokens to generate
- * @return Vector of draft tokens, empty if no matching pattern is found
- */
-llama_tokens common_speculative_gen_self_draft(
-                    const llama_tokens & tokens,
-                    llama_token          sampled,
-                    size_t         n_draft_min,
-                    size_t         n_draft_max);
+// informs the speculative decoder that n_accepted tokens were accepted by the target model
+void common_speculative_send_accepted(
+        struct common_speculative * spec,
+        const uint16_t n_accepted);
+
+// print statistics about the speculative decoding
+void common_speculative_print_stats(const struct common_speculative * spec);
