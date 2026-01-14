@@ -877,6 +877,7 @@ bool mtmd_decode_use_mrope(mtmd_context * ctx) {
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_QWEN3VL:
         case PROJECTOR_TYPE_GLM4V:
+        case PROJECTOR_TYPE_PADDLEOCR:
             return true;
         default:
             return false;
