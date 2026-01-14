@@ -123,7 +123,7 @@ ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
 
     ggml_backend_remoting_reg_init_devices(&reg);
 
-    GGML_LOG_INFO("%s: initialzed\n", __func__);
+    GGML_LOG_INFO("%s: initialized\n", __func__);
 
     return &reg;
 }
