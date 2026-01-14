@@ -7733,11 +7733,6 @@ class VaetkiModel(TextModel):
         self.gguf_writer.add_value_length_mla(hparams["v_head_dim"])
         self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
 
-        self.rope_parameters = {
-            "full_attention": {"rope_theta": self.hparams.get("rope_theta_global", 1000000.0)},
-            "sliding_attention": {"rope_theta": self.hparams.get("rope_theta", 10000.0)}
-        }
-
         # MoE parameters
         self.gguf_writer.add_leading_dense_block_count(hparams.get("first_k_dense_replace", 1))
         self.gguf_writer.add_expert_count(hparams["n_routed_experts"])
