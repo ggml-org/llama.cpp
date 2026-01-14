@@ -1054,6 +1054,13 @@ namespace ggml_cuda_mma {
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
 #endif // RDNA4
+#elif defined(AMD_MFMA_AVAILABLE)
+        using halfx4_t = __attribute__((ext_vector_type(4))) _Float16;
+        using floatx4_t = __attribute__((ext_vector_type(4))) float;
+        floatx4_t& acc_frag = reinterpret_cast<floatx4_t&>(D.x[0]);
+        const halfx4_t& a_frag = reinterpret_cast<const halfx4_t&>(A.x[0]);
+        const halfx4_t& b_frag = reinterpret_cast<const halfx4_t&>(B.x[0]);
+        acc_frag = __builtin_amdgcn_mfma_f32_16x16x16f16(a_frag, b_frag, acc_frag, 0, 0, 0);
 #else
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
@@ -1081,11 +1088,18 @@ namespace ggml_cuda_mma {
 #else
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
-#endif // RDNA4
+#endif // defined(RDNA4)
+#elif defined(AMD_MFMA_AVAILABLE)
+        using bf16x4_t = __attribute__((ext_vector_type(4))) __bf16;
+        using floatx4_t = __attribute__((ext_vector_type(4))) float;
+        floatx4_t& acc_frag = reinterpret_cast<floatx4_t&>(D.x[0]);
+        const bf16x4_t& a_frag = reinterpret_cast<const bf16x4_t&>(A.x[0]);
+        const bf16x4_t& b_frag = reinterpret_cast<const bf16x4_t&>(B.x[0]);
+        acc_frag = __builtin_amdgcn_mfma_f32_16x16x16bf16_1k(a_frag, b_frag, acc_frag, 0, 0, 0);
 #else
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
-#endif // AMPERE_MMA_AVAILABLE
+#endif // defined(AMD_WMMA_AVAILABLE)
     }
 
     template <data_layout dl_d, data_layout dl_ab>

@@ -2,11 +2,12 @@
 #include "mmf.cuh"
 #include "mmid.cuh"
 
-constexpr int mmf_rows_per_block = 32;
-constexpr int mmf_rows_per_block_cdna = 64;
-
-static int get_mmf_rows_per_block(const int cc, const int warp_size) {
-    return warp_size;
+static int get_mmf_rows_per_block(const int cc) {
+    if (GGML_CUDA_CC_IS_CDNA(cc)) {
+        return MMF_ROWS_PER_BLOCK_CDNA;
+    } else {
+        return MMF_ROWS_PER_BLOCK;
+    }
 }
 
 void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
@@ -97,10 +98,9 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
 
     const int device    = ggml_cuda_get_device();
     const int cc        = ggml_cuda_info().devices[device].cc;
-    const int warp_size = ggml_cuda_info().devices[device].warp_size;
-    const int rows_per_block = get_mmf_rows_per_block(cc, warp_size);
+    const int rows_per_block = get_mmf_rows_per_block(cc);
 
-    if (rows_per_block != mmf_rows_per_block && rows_per_block != mmf_rows_per_block_cdna) {
+    if (rows_per_block != MMF_ROWS_PER_BLOCK && rows_per_block != MMF_ROWS_PER_BLOCK_CDNA) {
         GGML_ABORT("unsupported rows_per_block: %i", rows_per_block);
     }
 
@@ -108,13 +108,13 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
         case GGML_TYPE_F32: {
             const float * src0_d = (const float *) src0->data;
             constexpr int vals_per_T = 1;
-            if (rows_per_block == mmf_rows_per_block) {
-                mul_mat_f_switch_cols_per_block<float, mmf_rows_per_block>(
+            if (rows_per_block == MMF_ROWS_PER_BLOCK) {
+                mul_mat_f_switch_cols_per_block<float, MMF_ROWS_PER_BLOCK>(
                     src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
                     ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
                     ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
             } else {
-                mul_mat_f_switch_cols_per_block<float, mmf_rows_per_block_cdna>(
+                mul_mat_f_switch_cols_per_block<float, MMF_ROWS_PER_BLOCK_CDNA>(
                     src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
                     ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
                     ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
@@ -123,13 +123,13 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
         case GGML_TYPE_F16: {
             const half2 * src0_d = (const half2 *) src0->data;
             constexpr int vals_per_T = 2;
-            if (rows_per_block == mmf_rows_per_block) {
-                mul_mat_f_switch_cols_per_block<half2, mmf_rows_per_block>(
+            if (rows_per_block == MMF_ROWS_PER_BLOCK) {
+                mul_mat_f_switch_cols_per_block<half2, MMF_ROWS_PER_BLOCK>(
                     src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
                     ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
                     ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
             } else {
-                mul_mat_f_switch_cols_per_block<half2, mmf_rows_per_block_cdna>(
+                mul_mat_f_switch_cols_per_block<half2, MMF_ROWS_PER_BLOCK_CDNA>(
                     src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
                     ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
                     ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
@@ -138,13 +138,13 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
         case GGML_TYPE_BF16: {
             const nv_bfloat162 * src0_d = (const nv_bfloat162 *) src0->data;
             constexpr int vals_per_T = 2;
-            if (rows_per_block == mmf_rows_per_block) {
-                mul_mat_f_switch_cols_per_block<nv_bfloat162, mmf_rows_per_block>(
+            if (rows_per_block == MMF_ROWS_PER_BLOCK) {
+                mul_mat_f_switch_cols_per_block<nv_bfloat162, MMF_ROWS_PER_BLOCK>(
                     src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
                     ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
                     ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
             } else {
-                mul_mat_f_switch_cols_per_block<nv_bfloat162, mmf_rows_per_block_cdna>(
+                mul_mat_f_switch_cols_per_block<nv_bfloat162, MMF_ROWS_PER_BLOCK_CDNA>(
                     src0_d, src1_d, ids_d, dst_d, ne00/vals_per_T, ne01, ncols_dst, s01/vals_per_T, stride_col_y/vals_per_T, stride_col_dst,
                     ids_s0, ids_s1, ne02, nchannels_y, nchannels_dst, s02/vals_per_T, stride_channel_y, stride_channel_dst,
                     ne03, ne3, s03/vals_per_T, s13, s3, ctx.stream(), ids_info_ptr);
@@ -176,7 +176,7 @@ bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const 
             return false;
         }
     }
-    if (src0_ne[1] % get_mmf_rows_per_block(cc, warp_size) != 0) {
+    if (src0_ne[1] % get_mmf_rows_per_block(cc) != 0) {
         return false;
     }
 

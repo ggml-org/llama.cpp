@@ -6,6 +6,9 @@
 
 using namespace ggml_cuda_mma;
 
+#define MMF_ROWS_PER_BLOCK 32
+#define MMF_ROWS_PER_BLOCK_CDNA 64
+
 struct mmf_ids_data {
     const int32_t * ids_src_compact = nullptr;
     const int32_t * ids_dst_compact = nullptr;
@@ -29,21 +32,18 @@ static __global__ void mul_mat_f(
 // TODO: handle this in a consistent and simpler way after AMD MFMA support has been added
 #if (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)) || defined(AMD_WMMA_AVAILABLE)
 #if defined(AMD_WMMA_AVAILABLE)
-    // Special case for tf32, just dummy mma layout as wmma doesn't support it.
-    constexpr bool is_tf32 = std::is_same_v<T, float>;
-    constexpr int tile_B_I = is_tf32 ? 8 : 16;
-    constexpr int tile_C_J = is_tf32 ? 8 : 16;
-    constexpr data_layout ab_layout = is_tf32 ? DATA_LAYOUT_I_MAJOR : get_input_data_layout();
-    typedef tile<16,       8,        T,     ab_layout>           tile_A;
-    typedef tile<tile_B_I, 8,        T,     ab_layout>           tile_B;
-    typedef tile<16,       tile_C_J, float, DATA_LAYOUT_J_MAJOR> tile_C;
+    if constexpr (!(std::is_same_v<T, half2> || std::is_same_v<T, nv_bfloat162>) || rows_per_block != MMF_ROWS_PER_BLOCK) {NO_DEVICE_CODE;} else {
+    typedef tile<16, 8,  T,     get_input_data_layout()> tile_A;
+    typedef tile<16, 8,  T,     get_input_data_layout()> tile_B;
+    typedef tile<16, 16, float, DATA_LAYOUT_J_MAJOR>     tile_C;
 #else
 #ifdef VOLTA_MMA_AVAILABLE
-    if constexpr (!std::is_same_v<T, half2>) {NO_DEVICE_CODE;} else {
+    if constexpr (!std::is_same_v<T, half2> || rows_per_block != MMF_ROWS_PER_BLOCK) {NO_DEVICE_CODE;} else {
     typedef tile<32, 4, T,     DATA_LAYOUT_I_MAJOR>          tile_A;
     typedef tile< 8, 4, T,     DATA_LAYOUT_I_MAJOR_MIRRORED> tile_B;
     typedef tile<32, 8, float, DATA_LAYOUT_I_MAJOR>          tile_C;
 #else
+    if constexpr (rows_per_block != MMF_ROWS_PER_BLOCK) {NO_DEVICE_CODE;} else {
     typedef tile<16, 8, T>     tile_A;
     typedef tile<8,  8, T>     tile_B;
     typedef tile<16, 8, float> tile_C;
@@ -253,9 +253,7 @@ static __global__ void mul_mat_f(
             }
         }
     }
-#ifdef VOLTA_MMA_AVAILABLE
     }
-#endif //VOLTA_MMA_AVAILABLE
 #else
     GGML_UNUSED_VARS(x, y, ids, dst,
         ncols, ncols_dst_total, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
@@ -280,21 +278,18 @@ static __global__ void mul_mat_f_ids(
 // TODO: handle this in a consistent and simpler way after AMD MFMA support has been added
 #if (!defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)) || defined(AMD_WMMA_AVAILABLE)
 #if defined(AMD_WMMA_AVAILABLE)
-    // Special case for tf32, just dummy mma layout as wmma doesn't support it.
-    constexpr bool is_tf32 = std::is_same_v<T, float>;
-    constexpr int tile_B_I = is_tf32 ? 8 : 16;
-    constexpr int tile_C_J = is_tf32 ? 8 : 16;
-    constexpr data_layout ab_layout = is_tf32 ? DATA_LAYOUT_I_MAJOR : get_input_data_layout();
-    typedef tile<16,       8,        T,     ab_layout>           tile_A;
-    typedef tile<tile_B_I, 8,        T,     ab_layout>           tile_B;
-    typedef tile<16,       tile_C_J, float, DATA_LAYOUT_J_MAJOR> tile_C;
+    if constexpr (!(std::is_same_v<T, half2> || std::is_same_v<T, nv_bfloat162>) || rows_per_block != MMF_ROWS_PER_BLOCK) {NO_DEVICE_CODE;} else {
+    typedef tile<16, 8,  T,     get_input_data_layout()> tile_A;
+    typedef tile<16, 8,  T,     get_input_data_layout()> tile_B;
+    typedef tile<16, 16, float, DATA_LAYOUT_J_MAJOR>     tile_C;
 #else
 #ifdef VOLTA_MMA_AVAILABLE
-    if constexpr (!std::is_same_v<T, half2>) {NO_DEVICE_CODE;} else {
+    if constexpr (!std::is_same_v<T, half2> || rows_per_block != MMF_ROWS_PER_BLOCK) {NO_DEVICE_CODE;} else {
     typedef tile<32, 4, T,     DATA_LAYOUT_I_MAJOR>          tile_A;
     typedef tile< 8, 4, T,     DATA_LAYOUT_I_MAJOR_MIRRORED> tile_B;
     typedef tile<32, 8, float, DATA_LAYOUT_I_MAJOR>          tile_C;
 #else
+    if constexpr (rows_per_block != MMF_ROWS_PER_BLOCK) {NO_DEVICE_CODE;} else {
     typedef tile<16, 8, T>     tile_A;
     typedef tile<8,  8, T>     tile_B;
     typedef tile<16, 8, float> tile_C;
@@ -530,9 +525,7 @@ static __global__ void mul_mat_f_ids(
             }
         }
     }
-#ifdef VOLTA_MMA_AVAILABLE
     }
-#endif // VOLTA_MMA_AVAILABLE
 #else
     GGML_UNUSED_VARS(x, y, ids_src_compact, ids_dst_compact, expert_bounds, dst,
         ncols, ncols_dst_total, nchannels_dst, stride_row, stride_col_y, stride_col_dst,
