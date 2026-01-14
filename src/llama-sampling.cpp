@@ -3391,6 +3391,8 @@ static void llama_sampler_adaptive_p_reset(struct llama_sampler * smpl) {
     ctx->total_weight      = 1.0f / (1.0f - ctx->decay);
     ctx->pending_token_id  = LLAMA_TOKEN_NULL;
     ctx->pending_token_idx = -1;
+    ctx->seed_cur          = get_rng_seed(ctx->seed); 
+    ctx->rng.seed(ctx->seed_cur); 
 }
 
 static struct llama_sampler * llama_sampler_adaptive_p_clone(const struct llama_sampler * smpl) {
