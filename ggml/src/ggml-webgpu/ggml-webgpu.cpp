@@ -1587,15 +1587,15 @@ static webgpu_command ggml_webgpu_cumsum(webgpu_context & ctx, ggml_tensor * src
 }
 
 static webgpu_command ggml_webgpu_sum_rows(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
-    bool total_sum = dst->op == GGML_OP_SUM;
+    bool                  total_sum = dst->op == GGML_OP_SUM;
     std::vector<uint32_t> params = { (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
                                      (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
                                      total_sum ? 0 : (uint32_t) (src->nb[1] / ggml_type_size(src->type)),
                                      total_sum ? 0 : (uint32_t) (src->nb[2] / ggml_type_size(src->type)),
                                      total_sum ? 0 : (uint32_t) (src->nb[3] / ggml_type_size(src->type)),
                                      total_sum ? static_cast<uint32_t>(ggml_nelements(src)) : (uint32_t) src->ne[0],
-                                     total_sum ? 1 :(uint32_t) src->ne[1],
-                                     total_sum ? 1 :(uint32_t) src->ne[2] };
+                                     total_sum ? 1 : (uint32_t) src->ne[1],
+                                     total_sum ? 1 : (uint32_t) src->ne[2] };
 
     std::vector<wgpu::BindGroupEntry> entries = {
         { .binding = 0,
@@ -2239,6 +2239,8 @@ static void ggml_webgpu_init_cpy_pipeline(webgpu_context & webgpu_ctx) {
 
     webgpu_ctx->cpy_pipelines[GGML_TYPE_F32][GGML_TYPE_F32] =
         ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_cpy_f32_f32, "cpy_f32_f32", constants);
+    webgpu_ctx->cpy_pipelines[GGML_TYPE_F32][GGML_TYPE_I32] =
+        ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_cpy_f32_i32, "cpy_f32_i32", constants);
     webgpu_ctx->cpy_pipelines[GGML_TYPE_F32][GGML_TYPE_F16] =
         ggml_webgpu_create_pipeline(webgpu_ctx->device, wgsl_cpy_f32_f16, "cpy_f32_f16", constants);
     webgpu_ctx->cpy_pipelines[GGML_TYPE_F16][GGML_TYPE_F32] =
@@ -2768,16 +2770,18 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             break;
         case GGML_OP_CPY:
         case GGML_OP_CONT:
-            supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
-                          (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
+            supports_op = ((op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
+                           (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16)) ||
+                          (op->type == GGML_TYPE_I32 && src0->type == GGML_TYPE_F32);
             break;
         case GGML_OP_SET_ROWS:
             supports_op = (op->type == GGML_TYPE_F16 && src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_I64);
             break;
         case GGML_OP_GET_ROWS:
-            if (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_I32 ||
-                ggml_webgpu_supported_qtype(src0->type)) {
+            if (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_webgpu_supported_qtype(src0->type)) {
                 supports_op = (op->type == GGML_TYPE_F32);
+            } else if (src0->type == GGML_TYPE_I32) {
+                supports_op = op->type == GGML_TYPE_I32;
             }
             break;
         case GGML_OP_MUL_MAT:
