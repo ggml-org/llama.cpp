@@ -3271,7 +3271,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.vocoder.speaker_file = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_LIQUID_AUDIO}));
+    ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_LIQUID_AUDIO}));
 
     add_opt(common_arg(
         {"--diffusion-steps"}, "N",

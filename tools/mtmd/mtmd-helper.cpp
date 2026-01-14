@@ -517,8 +517,8 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char *
     return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size());
 }
 
-bool mtmd_helper_save_wav(const char * fname, const float * data, size_t n_samples, int sample_rate) {
-    ma_encoder_config config = ma_encoder_config_init(ma_encoding_format_wav, ma_format_f32, 1, sample_rate);
+bool mtmd_helper_save_wav(const char * fname, const int16_t * data, size_t n_samples, int sample_rate) {
+    ma_encoder_config config = ma_encoder_config_init(ma_encoding_format_wav, ma_format_s16, 1, sample_rate);
     ma_encoder        encoder;
 
     ma_result res = ma_encoder_init_file(fname, &config, &encoder);

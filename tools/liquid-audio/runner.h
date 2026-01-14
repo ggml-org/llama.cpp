@@ -8,9 +8,9 @@
 namespace liquid {
 namespace audio {
 
-using generated_audio_t = std::vector<float>;
+using generated_audio_t = std::vector<int16_t>;
 using text_callback_t   = std::function<void(const std::string &)>;
-using audio_callback_t  = std::function<void(const std::vector<float> &)>;
+using audio_callback_t  = std::function<void(const std::vector<int16_t> &)>;
 
 class Runner {
   public:

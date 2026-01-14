@@ -122,7 +122,7 @@ int main(int argc, char ** argv) {
     auto text_cb = [&generated_text](const std::string & text) {
         generated_text += text;
     };
-    auto audio_cb = [&generated_audio](const std::vector<float> & audio) {
+    auto audio_cb = [&generated_audio](const std::vector<int16_t> & audio) {
         generated_audio.insert(generated_audio.end(), audio.begin(), audio.end());
     };
 

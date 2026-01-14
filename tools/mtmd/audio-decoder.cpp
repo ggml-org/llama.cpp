@@ -1,14 +1,16 @@
-#include "decoder.h"
+#include "audio-decoder.h"
 
-#include "common.h"
-#include "ggml-alloc.h"
+#include "clip-impl.h"
+#include "common/common.h"
 #include "ggml-backend.h"
 #include "ggml-cpp.h"
-#include "ggml.h"
 #include "gguf.h"
-#include "log.h"
+#include "llama.h"
+#include "mtmd-audio.h"
 
+#include <algorithm>
 #include <cmath>
+#include <complex>
 #include <cstdarg>
 #include <cstring>
 #include <fstream>
@@ -18,6 +20,8 @@
 
 namespace liquid {
 namespace audio {
+
+using audio_token_t = std::array<int32_t, 8>;
 
 namespace {
 
@@ -59,11 +63,11 @@ struct audio_decoder_ggml_ctx {
     std::unordered_map<std::string, ggml_tensor *> tensors;
     std::unordered_map<std::string, uint32_t>      hyperparameters;
 
-    explicit audio_decoder_ggml_ctx(const common_params & params) {
+    explicit audio_decoder_ggml_ctx(bool use_gpu) {
         ggml_backend_t backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
         GGML_ASSERT(backend_cpu);
 
-        if (params.mmproj_use_gpu) {
+        if (use_gpu) {
             ggml_backend_t backend_gpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
             if (!backend_gpu) {
                 backend_gpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU, nullptr);
@@ -305,9 +309,6 @@ class Cache {
 class DepthformerModel {
   public:
     void init(audio_decoder_ggml_ctx & ctx) {
-        config.n_layer = ctx.hyperparameters.at("depthformer_n_layer");
-        config.n_embd  = ctx.hyperparameters.at("depthformer_n_embd");
-
         // cache
         int n_cache_tensors = config.n_layer * 2;  // kv per layer
         cache.init(n_cache_tensors);
@@ -524,7 +525,7 @@ class DecoderModel {
         auto * out_embd = ggml_get_rows(ctx0, weights.audio_embedding.embd, out_tokens_offsets);
         out_embd        = ggml_cont(ctx0, ggml_permute(ctx0, out_embd, 1, 0, 2, 3));
         out_embd        = ggml_sum_rows(ctx0, out_embd);
-        out_embd        = ggml_reshape_1d(ctx0, out_embd, ggml_nelements(out_embd));
+        out_embd        = ggml_reshape_1d(ctx0, out_embd, config.n_embd);
 
         return out_embd;
     }
@@ -608,6 +609,7 @@ class DecoderModel {
 
   private:
     struct {
+        int n_embd     = 2048;
         int n_codebook = 8;
         int n_vocab    = 2049;
 
@@ -637,20 +639,107 @@ class DecoderModel {
 
 }  // namespace
 
-class Decoder::DecoderImpl {
+class audio_decoder_lfm25 : public mtmd_audio_decoder {
   public:
+    struct {
+        int n_fft       = 1280;
+        int hop_length  = 320;
+        int sample_rate = 24000;
+        int n_codes     = 8;
+    } istft_config;
+
     DecoderModel decoder_model;
 
     audio_decoder_ggml_ctx ctx;
 
-    DecoderImpl(const common_params & params) : ctx(params) {
-        const std::string & gguf_path = params.vocoder.model.path;
+    bool verbose = false;
 
-        ctx.load_gguf(gguf_path.c_str());
+    // tokenizer
+    common_init_result_ptr                      audio_tokenizer_llama_init;
+    llama_model *                               audio_tokenizer_model;
+    llama_context *                             audio_tokenizer_lctx;
+    std::unique_ptr<mtmd_audio_streaming_istft> istft_state;
+
+    // threadpool
+    ggml_threadpool * threadpool                  = nullptr;
+    void (*threadpool_free_fn)(ggml_threadpool *) = nullptr;
+
+    audio_decoder_lfm25(const std::string & vocoder_path,
+                        const std::string & tokenizer_path,
+                        int                 n_threads,
+                        bool                use_gpu) :
+        ctx(use_gpu) {
+        ctx.load_gguf(vocoder_path.c_str());
 
         decoder_model.init(ctx);
+
+        // audio tokenizer
+        common_params params_audio_tokenizer;
+        params_audio_tokenizer.model.path  = tokenizer_path;
+        params_audio_tokenizer.mmproj.path = "";
+        params_audio_tokenizer.embedding   = true;
+        audio_tokenizer_llama_init         = common_init_from_params(params_audio_tokenizer);
+        audio_tokenizer_model              = audio_tokenizer_llama_init->model();
+        audio_tokenizer_lctx               = audio_tokenizer_llama_init->context();
+
+        if (!audio_tokenizer_model || !audio_tokenizer_lctx) {
+            LOG_ERR("Failed to load audio tokenizer\n");
+            throw std::runtime_error("Failed to load audio tokenizer");
+        }
+
+        istft_state = std::make_unique<mtmd_audio_streaming_istft>(istft_config.n_fft, istft_config.hop_length);
+        if (!istft_state) {
+            LOG_ERR("Failed to create ISTFT state\n");
+            throw std::runtime_error("Failed to create ISTFT state");
+        }
+
+        init_threadpool(n_threads);
     }
 
+    virtual ~audio_decoder_lfm25() = default;
+
+    void reset() override {
+        llama_memory_clear(llama_get_memory(audio_tokenizer_lctx), false);
+        istft_state->reset();
+    }
+
+    mtmd_audio_decoder_type get_type() override { return mtmd_audio_decoder_type::LFM25; }
+
+    int decode(mtmd_audio_decode_result & result,
+               const float *              embd_ptr,
+               size_t                     n_embd,
+               float                      temperature,
+               int                        top_k) override {
+        result.is_final = false;
+
+        auto               t0 = ggml_time_ms();
+        std::vector<float> embd(embd_ptr, embd_ptr + n_embd);
+        audio_token_t      next_token = sample_audio_frame(embd, temperature, top_k);
+
+        if (verbose) {
+            LOG_INF("audio frame sampled in %" PRId64 " ms\n", ggml_time_ms() - t0);
+        }
+
+        if (next_token[0] == 2048) {
+            result.is_final = true;  // switch back to text
+            std::fill(next_token.begin(), next_token.end(), 2048);
+        } else {
+            auto decoded = detokenize(next_token);
+
+            result.pcm16.resize(decoded.size());
+            for (size_t i = 0; i < decoded.size(); i++) {
+                result.pcm16[i] = static_cast<int16_t>(std::clamp(decoded[i], -1.0f, 1.0f) * 32767.0f);
+            }
+        }
+
+        result.embedding = embed(next_token);
+
+        return 0;
+    }
+
+    int get_sample_rate() const override { return 24000; }
+
+  private:
     template <typename T> ggml_type get_ggml_type() {
         if constexpr (std::is_same_v<T, float>) {
             return GGML_TYPE_F32;
@@ -693,6 +782,75 @@ class Decoder::DecoderImpl {
         });
     }
 
+    std::vector<float> detokenize(const audio_token_t & codes) {
+        // embed_for_detokenizer, converts 8 audio codes into 6 embeddings for lfm2
+        int  n_tokens = 6;
+        auto embd     = embed_for_detokenizer(codes);
+
+        const int   n_out = llama_model_n_embd_out(audio_tokenizer_model);
+        llama_batch batch = llama_batch_get_one(nullptr, n_tokens);
+
+        batch.embd = embd.data();
+
+        if (llama_decode(audio_tokenizer_lctx, batch)) {
+            LOG_ERR("failed to run audio tokenizer\n");
+            exit(1);
+        }
+
+        std::vector<float> output(n_tokens * n_out);
+        std::memcpy(output.data(), llama_get_embeddings(audio_tokenizer_lctx), sizeof(float) * output.size());
+
+        return istft(output);
+    }
+
+    std::vector<float> istft(const std::vector<float> & embd) const {
+        const int n_fft_bins    = istft_config.n_fft / 2 + 1;
+        int       n_frames      = embd.size() / (n_fft_bins * 2);
+        int       output_length = (n_frames - 1) * istft_config.hop_length;
+
+        std::vector<float> output;
+        output.reserve(output_length);
+
+        // Perform ISTFT - process each frame
+        for (int i = 0; i < n_frames; i++) {
+            std::vector<float> frame_spectrum(n_fft_bins * 2);
+
+            // Extract frame spectrum from embd (which is in [n_fft_bins × n_frames × 2] format)
+            for (int j = 0; j < n_fft_bins; j++) {
+                const auto log_abs        = embd[i * n_fft_bins * 2 + 0 * n_fft_bins + j];
+                const auto angle          = embd[i * n_fft_bins * 2 + 1 * n_fft_bins + j];
+                const auto p              = std::polar(expf(log_abs), angle);
+                frame_spectrum[j * 2 + 0] = p.real();
+                frame_spectrum[j * 2 + 1] = p.imag();
+            }
+
+            auto frame_output = istft_state->process_frame(frame_spectrum.data());
+            output.insert(output.end(), frame_output.begin(), frame_output.end());
+        }
+
+        return output;
+    }
+
+    void init_threadpool(int n_threads) {
+        auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+        GGML_ASSERT(cpu_dev);
+        auto * reg = ggml_backend_dev_backend_reg(cpu_dev);
+        GGML_ASSERT(reg);
+        GGML_ASSERT(n_threads > 0);
+        if (auto * threadpool_new_fn = (ggml_threadpool * (*) (ggml_threadpool_params *) )
+                ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new");
+            threadpool_new_fn) {
+            ggml_threadpool_params tpp = ggml_threadpool_params_default(n_threads);
+            threadpool                 = threadpool_new_fn(&tpp);
+        }
+        threadpool_free_fn =
+            (decltype(threadpool_free_fn)) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free");
+        GGML_ASSERT(threadpool);
+
+        llama_attach_threadpool(audio_tokenizer_lctx, threadpool, nullptr);
+        set_threadpool(threadpool, n_threads);
+    }
+
     void set_threadpool(ggml_threadpool * tp, int n_threads) {
         auto * backend_cpu = ctx.backends.back();
         GGML_ASSERT(backend_cpu);
@@ -710,24 +868,30 @@ class Decoder::DecoderImpl {
     }
 };
 
-Decoder::Decoder(const common_params & params) : pimpl(std::make_unique<DecoderImpl>(params)) {}
-
-Decoder::~Decoder() = default;
-
-audio_token_t Decoder::sample_audio_frame(const std::vector<float> & embedding, float temperature, int top_k) {
-    return pimpl->sample_audio_frame(embedding, temperature, top_k);
-}
-
-std::vector<float> Decoder::embed(const audio_token_t & token) {
-    return pimpl->embed(token);
-}
-
-std::vector<float> Decoder::embed_for_detokenizer(const audio_token_t & token) {
-    return pimpl->embed_for_detokenizer(token);
-}
-
-void Decoder::set_threadpool(ggml_threadpool * threadpool, int n_threads) {
-    pimpl->set_threadpool(threadpool, n_threads);
-}
 }  // namespace audio
 }  // namespace liquid
+
+namespace {
+// FIXME(tarek): replace once model can be loaded via clip or llm path
+bool is_lfm2(const llama_model * model) {
+    char arch[256];
+    int  len = llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch));
+    if (len > 0 && strstr(arch, "lfm2") != nullptr) {
+        return true;
+    }
+    return false;
+}
+
+}  // namespace
+
+mtmd_audio_decoder_ptr mtmd_audio_decoder_create(const llama_model * text_model,
+                                                 const std::string & vocoder_path,
+                                                 const std::string & tokenizer_path,
+                                                 int                 n_threads,
+                                                 bool                use_gpu) {
+    if (is_lfm2(text_model)) {
+        return std::make_unique<liquid::audio::audio_decoder_lfm25>(vocoder_path, tokenizer_path, n_threads, use_gpu);
+    }
+
+    return nullptr;
+}

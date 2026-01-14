@@ -1,6 +1,6 @@
 # lib
 set(TARGET_LIB liquid-audio)
-add_library(${TARGET_LIB} runner.cpp decoder.cpp)
+add_library(${TARGET_LIB} runner.cpp)
 target_include_directories(${TARGET_LIB} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(${TARGET_LIB} PUBLIC llama common mtmd ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET_LIB} PRIVATE cxx_std_17)

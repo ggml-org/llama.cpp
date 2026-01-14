@@ -8,6 +8,7 @@ add_library(mtmd
             mtmd.h
             mtmd-helper.cpp
             mtmd-helper.h
+            audio-decoder.cpp
             clip.cpp
             clip.h
             clip-impl.h
