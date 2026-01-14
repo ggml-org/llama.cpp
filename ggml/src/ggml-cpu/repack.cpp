@@ -703,90 +703,93 @@ void ggml_gemv_q5_K_8x8_q8_K_generic(int                        n,
     }
 }
 
-void ggml_gemv_q6_K_8x8_q8_K_generic(int                        n,
-                                     float * GGML_RESTRICT      s,
-                                     size_t                     bs,
-                                     const void * GGML_RESTRICT vx,
-                                     const void * GGML_RESTRICT vy,
-                                     int                        nr,
-                                     int                        nc) {
-    const int             qk                = QK_K;
-    const int             nb                = n / qk;
-    const int             ncols_interleaved = 8;
-    const int             blocklen          = 8;
-    static const uint32_t kmask1            = 0x3f3f3f3f;
-    static const uint32_t kmask2            = 0x0f0f0f0f;
-    static const uint32_t kmask3            = 0x03030303;
 
-    GGML_ABORT("ggml_gemv_q6_K_8x8_q8_K_generic not implemented yet");
+void ggml_gemv_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+    constexpr int qk                = QK_K;
+    const int nb = n / qk;
+    const int ncols_interleaved = 8;
+    const int blocklen = 8;
 
     assert(n % qk == 0);
     assert(nc % ncols_interleaved == 0);
 
-    UNUSED(s);
     UNUSED(bs);
-    UNUSED(vx);
-    UNUSED(vy);
     UNUSED(nr);
-    UNUSED(nc);
-    UNUSED(nb);
-    UNUSED(ncols_interleaved);
-    UNUSED(blocklen);
 
-    float    sumf[8];
-    float    sum_minf[8];
-    uint32_t utmp[32];
-    int      sumi1;
-    int      sumi2;
-    int      sumi;
+    float sumf[8];
 
     const block_q8_K * a_ptr = (const block_q8_K *) vy;
     for (int x = 0; x < nc / ncols_interleaved; x++) {
-        const block_q4_Kx8 * b_ptr = (const block_q4_Kx8 *) vx + (x * nb);
+        const block_q6_Kx8 * b_ptr = (const block_q6_Kx8 *) vx + (x * nb);
 
         for (int j = 0; j < ncols_interleaved; j++) {
-            sumf[j]     = 0.0;
-            sum_minf[j] = 0.0;
+            sumf[j] = 0.0f;
         }
+
         for (int l = 0; l < nb; l++) {
-            for (int sb = 0; sb < 8; sb++) {
-                memcpy(utmp + sb * 4, b_ptr[l].scales + sb * 12, 12);
-                utmp[sb * 4 + 3]      = ((utmp[sb * 4 + 2] >> 4) & kmask2) | (((utmp[sb * 4 + 1] >> 6) & kmask3) << 4);
-                const uint32_t uaux_0 = utmp[sb * 4 + 1] & kmask1;
-                utmp[sb * 4 + 1]      = (utmp[sb * 4 + 2] & kmask2) | (((utmp[sb * 4 + 0] >> 6) & kmask3) << 4);
-                utmp[sb * 4 + 2]      = uaux_0;
-                utmp[sb * 4 + 0] &= kmask1;
-            }
-            for (int k = 0; k < (qk / (2 * blocklen)); k++) {
-                uint8_t * scales_0 = (uint8_t *) utmp + (k / 4) * 32;
-                uint8_t * scales_1 = (uint8_t *) utmp + (k / 4) * 32 + 16;
+
+
+            for (int k = 0; k < 16; k++) {
+                // k = 0.. 7 weights 0-63 low, 64-127 high
+                // k = 8..15 weights 128-191 low, 192-255 high
+                const int base_l = (k / 8) * 128 + (k % 8) * 8;
+                const int base_h = base_l + 64;
+
+                const int scale_idx_l = base_l / 16;
+                const int scale_idx_h = base_h / 16;
+
+                // Bit shift cycles 0,2,4,6 for each 32-value group within a 128-value half
+                const int qh_shift_l = ((base_l % 128) / 32) * 2;
+                const int qh_shift_h = ((base_h % 128) / 32) * 2;
+
+                // qh_half: offset to the correct 32-byte half (0 or 32)
+                const int qh_half_l = (base_l / 128) * 32;
+                const int qh_half_h = (base_h / 128) * 32;
+
                 for (int j = 0; j < ncols_interleaved; j++) {
-                    sumi1 = 0;
-                    sumi2 = 0;
-                    sumi  = 0;
-                    for (int i = 0; i < blocklen; ++i) {
-                        const int v0 =
-                            (int8_t) (b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] & 0xF);
-                        const int v1 = (int8_t) (b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] >> 4);
-                        sumi1        = (v0 * a_ptr[l].qs[(k >> 2) * 64 + (k % 4) * blocklen + i]);
-                        sumi2        = (v1 * a_ptr[l].qs[(k >> 2) * 64 + (k % 4) * blocklen + i + 32]);
-                        sumi1        = sumi1 * scales_0[j];
-                        sumi2        = sumi2 * scales_1[j];
-                        sumi += sumi1 + sumi2;
+                    // Interleaved scales
+                    const int8_t scale_l = b_ptr[l].scales[scale_idx_l * 8 + j];
+                    const int8_t scale_h = b_ptr[l].scales[scale_idx_h * 8 + j];
+
+                    int sumi_l = 0;
+                    int sumi_h = 0;
+
+                    for (int i = 0; i < blocklen; i++) {
+                        const int ql_pos = k * 64 + j * 8 + i;
+                        const int l_4    = b_ptr[l].ql[ql_pos] & 0xF;
+                        const int hi_4   = (b_ptr[l].ql[ql_pos] >> 4) & 0xF;
+
+                        // qh indexing with 8-byte interleaving (like q5_K)
+                        const int qh_byte_l   = qh_half_l + ((base_l + i) % 32);
+                        const int qh_chunk_l  = qh_byte_l / 8;
+                        const int qh_pos_l    = qh_byte_l % 8;
+                        const int qh_offset_l = qh_chunk_l * 64 + j * 8 + qh_pos_l;
+                        const int hi_2_l      = (b_ptr[l].qh[qh_offset_l] >> qh_shift_l) & 0x3;
+
+                        const int qh_byte_h   = qh_half_h + ((base_h + i) % 32);
+                        const int qh_chunk_h  = qh_byte_h / 8;
+                        const int qh_pos_h    = qh_byte_h % 8;
+                        const int qh_offset_h = qh_chunk_h * 64 + j * 8 + qh_pos_h;
+                        const int hi_2_h      = (b_ptr[l].qh[qh_offset_h] >> qh_shift_h) & 0x3;
+
+                        const int q_l = ((hi_2_l << 4) | l_4) - 32;
+                        const int q_h = ((hi_2_h << 4) | hi_4) - 32;
+
+                        const int8_t a_l = a_ptr[l].qs[base_l + i];
+                        const int8_t a_h = a_ptr[l].qs[base_h + i];
+
+                        sumi_l += q_l * a_l;
+                        sumi_h += q_h * a_h;
                     }
-                    sumf[j] += sumi * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d;
-                }
-            }
-            for (int sb = 0; sb < 8; sb++) {
-                uint8_t * mins = (uint8_t *) utmp + 8 + sb * 16;
-                for (int j = 0; j < ncols_interleaved; j++) {
-                    sum_minf[j] += mins[j] * (a_ptr[l].bsums[sb * 2] + a_ptr[l].bsums[sb * 2 + 1]) *
-                                   GGML_CPU_FP16_TO_FP32(b_ptr[l].dmin[j]) * a_ptr[l].d;
+
+                    sumf[j] +=
+                        (sumi_l * scale_l + sumi_h * scale_h) * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d;
                 }
             }
         }
+
         for (int j = 0; j < ncols_interleaved; j++) {
-            s[x * ncols_interleaved + j] = sumf[j] - sum_minf[j];
+            s[x * ncols_interleaved + j] = sumf[j];
         }
     }
 }
@@ -1489,94 +1492,98 @@ void ggml_gemm_q6_K_8x8_q8_K_generic(int                        n,
                                      const void * GGML_RESTRICT vy,
                                      int                        nr,
                                      int                        nc) {
-    const int             qk                = QK_K;
-    const int             nb                = n / qk;
-    const int             ncols_interleaved = 8;
-    const int             blocklen          = 8;
-    static const uint32_t kmask1            = 0x3f3f3f3f;
-    static const uint32_t kmask2            = 0x0f0f0f0f;
-    static const uint32_t kmask3            = 0x03030303;
-
-    GGML_ABORT("ggml_gemm_q6_K_8x8_q8_K_generic not implemented yet");
+    const int qk                = QK_K;
+    const int nb                = n / qk;
+    const int ncols_interleaved = 8;
+    const int blocklen          = 8;
 
     assert(n % qk == 0);
     assert(nr % 4 == 0);
     assert(nc % ncols_interleaved == 0);
 
-    UNUSED(s);
     UNUSED(bs);
-    UNUSED(vx);
-    UNUSED(vy);
-    UNUSED(nr);
-    UNUSED(nc);
-    UNUSED(nb);
-    UNUSED(ncols_interleaved);
-    UNUSED(blocklen);
 
-    float    sumf[4][8];
-    float    sum_minf[4][8];
-    uint32_t utmp[32];
-    int      sumi1;
-    int      sumi2;
-    int      sumi;
+    float sumf[4][8];
 
     for (int y = 0; y < nr / 4; y++) {
         const block_q8_Kx4 * a_ptr = (const block_q8_Kx4 *) vy + (y * nb);
         for (int x = 0; x < nc / ncols_interleaved; x++) {
-            const block_q4_Kx8 * b_ptr = (const block_q4_Kx8 *) vx + (x * nb);
+            const block_q6_Kx8 * b_ptr = (const block_q6_Kx8 *) vx + (x * nb);
+
             for (int m = 0; m < 4; m++) {
                 for (int j = 0; j < ncols_interleaved; j++) {
-                    sumf[m][j]     = 0.0;
-                    sum_minf[m][j] = 0.0;
+                    sumf[m][j] = 0.0f;
                 }
             }
+
             for (int l = 0; l < nb; l++) {
-                for (int sb = 0; sb < 8; sb++) {
-                    memcpy(utmp + sb * 4, b_ptr[l].scales + sb * 12, 12);
-                    utmp[sb * 4 + 3] = ((utmp[sb * 4 + 2] >> 4) & kmask2) | (((utmp[sb * 4 + 1] >> 6) & kmask3) << 4);
-                    const uint32_t uaux_0 = utmp[sb * 4 + 1] & kmask1;
-                    utmp[sb * 4 + 1]      = (utmp[sb * 4 + 2] & kmask2) | (((utmp[sb * 4 + 0] >> 6) & kmask3) << 4);
-                    utmp[sb * 4 + 2]      = uaux_0;
-                    utmp[sb * 4 + 0] &= kmask1;
-                }
-                for (int k = 0; k < (qk / (2 * blocklen)); k++) {
-                    uint8_t * scales_0 = (uint8_t *) utmp + (k / 4) * 32;
-                    uint8_t * scales_1 = (uint8_t *) utmp + (k / 4) * 32 + 16;
+                for (int k = 0; k < 16; k++) {
+                    // k = 0.. 7 weights 0-63 low, 64-127 high
+                    // k = 8..15 weights 128-191 low, 192-255 high
+                    const int base_l = (k / 8) * 128 + (k % 8) * 8;
+                    const int base_h = base_l + 64;
+
+                    const int scale_idx_l = base_l / 16;
+                    const int scale_idx_h = base_h / 16;
+
+                    // Bit shift cycles 0,2,4,6 for each 32-value group within a 128-value half
+                    const int qh_shift_l = ((base_l % 128) / 32) * 2;
+                    const int qh_shift_h = ((base_h % 128) / 32) * 2;
+
+                    // qh_half: offset to the correct 32-byte half (0 or 32)
+                    const int qh_half_l = (base_l / 128) * 32;
+                    const int qh_half_h = (base_h / 128) * 32;
+
+                    // Activation base indices for q8_Kx4 interleaved format
+                    // Layout: 128-value halves (k/8), then 8-value sub-blocks (k%8) with stride 32
+                    const int q8_base = (k / 8) * 512 + (k % 8) * 32;
+
                     for (int m = 0; m < 4; m++) {
                         for (int j = 0; j < ncols_interleaved; j++) {
-                            sumi1 = 0;
-                            sumi2 = 0;
-                            sumi  = 0;
-                            for (int i = 0; i < blocklen; ++i) {
-                                const int v0 =
-                                    (int8_t) (b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] & 0xF);
-                                const int v1 =
-                                    (int8_t) (b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] >> 4);
-                                sumi1 = (v0 * a_ptr[l].qs[(k >> 2) * 256 + (k % 4) * 4 * blocklen + m * blocklen + i]);
-                                sumi2 = (v1 *
-                                         a_ptr[l].qs[(k >> 2) * 256 + (k % 4) * 4 * blocklen + m * blocklen + i + 128]);
-                                sumi1 = sumi1 * scales_0[j];
-                                sumi2 = sumi2 * scales_1[j];
-                                sumi += sumi1 + sumi2;
+                            // Interleaved scales
+                            const int8_t scale_l = b_ptr[l].scales[scale_idx_l * 8 + j];
+                            const int8_t scale_h = b_ptr[l].scales[scale_idx_h * 8 + j];
+
+                            int sumi_l = 0;
+                            int sumi_h = 0;
+
+                            for (int i = 0; i < blocklen; i++) {
+                                const int ql_pos = k * 64 + j * 8 + i;
+                                const int l_4    = b_ptr[l].ql[ql_pos] & 0xF;
+                                const int hi_4   = (b_ptr[l].ql[ql_pos] >> 4) & 0xF;
+
+                                const int qh_idx_l    = qh_half_l + ((base_l + i) % 32);
+                                const int qh_chunk_l  = qh_idx_l / 8;
+                                const int qh_pos_l    = qh_idx_l % 8;
+                                const int qh_offset_l = qh_chunk_l * 64 + j * 8 + qh_pos_l;
+                                const int hi_2_l      = (b_ptr[l].qh[qh_offset_l] >> qh_shift_l) & 0x3;
+
+                                const int qh_idx_h    = qh_half_h + ((base_h + i) % 32);
+                                const int qh_chunk_h  = qh_idx_h / 8;
+                                const int qh_pos_h    = qh_idx_h % 8;
+                                const int qh_offset_h = qh_chunk_h * 64 + j * 8 + qh_pos_h;
+                                const int hi_2_h      = (b_ptr[l].qh[qh_offset_h] >> qh_shift_h) & 0x3;
+
+                                const int q_l = ((hi_2_l << 4) | l_4) - 32;
+                                const int q_h = ((hi_2_h << 4) | hi_4) - 32;
+
+                                const int8_t q8_l = a_ptr[l].qs[q8_base + m * 8 + i];
+                                const int8_t q8_h = a_ptr[l].qs[q8_base + m * 8 + i + 256];
+
+                                sumi_l += q_l * q8_l;
+                                sumi_h += q_h * q8_h;
                             }
-                            sumf[m][j] += sumi * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d[m];
-                        }
-                    }
-                }
-                for (int sb = 0; sb < 8; sb++) {
-                    uint8_t * mins = (uint8_t *) utmp + 8 + sb * 16;
-                    for (int m = 0; m < 4; m++) {
-                        const int16_t * bsums = a_ptr[l].bsums + (sb * 8) + (m * 4) - ((sb % 2) * 6);
-                        for (int j = 0; j < ncols_interleaved; j++) {
-                            sum_minf[m][j] += mins[j] * (bsums[0] + bsums[1]) *
-                                              GGML_CPU_FP16_TO_FP32(b_ptr[l].dmin[j]) * a_ptr[l].d[m];
+
+                            sumf[m][j] += (sumi_l * scale_l + sumi_h * scale_h) * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) *
+                                          a_ptr[l].d[m];
                         }
                     }
                 }
             }
+
             for (int m = 0; m < 4; m++) {
                 for (int j = 0; j < ncols_interleaved; j++) {
-                    s[(y * 4 + m) * bs + x * ncols_interleaved + j] = sumf[m][j] - sum_minf[m][j];
+                    s[(y * 4 + m) * bs + x * ncols_interleaved + j] = sumf[m][j];
                 }
             }
         }
@@ -2101,15 +2108,16 @@ static block_q6_Kx8 make_block_q6_Kx8(block_q6_K * in, unsigned int blck_size_in
         memcpy(&out.ql[dst_offset], &elem_ls, sizeof(uint64_t));
     }
 
-    // Interleave of high bits is done taking 4 bytes at a time (Double info in half the memory)
-    const int end_hs = QK_K * 2 / blck_size_interleave;
+    // Interleave high bits using same 8-byte pattern as low bits
+    const int end_hs = end_ls / 2;
     for (int i = 0; i < end_hs; ++i) {
-        int      src_id     = i % n_blocks;
-        int      src_offset = (i / n_blocks) * (blck_size_interleave / 2);
-        int      dst_offset = i * blck_size_interleave / 2;
-        uint32_t elem_hs;
-        memcpy(&elem_hs, &in[src_id].qh[src_offset], sizeof(uint32_t));
-        memcpy(&out.qh[dst_offset], &elem_hs, sizeof(uint32_t));
+        int src_id     = i % n_blocks;
+        int src_offset = (i / n_blocks) * blck_size_interleave;
+        int dst_offset = i * blck_size_interleave;
+
+        uint64_t elem_hs;
+        memcpy(&elem_hs, &in[src_id].qh[src_offset], sizeof(uint64_t));
+        memcpy(&out.qh[dst_offset], &elem_hs, sizeof(uint64_t));
     }
 
     // The below logic is designed so as to unpack and rearrange scales in Q6_K
