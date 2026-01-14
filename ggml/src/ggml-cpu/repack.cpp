@@ -1221,15 +1221,7 @@ void ggml_gemm_q4_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     assert (nr % 4 == 0);
     assert (nc % ncols_interleaved == 0);
 
-    UNUSED(s);
     UNUSED(bs);
-    UNUSED(vx);
-    UNUSED(vy);
-    UNUSED(nr);
-    UNUSED(nc);
-    UNUSED(nb);
-    UNUSED(ncols_interleaved);
-    UNUSED(blocklen);
 
     float sumf[4][8];
     float sum_minf[4][8];
@@ -2091,69 +2083,45 @@ static block_q5_Kx8 make_block_q5_Kx8(block_q5_K * in, unsigned int blck_size_in
 }
 
 static block_q6_Kx8 make_block_q6_Kx8(block_q6_K * in, unsigned int blck_size_interleave) {
-    block_q6_Kx8 out;
-    GGML_ABORT("Make block_q6_Kx8 not implemented yet");
-    //Delta(scale) and dmin values of the eight Q4_K structures are copied onto the output interleaved structure
-    for (int i = 0; i < 8; i++) {
+    block_q6_Kx8  out;
+    constexpr int n_blocks = 8;  // Kx8
+    for (int i = 0; i < n_blocks; i++) {
         out.d[i] = in[i].d;
     }
 
-    const int end = QK_K * 4 / blck_size_interleave;
-
-    // Interleave Q4_K quants by taking 8 bytes at a time
-    for (int i = 0; i < end; ++i) {
-        int src_id     = i % 8;
-        int src_offset = (i / 8) * blck_size_interleave;
+    const int end_ls = QK_K * 4 / blck_size_interleave;
+    // Interleave Q6_K quants by taking 8 bytes at a time
+    for (int i = 0; i < end_ls; ++i) {
+        int src_id     = i % n_blocks;
+        int src_offset = (i / n_blocks) * blck_size_interleave;
         int dst_offset = i * blck_size_interleave;
 
-        uint64_t elems;
+        uint64_t elem_ls;
+        memcpy(&elem_ls, &in[src_id].ql[src_offset], sizeof(uint64_t));
+        memcpy(&out.ql[dst_offset], &elem_ls, sizeof(uint64_t));
     }
 
-    // The below logic is designed so as to unpack and rearrange scales and mins values in Q4_K
-    // Currently the Q4_K structure has 8 scales and 8 mins packed in 12 bytes ( 6 bits for each value)
-    // The output Q4_Kx8 structure has 96 bytes
-    // Every 12 byte is packed such that it contains scales and mins for corresponding sub blocks from Q4_K structure
-    // For eg - First 12 bytes contains 8 scales and 8 mins - each of first sub block from different Q4_K structures
-    uint8_t s[8], m[8];
-
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 8; j++) {
-            s[j] = in[j].scales[i] & 63;
-            m[j] = in[j].scales[i + 4] & 63;
-        }
-
-        out.scales[i * 12]      = (s[0] & 63) + ((s[4] & 48) << 2);
-        out.scales[i * 12 + 1]  = (s[1] & 63) + ((s[5] & 48) << 2);
-        out.scales[i * 12 + 2]  = (s[2] & 63) + ((s[6] & 48) << 2);
-        out.scales[i * 12 + 3]  = (s[3] & 63) + ((s[7] & 48) << 2);
-        out.scales[i * 12 + 4]  = (m[0] & 63) + ((m[4] & 48) << 2);
-        out.scales[i * 12 + 5]  = (m[1] & 63) + ((m[5] & 48) << 2);
-        out.scales[i * 12 + 6]  = (m[2] & 63) + ((m[6] & 48) << 2);
-        out.scales[i * 12 + 7]  = (m[3] & 63) + ((m[7] & 48) << 2);
-        out.scales[i * 12 + 8]  = (s[4] & 15) + ((m[4] & 15) << 4);
-        out.scales[i * 12 + 9]  = (s[5] & 15) + ((m[5] & 15) << 4);
-        out.scales[i * 12 + 10] = (s[6] & 15) + ((m[6] & 15) << 4);
-        out.scales[i * 12 + 11] = (s[7] & 15) + ((m[7] & 15) << 4);
+    // Interleave of high bits is done taking 4 bytes at a time (Double info in half the memory)
+    const int end_hs = QK_K * 2 / blck_size_interleave;
+    for (int i = 0; i < end_hs; ++i) {
+        int      src_id     = i % n_blocks;
+        int      src_offset = (i / n_blocks) * (blck_size_interleave / 2);
+        int      dst_offset = i * blck_size_interleave / 2;
+        uint32_t elem_hs;
+        memcpy(&elem_hs, &in[src_id].qh[src_offset], sizeof(uint32_t));
+        memcpy(&out.qh[dst_offset], &elem_hs, sizeof(uint32_t));
     }
 
-    for (int i = 0; i < 4; i++) {
-        for (int j = 0; j < 8; j++) {
-            s[j] = ((in[j].scales[i] & 192) >> 2) | (in[j].scales[i + 8] & 15);
-            m[j] = ((in[j].scales[i + 4] & 192) >> 2) | ((in[j].scales[i + 8] & 240) >> 4);
-        }
+    // The below logic is designed so as to unpack and rearrange scales in Q6_K
+    // The output Q6_Kx8 structure interleaves the 8 bit scales in the same fashion as the quants
+    // Q6_K structure has an 8-bit scale per 16 elements -> 16 scales
+    // scales: [0 bl0 0 bl1 ... 0 bl7][1 bl0 ... 1 bl7] ... [15 bl0 ... 15 bl7]  (bl = block)
+    constexpr int n_scales = QK_K / 16;
 
-        out.scales[i * 12 + 48] = (s[0] & 63) + ((s[4] & 48) << 2);
-        out.scales[i * 12 + 49] = (s[1] & 63) + ((s[5] & 48) << 2);
-        out.scales[i * 12 + 50] = (s[2] & 63) + ((s[6] & 48) << 2);
-        out.scales[i * 12 + 51] = (s[3] & 63) + ((s[7] & 48) << 2);
-        out.scales[i * 12 + 52] = (m[0] & 63) + ((m[4] & 48) << 2);
-        out.scales[i * 12 + 53] = (m[1] & 63) + ((m[5] & 48) << 2);
-        out.scales[i * 12 + 54] = (m[2] & 63) + ((m[6] & 48) << 2);
-        out.scales[i * 12 + 55] = (m[3] & 63) + ((m[7] & 48) << 2);
-        out.scales[i * 12 + 56] = (s[4] & 15) + ((m[4] & 15) << 4);
-        out.scales[i * 12 + 57] = (s[5] & 15) + ((m[5] & 15) << 4);
-        out.scales[i * 12 + 58] = (s[6] & 15) + ((m[6] & 15) << 4);
-        out.scales[i * 12 + 59] = (s[7] & 15) + ((m[7] & 15) << 4);
+    for (int i = 0; i < n_blocks; i++) {
+        for (int j = 0; j < n_scales; j++) {
+            out.scales[j * n_blocks + i] = in[i].scales[j];
+        }
     }
 
     return out;
@@ -2284,21 +2252,16 @@ static int repack_q5_K_to_q5_K_8_bl(struct ggml_tensor *       t,
     return 0;
 }
 
-static int repack_q6_K_to_q6_K_8_bl(struct ggml_tensor *       t,
-                                    int                        interleave_block,
-                                    const void * GGML_RESTRICT data,
-                                    size_t                     data_size) {
+static int repack_q6_K_to_q6_K_8_bl(struct ggml_tensor * t, int interleave_block, const void * GGML_RESTRICT data, size_t data_size) {
     GGML_ASSERT(t->type == GGML_TYPE_Q6_K);
     GGML_ASSERT(interleave_block == 8);
     constexpr int nrows_interleaved = 8;
 
-    GGML_ABORT("repacking for Q6_K not implemented yet");
-
-    block_q6_Kx8 *     dst = (block_q6_Kx8 *) t->data;
-    const block_q6_K * src = (const block_q6_K *) data;
-    block_q6_K         dst_tmp[8];
-    int                nrow    = ggml_nrows(t);
-    int                nblocks = t->ne[0] / QK_K;
+    block_q6_Kx8 * dst = (block_q6_Kx8*)t->data;
+    const block_q6_K * src = (const block_q6_K*) data;
+    block_q6_K dst_tmp[8];
+    int nrow = ggml_nrows(t);
+    int nblocks = t->ne[0] / QK_K;
 
     GGML_ASSERT(data_size == nrow * nblocks * sizeof(block_q6_K));
 
@@ -2316,8 +2279,6 @@ static int repack_q6_K_to_q6_K_8_bl(struct ggml_tensor *       t,
         src += nrows_interleaved * nblocks;
     }
     return 0;
-
-    GGML_UNUSED(data_size);
 }
 
 static int repack_q4_0_to_q4_0_8_bl(struct ggml_tensor * t, int interleave_block, const void * GGML_RESTRICT data, size_t data_size) {
@@ -2583,7 +2544,14 @@ template <> void gemv<block_q4_0, 8, 8, GGML_TYPE_Q8_0>(int n, float * s, size_t
     ggml_gemv_q4_0_8x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemv<block_q2_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <>
+void gemv<block_q2_K, 8, 8, GGML_TYPE_Q8_K>(int          n,
+                                            float *      s,
+                                            size_t       bs,
+                                            const void * vx,
+                                            const void * vy,
+                                            int          nr,
+                                            int          nc) {
     ggml_gemv_q2_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
@@ -2631,7 +2599,14 @@ template <> void gemm<block_q4_0, 8, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t
     ggml_gemm_q4_0_4x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
-template <> void gemm<block_q4_0, 8, 8, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+template <>
+void gemm<block_q4_0, 8, 8, GGML_TYPE_Q8_0>(int          n,
+                                            float *      s,
+                                            size_t       bs,
+                                            const void * vx,
+                                            const void * vy,
+                                            int          nr,
+                                            int          nc) {
     ggml_gemm_q4_0_8x8_q8_0(n, s, bs, vx, vy, nr, nc);
 }
 
@@ -2652,7 +2627,7 @@ template <> void gemm<block_q5_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t
 }
 
 template <> void gemm<block_q6_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
-    ggml_gemm_q4_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
+    ggml_gemm_q6_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
 template <> void gemm<block_iq4_nl, 4, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
