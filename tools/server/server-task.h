@@ -156,9 +156,34 @@ struct server_task {
         return tokens.size();
     }
 
-    bool uses_sampling() const {
-        return type != SERVER_TASK_TYPE_EMBEDDING &&
-               type != SERVER_TASK_TYPE_RERANK;
+    bool need_embd() const {
+        switch (type) {
+            case SERVER_TASK_TYPE_EMBEDDING:
+            case SERVER_TASK_TYPE_RERANK:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool need_logits() const {
+        switch (type) {
+            case SERVER_TASK_TYPE_COMPLETION:
+            case SERVER_TASK_TYPE_INFILL:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    bool need_sampling() const {
+        switch (type) {
+            case SERVER_TASK_TYPE_COMPLETION:
+            case SERVER_TASK_TYPE_INFILL:
+                return true;
+            default:
+                return false;
+        }
     }
 
     static task_params params_from_json_cmpl(
