@@ -808,11 +808,8 @@ void ggml_gemv_q5_K_8x8_q8_K(int                        n,
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     constexpr int    col_pairs = ncols_interleaved / 2;
     const uint8x16_t m4b       = vdupq_n_u8(0x0f);
-    const uint8x16_t mhb       = vdupq_n_u8(0x10);  // high bit mask for 5th bit position
-
-    // Bit masks for extracting high bits based on subblock index
-    // sb=0: bit 0 (lo), bit 1 (hi); sb=1: bit 2 (lo), bit 3 (hi); etc.
-    const uint8_t bit_masks[8] = { 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80 };
+    const uint8x16_t mone = vdupq_n_u8(1);
+    const uint8x16_t mtwo = vdupq_n_u8(2);
 
     // 1x8 tile = 2 x 4
     float32x4_t acc_f32[ncols_interleaved / 4];
@@ -847,6 +844,17 @@ void ggml_gemv_q5_K_8x8_q8_K(int                        n,
             const int16x8_t bsums = vpaddq_s16(vld1q_s16(q8_ptr[b].bsums), vld1q_s16(q8_ptr[b].bsums + 8));
             int16_t         bsums_arr[8];
             vst1q_s16(bsums_arr, bsums);
+
+            // Load qh once per block and shift after each subblock
+            const uint8_t * qh_base = q5_ptr[b].qh;
+            uint8x16_t      qh[col_pairs][4];
+            for (int cp = 0; cp < col_pairs; cp++) {
+                qh[cp][0] = vld1q_u8(qh_base + 16 * cp);
+                qh[cp][1] = vld1q_u8(qh_base + 16 * cp + 64);
+                qh[cp][2] = vld1q_u8(qh_base + 16 * cp + 128);
+                qh[cp][3] = vld1q_u8(qh_base + 16 * cp + 192);
+            }
+
             for (int sb = 0; sb < QK_K / 64; sb++) {
                 for (int i = 0; i < col_pairs; i++) {
                     acc_lo[i] = vdupq_n_s32(0);
@@ -864,11 +872,6 @@ void ggml_gemv_q5_K_8x8_q8_K(int                        n,
                 }
 
                 const uint8_t * qs_base = q5_ptr[b].qs + sb * QK_K;
-                const uint8_t * qh_base = q5_ptr[b].qh;  // qh is shared across all subblocks
-
-                // Masks for extracting high bits for this subblock
-                const uint8x16_t lo_bit_mask = vdupq_n_u8(bit_masks[sb * 2]);
-                const uint8x16_t hi_bit_mask = vdupq_n_u8(bit_masks[sb * 2 + 1]);
 
                 // Load the 64 quants from q8K duplicated to use vecdots with the interleaved columns
                 const int8_t * q8_base = q8_ptr[b].qs + sb * 64;
@@ -879,27 +882,22 @@ void ggml_gemv_q5_K_8x8_q8_K(int                        n,
 
                 // Q5s columns iterated in pairs (01, 23, 45, 67)
                 for (int cp = 0; cp < col_pairs; cp++) {
-                    // Low bits
+                    // Low 4 bits from qs
                     uint8x16_t qs_cp_0 = vld1q_u8(qs_base + 16 * cp);
                     uint8x16_t qs_cp_1 = vld1q_u8(qs_base + 16 * cp + 64);
                     uint8x16_t qs_cp_2 = vld1q_u8(qs_base + 16 * cp + 128);
                     uint8x16_t qs_cp_3 = vld1q_u8(qs_base + 16 * cp + 192);
 
-                    // High bits (Q5_K specific)
-                    uint8x16_t qh_cp_0 = vld1q_u8(qh_base + 16 * cp);
-                    uint8x16_t qh_cp_1 = vld1q_u8(qh_base + 16 * cp + 64);
-                    uint8x16_t qh_cp_2 = vld1q_u8(qh_base + 16 * cp + 128);
-                    uint8x16_t qh_cp_3 = vld1q_u8(qh_base + 16 * cp + 192);
+                    // Extract high bits (mimics q5_k non-repack vec_dot)
+                    uint8x16_t hbit_lo_0 = vshlq_n_u8(vandq_u8(qh[cp][0], mone), 4);
+                    uint8x16_t hbit_lo_1 = vshlq_n_u8(vandq_u8(qh[cp][1], mone), 4);
+                    uint8x16_t hbit_lo_2 = vshlq_n_u8(vandq_u8(qh[cp][2], mone), 4);
+                    uint8x16_t hbit_lo_3 = vshlq_n_u8(vandq_u8(qh[cp][3], mone), 4);
 
-                    uint8x16_t hbit_lo_0 = vandq_u8(vtstq_u8(qh_cp_0, lo_bit_mask), mhb);
-                    uint8x16_t hbit_lo_1 = vandq_u8(vtstq_u8(qh_cp_1, lo_bit_mask), mhb);
-                    uint8x16_t hbit_lo_2 = vandq_u8(vtstq_u8(qh_cp_2, lo_bit_mask), mhb);
-                    uint8x16_t hbit_lo_3 = vandq_u8(vtstq_u8(qh_cp_3, lo_bit_mask), mhb);
-
-                    uint8x16_t hbit_hi_0 = vandq_u8(vtstq_u8(qh_cp_0, hi_bit_mask), mhb);
-                    uint8x16_t hbit_hi_1 = vandq_u8(vtstq_u8(qh_cp_1, hi_bit_mask), mhb);
-                    uint8x16_t hbit_hi_2 = vandq_u8(vtstq_u8(qh_cp_2, hi_bit_mask), mhb);
-                    uint8x16_t hbit_hi_3 = vandq_u8(vtstq_u8(qh_cp_3, hi_bit_mask), mhb);
+                    uint8x16_t hbit_hi_0 = vshlq_n_u8(vandq_u8(qh[cp][0], mtwo), 3);
+                    uint8x16_t hbit_hi_1 = vshlq_n_u8(vandq_u8(qh[cp][1], mtwo), 3);
+                    uint8x16_t hbit_hi_2 = vshlq_n_u8(vandq_u8(qh[cp][2], mtwo), 3);
+                    uint8x16_t hbit_hi_3 = vshlq_n_u8(vandq_u8(qh[cp][3], mtwo), 3);
 
                     // Combine 4-bit values with high bits to get 5-bit values
                     uint8x16_t q5_lo_0 = vorrq_u8(vandq_u8(qs_cp_0, m4b), hbit_lo_0);
@@ -921,6 +919,14 @@ void ggml_gemv_q5_K_8x8_q8_K(int                        n,
                     acc_hi[cp] = ggml_vdotq_s32(acc_hi[cp], vreinterpretq_s8_u8(q5_hi_1), q8_qs[5]);  // 40..47
                     acc_hi[cp] = ggml_vdotq_s32(acc_hi[cp], vreinterpretq_s8_u8(q5_hi_2), q8_qs[6]);  // 48..55
                     acc_hi[cp] = ggml_vdotq_s32(acc_hi[cp], vreinterpretq_s8_u8(q5_hi_3), q8_qs[7]);  // 56..63
+                }
+
+                // Prepare next subblock
+                for (int cp = 0; cp < col_pairs; cp++) {
+                    qh[cp][0] = vshrq_n_u8(qh[cp][0], 2);
+                    qh[cp][1] = vshrq_n_u8(qh[cp][1], 2);
+                    qh[cp][2] = vshrq_n_u8(qh[cp][2], 2);
+                    qh[cp][3] = vshrq_n_u8(qh[cp][3], 2);
                 }
 
                 // Iterates over a pair of column pairs (4 columns) to use a single 128 register
