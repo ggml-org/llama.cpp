@@ -99,10 +99,14 @@ class Runner::RunnerImpl {
                  int                          n_predict,
                  const text_callback_t &      text_callback,
                  const audio_callback_t &     audio_callback) {
+        mtmd_audio_output_reset(ctx.mtmd_ctx_audio.get());
+
         std::vector<common_chat_msg> msgs;
         for (const auto & message : messages) {
             if (const auto & role = message.role; role == "system") {
                 if (const auto & system_prompt = message.content; system_prompt == asr_system_prompt) {
+                    std::array modalities{ MTMD_OUTPUT_MODALITY_TEXT };
+                    mtmd_set_output_modalities(ctx.mtmd_ctx_audio.get(), modalities.data(), modalities.size());
                 } else if (system_prompt == interleaved_system_prompt) {
                     // TODO(tarek): check params with Marc
                     ctx.audio_temperature = 0.8;
@@ -114,6 +118,8 @@ class Runner::RunnerImpl {
                     // TODO(tarek): check params with Marc
                     ctx.audio_temperature = 0.8;
                     ctx.audio_top_k       = 64;
+                    std::array modalities{ MTMD_OUTPUT_MODALITY_AUDIO };
+                    mtmd_set_output_modalities(ctx.mtmd_ctx_audio.get(), modalities.data(), modalities.size());
                 } else {
                     std::vector<std::string> prompts = tts_system_prompts;
                     prompts.push_back(asr_system_prompt);
@@ -231,14 +237,6 @@ class Runner::RunnerImpl {
     int get_output_sample_rate() const { return mtmd_audio_output_get_sample_rate(ctx.mtmd_ctx_audio.get()); }
 
   private:
-    enum class Modality : uint8_t {
-        TEXT,
-        AUDIO_OUT,
-
-    };
-
-    using audio_token_t = std::array<int32_t, 8>;
-
     audio_context ctx;
 
     std::atomic<bool> stop_requested = false;
@@ -256,7 +254,6 @@ class Runner::RunnerImpl {
     }
 
     int generate_common(int n_predict, const text_callback_t & text_callback, const audio_callback_t & audio_callback) {
-        Modality    current_modality = Modality::TEXT;
         llama_batch batch            = llama_batch_get_one(nullptr, 1);  // doesn't own pointers, no need for free.
 
         n_predict = n_predict < 0 ? std::numeric_limits<int>::max() : n_predict;
@@ -379,21 +376,6 @@ class Runner::RunnerImpl {
         LOG("\n");
 
         return 0;
-    }
-
-    static void log_audio_tokens(const audio_token_t & next_token) {
-        LOG_INF("audio tokens: ");
-        bool first = true;
-        for (auto t : next_token) {
-            if (first) {
-                first = false;
-            } else {
-                LOG(", ");
-            }
-            LOG("%d", t);
-        }
-        LOG("\n");
-        fflush(stdout);
     }
 };
 

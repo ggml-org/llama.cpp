@@ -79,7 +79,7 @@ class AudioPlayer:
         with suppress_stderr():
             self.pyaudio = pyaudio.PyAudio()
             self.stream = self.pyaudio.open(
-                format=pyaudio.paFloat32,
+                format=pyaudio.paInt16,
                 channels=1,
                 rate=self.sample_rate,
                 output=True,
@@ -90,7 +90,7 @@ class AudioPlayer:
     def add_samples(self, samples):
         """Add samples to playback queue (non-blocking)."""
         self.all_samples.extend(samples)
-        pcm_data = np.array(samples, dtype=np.float32).tobytes()
+        pcm_data = np.array(samples, dtype=np.int16).tobytes()
         self.queue.put(pcm_data)
 
     def stop(self, output_file="output.wav"):
@@ -271,7 +271,7 @@ def process_stream(stream, audio_player=None):
                 ttft = time.time() - t0
             chunk_data = delta.audio_chunk["data"]
             pcm_bytes = base64.b64decode(chunk_data)
-            samples = struct.unpack(f"<{len(pcm_bytes) // 4}f", pcm_bytes)
+            samples = np.frombuffer(pcm_bytes, dtype=np.int16)
             audio_chunks.append((time.time(), samples))
             total_samples += len(samples)
 

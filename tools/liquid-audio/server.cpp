@@ -246,7 +246,7 @@ int main(int argc, char ** argv) {
                 }
             };
 
-            auto text_cb = [state, check_abort, &runner](const std::string & text) {
+            auto text_cb = [state, check_abort](const std::string & text) {
                 check_abort();
                 if (state->aborted.load()) {
                     return;
@@ -261,7 +261,7 @@ int main(int argc, char ** argv) {
                 state->push("data: " + chunk.dump() + "\n\n");
             };
 
-            auto audio_cb = [state, check_abort, &runner](const std::vector<float> & audio) {
+            auto audio_cb = [state, check_abort, &runner](const std::vector<int16_t> & audio) {
                 check_abort();
                 if (state->aborted.load()) {
                     return;

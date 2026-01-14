@@ -669,7 +669,7 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
 
     static constexpr auto interleaved_n_text  = 6;
     static constexpr auto interleaved_n_audio = 12;
-    int                   modality_left       = interleaved_n_text;
+    int                   modality_left       = INT_MAX;
 
     audio_decoder_lfm25(const std::string & vocoder_path,
                         const std::string & tokenizer_path,
@@ -708,6 +708,12 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
     void reset() override {
         llama_memory_clear(llama_get_memory(audio_tokenizer_lctx), false);
         istft_state->reset();
+
+        if (is_interleaved_mode()) {
+            modality_left = interleaved_n_text;
+        } else {
+            modality_left = INT_MAX;
+        }
     }
 
     mtmd_audio_decoder_type get_type() override { return mtmd_audio_decoder_type::LFM25; }

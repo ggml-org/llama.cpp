@@ -3,6 +3,7 @@ import base64
 import struct
 import time
 
+import numpy as np
 import soundfile as sf
 from openai import OpenAI
 
@@ -42,7 +43,7 @@ def tts(client, text):
     return client.chat.completions.create(
         model="",
         messages=[
-            {"role": "system", "content": "Perform TTS."},
+            {"role": "system", "content": "Perform TTS. Use the US male voice."},
             {"role": "user", "content": text},
         ],
         stream=True,
@@ -94,7 +95,7 @@ def collect_output(stream):
         if hasattr(delta, "audio_chunk") and delta.audio_chunk:
             chunk_data = delta.audio_chunk["data"]
             pcm_bytes = base64.b64decode(chunk_data)
-            samples = struct.unpack(f"<{len(pcm_bytes) // 4}f", pcm_bytes)
+            samples = np.frombuffer(pcm_bytes, dtype=np.int16)
             received_audio.append((time.time(), samples))
 
     if not completed:
@@ -107,7 +108,7 @@ def collect_output(stream):
     print(
         f"TTFT :                        {min(x[0][0] for x in [received_text, received_audio] if x) - t0:>5.3f}         s"
     )
-    if text:
+    if text and len(received_text) > 1:
         print(
             f"Text : {len(received_text):>8}  tokens at {len(received_text) / (received_text[-1][0] - received_text[0][0]):>8.0f}  tokens/s"
         )
