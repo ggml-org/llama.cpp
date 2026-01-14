@@ -36,10 +36,7 @@ ggml_cgraph * clip_graph_paddleocr::build() {
                     NORM_TYPE_NORMAL, proj_norm_eps, -1);
 
         const int scale_factor = model.hparams.n_merge;
-        int width  = img.nx / patch_size;
-        int height = img.ny / patch_size;
-        cur = ggml_reshape_3d(ctx0, cur, n_embd * scale_factor * scale_factor, width / scale_factor * height / scale_factor, 1);
-
+        cur = build_patch_merge_permute(cur, scale_factor);
         cur = build_ffn(cur,
                     model.mm_1_w, model.mm_1_b,
                     nullptr, nullptr,
