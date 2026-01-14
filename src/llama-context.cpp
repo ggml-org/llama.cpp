@@ -1057,6 +1057,8 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
 
     sampling.samplers.erase(seq_id);
 
+    sched_need_reserve = true;
+
     return true;
 }
 
