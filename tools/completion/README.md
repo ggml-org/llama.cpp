@@ -445,6 +445,8 @@ Adaptive-P: Select tokens near a configurable target probability over time.
 
 The adaptive-p sampler transforms the token probability distribution to favor tokens that fall near a user-configurable probability target. Internally, the sampler maintains an exponential moving average of the *ORIGINAL* probabilities of selected tokens at each sampling step. It uses this EMA to compute an adapted target probability at each sampling step, thus maintaining the desired target probability over time. Only mild truncation before this sampler is recommended. It is suggested to apply min-p before adaptive-p as the only other active sampler.
 
+Recommended starting values: `--adaptive-target 0.55 --adaptive-decay 0.9`
+
 For more info, refer to: [llama.cpp#17927](https://github.com/ggml-org/llama.cpp/pull/17927)
 
 ### Locally Typical Sampling
