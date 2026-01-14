@@ -10,6 +10,9 @@ branch=.
 adbserial=
 [ "$S" != "" ] && adbserial="-s $S"
 
+adbhost=
+[ "$H" != "" ] && adbhost="-H $H"
+
 model="Llama-3.2-3B-Instruct-Q4_0.gguf"
 [ "$M" != "" ] && model="$M"
 
@@ -39,7 +42,7 @@ hb=
 
 set -x
 
-adb $adbserial shell " \
+adb $adbserial $adbhost shell " \
   cd $basedir;         \
   LD_LIBRARY_PATH=$basedir/$branch/lib   \
   ADSP_LIBRARY_PATH=$basedir/$branch/lib \

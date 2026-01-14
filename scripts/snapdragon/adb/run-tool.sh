@@ -12,6 +12,9 @@ branch=.
 adbserial=
 [ "$S" != "" ] && adbserial="-s $S"
 
+adbhost=
+[ "$H" != "" ] && adbhost="-H $H"
+
 device="HTP0"
 [ "$D" != "" ] && device="$D"
 
@@ -43,7 +46,7 @@ set -x
 
 tool=$1; shift
 
-adb $adbserial shell " \
+adb $adbserial $adbhost shell " \
   cd $basedir; ulimit -c unlimited;        \
     LD_LIBRARY_PATH=$basedir/$branch/lib   \
     ADSP_LIBRARY_PATH=$basedir/$branch/lib \
