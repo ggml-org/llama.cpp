@@ -68,7 +68,7 @@ extern "C" {
     GGML_API void                           ggml_backend_buffer_reset         (ggml_backend_buffer_t buffer);
 
     // tensor copy between different backends
-    GGML_API void ggml_backend_tensor_copy(struct ggml_tensor * src, struct ggml_tensor * dst);
+    GGML_API void ggml_backend_tensor_copy(const struct ggml_tensor * src, struct ggml_tensor * dst);
 
     //
     // Backend (stream)
@@ -109,7 +109,18 @@ extern "C" {
     // the copy is performed after all the currently queued operations in backend_src
     // backend_dst will wait for the copy to complete before performing other operations
     // automatic fallback to sync copy if async is not supported
-    GGML_API void ggml_backend_tensor_copy_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, struct ggml_tensor * src, struct ggml_tensor * dst);
+    GGML_API void ggml_backend_tensor_copy_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const struct ggml_tensor * src, struct ggml_tensor * dst);
+
+    // asynchronous tensor shuffle
+    //   - src1, dst1 belong to backend_1
+    //   - src2, dst2 belong to backend_2
+    //   - src1 is copied to dst2
+    //   - src2 is copied to dst1
+    //   - both backends wait until both copies have completed
+    GGML_API void ggml_backend_tensor_shfl_async(
+        ggml_backend_t backend_1, ggml_backend_t backend_2,
+        const struct ggml_tensor * src1, const struct ggml_tensor * src2,
+        struct ggml_tensor * dst1, struct ggml_tensor * dst2);
 
     GGML_API ggml_backend_dev_t ggml_backend_get_device(ggml_backend_t backend);
 
@@ -135,7 +146,9 @@ extern "C" {
         // integrated GPU device using host memory
         GGML_BACKEND_DEVICE_TYPE_IGPU,
         // accelerator devices intended to be used together with the CPU backend (e.g. BLAS or AMX)
-        GGML_BACKEND_DEVICE_TYPE_ACCEL
+        GGML_BACKEND_DEVICE_TYPE_ACCEL,
+        // "meta" device wrapping multiple other devices for tensor parallelism
+        GGML_BACKEND_DEVICE_TYPE_META,
     };
 
     // functionality supported by the device
@@ -210,6 +223,52 @@ extern "C" {
         const char * value;
     };
     typedef struct ggml_backend_feature * (*ggml_backend_get_features_t)(ggml_backend_reg_t reg);
+
+    //
+    // Meta backend
+    //
+
+    enum ggml_backend_meta_split_state {
+        // tensor split by tensor dimensions:
+        GGML_BACKEND_SPLIT_STATE_BY_NE0   =  0,
+        GGML_BACKEND_SPLIT_STATE_BY_NE1   =  1,
+        GGML_BACKEND_SPLIT_STATE_BY_NE2   =  2,
+        GGML_BACKEND_SPLIT_STATE_BY_NE3   =  3,
+
+        GGML_BACKEND_SPLIT_STATE_MIRRORED = 10, // all values on all backends
+        GGML_BACKEND_SPLIT_STATE_PARTIAL  = 11, // each backend has a partial sum
+
+        // for internal bookkeeping only:
+        GGML_BACKEND_SPLIT_STATE_NONE     = 98,
+        GGML_BACKEND_SPLIT_STATE_UNKNOWN  = 99,
+    };
+
+    // function to assign split states for statically allocated tensors, compute tensor split states will be assigned to be compatible:
+    typedef enum ggml_backend_meta_split_state (*ggml_backend_meta_get_split_state_t)(const struct ggml_tensor * tensor, void * userdata);
+
+
+    GGML_API bool ggml_backend_dev_is_meta(ggml_backend_dev_t dev);
+    GGML_API size_t ggml_backend_meta_dev_n_devs(ggml_backend_dev_t meta_dev);
+    GGML_API ggml_backend_dev_t ggml_backend_meta_dev_simple_dev(ggml_backend_dev_t meta_dev, size_t index);
+
+    // create a new meta device from "simple" devices, meta buffer type/buffer/backend is then derived from this:
+    GGML_API ggml_backend_dev_t ggml_backend_meta_device(
+        ggml_backend_dev_t * devs, size_t n_devs, ggml_backend_meta_get_split_state_t get_split_state, void * get_split_state_ud);
+
+    GGML_API bool ggml_backend_buft_is_meta(ggml_backend_buffer_type_t buft);
+    GGML_API size_t ggml_backend_meta_buft_n_bufts(ggml_backend_buffer_type_t meta_buft);
+    GGML_API ggml_backend_buffer_type_t ggml_backend_meta_buft_simple_buft(ggml_backend_buffer_type_t meta_buft, size_t index);
+
+    GGML_API bool ggml_backend_buffer_is_meta(ggml_backend_buffer_t buf);
+    GGML_API size_t ggml_backend_meta_buffer_n_bufs(ggml_backend_buffer_t meta_buf);
+    GGML_API ggml_backend_buffer_t ggml_backend_meta_buffer_simple_buffer(ggml_backend_buffer_t meta_buf, size_t index);
+    GGML_API struct ggml_tensor * ggml_backend_meta_buffer_simple_tensor(const struct ggml_tensor * tensor, size_t index);
+
+    GGML_API bool ggml_backend_is_meta(ggml_backend_t backend);
+    GGML_API size_t ggml_backend_meta_n_backends(ggml_backend_t meta_backend);
+    GGML_API ggml_backend_t ggml_backend_meta_simple_backend(ggml_backend_t meta_backend, size_t index);
+
+    GGML_API enum ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync);
 
     //
     // Backend registry

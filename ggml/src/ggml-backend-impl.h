@@ -2,7 +2,9 @@
 
 // ggml-backend internal header
 
+#include "ggml-alloc.h"
 #include "ggml-backend.h"
+#include "ggml.h"
 
 #ifdef  __cplusplus
 extern "C" {
@@ -90,9 +92,16 @@ extern "C" {
         void (*free)(ggml_backend_t backend);
 
         // (optional) asynchronous tensor data access
-        void (*set_tensor_async)(ggml_backend_t backend,       struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
-        void (*get_tensor_async)(ggml_backend_t backend, const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size);
+        void (*set_tensor_async)   (ggml_backend_t backend,       struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
+        void (*get_tensor_async)   (ggml_backend_t backend, const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size);
+        void (*set_tensor_2d_async)(ggml_backend_t backend,       struct ggml_tensor * tensor, const void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
+        void (*get_tensor_2d_async)(ggml_backend_t backend, const struct ggml_tensor * tensor,       void * data, size_t offset, size_t size, size_t n_copies, size_t stride_tensor, size_t stride_data);
         bool (*cpy_tensor_async)(ggml_backend_t backend_src, ggml_backend_t backend_dst, const struct ggml_tensor * src, struct ggml_tensor * dst);
+        bool (*shfl_tensor_async)(ggml_backend_t backend_1, ggml_backend_t backend_2,
+            const struct ggml_tensor * src1, const struct ggml_tensor * src2, struct ggml_tensor * dst1, struct ggml_tensor * dst2);
+
+        // (optional) backend-specific AllReduce operation for meta backend
+        bool (*allreduce_tensor_async)(ggml_backend_t * backends, struct ggml_tensor ** tensors, size_t n_backends);
 
         // (optional) complete all pending operations (required if the backend supports async operations)
         void (*synchronize)(ggml_backend_t backend);
@@ -249,6 +258,9 @@ extern "C" {
 #    define GGML_BACKEND_DL_IMPL(reg_fn)
 #    define GGML_BACKEND_DL_SCORE_IMPL(score_fn)
 #endif
+
+    // temporary workaround to statically allocate tensors from a context in a deduplicated way:
+    GGML_API struct ggml_backend_buffer * ggml_backend_meta_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
 
 #ifdef  __cplusplus
 }
