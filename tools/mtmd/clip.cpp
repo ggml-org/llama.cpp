@@ -158,8 +158,8 @@ struct clip_ctx {
     clip_flash_attn_type flash_attn_type = CLIP_FLASH_ATTN_TYPE_AUTO;
     bool is_allocated = false;
 
-    bool    clip_reduced_vram   = false;
-    int64_t image_encode_timing = 0;
+    bool     clip_reduced_vram   = false;
+    int64_t  image_encode_timing = 0;
 
     // for debugging
     bool debug_graph = false;
@@ -205,11 +205,11 @@ struct clip_ctx {
         backend_ptrs.push_back(backend_cpu);
         backend_buft.push_back(ggml_backend_get_default_buffer_type(backend_cpu));
 
-        sched.reset(
-            ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), 8192, false, true)
-        );
-
         clip_reduced_vram = ctx_params.clip_reduced_vram;
+
+        sched.reset(
+            ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, true)
+        );
     }
 
     ~clip_ctx() {
@@ -648,82 +648,6 @@ ggml_tensor * clip_graph::build_attn(
         cur = ggml_add(ctx0, cur, wo_b);
     }
 
-    return cur;
-}
-
-// Tiled flash attention: lowers VRAM usage by processing Q in smaller chunks
-ggml_tensor * clip_graph::build_flash_attn_tiled(ggml_tensor * wo, 
-    ggml_tensor * wo_b, 
-    ggml_tensor * q_cur, 
-    ggml_tensor * k_cur, 
-    ggml_tensor * v_cur, 
-    ggml_tensor * kq_mask_raw, 
-    float kq_scale, 
-    size_t q_tile_size, 
-    int il) const
-{
-    const int64_t d_head = q_cur->ne[0];
-    const int64_t n_head = q_cur->ne[1];
-    const int64_t num_positions = q_cur->ne[2];
-    const int64_t batch_size = 1;
-
-    ggml_tensor * k_fa = ggml_permute(ctx0, k_cur, 0, 2, 1, 3);
-    ggml_tensor * v_fa = ggml_permute(ctx0, v_cur, 0, 2, 1, 3);
-    if (k_fa->type == GGML_TYPE_F32) {
-        k_fa = ggml_cast(ctx0, k_fa, GGML_TYPE_F16);
-    }
-    if (v_fa->type == GGML_TYPE_F32) {
-        v_fa = ggml_cast(ctx0, v_fa, GGML_TYPE_F16);
-    }
-
-    std::vector<ggml_tensor *> tile_results;  
-    for (int64_t q0 = 0; q0 < num_positions; q0 += (int64_t)q_tile_size) {
-        const int64_t qlen = std::min<int64_t>((int64_t)q_tile_size, num_positions - q0);
-
-        // Create Q tile view matching original layout, then permute for FA
-        // q_cur shape: [d_head, n_head, n_positions] -> view as [d_head, n_head, qlen, 1]
-        const size_t q_off = (size_t)q0 * q_cur->nb[2];
-        ggml_tensor * q_tile = ggml_view_4d(ctx0, q_cur,
-            d_head, n_head, qlen, batch_size,
-            q_cur->nb[1], q_cur->nb[2], 0,
-            q_cur->view_offs + q_off);
-        // Permute to FA layout: [d_head, n_head, qlen, B] -> [d_head, qlen, n_head, B]
-        q_tile = ggml_permute(ctx0, q_tile, 0, 2, 1, 3);
-
-        ggml_tensor * mask_tile = nullptr;
-        if (kq_mask_raw != nullptr) {
-            const size_t m_off = (size_t)q0 * kq_mask_raw->nb[1];
-            mask_tile = ggml_view_2d(ctx0, kq_mask_raw,
-                kq_mask_raw->ne[0], qlen,
-                kq_mask_raw->nb[1],
-                kq_mask_raw->view_offs + m_off);
-            mask_tile = ggml_cast(ctx0, mask_tile, GGML_TYPE_F16);
-        }
-
-        ggml_tensor * tile_out = ggml_flash_attn_ext(ctx0, q_tile, k_fa, v_fa, mask_tile, kq_scale, 0.0f, 0.0f);
-        ggml_flash_attn_ext_set_prec(tile_out, GGML_PREC_F32);
-
-        // Reshape to 2D for concatenation: [d_head * n_head, qlen]
-        tile_out = ggml_reshape_2d(ctx0, tile_out, tile_out->ne[0] * tile_out->ne[1], tile_out->ne[2]);
-        tile_results.push_back(tile_out);
-    }
-
-    // Concatenate all tiles along sequence dimension
-    ggml_tensor * cur = tile_results[0];
-    for (size_t i = 1; i < tile_results.size(); i++) {
-        cur = ggml_concat(ctx0, cur, tile_results[i], 1);
-    }
-    cur = ggml_cont(ctx0, cur);
-
-    cb(cur, "kqv_out_tiled", il);
-
-    // Apply output projection
-    if (wo) {
-        cur = ggml_mul_mat(ctx0, wo, cur);
-    }
-    if (wo_b) {
-        cur = ggml_add(ctx0, cur, wo_b);
-    }
     return cur;
 }
 

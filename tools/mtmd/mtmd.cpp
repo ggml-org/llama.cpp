@@ -112,7 +112,7 @@ mtmd_context_params mtmd_context_params_default() {
         /* warmup            */ true,
         /* image_min_tokens  */ -1,
         /* image_max_tokens  */ -1,
-        /* clip_reduced_vram  */ false,
+        /* clip_reduced_vram */ false,
     };
     return params;
 }

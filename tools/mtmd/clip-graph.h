@@ -99,18 +99,6 @@ struct clip_graph {
             float kq_scale,
             int il) const;
 
-    // Tiled flash attention: lowers VRAM usage by processing Q in smaller chunks
-    ggml_tensor * build_flash_attn_tiled(
-            ggml_tensor * wo,
-            ggml_tensor * wo_b,
-            ggml_tensor * q_cur,
-            ggml_tensor * k_cur,
-            ggml_tensor * v_cur,
-            ggml_tensor * kq_mask_raw,
-            float kq_scale,
-            size_t q_tile_size,
-            int il) const;
-
     // implementation of the 2D RoPE without adding a new op in ggml
     // this is not efficient (use double the memory), but works on all backends
     // TODO: there was a more efficient which relies on ggml_view and ggml_rope_ext_inplace, but the rope inplace does not work well with non-contiguous tensors ; we should fix that and revert back to the original implementation in https://github.com/ggml-org/llama.cpp/pull/13065
