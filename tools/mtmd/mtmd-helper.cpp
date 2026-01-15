@@ -350,16 +350,38 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         const char * name = chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE ? "image" : "audio";
         int64_t t0 = ggml_time_ms();
 
-        LOG_INF("encoding %s slice...\n", name);
-
-        ret = mtmd_encode_chunk(ctx, chunk);
-        if (ret != 0) {
-            LOG_ERR("failed to encode %s slice\n", name);
-            llama_batch_free(text_batch);
-            return ret;
+        bool used_cache = false;
+        if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+            const char * id = mtmd_input_chunk_get_id(chunk);
+            const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
+            if (id && *id) {
+                used_cache = mtmd_embd_cache_try_fill_output(ctx, id, n_tokens);
+                if (used_cache) {
+                    LOG_INF("%s\n", "MTMD_EMBD_CACHE_HIT");
+                }
+            }
         }
 
-        LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
+        if (!used_cache) {
+            LOG_INF("encoding %s slice...\n", name);
+
+            ret = mtmd_encode_chunk(ctx, chunk);
+            if (ret != 0) {
+                LOG_ERR("failed to encode %s slice\n", name);
+                llama_batch_free(text_batch);
+                return ret;
+            }
+
+            LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
+
+            if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+                const char * id = mtmd_input_chunk_get_id(chunk);
+                const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
+                if (id && *id) {
+                    mtmd_embd_cache_store_output(ctx, id, n_tokens);
+                }
+            }
+        }
 
         float * embd = mtmd_get_output_embd(ctx);
         ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past);

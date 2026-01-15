@@ -19,7 +19,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <list>
+#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 // represents raw image data, layout is RGBRGBRGB...
@@ -78,6 +83,24 @@ struct mtmd_input_chunks {
     std::vector<mtmd_input_chunk> entries;
 };
 
+// Persistent image embedding cache (LRU), keyed by image id.
+struct mtmd_embd_cache_entry {
+    std::string id;
+    uint32_t n_tokens;
+    uint32_t n_embd;
+    std::vector<float> embd; // size = n_tokens * n_embd
+};
+
+struct mtmd_embd_cache {
+    std::string filepath;
+    size_t max_entries = 0;
+    uint32_t n_embd = 0;
+
+    std::list<mtmd_embd_cache_entry> lru; // front = least recently used
+    std::unordered_map<std::string, std::list<mtmd_embd_cache_entry>::iterator> index;
+    std::mutex mtx;
+};
+
 // slice template, used by some llava-uhd models to correctly place the special tokens around image embeddings
 // models not having it (llava-1.6) will process embeddings without any special tokens in-between
 enum mtmd_slice_tmpl {
@@ -123,6 +146,7 @@ struct mtmd_context {
     struct clip_ctx * ctx_a; // audio
     const struct llama_model * text_model;
     std::vector<float> image_embd_v; // image embedding vector
+    std::unique_ptr<mtmd_embd_cache> embd_cache;
 
     bool print_timings;
     int n_threads;
@@ -861,6 +885,300 @@ int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) 
 
 float * mtmd_get_output_embd(mtmd_context * ctx) {
     return ctx->image_embd_v.data();
+}
+
+//------------------------------------------------------------------------------
+// mtmd image embedding cache (LRU, persistent)
+//------------------------------------------------------------------------------
+
+static constexpr uint32_t MTMD_EMBD_CACHE_MAGIC   = 0x4345544d; // 'MTEC'
+static constexpr uint32_t MTMD_EMBD_CACHE_VERSION = 1;
+
+static bool mtmd_read_u32_le(std::istream & is, uint32_t & out) {
+    uint8_t b[4];
+    if (!is.read((char *) b, 4)) {
+        return false;
+    }
+    out = (uint32_t) b[0] |
+          ((uint32_t) b[1] << 8) |
+          ((uint32_t) b[2] << 16) |
+          ((uint32_t) b[3] << 24);
+    return true;
+}
+
+static void mtmd_write_u32_le(std::ostream & os, uint32_t v) {
+    uint8_t b[4] = {
+        (uint8_t) (v & 0xff),
+        (uint8_t) ((v >> 8) & 0xff),
+        (uint8_t) ((v >> 16) & 0xff),
+        (uint8_t) ((v >> 24) & 0xff),
+    };
+    os.write((const char *) b, 4);
+}
+
+static bool mtmd_write_cache_file_locked(const mtmd_embd_cache & cache) {
+    if (cache.filepath.empty() || cache.max_entries == 0) {
+        return true;
+    }
+
+    const std::string tmp_path = cache.filepath + ".tmp";
+
+    try {
+        std::ofstream os(tmp_path, std::ios::binary | std::ios::trunc);
+        if (!os.is_open()) {
+            return false;
+        }
+
+        mtmd_write_u32_le(os, MTMD_EMBD_CACHE_MAGIC);
+        mtmd_write_u32_le(os, MTMD_EMBD_CACHE_VERSION);
+        mtmd_write_u32_le(os, (uint32_t) cache.max_entries);
+        mtmd_write_u32_le(os, (uint32_t) cache.lru.size());
+        mtmd_write_u32_le(os, (uint32_t) cache.n_embd);
+
+        for (const auto & e : cache.lru) {
+            const uint32_t id_len = (uint32_t) std::min<size_t>(e.id.size(), std::numeric_limits<uint32_t>::max());
+            mtmd_write_u32_le(os, id_len);
+            os.write(e.id.data(), id_len);
+
+            mtmd_write_u32_le(os, e.n_tokens);
+
+            const uint32_t embd_count = (uint32_t) std::min<size_t>(e.embd.size(), std::numeric_limits<uint32_t>::max());
+            mtmd_write_u32_le(os, embd_count);
+
+            if (!e.embd.empty()) {
+                os.write((const char *) e.embd.data(), sizeof(float) * e.embd.size());
+            }
+        }
+
+        os.close();
+
+        std::error_code ec;
+        std::filesystem::rename(tmp_path, cache.filepath, ec);
+        if (ec) {
+            // best-effort replace
+            std::filesystem::remove(cache.filepath, ec);
+            ec.clear();
+            std::filesystem::rename(tmp_path, cache.filepath, ec);
+        }
+
+        return !ec;
+    } catch (...) {
+        return false;
+    }
+}
+
+static bool mtmd_load_cache_file_locked(mtmd_embd_cache & cache) {
+    if (cache.filepath.empty() || cache.max_entries == 0) {
+        return true;
+    }
+
+    // Create file if missing
+    if (!std::filesystem::exists(cache.filepath)) {
+        cache.lru.clear();
+        cache.index.clear();
+        return mtmd_write_cache_file_locked(cache);
+    }
+
+    try {
+        std::ifstream is(cache.filepath, std::ios::binary);
+        if (!is.is_open()) {
+            return false;
+        }
+
+        uint32_t magic = 0, version = 0, max_entries_file = 0, n_entries = 0, n_embd_file = 0;
+        if (!mtmd_read_u32_le(is, magic) ||
+            !mtmd_read_u32_le(is, version) ||
+            !mtmd_read_u32_le(is, max_entries_file) ||
+            !mtmd_read_u32_le(is, n_entries) ||
+            !mtmd_read_u32_le(is, n_embd_file)) {
+            return false;
+        }
+
+        if (magic != MTMD_EMBD_CACHE_MAGIC || version != MTMD_EMBD_CACHE_VERSION) {
+            return false;
+        }
+
+        if (n_embd_file != cache.n_embd) {
+            // Different model; ignore persisted cache
+            cache.lru.clear();
+            cache.index.clear();
+            return mtmd_write_cache_file_locked(cache);
+        }
+
+        cache.lru.clear();
+        cache.index.clear();
+
+        const uint32_t n_to_load = std::min<uint32_t>(n_entries, (uint32_t) cache.max_entries);
+        for (uint32_t i = 0; i < n_to_load; ++i) {
+            uint32_t id_len = 0;
+            if (!mtmd_read_u32_le(is, id_len)) {
+                return false;
+            }
+            std::string id;
+            id.resize(id_len);
+            if (id_len > 0 && !is.read(id.data(), id_len)) {
+                return false;
+            }
+
+            uint32_t n_tokens = 0;
+            uint32_t embd_count = 0;
+            if (!mtmd_read_u32_le(is, n_tokens) || !mtmd_read_u32_le(is, embd_count)) {
+                return false;
+            }
+
+            const uint64_t expected = (uint64_t) n_tokens * (uint64_t) cache.n_embd;
+            if ((uint64_t) embd_count != expected) {
+                return false;
+            }
+
+            std::vector<float> embd;
+            embd.resize(embd_count);
+            if (embd_count > 0 && !is.read((char *) embd.data(), sizeof(float) * embd_count)) {
+                return false;
+            }
+
+            mtmd_embd_cache_entry entry;
+            entry.id = std::move(id);
+            entry.n_tokens = n_tokens;
+            entry.n_embd = cache.n_embd;
+            entry.embd = std::move(embd);
+
+            cache.lru.push_back(std::move(entry));
+            auto it = std::prev(cache.lru.end());
+            cache.index[it->id] = it;
+        }
+
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+int32_t mtmd_embd_cache_init(mtmd_context * ctx, const char * filepath, size_t max_entries) {
+    if (ctx == nullptr) {
+        return 1;
+    }
+
+    // Disable
+    if (filepath == nullptr || *filepath == '\0' || max_entries == 0) {
+        ctx->embd_cache.reset();
+        return 0;
+    }
+
+    if (max_entries > (size_t) std::numeric_limits<uint32_t>::max()) {
+        return 1;
+    }
+
+    ctx->embd_cache = std::make_unique<mtmd_embd_cache>();
+    ctx->embd_cache->filepath = filepath;
+    ctx->embd_cache->max_entries = max_entries;
+    ctx->embd_cache->n_embd = (uint32_t) ctx->n_embd_text;
+
+    std::lock_guard<std::mutex> lock(ctx->embd_cache->mtx);
+    const bool ok = mtmd_load_cache_file_locked(*ctx->embd_cache);
+    if (!ok) {
+        // if load fails, start empty and try to recreate file
+        ctx->embd_cache->lru.clear();
+        ctx->embd_cache->index.clear();
+        return mtmd_write_cache_file_locked(*ctx->embd_cache) ? 0 : 1;
+    }
+
+    return 0;
+}
+
+void mtmd_embd_cache_free(mtmd_context * ctx) {
+    if (ctx == nullptr) {
+        return;
+    }
+    ctx->embd_cache.reset();
+}
+
+bool mtmd_embd_cache_try_fill_output(mtmd_context * ctx, const char * id, size_t n_tokens) {
+    if (ctx == nullptr || id == nullptr || *id == '\0') {
+        return false;
+    }
+    if (ctx->embd_cache == nullptr || ctx->embd_cache->filepath.empty() || ctx->embd_cache->max_entries == 0) {
+        return false;
+    }
+    if (n_tokens == 0 || n_tokens > (size_t) std::numeric_limits<uint32_t>::max()) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(ctx->embd_cache->mtx);
+    auto it = ctx->embd_cache->index.find(id);
+    if (it == ctx->embd_cache->index.end()) {
+        return false;
+    }
+
+    auto lit = it->second;
+    if (lit->n_tokens != (uint32_t) n_tokens || lit->n_embd != ctx->embd_cache->n_embd) {
+        // incompatible entry; drop it
+        ctx->embd_cache->lru.erase(lit);
+        ctx->embd_cache->index.erase(it);
+        (void) mtmd_write_cache_file_locked(*ctx->embd_cache);
+        return false;
+    }
+
+    // move to MRU
+    ctx->embd_cache->lru.splice(ctx->embd_cache->lru.end(), ctx->embd_cache->lru, lit);
+
+    // fill output buffer
+    ctx->image_embd_v = lit->embd;
+
+    // persist updated LRU
+    (void) mtmd_write_cache_file_locked(*ctx->embd_cache);
+
+    return true;
+}
+
+void mtmd_embd_cache_store_output(mtmd_context * ctx, const char * id, size_t n_tokens) {
+    if (ctx == nullptr || id == nullptr || *id == '\0') {
+        return;
+    }
+    if (ctx->embd_cache == nullptr || ctx->embd_cache->filepath.empty() || ctx->embd_cache->max_entries == 0) {
+        return;
+    }
+    if (n_tokens == 0 || n_tokens > (size_t) std::numeric_limits<uint32_t>::max()) {
+        return;
+    }
+
+    const uint32_t n_embd = ctx->embd_cache->n_embd;
+    const uint64_t expected = (uint64_t) n_tokens * (uint64_t) n_embd;
+    if ((uint64_t) ctx->image_embd_v.size() != expected) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(ctx->embd_cache->mtx);
+
+    auto it = ctx->embd_cache->index.find(id);
+    if (it != ctx->embd_cache->index.end()) {
+        auto lit = it->second;
+        lit->n_tokens = (uint32_t) n_tokens;
+        lit->n_embd = n_embd;
+        lit->embd = ctx->image_embd_v;
+        ctx->embd_cache->lru.splice(ctx->embd_cache->lru.end(), ctx->embd_cache->lru, lit);
+        (void) mtmd_write_cache_file_locked(*ctx->embd_cache);
+        return;
+    }
+
+    // evict if full
+    while (ctx->embd_cache->lru.size() >= ctx->embd_cache->max_entries) {
+        auto & oldest = ctx->embd_cache->lru.front();
+        ctx->embd_cache->index.erase(oldest.id);
+        ctx->embd_cache->lru.pop_front();
+    }
+
+    mtmd_embd_cache_entry entry;
+    entry.id = id;
+    entry.n_tokens = (uint32_t) n_tokens;
+    entry.n_embd = n_embd;
+    entry.embd = ctx->image_embd_v;
+
+    ctx->embd_cache->lru.push_back(std::move(entry));
+    auto lit = std::prev(ctx->embd_cache->lru.end());
+    ctx->embd_cache->index[lit->id] = lit;
+
+    (void) mtmd_write_cache_file_locked(*ctx->embd_cache);
 }
 
 bool mtmd_decode_use_non_causal(mtmd_context * ctx) {

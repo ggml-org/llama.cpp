@@ -222,6 +222,25 @@ MTMD_API int32_t mtmd_encode(mtmd_context * ctx,
 MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
                                    const mtmd_input_chunk * chunk);
 
+// Persistent image-embedding cache (LRU).
+// Intended to skip re-running the vision tower for repeated images with the same id (hash).
+//
+// If filepath is nullptr/empty or max_entries == 0, caching is disabled.
+// Returns 0 on success (including disabled), non-zero on failure.
+MTMD_API int32_t mtmd_embd_cache_init(mtmd_context * ctx, const char * filepath, size_t max_entries);
+
+// No-op if cache is disabled. Safe to call multiple times.
+MTMD_API void mtmd_embd_cache_free(mtmd_context * ctx);
+
+// Internal helpers used by mtmd-helper to skip mtmd_encode_chunk on image cache hit.
+// - On hit, fills the mtmd output embedding buffer (mtmd_get_output_embd) and updates LRU order (and persists).
+// - On miss, returns false and does not modify outputs.
+MTMD_API bool mtmd_embd_cache_try_fill_output(mtmd_context * ctx, const char * id, size_t n_tokens);
+
+// Store the current mtmd output embedding buffer in the cache under `id` and update LRU order (and persist).
+// No-op if cache is disabled.
+MTMD_API void mtmd_embd_cache_store_output(mtmd_context * ctx, const char * id, size_t n_tokens);
+
 // Create metadata-only (stub) media chunks.
 // These chunks are intended for KV-cache bookkeeping / prompt layout reconstruction.
 // They do NOT contain image/audio data and MUST NOT be passed to mtmd_encode_chunk().

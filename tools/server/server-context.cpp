@@ -759,6 +759,20 @@ private:
             }
             SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
 
+            // Initialize persistent MTMD image embedding cache (LRU), stored next to slot-save directory.
+            // If slot-save-path is not set, keep the cache disabled.
+            if (!params_base.slot_save_path.empty()) {
+                const std::string cache_path = params_base.slot_save_path + "mtmd_embd_cache.bin";
+                const int32_t rc = mtmd_embd_cache_init(mctx, cache_path.c_str(), 128);
+                if (rc != 0) {
+                    SRV_WRN("failed to initialize MTMD embedding cache at '%s' (rc = %d)\n", cache_path.c_str(), rc);
+                } else {
+                    SRV_INF("MTMD embedding cache enabled: '%s' (max_entries = %d)\n", cache_path.c_str(), 128);
+                }
+            } else {
+                SRV_WRN("%s\n", "MTMD embedding cache disabled: --slot-save-path not set");
+            }
+
             if (params_base.ctx_shift) {
                 params_base.ctx_shift = false;
                 SRV_WRN("%s\n", "ctx_shift is not supported by multimodal, it will be disabled");
