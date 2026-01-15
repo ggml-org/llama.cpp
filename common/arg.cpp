@@ -341,7 +341,7 @@ static handle_model_result common_params_handle_model(
                 if (model.path.empty()) {
                     auto auto_detected = common_get_hf_file(model.hf_repo, bearer_token, offline);
                     if (auto_detected.repo.empty() || auto_detected.ggufFile.empty()) {
-                        exit(1); // built without CURL, error message already printed
+                        exit(1); // error message already printed
                     }
                     model.name    = model.hf_repo;      // repo name with tag
                     model.hf_repo = auto_detected.repo; // repo name without tag
