@@ -35,6 +35,13 @@ function(llama_add_compile_flags)
 endfunction()
 
 function(llama_download_model NAME HASH)
+    # Skip downloads in sandboxed builds (indicated by SOURCE_DATE_EPOCH)
+    if(DEFINED ENV{SOURCE_DATE_EPOCH})
+        message(STATUS "Skipping download of ${NAME} (sandboxed build detected via SOURCE_DATE_EPOCH)")
+        set(LLAMA_DOWNLOAD_MODEL "" PARENT_SCOPE)
+        return()
+    endif()
+
     set(DEST "${CMAKE_BINARY_DIR}/${NAME}")
     get_filename_component(DEST_DIR "${DEST}" DIRECTORY)
     file(MAKE_DIRECTORY "${DEST_DIR}")
