@@ -536,6 +536,8 @@
 		text-decoration: underline;
 		text-underline-offset: 2px;
 		transition: color 0.2s ease;
+		overflow-wrap: anywhere;
+		word-break: break-all;
 	}
 
 	div :global(a:hover) {

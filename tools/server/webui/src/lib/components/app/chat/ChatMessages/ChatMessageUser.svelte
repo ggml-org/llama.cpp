@@ -126,7 +126,7 @@
 			<Card
 				class="max-w-[80%] overflow-y-auto rounded-[1.125rem] border-none bg-primary/5 px-3.75 py-1.5 text-foreground backdrop-blur-md data-[multiline]:py-2.5 dark:bg-primary/15"
 				data-multiline={isMultiline ? '' : undefined}
-				style="max-height: calc(100dvh - var(--chat-form-area-height));"
+				style="max-height: calc(100dvh - var(--chat-form-area-height)); overflow-wrap: anywhere; word-break: break-word;"
 			>
 				{#if currentConfig.renderUserContentAsMarkdown}
 					<div bind:this={messageElement} class="text-md">
