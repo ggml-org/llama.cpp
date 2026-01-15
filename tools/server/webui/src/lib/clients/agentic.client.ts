@@ -39,11 +39,13 @@ import type {
 } from '$lib/types/chat';
 import type { MCPToolCall } from '$lib/types';
 import type { DatabaseMessage, DatabaseMessageExtra, McpServerOverride } from '$lib/types/database';
+import { AttachmentType } from '$lib/enums';
 
 export interface AgenticFlowCallbacks {
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
 	onToolCallChunk?: (serializedToolCalls: string) => void;
+	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
 	onModel?: (model: string) => void;
 	onComplete?: (
 		content: string,
@@ -131,8 +133,16 @@ export class AgenticClient {
 	 */
 	async runAgenticFlow(params: AgenticFlowParams): Promise<AgenticFlowResult> {
 		const { messages, options = {}, callbacks, signal, perChatOverrides } = params;
-		const { onChunk, onReasoningChunk, onToolCallChunk, onModel, onComplete, onError, onTimings } =
-			callbacks;
+		const {
+			onChunk,
+			onReasoningChunk,
+			onToolCallChunk,
+			onAttachments,
+			onModel,
+			onComplete,
+			onError,
+			onTimings
+		} = callbacks;
 
 		// Get agentic configuration (considering per-chat MCP overrides)
 		const agenticConfig = getAgenticConfig(config(), perChatOverrides);
@@ -188,6 +198,7 @@ export class AgenticClient {
 					onChunk,
 					onReasoningChunk,
 					onToolCallChunk,
+					onAttachments,
 					onModel,
 					onComplete,
 					onError,
@@ -222,8 +233,15 @@ export class AgenticClient {
 		signal?: AbortSignal;
 	}): Promise<void> {
 		const { messages, options, tools, agenticConfig, callbacks, signal } = params;
-		const { onChunk, onReasoningChunk, onToolCallChunk, onModel, onComplete, onTimings } =
-			callbacks;
+		const {
+			onChunk,
+			onReasoningChunk,
+			onToolCallChunk,
+			onAttachments,
+			onModel,
+			onComplete,
+			onTimings
+		} = callbacks;
 
 		const sessionMessages: AgenticMessage[] = toAgenticMessages(messages);
 		const allToolCalls: ApiChatCompletionToolCall[] = [];
@@ -509,10 +527,15 @@ export class AgenticClient {
 					return;
 				}
 
-				this.emitToolCallResult(result, maxToolPreviewLines, onChunk);
+				const { cleanedResult, attachments } = this.extractBase64Attachments(result);
+				if (attachments.length > 0) {
+					onAttachments?.(attachments);
+				}
 
-				// Add tool result to session (sanitize base64 images for context)
-				const contextValue = this.isBase64Image(result) ? '[Image displayed to user]' : result;
+				this.emitToolCallResult(cleanedResult, maxToolPreviewLines, onChunk);
+
+				// Add tool result to session (sanitize base64 payloads for context)
+				const contextValue = attachments.length > 0 ? cleanedResult : result;
 				sessionMessages.push({
 					role: 'tool',
 					tool_call_id: toolCall.id,
@@ -596,14 +619,11 @@ export class AgenticClient {
 		if (!emit) return;
 
 		let output = '';
-		if (this.isBase64Image(result)) {
-			output += `\n![tool-result](${result.trim()})`;
-		} else {
-			// Don't wrap in code fences - result may already be markdown with its own code blocks
-			const lines = result.split('\n');
-			const trimmedLines = lines.length > maxLines ? lines.slice(-maxLines) : lines;
-			output += `\n${trimmedLines.join('\n')}`;
-		}
+		output += `\n<<<TOOL_ARGS_END>>>`;
+		// Don't wrap in code fences - result may already be markdown with its own code blocks
+		const lines = result.split('\n');
+		const trimmedLines = lines.length > maxLines ? lines.slice(-maxLines) : lines;
+		output += `\n${trimmedLines.join('\n')}`;
 
 		output += `\n<<<AGENTIC_TOOL_CALL_END>>>\n`;
 		emit(output);
@@ -617,15 +637,59 @@ export class AgenticClient {
 	 *
 	 */
 
-	private isBase64Image(content: string): boolean {
-		const trimmed = content.trim();
-		if (!trimmed.startsWith('data:image/')) return false;
+	private extractBase64Attachments(result: string): {
+		cleanedResult: string;
+		attachments: DatabaseMessageExtra[];
+	} {
+		if (!result.trim()) {
+			return { cleanedResult: result, attachments: [] };
+		}
 
-		const match = trimmed.match(/^data:image\/(png|jpe?g|gif|webp);base64,([A-Za-z0-9+/]+=*)$/);
-		if (!match) return false;
+		const lines = result.split('\n');
+		const attachments: DatabaseMessageExtra[] = [];
+		let attachmentIndex = 0;
 
-		const base64Payload = match[2];
-		return base64Payload.length > 0 && base64Payload.length % 4 === 0;
+		const cleanedLines = lines.map((line) => {
+			const trimmedLine = line.trim();
+			const match = trimmedLine.match(/^data:([^;]+);base64,([A-Za-z0-9+/]+=*)$/);
+			if (!match) return line;
+
+			const mimeType = match[1].toLowerCase();
+			const base64Data = match[2];
+			if (!base64Data) return line;
+
+			attachmentIndex += 1;
+			const name = this.buildAttachmentName(mimeType, attachmentIndex);
+
+			if (mimeType.startsWith('image/')) {
+				attachments.push({
+					type: AttachmentType.IMAGE,
+					name,
+					base64Url: trimmedLine
+				});
+				return `[Attachment saved: ${name}]`;
+			}
+			return line;
+		});
+
+		return {
+			cleanedResult: cleanedLines.join('\n').trim(),
+			attachments
+		};
+	}
+
+	private buildAttachmentName(mimeType: string, index: number): string {
+		const extensionMap: Record<string, string> = {
+			'image/jpeg': 'jpg',
+			'image/jpg': 'jpg',
+			'image/png': 'png',
+			'image/gif': 'gif',
+			'image/webp': 'webp'
+		};
+
+		const extension = extensionMap[mimeType] ?? 'img';
+		const timestamp = Date.now();
+		return `mcp-attachment-${timestamp}-${index}.${extension}`;
 	}
 
 	clearError(): void {

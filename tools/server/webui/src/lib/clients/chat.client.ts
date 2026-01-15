@@ -55,6 +55,7 @@ export interface ChatStreamCallbacks {
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
 	onToolCallChunk?: (chunk: string) => void;
+	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
 	onModel?: (model: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
 	onComplete?: (
@@ -479,6 +480,9 @@ export class ChatClient {
 		let streamedToolCallContent = '';
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
+		let streamedExtras: DatabaseMessageExtra[] = assistantMessage.extra
+			? JSON.parse(JSON.stringify(assistantMessage.extra))
+			: [];
 
 		const recordModel = (modelName: string | null | undefined, persistImmediately = true): void => {
 			if (!modelName) return;
@@ -520,6 +524,15 @@ export class ChatClient {
 				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 				conversationsStore.updateMessageAtIndex(idx, { toolCalls: streamedToolCallContent });
 			},
+			onAttachments: (extras: DatabaseMessageExtra[]) => {
+				if (!extras.length) return;
+				streamedExtras = [...streamedExtras, ...extras];
+				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+				conversationsStore.updateMessageAtIndex(idx, { extra: streamedExtras });
+				DatabaseService.updateMessage(assistantMessage.id, { extra: streamedExtras }).catch(
+					console.error
+				);
+			},
 			onModel: (modelName: string) => recordModel(modelName),
 			onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
 				const tokensPerSecond =
@@ -552,6 +565,9 @@ export class ChatClient {
 					toolCalls: toolCallContent || streamedToolCallContent,
 					timings
 				};
+				if (streamedExtras.length > 0) {
+					updateData.extra = streamedExtras;
+				}
 				if (resolvedModel && !modelPersisted) {
 					updateData.model = resolvedModel;
 				}
@@ -562,6 +578,9 @@ export class ChatClient {
 					content: updateData.content as string,
 					toolCalls: updateData.toolCalls as string
 				};
+				if (streamedExtras.length > 0) {
+					uiUpdate.extra = streamedExtras;
+				}
 				if (timings) uiUpdate.timings = timings;
 				if (resolvedModel) uiUpdate.model = resolvedModel;
 
