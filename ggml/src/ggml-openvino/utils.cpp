@@ -525,7 +525,7 @@ ov::Tensor get_ov_input_tensor_static_decode(std::shared_ptr<GgmlOvDecoder> ggml
         return input_tensor;
     }
 
-    if (param_name.find("KQ_mask") == 0) {
+    if (param_name.find("self_kq_mask") == 0) {
         size_t context_size = ggml_decoder->get_ctx_size();
         std::vector<float> padded_data = pad_input<float>(ggml_tensor, 1, context_size, -INFINITY);
         ov::Tensor input_tensor(ov::element::f32, ov::Shape{1, 1, 1, context_size});
@@ -591,7 +591,7 @@ ov::Tensor get_ov_input_tensor_static_prefill(std::shared_ptr<GgmlOvDecoder> ggm
         return input_tensor;
     }
 
-    if (param_name.find("KQ_mask") == 0) {
+    if (param_name.find("self_kq_mask") == 0) {
         size_t cols = ggml_tensor->ne[0];
         size_t rows = ggml_tensor->ne[1];
         float * ggml_data = (float *) ggml_tensor->data + chunk_index * chunk_size * cols;
@@ -645,7 +645,7 @@ void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor
               << std::endl;
     switch (tensor.get_element_type()) {
     case ov::element::f32: {
-        if (name.find("KQ_mask") == std::string::npos) {
+        if (name.find("self_kq_mask") == std::string::npos) {
             std::cout << *(tensor.data<float>()) << std::endl;
         } else {
             size_t rows = tensor.get_shape()[2];

@@ -109,8 +109,8 @@ void add_sliced_mask(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
         }
     };
 
-    create_sliced_mask("KQ_mask", "KQ_mask_sliced", ggml_model_decoder.is_static());
-    create_sliced_mask("KQ_mask_swa", "KQ_mask_swa_sliced", ggml_model_decoder.is_static());
+    create_sliced_mask("self_kq_mask", "KQ_mask_sliced", ggml_model_decoder.is_static());
+    create_sliced_mask("self_kq_mask_swa", "KQ_mask_swa_sliced", ggml_model_decoder.is_static());
 }
 
 void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {

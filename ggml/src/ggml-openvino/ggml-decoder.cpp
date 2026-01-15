@@ -324,7 +324,7 @@ std::pair<ModelParams, ComputeParams> GgmlOvDecoder::compute_llm_params(ggml_cgr
             int layer = extract_layer_from_name(cache_k->name);
             auto * mask = node->src[3];
             std::string mask_name(mask->name);
-            assert(mask_name.find("KQ_mask") == 0);
+            assert(mask_name.find("self_kq_mask") == 0);
 
             if (std::string(node->src[3]->name).find("swa") != std::string::npos) {
                 model_params.swa_layers.push_back(layer);
@@ -392,7 +392,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor * op, co
     } else if (name == "inp_out_ids") {
         input_shape = ov::PartialShape{1, 1, 1, m_is_static ? m_compute_params.output_len : -1};
 
-    } else if (name.find("KQ_mask") == 0) {
+    } else if (name.find("self_kq_mask") == 0) {
         if (m_is_static) {
             input_shape = ov::PartialShape{1, 1, m_is_prefill ? m_prefill_chunk_size : 1, m_model_params.ctx};
         } else if (m_is_stateful) {
