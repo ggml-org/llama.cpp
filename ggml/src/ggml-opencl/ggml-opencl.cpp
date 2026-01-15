@@ -29,6 +29,10 @@
 #include <charconv>
 #include <mutex>
 
+namespace ocl_kernel_prototypes {
+    #include "div.h"
+}
+
 #undef MIN
 #undef MAX
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
