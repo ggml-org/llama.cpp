@@ -313,17 +313,9 @@ struct webgpu_global_context;
 struct webgpu_context_struct {
     // Points to global instances owned by ggml_backend_webgpu_reg_context
     webgpu_global_context * global_ctx;
-    // wgpu::Instance * instance;
-    // wgpu::Adapter * adapter;
-    // wgpu::Device  * device;
-    // wgpu::Buffer * get_tensor_staging_buf;
-    // uint32_t max_subgroup_size;
     
     wgpu::Queue    queue;
     webgpu_buf_pool param_buf_pool;
-    // TODO: I got rid of this...update uses to read from global context
-    // wgpu::Limits   limits;
-
 
     bool     supports_subgroup_matrix = false;
     uint32_t sg_mat_m;
