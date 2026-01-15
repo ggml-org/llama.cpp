@@ -259,6 +259,7 @@ extern "C" {
         LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT,
         LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_TAU,
         LLAMA_MODEL_META_KEY_SAMPLING_MIROSTAT_ETA,
+        LLAMA_MODEL_META_KEY_SAMPLING_TFS_Z,
     };
 
     struct llama_model_kv_override {
@@ -1320,6 +1321,12 @@ extern "C" {
 
     /// @details Top n sigma sampling as described in academic paper "Top-nσ: Not All Logits Are You Need" https://arxiv.org/pdf/2411.07641
     LLAMA_API struct llama_sampler * llama_sampler_init_top_n_sigma(float   n);
+
+    /// @details Tail Free Sampling (TFS).
+    /// @param z <= 0.0f disables the filter (noop).
+    /// @param min_keep ensures at least that many tokens remain.
+    LLAMA_API struct llama_sampler * llama_sampler_init_tail_free(float z, size_t min_keep);
+
 
     /// @details Mirostat 1.0 algorithm described in the paper https://arxiv.org/abs/2007.14966. Uses tokens instead of words.
     /// @param candidates A vector of `llama_token_data` containing the candidate tokens, their probabilities (p), and log-odds (logit) for the current position in the generated text.

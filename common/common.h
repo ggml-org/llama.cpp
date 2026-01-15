@@ -119,6 +119,7 @@ enum common_sampler_type {
     COMMON_SAMPLER_TYPE_INFILL      = 9,
     COMMON_SAMPLER_TYPE_PENALTIES   = 10,
     COMMON_SAMPLER_TYPE_TOP_N_SIGMA = 11,
+    COMMON_SAMPLER_TYPE_TAIL_FREE   = 12,
 };
 
 // dimensionality reduction methods, used by cvector-generator
@@ -159,6 +160,7 @@ enum common_params_sampling_config : uint64_t {
     COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT        = 1 << 9,
     COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_TAU    = 1 << 10,
     COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA    = 1 << 11,
+    COMMON_PARAMS_SAMPLING_CONFIG_TAIL_FREE       = 1 << 12,
 };
 
 
@@ -171,6 +173,7 @@ struct common_params_sampling {
     int32_t min_keep           = 0;     // 0 = disabled, otherwise samplers should return at least min_keep tokens
     int32_t top_k              = 40;    // <= 0 to use vocab size
     float   top_p              = 0.95f; // 1.0 = disabled
+    float tfs_z                = 0.0f; // Tail-free sampling: 0.0 = disabled
     float   min_p              = 0.05f; // 0.0 = disabled
     float   xtc_probability    = 0.00f; // 0.0 = disabled
     float   xtc_threshold      = 0.10f; // > 0.5 disables XTC
@@ -208,6 +211,7 @@ struct common_params_sampling {
         COMMON_SAMPLER_TYPE_MIN_P,
         COMMON_SAMPLER_TYPE_XTC,
         COMMON_SAMPLER_TYPE_TEMPERATURE,
+        COMMON_SAMPLER_TYPE_TAIL_FREE,
     };
 
     std::string                         grammar; // optional BNF-like grammar to constrain sampling
