@@ -2483,6 +2483,100 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
 
     // TODO: handle sampling buffers and samplers state ?
     //       https://github.com/ggml-org/llama.cpp/pull/17004
+    // Note: sampling.samplers map is not saved. Backend samplers are expected
+    // to be re-configured by the application with the same settings when loading state.
+
+    // write backend sampled logits
+    {
+        LLAMA_LOG_DEBUG("%s: - writing backend sampled logits\n", __func__);
+
+        const uint64_t logits_size = this->sampling.logits_size;
+        io.write(&logits_size, sizeof(logits_size));
+
+        if (logits_size) {
+            io.write(sampling.logits, logits_size * sizeof(float));
+        }
+    }
+
+    // write backend sampled tokens
+    {
+        LLAMA_LOG_DEBUG("%s: - writing backend sampled tokens\n", __func__);
+
+        const uint64_t sampled_size = this->sampling.sampled_size;
+        io.write(&sampled_size, sizeof(sampled_size));
+
+        if (sampled_size) {
+            io.write(sampling.sampled, sampled_size * sizeof(llama_token));
+        }
+    }
+
+    // write backend sampled probs
+    {
+        LLAMA_LOG_DEBUG("%s: - writing backend sampled probs\n", __func__);
+
+        const uint64_t probs_size = this->sampling.probs_size;
+        io.write(&probs_size, sizeof(probs_size));
+
+        if (probs_size) {
+            io.write(sampling.probs, probs_size * sizeof(float));
+        }
+    }
+
+    // write backend sampled candidates
+    {
+        LLAMA_LOG_DEBUG("%s: - writing backend sampled candidates\n", __func__);
+
+        const uint64_t candidates_size = this->sampling.candidates_size;
+        io.write(&candidates_size, sizeof(candidates_size));
+
+        if (candidates_size) {
+            io.write(sampling.candidates, candidates_size * sizeof(llama_token));
+        }
+    }
+
+    // write backend logits count
+    {
+        LLAMA_LOG_DEBUG("%s: - writing backend logits count\n", __func__);
+
+        const uint64_t count_size = this->sampling.logits_count.size();
+        io.write(&count_size, sizeof(count_size));
+
+        if (count_size) {
+            io.write(sampling.logits_count.data(), count_size * sizeof(uint32_t));
+        }
+    }
+
+    // write backend probs count
+    {
+        LLAMA_LOG_DEBUG("%s: - writing backend probs count\n", __func__);
+
+        const uint64_t count_size = this->sampling.probs_count.size();
+        io.write(&count_size, sizeof(count_size));
+
+        if (count_size) {
+            io.write(sampling.probs_count.data(), count_size * sizeof(uint32_t));
+        }
+    }
+
+    // write backend candidates count
+    {
+        LLAMA_LOG_DEBUG("%s: - writing backend candidates count\n", __func__);
+
+        const uint64_t count_size = this->sampling.candidates_count.size();
+        io.write(&count_size, sizeof(count_size));
+
+        if (count_size) {
+            io.write(sampling.candidates_count.data(), count_size * sizeof(uint32_t));
+        }
+    }
+
+    // write backend has_sampled flag
+    {
+        LLAMA_LOG_DEBUG("%s: - writing backend has_sampled flag\n", __func__);
+
+        io.write(&this->has_sampled, sizeof(bool));
+    }
+
 
     if (memory != nullptr) {
         LLAMA_LOG_DEBUG("%s: - writing memory module\n", __func__);
@@ -2575,6 +2669,125 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
 
     // TODO: handle sampling buffers and samplers state ?
     //       https://github.com/ggml-org/llama.cpp/pull/17004
+
+    // read sampled logits
+    {
+        LLAMA_LOG_DEBUG("%s: - reading backend sampled logits\n", __func__);
+
+        uint64_t logits_size;
+        io.read_to(&logits_size, sizeof(logits_size));
+
+        if (this->sampling.logits_size < logits_size) {
+            throw std::runtime_error("logits buffer too small");
+        }
+
+        if (logits_size) {
+            io.read_to(this->sampling.logits, logits_size * sizeof(float));
+        }
+    }
+
+    // read sampled tokens
+    {
+        LLAMA_LOG_DEBUG("%s: - reading backend sampled tokens\n", __func__);
+
+        uint64_t sampled_size;
+        io.read_to(&sampled_size, sizeof(sampled_size));
+
+        if (this->sampling.sampled_size < sampled_size) {
+            throw std::runtime_error("sampled buffer too small");
+        }
+
+        if (sampled_size) {
+            io.read_to(this->sampling.sampled, sampled_size * sizeof(llama_token));
+        }
+    }
+
+    // read sampled probs
+    {
+        LLAMA_LOG_DEBUG("%s: - reading backend sampled probs\n", __func__);
+
+        uint64_t probs_size;
+        io.read_to(&probs_size, sizeof(probs_size));
+
+        if (this->sampling.probs_size < probs_size) {
+            throw std::runtime_error("probs buffer too small");
+        }
+
+        if (probs_size) {
+            io.read_to(this->sampling.probs, probs_size * sizeof(float));
+        }
+    }
+
+    // read sampled candidates
+    {
+        LLAMA_LOG_DEBUG("%s: - reading backend sampled candidates\n", __func__);
+
+        uint64_t candidates_size;
+        io.read_to(&candidates_size, sizeof(candidates_size));
+
+        if (this->sampling.candidates_size < candidates_size) {
+            throw std::runtime_error("candidates buffer too small");
+        }
+
+        if (candidates_size) {
+            io.read_to(this->sampling.candidates, candidates_size * sizeof(llama_token));
+        }
+    }
+
+    // read sampled logits count
+    {
+        LLAMA_LOG_DEBUG("%s: - reading backend sampled logits count\n", __func__);
+
+        uint64_t count_size;
+        io.read_to(&count_size, sizeof(count_size));
+
+        if (this->sampling.logits_count.size() < count_size) {
+            throw std::runtime_error("logits count buffer too small");
+        }
+
+        if (count_size) {
+            io.read_to(this->sampling.logits_count.data(), count_size * sizeof(uint32_t));
+        }
+    }
+
+    // read sampled probs count
+    {
+        LLAMA_LOG_DEBUG("%s: - reading backend sampled probs count\n", __func__);
+
+        uint64_t count_size;
+        io.read_to(&count_size, sizeof(count_size));
+
+        if (this->sampling.probs_count.size() < count_size) {
+            throw std::runtime_error("probs count buffer too small");
+        }
+
+        if (count_size) {
+            io.read_to(this->sampling.probs_count.data(), count_size * sizeof(uint32_t));
+        }
+    }
+
+    // read sampled candidates count
+    {
+        LLAMA_LOG_DEBUG("%s: - reading backend sampled candidates count\n", __func__);
+
+        uint64_t count_size;
+        io.read_to(&count_size, sizeof(count_size));
+
+        if (this->sampling.candidates_count.size() < count_size) {
+            throw std::runtime_error("candidates count buffer too small");
+        }
+
+        if (count_size) {
+            io.read_to(this->sampling.candidates_count.data(), count_size * sizeof(uint32_t));
+        }
+    }
+
+    // read has_sampled flag
+    {
+        LLAMA_LOG_DEBUG("%s: - reading backend has_sampled flag\n", __func__);
+
+        io.read_to(&has_sampled, sizeof(bool));
+    }
 
     if (memory) {
         LLAMA_LOG_DEBUG("%s: - reading memory module\n", __func__);
