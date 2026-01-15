@@ -1648,8 +1648,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
             }
         }
 
-        // This flag indicates whether a backend sampler has actually sampled a specific
-        // token, or if it has produced probabilites. If true, we can skip the normal copying of logits and embeddings.
+        // This flag indicates whether a backend sampler has actually produced sampling result.
         const bool has_sampled = !res->t_sampled.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty();
 
         if (has_samplers && has_sampled) {
