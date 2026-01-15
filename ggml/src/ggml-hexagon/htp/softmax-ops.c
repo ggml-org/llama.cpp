@@ -2,27 +2,20 @@
 #pragma clang diagnostic ignored "-Wunused-function"
 #pragma clang diagnostic ignored "-Wunused-but-set-variable"
 
-#ifdef HTP_DEBUG
-#    define FARF_HIGH 1
-#endif
 #include <HAP_farf.h>
-#include <HAP_mem.h>
 #include <HAP_perf.h>
-#include <HAP_ps.h>
-#include <hexagon_protos.h>
-#include <hexagon_types.h>
+
 #include <math.h>
-#include <qurt_thread.h>
 #include <string.h>
+
+#include "hex-dma.h"
+#include "hvx-utils.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-dma.h"
 #include "htp-msg.h"
 #include "htp-ops.h"
-#include "hvx-utils.h"
-#include "ops-utils.h"
 
 #define htp_softmax_preamble3                              \
     const uint32_t ne00 = src0->ne[0];                     \
@@ -100,8 +93,8 @@ static void hvx_fast_softmax_prep_f32(const uint8_t * restrict src,
     uint8_t * restrict dst_curr        = dst;
     const uint8_t * restrict mask_curr = mask;
 
-    HVX_Vector scale_vec = hvx_vec_splat_fp32(scale);
-    HVX_Vector slope_vec = hvx_vec_splat_fp32(slope);
+    HVX_Vector scale_vec = hvx_vec_splat_f32(scale);
+    HVX_Vector slope_vec = hvx_vec_splat_f32(slope);
 
     int step_of_1 = num_elems >> 5;
 
@@ -134,9 +127,9 @@ static void hvx_fast_softmax_f32(const uint8_t * restrict src,
     HVX_Vector * restrict v_dst       = (HVX_Vector *) dst;
 
     HVX_Vector sum_vec = Q6_V_vsplat_R(0x00000000);
-    HVX_Vector max_vec = hvx_vec_splat_fp32(((const float *) src)[0]);
+    HVX_Vector max_vec = hvx_vec_splat_f32(((const float *) src)[0]);
     HVX_Vector zero_v  = Q6_V_vzero();
-    HVX_Vector one_v   = hvx_vec_splat_fp32(1.0);
+    HVX_Vector one_v   = hvx_vec_splat_f32(1.0);
 
     int step_of_1 = num_elems >> 5;
 
@@ -146,7 +139,7 @@ static void hvx_fast_softmax_f32(const uint8_t * restrict src,
         max_vec       = Q6_Vsf_vmax_VsfVsf(max_vec, v1);
     }
 
-    HVX_Vector v = hvx_vec_reduce_max_fp32(max_vec);
+    HVX_Vector v = hvx_vec_reduce_max_f32(max_vec);
     max_vec      = hvx_vec_repl4(v);
 
     #pragma unroll(4)
@@ -154,18 +147,18 @@ static void hvx_fast_softmax_f32(const uint8_t * restrict src,
         HVX_Vector v1 = v_src[i];
         HVX_Vector v2 = Q6_Vqf32_vsub_VsfVsf(v1, max_vec);
 
-        HVX_Vector v3 = hvx_vec_exp_fp32(Q6_Vsf_equals_Vqf32(v2));
+        HVX_Vector v3 = hvx_vec_exp_f32(Q6_Vsf_equals_Vqf32(v2));
 
         sum_vec = Q6_Vqf32_vadd_VsfVsf(Q6_Vsf_equals_Vqf32(sum_vec), v3);
 
         v_pad[i] = v3;
     }
 
-    v       = hvx_vec_qf32_reduce_sum(sum_vec);
+    v       = hvx_vec_reduce_sum_qf32(sum_vec);
     sum_vec = hvx_vec_repl4(Q6_Vsf_equals_Vqf32(v));
 
     HVX_VectorPred pos_sum   = Q6_Q_vcmp_gt_VwVw(sum_vec, zero_v);
-    HVX_Vector     v4        = hvx_vec_inverse_fp32(sum_vec);
+    HVX_Vector     v4        = hvx_vec_inverse_f32(sum_vec);
     HVX_Vector     scale_vec = Q6_V_vmux_QVV(pos_sum, v4, one_v);
 
     #pragma unroll(4)
@@ -181,11 +174,11 @@ static float hvx_softmax_f32(const uint8_t * restrict src,
                              uint8_t * restrict spad,
                              const int   num_elems,
                              const float max) {
-    hvx_sub_scalar_f32(src, max, spad, num_elems);
+    hvx_sub_scalar_f32(spad, src, max, num_elems);
 
     hvx_exp_f32(spad, dst, num_elems, false);
 
-    float sum = hvx_self_sum_f32(dst, num_elems);
+    float sum = hvx_reduce_sum_f32(dst, num_elems);
 
     return sum;
 }
@@ -255,7 +248,7 @@ static void softmax_htp_f32(int nth, int ith, struct softmax_th_ctx * softmax_ct
                 if (1 == opt_path) {
                     hvx_fast_softmax_f32((const uint8_t *) wp0, (uint8_t *) dp, (uint8_t *) wp1, ne00);
                 } else {
-                    float max = hvx_self_max_f32((const uint8_t *) wp0, ne00);
+                    float max = hvx_reduce_max_f32((const uint8_t *) wp0, ne00);
                     float sum = hvx_softmax_f32((const uint8_t *) wp0, (uint8_t *) wp2, (uint8_t *) wp1, ne00, max);
                     sum       = sum > 0.0 ? (1.0 / sum) : 1;
                     hvx_scale_f32((uint8_t *) dp, (const uint8_t *) wp2, ne00, sum);
@@ -290,7 +283,7 @@ static void softmax_job_f32_per_thread(struct softmax_th_ctx * softmax_ctx, int 
 
     int is_aligned = 1;
     int opt_path   = 0;
-    if (!htp_is_aligned((void *) src0->data, VLEN) || !htp_is_aligned((void *) dst->data, VLEN)) {
+    if (!hex_is_aligned((void *) src0->data, VLEN) || !hex_is_aligned((void *) dst->data, VLEN)) {
         is_aligned = 0;
         FARF(HIGH, "softmax-f32: unaligned addresses in elementwise op, possibly slower execution\n");
     }
@@ -345,9 +338,9 @@ static int execute_op_softmax_f32(struct htp_ops_context * octx) {
 
     // VTCM scratchpads for all tensors
     // N rows per thread, padded to HVX vector size
-    octx->dst_spad.size  = htp_round_up(dst_row_size, 128) * n_threads;
-    octx->src0_spad.size = htp_round_up(src0_row_size, 128) * n_threads;
-    octx->src1_spad.size = htp_round_up(src1_row_size, 128) * n_threads;
+    octx->dst_spad.size  = hex_round_up(dst_row_size, 128) * n_threads;
+    octx->src0_spad.size = hex_round_up(src0_row_size, 128) * n_threads;
+    octx->src1_spad.size = hex_round_up(src1_row_size, 128) * n_threads;
 
     size_t spad_size = octx->src0_spad.size + octx->src1_spad.size + octx->dst_spad.size;
 
