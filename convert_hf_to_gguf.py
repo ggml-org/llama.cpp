@@ -7746,7 +7746,7 @@ class VaetkiModel(TextModel):
         self.gguf_writer.add_sliding_window(hparams["sliding_window"])
         sliding_window_pattern = []
         for t in self.hparams["layer_types"]:
-            sliding_window_pattern.append(int(t == "sliding_attention"))
+            sliding_window_pattern.append(t == "sliding_attention")
         self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
