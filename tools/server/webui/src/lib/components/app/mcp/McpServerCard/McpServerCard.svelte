@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
 	import type { MCPServerSettingsEntry, HealthCheckState } from '$lib/types';
 	import { HealthCheckStatus } from '$lib/enums';
@@ -74,9 +74,10 @@
 		mcpClient.runHealthCheck(server);
 	}
 
-	function startEditing() {
-		editFormRef?.setInitialValues(server.url, server.headers || '');
+	async function startEditing() {
 		isEditing = true;
+		await tick();
+		editFormRef?.setInitialValues(server.url, server.headers || '');
 	}
 
 	function cancelEditing() {
