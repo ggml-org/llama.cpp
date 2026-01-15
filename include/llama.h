@@ -458,6 +458,14 @@ extern "C" {
                                  size_t    n_paths,
               struct llama_model_params    params);
 
+    // Load the model from a file descriptor (for Android SAF support)
+    // The fd should be opened for reading. Does not support split models.
+    // The fd is NOT closed by this function - caller retains ownership.
+    LLAMA_API struct llama_model * llama_model_load_from_fd(
+                                   int    fd,
+                                size_t    file_size,
+              struct llama_model_params    params);
+
     LLAMA_API void llama_model_save_to_file(
             const struct llama_model * model,
                         const char * path_model);

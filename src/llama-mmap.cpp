@@ -178,6 +178,23 @@ struct llama_file::impl {
         init_fp(mode);
     }
 
+    // Constructor from file descriptor (for Android SAF support)
+    impl(int fd_in, size_t file_size_in) : fname("") {
+        // Duplicate the fd so we own it
+        fd = dup(fd_in);
+        if (fd == -1) {
+            throw std::runtime_error(format("failed to dup fd %d: %s", fd_in, strerror(errno)));
+        }
+        size = file_size_in;
+        alignment = 1;
+        // Seek to beginning
+        if (lseek(fd, 0, SEEK_SET) == -1) {
+            close(fd);
+            fd = -1;
+            throw std::runtime_error(format("failed to seek fd: %s", strerror(errno)));
+        }
+    }
+
 #ifdef __linux__
     bool init_fd() {
         fd = open(fname.c_str(), O_RDONLY | O_DIRECT);
@@ -372,6 +389,18 @@ struct llama_file::impl {
 
 llama_file::llama_file(const char * fname, const char * mode, const bool use_direct_io) :
     pimpl(std::make_unique<impl>(fname, mode, use_direct_io)) {}
+
+#ifndef _WIN32
+llama_file::llama_file(int fd, size_t file_size) :
+    pimpl(std::make_unique<impl>(fd, file_size)) {}
+#else
+llama_file::llama_file(int fd, size_t file_size) {
+    GGML_UNUSED(fd);
+    GGML_UNUSED(file_size);
+    throw std::runtime_error("fd-based loading not supported on Windows");
+}
+#endif
+
 llama_file::~llama_file() = default;
 
 size_t llama_file::tell() const { return pimpl->tell(); }

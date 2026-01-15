@@ -15,6 +15,11 @@
 #include <string>
 #include <vector>
 
+#ifndef _WIN32
+#include <unistd.h>
+#include <cerrno>
+#endif
+
 template <typename T>
 struct type_to_gguf_type;
 
@@ -741,6 +746,40 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
     struct gguf_context * result = gguf_init_from_file_impl(file, params);
     fclose(file);
     return result;
+}
+
+struct gguf_context * gguf_init_from_fd(int fd, struct gguf_init_params params) {
+#ifdef _WIN32
+    GGML_LOG_ERROR("%s: fd loading not supported on Windows\n", __func__);
+    GGML_UNUSED(fd);
+    GGML_UNUSED(params);
+    return nullptr;
+#else
+    // Duplicate the fd so we own it and can close safely via fclose
+    int fd_dup = dup(fd);
+    if (fd_dup == -1) {
+        GGML_LOG_ERROR("%s: failed to dup fd %d: %s\n", __func__, fd, strerror(errno));
+        return nullptr;
+    }
+
+    // Seek to beginning
+    if (lseek(fd_dup, 0, SEEK_SET) == -1) {
+        GGML_LOG_ERROR("%s: failed to seek fd %d: %s\n", __func__, fd, strerror(errno));
+        close(fd_dup);
+        return nullptr;
+    }
+
+    FILE * file = fdopen(fd_dup, "rb");
+    if (!file) {
+        GGML_LOG_ERROR("%s: failed to fdopen fd %d: %s\n", __func__, fd, strerror(errno));
+        close(fd_dup);
+        return nullptr;
+    }
+
+    struct gguf_context * result = gguf_init_from_file_impl(file, params);
+    fclose(file);  // This also closes fd_dup
+    return result;
+#endif
 }
 
 void gguf_free(struct gguf_context * ctx) {
