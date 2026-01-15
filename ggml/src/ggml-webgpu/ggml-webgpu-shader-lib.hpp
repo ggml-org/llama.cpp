@@ -322,9 +322,9 @@ struct ggml_webgpu_set_rows_pipeline_key_hash {
 };
 
 struct ggml_webgpu_set_rows_shader_lib_context {
-    int dst_type;
-    int vec4;
-    int i64_idx;
+    int      dst_type;
+    int      vec4;
+    int      i64_idx;
     uint32_t max_wg_size;
 };
 
@@ -341,7 +341,7 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_set_rows_shader(
             variant += "_dstf32";
             break;
         case GGML_TYPE_F16:
-            // Default, no define needed
+            defines.push_back("DST_F16");
             variant += "_dstf16";
             break;
         default:
@@ -360,8 +360,74 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_set_rows_shader(
     defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
 
     ggml_webgpu_processed_shader result;
-    result.wgsl    = preprocessor.preprocess(shader_src, defines);
-    result.variant = variant;
+    result.wgsl                                      = preprocessor.preprocess(shader_src, defines);
+    result.variant                                   = variant;
+    ggml_webgpu_generic_shader_decisions * decisions = new ggml_webgpu_generic_shader_decisions();
+    decisions->wg_size                               = context.max_wg_size;
+    result.decisions                                 = decisions;
+    return result;
+}
+
+struct ggml_webgpu_unary_pipeline_key {
+    int  type;
+    int  op;
+    bool is_unary;  // many unary operators fall under the GGML_OP_UNARY umbrella
+    bool inplace;
+
+    bool operator==(const ggml_webgpu_unary_pipeline_key & other) const {
+        return type == other.type && op == other.op && is_unary == other.is_unary && inplace == other.inplace;
+    }
+};
+
+struct ggml_webgpu_unary_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_unary_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.type);
+        ggml_webgpu_hash_combine(seed, key.op);
+        ggml_webgpu_hash_combine(seed, key.is_unary);
+        ggml_webgpu_hash_combine(seed, key.inplace);
+        return seed;
+    }
+};
+
+struct ggml_webgpu_unary_shader_lib_context {
+    ggml_webgpu_unary_pipeline_key key;
+    uint32_t                       max_wg_size;
+};
+
+inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_unary_shader(
+    pre_wgsl::Preprocessor &                     preprocessor,
+    const char *                                 shader_src,
+    const ggml_webgpu_unary_shader_lib_context & context) {
+    std::vector<std::string> defines;
+    std::string              variant = context.key.is_unary ? ggml_unary_op_name((ggml_unary_op) context.key.op) :
+                                                              ggml_op_name((ggml_op) context.key.op);
+    // Operation-specific behavior
+    defines.push_back(variant);
+
+    switch (context.key.type) {
+        case GGML_TYPE_F32:
+            defines.push_back("TYPE_F32");
+            variant += "_f32";
+            break;
+        case GGML_TYPE_F16:
+            defines.push_back("TYPE_F16");
+            variant += "_f16";
+            break;
+        default:
+            GGML_ABORT("Unsupported type for unary shader");
+    }
+
+    if (context.key.inplace) {
+        defines.push_back("INPLACE");
+        variant += "_inplace";
+    }
+
+    defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+    ggml_webgpu_processed_shader result;
+    result.wgsl                                      = preprocessor.preprocess(shader_src, defines);
+    result.variant                                   = variant;
     ggml_webgpu_generic_shader_decisions * decisions = new ggml_webgpu_generic_shader_decisions();
     decisions->wg_size                               = context.max_wg_size;
     result.decisions                                 = decisions;
