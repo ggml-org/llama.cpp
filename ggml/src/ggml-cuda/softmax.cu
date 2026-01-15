@@ -75,9 +75,6 @@ static __global__ void soft_max_f32(
 
     const int block_size = block_size_template == 0 ? blockDim.x : block_size_template;
 
-    const int warp_id = threadIdx.x / WARP_SIZE;
-    const int lane_id = threadIdx.x % WARP_SIZE;
-
     const float slope = get_alibi_slope(p.max_bias, i02, p.n_head_log2, p.m0, p.m1);
 
     extern __shared__ float data_soft_max_f32[];
@@ -102,21 +99,7 @@ static __global__ void soft_max_f32(
     }
 
     // find the max value in the block
-    max_val = warp_reduce_max(max_val);
-    if (block_size > WARP_SIZE) {
-        if (warp_id == 0) {
-            buf_iw[lane_id] = -INFINITY;
-        }
-        __syncthreads();
-
-        if (lane_id == 0) {
-            buf_iw[warp_id] = max_val;
-        }
-        __syncthreads();
-
-        max_val = buf_iw[lane_id];
-        max_val = warp_reduce_max(max_val);
-    }
+    max_val = block_reduce<block_reduce_method::MAX, block_size_template>(max_val, buf_iw);
 
     float tmp = 0.0f; // partial sum
 
@@ -134,22 +117,7 @@ static __global__ void soft_max_f32(
     }
 
     // find the sum of exps in the block
-    tmp = warp_reduce_sum(tmp);
-    if (block_size > WARP_SIZE) {
-        __syncthreads();
-        if (warp_id == 0) {
-            buf_iw[lane_id] = 0.0f;
-        }
-        __syncthreads();
-
-        if (lane_id == 0) {
-            buf_iw[warp_id] = tmp;
-        }
-        __syncthreads();
-
-        tmp = buf_iw[lane_id];
-        tmp = warp_reduce_sum(tmp);
-    }
+    tmp = block_reduce<block_reduce_method::SUM, block_size_template>(tmp, buf_iw);
 
     if (sinks) {
         tmp += expf(sinks[i02] - max_val);
@@ -166,50 +134,6 @@ static __global__ void soft_max_f32(
         }
 
         dst[col] = vals[col] * inv_sum;
-    }
-}
-
-
-// TODO: This is a common pattern used across kernels that could be moved to common.cuh + templated
-static __device__ float two_stage_warp_reduce_max(float val) {
-    val = warp_reduce_max(val);
-    if (blockDim.x > WARP_SIZE) {
-        assert((blockDim.x <= 1024) && (blockDim.x % WARP_SIZE) == 0);
-        __shared__ float local_vals[32];
-        const int        warp_id = threadIdx.x / WARP_SIZE;
-        const int        lane_id = threadIdx.x % WARP_SIZE;
-        if (lane_id == 0) {
-            local_vals[warp_id] = val;
-        }
-        __syncthreads();
-        val = -INFINITY;
-        if (lane_id < (static_cast<int>(blockDim.x) / WARP_SIZE)) {
-            val = local_vals[lane_id];
-        }
-        return warp_reduce_max(val);
-    } else {
-        return val;
-    }
-}
-
-static __device__ float two_stage_warp_reduce_sum(float val) {
-    val = warp_reduce_sum(val);
-    if (blockDim.x > WARP_SIZE) {
-        assert((blockDim.x <= 1024) && (blockDim.x % WARP_SIZE) == 0);
-        __shared__ float local_vals[32];
-        const int        warp_id = threadIdx.x / WARP_SIZE;
-        const int        lane_id = threadIdx.x % WARP_SIZE;
-        if (lane_id == 0) {
-            local_vals[warp_id] = val;
-        }
-        __syncthreads();
-        val = 0.0f;
-        if (lane_id < (static_cast<int>(blockDim.x) / WARP_SIZE)) {
-            val = local_vals[lane_id];
-        }
-        return warp_reduce_sum(val);
-    } else {
-        return val;
     }
 }
 
@@ -230,6 +154,7 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
     float     local_vals[n_elem_per_thread] = { -INFINITY, -INFINITY, -INFINITY, -INFINITY };
     float     local_max                     = -INFINITY;
     const int step_size                     = gridDim.x * blockDim.x;
+    __shared__ float shared_vals[32];
 
     // Compute thread-local max
     for (int col = col_start; col < p.ncols;) {
@@ -246,7 +171,7 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
     }
 
     // Compute CTA-level max
-    local_max = two_stage_warp_reduce_max(local_max);
+    local_max = block_reduce<block_reduce_method::MAX>(local_max, shared_vals);
 
     // Store CTA-level max to GMEM
     if (tid == 0) {
@@ -261,7 +186,7 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
     } else {
         local_max = -INFINITY;
     }
-    local_max = two_stage_warp_reduce_max(local_max);
+    local_max = block_reduce<block_reduce_method::MAX>(local_max, shared_vals);
 
     // Compute softmax dividends, accumulate divisor
     float tmp_expf = 0.0f;
@@ -284,7 +209,7 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
     }
 
     // Reduce divisor within CTA
-    tmp_expf = two_stage_warp_reduce_sum(tmp_expf);
+    tmp_expf = block_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals);
 
     // Store CTA-level sum to GMEM
     if (tid == 0) {
@@ -298,7 +223,7 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
     } else {
         tmp_expf = 0.0f;
     }
-    tmp_expf = two_stage_warp_reduce_sum(tmp_expf);
+    tmp_expf = block_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals);
 
     // Divide dividend by global sum + store data
     for (int col = col_start; col < p.ncols;) {
