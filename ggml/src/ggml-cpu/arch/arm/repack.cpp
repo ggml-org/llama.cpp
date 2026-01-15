@@ -3394,7 +3394,7 @@ void ggml_gemm_q6_K_8x8_q8_K(int                        n,
                             q6_ql_1[k] = vld1q_u8(ql_base + ql_off_base + 64 + 16 * k);
                         }
 
-                        const int  qh_off_base = (sb * QK_K / 2) % 256;
+                        const int  qh_off_base = (sb * QK_K / 2) & 255;  // wrap after 256 bytes
                         uint8x16_t q6_qh_0[4];
                         uint8x16_t q6_qh_1[4];
                         for (int k = 0; k < 4; k++) {
