@@ -809,7 +809,7 @@ static void mul_mat_f_switch_cols_per_block(
 }
 
 #define DECL_MMF_CASE_HELPER(T, ncols_dst) \
-    template void mul_mat_f_cuda<T, ncols_dst>( \
+    template void mul_mat_f_cuda<T, MMF_ROWS_PER_BLOCK, ncols_dst>( \
         const T * x, const float * y, const int32_t * ids, float * dst, \
         const int64_t ncols_x, const int64_t nrows_x, int64_t ncols_dst_total, const int64_t stride_row, const int64_t stride_col_y, const int64_t stride_col_dst, \
         const int64_t stride_col_id, const int64_t stride_row_id, \
