@@ -337,7 +337,7 @@ llama_context::llama_context(
         cparams.pipeline_parallel = pipeline_parallel;
 
         if (cparams.pipeline_parallel) {
-            LLAMA_LOG_INFO("%s: pipeline parallelism enabled (n_copies=%d)\n", __func__, ggml_backend_sched_get_n_copies(sched.get()));
+            LLAMA_LOG_INFO("%s: pipeline parallelism enabled\n", __func__);
         }
 
         sched_reserve();
@@ -537,7 +537,8 @@ void llama_context::sched_reserve() {
 
     const int64_t t_end_us = ggml_time_us();
 
-    LLAMA_LOG_INFO("%s: reserve took %.2f ms\n", __func__, (t_end_us - t_start_us)/1000.0);
+    LLAMA_LOG_INFO("%s: reserve took %.2f ms, sched copies = %d\n",
+            __func__, (t_end_us - t_start_us)/1000.0, ggml_backend_sched_get_n_copies(sched.get()));
 }
 
 void llama_context::synchronize() {
@@ -1011,7 +1012,8 @@ void llama_context::set_warmup(bool value) {
 
     cparams.warmup = value;
 
-    sched_need_reserve = true;
+    // warmups are usually with small batches, so no need to reserve
+    //sched_need_reserve = true;
 }
 
 bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
