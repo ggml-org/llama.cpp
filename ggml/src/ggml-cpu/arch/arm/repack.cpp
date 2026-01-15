@@ -1,3 +1,4 @@
+#include "ggml.h"
 #define GGML_COMMON_IMPL_CPP
 #define GGML_COMMON_DECL_CPP
 #include "ggml-common.h"
@@ -3322,7 +3323,8 @@ void ggml_gemm_q6_K_8x8_q8_K(int                        n,
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_MATMUL_INT8)
     constexpr int    q8_k_blocklen = 4;
     const uint8x16_t m4b           = vdupq_n_u8(0x0f);
-    const uint8x16_t m2b           = vdupq_n_u8(0x03);
+    const uint8x16_t mask_lo       = vdupq_n_u8(0x03);
+    const uint8x16_t mask_hi       = vdupq_n_u8(0x30);
     const int8x16_t  m32s          = vdupq_n_s8(32);
 
     // 8 accumulators: 4 q8 rows × 2 col groups (0-3, 4-7)
@@ -3355,89 +3357,116 @@ void ggml_gemm_q6_K_8x8_q8_K(int                        n,
                         q6_scales[sc]       = vld1_s8(q6_ptr[b].scales + scale_idx * 8);
                     }
 
-                    // q8_ptr[b].qs layout for q8_Kx4:
-                    // 128-value halves, then 8-value sub-blocks with stride 32
-                    // Base offset: half * 512
-                    const int8_t * q8_base = q8_ptr[b].qs + half * 512;
-
-                    // Load qh once per half and shift after every 2 sub-blocks
-                    // qh has 32 bytes per half, interleaved as 4 chunks of 64 bytes (8 cols × 8 bytes)
+                    const uint8_t * ql_base = q6_ptr[b].ql + half * 512;
                     const uint8_t * qh_base = q6_ptr[b].qh + half * 256;
 
-                    uint8x16_t qh[4][4];  // [chunk][col_pair]
-                    for (int chunk = 0; chunk < 4; chunk++) {
-                        for (int cp = 0; cp < 4; cp++) {
-                            qh[chunk][cp] = vld1q_u8(qh_base + chunk * 64 + cp * 16);
-                        }
-                    }
-
-                    // Process 8 sub-blocks of 16 values each (8 low + 8 high nibble)
-                    // qh shift cycles 0,0,2,2,4,4,6,6 for k=0..7
-                    for (int k = 0; k < 8; k++) {
+                    // A subblock (sb) is a set of weights that share the scale
+                    // Since q6_K scales are per 16 elements
+                    // num sbs -> 256 elements / (16 elements/scale * 2 elements/byte * 2 halves)
+                    for (int sb = 0; sb < QK_K / 64; sb++) {
                         // Load q8 values for this sub-block
-                        int8x16_t q8_01[4], q8_23[4];
-                        for (int i = 0; i < 4; i++) {
-                            const int offset = k * 32 + i * 8;
-                            q8_01[i]         = vcombine_s8(vld1_s8(q8_base + offset), vld1_s8(q8_base + offset + 128));
-                            q8_23[i] = vcombine_s8(vld1_s8(q8_base + offset + 256), vld1_s8(q8_base + offset + 384));
+                        const int8_t * q8_base = q8_ptr[b].qs + half * 512 + sb * 128;
+
+                        int8x16_t q8_qs_01[4];
+                        int8x16_t q8_qs_23[4];
+
+                        // TODO: Unroll  and unify these
+                        // The matching weight for the low bits are in 0, 1 and for the high bits in 2, 3
+                        for (int i = 0; i < 2; i++) {
+                            const int offset = i * 32;
+                            q8_qs_01[i]      = vld1q_s8(q8_base + offset);       // 0..7 & 8..15 (r01)
+                            q8_qs_23[i]      = vld1q_s8(q8_base + offset + 16);  // 0..7 & 8..15 (r23)
+                        }
+                        for (int i = 0; i < 2; i++) {
+                            const int offset = i * 32;
+                            q8_qs_01[i + 2]  = vld1q_s8(q8_base + 64 + offset);       // 64..71 & 72..79
+                            q8_qs_23[i + 2]  = vld1q_s8(q8_base + 64 + offset + 16);  // 64..71 & 72..79
                         }
 
-                        // Load ql (low 4 bits) - interleaved with 8-byte chunks
-                        const uint8_t * ql_base = q6_ptr[b].ql + half * 512 + k * 64;
-
-                        // qh chunk index: k % 4 (cycles 0,1,2,3,0,1,2,3)
-                        const int qh_chunk = k % 4;
+                        // TODO: Verify that vmmlaq multiplies the weights as expected
+                        const int8x16_t q8s[2][4] = {
+                            { q8_qs_01[0], q8_qs_01[2], q8_qs_01[1], q8_qs_01[3] },
+                            { q8_qs_23[0], q8_qs_23[2], q8_qs_23[1], q8_qs_23[3] },
+                        };
 
                         // Process column pairs (0-1, 2-3, 4-5, 6-7)
-                        for (int cp = 0; cp < 4; cp++) {
-                            // Load 16 bytes of ql for this column pair
-                            uint8x16_t ql_raw = vld1q_u8(ql_base + cp * 16);
+                        for (int cp = 0; cp < ncols_interleaved / 2; cp++) {
+                            int32x4_t sb_acc[4];
+                            for (int i = 0; i < 4; i++) {
+                                sb_acc[i] = vdupq_n_s32(0);
+                            }
+                            // Each sb has 16 values & 16 bytes per column pair
+                            // 32 bytes total per cp
+                            int        ql_offset    = sb * QK_K / 2 + 16 * cp;
+                            uint8x16_t q6_qs_cp_0_l = vld1q_u8(ql_base + ql_offset + 0);   // 0.. 7 & 64..71
+                            uint8x16_t q6_qs_cp_1_l = vld1q_u8(ql_base + ql_offset + 64);  // 8..15 & 72..79
 
-                            // Extract low and high nibbles from ql
-                            int8x16_t ql_lo = vreinterpretq_s8_u8(vandq_u8(ql_raw, m4b));
-                            int8x16_t ql_hi = vreinterpretq_s8_u8(vshrq_n_u8(ql_raw, 4));
+                            int        qh_offset    = (sb * QK_K / 2) % 256 + 16 * cp;
+                            // 0..7 & 32..39 & 64..71 & 96..103
+                            uint8x16_t q6_qs_cp_0_h = vld1q_u8(qh_base + qh_offset + 0);
+                            // 8..15 & 40..47 & 72..79 & 104..111
+                            uint8x16_t q6_qs_cp_1_h = vld1q_u8(qh_base + qh_offset + 64);
 
-                            // Extract 2-bit high values from qh (already at correct position via shifting)
-                            uint8x16_t qh_masked  = vandq_u8(qh[qh_chunk][cp], m2b);
-                            int8x16_t  qh_shifted = vreinterpretq_s8_u8(vshlq_n_u8(qh_masked, 4));
+                            // For sb 2, 3 we need to access the 2nd and 4th bit pairs
+                            // 32..39 & 64..71 & 96..103
+                            // 40..47 & 72..79 & 104..111
+                            if (sb > 1) {
+                                q6_qs_cp_0_h = vshrq_n_u8(q6_qs_cp_0_h, 2);
+                                q6_qs_cp_1_h = vshrq_n_u8(q6_qs_cp_0_h, 2);
+                            }
 
-                            // Combine: q6 = (qh << 4) | ql - 32
-                            int8x16_t q6_lo = vsubq_s8(vorrq_s8(ql_lo, qh_shifted), m32s);
-                            int8x16_t q6_hi = vsubq_s8(vorrq_s8(ql_hi, qh_shifted), m32s);
+                            // Grab the bit pairs (00000011 and 00110000 masks)
+                            uint8x16_t q6_qs_cp_0_hl = vandq_s8(q6_qs_cp_0_h, mask_lo);
+                            uint8x16_t q6_qs_cp_0_hh = vshrq_n_u8(vandq_s8(q6_qs_cp_0_h, mask_hi), 4);
+                            uint8x16_t q6_qs_cp_1_hl = vandq_s8(q6_qs_cp_1_h, mask_lo);
+                            uint8x16_t q6_qs_cp_1_hh = vshrq_n_u8(vandq_s8(q6_qs_cp_1_h, mask_hi), 4);
 
-                            // Get scales for this sub-block
-                            int32x4_t scale_vec = {
-                                (int32_t) q6_scales[k][cp * 2],
-                                (int32_t) q6_scales[k][cp * 2],
-                                (int32_t) q6_scales[k][cp * 2 + 1],
-                                (int32_t) q6_scales[k][cp * 2 + 1],
-                            };
-
-                            // Matrix multiply and accumulate for row pairs
-                            int32x4_t dot_01_lo = vmmlaq_s32(vdupq_n_s32(0), q6_lo, q8_01[cp]);
-                            int32x4_t dot_23_lo = vmmlaq_s32(vdupq_n_s32(0), q6_lo, q8_23[cp]);
-
-                            acc[cp]     = vmlaq_s32(acc[cp], dot_01_lo, scale_vec);
-                            acc[cp + 4] = vmlaq_s32(acc[cp + 4], dot_23_lo, scale_vec);
-
-                            // High nibble
-                            int32x4_t dot_01_hi = vmmlaq_s32(vdupq_n_s32(0), q6_hi, q8_01[cp]);
-                            int32x4_t dot_23_hi = vmmlaq_s32(vdupq_n_s32(0), q6_hi, q8_23[cp]);
-
-                            acc[cp]     = vmlaq_s32(acc[cp], dot_01_hi, scale_vec);
-                            acc[cp + 4] = vmlaq_s32(acc[cp + 4], dot_23_hi, scale_vec);
-                        }
-
-                        // Shift qh by 2 after every 2 sub-blocks (k=1,3,5,7)
-                        if (k % 2 == 1) {
-                            for (int chunk = 0; chunk < 4; chunk++) {
-                                for (int cp = 0; cp < 4; cp++) {
-                                    qh[chunk][cp] = vshrq_n_u8(qh[chunk][cp], 2);
+                            // clang-format off
+                            // For each q6 = (qh << 4) | ql - 32
+                            const int8x16_t q6_nibbles[2][2] = {
+                                {
+                                    vsubq_s8(vorrq_s8(vreinterpretq_s8_u8(vandq_u8(q6_qs_cp_0_l, m4b)), q6_qs_cp_0_hl), m32s),
+                                    vsubq_s8(vorrq_s8(vreinterpretq_s8_u8(vandq_u8(q6_qs_cp_1_l, m4b)), q6_qs_cp_1_hl), m32s)
+                                },
+                                {
+                                    vsubq_s8(vorrq_s8(vreinterpretq_s8_u8(vshrq_n_u8(q6_qs_cp_0_l, 4)), q6_qs_cp_0_hh), m32s),
+                                    vsubq_s8(vorrq_s8(vreinterpretq_s8_u8(vshrq_n_u8(q6_qs_cp_1_l, 4)), q6_qs_cp_1_hh), m32s)
                                 }
+                            };
+                            // clang-format on
+
+                            for (int rp = 0; rp < 2; rp++) {
+                                for (int blk = 0; blk < 2; blk++) {
+                                    const int8x16_t * q8  = &q8s[rp][4 * blk];
+                                    const int8x16_t * q4  = q6_nibbles[blk];
+                                    int32x4_t         acc = sb_acc[2 * rp + blk];
+                                    // mul add for each qs in the same subblock
+                                    for (int qs_offset = 0; qs_offset < 4; qs_offset++) {
+                                        acc = vmmlaq_s32(acc, q4[qs_offset], q8[qs_offset]);
+                                    }
+                                    sb_acc[2 * rp + blk] = acc;
+                                }
+                            }
+
+                            // Loop is based over the scales
+                            const int scale_idx_l = half * 8 + sb;
+                            const int scale_idx_h = half * 8 + sb + 4;
+                            printf("scale_idx_l=%d scale_idx_h=%d\n", scale_idx_l, scale_idx_h);
+                            // TODO: Adjust with the correct scales
+                            for (int blk = 0; blk < 2; blk++) {
+                                int32x4_t scale_vec = {
+                                    (int32_t) q6_scales[scale_idx_l][blk * 4 + cp * 2],
+                                    (int32_t) q6_scales[scale_idx_l][blk * 4 + cp * 2 + 1],
+                                    (int32_t) q6_scales[scale_idx_h][blk * 4 + cp * 2],
+                                    (int32_t) q6_scales[scale_idx_h][blk * 4 + cp * 2 + 1],
+                                };
+                                acc[cp]     = vmlaq_s32(acc[cp], sb_acc[blk], scale_vec);
+                                acc[cp + 4] = vmlaq_s32(acc[cp + 4], sb_acc[blk + 2], scale_vec);
                             }
                         }
                     }
                 }  // for half
+                GGML_ABORT("Not implemented: Q6_K q8mm half processing");
 
                 // Reorder i8mm output to match memory layout
                 for (int i = 0; i < 8; i++) {
