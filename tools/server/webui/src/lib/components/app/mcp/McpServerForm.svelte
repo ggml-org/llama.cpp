@@ -25,6 +25,10 @@
 	// Local state for header pairs
 	let headerPairs = $state<KeyValuePair[]>(parseHeadersToArray(headers));
 
+	$effect(() => {
+		headerPairs = parseHeadersToArray(headers);
+	});
+
 	// Sync header pairs to parent when they change
 	function updateHeaderPairs(newPairs: KeyValuePair[]) {
 		headerPairs = newPairs;
