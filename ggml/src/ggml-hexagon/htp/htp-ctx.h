@@ -1,7 +1,7 @@
 #ifndef HTP_CTX_H
 #define HTP_CTX_H
 
-#include "htp-dma.h"
+#include "hex-dma.h"
 #include "worker-pool.h"
 
 #include <assert.h>

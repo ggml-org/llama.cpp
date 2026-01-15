@@ -210,6 +210,10 @@ build: 6a8cf8914 (6733)
   Controls whether the Hexagon backend allocates host buffers. By default, all buffers except for REPACK are host buffers.
   This option is required for testing Ops that require REPACK buffers (MUL_MAT and MUL_MAT_ID).
 
+- `GGML_HEXAGON_EXPERIMENTAL=1`
+  Controls whether the Hexagon backend enables experimental features.
+  This option is required for enabling/testing experimental Ops (FLASH_ATTN_EXT).
+
 - `GGML_HEXAGON_VERBOSE=1`
   Enables verbose logging of Ops from the backend. Example output:
 

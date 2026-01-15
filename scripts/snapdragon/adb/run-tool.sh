@@ -12,6 +12,9 @@ branch=.
 adbserial=
 [ "$S" != "" ] && adbserial="-s $S"
 
+adbhost=
+[ "$H" != "" ] && adbhost="-H $H"
+
 device="HTP0"
 [ "$D" != "" ] && device="$D"
 
@@ -19,7 +22,7 @@ verbose=
 [ "$V" != "" ] && verbose="GGML_HEXAGON_VERBOSE=$V"
 
 experimental=
-[ "$E" != "" ] && experimental="GGML_HEXAGON_EXPERIMENTAL=$V"
+[ "$E" != "" ] && experimental="GGML_HEXAGON_EXPERIMENTAL=$E"
 
 sched=
 [ "$SCHED" != "" ] && sched="GGML_SCHED_DEBUG=2" cli_opts="$cli_opts -v"
@@ -43,7 +46,7 @@ set -x
 
 tool=$1; shift
 
-adb $adbserial shell " \
+adb $adbserial $adbhost shell " \
   cd $basedir; ulimit -c unlimited;        \
     LD_LIBRARY_PATH=$basedir/$branch/lib   \
     ADSP_LIBRARY_PATH=$basedir/$branch/lib \

@@ -63,6 +63,7 @@ enum htp_op {
     HTP_OP_SET_ROWS       = 15,
     HTP_OP_SCALE          = 16,
     HTP_OP_GET_ROWS       = 17,
+    HTP_OP_CPY            = 18,
     INVALID
 };
 
