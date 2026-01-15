@@ -436,6 +436,19 @@ The Min-P sampling method was designed as an alternative to Top-P, and aims to e
 
 Example usage: `--min-p 0.05`
 
+### Adaptive-P Sampling
+
+-   `--adaptive-target N`: select tokens near this probability (valid range 0.0 to 1.0; negative = disabled)
+-   `--adaptive-decay N`: EMA decay for adaptation; history ≈ 1/(1-decay) tokens (valid range 0.0 - 0.99)
+
+Adaptive-P: Select tokens near a configurable target probability over time.
+
+The adaptive-p sampler transforms the token probability distribution to favor tokens that fall near a user-configurable probability target. Internally, the sampler maintains an exponential moving average of the *ORIGINAL* probabilities of selected tokens at each sampling step. It uses this EMA to compute an adapted target probability at each sampling step, thus maintaining the desired target probability over time. Only mild truncation before this sampler is recommended. It is suggested to apply min-p before adaptive-p as the only other active sampler.
+
+Recommended starting values: `--adaptive-target 0.55 --adaptive-decay 0.9`
+
+For more info, refer to: [llama.cpp#17927](https://github.com/ggml-org/llama.cpp/pull/17927)
+
 ### Locally Typical Sampling
 
 -   `--typical N`: Enable locally typical sampling with parameter p (default: 1.0, 1.0 = disabled).
