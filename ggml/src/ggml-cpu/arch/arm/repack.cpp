@@ -3385,89 +3385,82 @@ void ggml_gemm_q6_K_8x8_q8_K(int                        n,
                             q8_h_23[i]       = vld1q_s8(q8_base_h + offset + 16);
                         }
 
-                        // q8[row_pair][blk_type][vector_idx]
-                        // blk_type is either low or high values
-                        const int8x16_t q8s[2][2][2] = {
-                            { { q8_l_01[0], q8_l_01[1] }, { q8_h_01[0], q8_h_01[1] } },
-                            { { q8_l_23[0], q8_l_23[1] }, { q8_h_23[0], q8_h_23[1] } },
-                        };
+                        const int ql_off_base = sb * QK_K / 2;
+
+                        uint8x16_t q6_ql_0[4];
+                        uint8x16_t q6_ql_1[4];
+                        for (int k = 0; k < 4; k++) {
+                            q6_ql_0[k] = vld1q_u8(ql_base + ql_off_base + 16 * k);
+                            q6_ql_1[k] = vld1q_u8(ql_base + ql_off_base + 64 + 16 * k);
+                        }
+
+                        const int  qh_off_base = (sb * QK_K / 2) % 256;
+                        uint8x16_t q6_qh_0[4];
+                        uint8x16_t q6_qh_1[4];
+                        for (int k = 0; k < 4; k++) {
+                            q6_qh_0[k] = vld1q_u8(qh_base + qh_off_base + 16 * k);
+                            q6_qh_1[k] = vld1q_u8(qh_base + qh_off_base + 64 + 16 * k);
+                        }
+
+                        // Adjust for the proper high bits (Sb 2 and 3)
+                        if (sb > 1) {
+                            for (int k = 0; k < 4; k++) {
+                                q6_qh_0[k] = vshrq_n_u8(q6_qh_0[k], 2);
+                                q6_qh_1[k] = vshrq_n_u8(q6_qh_1[k], 2);
+                            }
+                        }
 
                         // Process column pairs (0-1, 2-3, 4-5, 6-7)
                         for (int cp = 0; cp < ncols_interleaved / 2; cp++) {
-                            int32x4_t sb_acc[4];
-                            for (int i = 0; i < 4; i++) {
-                                sb_acc[i] = vdupq_n_s32(0);
-                            }
+                            const uint8x16_t q6_qs_cp_0_l = q6_ql_0[cp];
+                            const uint8x16_t q6_qs_cp_1_l = q6_ql_1[cp];
+                            const uint8x16_t q6_qs_cp_0_h = q6_qh_0[cp];
+                            const uint8x16_t q6_qs_cp_1_h = q6_qh_1[cp];
 
-                            // Each sb has 16 values & 16 bytes per column pair
-                            // 32 bytes total per cp
-                            int        ql_offset    = sb * QK_K / 2 + 16 * cp;
-                            uint8x16_t q6_qs_cp_0_l = vld1q_u8(ql_base + ql_offset + 0);   // 0.. 7 & 64..71
-                            uint8x16_t q6_qs_cp_1_l = vld1q_u8(ql_base + ql_offset + 64);  // 8..15 & 72..79
+                            const uint8x16_t q6_qs_cp_0_hl = vshlq_n_u8(vandq_u8(q6_qs_cp_0_h, mask_lo), 4);
+                            const uint8x16_t q6_qs_cp_0_hh = vandq_u8(q6_qs_cp_0_h, mask_hi);
+                            const uint8x16_t q6_qs_cp_1_hl = vshlq_n_u8(vandq_u8(q6_qs_cp_1_h, mask_lo), 4);
+                            const uint8x16_t q6_qs_cp_1_hh = vandq_u8(q6_qs_cp_1_h, mask_hi);
 
-                            int        qh_offset    = (sb * QK_K / 2) % 256 + 16 * cp;
-                            // 0..7 & 32..39 & 64..71 & 96..103
-                            uint8x16_t q6_qs_cp_0_h = vld1q_u8(qh_base + qh_offset + 0);
-                            // 8..15 & 40..47 & 72..79 & 104..111
-                            uint8x16_t q6_qs_cp_1_h = vld1q_u8(qh_base + qh_offset + 64);
+                            const int8x16_t q6_l0 = vsubq_s8(
+                                vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6_qs_cp_0_l, m4b), q6_qs_cp_0_hl)), m32s);
+                            const int8x16_t q6_l1 = vsubq_s8(
+                                vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6_qs_cp_1_l, m4b), q6_qs_cp_1_hl)), m32s);
+                            const int8x16_t q6_h0 = vsubq_s8(
+                                vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6_qs_cp_0_l, 4), q6_qs_cp_0_hh)), m32s);
+                            const int8x16_t q6_h1 = vsubq_s8(
+                                vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6_qs_cp_1_l, 4), q6_qs_cp_1_hh)), m32s);
 
-                            // For sb 2, 3 we need to access the 2nd and 4th bit pairs
-                            // 32..39 & 64..71 & 96..103
-                            // 40..47 & 72..79 & 104..111
-                            if (sb > 1) {
-                                q6_qs_cp_0_h = vshrq_n_u8(q6_qs_cp_0_h, 2);
-                                q6_qs_cp_1_h = vshrq_n_u8(q6_qs_cp_1_h, 2);
-                            }
+                            // row pair 0, base_l
+                            int32x4_t sb_acc_0l = vmmlaq_s32(vdupq_n_s32(0), q6_l0, q8_l_01[0]);
+                            sb_acc_0l           = vmmlaq_s32(sb_acc_0l, q6_l1, q8_l_01[1]);
+                            // row pair 0, base_h
+                            int32x4_t sb_acc_0h = vmmlaq_s32(vdupq_n_s32(0), q6_h0, q8_h_01[0]);
+                            sb_acc_0h           = vmmlaq_s32(sb_acc_0h, q6_h1, q8_h_01[1]);
+                            // row pair 1, base_l
+                            int32x4_t sb_acc_1l = vmmlaq_s32(vdupq_n_s32(0), q6_l0, q8_l_23[0]);
+                            sb_acc_1l           = vmmlaq_s32(sb_acc_1l, q6_l1, q8_l_23[1]);
+                            // row pair 1, base_h
+                            int32x4_t sb_acc_1h = vmmlaq_s32(vdupq_n_s32(0), q6_h0, q8_h_23[0]);
+                            sb_acc_1h           = vmmlaq_s32(sb_acc_1h, q6_h1, q8_h_23[1]);
 
-                            uint8x16_t q6_qs_cp_0_hl = vshlq_n_u8(vandq_u8(q6_qs_cp_0_h, mask_lo), 4);
-                            uint8x16_t q6_qs_cp_0_hh = vandq_u8(q6_qs_cp_0_h, mask_hi);
-                            uint8x16_t q6_qs_cp_1_hl = vshlq_n_u8(vandq_u8(q6_qs_cp_1_h, mask_lo), 4);
-                            uint8x16_t q6_qs_cp_1_hh = vandq_u8(q6_qs_cp_1_h, mask_hi);
-
-                            // clang-format off
-                            // q6 = (qh << 4) | ql - 32
-                            const int8x16_t q6_nibbles[2][2] = {
-                                {
-                                    vsubq_s8(vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6_qs_cp_0_l, m4b), q6_qs_cp_0_hl)), m32s),
-                                    vsubq_s8(vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6_qs_cp_1_l, m4b), q6_qs_cp_1_hl)), m32s)
-                                },
-                                {
-                                    vsubq_s8(vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6_qs_cp_0_l, 4), q6_qs_cp_0_hh)), m32s),
-                                    vsubq_s8(vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6_qs_cp_1_l, 4), q6_qs_cp_1_hh)), m32s)
-                                }
+                            const int32x4_t scale_vec_l = {
+                                (int32_t) q6_scales[sb][cp * 2],
+                                (int32_t) q6_scales[sb][cp * 2],
+                                (int32_t) q6_scales[sb][cp * 2 + 1],
+                                (int32_t) q6_scales[sb][cp * 2 + 1],
                             };
-                            // clang-format on
+                            const int32x4_t scale_vec_h = {
+                                (int32_t) q6_scales[sb + 4][cp * 2],
+                                (int32_t) q6_scales[sb + 4][cp * 2],
+                                (int32_t) q6_scales[sb + 4][cp * 2 + 1],
+                                (int32_t) q6_scales[sb + 4][cp * 2 + 1],
+                            };
 
-                            // Calculates the Qs muladd of every row pair (rp) rows 01 and 23 of q8
-                            // for each of the internal 16 qs subblock (blk)
-                            for (int rp = 0; rp < 2; rp++) {
-                                for (int blk = 0; blk < 2; blk++) {
-                                    int32x4_t sbacc = sb_acc[2 * rp + blk];
-                                    // vi is either 0..7 or 8..15
-                                    for (int vi = 0; vi < 2; vi++) {
-                                        sbacc = vmmlaq_s32(sbacc, q6_nibbles[blk][vi], q8s[rp][blk][vi]);
-                                    }
-                                    sb_acc[2 * rp + blk] = sbacc;
-                                }
-                            }
-
-                            // apply scales to accumulated dot products
-                            const int scale_idx_l = sb;
-                            const int scale_idx_h = sb + 4;
-                            for (int blk = 0; blk < 2; blk++) {
-                                const int scale_idx = (blk == 0) ? scale_idx_l : scale_idx_h;
-                                // vmmlaq output: [c0*r0, c0*r1, c1*r0, c1*r1]
-                                int32x4_t scale_vec = {
-                                    (int32_t) q6_scales[scale_idx][cp * 2],      // c0 * r0
-                                    (int32_t) q6_scales[scale_idx][cp * 2],      // c0 * r1
-                                    (int32_t) q6_scales[scale_idx][cp * 2 + 1],  // c1 * r0
-                                    (int32_t) q6_scales[scale_idx][cp * 2 + 1],  // c1 * r1
-                                };
-                                // sb_acc[blk]: row pair 0 (rows 0,1)
-                                // sb_acc[blk+2]: row pair 1 (rows 2,3)
-                                acc[cp]     = vmlaq_s32(acc[cp], sb_acc[blk], scale_vec);
-                                acc[cp + 4] = vmlaq_s32(acc[cp + 4], sb_acc[blk + 2], scale_vec);
-                            }
+                            acc[cp]     = vmlaq_s32(acc[cp], sb_acc_0l, scale_vec_l);
+                            acc[cp]     = vmlaq_s32(acc[cp], sb_acc_0h, scale_vec_h);
+                            acc[cp + 4] = vmlaq_s32(acc[cp + 4], sb_acc_1l, scale_vec_l);
+                            acc[cp + 4] = vmlaq_s32(acc[cp + 4], sb_acc_1h, scale_vec_h);
                         }
                     }
                 }  // for half
