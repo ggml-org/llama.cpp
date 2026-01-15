@@ -13,6 +13,7 @@
     "SIGMOID_FUNC": "{{MUTATE}}[dst_i] = 1.0 / (1.0 + exp(-src[src_i]));",
     "SILU_FUNC": "{{MUTATE}}[dst_i] = src[src_i] / (1.0 + exp(-src[src_i]));",
     "EXP_FUNC": "{{MUTATE}}[dst_i] = exp(src[src_i]);",
+    "CLAMP_FUNC": "{{MUTATE}}[dst_i] = clamp(src[src_i], {{TYPE}}(params.clamp_min), {{TYPE}}(params.clamp_max));",
     "HARDSWISH_FUNC": "{{MUTATE}}[dst_i] = src[src_i] * min(1.0, max(0.0, (src[src_i] + 3.0) / 6.0));",
     "GELU_FUNC": "{{MUTATE}}[dst_i] = 0.5 * src[src_i] * (1.0 + tanh(clamp(sqrt(2.0 / 3.14159265) * (src[src_i] + 0.044715 * pow(src[src_i], 3.0)), -9.010913, 9.010913))); // Regarding tanh() domain restrictions in wgsl https://github.com/gpuweb/gpuweb/issues/4458",
     "GELU_QUICK_FUNC": "{{MUTATE}}[dst_i] = src[src_i] * 0.5 * (1.0 + tanh(clamp(0.79788456 * (src[src_i] + 0.044715 * src[src_i] * src[src_i] * src[src_i]), -9.010913, 9.010913))); // Regarding tanh() domain restrictions in wgsl https://github.com/gpuweb/gpuweb/issues/4458",
@@ -237,6 +238,27 @@
     {
       "SHADER_NAME": "exp_inplace_f16",
       "REPLS": { "TYPE": "f16", "FUNC": "EXP_FUNC", "EXT_PARAMS": "", "MUTATE": "src" },
+      "DECLS": ["INPLACE"]
+    },
+
+    {
+      "SHADER_NAME": "clamp_f32",
+      "REPLS": { "TYPE": "f32", "FUNC": "CLAMP_FUNC", "EXT_PARAMS": "clamp_min: f32, clamp_max: f32", "MUTATE": "dst" },
+      "DECLS": ["NOT_INPLACE"]
+    },
+    {
+      "SHADER_NAME": "clamp_f16",
+      "REPLS": { "TYPE": "f16", "FUNC": "CLAMP_FUNC", "EXT_PARAMS": "clamp_min: f32, clamp_max: f32", "MUTATE": "dst" },
+      "DECLS": ["NOT_INPLACE"]
+    },
+    {
+      "SHADER_NAME": "clamp_inplace_f32",
+      "REPLS": { "TYPE": "f32", "FUNC": "CLAMP_FUNC", "EXT_PARAMS": "clamp_min: f32, clamp_max: f32", "MUTATE": "src" },
+      "DECLS": ["INPLACE"]
+    },
+    {
+      "SHADER_NAME": "clamp_inplace_f16",
+      "REPLS": { "TYPE": "f16", "FUNC": "CLAMP_FUNC", "EXT_PARAMS": "clamp_min: f32, clamp_max: f32", "MUTATE": "src" },
       "DECLS": ["INPLACE"]
     },
 
@@ -584,4 +606,3 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 }
 
 #end(SHADER)
-

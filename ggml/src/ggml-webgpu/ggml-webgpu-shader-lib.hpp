@@ -28,6 +28,8 @@ template <typename T> inline void ggml_webgpu_hash_combine(size_t & seed, const 
     seed ^= std::hash<T>{}(value) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 }
 
+/** FlashAttention */
+
 struct ggml_webgpu_flash_attn_pipeline_key {
     int      q_type;
     int      kv_type;
@@ -211,9 +213,15 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_flash_attn_shader(
     return result;
 }
 
+/** Generic **/
+
 struct ggml_webgpu_generic_shader_lib_context {
     int      vec4;
     uint32_t max_wg_size;
+};
+
+struct ggml_webgpu_generic_shader_decisions {
+    uint32_t wg_size;
 };
 
 inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_generic_shader(
@@ -236,6 +244,8 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_generic_shader(
     result.variant = variant;
     return result;
 }
+
+/** Argsort **/
 
 struct ggml_webgpu_argsort_shader_lib_context {
     uint32_t max_wg_size;
@@ -285,6 +295,75 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_argsort_merge_shader(
     result.variant                                   = variant;
     ggml_webgpu_argsort_shader_decisions * decisions = new ggml_webgpu_argsort_shader_decisions();
     decisions->wg_size                               = wg_size;
+    result.decisions                                 = decisions;
+    return result;
+}
+
+/** Set Rows **/
+
+struct ggml_webgpu_set_rows_pipeline_key {
+    int dst_type;
+    int vec4;
+    int i64_idx;
+
+    bool operator==(const ggml_webgpu_set_rows_pipeline_key & other) const {
+        return dst_type == other.dst_type && vec4 == other.vec4 && i64_idx == other.i64_idx;
+    }
+};
+
+struct ggml_webgpu_set_rows_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_set_rows_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.dst_type);
+        ggml_webgpu_hash_combine(seed, key.vec4);
+        ggml_webgpu_hash_combine(seed, key.i64_idx);
+        return seed;
+    }
+};
+
+struct ggml_webgpu_set_rows_shader_lib_context {
+    int dst_type;
+    int vec4;
+    int i64_idx;
+    uint32_t max_wg_size;
+};
+
+inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_set_rows_shader(
+    pre_wgsl::Preprocessor &                        preprocessor,
+    const char *                                    shader_src,
+    const ggml_webgpu_set_rows_shader_lib_context & context) {
+    std::vector<std::string> defines;
+    std::string              variant = "set_rows";
+
+    switch (context.dst_type) {
+        case GGML_TYPE_F32:
+            defines.push_back("DST_F32");
+            variant += "_dstf32";
+            break;
+        case GGML_TYPE_F16:
+            // Default, no define needed
+            variant += "_dstf16";
+            break;
+        default:
+            GGML_ABORT("Unsupported dst type for set_rows shader");
+    }
+
+    if (context.vec4) {
+        defines.push_back("VEC4");
+        variant += "_vec";
+    }
+    if (context.i64_idx) {
+        defines.push_back("I64_IDX");
+        variant += "_i64idx";
+    }
+
+    defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+    ggml_webgpu_processed_shader result;
+    result.wgsl    = preprocessor.preprocess(shader_src, defines);
+    result.variant = variant;
+    ggml_webgpu_generic_shader_decisions * decisions = new ggml_webgpu_generic_shader_decisions();
+    decisions->wg_size                               = context.max_wg_size;
     result.decisions                                 = decisions;
     return result;
 }
