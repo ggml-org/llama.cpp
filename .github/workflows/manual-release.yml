@@ -77,16 +77,8 @@ jobs:
         run: |
           choco install ninja
 
-      - name: libCURL
-        id: get_libcurl
-        uses: ./.github/actions/windows-setup-curl
-        with:
-          architecture: win64
-
       - name: Build
         shell: cmd
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           cmake -S . -B build -G "Ninja Multi-Config" ^
@@ -95,15 +87,12 @@ jobs:
             -DGGML_BACKEND_DL=ON ^
             -DGGML_CPU_ALL_VARIANTS=ON ^
             -DGGML_OPENMP=ON ^
-            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" ^
+            -DLLAMA_CURL=OFF ^
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release
 
       - name: Pack artifacts
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          Copy-Item $env:CURL_PATH\bin\libcurl-x64.dll .\build\bin\Release\
           Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\x64\Microsoft.VC143.OpenMP.LLVM\libomp140.x86_64.dll" .\build\bin\Release\
           7z a -snl llama-bin-win-cpu-x64.zip .\build\bin\Release\*
 
@@ -131,13 +120,6 @@ jobs:
           key: macOS-latest-cmake-arm64
           evict-old-files: 1d
 
-      - name: Dependencies
-        id: depends
-        continue-on-error: true
-        run: |
-          brew update
-          brew install curl
-
       - name: Build
         id: cmake_build
         run: |
@@ -149,6 +131,7 @@ jobs:
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DGGML_RPC=ON \
+            -DLLAMA_CURL=OFF \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
