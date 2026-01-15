@@ -9,7 +9,7 @@ concurrency:
 
 env:
   BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
-  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
+  CMAKE_ARGS: "-DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON"
 
 jobs:
   server_tests:
@@ -97,7 +97,7 @@ jobs:
             -DGGML_OPENMP=ON ^
             -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" ^
             ${{ env.CMAKE_ARGS }}
-          cmake --build build --config Release --target llama-server
+          cmake --build build --config Release
 
       - name: Pack artifacts
         env:
@@ -105,8 +105,7 @@ jobs:
         run: |
           Copy-Item $env:CURL_PATH\bin\libcurl-x64.dll .\build\bin\Release\
           Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.44.35112\debug_nonredist\x64\Microsoft.VC143.OpenMP.LLVM\libomp140.x86_64.dll" .\build\bin\Release\
-          Copy-Item LICENSE .\build\bin\Release\
-          7z a -snl llama-bin-win-cpu-x64.zip .\build\bin\Release\llama-server.exe .\build\bin\Release\*.dll .\build\bin\Release\LICENSE
+          7z a -snl llama-bin-win-cpu-x64.zip .\build\bin\Release\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -151,7 +150,7 @@ jobs:
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DGGML_RPC=ON \
             ${{ env.CMAKE_ARGS }}
-          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) --target llama-server
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
       - name: Determine tag name
         id: tag
@@ -160,11 +159,8 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          mkdir -p ./package
-          cp ./build/bin/llama-server ./package/
-          cp ./build/bin/*.dylib ./package/ 2>/dev/null || true
-          cp LICENSE ./package/
-          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz -s ",./,llama-${{ steps.tag.outputs.name }}/," -C ./package .
+          cp LICENSE ./build/bin/
+          tar -czvf llama-${{ steps.tag.outputs.name }}-bin-macos-arm64.tar.gz -s ",./,llama-${{ steps.tag.outputs.name }}/," -C ./build/bin .
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -243,4 +239,3 @@ jobs:
                 });
               }
             }
-
