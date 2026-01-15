@@ -1015,7 +1015,7 @@ static void test_backend_state_save_restore(const test_params & params) {
     std::vector<float> saved_logits;
     std::vector<llama_token> saved_candidates;
 
-    auto setup_backend_sampler = [&seq_id](llama_sampler_ptr & chain) {
+    auto setup_backend_sampler = [](llama_sampler_ptr & chain) {
         struct llama_sampler_chain_params params = llama_sampler_chain_default_params();
         chain.reset(llama_sampler_chain_init(params));
         llama_sampler_chain_add(chain.get(), llama_sampler_init_top_k(10));
