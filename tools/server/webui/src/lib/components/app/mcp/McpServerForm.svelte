@@ -23,11 +23,7 @@
 	}: Props = $props();
 
 	// Local state for header pairs
-	let headerPairs = $state<KeyValuePair[]>(parseHeadersToArray(headers));
-
-	$effect(() => {
-		headerPairs = parseHeadersToArray(headers);
-	});
+	let headerPairs = $derived<KeyValuePair[]>(parseHeadersToArray(headers));
 
 	// Sync header pairs to parent when they change
 	function updateHeaderPairs(newPairs: KeyValuePair[]) {
