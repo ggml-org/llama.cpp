@@ -159,6 +159,8 @@ struct cli_context {
 };
 
 int main(int argc, char ** argv) {
+    common_init_args(argc, argv);
+
     common_params params;
 
     params.verbosity = LOG_LEVEL_ERROR; // by default, less verbose logs
