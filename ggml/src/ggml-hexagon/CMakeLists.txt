@@ -25,14 +25,9 @@ else()
     target_link_options(htp_iface PUBLIC -ldl)
 endif()
 
-#link_custom_library(htp_iface cdsprpc)
-#link_custom_library(htp_iface rpcmem)
-
 set(TARGET_NAME ggml-hexagon)
 ggml_add_backend_library(${TARGET_NAME}
     ggml-hexagon.cpp
-    htp-utils.c
-    htp-utils.h
     ../ggml-backend-dl.cpp
     htp-drv.cpp
     htp-drv.h
