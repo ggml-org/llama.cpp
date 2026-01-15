@@ -1395,6 +1395,33 @@ extern "C" {
                           const char ** seq_breakers,
                               size_t    num_breakers);
 
+    /// adaptive-p: select tokens near a configurable target probability over time.
+    ///
+    /// the adaptive-p sampler transforms the token probability distribution to favor tokens
+    /// that fall near a user-configurable probability target.
+    ///
+    /// internally, the sampler maintains an exponential moving average of the *ORIGINAL*
+    /// probabilities of selected tokens at each sampling step. it uses this EMA to compute an
+    /// adapted target probability at each sampling step, thus maintaining the desired target
+    /// probability over time.
+    ///
+    /// adaptive-p selects a token ID rather than just mutating candidates, so it must be last
+    /// in the sampler chain (like mirostat, dist, greedy).
+    ///
+    /// only mild truncation before this sampler is recommended. we suggest applying min-p
+    /// before adaptive-p as the only other active sampler in the chain.
+    ///
+    /// @param target select tokens near this probability (valid range 0.0 to 1.0; negative = disabled)
+    /// @param decay  EMA decay for adaptation; history ≈ 1/(1-decay) tokens (valid range 0.0 - 0.99)
+    /// @param seed   RNG seed
+    ///
+    /// ref: https://github.com/ggml-org/llama.cpp/pull/17927
+    ///
+    LLAMA_API struct llama_sampler * llama_sampler_init_adaptive_p(
+                               float   target,
+                               float   decay,
+                            uint32_t   seed);
+
     LLAMA_API struct llama_sampler * llama_sampler_init_logit_bias(
                              int32_t   n_vocab,
                              int32_t   n_logit_bias,
