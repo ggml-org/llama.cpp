@@ -186,6 +186,22 @@ public:
     // for compatibility with speculative decoding, ctx shift, slot save/load
     const llama_tokens & get_text_tokens() const;
 
+    // Export the raw token layout, including LLAMA_TOKEN_NULL placeholders for media.
+    // This is used for multimodal slot save/restore.
+    llama_tokens export_tokens_all() const;
+
+    // Serialize multimodal token layout + chunk metadata for slot save/restore.
+    // Only valid when has_mtmd == true.
+    json to_json_mtmd_sidecar() const;
+
+    // Deserialize a multimodal token layout + chunk metadata produced by to_json_mtmd_sidecar().
+    // Reconstructs media chunks as metadata-only stubs (no image/audio bytes).
+    static server_tokens from_json_mtmd_sidecar(const json & j);
+
+    // Count image chunks that are fully contained within the first `prefix_len` tokens.
+    // This is useful for detecting multimodal KV-cache reuse.
+    size_t count_image_chunks_in_prefix(size_t prefix_len) const;
+
     // for compatibility with speculative decoding
     void set_token(llama_pos pos, llama_token id);
 

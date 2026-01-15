@@ -12,6 +12,7 @@
 #include <random>
 #include <sstream>
 #include <fstream>
+#include <stdexcept>
 
 json format_error_response(const std::string & message, const enum error_type type) {
     std::string type_str;
@@ -328,6 +329,191 @@ void server_tokens::insert(const llama_tokens & inp_tokens) {
 const llama_tokens & server_tokens::get_text_tokens() const {
     GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
     return tokens;
+}
+
+llama_tokens server_tokens::export_tokens_all() const {
+    return tokens;
+}
+
+size_t server_tokens::count_image_chunks_in_prefix(size_t prefix_len) const {
+    if (!has_mtmd || prefix_len == 0) {
+        return 0;
+    }
+
+    size_t n_hits = 0;
+    for (const auto & it : map_idx_to_media) {
+        const size_t start_idx = it.first;
+        if (start_idx >= prefix_len) {
+            continue;
+        }
+        const mtmd_input_chunk * chunk = it.second.get();
+        if (mtmd_input_chunk_get_type(chunk) != MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+            continue;
+        }
+        const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
+        if (start_idx + n_tokens <= prefix_len) {
+            n_hits++;
+        }
+    }
+
+    return n_hits;
+}
+
+json server_tokens::to_json_mtmd_sidecar() const {
+    GGML_ASSERT(has_mtmd);
+
+    json out = json::object();
+    out["mtmd_sidecar_version"] = 1;
+
+    // tokens (include LLAMA_TOKEN_NULL placeholders as -1)
+    {
+        json jtoks = json::array();
+        for (const auto & t : tokens) {
+            jtoks.push_back(t == LLAMA_TOKEN_NULL ? -1 : (int) t);
+        }
+        out["tokens"] = std::move(jtoks);
+    }
+
+    // chunks
+    {
+        json jchunks = json::array();
+        for (const auto & it : map_idx_to_media) {
+            const size_t start_idx = it.first;
+            const auto & chunk_ptr = it.second;
+            const mtmd_input_chunk * chunk = chunk_ptr.get();
+
+            const auto type = mtmd_input_chunk_get_type(chunk);
+            const char * id_c = mtmd_input_chunk_get_id(chunk);
+            const std::string id = id_c ? std::string(id_c) : std::string();
+            const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk);
+
+            if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+                const mtmd_image_tokens * img = mtmd_input_chunk_get_tokens_image(chunk);
+                GGML_ASSERT(img != nullptr);
+
+                const size_t nx = mtmd_image_tokens_get_nx(img);
+                const size_t ny = mtmd_image_tokens_get_ny(img);
+                const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk);
+                const bool use_mrope_pos = n_pos != (llama_pos) n_tokens;
+
+                jchunks.push_back(json{
+                    {"start_idx",      start_idx},
+                    {"type",           "image"},
+                    {"id",             id},
+                    {"n_tokens",       n_tokens},
+                    {"nx",             nx},
+                    {"ny",             ny},
+                    {"use_mrope_pos",  use_mrope_pos},
+                });
+            } else if (type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+                jchunks.push_back(json{
+                    {"start_idx", start_idx},
+                    {"type",      "audio"},
+                    {"id",        id},
+                    {"n_tokens",  n_tokens},
+                });
+            } else {
+                // should never happen: map_idx_to_media should only contain media chunks
+                GGML_ABORT("invalid mtmd chunk type");
+            }
+        }
+        out["chunks"] = std::move(jchunks);
+    }
+
+    return out;
+}
+
+server_tokens server_tokens::from_json_mtmd_sidecar(const json & j) {
+    // basic shape checks
+    if (!j.is_object()) {
+        throw std::runtime_error("mtmd sidecar must be a JSON object");
+    }
+    const int version = json_value(j, "mtmd_sidecar_version", 0);
+    if (version != 1) {
+        throw std::runtime_error("unsupported mtmd sidecar version");
+    }
+    if (!j.contains("tokens") || !j.at("tokens").is_array()) {
+        throw std::runtime_error("mtmd sidecar missing 'tokens' array");
+    }
+    if (!j.contains("chunks") || !j.at("chunks").is_array()) {
+        throw std::runtime_error("mtmd sidecar missing 'chunks' array");
+    }
+
+    server_tokens res;
+    res.has_mtmd = true;
+
+    // tokens
+    {
+        const auto & jtoks = j.at("tokens");
+        res.tokens.clear();
+        res.tokens.reserve(jtoks.size());
+        for (const auto & v : jtoks) {
+            if (!v.is_number_integer()) {
+                throw std::runtime_error("mtmd sidecar tokens must be integers");
+            }
+            const int64_t tv = v.get<int64_t>();
+            if (tv == -1) {
+                res.tokens.emplace_back(LLAMA_TOKEN_NULL);
+            } else {
+                res.tokens.emplace_back((llama_token) tv);
+            }
+        }
+    }
+
+    // chunks
+    {
+        const auto & jchunks = j.at("chunks");
+        for (const auto & c : jchunks) {
+            if (!c.is_object()) {
+                throw std::runtime_error("mtmd sidecar chunk must be an object");
+            }
+            const size_t start_idx = (size_t) json_value(c, "start_idx", (int64_t) -1);
+            const std::string type = json_value(c, "type", std::string());
+            const std::string id   = json_value(c, "id",   std::string());
+            const size_t n_tokens  = (size_t) json_value(c, "n_tokens", (int64_t) 0);
+
+            if (id.empty()) {
+                throw std::runtime_error("mtmd sidecar chunk id must not be empty");
+            }
+            if (n_tokens == 0) {
+                throw std::runtime_error("mtmd sidecar chunk n_tokens must be > 0");
+            }
+            if (start_idx >= res.tokens.size() || start_idx + n_tokens > res.tokens.size()) {
+                throw std::runtime_error("mtmd sidecar chunk range out of bounds");
+            }
+            if (res.map_idx_to_media.count(start_idx) != 0) {
+                throw std::runtime_error("mtmd sidecar has duplicate chunk start_idx");
+            }
+
+            // ensure placeholders match the claimed range
+            for (size_t i = start_idx; i < start_idx + n_tokens; ++i) {
+                if (res.tokens[i] != LLAMA_TOKEN_NULL) {
+                    throw std::runtime_error("mtmd sidecar chunk range must be LLAMA_TOKEN_NULL placeholders");
+                }
+            }
+
+            mtmd_input_chunk * stub = nullptr;
+            if (type == "image") {
+                const int nx = (int) json_value(c, "nx", (int64_t) 0);
+                const int ny = (int) json_value(c, "ny", (int64_t) 0);
+                const bool use_mrope_pos = json_value(c, "use_mrope_pos", false);
+
+                stub = mtmd_input_chunk_create_stub_image(id.c_str(), nx, ny, use_mrope_pos, n_tokens);
+            } else if (type == "audio") {
+                stub = mtmd_input_chunk_create_stub_audio(id.c_str(), n_tokens);
+            } else {
+                throw std::runtime_error("mtmd sidecar chunk type must be 'image' or 'audio'");
+            }
+
+            if (stub == nullptr) {
+                throw std::runtime_error("failed to create mtmd stub chunk from sidecar metadata");
+            }
+
+            res.map_idx_to_media[start_idx] = mtmd::input_chunk_ptr(stub);
+        }
+    }
+
+    return res;
 }
 
 void server_tokens::set_token(llama_pos pos, llama_token id) {

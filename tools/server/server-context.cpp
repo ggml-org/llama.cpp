@@ -14,8 +14,10 @@
 
 #include <cstddef>
 #include <cinttypes>
+#include <cstdio>
 #include <memory>
 #include <filesystem>
+#include <fstream>
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -1757,10 +1759,6 @@ private:
                 } break;
             case SERVER_TASK_TYPE_SLOT_SAVE:
                 {
-                    if (!check_no_mtmd(task.id)) {
-                        break;
-                    }
-
                     int id_slot = task.slot_action.slot_id;
                     server_slot * slot = get_slot_by_id(id_slot);
                     if (slot == nullptr) {
@@ -1780,8 +1778,48 @@ private:
                     std::string filename = task.slot_action.filename;
                     std::string filepath = task.slot_action.filepath;
 
-                    const llama_tokens & tokens = slot->prompt.tokens.get_text_tokens();
-                    const size_t nwrite = llama_state_seq_save_file(ctx, filepath.c_str(), slot->id, tokens.data(), token_count);
+                    size_t nwrite = 0;
+                    if (slot->prompt.tokens.has_mtmd) {
+                        const llama_tokens raw_tokens = slot->prompt.tokens.export_tokens_all();
+                        nwrite = llama_state_seq_save_file(ctx, filepath.c_str(), slot->id, raw_tokens.data(), raw_tokens.size());
+                        if (nwrite == 0) {
+                            send_error(task, "Unable to save slot state", ERROR_TYPE_SERVER);
+                            break;
+                        }
+
+                        // write MTMD sidecar
+                        const std::string sidecar_path = filepath + ".mtmd.json";
+                        const std::string sidecar_tmp  = sidecar_path + ".tmp";
+                        try {
+                            std::ofstream ofs(sidecar_tmp, std::ios::binary | std::ios::trunc);
+                            if (!ofs.is_open()) {
+                                send_error(task, "Unable to save slot MTMD sidecar", ERROR_TYPE_SERVER);
+                                break;
+                            }
+                            const json sidecar = slot->prompt.tokens.to_json_mtmd_sidecar();
+                            ofs << sidecar.dump();
+                            ofs.close();
+
+                            std::error_code ec;
+                            std::filesystem::rename(sidecar_tmp, sidecar_path, ec);
+                            if (ec) {
+                                // best-effort replace
+                                std::filesystem::remove(sidecar_path, ec);
+                                ec.clear();
+                                std::filesystem::rename(sidecar_tmp, sidecar_path, ec);
+                            }
+                            if (ec) {
+                                send_error(task, "Unable to finalize slot MTMD sidecar", ERROR_TYPE_SERVER);
+                                break;
+                            }
+                        } catch (const std::exception & e) {
+                            send_error(task, std::string("Unable to save slot MTMD sidecar: ") + e.what(), ERROR_TYPE_SERVER);
+                            break;
+                        }
+                    } else {
+                        const llama_tokens & tokens = slot->prompt.tokens.get_text_tokens();
+                        nwrite = llama_state_seq_save_file(ctx, filepath.c_str(), slot->id, tokens.data(), token_count);
+                    }
 
                     const int64_t t_end = ggml_time_us();
                     const double t_save_ms = (t_end - t_start) / 1000.0;
@@ -1798,7 +1836,6 @@ private:
                 } break;
             case SERVER_TASK_TYPE_SLOT_RESTORE:
                 {
-                    if (!check_no_mtmd(task.id)) break;
                     int id_slot = task.slot_action.slot_id;
                     server_slot * slot = get_slot_by_id(id_slot);
                     if (slot == nullptr) {
@@ -1827,8 +1864,44 @@ private:
                         break;
                     }
                     tokens.resize(token_count);
-                    slot->prompt.tokens.clear();
-                    slot->prompt.tokens.insert(tokens);
+                    if (slot->mctx != nullptr) {
+                        const std::string sidecar_path = filepath + ".mtmd.json";
+                        if (!std::filesystem::exists(sidecar_path)) {
+                            slot->prompt.tokens.clear(); // KV may already been invalidated?
+                            send_error(task, "Unable to restore multimodal slot: missing MTMD sidecar", ERROR_TYPE_INVALID_REQUEST);
+                            break;
+                        }
+
+                        try {
+                            std::ifstream ifs(sidecar_path, std::ios::binary);
+                            if (!ifs.is_open()) {
+                                slot->prompt.tokens.clear();
+                                send_error(task, "Unable to restore multimodal slot: failed to open MTMD sidecar", ERROR_TYPE_SERVER);
+                                break;
+                            }
+                            std::string buf((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
+                            ifs.close();
+
+                            const json sidecar = json::parse(buf);
+                            server_tokens restored = server_tokens::from_json_mtmd_sidecar(sidecar);
+
+                            // basic sanity: tokens count from KV-state file must match sidecar layout
+                            if (restored.size() != token_count) {
+                                slot->prompt.tokens.clear();
+                                send_error(task, "Unable to restore multimodal slot: MTMD sidecar does not match state file", ERROR_TYPE_INVALID_REQUEST);
+                                break;
+                            }
+
+                            slot->prompt.tokens = std::move(restored);
+                        } catch (const std::exception & e) {
+                            slot->prompt.tokens.clear();
+                            send_error(task, std::string("Unable to restore multimodal slot: ") + e.what(), ERROR_TYPE_INVALID_REQUEST);
+                            break;
+                        }
+                    } else {
+                        slot->prompt.tokens.clear();
+                        slot->prompt.tokens.insert(tokens);
+                    }
 
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
@@ -1845,9 +1918,6 @@ private:
                 } break;
             case SERVER_TASK_TYPE_SLOT_ERASE:
                 {
-                    if (!check_no_mtmd(task.id)) {
-                        break;
-                    }
                     int id_slot = task.slot_action.slot_id;
                     server_slot * slot = get_slot_by_id(id_slot);
                     if (slot == nullptr) {
@@ -2208,6 +2278,15 @@ private:
                                 if (slot.alora_invocation_start > 0) {
                                     SLT_DBG(slot, "only caching to alora invocation start (n_past = %d, alora_invocation_start = %d)\n", n_past, slot.alora_invocation_start);
                                     n_past = std::min(n_past, slot.alora_invocation_start - 1);
+                                }
+
+                                // Multimodal KV reuse: if the common prefix includes a full image chunk, we are reusing
+                                // cached image KV (no re-encode needed).
+                                if (slot.prompt.tokens.has_mtmd && n_past > 0) {
+                                    const size_t n_img_hits = slot.prompt.tokens.count_image_chunks_in_prefix((size_t) n_past);
+                                    for (size_t i = 0; i < n_img_hits; ++i) {
+                                        std::fprintf(stderr, "IMAGE CACHE HIT\n");
+                                    }
                                 }
 
                                 const auto n_cache_reuse = slot.task->params.n_cache_reuse;

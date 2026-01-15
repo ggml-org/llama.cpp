@@ -222,6 +222,23 @@ MTMD_API int32_t mtmd_encode(mtmd_context * ctx,
 MTMD_API int32_t mtmd_encode_chunk(mtmd_context * ctx,
                                    const mtmd_input_chunk * chunk);
 
+// Create metadata-only (stub) media chunks.
+// These chunks are intended for KV-cache bookkeeping / prompt layout reconstruction.
+// They do NOT contain image/audio data and MUST NOT be passed to mtmd_encode_chunk().
+//
+// Returns nullptr on invalid input.
+MTMD_API mtmd_input_chunk * mtmd_input_chunk_create_stub_image(
+        const char * id,
+        int nx,
+        int ny,
+        bool use_mrope_pos,
+        size_t n_tokens);
+
+// Returns nullptr on invalid input.
+MTMD_API mtmd_input_chunk * mtmd_input_chunk_create_stub_audio(
+        const char * id,
+        size_t n_tokens);
+
 // get output embeddings from the last encode pass
 // the reading size (in bytes) is equal to:
 // llama_model_n_embd(model) * mtmd_input_chunk_get_n_tokens(chunk) * sizeof(float)

@@ -19,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <vector>
 
 // represents raw image data, layout is RGBRGBRGB...
@@ -1068,6 +1069,59 @@ void mtmd_input_chunk_free(mtmd_input_chunk * chunk) {
     if (chunk) {
         delete chunk;
     }
+}
+
+mtmd_input_chunk * mtmd_input_chunk_create_stub_image(
+        const char * id,
+        int nx,
+        int ny,
+        bool use_mrope_pos,
+        size_t n_tokens) {
+    if (id == nullptr || *id == '\0') {
+        return nullptr;
+    }
+    if (nx <= 0 || ny <= 0) {
+        return nullptr;
+    }
+    // mtmd_image_tokens::n_tokens() is nx * ny, so this must match the placeholder count.
+    if ((uint64_t) nx * (uint64_t) ny != (uint64_t) n_tokens) {
+        return nullptr;
+    }
+
+    mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens());
+    image_tokens->nx = (uint32_t) nx;
+    image_tokens->ny = (uint32_t) ny;
+    image_tokens->use_mrope_pos = use_mrope_pos;
+    image_tokens->id = id;
+
+    return new mtmd_input_chunk{
+        MTMD_INPUT_CHUNK_TYPE_IMAGE,
+        {}, // text tokens
+        std::move(image_tokens),
+        nullptr, // audio tokens
+    };
+}
+
+mtmd_input_chunk * mtmd_input_chunk_create_stub_audio(
+        const char * id,
+        size_t n_tokens) {
+    if (id == nullptr || *id == '\0') {
+        return nullptr;
+    }
+    if (n_tokens == 0 || n_tokens > (size_t) std::numeric_limits<uint32_t>::max()) {
+        return nullptr;
+    }
+
+    mtmd_audio_tokens_ptr audio_tokens(new mtmd_audio_tokens());
+    audio_tokens->n_tokens = (uint32_t) n_tokens;
+    audio_tokens->id = id;
+
+    return new mtmd_input_chunk{
+        MTMD_INPUT_CHUNK_TYPE_AUDIO,
+        {}, // text tokens
+        nullptr, // image tokens
+        std::move(audio_tokens),
+    };
 }
 
 // mtmd_image_tokens
