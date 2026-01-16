@@ -127,3 +127,5 @@ ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
 
     return &reg;
 }
+
+GGML_BACKEND_DL_IMPL(ggml_backend_remoting_frontend_reg)
