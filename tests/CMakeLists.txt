@@ -186,6 +186,7 @@ endif()
 llama_build_and_test(test-chat-parser.cpp)
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
 llama_build_and_test(test-chat-template.cpp)
+llama_build_and_test(test-jinja.cpp)
 llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build_and_test(
@@ -196,7 +197,6 @@ llama_build_and_test(
     peg-parser/test-json-parser.cpp
     peg-parser/test-json-serialization.cpp
     peg-parser/test-unicode.cpp
-    peg-parser/testing.h
     peg-parser/tests.h
 )
 llama_build_and_test(test-regex-partial.cpp)

@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "testing.h"
+#include "../testing.h"
 #include "peg-parser.h"
 #include "chat-peg-parser.h"
 #include "simple-tokenize.h"

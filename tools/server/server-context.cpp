@@ -864,9 +864,10 @@ private:
         };
 
         // print sample chat example to make it clear which template is used
-        LOG_INF("%s: chat template, chat_template: %s, example_format: '%s'\n", __func__,
-            common_chat_templates_source(chat_templates.get()),
-            common_chat_format_example(chat_templates.get(), params_base.use_jinja, params_base.default_template_kwargs).c_str());
+        // @ngxson modern templates are too long, spam the logs; printing the example is enough
+        LOG_INF("%s: chat template, example_format: '%s'\n", __func__,
+        //      common_chat_templates_source(chat_templates.get()),
+                common_chat_format_example(chat_templates.get(), params_base.use_jinja, params_base.default_template_kwargs).c_str());
 
         if (!is_resume) {
             return init();

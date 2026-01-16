@@ -198,7 +198,7 @@ struct testing {
         ++assertions;
         if (!cond) {
             ++failures;
-            out << indent() << "ASSERT TRUE FAILED";
+            out << indent() << "ASSERTION FAILED";
             if (!msg.empty()) {
                 out << " : " << msg;
             }
