@@ -2786,21 +2786,22 @@ template <typename... _TInnerArgs> struct cl_func_args_concatenator<void(_TInner
     using func_t = void(_TInnerArgs...);
 };
 
-template <typename _TFirstArg, typename... _TRestArgs> struct cl_param_type_extractor {
+template <typename _TFirstArg, typename... _TRestArgs> struct cl_kernel_signature_builder {
     using args_t       = std::remove_const_t<std::remove_pointer_t<std::remove_reference_t<_TFirstArg>>>;
     using first_func_t = typename cl_kernel_arg_setter<args_t>::func_t;
-    using func_t       = typename cl_func_args_concatenator<first_func_t,
-                                                            typename cl_param_type_extractor<_TRestArgs...>::func_t>::func_t;
+    using func_t =
+        typename cl_func_args_concatenator<first_func_t,
+                                           typename cl_kernel_signature_builder<_TRestArgs...>::func_t>::func_t;
 };
 
-template <typename _TFinalArg> struct cl_param_type_extractor<_TFinalArg> {
+template <typename _TFinalArg> struct cl_kernel_signature_builder<_TFinalArg> {
     using args_t = std::remove_const_t<std::remove_pointer_t<std::remove_reference_t<_TFinalArg>>>;
     using func_t = typename cl_kernel_arg_setter<args_t>::func_t;
 };
 
 template <typename _TFunc, typename... _TArgs>
 static inline size_t cl_set_kernel_args_safe(cl_kernel kernel, _TArgs &&... args) {
-    static_assert(std::is_same_v<_TFunc, typename cl_param_type_extractor<_TArgs...>::func_t>,
+    static_assert(std::is_same_v<_TFunc, typename cl_kernel_signature_builder<_TArgs...>::func_t>,
                   "Kernel argument type mismatch between prototype and called arguments");
     return cl_set_kernel_args(kernel, args...);
 }
