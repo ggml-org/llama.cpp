@@ -1,6 +1,5 @@
 #import "ggml-metal-device.h"
 
-
 #import "ggml-impl.h"
 
 #include <Foundation/Foundation.h>
