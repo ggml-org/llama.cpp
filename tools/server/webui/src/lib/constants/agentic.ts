@@ -36,6 +36,10 @@ export const AGENTIC_REGEX = {
 	EARLY_MATCH: /<<<AGENTIC_TOOL_CALL_START>>>([\s\S]*)$/,
 	// Matches partial marker at end of content
 	PARTIAL_MARKER: /<<<[A-Za-z_]*$/,
+	// Matches reasoning content blocks (including tags)
+	REASONING_BLOCK: /<<<reasoning_content_start>>>[\s\S]*?<<<reasoning_content_end>>>/g,
+	// Matches an opening reasoning tag and any remaining content (unterminated)
+	REASONING_OPEN: /<<<reasoning_content_start>>>[\s\S]*$/,
 	// Matches tool name inside content
 	TOOL_NAME_EXTRACT: /<<<TOOL_NAME:([^>]+)>>>/
 } as const;
