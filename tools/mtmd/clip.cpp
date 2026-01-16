@@ -1228,8 +1228,6 @@ struct clip_model_loader {
                         get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels);
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels);
 
-                        // TODO(megemini): paddleocr vl not specified?
-                        hparams.set_limit_image_tokens(8, 4096);
                         hparams.set_warmup_n_tokens(28*28); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_LFM2A:
