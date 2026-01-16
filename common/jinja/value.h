@@ -168,8 +168,20 @@ struct value_t {
         }
         return val_obj.unordered.at(key);
     }
-    virtual value & at(size_t index) {
-        if (index >= val_arr.size()) {
+    virtual value & at(int64_t index, value & default_val) {
+        if (index < 0) {
+            index += val_arr.size();
+        }
+        if (index < 0 || static_cast<size_t>(index) >= val_arr.size()) {
+            return default_val;
+        }
+        return val_arr[index];
+    }
+    virtual value & at(int64_t index) {
+        if (index < 0) {
+            index += val_arr.size();
+        }
+        if (index < 0 || static_cast<size_t>(index) >= val_arr.size()) {
             throw std::runtime_error("Index " + std::to_string(index) + " out of bounds for array of size " + std::to_string(val_arr.size()));
         }
         return val_arr[index];
