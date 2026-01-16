@@ -1,7 +1,37 @@
 import { getJsonHeaders } from '$lib/utils';
+import { AGENTIC_REGEX } from '$lib/constants/agentic';
 import { AttachmentType } from '$lib/enums';
+import type { ApiChatMessageContentPart } from '$lib/types/api';
 
 export class ChatService {
+	private static stripReasoningContent(
+		content: ApiChatMessageData['content'] | null | undefined
+	): ApiChatMessageData['content'] | null | undefined {
+		if (!content) {
+			return content;
+		}
+
+		if (typeof content === 'string') {
+			return content
+				.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
+				.replace(AGENTIC_REGEX.REASONING_OPEN, '');
+		}
+
+		if (!Array.isArray(content)) {
+			return content;
+		}
+
+		return content.map((part: ApiChatMessageContentPart) => {
+			if (part.type !== 'text' || !part.text) return part;
+			return {
+				...part,
+				text: part.text
+					.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
+					.replace(AGENTIC_REGEX.REASONING_OPEN, '')
+			};
+		});
+	}
+
 	/**
 	 *
 	 *
@@ -114,7 +144,9 @@ export class ChatService {
 		const requestBody: ApiChatCompletionRequest = {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
 				role: msg.role,
-				content: msg.content,
+				// Strip reasoning tags/content from the prompt to avoid polluting KV cache.
+				// TODO: investigate backend expectations for reasoning tags and add a toggle if needed.
+				content: ChatService.stripReasoningContent(msg.content),
 				tool_calls: msg.tool_calls,
 				tool_call_id: msg.tool_call_id
 			})),
