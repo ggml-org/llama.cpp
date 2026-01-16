@@ -99,7 +99,6 @@ class Runner::RunnerImpl {
                  int                          n_predict,
                  const text_callback_t &      text_callback,
                  const audio_callback_t &     audio_callback) {
-        mtmd_audio_output_reset(ctx.mtmd_ctx_audio.get());
 
         std::vector<common_chat_msg> msgs;
         for (const auto & message : messages) {
@@ -151,6 +150,8 @@ class Runner::RunnerImpl {
             msg.content = message.content;
             msgs.push_back(msg);
         }
+
+        mtmd_audio_output_start_new_turn(ctx.mtmd_ctx_audio.get());
 
         if (eval_messages(msgs, ctx.n_past == 0)) {
             return error("failed to run prefill");
@@ -230,8 +231,6 @@ class Runner::RunnerImpl {
 
         llama_memory_clear(llama_get_memory(ctx.lctx), false);
         ctx.n_past = 0;
-
-        mtmd_audio_output_reset(ctx.mtmd_ctx_audio.get());
     }
 
     int get_output_sample_rate() const { return mtmd_audio_output_get_sample_rate(ctx.mtmd_ctx_audio.get()); }

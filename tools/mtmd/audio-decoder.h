@@ -20,8 +20,6 @@ struct mtmd_audio_decode_result {
 struct mtmd_audio_decoder {
     virtual ~mtmd_audio_decoder() = default;
 
-    virtual void reset() = 0;
-
     virtual mtmd_audio_decoder_type get_type() = 0;
 
     virtual int get_sample_rate() const = 0;
@@ -36,6 +34,8 @@ struct mtmd_audio_decoder {
     virtual mtmd_output_modality accept_text_token(llama_token token) = 0;
 
     virtual void set_modalities(const std::vector<mtmd_output_modality> & modalities) = 0;
+
+    virtual void start_new_turn() = 0;
 };
 
 using mtmd_audio_decoder_ptr = std::unique_ptr<mtmd_audio_decoder>;

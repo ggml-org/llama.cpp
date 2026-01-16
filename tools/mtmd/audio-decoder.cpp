@@ -705,7 +705,7 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
 
     virtual ~audio_decoder_lfm25() = default;
 
-    void reset() override {
+    void start_new_turn() override {
         llama_memory_clear(llama_get_memory(audio_tokenizer_lctx), false);
         istft_state->reset();
 
@@ -782,11 +782,6 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
 
     void set_modalities(const std::vector<mtmd_output_modality> & modalities) override {
         this->modalities = modalities;
-        if (is_interleaved_mode()) {
-            modality_left = interleaved_n_text;
-        } else {
-            modality_left = INT_MAX;
-        }
     }
 
   private:

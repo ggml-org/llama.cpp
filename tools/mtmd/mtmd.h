@@ -256,9 +256,6 @@ MTMD_API bool mtmd_support_audio_output(mtmd_context * ctx);
 // returns 0 if audio output is not supported
 MTMD_API int mtmd_audio_output_get_sample_rate(mtmd_context * ctx);
 
-// reset decoder state
-MTMD_API void mtmd_audio_output_reset(mtmd_context * ctx);
-
 // decode audio frame
 MTMD_API int mtmd_audio_output_decode(mtmd_context * ctx,
                                       const float *  embedding,
@@ -281,6 +278,9 @@ MTMD_API void mtmd_audio_output_accept_token(mtmd_context * ctx, llama_token id)
 
 // set output modalities sequence for generation
 MTMD_API void mtmd_set_output_modalities(mtmd_context * ctx, mtmd_output_modality * ptr, size_t len);
+
+// reset decoder state, has to be called after modalities are set
+MTMD_API void mtmd_audio_output_start_new_turn(mtmd_context * ctx);
 
 #ifdef __cplusplus
 } // extern "C"

@@ -1217,9 +1217,9 @@ int mtmd_audio_output_decode(
     return 0;
 }
 
-void mtmd_audio_output_reset(mtmd_context * ctx) {
+void mtmd_audio_output_start_new_turn(mtmd_context * ctx) {
     GGML_ASSERT(mtmd_support_audio_output(ctx));
-    ctx->audio_decoder->reset();
+    ctx->audio_decoder->start_new_turn();
 }
 
 mtmd_output_modality mtmd_get_output_modality(mtmd_context * ctx) {
@@ -1253,6 +1253,11 @@ void mtmd_audio_output_accept_token(mtmd_context * ctx, llama_token id) {
 
 void mtmd_set_output_modalities(mtmd_context * ctx, mtmd_output_modality * ptr, size_t len) {
     GGML_ASSERT(mtmd_support_audio_output(ctx));
+    if (!ptr || !len) {
+        ctx->audio_decoder->set_modalities({});
+        return;
+    }
+
     std::vector modalities(ptr, ptr + len);
     ctx->audio_decoder->set_modalities(modalities);
 }
