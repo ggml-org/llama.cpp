@@ -94,17 +94,6 @@ void ggml_cann_set_device(const int32_t device) {
 }
 
 /**
- * @brief Retrieves the current device ID.
- *
- * @return The current device ID.
- */
-int32_t ggml_cann_get_device() {
-    int32_t id;
-    ACL_CHECK(aclrtGetDevice(&id));
-    return id;
-}
-
-/**
  * @brief Get the value of the specified environment variable (name) as lowercase.
  *        if not empty, return a std::string object
  */
