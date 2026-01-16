@@ -184,4 +184,14 @@ struct llama_model_loader {
     std::string ftype_name() const;
 
     void print_info() const;
+
+private:
+    // Helper methods for constructor deduplication
+    void init_common_params(
+        const llama_model_kv_override * param_overrides_p,
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
+
+    void load_architecture_and_metadata();
+
+    void determine_file_type_and_dump_metadata(int trace, const char * source_name);
 };
