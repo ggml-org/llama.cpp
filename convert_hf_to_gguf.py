@@ -2396,6 +2396,8 @@ class StableLMModel(TextModel):
     "LlavaForConditionalGeneration",
     "VoxtralForConditionalGeneration",
     "LlamaForCausalLMEagle3",
+    "Eagle3Speculator",
+    "Eagle3DraftModel",
     "LlamaModel")
 class LlamaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLAMA
@@ -2444,6 +2446,11 @@ class LlamaModel(TextModel):
                 target_hidden_size = target_config["hidden_size"]
                 logger.info(f"EAGLE3: target_hidden_size = {target_hidden_size} (from target model config)")
             self.gguf_writer.add_uint32(f"{self.gguf_writer.arch}.target_hidden_size", target_hidden_size)
+
+            # Eagle3Speculator norm_before_residual specific handling
+            norm_before_residual = eagle3_raw_config.get("norm_before_residual", False)
+            logger.info(f"EAGLE3: norm_before_residual = {norm_before_residual} (from EAGLE3 config)")
+            self.gguf_writer.add_bool(f"{self.gguf_writer.arch}.norm_before_residual", norm_before_residual)
 
     def set_vocab(self):
         # For EAGLE-3 models, use tokenizer from target model if provided
@@ -2528,14 +2535,22 @@ class LlamaModel(TextModel):
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
         tensors = super().index_tensors(remote_hf_model_id)
+
+        # Handle Eagle3Speculator nested config
+        if "transformer_layer_config" in self.hparams:
+            self.hparams = {**self.hparams, **self.hparams["transformer_layer_config"]}
+            
         # EAGLE-3 detection: check hparams directly (before self.is_eagle3 is set)
         if "draft_vocab_size" in self.hparams and self.hparams["num_hidden_layers"] == 1:
-            logger.info("EAGLE-3: Renaming midlayer.* to model.layers.0.*")
+            logger.info("EAGLE-3: Renaming midlayer.* or layers.0.* to model.layers.0.*")
             new_tensors = {}
             # EAGLE-3: rename midlayer.* to model.layers.0.* for compatibility with llama model
             for name, gen in tensors.items():
                 if name.startswith("midlayer."):
                     new_name = "model.layers.0." + name[len("midlayer."):]
+                    new_tensors[new_name] = gen
+                elif name.startswith("layers.0."): # layers.0.* -> model.layers.0.* (Eagle3Speculator format)
+                    new_name = "model." + name
                     new_tensors[new_name] = gen
                 else:
                     new_tensors[name] = gen

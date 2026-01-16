@@ -149,6 +149,7 @@ class Keys:
         DENSE_FEAT_OUT_SIZE               = "{arch}.{dense}_feat_out"
         EAGLE3_EXTRACT_LAYERS             = "{arch}.extract_layers"
         EAGLE3_TARGET_HIDDEN_SIZE         = "{arch}.target_hidden_size"
+        EAGLE3_NORM_BEFORE_RESIDUAL       = "{arch}.norm_before_residual"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"

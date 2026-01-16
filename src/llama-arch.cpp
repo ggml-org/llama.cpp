@@ -248,8 +248,9 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 
     { LLM_KV_CLASSIFIER_OUTPUT_LABELS, "%s.classifier.output_labels" },
 
-    { LLM_KV_EAGLE3_EXTRACT_LAYERS,     "%s.extract_layers"     },
-    { LLM_KV_EAGLE3_TARGET_HIDDEN_SIZE, "%s.target_hidden_size" },
+    { LLM_KV_EAGLE3_EXTRACT_LAYERS,        "%s.extract_layers"        },
+    { LLM_KV_EAGLE3_TARGET_HIDDEN_SIZE,    "%s.target_hidden_size"    },
+    { LLM_KV_EAGLE3_NORM_BEFORE_RESIDUAL,  "%s.norm_before_residual"  },
 
     { LLM_KV_SHORTCONV_L_CACHE, "%s.shortconv.l_cache" },
     // sentence-transformers dense modules feature dims

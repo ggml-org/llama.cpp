@@ -196,6 +196,9 @@ struct llama_hparams {
     // EAGLE3 draft model - target model hidden size
     uint32_t eagle3_target_hidden_size = 0;
 
+    // EAGLE3 draft model - apply hidden_norm before storing residual
+    bool eagle3_norm_before_residual = false;
+
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141
     llama_token dec_start_token_id = LLAMA_TOKEN_NULL;

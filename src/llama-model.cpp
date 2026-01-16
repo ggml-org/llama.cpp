@@ -2260,7 +2260,14 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_EAGLE3_TARGET_HIDDEN_SIZE, hparams.eagle3_target_hidden_size);
                 LLAMA_LOG_INFO("%s: EAGLE3 target_hidden_size = %u (draft n_embd = %u)\n", __func__,
                                hparams.eagle3_target_hidden_size, hparams.n_embd);
-                               
+
+                // EAGLE3 norm_before_residual (optional, default false)
+                // compatible with Readhat eagle3 speculator model
+                ml.get_key(LLM_KV_EAGLE3_NORM_BEFORE_RESIDUAL, hparams.eagle3_norm_before_residual, false);
+                if (hparams.eagle3_norm_before_residual) {
+                    LLAMA_LOG_INFO("%s: EAGLE3 norm_before_residual = true\n", __func__);
+                }
+
                 type = LLM_TYPE_UNKNOWN;
             } break;
         case LLM_ARCH_COGVLM:
