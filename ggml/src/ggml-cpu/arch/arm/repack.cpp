@@ -1178,7 +1178,7 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                         q8_h[i] = (int8x16_t) vld1q_dup_s64((const int64_t *) (q8_base_h + i * 8));
                     }
 
-                    // TODO: Test other qh repack patters to reduce loads
+                    // TODO: Test other qh repack patterns to reduce loads
                     const int ql_off_base = sb * QK_K / 2;
                     const int qh_off_base = ql_off_base & 255;  // wraps after 256 bytes
 
@@ -3601,6 +3601,9 @@ void ggml_gemm_q6_K_8x8_q8_K(int                        n,
                             const uint8x16_t q6_qs_cp_1_hh = vandq_u8(q6_qs_cp_1_h, mask_hi);
 
                             // q6 = (low4 | high2<<4) - 32
+                            // TODO: Not adding -32 and adjusting scales later didn't provide the expeected
+                            // benefits in initial experiments, but more thought may be needed to get the
+                            // expected performance improvements
                             const int8x16_t q6_l0 = vsubq_s8(
                                 vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6_qs_cp_0_l, m4b), q6_qs_cp_0_hl)), m32s);
                             const int8x16_t q6_l1 = vsubq_s8(
