@@ -12,7 +12,6 @@ ggml_cgraph * clip_graph_conformer::build() {
     ggml_build_forward_expand(gf, pos_emb);
 
     ggml_tensor * inp = build_inp_raw(1);
-    cb(inp, "input", -1);
 
     auto * cur = ggml_cont(ctx0, ggml_transpose(ctx0, inp));
 
