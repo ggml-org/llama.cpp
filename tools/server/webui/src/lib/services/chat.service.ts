@@ -489,10 +489,6 @@ export class ChatService {
 			const reasoningContent = data.choices[0]?.message?.reasoning_content;
 			const toolCalls = data.choices[0]?.message?.tool_calls;
 
-			if (reasoningContent) {
-				console.log('Full reasoning content:', reasoningContent);
-			}
-
 			let serializedToolCalls: string | undefined;
 
 			if (toolCalls && toolCalls.length > 0) {

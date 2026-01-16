@@ -4,7 +4,6 @@
 		ModelBadge,
 		ChatMessageActions,
 		ChatMessageStatistics,
-		ChatMessageThinkingBlock,
 		MarkdownContent,
 		ModelsSelector
 	} from '$lib/components/app';
@@ -23,6 +22,7 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { AGENTIC_TAGS, REASONING_TAGS } from '$lib/constants/agentic';
 
 	interface Props {
 		class?: string;
@@ -53,7 +53,6 @@
 		shouldBranchAfterEdit?: boolean;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 		textareaElement?: HTMLTextAreaElement;
-		thinkingContent: string | null;
 	}
 
 	let {
@@ -79,15 +78,17 @@
 		showDeleteDialog,
 		shouldBranchAfterEdit = false,
 		siblingInfo = null,
-		textareaElement = $bindable(),
-		thinkingContent
+		textareaElement = $bindable()
 	}: Props = $props();
 
 	const hasAgenticMarkers = $derived(
-		messageContent?.includes('<<<AGENTIC_TOOL_CALL_START>>>') ?? false
+		messageContent?.includes(AGENTIC_TAGS.TOOL_CALL_START) ?? false
 	);
 	const hasStreamingToolCall = $derived(isChatStreaming() && agenticStreamingToolCall() !== null);
-	const isAgenticContent = $derived(hasAgenticMarkers || hasStreamingToolCall);
+	const hasReasoningMarkers = $derived(messageContent?.includes(REASONING_TAGS.START) ?? false);
+	const isStructuredContent = $derived(
+		hasAgenticMarkers || hasReasoningMarkers || hasStreamingToolCall
+	);
 	const processingState = useProcessingState();
 
 	let currentConfig = $derived(config());
@@ -123,14 +124,6 @@
 	role="group"
 	aria-label="Assistant message with actions"
 >
-	{#if thinkingContent}
-		<ChatMessageThinkingBlock
-			reasoningContent={thinkingContent}
-			isStreaming={!message.timestamp}
-			hasRegularContent={!!messageContent?.trim()}
-		/>
-	{/if}
-
 	{#if message?.role === 'assistant' && isLoading() && !message?.content?.trim()}
 		<div class="mt-6 w-full max-w-[48rem]" in:fade>
 			<div class="processing-container">
@@ -182,7 +175,7 @@
 	{:else if message.role === 'assistant'}
 		{#if showRawOutput}
 			<pre class="raw-output">{messageContent || ''}</pre>
-		{:else if isAgenticContent}
+		{:else if isStructuredContent}
 			<AgenticContent content={messageContent || ''} isStreaming={isChatStreaming()} {message} />
 		{:else}
 			<MarkdownContent content={messageContent || ''} {message} />
@@ -248,7 +241,7 @@
 			{onCopy}
 			{onEdit}
 			{onRegenerate}
-			onContinue={currentConfig.enableContinueGeneration && !thinkingContent
+			onContinue={currentConfig.enableContinueGeneration && !hasReasoningMarkers
 				? onContinue
 				: undefined}
 			{onDelete}

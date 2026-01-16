@@ -2,9 +2,8 @@
 	/**
 	 * AgenticContent - Chronological display of agentic flow output
 	 *
-	 * Parses content with tool call markers and displays them inline
-	 * with text content. Each tool call is shown as a collapsible box
-	 * similar to the reasoning/thinking block UI.
+	 * Parses content with tool call and reasoning markers and displays them inline
+	 * with text content. Tool calls and reasoning are shown as collapsible blocks.
 	 */
 
 	import {
@@ -13,9 +12,9 @@
 		SyntaxHighlightedCode
 	} from '$lib/components/app';
 	import { config } from '$lib/stores/settings.svelte';
-	import { Wrench, Loader2, AlertTriangle } from '@lucide/svelte';
+	import { Wrench, Loader2, AlertTriangle, Brain } from '@lucide/svelte';
 	import { AgenticSectionType } from '$lib/enums';
-	import { AGENTIC_TAGS, AGENTIC_REGEX } from '$lib/constants/agentic';
+	import { AGENTIC_TAGS, AGENTIC_REGEX, REASONING_TAGS } from '$lib/constants/agentic';
 	import { formatJsonPretty } from '$lib/utils/formatters';
 	import type { DatabaseMessage } from '$lib/types/database';
 
@@ -48,24 +47,90 @@
 	let expandedStates: Record<number, boolean> = $state({});
 
 	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
+	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
 
-	function getDefaultExpanded(isPending: boolean): boolean {
-		return showToolCallInProgress && isPending;
+	function getDefaultExpanded(section: AgenticSection): boolean {
+		if (
+			section.type === AgenticSectionType.TOOL_CALL_PENDING ||
+			section.type === AgenticSectionType.TOOL_CALL_STREAMING
+		) {
+			return showToolCallInProgress;
+		}
+		if (section.type === AgenticSectionType.REASONING_PENDING) {
+			return showThoughtInProgress;
+		}
+		return false;
 	}
 
-	function isExpanded(index: number, isPending: boolean): boolean {
+	function isExpanded(index: number, section: AgenticSection): boolean {
 		if (expandedStates[index] !== undefined) {
 			return expandedStates[index];
 		}
-		return getDefaultExpanded(isPending);
+		return getDefaultExpanded(section);
 	}
 
-	function toggleExpanded(index: number, isPending: boolean) {
-		const currentState = isExpanded(index, isPending);
+	function toggleExpanded(index: number, section: AgenticSection) {
+		const currentState = isExpanded(index, section);
 		expandedStates[index] = !currentState;
 	}
 
-	function parseAgenticContent(rawContent: string): AgenticSection[] {
+	type ReasoningSegment = {
+		type: 'text' | 'reasoning' | 'reasoning_pending';
+		content: string;
+	};
+
+	function stripPartialMarker(text: string): string {
+		const partialMarkerMatch = text.match(AGENTIC_REGEX.PARTIAL_MARKER);
+		if (partialMarkerMatch) {
+			return text.slice(0, partialMarkerMatch.index).trim();
+		}
+		return text;
+	}
+
+	function splitReasoningSegments(rawContent: string): ReasoningSegment[] {
+		if (!rawContent) return [];
+
+		const segments: ReasoningSegment[] = [];
+		let cursor = 0;
+
+		while (cursor < rawContent.length) {
+			const startIndex = rawContent.indexOf(REASONING_TAGS.START, cursor);
+			if (startIndex === -1) {
+				const remainingText = rawContent.slice(cursor);
+				if (remainingText) {
+					segments.push({ type: 'text', content: remainingText });
+				}
+				break;
+			}
+
+			if (startIndex > cursor) {
+				const textBefore = rawContent.slice(cursor, startIndex);
+				if (textBefore) {
+					segments.push({ type: 'text', content: textBefore });
+				}
+			}
+
+			const contentStart = startIndex + REASONING_TAGS.START.length;
+			const endIndex = rawContent.indexOf(REASONING_TAGS.END, contentStart);
+
+			if (endIndex === -1) {
+				const pendingContent = rawContent.slice(contentStart);
+				segments.push({
+					type: 'reasoning_pending',
+					content: stripPartialMarker(pendingContent)
+				});
+				break;
+			}
+
+			const reasoningContent = rawContent.slice(contentStart, endIndex);
+			segments.push({ type: 'reasoning', content: reasoningContent });
+			cursor = endIndex + REASONING_TAGS.END.length;
+		}
+
+		return segments;
+	}
+
+	function parseToolCallContent(rawContent: string): AgenticSection[] {
 		if (!rawContent) return [];
 
 		const sections: AgenticSection[] = [];
@@ -188,6 +253,34 @@
 
 		return sections;
 	}
+
+	function parseAgenticContent(rawContent: string): AgenticSection[] {
+		if (!rawContent) return [];
+
+		const segments = splitReasoningSegments(rawContent);
+		const sections: AgenticSection[] = [];
+
+		for (const segment of segments) {
+			if (segment.type === 'text') {
+				sections.push(...parseToolCallContent(segment.content));
+				continue;
+			}
+
+			if (segment.type === 'reasoning') {
+				if (segment.content.trim()) {
+					sections.push({ type: AgenticSectionType.REASONING, content: segment.content });
+				}
+				continue;
+			}
+
+			sections.push({
+				type: AgenticSectionType.REASONING_PENDING,
+				content: segment.content
+			});
+		}
+
+		return sections;
+	}
 </script>
 
 <div class="agentic-content">
@@ -201,13 +294,13 @@
 			{@const streamingIconClass = isStreaming ? 'h-4 w-4 animate-spin' : 'h-4 w-4 text-yellow-500'}
 			{@const streamingSubtitle = isStreaming ? 'streaming...' : 'incomplete'}
 			<CollapsibleContentBlock
-				open={isExpanded(index, true)}
+				open={isExpanded(index, section)}
 				class="my-2"
 				icon={streamingIcon}
 				iconClass={streamingIconClass}
 				title={section.toolName || 'Tool call'}
 				subtitle={streamingSubtitle}
-				onToggle={() => toggleExpanded(index, true)}
+				onToggle={() => toggleExpanded(index, section)}
 			>
 				<div class="pt-3">
 					<div class="my-3 flex items-center gap-2 text-xs text-muted-foreground">
@@ -245,17 +338,13 @@
 				1}
 			{@const timing = !isPending ? getToolCallTiming(toolCallIndex) : undefined}
 			<CollapsibleContentBlock
-				open={isExpanded(index, isPending)}
+				open={isExpanded(index, section)}
 				class="my-2"
 				icon={toolIcon}
 				iconClass={toolIconClass}
 				title={section.toolName || ''}
-				subtitle={isPending
-					? 'executing...'
-					: timing
-						? `${(timing.duration_ms / 1000).toFixed(2)}s`
-						: undefined}
-				onToggle={() => toggleExpanded(index, isPending)}
+				subtitle={isPending ? 'executing...' : undefined}
+				onToggle={() => toggleExpanded(index, section)}
 			>
 				{#if section.toolArgs && section.toolArgs !== '{}'}
 					<div class="pt-3">
@@ -286,6 +375,37 @@
 							Waiting for result...
 						</div>
 					{/if}
+				</div>
+			</CollapsibleContentBlock>
+		{:else if section.type === AgenticSectionType.REASONING}
+			<CollapsibleContentBlock
+				open={isExpanded(index, section)}
+				class="my-2"
+				icon={Brain}
+				title="Reasoning"
+				onToggle={() => toggleExpanded(index, section)}
+			>
+				<div class="pt-3">
+					<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
+						{section.content}
+					</div>
+				</div>
+			</CollapsibleContentBlock>
+		{:else if section.type === AgenticSectionType.REASONING_PENDING}
+			{@const reasoningTitle = isStreaming ? 'Reasoning...' : 'Reasoning'}
+			{@const reasoningSubtitle = isStreaming ? 'streaming...' : 'incomplete'}
+			<CollapsibleContentBlock
+				open={isExpanded(index, section)}
+				class="my-2"
+				icon={Brain}
+				title={reasoningTitle}
+				subtitle={reasoningSubtitle}
+				onToggle={() => toggleExpanded(index, section)}
+			>
+				<div class="pt-3">
+					<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
+						{section.content}
+					</div>
 				</div>
 			</CollapsibleContentBlock>
 		{/if}

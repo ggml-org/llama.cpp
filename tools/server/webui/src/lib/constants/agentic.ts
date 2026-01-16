@@ -17,6 +17,11 @@ export const AGENTIC_TAGS = {
 	TAG_SUFFIX: '>>>'
 } as const;
 
+export const REASONING_TAGS = {
+	START: '<<<reasoning_content_start>>>',
+	END: '<<<reasoning_content_end>>>'
+} as const;
+
 // Regex patterns for parsing agentic content
 export const AGENTIC_REGEX = {
 	// Matches completed tool calls (with END marker)
@@ -31,7 +36,7 @@ export const AGENTIC_REGEX = {
 	// Matches early tool call (just START marker)
 	EARLY_MATCH: /<<<AGENTIC_TOOL_CALL_START>>>([\s\S]*)$/,
 	// Matches partial marker at end of content
-	PARTIAL_MARKER: /<<<[A-Z_]*$/,
+	PARTIAL_MARKER: /<<<[A-Za-z_]*$/,
 	// Matches tool name inside content
 	TOOL_NAME_EXTRACT: /<<<TOOL_NAME:([^>]+)>>>/
 } as const;

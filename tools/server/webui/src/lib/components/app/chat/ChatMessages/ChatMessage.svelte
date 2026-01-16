@@ -66,15 +66,6 @@
 	let shouldBranchAfterEdit = $state(false);
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
 
-	let thinkingContent = $derived.by(() => {
-		if (message.role === MessageRole.ASSISTANT) {
-			const trimmedThinking = message.thinking?.trim();
-
-			return trimmedThinking ? trimmedThinking : null;
-		}
-		return null;
-	});
-
 	// Auto-start edit mode if this message is the pending edit target
 	$effect(() => {
 		const pendingId = pendingEditMessageId();
@@ -309,6 +300,5 @@
 		onShouldBranchAfterEditChange={(value) => (shouldBranchAfterEdit = value)}
 		{showDeleteDialog}
 		{siblingInfo}
-		{thinkingContent}
 	/>
 {/if}
