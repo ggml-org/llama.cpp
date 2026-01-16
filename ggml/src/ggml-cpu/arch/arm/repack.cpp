@@ -1201,12 +1201,12 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             vsubq_s8(vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6_qs_cp_1_l, 4), q6_qs_cp_1_hh)), m32s);
 
                         int32x4_t sb_acc_l = vdupq_n_s32(0);
-                        sb_acc_l           = ggml_vdotq_s32(sb_acc_l, q6_l0, q8_l[0]);
-                        sb_acc_l           = ggml_vdotq_s32(sb_acc_l, q6_l1, q8_l[1]);
+                        sb_acc_l           = vdotq_s32(sb_acc_l, q6_l0, q8_l[0]);
+                        sb_acc_l           = vdotq_s32(sb_acc_l, q6_l1, q8_l[1]);
 
                         int32x4_t sb_acc_h = vdupq_n_s32(0);
-                        sb_acc_h           = ggml_vdotq_s32(sb_acc_h, q6_h0, q8_h[0]);
-                        sb_acc_h           = ggml_vdotq_s32(sb_acc_h, q6_h1, q8_h[1]);
+                        sb_acc_h           = vdotq_s32(sb_acc_h, q6_h0, q8_h[0]);
+                        sb_acc_h           = vdotq_s32(sb_acc_h, q6_h1, q8_h[1]);
 
                         // Pairwise add to get per-column sums: [col0, col1, col0, col1]
                         int32x4_t sum_l = vpaddq_s32(sb_acc_l, sb_acc_l);
