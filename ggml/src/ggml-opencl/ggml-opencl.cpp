@@ -2775,22 +2775,22 @@ template <typename... _TArgs> static inline size_t cl_set_kernel_args(cl_kernel 
     return index;
 }
 
-template <typename... _TArgs> struct type_merger {};
+template <typename... _TArgs> struct cl_func_args_concatenator {};
 
 template <typename... _TArgs, typename... _TInnerArgs1, typename... _TInnerArgs2>
-struct type_merger<void(_TInnerArgs1...), void(_TInnerArgs2...), _TArgs...> {
-    using func_t = typename type_merger<void(_TInnerArgs1..., _TInnerArgs2...), _TArgs...>::func_t;
+struct cl_func_args_concatenator<void(_TInnerArgs1...), void(_TInnerArgs2...), _TArgs...> {
+    using func_t = typename cl_func_args_concatenator<void(_TInnerArgs1..., _TInnerArgs2...), _TArgs...>::func_t;
 };
 
-template <typename... _TInnerArgs> struct type_merger<void(_TInnerArgs...)> {
+template <typename... _TInnerArgs> struct cl_func_args_concatenator<void(_TInnerArgs...)> {
     using func_t = void(_TInnerArgs...);
 };
 
 template <typename _TFirstArg, typename... _TRestArgs> struct cl_param_type_extractor {
-    using args_t = std::remove_const_t<std::remove_pointer_t<std::remove_reference_t<_TFirstArg>>>;
-    using first_func_t =
-        typename cl_kernel_arg_setter<args_t>::func_t;
-    using func_t = typename type_merger<first_func_t, typename cl_param_type_extractor<_TRestArgs...>::func_t>::func_t;
+    using args_t       = std::remove_const_t<std::remove_pointer_t<std::remove_reference_t<_TFirstArg>>>;
+    using first_func_t = typename cl_kernel_arg_setter<args_t>::func_t;
+    using func_t       = typename cl_func_args_concatenator<first_func_t,
+                                                            typename cl_param_type_extractor<_TRestArgs...>::func_t>::func_t;
 };
 
 template <typename _TFinalArg> struct cl_param_type_extractor<_TFinalArg> {
@@ -2798,16 +2798,11 @@ template <typename _TFinalArg> struct cl_param_type_extractor<_TFinalArg> {
     using func_t = typename cl_kernel_arg_setter<args_t>::func_t;
 };
 
-template <typename _TFunc> struct cl_kernel_invoker {
-    template <typename... _TCalledArgs> static size_t invoke(cl_kernel kernel, _TCalledArgs &&... args) {
-        static_assert(std::is_same_v<_TFunc, typename cl_param_type_extractor<_TCalledArgs...>::func_t>,
-                      "Kernel argument type mismatch between prototype and called arguments");
-        return cl_set_kernel_args(kernel, args...);
-    }
-};
-
-template <typename _TFunc, typename... _TArgs> static inline size_t cl_set_kernel_args_safe(cl_kernel kernel, _TArgs &&... args) {
-    return cl_kernel_invoker<_TFunc>::invoke(kernel, args...);
+template <typename _TFunc, typename... _TArgs>
+static inline size_t cl_set_kernel_args_safe(cl_kernel kernel, _TArgs &&... args) {
+    static_assert(std::is_same_v<_TFunc, typename cl_param_type_extractor<_TArgs...>::func_t>,
+                  "Kernel argument type mismatch between prototype and called arguments");
+    return cl_set_kernel_args(kernel, args...);
 }
 
 }  // namespace
