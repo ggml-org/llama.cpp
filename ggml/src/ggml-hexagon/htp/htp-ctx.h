@@ -1,7 +1,7 @@
 #ifndef HTP_CTX_H
 #define HTP_CTX_H
 
-#include "htp-dma.h"
+#include "hex-dma.h"
 #include "worker-pool.h"
 
 #include <assert.h>
@@ -10,11 +10,6 @@
 #include <stdint.h>
 
 #define HTP_MAX_NTHREADS 10
-
-// FIXME: move these into matmul-ops
-#define HTP_SPAD_SRC0_NROWS 16
-#define HTP_SPAD_SRC1_NROWS 16
-#define HTP_SPAD_DST_NROWS  2
 
 // Main context for htp DSP backend
 struct htp_context {

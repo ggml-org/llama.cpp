@@ -1,4 +1,5 @@
 set(TARGET cpp-httplib)
+license_add_file("cpp-httplib" "LICENSE")
 
 find_package(Threads REQUIRED)
 
@@ -8,7 +9,7 @@ if (NOT MSVC)
     target_compile_options(${TARGET} PRIVATE -w)
 endif()
 
-target_link_libraries  (${TARGET} PRIVATE Threads::Threads)
+target_link_libraries(${TARGET} PRIVATE Threads::Threads)
 
 if (WIN32 AND NOT MSVC)
     target_link_libraries(${TARGET} PRIVATE ws2_32)
@@ -67,6 +68,8 @@ if (LLAMA_BUILD_BORINGSSL)
     set(BUILD_SHARED_LIBS ${SAVED_BUILD_SHARED_LIBS})
     set(BUILD_TESTING ${SAVED_BUILD_TESTING})
 
+    license_add_file("BoringSSL" "${boringssl_SOURCE_DIR}/LICENSE")
+
     set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
     target_link_libraries(${TARGET} PUBLIC ssl crypto)
 
@@ -107,6 +110,8 @@ elseif (LLAMA_BUILD_LIBRESSL)
 
     set(BUILD_SHARED_LIBS ${SAVED_BUILD_SHARED_LIBS})
     set(BUILD_TESTING ${SAVED_BUILD_TESTING})
+
+    license_add_file("LibreSSL" "${libressl_SOURCE_DIR}/COPYING")
 
     set(CPPHTTPLIB_OPENSSL_SUPPORT TRUE)
     target_link_libraries(${TARGET} PUBLIC ssl crypto)
