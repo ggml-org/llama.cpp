@@ -466,6 +466,8 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     // original regex from tokenizer.json
                     // "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?(?:\\p{L}\\p{M}*(?: \\p{L}\\p{M}*)*)+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]?|\\s*[\\r\\n]|\\s+(?!\\S)|\\s+"
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?(?:\\p{L}\\p{M}*(?: \\p{L}\\p{M}*)*)+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]?|\\s*[\\r\\n]|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_JINA_V2_ZH:
                 // ref: https://huggingface.co/jinaai/jina-embeddings-v2-base-zh
                 // whitespace pre-tokenizer
@@ -1617,7 +1619,7 @@ struct llama_vocab::impl {
     bool escape_whitespaces         = true;
     bool treat_whitespace_as_suffix = false;
     bool apply_lowercase            = false;  // lowercase normalization
-    bool use_byte_encoding          = true;   // GPT-2 byte encoding for BPE vocab
+    bool use_byte_encoding          = true;
 
     std::unordered_map<std::string, llama_token> token_to_id;
     std::vector<token_data>                      id_to_token;
@@ -1767,7 +1769,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_mask_id = 103;
 
             add_sep = true;
-        } else if (tokenizer_model == "gpt2") {
+        } else if (
+            tokenizer_model == "gpt2" ||
+            tokenizer_model == "whitespace") {
             type = LLAMA_VOCAB_TYPE_BPE;
 
             // read bpe merges and populate bpe ranks
@@ -1795,12 +1799,21 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
 
             // default special tokens
-            special_bos_id  = 11;
-            special_eos_id  = 11;
-            special_unk_id  = LLAMA_TOKEN_NULL;
-            special_sep_id  = LLAMA_TOKEN_NULL;
-            special_pad_id  = LLAMA_TOKEN_NULL;
-            special_mask_id = LLAMA_TOKEN_NULL;
+            if (tokenizer_model == "gpt2") {
+                special_bos_id  = 11;
+                special_eos_id  = 11;
+                special_unk_id  = LLAMA_TOKEN_NULL;
+                special_sep_id  = LLAMA_TOKEN_NULL;
+                special_pad_id  = LLAMA_TOKEN_NULL;
+                special_mask_id = LLAMA_TOKEN_NULL;
+            } else if (tokenizer_model == "whitespace") {
+                special_bos_id  = 0;   // <s>
+                special_eos_id  = 2;   // </s>
+                special_unk_id  = 3;   // <unk>
+                special_sep_id  = 2;   // </s> (same as eos)
+                special_pad_id  = 1;   // <pad>
+                special_mask_id = 4;   // <mask>
+            }
         } else if (tokenizer_model == "t5") {
             type = LLAMA_VOCAB_TYPE_UGM;
 
@@ -2067,7 +2080,6 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 clean_spaces = true;
                 add_bos = true;
                 add_sep = true;
-                apply_lowercase = true;
                 use_byte_encoding = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
@@ -2099,8 +2111,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
         }
 
-        ml.get_key(LLM_KV_TOKENIZER_ADD_PREFIX,      add_space_prefix,         false);
-        ml.get_key(LLM_KV_TOKENIZER_REMOVE_EXTRA_WS, remove_extra_whitespaces, false);
+        ml.get_key(LLM_KV_TOKENIZER_ADD_PREFIX,           add_space_prefix,         false);
+        ml.get_key(LLM_KV_TOKENIZER_REMOVE_EXTRA_WS,      remove_extra_whitespaces, false);
+        ml.get_key(LLM_KV_TOKENIZER_NORMALIZER_LOWERCASE, apply_lowercase,          true);
     }
 
     const int token_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_LIST).c_str());

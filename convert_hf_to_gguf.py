@@ -1293,6 +1293,16 @@ class TextModel(ModelBase):
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         special_vocab.add_to_gguf(self.gguf_writer)
 
+    def _set_vocab_whitespace(self) -> None:
+        tokens, toktypes, tokpre = self.get_vocab_base()
+        self.gguf_writer.add_tokenizer_model("whitespace")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
     def _set_vocab_qwen(self):
         dir_model = self.dir_model
         hparams = self.hparams
@@ -7135,7 +7145,17 @@ class JinaBertV2Model(BertModel):
         if tokenizer_class == 'BertTokenizer':
             super().set_vocab()
         elif tokenizer_class == 'RobertaTokenizer':
-            self._set_vocab_gpt2()
+            pre_tokenizer_type = None
+            tokenizer_json_path = self.dir_model / "tokenizer.json"
+            if tokenizer_json_path.is_file():
+                with open(tokenizer_json_path, "r", encoding="utf-8") as f:
+                    tokenizer_json = json.load(f)
+                    pre_tokenizer_type = tokenizer_json.get("pre_tokenizer", {}).get("type")
+
+            if pre_tokenizer_type == "Whitespace":
+                self._set_vocab_whitespace()
+            else:
+                self._set_vocab_gpt2()
             self.gguf_writer.add_token_type_count(2)
         else:
             raise NotImplementedError(f'Tokenizer {tokenizer_class} is not supported for JinaBertModel')
