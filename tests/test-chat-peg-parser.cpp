@@ -5,8 +5,6 @@
 #include "peg-parser.h"
 #include "testing.h"
 #include "peg-parser/simple-tokenize.h"
-#include "peg-parser/testing.h"
-#include "peg-parser/simple-tokenize.h"
 
 #include <iostream>
 #include <numeric>

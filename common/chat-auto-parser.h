@@ -1,10 +1,9 @@
 #pragma once
 
 #include "chat.h"
+#include "jinja/runtime.h"
 
 #include <chrono>
-#include <minja/chat-template.hpp>
-#include <minja/minja.hpp>
 #include <string>
 #include <vector>
 
@@ -112,26 +111,26 @@ struct template_analysis_result {
 class template_analyzer {
   public:
     // Main entry point: Unified two-phase analysis
-    static template_analysis_result analyze_template(const minja::chat_template & tmpl);
+    static template_analysis_result analyze_template(const common_chat_template & tmpl);
 
     // Phase 1 - Analyze content and reasoning structure (no tools)
-    static content_structure analyze_content_structure(const minja::chat_template & tmpl);
+    static content_structure analyze_content_structure(const common_chat_template & tmpl);
 
     // Phase 2 - Analyze tool call structure (layered on Phase 1)
-    static tool_call_structure analyze_tool_structure(const minja::chat_template & tmpl,
+    static tool_call_structure analyze_tool_structure(const common_chat_template & tmpl,
                                                       const content_structure &    content);
 
   private:
     // Phase 1 detection helpers
-    static void detect_reasoning_markers(const minja::chat_template & tmpl, content_structure & cs);
-    static void detect_content_markers(const minja::chat_template & tmpl, content_structure & cs);
+    static void detect_reasoning_markers(const common_chat_template & tmpl, content_structure & cs);
+    static void detect_content_markers(const common_chat_template & tmpl, content_structure & cs);
     static content_structure::reasoning_mode_type detect_reasoning_mode(const content_structure & cs,
                                                                         const std::string &       prompt);
 
     // Phase 2 detection helpers
-    static void detect_tool_markers(const minja::chat_template & tmpl, tool_call_structure & ts);
-    static void detect_function_format(const minja::chat_template & tmpl, tool_call_structure & ts);
-    static void detect_argument_format(const minja::chat_template & tmpl, tool_call_structure & ts);
+    static void detect_tool_markers(const common_chat_template & tmpl, tool_call_structure & ts);
+    static void detect_function_format(const common_chat_template & tmpl, tool_call_structure & ts);
+    static void detect_argument_format(const common_chat_template & tmpl, tool_call_structure & ts);
 
     // Phase 2 helper methods
     static void analyze_json_format(tool_call_structure & ts, const struct internal_discovered_pattern & discovered);
@@ -158,25 +157,26 @@ struct templates_params {
     std::string                           grammar;
     bool                                  add_generation_prompt;
     bool                                  enable_thinking;
-    std::chrono::system_clock::time_point now;
+    std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
     json                                  extra_context;
     bool                                  add_bos;
     bool                                  add_eos;
-    bool                                  is_inference;
+    bool                                  is_inference = true;
     bool                                  add_inference;
+    bool                                  mark_input = true; // whether to mark input strings in the jinja context
 };
 
 class universal_peg_generator {
   public:
     // Generate parser from analysis result
     static common_chat_params generate_parser(const template_analysis_result & analysis,
-                                              const minja::chat_template &     tmpl,
+                                              const common_chat_template &     tmpl,
                                               const struct templates_params &  inputs);
 
   private:
     // Build unified parser (single code path for all formats)
     static common_peg_arena build_parser(const template_analysis_result & analysis,
-                                         const minja::chat_template &     tmpl,
+                                         const common_chat_template &     tmpl,
                                          const struct templates_params &  inputs,
                                          bool                             thinking_forced_open);
 };

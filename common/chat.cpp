@@ -8,31 +8,16 @@
 #include "json-schema-to-grammar.h"
 #include "log.h"
 
-// #include <minja/chat-template.hpp>
-// #include <minja/minja.hpp>
-
 #include "jinja/parser.h"
 #include "jinja/value.h"
 #include "jinja/runtime.h"
 #include "jinja/caps.h"
 
-// #include <minja/chat-template.hpp>
-// #include <minja/minja.hpp>
-
-#include "jinja/parser.h"
-#include "jinja/value.h"
-#include "jinja/runtime.h"
-#include "jinja/caps.h"
-
-#include <algorithm>
-#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <functional>
-#include <map>
-#include <minja/chat-template.hpp>
-#include <minja/minja.hpp>
+
 #include <optional>
 #include <sstream>
 #include <stdexcept>
@@ -183,67 +168,6 @@ std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const comm
 }
 
 using chat_template_caps = jinja::caps;
-
-struct common_chat_template {
-    jinja::program prog;
-    std::string bos_tok;
-    std::string eos_tok;
-    std::string src;
-    chat_template_caps caps;
-
-    common_chat_template(const std::string & src, const std::string & bos_token, const std::string & eos_token) {
-        jinja::lexer lexer;
-        auto lexer_res = lexer.tokenize(src);
-        this->prog = jinja::parse_from_tokens(lexer_res);
-
-        this->src = lexer_res.source;
-        this->bos_tok = bos_token;
-        this->eos_tok = eos_token;
-
-        this->caps = jinja::caps_get(prog);
-        // LOG_INF("%s: caps:\n%s\n", __func__, this->caps.to_string().c_str());
-    }
-
-    const std::string & source() const { return src; }
-    const std::string & bos_token() const { return bos_tok; }
-    const std::string & eos_token() const { return eos_tok; }
-
-    // TODO: this is ugly, refactor it somehow
-    json add_system(const json & messages, const std::string & system_prompt) const {
-        GGML_ASSERT(messages.is_array());
-        auto msgs_copy = messages;
-        if (!caps.supports_system_role) {
-            if (msgs_copy.empty()) {
-                msgs_copy.insert(msgs_copy.begin(), json{
-                    {"role", "user"},
-                    {"content", system_prompt}
-                });
-            } else {
-                auto & first_msg = msgs_copy[0];
-                if (!first_msg.contains("content")) {
-                    first_msg["content"] = "";
-                }
-                first_msg["content"] = system_prompt + "\n\n"
-                    + first_msg["content"].get<std::string>();
-            }
-        } else {
-            if (msgs_copy.empty() || msgs_copy[0].at("role") != "system") {
-                msgs_copy.insert(msgs_copy.begin(), json{
-                    {"role", "system"},
-                    {"content", system_prompt}
-                });
-            } else if (msgs_copy[0].at("role") == "system") {
-                msgs_copy[0]["content"] = system_prompt;
-            }
-        }
-        return msgs_copy;
-    }
-
-    chat_template_caps original_caps() const {
-        return caps;
-    }
-
-};
 
 struct common_chat_templates {
     bool add_bos;
@@ -824,13 +748,12 @@ static void foreach_parameter(const json &                                      
     }
 }
 
-static std::string apply(
+std::string common_chat_template_direct_apply(
     const common_chat_template & tmpl,
     const struct templates_params & inputs,
-    const std::optional<json> & messages_override = std::nullopt,
-    const std::optional<json> & tools_override = std::nullopt,
-    const std::optional<json> & additional_context = std::nullopt)
-{
+    const std::optional<json> & messages_override,
+    const std::optional<json> & tools_override,
+    const std::optional<json> & additional_context) {
     jinja::context ctx(tmpl.source());
 
     nlohmann::ordered_json inp = nlohmann::ordered_json{
@@ -863,7 +786,7 @@ static std::string apply(
     // render
     jinja::runtime runtime(ctx);
     const jinja::value results = runtime.execute(tmpl.prog);
-    auto parts = runtime.gather_string_parts(results);
+    auto parts = jinja::runtime::gather_string_parts(results);
 
     std::string result = parts->as_string().str();
 
@@ -875,98 +798,6 @@ static std::string apply(
         result = result.substr(0, result.size() - tmpl.eos_token().size());
     }
     return result;
-}
-
-static common_chat_params common_chat_params_init_generic(const common_chat_template &    tmpl,
-                                                          const struct templates_params & inputs) {
-    common_chat_params data;
-
-    auto tool_call_schemas = json::array();
-    foreach_function(inputs.tools, [&](const json & tool) {
-        const auto & function    = tool.at("function");
-        auto         tool_schema = json{
-                    { "type",       "object"                             },
-                    { "properties",
-                     {
-                  { "name",
-                            {
-                        { "type", "string" },
-                        { "const", function.at("name") },
-                    } },
-                  { "arguments", function.at("parameters") },
-              }                                                          },
-                    { "required",   json::array({ "name", "arguments" }) },
-        };
-        if (function.contains("description")) {
-            tool_schema["description"] = function.at("description");
-        }
-        if (inputs.parallel_tool_calls) {
-            tool_schema.at("properties")["id"] = {
-                { "type",      "string" },
-                { "minLength", 4        },
-            };
-            tool_schema.at("required").push_back("id");
-        }
-        tool_call_schemas.emplace_back(tool_schema);
-    });
-    const auto tool_call =
-        inputs.parallel_tool_calls ?
-            json{
-                { "type",       "object"                      },
-                { "properties",
-                 {
-                      { "tool_calls",
-                        {
-                            { "type", "array" },
-                            { "items", tool_call_schemas.size() == 1 ? tool_call_schemas[0] :
-                                                                       json{
-                                                                           { "anyOf", tool_call_schemas },
-                                                                       } },
-                            { "minItems", 1 },
-                        } },
-                  }                                           },
-                { "required",   json::array({ "tool_calls" }) },
-    } :
-            json{
-                { "type", "object" },
-                { "properties",
-                  {
-                      { "tool_call", tool_call_schemas.size() == 1 ? tool_call_schemas[0] :
-                                                                     json{
-                                                                         { "anyOf", tool_call_schemas },
-                                                                     } },
-                  } },
-                { "required", json::array({ "tool_call" }) },
-            };
-    const auto schema =
-        inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED ?
-            json{
-                { "anyOf", json::array({
-                               tool_call,
-                               {
-                                   { "type", "object" },
-                                   { "properties",
-                                     {
-                                         { "response", inputs.json_schema.is_null() ? json{ { "type", "string" } } :
-                                                                                      inputs.json_schema },
-                                     } },
-                                   { "required", json::array({ "response" }) },
-                               },
-                           }) }
-    } :
-            tool_call;
-
-    data.grammar_lazy = false;
-    data.grammar = build_grammar([&](const common_grammar_builder & builder) { builder.add_schema("root", schema); });
-
-    auto tweaked_messages =
-        common_chat_template::add_system(inputs.messages,
-                                         "Respond in JSON format, either with `tool_call` (a request to call tools) or "
-                                         "with `response` reply to the user's request");
-
-    data.prompt = apply(tmpl, inputs, /* messages_override= */ tweaked_messages);
-    data.format = COMMON_CHAT_FORMAT_GENERIC;
-    return data;
 }
 
 static common_chat_params common_chat_params_init_ministral_3(const common_chat_template &    tmpl,
@@ -1016,7 +847,7 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
     auto include_grammar   = true;
 
-    data.prompt           = apply(tmpl, inputs, /* messages_override = */ adjusted_messages);
+    data.prompt           = common_chat_template_direct_apply(tmpl, inputs, /* messages_override = */ adjusted_messages);
     data.format           = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens = {
         "[THINK]",
@@ -1102,7 +933,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         }
     }
 
-    auto prompt = apply(tmpl, inputs, /* messages_override= */ adjusted_messages);
+    auto prompt = common_chat_template_direct_apply(tmpl, inputs, /* messages_override= */ adjusted_messages);
 
     // Check if we need to replace the return token with end token during
     // inference and without generation prompt. For more details see:
@@ -1228,6 +1059,27 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     return data;
 }
 
+namespace workaround {
+
+// if first message is system and template does not support it, merge it with next message
+static void system_message_not_supported(json & messages) {
+    if (!messages.empty() && messages.front().at("role") == "system") {
+        if (messages.size() > 1) {
+            LOG_DBG("Merging system prompt into next message\n");
+            auto & first_msg = messages.front();
+            auto & second_msg = messages[1];
+            second_msg["content"] = first_msg.at("content").get<std::string>()
+                + "\n" + second_msg.at("content").get<std::string>();
+            messages.erase(messages.begin());
+        } else {
+            LOG_WRN("Removing system prompt due to template not supporting system role\n");
+            messages.erase(messages.begin());
+        }
+    }
+}
+
+}
+
 static common_chat_params common_chat_templates_apply_jinja(const struct common_chat_templates *        tmpls,
                                                             const struct common_chat_templates_inputs & inputs) {
     templates_params params;
@@ -1301,8 +1153,7 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
         LOG_WRN("Automatic parser generation failed: %s\n", e.what());
     }
 
-    // Generic fallback - basic content-only handling
-    return common_chat_params_init_generic(tmpl, params);
+    GGML_ABORT("Unable to generate parser for this template.");
 }
 
 // Legacy template route (adhoc C++ implementation of known templates), forward to llama_chat_apply_template.

@@ -1,10 +1,11 @@
 #pragma once
 
-#include <minja/chat-template.hpp>
-#include <minja/minja.hpp>
 #include <optional>
 #include <string>
 #include <vector>
+
+#include "chat.h"
+#include "nlohmann/json.hpp"
 
 using json = nlohmann::ordered_json;
 
@@ -27,7 +28,7 @@ std::string find_common_substring_limited(const std::vector<std::string> & strin
                                           const std::string &              delimiters);
 
 bool        string_ends_with(const std::string & str, const std::string & suffix);
-std::string apply_template(const minja::chat_template &    tmpl,
+std::string apply_template(common_chat_template      &    tmpl,
                            const struct templates_params & inputs,
                            const std::optional<json> &     messages_override  = std::nullopt,
                            const std::optional<json> &     tools_override     = std::nullopt,
@@ -129,4 +130,4 @@ internal_discovered_pattern extract_patterns_from_differences(const std::string 
 internal_tool_format determine_format_from_patterns(const internal_discovered_pattern & patterns);
 
 // Analyze template using differential analysis (internal use)
-internal_discovered_pattern analyze_by_differential(const minja::chat_template & tmpl);
+internal_discovered_pattern analyze_by_differential(const common_chat_template & tmpl);

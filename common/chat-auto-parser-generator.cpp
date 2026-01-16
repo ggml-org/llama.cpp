@@ -1,17 +1,17 @@
 #include "chat-auto-parser-helpers.h"
 #include "chat-auto-parser.h"
 #include "chat-peg-parser.h"
+#include "chat.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
+#include "nlohmann/json.hpp"
 
-#include <minja/chat-template.hpp>
-#include <minja/minja.hpp>
 #include <optional>
 
 using json = nlohmann::ordered_json;
 
 common_chat_params universal_peg_generator::generate_parser(const template_analysis_result & analysis,
-                                                            const minja::chat_template &     tmpl,
+                                                            const common_chat_template &     tmpl,
                                                             const struct templates_params &  inputs) {
     common_chat_params data;
 
@@ -41,7 +41,7 @@ common_chat_params universal_peg_generator::generate_parser(const template_analy
         }
 
         // Calculate prompt first to detect forced thinking
-        data.prompt = apply_template(tmpl, inputs, messages_override);
+        data.prompt = common_chat_template_direct_apply(tmpl, inputs, messages_override);
 
         // Determine if thinking is forced open based on prompt ending
         bool thinking_forced_open = false;
@@ -163,7 +163,7 @@ common_chat_params universal_peg_generator::generate_parser(const template_analy
 }
 
 common_peg_arena universal_peg_generator::build_parser(const template_analysis_result & analysis,
-                                                       const minja::chat_template &     tmpl,
+                                                       const common_chat_template &     tmpl,
                                                        const struct templates_params &  inputs,
                                                        bool                             thinking_forced_open) {
     GGML_UNUSED(tmpl);

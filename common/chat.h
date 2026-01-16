@@ -3,13 +3,21 @@
 #pragma once
 
 #include "common.h"
+#include "jinja/parser.h"
+#include "nlohmann/json_fwd.hpp"
 #include "peg-parser.h"
+#include "jinja/runtime.h"
+#include "jinja/caps.h"
+#include "nlohmann/json.hpp"
 
 #include <chrono>
 #include <functional>
 #include <map>
 #include <string>
 #include <vector>
+
+using chat_template_caps = jinja::caps;
+using json = nlohmann::ordered_json;
 
 struct common_chat_templates;
 
@@ -30,6 +38,67 @@ struct common_chat_msg_content_part {
     bool operator==(const common_chat_msg_content_part & other) const {
         return type == other.type && text == other.text;
     }
+};
+
+struct common_chat_template {
+    jinja::program prog;
+    std::string bos_tok;
+    std::string eos_tok;
+    std::string src;
+    chat_template_caps caps;
+
+    common_chat_template(const std::string & src, const std::string & bos_token, const std::string & eos_token) {
+        jinja::lexer lexer;
+        auto lexer_res = lexer.tokenize(src);
+        this->prog = jinja::parse_from_tokens(lexer_res);
+
+        this->src = lexer_res.source;
+        this->bos_tok = bos_token;
+        this->eos_tok = eos_token;
+
+        this->caps = jinja::caps_get(prog);
+        // LOG_INF("%s: caps:\n%s\n", __func__, this->caps.to_string().c_str());
+    }
+
+    const std::string & source() const { return src; }
+    const std::string & bos_token() const { return bos_tok; }
+    const std::string & eos_token() const { return eos_tok; }
+
+    // TODO: this is ugly, refactor it somehow
+    json add_system(const json & messages, const std::string & system_prompt) const {
+        GGML_ASSERT(messages.is_array());
+        auto msgs_copy = messages;
+        if (!caps.supports_system_role) {
+            if (msgs_copy.empty()) {
+                msgs_copy.insert(msgs_copy.begin(), json{
+                    {"role", "user"},
+                    {"content", system_prompt}
+                });
+            } else {
+                auto & first_msg = msgs_copy[0];
+                if (!first_msg.contains("content")) {
+                    first_msg["content"] = "";
+                }
+                first_msg["content"] = system_prompt + "\n\n"
+                    + first_msg["content"].get<std::string>();
+            }
+        } else {
+            if (msgs_copy.empty() || msgs_copy[0].at("role") != "system") {
+                msgs_copy.insert(msgs_copy.begin(), json{
+                    {"role", "system"},
+                    {"content", system_prompt}
+                });
+            } else if (msgs_copy[0].at("role") == "system") {
+                msgs_copy[0]["content"] = system_prompt;
+            }
+        }
+        return msgs_copy;
+    }
+
+    chat_template_caps original_caps() const {
+        return caps;
+    }
+
 };
 
 struct common_chat_msg {
@@ -213,4 +282,11 @@ class common_chat_msg_partial_exception : public std::runtime_error {
   public:
     common_chat_msg_partial_exception(const std::string & message) : std::runtime_error(message) {}
 };
+
+std::string common_chat_template_direct_apply(
+    const common_chat_template & tmpl,
+    const struct templates_params & inputs,
+    const std::optional<json> & messages_override = std::nullopt,
+    const std::optional<json> & tools_override = std::nullopt,
+    const std::optional<json> & additional_context = std::nullopt);
 

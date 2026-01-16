@@ -1,13 +1,12 @@
 #include "chat-auto-parser-helpers.h"
 #include "chat-auto-parser.h"
+#include "chat.h"
 #include "log.h"
-
-#include <minja/chat-template.hpp>
-#include <minja/minja.hpp>
+#include "nlohmann/json.hpp"
 
 using json = nlohmann::ordered_json;
 
-template_analysis_result template_analyzer::analyze_template(const minja::chat_template & tmpl) {
+template_analysis_result template_analyzer::analyze_template(const common_chat_template & tmpl) {
     LOG_DBG("=== STARTING UNIFIED TEMPLATE ANALYSIS ===\n");
 
     template_analysis_result result;
@@ -65,7 +64,7 @@ template_analysis_result template_analyzer::analyze_template(const minja::chat_t
     if (result.tools.function_format == tool_call_structure::FUNC_RECIPIENT_BASED &&
         result.content.content_start.empty() && !result.tools.tool_section_start.empty()) {
         // Render template with content only (no tools) to detect the content marker
-        minja::chat_template_inputs inputs;
+        templates_params inputs;
         inputs.messages = {
             { { "role", "user" },      { "content", "Hello" }               },
             { { "role", "assistant" }, { "content", "ACTUAL_CONTENT_HERE" } }
@@ -74,7 +73,7 @@ template_analysis_result template_analyzer::analyze_template(const minja::chat_t
 
         std::string output;
         try {
-            output = tmpl.apply(inputs);
+            output = common_chat_template_direct_apply(tmpl, inputs);
         } catch (...) {
             output = "";
         }
@@ -130,7 +129,7 @@ template_analysis_result template_analyzer::analyze_template(const minja::chat_t
     return result;
 }
 
-content_structure template_analyzer::analyze_content_structure(const minja::chat_template & tmpl) {
+content_structure template_analyzer::analyze_content_structure(const common_chat_template & tmpl) {
     LOG_DBG("=== PHASE 1: ANALYZING CONTENT STRUCTURE ===\n");
 
     content_structure cs;
@@ -142,7 +141,7 @@ content_structure template_analyzer::analyze_content_structure(const minja::chat
     detect_content_markers(tmpl, cs);
 
     // Step 3: Determine reasoning mode (NONE, OPTIONAL, FORCED_OPEN)
-    minja::chat_template_inputs inputs;
+    templates_params inputs;
     inputs.messages = {
         { { "role", "user" }, { "content", "Hello" } }
     };
@@ -151,7 +150,7 @@ content_structure template_analyzer::analyze_content_structure(const minja::chat
 
     std::string prompt;
     try {
-        prompt = tmpl.apply(inputs);
+        prompt = common_chat_template_direct_apply(tmpl, inputs);
     } catch (...) {
         LOG_DBG("Failed to render template for reasoning mode detection\n");
         return cs;
@@ -165,7 +164,7 @@ content_structure template_analyzer::analyze_content_structure(const minja::chat
     return cs;
 }
 
-void template_analyzer::detect_reasoning_markers(const minja::chat_template & tmpl, content_structure & cs) {
+void template_analyzer::detect_reasoning_markers(const common_chat_template & tmpl, content_structure & cs) {
     LOG_DBG("=== DETECTING REASONING MARKERS ===\n");
 
     // Method 1: Compare outputs with reasoning_content field present vs absent
@@ -180,12 +179,12 @@ void template_analyzer::detect_reasoning_markers(const minja::chat_template & tm
         { "content", "CONTENT_MARKER" }
     };
 
-    minja::chat_template_inputs inputs;
+    templates_params inputs;
 
     inputs.messages = { reasoning_msg };
     std::string reasoning_output;
     try {
-        reasoning_output = tmpl.apply(inputs);
+        reasoning_output = common_chat_template_direct_apply(tmpl, inputs);
     } catch (...) {
         LOG_DBG("Failed to render template with reasoning_content\n");
         reasoning_output = "";
@@ -194,7 +193,7 @@ void template_analyzer::detect_reasoning_markers(const minja::chat_template & tm
     inputs.messages = { base_msg };
     std::string base_output;
     try {
-        base_output = tmpl.apply(inputs);
+        base_output = common_chat_template_direct_apply(tmpl, inputs);
     } catch (...) {
         LOG_DBG("Failed to render base template\n");
         base_output = "";
@@ -268,14 +267,14 @@ void template_analyzer::detect_reasoning_markers(const minja::chat_template & tm
             { "content", "Hello" }
         };
 
-        minja::chat_template_inputs inputs_prompt;
+        templates_params inputs_prompt;
         inputs_prompt.messages              = { user_msg };
         inputs_prompt.add_generation_prompt = true;
 
         inputs_prompt.extra_context["enable_thinking"] = false;
         std::string prompt_no_think;
         try {
-            prompt_no_think = tmpl.apply(inputs_prompt);
+            prompt_no_think = common_chat_template_direct_apply(tmpl, inputs);
         } catch (...) {
             prompt_no_think = "";
         }
@@ -283,7 +282,7 @@ void template_analyzer::detect_reasoning_markers(const minja::chat_template & tm
         inputs_prompt.extra_context["enable_thinking"] = true;
         std::string prompt_think;
         try {
-            prompt_think = tmpl.apply(inputs_prompt);
+            prompt_think = common_chat_template_direct_apply(tmpl, inputs);
         } catch (...) {
             prompt_think = "";
         }
@@ -366,14 +365,14 @@ void template_analyzer::detect_reasoning_markers(const minja::chat_template & tm
             { "content", "Hello" }
         };
 
-        minja::chat_template_inputs inputs_prompt;
+        templates_params inputs_prompt;
         inputs_prompt.messages                         = { user_msg };
         inputs_prompt.add_generation_prompt            = true;
         inputs_prompt.extra_context["enable_thinking"] = true;
 
         std::string prompt;
         try {
-            prompt = tmpl.apply(inputs_prompt);
+            prompt = common_chat_template_direct_apply(tmpl, inputs);
         } catch (...) {
             prompt = "";
         }
@@ -470,7 +469,7 @@ void template_analyzer::detect_reasoning_markers(const minja::chat_template & tm
             { "content", "Hello" }
         };
 
-        minja::chat_template_inputs inputs_prompt;
+        templates_params inputs_prompt;
         inputs_prompt.messages                         = { user_msg };
         inputs_prompt.add_generation_prompt            = true;
         // Try with thinking disabled - templates may output empty thinking blocks
@@ -478,7 +477,7 @@ void template_analyzer::detect_reasoning_markers(const minja::chat_template & tm
 
         std::string prompt;
         try {
-            prompt = tmpl.apply(inputs_prompt);
+            prompt = common_chat_template_direct_apply(tmpl, inputs);
         } catch (...) {
             prompt = "";
         }
@@ -594,7 +593,7 @@ void template_analyzer::detect_reasoning_markers(const minja::chat_template & tm
     }
 }
 
-void template_analyzer::detect_content_markers(const minja::chat_template & tmpl, content_structure & cs) {
+void template_analyzer::detect_content_markers(const common_chat_template & tmpl, content_structure & cs) {
     LOG_DBG("=== DETECTING CONTENT MARKERS ===\n");
 
     // Render template with a unique content marker
@@ -607,7 +606,7 @@ void template_analyzer::detect_content_markers(const minja::chat_template & tmpl
         { "content", "UNIQUE_CONTENT_12345" }
     };
 
-    minja::chat_template_inputs inputs;
+    templates_params inputs;
     inputs.messages                         = { user_msg, assistant_msg };
     // Try with thinking enabled first (some templates only wrap content when reasoning is present)
     inputs.extra_context["thinking"]        = true;
@@ -615,7 +614,7 @@ void template_analyzer::detect_content_markers(const minja::chat_template & tmpl
 
     std::string output_with_thinking;
     try {
-        output_with_thinking = tmpl.apply(inputs);
+        output_with_thinking = common_chat_template_direct_apply(tmpl, inputs);
     } catch (...) {
         output_with_thinking = "";
     }
@@ -626,7 +625,7 @@ void template_analyzer::detect_content_markers(const minja::chat_template & tmpl
 
     std::string output_no_thinking;
     try {
-        output_no_thinking = tmpl.apply(inputs);
+        output_no_thinking = common_chat_template_direct_apply(tmpl, inputs);
     } catch (...) {
         output_no_thinking = "";
     }
@@ -735,7 +734,7 @@ content_structure::reasoning_mode_type template_analyzer::detect_reasoning_mode(
     return content_structure::REASONING_OPTIONAL;
 }
 
-tool_call_structure template_analyzer::analyze_tool_structure(const minja::chat_template & tmpl,
+tool_call_structure template_analyzer::analyze_tool_structure(const common_chat_template & tmpl,
                                                               const content_structure &    content) {
     (void) content;  // May be used in future for better tool detection
 

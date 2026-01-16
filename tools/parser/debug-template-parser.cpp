@@ -6,10 +6,10 @@
 #include "log.h"
 
 #include <fstream>
-#include <minja/chat-template.hpp>
-#include <minja/minja.hpp>
 #include <sstream>
 #include <string>
+
+#include "nlohmann/json.hpp"
 
 using json = nlohmann::ordered_json;
 
@@ -249,7 +249,7 @@ static json build_tools_definition() {
     });
 }
 
-static void render_scenario(const minja::chat_template & tmpl,
+static void render_scenario(const common_chat_template & tmpl,
                             const std::string &          scenario_name,
                             const json &                 messages,
                             const json &                 tools,
@@ -261,7 +261,7 @@ static void render_scenario(const minja::chat_template & tmpl,
     LOG_ERR("Messages:\n%s\n", messages.dump(2).c_str());
 
     try {
-        minja::chat_template_inputs inputs;
+        templates_params inputs;
         inputs.messages                         = messages;
         inputs.add_generation_prompt            = add_generation_prompt;
         inputs.extra_context["enable_thinking"] = enable_thinking;
@@ -270,10 +270,7 @@ static void render_scenario(const minja::chat_template & tmpl,
             inputs.tools = tools;
         }
 
-        minja::chat_template_options opts;
-        opts.apply_polyfills = false;
-
-        std::string output = tmpl.apply(inputs, opts);
+        std::string output = common_chat_template_direct_apply(tmpl, inputs);
 
         LOG_ERR("\n--- Rendered Output ---\n");
         LOG_ERR("%s\n", output.c_str());
@@ -283,7 +280,7 @@ static void render_scenario(const minja::chat_template & tmpl,
     }
 }
 
-static void render_all_scenarios(const minja::chat_template & tmpl,
+static void render_all_scenarios(const common_chat_template & tmpl,
                                  const json &                 tools,
                                  bool                         add_generation_prompt,
                                  bool                         enable_thinking,
@@ -403,7 +400,7 @@ int main(int argc, char ** argv) {
             opts.generation_prompt ? "true" : "false", opts.enable_reasoning ? "true" : "false");
 
     try {
-        minja::chat_template chat_template(template_source, "", "");
+        common_chat_template chat_template(template_source, "", "");
 
         // Build tools definition
         json tools = opts.with_tools ? build_tools_definition() : json();

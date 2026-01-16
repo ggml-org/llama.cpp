@@ -1,10 +1,10 @@
 #include "chat-auto-parser-helpers.h"
 
 #include "chat-auto-parser.h"
+#include "chat.h"
 #include "log.h"
 
-#include <minja/chat-template.hpp>
-#include <minja/minja.hpp>
+#include "nlohmann/json.hpp"
 
 using json = nlohmann::ordered_json;
 
@@ -144,30 +144,27 @@ std::string find_common_substring_limited(const std::vector<std::string> & strin
     return common;
 }
 
-std::string apply_template(const minja::chat_template &    tmpl,
+std::string apply_template(common_chat_template      &    tmpl,
                            const struct templates_params & inputs,
                            const std::optional<json> &     messages_override,
                            const std::optional<json> &     tools_override,
                            const std::optional<json> &     additional_context) {
-    minja::chat_template_inputs tmpl_inputs;
-    tmpl_inputs.messages = messages_override ? *messages_override : inputs.messages;
+    struct templates_params final_inputs(inputs);
+    final_inputs.messages = messages_override ? *messages_override : inputs.messages;
     if (tools_override) {
-        tmpl_inputs.tools = *tools_override;
+        final_inputs.tools = *tools_override;
     } else {
-        tmpl_inputs.tools = inputs.tools.empty() ? json() : inputs.tools;
+        final_inputs.tools = inputs.tools.empty() ? json() : inputs.tools;
     }
-    tmpl_inputs.add_generation_prompt            = inputs.add_generation_prompt;
-    tmpl_inputs.extra_context                    = inputs.extra_context;
-    tmpl_inputs.extra_context["enable_thinking"] = inputs.enable_thinking;
+    final_inputs.add_generation_prompt            = inputs.add_generation_prompt;
+    final_inputs.extra_context                    = inputs.extra_context;
+    final_inputs.extra_context["enable_thinking"] = inputs.enable_thinking;
     if (additional_context) {
-        tmpl_inputs.extra_context.merge_patch(*additional_context);
+        final_inputs.extra_context.merge_patch(*additional_context);
     }
 
-    minja::chat_template_options tmpl_opts;
-    tmpl_opts.apply_polyfills = false;
     try {
-        auto result = tmpl.apply(tmpl_inputs, tmpl_opts);
-        return result;
+        return common_chat_template_direct_apply(tmpl, inputs);
     } catch (const std::exception & e) {
         LOG_ERR("Template application failed: %s\n", e.what());
         return "";
@@ -1151,7 +1148,7 @@ internal_tool_format determine_format_from_patterns(const internal_discovered_pa
     return FORMAT_UNKNOWN;
 }
 
-internal_discovered_pattern analyze_by_differential(const minja::chat_template & tmpl) {
+internal_discovered_pattern analyze_by_differential(const common_chat_template & tmpl) {
     internal_discovered_pattern patterns;
 
     try {
@@ -1223,19 +1220,15 @@ internal_discovered_pattern analyze_by_differential(const minja::chat_template &
                           { "arguments", json::object({ { "param1", "value1" }, { "param2", "value2" } }) } } } } }) }
         };
 
-        minja::chat_template_inputs inputs;
+        struct templates_params inputs;
         inputs.tools = tools;
-
-        // Use options with polyfills disabled to test true template capabilities
-        minja::chat_template_options opts;
-        opts.apply_polyfills = false;
 
         // Helper function to safely render template, handling null content issues
         auto safe_render = [&](const json & messages) -> std::string {
             try {
                 // First try with the original messages
                 inputs.messages = messages;
-                return tmpl.apply(inputs, opts);
+                return common_chat_template_direct_apply(tmpl, inputs);
             } catch (const std::exception & e) {
                 // If it fails, try replacing null content with empty string
                 json fixed_messages = messages;
@@ -1246,7 +1239,7 @@ internal_discovered_pattern analyze_by_differential(const minja::chat_template &
                 }
                 inputs.messages = fixed_messages;
                 try {
-                    return tmpl.apply(inputs, opts);
+                    return common_chat_template_direct_apply(tmpl, inputs);
                 } catch (...) {
                     return "";
                 }
@@ -1373,14 +1366,14 @@ internal_discovered_pattern analyze_by_differential(const minja::chat_template &
                 { "content", "MARKER"    }
             };
 
-            minja::chat_template_inputs alt_inputs;
+            templates_params alt_inputs;
             alt_inputs.tools                 = tools;
             alt_inputs.messages              = { user_msg, alternative_base_msg };
             alt_inputs.add_generation_prompt = false;
-            auto alt_base                    = tmpl.apply(alt_inputs, opts);
+            auto alt_base                    = common_chat_template_direct_apply(tmpl, alt_inputs);
 
             alt_inputs.messages = { user_msg, tool_msg1 };
-            auto alt_tool1      = tmpl.apply(alt_inputs, opts);
+            auto alt_tool1      = common_chat_template_direct_apply(tmpl, alt_inputs);
 
             tool1_diff = find_string_difference(alt_base, alt_tool1);
             if (!tool1_diff.empty()) {
@@ -1389,9 +1382,9 @@ internal_discovered_pattern analyze_by_differential(const minja::chat_template &
                 tool1_output = alt_tool1;
 
                 alt_inputs.messages = { user_msg, tool_msg2 };
-                tool2_diff          = find_string_difference(alt_base, tmpl.apply(alt_inputs, opts));
+                tool2_diff          = find_string_difference(alt_base, common_chat_template_direct_apply(tmpl, inputs));
                 alt_inputs.messages = { user_msg, tool_msg3 };
-                tool3_diff          = find_string_difference(alt_base, tmpl.apply(alt_inputs, opts));
+                tool3_diff          = find_string_difference(alt_base, common_chat_template_direct_apply(tmpl, inputs));
             }
         }
 
