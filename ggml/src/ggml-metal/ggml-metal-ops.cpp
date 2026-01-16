@@ -1635,7 +1635,7 @@ int ggml_metal_op_pool_1d(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
     GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
-    GGML_TENSOR_LOCALS(uint32_t, nb,  op,         nb);
+    GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
 
     const int32_t * opts = op->op_params;
     ggml_op_pool op_pool = (ggml_op_pool) opts[0];
@@ -1666,7 +1666,7 @@ int ggml_metal_op_pool_1d(ggml_metal_op_t ctx, int idx) {
     const int ntg = (np + nth - 1) / nth;
 
     ggml_metal_encoder_set_pipeline(enc, pipeline);
-    ggml_metal_encoder_set_bytes   (enc, &args_pool_1d, sizeof(args_pool_1d), 0);
+    ggml_metal_encoder_set_bytes   (enc, &args_pool_1d, sizeof(args_pool_1d),  0);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
 

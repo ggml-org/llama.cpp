@@ -928,7 +928,6 @@ typedef struct {
     int64_t  np;
 } ggml_metal_kargs_pool_2d;
 
-
 typedef struct {
     int32_t  k0;
     int32_t  s0;
