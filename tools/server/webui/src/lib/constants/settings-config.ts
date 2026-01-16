@@ -26,7 +26,6 @@ export const SETTING_CONFIG_DEFAULT: Record<string, string | number | boolean> =
 	mcpServerUsageStats: '{}', // JSON object: { [serverId]: usageCount }
 	agenticMaxTurns: 10,
 	agenticMaxToolPreviewLines: 25,
-	agenticFilterReasoningAfterFirstTurn: true,
 	showToolCallInProgress: false,
 	// make sure these default values are in sync with `common.h`
 	samplers: 'top_k;typ_p;top_p;min_p;temperature',
@@ -127,8 +126,6 @@ export const SETTING_CONFIG_INFO: Record<string, string> = {
 		'Maximum number of tool execution cycles before stopping (prevents infinite loops).',
 	agenticMaxToolPreviewLines:
 		'Number of lines shown in tool output previews (last N lines). Only these previews and the final LLM response persist after the agentic loop completes.',
-	agenticFilterReasoningAfterFirstTurn:
-		'Only show reasoning from the first agentic turn. When disabled, reasoning from all turns is merged in one (WebUI limitation).',
 	showToolCallInProgress:
 		'Automatically expand tool call details while executing and keep them expanded after completion.',
 	pyInterpreterEnabled:

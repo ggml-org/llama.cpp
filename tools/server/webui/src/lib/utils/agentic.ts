@@ -24,16 +24,11 @@ export function getAgenticConfig(
 		settings.agenticMaxToolPreviewLines,
 		DEFAULT_AGENTIC_CONFIG.maxToolPreviewLines
 	);
-	const filterReasoningAfterFirstTurn =
-		typeof settings.agenticFilterReasoningAfterFirstTurn === 'boolean'
-			? settings.agenticFilterReasoningAfterFirstTurn
-			: DEFAULT_AGENTIC_CONFIG.filterReasoningAfterFirstTurn;
 
 	return {
 		enabled: mcpStore.hasEnabledServers(perChatOverrides) && DEFAULT_AGENTIC_CONFIG.enabled,
 		maxTurns,
-		maxToolPreviewLines,
-		filterReasoningAfterFirstTurn
+		maxToolPreviewLines
 	};
 }
 
