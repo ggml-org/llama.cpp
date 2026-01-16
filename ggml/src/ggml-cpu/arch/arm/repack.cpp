@@ -1118,9 +1118,9 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
             float32x4_t sb_scale_0 = vmulq_f32(q6_d_0, q8_d);
             float32x4_t sb_scale_1 = vmulq_f32(q6_d_1, q8_d);
 
-            int32x4_t acc[col_pairs];
+            int32x2_t acc[col_pairs];
             for (int i = 0; i < col_pairs; i++) {
-                acc[i] = vdupq_n_s32(0);
+                acc[i] = vdup_n_s32(0);
             }
 
             // Process two 128-value halves per superblock
@@ -1208,33 +1208,29 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                         sb_acc_h           = vdotq_s32(sb_acc_h, q6_h0, q8_h[0]);
                         sb_acc_h           = vdotq_s32(sb_acc_h, q6_h1, q8_h[1]);
 
-                        // Pairwise add to get per-column sums: [col0, col1, col0, col1]
-                        int32x4_t sum_l = vpaddq_s32(sb_acc_l, sb_acc_l);
-                        int32x4_t sum_h = vpaddq_s32(sb_acc_h, sb_acc_h);
+                        // Pairwise add to get per-column sums: [col0, col1]
+                        int32x2_t sum_l = vpadd_s32(vget_low_s32(sb_acc_l), vget_high_s32(sb_acc_l));
+                        int32x2_t sum_h = vpadd_s32(vget_low_s32(sb_acc_h), vget_high_s32(sb_acc_h));
 
                         // Apply subscales: scale indices sb for low, sb+4 for high
-                        const int32x4_t scale_vec_l = { (int32_t) q6_scales[sb][cp * 2],
-                                                        (int32_t) q6_scales[sb][cp * 2 + 1],
-                                                        (int32_t) q6_scales[sb][cp * 2],
+                        const int32x2_t scale_vec_l = { (int32_t) q6_scales[sb][cp * 2],
                                                         (int32_t) q6_scales[sb][cp * 2 + 1] };
-                        const int32x4_t scale_vec_h = { (int32_t) q6_scales[sb + 4][cp * 2],
-                                                        (int32_t) q6_scales[sb + 4][cp * 2 + 1],
-                                                        (int32_t) q6_scales[sb + 4][cp * 2],
+                        const int32x2_t scale_vec_h = { (int32_t) q6_scales[sb + 4][cp * 2],
                                                         (int32_t) q6_scales[sb + 4][cp * 2 + 1] };
 
                         // Accumulate scaled results
-                        acc[cp] = vmlaq_s32(acc[cp], sum_l, scale_vec_l);
-                        acc[cp] = vmlaq_s32(acc[cp], sum_h, scale_vec_h);
+                        acc[cp] = vmla_s32(acc[cp], sum_l, scale_vec_l);
+                        acc[cp] = vmla_s32(acc[cp], sum_h, scale_vec_h);
                     }
                 }
             }  // for half
 
             // Apply superblock scale (no mins for q6_K)
-            // acc[cp] has [c0, c1, c0, c1]
-            float32x2_t w_01 = vmul_f32(vcvt_f32_s32(vget_low_s32(acc[0])), vget_low_f32(sb_scale_0));
-            float32x2_t w_23 = vmul_f32(vcvt_f32_s32(vget_low_s32(acc[1])), vget_high_f32(sb_scale_0));
-            float32x2_t w_45 = vmul_f32(vcvt_f32_s32(vget_low_s32(acc[2])), vget_low_f32(sb_scale_1));
-            float32x2_t w_67 = vmul_f32(vcvt_f32_s32(vget_low_s32(acc[3])), vget_high_f32(sb_scale_1));
+            // acc[cp] has [c0, c1]
+            float32x2_t w_01 = vmul_f32(vcvt_f32_s32(acc[0]), vget_low_f32(sb_scale_0));
+            float32x2_t w_23 = vmul_f32(vcvt_f32_s32(acc[1]), vget_high_f32(sb_scale_0));
+            float32x2_t w_45 = vmul_f32(vcvt_f32_s32(acc[2]), vget_low_f32(sb_scale_1));
+            float32x2_t w_67 = vmul_f32(vcvt_f32_s32(acc[3]), vget_high_f32(sb_scale_1));
 
             acc_f32[0] = vaddq_f32(acc_f32[0], vcombine_f32(w_01, w_23));
             acc_f32[1] = vaddq_f32(acc_f32[1], vcombine_f32(w_45, w_67));
