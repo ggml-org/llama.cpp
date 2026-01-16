@@ -236,7 +236,7 @@ static std::string get_driver_path() {
                                         SERVICE_QUERY_CONFIG);  // need query config access
 
     if (nullptr == schService) {
-        GGML_LOG_ERROR("ggml-hex: Failed to open qcnspmcdm service. Error: %lu", GetLastError());
+        GGML_LOG_ERROR("ggml-hex: Failed to open qcnspmcdm service. Error: %lu\n", GetLastError());
         CloseServiceHandle(schSCManager);
         return result;
     }
