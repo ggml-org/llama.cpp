@@ -1,5 +1,5 @@
 #import "ggml-metal-device.h"
-#include "ggml.h"
+
 
 #import "ggml-impl.h"
 
