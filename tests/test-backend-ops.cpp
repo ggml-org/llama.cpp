@@ -6988,9 +6988,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             for (int k0 : {1, 3}) {
                 for (int s0 : {1, 2}) {
                     for (int p0 : {0, 1}) {
-                        test_cases.emplace_back(new test_pool1d(pool_type, type_input, { 10, 1, 1, 1 }, k0, s0, p0));
-                        test_cases.emplace_back(new test_pool1d(pool_type, type_input, { 11, 1, 1, 2 }, k0, s0, p0));
-                        test_cases.emplace_back(new test_pool1d(pool_type, type_input, { 128, 1, 1, 3 }, k0, s0, p0));
+                        test_cases.emplace_back(new test_pool1d(pool_type, type_input, { 10,  3, 1, 1 }, k0, s0, p0));
+                        test_cases.emplace_back(new test_pool1d(pool_type, type_input, { 11,  1, 1, 2 }, k0, s0, p0));
+                        test_cases.emplace_back(new test_pool1d(pool_type, type_input, { 128, 2, 1, 3 }, k0, s0, p0));
                     }
                 }
             }
