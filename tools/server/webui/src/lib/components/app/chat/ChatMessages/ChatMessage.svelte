@@ -41,47 +41,6 @@
 	let shouldBranchAfterEdit = $state(false);
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
 
-	let thinkingContent = $derived.by(() => {
-		if (message.role === MessageRole.ASSISTANT) {
-			const trimmedThinking = message.thinking?.trim();
-
-	setMessageEditContext({
-		get isEditing() {
-			return isEditing;
-		},
-		get editedContent() {
-			return editedContent;
-		},
-		get editedExtras() {
-			return editedExtras;
-		},
-		get editedUploadedFiles() {
-			return editedUploadedFiles;
-		},
-		get originalContent() {
-			return message.content;
-		},
-		get originalExtras() {
-			return message.extra || [];
-		},
-		get showSaveOnlyOption() {
-			return showSaveOnlyOption;
-		},
-		setContent: (content: string) => {
-			editedContent = content;
-		},
-		setExtras: (extras: DatabaseMessageExtra[]) => {
-			editedExtras = extras;
-		},
-		setUploadedFiles: (files: ChatUploadedFile[]) => {
-			editedUploadedFiles = files;
-		},
-		save: handleSaveEdit,
-		saveOnly: handleSaveEditOnly,
-		cancel: handleCancelEdit,
-		startEdit: handleEdit
-	});
-
 	// Auto-start edit mode if this message is the pending edit target
 	$effect(() => {
 		const pendingId = pendingEditMessageId();
@@ -277,6 +236,5 @@
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
 		{showDeleteDialog}
 		{siblingInfo}
-		{thinkingContent}
 	/>
 {/if}

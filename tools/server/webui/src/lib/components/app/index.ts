@@ -33,8 +33,6 @@ export { default as ChatMessageBranchingControls } from './chat/ChatMessages/Cha
 export { default as ChatMessageEditForm } from './chat/ChatMessages/ChatMessageEditForm.svelte';
 export { default as ChatMessageStatistics } from './chat/ChatMessages/ChatMessageStatistics.svelte';
 export { default as ChatMessageSystem } from './chat/ChatMessages/ChatMessageSystem.svelte';
-export { default as ChatMessageThinkingBlock } from './chat/ChatMessages/ChatMessageThinkingBlock.svelte';
-export { default as ChatMessageUser } from './chat/ChatMessages/ChatMessageUser.svelte';
 export { default as ChatMessages } from './chat/ChatMessages/ChatMessages.svelte';
 export { default as CollapsibleContentBlock } from './chat/ChatMessages/CollapsibleContentBlock.svelte';
 export { default as MessageBranchingControls } from './chat/ChatMessages/ChatMessageBranchingControls.svelte';

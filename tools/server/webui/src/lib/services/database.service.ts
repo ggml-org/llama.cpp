@@ -165,7 +165,6 @@ export class DatabaseService {
 			role: 'system',
 			content: '',
 			parent: null,
-			thinking: '',
 			toolCalls: '',
 			children: []
 		};
@@ -201,7 +200,6 @@ export class DatabaseService {
 			role: 'system',
 			content: trimmedPrompt,
 			parent: parentId,
-			thinking: '',
 			children: []
 		};
 

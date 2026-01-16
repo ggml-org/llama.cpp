@@ -4,7 +4,6 @@
 		ModelBadge,
 		ChatMessageActions,
 		ChatMessageStatistics,
-		ChatMessageThinkingBlock,
 		MarkdownContent,
 		ModelBadge,
 		ModelsSelector
@@ -25,9 +24,7 @@
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
-	import { modelsStore } from '$lib/stores/models.svelte';
-	import { ServerModelStatus } from '$lib/enums';
-	import { REASONING_TAGS } from '$lib/constants/agentic';
+	import { AGENTIC_TAGS, REASONING_TAGS } from '$lib/constants/agentic';
 
 	interface Props {
 		class?: string;
@@ -51,7 +48,6 @@
 		showDeleteDialog: boolean;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 		textareaElement?: HTMLTextAreaElement;
-		thinkingContent: string | null;
 	}
 
 	let {
@@ -70,15 +66,17 @@
 		onShowDeleteDialogChange,
 		showDeleteDialog,
 		siblingInfo = null,
-		textareaElement = $bindable(),
-		thinkingContent
+		textareaElement = $bindable()
 	}: Props = $props();
 
 	const hasAgenticMarkers = $derived(
-		messageContent?.includes('<<<AGENTIC_TOOL_CALL_START>>>') ?? false
+		messageContent?.includes(AGENTIC_TAGS.TOOL_CALL_START) ?? false
 	);
 	const hasStreamingToolCall = $derived(isChatStreaming() && agenticStreamingToolCall() !== null);
-	const isAgenticContent = $derived(hasAgenticMarkers || hasStreamingToolCall);
+	const hasReasoningMarkers = $derived(messageContent?.includes(REASONING_TAGS.START) ?? false);
+	const isStructuredContent = $derived(
+		hasAgenticMarkers || hasReasoningMarkers || hasStreamingToolCall
+	);
 	const processingState = useProcessingState();
 
 	let currentConfig = $derived(config());
@@ -149,15 +147,7 @@
 	role="group"
 	aria-label="Assistant message with actions"
 >
-	{#if !editCtx.isEditing && thinkingContent}
-		<ChatMessageThinkingBlock
-			reasoningContent={thinkingContent}
-			isStreaming={!message.timestamp}
-			hasRegularContent={!!visibleMessageContent?.trim()}
-		/>
-	{/if}
-
-	{#if showProcessingInfoTop}
+	{#if message?.role === 'assistant' && isLoading() && !message?.content?.trim()}
 		<div class="mt-6 w-full max-w-[48rem]" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
@@ -215,7 +205,7 @@
 	{:else if message.role === MessageRole.ASSISTANT}
 		{#if showRawOutput}
 			<pre class="raw-output">{messageContent || ''}</pre>
-		{:else if isAgenticContent}
+		{:else if isStructuredContent}
 			<AgenticContent content={messageContent || ''} isStreaming={isChatStreaming()} {message} />
 		{:else}
 			<MarkdownContent content={messageContent || ''} {message} />

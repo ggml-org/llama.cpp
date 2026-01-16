@@ -17,6 +17,7 @@ import {
 import { DEFAULT_CONTEXT } from '$lib/constants/default-context';
 import { getAgenticConfig } from '$lib/utils/agentic';
 import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
+import { REASONING_TAGS } from '$lib/constants/agentic';
 import type { ChatMessageTimings, ChatMessagePromptProgress } from '$lib/types/chat';
 import type { DatabaseMessage, DatabaseMessageExtra } from '$lib/types/database';
 
@@ -86,6 +87,17 @@ interface ChatStoreStateCallbacks {
 	getActiveConversationId: () => string | null;
 	getCurrentResponse: () => string;
 }
+
+const countOccurrences = (source: string, token: string): number =>
+	source ? source.split(token).length - 1 : 0;
+
+const hasUnclosedReasoningTag = (content: string): boolean =>
+	countOccurrences(content, REASONING_TAGS.START) > countOccurrences(content, REASONING_TAGS.END);
+
+const wrapReasoningContent = (content: string, reasoningContent?: string): string => {
+	if (!reasoningContent) return content;
+	return `${REASONING_TAGS.START}${reasoningContent}${REASONING_TAGS.END}${content}`;
+};
 
 /**
  * ChatClient - Business Logic Facade for Chat Operations
@@ -205,7 +217,6 @@ export class ChatClient {
 					content,
 					type,
 					timestamp: Date.now(),
-					thinking: '',
 					toolCalls: '',
 					children: [],
 					extra: extras
@@ -377,7 +388,6 @@ export class ChatClient {
 				role: 'assistant',
 				content: '',
 				timestamp: Date.now(),
-				thinking: '',
 				toolCalls: '',
 				children: [],
 				model: null
@@ -476,8 +486,9 @@ export class ChatClient {
 		}
 
 		let streamedContent = '';
-		let streamedReasoningContent = '';
 		let streamedToolCallContent = '';
+		let isReasoningOpen = false;
+		let hasStreamedChunks = false;
 		let resolvedModel: string | null = null;
 		let modelPersisted = false;
 		let streamedExtras: DatabaseMessageExtra[] = assistantMessage.extra
@@ -500,6 +511,39 @@ export class ChatClient {
 			}
 		};
 
+		const updateStreamingContent = () => {
+			this.store.setChatStreaming(assistantMessage.convId, streamedContent, assistantMessage.id);
+			const idx = conversationsStore.findMessageIndex(assistantMessage.id);
+			conversationsStore.updateMessageAtIndex(idx, { content: streamedContent });
+		};
+
+		const appendContentChunk = (chunk: string) => {
+			if (isReasoningOpen) {
+				streamedContent += REASONING_TAGS.END;
+				isReasoningOpen = false;
+			}
+			streamedContent += chunk;
+			hasStreamedChunks = true;
+			updateStreamingContent();
+		};
+
+		const appendReasoningChunk = (chunk: string) => {
+			if (!isReasoningOpen) {
+				streamedContent += REASONING_TAGS.START;
+				isReasoningOpen = true;
+			}
+			streamedContent += chunk;
+			hasStreamedChunks = true;
+			updateStreamingContent();
+		};
+
+		const finalizeReasoning = () => {
+			if (isReasoningOpen) {
+				streamedContent += REASONING_TAGS.END;
+				isReasoningOpen = false;
+			}
+		};
+
 		this.store.setStreamingActive(true);
 		this.store.setActiveProcessingConversation(assistantMessage.convId);
 
@@ -507,15 +551,10 @@ export class ChatClient {
 
 		const streamCallbacks: ChatStreamCallbacks = {
 			onChunk: (chunk: string) => {
-				streamedContent += chunk;
-				this.store.setChatStreaming(assistantMessage.convId, streamedContent, assistantMessage.id);
-				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
-				conversationsStore.updateMessageAtIndex(idx, { content: streamedContent });
+				appendContentChunk(chunk);
 			},
 			onReasoningChunk: (reasoningChunk: string) => {
-				streamedReasoningContent += reasoningChunk;
-				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
-				conversationsStore.updateMessageAtIndex(idx, { thinking: streamedReasoningContent });
+				appendReasoningChunk(reasoningChunk);
 			},
 			onToolCallChunk: (toolCallChunk: string) => {
 				const chunk = toolCallChunk.trim();
@@ -558,10 +597,14 @@ export class ChatClient {
 				toolCallContent?: string
 			) => {
 				this.store.setStreamingActive(false);
+				finalizeReasoning();
+
+				const combinedContent = hasStreamedChunks
+					? streamedContent
+					: wrapReasoningContent(finalContent || '', reasoningContent);
 
 				const updateData: Record<string, unknown> = {
-					content: finalContent || streamedContent,
-					thinking: reasoningContent || streamedReasoningContent,
+					content: combinedContent,
 					toolCalls: toolCallContent || streamedToolCallContent,
 					timings
 				};
@@ -575,7 +618,7 @@ export class ChatClient {
 
 				const idx = conversationsStore.findMessageIndex(assistantMessage.id);
 				const uiUpdate: Partial<DatabaseMessage> = {
-					content: updateData.content as string,
+					content: combinedContent,
 					toolCalls: updateData.toolCalls as string
 				};
 				if (streamedExtras.length > 0) {
@@ -587,7 +630,7 @@ export class ChatClient {
 				conversationsStore.updateMessageAtIndex(idx, uiUpdate);
 				await conversationsStore.updateCurrentNode(assistantMessage.id);
 
-				if (onComplete) await onComplete(streamedContent);
+				if (onComplete) await onComplete(combinedContent);
 				this.store.setChatLoading(assistantMessage.convId, false);
 				this.store.clearChatStreaming(assistantMessage.convId);
 				this.store.setProcessingState(assistantMessage.convId, null);
@@ -714,10 +757,9 @@ export class ChatClient {
 
 		if (lastMessage?.role === 'assistant') {
 			try {
-				const updateData: { content: string; thinking?: string; timings?: ChatMessageTimings } = {
+				const updateData: { content: string; timings?: ChatMessageTimings } = {
 					content: streamingState.response
 				};
-				if (lastMessage.thinking?.trim()) updateData.thinking = lastMessage.thinking;
 				const lastKnownState = this.store.getProcessingState(conversationId);
 				if (lastKnownState) {
 					updateData.timings = {
@@ -736,7 +778,6 @@ export class ChatClient {
 
 				lastMessage.content = this.store.getCurrentResponse();
 
-				if (updateData.thinking) lastMessage.thinking = updateData.thinking;
 				if (updateData.timings) lastMessage.timings = updateData.timings;
 			} catch (error) {
 				lastMessage.content = this.store.getCurrentResponse();
@@ -891,7 +932,6 @@ export class ChatClient {
 					timestamp: Date.now(),
 					role: msg.role,
 					content: '',
-					thinking: '',
 					toolCalls: '',
 					children: [],
 					model: null
@@ -1040,7 +1080,6 @@ export class ChatClient {
 			}
 
 			const originalContent = dbMessage.content;
-			const originalThinking = dbMessage.thinking || '';
 
 			const conversationContext = conversationsStore.activeMessages.slice(0, idx);
 			const contextWithContinue = [
@@ -1048,9 +1087,41 @@ export class ChatClient {
 				{ role: 'assistant' as const, content: originalContent }
 			];
 
-			let appendedContent = '',
-				appendedThinking = '',
-				hasReceivedContent = false;
+			let appendedContent = '';
+			let hasReceivedContent = false;
+			let isReasoningOpen = hasUnclosedReasoningTag(originalContent);
+
+			const updateStreamingContent = (fullContent: string) => {
+				this.store.setChatStreaming(msg.convId, fullContent, msg.id);
+				conversationsStore.updateMessageAtIndex(idx, { content: fullContent });
+			};
+
+			const appendContentChunk = (chunk: string) => {
+				if (isReasoningOpen) {
+					appendedContent += REASONING_TAGS.END;
+					isReasoningOpen = false;
+				}
+				appendedContent += chunk;
+				hasReceivedContent = true;
+				updateStreamingContent(originalContent + appendedContent);
+			};
+
+			const appendReasoningChunk = (chunk: string) => {
+				if (!isReasoningOpen) {
+					appendedContent += REASONING_TAGS.START;
+					isReasoningOpen = true;
+				}
+				appendedContent += chunk;
+				hasReceivedContent = true;
+				updateStreamingContent(originalContent + appendedContent);
+			};
+
+			const finalizeReasoning = () => {
+				if (isReasoningOpen) {
+					appendedContent += REASONING_TAGS.END;
+					isReasoningOpen = false;
+				}
+			};
 
 			const abortController = this.store.getAbortController(msg.convId);
 
@@ -1060,19 +1131,11 @@ export class ChatClient {
 					...this.getApiOptions(),
 
 					onChunk: (chunk: string) => {
-						hasReceivedContent = true;
-						appendedContent += chunk;
-						const fullContent = originalContent + appendedContent;
-						this.store.setChatStreaming(msg.convId, fullContent, msg.id);
-						conversationsStore.updateMessageAtIndex(idx, { content: fullContent });
+						appendContentChunk(chunk);
 					},
 
 					onReasoningChunk: (reasoningChunk: string) => {
-						hasReceivedContent = true;
-						appendedThinking += reasoningChunk;
-						conversationsStore.updateMessageAtIndex(idx, {
-							thinking: originalThinking + appendedThinking
-						});
+						appendReasoningChunk(reasoningChunk);
 					},
 
 					onTimings: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => {
@@ -1098,17 +1161,18 @@ export class ChatClient {
 						reasoningContent?: string,
 						timings?: ChatMessageTimings
 					) => {
-						const fullContent = originalContent + (finalContent || appendedContent);
-						const fullThinking = originalThinking + (reasoningContent || appendedThinking);
+						finalizeReasoning();
+						const appendedFromCompletion = hasReceivedContent
+							? appendedContent
+							: wrapReasoningContent(finalContent || '', reasoningContent);
+						const fullContent = originalContent + appendedFromCompletion;
 						await DatabaseService.updateMessage(msg.id, {
 							content: fullContent,
-							thinking: fullThinking,
 							timestamp: Date.now(),
 							timings
 						});
 						conversationsStore.updateMessageAtIndex(idx, {
 							content: fullContent,
-							thinking: fullThinking,
 							timestamp: Date.now(),
 							timings
 						});
@@ -1123,12 +1187,10 @@ export class ChatClient {
 							if (hasReceivedContent && appendedContent) {
 								await DatabaseService.updateMessage(msg.id, {
 									content: originalContent + appendedContent,
-									thinking: originalThinking + appendedThinking,
 									timestamp: Date.now()
 								});
 								conversationsStore.updateMessageAtIndex(idx, {
 									content: originalContent + appendedContent,
-									thinking: originalThinking + appendedThinking,
 									timestamp: Date.now()
 								});
 							}
@@ -1139,12 +1201,10 @@ export class ChatClient {
 						}
 						console.error('Continue generation error:', error);
 						conversationsStore.updateMessageAtIndex(idx, {
-							content: originalContent,
-							thinking: originalThinking
+							content: originalContent
 						});
 						await DatabaseService.updateMessage(msg.id, {
-							content: originalContent,
-							thinking: originalThinking
+							content: originalContent
 						});
 						this.store.setChatLoading(msg.convId, false);
 						this.store.clearChatStreaming(msg.convId);
@@ -1192,7 +1252,6 @@ export class ChatClient {
 						timestamp: Date.now(),
 						role: msg.role,
 						content: newContent,
-						thinking: msg.thinking || '',
 						toolCalls: msg.toolCalls || '',
 						children: [],
 						model: msg.model
@@ -1307,7 +1366,6 @@ export class ChatClient {
 					timestamp: Date.now(),
 					role: msg.role,
 					content: newContent,
-					thinking: msg.thinking || '',
 					toolCalls: msg.toolCalls || '',
 					children: [],
 					extra: extrasToUse,
@@ -1357,7 +1415,6 @@ export class ChatClient {
 					timestamp: Date.now(),
 					role: 'assistant',
 					content: '',
-					thinking: '',
 					toolCalls: '',
 					children: [],
 					model: null
