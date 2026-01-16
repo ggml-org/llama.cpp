@@ -1,27 +1,28 @@
 import type { Root as HastRoot } from 'hast';
 import { visit } from 'unist-util-visit';
-import type { DatabaseMessageExtra, DatabaseMessageExtraImageFile } from '$lib/types/database';
-import { AttachmentType, UrlPrefix } from '$lib/enums';
+import type { DatabaseMessage, DatabaseMessageExtraImageFile } from '$lib/types/database';
 
 /**
  * Rehype plugin to resolve attachment image sources.
- * Converts attachment names to base64 data URLs.
+ * Converts attachment names (e.g., "mcp-attachment-xxx.png") to base64 data URLs.
  */
-export function rehypeResolveAttachmentImages(options: { attachments?: DatabaseMessageExtra[] }) {
+export function rehypeResolveAttachmentImages(options: { message?: DatabaseMessage }) {
 	return (tree: HastRoot) => {
 		visit(tree, 'element', (node) => {
 			if (node.tagName === 'img' && node.properties?.src) {
 				const src = String(node.properties.src);
 
-				if (src.startsWith(UrlPrefix.DATA) || src.startsWith(UrlPrefix.HTTP)) {
+				// Skip data URLs and external URLs
+				if (src.startsWith('data:') || src.startsWith('http')) {
 					return;
 				}
 
-				const attachment = options.attachments?.find(
-					(a): a is DatabaseMessageExtraImageFile =>
-						a.type === AttachmentType.IMAGE && a.name === src
+				// Find matching attachment
+				const attachment = options.message?.extra?.find(
+					(a): a is DatabaseMessageExtraImageFile => a.type === 'IMAGE' && a.name === src
 				);
 
+				// Replace with base64 URL if found
 				if (attachment?.base64Url) {
 					node.properties.src = attachment.base64Url;
 				}

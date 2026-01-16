@@ -216,9 +216,9 @@
 		{#if showRawOutput}
 			<pre class="raw-output">{messageContent || ''}</pre>
 		{:else if isAgenticContent}
-			<AgenticContent content={messageContent || ''} isStreaming={isChatStreaming()} />
+			<AgenticContent content={messageContent || ''} isStreaming={isChatStreaming()} {message} />
 		{:else}
-			<MarkdownContent content={visibleMessageContent || ''} attachments={message.extra} />
+			<MarkdownContent content={messageContent || ''} {message} />
 		{/if}
 	{:else}
 		<div class="text-sm whitespace-pre-wrap">

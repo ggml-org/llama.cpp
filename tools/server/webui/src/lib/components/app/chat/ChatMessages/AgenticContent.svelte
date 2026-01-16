@@ -17,10 +17,10 @@
 	import { AgenticSectionType } from '$lib/enums';
 	import { AGENTIC_TAGS, AGENTIC_REGEX } from '$lib/constants/agentic';
 	import { formatJsonPretty } from '$lib/utils/formatters';
-	import { decodeBase64 } from '$lib/utils';
-	import type { ChatMessageToolCallTiming } from '$lib/types/chat';
+	import type { DatabaseMessage } from '$lib/types/database';
 
 	interface Props {
+		message?: DatabaseMessage;
 		content: string;
 		isStreaming?: boolean;
 	}
@@ -33,7 +33,7 @@
 		toolResult?: string;
 	}
 
-	let { content, isStreaming = false }: Props = $props();
+	let { content, message, isStreaming = false }: Props = $props();
 
 	const sections = $derived(parseAgenticContent(content));
 
@@ -194,7 +194,7 @@
 	{#each sections as section, index (index)}
 		{#if section.type === AgenticSectionType.TEXT}
 			<div class="agentic-text">
-				<MarkdownContent content={section.content} />
+				<MarkdownContent content={section.content} {message} />
 			</div>
 		{:else if section.type === AgenticSectionType.TOOL_CALL_STREAMING}
 			{@const streamingIcon = isStreaming ? Loader2 : AlertTriangle}
