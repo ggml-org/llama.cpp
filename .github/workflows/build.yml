@@ -1394,6 +1394,11 @@ jobs:
         arch: [x86, aarch64]
         chip_type: ['910b', '310p']
         build: ['Release']
+        use_acl_graph: ['on', 'off']
+        exclude:
+          # 310P does not support USE_ACL_GRAPH=on
+          - chip_type: '310p'
+            use_acl_graph: 'on'
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
@@ -1419,6 +1424,7 @@ jobs:
         env:
           BUILD_TYPE: ${{ matrix.build }}
           SOC_TYPE: ascend${{ matrix.chip_type }}
+          USE_ACL_GRAPH: ${{ matrix.use_acl_graph }}
         run: |
           HOST_UID=$(id -u)
           HOST_GID=$(id -g)
@@ -1428,6 +1434,7 @@ jobs:
             -w /workspace \
             -e SOC_TYPE=${SOC_TYPE} \
             -e BUILD_TYPE=${BUILD_TYPE} \
+            -e USE_ACL_GRAPH=${USE_ACL_GRAPH} \
             "${{ steps.cann-image.outputs.image }}" \
             bash -lc '
               set -e
@@ -1438,7 +1445,8 @@ jobs:
               cmake -S . -B build \
                   -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
                   -DGGML_CANN=on \
-                  -DSOC_TYPE=${SOC_TYPE}
+                  -DSOC_TYPE=${SOC_TYPE} \
+                  -DUSE_ACL_GRAPH=${USE_ACL_GRAPH}
               cmake --build build -j $(nproc)
 
               chown -R '"${HOST_UID}"':'"${HOST_GID}"' /workspace/build
