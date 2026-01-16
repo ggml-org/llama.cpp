@@ -1103,6 +1103,21 @@ private:
     }
 
     bool launch_slot_with_task(server_slot & slot, server_task && task) {
+        // continue mode: prepend existing slot tokens to task tokens
+        // the normal cache_prompt logic will then find the common prefix and only process new tokens
+        if (task.params.continue_slot) {
+            if (slot.prompt.tokens.empty()) {
+                send_error(task, "continue mode requires existing slot state, but slot is empty", ERROR_TYPE_INVALID_REQUEST);
+                return false;
+            }
+            SLT_INF(slot, "continue mode: prepending %zu existing tokens to %zu new tokens\n",
+                    slot.prompt.tokens.size(), task.tokens.size());
+            // create combined tokens: existing + new
+            server_tokens combined = slot.prompt.tokens.clone();
+            combined.push_back(task.tokens);
+            task.tokens = std::move(combined);
+        }
+
         // process per-request lora adapters
         if (!task.params.lora.empty()) {
             auto task_loras = construct_lora_list(task.params.lora);
@@ -3490,15 +3505,19 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
         // TODO: this log can become very long, put it behind a flag or think about a more compact format
         //SRV_DBG("Prompt: %s\n", prompt.is_string() ? prompt.get<std::string>().c_str() : prompt.dump(2).c_str());
 
+        // continue mode: append tokens to existing slot state instead of replacing
+        const bool continue_slot = json_value(data, "continue", false);
+        const bool add_special = !continue_slot; // no BOS for continuation
+
         // process prompt
         std::vector<server_tokens> inputs;
 
         if (res_type != TASK_RESPONSE_TYPE_NONE && ctx_server.mctx != nullptr) {
             // This is the case used by OAI compatible chat path with MTMD. TODO It can be moved to the path below.
-            inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files));
+            inputs.push_back(process_mtmd_prompt(ctx_server.mctx, prompt.get<std::string>(), files, add_special));
         } else {
             // Everything else, including multimodal completions.
-            inputs = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true);
+            inputs = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, add_special, true);
         }
 
         // tasks.reserve(inputs.size()); // TODO: this is inaccurate due to child tasks
@@ -3520,6 +3539,9 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             task.params.res_type          = res_type;
             task.params.oaicompat_cmpl_id = completion_id;
             task.params.oaicompat_model   = meta->model_name;
+
+            // continue mode: append tokens to existing slot
+            task.params.continue_slot = continue_slot;
 
             // prepare child tasks
             if (task.params.n_cmpl > 1) {

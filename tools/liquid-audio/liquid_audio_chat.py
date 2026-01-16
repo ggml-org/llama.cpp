@@ -232,7 +232,6 @@ def create_stream_single_shot(client, mode, text=None, wav_data=None, max_tokens
         messages=messages,
         stream=True,
         max_tokens=max_tokens,
-        extra_body={"reset_context": True},
     )
 
 
@@ -244,7 +243,10 @@ def create_stream_chat(client, messages, max_tokens=512, reset_context=False):
         messages=messages,
         stream=True,
         max_tokens=max_tokens,
-        extra_body={"reset_context": reset_context},
+        extra_body={
+            "id_slot": 0,
+            "continue": not reset_context,
+        },
     )
 
 
@@ -442,19 +444,15 @@ def main():
 
                 elif cmd == "/mode":
                     if arg in ("asr", "tts", "interleaved"):
-                        if arg != mode:
+                        if arg == mode:
+                            print(f"Already in {mode} mode")
+                        elif arg == "interleaved":
                             mode = arg
                             is_first_message = True
-                            print(
-                                f"Mode: {mode}"
-                                + (
-                                    " (single-shot)"
-                                    if mode in ("asr", "tts")
-                                    else " (chat)"
-                                )
-                            )
+                            print(f"Mode: {mode} (chat)")
                         else:
-                            print(f"Already in {mode} mode")
+                            mode = arg
+                            print(f"Mode: {mode} (single-shot)")
                     else:
                         print("Usage: /mode <asr|tts|interleaved>")
                     continue
