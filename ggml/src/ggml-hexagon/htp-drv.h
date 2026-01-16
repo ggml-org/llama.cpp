@@ -58,8 +58,6 @@ extern "C" {
 #    include <sysinfoapi.h>
 #    define _CRT_SECURE_NO_WARNINGS         1
 #    define _WINSOCK_DEPRECATED_NO_WARNINGS 1
-/* Including this file for custom implementation of getopt function. */
-#    include "getopt_custom.h"
 #endif
 
 /* Includes and defines for all HLOS except windows */
