@@ -464,6 +464,10 @@ task_params server_task::params_from_json_cmpl(
         throw std::runtime_error("n_cmpl cannot be greater than the number of slots, please increase -np");
     }
 
+    // Output modalities (from modalities: ["text", "audio"])
+    params.audio_output_enabled = json_value(data, "audio_output", false);
+    params.text_output_enabled = json_value(data, "text_output", true);
+
     return params;
 }
 
@@ -1167,6 +1171,16 @@ json server_task_result_cmpl_partial::to_json_oaicompat_chat() {
 
     for (const auto & diff : oaicompat_msg_diffs) {
         add_delta(common_chat_msg_diff_to_json_oaicompat<json>(diff));
+    }
+
+    // Add audio chunk if present (OpenAI-compatible format)
+    if (has_audio && !audio_data_base64.empty()) {
+        add_delta({
+            {"audio", {
+                {"id", "audio_" + std::to_string(n_decoded)},
+                {"data", audio_data_base64},
+            }},
+        });
     }
 
     if (!deltas.empty()) {

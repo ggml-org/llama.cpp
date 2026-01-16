@@ -94,9 +94,9 @@ def collect_output(stream):
             received_text.append((time.time(), text))
             print(text, end="", flush=True)
 
-        # Handle audio chunks
-        if hasattr(delta, "audio_chunk") and delta.audio_chunk:
-            chunk_data = delta.audio_chunk["data"]
+        # Handle audio chunks (OpenAI-compatible format: delta.audio.data)
+        if hasattr(delta, "audio") and delta.audio and "data" in delta.audio:
+            chunk_data = delta.audio["data"]
             pcm_bytes = base64.b64decode(chunk_data)
             samples = np.frombuffer(pcm_bytes, dtype=np.int16)
             received_audio.append((time.time(), samples))

@@ -272,10 +272,10 @@ def process_stream(stream, audio_player=None):
             print(text, end="", flush=True)
 
         # Handle audio
-        if hasattr(delta, "audio_chunk") and delta.audio_chunk:
+        if hasattr(delta, "audio") and delta.audio and "data" in delta.audio:
             if ttft is None:
                 ttft = time.time() - t0
-            chunk_data = delta.audio_chunk["data"]
+            chunk_data = delta.audio["data"]
             pcm_bytes = base64.b64decode(chunk_data)
             samples = np.frombuffer(pcm_bytes, dtype=np.int16)
             audio_chunks.append((time.time(), samples))

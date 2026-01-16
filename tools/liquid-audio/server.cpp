@@ -286,7 +286,7 @@ int main(int argc, char ** argv) {
                     { "created", std::time(0)                                                                      },
                     { "choices", json::array({ { { "index", 0 },
                                                  { "delta",
-                                                   { { "audio_chunk",
+                                                   { { "audio",
                                                        { { "data", audio_base64 },
                                                          { "format", "pcm" },
                                                          { "sample_rate", runner.get_output_sample_rate() } } } } },
