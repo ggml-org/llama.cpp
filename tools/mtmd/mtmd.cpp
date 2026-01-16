@@ -1187,8 +1187,6 @@ int mtmd_audio_output_decode(
         mtmd_context * ctx,
         const float * embedding,
         size_t n_embd,
-        float temperature,
-        int top_k,
         float * out_embedding) {
     GGML_ASSERT(mtmd_support_audio_output(ctx));
 
@@ -1196,8 +1194,7 @@ int mtmd_audio_output_decode(
 
     mtmd_audio_decode_result result;
 
-    if (auto res = ctx->audio_decoder->decode(result,
-            embedding, n_embd, temperature, top_k); res != 0) {
+    if (auto res = ctx->audio_decoder->decode(result, embedding, n_embd); res != 0) {
         LOG_ERR("%s: audio decoding failed: %d\n", __func__, res);
         return res;
     }
@@ -1251,7 +1248,7 @@ void mtmd_audio_output_accept_token(mtmd_context * ctx, llama_token id) {
     ctx->output_modality = ctx->audio_decoder->accept_text_token(id);
 }
 
-void mtmd_set_output_modalities(mtmd_context * ctx, mtmd_output_modality * ptr, size_t len) {
+void mtmd_set_output_modalities(mtmd_context * ctx, const mtmd_output_modality * ptr, size_t len) {
     GGML_ASSERT(mtmd_support_audio_output(ctx));
     if (!ptr || !len) {
         ctx->audio_decoder->set_modalities({});

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "common.h"
+#include "mtmd.h"
 
 #include <functional>
 #include <string>
@@ -37,10 +38,11 @@ class Runner {
 
     int  init(common_params params);
     void stop();
-    int  generate(const std::vector<Message> & messages,
-                  int                          n_predict,
-                  const text_callback_t &      text_callback,
-                  const audio_callback_t &     audio_callback);
+    int  generate(const std::vector<Message> &              messages,
+                  int                                       n_predict,
+                  const text_callback_t &                   text_callback,
+                  const audio_callback_t &                  audio_callback,
+                  const std::vector<mtmd_output_modality> & modalities);
 
     int          get_output_sample_rate() const;
     const char * get_last_error() const;

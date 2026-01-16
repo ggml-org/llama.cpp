@@ -40,10 +40,6 @@ struct audio_context {
 
     common_chat_templates_ptr tmpls;
 
-    // audio sampling params
-    float audio_temperature = 0.0f;
-    int   audio_top_k       = 1;
-
     int init(common_params & params) {
         // backbone
         llama_init = common_init_from_params(params);
@@ -95,42 +91,17 @@ class Runner::RunnerImpl {
   public:
     RunnerImpl() = default;
 
-    int generate(const std::vector<Message> & messages,
-                 int                          n_predict,
-                 const text_callback_t &      text_callback,
-                 const audio_callback_t &     audio_callback) {
+    int generate(const std::vector<Message> &              messages,
+                 int                                       n_predict,
+                 const text_callback_t &                   text_callback,
+                 const audio_callback_t &                  audio_callback,
+                 const std::vector<mtmd_output_modality> & modalities) {
+        mtmd_set_output_modalities(ctx.mtmd_ctx_audio.get(), modalities.data(), modalities.size());
+        mtmd_audio_output_start_new_turn(ctx.mtmd_ctx_audio.get());
 
         std::vector<common_chat_msg> msgs;
         for (const auto & message : messages) {
-            if (const auto & role = message.role; role == "system") {
-                if (const auto & system_prompt = message.content; system_prompt == asr_system_prompt) {
-                    std::array modalities{ MTMD_OUTPUT_MODALITY_TEXT };
-                    mtmd_set_output_modalities(ctx.mtmd_ctx_audio.get(), modalities.data(), modalities.size());
-                } else if (system_prompt == interleaved_system_prompt) {
-                    // TODO(tarek): check params with Marc
-                    ctx.audio_temperature = 0.8;
-                    ctx.audio_top_k       = 4;
-                    std::array modalities{ MTMD_OUTPUT_MODALITY_AUDIO, MTMD_OUTPUT_MODALITY_TEXT };
-                    mtmd_set_output_modalities(ctx.mtmd_ctx_audio.get(), modalities.data(), modalities.size());
-                } else if (std::find(begin(tts_system_prompts), end(tts_system_prompts), system_prompt) !=
-                           end(tts_system_prompts)) {
-                    // TODO(tarek): check params with Marc
-                    ctx.audio_temperature = 0.8;
-                    ctx.audio_top_k       = 64;
-                    std::array modalities{ MTMD_OUTPUT_MODALITY_AUDIO };
-                    mtmd_set_output_modalities(ctx.mtmd_ctx_audio.get(), modalities.data(), modalities.size());
-                } else {
-                    std::vector<std::string> prompts = tts_system_prompts;
-                    prompts.push_back(asr_system_prompt);
-                    prompts.push_back(interleaved_system_prompt);
-                    std::string err;
-                    for (const auto & p : prompts) {
-                        err += " - " + p + "\n";
-                    }
-
-                    return error("Unsupported system prompt. Supported prompts are:\n" + err);
-                }
-            } else if (role == "user") {
+            if (message.role == "user") {
                 if (const auto & wav = message.wav; !wav.empty()) {
                     if (message.content != mtmd_default_marker()) {
                         return error("when providing audio input, content must be the default marker: " +
@@ -150,8 +121,6 @@ class Runner::RunnerImpl {
             msg.content = message.content;
             msgs.push_back(msg);
         }
-
-        mtmd_audio_output_start_new_turn(ctx.mtmd_ctx_audio.get());
 
         if (eval_messages(msgs, ctx.n_past == 0)) {
             return error("failed to run prefill");
@@ -253,7 +222,7 @@ class Runner::RunnerImpl {
     }
 
     int generate_common(int n_predict, const text_callback_t & text_callback, const audio_callback_t & audio_callback) {
-        llama_batch batch            = llama_batch_get_one(nullptr, 1);  // doesn't own pointers, no need for free.
+        llama_batch batch = llama_batch_get_one(nullptr, 1);  // doesn't own pointers, no need for free.
 
         n_predict = n_predict < 0 ? std::numeric_limits<int>::max() : n_predict;
         std::vector<float> embd(llama_model_n_embd(ctx.model));
@@ -296,7 +265,7 @@ class Runner::RunnerImpl {
                 batch.embd  = nullptr;
             } else if (mtmd_get_output_modality(mctx) == MTMD_OUTPUT_MODALITY_AUDIO) {
                 int res = mtmd_audio_output_decode(mctx, llama_get_embeddings(ctx.lctx), llama_model_n_embd(ctx.model),
-                                                   ctx.audio_temperature, ctx.audio_top_k, embd.data());
+                                                   embd.data());
                 GGML_ASSERT(res == 0);
                 auto                 n_samples = mtmd_get_n_audio_samples(mctx);
                 std::vector<int16_t> samples(n_samples);
@@ -395,11 +364,12 @@ void Runner::stop() {
     impl_->stop();
 }
 
-int Runner::generate(const std::vector<Message> & messages,
-                     int                          n_predict,
-                     const text_callback_t &      text_callback,
-                     const audio_callback_t &     audio_callback) {
-    return impl_->generate(messages, n_predict, text_callback, audio_callback);
+int Runner::generate(const std::vector<Message> &              messages,
+                     int                                       n_predict,
+                     const text_callback_t &                   text_callback,
+                     const audio_callback_t &                  audio_callback,
+                     const std::vector<mtmd_output_modality> & modalities) {
+    return impl_->generate(messages, n_predict, text_callback, audio_callback, modalities);
 }
 
 int Runner::init(common_params params) {

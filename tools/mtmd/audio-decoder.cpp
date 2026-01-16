@@ -596,8 +596,8 @@ class DecoderModel {
                 llama_sampler_apply(smpl, &cur_p);
 
                 GGML_ASSERT(cur_p.selected >= 0 && cur_p.selected < (int32_t) cur_p.size);
-
                 prev_token = cur_p.data[cur_p.selected].id;
+                llama_sampler_accept(smpl, prev_token);
 
                 token[i] = prev_token;
             }
@@ -671,6 +671,9 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
     static constexpr auto interleaved_n_audio = 12;
     int                   modality_left       = INT_MAX;
 
+    // sampling params for audio
+    llama_sampler * smpl = nullptr;
+
     audio_decoder_lfm25(const std::string & vocoder_path,
                         const std::string & tokenizer_path,
                         int                 n_threads,
@@ -703,7 +706,7 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
         init_threadpool(n_threads);
     }
 
-    virtual ~audio_decoder_lfm25() = default;
+    virtual ~audio_decoder_lfm25() { llama_sampler_free(smpl); }
 
     void start_new_turn() override {
         llama_memory_clear(llama_get_memory(audio_tokenizer_lctx), false);
@@ -718,11 +721,9 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
 
     mtmd_audio_decoder_type get_type() override { return mtmd_audio_decoder_type::LFM25; }
 
-    int decode(mtmd_audio_decode_result & result,
-               const float *              embd_ptr,
-               size_t                     n_embd,
-               float                      temperature,
-               int                        top_k) override {
+    int decode(mtmd_audio_decode_result & result, const float * embd_ptr, size_t n_embd) override {
+        // TODO(tarek): remove reset
+        llama_sampler_reset(smpl);
         modality_left -= 1;
 
         if (is_interleaved_mode() && modality_left == 0) {
@@ -734,7 +735,7 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
 
         auto               t0 = ggml_time_ms();
         std::vector<float> embd(embd_ptr, embd_ptr + n_embd);
-        audio_token_t      next_token = sample_audio_frame(embd, temperature, top_k);
+        audio_token_t      next_token = decoder_model.sample(ctx, embd, smpl);
 
         if (verbose) {
             LOG_INF("audio frame sampled in %" PRId64 " ms\n", ggml_time_ms() - t0);
@@ -782,6 +783,17 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
 
     void set_modalities(const std::vector<mtmd_output_modality> & modalities) override {
         this->modalities = modalities;
+
+        // samplers are different for interleaved and asr modes
+        static constexpr float audio_temperature = 0.8f;
+        int                    audio_top_k       = is_interleaved_mode() ? 4 : 64;
+        llama_sampler_free(smpl);
+        struct llama_sampler_chain_params sparams;
+        sparams.no_perf = true;
+        smpl            = llama_sampler_chain_init(sparams);
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(audio_temperature));
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_k(audio_top_k));
+        llama_sampler_chain_add(smpl, llama_sampler_init_dist(0));
     }
 
   private:
@@ -798,26 +810,6 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
         } else {
             static_assert(!sizeof(T *), "Unsupported type");
         }
-    }
-
-    audio_token_t sample_audio_frame(const std::vector<float> & embd, float temperature, int top_k) {
-        // sampling
-        const bool                        greedy = temperature <= 0;
-        struct llama_sampler_chain_params sparams;
-        llama_sampler *                   smpl = llama_sampler_chain_init(sparams);
-        if (greedy) {
-            llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
-        } else {
-            llama_sampler_chain_add(smpl, llama_sampler_init_temp(temperature));
-            llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k));
-            llama_sampler_chain_add(smpl, llama_sampler_init_dist(0));
-        }
-
-        audio_token_t token = decoder_model.sample(ctx, embd, smpl);
-
-        llama_sampler_free(smpl);
-
-        return token;
     }
 
     std::vector<float> embed(const audio_token_t & token) {

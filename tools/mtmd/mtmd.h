@@ -260,8 +260,6 @@ MTMD_API int mtmd_audio_output_get_sample_rate(mtmd_context * ctx);
 MTMD_API int mtmd_audio_output_decode(mtmd_context * ctx,
                                       const float *  embedding,
                                       size_t         n_embd,
-                                      float          temperature,
-                                      int            top_k,
                                       float *        out_embedding);
 
 // get current output modality
@@ -277,7 +275,7 @@ MTMD_API int mtmd_get_audio_samples(mtmd_context * ctx, int16_t * samples);
 MTMD_API void mtmd_audio_output_accept_token(mtmd_context * ctx, llama_token id);
 
 // set output modalities sequence for generation
-MTMD_API void mtmd_set_output_modalities(mtmd_context * ctx, mtmd_output_modality * ptr, size_t len);
+MTMD_API void mtmd_set_output_modalities(mtmd_context * ctx, const mtmd_output_modality * ptr, size_t len);
 
 // reset decoder state, has to be called after modalities are set
 MTMD_API void mtmd_audio_output_start_new_turn(mtmd_context * ctx);

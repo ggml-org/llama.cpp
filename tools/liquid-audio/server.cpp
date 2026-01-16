@@ -171,6 +171,19 @@ int main(int argc, char ** argv) {
             bool reset_context = body.value("reset_context", true);
 
             std::vector<liquid::audio::Runner::Message> messages;
+            std::vector<mtmd_output_modality>           modalities;
+
+            if (body.contains("modalities") && body.at("modalities").is_array()) {
+                for (const auto & modality : body.at("modalities")) {
+                    if (modality.is_string() && modality.get<std::string>() == "audio") {
+                        modalities.push_back(MTMD_OUTPUT_MODALITY_AUDIO);
+                        printf("Added audio modality\n");
+                    } else if (modality.is_string() && modality.get<std::string>() == "text") {
+                        modalities.push_back(MTMD_OUTPUT_MODALITY_TEXT);
+                        printf("Added text modality\n");
+                    }
+                }
+            }
 
             if (body.contains("messages") && body["messages"].is_array()) {
                 for (const auto & msg : body["messages"]) {
@@ -283,14 +296,15 @@ int main(int argc, char ** argv) {
             };
 
             // Start generation in background thread
-            state->thread = std::thread([state, &runner, messages, n_predict, reset_context, text_cb, audio_cb]() {
+            state->thread = std::thread([state, &runner, messages, n_predict, reset_context, text_cb, audio_cb,
+                                         modalities]() {
                 if (reset_context) {
                     LOG_INF("Resetting model context\n");
                     runner.reset();
                 }
 
                 std::optional<std::string> err;
-                if (runner.generate(messages, n_predict, text_cb, audio_cb)) {
+                if (runner.generate(messages, n_predict, text_cb, audio_cb, modalities)) {
                     err = runner.get_last_error();
                 }
 

@@ -36,6 +36,7 @@ from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 import os
 import contextlib
 
+
 @contextlib.contextmanager
 def suppress_stderr():
     """Temporarily redirect stderr to /dev/null."""
@@ -217,13 +218,17 @@ def create_stream_single_shot(client, mode, text=None, wav_data=None, max_tokens
     """Create a single-shot request for ASR/TTS (always resets context)."""
     messages = [{"role": "system", "content": SYSTEM_PROMPTS[mode]}]
 
+    modalities = []
     if mode == "asr" and wav_data:
         messages.append(create_audio_message(wav_data))
+        modalities.append("text")
     elif mode == "tts" and text:
         messages.append(create_text_message(text))
+        modalities.append("audio")
 
     return client.chat.completions.create(
         model="",
+        modalities=modalities,
         messages=messages,
         stream=True,
         max_tokens=max_tokens,
@@ -235,6 +240,7 @@ def create_stream_chat(client, messages, max_tokens=512, reset_context=False):
     """Create a chat request for interleaved mode (maintains context)."""
     return client.chat.completions.create(
         model="",
+        modalities=["text", "audio"],
         messages=messages,
         stream=True,
         max_tokens=max_tokens,
@@ -298,7 +304,9 @@ def process_stream(stream, audio_player=None):
     if text_chunks and len(text_chunks) > 1:
         text_duration = text_chunks[-1][0] - text_chunks[0][0]
         if text_duration > 0:
-            stats.append(f"text {len(text_chunks)} tok @ {len(text_chunks)/text_duration:.1f} tok/s")
+            stats.append(
+                f"text {len(text_chunks)} tok @ {len(text_chunks) / text_duration:.1f} tok/s"
+            )
 
     if audio_chunks:
         # Calculate from ttft to last chunk for accurate throughput
@@ -306,7 +314,9 @@ def process_stream(stream, audio_player=None):
         last_audio_time = audio_chunks[-1][0]
         audio_duration = last_audio_time - first_audio_time
         audio_secs = total_samples / 24000
-        stats.append(f"audio {audio_secs:.1f}s @ {total_samples/audio_duration:.0f} samples/s")
+        stats.append(
+            f"audio {audio_secs:.1f}s @ {total_samples / audio_duration:.0f} samples/s"
+        )
 
     stats.append(f"total {total_time:.3f}s")
     print(f"\n[{' | '.join(stats)}]")
@@ -435,7 +445,14 @@ def main():
                         if arg != mode:
                             mode = arg
                             is_first_message = True
-                            print(f"Mode: {mode}" + (" (single-shot)" if mode in ("asr", "tts") else " (chat)"))
+                            print(
+                                f"Mode: {mode}"
+                                + (
+                                    " (single-shot)"
+                                    if mode in ("asr", "tts")
+                                    else " (chat)"
+                                )
+                            )
                         else:
                             print(f"Already in {mode} mode")
                     else:
@@ -484,7 +501,9 @@ def main():
                     continue
 
             # Prepare request based on mode
-            text_input = user_input if user_input and not user_input.startswith("/") else None
+            text_input = (
+                user_input if user_input and not user_input.startswith("/") else None
+            )
 
             if mode == "asr":
                 if not wav_data:
@@ -509,7 +528,11 @@ def main():
                 if mode in ("asr", "tts"):
                     # Single-shot mode: system + one message, always reset
                     stream = create_stream_single_shot(
-                        client, mode, text=text_input, wav_data=wav_data, max_tokens=args.max_tokens
+                        client,
+                        mode,
+                        text=text_input,
+                        wav_data=wav_data,
+                        max_tokens=args.max_tokens,
                     )
                 else:
                     # Interleaved chat mode: only send new messages
@@ -517,7 +540,9 @@ def main():
 
                     # First message needs system prompt and reset
                     if is_first_message:
-                        messages.append({"role": "system", "content": SYSTEM_PROMPTS["interleaved"]})
+                        messages.append(
+                            {"role": "system", "content": SYSTEM_PROMPTS["interleaved"]}
+                        )
 
                     # Add user message(s)
                     if text_input:
@@ -526,7 +551,10 @@ def main():
                         messages.append(create_audio_message(wav_data))
 
                     stream = create_stream_chat(
-                        client, messages, max_tokens=args.max_tokens, reset_context=is_first_message
+                        client,
+                        messages,
+                        max_tokens=args.max_tokens,
+                        reset_context=is_first_message,
                     )
                     is_first_message = False
 

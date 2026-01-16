@@ -33,6 +33,7 @@ def interleaved(client, text=None, wav_data=None):
 
     return client.chat.completions.create(
         model="",
+        modalities=["text", "audio"],
         messages=messages,
         stream=True,
         max_tokens=512,
@@ -42,6 +43,7 @@ def interleaved(client, text=None, wav_data=None):
 def tts(client, text):
     return client.chat.completions.create(
         model="",
+        modalities=["audio"],
         messages=[
             {"role": "system", "content": "Perform TTS. Use the US male voice."},
             {"role": "user", "content": text},
@@ -55,6 +57,7 @@ def asr(client, wav_data):
     encoded_wav_data = base64.b64encode(wav_data).decode("utf-8")
     return client.chat.completions.create(
         model="",
+        modalities=["text"],
         messages=[
             {"role": "system", "content": "Perform ASR."},
             {

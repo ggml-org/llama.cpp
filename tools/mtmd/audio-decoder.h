@@ -24,11 +24,7 @@ struct mtmd_audio_decoder {
 
     virtual int get_sample_rate() const = 0;
 
-    virtual int decode(mtmd_audio_decode_result & result,
-                       const float *              embd,
-                       size_t                     n_embd,
-                       float                      temperature,
-                       int                        top_k) = 0;
+    virtual int decode(mtmd_audio_decode_result & result, const float * embd, size_t n_embd) = 0;
 
     // returns next modality after text token
     virtual mtmd_output_modality accept_text_token(llama_token token) = 0;
