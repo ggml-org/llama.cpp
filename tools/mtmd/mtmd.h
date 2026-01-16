@@ -277,7 +277,7 @@ MTMD_API void mtmd_audio_output_accept_token(mtmd_context * ctx, llama_token id)
 // set output modalities sequence for generation
 MTMD_API void mtmd_set_output_modalities(mtmd_context * ctx, const mtmd_output_modality * ptr, size_t len);
 
-// reset decoder state, has to be called after modalities are set
+// notify about new turn start, has to be called after modalities are set
 MTMD_API void mtmd_audio_output_start_new_turn(mtmd_context * ctx);
 
 #ifdef __cplusplus

@@ -177,10 +177,8 @@ int main(int argc, char ** argv) {
                 for (const auto & modality : body.at("modalities")) {
                     if (modality.is_string() && modality.get<std::string>() == "audio") {
                         modalities.push_back(MTMD_OUTPUT_MODALITY_AUDIO);
-                        printf("Added audio modality\n");
                     } else if (modality.is_string() && modality.get<std::string>() == "text") {
                         modalities.push_back(MTMD_OUTPUT_MODALITY_TEXT);
-                        printf("Added text modality\n");
                     }
                 }
             }

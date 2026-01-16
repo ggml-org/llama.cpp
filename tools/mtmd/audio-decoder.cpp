@@ -573,6 +573,10 @@ class DecoderModel {
     }
 
     audio_token_t sample(audio_decoder_ggml_ctx & ctx, const std::vector<float> & embd, llama_sampler * smpl) {
+        GGML_ASSERT(smpl);
+        // TODO(tarek): remove reset
+        llama_sampler_reset(smpl);
+
         audio_token_t token;
         llama_token   prev_token = -1;
 
@@ -671,8 +675,8 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
     static constexpr auto interleaved_n_audio = 12;
     int                   modality_left       = INT_MAX;
 
-    // sampling params for audio
-    llama_sampler * smpl = nullptr;
+    // sampling
+    llama_sampler_ptr smpl;
 
     audio_decoder_lfm25(const std::string & vocoder_path,
                         const std::string & tokenizer_path,
@@ -706,7 +710,7 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
         init_threadpool(n_threads);
     }
 
-    virtual ~audio_decoder_lfm25() { llama_sampler_free(smpl); }
+    virtual ~audio_decoder_lfm25() = default;
 
     void start_new_turn() override {
         llama_memory_clear(llama_get_memory(audio_tokenizer_lctx), false);
@@ -722,8 +726,6 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
     mtmd_audio_decoder_type get_type() override { return mtmd_audio_decoder_type::LFM25; }
 
     int decode(mtmd_audio_decode_result & result, const float * embd_ptr, size_t n_embd) override {
-        // TODO(tarek): remove reset
-        llama_sampler_reset(smpl);
         modality_left -= 1;
 
         if (is_interleaved_mode() && modality_left == 0) {
@@ -735,7 +737,7 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
 
         auto               t0 = ggml_time_ms();
         std::vector<float> embd(embd_ptr, embd_ptr + n_embd);
-        audio_token_t      next_token = decoder_model.sample(ctx, embd, smpl);
+        audio_token_t      next_token = decoder_model.sample(ctx, embd, smpl.get());
 
         if (verbose) {
             LOG_INF("audio frame sampled in %" PRId64 " ms\n", ggml_time_ms() - t0);
@@ -787,13 +789,13 @@ class audio_decoder_lfm25 : public mtmd_audio_decoder {
         // samplers are different for interleaved and asr modes
         static constexpr float audio_temperature = 0.8f;
         int                    audio_top_k       = is_interleaved_mode() ? 4 : 64;
-        llama_sampler_free(smpl);
+
         struct llama_sampler_chain_params sparams;
         sparams.no_perf = true;
-        smpl            = llama_sampler_chain_init(sparams);
-        llama_sampler_chain_add(smpl, llama_sampler_init_temp(audio_temperature));
-        llama_sampler_chain_add(smpl, llama_sampler_init_top_k(audio_top_k));
-        llama_sampler_chain_add(smpl, llama_sampler_init_dist(0));
+        smpl            = llama_sampler_ptr(llama_sampler_chain_init(sparams));
+        llama_sampler_chain_add(smpl.get(), llama_sampler_init_temp(audio_temperature));
+        llama_sampler_chain_add(smpl.get(), llama_sampler_init_top_k(audio_top_k));
+        llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(0));
     }
 
   private:

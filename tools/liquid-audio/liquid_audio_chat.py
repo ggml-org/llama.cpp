@@ -54,7 +54,7 @@ def suppress_stderr():
 class AudioPlayer:
     """Streams audio samples to speakers via PyAudio (non-blocking)."""
 
-    def __init__(self, sample_rate=24000):
+    def __init__(self, sample_rate=None):
         self.sample_rate = sample_rate
         self.all_samples = []
         self.pyaudio = None
@@ -62,6 +62,7 @@ class AudioPlayer:
         self.queue = Queue()
         self.thread = None
         self.running = False
+        self.started = False
 
     def _playback_thread(self):
         """Background thread that writes audio to the stream."""
@@ -74,9 +75,15 @@ class AudioPlayer:
                 pass
 
     def start(self):
-        """Start the audio stream."""
+        """Prepare the audio player (stream starts on first samples)."""
         self.all_samples = []
         self.running = True
+        self.started = False
+
+    def _start_stream(self):
+        """Actually start the audio stream (called when sample rate is known)."""
+        if self.started or self.sample_rate is None:
+            return
         with suppress_stderr():
             self.pyaudio = pyaudio.PyAudio()
             self.stream = self.pyaudio.open(
@@ -87,9 +94,13 @@ class AudioPlayer:
             )
         self.thread = threading.Thread(target=self._playback_thread, daemon=True)
         self.thread.start()
+        self.started = True
 
-    def add_samples(self, samples):
+    def add_samples(self, samples, sample_rate=None):
         """Add samples to playback queue (non-blocking)."""
+        if sample_rate is not None and self.sample_rate is None:
+            self.sample_rate = sample_rate
+        self._start_stream()
         self.all_samples.extend(samples)
         pcm_data = np.array(samples, dtype=np.int16).tobytes()
         self.queue.put(pcm_data)
@@ -258,6 +269,7 @@ def process_stream(stream, audio_player=None):
     audio_chunks = []
     total_samples = 0
     completed = False
+    audio_sample_rate = None
 
     for chunk in stream:
         if chunk.choices[0].finish_reason == "stop":
@@ -277,6 +289,9 @@ def process_stream(stream, audio_player=None):
         if hasattr(delta, "audio") and delta.audio and "data" in delta.audio:
             if ttft is None:
                 ttft = time.time() - t0
+            # Get sample rate from response if available
+            if audio_sample_rate is None and "sample_rate" in delta.audio:
+                audio_sample_rate = delta.audio["sample_rate"]
             chunk_data = delta.audio["data"]
             pcm_bytes = base64.b64decode(chunk_data)
             samples = np.frombuffer(pcm_bytes, dtype=np.int16)
@@ -287,7 +302,7 @@ def process_stream(stream, audio_player=None):
             print("♪", end="", flush=True)
 
             if audio_player:
-                audio_player.add_samples(samples)
+                audio_player.add_samples(samples, sample_rate=audio_sample_rate)
 
     if text_chunks or audio_chunks:
         print()  # Newline after output
@@ -315,7 +330,7 @@ def process_stream(stream, audio_player=None):
         first_audio_time = audio_chunks[0][0]
         last_audio_time = audio_chunks[-1][0]
         audio_duration = last_audio_time - first_audio_time
-        audio_secs = total_samples / 24000
+        audio_secs = total_samples / audio_sample_rate
         stats.append(
             f"audio {audio_secs:.1f}s @ {total_samples / audio_duration:.0f} samples/s"
         )

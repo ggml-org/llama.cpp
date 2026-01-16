@@ -1067,23 +1067,17 @@ json oaicompat_chat_params_parse(
         }
     }
 
-    // Handle "modalities" parameter for audio output (OpenAI-compatible)
-    // Example: "modalities": ["text", "audio"] or ["audio"]
+    // handle "modalities" parameter for audio output
     if (body.contains("modalities") && body.at("modalities").is_array()) {
-        bool has_audio = false;
-        bool has_text = false;
         for (const auto & modality : body.at("modalities")) {
             if (modality.is_string()) {
-                std::string mod = modality.get<std::string>();
-                if (mod == "audio") {
-                    has_audio = true;
-                } else if (mod == "text") {
-                    has_text = true;
+                if (auto const & m = modality.get<std::string>(); m == "audio") {
+                    llama_params["has_out_audio"] = true;
+                } else if (m == "text") {
+                    llama_params["has_out_text"] = true;
                 }
             }
         }
-        llama_params["audio_output"] = has_audio;
-        llama_params["text_output"] = has_text;
     }
 
     return llama_params;

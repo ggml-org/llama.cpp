@@ -84,9 +84,9 @@ struct task_params {
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
 
-    // Output modalities (from modalities: ["text"], ["audio"], or ["text", "audio"])
-    bool audio_output_enabled = false;
-    bool text_output_enabled = true;  // default to text
+    // output modalities (from modalities: ["text"], ["audio"], or ["text", "audio"])
+    bool has_out_audio = false;
+    bool has_out_text  = true;  // default to text
 
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
@@ -310,11 +310,9 @@ struct completion_token_output {
     };
     std::vector<prob_info> probs;
 
-    // Audio output
+    // audio output
     std::vector<int16_t> audio_samples;
     int audio_sample_rate = 0;
-
-    bool has_audio() const { return !audio_samples.empty(); }
 
     json to_json(bool post_sampling_probs) const;
 
@@ -411,9 +409,8 @@ struct server_task_result_cmpl_partial : server_task_result {
     bool anthropic_text_block_started = false;
 
     // Audio output
-    std::string audio_data_base64;  // Base64-encoded PCM samples
-    int audio_sample_rate = 0;
-    bool has_audio = false;
+    std::vector<int16_t> audio_out;
+    int audio_out_sample_rate = 0;
 
     virtual bool is_stop() override {
         return false; // in stream mode, partial responses are not considered stop
