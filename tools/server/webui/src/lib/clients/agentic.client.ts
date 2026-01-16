@@ -278,9 +278,6 @@ export class AgenticClient {
 				return;
 			}
 
-			// Filter reasoning content after first turn if configured
-			const shouldFilterReasoning = agenticConfig.filterReasoningAfterFirstTurn && turn > 0;
-
 			let turnContent = '';
 			let turnToolCalls: ApiChatCompletionToolCall[] = [];
 			let lastStreamingToolCallName = '';
@@ -314,7 +311,7 @@ export class AgenticClient {
 							turnContent += chunk;
 							onChunk?.(chunk);
 						},
-						onReasoningChunk: shouldFilterReasoning ? undefined : onReasoningChunk,
+						onReasoningChunk,
 						onToolCallChunk: (serialized: string) => {
 							try {
 								turnToolCalls = JSON.parse(serialized) as ApiChatCompletionToolCall[];
