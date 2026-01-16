@@ -245,6 +245,52 @@ inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_generic_shader(
     return result;
 }
 
+/** Pad **/
+
+struct ggml_webgpu_pad_pipeline_key {
+    bool circular;
+
+    bool operator==(const ggml_webgpu_pad_pipeline_key & other) const {
+        return circular == other.circular;
+    }
+};
+
+struct ggml_webgpu_pad_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_pad_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.circular);
+        return seed;
+    }
+};
+
+struct ggml_webgpu_pad_shader_lib_context {
+    ggml_webgpu_pad_pipeline_key key;
+    uint32_t                     max_wg_size;
+};
+
+inline ggml_webgpu_processed_shader ggml_webgpu_preprocess_pad_shader(
+    pre_wgsl::Preprocessor &                    preprocessor,
+    const char *                                shader_src,
+    const ggml_webgpu_pad_shader_lib_context &  context) {
+    std::vector<std::string> defines;
+    std::string              variant = "pad";
+
+    if (context.key.circular) {
+        defines.push_back("CIRCULAR");
+        variant += "_circular";
+    }
+
+    defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+    ggml_webgpu_processed_shader result;
+    result.wgsl                                      = preprocessor.preprocess(shader_src, defines);
+    result.variant                                   = variant;
+    ggml_webgpu_generic_shader_decisions * decisions = new ggml_webgpu_generic_shader_decisions();
+    decisions->wg_size                               = context.max_wg_size;
+    result.decisions                                 = decisions;
+    return result;
+}
+
 /** Argsort **/
 
 struct ggml_webgpu_argsort_shader_lib_context {
