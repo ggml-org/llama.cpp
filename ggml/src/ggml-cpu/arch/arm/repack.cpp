@@ -1123,7 +1123,7 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
             }
 
             // Load all 16 scales once and widen to int16 (Q6_K has 16 scales per block)
-            // Needed to use vget_lane_s16 in the inner loop
+            // Reused for bias and dequantization later
             int16_t q6_scales[16 * 8];
             for (int i = 0; i < 16; i++) {
                 int16x8_t scales = vmovl_s8(vld1_s8(q6_ptr[b].scales + i * 8));
@@ -3523,16 +3523,16 @@ void ggml_gemm_q6_K_8x8_q8_K(int                        n,
                     acc[i] = vdupq_n_s32(0);
                 }
 
+                // Q6_K has simple 8-bit scales, 16 per block (one per 16 values)
+                // Reused for bias and dequantization later
+                int16_t q6_scales[16 * 8];
+                for (int i = 0; i < 16; ++i) {
+                    int16x8_t s16 = vmovl_s8(vld1_s8(q6_ptr[b].scales + i * 8));
+                    vst1q_s16(q6_scales + i * 8, s16);
+                }
+
                 // Process two 128-value halves per superblock
                 for (int half = 0; half < 2; half++) {
-                    // Q6_K has simple 8-bit scales, 16 per block (one per 16 values)
-                    // Interleaved layout: scales[scale_idx * 8 + col]
-                    // For this half, we need scales for indices: half*8 + 0..7
-                    int8x8_t q6_scales[8];
-                    for (int sc = 0; sc < 8; sc++) {
-                        const int scale_idx = half * 8 + sc;
-                        q6_scales[sc]       = vld1_s8(q6_ptr[b].scales + scale_idx * 8);
-                    }
 
                     const uint8_t * ql_base = q6_ptr[b].ql + half * 512;
                     const uint8_t * qh_base = q6_ptr[b].qh + half * 256;
@@ -3623,17 +3623,20 @@ void ggml_gemm_q6_K_8x8_q8_K(int                        n,
                             int32x4_t sb_acc_1h = vmmlaq_s32(vdupq_n_s32(0), q6_h0, q8_h_23[0]);
                             sb_acc_1h           = vmmlaq_s32(sb_acc_1h, q6_h1, q8_h_23[1]);
 
+                            const int scale_idx_l = half * 8 + sb;
+                            const int scale_idx_h = half * 8 + sb + 4;
+
                             const int32x4_t scale_vec_l = {
-                                (int32_t) q6_scales[sb][cp * 2],
-                                (int32_t) q6_scales[sb][cp * 2],
-                                (int32_t) q6_scales[sb][cp * 2 + 1],
-                                (int32_t) q6_scales[sb][cp * 2 + 1],
+                                q6_scales[scale_idx_l * 8 + cp * 2 + 0],
+                                q6_scales[scale_idx_l * 8 + cp * 2 + 0],
+                                q6_scales[scale_idx_l * 8 + cp * 2 + 1],
+                                q6_scales[scale_idx_l * 8 + cp * 2 + 1],
                             };
                             const int32x4_t scale_vec_h = {
-                                (int32_t) q6_scales[sb + 4][cp * 2],
-                                (int32_t) q6_scales[sb + 4][cp * 2],
-                                (int32_t) q6_scales[sb + 4][cp * 2 + 1],
-                                (int32_t) q6_scales[sb + 4][cp * 2 + 1],
+                                q6_scales[scale_idx_h * 8 + cp * 2 + 0],
+                                q6_scales[scale_idx_h * 8 + cp * 2 + 0],
+                                q6_scales[scale_idx_h * 8 + cp * 2 + 1],
+                                q6_scales[scale_idx_h * 8 + cp * 2 + 1],
                             };
 
                             acc[cp]     = vmlaq_s32(acc[cp], sb_acc_0l, scale_vec_l);
