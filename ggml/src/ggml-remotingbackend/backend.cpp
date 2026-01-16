@@ -25,7 +25,9 @@ static void log_to_file_callback(enum ggml_log_level level, const char * text, v
 }
 
 extern "C" {
-void apir_backend_deinit(void) {
+void apir_backend_deinit(uint32_t virgl_ctx_id) {
+    GGML_UNUSED(virgl_ctx_id);
+
     auto buffers = apir_get_track_backend_buffers();
     for (const auto & buffer : buffers) {
         apir_untrack_backend_buffer(buffer);
@@ -50,7 +52,11 @@ void apir_backend_deinit(void) {
     }
 }
 
-ApirLoadLibraryReturnCode apir_backend_initialize() {
+#define APIR_GGML_LIBRARY_PATH_KEY "ggml.library.path"
+#define APIR_GGML_LIBRARY_REG_KEY "ggml.library.reg"
+#define APIR_GGML_LIBRARY_INIT_KEY "ggml.library.init"
+
+ApirLoadLibraryReturnCode apir_backend_initialize(uint32_t virgl_ctx_id, struct virgl_apir_callbacks *virgl_cbs) {
     const char * dlsym_error;
 
     const char * apir_log_to_file = getenv(APIR_LLAMA_CPP_LOG_TO_FILE_ENV);
@@ -62,9 +68,10 @@ ApirLoadLibraryReturnCode apir_backend_initialize() {
             GGML_LOG_INFO("Could not open the log file at '%s'\n", apir_log_to_file);
         }
     }
-    const char * library_name = getenv(APIR_LLAMA_CPP_GGML_LIBRARY_PATH_ENV);
-    const char * library_reg  = getenv(APIR_LLAMA_CPP_GGML_LIBRARY_REG_ENV);
-    const char * library_init = getenv(APIR_LLAMA_CPP_GGML_LIBRARY_INIT_ENV);
+
+    const char * library_name = virgl_cbs->get_config(virgl_ctx_id, APIR_GGML_LIBRARY_PATH_KEY);
+    const char * library_reg  = virgl_cbs->get_config(virgl_ctx_id, APIR_GGML_LIBRARY_REG_KEY);
+    const char * library_init = virgl_cbs->get_config(virgl_ctx_id, APIR_GGML_LIBRARY_INIT_KEY);
 
     GGML_LOG_INFO("%s: loading %s (%s|%s)\n", __func__, library_name, library_reg, library_init);
 
@@ -117,27 +124,31 @@ ApirLoadLibraryReturnCode apir_backend_initialize() {
     return (ApirLoadLibraryReturnCode) (APIR_LOAD_LIBRARY_INIT_BASE_INDEX + ret);
 }
 
-uint32_t apir_backend_dispatcher(uint32_t             cmd_type,
-                                 virgl_apir_context * ctx,
-                                 char *               dec_cur,
-                                 const char *         dec_end,
-                                 char *               enc_cur,
-                                 const char *         enc_end,
-                                 char **              enc_cur_after) {
-    apir_encoder _enc = {
+uint32_t apir_backend_dispatcher(uint32_t               virgl_ctx_id,
+                                 virgl_apir_callbacks * virgl_cbs,
+				 uint32_t               cmd_type,
+                                 char *                 dec_cur,
+                                 const char *           dec_end,
+                                 char *                 enc_cur,
+                                 const char *           enc_end,
+                                 char **                enc_cur_after) {
+    apir_encoder enc = {
         .cur   = enc_cur,
         .start = enc_cur,
         .end   = enc_end,
         .fatal = false,
     };
-    apir_encoder * enc = &_enc;
 
-    apir_decoder _dec = {
+    apir_decoder dec = {
         .cur   = dec_cur,
         .end   = dec_end,
         .fatal = false,
     };
-    apir_decoder * dec = &_dec;
+
+    virgl_apir_context ctx = {
+	.ctx_id = virgl_ctx_id,
+	.iface = virgl_cbs,
+    };
 
     if (cmd_type >= APIR_BACKEND_DISPATCH_TABLE_COUNT) {
         GGML_LOG_ERROR("Received an invalid dispatch index (%d >= %d)\n", cmd_type, APIR_BACKEND_DISPATCH_TABLE_COUNT);
@@ -145,9 +156,9 @@ uint32_t apir_backend_dispatcher(uint32_t             cmd_type,
     }
 
     backend_dispatch_t forward_fct = apir_backend_dispatch_table[cmd_type];
-    uint32_t           ret         = forward_fct(enc, dec, ctx);
+    uint32_t           ret         = forward_fct(&enc, &dec, &ctx);
 
-    *enc_cur_after = enc->cur;
+    *enc_cur_after = enc.cur;
 
     return ret;
 }

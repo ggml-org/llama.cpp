@@ -25,7 +25,7 @@ uint32_t backend_backend_graph_compute(apir_encoder * enc, apir_decoder * dec, v
     uint32_t shmem_res_id;
     apir_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);
 
-    const void * shmem_data = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
+    const void * shmem_data = ctx->iface->get_shmem_ptr(ctx->ctx_id, shmem_res_id);
     if (!shmem_data) {
         GGML_LOG_ERROR("Couldn't get the shmem addr from virgl\n");
         apir_decoder_set_fatal(dec);

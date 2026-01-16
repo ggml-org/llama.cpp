@@ -37,7 +37,7 @@ uint32_t backend_buffer_set_tensor(apir_encoder * enc, apir_decoder * dec, virgl
     size_t size;
     apir_decode_size_t(dec, &size);
 
-    void * shmem_data = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
+    void * shmem_data = ctx->iface->get_shmem_ptr(ctx->ctx_id, shmem_res_id);
 
     if (!shmem_data) {
         GGML_LOG_ERROR("Couldn't get the shmem addr from virgl\n");
@@ -69,7 +69,7 @@ uint32_t backend_buffer_get_tensor(apir_encoder * enc, apir_decoder * dec, virgl
     size_t size;
     apir_decode_size_t(dec, &size);
 
-    void * shmem_data = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
+    void * shmem_data = ctx->iface->get_shmem_ptr(ctx->ctx_id, shmem_res_id);
     if (!shmem_data) {
         GGML_LOG_ERROR("Couldn't get the shmem addr from virgl\n");
         return 1;

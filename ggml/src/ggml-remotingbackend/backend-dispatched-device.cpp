@@ -122,7 +122,7 @@ uint32_t backend_device_buffer_from_ptr(apir_encoder * enc, apir_decoder * dec, 
     uint32_t shmem_res_id;
     apir_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);
 
-    void * shmem_ptr = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
+    void * shmem_ptr = ctx->iface->get_shmem_ptr(ctx->ctx_id, shmem_res_id);
     if (!shmem_ptr) {
         GGML_LOG_ERROR("Couldn't get the shmem addr from virgl\n");
         apir_decoder_set_fatal(dec);

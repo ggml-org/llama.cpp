@@ -24,18 +24,6 @@
 typedef uintptr_t apir_buffer_type_host_handle_t;
 typedef uintptr_t apir_buffer_host_handle_t;
 
-struct virgl_opaque_context;
-
-struct virgl_apir_callbacks {
-    void * (*get_shmem_ptr)(virgl_opaque_context * ctx, uint32_t res_id);
-};
-
-struct virgl_apir_context {
-    virgl_opaque_context * virgl_ctx;
-
-    virgl_apir_callbacks iface;
-};
-
 static const char * apir_backend_initialize_error(int code) {
 #define APIR_BACKEND_INITIALIZE_ERROR(code_name) \
     do {                                         \
