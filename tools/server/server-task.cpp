@@ -160,6 +160,7 @@ task_params server_task::params_from_json_cmpl(
     defaults.n_keep        = params_base.n_keep;
     defaults.n_predict     = params_base.n_predict;
     defaults.n_cache_reuse = params_base.n_cache_reuse;
+    defaults.cache_prompt  = params_base.cache_prompt;
     defaults.antiprompt    = params_base.antiprompt;
 
     // enabling this will output extra debug information in the HTTP responses from the server
@@ -169,7 +170,7 @@ task_params server_task::params_from_json_cmpl(
     params.stream           = json_value(data,       "stream",             false);
     auto stream_opt         = json_value(data,       "stream_options",     json::object());
     params.include_usage    = json_value(stream_opt, "include_usage",      false);
-    params.cache_prompt     = json_value(data,       "cache_prompt",       true);
+    params.cache_prompt     = json_value(data,       "cache_prompt",       defaults.cache_prompt);
     params.return_tokens    = json_value(data,       "return_tokens",      false);
     params.return_progress  = json_value(data,       "return_progress",    false);
     params.n_predict        = json_value(data,       "n_predict",          json_value(data, "max_tokens", defaults.n_predict));
@@ -203,6 +204,8 @@ task_params server_task::params_from_json_cmpl(
     params.sampling.mirostat           = json_value(data, "mirostat",            defaults.sampling.mirostat);
     params.sampling.mirostat_tau       = json_value(data, "mirostat_tau",        defaults.sampling.mirostat_tau);
     params.sampling.mirostat_eta       = json_value(data, "mirostat_eta",        defaults.sampling.mirostat_eta);
+    params.sampling.adaptive_target    = json_value(data, "adaptive_target",     defaults.sampling.adaptive_target);
+    params.sampling.adaptive_decay     = json_value(data, "adaptive_decay",      defaults.sampling.adaptive_decay);
     params.sampling.seed               = json_value(data, "seed",                defaults.sampling.seed);
     params.sampling.n_probs            = json_value(data, "n_probs",             defaults.sampling.n_probs);
     params.sampling.min_keep           = json_value(data, "min_keep",            defaults.sampling.min_keep);

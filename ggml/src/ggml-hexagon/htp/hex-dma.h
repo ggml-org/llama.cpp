@@ -2,7 +2,6 @@
 #define HTP_DMA_H
 
 #include <HAP_farf.h>
-#include <hexagon_protos.h>
 #include <hexagon_types.h>
 #include <stdbool.h>
 #include <stdint.h>

@@ -168,8 +168,6 @@ jobs:
         run: |
           cmake -B build \
               -DGGML_NATIVE=OFF \
-              -DLLAMA_CURL=OFF \
-              -DLLAMA_OPENSSL=ON \
               -DLLAMA_BUILD_SERVER=ON \
               -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
               -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON \
@@ -182,8 +180,6 @@ jobs:
         run: |
           cmake -B build \
               -DGGML_NATIVE=OFF \
-              -DLLAMA_CURL=OFF \
-              -DLLAMA_OPENSSL=ON \
               -DLLAMA_BUILD_SERVER=ON \
               -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
               -DLLAMA_SANITIZE_${{ matrix.sanitizer }}=ON ;
@@ -195,8 +191,6 @@ jobs:
         run: |
           cmake -B build \
               -DGGML_NATIVE=OFF \
-              -DLLAMA_CURL=OFF \
-              -DLLAMA_OPENSSL=ON \
               -DLLAMA_BUILD_SERVER=ON \
               -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ;
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
