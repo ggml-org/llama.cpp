@@ -1093,8 +1093,157 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-#if 0 && defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
-    GGML_ABORT("ggml_gemv_q6_K_8x8_q8_K: ARM NEON DOTPROD implementation not yet available");
+#if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+    constexpr int    col_pairs = ncols_interleaved / 2;
+    const uint8x16_t m4b       = vdupq_n_u8(0x0f);
+    const uint8x16_t mask_lo   = vdupq_n_u8(0x03);
+    const uint8x16_t mask_hi   = vdupq_n_u8(0x30);
+    const int8x16_t  m32s      = vdupq_n_s8(32);
+
+    // 1x8 tile = 2 x 4
+    float32x4_t acc_f32[2];
+
+    const block_q8_K * GGML_RESTRICT q8_ptr = (const block_q8_K *) vy;
+
+    for (int x = 0; x < nc / ncols_interleaved; x++) {
+        const block_q6_Kx8 * GGML_RESTRICT q6_ptr = (const block_q6_Kx8 *) vx + (x * nb);
+
+        acc_f32[0] = vdupq_n_f32(0);
+        acc_f32[1] = vdupq_n_f32(0);
+
+        for (int b = 0; b < nb; b++) {
+            float32x4_t q6_d_0     = vcvt_f32_f16(vld1_f16((const __fp16 *) q6_ptr[b].d));      // d0 d1 d2 d3
+            float32x4_t q6_d_1     = vcvt_f32_f16(vld1_f16((const __fp16 *) q6_ptr[b].d + 4));  // d4 d5 d6 d7
+            float32x4_t q8_d       = vdupq_n_f32(q8_ptr[b].d);
+            float32x4_t sb_scale_0 = vmulq_f32(q6_d_0, q8_d);
+            float32x4_t sb_scale_1 = vmulq_f32(q6_d_1, q8_d);
+
+            int32x4_t acc[col_pairs];
+            for (int i = 0; i < col_pairs; i++) {
+                acc[i] = vdupq_n_s32(0);
+            }
+
+            // Process two 128-value halves per superblock
+            for (int half = 0; half < 2; half++) {
+                // Q6_K has simple 8-bit scales, 16 per block (one per 16 values)
+                // Interleaved layout: scales[scale_idx * 8 + col]
+                // For this half, we need scales for indices: half*8 + 0..7
+                int8x8_t q6_scales[8];
+                for (int sc = 0; sc < 8; sc++) {
+                    const int scale_idx = half * 8 + sc;
+                    q6_scales[sc]       = vld1_s8(q6_ptr[b].scales + scale_idx * 8);
+                }
+
+                const uint8_t * ql_base = q6_ptr[b].ql + half * 512;
+                const uint8_t * qh_base = q6_ptr[b].qh + half * 256;
+
+                // A subblock (sb) is a set of weights that share the scale
+                // Since q6_K scales are per 16 elements
+                // num sbs -> 256 elements / (16 elements/scale * 2 elements/byte * 2 halves)
+                for (int sb = 0; sb < QK_K / 64; sb++) {
+                    const int8_t * q8_base_l = q8_ptr[b].qs + half * 128 + sb * 16;
+                    const int8_t * q8_base_h = q8_base_l + 64;
+
+                    // Load and duplicate q8 values (registers will hold two columns of q6 weights)
+                    int8x16_t q8_l[2];
+                    int8x16_t q8_h[2];
+                    for (int i = 0; i < 2; i++) {
+                        q8_l[i] = (int8x16_t) vld1q_dup_s64((const int64_t *) (q8_base_l + i * 8));
+                        q8_h[i] = (int8x16_t) vld1q_dup_s64((const int64_t *) (q8_base_h + i * 8));
+                    }
+
+                    const int ql_off_base = sb * QK_K / 2;
+                    const int qh_off_base = (sb * QK_K / 2) & 255;  // wrap after 256 bytes
+
+                    uint8x16_t q6_ql_0[4];
+                    uint8x16_t q6_ql_1[4];
+                    for (int k = 0; k < 4; k++) {
+                        q6_ql_0[k] = vld1q_u8(ql_base + ql_off_base + 16 * k);
+                        q6_ql_1[k] = vld1q_u8(ql_base + ql_off_base + 64 + 16 * k);
+                    }
+
+                    uint8x16_t q6_qh_0[4];
+                    uint8x16_t q6_qh_1[4];
+                    for (int k = 0; k < 4; k++) {
+                        q6_qh_0[k] = vld1q_u8(qh_base + qh_off_base + 16 * k);
+                        q6_qh_1[k] = vld1q_u8(qh_base + qh_off_base + 64 + 16 * k);
+                    }
+
+                    // Adjust qh for subblocks 2 and 3 (shift right by 2)
+                    if (sb > 1) {
+                        for (int k = 0; k < 4; k++) {
+                            q6_qh_0[k] = vshrq_n_u8(q6_qh_0[k], 2);
+                            q6_qh_1[k] = vshrq_n_u8(q6_qh_1[k], 2);
+                        }
+                    }
+
+                    // Process column pairs (0-1, 2-3, 4-5, 6-7)
+                    for (int cp = 0; cp < col_pairs; cp++) {
+                        const uint8x16_t q6_qs_cp_0_l = q6_ql_0[cp];
+                        const uint8x16_t q6_qs_cp_1_l = q6_ql_1[cp];
+                        const uint8x16_t q6_qs_cp_0_h = q6_qh_0[cp];
+                        const uint8x16_t q6_qs_cp_1_h = q6_qh_1[cp];
+
+                        // Extract high 2 bits and shift into position
+                        const uint8x16_t q6_qs_cp_0_hl = vshlq_n_u8(vandq_u8(q6_qs_cp_0_h, mask_lo), 4);
+                        const uint8x16_t q6_qs_cp_0_hh = vandq_u8(q6_qs_cp_0_h, mask_hi);
+                        const uint8x16_t q6_qs_cp_1_hl = vshlq_n_u8(vandq_u8(q6_qs_cp_1_h, mask_lo), 4);
+                        const uint8x16_t q6_qs_cp_1_hh = vandq_u8(q6_qs_cp_1_h, mask_hi);
+
+                        // q6 = (low4 | high2<<4) - 32
+                        const int8x16_t q6_l0 =
+                            vsubq_s8(vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6_qs_cp_0_l, m4b), q6_qs_cp_0_hl)), m32s);
+                        const int8x16_t q6_l1 =
+                            vsubq_s8(vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6_qs_cp_1_l, m4b), q6_qs_cp_1_hl)), m32s);
+                        const int8x16_t q6_h0 =
+                            vsubq_s8(vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6_qs_cp_0_l, 4), q6_qs_cp_0_hh)), m32s);
+                        const int8x16_t q6_h1 =
+                            vsubq_s8(vreinterpretq_s8_u8(vorrq_u8(vshrq_n_u8(q6_qs_cp_1_l, 4), q6_qs_cp_1_hh)), m32s);
+
+                        int32x4_t sb_acc_l = vdupq_n_s32(0);
+                        sb_acc_l           = ggml_vdotq_s32(sb_acc_l, q6_l0, q8_l[0]);
+                        sb_acc_l           = ggml_vdotq_s32(sb_acc_l, q6_l1, q8_l[1]);
+
+                        int32x4_t sb_acc_h = vdupq_n_s32(0);
+                        sb_acc_h           = ggml_vdotq_s32(sb_acc_h, q6_h0, q8_h[0]);
+                        sb_acc_h           = ggml_vdotq_s32(sb_acc_h, q6_h1, q8_h[1]);
+
+                        // Pairwise add to get per-column sums: [col0, col1, col0, col1]
+                        int32x4_t sum_l = vpaddq_s32(sb_acc_l, sb_acc_l);
+                        int32x4_t sum_h = vpaddq_s32(sb_acc_h, sb_acc_h);
+
+                        // Apply subscales: scale indices sb for low, sb+4 for high
+                        const int32x4_t scale_vec_l = { (int32_t) q6_scales[sb][cp * 2],
+                                                        (int32_t) q6_scales[sb][cp * 2 + 1],
+                                                        (int32_t) q6_scales[sb][cp * 2],
+                                                        (int32_t) q6_scales[sb][cp * 2 + 1] };
+                        const int32x4_t scale_vec_h = { (int32_t) q6_scales[sb + 4][cp * 2],
+                                                        (int32_t) q6_scales[sb + 4][cp * 2 + 1],
+                                                        (int32_t) q6_scales[sb + 4][cp * 2],
+                                                        (int32_t) q6_scales[sb + 4][cp * 2 + 1] };
+
+                        // Accumulate scaled results
+                        acc[cp] = vmlaq_s32(acc[cp], sum_l, scale_vec_l);
+                        acc[cp] = vmlaq_s32(acc[cp], sum_h, scale_vec_h);
+                    }
+                }
+            }  // for half
+
+            // Apply superblock scale (no mins for q6_K)
+            // acc[cp] has [c0, c1, c0, c1]
+            float32x2_t w_01 = vmul_f32(vcvt_f32_s32(vget_low_s32(acc[0])), vget_low_f32(sb_scale_0));
+            float32x2_t w_23 = vmul_f32(vcvt_f32_s32(vget_low_s32(acc[1])), vget_high_f32(sb_scale_0));
+            float32x2_t w_45 = vmul_f32(vcvt_f32_s32(vget_low_s32(acc[2])), vget_low_f32(sb_scale_1));
+            float32x2_t w_67 = vmul_f32(vcvt_f32_s32(vget_low_s32(acc[3])), vget_high_f32(sb_scale_1));
+
+            acc_f32[0] = vaddq_f32(acc_f32[0], vcombine_f32(w_01, w_23));
+            acc_f32[1] = vaddq_f32(acc_f32[1], vcombine_f32(w_45, w_67));
+        }  // for b
+
+        int base = x * ncols_interleaved;
+        vst1q_f32(s + base, acc_f32[0]);
+        vst1q_f32(s + base + 4, acc_f32[1]);
+    }  // for x
     return;
 #endif  // defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     ggml_gemv_q6_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
@@ -3417,11 +3566,13 @@ void ggml_gemm_q6_K_8x8_q8_K(int                        n,
                             const uint8x16_t q6_qs_cp_0_h = q6_qh_0[cp];
                             const uint8x16_t q6_qs_cp_1_h = q6_qh_1[cp];
 
+                            // Extract high 2 bits and shift into position
                             const uint8x16_t q6_qs_cp_0_hl = vshlq_n_u8(vandq_u8(q6_qs_cp_0_h, mask_lo), 4);
                             const uint8x16_t q6_qs_cp_0_hh = vandq_u8(q6_qs_cp_0_h, mask_hi);
                             const uint8x16_t q6_qs_cp_1_hl = vshlq_n_u8(vandq_u8(q6_qs_cp_1_h, mask_lo), 4);
                             const uint8x16_t q6_qs_cp_1_hh = vandq_u8(q6_qs_cp_1_h, mask_hi);
 
+                            // q6 = (low4 | high2<<4) - 32
                             const int8x16_t q6_l0 = vsubq_s8(
                                 vreinterpretq_s8_u8(vorrq_u8(vandq_u8(q6_qs_cp_0_l, m4b), q6_qs_cp_0_hl)), m32s);
                             const int8x16_t q6_l1 = vsubq_s8(
