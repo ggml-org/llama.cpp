@@ -383,6 +383,32 @@ static void test_filters(testing & t) {
         "123"
     );
 
+    test_template(t, "sort reverse",
+        "{% for i in items|sort(true) %}{{ i }}{% endfor %}",
+        {{"items", json::array({3, 1, 2})}},
+        "321"
+    );
+
+    test_template(t, "sort with attribute",
+        "{{ items|sort(attribute='name')|join(attribute='age') }}",
+        {{"items", json::array({
+            json({{"name", "c"}, {"age", 3}}),
+            json({{"name", "a"}, {"age", 1}}),
+            json({{"name", "b"}, {"age", 2}}),
+        })}},
+        "123"
+    );
+
+    test_template(t, "sort with numeric attribute",
+        "{{ items|sort(attribute=0)|join(attribute=1) }}",
+        {{"items", json::array({
+            json::array({3, "z"}),
+            json::array({1, "x"}),
+            json::array({2, "y"}),
+        })}},
+        "xyz"
+    );
+
     test_template(t, "join",
         "{{ items|join(', ') }}",
         {{"items", json::array({"a", "b", "c"})}},
@@ -934,7 +960,17 @@ static void test_array_methods(testing & t) {
     );
 
     test_template(t, "array|join attribute",
-        "{{ arr|join(attribute=0) }}",
+        "{{ arr|join(attribute='age') }}",
+        {{"arr", json::array({
+            json({{"name", "a"}, {"age", 1}}),
+            json({{"name", "b"}, {"age", 2}}),
+            json({{"name", "c"}, {"age", 3}}),
+        })}},
+        "123"
+    );
+
+    test_template(t, "array|join numeric attribute",
+        "{{ arr|join(attribute=-1) }}",
         {{"arr", json::array({json::array({1}), json::array({2}), json::array({3})})}},
         "123"
     );
@@ -957,8 +993,8 @@ static void test_array_methods(testing & t) {
         "a,b,c,d"
     );
 
-    test_template(t, "array.map() with attribute",
-        "{% for v in arr.map('age') %}{{ v }} {% endfor %}",
+    test_template(t, "array|map with attribute",
+        "{% for v in arr|map(attribute='age') %}{{ v }} {% endfor %}",
         {{"arr", json::array({
             json({{"name", "a"}, {"age", 1}}),
             json({{"name", "b"}, {"age", 2}}),
@@ -967,14 +1003,50 @@ static void test_array_methods(testing & t) {
         "1 2 3 "
     );
 
-    test_template(t, "array.map() with numeric attribute",
-        "{% for v in arr.map(0) %}{{ v }} {% endfor %}",
+    test_template(t, "array|map with attribute default",
+        "{% for v in arr|map(attribute='age', default=3) %}{{ v }} {% endfor %}",
+        {{"arr", json::array({
+            json({{"name", "a"}, {"age", 1}}),
+            json({{"name", "b"}, {"age", 2}}),
+            json({{"name", "c"}}),
+        })}},
+        "1 2 3 "
+    );
+
+    test_template(t, "array|map without attribute default",
+        "{% for v in arr|map(attribute='age') %}{{ v }} {% endfor %}",
+        {{"arr", json::array({
+            json({{"name", "a"}, {"age", 1}}),
+            json({{"name", "b"}, {"age", 2}}),
+            json({{"name", "c"}}),
+        })}},
+        "1 2  "
+    );
+
+    test_template(t, "array|map with numeric attribute",
+        "{% for v in arr|map(attribute=0) %}{{ v }} {% endfor %}",
         {{"arr", json::array({
             json::array({10, "x"}),
             json::array({20, "y"}),
             json::array({30, "z"}),
         })}},
         "10 20 30 "
+    );
+
+    test_template(t, "array|map with negative attribute",
+        "{% for v in arr|map(attribute=-1) %}{{ v }} {% endfor %}",
+        {{"arr", json::array({
+            json::array({10, "x"}),
+            json::array({20, "y"}),
+            json::array({30, "z"}),
+        })}},
+        "x y z "
+    );
+
+    test_template(t, "array|map with filter",
+        "{{ arr|map('int')|sum }}",
+        {{"arr", json::array({"1", "2", "3"})}},
+        "6"
     );
 
     // not used by any chat templates
