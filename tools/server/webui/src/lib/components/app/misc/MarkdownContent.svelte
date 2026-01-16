@@ -14,6 +14,7 @@
 	import { rehypeRestoreTableHtml } from '$lib/markdown/table-html-restorer';
 	import { rehypeEnhanceLinks } from '$lib/markdown/enhance-links';
 	import { rehypeEnhanceCodeBlocks } from '$lib/markdown/enhance-code-blocks';
+	import { rehypeResolveAttachmentImages } from '$lib/markdown/resolve-attachment-images';
 	import { remarkLiteralHtml } from '$lib/markdown/literal-html';
 	import { copyCodeToClipboard, preprocessLaTeX } from '$lib/utils';
 	import '$styles/katex-custom.scss';
@@ -21,9 +22,11 @@
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
 	import CodePreviewDialog from './CodePreviewDialog.svelte';
+	import type { DatabaseMessage } from '$lib/types/database';
 	import { getImageErrorFallbackHtml } from '$lib/utils/image-error-fallback';
 
 	interface Props {
+		message?: DatabaseMessage;
 		content: string;
 		class?: string;
 		disableMath?: boolean;
@@ -34,7 +37,7 @@
 		html: string;
 	}
 
-	let { content, class: className = '', disableMath = false }: Props = $props();
+	let { content, message, class: className = '', disableMath = false }: Props = $props();
 
 	let containerRef = $state<HTMLDivElement>();
 	let renderedBlocks = $state<MarkdownBlock[]>([]);
@@ -49,6 +52,8 @@
 	const themeStyleId = `highlight-theme-${(window.idxThemeStyle = (window.idxThemeStyle ?? 0) + 1)}`;
 
 	let processor = $derived(() => {
+		// Force reactivity on message changes
+		void message;
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		let proc: any = remark().use(remarkGfm); // GitHub Flavored Markdown
 
@@ -70,6 +75,7 @@
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
+			.use(rehypeResolveAttachmentImages, { message })
 			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
 	});
 
