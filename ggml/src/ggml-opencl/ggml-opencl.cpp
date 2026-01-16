@@ -2695,16 +2695,6 @@ template <> struct cl_kernel_arg_setter<int> {
     }
 };
 
-template <> struct cl_kernel_arg_setter<std::remove_pointer_t<std::remove_reference_t<cl_mem>>> {
-    typedef void func_t(cl_mem);
-
-    static size_t set_arg(cl_kernel kernel, size_t index, cl_mem arg) {
-        CL_CHECK(clSetKernelArg(kernel, index, sizeof(arg), &arg));
-        return index + 1;
-    }
-};
-
-
 template <> struct cl_kernel_arg_setter<cl_ulong> {
     typedef void func_t(cl_ulong);
 
