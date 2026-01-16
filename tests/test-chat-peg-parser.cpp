@@ -8,7 +8,7 @@
 #include "common.h"
 #include "json-schema-to-grammar.h"
 #include "peg-parser.h"
-#include "peg-parser/testing.h"
+#include "testing.h"
 #include "peg-parser/simple-tokenize.h"
 #include "nlohmann/json.hpp"
 
