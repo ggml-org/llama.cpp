@@ -2714,7 +2714,7 @@ template <> struct cl_kernel_arg_setter<float> {
 };
 
 template <> struct cl_kernel_arg_setter<ggml_tensor> {
-    typedef void func_t(cl_mem, cl_ulong);
+    typedef void func_t(char *, cl_ulong);
 
     static size_t set_arg(cl_kernel kernel, size_t index, const ggml_tensor * t) {
         ggml_tensor_extra_cl * extra = (ggml_tensor_extra_cl *) t->extra;
@@ -2799,21 +2799,16 @@ template <typename _TFinalArg> struct cl_param_type_extractor<_TFinalArg> {
 };
 
 template <typename _TFunc> struct cl_kernel_invoker {
-    template <typename... _TCalledArgs> static void invoke(cl_kernel kernel, _TCalledArgs &&... args) {
+    template <typename... _TCalledArgs> static size_t invoke(cl_kernel kernel, _TCalledArgs &&... args) {
         static_assert(std::is_same_v<_TFunc, typename cl_param_type_extractor<_TCalledArgs...>::func_t>,
                       "Kernel argument type mismatch between prototype and called arguments");
-
-        size_t index = 0;
-        (
-            [&] {
-                index = cl_kernel_arg_setter<
-                    std::remove_const_t<std::remove_pointer_t<std::remove_reference_t<_TCalledArgs>>>>::set_arg(kernel,
-                                                                                                                index,
-                                                                                                                args);
-            }(),
-            ...);
+        return cl_set_kernel_args(kernel, args...);
     }
 };
+
+template <typename _TFunc, typename... _TArgs> static inline size_t cl_set_kernel_args_safe(cl_kernel kernel, _TArgs &&... args) {
+    return cl_kernel_invoker<_TFunc>::invoke(kernel, args...);
+}
 
 }  // namespace
 
@@ -5194,7 +5189,7 @@ static void ggml_cl_div(ggml_backend_t backend, const ggml_tensor * src0, const 
     } else {
         if (src0->type == GGML_TYPE_F32) {
             kernel = backend_ctx->kernel_div;
-            cl_kernel_invoker<decltype(ocl_kernel_prototypes::kernel_div)>::invoke(
+            cl_set_kernel_args_safe<decltype(ocl_kernel_prototypes::kernel_div)>(
                 kernel,
                 src0,
                 src1,
