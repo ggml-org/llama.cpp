@@ -1267,7 +1267,18 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * 
     const int64_t n_stream = args.n_stream;
     const int64_t n_tps    = args.n_tps;
 
+    // the min position in the batch for each sequence
+    llama_pos seq_pos_min[LLAMA_MAX_SEQ];
+    std::fill(seq_pos_min, seq_pos_min + LLAMA_MAX_SEQ, INT32_MIN);
+
+    for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
+        const llama_seq_id seq_id = ubatch->seq_id[i][0];
+
+        seq_pos_min[seq_id] = std::min(seq_pos_min[seq_id], ubatch->pos[i]);
+    }
+
     for (uint32_t s = 0; s < n_stream; ++s) {
+        // bookeeping of the KQ mask cells that could change for other tokens of the same sequence
         std::unordered_map<llama_seq_id, uint32_t>              seq_srct;
         std::unordered_map<llama_seq_id, std::vector<uint32_t>> seq_idxs;
 
@@ -1275,9 +1286,6 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * 
             const uint32_t i = s*n_tps + ii;
 
             const llama_seq_id seq_id = ubatch->seq_id[i][0];
-
-            auto & srct = seq_srct[seq_id];
-            auto & idxs = seq_idxs[seq_id];
 
             const auto & cells = v_cells.at(seq_to_stream[seq_id]);
 
@@ -1288,38 +1296,51 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * 
             const llama_pos p1_x = is_2d ? ubatch->pos[i + ubatch->n_tokens*2] : 0;
             const llama_pos p1_y = is_2d ? ubatch->pos[i + ubatch->n_tokens]   : 0;
 
-            const uint64_t idst = n_kv*(s*n_tps + ii);
+            const uint64_t idst = n_kv*i;
 
+            // for tokens of the same sequence, the mask is mostly the same, so we can reuse it
+            // the only cells that could change are the ones that are with similar positions as the
+            //   ones in the batch (i.e. due to causal masking, SWA, etc.)
+            // keep track of those cells and shortcut the loop to save time
+            // note: this optimization is not compatible with Alibi position encoding
+            // ref:  https://github.com/ggml-org/llama.cpp/pull/18842
             bool prev = false;
 
-            if (!alibi && ii > 0 && ubatch->seq_id[i][0] == ubatch->seq_id[i - 1][0]) {
-                const uint64_t idst_prev = n_kv*(s*n_tps + ii - 1);
+            auto & idxs = seq_idxs[seq_id];
 
-                std::copy(data + idst_prev, data + idst_prev + n_kv, data + idst);
+            if (!alibi) {
+                if (ii > 0 && seq_srct.find(seq_id) != seq_srct.end()) {
+                    const uint32_t srct = seq_srct[seq_id];
 
-                prev = true;
-            } else {
-                idxs.clear();
-                idxs.reserve(ubatch->n_tokens + n_swa);
+                    const uint64_t idst_prev = n_kv*srct;
 
-                srct = ii;
+                    std::copy(data + idst_prev, data + idst_prev + n_kv, data + idst);
+
+                    prev = true;
+                } else {
+                    idxs.clear();
+                    idxs.reserve(ubatch->n_tokens + n_swa + 32);
+
+                    seq_srct[seq_id] = i;
+                }
             }
-
-            const llama_pos seq_pos_max = cells.seq_pos_max(seq_id);
 
             for (uint32_t jj = 0; jj < n_kv; ++jj) {
                 uint32_t j = jj;
 
-                if (prev) {
-                    if (jj >= idxs.size()) {
-                        break;
+                // we have an exiting mask for this sequence -> update just seq_idxs
+                if (!alibi) {
+                    if (prev) {
+                        if (jj >= idxs.size()) {
+                            break;
+                        }
+
+                        j = idxs[jj];
                     }
 
-                    j = idxs[jj];
-                }
-
-                if (cells.is_empty(j)) {
-                    goto skip;
+                    if (cells.is_empty(j)) {
+                        goto skip;
+                    }
                 }
 
                 // mask the token if not the same sequence
@@ -1331,7 +1352,8 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * 
 
                 if (!alibi) {
                     if (!prev) {
-                        if (p0 + (int32_t) (ubatch->n_tokens + n_swa + 32) >= seq_pos_max) {
+                        // record all cells for which: p0 >= seq_pos_min[seq_id] - n_swa - 32
+                        if (p0 + (int32_t) (n_swa + 32) >= seq_pos_min[seq_id]) {
                             idxs.push_back(j);
                         }
                     }
@@ -1379,7 +1401,6 @@ skip:
 template<bool causal, bool swa, bool is_2d>
 static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * data) {
     const bool alibi = args.hparams.use_alibi;
-
     if (alibi) {
         set_input_kq_mask_impl<causal, swa, is_2d, true> (args, data);
     } else {
@@ -1390,7 +1411,6 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * 
 template<bool causal, bool swa>
 static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * data) {
     const bool is_2d = args.ubatch->is_pos_2d();
-
     if (is_2d) {
         set_input_kq_mask_impl<causal, swa, true> (args, data);
     } else {
@@ -1401,7 +1421,6 @@ static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * 
 template<bool causal>
 static void set_input_kq_mask_impl(const args_set_input_kq_mask & args, float * data) {
     const bool swa = args.swa_type != LLAMA_SWA_TYPE_NONE;
-
     if (swa) {
         set_input_kq_mask_impl<causal, true> (args, data);
     } else {

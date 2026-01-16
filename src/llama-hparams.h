@@ -275,6 +275,7 @@ struct llama_hparams {
     uint32_t n_layer_kv() const;
 
     // note that this function uses different SWA parameters from those in the hparams
+    // note: inlined on purpose for performance reasons
     // TODO: think of a better place for this function
     // TODO: pack the SWA params in a struct?
     static bool is_masked_swa(uint32_t n_swa, llama_swa_type swa_type, llama_pos p0, llama_pos p1) {
