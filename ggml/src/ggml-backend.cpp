@@ -688,9 +688,9 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #endif
 
 enum ggml_backend_sync_mode {
-    GGML_SPLIT_SYNC_MODE_IMPLICIT = 0,            // splits which can rely on implicit sync mechanisms of its backend like a queue or stream
+    GGML_SPLIT_SYNC_MODE_EXPLICIT = 0,            // splits which require explicit synchronization throughout (default)
     GGML_SPLIT_SYNC_MODE_WRITE_READ_BOUNDARY = 1, // splits which require only a single explicit sync between the last write and the first read
-    GGML_SPLIT_SYNC_MODE_EXPLICIT = 2             // splits which require explicit synchronization throughout (default)
+    GGML_SPLIT_SYNC_MODE_IMPLICIT = 2             // splits which can rely on implicit sync mechanisms of its backend like a queue or stream
 };
 
 struct ggml_backend_sched_split {
@@ -701,7 +701,7 @@ struct ggml_backend_sched_split {
     int n_inputs;
     // graph view of this split
     struct ggml_cgraph graph;
-    enum ggml_backend_sync_mode backend_sync_mode = GGML_SPLIT_SYNC_MODE_EXPLICIT;
+    enum ggml_backend_sync_mode backend_sync_mode;
 };
 
 struct ggml_backend_sched {
