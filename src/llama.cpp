@@ -1116,7 +1116,6 @@ int32_t llama_split_path(
     return (int32_t) written;
 }
 
-
 int32_t llama_split_prefix(
     char * split_prefix,
     size_t maxlen,
@@ -1128,8 +1127,8 @@ int32_t llama_split_prefix(
 
     char postfix[32];
     snprintf(postfix, sizeof(postfix), "-%05d-of-%05d.gguf", split_no + 1, split_count);
+    
     const std::string str_postfix(postfix);
-
     if (str_split_path.size() <= str_postfix.size()) {
         return 0;
     }
@@ -1139,12 +1138,12 @@ int32_t llama_split_prefix(
     if (str_split_path.compare(size_prefix, std::string::npos, str_postfix) == 0) {
         const size_t copy_len = std::min(size_prefix + 1, maxlen);
         snprintf(split_prefix, copy_len, "%s", split_path);
+        
         return (int32_t) size_prefix;
     }
 
     return 0;
 }
-
 
 const char * llama_print_system_info(void) {
     static std::string s;
