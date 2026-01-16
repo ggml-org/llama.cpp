@@ -20,9 +20,15 @@ struct Params {
     stride_idx2: u32,
     stride_idx3: u32,
 
+    stride_out1: u32,
+    stride_out2: u32,
+    stride_out3: u32,
+
     ne0: u32,
     ne1: u32,
     ne2: u32,
+
+    top_k: u32,
 
     len: u32,
     nm: u32,
@@ -59,9 +65,9 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
     let total = len0 + len1;
     let chunk = (total + WG_SIZE - 1u) / WG_SIZE;
     let k0 = lid.x * chunk;
-    let k1 = min(k0 + chunk, total);
+    let k1 = min(min(k0 + chunk, total), params.top_k);
     // guard against overprovisioned threads
-    if (k0 >= total) {
+    if (k0 >= params.top_k || k0 >= total) {
         return;
     }
 
@@ -82,9 +88,9 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
         i3 * params.stride_idx3;
 
     let row_out = params.offset_out +
-        i1 * params.stride_idx1 +
-        i2 * params.stride_idx2 +
-        i3 * params.stride_idx3;
+        i1 * params.stride_out1 +
+        i2 * params.stride_out2 +
+        i3 * params.stride_out3;
 
 
     var low: u32 = select(0, k0 - len1, k0 > len1);
