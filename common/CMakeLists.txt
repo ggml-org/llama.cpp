@@ -60,6 +60,8 @@ add_library(${TARGET} STATIC
     common.h
     console.cpp
     console.h
+    debug.cpp
+    debug.h
     download.cpp
     download.h
     http.h
@@ -95,17 +97,7 @@ endif()
 # TODO: use list(APPEND LLAMA_COMMON_EXTRA_LIBS ...)
 set(LLAMA_COMMON_EXTRA_LIBS build_info)
 
-if (LLAMA_CURL)
-    # Use curl to download model url
-    find_package(CURL)
-    if (NOT CURL_FOUND)
-        message(FATAL_ERROR "Could NOT find CURL. Hint: to disable this feature, set -DLLAMA_CURL=OFF")
-    endif()
-    target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_CURL)
-    include_directories(${CURL_INCLUDE_DIRS})
-    set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} ${CURL_LIBRARIES})
-elseif (LLAMA_HTTPLIB)
-    # otherwise, use cpp-httplib
+if (LLAMA_HTTPLIB)
     target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_HTTPLIB)
     set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} cpp-httplib)
 endif()

@@ -13,7 +13,7 @@ ARG CANN_BASE_IMAGE=quay.io/ascend/cann:8.3.rc2-${CHIP_TYPE}-openeuler24.03-py3.
 FROM ${CANN_BASE_IMAGE} AS build
 
 # -- Install build dependencies --
-RUN yum install -y gcc g++ cmake make git libcurl-devel python3 python3-pip && \
+RUN yum install -y gcc g++ cmake make git openssl-devel python3 python3-pip && \
     yum clean all && \
     rm -rf /var/cache/yum
 
