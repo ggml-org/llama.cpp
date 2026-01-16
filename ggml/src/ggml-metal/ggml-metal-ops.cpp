@@ -1645,12 +1645,9 @@ int ggml_metal_op_pool_1d(ggml_metal_op_t ctx, int idx) {
     const int32_t p0 = opts[3];
 
     const int64_t IW = op->src[0]->ne[0];
-    const int64_t N  = op->ne[3];
-    const int64_t OC = op->ne[2];
-    const int64_t OH = op->ne[1];
     const int64_t OW = op->ne[0];
 
-    const int64_t np = N * OC * OH * OW;
+    const int64_t np = ggml_nelements(op);
 
     ggml_metal_kargs_pool_1d args_pool_1d = {
         /* .k0 = */  k0,

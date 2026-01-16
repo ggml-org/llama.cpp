@@ -7136,7 +7136,7 @@ static void ggml_compute_forward_pool_1d_ksp(
         float      * drow       = (float *) ((      char *) dst->data + ir * dst->nb[1]);
 
         for (int64_t ow = 0; ow < OW; ++ow) {
-            float res;
+            float res = 0;
             switch (op) {
                 case GGML_OP_POOL_AVG: res = 0.0f;     break;
                 case GGML_OP_POOL_MAX: res = -FLT_MAX; break;
@@ -7236,7 +7236,7 @@ void ggml_compute_forward_pool_2d(
             float * const out  = drow;
 
             for (int ox = 0; ox < px; ++ox) {
-                float res;
+                float res = 0;
                 switch (op) {
                     case GGML_OP_POOL_AVG: res = 0;        break;
                     case GGML_OP_POOL_MAX: res = -FLT_MAX; break;
