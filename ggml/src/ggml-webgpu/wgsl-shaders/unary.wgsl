@@ -102,6 +102,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 #ifdef EXP
     let res = exp(src[params.offset_src + src_idx]);
 #endif
+#ifdef LOG
+    let res = log(src[params.offset_src + src_idx]);
+#endif
 #ifdef CLAMP
     let res = clamp(src[params.offset_src + src_idx], TYPE(params.clamp_min), TYPE(params.clamp_max));
 #endif
