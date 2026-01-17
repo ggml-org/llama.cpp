@@ -76,13 +76,15 @@ Versions **b5942** and newer of `llama-imatrix` store data in GGUF format by def
 
 ## Statistics
 
+Please note that the L₂ Distance can only be calculated if the imatrix is in GGUF format. If a value lacks proper statistical interpretability, **nan** will be shown instead. The following statistics are computed:
+
 #### Per tensor
 
 * **Min / Max / μ / σ**: Tensor elements Min, Max, Mean, and Standard Deviation.
 * **H Norm**: Shannon Entropy normalized over log₂(N). Defined as $H Norm=\frac{-\sum_{i=1}^N p_i \log_2 p_i}{log_2 N}$. Used to determine how well a prompt "exercises" the model's capabilities. Higher values indicate more uniform distribution of activations. Every neuron is firing equally; hard to prune.
-* **ZD**: % of elements whose ZD-score is > 1.0 (an indicator of outliers), as described in _3.1 Layer Importance Scores_ of [Layer-Wise Quantization](https://arxiv.org/abs/2406.17415).
+* **Z-score Distribution (ZD)**: % of elements whose ZD-score is > 1.0 (an indicator of outliers), as described in _3.1 Layer Importance Scores_ of [Layer-Wise Quantization](https://arxiv.org/abs/2406.17415).
 * **∑ E[A²]**: The sum of squares of activations (Energy) for the tensor. Tensors with high "energy" contribute most to the final output. Quantization errors here propagate strongly. These tensors usually need higher precision (e.g., Q6_K vs Q4_K).
-* **L₂ Norm**: Euclidean Distance from the tensor in the previous layer. Measure of transformation magnitude; higher values indicate more significant transformation on the data.
+* **L₂ Distance**: Euclidean Distance from the tensor in the previous layer. Measure of transformation magnitude; higher values indicate more significant transformation on the data.
 * **CosSim**: Cosine Similarity with the tensor in the previous layer. _~1.0_, the tensor output points in the exact same direction as the previous layer's tensor (the layer is refining magnitude, not direction). _< 1.0_, the layer is rotating the vector space (changing semantic meaning).
 * **PCC**: Pearson Correlation Coefficient with the tensor in the previous layer. Checks for linear correlation excluding the mean shift. Similar to CosSim but centers geometric data first. Indicates if the pattern of activation changes or just the offset.
 
@@ -90,9 +92,9 @@ Versions **b5942** and newer of `llama-imatrix` store data in GGUF format by def
 
 Aggregated metrics per block/layer:
 
-* **ZD**: % of this layer's concatenated tensors' elements with |Z| > 1. Indicates general "spikiness" of the layer's activations.
+* **Z-score Distribution (ZD)**: % of this layer's concatenated tensors' elements with |Z| > 1. Indicates general "spikiness" of the layer's activations.
 * **∑ E[A²]:** Total energy of the layer's concatenated tensors. Indicates the layer's overall contribution amplitude.
-* **L₂ Norm:** Euclidean Distance of the layer's concatenated tensors from the previous layer’s. Global measure of transformation magnitude.
+* **L₂ Distance:** Euclidean Distance of the layer's concatenated tensors from the previous layer’s. Global measure of transformation magnitude.
 * **CosSim**: Cosine Similarity of this layer's concatenated tensors with the previous layer.
 * **PCC**: Average Pearson Correlation of the tensors in the layer.
 
