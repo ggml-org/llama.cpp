@@ -698,6 +698,7 @@ const func_builtins & value_bool_t::get_builtins() const {
             bool val = args.get_pos(0)->as_bool();
             return mk_val<value_string>(val ? "True" : "False");
         }},
+        {"tojson", tojson},
     };
     return builtins;
 }
