@@ -849,6 +849,12 @@ static void test_tests(testing & t) {
         "yes"
     );
 
+    test_template(t, "undefined implies none",
+        "{% if x is not none %}yes{% else %}no{% endif %}",
+        json::object(),
+        "no"
+    );
+
     test_template(t, "is string",
         "{% if x is string %}yes{% endif %}",
         {{"x", "hello"}},

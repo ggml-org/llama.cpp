@@ -1,6 +1,7 @@
 #pragma once
 
 #include "chat.h"
+#include "common.h"
 #include "jinja/runtime.h"
 
 #include <chrono>
@@ -151,18 +152,18 @@ struct templates_params {
     json                                  tools;
     common_chat_tool_choice               tool_choice;
     json                                  json_schema;
-    bool                                  parallel_tool_calls;
-    common_reasoning_format               reasoning_format;
-    bool                                  stream;
+    bool                                  parallel_tool_calls = true;
+    common_reasoning_format               reasoning_format = COMMON_REASONING_FORMAT_AUTO;
+    bool                                  stream = true;
     std::string                           grammar;
-    bool                                  add_generation_prompt;
-    bool                                  enable_thinking;
+    bool                                  add_generation_prompt = false;
+    bool                                  enable_thinking = true;
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
     json                                  extra_context;
-    bool                                  add_bos;
-    bool                                  add_eos;
+    bool                                  add_bos = false;
+    bool                                  add_eos = false;
     bool                                  is_inference = true;
-    bool                                  add_inference;
+    bool                                  add_inference = false;
     bool                                  mark_input = true; // whether to mark input strings in the jinja context
 };
 

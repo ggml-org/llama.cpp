@@ -358,7 +358,12 @@ const func_builtins & global_builtins() {
             args.ensure_vals<value_string>();
             return mk_val<value_bool>(args.get_pos(0)->val_str.is_uppercase());
         }},
-        {"test_is_none", test_type_fn<value_none>},
+        {"test_is_none", [](const func_args & args) -> value {
+            args.ensure_count(1);
+            bool res = args.get_pos(0)->is_none();
+            JJ_DEBUG("test_is_none: result=%d", res ? 1 : 0);
+            return mk_val<value_bool>(res);
+        }},
         {"test_is_defined", [](const func_args & args) -> value {
             args.ensure_count(1);
             bool res = !args.get_pos(0)->is_undefined();
@@ -669,8 +674,26 @@ const func_builtins & value_string_t::get_builtins() const {
             return args.get_pos(0);
         }},
         {"tojson", tojson},
-        {"indent", [](const func_args &) -> value {
-            throw not_implemented_exception("String indent builtin not implemented");
+        {"indent", [](const func_args &args) -> value {
+            // no support for "first" as that would require us to somehow access generation context
+            args.ensure_count(2, 4);
+            args.ensure_vals<value_string, value_int, value_bool, value_bool>(true, true, false, false);
+
+            auto input = args.get_pos(0);
+            auto arg0 = args.get_pos(1);
+
+            int count = arg0->as_int();
+            if (count <= 0) {
+                throw raised_exception("indent must be a positive number");
+            }
+            std::string indented;
+            for (int i = 0; i < count; i++) {
+                indented.append(" ");
+            }
+            indented.append(input->as_string().str());
+            auto res = mk_val<value_string>(indented);
+            res->val_str.mark_input_based_on(input->as_string());
+            return res;
         }},
         {"join", [](const func_args &) -> value {
             throw not_implemented_exception("String join builtin not implemented");
