@@ -98,6 +98,9 @@ class ConversationsStore {
 		const modalities: ModelModalities = { vision: false, audio: false };
 
 		for (const message of messages) {
+			// Ignore assistant messages (MCP tool results)
+			if (message.role !== 'user') continue;
+
 			if (!message.extra) continue;
 
 			for (const extra of message.extra) {
