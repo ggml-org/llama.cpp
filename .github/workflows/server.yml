@@ -72,7 +72,7 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          cmake -B build -DLLAMA_CURL=OFF -DLLAMA_BUILD_BORINGSSL=ON
+          cmake -B build -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config ${{ matrix.build_type }} -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
 
       - name: Python setup
@@ -108,7 +108,7 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          cmake -B build -DLLAMA_CURL=OFF -DLLAMA_BUILD_BORINGSSL=ON
+          cmake -B build -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS} --target llama-server
 
       - name: Python setup
