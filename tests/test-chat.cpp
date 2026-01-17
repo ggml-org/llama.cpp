@@ -288,12 +288,12 @@ static common_chat_tool todo_list{
     /* .parameters = */ R"({
         "type": "object",
         "properties": {
-            "items": {
+            "todos": {
                 "type": "array",
                 "description": "List of TODO list items"
             }
         },
-        "required": ["items"]
+        "required": ["todos"]
     })",
 };
 
@@ -1373,6 +1373,40 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
             })
             .run();
+
+        tst.test(
+               "<seed:tool_call>\n"
+               "<function=todo_list>\n"
+               "<parameter=todos>\n"
+               "[{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</seed:tool_call>")
+            .tools({
+                todo_list
+        })
+            .expect_tool_calls({
+                { "todo_list", "{\"todos\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}", {} },
+            })
+            .run();
+
+        // single-quote normalization
+        tst.test(
+               "<seed:tool_call>\n"
+               "<function=todo_list>\n"
+               "<parameter=todos>\n"
+               "[{'item': 'Check stuff', 'selected': false}, {'item': 'Prepare stuff', 'selected': true}]\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</seed:tool_call>")
+            .tools({
+                todo_list
+        })
+            .expect_tool_calls({
+                { "todo_list", "{\"todos\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}", {} },
+            })
+            .run();
+
     }
 
     {
@@ -1466,7 +1500,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         tst.test(
                "<tool_call>\n"
                "<function=todo_list>\n"
-               "<parameter=items>\n"
+               "<parameter=todos>\n"
                "[{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]\n"
                "</parameter>\n"
                "</function>\n"
@@ -1475,7 +1509,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 todo_list
         })
             .expect_tool_calls({
-                { "todo_list", "{\"items\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}", {} },
+                { "todo_list", "{\"todos\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}", {} },
             })
             .run();
     }

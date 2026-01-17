@@ -258,11 +258,21 @@ static void render_scenario(const common_chat_template & tmpl,
     LOG_ERR("\n=== Scenario: %s ===\n", scenario_name.c_str());
     LOG_ERR("add_generation_prompt: %s, enable_thinking: %s\n", add_generation_prompt ? "true" : "false",
             enable_thinking ? "true" : "false");
-    LOG_ERR("Messages:\n%s\n", messages.dump(2).c_str());
+
+    // When add_generation_prompt is true, add a trailing user message to trigger the prompt
+    json final_messages = messages;
+    if (add_generation_prompt && !messages.empty() && messages.back().value("role", "") == "assistant") {
+        final_messages.push_back(json{
+            { "role",    "user" },
+            { "content", "Now please continue with another response." }
+        });
+    }
+
+    LOG_ERR("Messages:\n%s\n", final_messages.dump(2).c_str());
 
     try {
         templates_params inputs;
-        inputs.messages                         = messages;
+        inputs.messages                         = final_messages;
         inputs.add_generation_prompt            = add_generation_prompt;
         inputs.extra_context["enable_thinking"] = enable_thinking;
 

@@ -26,6 +26,56 @@ static std::string_view trim(std::string_view sv) {
     return trim_trailing_space(sv);
 }
 
+// Convert Python-style single-quoted strings to JSON double-quoted strings
+// e.g., {'key': 'value'} -> {"key": "value"}
+static std::string normalize_quotes_to_json(const std::string & input) {
+    std::string result;
+    result.reserve(input.size());
+
+    bool in_single_quoted = false;
+    bool in_double_quoted = false;
+
+    for (size_t i = 0; i < input.size(); ++i) {
+        char c = input[i];
+
+        // Handle escape sequences
+        if (c == '\\' && i + 1 < input.size()) {
+            char next = input[i + 1];
+            if (in_single_quoted && next == '\'') {
+                // \' inside single-quoted string -> just '
+                result += '\'';
+                ++i;
+                continue;
+            }
+            if (in_double_quoted && next == '"') {
+                // \" inside double-quoted string -> keep as \"
+                result += "\\\"";
+                ++i;
+                continue;
+            }
+            // Other escapes: pass through
+            result += c;
+            continue;
+        }
+
+        if (c == '"' && !in_single_quoted) {
+            in_double_quoted = !in_double_quoted;
+            result += c;
+        } else if (c == '\'' && !in_double_quoted) {
+            // Single quote acting as string delimiter -> convert to double quote
+            in_single_quoted = !in_single_quoted;
+            result += '"';
+        } else if (c == '"' && in_single_quoted) {
+            // Double quote inside single-quoted string -> escape it
+            result += "\\\"";
+        } else {
+            result += c;
+        }
+    }
+
+    return result;
+}
+
 void common_chat_peg_mapper::from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result) {
     arena.visit(result, [this](const common_peg_ast_node & node) { map(node); });
 }
@@ -742,6 +792,14 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
 
         std::string value_to_add;
         if (!value_content.empty()) {
+            // For potential containers, normalize Python-style single quotes to JSON double quotes first
+            // This ensures consistent output during both partial and final parsing
+            bool is_potential_container =
+                (value_content[0] == '[' || value_content[0] == '{');
+            if (is_potential_container) {
+                value_content = normalize_quotes_to_json(value_content);
+            }
+
             // Try to parse as JSON value (number, bool, null, object, array)
             // For strings, we need special handling to support incremental parsing
             try {
@@ -767,12 +825,13 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
                     value_to_add = value_content;
                 }
             } catch (...) {
-                bool is_potential_container =
-                    !value_content.empty() && (value_content[0] == '[' || value_content[0] == '{');
+                // JSON parsing failed - content is either incomplete (partial) or not valid JSON
+                // Note: potential containers were already normalized above, so value_content
+                // already has double quotes if it started with [ or {
+
                 if (node.is_partial && is_potential_container) {
                     // During incremental parsing, if it looks like a JSON container, don't wrap in quotes yet
-                    // and don't escape. Just append raw. If it ends up being a container, we're good.
-                    // If it ends up being a string, it will be handled when is_partial becomes false.
+                    // and don't escape. Just pass through the (already normalized) content.
                     value_to_add = value_content;
                 } else {
                     // Not valid JSON and NOT a potential partial container - treat as string value
