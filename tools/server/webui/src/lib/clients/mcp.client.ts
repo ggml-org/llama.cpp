@@ -25,6 +25,7 @@
  * - Usage statistics tracking
  */
 
+import { mcpStore } from '$lib/stores/mcp.svelte';
 import { browser } from '$app/environment';
 import { MCPService } from '$lib/services/mcp.service';
 import type {
@@ -34,7 +35,6 @@ import type {
 	ToolExecutionResult,
 	MCPClientConfig,
 	MCPConnection,
-	HealthCheckState,
 	HealthCheckParams,
 	ServerCapabilities,
 	ClientCapabilities,
@@ -88,70 +88,6 @@ export class MCPClient {
 	private toolsIndex = new Map<string, string>();
 	private configSignature: string | null = null;
 	private initPromise: Promise<boolean> | null = null;
-
-	private onStateChange?: (state: {
-		isInitializing?: boolean;
-		error?: string | null;
-		toolCount?: number;
-		connectedServers?: string[];
-	}) => void;
-
-	private onHealthCheckChange?: (serverId: string, state: HealthCheckState) => void;
-	private onServerUsage?: (serverId: string) => void;
-
-	/**
-	 *
-	 *
-	 * Store Integration
-	 *
-	 *
-	 */
-
-	/**
-	 * Sets callback for state changes.
-	 * Called by mcpStore to sync reactive state.
-	 */
-	setStateChangeCallback(
-		callback: (state: {
-			isInitializing?: boolean;
-			error?: string | null;
-			toolCount?: number;
-			connectedServers?: string[];
-		}) => void
-	): void {
-		this.onStateChange = callback;
-	}
-
-	/**
-	 * Set callback for health check state changes
-	 */
-	setHealthCheckCallback(callback: (serverId: string, state: HealthCheckState) => void): void {
-		this.onHealthCheckChange = callback;
-	}
-
-	/**
-	 * Set callback for server usage tracking
-	 */
-	setServerUsageCallback(callback: (serverId: string) => void): void {
-		this.onServerUsage = callback;
-	}
-
-	private notifyStateChange(state: Parameters<NonNullable<typeof this.onStateChange>>[0]): void {
-		this.onStateChange?.(state);
-	}
-
-	private notifyHealthCheck(serverId: string, state: HealthCheckState): void {
-		this.onHealthCheckChange?.(serverId, state);
-	}
-
-	/**
-	 *
-	 *
-	 * Lifecycle
-	 *
-	 *
-	 */
-
 	/**
 	 * Ensures MCP is initialized with current config.
 	 * Handles config changes by reinitializing as needed.
@@ -189,13 +125,13 @@ export class MCPClient {
 	private async initialize(signature: string, mcpConfig: MCPClientConfig): Promise<boolean> {
 		console.log('[MCPClient] Starting initialization...');
 
-		this.notifyStateChange({ isInitializing: true, error: null });
+		mcpStore.updateState({ isInitializing: true, error: null });
 		this.configSignature = signature;
 
 		const serverEntries = Object.entries(mcpConfig.servers);
 		if (serverEntries.length === 0) {
 			console.log('[MCPClient] No servers configured');
-			this.notifyStateChange({ isInitializing: false, toolCount: 0, connectedServers: [] });
+			mcpStore.updateState({ isInitializing: false, toolCount: 0, connectedServers: [] });
 			return false;
 		}
 
@@ -253,7 +189,7 @@ export class MCPClient {
 
 		if (successCount === 0 && totalCount > 0) {
 			const error = 'All MCP server connections failed';
-			this.notifyStateChange({
+			mcpStore.updateState({
 				isInitializing: false,
 				error,
 				toolCount: 0,
@@ -263,7 +199,7 @@ export class MCPClient {
 			return false;
 		}
 
-		this.notifyStateChange({
+		mcpStore.updateState({
 			isInitializing: false,
 			error: null,
 			toolCount: this.toolsIndex.size,
@@ -306,7 +242,7 @@ export class MCPClient {
 		this.toolsIndex.clear();
 		this.configSignature = null;
 
-		this.notifyStateChange({
+		mcpStore.updateState({
 			isInitializing: false,
 			error: null,
 			toolCount: 0,
@@ -472,7 +408,7 @@ export class MCPClient {
 			throw new MCPError(`Server "${serverName}" is not connected`, -32000);
 		}
 
-		this.onServerUsage?.(serverName);
+		mcpStore.incrementServerUsage(serverName);
 
 		const args = this.parseToolArguments(toolCall.function.arguments);
 		return MCPService.callTool(connection, { name: toolName, arguments: args }, signal);
@@ -569,7 +505,7 @@ export class MCPClient {
 		let currentPhase: MCPConnectionPhase = MCPConnectionPhase.Idle;
 
 		if (!trimmedUrl) {
-			this.notifyHealthCheck(server.id, {
+			mcpStore.updateHealthCheck(server.id, {
 				status: HealthCheckStatus.Error,
 				message: 'Please enter a server URL first.',
 				logs: []
@@ -578,7 +514,7 @@ export class MCPClient {
 		}
 
 		// Initial connecting state
-		this.notifyHealthCheck(server.id, {
+		mcpStore.updateHealthCheck(server.id, {
 			status: HealthCheckStatus.Connecting,
 			phase: MCPConnectionPhase.TransportCreating,
 			logs: []
@@ -603,7 +539,7 @@ export class MCPClient {
 				(phase, log) => {
 					currentPhase = phase;
 					logs.push(log);
-					this.notifyHealthCheck(server.id, {
+					mcpStore.updateHealthCheck(server.id, {
 						status: HealthCheckStatus.Connecting,
 						phase,
 						logs: [...logs]
@@ -622,7 +558,7 @@ export class MCPClient {
 				connection.clientCapabilities
 			);
 
-			this.notifyHealthCheck(server.id, {
+			mcpStore.updateHealthCheck(server.id, {
 				status: HealthCheckStatus.Success,
 				tools,
 				serverInfo: connection.serverInfo,
@@ -643,7 +579,7 @@ export class MCPClient {
 				message: `Connection failed: ${message}`,
 				level: MCPLogLevel.Error
 			});
-			this.notifyHealthCheck(server.id, {
+			mcpStore.updateHealthCheck(server.id, {
 				status: HealthCheckStatus.Error,
 				message,
 				phase: currentPhase,
