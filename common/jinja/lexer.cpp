@@ -91,6 +91,16 @@ lexer_result lexer::tokenize(const std::string & source) {
         return str;
     };
 
+    auto consume_numeric = [&]() -> std::string {
+        std::string num = consume_while(is_integer);
+        if (pos < src.size() && src[pos] == '.' && pos + 1 < src.size() && is_integer(src[pos + 1])) {
+            ++pos; // Consume '.'
+            std::string frac = consume_while(is_integer);
+            num += "." + frac;
+        }
+        return num;
+    };
+
     auto next_pos_is = [&](std::initializer_list<char> chars, size_t n = 1) -> bool {
         if (pos + n >= src.size()) return false;
         for (char c : chars) {
@@ -258,7 +268,7 @@ lexer_result lexer::tokenize(const std::string & source) {
                     ++pos; // Consume the operator
 
                     // Check for numbers following the unary operator
-                    std::string num = consume_while(is_integer);
+                    std::string num = consume_numeric();
                     std::string value = std::string(1, ch) + num;
                     token::type t = num.empty() ? token::unary_operator : token::numeric_literal;
                     // JJ_DEBUG("consumed unary operator or numeric literal: '%s'", value.c_str());
@@ -307,12 +317,7 @@ lexer_result lexer::tokenize(const std::string & source) {
         // Numbers
         if (is_integer(ch)) {
             start_pos = pos;
-            std::string num = consume_while(is_integer);
-            if (pos < src.size() && src[pos] == '.' && pos + 1 < src.size() && is_integer(src[pos + 1])) {
-                ++pos; // Consume '.'
-                std::string frac = consume_while(is_integer);
-                num += "." + frac;
-            }
+            std::string num = consume_numeric();
             // JJ_DEBUG("consumed numeric literal: '%s'", num.c_str());
             tokens.push_back({token::numeric_literal, num, start_pos});
             continue;

@@ -247,6 +247,12 @@ static void test_expressions(testing & t) {
         "Bob"
     );
 
+    test_template(t, "negative float (not dot notation)",
+        "{{ -1.0 }}",
+        json::object(),
+        "-1.0"
+    );
+
     test_template(t, "bracket notation",
         "{{ user['name'] }}",
         {{"user", {{"name", "Bob"}}}},
