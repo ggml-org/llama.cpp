@@ -68,7 +68,7 @@ struct context {
 
     context(const context & parent) : context() {
         // inherit variables (for example, when entering a new scope)
-        auto & pvar = parent.env->as_object();
+        auto & pvar = parent.env->as_ordered_object();
         for (const auto & pair : pvar) {
             set_val(pair.first, pair.second);
         }

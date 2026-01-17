@@ -908,7 +908,7 @@ const func_builtins & value_object_t::get_builtins() const {
         }},
         {"keys", [](const func_args & args) -> value {
             args.ensure_vals<value_object>();
-            const auto & obj = args.get_pos(0)->as_object();
+            const auto & obj = args.get_pos(0)->as_ordered_object();
             auto result = mk_val<value_array>();
             for (const auto & pair : obj) {
                 result->push_back(mk_val<value_string>(pair.first));
@@ -917,7 +917,7 @@ const func_builtins & value_object_t::get_builtins() const {
         }},
         {"values", [](const func_args & args) -> value {
             args.ensure_vals<value_object>();
-            const auto & obj = args.get_pos(0)->as_object();
+            const auto & obj = args.get_pos(0)->as_ordered_object();
             auto result = mk_val<value_array>();
             for (const auto & pair : obj) {
                 result->push_back(pair.second);
@@ -926,7 +926,7 @@ const func_builtins & value_object_t::get_builtins() const {
         }},
         {"items", [](const func_args & args) -> value {
             args.ensure_vals<value_object>();
-            const auto & obj = args.get_pos(0)->as_object();
+            const auto & obj = args.get_pos(0)->as_ordered_object();
             auto result = mk_val<value_array>();
             for (const auto & pair : obj) {
                 auto item = mk_val<value_array>();
@@ -940,7 +940,7 @@ const func_builtins & value_object_t::get_builtins() const {
         {"string", tojson},
         {"length", [](const func_args & args) -> value {
             args.ensure_vals<value_object>();
-            const auto & obj = args.get_pos(0)->as_object();
+            const auto & obj = args.get_pos(0)->as_ordered_object();
             return mk_val<value_int>(static_cast<int64_t>(obj.size()));
         }},
         {"tojson", [](const func_args & args) -> value {
@@ -957,16 +957,14 @@ const func_builtins & value_object_t::get_builtins() const {
             //const bool case_sensitive = val_case->as_bool(); // undefined == false
             const bool reverse = val_reverse->as_bool(); // undefined == false
             const bool by_value = is_val<value_string>(val_by) && val_by->as_string().str() == "value" ? true : false;
-            value_t::map obj = val_input->val_obj; // copy
-            std::sort(obj.ordered.begin(), obj.ordered.end(), [&](const auto & a, const auto & b) {
+            auto result = mk_val<value_object>(val_input->as_ordered_object()); // copy
+            std::sort(result->val_obj.ordered.begin(), result->val_obj.ordered.end(), [&](const auto & a, const auto & b) {
                 if (by_value) {
                     return value_compare(a.second, b.second, reverse ? value_compare_op::gt : value_compare_op::lt);
                 } else {
                     return reverse ? a.first > b.first : a.first < b.first;
                 }
             });
-            auto result = mk_val<value_object>();
-            result->val_obj = std::move(obj);
             return result;
         }},
         {"join", [](const func_args &) -> value {
@@ -1163,7 +1161,7 @@ static void value_to_json_internal(std::ostringstream & oss, const value & val, 
         }
         oss << "]";
     } else if (is_val<value_object>(val)) {
-        const auto & obj = val->val_obj.ordered; // IMPORTANT: need to keep exact order
+        const auto & obj = val->as_ordered_object(); // IMPORTANT: need to keep exact order
         oss << "{";
         if (!obj.empty()) {
             oss << newline();

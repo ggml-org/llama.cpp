@@ -463,7 +463,7 @@ value for_statement::execute_impl(context & ctx) {
     std::vector<value> items;
     if (is_val<value_object>(iterable_val)) {
         JJ_DEBUG("%s", "For loop over object keys");
-        auto & obj = iterable_val->as_object();
+        auto & obj = iterable_val->as_ordered_object();
         for (auto & p : obj) {
             auto tuple = mk_val<value_array>();
             if (iterable_val->val_obj.is_key_numeric) {
