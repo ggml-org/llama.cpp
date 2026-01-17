@@ -90,6 +90,7 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 #define VK_VENDOR_ID_AMD 0x1002
 #define VK_VENDOR_ID_APPLE 0x106b
+#define VK_VENDOR_ID_ARM 0x13B5
 #define VK_VENDOR_ID_INTEL 0x8086
 #define VK_VENDOR_ID_NVIDIA 0x10de
 
@@ -3000,6 +3001,11 @@ static void ggml_vk_load_shaders(vk_device& device) {
             // Xe2/Xe3 with coopmat enabled - warptile performance tuning
             l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
             l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
+        } else if (device->vendor_id == VK_VENDOR_ID_ARM && device->subgroup_size >= 16) {
+            uint32_t wm = 32 / device->subgroup_size;
+            m_warptile_mmq = m_warptile_mmq_int = { 64, 64, 64, 16, 16, 32, wm, 2, 2, 1, device->subgroup_size };
+            m_warptile = { 64, 64, 64, 16, 16, 32, wm, 2, 2, 1, device->subgroup_size };
+            m_warptile_id = m_warptile_mmqid = { 64, 64, 64, 16, 16, 32, wm, 2, 2, 1, device->subgroup_size };
         }
 
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
@@ -3022,6 +3028,11 @@ static void ggml_vk_load_shaders(vk_device& device) {
                 device->mul_mat_l[i] = false;
             } else if (!ggml_vk_matmul_shmem_support(device, l_warptile_mmq, false, t)) {
                 device->mul_mat_l[i] = false;
+            }
+
+            if (device->vendor_id == VK_VENDOR_ID_ARM) {
+                device->mul_mat_l[i] = false;
+                device->mul_mat_id_l[i] = false;
             }
 
             // Disable mul_mat_id if not enough shared memory is available
@@ -4618,8 +4629,20 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         const char* GGML_VK_SUBALLOCATION_BLOCK_SIZE = getenv("GGML_VK_SUBALLOCATION_BLOCK_SIZE");
 
-        if (GGML_VK_SUBALLOCATION_BLOCK_SIZE != nullptr) {
-            device->suballocation_block_size = std::stoull(GGML_VK_SUBALLOCATION_BLOCK_SIZE);
+        if (device->vendor_id == VK_VENDOR_ID_ARM) {
+            // Force disable FP16/BF16 on Mali GPUs.
+            // Benchmark data from vkpeak (Mali-G720):
+            // fp32-scalar: 3501 GFLOPS
+            // fp16-scalar: 3086 GFLOPS
+            // fp16-vec4:   5111 GFLOPS
+            // fp16-matrix: 0.00 GFLOPS
+            //
+            // Without hardware fp16-matrix support or explicit Vec4 vectorization
+            // in shaders, the FP16 path is a performance regression (scalar)
+            // compared to the stable FP32 path.
+            device->fp16 = false;
+            device->bf16 = false;
+            device->suballocation_block_size = 256 * 1024 * 1024;
         } else {
             // Limit batching of allocations to 1GB by default to avoid fragmentation issues
             device->suballocation_block_size = 1024*1024*1024;
