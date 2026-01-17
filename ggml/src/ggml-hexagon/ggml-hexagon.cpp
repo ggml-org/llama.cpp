@@ -3046,10 +3046,12 @@ ggml_hexagon_registry::ggml_hexagon_registry(ggml_backend_reg_t reg) {
         }
     }
 
+#if defined(__ANDROID__)
     if (opt_arch < 75) {
         opt_ndev = 1;
         GGML_LOG_WARN("ggml-hex: forcing ndev to 1 for SoCs archs lower than v75.\n");
     }
+#endif
 
     GGML_LOG_INFO("ggml-hex: Hexagon Arch version v%d\n", opt_arch);
 
