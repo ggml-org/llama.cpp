@@ -114,6 +114,9 @@ message(STATUS "GGML_SYSTEM_ARCH: ${GGML_SYSTEM_ARCH}")
 
 if (NOT MSVC)
     if (GGML_STATIC)
+        if (UNIX AND NOT APPLE)
+            set(CMAKE_FIND_LIBRARY_SUFFIXES ".a;.so")
+        endif()
         add_link_options(-static)
         if (MINGW)
             add_link_options(-static-libgcc -static-libstdc++)
@@ -122,10 +125,6 @@ if (NOT MSVC)
     if (GGML_GPROF)
         add_compile_options(-pg)
     endif()
-endif()
-
-if (MINGW)
-    add_compile_definitions(_WIN32_WINNT=${GGML_WIN_VER})
 endif()
 
 #
@@ -142,6 +141,9 @@ endif()
 # which was introduced in POSIX.1-2008, forcing us to go higher
 if (CMAKE_SYSTEM_NAME MATCHES "OpenBSD")
     add_compile_definitions(_XOPEN_SOURCE=700)
+elseif (CMAKE_SYSTEM_NAME MATCHES "AIX")
+    # Don't define _XOPEN_SOURCE.  We need _ALL_SOURCE, which is the default,
+    # in order to define _SC_PHYS_PAGES.
 else()
     add_compile_definitions(_XOPEN_SOURCE=600)
 endif()
@@ -205,14 +207,28 @@ add_library(ggml-base
             ggml-quants.h
             gguf.cpp)
 
+set_target_properties(ggml-base PROPERTIES
+    VERSION ${GGML_VERSION}
+    SOVERSION ${GGML_VERSION_MAJOR}
+)
+
 target_include_directories(ggml-base PRIVATE .)
 if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
 endif()
 
+if (GGML_SCHED_NO_REALLOC)
+    target_compile_definitions(ggml-base PUBLIC GGML_SCHED_NO_REALLOC)
+endif()
+
 add_library(ggml
             ggml-backend-reg.cpp)
 add_library(ggml::ggml ALIAS ggml)
+
+set_target_properties(ggml PROPERTIES
+    VERSION ${GGML_VERSION}
+    SOVERSION ${GGML_VERSION_MAJOR}
+)
 
 if (GGML_BACKEND_DIR)
     if (NOT GGML_BACKEND_DL)
@@ -251,6 +267,15 @@ function(ggml_add_backend_library backend)
     if (${BUILD_SHARED_LIBS})
         target_compile_definitions(${backend} PRIVATE GGML_BACKEND_BUILD)
         target_compile_definitions(${backend} PUBLIC  GGML_BACKEND_SHARED)
+    endif()
+
+    # Set versioning properties for all backend libraries
+    # Building a MODULE library with a version is not supported on macOS (https://gitlab.kitware.com/cmake/cmake/-/issues/20782)
+    if (NOT (APPLE AND GGML_BACKEND_DL))
+        set_target_properties(${backend} PROPERTIES
+            VERSION ${GGML_VERSION}
+            SOVERSION ${GGML_VERSION_MAJOR}
+        )
     endif()
 
     if(NOT GGML_AVAILABLE_BACKENDS)
@@ -301,6 +326,22 @@ function(ggml_add_cpu_backend_variant tag_name)
         foreach (feat ${ARGN})
             set(GGML_INTERNAL_${feat} ON)
         endforeach()
+    elseif (GGML_SYSTEM_ARCH STREQUAL "s390x")
+        foreach (feat VXE2 NNPA)
+            set(GGML_INTERNAL_${feat} OFF)
+        endforeach()
+
+        foreach (feat ${ARGN})
+            set(GGML_INTERNAL_${feat} ON)
+        endforeach()
+    elseif (GGML_SYSTEM_ARCH STREQUAL "riscv64")
+        foreach (feat RVV)
+            set(GGML_INTERNAL_${feat} OFF)
+        endforeach()
+
+        foreach (feat ${ARGN})
+            set(GGML_INTERNAL_${feat} ON)
+        endforeach()
     endif()
 
     ggml_add_cpu_backend_variant_impl(${tag_name})
@@ -316,15 +357,29 @@ if (GGML_CPU_ALL_VARIANTS)
     endif()
     if (GGML_SYSTEM_ARCH STREQUAL "x86")
         ggml_add_cpu_backend_variant(x64)
-        ggml_add_cpu_backend_variant(sse42        SSE42)
-        ggml_add_cpu_backend_variant(sandybridge  SSE42 AVX)
-        ggml_add_cpu_backend_variant(haswell      SSE42 AVX F16C AVX2 BMI2 FMA)
-        ggml_add_cpu_backend_variant(skylakex     SSE42 AVX F16C AVX2 BMI2 FMA AVX512)
-        ggml_add_cpu_backend_variant(icelake      SSE42 AVX F16C AVX2 BMI2 FMA AVX512 AVX512_VBMI AVX512_VNNI)
-        ggml_add_cpu_backend_variant(alderlake    SSE42 AVX F16C AVX2 BMI2 FMA AVX_VNNI)
+        ggml_add_cpu_backend_variant(sse42              SSE42)
+        ggml_add_cpu_backend_variant(sandybridge        SSE42 AVX)
+        if (NOT MSVC)
+            # __FMA__ and __F16C__ are not defined in MSVC, however they are implied with AVX2/AVX512
+            ggml_add_cpu_backend_variant(ivybridge      SSE42 AVX F16C)
+            ggml_add_cpu_backend_variant(piledriver     SSE42 AVX F16C FMA)
+        endif()
+        ggml_add_cpu_backend_variant(haswell            SSE42 AVX F16C FMA AVX2 BMI2)
+        ggml_add_cpu_backend_variant(skylakex           SSE42 AVX F16C FMA AVX2 BMI2 AVX512)
+        ggml_add_cpu_backend_variant(cannonlake         SSE42 AVX F16C FMA AVX2 BMI2 AVX512 AVX512_VBMI)
+        ggml_add_cpu_backend_variant(cascadelake        SSE42 AVX F16C FMA AVX2 BMI2 AVX512 AVX512_VNNI)
+        ggml_add_cpu_backend_variant(icelake            SSE42 AVX F16C FMA AVX2 BMI2 AVX512 AVX512_VBMI AVX512_VNNI)
+        if (NOT MSVC)
+            # MSVC 2022 doesn't support BF16 intrinsics without `/arch:AVX10.1` ?!
+            # https://learn.microsoft.com/en-us/cpp/intrinsics/x64-amd64-intrinsics-list?view=msvc-170
+            # https://learn.microsoft.com/en-us/cpp/build/reference/arch-x64?view=msvc-170
+            ggml_add_cpu_backend_variant(cooperlake     SSE42 AVX F16C FMA AVX2 BMI2 AVX512 AVX512_VNNI AVX512_BF16)
+            ggml_add_cpu_backend_variant(zen4           SSE42 AVX F16C FMA AVX2 BMI2 AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16)
+        endif()
+        ggml_add_cpu_backend_variant(alderlake          SSE42 AVX F16C FMA AVX2 BMI2 AVX_VNNI)
         if (NOT MSVC)
             # MSVC doesn't support AMX
-            ggml_add_cpu_backend_variant(sapphirerapids SSE42 AVX F16C AVX2 BMI2 FMA AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16 AMX_TILE AMX_INT8)
+            ggml_add_cpu_backend_variant(sapphirerapids SSE42 AVX F16C FMA AVX2 BMI2 AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16 AMX_TILE AMX_INT8)
         endif()
     elseif(GGML_SYSTEM_ARCH STREQUAL "ARM")
         if (CMAKE_SYSTEM_NAME MATCHES "Linux")
@@ -345,6 +400,9 @@ if (GGML_CPU_ALL_VARIANTS)
             ggml_add_cpu_backend_variant(android_armv8.2_1    DOTPROD)
             ggml_add_cpu_backend_variant(android_armv8.2_2    DOTPROD FP16_VECTOR_ARITHMETIC)
             ggml_add_cpu_backend_variant(android_armv8.6_1    DOTPROD FP16_VECTOR_ARITHMETIC MATMUL_INT8)
+            ggml_add_cpu_backend_variant(android_armv9.0_1    DOTPROD MATMUL_INT8 FP16_VECTOR_ARITHMETIC SVE2)
+            ggml_add_cpu_backend_variant(android_armv9.2_1    DOTPROD MATMUL_INT8 FP16_VECTOR_ARITHMETIC SVE SME)
+            ggml_add_cpu_backend_variant(android_armv9.2_2    DOTPROD MATMUL_INT8 FP16_VECTOR_ARITHMETIC SVE SVE2 SME)
         elseif (APPLE)
             ggml_add_cpu_backend_variant(apple_m1             DOTPROD)
             ggml_add_cpu_backend_variant(apple_m2_m3          DOTPROD MATMUL_INT8)
@@ -365,6 +423,20 @@ if (GGML_CPU_ALL_VARIANTS)
         else()
             message(FATAL_ERROR "Unsupported PowerPC target OS: ${CMAKE_SYSTEM_NAME}")
         endif()
+    elseif (GGML_SYSTEM_ARCH STREQUAL "s390x")
+        if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+            ggml_add_cpu_backend_variant(z15    Z15 VXE2)
+            ggml_add_cpu_backend_variant(z16    Z16 VXE2 NNPA)
+        else()
+            message(FATAL_ERROR "Unsupported s390x target OS: ${CMAKE_SYSTEM_NAME}")
+        endif()
+    elseif (GGML_SYSTEM_ARCH STREQUAL "riscv64")
+        if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+            ggml_add_cpu_backend_variant(riscv64_0)
+            ggml_add_cpu_backend_variant(riscv64_v   RVV)
+        else()
+            message(FATAL_ERROR "Unsupported RISC-V target OS: ${CMAKE_SYSTEM_NAME}")
+        endif()
     else()
         message(FATAL_ERROR "GGML_CPU_ALL_VARIANTS not yet supported with ${GGML_SYSTEM_ARCH} on ${CMAKE_SYSTEM_NAME}")
     endif()
@@ -384,6 +456,8 @@ ggml_add_backend(Vulkan)
 ggml_add_backend(WebGPU)
 ggml_add_backend(zDNN)
 ggml_add_backend(OpenCL)
+ggml_add_backend(Hexagon)
+ggml_add_backend(ZenDNN)
 
 foreach (target ggml-base ggml)
     target_include_directories(${target} PUBLIC    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../include> $<INSTALL_INTERFACE:include>)

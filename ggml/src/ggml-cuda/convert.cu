@@ -27,7 +27,7 @@ static __global__ void dequantize_block(const void * __restrict__ vx, dst_t * __
     const int64_t y_offset = qr == 1 ? 1 : qk/2;
 
     // dequantize
-    dfloat2 v;
+    float2 v;
     dequantize_kernel(vx, ib, iqs, v);
 
     const int64_t iy0 = ((i03*ne02 + i02)*ne01 + i01)*ne00 + iybs + iqs;
@@ -71,9 +71,7 @@ static __global__ void dequantize_block_q8_0_f16(const void * __restrict__ vx, h
         y2[iy/2 + threadIdx.x] = __hmul2(make_half2(qs.x, qs.y), __half2half2(d));
     }
 #else
-    GGML_UNUSED(vx);
-    GGML_UNUSED(y);
-    GGML_UNUSED(k);
+    GGML_UNUSED_VARS(vx, y, k);
     NO_DEVICE_CODE;
 #endif // __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL
 }

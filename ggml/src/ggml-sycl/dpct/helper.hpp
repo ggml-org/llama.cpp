@@ -13,10 +13,10 @@
 #ifndef GGML_SYCL_DPCT_HELPER_HPP
 #define GGML_SYCL_DPCT_HELPER_HPP
 
-#include <map>
 #include <sycl/sycl.hpp>
 #include <sycl/half_type.hpp>
 #include <syclcompat/math.hpp>
+#include <map>
 
 #ifdef GGML_SYCL_USE_INTEL_ONEMKL
 #include <oneapi/mkl.hpp>
@@ -115,36 +115,6 @@ inline auto get_onemath_backend(sycl::queue& queue)
     return queue;
 #else
     static_assert(false, "Unsupported backend");
-#endif
-}
-
-#ifdef SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS
-    namespace syclex = sycl::ext::oneapi::experimental;
-#endif
-
-template <int NR, typename Func>
-__dpct_inline__ void sycl_parallel_for(sycl::handler & cgh, sycl::nd_range<NR> nd_range, Func && func) {
-#ifdef SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS
-    syclex::nd_launch(cgh, nd_range, func);
-#else
-    cgh.parallel_for(nd_range, func);
-#endif
-}
-
-template <int NR, typename Func>
-__dpct_inline__ void sycl_parallel_for(sycl::queue * q, sycl::nd_range<NR> nd_range, Func && func) {
-#ifdef SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS
-    syclex::nd_launch(*q, nd_range, func);
-#else
-    q->parallel_for(nd_range, func);
-#endif
-}
-
-template <typename Func> __dpct_inline__ void sycl_launch(sycl::queue * stream, Func && func) {
-#ifdef SYCL_EXT_ONEAPI_ENQUEUE_FUNCTIONS
-    syclex::submit(*stream, func);
-#else
-    stream->submit(func);
 #endif
 }
 
@@ -306,6 +276,26 @@ namespace dpct
         };
 
     } // namespace detail
+
+    // COPY from DPCT head files
+    /// dim3 is used to store 3 component dimensions.
+    class dim3 {
+        public:
+        unsigned x, y, z;
+
+        constexpr dim3(unsigned x = 1, unsigned y = 1, unsigned z = 1)
+            : x(x), y(y), z(z) {}
+
+        dim3(const sycl::id<3> &r) : dim3(r[2], r[1], r[0]) {}
+
+        operator sycl::range<3>() const { return sycl::range<3>(z, y, x); }
+    }; // namespace dim3
+
+    inline dim3 operator*(const dim3 &a, const dim3 &b) {
+    return dim3{a.x * b.x, a.y * b.y, a.z * b.z};
+    }
+    // COPY from DPCT head files
+
 
     /// Pitched 2D/3D memory data.
     class pitched_data
@@ -1870,10 +1860,31 @@ namespace dpct
                                            : id);
     }
 
+    template <typename T1, typename T2>
+    using dot_product_acc_t = std::conditional_t<
+        std::is_unsigned_v<T1> && std::is_unsigned_v<T2>,
+        uint32_t,
+        int32_t>;
+
+    template <typename T>
+    sycl::vec<T, 4> extract_and_sign_or_zero_extend4(T val) {
+      return sycl::vec<T, 1>(val)
+          .template as<sycl::vec<
+              std::conditional_t<std::is_signed_v<T>, int8_t, uint8_t>,
+              4>>()
+          .template convert<T>();
+    }
+
     template <typename T1, typename T2, typename T3>
-    inline auto dp4a(T1 a, T2 b, T3 c)
-    {
-        return syclcompat::dp4a(a, b, c);
+    inline auto dp4a(T1 a, T2 b, T3 c) {
+      dot_product_acc_t<T1, T2> res = c;
+      auto va = extract_and_sign_or_zero_extend4(a);
+      auto vb = extract_and_sign_or_zero_extend4(b);
+      res += va[0] * vb[0];
+      res += va[1] * vb[1];
+      res += va[2] * vb[2];
+      res += va[3] * vb[3];
+      return res;
     }
 
     struct sub_sat
@@ -2980,6 +2991,38 @@ namespace dpct
     inline T1 atomic_fetch_add(T1 *addr, T2 operand,
                             sycl::memory_order memoryOrder) {
     atomic_fetch_add<T1, addressSpace>(addr, operand, memoryOrder);
+    }
+
+    inline unsigned int byte_level_permute(
+        unsigned int a, unsigned int b, unsigned int s) {
+      unsigned int ret;
+      ret = ((((std::uint64_t)b << 32 | a) >> (s & 0x7) * 8) & 0xff) |
+            (((((std::uint64_t)b << 32 | a) >> ((s >> 4) & 0x7) * 8) & 0xff)
+             << 8) |
+            (((((std::uint64_t)b << 32 | a) >> ((s >> 8) & 0x7) * 8) & 0xff)
+             << 16) |
+            (((((std::uint64_t)b << 32 | a) >> ((s >> 12) & 0x7) * 8) & 0xff)
+             << 24);
+      return ret;
+    }
+
+    inline uint32_t byte_level_permute_custom(
+        uint32_t low32, uint32_t high32, uint32_t sel, int mode = 0) {
+      constexpr uint16_t lookup[6][4] = {
+          {0x3210, 0x4321, 0x5432, 0x6543},  // Forward 4-byte extract
+          {0x5670, 0x6701, 0x7012, 0x0123},  // Backward 4-byte extract
+          {0x0000, 0x1111, 0x2222, 0x3333},  // Replicate 8-bit values
+          {0x3210, 0x3211, 0x3222, 0x3333},  // Edge clamp left
+          {0x0000, 0x1110, 0x2210, 0x3210},  // Edge clamp right
+          {0x1010, 0x3232, 0x1010, 0x3232}   // Replicate 16-bit values
+      };
+
+      if (mode >= 1 && mode <= 6) {
+        return byte_level_permute(low32, high32, lookup[mode - 1][sel & 0x3]);
+      } else if (!mode) {
+        return byte_level_permute(low32, high32, sel);
+      }
+      return 0;
     }
 
 } // COPY from DPCT head files

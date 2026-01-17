@@ -9,6 +9,7 @@ jobs:
   update:
     name: Update Winget Package
     runs-on: ubuntu-latest
+    if: github.repository_owner == 'ggml-org'
 
     steps:
       - name: Install cargo binstall

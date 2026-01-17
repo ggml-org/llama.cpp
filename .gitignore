@@ -20,52 +20,41 @@
 *.so
 *.swp
 *.tmp
+*.DS_Store
 
 # IDE / OS
 
-.cache/
-.ccls-cache/
-.direnv/
-.DS_Store
-.envrc
-.idea/
-.swiftpm
-.vs/
-.vscode/
-nppBackup
+/.cache/
+/.ccls-cache/
+/.direnv/
+/.envrc
+/.idea/
+/.swiftpm
+/.vs/
+/.vscode/
+/nppBackup
 
 
 # Coverage
 
-gcovr-report/
-lcov-report/
+/gcovr-report/
+/lcov-report/
 
 # Build Artifacts
 
-tags
-.build/
-build*
-release
-debug
-!build-info.cmake
-!build-info.cpp.in
-!build-info.sh
-!build.zig
-!docs/build.md
+/tags
+/.build/
+/build*
+/release
+/debug
 /libllama.so
 /llama-*
 /vulkan-shaders-gen
-android-ndk-*
-arm_neon.h
-cmake-build-*
-CMakeSettings.json
-compile_commands.json
-ggml-metal-embed.metal
-llama-batched-swift
 /rpc-server
-out/
-tmp/
-autogen-*.md
+/out/
+/tmp/
+/autogen-*.md
+/common/build-info.cpp
 
 # Deprecated
 
@@ -74,44 +63,38 @@ autogen-*.md
 
 # CI
 
-!.github/workflows/*.yml
+!/.github/workflows/*.yml
 
 # Models
 
-models/*
-models-mnt
-!models/.editorconfig
-!models/ggml-vocab-*.gguf*
-!models/templates
+/models/*
+/models-mnt
+!/models/.editorconfig
+!/models/ggml-vocab-*.gguf*
+!/models/templates
 
 # Zig
-zig-out/
-zig-cache/
-
-# Logs
-
-ppl-*.txt
-qnt-*.txt
-perf-*.txt
+/zig-out/
+/zig-cache/
 
 # Examples
 
-examples/jeopardy/results.txt
-tools/server/*.css.hpp
-tools/server/*.html.hpp
-tools/server/*.js.hpp
-tools/server/*.mjs.hpp
-tools/server/*.gz.hpp
-!build_64.sh
-!examples/*.bat
-!examples/*/*.kts
-!examples/*/*/*.kts
-!examples/sycl/*.bat
-!examples/sycl/*.sh
+/examples/jeopardy/results.txt
+/tools/server/*.css.hpp
+/tools/server/*.html.hpp
+/tools/server/*.js.hpp
+/tools/server/*.mjs.hpp
+/tools/server/*.gz.hpp
+!/build_64.sh
+!/examples/*.bat
+!/examples/*/*.kts
+!/examples/*/*/*.kts
+!/examples/sycl/*.bat
+!/examples/sycl/*.sh
 
 # Server Web UI temporary files
-node_modules
-tools/server/webui/dist
+/tools/server/webui/node_modules
+/tools/server/webui/dist
 
 # Python
 
@@ -147,3 +130,11 @@ poetry.toml
 # Local scripts
 /run-vim.sh
 /run-chat.sh
+/run-spec.sh
+/.ccache/
+
+# IDE
+/*.code-workspace
+/.windsurf/
+# emscripten
+a.out.*

@@ -25,6 +25,12 @@ fi
 # verify at the start that the compare script has all the necessary dependencies installed
 ./scripts/compare-llama-bench.py --check
 
+if ! command -v sqlite3 >/dev/null 2>&1; then
+    echo "Error: sqlite3 is not installed or not in PATH"
+    echo "Please install sqlite3 to use this script"
+    exit 1
+fi
+
 if [ "$tool" = "llama-bench" ]; then
     db_file="llama-bench.sqlite"
     target="llama-bench"

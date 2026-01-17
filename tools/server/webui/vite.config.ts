@@ -1,13 +1,11 @@
-import { defineConfig, PluginOption } from 'vite';
-import react from '@vitejs/plugin-react';
-import { viteSingleFile } from 'vite-plugin-singlefile';
-import path from 'node:path';
-import fs from 'node:fs';
+import tailwindcss from '@tailwindcss/vite';
+import { sveltekit } from '@sveltejs/kit/vite';
 import * as fflate from 'fflate';
-
-/* eslint-disable */
-
-const MAX_BUNDLE_SIZE = 2 * 1024 * 1024; // only increase when absolutely necessary
+import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { resolve } from 'path';
+import { defineConfig } from 'vite';
+import devtoolsJson from 'vite-plugin-devtools-json';
+import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 
 const GUIDE_FOR_FRONTEND = `
 <!--
@@ -18,65 +16,151 @@ const GUIDE_FOR_FRONTEND = `
 -->
 `.trim();
 
-const FRONTEND_PLUGINS = [react()];
+const MAX_BUNDLE_SIZE = 2 * 1024 * 1024;
 
-const BUILD_PLUGINS = [
-  ...FRONTEND_PLUGINS,
-  viteSingleFile(),
-  (function llamaCppPlugin() {
-    let config: any;
-    return {
-      name: 'llamacpp:build',
-      apply: 'build',
-      async configResolved(_config: any) {
-        config = _config;
-      },
-      writeBundle() {
-        const outputIndexHtml = path.join(config.build.outDir, 'index.html');
-        let content =
-          GUIDE_FOR_FRONTEND + '\n' + fs.readFileSync(outputIndexHtml, 'utf-8');
-        content = content.replace(/\r/g, ''); // remove windows-style line endings
-        const compressed = fflate.gzipSync(Buffer.from(content, 'utf-8'), {
-          level: 9,
-        });
+/**
+ * the maximum size of an embedded asset in bytes,
+ * e.g. maximum size of embedded font (see node_modules/katex/dist/fonts/*.woff2)
+ */
+const MAX_ASSET_SIZE = 32000;
 
-        // because gzip header contains machine-specific info, we must remove these data from the header
-        // timestamp
-        compressed[0x4] = 0;
-        compressed[0x5] = 0;
-        compressed[0x6] = 0;
-        compressed[0x7] = 0;
-        // OS
-        compressed[0x9] = 0;
+/** public/index.html.gz minified flag */
+const ENABLE_JS_MINIFICATION = true;
 
-        if (compressed.byteLength > MAX_BUNDLE_SIZE) {
-          throw new Error(
-            `Bundle size is too large (${Math.ceil(compressed.byteLength / 1024)} KB).\n` +
-              `Please reduce the size of the frontend or increase MAX_BUNDLE_SIZE in vite.config.js.\n`
-          );
-        }
+function llamaCppBuildPlugin() {
+	return {
+		name: 'llamacpp:build',
+		apply: 'build' as const,
+		closeBundle() {
+			// Ensure the SvelteKit adapter has finished writing to ../public
+			setTimeout(() => {
+				try {
+					const indexPath = resolve('../public/index.html');
+					const gzipPath = resolve('../public/index.html.gz');
 
-        const targetOutputFile = path.join(
-          config.build.outDir,
-          '../../public/index.html.gz'
-        );
-        fs.writeFileSync(targetOutputFile, compressed);
-      },
-    } satisfies PluginOption;
-  })(),
-];
+					if (!existsSync(indexPath)) {
+						return;
+					}
+
+					let content = readFileSync(indexPath, 'utf-8');
+
+					const faviconPath = resolve('static/favicon.svg');
+					if (existsSync(faviconPath)) {
+						const faviconContent = readFileSync(faviconPath, 'utf-8');
+						const faviconBase64 = Buffer.from(faviconContent).toString('base64');
+						const faviconDataUrl = `data:image/svg+xml;base64,${faviconBase64}`;
+
+						content = content.replace(/href="[^"]*favicon\.svg"/g, `href="${faviconDataUrl}"`);
+
+						console.log('✓ Inlined favicon.svg as base64 data URL');
+					}
+
+					content = content.replace(/\r/g, '');
+					content = GUIDE_FOR_FRONTEND + '\n' + content;
+
+					const compressed = fflate.gzipSync(Buffer.from(content, 'utf-8'), { level: 9 });
+
+					compressed[0x4] = 0;
+					compressed[0x5] = 0;
+					compressed[0x6] = 0;
+					compressed[0x7] = 0;
+					compressed[0x9] = 0;
+
+					if (compressed.byteLength > MAX_BUNDLE_SIZE) {
+						throw new Error(
+							`Bundle size is too large (${Math.ceil(compressed.byteLength / 1024)} KB).\n` +
+								`Please reduce the size of the frontend or increase MAX_BUNDLE_SIZE in vite.config.ts.\n`
+						);
+					}
+
+					writeFileSync(gzipPath, compressed);
+					console.log('✓ Created index.html.gz');
+				} catch (error) {
+					console.error('Failed to create gzip file:', error);
+				}
+			}, 100);
+		}
+	};
+}
 
 export default defineConfig({
-  // @ts-ignore
-  plugins: process.env.ANALYZE ? FRONTEND_PLUGINS : BUILD_PLUGINS,
-  server: {
-    proxy: {
-      '/v1': 'http://localhost:8080',
-      '/props': 'http://localhost:8080',
-    },
-    headers: {
-      'Cross-Origin-Embedder-Policy': 'require-corp',
-      'Cross-Origin-Opener-Policy': 'same-origin',
-    },
-  },
+	resolve: {
+		alias: {
+			'katex-fonts': resolve('node_modules/katex/dist/fonts')
+		}
+	},
+	build: {
+		assetsInlineLimit: MAX_ASSET_SIZE,
+		chunkSizeWarningLimit: 3072,
+		minify: ENABLE_JS_MINIFICATION
+	},
+	css: {
+		preprocessorOptions: {
+			scss: {
+				additionalData: `
+					$use-woff2: true;
+					$use-woff: false;
+					$use-ttf: false;
+				`
+			}
+		}
+	},
+	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
+	test: {
+		projects: [
+			{
+				extends: './vite.config.ts',
+				test: {
+					name: 'client',
+					environment: 'browser',
+					browser: {
+						enabled: true,
+						provider: 'playwright',
+						instances: [{ browser: 'chromium' }]
+					},
+					include: ['tests/client/**/*.svelte.{test,spec}.{js,ts}'],
+					setupFiles: ['./vitest-setup-client.ts']
+				}
+			},
+			{
+				extends: './vite.config.ts',
+				test: {
+					name: 'unit',
+					environment: 'node',
+					include: ['tests/unit/**/*.{test,spec}.{js,ts}']
+				}
+			},
+			{
+				extends: './vite.config.ts',
+				test: {
+					name: 'ui',
+					environment: 'browser',
+					browser: {
+						enabled: true,
+						provider: 'playwright',
+						instances: [{ browser: 'chromium', headless: true }]
+					},
+					include: ['tests/stories/**/*.stories.{js,ts,svelte}'],
+					setupFiles: ['./.storybook/vitest.setup.ts']
+				},
+				plugins: [
+					storybookTest({
+						storybookScript: 'pnpm run storybook --no-open'
+					})
+				]
+			}
+		]
+	},
+
+	server: {
+		proxy: {
+			'/v1': 'http://localhost:8080',
+			'/props': 'http://localhost:8080',
+			'/models': 'http://localhost:8080'
+		},
+		headers: {
+			'Cross-Origin-Embedder-Policy': 'require-corp',
+			'Cross-Origin-Opener-Policy': 'same-origin'
+		}
+	}
 });

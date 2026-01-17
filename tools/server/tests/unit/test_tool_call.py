@@ -12,7 +12,7 @@ from enum import Enum
 
 server: ServerProcess
 
-TIMEOUT_SERVER_START = 15*60
+TIMEOUT_START_SLOW = 15 * 60 # this is needed for real model tests
 TIMEOUT_HTTP_REQUEST = 60
 
 @pytest.fixture(autouse=True)
@@ -124,7 +124,7 @@ def test_completion_with_required_tool_tiny_fast(template_name: str, tool: dict,
     server.jinja = True
     server.n_predict = n_predict
     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start()
     do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED, temperature=0.0, top_k=1, top_p=1.0)
 
 
@@ -168,7 +168,7 @@ def test_completion_with_required_tool_tiny_slow(template_name: str, tool: dict,
     server.jinja = True
     server.n_predict = n_predict
     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
     do_test_completion_with_required_tool_tiny(server, tool, argument_key, n_predict, stream=stream == CompletionMode.STREAMED)
 
 
@@ -240,7 +240,7 @@ def test_completion_with_required_tool_real_model(tool: dict, argument_key: str 
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
     body = server.make_any_request("POST", "/v1/chat/completions", data={
         "max_tokens": n_predict,
         "messages": [
@@ -295,7 +295,7 @@ def test_completion_without_tool_call_fast(template_name: str, n_predict: int, t
     server.n_predict = n_predict
     server.jinja = True
     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start()
     do_test_completion_without_tool_call(server, n_predict, tools, tool_choice, stream=stream == CompletionMode.STREAMED)
 
 
@@ -317,7 +317,7 @@ def test_completion_without_tool_call_slow(template_name: str, n_predict: int, t
     server.n_predict = n_predict
     server.jinja = True
     server.chat_template_file = f'../../../models/templates/{template_name}.jinja'
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
     do_test_completion_without_tool_call(server, n_predict, tools, tool_choice, stream=stream == CompletionMode.STREAMED)
 
 
@@ -377,7 +377,7 @@ def test_weather(hf_repo: str, template_override: str | Tuple[str, str | None] |
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start()
     do_test_weather(server, stream=stream == CompletionMode.STREAMED, max_tokens=n_predict)
 
 
@@ -436,7 +436,7 @@ def test_calc_result(result_override: str | None, n_predict: int, hf_repo: str, 
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
     do_test_calc_result(server, result_override, n_predict, stream=stream == CompletionMode.STREAMED)
 
 
@@ -524,7 +524,7 @@ def test_thoughts(n_predict: int, reasoning_format: Literal['deepseek', 'none'] 
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start()
     body = server.make_any_request("POST", "/v1/chat/completions", data={
         "max_tokens": n_predict,
         "messages": [
@@ -597,7 +597,7 @@ def test_hello_world(hf_repo: str, template_override: str | Tuple[str, str | Non
         assert os.path.exists(server.chat_template_file), f"Template file {server.chat_template_file} does not exist. Run `python scripts/get_chat_template.py {template_hf_repo} {template_variant} > {server.chat_template_file}` to download the template."
     elif isinstance(template_override, str):
         server.chat_template = template_override
-    server.start(timeout_seconds=TIMEOUT_SERVER_START)
+    server.start(timeout_seconds=TIMEOUT_START_SLOW)
 
     do_test_hello_world(server, stream=stream == CompletionMode.STREAMED, max_tokens=n_predict)
 

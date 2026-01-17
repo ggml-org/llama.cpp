@@ -57,6 +57,10 @@
 #include "ggml-opencl.h"
 #endif
 
+#ifdef GGML_USE_HEXAGON
+#include "ggml-hexagon.h"
+#endif
+
 #ifdef GGML_USE_BLAS
 #include "ggml-blas.h"
 #endif
@@ -67,6 +71,10 @@
 
 #ifdef GGML_USE_CANN
 #include "ggml-cann.h"
+#endif
+
+#ifdef GGML_USE_ZENDNN
+#include "ggml-zendnn.h"
 #endif
 
 // disable C++17 deprecation warning for std::codecvt_utf8
@@ -135,6 +143,10 @@ static void * dl_get_sym(dl_handle * handle, const char * name) {
     return p;
 }
 
+static const char * dl_error() {
+    return "";
+}
+
 #else
 
 using dl_handle = void;
@@ -153,6 +165,11 @@ static void * dl_load_library(const fs::path & path) {
 
 static void * dl_get_sym(dl_handle * handle, const char * name) {
     return dlsym(handle, name);
+}
+
+static const char * dl_error() {
+    const char *rslt = dlerror();
+    return rslt != nullptr ? rslt : "";
 }
 
 #endif
@@ -189,6 +206,12 @@ struct ggml_backend_registry {
 #endif
 #ifdef GGML_USE_OPENCL
         register_backend(ggml_backend_opencl_reg());
+#endif
+#ifdef GGML_USE_ZENDNN
+        register_backend(ggml_backend_zendnn_reg());
+#endif
+#ifdef GGML_USE_HEXAGON
+        register_backend(ggml_backend_hexagon_reg());
 #endif
 #ifdef GGML_USE_CANN
         register_backend(ggml_backend_cann_reg());
@@ -240,7 +263,7 @@ struct ggml_backend_registry {
         dl_handle_ptr handle { dl_load_library(path) };
         if (!handle) {
             if (!silent) {
-                GGML_LOG_ERROR("%s: failed to load %s\n", __func__, path_str(path).c_str());
+                GGML_LOG_ERROR("%s: failed to load %s: %s\n", __func__, path_str(path).c_str(), dl_error());
             }
             return nullptr;
         }
@@ -400,9 +423,8 @@ ggml_backend_t ggml_backend_init_by_type(enum ggml_backend_dev_type type, const 
 
 ggml_backend_t ggml_backend_init_best(void) {
     ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
-    if (!dev) {
-        dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-    }
+    dev = dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
+    dev = dev ? dev : ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!dev) {
         return nullptr;
     }
@@ -519,8 +541,12 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
     fs::path best_path;
 
     for (const auto & search_path : search_paths) {
-        if (!fs::exists(search_path)) {
-            GGML_LOG_DEBUG("%s: search path %s does not exist\n", __func__, path_str(search_path).c_str());
+        if (std::error_code ec; !fs::exists(search_path, ec)) {
+            if (ec) {
+                GGML_LOG_DEBUG("%s: posix_stat(%s) failure, error-message: %s\n", __func__, path_str(search_path).c_str(), ec.message().c_str());
+            } else {
+                GGML_LOG_DEBUG("%s: search path %s does not exist\n", __func__, path_str(search_path).c_str());
+            }
             continue;
         }
         fs::directory_iterator dir_it(search_path, fs::directory_options::skip_permission_denied);
@@ -531,7 +557,7 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
                 if (filename.native().find(file_prefix) == 0 && ext == file_extension) {
                     dl_handle_ptr handle { dl_load_library(entry) };
                     if (!handle && !silent) {
-                        GGML_LOG_ERROR("%s: failed to load %s\n", __func__, path_str(entry.path()).c_str());
+                        GGML_LOG_ERROR("%s: failed to load %s: %s\n", __func__, path_str(entry.path()).c_str(), dl_error());
                     }
                     if (handle) {
                         auto score_fn = (ggml_backend_score_t) dl_get_sym(handle.get(), "ggml_backend_score");
@@ -560,8 +586,12 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
         for (const auto & search_path : search_paths) {
             fs::path filename = backend_filename_prefix().native() + name_path.native() + backend_filename_extension().native();
             fs::path path = search_path / filename;
-            if (fs::exists(path)) {
+            if (std::error_code ec; fs::exists(path, ec)) {
                 return get_reg().load_backend(path, silent);
+            } else {
+                if (ec) {
+                    GGML_LOG_DEBUG("%s: posix_stat(%s) failure, error-message: %s\n", __func__, path_str(path).c_str(), ec.message().c_str());
+                }
             }
         }
         return nullptr;
@@ -582,6 +612,7 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
 #endif
 
     ggml_backend_load_best("blas", silent, dir_path);
+    ggml_backend_load_best("zendnn", silent, dir_path);
     ggml_backend_load_best("cann", silent, dir_path);
     ggml_backend_load_best("cuda", silent, dir_path);
     ggml_backend_load_best("hip", silent, dir_path);
@@ -590,6 +621,7 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("sycl", silent, dir_path);
     ggml_backend_load_best("vulkan", silent, dir_path);
     ggml_backend_load_best("opencl", silent, dir_path);
+    ggml_backend_load_best("hexagon", silent, dir_path);
     ggml_backend_load_best("musa", silent, dir_path);
     ggml_backend_load_best("cpu", silent, dir_path);
     // check the environment variable GGML_BACKEND_PATH to load an out-of-tree backend

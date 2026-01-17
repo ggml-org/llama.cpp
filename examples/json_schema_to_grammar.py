@@ -231,9 +231,9 @@ DOT = '[^\\x0A\\x0D]'
 RESERVED_NAMES = set(["root", "dot", *PRIMITIVE_RULES.keys(), *STRING_FORMAT_RULES.keys()])
 
 INVALID_RULE_CHARS_RE = re.compile(r'[^a-zA-Z0-9-]+')
-GRAMMAR_LITERAL_ESCAPE_RE = re.compile(r'[\r\n"]')
+GRAMMAR_LITERAL_ESCAPE_RE = re.compile(r'[\r\n"\\]')
 GRAMMAR_RANGE_LITERAL_ESCAPE_RE = re.compile(r'[\r\n"\]\-\\]')
-GRAMMAR_LITERAL_ESCAPES = {'\r': '\\r', '\n': '\\n', '"': '\\"', '-': '\\-', ']': '\\]'}
+GRAMMAR_LITERAL_ESCAPES = {'\r': '\\r', '\n': '\\n', '"': '\\"', '-': '\\-', ']': '\\]', '\\': '\\\\'}
 
 NON_LITERAL_SET = set('|.()[]{}*+?')
 ESCAPED_IN_REGEXPS_BUT_NOT_IN_LITERALS = set('^$.[]()|{}*+?')
@@ -371,8 +371,17 @@ class SchemaConverter:
                         raise ValueError(f'Unsupported ref {ref}')
 
                     for sel in ref.split('#')[-1].split('/')[1:]:
-                        assert target is not None and sel in target, f'Error resolving ref {ref}: {sel} not in {target}'
-                        target = target[sel]
+                        assert target is not None, f'Error resolving ref {ref}: {sel} not in {target}'
+                        if isinstance(target, list):
+                            try:
+                                sel_index = int(sel)
+                            except ValueError:
+                                raise ValueError(f'Error resolving ref {ref}: {sel} not in {target}')
+                            assert 0 <= sel_index < len(target), f'Error resolving ref {ref}: {sel} not in {target}'
+                            target = target[sel_index]
+                        else:
+                            assert sel in target, f'Error resolving ref {ref}: {sel} not in {target}'
+                            target = target[sel]
 
                     self._refs[ref] = target
                 else:
@@ -547,7 +556,8 @@ class SchemaConverter:
 
 
     def _resolve_ref(self, ref):
-        ref_name = ref.split('/')[-1]
+        ref_fragment = ref.split('#')[-1]
+        ref_name = 'ref' + re.sub(r'[^a-zA-Z0-9-]+', '-', ref_fragment)
         if ref_name not in self._rules and ref not in self._refs_being_resolved:
             self._refs_being_resolved.add(ref)
             resolved = self._refs[ref]
@@ -586,9 +596,10 @@ class SchemaConverter:
             properties = list(schema.get('properties', {}).items())
             return self._add_rule(rule_name, self._build_object_rule(properties, required, name, schema.get('additionalProperties')))
 
-        elif schema_type in (None, 'object') and 'allOf' in schema:
+        elif schema_type in (None, 'object', 'string') and 'allOf' in schema:
             required = set()
             properties = []
+            enum_sets = []
             hybrid_name = name
             def add_component(comp_schema, is_required):
                 if (ref := comp_schema.get('$ref')) is not None:
@@ -600,12 +611,24 @@ class SchemaConverter:
                         if is_required:
                             required.add(prop_name)
 
+                if 'enum' in comp_schema:
+                    enum_sets.append(set(comp_schema['enum']))
+
             for t in schema['allOf']:
                 if 'anyOf' in t:
                     for tt in t['anyOf']:
                         add_component(tt, is_required=False)
                 else:
                     add_component(t, is_required=True)
+
+            if enum_sets:
+                enum_intersection = enum_sets[0]
+                for s in enum_sets[1:]:
+                    enum_intersection &= s
+
+                if enum_intersection:
+                    rule = '(' + ' | '.join((self._generate_constant_rule(v) for v in sorted(enum_intersection))) + ') space'
+                    return self._add_rule(rule_name, rule)
 
             return self._add_rule(rule_name, self._build_object_rule(properties, required, hybrid_name, additional_properties=None))
 

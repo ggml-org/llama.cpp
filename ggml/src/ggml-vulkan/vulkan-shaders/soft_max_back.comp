@@ -2,8 +2,8 @@
 
 #extension GL_EXT_control_flow_attributes : enable
 
-#include "generic_head.comp"
-#include "types.comp"
+#include "generic_head.glsl"
+#include "types.glsl"
 
 layout(constant_id = 0) const uint BLOCK_SIZE = 32;
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
@@ -19,6 +19,10 @@ shared FLOAT_TYPE sum_yg[BLOCK_SIZE];
 void main() {
     const uint row = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
     const uint tid = gl_LocalInvocationID.x;
+
+    if (row >= p.KY) {
+        return;
+    }
 
     FLOAT_TYPE scale = p.param1;
 

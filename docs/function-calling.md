@@ -21,6 +21,8 @@ Function calling is supported for all models (see https://github.com/ggml-org/ll
   - Use `--chat-template-file` to override the template when appropriate (see examples below)
   - Generic support may consume more tokens and be less efficient than a model's native format.
 
+- Multiple/parallel tool calling is supported on some models but disabled by default, enable it by passing `"parallel_tool_calls": true` in the completion endpoint payload.
+
 <details>
 <summary>Show some common templates and which format handler they use</summary>
 
@@ -268,6 +270,8 @@ Function calling is supported for all models (see https://github.com/ggml-org/ll
 | xwen-team-Xwen-7B-Chat.jinja | Hermes 2 Pro |
 
 This table can be generated with:
+
+<!-- TODO @ngxson : we should update this, since minja dependency has been removed -->
 
 ```bash
 ./build/bin/test-chat ../minja/build/tests/*.jinja 2>/dev/null

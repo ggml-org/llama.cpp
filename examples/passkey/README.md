@@ -11,5 +11,5 @@ See the following PRs for more info:
 ### Usage
 
 ```bash
-make -j && ./llama-passkey -m ./models/llama-7b-v2/ggml-model-f16.gguf --junk 250
+llama-passkey -m ./models/llama-7b-v2/ggml-model-f16.gguf --junk 250
 ```

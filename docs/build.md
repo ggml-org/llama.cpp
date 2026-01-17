@@ -59,18 +59,16 @@ cmake --build build --config Release
     cmake --preset arm64-windows-llvm-release -D GGML_OPENMP=OFF
     cmake --build build-arm64-windows-llvm-release
     ```
-    Building for arm64 can also be done with the MSVC compiler with the build-arm64-windows-MSVC preset, or the standard CMake build instructions. However, note that the MSVC compiler does not support inline ARM assembly code, used e.g. for the accelerated Q4_0_N_M CPU kernels.
-
     For building with ninja generator and clang compiler as default:
       -set path:set LIB=C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\um\x64;C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.41.34120\lib\x64\uwp;C:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\ucrt\x64
       ```bash
       cmake --preset x64-windows-llvm-release
       cmake --build build-x64-windows-llvm-release
       ```
-- Curl usage is enabled by default and can be turned off with `-DLLAMA_CURL=OFF`. Otherwise you need to install development libraries for libcurl.
-  - **Debian / Ubuntu:** `sudo apt-get install libcurl4-openssl-dev`  # (or `libcurl4-gnutls-dev` if you prefer GnuTLS)
-  - **Fedora / RHEL / Rocky / Alma:** `sudo dnf install libcurl-devel`
-  - **Arch / Manjaro:** `sudo pacman -S curl`  # includes libcurl headers
+- If you want HTTPS/TLS features, you may install OpenSSL development libraries. If not installed, the project will build and run without SSL support.
+  - **Debian / Ubuntu:** `sudo apt-get install libssl-dev`
+  - **Fedora / RHEL / Rocky / Alma:** `sudo dnf install openssl-devel`
+  - **Arch / Manjaro:** `sudo pacman -S openssl`
 
 ## BLAS Build
 
@@ -152,19 +150,38 @@ We also have a [guide](./backend/CUDA-FEDORA.md) for setting up CUDA toolkit in 
 
 
 ### Compilation
+
+Make sure to read the notes about the CPU build for general instructions for e.g. speeding up the compilation.
+
 ```bash
 cmake -B build -DGGML_CUDA=ON
 cmake --build build --config Release
 ```
 
+### Non-Native Builds
+
+By default llama.cpp will be built for the hardware that is connected to the system at that time.
+For a build covering all CUDA GPUs, disable `GGML_NATIVE`:
+
+```bash
+cmake -B build -DGGML_CUDA=ON -DGGML_NATIVE=OFF
+```
+
+The resulting binary should run on all CUDA GPUs with optimal performance, though some just-in-time compilation may be required.
+
 ### Override Compute Capability Specifications
 
-If `nvcc` cannot detect your gpu, you may get compile-warnings such as:
+If `nvcc` cannot detect your gpu, you may get compile warnings such as:
  ```text
 nvcc warning : Cannot find valid GPU for '-arch=native', default arch is used
 ```
 
-To override the `native` GPU detection:
+One option is to do a non-native build as described above.
+However, this will result in a large binary that takes a long time to compile.
+Alternatively it is also possible to explicitly specify CUDA architectures.
+This may also make sense for a non-native build, for that one should look at the logic in `ggml/src/ggml-cuda/CMakeLists.txt` as a starting point.
+
+To override the default CUDA architectures:
 
 #### 1. Take note of the `Compute Capability` of your NVIDIA devices: ["CUDA: Your GPU Compute > Capability"](https://developer.nvidia.com/cuda-gpus).
 
@@ -178,6 +195,48 @@ GeForce RTX 3070      8.6
 
 ```bash
 cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="86;89"
+```
+
+### Overriding the CUDA Version
+
+If you have multiple CUDA installations on your system and want to compile llama.cpp for a specific one, e.g. for CUDA 11.7 installed under `/opt/cuda-11.7`:
+
+```bash
+cmake -B build -DGGML_CUDA=ON -DCMAKE_CUDA_COMPILER=/opt/cuda-11.7/bin/nvcc -DCMAKE_INSTALL_RPATH="/opt/cuda-11.7/lib64;\$ORIGIN" -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+```
+
+#### Fixing Compatibility Issues with Old CUDA and New glibc
+
+If you try to use an old CUDA version (e.g. v11.7) with a new glibc version you can get errors like this:
+
+```
+/usr/include/bits/mathcalls.h(83): error: exception specification is
+  incompatible with that of previous function "cospi"
+
+
+  /opt/cuda-11.7/bin/../targets/x86_64-linux/include/crt/math_functions.h(5545):
+  here
+```
+
+It seems the least bad solution is to patch the CUDA installation to declare the correct signatures.
+Replace the following lines in `/path/to/your/cuda/installation/targets/x86_64-linux/include/crt/math_functions.h`:
+
+```C++
+// original lines
+extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ double                 cospi(double x);
+extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ float                  cospif(float x);
+extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ double                 sinpi(double x);
+extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ float                  sinpif(float x);
+extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ double                 rsqrt(double x);
+extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ float                  rsqrtf(float x);
+
+// edited lines
+extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ double                 cospi(double x) noexcept (true);
+extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ float                  cospif(float x) noexcept (true);
+extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ double                 sinpi(double x) noexcept (true);
+extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ float                  sinpif(float x) noexcept (true);
+extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ double                 rsqrt(double x) noexcept (true);
+extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ float                  rsqrtf(float x) noexcept (true);
 ```
 
 ### Runtime CUDA environmental variables
@@ -197,13 +256,12 @@ The environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1` can be used to enab
 
 The following compilation options are also available to tweak performance:
 
-| Option                        | Legal values           | Default | Description                                                                                                                                                                                                                                                                             |
-|-------------------------------|------------------------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| GGML_CUDA_FORCE_MMQ           | Boolean                | false   | Force the use of custom matrix multiplication kernels for quantized models instead of FP16 cuBLAS even if there is no int8 tensor core implementation available (affects V100, CDNA and RDNA3+). MMQ kernels are enabled by default on GPUs with int8 tensor core support. With MMQ force enabled, speed for large batch sizes will be worse but VRAM consumption will be lower.                       |
-| GGML_CUDA_FORCE_CUBLAS        | Boolean                | false   | Force the use of FP16 cuBLAS instead of custom matrix multiplication kernels for quantized models                                                                                                                                                                                       |
-| GGML_CUDA_F16                 | Boolean                | false   | If enabled, use half-precision floating point arithmetic for the CUDA dequantization + mul mat vec kernels and for the q4_1 and q5_1 matrix matrix multiplication kernels. Can improve performance on relatively recent GPUs.                                                           |
-| GGML_CUDA_PEER_MAX_BATCH_SIZE | Positive integer       | 128     | Maximum batch size for which to enable peer access between multiple GPUs. Peer access requires either Linux or NVLink. When using NVLink enabling peer access for larger batch sizes is potentially beneficial.                                                                         |
-| GGML_CUDA_FA_ALL_QUANTS       | Boolean                | false   | Compile support for all KV cache quantization type (combinations) for the FlashAttention CUDA kernels. More fine-grained control over KV cache size but compilation takes much longer.                                                                                                  |
+| Option                        | Legal values           | Default | Description                                                                                                                                                                                                                                                                                                                                                                      |
+|-------------------------------|------------------------|---------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| GGML_CUDA_FORCE_MMQ           | Boolean                | false   | Force the use of custom matrix multiplication kernels for quantized models instead of FP16 cuBLAS even if there is no int8 tensor core implementation available (affects V100, CDNA and RDNA3+). MMQ kernels are enabled by default on GPUs with int8 tensor core support. With MMQ force enabled, speed for large batch sizes will be worse but VRAM consumption will be lower. |
+| GGML_CUDA_FORCE_CUBLAS        | Boolean                | false   | Force the use of FP16 cuBLAS instead of custom matrix multiplication kernels for quantized models. There may be issues with numerical overflows (except for CDNA and RDNA4) and memory use will be higher. Prompt processing may become faster on recent datacenter GPUs (the custom kernels were tuned primarily for RTX 3000/4000).                                            |
+| GGML_CUDA_PEER_MAX_BATCH_SIZE | Positive integer       | 128     | Maximum batch size for which to enable peer access between multiple GPUs. Peer access requires either Linux or NVLink. When using NVLink enabling peer access for larger batch sizes is potentially beneficial.                                                                                                                                                                  |
+| GGML_CUDA_FA_ALL_QUANTS       | Boolean                | false   | Compile support for all KV cache quantization type (combinations) for the FlashAttention CUDA kernels. More fine-grained control over KV cache size but compilation takes much longer.                                                                                                                                                                                           |
 
 ## MUSA
 
@@ -264,9 +322,11 @@ You can download it from your Linux distro's package manager or from here: [ROCm
 - Using `CMake` for Linux (assuming a gfx1030-compatible AMD GPU):
   ```bash
   HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
-      cmake -S . -B build -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1030 -DCMAKE_BUILD_TYPE=Release \
+      cmake -S . -B build -DGGML_HIP=ON -DGPU_TARGETS=gfx1030 -DCMAKE_BUILD_TYPE=Release \
       && cmake --build build --config Release -- -j 16
   ```
+
+  Note: `GPU_TARGETS` is optional, omitting it will build the code for all GPUs in the current system.
 
   To enhance flash attention performance on RDNA3+ or CDNA architectures, you can utilize the rocWMMA library by enabling the `-DGGML_HIP_ROCWMMA_FATTN=ON` option. This requires rocWMMA headers to be installed on the build system.
 
@@ -285,17 +345,17 @@ You can download it from your Linux distro's package manager or from here: [ROCm
   ```bash
   HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -p)" \
   HIP_DEVICE_LIB_PATH=<directory-you-just-found> \
-      cmake -S . -B build -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1030 -DCMAKE_BUILD_TYPE=Release \
+      cmake -S . -B build -DGGML_HIP=ON -DGPU_TARGETS=gfx1030 -DCMAKE_BUILD_TYPE=Release \
       && cmake --build build -- -j 16
   ```
 
 - Using `CMake` for Windows (using x64 Native Tools Command Prompt for VS, and assuming a gfx1100-compatible AMD GPU):
   ```bash
   set PATH=%HIP_PATH%\bin;%PATH%
-  cmake -S . -B build -G Ninja -DAMDGPU_TARGETS=gfx1100 -DGGML_HIP=ON -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
+  cmake -S . -B build -G Ninja -DGPU_TARGETS=gfx1100 -DGGML_HIP=ON -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
   cmake --build build
   ```
-  Make sure that `AMDGPU_TARGETS` is set to the GPU arch you want to compile for. The above example uses `gfx1100` that corresponds to Radeon RX 7900XTX/XT/GRE. You can find a list of targets [here](https://llvm.org/docs/AMDGPUUsage.html#processors)
+  If necessary, adapt `GPU_TARGETS` to the GPU arch you want to compile for. The above example uses `gfx1100` that corresponds to Radeon RX 7900XTX/XT/GRE. You can find a list of targets [here](https://llvm.org/docs/AMDGPUUsage.html#processors)
   Find your gpu version string by matching the most significant version information from `rocminfo | grep gfx | head -1 | awk '{print $2}'` with the list of processors, e.g. `gfx1035` maps to `gfx1030`.
 
 
@@ -390,10 +450,21 @@ docker run -it --rm -v "$(pwd):/app:Z" --device /dev/dri/renderD128:/dev/dri/ren
 
 ### For Linux users:
 
+#### Using the LunarG Vulkan SDK
+
 First, follow the official LunarG instructions for the installation and setup of the Vulkan SDK in the [Getting Started with the Linux Tarball Vulkan SDK](https://vulkan.lunarg.com/doc/sdk/latest/linux/getting_started.html) guide.
 
 > [!IMPORTANT]
 > After completing the first step, ensure that you have used the `source` command on the `setup_env.sh` file inside of the Vulkan SDK in your current terminal session. Otherwise, the build won't work. Additionally, if you close out of your terminal, you must perform this step again if you intend to perform a build. However, there are ways to make this persistent. Refer to the Vulkan SDK guide linked in the first step for more information about any of this.
+
+#### Using system packages
+
+On Debian / Ubuntu, you can install the required dependencies using:
+```sh
+sudo apt-get install libvulkan-dev glslc
+```
+
+#### Common steps
 
 Second, after verifying that you have followed all of the SDK installation/setup steps, use this command to make sure before proceeding:
 ```bash
@@ -442,6 +513,38 @@ llama_new_context_with_model:       CANN compute buffer size =  1260.81 MiB
 ```
 
 For detailed info, such as model/device supports, CANN install, please refer to [llama.cpp for CANN](./backend/CANN.md).
+
+## ZenDNN
+
+ZenDNN provides optimized deep learning primitives for AMD EPYC™ CPUs. It accelerates matrix multiplication operations for inference workloads.
+
+### Compilation
+
+- Using `CMake` on Linux (automatic build):
+
+    ```bash
+    cmake -B build -DGGML_ZENDNN=ON
+    cmake --build build --config Release
+    ```
+
+    The first build will automatically download and build ZenDNN, which may take 5-10 minutes. Subsequent builds will be much faster.
+
+- Using `CMake` with custom ZenDNN installation:
+
+    ```bash
+    cmake -B build -DGGML_ZENDNN=ON -DZENDNN_ROOT=/path/to/zendnn/install
+    cmake --build build --config Release
+    ```
+
+### Testing
+
+You can test with:
+
+```bash
+./build/bin/llama-cli -m PATH_TO_MODEL -p "Building a website can be done in 10 steps:" -n 50
+```
+
+For detailed information about hardware support, setup instructions, and performance optimization, refer to [llama.cpp for ZenDNN](./backend/ZenDNN.md).
 
 ## Arm® KleidiAI™
 KleidiAI is a library of optimized microkernels for AI workloads, specifically designed for Arm CPUs. These microkernels enhance performance and can be enabled for use by the CPU backend.

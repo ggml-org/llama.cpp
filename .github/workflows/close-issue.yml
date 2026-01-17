@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/stale@v5
         with:
-          exempt-issue-labels: "refactoring,help wanted,good first issue,research,bug,roadmap"
+          exempt-issue-labels: "refactoring,help wanted,good first issue,research 🔬,bug,roadmap"
           days-before-issue-stale: 30
           days-before-issue-close: 14
           stale-issue-label: "stale"

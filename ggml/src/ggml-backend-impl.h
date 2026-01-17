@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-    #define GGML_BACKEND_API_VERSION 1
+    #define GGML_BACKEND_API_VERSION 2
 
     //
     // Backend buffer type
@@ -114,6 +114,9 @@ extern "C" {
         void (*event_record)(ggml_backend_t backend, ggml_backend_event_t event);
         // wait for an event on on a different stream
         void (*event_wait)  (ggml_backend_t backend, ggml_backend_event_t event);
+
+        // (optional) sort/optimize the nodes in the graph
+        void                      (*graph_optimize)    (ggml_backend_t backend, struct ggml_cgraph * cgraph);
     };
 
     struct ggml_backend {
@@ -141,7 +144,7 @@ extern "C" {
         // device description: short informative description of the device, could be the model name
         const char * (*get_description)(ggml_backend_dev_t dev);
 
-        // device memory in bytes
+        // device memory in bytes: 0 bytes to indicate no memory to report
         void         (*get_memory)(ggml_backend_dev_t dev, size_t * free, size_t * total);
 
         // device type
@@ -205,9 +208,6 @@ extern "C" {
         struct ggml_backend_reg_i iface;
         void * context;
     };
-
-    // Internal backend registry API
-    GGML_API void ggml_backend_register(ggml_backend_reg_t reg);
 
     // Add backend dynamic loading support to the backend
 
