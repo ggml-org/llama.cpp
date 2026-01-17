@@ -902,14 +902,9 @@ const func_builtins & value_object_t::get_builtins() const {
             if (args.count() == 3) {
                 default_val = args.get_pos(2);
             }
-            const auto & obj = args.get_pos(0)->as_object();
+            const value obj = args.get_pos(0);
             std::string key = args.get_pos(1)->as_string().str();
-            auto it = obj.find(key);
-            if (it != obj.end()) {
-                return it->second;
-            } else {
-                return default_val;
-            }
+            return obj->at(key, default_val);
         }},
         {"keys", [](const func_args & args) -> value {
             args.ensure_vals<value_object>();
@@ -961,15 +956,14 @@ const func_builtins & value_object_t::get_builtins() const {
             // FIXME: sorting is case sensitive
             //const bool case_sensitive = val_case->as_bool(); // undefined == false
             const bool reverse = val_reverse->as_bool(); // undefined == false
-            if (!val_by->is_undefined()) {
-                throw not_implemented_exception("dictsort by key not implemented");
-            }
-            if (reverse) {
-                throw not_implemented_exception("dictsort reverse not implemented");
-            }
+            const bool by_value = is_val<value_string>(val_by) && val_by->as_string().str() == "value" ? true : false;
             value_t::map obj = val_input->val_obj; // copy
             std::sort(obj.ordered.begin(), obj.ordered.end(), [&](const auto & a, const auto & b) {
-                return a.first < b.first;
+                if (by_value) {
+                    return value_compare(a.second, b.second, reverse ? value_compare_op::gt : value_compare_op::lt);
+                } else {
+                    return reverse ? a.first > b.first : a.first < b.first;
+                }
             });
             auto result = mk_val<value_object>();
             result->val_obj = std::move(obj);
