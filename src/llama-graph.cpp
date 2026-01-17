@@ -23,7 +23,8 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
     }
 
     if (ubatch->embd) {
-        const int64_t n_embd   = embd->ne[0];
+        GGML_ASSERT(n_embd == embd->ne[0]);
+
         const int64_t n_tokens = ubatch->n_tokens;
 
         ggml_backend_tensor_set(embd, ubatch->embd, 0, n_tokens*n_embd*ggml_element_size(embd));
@@ -1340,16 +1341,24 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
     const int64_t n_embd = hparams.n_embd_inp();
 
-    auto inp = std::make_unique<llm_graph_input_embd>();
+    auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
 
-    ggml_tensor * cur = nullptr;
+    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
+    cb(inp->tokens, "inp_tokens", -1);
+    ggml_set_input(inp->tokens);
 
     if (ubatch.token) {
-        inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
-        //cb(inp->tokens, "inp_tokens", -1);
-        ggml_set_input(inp->tokens);
         res->t_tokens = inp->tokens;
+    }
 
+    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, ubatch.n_tokens);
+    cb(inp->embd, "inp_embd", -1);
+    ggml_set_input(inp->embd);
+
+    ggml_tensor * cur;
+
+    // token embeddings
+    {
         cur = ggml_get_rows(ctx0, tok_embd, inp->tokens);
 
         // apply lora for embedding tokens if needed
@@ -1369,19 +1378,18 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
 
             cur = ggml_add(ctx0, cur, inpL_delta);
         }
-    } else {
-        inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, ubatch.n_tokens);
-        ggml_set_input(inp->embd);
-
-        cur = inp->embd;
     }
+
+    std::array<ggml_tensor *, 2> inps = { cur, inp->embd };
+
+    cur = ggml_build_forward_select(gf, inps.data(), inps.size(), ubatch.token ? 0 : 1);
 
     // For Granite architecture
     if (hparams.f_embedding_scale != 0.0f) {
         cur = ggml_scale(ctx0, cur, hparams.f_embedding_scale);
     }
 
-    cb(cur, "inp_embd", -1);
+    cb(cur, "embd", -1);
 
     res->add_input(std::move(inp));
 
