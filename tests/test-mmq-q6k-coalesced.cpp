@@ -11,10 +11,13 @@
 #include <vector>
 #include <random>
 
+#include "dpct/helper.hpp"
+
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "ggml-sycl.h"
 #include "ggml-quants.h"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 
 #define QK_K 256
 #define WARP_SIZE 32
@@ -23,6 +26,8 @@
 #ifndef QI8_1
 #define QI8_1 (QK8_1 / 4)
 #endif
+
+void * ggml_sycl_get_weight_layout_ptr(const ggml_tensor * tensor, int device, ggml_layout_mode target);
 
 static inline int get_int_from_uint8(const uint8_t * x8, const int i32) {
     const uint16_t * x16 = (const uint16_t *)(x8 + sizeof(int) * i32);
@@ -100,7 +105,7 @@ static void cpu_mul_mat_q6k_q8_1(const void* x_data, const float* y,
 static bool test_mmq_q6k_coalesced(int n_tokens, bool verbose) {
     printf("\n--- MMQ Q6_K coalesced batch=%d ---\n", n_tokens);
 
-    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "coalesced", 1);
+    ggml_sycl::test_layout_override_guard guard(GGML_LAYOUT_COALESCED);
 
     ggml_backend_t backend = ggml_backend_sycl_init(0);
     if (!backend) {
@@ -191,6 +196,16 @@ static bool test_mmq_q6k_coalesced(int n_tokens, bool verbose) {
     printf("  Uploading weights to GPU...\n");
     ggml_backend_tensor_set(weight, weight_q6k.data(), 0, total_blocks * sizeof(block_q6_K));
 
+    void * layout_ptr = ggml_sycl_get_weight_layout_ptr(weight, 0, GGML_LAYOUT_COALESCED);
+    if (!layout_ptr) {
+        printf("  FAIL: could not materialize coalesced layout via unified cache\n");
+        ggml_backend_buffer_free(weight_buffer);
+        ggml_backend_buffer_free(compute_buffer);
+        ggml_free(ctx);
+        ggml_backend_free(backend);
+        return false;
+    }
+
     printf("\n  === COALESCED LAYOUT CHECK ===\n");
     printf("  weight->extra = %p\n", (void*)weight->extra);
     if (!weight->extra) {
@@ -227,8 +242,19 @@ static bool test_mmq_q6k_coalesced(int n_tokens, bool verbose) {
         ((QK_K / 2) + (QK_K / 4) + (QK_K / 16));
     const size_t d_offset = (size_t)n_ff * (size_t)row_quants_bytes;
 
-    std::vector<uint8_t> gpu_raw_data(total_blocks * sizeof(block_q6_K));
-    ggml_backend_tensor_get(weight, gpu_raw_data.data(), 0, total_blocks * sizeof(block_q6_K));
+    const size_t layout_size = layout->size;
+    if (layout_size < d_offset + sizeof(ggml_half)) {
+        printf("  FAIL: layout size %zu too small for coalesced d offset %zu\n", layout_size, d_offset);
+        ggml_backend_buffer_free(weight_buffer);
+        ggml_backend_buffer_free(compute_buffer);
+        ggml_free(ctx);
+        ggml_backend_free(backend);
+        return false;
+    }
+
+    std::vector<uint8_t> gpu_raw_data(layout_size);
+    auto & q = dpct::dev_mgr::instance().get_device(0).default_queue();
+    q.memcpy(gpu_raw_data.data(), layout_ptr, layout_size).wait();
 
     if (verbose) {
         auto sub_32 = [](int x) {

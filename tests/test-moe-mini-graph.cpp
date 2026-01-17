@@ -11,6 +11,7 @@
 #include "ggml-backend.h"
 #include "ggml-sycl.h"
 #include "ggml-cpu.h"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 #include "ggml-quants.h"
 
 #if !defined(GGML_USE_SYCL)
@@ -115,6 +116,7 @@ static void build_inputs(moe_graph_inputs & inputs) {
 static bool run_moe_graph_backend(ggml_backend_t backend,
                                   bool use_host_moe_weights,
                                   const moe_graph_inputs & inputs,
+                                  bool require_graphs,
                                   std::vector<float> & output) {
     const ggml_init_params params = {
         64 * 1024 * 1024,
@@ -142,6 +144,12 @@ static bool run_moe_graph_backend(ggml_backend_t backend,
     ggml_set_name(moe_w, "moe_weights");
     ggml_tensor * moe_out = ggml_mul_mat_id(ctx, moe_w, norm3d, moe_ids);
     ggml_set_name(moe_out, "moe_out");
+    ggml_tensor * final_out = moe_out;
+    std::vector<ggml_tensor *> extra_ops;
+    for (int i = 0; i < 6; ++i) {
+        final_out = ggml_scale(ctx, final_out, 1.0f);
+        extra_ops.push_back(final_out);
+    }
 
     ggml_backend_buffer_type_t dev_buft = ggml_backend_get_default_buffer_type(backend);
     ggml_backend_buffer_type_t moe_buft = dev_buft;
@@ -177,6 +185,15 @@ static bool run_moe_graph_backend(ggml_backend_t backend,
         ggml_free(ctx);
         return false;
     }
+    for (ggml_tensor * extra : extra_ops) {
+        if (!alloc_or_fail(dev_buft, extra, GGML_BACKEND_BUFFER_USAGE_COMPUTE)) {
+            for (ggml_backend_buffer_t buf : buffers) {
+                ggml_backend_buffer_free(buf);
+            }
+            ggml_free(ctx);
+            return false;
+        }
+    }
 
     ggml_backend_dev_t dev = ggml_backend_get_device(backend);
     if (use_host_moe_weights && dev) {
@@ -193,7 +210,26 @@ static bool run_moe_graph_backend(ggml_backend_t backend,
                             inputs.moe_weights.size() * sizeof(block_mxfp4));
 
     ggml_cgraph * graph = ggml_new_graph(ctx);
-    ggml_build_forward_expand(graph, moe_out);
+    ggml_build_forward_expand(graph, final_out);
+
+    if (require_graphs) {
+        if (!ggml_sycl::test_backend_supports_graphs(backend)) {
+            fprintf(stderr, "SKIP: backend does not support graphs\n");
+            for (ggml_backend_buffer_t buf : buffers) {
+                ggml_backend_buffer_free(buf);
+            }
+            ggml_free(ctx);
+            return false;
+        }
+        if (ggml_sycl::test_backend_graphs_disabled(backend)) {
+            fprintf(stderr, "SKIP: backend graphs disabled by configuration\n");
+            for (ggml_backend_buffer_t buf : buffers) {
+                ggml_backend_buffer_free(buf);
+            }
+            ggml_free(ctx);
+            return false;
+        }
+    }
 
     ggml_status status = ggml_backend_graph_compute(backend, graph);
     if (status != GGML_STATUS_SUCCESS) {
@@ -204,8 +240,20 @@ static bool run_moe_graph_backend(ggml_backend_t backend,
         return false;
     }
 
+    if (require_graphs) {
+        const size_t pinned = ggml_sycl::test_graph_pinned_entry_count(backend);
+        if (pinned == 0) {
+            fprintf(stderr, "FAIL: expected graph-pinned cache entries\n");
+            for (ggml_backend_buffer_t buf : buffers) {
+                ggml_backend_buffer_free(buf);
+            }
+            ggml_free(ctx);
+            return false;
+        }
+    }
+
     output.resize(static_cast<size_t>(inputs.out_dim) * inputs.n_used * inputs.n_tokens);
-    ggml_backend_tensor_get(moe_out, output.data(), 0, output.size() * sizeof(float));
+    ggml_backend_tensor_get(final_out, output.data(), 0, output.size() * sizeof(float));
 
     for (ggml_backend_buffer_t buf : buffers) {
         ggml_backend_buffer_free(buf);
@@ -243,13 +291,22 @@ int main() {
     std::vector<float> cpu_out;
     std::vector<float> sycl_out;
 
-    const bool cpu_ok = run_moe_graph_backend(cpu_backend, false, inputs, cpu_out);
-    const bool sycl_ok = run_moe_graph_backend(sycl_backend, true, inputs, sycl_out);
+    const bool cpu_ok = run_moe_graph_backend(cpu_backend, false, inputs, false, cpu_out);
+    const bool sycl_ok = run_moe_graph_backend(sycl_backend, true, inputs, true, sycl_out);
 
     ggml_backend_free(cpu_backend);
     ggml_backend_free(sycl_backend);
 
-    if (!cpu_ok || !sycl_ok) {
+    if (!sycl_ok) {
+        fprintf(stderr, "SKIP: SYCL graph path unavailable or disabled\n");
+        if (!cpu_ok) {
+            fprintf(stderr, "FAIL: CPU baseline failed\n");
+            return 1;
+        }
+        return 0;
+    }
+
+    if (!cpu_ok) {
         fprintf(stderr, "FAIL: backend compute failed (cpu_ok=%d sycl_ok=%d)\n", cpu_ok ? 1 : 0, sycl_ok ? 1 : 0);
         return 1;
     }

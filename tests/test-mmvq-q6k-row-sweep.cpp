@@ -6,6 +6,7 @@
 #include "ggml-cpu.h"
 #include "ggml-sycl.h"
 #include "ggml.h"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -138,7 +139,7 @@ static bool run_test(ggml_backend_t gpu, ggml_backend_t cpu, int nrows) {
 int main() {
     setvbuf(stdout, nullptr, _IONBF, 0);
     printf("=== Q6_K 56-block Row Sweep ===\n");
-    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "coalesced", 1);
+    ggml_sycl::test_layout_override_guard guard(GGML_LAYOUT_COALESCED);
 
     ggml_backend_t gpu = ggml_backend_sycl_init(0);
     ggml_backend_t cpu = ggml_backend_cpu_init();

@@ -9,6 +9,7 @@
 #include "ggml-cpu.h"
 #include "ggml-sycl.h"
 #include "ggml.h"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -174,8 +175,8 @@ int main() {
     printf("This test specifically targets the 56-block case (Mistral FFN)\n\n");
 
     // Force coalesced mode
-    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "coalesced", 1);
-    printf("GGML_SYCL_LAYOUT_OVERRIDE=coalesced\n\n");
+    ggml_sycl::test_layout_override_guard guard(GGML_LAYOUT_COALESCED);
+    printf("Layout override: coalesced (test-only)\n\n");
 
     ggml_backend_t gpu_backend = ggml_backend_sycl_init(0);
     if (!gpu_backend) {

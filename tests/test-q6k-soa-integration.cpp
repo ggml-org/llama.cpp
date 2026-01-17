@@ -6,7 +6,7 @@
 //
 // Production flow for Q6_K:
 // 1. ggml_backend_tensor_set() is called with AoS data
-// 2. buffer_set_tensor() checks if reordering is enabled (GGML_SYCL_LAYOUT_OVERRIDE=aos disables)
+// 2. buffer_set_tensor() checks if reordering is enabled (test override can force AoS)
 // 3. If enabled: reorder_q6_k_cpu() converts AoS→SoA in staging buffer
 // 4. Data is uploaded to GPU in SoA format
 // 5. DMMV kernel uses SoA layout for efficient memory access
@@ -24,11 +24,15 @@
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "ggml-sycl.h"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 
 // Check if AoS override is set (disables reordering)
 static bool is_soa_disabled() {
-    const char * env = std::getenv("GGML_SYCL_LAYOUT_OVERRIDE");
-    return env && (std::string(env) == "aos");
+    ggml_layout_mode override_layout = GGML_LAYOUT_AOS;
+    if (!ggml_sycl::test_get_layout_override(&override_layout)) {
+        return false;
+    }
+    return override_layout == GGML_LAYOUT_AOS;
 }
 
 // Q6_K block structure (must match ggml-common.h)
@@ -319,11 +323,11 @@ int main() {
 
     // Show which mode we're testing
     if (is_soa_disabled()) {
-        printf("MODE: AoS (GGML_SYCL_LAYOUT_OVERRIDE=aos)\n");
+        printf("MODE: AoS (test layout override)\n");
         printf("  - Weight data uploaded in original AoS format\n");
         printf("  - DMMV uses AoS kernel path\n\n");
     } else {
-        printf("MODE: SoA (default or GGML_SYCL_LAYOUT_OVERRIDE=soa)\n");
+        printf("MODE: SoA (default)\n");
         printf("  - reorder_q6_k_cpu() converts AoS→SoA during upload\n");
         printf("  - DMMV uses SoA kernel path\n\n");
     }
@@ -368,7 +372,7 @@ int main() {
 
     // Additional test: compare SoA vs AoS (with override)
     printf("\n=== Comparison Note ===\n");
-    printf("To compare SoA vs AoS, run this test with and without GGML_SYCL_LAYOUT_OVERRIDE=aos\n");
+    printf("To compare SoA vs AoS, run this test with and without a test layout override forcing AoS\n");
     printf("If results differ significantly, the bug is in the reorder or kernel path.\n");
 
     printf("\n=== SUMMARY ===\n");

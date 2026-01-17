@@ -15,6 +15,7 @@
 #include "ggml-sycl.h"
 
 #include "common.hpp"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 
 #define QK8_0 32
 
@@ -70,7 +71,7 @@ static void compute_reference(const block_q8_0_test * weights, const float * inp
 }
 
 int main() {
-    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "soa", 1);
+    ggml_sycl::test_layout_override_guard guard(GGML_LAYOUT_SOA);
     setenv("GGML_SYCL_WEIGHTS_EVICTABLE", "1", 1);
 
     ggml_backend_sycl_set_unified_cache_budget_pct(90);

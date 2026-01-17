@@ -5,7 +5,6 @@
 // Run: ONEAPI_DEVICE_SELECTOR=level_zero:1 ./build/bin/test-q6k-dispatch
 //
 // Environment variables:
-//   GGML_SYCL_LAYOUT_OVERRIDE=aos  - Force AoS (no reorder)
 //   GGML_SYCL_DISABLE_GRAPH=1 - Disable SYCL graphs
 //   (default)                - SoA optimization enabled
 
@@ -21,6 +20,7 @@
 #include "ggml-backend.h"
 #include "ggml-sycl.h"
 #include "ggml-cpu.h"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 
 // Include quants header for quantization/dequantization functions
 #include "ggml-quants.h"
@@ -28,6 +28,50 @@
 // Constants from ggml-common.h
 #define QK_K 256
 #define QK8_1 32
+
+static bool parse_layout_arg(const char * arg, ggml_layout_mode & out) {
+    if (!arg) {
+        return false;
+    }
+    if (strcmp(arg, "aos") == 0) {
+        out = GGML_LAYOUT_AOS;
+        return true;
+    }
+    if (strcmp(arg, "soa") == 0) {
+        out = GGML_LAYOUT_SOA;
+        return true;
+    }
+    if (strcmp(arg, "coalesced") == 0) {
+        out = GGML_LAYOUT_COALESCED;
+        return true;
+    }
+    if (strcmp(arg, "xmx_tiled") == 0) {
+        out = GGML_LAYOUT_XMX_TILED;
+        return true;
+    }
+    if (strcmp(arg, "xmx_gemm_tiled") == 0) {
+        out = GGML_LAYOUT_XMX_GEMM_TILED;
+        return true;
+    }
+    return false;
+}
+
+static const char * layout_mode_name(ggml_layout_mode mode) {
+    switch (mode) {
+        case GGML_LAYOUT_AOS:
+            return "aos";
+        case GGML_LAYOUT_SOA:
+            return "soa";
+        case GGML_LAYOUT_COALESCED:
+            return "coalesced";
+        case GGML_LAYOUT_XMX_TILED:
+            return "xmx_tiled";
+        case GGML_LAYOUT_XMX_GEMM_TILED:
+            return "xmx_gemm_tiled";
+        default:
+            return "unknown";
+    }
+}
 
 // CPU reference: compute dot product of Q6_K row with F32 vector
 // Uses dequantization for accuracy
@@ -517,10 +561,30 @@ int main(int argc, char** argv) {
     printf("========================================\n\n");
 
     // Check environment
-    const char * override_env = getenv("GGML_SYCL_LAYOUT_OVERRIDE");
     const char * disable_graph = getenv("GGML_SYCL_DISABLE_GRAPH");
+    ggml_layout_mode override_layout = GGML_LAYOUT_AOS;
+    bool has_override = false;
+    for (int i = 1; i < argc; ++i) {
+        const char * arg = argv[i];
+        if (!arg) {
+            continue;
+        }
+        const char * value = nullptr;
+        if (strncmp(arg, "--layout=", 9) == 0) {
+            value = arg + 9;
+        } else if (strcmp(arg, "--layout") == 0 && i + 1 < argc) {
+            value = argv[++i];
+        }
+        if (value && parse_layout_arg(value, override_layout)) {
+            ggml_sycl::test_set_layout_override(override_layout);
+            has_override = true;
+            break;
+        } else if (value) {
+            printf("WARNING: unknown --layout=%s (ignoring)\n", value);
+        }
+    }
     printf("Environment:\n");
-    printf("  GGML_SYCL_LAYOUT_OVERRIDE: %s\n", override_env ? override_env : "(not set, auto)");
+    printf("  Layout override: %s\n", has_override ? layout_mode_name(override_layout) : "(auto)");
     printf("  GGML_SYCL_DISABLE_GRAPH: %s\n", disable_graph ? disable_graph : "(not set, graphs enabled)");
     printf("\n");
 
@@ -547,6 +611,10 @@ int main(int argc, char** argv) {
     printf("\n========================================\n");
     printf("Results: %d passed, %d failed, %d skipped\n", passed, failed, skipped);
     printf("========================================\n");
+
+    if (has_override) {
+        ggml_sycl::test_clear_layout_override();
+    }
 
     return (failed > 0) ? 1 : 0;
 }

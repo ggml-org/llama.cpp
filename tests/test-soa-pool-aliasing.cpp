@@ -10,7 +10,7 @@
 //
 // Compare:
 //   ONEAPI_DEVICE_SELECTOR=level_zero:1 ./build/bin/test-soa-pool-aliasing  # Auto layout
-//   GGML_SYCL_LAYOUT_OVERRIDE=aos ONEAPI_DEVICE_SELECTOR=level_zero:1 ./build/bin/test-soa-pool-aliasing  # AoS only
+//   Use ggml_sycl::test_set_layout_override() in this test to force AoS if needed
 
 #include <cstdio>
 #include <cstdlib>
@@ -24,11 +24,38 @@
 #include "ggml-backend.h"
 #include "ggml-sycl.h"
 #include "ggml-cpu.h"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 
 // Simulate Mistral 7B dimensions
 static const int N_EMBD = 4096;
 static const int N_FF = 14336;
 static const int N_TOKENS = 1;  // Decode phase
+
+static const char * layout_override_label(bool * aos_only_out = nullptr) {
+    ggml_layout_mode layout = GGML_LAYOUT_AOS;
+    const bool       has    = ggml_sycl::test_get_layout_override(&layout);
+    const bool       aos    = has && layout == GGML_LAYOUT_AOS;
+    if (aos_only_out) {
+        *aos_only_out = aos;
+    }
+    if (!has) {
+        return "(auto)";
+    }
+    switch (layout) {
+        case GGML_LAYOUT_AOS:
+            return "aos";
+        case GGML_LAYOUT_SOA:
+            return "soa";
+        case GGML_LAYOUT_COALESCED:
+            return "coalesced";
+        case GGML_LAYOUT_XMX_TILED:
+            return "xmx_tiled";
+        case GGML_LAYOUT_XMX_GEMM_TILED:
+            return "xmx_gemm_tiled";
+        default:
+            return "unknown";
+    }
+}
 
 // Check if output contains valid (non-zero) values
 static bool check_output_valid(const float* data, int n, const char* name, bool verbose = false) {
@@ -65,9 +92,8 @@ bool test_sequential_matmul() {
     printf("This simulates a transformer layer with Q/K/V/O projections\n\n");
 
     // Check layout override mode
-    const char * override_env = getenv("GGML_SYCL_LAYOUT_OVERRIDE");
-    const bool   aos_only     = (override_env && strcmp(override_env, "aos") == 0);
-    printf("Layout override: %s\n", override_env ? override_env : "(auto)");
+    bool aos_only = false;
+    printf("Layout override: %s\n", layout_override_label(&aos_only));
     printf("Reorder enabled: %s\n", aos_only ? "no" : "yes");
 
     // Initialize SYCL backend
@@ -267,9 +293,8 @@ bool test_pool_buffer_cycling() {
     printf("\n=== Test: Pool buffer cycling with multiple iterations ===\n");
     printf("This tests that pool buffers work correctly across multiple graph executions\n\n");
 
-    const char * override_env = getenv("GGML_SYCL_LAYOUT_OVERRIDE");
-    const bool   aos_only     = (override_env && strcmp(override_env, "aos") == 0);
-    printf("Layout override: %s\n", override_env ? override_env : "(auto)");
+    bool aos_only = false;
+    printf("Layout override: %s\n", layout_override_label(&aos_only));
     printf("Reorder enabled: %s\n", aos_only ? "no" : "yes");
 
     ggml_backend_t backend = ggml_backend_sycl_init(0);

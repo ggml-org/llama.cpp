@@ -112,6 +112,11 @@ function(llama_build_and_test source)
     set_property(TEST ${TEST_TARGET} PROPERTY LABELS ${LLAMA_TEST_LABEL})
 endfunction()
 
+# SYCL tests include internal ggml headers under ggml/src.
+if (GGML_SYCL)
+    include_directories(${PROJECT_SOURCE_DIR}/ggml/src)
+endif()
+
 # build test-tokenizer-0 target once and add many tests
 llama_build(test-tokenizer-0.cpp)
 
@@ -465,6 +470,42 @@ if(GGML_SYCL)
     target_compile_options(test-mmvq-q6k-debug PRIVATE "-fsycl" "-Wno-narrowing")
     target_link_options(test-mmvq-q6k-debug PRIVATE "-fsycl")
     install(TARGETS test-mmvq-q6k-debug RUNTIME)
+
+    # test-mmvq-q8-0-streaming-bench: CPU vs DMA-streamed GPU benchmark for Q8_0 MMVQ
+    add_executable(test-mmvq-q8-0-streaming-bench test-mmvq-q8-0-streaming-bench.cpp)
+    target_link_libraries(test-mmvq-q8-0-streaming-bench PRIVATE ggml)
+    target_include_directories(test-mmvq-q8-0-streaming-bench PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-mmvq-q8-0-streaming-bench PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-mmvq-q8-0-streaming-bench PRIVATE "-fsycl")
+    install(TARGETS test-mmvq-q8-0-streaming-bench RUNTIME)
+    add_test(NAME test-mmvq-q8-0-streaming-bench COMMAND $<TARGET_FILE:test-mmvq-q8-0-streaming-bench>)
+    add_test(NAME test-mmvq-q8-0-streaming-smoke COMMAND $<TARGET_FILE:test-mmvq-q8-0-streaming-bench>)
+    set_tests_properties(test-mmvq-q8-0-streaming-smoke PROPERTIES
+        ENVIRONMENT "GGML_SYCL_MMVQ_BENCH=1;GGML_SYCL_MMVQ_BENCH_MODE=cache;GGML_SYCL_MMVQ_BENCH_NROWS=256;GGML_SYCL_MMVQ_BENCH_NCOLS=512;GGML_SYCL_MMVQ_BENCH_ITERS=1;GGML_SYCL_MMVQ_BENCH_WARMUP=0;GGML_SYCL_MMVQ_BENCH_SLICE_MB=1;GGML_SYCL_MMVQ_BENCH_BUFFERS=1")
+add_test(NAME test-mmq-q8-0-streaming-smoke COMMAND $<TARGET_FILE:test-mmvq-q8-0-streaming-bench>)
+set_tests_properties(test-mmq-q8-0-streaming-smoke PROPERTIES
+    ENVIRONMENT "GGML_SYCL_MMVQ_BENCH=1;GGML_SYCL_MMVQ_BENCH_MODE=mmq;GGML_SYCL_MMVQ_BENCH_MMQ_NROWS=512;GGML_SYCL_MMVQ_BENCH_MMQ_NCOLS=2048;GGML_SYCL_MMVQ_BENCH_MMQ_NTOKENS=4;GGML_SYCL_MMVQ_BENCH_MMQ_ITERS=1;GGML_SYCL_MMVQ_BENCH_MMQ_WARMUP=0;GGML_SYCL_MMVQ_BENCH_MMQ_BUDGET_MB=64")
+add_test(NAME test-mmq-q8-0-streaming-forced COMMAND $<TARGET_FILE:test-mmvq-q8-0-streaming-bench>)
+    set_tests_properties(test-mmq-q8-0-streaming-forced PROPERTIES
+        ENVIRONMENT "GGML_SYCL_MMVQ_BENCH=1;GGML_SYCL_MMVQ_BENCH_MODE=mmq;GGML_SYCL_MMVQ_BENCH_MMQ_NROWS=512;GGML_SYCL_MMVQ_BENCH_MMQ_NCOLS=2048;GGML_SYCL_MMVQ_BENCH_MMQ_NTOKENS=4;GGML_SYCL_MMVQ_BENCH_MMQ_ITERS=1;GGML_SYCL_MMVQ_BENCH_MMQ_WARMUP=0;GGML_SYCL_MMVQ_BENCH_MMQ_BUDGET_MB=1")
+
+    # test-sycl-host-buffer-routing: verify host buffer uses pinned allocation when enabled
+    add_executable(test-sycl-host-buffer-routing test-sycl-host-buffer-routing.cpp)
+    target_link_libraries(test-sycl-host-buffer-routing PRIVATE ggml)
+    target_include_directories(test-sycl-host-buffer-routing PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-sycl-host-buffer-routing PRIVATE "-fsycl")
+    target_link_options(test-sycl-host-buffer-routing PRIVATE "-fsycl")
+    install(TARGETS test-sycl-host-buffer-routing RUNTIME)
+    add_test(NAME test-sycl-host-buffer-routing COMMAND $<TARGET_FILE:test-sycl-host-buffer-routing>)
+    set_tests_properties(test-sycl-host-buffer-routing PROPERTIES
+        ENVIRONMENT "GGML_SYCL_HOST_BUFFER_TEST=1;GGML_SYCL_HOST_BUFFER_SIZE_MB=4")
+    add_test(NAME test-sycl-host-buffer-routing-fallback COMMAND $<TARGET_FILE:test-sycl-host-buffer-routing>)
+    set_tests_properties(test-sycl-host-buffer-routing-fallback PROPERTIES
+        ENVIRONMENT "GGML_SYCL_HOST_BUFFER_TEST=1;GGML_SYCL_HOST_BUFFER_SIZE_MB=4;GGML_SYCL_NO_PINNED=1")
 endif()
 
 # test-mmvq-coalesced: GPU unit tests for coalesced MMVQ (Q4_0 and Q6_K)
@@ -520,6 +561,39 @@ if(GGML_SYCL)
     add_test(NAME test-moe-mul-mat-id COMMAND $<TARGET_FILE:test-moe-mul-mat-id>)
 endif()
 
+# test-mul-mat-host-streaming: host weight streaming for MUL_MAT (CPU vs SYCL)
+if(GGML_SYCL)
+    add_executable(test-mul-mat-host-streaming test-mul-mat-host-streaming.cpp)
+    target_link_libraries(test-mul-mat-host-streaming PRIVATE ggml ggml-cpu)
+    target_include_directories(test-mul-mat-host-streaming PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-mul-mat-host-streaming PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-mul-mat-host-streaming PRIVATE "-fsycl")
+    install(TARGETS test-mul-mat-host-streaming RUNTIME)
+    add_test(NAME test-mul-mat-host-streaming COMMAND $<TARGET_FILE:test-mul-mat-host-streaming>)
+endif()
+
+# test-xmx-host-streaming: XMX GEMM host streaming for Q4_0 (CPU vs SYCL)
+if(GGML_SYCL)
+    add_executable(test-xmx-host-streaming test-xmx-host-streaming.cpp)
+    target_link_libraries(test-xmx-host-streaming PRIVATE ggml ggml-cpu)
+    target_include_directories(test-xmx-host-streaming PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-xmx-host-streaming PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-xmx-host-streaming PRIVATE "-fsycl")
+    target_compile_definitions(test-xmx-host-streaming PRIVATE GGML_SYCL_WARP_SIZE=32)
+    if (GGML_SYCL_MMQ_XMX)
+        target_compile_definitions(test-xmx-host-streaming PRIVATE GGML_SYCL_MMQ_XMX)
+    endif()
+    if (GGML_SYCL_XMX_GEMM)
+        target_compile_definitions(test-xmx-host-streaming PRIVATE GGML_SYCL_XMX_GEMM)
+    endif()
+    install(TARGETS test-xmx-host-streaming RUNTIME)
+    add_test(NAME test-xmx-host-streaming COMMAND $<TARGET_FILE:test-xmx-host-streaming>)
+endif()
+
 # test-moe-mul-mat-id-q4q8: MoE Q4_0/Q8_0 MUL_MAT_ID CPU vs SYCL comparison
 if(GGML_SYCL)
     add_executable(test-moe-mul-mat-id-q4q8 test-moe-mul-mat-id-q4q8.cpp)
@@ -560,6 +634,26 @@ if(GGML_SYCL)
     add_test(NAME test-layout-cache COMMAND $<TARGET_FILE:test-layout-cache>)
 endif()
 
+# test-pinned-probe: probe pinned host allocation behavior (JSON output)
+if(GGML_SYCL)
+    add_executable(test-pinned-probe test-pinned-probe.cpp)
+    target_compile_options(test-pinned-probe PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-pinned-probe PRIVATE "-fsycl")
+    install(TARGETS test-pinned-probe RUNTIME)
+endif()
+
+# test-iommu-dma-stress: opt-in pinned-host DMA stress test (can crash GPU driver)
+if(GGML_SYCL)
+    add_executable(test-iommu-dma-stress test-iommu-dma-stress.cpp)
+    target_link_libraries(test-iommu-dma-stress PRIVATE ggml ggml-cpu)
+    target_include_directories(test-iommu-dma-stress PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-iommu-dma-stress PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-iommu-dma-stress PRIVATE "-fsycl")
+    install(TARGETS test-iommu-dma-stress RUNTIME)
+endif()
+
 # test-unified-cache-bugs: regression tests for unified cache bug fixes
 if(GGML_SYCL)
     add_executable(test-unified-cache-bugs test-unified-cache-bugs.cpp)
@@ -571,6 +665,47 @@ if(GGML_SYCL)
     target_link_options(test-unified-cache-bugs PRIVATE "-fsycl")
     install(TARGETS test-unified-cache-bugs RUNTIME)
     add_test(NAME test-unified-cache-bugs COMMAND $<TARGET_FILE:test-unified-cache-bugs>)
+endif()
+
+# test-unified-cache-integrity: layout cache stress + map consistency
+if(GGML_SYCL)
+    add_executable(test-unified-cache-integrity test-unified-cache-integrity.cpp)
+    target_link_libraries(test-unified-cache-integrity PRIVATE ggml ggml-cpu)
+    target_include_directories(test-unified-cache-integrity PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_definitions(test-unified-cache-integrity PRIVATE GGML_SYCL_WARP_SIZE=32)
+    target_compile_options(test-unified-cache-integrity PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-unified-cache-integrity PRIVATE "-fsycl")
+    install(TARGETS test-unified-cache-integrity RUNTIME)
+    add_test(NAME test-unified-cache-integrity COMMAND $<TARGET_FILE:test-unified-cache-integrity>)
+endif()
+
+# test-unified-cache-unpin-event: compare event sources for unpin_on_event
+if(GGML_SYCL)
+    add_executable(test-unified-cache-unpin-event test-unified-cache-unpin-event.cpp)
+    target_link_libraries(test-unified-cache-unpin-event PRIVATE ggml ggml-cpu)
+    target_include_directories(test-unified-cache-unpin-event PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_definitions(test-unified-cache-unpin-event PRIVATE GGML_SYCL_WARP_SIZE=32)
+    target_compile_options(test-unified-cache-unpin-event PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-unified-cache-unpin-event PRIVATE "-fsycl")
+    install(TARGETS test-unified-cache-unpin-event RUNTIME)
+    add_test(NAME test-unified-cache-unpin-event COMMAND $<TARGET_FILE:test-unified-cache-unpin-event>)
+endif()
+
+# test-host-cache-guard: verifies host cache guard detects overruns
+if(GGML_SYCL)
+    add_executable(test-host-cache-guard test-host-cache-guard.cpp)
+    target_link_libraries(test-host-cache-guard PRIVATE ggml ggml-cpu)
+    target_include_directories(test-host-cache-guard PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-host-cache-guard PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-host-cache-guard PRIVATE "-fsycl")
+    install(TARGETS test-host-cache-guard RUNTIME)
+    add_test(NAME test-host-cache-guard COMMAND $<TARGET_FILE:test-host-cache-guard>)
 endif()
 
 # test-unified-cache-concurrent: concurrency stress tests for unified cache
@@ -877,7 +1012,9 @@ if(GGML_SYCL)
     target_link_libraries(test-ggml-sycl-soa PRIVATE ggml)
     target_include_directories(test-ggml-sycl-soa PRIVATE
         ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
         ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_definitions(test-ggml-sycl-soa PRIVATE GGML_SYCL_WARP_SIZE=32)
     target_compile_options(test-ggml-sycl-soa PRIVATE "-fsycl" "-Wno-narrowing")
     target_link_options(test-ggml-sycl-soa PRIVATE "-fsycl")
     install(TARGETS test-ggml-sycl-soa RUNTIME)
@@ -940,6 +1077,18 @@ if(GGML_SYCL)
     target_link_options(test-sycl-host-kquant PRIVATE "-fsycl")
     install(TARGETS test-sycl-host-kquant RUNTIME)
     add_test(NAME test-sycl-host-kquant COMMAND $<TARGET_FILE:test-sycl-host-kquant>)
+
+    # test-sycl-layout-choice: Ensures single layout per tensor after finalize_layouts.
+    add_executable(test-sycl-layout-choice test-sycl-layout-choice.cpp)
+    target_link_libraries(test-sycl-layout-choice PRIVATE ggml)
+    target_include_directories(test-sycl-layout-choice PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-layout-choice PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-layout-choice PRIVATE "-fsycl")
+    install(TARGETS test-sycl-layout-choice RUNTIME)
+    add_test(NAME test-sycl-layout-choice COMMAND $<TARGET_FILE:test-sycl-layout-choice>)
 
     # test-q6k-dispatch: Tests Q6_K MMVQ dispatch path using actual ggml backend API
     add_executable(test-q6k-dispatch test-q6k-dispatch.cpp)

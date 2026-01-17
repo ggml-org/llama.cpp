@@ -10,11 +10,17 @@
 // Build: cmake --build build --target test-dmmv-q4-0-coalesced
 // Run: ONEAPI_DEVICE_SELECTOR=level_zero:1 ./build/bin/test-dmmv-q4-0-coalesced
 
+#ifndef GGML_SYCL_WARP_SIZE
+#define GGML_SYCL_WARP_SIZE 32
+#endif
+
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 #include "../ggml/src/ggml-quants.h"
 #include "ggml-sycl.h"
+#include "ggml-sycl/common.hpp"
 #include "ggml.h"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -29,13 +35,7 @@
 #define QK4_0 32
 #define QR4_0 2
 
-// Coalesced tile configuration (must match common.hpp)
-#ifndef GGML_SYCL_WARP_SIZE
-#define GGML_SYCL_WARP_SIZE 32
-#endif
-constexpr int WARP_SIZE = GGML_SYCL_WARP_SIZE;
-constexpr int MMVQ_COALESCED_TILE_BLOCKS     = WARP_SIZE;
-constexpr int MMVQ_COALESCED_TILE_BYTES_Q4_0 = MMVQ_COALESCED_TILE_BLOCKS * 16;
+// Coalesced tile configuration (from common.hpp)
 
 typedef struct {
     ggml_fp16_t d;
@@ -242,7 +242,9 @@ static bool run_mul_mat_backend(ggml_backend_t backend, ggml_type weight_type,
                                 const void * weight_data, size_t weight_size,
                                 const float * input_data, int n_embd, int n_rows,
                                 std::vector<float> & output,
-                                std::vector<uint8_t> * weight_out = nullptr) {
+                                std::vector<uint8_t> * weight_out = nullptr,
+                                int device_id = -1,
+                                ggml_layout_mode layout_target = GGML_LAYOUT_AOS) {
     ggml_backend_buffer_type_t buft = ggml_backend_get_default_buffer_type(backend);
 
     struct ggml_init_params params = {
@@ -302,7 +304,18 @@ static bool run_mul_mat_backend(ggml_backend_t backend, ggml_type weight_type,
             fprintf(stderr, "[LAYOUT-CHECK] readback start: weight_size=%zu ptr=%p\n",
                     weight_size, weight->data);
             weight_out->resize(weight_size);
-            ggml_backend_sycl_memcpy_d2h(weight, weight_out->data(), weight_size);
+            bool copied = false;
+            if (ggml_backend_buffer_is_sycl(weight->buffer) && device_id >= 0) {
+                void * layout_ptr = ggml_sycl_get_weight_layout_ptr(weight, device_id, layout_target);
+                if (layout_ptr) {
+                    sycl::queue & q = dpct::dev_mgr::instance().get_device(device_id).default_queue();
+                    q.memcpy(weight_out->data(), layout_ptr, weight_size).wait();
+                    copied = true;
+                }
+            }
+            if (!copied) {
+                ggml_backend_sycl_memcpy_d2h(weight, weight_out->data(), weight_size);
+            }
             fprintf(stderr, "[LAYOUT-CHECK] readback done\n");
         }
     }
@@ -349,7 +362,8 @@ static bool run_dmmv_coalesced_case(ggml_backend_t gpu_backend, ggml_backend_t c
     std::vector<uint8_t> weight_coalesced;
     if (!run_mul_mat_backend(gpu_backend, GGML_TYPE_Q4_0, weight_quant.data(), weight_bytes,
                              input_data.data(), ncols, nrows, gpu_out,
-                             (debug_coalesced || layout_check) ? &weight_coalesced : nullptr)) {
+                             (debug_coalesced || layout_check) ? &weight_coalesced : nullptr,
+                             /*device_id=*/0, GGML_LAYOUT_COALESCED)) {
         printf("  FAIL: GPU backend compute failed\n");
         return false;
     }
@@ -709,7 +723,7 @@ int main() {
     // GPU tests (coalesced DMMV via ggml backend)
     printf("\n=== Part 2: GPU DMMV Tests (Coalesced) ===\n");
 
-    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "coalesced", 1);
+    ggml_sycl::test_layout_override_guard guard(GGML_LAYOUT_COALESCED);
     setenv("GGML_SYCL_FORCE_DMMV", "1", 1);
 
     ggml_backend_t gpu_backend = ggml_backend_sycl_init(0);

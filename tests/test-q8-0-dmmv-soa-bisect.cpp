@@ -14,11 +14,13 @@
 #include <vector>
 #include <random>
 #include <algorithm>
+#include <cstring>
 
 #include "ggml.h"
 #include "ggml-backend.h"
 #include "ggml-sycl.h"
 #include "ggml-cpu.h"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 
 #define QK8_0 32
 
@@ -116,10 +118,33 @@ static bool run_gpu_compute(ggml_backend_t gpu_backend,
                             float* output_data,
                             int ncols, int nrows, int batch,
                             const char * layout_override) {
+    ggml_layout_mode prev_layout = GGML_LAYOUT_AOS;
+    const bool       had_prev    = ggml_sycl::test_get_layout_override(&prev_layout);
+    struct OverrideGuard {
+        bool            restore = false;
+        ggml_layout_mode prev   = GGML_LAYOUT_AOS;
+        ~OverrideGuard() {
+            if (restore) {
+                ggml_sycl::test_set_layout_override(prev);
+            } else {
+                ggml_sycl::test_clear_layout_override();
+            }
+        }
+    } override_guard{ had_prev, prev_layout };
+
     if (layout_override) {
-        setenv("GGML_SYCL_LAYOUT_OVERRIDE", layout_override, 1);
+        if (strcmp(layout_override, "aos") == 0) {
+            ggml_sycl::test_set_layout_override(GGML_LAYOUT_AOS);
+        } else if (strcmp(layout_override, "soa") == 0) {
+            ggml_sycl::test_set_layout_override(GGML_LAYOUT_SOA);
+        } else if (strcmp(layout_override, "coalesced") == 0) {
+            ggml_sycl::test_set_layout_override(GGML_LAYOUT_COALESCED);
+        } else {
+            fprintf(stderr, "FAIL: unknown layout override '%s'\n", layout_override);
+            return false;
+        }
     } else {
-        unsetenv("GGML_SYCL_LAYOUT_OVERRIDE");
+        ggml_sycl::test_clear_layout_override();
     }
 
     struct ggml_init_params params = {

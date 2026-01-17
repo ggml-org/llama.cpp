@@ -18,6 +18,7 @@
 #include "ggml-backend.h"
 #include "ggml-sycl.h"
 #include "ggml-quants.h"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 
 #define QK_K 256
 
@@ -512,9 +513,10 @@ static bool test_mmq_q6k_batch(int n_tokens, bool verbose) {
     printf("  Thresholds: abs>%.2f AND rel>%.0f%%\n", ABS_TOL, REL_TOL * 100);
 
     // Report layout override status
-    const char * override_env = getenv("GGML_SYCL_LAYOUT_OVERRIDE");
-    const bool   aos_only     = (override_env && strcmp(override_env, "aos") == 0);
-    printf("  Layout override: %s\n", override_env ? override_env : "(auto)");
+    ggml_layout_mode override_layout = GGML_LAYOUT_AOS;
+    const bool        has_override   = ggml_sycl::test_get_layout_override(&override_layout);
+    const bool        aos_only       = has_override && override_layout == GGML_LAYOUT_AOS;
+    printf("  Layout override: %s\n", has_override ? "test override" : "(auto)");
     printf("  Reorder enabled: %s\n", aos_only ? "no" : "yes");
 
     // Cleanup

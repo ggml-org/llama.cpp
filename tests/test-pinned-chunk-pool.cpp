@@ -7,9 +7,11 @@
 #include <cstring>
 #include <iostream>
 #include <sycl/sycl.hpp>
+#include <vector>
 
 // Include the header we're testing
 #include "pinned-pool.hpp"
+#include "unified-cache.hpp"
 
 void test_basic_allocation() {
     sycl::queue q;
@@ -184,6 +186,7 @@ void test_host_cache_uses_pool() {
     for (int i = 0; i < 10; i++) {
         bool needs_fill = false;
         bool pinned     = false;
+        ggml_sycl::cache_location location = ggml_sycl::cache_location::HOST_MMAP;
 
         // Use fake but non-null pointers for key_ptr and src_ptr
         // (host_cache checks for nullptr and returns early)
@@ -201,15 +204,42 @@ void test_host_cache_uses_pool() {
                                        GGML_LAYOUT_AOS,
                                        false,        // validate_content (skip hash computation for fake ptr)
                                        &needs_fill, &pinned,
+                                       &location,
                                        nullptr       // xmx_info
             );
 
         assert(ptr != nullptr && "Allocation should succeed");
         assert(pinned && "Should be pinned allocation, not std::malloc fallback");
+        assert(location == ggml_sycl::cache_location::HOST_PINNED && "Expected pinned host cache location");
         ptrs.push_back(ptr);
     }
 
     std::cout << "test_host_cache_uses_pool: PASSED\n";
+}
+
+void test_host_cache_mmap_alias() {
+    sycl::queue q;
+
+    // Budget too small for an 8GB chunk: forces pinned alloc failure.
+    constexpr size_t        BUDGET = 1ULL * 1024 * 1024;  // 1MB
+    ggml_sycl::host_cache   cache(q, BUDGET);
+
+    std::vector<uint8_t> data(1024, 0x5A);
+    bool                 needs_fill = false;
+    bool                 pinned     = false;
+    ggml_sycl::cache_location location = ggml_sycl::cache_location::HOST_MMAP;
+
+    const void * fake_key = reinterpret_cast<const void *>(static_cast<uintptr_t>(0x4000));
+    void * ptr = cache.ensure_cached_alloc(fake_key, data.data(), data.size(), data.size(),
+                                           ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1,
+                                           GGML_LAYOUT_AOS, false, &needs_fill, &pinned, &location, nullptr);
+
+    assert(ptr == data.data() && "Expected mmap alias pointer");
+    assert(!pinned && "Expected non-pinned alias");
+    assert(!needs_fill && "Alias path should not require fill");
+    assert(location == ggml_sycl::cache_location::HOST_MMAP && "Expected HOST_MMAP location");
+
+    std::cout << "test_host_cache_mmap_alias: PASSED\n";
 }
 
 int main() {
@@ -221,6 +251,7 @@ int main() {
         test_chunk_count();
         test_statistics();
         test_host_cache_uses_pool();
+        test_host_cache_mmap_alias();
         std::cout << "\nAll tests PASSED!\n";
         return 0;
     } catch (const std::exception & e) {

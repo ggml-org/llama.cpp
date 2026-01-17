@@ -9,6 +9,7 @@
 #include "../ggml/src/ggml-quants.h"
 #include "ggml-sycl.h"
 #include "ggml.h"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -164,7 +165,7 @@ int main() {
     setvbuf(stderr, nullptr, _IONBF, 0);
     printf("=== Q6_K DMMV Coalesced Tests ===\n");
 
-    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "coalesced", 1);
+    ggml_sycl::test_layout_override_guard guard(GGML_LAYOUT_COALESCED);
     setenv("GGML_SYCL_FORCE_DMMV", "1", 1);
 
     ggml_backend_t gpu_backend = ggml_backend_sycl_init(0);

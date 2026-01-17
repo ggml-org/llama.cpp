@@ -15,6 +15,7 @@
 #include "ggml-backend.h"
 #include "ggml-sycl.h"
 #include "ggml-quants.h"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 
 // Constants from production code
 #define QK_K 256
@@ -284,8 +285,8 @@ static void test_dispatch_aos_vs_soa() {
     }
 
     // Test with reordering disabled (AoS mode)
-    printf("\n  --- AoS Mode (GGML_SYCL_LAYOUT_OVERRIDE=aos) ---\n");
-    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "aos", 1);
+    printf("\n  --- AoS Mode (test override) ---\n");
+    ggml_sycl::test_set_layout_override(GGML_LAYOUT_AOS);
 
     // Create new backend to pick up env var
     ggml_backend_free(backend);
@@ -294,11 +295,12 @@ static void test_dispatch_aos_vs_soa() {
     printf("  [Using simple known-value blocks instead of quantize_row_q6_K]\n");
 
     // Test with SoA enabled
-    printf("\n  --- SoA Mode (GGML_SYCL_LAYOUT_OVERRIDE=soa) ---\n");
-    setenv("GGML_SYCL_LAYOUT_OVERRIDE", "soa", 1);
+    printf("\n  --- SoA Mode (test override) ---\n");
+    ggml_sycl::test_set_layout_override(GGML_LAYOUT_SOA);
 
     ggml_backend_free(backend);
     printf("  Backend tests complete - see Tests 5-7 for actual kernel verification\n");
+    ggml_sycl::test_clear_layout_override();
 }
 
 //=============================================================================
