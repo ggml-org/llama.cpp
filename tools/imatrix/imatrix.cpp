@@ -382,7 +382,7 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         int n_tensors = 0;
     };
 
-    std::map<int, layer_aggregation> l_agr;
+    std::map<int, layer_aggregation> laggr;
 
     for (const auto & ts : tstats) {
         std::string layer_str;
@@ -394,7 +394,7 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
 
         if (ts.norm1_sq == 0.0 && ts.norm2_sq == 0.0 && ts.l2_dist_sq == 0.0) { continue; }
 
-        auto & entry = l_agr[blk];
+        auto & entry = laggr[blk];
         entry.sum_dot_prod += ts.dot_prod;
         entry.sum_norm1_sq += ts.norm1_sq;
         entry.sum_norm2_sq += ts.norm2_sq;
@@ -403,7 +403,7 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         entry.n_tensors++;
     }
 
-    for (const auto & [layer, agg] : l_agr) {
+    for (const auto & [layer, agg] : laggr) {
         if (agg.n_tensors == 0) { continue; }
 
         float cossim = 0.0f;
