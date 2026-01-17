@@ -37,7 +37,7 @@ static __global__ void mul_mat_f(
     typedef tile<16, 8,  T,     get_input_data_layout()> tile_B;
     typedef tile<16, 16, float, DATA_LAYOUT_J_MAJOR>     tile_C;
 #elif defined(AMD_MFMA_AVAILABLE)
-    if constexpr (!(std::is_same_v<T, half2> || std::is_same_v<T, nv_bfloat162>) || rows_per_block != MMF_ROWS_PER_BLOCK_CDNA) {NO_DEVICE_CODE;} else {
+    if constexpr (rows_per_block != MMF_ROWS_PER_BLOCK_CDNA) {NO_DEVICE_CODE;} else {
     typedef tile<16, 8,  T,     DATA_LAYOUT_I_MAJOR> tile_A;
     typedef tile<16, 8,  T,     DATA_LAYOUT_I_MAJOR> tile_B;
     typedef tile<16, 16, float, DATA_LAYOUT_J_MAJOR> tile_C;
