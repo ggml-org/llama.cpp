@@ -13719,6 +13719,10 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             submit_node_idx = i;
         }
 
+        if ((cgraph->nodes[i]->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+            continue;
+        }
+
         if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT || cgraph->nodes[i]->op == GGML_OP_MUL_MAT_ID) {
             auto bytes = ggml_nbytes(cgraph->nodes[i]->src[0]);
             mul_mat_bytes += bytes;
