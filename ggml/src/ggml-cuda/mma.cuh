@@ -333,7 +333,7 @@ namespace ggml_cuda_mma {
 
         static __device__ __forceinline__ int get_j(const int l) {
             if constexpr (I == 16 && J == 8) {
-                return 4 * (threadIdx.x / 16) + l;
+                return ne * (threadIdx.x / 16) + l;
             } else {
                 NO_DEVICE_CODE;
                 return -1;
@@ -359,7 +359,7 @@ namespace ggml_cuda_mma {
 
         static __device__ __forceinline__ int get_j(const int l) {
             if constexpr (I == 16 && J == 8) {
-                return 2 * (threadIdx.x / 16) + l;
+                return ne * (threadIdx.x / 16) + l;
             } else {
                 NO_DEVICE_CODE;
                 return -1;
