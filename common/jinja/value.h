@@ -286,6 +286,7 @@ using value_array = std::shared_ptr<value_array_t>;
 
 
 struct value_object_t : public value_t {
+    bool has_builtins = true; // context and loop objects do not have builtins
     value_object_t() = default;
     value_object_t(value & v) {
         val_obj = v->val_obj;
