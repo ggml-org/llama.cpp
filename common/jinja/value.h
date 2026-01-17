@@ -321,6 +321,18 @@ struct value_object_t : public value_t {
     }
     virtual std::string type() const override { return "Object"; }
     virtual const std::vector<std::pair<std::string, value>> & as_ordered_object() const override { return val_obj.ordered; }
+    virtual string as_string() const override {
+        std::ostringstream ss;
+        ss << "{";
+        for (size_t i = 0; i < val_obj.ordered.size(); i++) {
+            if (i > 0) ss << ", ";
+            auto entry = val_obj.ordered.at(i);
+            ss << "\"" << entry.first << "\":" << entry.second; // TODO: sanitize?
+        }
+        ss << "}";
+        return ss.str();
+
+    }
     virtual bool as_bool() const override {
         return !val_obj.unordered.empty();
     }

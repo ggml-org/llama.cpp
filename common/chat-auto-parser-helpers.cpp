@@ -1222,6 +1222,7 @@ internal_discovered_pattern analyze_by_differential(const common_chat_template &
 
         struct templates_params inputs;
         inputs.tools = tools;
+        inputs.add_generation_prompt = false;
 
         // Helper function to safely render template, handling null content issues
         auto safe_render = [&](const json & messages) -> std::string {

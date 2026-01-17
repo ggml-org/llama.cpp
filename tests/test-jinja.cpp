@@ -323,6 +323,13 @@ static void test_set_statement(testing & t) {
         json::object(),
         "1"
     );
+
+    test_template(t, "set thinking",
+        "{%- if not thinking is defined -%}{%- if enable_thinking is defined -%}{%- set thinking = enable_thinking -%}{%- else -%}{%- set thinking = false %}{%- endif -%}{%- endif -%}{{ thinking }}",
+        {{"enable_thinking",true}},
+        "True"
+    );
+
 }
 
 static void test_filters(testing & t) {

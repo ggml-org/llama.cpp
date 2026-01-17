@@ -761,6 +761,7 @@ std::string common_chat_template_direct_apply(
         {"tools", tools_override.has_value() ? *tools_override : inputs.tools},
         {"bos_token", tmpl.bos_token()},
         {"eos_token", tmpl.eos_token()},
+        {"enable_thinking", inputs.enable_thinking},
     };
     if (inputs.extra_context.is_object()) {
         // TODO: do we need to merge, or replacing is fine?

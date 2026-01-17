@@ -146,7 +146,7 @@ content_structure template_analyzer::analyze_content_structure(const common_chat
         { { "role", "user" }, { "content", "Hello" } }
     };
     inputs.add_generation_prompt            = true;
-    inputs.extra_context["enable_thinking"] = true;
+    inputs.enable_thinking                  = true;
 
     std::string prompt;
     try {
@@ -270,19 +270,18 @@ void template_analyzer::detect_reasoning_markers(const common_chat_template & tm
         templates_params inputs_prompt;
         inputs_prompt.messages              = { user_msg };
         inputs_prompt.add_generation_prompt = true;
-
-        inputs_prompt.extra_context["enable_thinking"] = false;
+        inputs_prompt.enable_thinking = false;
         std::string prompt_no_think;
         try {
-            prompt_no_think = common_chat_template_direct_apply(tmpl, inputs);
+            prompt_no_think = common_chat_template_direct_apply(tmpl, inputs_prompt);
         } catch (...) {
             prompt_no_think = "";
         }
 
-        inputs_prompt.extra_context["enable_thinking"] = true;
+        inputs_prompt.enable_thinking = true;
         std::string prompt_think;
         try {
-            prompt_think = common_chat_template_direct_apply(tmpl, inputs);
+            prompt_think = common_chat_template_direct_apply(tmpl, inputs_prompt);
         } catch (...) {
             prompt_think = "";
         }
@@ -368,11 +367,11 @@ void template_analyzer::detect_reasoning_markers(const common_chat_template & tm
         templates_params inputs_prompt;
         inputs_prompt.messages                         = { user_msg };
         inputs_prompt.add_generation_prompt            = true;
-        inputs_prompt.extra_context["enable_thinking"] = true;
+        inputs_prompt.enable_thinking                  = true;
 
         std::string prompt;
         try {
-            prompt = common_chat_template_direct_apply(tmpl, inputs);
+            prompt = common_chat_template_direct_apply(tmpl, inputs_prompt);
         } catch (...) {
             prompt = "";
         }
@@ -473,11 +472,11 @@ void template_analyzer::detect_reasoning_markers(const common_chat_template & tm
         inputs_prompt.messages                         = { user_msg };
         inputs_prompt.add_generation_prompt            = true;
         // Try with thinking disabled - templates may output empty thinking blocks
-        inputs_prompt.extra_context["enable_thinking"] = false;
+        inputs_prompt.enable_thinking                  = false;
 
         std::string prompt;
         try {
-            prompt = common_chat_template_direct_apply(tmpl, inputs);
+            prompt = common_chat_template_direct_apply(tmpl, inputs_prompt);
         } catch (...) {
             prompt = "";
         }
@@ -610,7 +609,7 @@ void template_analyzer::detect_content_markers(const common_chat_template & tmpl
     inputs.messages                         = { user_msg, assistant_msg };
     // Try with thinking enabled first (some templates only wrap content when reasoning is present)
     inputs.extra_context["thinking"]        = true;
-    inputs.extra_context["enable_thinking"] = true;
+    inputs.enable_thinking                  = true;
 
     std::string output_with_thinking;
     try {
@@ -621,7 +620,7 @@ void template_analyzer::detect_content_markers(const common_chat_template & tmpl
 
     // Also render without thinking
     inputs.extra_context["thinking"]        = false;
-    inputs.extra_context["enable_thinking"] = false;
+    inputs.enable_thinking                  = false;
 
     std::string output_no_thinking;
     try {
