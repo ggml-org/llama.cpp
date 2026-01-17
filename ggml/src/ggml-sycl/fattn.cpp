@@ -807,6 +807,11 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     const ggml_tensor * Q = dst->src[0];
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
+    // Flash attention uses activation tensors (Q/K/V + KV cache). No weight tensors
+    // are expected here, so unified-cache streaming is intentionally skipped.
+    GGML_ASSERT(!ggml_sycl_tensor_is_weight(Q));
+    GGML_ASSERT(!ggml_sycl_tensor_is_weight(K));
+    GGML_ASSERT(!ggml_sycl_tensor_is_weight(V));
 
     // Check tiered dispatch for K/V cache tensors
     if (g_tiered_enabled.load(std::memory_order_acquire)) {

@@ -81,6 +81,7 @@ struct DnnlPrimitiveKeyHash {
         h ^= std::hash<int64_t>{}(k.strb0 + k.strb1 + k.strb2) << 9;
         h ^= std::hash<int>{}(k.variant) << 10;
         h ^= std::hash<int>{}(k.batch_size) << 11;
+        h ^= std::hash<int>{}(k.ldc) << 12;
         return h;
     }
 };
@@ -196,6 +197,12 @@ public:
     using dt = dnnl::memory::data_type;
     using tag = dnnl::memory::format_tag;
 
+    // Serialize oneDNN execution to avoid cross-thread primitive/memory races.
+    static std::mutex & exec_mutex() {
+        static std::mutex mutex;
+        return mutex;
+    }
+
     template<typename T>
     static constexpr dt to_dt() {
         if constexpr (std::is_same_v<T, float>) return dt::f32;
@@ -206,10 +213,15 @@ public:
     static void gemm(ggml_backend_sycl_context & ctx, int m, int n, int k,
         const void * a, dt at, dnnl_dim_t stra0, dnnl_dim_t stra1, dnnl_dim_t stra2,
         const void * b, dt bt, dnnl_dim_t strb0, dnnl_dim_t strb1, dnnl_dim_t strb2,
-        void * c, dt ct, const queue_ptr & q, dnnl_dim_t batches_a, dnnl_dim_t batches_b) {
+        void * c, dt ct, const queue_ptr & q, dnnl_dim_t batches_a, dnnl_dim_t batches_b, int ldc = -1) {
+        std::lock_guard<std::mutex> lock(exec_mutex());
 
         auto stream = ctx.stream_dnnl(q);
         auto eng = ctx.engine_dnnl(q);
+
+        if (ldc <= 0) {
+            ldc = m;
+        }
 
         // Build cache key
         DnnlPrimitiveKey key{};
@@ -227,6 +239,7 @@ public:
         key.strb0 = strb0;
         key.strb1 = strb1;
         key.strb2 = strb2;
+        key.ldc = ldc;
         key.variant = 0;  // gemm variant
 
         // Build memory descriptors
@@ -239,7 +252,7 @@ public:
         const auto b_in_md = dnnl::memory::desc(b_dims, bt, b_strides);
 
         dnnl::memory::dims c_dims = { std::max(batches_a, batches_b), m, n};
-        dnnl::memory::dims c_strides = {m*n, 1,  m };
+        dnnl::memory::dims c_strides = {static_cast<dnnl_dim_t>(ldc) * n, 1, ldc};
         const auto c_md = dnnl::memory::desc(c_dims, ct, c_strides);
 
         dnnl::primitive_attr primitive_attr;
@@ -260,14 +273,17 @@ public:
             auto matmul_pd = dnnl::matmul::primitive_desc(eng, a_in_md, b_in_md, c_md, primitive_attr);
             auto c_mem = dnnl::memory(matmul_pd.dst_desc(), eng, c);
             auto scratchpad_md = matmul_pd.scratchpad_desc();
-            auto scratchpad_mem = ctx.get_scratchpad_mem(scratchpad_md, eng, q);
+            const size_t scratchpad_size = scratchpad_md.get_size();
             auto matmul_prim = dnnl::matmul(matmul_pd);
 
             std::unordered_map<int, dnnl::memory> matmul_args;
             matmul_args.insert({ DNNL_ARG_SRC, a_mem });
             matmul_args.insert({ DNNL_ARG_WEIGHTS, b_mem });
             matmul_args.insert({ DNNL_ARG_DST, c_mem });
-            matmul_args.insert({ DNNL_ARG_SCRATCHPAD, scratchpad_mem });
+            if (scratchpad_size > 0) {
+                auto scratchpad_mem = ctx.get_scratchpad_mem(scratchpad_md, eng, q);
+                matmul_args.insert({ DNNL_ARG_SCRATCHPAD, scratchpad_mem });
+            }
             matmul_prim.execute(stream, matmul_args);
             return;
         }
@@ -276,21 +292,24 @@ public:
         auto a_mem = dnnl::memory(cached->a_md, eng, const_cast<void*>(a));
         auto b_mem = dnnl::memory(cached->b_md, eng, const_cast<void*>(b));
         auto c_mem = dnnl::memory(cached->c_md, eng, c);
-        auto scratchpad_mem = ctx.get_scratchpad_mem(cached->scratchpad_md, eng, q);
+        const size_t scratchpad_size = cached->scratchpad_md.get_size();
 
         std::unordered_map<int, dnnl::memory> matmul_args;
         matmul_args.insert({ DNNL_ARG_SRC, a_mem });
         matmul_args.insert({ DNNL_ARG_WEIGHTS, b_mem });
         matmul_args.insert({ DNNL_ARG_DST, c_mem });
-        matmul_args.insert({ DNNL_ARG_SCRATCHPAD, scratchpad_mem });
+        if (scratchpad_size > 0) {
+            auto scratchpad_mem = ctx.get_scratchpad_mem(cached->scratchpad_md, eng, q);
+            matmul_args.insert({ DNNL_ARG_SCRATCHPAD, scratchpad_mem });
+        }
 
         cached->primitive.execute(stream, matmul_args);
     }
 
     static void row_gemm(ggml_backend_sycl_context & ctx, int m, int n, int k,
-        const void * a, dt at, const void * b, dt bt, void * c, dt ct, const queue_ptr & q) {
+        const void * a, dt at, const void * b, dt bt, void * c, dt ct, const queue_ptr & q, int ldc = -1) {
 
-        gemm(ctx, m, n, k, a, at, 1, k, k * m, b, bt, 1, k, n * k, c, ct, q, 1, 1);
+        gemm(ctx, m, n, k, a, at, 1, k, k * m, b, bt, 1, k, n * k, c, ct, q, 1, 1, ldc);
     }
 
     // Strided batch GEMM - C[i] = alpha * A[i] * B[i] + beta * C[i]
@@ -307,6 +326,7 @@ public:
         int batch_size,
         const queue_ptr & q)
     {
+        std::lock_guard<std::mutex> lock(exec_mutex());
         auto stream = ctx.stream_dnnl(q);
         auto eng = ctx.engine_dnnl(q);
 

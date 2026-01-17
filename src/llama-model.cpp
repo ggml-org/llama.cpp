@@ -3611,9 +3611,16 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
             auto register_host_weight = [&](ggml_tensor * tensor) {
 #ifdef GGML_USE_SYCL
-                if (prefer_host_weights && ggml_backend_buft_is_host(buft) && tensor) {
-                    ggml_backend_sycl_register_host_weight_tensor(layer_dev, tensor);
+                if (!tensor || bias) {
+                    return;
                 }
+                if (ggml_backend_dev_backend_reg(layer_dev) != ggml_backend_sycl_reg()) {
+                    return;
+                }
+                if (!ggml_backend_sycl_weights_evictable()) {
+                    return;
+                }
+                ggml_backend_sycl_register_host_weight_tensor(layer_dev, tensor);
 #else
                 GGML_UNUSED(tensor);
 #endif

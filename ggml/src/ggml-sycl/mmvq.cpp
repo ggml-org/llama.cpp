@@ -3505,8 +3505,9 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
             }
         } else {
             const bool allow_all_experts = false;
-            if (!ggml_sycl_update_moe_ptr_table(ctx, src0, ids, layout, &table_event, allow_all_experts, true, nullptr,
-                                                false)) {
+            if (!ggml_sycl_update_moe_ptr_table(ctx, src0, ids, layout, &table_event, allow_all_experts, nullptr,
+                                                /*skip_device_copy=*/false,
+                                                /*force_cache_aos=*/false)) {
                 GGML_SYCL_DEBUG("[MMVQ] Failed to update expert pointer table for %s\n", src0->name);
                 return false;
             }
@@ -3769,252 +3770,213 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
     return true;
 }
 
-void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
-                                const ggml_tensor *         src0,
-                                const ggml_tensor *         src1,
-                                ggml_tensor *               dst,
-                                const char *                src0_dd_i,
-                                const float *               src1_ddf_i,
-                                const char *                src1_ddq_i,
-                                float *                     dst_dd_i,
-                                const int64_t               row_low,
-                                const int64_t               row_high,
-                                const int64_t               src1_ncols,
-                                const int64_t               src1_padded_col_size,
-                                const dpct::queue_ptr &     stream) {
-    GGML_SYCL_PROFILE_SCOPE_MMVQ("mmvq");
+struct mmvq_stream_segment {
+    size_t src_base      = 0;
+    size_t bytes_per_row = 0;
+};
 
-    // Check tiered dispatch for weight tensor
-    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
-        ggml_sycl::memory_tier tier;
-        bool in_inventory = false;
-        void * cached_ptr = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
-        if (cached_ptr != nullptr) {
-            GGML_SYCL_DEBUG("[SYCL] mmvq tiered hit: %s (tier=%d)\n",
-                          src0->name, static_cast<int>(tier));
-        } else if (in_inventory) {
-            GGML_SYCL_DEBUG("[SYCL] mmvq tiered pending: %s\n", src0->name);
-        }
+struct mmvq_stream_ctx {
+    int                 device_id         = -1;
+    const ggml_tensor * src0              = nullptr;
+    const char *        src1_ddq_i        = nullptr;
+    float *             dst_dd_i          = nullptr;
+    int64_t             dst_row_stride    = 0;
+    int64_t             ne00              = 0;
+    int64_t             ne10              = 0;
+    int64_t             src1_ncols        = 0;
+    int64_t             src1_padded_col_size = 0;
+    int64_t             row_base          = 0;
+    int64_t             total_rows        = 0;
+    reorder_mode        mmvq_mode         = reorder_mode::NONE;
+    layout_mode         layout            = GGML_LAYOUT_AOS;
+    const uint8_t *     src_base          = nullptr;
+    size_t              row_total_bytes   = 0;
+    int                 segment_count     = 0;
+    mmvq_stream_segment segments[4]       = {};
+};
+
+static bool mmvq_parse_env_mb_value(const char * name, size_t & out_mb) {
+    const char * env = std::getenv(name);
+    if (!env || env[0] == '\0') {
+        return false;
+    }
+    char * end = nullptr;
+    long   mb  = std::strtol(env, &end, 10);
+    if (end == env || mb < 0) {
+        GGML_LOG_WARN("[MMVQ] Invalid %s='%s'\n", name, env);
+        return false;
+    }
+    out_mb = static_cast<size_t>(mb);
+    return true;
+}
+
+static bool mmvq_parse_env_count_value(const char * name, size_t & out_count) {
+    const char * env = std::getenv(name);
+    if (!env || env[0] == '\0') {
+        return false;
+    }
+    char * end   = nullptr;
+    long   count = std::strtol(env, &end, 10);
+    if (end == env || count < 0) {
+        GGML_LOG_WARN("[MMVQ] Invalid %s='%s'\n", name, env);
+        return false;
+    }
+    out_count = static_cast<size_t>(count);
+    return true;
+}
+
+static void mmvq_resolve_dma_params(size_t row_bytes, size_t & slice_bytes, size_t & buffer_count) {
+    size_t slice_mb = 1024;
+    size_t buffers  = 2;
+    size_t env_val  = 0;
+
+    if (mmvq_parse_env_mb_value("GGML_SYCL_DMA_SLICE_MB", env_val)) {
+        slice_mb = env_val;
+    }
+    if (mmvq_parse_env_count_value("GGML_SYCL_DMA_BUFFERS", env_val) ||
+        mmvq_parse_env_count_value("GGML_SYCL_DMA_SLICES", env_val)) {
+        buffers = env_val;
     }
 
-    const int64_t ne10 = src1->ne[0];
-    GGML_ASSERT(ne10 % QK8_1 == 0);
+    if (slice_bytes == 0) {
+        slice_bytes = slice_mb * 1024ULL * 1024ULL;
+    }
+    if (buffer_count == 0) {
+        buffer_count = buffers;
+    }
+    if (row_bytes > 0) {
+        size_t rows_per_slice = slice_bytes / row_bytes;
+        if (rows_per_slice < 1) {
+            rows_per_slice = 1;
+        }
+        slice_bytes = rows_per_slice * row_bytes;
+    }
+}
 
-    const int64_t ne00     = src0->ne[0];
-    const int64_t ne01     = src0->ne[1];  // Total tensor rows, needed for SoA offset calculations
-    const int64_t row_diff = row_high - row_low;
+static size_t mmvq_q6_k_coalesced_row_quants_bytes(int blocks_per_row) {
+    size_t row_quants_bytes = 0;
+    int    remaining        = blocks_per_row;
+    while (remaining > 0) {
+        int ts = 1;
+        while (ts * 2 <= remaining && ts < 32) {
+            ts *= 2;
+        }
+        row_quants_bytes += static_cast<size_t>(ts) * (128 + 64 + 16);
+        remaining -= ts;
+    }
+    return row_quants_bytes;
+}
 
-    int device_id;
-    SYCL_CHECK(CHECK_TRY_ERROR(device_id = get_current_device_id()));
+static bool mmvq_build_stream_segments(const ggml_tensor * src0,
+                                       layout_mode         layout,
+                                       int64_t             ncols,
+                                       int64_t             total_rows,
+                                       mmvq_stream_ctx &   ctx) {
+    ctx.segment_count   = 0;
+    ctx.row_total_bytes = 0;
+    ctx.total_rows      = total_rows;
 
-    const auto *      src0_extra  = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
-    const layout_mode layout      = get_effective_layout_mode(src0_extra);
-    reorder_mode      mmvq_mode   = reorder_mode::NONE;
-    const void *      layout_base = nullptr;
-    switch (layout) {
-        case GGML_LAYOUT_SOA:
-            mmvq_mode   = reorder_mode::SOA;
-            layout_base = ggml_sycl_get_layout_ptr_for(src0, device_id, GGML_LAYOUT_SOA);
+    if (layout == GGML_LAYOUT_AOS) {
+        ctx.row_total_bytes = ggml_row_size(src0->type, ncols);
+        return false;
+    }
+
+    const size_t blocks_per_row = static_cast<size_t>(ncols) / ggml_blck_size(src0->type);
+    size_t       src_base       = 0;
+    auto         add_segment    = [&](size_t bytes_per_row) {
+        GGML_ASSERT(ctx.segment_count < 4);
+        ctx.segments[ctx.segment_count].src_base      = src_base;
+        ctx.segments[ctx.segment_count].bytes_per_row = bytes_per_row;
+        ctx.segment_count++;
+        src_base += static_cast<size_t>(total_rows) * bytes_per_row;
+        ctx.row_total_bytes += bytes_per_row;
+    };
+
+    switch (src0->type) {
+        case GGML_TYPE_Q4_0:
+            {
+                const size_t q_bytes = static_cast<size_t>(ncols) / 2;
+                const size_t d_bytes = blocks_per_row * sizeof(ggml_half);
+                add_segment(q_bytes);
+                add_segment(d_bytes);
+            }
             break;
-        case GGML_LAYOUT_COALESCED:
-            mmvq_mode   = reorder_mode::COALESCED;
-            layout_base = ggml_sycl_get_layout_ptr_for(src0, device_id, GGML_LAYOUT_COALESCED);
+        case GGML_TYPE_Q8_0:
+            {
+                const size_t q_bytes = static_cast<size_t>(ncols);
+                const size_t d_bytes = blocks_per_row * sizeof(ggml_half);
+                add_segment(q_bytes);
+                add_segment(d_bytes);
+            }
+            break;
+        case GGML_TYPE_Q4_K:
+            {
+                const size_t q_bytes      = blocks_per_row * (QK_K / 2);
+                const size_t scales_bytes = blocks_per_row * K_SCALE_SIZE;
+                const size_t dm_bytes     = blocks_per_row * 4;
+                add_segment(q_bytes);
+                add_segment(scales_bytes);
+                add_segment(dm_bytes);
+            }
+            break;
+        case GGML_TYPE_Q6_K:
+            {
+                if (layout == GGML_LAYOUT_COALESCED) {
+                    const size_t q_bytes = mmvq_q6_k_coalesced_row_quants_bytes(static_cast<int>(blocks_per_row));
+                    const size_t d_bytes = blocks_per_row * sizeof(ggml_half);
+                    add_segment(q_bytes);
+                    add_segment(d_bytes);
+                } else {
+                    const size_t ql_bytes     = blocks_per_row * (QK_K / 2);
+                    const size_t qh_bytes     = blocks_per_row * (QK_K / 4);
+                    const size_t scales_bytes = blocks_per_row * (QK_K / 16);
+                    const size_t d_bytes      = blocks_per_row * sizeof(ggml_half);
+                    add_segment(ql_bytes);
+                    add_segment(qh_bytes);
+                    add_segment(scales_bytes);
+                    add_segment(d_bytes);
+                }
+            }
+            break;
+        case GGML_TYPE_MXFP4:
+            {
+                const size_t q_bytes = static_cast<size_t>(ncols) / 2;
+                const size_t e_bytes = blocks_per_row;
+                add_segment(q_bytes);
+                add_segment(e_bytes);
+            }
             break;
         default:
-            mmvq_mode = reorder_mode::NONE;
-            break;
-    }
-    if (mmvq_mode != reorder_mode::NONE && !layout_base) {
-        GGML_SYCL_DEBUG("[MMVQ] Missing layout pointer for %s layout=%d, falling back to AoS\n",
-                        src0->name ? src0->name : "?", (int) layout);
-        mmvq_mode = reorder_mode::NONE;
+            GGML_ABORT("MMVQ streaming: unsupported layout/type");
     }
 
-    // DEBUG: Check dimensions and src1 values for layer 0 projections
-    static int mmvq_dbg       = 0;
-    static int mmvq_b1_dbg    = 0;
-    static int mmvq_wq_dbg    = 0;
-    bool       is_attn_out_l0 = src0->name && strstr(src0->name, "blk.0.attn_output");
-    bool       is_wq_l0       = src0->name && strstr(src0->name, "blk.0.attn_q");
-    bool do_mmvq_dbg = (mmvq_dbg++ < 5 && is_attn_out_l0) || (src1_ncols == 1 && is_attn_out_l0 && mmvq_b1_dbg++ < 5);
+    return true;
+}
 
-    // DEBUG wq projection for batch=1 NaN issue
-    // Controlled by GGML_SYCL_TP_DEBUG environment variable
-    if (g_ggml_sycl_tp_debug && is_wq_l0 && src1_ncols == 1 && mmvq_wq_dbg++ < 5) {
-        fprintf(stderr, "TP DEBUG MMVQ wq layer0 batch=1: ne00=%lld, row_diff=%lld, src1_ddf_i=%p, src1_ddq_i=%p\n",
-                (long long) ne00, (long long) row_diff, (void *) src1_ddf_i, (void *) src1_ddq_i);
-
-        // Check input values (RMS norm output, quantized as Q8_1)
-        struct block_q8_1_debug {
-            sycl::half d;
-            sycl::half s;
-            int8_t     qs[32];
-        };
-
-        block_q8_1_debug blk;
-        stream->memcpy(&blk, src1_ddq_i, sizeof(blk)).wait();
-        float d_f = static_cast<float>(blk.d);
-        fprintf(stderr, "TP DEBUG MMVQ wq input (norm output): d=%f, qs[0..3]=[%d,%d,%d,%d]\n", d_f, blk.qs[0],
-                blk.qs[1], blk.qs[2], blk.qs[3]);
-
-        // Check for NaN/inf in d
-        if (d_f != d_f || d_f == std::numeric_limits<float>::infinity() ||
-            d_f == -std::numeric_limits<float>::infinity()) {
-            fprintf(stderr, "TP DEBUG MMVQ wq input: INVALID d value detected!\n");
-        }
-    }
-
-    // DEBUG: Layer 30 and 31 FFN gate Q8_1 quantized input check
-    static int mmvq_l30_gate_dbg = 0;
-    static int mmvq_l31_gate_dbg = 0;
-    bool       is_ffn_gate_l30   = src0->name && strstr(src0->name, "blk.30.ffn_gate");
-    bool       is_ffn_gate_l31   = src0->name && strstr(src0->name, "blk.31.ffn_gate");
-
-    // Check layer 30 first to compare
-    if (g_ggml_sycl_tp_debug && is_ffn_gate_l30 && src1_ncols == 1 && mmvq_l30_gate_dbg++ < 3) {
-        struct block_q4_0_l30 {
-            sycl::half d;
-            uint8_t    qs[16];
-        };
-
-        block_q4_0_l30 wblk;
-        stream->memcpy(&wblk, src0_dd_i, sizeof(wblk)).wait();
-        float wd = static_cast<float>(wblk.d);
-        int   w0 = (wblk.qs[0] & 0xF) - 8;
-        int   w1 = (wblk.qs[0] >> 4) - 8;
-        fprintf(stderr, "TP DEBUG MMVQ L30 Q4_0 weight: ptr=%p d=%f raw[0..1]=[%d,%d] -> deq=[%f,%f]\n",
-                (void *) src0_dd_i, wd, w0, w1, w0 * wd, w1 * wd);
-    }
-    if (g_ggml_sycl_tp_debug && is_ffn_gate_l31 && src1_ncols == 1 && mmvq_l31_gate_dbg++ < 5) {
-        fprintf(stderr, "TP DEBUG MMVQ L31 FFN_GATE batch=1: ne00=%lld (K), row_diff=%lld (N), src1_ddq_i=%p\n",
-                (long long) ne00, (long long) row_diff, (void *) src1_ddq_i);
-
-        // Read first Q8_1 block (ffn_norm output quantized)
-        struct block_q8_1_l31 {
-            sycl::half d;
-            sycl::half s;
-            int8_t     qs[32];
-        };
-
-        block_q8_1_l31 blk;
-        stream->memcpy(&blk, src1_ddq_i, sizeof(blk)).wait();
-        float d_f = static_cast<float>(blk.d);
-        float s_f = static_cast<float>(blk.s);
-        float v0  = blk.qs[0] * d_f;
-        float v1  = blk.qs[1] * d_f;
-        float v2  = blk.qs[2] * d_f;
-        float v3  = blk.qs[3] * d_f;
-
-        bool d_invalid = std::isnan(d_f) || std::isinf(d_f);
-        fprintf(stderr, "TP DEBUG MMVQ L31 Q8_1 input: d=%f (%s), s=%f, qs[0..3]=[%d,%d,%d,%d] -> deq=[%f,%f,%f,%f]\n",
-                d_f, d_invalid ? "INVALID" : "ok", s_f, blk.qs[0], blk.qs[1], blk.qs[2], blk.qs[3], v0, v1, v2, v3);
-
-        // Also check weight Q4_0 block at layer 31
-        struct block_q4_0_l31 {
-            sycl::half d;
-            uint8_t    qs[16];  // 32 x 4-bit
-        };
-
-        block_q4_0_l31 wblk;
-        stream->memcpy(&wblk, src0_dd_i, sizeof(wblk)).wait();
-        float wd         = static_cast<float>(wblk.d);
-        int   w0         = (wblk.qs[0] & 0xF) - 8;
-        int   w1         = (wblk.qs[0] >> 4) - 8;
-        bool  wd_invalid = std::isnan(wd) || std::isinf(wd);
-        fprintf(stderr, "TP DEBUG MMVQ L31 Q4_0 weight: d=%f (%s), raw[0..1]=[%d,%d] -> deq=[%f,%f]\n", wd,
-                wd_invalid ? "INVALID" : "ok", w0, w1, w0 * wd, w1 * wd);
-
-        // DEBUG: Check if dst pointer overlaps with weight
-        uintptr_t weight_start = (uintptr_t) src0_dd_i;
-        uintptr_t weight_end   = weight_start + (ne00 / 32) * 18 * row_diff;  // Q4_0 block size
-        uintptr_t dst_start    = (uintptr_t) dst_dd_i;
-        uintptr_t dst_end      = dst_start + row_diff * src1_ncols * sizeof(float);
-        bool      overlap      = (dst_start < weight_end && dst_end > weight_start);
-        fprintf(stderr, "TP DEBUG MMVQ L31 ptrs: weight=[%p,%p), dst=[%p,%p), overlap=%d\n", (void *) weight_start,
-                (void *) weight_end, (void *) dst_start, (void *) dst_end, overlap);
-    }
-    if (g_ggml_sycl_tp_debug && do_mmvq_dbg) {
-        fprintf(stderr,
-                "TP DEBUG MMVQ %s: ne00=%lld (K), ne10=%lld (src1_K), row_diff=%lld (N), src1_ncols=%lld, padded=%lld, "
-                "src1_ddq_i=%p\n",
-                src0->name, (long long) ne00, (long long) ne10, (long long) row_diff, (long long) src1_ncols,
-                (long long) src1_padded_col_size, (void *) src1_ddq_i);
-
-        // Read and dequantize first Q8_1 block to check input values
-        // Q8_1 block: ggml_half d (2 bytes), ggml_half s (2 bytes), int8_t qs[32]
-        struct block_q8_1_debug {
-            sycl::half d;
-            sycl::half s;
-            int8_t     qs[32];
-        };
-
-        block_q8_1_debug blk;
-        stream->memcpy(&blk, src1_ddq_i, sizeof(blk)).wait();
-        // Dequantize first 4 values: val[i] = qs[i] * d
-        float d_f = static_cast<float>(blk.d);
-        float s_f = static_cast<float>(blk.s);
-        float v0  = blk.qs[0] * d_f;
-        float v1  = blk.qs[1] * d_f;
-        float v2  = blk.qs[2] * d_f;
-        float v3  = blk.qs[3] * d_f;
-        fprintf(stderr,
-                "TP DEBUG MMVQ src1 (attn_out quantized): d=%f, s=%f, qs[0..3]=[%d,%d,%d,%d] -> deq=[%f,%f,%f,%f]\n",
-                d_f, s_f, blk.qs[0], blk.qs[1], blk.qs[2], blk.qs[3], v0, v1, v2, v3);
-
-        // Also read some middle values from quantized input (block 32 = position 1024-1055)
-        block_q8_1_debug blk_mid;
-        stream->memcpy(&blk_mid, src1_ddq_i + 32 * sizeof(blk_mid), sizeof(blk_mid)).wait();
-        float d_mid = static_cast<float>(blk_mid.d);
-        fprintf(stderr, "TP DEBUG MMVQ src1 middle (pos 1024): d=%f, qs[0..3]=[%d,%d,%d,%d] -> deq=[%f,%f,%f,%f]\n",
-                d_mid, blk_mid.qs[0], blk_mid.qs[1], blk_mid.qs[2], blk_mid.qs[3], blk_mid.qs[0] * d_mid,
-                blk_mid.qs[1] * d_mid, blk_mid.qs[2] * d_mid, blk_mid.qs[3] * d_mid);
-    }
-
-    // DEBUG: Also print device ID and weight data for layer 0 attn_output
-    static int mmvq_dev_dbg = 0;
-    if (g_ggml_sycl_tp_debug && mmvq_dev_dbg++ < 10 && src0->name && strstr(src0->name, "blk.0.attn_output")) {
-        fprintf(stderr, "TP DEBUG MMVQ device=%d for %s, src0_dd_i=%p, ne00=%lld, row_diff=%lld\n", device_id,
-                src0->name, (void *) src0_dd_i, (long long) ne00, (long long) row_diff);
-
-        // Read first Q4_0 block from weight (output row 0, first 32 input elements)
-        struct block_q4_0_debug {
-            sycl::half d;
-            uint8_t    qs[16];  // 32 x 4-bit values packed
-        };
-
-        block_q4_0_debug w_blk0, w_blk64;
-        stream->memcpy(&w_blk0, src0_dd_i, sizeof(w_blk0)).wait();
-        // Also read block 64 (second row of output, position [1,0]) for TP mode
-        // Block index 64 = ne00/32 blocks per row = 64 for TP, 128 for single
-        size_t blocks_per_row = ne00 / 32;
-        stream->memcpy(&w_blk64, src0_dd_i + blocks_per_row * sizeof(w_blk0), sizeof(w_blk64)).wait();
-
-        float d0  = static_cast<float>(w_blk0.d);
-        float d64 = static_cast<float>(w_blk64.d);
-        // Dequantize first 4 values: val[i] = (qs[i/2] >> (4*(i%2)) & 0xF) - 8) * d
-        int   v0  = (w_blk0.qs[0] & 0xF) - 8;
-        int   v1  = (w_blk0.qs[0] >> 4) - 8;
-        int   v2  = (w_blk0.qs[1] & 0xF) - 8;
-        int   v3  = (w_blk0.qs[1] >> 4) - 8;
-        fprintf(stderr,
-                "TP DEBUG MMVQ weight row0 blk0: d=%f, qs[0-1]=0x%02x%02x, vals=[%d,%d,%d,%d] -> deq=[%f,%f,%f,%f]\n",
-                d0, w_blk0.qs[0], w_blk0.qs[1], v0, v1, v2, v3, v0 * d0, v1 * d0, v2 * d0, v3 * d0);
-
-        int v0_64 = (w_blk64.qs[0] & 0xF) - 8;
-        int v1_64 = (w_blk64.qs[0] >> 4) - 8;
-        fprintf(stderr, "TP DEBUG MMVQ weight row1 blk0: d=%f, qs[0]=0x%02x, vals=[%d,%d] -> deq=[%f,%f]\n", d64,
-                w_blk64.qs[0], v0_64, v1_64, v0_64 * d64, v1_64 * d64);
-    }
-
-    const size_t q8_1_ts = sizeof(block_q8_1);
-    const size_t q8_1_bs = QK8_1;
-    // the main device has a larger memory buffer to hold the results from all GPUs
-    // nrows_dst == nrows of the matrix that the kernel writes into
+static void ggml_sycl_mmvq_dispatch(const ggml_tensor *     src0,
+                                    const char *            src0_dd_i,
+                                    const void *            layout_base,
+                                    reorder_mode            mmvq_mode,
+                                    int                     device_id,
+                                    int64_t                 ne00,
+                                    int64_t                 ne01,
+                                    int64_t                 ne10,
+                                    int64_t                 row_low,
+                                    int64_t                 row_high,
+                                    int64_t                 src1_ncols,
+                                    int64_t                 src1_padded_col_size,
+                                    const char *            src1_ddq_i,
+                                    float *                 dst_dd_i,
+                                    int64_t                 dst_row_stride,
+                                    const dpct::queue_ptr & stream) {
+    const int64_t row_diff = row_high - row_low;
+    const size_t  q8_1_ts  = sizeof(block_q8_1);
+    const size_t  q8_1_bs  = QK8_1;
 
     for (int i = 0; i < src1_ncols; i++) {
         const size_t src1_ddq_i_offset = i * src1_padded_col_size * q8_1_ts / q8_1_bs;
         const char * src1_ddq_i_bs     = src1_ddq_i + src1_ddq_i_offset;
-        float *      dst_dd_i_bs       = dst_dd_i + i * dst->ne[0];
+        float *      dst_dd_i_bs       = dst_dd_i + i * dst_row_stride;
         switch (src0->type) {
             case GGML_TYPE_Q4_0:
                 {
@@ -4335,8 +4297,441 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
                     out_vals[3], out_vals[4], out_vals[5], out_vals[6], out_vals[7]);
         }
     }
+}
+
+static sycl::event mmvq_stream_copy(sycl::queue &                    queue,
+                                    void *                           device_slice,
+                                    size_t                           slice_bytes,
+                                    size_t                           offset_bytes,
+                                    const void *                     src_ptr,
+                                    size_t                           src_size,
+                                    const void *                     ctx_void,
+                                    const std::vector<sycl::event> & deps) {
+    GGML_UNUSED(src_ptr);
+    GGML_UNUSED(src_size);
+    const auto * ctx = static_cast<const mmvq_stream_ctx *>(ctx_void);
+    if (!ctx || ctx->segment_count == 0 || ctx->row_total_bytes == 0) {
+        return queue.memcpy(device_slice, static_cast<const char *>(src_ptr) + offset_bytes, slice_bytes, deps);
+    }
+    GGML_ASSERT(offset_bytes % ctx->row_total_bytes == 0);
+    GGML_ASSERT(slice_bytes % ctx->row_total_bytes == 0);
+
+    const size_t row_start = offset_bytes / ctx->row_total_bytes;
+    const size_t row_count = slice_bytes / ctx->row_total_bytes;
+    const size_t src_row   = static_cast<size_t>(ctx->row_base) + row_start;
+
+    size_t                      dst_offset = 0;
+    std::vector<sycl::event>    cur_deps   = deps;
+    sycl::event                last_evt;
+
+    for (int i = 0; i < ctx->segment_count; ++i) {
+        const auto & seg   = ctx->segments[i];
+        const size_t bytes = row_count * seg.bytes_per_row;
+        if (bytes == 0) {
+            continue;
+        }
+        const uint8_t * src = ctx->src_base + seg.src_base + src_row * seg.bytes_per_row;
+        void *          dst = static_cast<uint8_t *>(device_slice) + dst_offset;
+        last_evt = queue.memcpy(dst, src, bytes, cur_deps);
+        cur_deps.assign(1, last_evt);
+        dst_offset += bytes;
+    }
+
+    GGML_ASSERT(dst_offset == slice_bytes);
+    return last_evt;
+}
+
+static sycl::event mmvq_stream_slice(sycl::queue &                    queue,
+                                     void *                           device_slice,
+                                     size_t                           slice_bytes,
+                                     size_t                           offset_bytes,
+                                     const void *                     ctx_void,
+                                     const std::vector<sycl::event> & deps) {
+    GGML_UNUSED(deps);
+    const auto * ctx = static_cast<const mmvq_stream_ctx *>(ctx_void);
+    if (!ctx || ctx->row_total_bytes == 0) {
+        return queue.ext_oneapi_submit_barrier();
+    }
+    GGML_ASSERT(offset_bytes % ctx->row_total_bytes == 0);
+    GGML_ASSERT(slice_bytes % ctx->row_total_bytes == 0);
+
+    const size_t row_start = offset_bytes / ctx->row_total_bytes;
+    const size_t row_count = slice_bytes / ctx->row_total_bytes;
+    float *      dst_ptr   = ctx->dst_dd_i + row_start;
+
+    const void * layout_ptr = (ctx->mmvq_mode == reorder_mode::SOA || ctx->mmvq_mode == reorder_mode::COALESCED)
+                                  ? device_slice
+                                  : nullptr;
+
+    ggml_sycl_mmvq_dispatch(ctx->src0,
+                            static_cast<const char *>(device_slice),
+                            layout_ptr,
+                            ctx->mmvq_mode,
+                            ctx->device_id,
+                            ctx->ne00,
+                            static_cast<int64_t>(row_count),
+                            ctx->ne10,
+                            0,
+                            static_cast<int64_t>(row_count),
+                            ctx->src1_ncols,
+                            ctx->src1_padded_col_size,
+                            ctx->src1_ddq_i,
+                            dst_ptr,
+                            ctx->dst_row_stride,
+                            &queue);
+
+    return queue.ext_oneapi_submit_barrier();
+}
+
+void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
+                                const ggml_tensor *         src0,
+                                const ggml_tensor *         src1,
+                                ggml_tensor *               dst,
+                                const char *                src0_dd_i,
+                                const float *               src1_ddf_i,
+                                const char *                src1_ddq_i,
+                                float *                     dst_dd_i,
+                                const int64_t               row_low,
+                                const int64_t               row_high,
+                                const int64_t               src1_ncols,
+                                const int64_t               src1_padded_col_size,
+                                const dpct::queue_ptr &     stream) {
+    GGML_SYCL_PROFILE_SCOPE_MMVQ("mmvq");
+
+    // Check tiered dispatch for weight tensor
+    if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
+        ggml_sycl::memory_tier tier;
+        bool in_inventory = false;
+        void * cached_ptr = get_cached_tensor_ptr(src0->name, &tier, &in_inventory);
+        if (cached_ptr != nullptr) {
+            GGML_SYCL_DEBUG("[SYCL] mmvq tiered hit: %s (tier=%d)\n",
+                          src0->name, static_cast<int>(tier));
+        } else if (in_inventory) {
+            GGML_SYCL_DEBUG("[SYCL] mmvq tiered pending: %s\n", src0->name);
+        }
+    }
+
+    const int64_t ne10 = src1->ne[0];
+    GGML_ASSERT(ne10 % QK8_1 == 0);
+
+    const int64_t ne00     = src0->ne[0];
+    const int64_t ne01     = src0->ne[1];  // Total tensor rows, needed for SoA offset calculations
+    const int64_t row_diff = row_high - row_low;
+
+    int device_id;
+    SYCL_CHECK(CHECK_TRY_ERROR(device_id = get_current_device_id()));
+
+    const auto * src0_extra = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+    layout_mode   layout     = GGML_LAYOUT_AOS;
+    layout_mode   chosen     = GGML_LAYOUT_AOS;
+    if (ggml_sycl_get_layout_choice_for_tensor(src0, device_id, &chosen)) {
+        layout = chosen;
+    } else {
+        layout = get_effective_layout_mode(src0_extra);
+    }
+    reorder_mode mmvq_mode = reorder_mode::NONE;
+    const void *      layout_base = nullptr;
+    switch (layout) {
+        case GGML_LAYOUT_SOA:
+            mmvq_mode   = reorder_mode::SOA;
+            layout_base = ggml_sycl_get_layout_ptr_for(src0, device_id, GGML_LAYOUT_SOA);
+            break;
+        case GGML_LAYOUT_COALESCED:
+            mmvq_mode   = reorder_mode::COALESCED;
+            layout_base = ggml_sycl_get_layout_ptr_for(src0, device_id, GGML_LAYOUT_COALESCED);
+            break;
+        default:
+            mmvq_mode = reorder_mode::NONE;
+            break;
+    }
+    if (mmvq_mode != reorder_mode::NONE && !layout_base) {
+        GGML_SYCL_DEBUG("[MMVQ] Missing layout pointer for %s layout=%d, falling back to AoS\n",
+                        src0->name ? src0->name : "?", (int) layout);
+        mmvq_mode = reorder_mode::NONE;
+    }
+
+    // DEBUG: Check dimensions and src1 values for layer 0 projections
+    static int mmvq_dbg       = 0;
+    static int mmvq_b1_dbg    = 0;
+    static int mmvq_wq_dbg    = 0;
+    bool       is_attn_out_l0 = src0->name && strstr(src0->name, "blk.0.attn_output");
+    bool       is_wq_l0       = src0->name && strstr(src0->name, "blk.0.attn_q");
+    bool do_mmvq_dbg = (mmvq_dbg++ < 5 && is_attn_out_l0) || (src1_ncols == 1 && is_attn_out_l0 && mmvq_b1_dbg++ < 5);
+
+    // DEBUG wq projection for batch=1 NaN issue
+    // Controlled by GGML_SYCL_TP_DEBUG environment variable
+    if (g_ggml_sycl_tp_debug && is_wq_l0 && src1_ncols == 1 && mmvq_wq_dbg++ < 5) {
+        fprintf(stderr, "TP DEBUG MMVQ wq layer0 batch=1: ne00=%lld, row_diff=%lld, src1_ddf_i=%p, src1_ddq_i=%p\n",
+                (long long) ne00, (long long) row_diff, (void *) src1_ddf_i, (void *) src1_ddq_i);
+
+        // Check input values (RMS norm output, quantized as Q8_1)
+        struct block_q8_1_debug {
+            sycl::half d;
+            sycl::half s;
+            int8_t     qs[32];
+        };
+
+        block_q8_1_debug blk;
+        stream->memcpy(&blk, src1_ddq_i, sizeof(blk)).wait();
+        float d_f = static_cast<float>(blk.d);
+        fprintf(stderr, "TP DEBUG MMVQ wq input (norm output): d=%f, qs[0..3]=[%d,%d,%d,%d]\n", d_f, blk.qs[0],
+                blk.qs[1], blk.qs[2], blk.qs[3]);
+
+        // Check for NaN/inf in d
+        if (d_f != d_f || d_f == std::numeric_limits<float>::infinity() ||
+            d_f == -std::numeric_limits<float>::infinity()) {
+            fprintf(stderr, "TP DEBUG MMVQ wq input: INVALID d value detected!\n");
+        }
+    }
+
+    // DEBUG: Layer 30 and 31 FFN gate Q8_1 quantized input check
+    static int mmvq_l30_gate_dbg = 0;
+    static int mmvq_l31_gate_dbg = 0;
+    bool       is_ffn_gate_l30   = src0->name && strstr(src0->name, "blk.30.ffn_gate");
+    bool       is_ffn_gate_l31   = src0->name && strstr(src0->name, "blk.31.ffn_gate");
+
+    // Check layer 30 first to compare
+    if (g_ggml_sycl_tp_debug && is_ffn_gate_l30 && src1_ncols == 1 && mmvq_l30_gate_dbg++ < 3) {
+        struct block_q4_0_l30 {
+            sycl::half d;
+            uint8_t    qs[16];
+        };
+
+        block_q4_0_l30 wblk;
+        stream->memcpy(&wblk, src0_dd_i, sizeof(wblk)).wait();
+        float wd = static_cast<float>(wblk.d);
+        int   w0 = (wblk.qs[0] & 0xF) - 8;
+        int   w1 = (wblk.qs[0] >> 4) - 8;
+        fprintf(stderr, "TP DEBUG MMVQ L30 Q4_0 weight: ptr=%p d=%f raw[0..1]=[%d,%d] -> deq=[%f,%f]\n",
+                (void *) src0_dd_i, wd, w0, w1, w0 * wd, w1 * wd);
+    }
+    if (g_ggml_sycl_tp_debug && is_ffn_gate_l31 && src1_ncols == 1 && mmvq_l31_gate_dbg++ < 5) {
+        fprintf(stderr, "TP DEBUG MMVQ L31 FFN_GATE batch=1: ne00=%lld (K), row_diff=%lld (N), src1_ddq_i=%p\n",
+                (long long) ne00, (long long) row_diff, (void *) src1_ddq_i);
+
+        // Read first Q8_1 block (ffn_norm output quantized)
+        struct block_q8_1_l31 {
+            sycl::half d;
+            sycl::half s;
+            int8_t     qs[32];
+        };
+
+        block_q8_1_l31 blk;
+        stream->memcpy(&blk, src1_ddq_i, sizeof(blk)).wait();
+        float d_f = static_cast<float>(blk.d);
+        float s_f = static_cast<float>(blk.s);
+        float v0  = blk.qs[0] * d_f;
+        float v1  = blk.qs[1] * d_f;
+        float v2  = blk.qs[2] * d_f;
+        float v3  = blk.qs[3] * d_f;
+
+        bool d_invalid = std::isnan(d_f) || std::isinf(d_f);
+        fprintf(stderr, "TP DEBUG MMVQ L31 Q8_1 input: d=%f (%s), s=%f, qs[0..3]=[%d,%d,%d,%d] -> deq=[%f,%f,%f,%f]\n",
+                d_f, d_invalid ? "INVALID" : "ok", s_f, blk.qs[0], blk.qs[1], blk.qs[2], blk.qs[3], v0, v1, v2, v3);
+
+        // Also check weight Q4_0 block at layer 31
+        struct block_q4_0_l31 {
+            sycl::half d;
+            uint8_t    qs[16];  // 32 x 4-bit
+        };
+
+        block_q4_0_l31 wblk;
+        stream->memcpy(&wblk, src0_dd_i, sizeof(wblk)).wait();
+        float wd         = static_cast<float>(wblk.d);
+        int   w0         = (wblk.qs[0] & 0xF) - 8;
+        int   w1         = (wblk.qs[0] >> 4) - 8;
+        bool  wd_invalid = std::isnan(wd) || std::isinf(wd);
+        fprintf(stderr, "TP DEBUG MMVQ L31 Q4_0 weight: d=%f (%s), raw[0..1]=[%d,%d] -> deq=[%f,%f]\n", wd,
+                wd_invalid ? "INVALID" : "ok", w0, w1, w0 * wd, w1 * wd);
+
+        // DEBUG: Check if dst pointer overlaps with weight
+        uintptr_t weight_start = (uintptr_t) src0_dd_i;
+        uintptr_t weight_end   = weight_start + (ne00 / 32) * 18 * row_diff;  // Q4_0 block size
+        uintptr_t dst_start    = (uintptr_t) dst_dd_i;
+        uintptr_t dst_end      = dst_start + row_diff * src1_ncols * sizeof(float);
+        bool      overlap      = (dst_start < weight_end && dst_end > weight_start);
+        fprintf(stderr, "TP DEBUG MMVQ L31 ptrs: weight=[%p,%p), dst=[%p,%p), overlap=%d\n", (void *) weight_start,
+                (void *) weight_end, (void *) dst_start, (void *) dst_end, overlap);
+    }
+    if (g_ggml_sycl_tp_debug && do_mmvq_dbg) {
+        fprintf(stderr,
+                "TP DEBUG MMVQ %s: ne00=%lld (K), ne10=%lld (src1_K), row_diff=%lld (N), src1_ncols=%lld, padded=%lld, "
+                "src1_ddq_i=%p\n",
+                src0->name, (long long) ne00, (long long) ne10, (long long) row_diff, (long long) src1_ncols,
+                (long long) src1_padded_col_size, (void *) src1_ddq_i);
+
+        // Read and dequantize first Q8_1 block to check input values
+        // Q8_1 block: ggml_half d (2 bytes), ggml_half s (2 bytes), int8_t qs[32]
+        struct block_q8_1_debug {
+            sycl::half d;
+            sycl::half s;
+            int8_t     qs[32];
+        };
+
+        block_q8_1_debug blk;
+        stream->memcpy(&blk, src1_ddq_i, sizeof(blk)).wait();
+        // Dequantize first 4 values: val[i] = qs[i] * d
+        float d_f = static_cast<float>(blk.d);
+        float s_f = static_cast<float>(blk.s);
+        float v0  = blk.qs[0] * d_f;
+        float v1  = blk.qs[1] * d_f;
+        float v2  = blk.qs[2] * d_f;
+        float v3  = blk.qs[3] * d_f;
+        fprintf(stderr,
+                "TP DEBUG MMVQ src1 (attn_out quantized): d=%f, s=%f, qs[0..3]=[%d,%d,%d,%d] -> deq=[%f,%f,%f,%f]\n",
+                d_f, s_f, blk.qs[0], blk.qs[1], blk.qs[2], blk.qs[3], v0, v1, v2, v3);
+
+        // Also read some middle values from quantized input (block 32 = position 1024-1055)
+        block_q8_1_debug blk_mid;
+        stream->memcpy(&blk_mid, src1_ddq_i + 32 * sizeof(blk_mid), sizeof(blk_mid)).wait();
+        float d_mid = static_cast<float>(blk_mid.d);
+        fprintf(stderr, "TP DEBUG MMVQ src1 middle (pos 1024): d=%f, qs[0..3]=[%d,%d,%d,%d] -> deq=[%f,%f,%f,%f]\n",
+                d_mid, blk_mid.qs[0], blk_mid.qs[1], blk_mid.qs[2], blk_mid.qs[3], blk_mid.qs[0] * d_mid,
+                blk_mid.qs[1] * d_mid, blk_mid.qs[2] * d_mid, blk_mid.qs[3] * d_mid);
+    }
+
+    // DEBUG: Also print device ID and weight data for layer 0 attn_output
+    static int mmvq_dev_dbg = 0;
+    if (g_ggml_sycl_tp_debug && mmvq_dev_dbg++ < 10 && src0->name && strstr(src0->name, "blk.0.attn_output")) {
+        fprintf(stderr, "TP DEBUG MMVQ device=%d for %s, src0_dd_i=%p, ne00=%lld, row_diff=%lld\n", device_id,
+                src0->name, (void *) src0_dd_i, (long long) ne00, (long long) row_diff);
+
+        // Read first Q4_0 block from weight (output row 0, first 32 input elements)
+        struct block_q4_0_debug {
+            sycl::half d;
+            uint8_t    qs[16];  // 32 x 4-bit values packed
+        };
+
+        block_q4_0_debug w_blk0, w_blk64;
+        stream->memcpy(&w_blk0, src0_dd_i, sizeof(w_blk0)).wait();
+        // Also read block 64 (second row of output, position [1,0]) for TP mode
+        // Block index 64 = ne00/32 blocks per row = 64 for TP, 128 for single
+        size_t blocks_per_row = ne00 / 32;
+        stream->memcpy(&w_blk64, src0_dd_i + blocks_per_row * sizeof(w_blk0), sizeof(w_blk64)).wait();
+
+        float d0  = static_cast<float>(w_blk0.d);
+        float d64 = static_cast<float>(w_blk64.d);
+        // Dequantize first 4 values: val[i] = (qs[i/2] >> (4*(i%2)) & 0xF) - 8) * d
+        int   v0  = (w_blk0.qs[0] & 0xF) - 8;
+        int   v1  = (w_blk0.qs[0] >> 4) - 8;
+        int   v2  = (w_blk0.qs[1] & 0xF) - 8;
+        int   v3  = (w_blk0.qs[1] >> 4) - 8;
+        fprintf(stderr,
+                "TP DEBUG MMVQ weight row0 blk0: d=%f, qs[0-1]=0x%02x%02x, vals=[%d,%d,%d,%d] -> deq=[%f,%f,%f,%f]\n",
+                d0, w_blk0.qs[0], w_blk0.qs[1], v0, v1, v2, v3, v0 * d0, v1 * d0, v2 * d0, v3 * d0);
+
+        int v0_64 = (w_blk64.qs[0] & 0xF) - 8;
+        int v1_64 = (w_blk64.qs[0] >> 4) - 8;
+        fprintf(stderr, "TP DEBUG MMVQ weight row1 blk0: d=%f, qs[0]=0x%02x, vals=[%d,%d] -> deq=[%f,%f]\n", d64,
+                w_blk64.qs[0], v0_64, v1_64, v0_64 * d64, v1_64 * d64);
+    }
+
+    const layout_mode dispatch_layout =
+        (mmvq_mode == reorder_mode::NONE) ? GGML_LAYOUT_AOS : layout;
+    const void * dispatch_base =
+        (mmvq_mode == reorder_mode::SOA || mmvq_mode == reorder_mode::COALESCED) ? layout_base : nullptr;
+    const char * dispatch_ptr   = src0_dd_i;
+    const int64_t dst_row_stride = dst->ne[0];
+
+    mmvq_stream_ctx stream_ctx{};
+    const bool      custom_copy = mmvq_build_stream_segments(src0, dispatch_layout, ne00, ne01, stream_ctx);
+    stream_ctx.device_id          = device_id;
+    stream_ctx.src0               = src0;
+    stream_ctx.src1_ddq_i         = src1_ddq_i;
+    stream_ctx.dst_dd_i           = dst_dd_i;
+    stream_ctx.dst_row_stride     = dst_row_stride;
+    stream_ctx.ne00               = ne00;
+    stream_ctx.ne10               = ne10;
+    stream_ctx.src1_ncols         = src1_ncols;
+    stream_ctx.src1_padded_col_size = src1_padded_col_size;
+    stream_ctx.row_base           = row_low;
+    stream_ctx.mmvq_mode          = mmvq_mode;
+    stream_ctx.layout             = dispatch_layout;
+
+    auto infer_location = [&](const void * ptr) -> ggml_sycl::cache_location {
+        if (!ptr) {
+            return ggml_sycl::cache_location::HOST_MMAP;
+        }
+        const sycl::usm::alloc alloc = sycl::get_pointer_type(ptr, stream->get_context());
+        if (alloc == sycl::usm::alloc::device) {
+            return ggml_sycl::cache_location::DEVICE;
+        }
+        if (alloc == sycl::usm::alloc::host || alloc == sycl::usm::alloc::shared) {
+            return ggml_sycl::cache_location::HOST_PINNED;
+        }
+        return ggml_sycl::cache_location::HOST_MMAP;
+    };
+
+    ggml_sycl::unified_cache * cache =
+        ggml_sycl::unified_cache_enabled() ? ggml_sycl::get_unified_cache(*stream) : nullptr;
+    const void *               cache_key = cache ? ggml_backend_sycl_get_weight_cache_key(src0, device_id) : nullptr;
+    ggml_sycl::cache_ptr_view  view{};
+    if (cache && cache_key) {
+        view = cache->get_view(cache_key, dispatch_layout);
+    }
+    const void * view_ptr = dispatch_base ? dispatch_base : dispatch_ptr;
+    if (!view.ptr) {
+        view.ptr      = const_cast<void *>(view_ptr);
+        view.size     = stream_ctx.row_total_bytes * static_cast<size_t>(ne01);
+        view.layout   = dispatch_layout;
+        view.type     = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
+        view.location = infer_location(view.ptr);
+    }
+    stream_ctx.src_base = static_cast<const uint8_t *>(view.ptr);
+
+    if (view.ptr && view.location != ggml_sycl::cache_location::DEVICE) {
+        if (!cache) {
+            GGML_ABORT("MMVQ streaming requires unified cache");
+        }
+        size_t slice_bytes  = 0;
+        size_t buffer_count = 0;
+        mmvq_resolve_dma_params(stream_ctx.row_total_bytes, slice_bytes, buffer_count);
+        const size_t total_bytes = stream_ctx.row_total_bytes * static_cast<size_t>(row_diff);
+        if (cache_key) {
+            cache->pin(cache_key, dispatch_layout);
+        }
+        auto result = cache->stream_dma(view, total_bytes, slice_bytes, buffer_count, mmvq_stream_slice, &stream_ctx,
+                                        {}, custom_copy ? mmvq_stream_copy : nullptr);
+        if (cache_key) {
+            if (result.ok) {
+                cache->unpin_on_event(cache_key, dispatch_layout, result.event);
+            } else {
+                cache->unpin(cache_key, dispatch_layout);
+            }
+        }
+        if (!result.ok) {
+            if (result.mmap_direct_failed) {
+                GGML_LOG_WARN("[MMVQ] DMA from mmap failed, falling back to CPU (%s)\n",
+                              src0->name ? src0->name : "unknown");
+                if (ggml_sycl_cpu_fallback_graph(ctx, dst, "mmvq streaming")) {
+                    return;
+                }
+            }
+            GGML_ABORT("MMVQ streaming failed");
+        }
+        GGML_UNUSED(src1);
+        GGML_UNUSED(src1_ddf_i);
+        GGML_UNUSED(ctx);
+        return;
+    }
+
+    ggml_sycl_mmvq_dispatch(src0,
+                            dispatch_ptr,
+                            dispatch_base,
+                            mmvq_mode,
+                            device_id,
+                            ne00,
+                            ne01,
+                            ne10,
+                            row_low,
+                            row_high,
+                            src1_ncols,
+                            src1_padded_col_size,
+                            src1_ddq_i,
+                            dst_dd_i,
+                            dst_row_stride,
+                            stream);
     GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
     GGML_UNUSED(src1_ddf_i);
     GGML_UNUSED(ctx);
 }

@@ -15,8 +15,10 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <list>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -35,11 +37,29 @@ enum class cache_entry_state {
     FAILED,
 };
 
+// Memory location for cached pointers/buffers
+enum class cache_location {
+    DEVICE,
+    HOST_PINNED,
+    HOST_MMAP,
+};
+
 // XMX layout metadata carried with cache entries/results
 struct cache_layout_xmx_info {
     int64_t tile_n        = 0;
     int64_t tile_k        = 0;
     int64_t n_tile_groups = 0;
+};
+
+struct cache_ptr_view {
+    void *                ptr      = nullptr;
+    size_t                size     = 0;
+    ggml_layout_mode      layout   = GGML_LAYOUT_AOS;
+    cache_location        location = cache_location::DEVICE;
+    cache_entry_type      type     = cache_entry_type::DENSE_WEIGHT;
+    int                   layer_id = -1;
+    int                   expert_id = -1;
+    cache_layout_xmx_info xmx_info = {};
 };
 
 // Result status for layout-aware cache API
@@ -69,7 +89,6 @@ struct cache_layout_request {
     int                   expert_id        = -1;
     ggml_layout_mode      layout           = GGML_LAYOUT_AOS;
     bool                  validate_content = false;
-    bool                  allow_overcommit = false;
     cache_layout_xmx_info xmx_info         = {};
     cache_layout_fill_fn  fill_fn          = nullptr;
     const void *          fill_ctx         = nullptr;
@@ -83,12 +102,13 @@ struct cache_layout_result {
     sycl::event           event;
     cache_layout_status   status        = cache_layout_status::FAILED;
     bool                  host_resident = false;  // true if pointer is in host memory (fallback when VRAM full)
+    cache_location        location      = cache_location::DEVICE;
 };
 
 // Key for identifying a cached entry
 struct unified_cache_key {
     cache_entry_type type;
-    const void *     key_ptr;    // Stable key: GGUF identity for dense, mmap ptr for MoE
+    const void *     key_ptr;    // Stable key from ggml_backend_sycl_get_weight_cache_key or ggml_sycl_get_moe_expert_cache_key
     int              layer_id;   // Layer ID (for expert identification)
     int              expert_id;  // Expert ID (-1 for dense weights)
     ggml_layout_mode layout;     // Target layout for this entry
@@ -145,6 +165,7 @@ struct unified_cache_entry {
     bool                  has_ready_event;  // True if ready_event is valid
     sycl::event           ready_event;      // Completion event for IN_PROGRESS entries
     bool                  host_resident;    // Entry lives in host memory, not device (fallback when VRAM full)
+    cache_location        location;         // DEVICE/HOST_PINNED/HOST_MMAP
     // NOTE: Reorder state is tracked in tensor->extra->optimized_feature, not here
 };
 
@@ -154,6 +175,7 @@ struct host_cache_entry {
     const void *          src_ptr      = nullptr;
     uint64_t              content_hash = 0;
     size_t                size         = 0;
+    size_t                guard_size   = 0;
     cache_entry_type      type         = cache_entry_type::DENSE_WEIGHT;
     int                   layer_id     = -1;
     int                   expert_id    = -1;
@@ -163,10 +185,11 @@ struct host_cache_entry {
     bool                  pinned       = false;
     bool                  owns_ptr     = true;
     bool                  pinned_alloc = false;  // true if allocated via sycl::malloc_host
+    cache_location        location     = cache_location::HOST_PINNED;
     cache_layout_xmx_info xmx_info     = {};
 };
 
-// Host cache for canonical layouts (pinned-first, pageable fallback)
+// Host cache for canonical layouts (pinned-first, mmap alias fallback)
 class host_cache {
   public:
     host_cache(sycl::queue & queue, size_t budget_bytes);
@@ -188,10 +211,12 @@ class host_cache {
                                bool                          validate_content,
                                bool *                        needs_fill,
                                bool *                        pinned_alloc_out,
+                               cache_location *              location_out,
                                const cache_layout_xmx_info * xmx_info);
 
     bool   is_cached(const void * key_ptr, ggml_layout_mode layout) const;
     void * get(const void * key_ptr, ggml_layout_mode layout);
+    cache_location get_location(const void * key_ptr, ggml_layout_mode layout) const;
     void   remove(const void * key_ptr, cache_entry_type type, int layer_id, int expert_id, ggml_layout_mode layout);
 
     void pin(const void * key_ptr, ggml_layout_mode layout);
@@ -297,6 +322,7 @@ class unified_cache {
 
     // Get device pointer for cached entry (returns nullptr if not cached)
     void * get(const void * key_ptr, ggml_layout_mode layout);
+    cache_ptr_view get_view(const void * key_ptr, ggml_layout_mode layout);
 
     // Remove a cache entry (free device memory).
     void remove(const void * key_ptr, cache_entry_type type, int layer_id, int expert_id, ggml_layout_mode layout);
@@ -346,6 +372,8 @@ class unified_cache {
 
     void print_stats() const;
     void reset_stats();
+    // Debug/testing helper: verify internal maps are consistent.
+    bool validate() const;
 
     // Reserve non-cache runtime buffers (compute, KV, etc.)
     void update_reserved_bytes(size_t reserved_bytes);
@@ -361,6 +389,49 @@ class unified_cache {
 
     // Track cache entries pinned for in-flight kernels.
     void unpin_on_event(const void * key_ptr, ggml_layout_mode layout, const sycl::event & event);
+
+    using dma_stream_slice_fn = sycl::event (*)(sycl::queue &                    queue,
+                                                void *                           device_slice,
+                                                size_t                           slice_bytes,
+                                                size_t                           offset_bytes,
+                                                const void *                     ctx,
+                                                const std::vector<sycl::event> & deps);
+    using dma_stream_copy_fn = sycl::event (*)(sycl::queue &                    queue,
+                                               void *                           device_slice,
+                                               size_t                           slice_bytes,
+                                               size_t                           offset_bytes,
+                                               const void *                     src_ptr,
+                                               size_t                           src_size,
+                                               const void *                     ctx,
+                                               const std::vector<sycl::event> & deps);
+
+    struct dma_staging_buffers {
+        void ** buffers     = nullptr;
+        size_t  count       = 0;
+        size_t  slice_bytes = 0;
+    };
+
+    // Device-resident DMA staging buffer pool (for streaming).
+    bool get_dma_staging_buffers(size_t slice_bytes, size_t count, dma_staging_buffers & out);
+
+    struct dma_stream_result {
+        sycl::event event;
+        bool        ok              = false;
+        bool        used_mmap_direct = false;
+        bool        mmap_direct_failed = false;
+        size_t      slices          = 0;
+        size_t      slice_bytes     = 0;
+        size_t      buffer_count    = 0;
+    };
+
+    dma_stream_result stream_dma(const cache_ptr_view &            src,
+                                 size_t                            total_bytes,
+                                 size_t                            slice_bytes,
+                                 size_t                            buffer_count,
+                                 dma_stream_slice_fn               slice_fn,
+                                 const void *                      ctx,
+                                 const std::vector<sycl::event> &   deps,
+                                 dma_stream_copy_fn                copy_fn = nullptr);
 
   private:
     // Evict lowest-scoring entry to make room for new_size bytes
@@ -405,6 +476,12 @@ class unified_cache {
     size_t     staging_size_ = 0;
     std::mutex staging_mutex_;
 
+    // Device-resident DMA staging buffers (for streaming).
+    std::vector<void *> dma_staging_buffers_;
+    size_t              dma_slice_bytes_   = 0;
+    size_t              dma_buffer_count_  = 0;
+    std::mutex          dma_staging_mutex_;
+
     // Deferred frees to avoid releasing buffers while in flight.
     std::vector<deferred_free_entry> deferred_frees_;
 
@@ -416,7 +493,7 @@ class unified_cache {
     };
 
     // Entries pinned for in-flight kernels.
-    std::vector<inflight_unpin_entry> inflight_unpins_;
+    std::list<inflight_unpin_entry> inflight_unpins_;
 
     // Stats
     mutable std::atomic<size_t> hits_{ 0 };
@@ -473,55 +550,12 @@ size_t unified_cache_get_runtime_bytes(int device);
 // Host cache accessors (canonical layouts in host memory)
 host_cache * get_host_cache(sycl::queue & queue);
 host_cache * get_host_cache_for_device(int device_id);
+int host_cache_guard_error_count();
+void host_cache_guard_reset();
 
-// === MoE Expert Caching API (for compatibility with existing expert_cache usage) ===
-
-// Cache an expert weight tensor via unified cache
-// Returns device pointer or nullptr on failure
-// mmap_ptr: pointer to expert data in mmap'd file
-// expert_size: size of expert in bytes
-// layer_id, expert_id: for identification and debugging
-void * cache_moe_expert(sycl::queue & queue, const void * mmap_ptr, size_t expert_size, int layer_id, int expert_id);
-
-// Check if expert is cached
-bool is_expert_cached(const void * mmap_ptr);
-
-// Get cached expert pointer (returns nullptr if not cached)
-void * get_cached_expert(const void * mmap_ptr);
-
-// NOTE: mark_expert_reordered/is_expert_reordered removed
-// Reorder state is tracked in tensor->extra->optimized_feature, not in cache
-
-// Pin expert to prevent eviction during graph execution
-void pin_expert(const void * mmap_ptr);
-
+// === MoE Cache Helpers ===
 // Unpin all experts
 void unpin_all_experts();
-
-// === Reorder Callback Support ===
-
-// Callback for SoA weight reordering (called after cache miss)
-// data_device: GPU pointer to cached data
-// ncols, nrows: tensor dimensions
-// size: total size in bytes
-// stream: SYCL queue for async operations
-using moe_reorder_callback_fn =
-    void (*)(uint8_t * data_device, int ncols, int nrows, size_t size, sycl::queue * stream);
-
-// Set the global reorder callback (typically set once during initialization)
-void set_moe_reorder_callback(moe_reorder_callback_fn callback);
-
-// Cache an expert with optional SoA reorder (for MXFP4 and similar types)
-// Returns device pointer or nullptr on failure
-// Applies reorder callback if set and entry is newly cached
-// NOTE: Caller must track reorder state in tensor->extra->optimized_feature
-void * cache_moe_expert_with_reorder(sycl::queue & queue,
-                                     const void *  mmap_ptr,
-                                     size_t        expert_size,
-                                     int           layer_id,
-                                     int           expert_id,
-                                     int           ncols,
-                                     int           nrows);
 
 // === Shutdown API ===
 

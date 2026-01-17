@@ -10,6 +10,12 @@
 #include <cstring>
 #include <vector>
 
+static inline void ggml_sycl_add_deps(sycl::handler & cgh, const std::vector<sycl::event> * deps) {
+    if (deps && !deps->empty()) {
+        cgh.depends_on(*deps);
+    }
+}
+
 // Q4_0 SoA DMMV kernel - follows Q6_K pattern exactly
 // SoA layout: [all qs: nblocks * 16 bytes] [all d: nblocks * 2 bytes]
 // Each byte contains 2 x 4-bit values: low nibble = value[i], high nibble = value[i+16]
@@ -698,7 +704,8 @@ static void dequantize_mul_mat_vec_q4_0_sycl_coalesced_q8_0(
     const void *vx, const block_q8_0 *y, float *dst,
     const int ncols, const int nrows,
     const int nrows_full, const int row_low,
-    dpct::queue_ptr stream)
+    dpct::queue_ptr stream,
+    const std::vector<sycl::event> * deps = nullptr)
 {
     GGML_ASSERT((ncols / QK4_0) % MMVQ_COALESCED_TILE_BLOCKS == 0);
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
@@ -706,6 +713,7 @@ static void dequantize_mul_mat_vec_q4_0_sycl_coalesced_q8_0(
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
 
     stream->submit([&](sycl::handler &cgh) {
+        ggml_sycl_add_deps(cgh, deps);
         cgh.parallel_for<class dmmv_q4_0_coalesced_q8_0_kernel>(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -772,7 +780,8 @@ static void dequantize_mul_mat_vec_q4_0_sycl_reorder_q8_0(
     const void *vx, const block_q8_0 *y, float *dst,
     const int ncols, const int nrows,
     const int64_t d_offset, const int row_low,
-    dpct::queue_ptr stream)
+    dpct::queue_ptr stream,
+    const std::vector<sycl::event> * deps = nullptr)
 {
     GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
@@ -780,6 +789,7 @@ static void dequantize_mul_mat_vec_q4_0_sycl_reorder_q8_0(
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
 
     stream->submit([&](sycl::handler &cgh) {
+        ggml_sycl_add_deps(cgh, deps);
         cgh.parallel_for<class dmmv_q4_0_soa_q8_0_kernel>(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -838,7 +848,8 @@ static void dequantize_mul_mat_vec_q4_0_aos_q8_0(
 static void dequantize_mul_mat_vec_q4_0_sycl_q8_0(
     const void *vx, const block_q8_0 *y, float *dst,
     const int ncols, const int nrows,
-    dpct::queue_ptr stream)
+    dpct::queue_ptr stream,
+    const std::vector<sycl::event> * deps = nullptr)
 {
     GGML_ASSERT(ncols % GGML_SYCL_DMMV_X == 0);
     const int block_num_y = (nrows + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
@@ -846,6 +857,7 @@ static void dequantize_mul_mat_vec_q4_0_sycl_q8_0(
     const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
 
     stream->submit([&](sycl::handler &cgh) {
+        ggml_sycl_add_deps(cgh, deps);
         cgh.parallel_for<class dmmv_q4_0_aos_q8_0_kernel>(
             sycl::nd_range<3>(block_nums * block_dims, block_dims),
             [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
@@ -3051,6 +3063,394 @@ void dequantize_mul_mat_vec_q6_K_sycl_soa(const void *vx, const float *y,
         });
 }
 
+struct dmmv_stream_segment {
+    size_t src_base      = 0;
+    size_t bytes_per_row = 0;
+};
+
+struct dmmv_stream_ctx {
+    int                 device_id       = -1;
+    const ggml_tensor * src0            = nullptr;
+    const dfloat *      src1_dfloat     = nullptr;
+    const float *       src1_ddf_i      = nullptr;
+    float *             dst_dd_i        = nullptr;
+    int64_t             dst_row_stride  = 0;
+    int64_t             ne00            = 0;
+    int64_t             row_base        = 0;
+    layout_mode         layout          = GGML_LAYOUT_AOS;
+    const uint8_t *     src_base        = nullptr;
+    size_t              row_total_bytes = 0;
+    int                 segment_count   = 0;
+    dmmv_stream_segment segments[4]     = {};
+};
+
+static bool dmmv_parse_env_mb_value(const char * name, size_t & out_mb) {
+    const char * env = std::getenv(name);
+    if (!env || env[0] == '\0') {
+        return false;
+    }
+    char * end = nullptr;
+    long   mb  = std::strtol(env, &end, 10);
+    if (end == env || mb < 0) {
+        GGML_LOG_WARN("[DMMV] Invalid %s='%s'\n", name, env);
+        return false;
+    }
+    out_mb = static_cast<size_t>(mb);
+    return true;
+}
+
+static bool dmmv_parse_env_count_value(const char * name, size_t & out_count) {
+    const char * env = std::getenv(name);
+    if (!env || env[0] == '\0') {
+        return false;
+    }
+    char * end   = nullptr;
+    long   count = std::strtol(env, &end, 10);
+    if (end == env || count < 0) {
+        GGML_LOG_WARN("[DMMV] Invalid %s='%s'\n", name, env);
+        return false;
+    }
+    out_count = static_cast<size_t>(count);
+    return true;
+}
+
+static void dmmv_resolve_dma_params(size_t row_bytes, size_t & slice_bytes, size_t & buffer_count) {
+    size_t slice_mb = 1024;
+    size_t buffers  = 2;
+    size_t env_val  = 0;
+
+    if (dmmv_parse_env_mb_value("GGML_SYCL_DMA_SLICE_MB", env_val)) {
+        slice_mb = env_val;
+    }
+    if (dmmv_parse_env_count_value("GGML_SYCL_DMA_BUFFERS", env_val) ||
+        dmmv_parse_env_count_value("GGML_SYCL_DMA_SLICES", env_val)) {
+        buffers = env_val;
+    }
+
+    if (slice_bytes == 0) {
+        slice_bytes = slice_mb * 1024ULL * 1024ULL;
+    }
+    if (buffer_count == 0) {
+        buffer_count = buffers;
+    }
+    if (row_bytes > 0) {
+        size_t rows_per_slice = slice_bytes / row_bytes;
+        if (rows_per_slice < 1) {
+            rows_per_slice = 1;
+        }
+        slice_bytes = rows_per_slice * row_bytes;
+    }
+}
+
+static size_t dmmv_q6_k_coalesced_row_quants_bytes(int blocks_per_row) {
+    size_t row_quants_bytes = 0;
+    int    remaining        = blocks_per_row;
+    while (remaining > 0) {
+        int ts = 1;
+        while (ts * 2 <= remaining && ts < 32) {
+            ts *= 2;
+        }
+        row_quants_bytes += static_cast<size_t>(ts) * (128 + 64 + 16);
+        remaining -= ts;
+    }
+    return row_quants_bytes;
+}
+
+static bool dmmv_build_stream_segments(const ggml_tensor * src0,
+                                       layout_mode         layout,
+                                       int64_t             ncols,
+                                       int64_t             total_rows,
+                                       dmmv_stream_ctx &   ctx) {
+    ctx.segment_count   = 0;
+    ctx.row_total_bytes = 0;
+
+    if (layout == GGML_LAYOUT_AOS) {
+        ctx.row_total_bytes = ggml_row_size(src0->type, ncols);
+        return false;
+    }
+
+    const size_t blocks_per_row = static_cast<size_t>(ncols) / ggml_blck_size(src0->type);
+    size_t       src_base       = 0;
+    auto         add_segment    = [&](size_t bytes_per_row) {
+        GGML_ASSERT(ctx.segment_count < 4);
+        ctx.segments[ctx.segment_count].src_base      = src_base;
+        ctx.segments[ctx.segment_count].bytes_per_row = bytes_per_row;
+        ctx.segment_count++;
+        src_base += static_cast<size_t>(total_rows) * bytes_per_row;
+        ctx.row_total_bytes += bytes_per_row;
+    };
+
+    switch (src0->type) {
+        case GGML_TYPE_Q4_0:
+            {
+                const size_t q_bytes = static_cast<size_t>(ncols) / 2;
+                const size_t d_bytes = blocks_per_row * sizeof(ggml_half);
+                add_segment(q_bytes);
+                add_segment(d_bytes);
+            }
+            break;
+        case GGML_TYPE_Q8_0:
+            {
+                const size_t q_bytes = static_cast<size_t>(ncols);
+                const size_t d_bytes = blocks_per_row * sizeof(ggml_half);
+                add_segment(q_bytes);
+                add_segment(d_bytes);
+            }
+            break;
+        case GGML_TYPE_Q6_K:
+            {
+                if (layout == GGML_LAYOUT_COALESCED) {
+                    const size_t q_bytes = dmmv_q6_k_coalesced_row_quants_bytes(static_cast<int>(blocks_per_row));
+                    const size_t d_bytes = blocks_per_row * sizeof(ggml_half);
+                    add_segment(q_bytes);
+                    add_segment(d_bytes);
+                } else {
+                    const size_t ql_bytes     = blocks_per_row * (QK_K / 2);
+                    const size_t qh_bytes     = blocks_per_row * (QK_K / 4);
+                    const size_t scales_bytes = blocks_per_row * (QK_K / 16);
+                    const size_t d_bytes      = blocks_per_row * sizeof(ggml_half);
+                    add_segment(ql_bytes);
+                    add_segment(qh_bytes);
+                    add_segment(scales_bytes);
+                    add_segment(d_bytes);
+                }
+            }
+            break;
+        default:
+            GGML_ABORT("DMMV streaming: unsupported layout/type");
+    }
+
+    return true;
+}
+
+static void ggml_sycl_dmmv_dispatch(const ggml_tensor *         src0,
+                                    const char *                src0_dd_i,
+                                    const void *                layout_base,
+                                    layout_mode                 layout,
+                                    const block_q8_0 *           src1_q8,
+                                    const dfloat *              src1_dfloat,
+                                    const float *               src1_ddf_i,
+                                    float *                     dst_dd_i,
+                                    const int64_t               row_low,
+                                    const int64_t               row_high,
+                                    const int64_t               layout_rows,
+                                    const int64_t               layout_row_low,
+                                    const dpct::queue_ptr &     stream,
+                                    const std::vector<sycl::event> * deps = nullptr) {
+    const int64_t ne00     = src0->ne[0];
+    const int64_t row_diff = row_high - row_low;
+
+    layout_mode use_layout = layout;
+    if ((use_layout == GGML_LAYOUT_SOA || use_layout == GGML_LAYOUT_COALESCED) && !layout_base) {
+        use_layout = GGML_LAYOUT_AOS;
+    }
+
+    if (std::getenv("GGML_SYCL_DMMV_Q8_DEBUG")) {
+        fprintf(stderr,
+                "[DMMV] dispatch: src0_type=%d layout=%d rows=%lld..%lld layout_rows=%lld src1_q8=%s\n",
+                src0->type,
+                static_cast<int>(layout),
+                (long long) row_low,
+                (long long) row_high,
+                (long long) layout_rows,
+                src1_q8 ? "yes" : "no");
+    }
+
+    switch (src0->type) {
+        case GGML_TYPE_Q4_0:
+            if (src1_q8 != nullptr) {
+                if (use_layout == GGML_LAYOUT_COALESCED) {
+                    GGML_SYCL_KTRACE("dmmv_q4_0_coalesced_q8_0", " ne00=%lld row_diff=%lld rows=%lld row_low=%lld",
+                                     (long long)ne00, (long long)row_diff, (long long)layout_rows,
+                                     (long long)layout_row_low);
+                    dequantize_mul_mat_vec_q4_0_sycl_coalesced_q8_0(layout_base, src1_q8, dst_dd_i, ne00, row_diff,
+                                                                  layout_rows, layout_row_low, stream, deps);
+                } else if (use_layout == GGML_LAYOUT_SOA) {
+                    const int64_t nblocks        = layout_rows * (ne00 / QK4_0);
+                    const int64_t total_qs_bytes = nblocks * (QK4_0 / 2);
+                    const int64_t d_offset       = total_qs_bytes;
+
+                    GGML_SYCL_KTRACE("dmmv_q4_0_soa_q8_0", " ne00=%lld row_diff=%lld storage_rows=%lld global_row_low=%lld d_offset=%lld",
+                                     (long long)ne00, (long long)row_diff, (long long)layout_rows,
+                                     (long long)layout_row_low, (long long)d_offset);
+                    dequantize_mul_mat_vec_q4_0_sycl_reorder_q8_0(layout_base, src1_q8, dst_dd_i, ne00, row_diff,
+                                                                d_offset, layout_row_low, stream, deps);
+                } else {
+                    dequantize_mul_mat_vec_q4_0_sycl_q8_0(src0_dd_i, src1_q8, dst_dd_i, ne00, row_diff, stream, deps);
+                }
+            } else if (use_layout == GGML_LAYOUT_COALESCED) {
+                GGML_SYCL_KTRACE("dmmv_q4_0_coalesced", " ne00=%lld row_diff=%lld rows=%lld row_low=%lld",
+                                 (long long)ne00, (long long)row_diff, (long long)layout_rows,
+                                 (long long)layout_row_low);
+                dequantize_mul_mat_vec_q4_0_sycl_coalesced(layout_base, src1_dfloat, dst_dd_i, ne00, row_diff,
+                                                          layout_rows, layout_row_low, stream);
+            } else if (use_layout == GGML_LAYOUT_SOA) {
+                const int64_t nblocks        = layout_rows * (ne00 / QK4_0);
+                const int64_t total_qs_bytes = nblocks * (QK4_0 / 2);
+                const int64_t d_offset       = total_qs_bytes;
+
+                GGML_SYCL_KTRACE("dmmv_q4_0_soa", " ne00=%lld row_diff=%lld storage_rows=%lld global_row_low=%lld d_offset=%lld",
+                                 (long long)ne00, (long long)row_diff, (long long)layout_rows,
+                                 (long long)layout_row_low, (long long)d_offset);
+                dequantize_mul_mat_vec_q4_0_sycl_reorder(layout_base, src1_dfloat, dst_dd_i, ne00, row_diff,
+                                                        d_offset, layout_row_low, stream);
+            } else {
+                dequantize_mul_mat_vec_q4_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            }
+            break;
+        case GGML_TYPE_Q4_1:
+            dequantize_mul_mat_vec_q4_1_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            break;
+        case GGML_TYPE_Q5_0:
+            dequantize_mul_mat_vec_q5_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            break;
+        case GGML_TYPE_Q5_1:
+            dequantize_mul_mat_vec_q5_1_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            break;
+        case GGML_TYPE_Q8_0:
+            if (use_layout == GGML_LAYOUT_COALESCED) {
+                GGML_SYCL_KTRACE("dmmv_q8_0_coalesced", " ne00=%lld row_diff=%lld rows=%lld row_low=%lld",
+                                 (long long)ne00, (long long)row_diff, (long long)layout_rows,
+                                 (long long)layout_row_low);
+                dequantize_mul_mat_vec_q8_0_sycl_coalesced(layout_base, src1_dfloat, dst_dd_i, ne00, row_diff,
+                                                          layout_rows, layout_row_low, stream);
+            } else if (use_layout == GGML_LAYOUT_SOA) {
+                const int64_t nblocks        = layout_rows * (ne00 / QK8_0);
+                const int64_t total_qs_bytes = nblocks * QK8_0;
+                const int64_t d_offset       = total_qs_bytes;
+
+                GGML_SYCL_KTRACE("dmmv_q8_0_soa", " ne00=%lld row_diff=%lld storage_rows=%lld global_row_low=%lld d_offset=%lld",
+                                 (long long)ne00, (long long)row_diff, (long long)layout_rows,
+                                 (long long)layout_row_low, (long long)d_offset);
+                dequantize_mul_mat_vec_q8_0_sycl_reorder(layout_base, src1_dfloat, dst_dd_i, ne00, row_diff,
+                                                        d_offset, layout_row_low, stream);
+            } else {
+                dequantize_mul_mat_vec_q8_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            }
+            break;
+        case GGML_TYPE_Q2_K:
+            GGML_SYCL_KTRACE("dmmv_q2_k", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+            dequantize_mul_mat_vec_q2_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+            break;
+        case GGML_TYPE_Q3_K:
+            GGML_SYCL_KTRACE("dmmv_q3_k", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+            dequantize_mul_mat_vec_q3_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+            break;
+        case GGML_TYPE_Q4_K:
+            GGML_SYCL_KTRACE("dmmv_q4_k_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+            dequantize_mul_mat_vec_q4_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+            break;
+        case GGML_TYPE_Q5_K:
+            GGML_SYCL_KTRACE("dmmv_q5_k", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+            dequantize_mul_mat_vec_q5_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+            break;
+        case GGML_TYPE_Q6_K:
+            if (use_layout == GGML_LAYOUT_COALESCED) {
+                GGML_SYCL_KTRACE("dmmv_q6_k_coalesced_variable", " ne00=%lld row_diff=%lld storage_rows=%lld global_row_low=%lld",
+                                 (long long)ne00, (long long)row_diff, (long long)layout_rows,
+                                 (long long)layout_row_low);
+                dequantize_mul_mat_vec_q6_K_sycl_coalesced_variable(layout_base, src1_ddf_i, dst_dd_i, ne00,
+                                                                    row_diff, layout_rows, layout_row_low, stream);
+            } else if (use_layout == GGML_LAYOUT_SOA) {
+                GGML_SYCL_KTRACE("dmmv_q6_k_soa", " ne00=%lld row_diff=%lld storage_rows=%lld global_row_low=%lld",
+                                 (long long)ne00, (long long)row_diff, (long long)layout_rows,
+                                 (long long)layout_row_low);
+                dequantize_mul_mat_vec_q6_K_sycl_soa(layout_base, src1_ddf_i, dst_dd_i, ne00, row_diff, layout_rows,
+                                                    layout_row_low, stream);
+            } else {
+                GGML_SYCL_KTRACE("dmmv_q6_k_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+                dequantize_mul_mat_vec_q6_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+            }
+            break;
+        case GGML_TYPE_F16:
+            GGML_SYCL_KTRACE("dmmv_f16", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
+            convert_mul_mat_vec_f16_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
+            break;
+        default:
+            printf("ggml_sycl_op_dequantize_mul_mat_vec unsupported GGML_TYPE %d\n", src0->type);
+            GGML_ABORT("fatal error");
+    }
+}
+
+static sycl::event dmmv_stream_copy(sycl::queue &                    queue,
+                                    void *                           device_slice,
+                                    size_t                           slice_bytes,
+                                    size_t                           offset_bytes,
+                                    const void *                     src_ptr,
+                                    size_t                           src_size,
+                                    const void *                     ctx_void,
+                                    const std::vector<sycl::event> & deps) {
+    GGML_UNUSED(src_size);
+    const auto * ctx = static_cast<const dmmv_stream_ctx *>(ctx_void);
+    if (!ctx || ctx->segment_count == 0 || ctx->row_total_bytes == 0) {
+        return queue.memcpy(device_slice, static_cast<const char *>(src_ptr) + offset_bytes, slice_bytes, deps);
+    }
+    GGML_ASSERT(offset_bytes % ctx->row_total_bytes == 0);
+    GGML_ASSERT(slice_bytes % ctx->row_total_bytes == 0);
+
+    const size_t row_start = offset_bytes / ctx->row_total_bytes;
+    const size_t row_count = slice_bytes / ctx->row_total_bytes;
+    const size_t src_row   = static_cast<size_t>(ctx->row_base) + row_start;
+
+    size_t                   dst_offset = 0;
+    std::vector<sycl::event> cur_deps   = deps;
+    sycl::event              last_evt;
+
+    for (int i = 0; i < ctx->segment_count; ++i) {
+        const auto & seg   = ctx->segments[i];
+        const size_t bytes = row_count * seg.bytes_per_row;
+        if (bytes == 0) {
+            continue;
+        }
+        const uint8_t * src = ctx->src_base + seg.src_base + src_row * seg.bytes_per_row;
+        void *          dst = static_cast<uint8_t *>(device_slice) + dst_offset;
+        last_evt = queue.memcpy(dst, src, bytes, cur_deps);
+        cur_deps.assign(1, last_evt);
+        dst_offset += bytes;
+    }
+
+    GGML_ASSERT(dst_offset == slice_bytes);
+    return last_evt;
+}
+
+static sycl::event dmmv_stream_slice(sycl::queue &                    queue,
+                                     void *                           device_slice,
+                                     size_t                           slice_bytes,
+                                     size_t                           offset_bytes,
+                                     const void *                     ctx_void,
+                                     const std::vector<sycl::event> & deps) {
+    const auto * ctx = static_cast<const dmmv_stream_ctx *>(ctx_void);
+    if (!ctx || ctx->row_total_bytes == 0) {
+        return queue.ext_oneapi_submit_barrier();
+    }
+    GGML_ASSERT(offset_bytes % ctx->row_total_bytes == 0);
+    GGML_ASSERT(slice_bytes % ctx->row_total_bytes == 0);
+
+    const size_t row_start = offset_bytes / ctx->row_total_bytes;
+    const size_t row_count = slice_bytes / ctx->row_total_bytes;
+    float *      dst_ptr   = ctx->dst_dd_i + static_cast<int64_t>(row_start);
+
+    const void * layout_ptr =
+        (ctx->layout == GGML_LAYOUT_SOA || ctx->layout == GGML_LAYOUT_COALESCED) ? device_slice : nullptr;
+
+    ggml_sycl_dmmv_dispatch(ctx->src0,
+                            static_cast<const char *>(device_slice),
+                            layout_ptr,
+                            ctx->layout,
+                            nullptr,
+                            ctx->src1_dfloat,
+                            ctx->src1_ddf_i,
+                            dst_ptr,
+                            0,
+                            static_cast<int64_t>(row_count),
+                            static_cast<int64_t>(row_count),
+                            0,
+                            &queue,
+                            &deps);
+
+    return queue.ext_oneapi_submit_barrier();
+}
+
 void ggml_sycl_op_dequantize_mul_mat_vec(
     ggml_backend_sycl_context & ctx,
     const ggml_tensor *src0, const ggml_tensor *src1, ggml_tensor *dst,
@@ -3061,6 +3461,16 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
 
     const int64_t ne00 = src0->ne[0];
     const int64_t row_diff = row_high - row_low;
+
+    if (std::getenv("GGML_SYCL_DMMV_Q8_DEBUG")) {
+        fprintf(stderr,
+                "[DMMV] op: src0_type=%d ne00=%lld rows=%lld..%lld src1_type=%d\n",
+                src0->type,
+                (long long) ne00,
+                (long long) row_low,
+                (long long) row_high,
+                src1 ? src1->type : -1);
+    }
 
     // Check tiered dispatch for weight tensor
     if (src0->name && g_tiered_enabled.load(std::memory_order_acquire)) {
@@ -3106,205 +3516,196 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
         dmmv_call_count++;
     }
 
-    switch (src0->type) {
-        case GGML_TYPE_Q4_0:
-            {
-                // Use src0->extra directly, not dst->src[0]->extra
-                // Both should be the same pointer, but src0 is passed directly from the graph node
-                ggml_tensor_extra_gpu* extra = (ggml_tensor_extra_gpu*)src0->extra;
-                layout_mode mode = get_effective_layout_mode(extra);
-                // Unconditional debug for AOS path investigation
-                static int q4_0_dispatch_count = 0;
-                if (std::getenv("GGML_SYCL_AOS_DEBUG") && q4_0_dispatch_count++ < 50) {
-                    fprintf(stderr, "[Q4_0_DISPATCH] #%d tensor=%s mode=%d ne00=%lld row_diff=%lld extra=%p src0_dd_i=%p\n",
-                            q4_0_dispatch_count, src0->name ? src0->name : "?", (int)mode,
-                            (long long)ne00, (long long)row_diff, (void*)extra, (void*)src0_dd_i);
-                    fflush(stderr);
-                }
+    int device_id;
+    SYCL_CHECK(CHECK_TRY_ERROR(device_id = get_current_device_id()));
 
-                if (std::getenv("GGML_SYCL_MMQ_DEBUG")) {
-                    static int q4_0_mode_debug = 0;
-                    if (q4_0_mode_debug++ < 10) {
-                        fprintf(stderr, "[DMMV] Q4_0 layout mode=%d (0=AOS,1=SOA,2=COALESCED,3=XMX_TILED)\n",
-                                (int)mode);
-                    }
-                }
-
-                if (mode == GGML_LAYOUT_COALESCED) {
-                    // Use direct dfloat path (no Q8 quantization overhead)
-                    const int64_t ne01 = src0->ne[1];
-                    GGML_SYCL_KTRACE("dmmv_q4_0_coalesced", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld",
-                                     (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
-                    dequantize_mul_mat_vec_q4_0_sycl_coalesced(src0_dd_i, src1_dfloat,
-                                                              dst_dd_i, ne00, row_diff, ne01, row_low, stream);
-                } else if (mode == GGML_LAYOUT_SOA) {
-                    // Use direct dfloat path (no Q8 quantization overhead)
-                    const ggml_tensor * storage = get_storage_tensor(src0);
-                    const int64_t storage_rows = ggml_nrows(storage);
-                    const int64_t ncols = storage->ne[0];
-                    const int64_t nblocks = storage_rows * (ncols / QK4_0);
-                    const int64_t total_qs_bytes = nblocks * (QK4_0 / 2);
-                    const int64_t d_offset = total_qs_bytes;
-
-                    const void * storage_base = ggml_sycl_get_layout_ptr_for(storage, ctx.device, mode);
-
-                    int64_t view_row_offset = 0;
-                    if (src0->view_src != nullptr) {
-                        view_row_offset = src0->view_offs / src0->nb[1];
-                    }
-                    const int global_row_low = row_low + view_row_offset;
-
-                    GGML_SYCL_KTRACE("dmmv_q4_0_soa", " ne00=%lld row_diff=%lld storage_rows=%lld global_row_low=%lld d_offset=%lld",
-                                     (long long)ne00, (long long)row_diff, (long long)storage_rows, (long long)global_row_low, (long long)d_offset);
-                    dequantize_mul_mat_vec_q4_0_sycl_reorder(storage_base, src1_dfloat, dst_dd_i,
-                                                            ne00, row_diff, d_offset, global_row_low, stream);
-                } else {
-                    // NONE mode - use direct dfloat path (no Q8 quantization overhead)
-                    // This matches master branch behavior for optimal performance
-                    dequantize_mul_mat_vec_q4_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
-                }
-            }
-            break;
-        case GGML_TYPE_Q4_1:
-            // Use direct dfloat path (no Q8 quantization overhead)
-            dequantize_mul_mat_vec_q4_1_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
-            break;
-        case GGML_TYPE_Q5_0:
-            // Use direct dfloat path (no Q8 quantization overhead)
-            dequantize_mul_mat_vec_q5_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
-            break;
-        case GGML_TYPE_Q5_1:
-            // Use direct dfloat path (no Q8 quantization overhead)
-            dequantize_mul_mat_vec_q5_1_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
-            break;
-        case GGML_TYPE_Q8_0:
-            {
-                // Use src0->extra directly (same as Q4_0 fix)
-                ggml_tensor_extra_gpu* extra = (ggml_tensor_extra_gpu*)src0->extra;
-                layout_mode mode = get_effective_layout_mode(extra);
-
-                // DEBUG: Track SoA dispatch for Q8_0
-                if (g_ggml_sycl_debug) {
-                    fprintf(stderr, "[DMMV-Q8_0-DBG] src0='%s' extra=%p mode=%d (0=NONE,1=SOA,2=COALESCED)\n",
-                            src0->name ? src0->name : "?", extra, (int)mode);
-                }
-
-                if (mode == GGML_LAYOUT_COALESCED) {
-                    // Use direct dfloat path (no Q8 quantization overhead)
-                    const int64_t ne01 = src0->ne[1];
-                    GGML_SYCL_KTRACE("dmmv_q8_0_coalesced", " ne00=%lld row_diff=%lld ne01=%lld row_low=%lld",
-                                     (long long)ne00, (long long)row_diff, (long long)ne01, (long long)row_low);
-                    dequantize_mul_mat_vec_q8_0_sycl_coalesced(src0_dd_i, src1_dfloat,
-                                                              dst_dd_i, ne00, row_diff, ne01, row_low, stream);
-                } else if (mode == GGML_LAYOUT_SOA) {
-                    // Use direct dfloat path (no Q8 quantization overhead)
-                    const ggml_tensor * storage = get_storage_tensor(src0);
-                    const int64_t storage_rows = ggml_nrows(storage);
-                    const int64_t ncols = storage->ne[0];
-                    const int64_t nblocks = storage_rows * (ncols / QK8_0);
-                    const int64_t total_qs_bytes = nblocks * QK8_0;
-                    const int64_t d_offset = total_qs_bytes;
-
-                    const void * storage_base = ggml_sycl_get_layout_ptr_for(storage, ctx.device, mode);
-
-                    int64_t view_row_offset = 0;
-                    if (src0->view_src != nullptr) {
-                        view_row_offset = src0->view_offs / src0->nb[1];
-                    }
-                    const int global_row_low = row_low + view_row_offset;
-
-                    GGML_SYCL_KTRACE("dmmv_q8_0_soa", " ne00=%lld row_diff=%lld storage_rows=%lld global_row_low=%lld d_offset=%lld",
-                                     (long long)ne00, (long long)row_diff, (long long)storage_rows, (long long)global_row_low, (long long)d_offset);
-                    dequantize_mul_mat_vec_q8_0_sycl_reorder(storage_base, src1_dfloat, dst_dd_i,
-                                                            ne00, row_diff, d_offset, global_row_low, stream);
-                } else {
-                    // NONE mode - use direct dfloat path (no Q8 quantization overhead)
-                    dequantize_mul_mat_vec_q8_0_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
-                }
-            }
-            break;
-        case GGML_TYPE_Q2_K:
-            GGML_SYCL_KTRACE("dmmv_q2_k", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-            dequantize_mul_mat_vec_q2_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
-            break;
-        case GGML_TYPE_Q3_K:
-            GGML_SYCL_KTRACE("dmmv_q3_k", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-            dequantize_mul_mat_vec_q3_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
-            break;
-        case GGML_TYPE_Q4_K:
-            {
-                // Use src0->extra directly (same as Q4_0/Q8_0 fix)
-                ggml_tensor_extra_gpu* extra = (ggml_tensor_extra_gpu*)src0->extra;
-                if (ggml_sycl_layout_is_reordered(extra)) {
-                    // reorder is currently not supported for dmmv
-                    GGML_ABORT("Unimplemented dequantize case case for q4_k reorder");
-                } else {
-                    GGML_SYCL_KTRACE("dmmv_q4_k_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-                    dequantize_mul_mat_vec_q4_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
-                }
-            }
-            break;
-        case GGML_TYPE_Q5_K:
-            GGML_SYCL_KTRACE("dmmv_q5_k", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-            dequantize_mul_mat_vec_q5_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
-            break;
-        case GGML_TYPE_Q6_K:
-            {
-                ggml_tensor_extra_gpu* extra = (ggml_tensor_extra_gpu*)src0->extra;
-                layout_mode mode = get_effective_layout_mode(extra);
-
-                if (mode == GGML_LAYOUT_COALESCED) {
-                    const ggml_tensor * storage = get_storage_tensor(src0);
-                    const int64_t storage_rows = ggml_nrows(storage);
-
-                    const void * storage_base = ggml_sycl_get_layout_ptr_for(storage, ctx.device, GGML_LAYOUT_COALESCED);
-
-                    int64_t view_row_offset = 0;
-                    if (src0->view_src != nullptr) {
-                        view_row_offset = src0->view_offs / src0->nb[1];
-                    }
-                    const int global_row_low = row_low + view_row_offset;
-
-                    GGML_SYCL_KTRACE("dmmv_q6_k_coalesced_variable", " ne00=%lld row_diff=%lld storage_rows=%lld global_row_low=%lld",
-                                     (long long)ne00, (long long)row_diff, (long long)storage_rows, (long long)global_row_low);
-                    dequantize_mul_mat_vec_q6_K_sycl_coalesced_variable(storage_base, src1_ddf_i, dst_dd_i,
-                                                                        ne00, row_diff, storage_rows, global_row_low, stream);
-                } else if (mode == GGML_LAYOUT_SOA) {
-                    // Q6_K SoA layout: [all ql] [all qh] [all scales] [all d]
-                    // CRITICAL: Must use storage tensor dimensions for offset calculation, not view dimensions
-                    const ggml_tensor * storage = get_storage_tensor(src0);
-                    const int64_t storage_rows = ggml_nrows(storage);
-
-                    // Get storage tensor base pointer
-                    const void * storage_base = ggml_sycl_get_layout_ptr_for(storage, ctx.device, GGML_LAYOUT_SOA);
-
-                    // Calculate global row_low: row_low is relative to src0, need to add view offset
-                    int64_t view_row_offset = 0;
-                    if (src0->view_src != nullptr) {
-                        // src0 is a view - calculate its row offset within storage
-                        // Use nb[1] (row stride) to calculate row offset from byte offset
-                        view_row_offset = src0->view_offs / src0->nb[1];
-                    }
-                    const int global_row_low = row_low + view_row_offset;
-
-                    GGML_SYCL_KTRACE("dmmv_q6_k_soa", " ne00=%lld row_diff=%lld storage_rows=%lld global_row_low=%lld",
-                                     (long long)ne00, (long long)row_diff, (long long)storage_rows, (long long)global_row_low);
-                    dequantize_mul_mat_vec_q6_K_sycl_soa(storage_base, src1_ddf_i, dst_dd_i, ne00, row_diff, storage_rows, global_row_low, stream);
-                } else {
-                    GGML_SYCL_KTRACE("dmmv_q6_k_aos", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-                    dequantize_mul_mat_vec_q6_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
-                }
-            }
-            break;
-        case GGML_TYPE_F16:
-            GGML_SYCL_KTRACE("dmmv_f16", " ne00=%lld row_diff=%lld", (long long)ne00, (long long)row_diff);
-            convert_mul_mat_vec_f16_sycl(src0_dd_i, src1_dfloat, dst_dd_i, ne00, row_diff, stream);
-            break;
-        default:
-            printf("ggml_sycl_op_dequantize_mul_mat_vec unsupported GGML_TYPE %d\n", src0->type);
-            GGML_ABORT("fatal error");
+    ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *) src0->extra;
+    layout_mode             mode  = GGML_LAYOUT_AOS;
+    layout_mode             chosen = GGML_LAYOUT_AOS;
+    if (ggml_sycl_get_layout_choice_for_tensor(src0, device_id, &chosen)) {
+        mode = chosen;
+    } else {
+        mode = get_effective_layout_mode(extra);
     }
 
+    if (src0->type == GGML_TYPE_Q4_0) {
+        static int q4_0_dispatch_count = 0;
+        if (std::getenv("GGML_SYCL_AOS_DEBUG") && q4_0_dispatch_count++ < 50) {
+            fprintf(stderr, "[Q4_0_DISPATCH] #%d tensor=%s mode=%d ne00=%lld row_diff=%lld extra=%p src0_dd_i=%p\n",
+                    q4_0_dispatch_count, src0->name ? src0->name : "?", (int)mode,
+                    (long long)ne00, (long long)row_diff, (void*)extra, (void*)src0_dd_i);
+            fflush(stderr);
+        }
+
+        if (std::getenv("GGML_SYCL_MMQ_DEBUG")) {
+            static int q4_0_mode_debug = 0;
+            if (q4_0_mode_debug++ < 10) {
+                fprintf(stderr, "[DMMV] Q4_0 layout mode=%d (0=AOS,1=SOA,2=COALESCED,3=XMX_TILED)\n",
+                        (int)mode);
+            }
+        }
+    }
+
+    if (src0->type == GGML_TYPE_Q8_0 && g_ggml_sycl_debug) {
+        fprintf(stderr, "[DMMV-Q8_0-DBG] src0='%s' extra=%p mode=%d (0=NONE,1=SOA,2=COALESCED)\n",
+                src0->name ? src0->name : "?", extra, (int)mode);
+    }
+
+    if (src0->type == GGML_TYPE_Q4_K && ggml_sycl_layout_is_reordered(extra)) {
+        GGML_ABORT("Unimplemented dequantize case case for q4_k reorder");
+    }
+
+    layout_mode layout = GGML_LAYOUT_AOS;
+    const ggml_tensor * storage = src0;
+    const void * layout_base = nullptr;
+    int64_t layout_rows = src0->ne[1];
+    int64_t layout_row_low = 0;
+
+    const bool allow_layout = (src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0 || src0->type == GGML_TYPE_Q6_K);
+    if (allow_layout && (mode == GGML_LAYOUT_SOA || mode == GGML_LAYOUT_COALESCED)) {
+        layout = mode;
+        storage = get_storage_tensor(src0);
+        layout_rows = ggml_nrows(storage);
+        layout_base = ggml_sycl_get_layout_ptr_for(storage, device_id, layout);
+        if (!layout_base) {
+            GGML_SYCL_DEBUG("[DMMV] Missing layout pointer for %s layout=%d, falling back to AoS\n",
+                            src0->name ? src0->name : "?", (int)layout);
+            layout = GGML_LAYOUT_AOS;
+        } else {
+            int64_t view_row_offset = 0;
+            if (src0->view_src != nullptr) {
+                view_row_offset = src0->view_offs / src0->nb[1];
+            }
+            layout_row_low = row_low + view_row_offset;
+        }
+    }
+
+    const layout_mode dispatch_layout = layout;
+    const void *      dispatch_base   =
+        (dispatch_layout == GGML_LAYOUT_SOA || dispatch_layout == GGML_LAYOUT_COALESCED) ? layout_base : nullptr;
+    const char * dispatch_ptr   = src0_dd_i;
+
+    dmmv_stream_ctx stream_ctx{};
+    const int64_t   build_rows  = (dispatch_layout == GGML_LAYOUT_AOS) ? src0->ne[1] : layout_rows;
+    const bool      custom_copy = dmmv_build_stream_segments(src0, dispatch_layout, ne00, build_rows, stream_ctx);
+    stream_ctx.device_id      = device_id;
+    stream_ctx.src0           = src0;
+    stream_ctx.src1_dfloat    = src1_dfloat;
+    stream_ctx.src1_ddf_i     = src1_ddf_i;
+    stream_ctx.dst_dd_i       = dst_dd_i;
+    stream_ctx.dst_row_stride = row_diff;
+    stream_ctx.ne00           = ne00;
+    stream_ctx.row_base       =
+        (dispatch_layout == GGML_LAYOUT_SOA || dispatch_layout == GGML_LAYOUT_COALESCED) ? layout_row_low : 0;
+    stream_ctx.layout          = dispatch_layout;
+
+    auto infer_location = [&](const void * ptr) -> ggml_sycl::cache_location {
+        if (!ptr) {
+            return ggml_sycl::cache_location::HOST_MMAP;
+        }
+        const sycl::usm::alloc alloc = sycl::get_pointer_type(ptr, stream->get_context());
+        if (alloc == sycl::usm::alloc::device) {
+            return ggml_sycl::cache_location::DEVICE;
+        }
+        if (alloc == sycl::usm::alloc::host || alloc == sycl::usm::alloc::shared) {
+            return ggml_sycl::cache_location::HOST_PINNED;
+        }
+        return ggml_sycl::cache_location::HOST_MMAP;
+    };
+
+    ggml_sycl::unified_cache * cache =
+        ggml_sycl::unified_cache_enabled() ? ggml_sycl::get_unified_cache(*stream) : nullptr;
+    const void *               cache_key = cache ? ggml_backend_sycl_get_weight_cache_key(src0, device_id) : nullptr;
+    ggml_sycl::cache_ptr_view  view{};
+    if (cache && cache_key) {
+        view = cache->get_view(cache_key, dispatch_layout);
+    }
+    const void * view_ptr = dispatch_base ? dispatch_base : dispatch_ptr;
+    if (!view.ptr) {
+        view.ptr      = const_cast<void *>(view_ptr);
+        view.size     = stream_ctx.row_total_bytes * static_cast<size_t>(build_rows);
+        view.layout   = dispatch_layout;
+        view.type     = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
+        view.location = infer_location(view.ptr);
+    }
+    stream_ctx.src_base = static_cast<const uint8_t *>(view.ptr);
+
+    if (view.ptr && view.location != ggml_sycl::cache_location::DEVICE) {
+        if (!cache) {
+            GGML_ABORT("DMMV streaming requires unified cache");
+        }
+        size_t slice_bytes  = 0;
+        size_t buffer_count = 0;
+        dmmv_resolve_dma_params(stream_ctx.row_total_bytes, slice_bytes, buffer_count);
+        const size_t total_bytes = stream_ctx.row_total_bytes * static_cast<size_t>(row_diff);
+        if (cache_key) {
+            cache->pin(cache_key, dispatch_layout);
+        }
+        auto result = cache->stream_dma(view, total_bytes, slice_bytes, buffer_count, dmmv_stream_slice, &stream_ctx,
+                                        {}, custom_copy ? dmmv_stream_copy : nullptr);
+        if (cache_key) {
+            if (result.ok) {
+                cache->unpin_on_event(cache_key, dispatch_layout, result.event);
+            } else {
+                cache->unpin(cache_key, dispatch_layout);
+            }
+        }
+        if (!result.ok) {
+            if (result.mmap_direct_failed) {
+                GGML_LOG_WARN("[DMMV] DMA from mmap failed, falling back to CPU (%s)\n",
+                              src0->name ? src0->name : "unknown");
+                if (ggml_sycl_cpu_fallback_graph(ctx, dst, "dmmv streaming")) {
+                    return;
+                }
+            }
+            GGML_ABORT("DMMV streaming failed");
+        }
+        GGML_UNUSED(src1);
+        GGML_UNUSED(src1_ddq_i);
+        GGML_UNUSED(src1_ncols);
+        GGML_UNUSED(src1_padded_row_size);
+        GGML_UNUSED(ctx);
+        return;
+    }
+
+    const block_q8_0 * src1_q8 = nullptr;
+    ggml_sycl_pool_alloc<char> src1_q8_alloc(ctx.pool());
+    std::vector<sycl::event>   dmmv_deps;
+    if (src0->type == GGML_TYPE_Q4_0) {
+        const int64_t blocks = ne00 / QK8_0;
+        if (blocks > 0) {
+            src1_q8 = reinterpret_cast<block_q8_0 *>(src1_q8_alloc.alloc(static_cast<size_t>(blocks) * sizeof(block_q8_0)));
+            if (std::getenv("GGML_SYCL_DMMV_Q8_DEBUG")) {
+                fprintf(stderr, "[DMMV] q8 alloc: blocks=%lld bytes=%zu ptr=%p\n",
+                        (long long) blocks,
+                        static_cast<size_t>(blocks) * sizeof(block_q8_0),
+                        (void *) src1_q8);
+            }
+            sycl::event quant_evt =
+                quantize_row_q8_0_sycl(src1_ddf_i, (void *) src1_q8, static_cast<int>(ne00), 1, static_cast<int>(ne00),
+                                       stream);
+            dmmv_deps.push_back(quant_evt);
+            if (std::getenv("GGML_SYCL_DMMV_Q8_DEBUG")) {
+                fprintf(stderr, "[DMMV] q8_0 input enabled: src1_q8=%p blocks=%lld\n", (void *) src1_q8,
+                        (long long) blocks);
+            }
+        }
+    }
+
+    ggml_sycl_dmmv_dispatch(src0,
+                            dispatch_ptr,
+                            dispatch_base,
+                            dispatch_layout,
+                            src1_q8,
+                            src1_dfloat,
+                            src1_ddf_i,
+                            dst_dd_i,
+                            row_low,
+                            row_high,
+                            layout_rows,
+                            layout_row_low,
+                            stream,
+                            dmmv_deps.empty() ? nullptr : &dmmv_deps);
     GGML_UNUSED(src1);
     GGML_UNUSED(dst);
     GGML_UNUSED(src1_ddq_i);

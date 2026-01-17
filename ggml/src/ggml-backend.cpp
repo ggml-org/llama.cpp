@@ -20,6 +20,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
+#include <mutex>
+#include <unordered_set>
 #include <vector>
 
 #ifdef __APPLE__
@@ -29,6 +31,9 @@
 
 
 // backend buffer type
+
+static std::mutex                                  g_backend_buffer_registry_mutex;
+static std::unordered_set<ggml_backend_buffer_t>   g_backend_buffer_registry;
 
 const char * ggml_backend_buft_name(ggml_backend_buffer_type_t buft) {
     GGML_ASSERT(buft);
@@ -97,6 +102,11 @@ ggml_backend_buffer_t ggml_backend_buffer_init(
         /* .usage     = */ GGML_BACKEND_BUFFER_USAGE_ANY
     };
 
+    {
+        std::lock_guard<std::mutex> lock(g_backend_buffer_registry_mutex);
+        g_backend_buffer_registry.insert(buffer);
+    }
+
     return buffer;
 }
 
@@ -111,6 +121,10 @@ void ggml_backend_buffer_free(ggml_backend_buffer_t buffer) {
 
     if (buffer->iface.free_buffer != NULL) {
         buffer->iface.free_buffer(buffer);
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_backend_buffer_registry_mutex);
+        g_backend_buffer_registry.erase(buffer);
     }
     delete buffer;
 }
@@ -188,6 +202,14 @@ void ggml_backend_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backe
 enum ggml_backend_buffer_usage ggml_backend_buffer_get_usage(ggml_backend_buffer_t buffer) {
     GGML_ASSERT(buffer);
     return buffer->usage;
+}
+
+bool ggml_backend_buffer_is_valid(ggml_backend_buffer_t buffer) {
+    if (buffer == NULL) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_backend_buffer_registry_mutex);
+    return g_backend_buffer_registry.find(buffer) != g_backend_buffer_registry.end();
 }
 
 ggml_backend_buffer_type_t ggml_backend_buffer_get_type(ggml_backend_buffer_t buffer) {
@@ -2722,7 +2744,6 @@ bool ggml_backend_sched_is_profiling_enabled(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     return sched->do_profile_pipeline;
 }
-
 
 
 

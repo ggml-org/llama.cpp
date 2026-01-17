@@ -35,6 +35,7 @@ list(FILTER GGML_SOURCES_SYCL EXCLUDE REGEX "test_tensor_parallel\\.cpp$")
 
 if (GGML_SYCL_MMQ_XMX)
     message(STATUS "Compiling with experimental GGML_SYCL_MMQ_XMX kernels.")
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_MMQ_XMX)
     list(APPEND GGML_SOURCES_SYCL mmq_xmx.cpp)
     list(APPEND GGML_HEADERS_SYCL mmq_xmx.hpp)
 endif()

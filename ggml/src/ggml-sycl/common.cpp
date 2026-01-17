@@ -18,6 +18,7 @@
 
 #include <cstdlib>
 #include <mutex>
+#include <unordered_set>
 
 #if __has_include(<sycl/ext/oneapi/matrix/matrix.hpp>)
 #    include <sycl/ext/oneapi/matrix/matrix.hpp>
@@ -36,6 +37,33 @@ static std::atomic<uint64_t> g_layout_ptr_host_cache_aos_hit{0};
 static std::atomic<uint64_t> g_layout_ptr_host_cache_layout_fallback{0};
 static std::atomic<uint64_t> g_layout_ptr_host_cache_data_fallback{0};
 static std::atomic<uint64_t> g_layout_ptr_host_cache_miss{0};
+
+static std::mutex                                   g_opt_feature_registry_mutex;
+static std::unordered_set<const optimize_feature *> g_opt_feature_registry;
+
+bool ggml_sycl_is_optimize_feature_live(const optimize_feature * feature) {
+    if (!feature) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(g_opt_feature_registry_mutex);
+    return g_opt_feature_registry.find(feature) != g_opt_feature_registry.end();
+}
+
+void ggml_sycl_register_optimize_feature(optimize_feature * feature) {
+    if (!feature) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_opt_feature_registry_mutex);
+    g_opt_feature_registry.insert(feature);
+}
+
+void ggml_sycl_unregister_optimize_feature(optimize_feature * feature) {
+    if (!feature) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_opt_feature_registry_mutex);
+    g_opt_feature_registry.erase(feature);
+}
 
 void ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event event) {
     if (!ggml_sycl_layout_ptr_stats_enabled()) {
@@ -253,10 +281,10 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
 
             // Two-stage copy: mmap'd -> host (pinned) -> device
             // The shared-context queue cannot access non-USM mmap'd memory directly
-            // Use regular heap memory + memcpy (simplest approach)
-            void * host_staging = std::malloc(size);
+            // Use pinned host memory for staging
+            void * host_staging = ggml_sycl_host_malloc(size);
             if (host_staging == nullptr) {
-                GGML_LOG_ERROR("[STAGING] std::malloc returned nullptr for %zu bytes\n", size);
+                GGML_LOG_ERROR("[STAGING] failed to allocate pinned host staging buffer for %zu bytes\n", size);
                 sycl::free(staged, *tp_queue);
                 return nullptr;
             }
@@ -274,7 +302,7 @@ void * ggml_sycl_get_staged_ptr_device(const void * src, size_t size, int device
             GGML_SYCL_DEBUG("[STAGING] SYCL memcpy done\n");
 
             // Free the temporary host staging buffer
-            std::free(host_staging);
+            ggml_sycl_host_free(host_staging);
 
             entry->ptrs[device] = staged;
             GGML_SYCL_DEBUG("[STAGING] Staged %zu bytes from %p to device %d: %p\n", size, src, device, staged);
@@ -374,7 +402,15 @@ void * ggml_sycl_host_malloc(size_t size) try {
 }
 
 void ggml_sycl_host_free(void * ptr) try {
-    // allow to use dpct::get_in_order_queue() for host malloc
+    if (!ptr) {
+        return;
+    }
+    // Prefer shared TP context if it exists (pinned host memory may be bound to it).
+    if (g_tp_shared_context != nullptr) {
+        sycl::free(ptr, *g_tp_shared_context);
+        return;
+    }
+    // Fallback to default queue context.
     SYCL_CHECK(CHECK_TRY_ERROR(sycl::free(ptr, dpct::get_in_order_queue())));
 } catch (const sycl::exception & exc) {
     std::cerr << exc.what() << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
@@ -545,6 +581,7 @@ void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> str
         }
     }
 
+    ggml_sycl_unregister_optimize_feature(&extra->optimized_feature);
     delete extra;
 }
 
@@ -1100,14 +1137,26 @@ void ggml_sycl_tp_init_quant_comm_buffers(size_t initial_size) {
 
     GGML_SYCL_DEBUG("SYCL TP: Pre-allocating INT16 quant comm buffers for %zu elements\n", alloc_size);
 
-    // Allocate host buffers (standard malloc - CPU-accessible)
+    // Allocate host buffers (pinned host memory)
     // INT16 = 2 bytes per element
-    g_tp_quant_comm_bufs.host_q0     = (int16_t *) std::malloc(alloc_size * sizeof(int16_t));
-    g_tp_quant_comm_bufs.host_q1     = (int16_t *) std::malloc(alloc_size * sizeof(int16_t));
-    g_tp_quant_comm_bufs.host_result = (float *) std::malloc(alloc_size * sizeof(float));
+    g_tp_quant_comm_bufs.host_q0     = (int16_t *) ggml_sycl_host_malloc(alloc_size * sizeof(int16_t));
+    g_tp_quant_comm_bufs.host_q1     = (int16_t *) ggml_sycl_host_malloc(alloc_size * sizeof(int16_t));
+    g_tp_quant_comm_bufs.host_result = (float *) ggml_sycl_host_malloc(alloc_size * sizeof(float));
 
     if (!g_tp_quant_comm_bufs.host_q0 || !g_tp_quant_comm_bufs.host_q1 || !g_tp_quant_comm_bufs.host_result) {
         GGML_LOG_ERROR("SYCL TP: Failed to allocate quant comm host buffers\n");
+        if (g_tp_quant_comm_bufs.host_q0) {
+            ggml_sycl_host_free(g_tp_quant_comm_bufs.host_q0);
+        }
+        if (g_tp_quant_comm_bufs.host_q1) {
+            ggml_sycl_host_free(g_tp_quant_comm_bufs.host_q1);
+        }
+        if (g_tp_quant_comm_bufs.host_result) {
+            ggml_sycl_host_free(g_tp_quant_comm_bufs.host_result);
+        }
+        g_tp_quant_comm_bufs.host_q0 = nullptr;
+        g_tp_quant_comm_bufs.host_q1 = nullptr;
+        g_tp_quant_comm_bufs.host_result = nullptr;
         return;
     }
 
@@ -1131,13 +1180,13 @@ void ggml_sycl_tp_init_quant_comm_buffers(size_t initial_size) {
             GGML_LOG_ERROR("SYCL TP: Failed to allocate quant comm device buffers on device %d\n", dev);
             // Cleanup partial allocations
             if (g_tp_quant_comm_bufs.host_q0) {
-                std::free(g_tp_quant_comm_bufs.host_q0);
+                ggml_sycl_host_free(g_tp_quant_comm_bufs.host_q0);
             }
             if (g_tp_quant_comm_bufs.host_q1) {
-                std::free(g_tp_quant_comm_bufs.host_q1);
+                ggml_sycl_host_free(g_tp_quant_comm_bufs.host_q1);
             }
             if (g_tp_quant_comm_bufs.host_result) {
-                std::free(g_tp_quant_comm_bufs.host_result);
+                ggml_sycl_host_free(g_tp_quant_comm_bufs.host_result);
             }
             g_tp_quant_comm_bufs = {};
             return;
@@ -1166,13 +1215,13 @@ void ggml_sycl_tp_ensure_quant_comm_buffers(size_t n_elements) {
 
         // Free host buffers
         if (g_tp_quant_comm_bufs.host_q0) {
-            std::free(g_tp_quant_comm_bufs.host_q0);
+            ggml_sycl_host_free(g_tp_quant_comm_bufs.host_q0);
         }
         if (g_tp_quant_comm_bufs.host_q1) {
-            std::free(g_tp_quant_comm_bufs.host_q1);
+            ggml_sycl_host_free(g_tp_quant_comm_bufs.host_q1);
         }
         if (g_tp_quant_comm_bufs.host_result) {
-            std::free(g_tp_quant_comm_bufs.host_result);
+            ggml_sycl_host_free(g_tp_quant_comm_bufs.host_result);
         }
 
         // Free device buffers
@@ -1206,15 +1255,15 @@ void ggml_sycl_tp_free_quant_comm_buffers() {
 
     GGML_SYCL_DEBUG("SYCL TP: Freeing quant comm buffers\n");
 
-    // Free host buffers (standard malloc)
+    // Free host buffers (pinned host memory)
     if (g_tp_quant_comm_bufs.host_q0) {
-        std::free(g_tp_quant_comm_bufs.host_q0);
+        ggml_sycl_host_free(g_tp_quant_comm_bufs.host_q0);
     }
     if (g_tp_quant_comm_bufs.host_q1) {
-        std::free(g_tp_quant_comm_bufs.host_q1);
+        ggml_sycl_host_free(g_tp_quant_comm_bufs.host_q1);
     }
     if (g_tp_quant_comm_bufs.host_result) {
-        std::free(g_tp_quant_comm_bufs.host_result);
+        ggml_sycl_host_free(g_tp_quant_comm_bufs.host_result);
     }
 
     // Free device buffers
@@ -1318,17 +1367,33 @@ void ggml_sycl_tp_get_host_reduce_buffers(size_t bytes, float ** buf0, float ** 
 
     // Free old buffers if they exist
     if (g_tp_host_buf0 != nullptr) {
-        std::free(g_tp_host_buf0);
+        ggml_sycl_host_free(g_tp_host_buf0);
     }
     if (g_tp_host_buf1 != nullptr) {
-        std::free(g_tp_host_buf1);
+        ggml_sycl_host_free(g_tp_host_buf1);
     }
 
     // Allocate new buffers (with some headroom to avoid frequent reallocs)
     size_t alloc_size  = bytes + (bytes / 4);  // 25% headroom
-    g_tp_host_buf0     = (float *) std::malloc(alloc_size);
-    g_tp_host_buf1     = (float *) std::malloc(alloc_size);
+    g_tp_host_buf0     = (float *) ggml_sycl_host_malloc(alloc_size);
+    g_tp_host_buf1     = (float *) ggml_sycl_host_malloc(alloc_size);
     g_tp_host_buf_size = alloc_size;
+
+    if (g_tp_host_buf0 == nullptr || g_tp_host_buf1 == nullptr) {
+        GGML_LOG_ERROR("SYCL TP: Failed to allocate %zu bytes for persistent host reduce buffers\n", alloc_size);
+        if (g_tp_host_buf0) {
+            ggml_sycl_host_free(g_tp_host_buf0);
+        }
+        if (g_tp_host_buf1) {
+            ggml_sycl_host_free(g_tp_host_buf1);
+        }
+        g_tp_host_buf0 = nullptr;
+        g_tp_host_buf1 = nullptr;
+        g_tp_host_buf_size = 0;
+        *buf0 = nullptr;
+        *buf1 = nullptr;
+        return;
+    }
 
     GGML_SYCL_DEBUG("SYCL TP: Allocated %zu bytes for persistent host reduce buffers\n", alloc_size);
 
@@ -1350,7 +1415,6 @@ void ggml_sycl_tp_get_host_reduce_buffers(size_t bytes, float ** buf0, float ** 
 static void *                     g_pp_transfer_buf[2]   = { nullptr, nullptr };  // Double buffers
 static size_t                     g_pp_transfer_buf_size = 0;
 static std::mutex                 g_pp_transfer_mutex;
-static sycl::context *            g_pp_transfer_ctx = nullptr;
 static int                        g_pp_current_buf  = 0;  // Which buffer to use next (0 or 1)
 static std::optional<sycl::event> g_pp_pending_event[2];  // Pending events for each buffer
 
@@ -1359,69 +1423,33 @@ static bool ggml_sycl_pp_alloc_buffers(size_t bytes) {
     // Free old buffers if they exist
     for (int i = 0; i < 2; i++) {
         if (g_pp_transfer_buf[i] != nullptr) {
-            if (g_pp_transfer_ctx != nullptr) {
-                sycl::free(g_pp_transfer_buf[i], *g_pp_transfer_ctx);
-            } else {
-                std::free(g_pp_transfer_buf[i]);
-            }
+            ggml_sycl_host_free(g_pp_transfer_buf[i]);
             g_pp_transfer_buf[i] = nullptr;
         }
         g_pp_pending_event[i].reset();
-    }
-    if (g_pp_transfer_ctx != nullptr) {
-        delete g_pp_transfer_ctx;
-        g_pp_transfer_ctx = nullptr;
     }
     g_pp_transfer_buf_size = 0;
 
     // Allocate with 25% headroom to reduce reallocations
     size_t alloc_size = bytes + (bytes / 4);
 
-    // Try to allocate pinned host memory for faster transfers
-    try {
-        auto & q             = dpct::get_in_order_queue();
-        g_pp_transfer_ctx    = new sycl::context(q.get_context());
-        g_pp_transfer_buf[0] = sycl::malloc_host(alloc_size, *g_pp_transfer_ctx);
-        g_pp_transfer_buf[1] = sycl::malloc_host(alloc_size, *g_pp_transfer_ctx);
-        if (g_pp_transfer_buf[0] != nullptr && g_pp_transfer_buf[1] != nullptr) {
-            g_pp_transfer_buf_size = alloc_size;
-            GGML_SYCL_DEBUG("SYCL PP: Allocated 2x %zu bytes pinned host memory for double-buffered transfer\n",
-                            alloc_size);
-            return true;
-        }
-        // Partial allocation - clean up
-        if (g_pp_transfer_buf[0]) {
-            sycl::free(g_pp_transfer_buf[0], *g_pp_transfer_ctx);
-        }
-        if (g_pp_transfer_buf[1]) {
-            sycl::free(g_pp_transfer_buf[1], *g_pp_transfer_ctx);
-        }
-        g_pp_transfer_buf[0] = g_pp_transfer_buf[1] = nullptr;
-    } catch (...) {
-        // Pinned allocation failed
-        if (g_pp_transfer_ctx != nullptr) {
-            delete g_pp_transfer_ctx;
-            g_pp_transfer_ctx = nullptr;
-        }
-    }
-
-    // Fallback to standard malloc
-    g_pp_transfer_buf[0] = std::malloc(alloc_size);
-    g_pp_transfer_buf[1] = std::malloc(alloc_size);
+    // Allocate pinned host memory for faster transfers
+    g_pp_transfer_buf[0] = ggml_sycl_host_malloc(alloc_size);
+    g_pp_transfer_buf[1] = ggml_sycl_host_malloc(alloc_size);
     if (g_pp_transfer_buf[0] == nullptr || g_pp_transfer_buf[1] == nullptr) {
         if (g_pp_transfer_buf[0]) {
-            std::free(g_pp_transfer_buf[0]);
+            ggml_sycl_host_free(g_pp_transfer_buf[0]);
         }
         if (g_pp_transfer_buf[1]) {
-            std::free(g_pp_transfer_buf[1]);
+            ggml_sycl_host_free(g_pp_transfer_buf[1]);
         }
         g_pp_transfer_buf[0] = g_pp_transfer_buf[1] = nullptr;
-        GGML_LOG_ERROR("SYCL PP: Failed to allocate 2x %zu bytes for transfer buffers\n", alloc_size);
+        GGML_LOG_ERROR("SYCL PP: Failed to allocate 2x %zu bytes pinned host buffers\n", alloc_size);
         return false;
     }
 
     g_pp_transfer_buf_size = alloc_size;
-    GGML_SYCL_DEBUG("SYCL PP: Allocated 2x %zu bytes (standard malloc) for double-buffered transfer\n", alloc_size);
+    GGML_SYCL_DEBUG("SYCL PP: Allocated 2x %zu bytes pinned host memory for double-buffered transfer\n", alloc_size);
     return true;
 }
 
@@ -1498,17 +1526,9 @@ void ggml_sycl_free_dev2dev_transfer_buffer() {
     // Free buffers
     for (int i = 0; i < 2; i++) {
         if (g_pp_transfer_buf[i] != nullptr) {
-            if (g_pp_transfer_ctx != nullptr) {
-                sycl::free(g_pp_transfer_buf[i], *g_pp_transfer_ctx);
-            } else {
-                std::free(g_pp_transfer_buf[i]);
-            }
+            ggml_sycl_host_free(g_pp_transfer_buf[i]);
             g_pp_transfer_buf[i] = nullptr;
         }
-    }
-    if (g_pp_transfer_ctx != nullptr) {
-        delete g_pp_transfer_ctx;
-        g_pp_transfer_ctx = nullptr;
     }
     g_pp_transfer_buf_size = 0;
     g_pp_current_buf       = 0;

@@ -18,6 +18,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <vector>
 
 static const ggml_tensor * get_storage_tensor(const ggml_tensor * t) {
     const ggml_tensor * current = t;
@@ -56,6 +57,174 @@ static bool ggml_sycl_wait_after_get_rows_q6_k_soa() {
         cached = (env && std::strcmp(env, "0") != 0) ? 1 : 0;
     }
     return cached == 1;
+}
+
+struct get_rows_stream_segment {
+    size_t src_base      = 0;
+    size_t bytes_per_row = 0;
+};
+
+struct get_rows_stream_ctx {
+    ggml_backend_sycl_context * backend_ctx     = nullptr;
+    const ggml_tensor *         src0            = nullptr;
+    ggml_tensor *               dst             = nullptr;
+    const int32_t *             row_indices     = nullptr;
+    size_t                      row_count       = 0;
+    int64_t                     row_base        = 0;
+    layout_mode                 layout          = GGML_LAYOUT_AOS;
+    const uint8_t *             src_base        = nullptr;
+    size_t                      row_total_bytes = 0;
+    int                         segment_count   = 0;
+    get_rows_stream_segment     segments[4]     = {};
+    int                         device_id       = -1;
+    const int32_t *             seq_device      = nullptr;
+    size_t                      seq_count       = 0;
+    float *                     dst_base        = nullptr;
+    int64_t                     dst_row_stride  = 0;
+};
+
+static bool get_rows_parse_env_mb_value(const char * name, size_t & out_mb) {
+    const char * env = std::getenv(name);
+    if (!env || env[0] == '\0') {
+        return false;
+    }
+    char * end = nullptr;
+    long   mb  = std::strtol(env, &end, 10);
+    if (end == env || mb < 0) {
+        GGML_LOG_WARN("[GET_ROWS] Invalid %s='%s'\n", name, env);
+        return false;
+    }
+    out_mb = static_cast<size_t>(mb);
+    return true;
+}
+
+static bool get_rows_parse_env_count_value(const char * name, size_t & out_count) {
+    const char * env = std::getenv(name);
+    if (!env || env[0] == '\0') {
+        return false;
+    }
+    char * end   = nullptr;
+    long   count = std::strtol(env, &end, 10);
+    if (end == env || count < 0) {
+        GGML_LOG_WARN("[GET_ROWS] Invalid %s='%s'\n", name, env);
+        return false;
+    }
+    out_count = static_cast<size_t>(count);
+    return true;
+}
+
+static void get_rows_resolve_dma_params(size_t row_bytes, size_t & slice_bytes, size_t & buffer_count) {
+    size_t slice_mb = 1024;
+    size_t buffers  = 2;
+    size_t env_val  = 0;
+
+    if (get_rows_parse_env_mb_value("GGML_SYCL_DMA_SLICE_MB", env_val)) {
+        slice_mb = env_val;
+    }
+    if (get_rows_parse_env_count_value("GGML_SYCL_DMA_BUFFERS", env_val) ||
+        get_rows_parse_env_count_value("GGML_SYCL_DMA_SLICES", env_val)) {
+        buffers = env_val;
+    }
+
+    if (slice_bytes == 0) {
+        slice_bytes = slice_mb * 1024ULL * 1024ULL;
+    }
+    if (buffer_count == 0) {
+        buffer_count = buffers;
+    }
+    if (row_bytes > 0) {
+        size_t rows_per_slice = slice_bytes / row_bytes;
+        if (rows_per_slice < 1) {
+            rows_per_slice = 1;
+        }
+        slice_bytes = rows_per_slice * row_bytes;
+    }
+}
+
+static size_t get_rows_q6_k_coalesced_row_quants_bytes(int blocks_per_row) {
+    size_t row_quants_bytes = 0;
+    int    remaining        = blocks_per_row;
+    while (remaining > 0) {
+        int ts = 1;
+        while (ts * 2 <= remaining && ts < 32) {
+            ts *= 2;
+        }
+        row_quants_bytes += static_cast<size_t>(ts) * (128 + 64 + 16);
+        remaining -= ts;
+    }
+    return row_quants_bytes;
+}
+
+static bool get_rows_build_stream_segments(const ggml_tensor * src0,
+                                           layout_mode         layout,
+                                           int64_t             ncols,
+                                           int64_t             total_rows,
+                                           get_rows_stream_ctx & ctx) {
+    ctx.segment_count   = 0;
+    ctx.row_total_bytes = 0;
+
+    const auto add_segment = [&](size_t bytes_per_row) {
+        GGML_ASSERT(ctx.segment_count < 4);
+        ctx.segments[ctx.segment_count].src_base      = 0;
+        ctx.segments[ctx.segment_count].bytes_per_row = bytes_per_row;
+        ctx.segment_count++;
+        ctx.row_total_bytes += bytes_per_row;
+    };
+
+    if (layout == GGML_LAYOUT_AOS) {
+        const size_t row_bytes = ggml_row_size(src0->type, ncols);
+        add_segment(row_bytes);
+        return true;
+    }
+
+    const size_t blocks_per_row = static_cast<size_t>(ncols) / ggml_blck_size(src0->type);
+    switch (src0->type) {
+        case GGML_TYPE_Q4_0:
+            {
+                const size_t q_bytes = static_cast<size_t>(ncols) / 2;
+                const size_t d_bytes = blocks_per_row * sizeof(ggml_half);
+                add_segment(q_bytes);
+                add_segment(d_bytes);
+            }
+            break;
+        case GGML_TYPE_Q8_0:
+            {
+                const size_t q_bytes = static_cast<size_t>(ncols);
+                const size_t d_bytes = blocks_per_row * sizeof(ggml_half);
+                add_segment(q_bytes);
+                add_segment(d_bytes);
+            }
+            break;
+        case GGML_TYPE_Q6_K:
+            {
+                if (layout == GGML_LAYOUT_COALESCED) {
+                    const size_t q_bytes = get_rows_q6_k_coalesced_row_quants_bytes(static_cast<int>(blocks_per_row));
+                    const size_t d_bytes = blocks_per_row * sizeof(ggml_half);
+                    add_segment(q_bytes);
+                    add_segment(d_bytes);
+                } else {
+                    const size_t ql_bytes     = blocks_per_row * (QK_K / 2);
+                    const size_t qh_bytes     = blocks_per_row * (QK_K / 4);
+                    const size_t scales_bytes = blocks_per_row * (QK_K / 16);
+                    const size_t d_bytes      = blocks_per_row * sizeof(ggml_half);
+                    add_segment(ql_bytes);
+                    add_segment(qh_bytes);
+                    add_segment(scales_bytes);
+                    add_segment(d_bytes);
+                }
+            }
+            break;
+        default:
+            GGML_ABORT("GET_ROWS streaming: unsupported layout/type");
+    }
+
+    // Fix src_base offsets for non-AoS segments.
+    size_t src_base = 0;
+    for (int i = 0; i < ctx.segment_count; ++i) {
+        ctx.segments[i].src_base = src_base;
+        src_base += static_cast<size_t>(total_rows) * ctx.segments[i].bytes_per_row;
+    }
+    return true;
 }
 
 template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
@@ -1102,6 +1271,166 @@ static void get_rows_sycl_float(ggml_backend_sycl_context & ctx,
     GGML_UNUSED(ctx);
 }
 
+static void ggml_sycl_get_rows_dispatch_slice(ggml_backend_sycl_context & ctx,
+                                              const ggml_tensor *         src0,
+                                              const ggml_tensor *         src1,
+                                              ggml_tensor *               dst,
+                                              const void *                src0_dd,
+                                              const int32_t *             src1_dd,
+                                              float *                     dst_dd,
+                                              layout_mode                 layout,
+                                              int64_t                     row_offset,
+                                              int64_t                     storage_rows,
+                                              dpct::queue_ptr             stream) {
+    switch (src0->type) {
+        case GGML_TYPE_F16:
+            get_rows_sycl_float(ctx, src0, src1, dst, (const sycl::half *) src0_dd, src1_dd, dst_dd, stream);
+            break;
+        case GGML_TYPE_F32:
+            get_rows_sycl_float(ctx, src0, src1, dst, (const float *) src0_dd, src1_dd, dst_dd, stream);
+            break;
+        case GGML_TYPE_Q4_0:
+            {
+                const int64_t ne00     = src0->ne[0];
+                const int64_t d_offset = storage_rows * ne00 / 2;
+                if (layout == GGML_LAYOUT_SOA) {
+                    get_rows_sycl_reorder<QK4_0, QR4_0, dequantize_q4_0_reorder>(
+                        ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, row_offset, d_offset, stream);
+                } else if (layout == GGML_LAYOUT_COALESCED) {
+                    get_rows_q4_0_coalesced_sycl(ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, row_offset, d_offset,
+                                                 stream);
+                } else {
+                    get_rows_sycl<QK4_0, QR4_0, dequantize_q4_0>(ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, stream);
+                }
+            }
+            break;
+        case GGML_TYPE_Q4_1:
+            get_rows_sycl<QK4_1, QR4_1, dequantize_q4_1>(ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, stream);
+            break;
+        case GGML_TYPE_Q5_0:
+            get_rows_sycl<QK5_0, QR5_0, dequantize_q5_0>(ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, stream);
+            break;
+        case GGML_TYPE_Q5_1:
+            get_rows_sycl<QK5_1, QR5_1, dequantize_q5_1>(ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, stream);
+            break;
+        case GGML_TYPE_Q8_0:
+            {
+                const int64_t ne00     = src0->ne[0];
+                const int64_t d_offset = storage_rows * ne00;
+                if (layout == GGML_LAYOUT_SOA) {
+                    get_rows_sycl_reorder<QK8_0, QR8_0, dequantize_q8_0_reorder>(
+                        ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, row_offset, d_offset, stream);
+                } else if (layout == GGML_LAYOUT_COALESCED) {
+                    get_rows_q8_0_coalesced_sycl(ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, row_offset, d_offset,
+                                                 stream);
+                } else {
+                    get_rows_sycl<QK8_0, QR8_0, dequantize_q8_0>(ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, stream);
+                }
+            }
+            break;
+        case GGML_TYPE_Q6_K:
+            if (layout == GGML_LAYOUT_COALESCED) {
+                get_rows_q6_k_coalesced_variable_sycl<float>(ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, row_offset,
+                                                             storage_rows, stream);
+            } else if (layout == GGML_LAYOUT_SOA) {
+                get_rows_q6_k_soa_sycl(ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, row_offset, storage_rows, stream);
+            } else {
+                get_rows_q6_k_aos_sycl(ctx, src0, src1, dst, src0_dd, src1_dd, dst_dd, stream);
+            }
+            break;
+        default:
+            GGML_LOG_ERROR("%s: unsupported type for streaming: %s\n", __func__, ggml_type_name(src0->type));
+            GGML_ABORT("fatal error");
+    }
+}
+
+static sycl::event get_rows_stream_copy(sycl::queue &                    queue,
+                                        void *                           device_slice,
+                                        size_t                           slice_bytes,
+                                        size_t                           offset_bytes,
+                                        const void *                     src_ptr,
+                                        size_t                           src_size,
+                                        const void *                     ctx_void,
+                                        const std::vector<sycl::event> & deps) {
+    GGML_UNUSED(src_ptr);
+    GGML_UNUSED(src_size);
+    const auto * ctx = static_cast<const get_rows_stream_ctx *>(ctx_void);
+    if (!ctx || ctx->row_total_bytes == 0 || ctx->segment_count == 0) {
+        return queue.ext_oneapi_submit_barrier();
+    }
+
+    GGML_ASSERT(offset_bytes % ctx->row_total_bytes == 0);
+    GGML_ASSERT(slice_bytes % ctx->row_total_bytes == 0);
+
+    const size_t row_start = offset_bytes / ctx->row_total_bytes;
+    const size_t row_count = slice_bytes / ctx->row_total_bytes;
+
+    size_t                   dst_segment_offset = 0;
+    std::vector<sycl::event> cur_deps           = deps;
+    sycl::event              last_evt;
+
+    for (int seg_idx = 0; seg_idx < ctx->segment_count; ++seg_idx) {
+        const auto & seg = ctx->segments[seg_idx];
+        for (size_t i = 0; i < row_count; ++i) {
+            const int32_t row_idx = ctx->row_indices[row_start + i] + static_cast<int32_t>(ctx->row_base);
+            const uint8_t * src = ctx->src_base + seg.src_base + static_cast<size_t>(row_idx) * seg.bytes_per_row;
+            void * dst = static_cast<uint8_t *>(device_slice) + dst_segment_offset + i * seg.bytes_per_row;
+            last_evt = queue.memcpy(dst, src, seg.bytes_per_row, cur_deps);
+            cur_deps.assign(1, last_evt);
+        }
+        dst_segment_offset += row_count * seg.bytes_per_row;
+    }
+
+    return last_evt;
+}
+
+static sycl::event get_rows_stream_slice(sycl::queue &                    queue,
+                                         void *                           device_slice,
+                                         size_t                           slice_bytes,
+                                         size_t                           offset_bytes,
+                                         const void *                     ctx_void,
+                                         const std::vector<sycl::event> & deps) {
+    GGML_UNUSED(deps);
+    const auto * ctx = static_cast<const get_rows_stream_ctx *>(ctx_void);
+    if (!ctx || ctx->row_total_bytes == 0) {
+        return queue.ext_oneapi_submit_barrier();
+    }
+
+    GGML_ASSERT(offset_bytes % ctx->row_total_bytes == 0);
+    GGML_ASSERT(slice_bytes % ctx->row_total_bytes == 0);
+
+    const size_t row_start = offset_bytes / ctx->row_total_bytes;
+    const size_t row_count = slice_bytes / ctx->row_total_bytes;
+    GGML_ASSERT(row_count <= ctx->seq_count);
+
+    ggml_tensor src1_fake{};
+    src1_fake.type = GGML_TYPE_I32;
+    src1_fake.ne[0] = static_cast<int64_t>(row_count);
+    src1_fake.ne[1] = 1;
+    src1_fake.ne[2] = 1;
+    src1_fake.ne[3] = 1;
+    src1_fake.nb[0] = sizeof(int32_t);
+    src1_fake.nb[1] = src1_fake.nb[0] * src1_fake.ne[0];
+    src1_fake.nb[2] = src1_fake.nb[1];
+    src1_fake.nb[3] = src1_fake.nb[2];
+
+    float * dst_ptr = ctx->dst_base + static_cast<int64_t>(row_start) * ctx->dst_row_stride;
+
+    ggml_sycl_get_rows_dispatch_slice(*ctx->backend_ctx,
+                                      ctx->src0,
+                                      &src1_fake,
+                                      ctx->dst,
+                                      device_slice,
+                                      ctx->seq_device,
+                                      dst_ptr,
+                                      ctx->layout,
+                                      0,
+                                      static_cast<int64_t>(row_count),
+                                      &queue);
+
+    return queue.ext_oneapi_submit_barrier();
+}
+
 void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->src[1]->type == GGML_TYPE_I32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
@@ -1117,13 +1446,128 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const int64_t       storage_rows = ggml_nrows(storage);
     const int64_t       row_offset   = get_view_row_offset(src0);
     const size_t        view_offset  = get_view_byte_offset(src0);
-    const void *        aos_base     = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_AOS);
-    if (!aos_base) {
-        aos_base = ggml_sycl_get_layout_ptr(storage, device);
-    }
-    const void *        src0_d       = aos_base ? (const char *) aos_base + view_offset : nullptr;
+    const void *        aos_base     = nullptr;
+    const void *        src0_d       = nullptr;
     const int32_t *     src1_i32     = (const int32_t *) ggml_sycl_get_data_ptr(dst->src[1], device);
     float *             dst_d        = (float *) ggml_sycl_get_data_ptr(dst, device);
+
+    ggml_tensor_extra_gpu * extra     = (ggml_tensor_extra_gpu *) src0->extra;
+    const layout_mode       mode      = get_effective_layout_mode(extra);
+    const bool              layout_ok = (src0->type == GGML_TYPE_Q4_0 || src0->type == GGML_TYPE_Q8_0 ||
+                                         src0->type == GGML_TYPE_Q6_K);
+    layout_mode             layout    = GGML_LAYOUT_AOS;
+    layout_mode             chosen    = GGML_LAYOUT_AOS;
+    if (ggml_sycl_get_layout_choice_for_tensor(src0, device, &chosen)) {
+        layout = chosen;
+    } else if (layout_ok && (mode == GGML_LAYOUT_SOA || mode == GGML_LAYOUT_COALESCED)) {
+        layout = mode;
+    }
+    const void *            layout_base = nullptr;
+    if (layout != GGML_LAYOUT_AOS) {
+        layout_base = ggml_sycl_get_layout_ptr_for(storage, device, layout);
+        if (!layout_base) {
+            layout = GGML_LAYOUT_AOS;
+        }
+    }
+    if (layout == GGML_LAYOUT_AOS) {
+        aos_base = ggml_sycl_get_layout_ptr_for(storage, device, GGML_LAYOUT_AOS);
+        if (!aos_base) {
+            aos_base = ggml_sycl_get_layout_ptr(storage, device);
+        }
+        src0_d = aos_base ? (const char *) aos_base + view_offset : nullptr;
+    }
+
+    const int64_t n_rows_total = dst->src[1]->ne[0];
+    const bool    index_is_1d  = (dst->src[1]->ne[1] == 1 && dst->src[1]->ne[2] == 1 && dst->src[1]->ne[3] == 1);
+
+    ggml_sycl::unified_cache * cache =
+        ggml_sycl::unified_cache_enabled() ? ggml_sycl::get_unified_cache(*ctx.stream()) : nullptr;
+    const void *               cache_key = cache ? ggml_backend_sycl_get_weight_cache_key(src0, device) : nullptr;
+
+    if (cache && cache_key && ggml_sycl_tensor_is_weight(src0) && index_is_1d && n_rows_total > 0) {
+        ggml_sycl::cache_ptr_view view{};
+        view = cache->get_view(cache_key, layout);
+
+        const void * base_ptr = (layout == GGML_LAYOUT_AOS) ? aos_base : layout_base;
+        if (!view.ptr && base_ptr) {
+            view.ptr      = const_cast<void *>(base_ptr);
+            view.size     = ggml_row_size(src0->type, src0->ne[0]) * static_cast<size_t>(storage_rows);
+            view.layout   = layout;
+            view.type     = ggml_sycl::cache_entry_type::DENSE_WEIGHT;
+            const sycl::usm::alloc alloc = sycl::get_pointer_type(view.ptr, ctx.stream()->get_context());
+            if (alloc == sycl::usm::alloc::device) {
+                view.location = ggml_sycl::cache_location::DEVICE;
+            } else if (alloc == sycl::usm::alloc::host || alloc == sycl::usm::alloc::shared) {
+                view.location = ggml_sycl::cache_location::HOST_PINNED;
+            } else {
+                view.location = ggml_sycl::cache_location::HOST_MMAP;
+            }
+        }
+
+        if (view.ptr && view.location != ggml_sycl::cache_location::DEVICE) {
+            get_rows_stream_ctx stream_ctx{};
+            const bool segments_ok = get_rows_build_stream_segments(src0, layout, src0->ne[0], storage_rows, stream_ctx);
+            if (segments_ok && stream_ctx.row_total_bytes > 0) {
+                std::vector<int32_t> row_indices(n_rows_total);
+                ctx.stream()->memcpy(row_indices.data(), src1_i32, n_rows_total * sizeof(int32_t)).wait();
+
+                size_t slice_bytes  = 0;
+                size_t buffer_count = 0;
+                get_rows_resolve_dma_params(stream_ctx.row_total_bytes, slice_bytes, buffer_count);
+                const size_t rows_per_slice = slice_bytes / stream_ctx.row_total_bytes;
+
+                ggml_sycl_pool_alloc<int32_t> seq_device_alloc(ctx.pool());
+                int32_t * seq_device = seq_device_alloc.alloc(rows_per_slice);
+                if (!seq_device) {
+                    GGML_LOG_WARN("[GET_ROWS] DMA index staging allocation failed (rows=%zu)\n", rows_per_slice);
+                } else {
+                    std::vector<int32_t> seq_host(rows_per_slice);
+                    for (size_t i = 0; i < rows_per_slice; ++i) {
+                        seq_host[i] = static_cast<int32_t>(i);
+                    }
+                    sycl::event seq_evt =
+                        ctx.stream()->memcpy(seq_device, seq_host.data(), rows_per_slice * sizeof(int32_t));
+
+                    stream_ctx.backend_ctx    = &ctx;
+                    stream_ctx.src0           = src0;
+                    stream_ctx.dst            = dst;
+                    stream_ctx.row_indices    = row_indices.data();
+                    stream_ctx.row_count      = static_cast<size_t>(n_rows_total);
+                    stream_ctx.row_base       = row_offset;
+                    stream_ctx.layout         = layout;
+                    stream_ctx.src_base       = static_cast<const uint8_t *>(view.ptr);
+                    stream_ctx.device_id      = device;
+                    stream_ctx.seq_device     = seq_device;
+                    stream_ctx.seq_count      = rows_per_slice;
+                    stream_ctx.dst_base       = dst_d;
+                    stream_ctx.dst_row_stride = dst->nb[1] / sizeof(float);
+
+                    const size_t total_bytes = stream_ctx.row_total_bytes * static_cast<size_t>(n_rows_total);
+                    cache->pin(cache_key, layout);
+                    auto result = cache->stream_dma(view, total_bytes, slice_bytes, buffer_count, get_rows_stream_slice,
+                                                    &stream_ctx, { seq_evt }, get_rows_stream_copy);
+                    if (result.ok) {
+                        cache->unpin_on_event(cache_key, layout, result.event);
+                    } else {
+                        cache->unpin(cache_key, layout);
+                    }
+                    if (!result.ok) {
+                        if (result.mmap_direct_failed) {
+                            GGML_LOG_WARN("[GET_ROWS] DMA from mmap failed, falling back to CPU (%s)\n",
+                                          dst->name ? dst->name : "unknown");
+                            if (ggml_sycl_cpu_fallback_graph(ctx, dst, "get_rows streaming")) {
+                                return;
+                            }
+                        }
+                        GGML_ABORT("GET_ROWS streaming failed");
+                    }
+                    GGML_UNUSED(src0_d);
+                    GGML_UNUSED(src1_i32);
+                    return;
+                }
+            }
+        }
+    }
 
     // TP DEBUG (controlled by GGML_SYCL_TP_DEBUG environment variable)
     bool       is_tok_embd    = dst->src[0]->name && strstr(dst->src[0]->name, "token_embd");

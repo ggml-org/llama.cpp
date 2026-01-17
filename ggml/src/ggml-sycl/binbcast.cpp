@@ -5,9 +5,51 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <sycl/sycl.hpp>
 #include <vector>
+
+enum class ggml_sycl_binbcast_event_mode {
+    BARRIER,
+    SAFE,
+};
+
+static const char * ggml_sycl_binbcast_event_mode_name(ggml_sycl_binbcast_event_mode mode) {
+    switch (mode) {
+        case ggml_sycl_binbcast_event_mode::BARRIER:
+            return "barrier";
+        case ggml_sycl_binbcast_event_mode::SAFE:
+            return "safe";
+        default:
+            return "unknown";
+    }
+}
+
+static ggml_sycl_binbcast_event_mode ggml_sycl_get_binbcast_event_mode() {
+    const char * env = std::getenv("GGML_SYCL_BINBCAST_EVENT_MODE");
+    if (!env || env[0] == '\0') {
+        return ggml_sycl_binbcast_event_mode::BARRIER;
+    }
+    if (std::strcmp(env, "safe") == 0) {
+        return ggml_sycl_binbcast_event_mode::SAFE;
+    }
+    if (std::strcmp(env, "barrier") == 0) {
+        return ggml_sycl_binbcast_event_mode::BARRIER;
+    }
+    return ggml_sycl_binbcast_event_mode::BARRIER;
+}
+
+struct ggml_sycl_binbcast_unpin_event_kernel;
+
+static sycl::event ggml_sycl_submit_binbcast_event(sycl::queue & q, ggml_sycl_binbcast_event_mode mode) {
+    if (mode == ggml_sycl_binbcast_event_mode::BARRIER) {
+        return q.ext_oneapi_submit_barrier();
+    }
+    return q.submit([&](sycl::handler & cgh) {
+        cgh.single_task<ggml_sycl_binbcast_unpin_event_kernel>([] {});
+    });
+}
 
 static inline const char * ggml_sycl_layout_mode_name(ggml_layout_mode mode) {
     switch (mode) {
@@ -19,6 +61,8 @@ static inline const char * ggml_sycl_layout_mode_name(ggml_layout_mode mode) {
             return "coalesced";
         case GGML_LAYOUT_XMX_TILED:
             return "xmx_tiled";
+        case GGML_LAYOUT_XMX_GEMM_TILED:
+            return "xmx_gemm_tiled";
         default:
             return "unknown";
     }
@@ -76,6 +120,27 @@ static void ggml_sycl_debug_dump_tensor(const char * tag, const ggml_tensor * t)
             tag, t->name, ggml_type_name(t->type), (long long) t->ne[0], (long long) t->ne[1], (long long) t->ne[2],
             (long long) t->ne[3], t->nb[0], t->nb[1], t->nb[2], t->nb[3], ggml_is_contiguous(t), t->data,
             t->view_src ? t->view_src->name : "none", t->view_offs, layout_mode, layout_ptr, layout_size);
+}
+
+static void ggml_sycl_debug_check_tensor_ptr(const char * tag, const ggml_tensor * t) {
+    if (!t || !t->buffer || !t->data) {
+        return;
+    }
+    void * base = ggml_backend_buffer_get_base(t->buffer);
+    size_t size = ggml_backend_buffer_get_size(t->buffer);
+    if (!base || size == 0) {
+        return;
+    }
+    const uintptr_t base_u = reinterpret_cast<uintptr_t>(base);
+    const uintptr_t data_u = reinterpret_cast<uintptr_t>(t->data);
+    const size_t    need   = ggml_nbytes(t);
+    const bool      in_range = data_u >= base_u && (data_u + need) <= (base_u + size);
+    if (!in_range) {
+        const char * buft = ggml_backend_buft_name(ggml_backend_buffer_get_type(t->buffer));
+        fprintf(stderr,
+                "[SYCL-ADD-DBG] %s pointer out of range: data=%p need=%zu base=%p size=%zu buft=%s\n",
+                tag, t->data, need, base, size, buft ? buft : "(null)");
+    }
 }
 
 template <float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t>
@@ -480,7 +545,12 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx,
 
     if (pin_count > 0 && cache) {
         try {
-            sycl::event done_event = main_stream->ext_oneapi_submit_barrier();
+            const auto mode = ggml_sycl_get_binbcast_event_mode();
+            if (g_ggml_sycl_debug) {
+                GGML_LOG_INFO("[SYCL-BINBCAST] unpin event mode=%s pins=%d\n",
+                              ggml_sycl_binbcast_event_mode_name(mode), pin_count);
+            }
+            sycl::event done_event = ggml_sycl_submit_binbcast_event(*main_stream, mode);
             for (int i = 0; i < pin_count; ++i) {
                 if (!pins[i].keep_pinned) {
                     cache->unpin_on_event(pins[i].key_ptr, pins[i].layout, done_event);
@@ -504,6 +574,9 @@ inline void ggml_sycl_op_add(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
         ggml_sycl_debug_dump_tensor("ADD src0", src0);
         ggml_sycl_debug_dump_tensor("ADD src1", src1);
         ggml_sycl_debug_dump_tensor("ADD dst", dst);
+        ggml_sycl_debug_check_tensor_ptr("ADD src0", src0);
+        ggml_sycl_debug_check_tensor_ptr("ADD src1", src1);
+        ggml_sycl_debug_check_tensor_ptr("ADD dst", dst);
         const size_t src0_need  = ggml_sycl_max_end_bytes(ne00, ne01, ne02, ne03, nb00, nb01, nb02, nb03);
         const size_t src1_need  = ggml_sycl_max_end_bytes(ne10, ne11, ne12, ne13, nb10, nb11, nb12, nb13);
         const size_t dst_need   = ggml_sycl_max_end_bytes(ne0, ne1, ne2, ne3, nb0, nb1, nb2, nb3);

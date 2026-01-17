@@ -20,6 +20,7 @@
 #pragma once
 
 #include <sycl/nd_item.hpp>
+#include <vector>
 
 #include "ggml-sycl/dpct/helper.hpp"
 
@@ -188,16 +189,22 @@ void quantize_row_q8_1_sycl(const float * x, void * vy, const int kx, const int 
                          });
 }
 
-inline void quantize_row_q8_0_sycl(const float * x, void * vy, const int kx, const int ky, const int kx_padded,
-                                  dpct::queue_ptr stream) {
+inline sycl::event quantize_row_q8_0_sycl(const float * x, void * vy, const int kx, const int ky, const int kx_padded,
+                                         dpct::queue_ptr stream,
+                                         const std::vector<sycl::event> * deps = nullptr) {
     static_assert(QK8_0 % WARP_SIZE == 0);
     auto local_range      = std::size_t(WARP_SIZE);
     auto num_quant_blocks = ky * (kx / QK8_0);
     auto global_range     = num_quant_blocks * local_range;
     dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
 
-    stream->parallel_for(sycl::nd_range<1>({ global_range }, { local_range }),
+    return stream->submit([&](sycl::handler & cgh) {
+        if (deps && !deps->empty()) {
+            cgh.depends_on(*deps);
+        }
+        cgh.parallel_for(sycl::nd_range<1>({ global_range }, { local_range }),
                          [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              quantize_q8_0<QK8_0 / WARP_SIZE>()(x, vy, kx, kx_padded, it);
                          });
+    });
 }
