@@ -257,8 +257,6 @@ private:
     size_t size_k_bytes() const;
     size_t size_v_bytes() const;
 
-    bool is_masked_swa(llama_pos p0, llama_pos p1) const;
-
     ggml_tensor * build_rope_shift(
             const llama_cparams & cparams,
                    ggml_context * ctx,
