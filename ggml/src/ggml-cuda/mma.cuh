@@ -1001,17 +1001,13 @@ namespace ggml_cuda_mma {
 #else
 #pragma unroll
         for (int i = 0; i < 2; ++i) {
-            const float& a_frag = reinterpret_cast<const float&>(A.x[i]);
-            const float& b_frag = reinterpret_cast<const float&>(B.x[i]);
-            acc_frag = __builtin_amdgcn_mfma_f32_16x16x4f32(a_frag, b_frag, acc_frag, 0, 0, 0);
+            acc_frag = __builtin_amdgcn_mfma_f32_16x16x4f32(A.x[i], B.x[i], acc_frag, 0, 0, 0);
         }
 #endif
 #elif defined(CDNA2) || defined(CDNA1)
 #pragma unroll
         for (int i = 0; i < 2; ++i) {
-            const float& a_frag = reinterpret_cast<const float&>(A.x[i]);
-            const float& b_frag = reinterpret_cast<const float&>(B.x[i]);
-            acc_frag = __builtin_amdgcn_mfma_f32_16x16x4f32(a_frag, b_frag, acc_frag, 0, 0, 0);
+            acc_frag = __builtin_amdgcn_mfma_f32_16x16x4f32(A.x[i], B.x[i], acc_frag, 0, 0, 0);
         }
 #else
         GGML_UNUSED_VARS(D, A, B);
