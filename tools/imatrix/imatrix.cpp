@@ -1456,9 +1456,29 @@ static bool show_statistics(const common_params & params) {
     std::map<int, float> layer_pearson;
     compute_layer_statistics(ts, layer_cossim, layer_l2_dist, layer_pearson);
 
-    LOG_INF("\n\nComputing layer statistics (%zu layers)\n\n", ls.size() - 2);
+    size_t layers = 0;
+    int min = std::numeric_limits<int>::max();
+    int max = -1;
 
-    // Layer Table Headers
+    for (const auto & [layer, stats] : ls) {
+        if (layer >= 0 && stats.n > 0) {
+            layers++;
+            min = std::min(layer, min);
+            max = std::max(layer, max);
+        }
+    }
+
+    if (layers > 0) {
+        const auto expected = (size_t)(max - min + 1);
+        if (layers != expected) {
+            LOG_WRN("\n%s: layer sequence gap detected (found %zu layers in range %d-%d, expected %zu); layer statistics will not be shown\n",
+                __func__, layers, min, max, expected);
+            return false;
+        }
+    }
+
+    LOG_INF("\n\nComputing layer statistics for %s (%zu layers)\n\n", params.in_files[0].c_str(), layers);
+    
     if (legacy) {
         LOG_INF("%*s%s%9s%s%17s %10s %10s\n",
             w_lay, "Layer", sep,
