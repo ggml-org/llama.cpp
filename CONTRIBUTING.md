@@ -20,7 +20,7 @@ If AI is used to generate any portion of the code, contributors must adhere to t
 1. Explicitly disclose the manner in which AI was employed.
 2. Perform a comprehensive manual review prior to submitting the pull request.
 3. Be prepared to explain every line of code they submitted when asked about it by a maintainer.
-4. Using AI to respond to human reviewers is strictly prohibited.
+4. Using AI to write pull request descriptions or to respond to human reviewers is strictly prohibited.
 
 For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 

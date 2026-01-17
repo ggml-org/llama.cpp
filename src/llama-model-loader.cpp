@@ -2,6 +2,7 @@
 
 #include "ggml.h"
 
+#include <algorithm>
 #include <array>
 #include <cinttypes>
 #include <cstring>
@@ -344,6 +345,7 @@ namespace GGUFMeta {
             GGUFMeta::GKV<GGUFMeta::ArrayInfo>::get_kv(ctx, kid);
 
         switch (arr_info.gt) {
+            case GGUF_TYPE_BOOL:
             case GGUF_TYPE_UINT32:
             case GGUF_TYPE_INT32:   GGML_ASSERT((std::is_same<T,     int32_t>::value) ||
                                                 (std::is_same<T,    uint32_t>::value)); break;
@@ -365,7 +367,13 @@ namespace GGUFMeta {
                 result[i] = value;
             }
         } else {
-            std::copy((const T*)arr_info.data, (const T *)arr_info.data + arr_info.length, result.begin());
+            if (arr_info.gt == GGUF_TYPE_BOOL) {
+                std::transform((const bool *)arr_info.data, (const bool *)arr_info.data + arr_info.length, result.begin(), [](bool x) {
+                    return static_cast<T>(x);
+                });
+            } else {
+                std::copy((const T*)arr_info.data, (const T *)arr_info.data + arr_info.length, result.begin());
+            }
         }
 
         return true;

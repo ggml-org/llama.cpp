@@ -152,18 +152,14 @@ struct clip_ctx {
     ggml_backend_t backend_cpu = nullptr;
     ggml_backend_buffer_ptr buf;
 
+
     int max_nodes = 8192;
     ggml_backend_sched_ptr sched;
     clip_flash_attn_type flash_attn_type = CLIP_FLASH_ATTN_TYPE_AUTO;
     bool is_allocated = false;
 
-    // for debugging
-    bool debug_graph = false;
-    std::vector<ggml_tensor *> debug_print_tensors;
-
     clip_ctx(clip_context_params & ctx_params) {
         flash_attn_type = ctx_params.flash_attn_type;
-        debug_graph = std::getenv("MTMD_DEBUG_GRAPH") != nullptr;
         backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
         if (!backend_cpu) {
             throw std::runtime_error("failed to initialize CPU backend");
@@ -204,6 +200,10 @@ struct clip_ctx {
         sched.reset(
             ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), 8192, false, true)
         );
+
+        if (ctx_params.cb_eval != nullptr) {
+            ggml_backend_sched_set_eval_callback(sched.get(), ctx_params.cb_eval, ctx_params.cb_eval_user_data);
+        }
     }
 
     ~clip_ctx() {
@@ -239,9 +239,7 @@ clip_graph::clip_graph(clip_ctx * ctx, const clip_image_f32 & img) :
         n_mmproj_embd(clip_n_mmproj_embd(ctx)),
         eps(hparams.eps),
         kq_scale(1.0f / sqrtf((float)d_head)),
-        flash_attn_type(ctx->flash_attn_type),
-        debug_graph(ctx->debug_graph),
-        debug_print_tensors(ctx->debug_print_tensors) {
+        flash_attn_type(ctx->flash_attn_type) {
     struct ggml_init_params params = {
         /*.mem_size   =*/ ctx->buf_compute_meta.size(),
         /*.mem_buffer =*/ ctx->buf_compute_meta.data(),
@@ -252,14 +250,11 @@ clip_graph::clip_graph(clip_ctx * ctx, const clip_image_f32 & img) :
     gf = ggml_new_graph_custom(ctx0, ctx->max_nodes, false);
 }
 
-void clip_graph::cb(ggml_tensor * cur0, const char * name, int il) const {
-    if (debug_graph) {
-        ggml_tensor * cur = ggml_cpy(ctx0, cur0, ggml_dup_tensor(ctx0, cur0));
-        std::string cur_name = il >= 0 ? std::string(name) + "_" + std::to_string(il) : name;
-        ggml_set_name(cur, cur_name.c_str());
-        ggml_set_output(cur);
-        ggml_build_forward_expand(gf, cur);
-        debug_print_tensors.push_back(cur);
+void clip_graph::cb(ggml_tensor * cur, const char * name, int il) const {
+    if (il >= 0) {
+        ggml_format_name(cur, "%s-%d", name, il);
+    } else {
+        ggml_set_name(cur, name);
     }
 }
 
@@ -1519,8 +1514,8 @@ struct clip_model_loader {
                     model.mm_model_mlp_1_w = get_tensor(string_format(TN_GLM_ADAPTER_D_H_2_4H, "weight"));
                     model.mm_model_mlp_2_w = get_tensor(string_format(TN_GLM_ADAPTER_GATE, "weight"));
                     model.mm_model_mlp_3_w = get_tensor(string_format(TN_GLM_ADAPTER_D_4H_2_H, "weight"));
-                    model.mm_boi = get_tensor(string_format(TN_TOK_GLM_BOI, "weight"));
-                    model.mm_eoi = get_tensor(string_format(TN_TOK_GLM_EOI, "weight"));
+                    model.mm_boi = get_tensor(string_format(TN_TOK_GLM_BOI));
+                    model.mm_eoi = get_tensor(string_format(TN_TOK_GLM_EOI));
                 } break;
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
@@ -1761,8 +1756,8 @@ struct clip_model_loader {
                     model.mm_2_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "bias"));
                     model.mm_norm_pre_w = get_tensor(string_format(TN_MM_NORM_PRE, "weight"));
                     model.mm_norm_pre_b = get_tensor(string_format(TN_MM_NORM_PRE, "bias"));
-                    model.mm_boi = get_tensor(string_format(TN_TOK_BOI, "weight"));
-                    model.mm_eoi = get_tensor(string_format(TN_TOK_EOI, "weight"));
+                    model.mm_boi = get_tensor(string_format(TN_TOK_BOI));
+                    model.mm_eoi = get_tensor(string_format(TN_TOK_EOI));
                 } break;
             case PROJECTOR_TYPE_LLAMA4:
                 {
@@ -3339,7 +3334,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
     }
 
     // build the inference graph
-    ctx->debug_print_tensors.clear();
     ggml_backend_sched_reset(ctx->sched.get());
     ggml_cgraph * gf = clip_image_build_graph(ctx, imgs);
     ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
@@ -3709,18 +3703,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         return false;
     }
 
-    // print debug nodes
-    if (ctx->debug_graph) {
-        LOG_INF("\n\n---\n\n");
-        LOG_INF("\n\nDebug graph:\n\n");
-        for (ggml_tensor * t : ctx->debug_print_tensors) {
-            std::vector<uint8_t> data(ggml_nbytes(t));
-            ggml_backend_tensor_get(t, data.data(), 0, ggml_nbytes(t));
-            print_tensor_shape(t);
-            print_tensor_data(t, data.data(), 3);
-        }
-    }
-
     // the last node is the embedding tensor
     ggml_tensor * embeddings = ggml_graph_node(gf, -1);
 
@@ -3808,18 +3790,6 @@ bool clip_is_glm(const struct clip_ctx * ctx) {
     return ctx->proj_type() == PROJECTOR_TYPE_GLM_EDGE;
 }
 
-bool clip_is_mrope(const struct clip_ctx * ctx) {
-    switch (ctx->proj_type()) {
-        case PROJECTOR_TYPE_QWEN2VL:
-        case PROJECTOR_TYPE_QWEN25VL:
-        case PROJECTOR_TYPE_QWEN3VL:
-        case PROJECTOR_TYPE_GLM4V:
-            return true;
-        default:
-            return false;
-    }
-}
-
 bool clip_is_llava(const struct clip_ctx * ctx) {
     return ctx->model.hparams.has_llava_projector;
 }
@@ -3884,7 +3854,6 @@ const clip_hparams * clip_get_hparams(const struct clip_ctx * ctx) {
 //
 // API for debugging
 //
-
 void clip_debug_encode(clip_ctx * ctx, int h, int w, float fill_value) {
     clip_image_f32 img;
     img.nx = w;
@@ -3893,9 +3862,6 @@ void clip_debug_encode(clip_ctx * ctx, int h, int w, float fill_value) {
     for (int i = 0; i < h * w * 3; i++) {
         img.buf[i] = static_cast<float>(fill_value);
     }
-    bool cur_debug_graph = ctx->debug_graph;
-    ctx->debug_graph = true;
     clip_image_encode(ctx, 1, &img, nullptr);
-    ctx->debug_graph = cur_debug_graph;
     GGML_ASSERT(img.buf.empty() && "expected, always stop here");
 }
