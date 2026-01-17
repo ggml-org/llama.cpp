@@ -10,6 +10,12 @@
   {
     "REPLS": {
       "SRC_TYPE": "f32",
+      "DST_TYPE": "i32"
+    }
+  },
+  {
+    "REPLS": {
+      "SRC_TYPE": "f32",
       "DST_TYPE": "f16"
     }
   },
