@@ -184,7 +184,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     double energy_sum = 0.0;
     size_t valid_n = 0;
 
-    // Pass 1: Welford's Algorithm regarding aggregated elements
+    // Pass 1: Mean, Min, Max, Std Dev
     for (size_t i = 0; i < n_mat; ++i) {
         const auto c = (float)e.counts[i];
         if (c <= 0.0f) { continue; }
@@ -206,8 +206,6 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
             mean += delta / (double)valid_n;
             M2 += delta * (v - mean);
 
-            // Energy for entropy uses v_val (E[x^2]) usually, or v_act^2?
-            // Existing logic used v_val (mean of squares) for entropy distribution.
             if (v_val > 0.0) { energy_sum += v_val; }
         }
     }
@@ -225,7 +223,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     const double inv_energy_sum = energy_sum > 0.0 ? 1.0 / energy_sum : 0.0;
     const float inv_std = std_deviation > 0.0f ? 1.0f / std_deviation : 0.0f;
     const float fmean = (float)mean;
-    const float log2_val = 1 / std::log2f(2); // 1.44269504089
+    const float log2_val = 1 / std::log2f(2);
 
     for (size_t i = 0; i < n_mat; ++i) {
         const auto c = (float)e.counts[i];
@@ -241,7 +239,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
                 if (p > 1e-9) { entropy -= (float)(p * std::log(p) * log2_val); }
             }
 
-            // Z-Score (Outlier detection)
+            // Z-Score Density (Outlier detection)
             if (std_deviation > 0.0f) {
                 const double v_act = legacy ? 0.0 : (double)e.activations[off + j] * inv_c;
                 const double v_val = (double)e.values[off + j] * inv_c;
@@ -260,13 +258,11 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     ts.min_values = vmin;
     ts.elements = (int)valid_n;
     ts.std_deviation = std_deviation;
-    ts.entropy = std::abs(entropy); // Ensure positive 0
+    ts.entropy = std::abs(entropy);
     ts.zd_score = (float)(zd_count / (double)valid_n);
-
-    // Default pairwise
-    ts.cossim = 1.0f;
-    ts.pearson = 1.0f;
-    ts.l2_dist = 0.0f;
+    ts.cossim = std::numeric_limits<float>::quiet_NaN();
+    ts.pearson = std::numeric_limits<float>::quiet_NaN();
+    ts.l2_dist = std::numeric_limits<float>::quiet_NaN();
 
     return true;
 }
@@ -281,12 +277,10 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
         std::string dummy_tensor;
         process_tensor_name(ts.tensor, layer_str, dummy_tensor);
 
-        // Robust block ID extraction
         int blk = -1;
         try { blk = std::stoi(layer_str); } catch (...) { continue; }
         if (blk <= 0) { continue; }
 
-        // Reconstruct previous layer name
         const size_t blk_start_pos = ts.tensor.find("blk." + layer_str);
         if (blk_start_pos == std::string::npos) { continue; }
 
@@ -309,8 +303,6 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
         double norm1_sq = 0.0;
         double norm2_sq = 0.0;
         double l2_dist_sq = 0.0;
-
-        // Aux variables for Pearson (Spatial Covariance)
         double sum_c = 0.0;
         double sum_p = 0.0;
         const size_t n = curr_avg.size();
@@ -332,7 +324,7 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
             const double c_val = curr_avg[i];
             const double p_val = prev_avg[i];
 
-            // Cosine Similarity & L2 basics
+            // Cosine Similarity & L2 Distance
             dot_prod += c_val * p_val;
             norm1_sq += c_val * c_val;
             norm2_sq += p_val * p_val;
@@ -357,14 +349,14 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
             ts.cossim = (float)(dot_prod / (std::sqrt(norm1_sq) * std::sqrt(norm2_sq)));
             ts.cossim = std::clamp(ts.cossim, -1.0f, 1.0f);
         } else {
-            ts.cossim = (norm1_sq == 0.0 && norm2_sq == 0.0) ? 1.0f : 0.0f;
+            ts.cossim = (norm1_sq == 0.0 && norm2_sq == 0.0) ? std::numeric_limits<float>::quiet_NaN() : 0.0f;
         }
 
         if (var_c_sum > 0.0 && var_p_sum > 0.0) {
             ts.pearson = (float)(cov_sum / (std::sqrt(var_c_sum) * std::sqrt(var_p_sum)));
             ts.pearson = std::clamp(ts.pearson, -1.0f, 1.0f);
         } else {
-            ts.pearson = (var_c_sum == 0.0 && var_p_sum == 0.0) ? 1.0f : 0.0f;
+            ts.pearson = (var_c_sum == 0.0 && var_p_sum == 0.0) ? std::numeric_limits<float>::quiet_NaN() : 0.0f;
         }
     }
 }
@@ -411,7 +403,7 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
             cossim = (float)(agg.sum_dot_prod / (std::sqrt(agg.sum_norm1_sq) * std::sqrt(agg.sum_norm2_sq)));
             cossim = std::clamp(cossim, -1.0f, 1.0f);
         } else if (agg.sum_norm1_sq == 0.0 && agg.sum_norm2_sq == 0.0) {
-            cossim = 1.0f;
+            cossim = std::numeric_limits<float>::quiet_NaN();
         }
 
         layer_cossim[layer] = cossim;
@@ -1376,20 +1368,18 @@ static bool show_statistics(const common_params & params) {
     };
     std::map<int, layer_stats> ls;
 
-    // Helper to shorten names for table formatting "blk.10.attn_k.weight" -> "..10.attn_k.weight"
+    // Shorten names for table formatting
     auto label_fmt = [](std::string s, size_t w) -> std::string {
         if (s.length() <= w) { return s; }
         return ".." + s.substr(s.length() - (w - 2));
     };
 
-    // Table Constants
     constexpr int w_lay = 6;
-    constexpr int w_nam = 40; // Wide enough for most tensors
+    constexpr int w_nam = 40; // Should be wide enough for most tensor names
     const auto * sep = " | ";
 
-    LOG_INF("\nComputing tensor statistics (%d tensors)\n", static_cast<int>(ts.size()));
+    LOG_INF("\nComputing tensor statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
 
-    // Header logic separated to handle different column counts
     if (legacy) {
         LOG_INF("\n%*s%s%-*s%s%10s %12s %10s %10s%s %8s  %8s%s%17s %8s %8s\n",
             w_lay, "Layer", sep,
@@ -1408,18 +1398,17 @@ static bool show_statistics(const common_params & params) {
         LOG_INF("%s\n", std::string(167, '-').c_str());
     }
 
+    // Tensor Statistics
     for (const auto & tstat : ts) {
         std::string layer;
         std::string name;
-        process_tensor_name(tstat.tensor, layer, name);
 
-        // Calculate metrics
+        process_tensor_name(tstat.tensor, layer, name);
         const float h_norm = tstat.elements > 1 ? 100.0f * (tstat.entropy / std::log2((float) tstat.elements)) : 0.0f;
 
         int blk;
         try { blk = std::stoi(layer); } catch (...) { blk = -1; }
 
-        // Print Row
         if (legacy) {
             LOG_INF("%*s%s%-*s%s%10.4f %12.4f %10.4f %10.4f%s%8.2f%% %8.2f%%%s%14.4f %8.4f %8.4f\n",
                 w_lay, layer.c_str(), sep,
@@ -1429,7 +1418,6 @@ static bool show_statistics(const common_params & params) {
                 tstat.sum_values, tstat.cossim, tstat.pearson
             );
         } else {
-            // Display L2 Dist AND Sum E[A^2]
             LOG_INF("%*s%s%-*s%s%10.4f %12.4f %10.4f %10.4f%s%8.2f%% %8.2f%%%s%14.4f %12.4f %8.4f %8.4f\n",
                 w_lay, layer.c_str(), sep,
                 w_nam, label_fmt(tstat.tensor, w_nam).c_str(), sep,
@@ -1441,16 +1429,13 @@ static bool show_statistics(const common_params & params) {
 
         // Aggregate Layer Stats
         const float zd = (float)tstat.elements * tstat.zd_score;
-        auto & l_entry = ls[blk];
-
-        // Accumulate sum values regardless of legacy status to allow display in both modes
-        l_entry.layer_sum += tstat.sum_values;
-        l_entry.layer_zd += zd;
-        l_entry.n += tstat.elements;
+        auto & l = ls[blk];
+        l.layer_sum += tstat.sum_values;
+        l.layer_zd += zd;
+        l.n += tstat.elements;
     }
 
-    // --- Computed Layer Statistics ---
-
+    // Layer Statistics
     std::map<int, float> layer_cossim;
     std::map<int, float> layer_l2_dist;
     std::map<int, float> layer_pearson;
@@ -1496,9 +1481,9 @@ static bool show_statistics(const common_params & params) {
     for (const auto & [layer, stats] : ls) {
         if (layer < 0 || stats.n == 0) { continue; }
 
-        float lcs = layer == 0 ? 1.0f : layer_cossim[layer];
-        float ll2 = layer == 0 ? 0.0f : layer_l2_dist[layer];
-        float lpc = layer == 0 ? 1.0f : layer_pearson[layer];
+        float lcs = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_cossim[layer];
+        float ll2 = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_l2_dist[layer];
+        float lpc = layer == 0 ? std::numeric_limits<float>::quiet_NaN() : layer_pearson[layer];
 
         if (legacy) {
             LOG_INF("%*d%s%8.2f%%%s%14.4f %10.4f %10.4f\n",
