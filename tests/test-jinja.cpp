@@ -534,6 +534,66 @@ static void test_literals(testing & t) {
         json::object(),
         "1"
     );
+
+    test_template(t, "integer|abs",
+        "{{ -42 | abs }}",
+        json::object(),
+        "42"
+    );
+
+    test_template(t, "integer|float",
+        "{{ 42 | float }}",
+        json::object(),
+        "42.0"
+    );
+
+    test_template(t, "integer|tojson",
+        "{{ 42 | tojson }}",
+        json::object(),
+        "42"
+    );
+
+    test_template(t, "float|abs",
+        "{{ -3.14 | abs }}",
+        json::object(),
+        "3.14"
+    );
+
+    test_template(t, "float|int",
+        "{{ 3.14 | int }}",
+        json::object(),
+        "3"
+    );
+
+    test_template(t, "float|tojson",
+        "{{ 3.14 | tojson }}",
+        json::object(),
+        "3.14"
+    );
+
+    test_template(t, "string|tojson",
+        "{{ 'hello' | tojson }}",
+        json::object(),
+        "\"hello\""
+    );
+
+    test_template(t, "boolean|int",
+        "{{ true | int }}",
+        json::object(),
+        "1"
+    );
+
+    test_template(t, "boolean|float",
+        "{{ true | float }}",
+        json::object(),
+        "1.0"
+    );
+
+    test_template(t, "boolean|tojson",
+        "{{ true | tojson }}",
+        json::object(),
+        "true"
+    );
 }
 
 static void test_comments(testing & t) {
