@@ -1,11 +1,9 @@
+#include "debug.h"
 #include "arg.h"
 #include "common.h"
 #include "log.h"
 #include "llama.h"
-#include "ggml.h"
 
-#include <cmath>
-#include <cstdint>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -13,7 +11,7 @@
 #include <fstream>
 #include <regex>
 
-static void print_usage(int, char ** argv) {
+static void print_usage(int /*argc*/, char ** argv) {
     const std::string usage_template = R"(
         example usage:
 
@@ -35,33 +33,21 @@ static void print_usage(int, char ** argv) {
     LOG("%s\n", usage.c_str());
 }
 
-static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data);
-
-struct callback_data {
-    std::vector<uint8_t>    data;
-    std::vector<std::regex> tensor_filters;
-
-    callback_data() = default;
-
-    callback_data(common_params & params, const std::vector<std::string> & filter_patterns) {
-        for (const auto & pattern : filter_patterns) {
-            try {
-                std::string anchored_pattern = "^" + pattern;
-                tensor_filters.emplace_back(anchored_pattern, std::regex::optimize);
-            } catch (const std::regex_error & e) {
-                throw std::runtime_error("Invalid regex pattern '" + pattern + "': " + e.what());
-            }
-        }
-        params.cb_eval           = ggml_debug;
-        params.cb_eval_user_data = this;
+static bool has_pooling(llama_context * ctx) {
+    switch (llama_pooling_type(ctx)) {
+        case LLAMA_POOLING_TYPE_NONE:
+        case LLAMA_POOLING_TYPE_UNSPECIFIED:
+            return false;
+        default:
+            return true;
     }
-};
+}
 
 struct output_data {
     float *                  data_ptr    = nullptr;
     int                      data_size   = 0;
     std::string              type_suffix;
-    std::vector<float>       storage;
+    std::vector<float>       embd_norm;
     std::string              prompt;
     std::vector<llama_token> tokens;
 
@@ -73,24 +59,32 @@ struct output_data {
         prompt = params.prompt;
 
         if (params.embedding) {
-            const int  n_embd          = llama_model_n_embd_out(model);
-            const bool pooling_enabled = llama_pooling_type(ctx) != LLAMA_POOLING_TYPE_NONE;
-            const int  n_embd_count    = pooling_enabled ? 1 : tokens.size();
-            const int  n_embeddings    = n_embd * n_embd_count;
+            const int n_embd       = llama_model_n_embd_out(model);
+            const bool pooling     = has_pooling(ctx);
+            const int n_embd_count = pooling ? 1 : tokens.size();
+            const int n_floats     = n_embd * n_embd_count;
 
-            float * embeddings;
-            if (pooling_enabled) {
-                embeddings = llama_get_embeddings_seq(ctx, 0);
-                storage.resize(n_embeddings);
-                common_embd_normalize(embeddings, storage.data(), n_embeddings, params.embd_normalize);
-                embeddings = storage.data();
-            } else {
-                embeddings = llama_get_embeddings(ctx);
+            float * embd_raw = pooling ? llama_get_embeddings_seq(ctx, 0) : llama_get_embeddings(ctx);
+            if (embd_raw == nullptr) {
+                throw std::runtime_error("failed to get embeddings from the model");
             }
 
-            data_ptr = embeddings;
-            data_size = n_embeddings;
+            LOG_DBG("pooling_enabled: %s\n", pooling ? "true" : "false");
+            LOG_DBG("n_embd: %d\n", n_embd);
+            LOG_DBG("n_floats: %d\n", n_floats);
+            LOG_DBG("n_embd_count: %d\n", n_embd_count);
+
+            data_ptr    = embd_raw;
+            data_size   = n_floats;
             type_suffix = "-embeddings";
+
+            if (params.embd_normalize >= 0) {
+                embd_norm.resize(n_floats);
+                for (int i = 0; i < n_embd_count; i++) {
+                    common_embd_normalize(embd_raw+i*n_embd, embd_norm.data()+i*n_embd, n_embd, params.embd_normalize);
+                }
+                data_ptr = embd_norm.data();
+            }
         } else {
             const float * logits = llama_get_logits_ith(ctx, tokens.size() - 1);
             const int n_logits = llama_vocab_n_tokens(vocab);
@@ -101,168 +95,6 @@ struct output_data {
         }
     }
 };
-
-static std::string ggml_ne_string(const ggml_tensor * t) {
-    std::string str;
-    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
-        str += std::to_string(t->ne[i]);
-        if (i + 1 < GGML_MAX_DIMS) {
-            str += ", ";
-        }
-    }
-    return str;
-}
-
-static inline float ggml_compute_bf16_to_fp32(ggml_bf16_t h) {
-    union {
-        float f;
-        uint32_t i;
-    } u;
-    u.i = (uint32_t)h.bits << 16;
-    return u.f;
-}
-
-static float ggml_get_float_value(const uint8_t * data, ggml_type type,
-        const size_t * nb, size_t i0, size_t i1, size_t i2, size_t i3) {
-    size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
-    switch (type) {
-        case GGML_TYPE_F16:
-            return ggml_fp16_to_fp32(*(const ggml_fp16_t *) &data[i]);
-        case GGML_TYPE_F32:
-            return *(const float *) &data[i];
-        case GGML_TYPE_I64:
-            return (float) *(const int64_t *) &data[i];
-        case GGML_TYPE_I32:
-            return (float) *(const int32_t *) &data[i];
-        case GGML_TYPE_I16:
-            return (float) *(const int16_t *) &data[i];
-        case GGML_TYPE_I8:
-            return (float) *(const int8_t *) &data[i];
-        case GGML_TYPE_BF16:
-            return ggml_compute_bf16_to_fp32(*(const ggml_bf16_t *) &data[i]);
-        default:
-            GGML_ABORT("fatal error");
-    }
-}
-
-static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t n) {
-    GGML_ASSERT(n > 0);
-    float sum    = 0;
-    float sum_sq = 0.0;
-    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
-        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
-            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
-                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
-                    const float v = ggml_get_float_value(data, type, nb, i0, i1, i2, i3);
-                    sum    += v;
-                    sum_sq += v * v;
-                }
-            }
-        }
-    }
-    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
-        LOG_DBG("                                     [\n");
-        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
-            if (i2 == n && ne[2] > 2*n) {
-                LOG_DBG("                                      ..., \n");
-                i2 = ne[2] - n;
-            }
-            LOG_DBG("                                      [\n");
-            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
-                if (i1 == n && ne[1] > 2*n) {
-                    LOG_DBG("                                       ..., \n");
-                    i1 = ne[1] - n;
-                }
-                LOG_DBG("                                       [");
-                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
-                    if (i0 == n && ne[0] > 2*n) {
-                        LOG_DBG("..., ");
-                        i0 = ne[0] - n;
-                    }
-                    const float v = ggml_get_float_value(data, type, nb, i0, i1, i2, i3);
-                    LOG_DBG("%12.4f", v);
-                    if (i0 < ne[0] - 1) {
-                        LOG_DBG(", ");
-                    }
-                }
-                LOG_DBG("],\n");
-            }
-            LOG_DBG("                                      ],\n");
-        }
-        LOG_DBG("                                     ]\n");
-        LOG_DBG("                                     sum    = %f\n", sum);
-        LOG_DBG("                                     sum_sq = %f\n", sum_sq);
-    }
-
-    if (std::isnan(sum)) {
-        LOG_ERR("encountered NaN - aborting\n");
-        exit(0);
-    }
-}
-
-/**
- * GGML operations callback during the graph execution.
- *
- * @param t current tensor
- * @param ask when ask is true, the scheduler wants to know if we are interested in data from this tensor
- *            if we return true, a follow-up call will be made with ask=false in which we can do the actual collection.
- *            see ggml_backend_sched_eval_callback
- * @param user_data user data to pass at each call back
- * @return true to receive data or continue the graph, false otherwise
- */
-static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
-    auto * cb_data = (callback_data *) user_data;
-
-    const struct ggml_tensor * src0 = t->src[0];
-    const struct ggml_tensor * src1 = t->src[1];
-
-    if (ask) {
-        return true; // Always retrieve data
-    }
-
-    bool matches_filter = cb_data->tensor_filters.empty();
-
-    if (!matches_filter) {
-        for (const auto & filter : cb_data->tensor_filters) {
-            if (std::regex_search(t->name, filter)) {
-                matches_filter = true;
-                break;
-            }
-        }
-    }
-
-    char src1_str[128] = {0};
-    if (src1) {
-        snprintf(src1_str, sizeof(src1_str), "%s{%s}", src1->name, ggml_ne_string(src1).c_str());
-    }
-
-    if (matches_filter) {
-        LOG_DBG("%s: %24s = (%s) %10s(%s{%s}, %s}) = {%s}\n", __func__,
-             t->name,
-             ggml_type_name(t->type),
-             ggml_op_desc(t),
-             src0->name,
-             ggml_ne_string(src0).c_str(),
-             src1 ? src1_str : "",
-             ggml_ne_string(t).c_str());
-    }
-
-    const bool is_host = ggml_backend_buffer_is_host(t->buffer);
-
-    if (!is_host) {
-        auto n_bytes = ggml_nbytes(t);
-        cb_data->data.resize(n_bytes);
-        ggml_backend_tensor_get(t, cb_data->data.data(), 0, n_bytes);
-    }
-
-    if (!ggml_is_quantized(t->type) && matches_filter) {
-        uint8_t * data = is_host ? (uint8_t *) t->data : cb_data->data.data();
-        ggml_print_tensor(data, t->type, t->ne, t->nb, 3);
-    }
-
-    return true;
-}
-
 
 static void save_output_data(const output_data & output, const std::string & model_name, const std::string & output_dir) {
     std::filesystem::create_directory(output_dir);
@@ -390,7 +222,7 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    callback_data cb_data(params, params.tensor_filter);
+    base_callback_data cb_data(params, params.tensor_filter);
 
     auto llama_init = common_init_from_params(params);
 

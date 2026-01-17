@@ -1,10 +1,10 @@
 #include "common.h"
+#include "download.h"
 #include "log.h"
 #include "llama.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "chat.h"
-#include "arg.h" // for common_remote_get_content; TODO: use download.h only
 #include "base64.hpp"
 
 #include "server-common.h"
@@ -779,7 +779,7 @@ static void handle_media(
         // download remote image
         // TODO @ngxson : maybe make these params configurable
         common_remote_params params;
-        params.headers.push_back("User-Agent: llama.cpp/" + build_info);
+        params.headers.push_back({"User-Agent", "llama.cpp/" + build_info});
         params.max_size = 1024 * 1024 * 10; // 10MB
         params.timeout  = 10; // seconds
         SRV_INF("downloading image from '%s'\n", url.c_str());

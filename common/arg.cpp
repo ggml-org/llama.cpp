@@ -2,10 +2,11 @@
 
 #include "chat.h"
 #include "common.h"
+#include "download.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
-#include "download.h"
+#include "preset.h"
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -46,6 +47,8 @@
 #endif
 
 #define LLAMA_MAX_URL_LENGTH 2084 // Maximum URL Length in Chrome: 2083
+
+extern const char * LICENSES[];
 
 using json = nlohmann::ordered_json;
 using namespace common_arg_utils;
@@ -268,6 +271,55 @@ static void parse_tensor_buffer_overrides(const std::string & value, std::vector
     }
 }
 
+static std::string clean_file_name(const std::string & fname) {
+    std::string clean_fname = fname;
+    string_replace_all(clean_fname, "\\", "_");
+    string_replace_all(clean_fname, "/", "_");
+    return clean_fname;
+}
+
+static bool common_params_handle_remote_preset(common_params & params, llama_example ex) {
+    GGML_ASSERT(!params.model.hf_repo.empty());
+
+    // the returned hf_repo is without tag
+    auto [hf_repo, hf_tag] = common_download_split_repo_tag(params.model.hf_repo);
+
+    // "latest" tag (default if not specified) is translated to "default" preset
+    if (hf_tag == "latest") {
+        hf_tag = "default";
+    }
+
+    const bool offline = params.offline;
+    std::string model_endpoint = get_model_endpoint();
+    auto preset_url = model_endpoint + hf_repo + "/resolve/main/preset.ini";
+
+    // prepare local path for caching
+    auto preset_fname = clean_file_name(hf_repo + "_preset.ini");
+    auto preset_path = fs_get_cache_file(preset_fname);
+    const int status = common_download_file_single(preset_url, preset_path, params.hf_token, offline);
+    const bool has_preset = status >= 200 && status < 400;
+
+    // remote preset is optional, so we don't error out if not found
+    if (has_preset) {
+        LOG_INF("applying remote preset from %s\n", preset_url.c_str());
+        common_preset_context ctx(ex, /* only_remote_allowed */ true);
+        common_preset global;
+        auto remote_presets = ctx.load_from_ini(preset_path, global);
+        remote_presets = ctx.cascade(global, remote_presets);
+        if (remote_presets.find(hf_tag) != remote_presets.end()) {
+            common_preset preset = remote_presets.at(hf_tag);
+            LOG_INF("\n%s", preset.to_ini().c_str()); // to_ini already added trailing newline
+            preset.apply_to_params(params);
+        } else {
+            throw std::runtime_error("Remote preset.ini does not contain [" + std::string(hf_tag) + "] section");
+        }
+    } else {
+        LOG_INF("%s", "no remote preset found, skipping\n");
+    }
+
+    return has_preset;
+}
+
 struct handle_model_result {
     bool found_mmproj = false;
     common_params_model mmproj;
@@ -289,7 +341,7 @@ static handle_model_result common_params_handle_model(
                 if (model.path.empty()) {
                     auto auto_detected = common_get_hf_file(model.hf_repo, bearer_token, offline);
                     if (auto_detected.repo.empty() || auto_detected.ggufFile.empty()) {
-                        exit(1); // built without CURL, error message already printed
+                        exit(1); // error message already printed
                     }
                     model.name    = model.hf_repo;      // repo name with tag
                     model.hf_repo = auto_detected.repo; // repo name without tag
@@ -309,9 +361,7 @@ static handle_model_result common_params_handle_model(
             // make sure model path is present (for caching purposes)
             if (model.path.empty()) {
                 // this is to avoid different repo having same file name, or same file name in different subdirs
-                std::string filename = model.hf_repo + "_" + model.hf_file;
-                // to make sure we don't have any slashes in the filename
-                string_replace_all(filename, "/", "_");
+                std::string filename = clean_file_name(model.hf_repo + "_" + model.hf_file);
                 model.path = fs_get_cache_file(filename);
             }
 
@@ -425,61 +475,87 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         }
     };
 
-    std::set<std::string> seen_args;
+    auto parse_cli_args = [&]() {
+        std::set<std::string> seen_args;
 
-    for (int i = 1; i < argc; i++) {
-        const std::string arg_prefix = "--";
+        for (int i = 1; i < argc; i++) {
+            const std::string arg_prefix = "--";
 
-        std::string arg = argv[i];
-        if (arg.compare(0, arg_prefix.size(), arg_prefix) == 0) {
-            std::replace(arg.begin(), arg.end(), '_', '-');
-        }
-        if (arg_to_options.find(arg) == arg_to_options.end()) {
-            throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
-        }
-        if (!seen_args.insert(arg).second) {
-            LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
-        }
-        auto & tmp = arg_to_options[arg];
-        auto opt = *tmp.first;
-        bool is_positive = tmp.second;
-        if (opt.has_value_from_env()) {
-            fprintf(stderr, "warn: %s environment variable is set, but will be overwritten by command line argument %s\n", opt.env, arg.c_str());
-        }
-        try {
-            if (opt.handler_void) {
-                opt.handler_void(params);
-                continue;
+            std::string arg = argv[i];
+            if (arg.compare(0, arg_prefix.size(), arg_prefix) == 0) {
+                std::replace(arg.begin(), arg.end(), '_', '-');
             }
-            if (opt.handler_bool) {
-                opt.handler_bool(params, is_positive);
-                continue;
+            if (arg_to_options.find(arg) == arg_to_options.end()) {
+                throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
             }
+            if (!seen_args.insert(arg).second) {
+                LOG_WRN("DEPRECATED: argument '%s' specified multiple times, use comma-separated values instead (only last value will be used)\n", arg.c_str());
+            }
+            auto & tmp = arg_to_options[arg];
+            auto opt = *tmp.first;
+            bool is_positive = tmp.second;
+            if (opt.has_value_from_env()) {
+                fprintf(stderr, "warn: %s environment variable is set, but will be overwritten by command line argument %s\n", opt.env, arg.c_str());
+            }
+            try {
+                if (opt.handler_void) {
+                    opt.handler_void(params);
+                    continue;
+                }
+                if (opt.handler_bool) {
+                    opt.handler_bool(params, is_positive);
+                    continue;
+                }
 
-            // arg with single value
-            check_arg(i);
-            std::string val = argv[++i];
-            if (opt.handler_int) {
-                opt.handler_int(params, std::stoi(val));
-                continue;
-            }
-            if (opt.handler_string) {
-                opt.handler_string(params, val);
-                continue;
-            }
+                // arg with single value
+                check_arg(i);
+                std::string val = argv[++i];
+                if (opt.handler_int) {
+                    opt.handler_int(params, std::stoi(val));
+                    continue;
+                }
+                if (opt.handler_string) {
+                    opt.handler_string(params, val);
+                    continue;
+                }
 
-            // arg with 2 values
-            check_arg(i);
-            std::string val2 = argv[++i];
-            if (opt.handler_str_str) {
-                opt.handler_str_str(params, val, val2);
-                continue;
+                // arg with 2 values
+                check_arg(i);
+                std::string val2 = argv[++i];
+                if (opt.handler_str_str) {
+                    opt.handler_str_str(params, val, val2);
+                    continue;
+                }
+            } catch (std::exception & e) {
+                throw std::invalid_argument(string_format(
+                    "error while handling argument \"%s\": %s\n\n"
+                    "usage:\n%s\n\nto show complete usage, run with -h",
+                    arg.c_str(), e.what(), opt.to_string().c_str()));
             }
-        } catch (std::exception & e) {
-            throw std::invalid_argument(string_format(
-                "error while handling argument \"%s\": %s\n\n"
-                "usage:\n%s\n\nto show complete usage, run with -h",
-                arg.c_str(), e.what(), opt.to_string().c_str()));
+        }
+    };
+
+    // parse the first time to get -hf option (used for remote preset)
+    parse_cli_args();
+
+    // maybe handle remote preset
+    if (!params.model.hf_repo.empty()) {
+        std::string cli_hf_repo = params.model.hf_repo;
+        bool has_preset = common_params_handle_remote_preset(params, ctx_arg.ex);
+
+        // special case: if hf_repo explicitly set by preset, we need to preserve it (ignore CLI value)
+        // this is useful when we have one HF repo pointing to other HF repos (one model - multiple GGUFs)
+        std::string preset_hf_repo = params.model.hf_repo;
+        bool preset_has_hf_repo = preset_hf_repo != cli_hf_repo;
+
+        if (has_preset) {
+            // re-parse CLI args to override preset values
+            parse_cli_args();
+        }
+
+        // preserve hf_repo from preset if needed
+        if (preset_has_hf_repo) {
+            params.model.hf_repo = preset_hf_repo;
         }
     }
 
@@ -679,7 +755,6 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
         "llama-quantize",
         "llama-qwen2vl-cli",
         "llama-retrieval",
-        "llama-run",
         "llama-save-load-state",
         "llama-server",
         "llama-simple",
@@ -967,6 +1042,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--license"},
+        "show source code license and dependencies",
+        [](common_params &) {
+            for (int i = 0; LICENSES[i]; ++i) {
+                printf("%s\n", LICENSES[i]);
+            }
+            exit(0);
+        }
+    ));
+    add_opt(common_arg(
         {"-cl", "--cache-list"},
         "show list of models in cache",
         [](common_params &) {
@@ -1210,7 +1295,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.kv_unified = true;
         }
-    ).set_env("LLAMA_ARG_KV_UNIFIED").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_env("LLAMA_ARG_KV_UNIFIED").set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_BATCHED}));
     add_opt(common_arg(
         {"--context-shift"},
         {"--no-context-shift"},
@@ -1642,6 +1727,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             } else {
                 params.sampling.dry_sequence_breakers.emplace_back(value);
             }
+        }
+    ).set_sparam());
+    add_opt(common_arg(
+        {"--adaptive-target"}, "N",
+        string_format("adaptive-p: select tokens near this probability (valid range 0.0 "
+                      "to 1.0; negative = disabled) (default: %.2f)\n"
+                      "[(more info)](https://github.com/ggml-org/llama.cpp/pull/17927)",
+                      (double)params.sampling.adaptive_target),
+        [](common_params & params, const std::string & value) {
+            params.sampling.adaptive_target = std::stof(value);
+        }
+    ).set_sparam());
+    add_opt(common_arg(
+        {"--adaptive-decay"}, "N",
+        string_format("adaptive-p: decay rate for target adaptation over time. lower values "
+                      "are more reactive, higher values are more stable.\n"
+                      "(valid range 0.0 to 0.99) (default: %.2f)",
+                      (double)params.sampling.adaptive_decay),
+        [](common_params & params, const std::string & value) {
+            params.sampling.adaptive_decay = std::stof(value);
         }
     ).set_sparam());
     add_opt(common_arg(
@@ -2089,11 +2194,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--mmap"},
         {"--no-mmap"},
-        string_format("whether to memory-map model (if disabled, slower load but may reduce pageouts if not using mlock) (default: %s)", params.use_mmap ? "enabled" : "disabled"),
+        string_format("whether to memory-map model. Explicitly enabling mmap disables direct-io. (if mmap disabled, slower load but may reduce pageouts if not using mlock) (default: %s)", params.use_mmap ? "enabled" : "disabled"),
         [](common_params & params, bool value) {
             params.use_mmap = value;
+            if (value) {
+                params.use_direct_io = false;  // disable direct io when mmap is explicitly enabled
+            }
         }
     ).set_env("LLAMA_ARG_MMAP"));
+    add_opt(common_arg(
+        {"-dio", "--direct-io"},
+        {"-ndio", "--no-direct-io"},
+        string_format("use DirectIO if available. Takes precedence over --mmap (default: %s)", params.use_direct_io ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.use_direct_io = value;
+        }
+    ).set_env("LLAMA_ARG_DIO"));
     add_opt(common_arg(
         {"--numa"}, "TYPE",
         "attempt optimizations that help on some NUMA systems\n"
@@ -2245,7 +2361,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             std::vector<std::string> split_arg{ it, {} };
             if (split_arg.size() >= llama_max_devices()) {
                 throw std::invalid_argument(
-                    string_format("got %d input configs, but system only has %d devices", (int)split_arg.size(), (int)llama_max_devices())
+                    string_format("got %zu input configs, but system only has %zu devices", split_arg.size(), llama_max_devices())
                 );
             }
             for (size_t i = 0; i < llama_max_devices(); ++i) {
@@ -2285,10 +2401,28 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_FIT"));
     add_opt(common_arg(
-        { "-fitt", "--fit-target" }, "MiB",
-        string_format("target margin per device for --fit option, default: %zu", params.fit_params_target/(1024*1024)),
-        [](common_params & params, int value) {
-            params.fit_params_target = value * size_t(1024*1024);
+        { "-fitt", "--fit-target" }, "MiB0,MiB1,MiB2,...",
+        string_format("target margin per device for --fit, comma-separated list of values, "
+            "single value is broadcast across all devices, default: %zu", params.fit_params_target[0]/(1024*1024)),
+        [](common_params & params, const std::string & value) {
+            std::string arg_next = value;
+
+            // split string by , and /
+            const std::regex regex{ R"([,/]+)" };
+            std::sregex_token_iterator it{ arg_next.begin(), arg_next.end(), regex, -1 };
+            std::vector<std::string> split_arg{ it, {} };
+            if (split_arg.size() >= llama_max_devices()) {
+                throw std::invalid_argument(
+                    string_format("got %zu input configs, but system only has %zu devices", split_arg.size(), llama_max_devices())
+                );
+            }
+            if (split_arg.size() == 1) {
+                std::fill(params.fit_params_target.begin(), params.fit_params_target.end(), std::stoul(split_arg[0]) * 1024*1024);
+                return;
+            }
+            for (size_t i = 0; i < split_arg.size(); i++) {
+                params.fit_params_target[i] = std::stoul(split_arg[i]) * 1024*1024;
+            }
         }
     ).set_env("LLAMA_ARG_FIT_TARGET"));
     add_opt(common_arg(
@@ -2764,9 +2898,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_THREADS_HTTP"));
     add_opt(common_arg(
+        {"--cache-prompt"},
+        {"--no-cache-prompt"},
+        string_format("whether to enable prompt caching (default: %s)", params.cache_prompt ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.cache_prompt = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CACHE_PROMPT"));
+    add_opt(common_arg(
         {"--cache-reuse"}, "N",
         string_format(
-            "min chunk size to attempt reusing from the cache via KV shifting (default: %d)\n"
+            "min chunk size to attempt reusing from the cache via KV shifting, requires prompt caching to be enabled (default: %d)\n"
             "[(card)](https://ggml.ai/f0.png)", params.n_cache_reuse
         ),
         [](common_params & params, int value) {
