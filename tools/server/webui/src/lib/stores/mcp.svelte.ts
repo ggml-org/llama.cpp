@@ -19,7 +19,6 @@
  * @see MCPService in services/mcp.ts for protocol operations
  */
 
-import { browser } from '$app/environment';
 import { mcpClient } from '$lib/clients/mcp.client';
 import type { HealthCheckState, MCPServerSettingsEntry, McpServerUsageStats } from '$lib/types';
 import type { McpServerOverride } from '$lib/types/database';
@@ -59,31 +58,26 @@ class MCPStore {
 	private _connectedServers = $state<string[]>([]);
 	private _healthChecks = $state<Record<string, HealthCheckState>>({});
 
-	constructor() {
-		if (browser) {
-			mcpClient.setStateChangeCallback((state) => {
-				if (state.isInitializing !== undefined) {
-					this._isInitializing = state.isInitializing;
-				}
-				if (state.error !== undefined) {
-					this._error = state.error;
-				}
-				if (state.toolCount !== undefined) {
-					this._toolCount = state.toolCount;
-				}
-				if (state.connectedServers !== undefined) {
-					this._connectedServers = state.connectedServers;
-				}
-			});
+	/**
+	 * Update state from MCPClient
+	 */
+	updateState(state: {
+		isInitializing?: boolean;
+		error?: string | null;
+		toolCount?: number;
+		connectedServers?: string[];
+	}): void {
+		if (state.isInitializing !== undefined) this._isInitializing = state.isInitializing;
+		if (state.error !== undefined) this._error = state.error;
+		if (state.toolCount !== undefined) this._toolCount = state.toolCount;
+		if (state.connectedServers !== undefined) this._connectedServers = state.connectedServers;
+	}
 
-			mcpClient.setHealthCheckCallback((serverId, state) => {
-				this._healthChecks = { ...this._healthChecks, [serverId]: state };
-			});
-
-			mcpClient.setServerUsageCallback((serverId) => {
-				this.incrementServerUsage(serverId);
-			});
-		}
+	/**
+	 * Update health check state from MCPClient
+	 */
+	updateHealthCheck(serverId: string, state: HealthCheckState): void {
+		this._healthChecks = { ...this._healthChecks, [serverId]: state };
 	}
 
 	get isInitializing(): boolean {
