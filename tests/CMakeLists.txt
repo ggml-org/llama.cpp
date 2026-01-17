@@ -259,3 +259,8 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
+
+# test-kq-mask
+set(LLAMA_TEST_NAME test-kq-mask)
+llama_build_and_test(test-kq-mask.cpp)
+target_include_directories(test-kq-mask PRIVATE ${PROJECT_SOURCE_DIR}/src)
