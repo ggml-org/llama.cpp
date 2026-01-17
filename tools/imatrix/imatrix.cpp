@@ -1463,7 +1463,7 @@ static bool show_statistics(const common_params & params) {
     }
 
     LOG_INF("\n\nComputing layer statistics for %s (%zu layers)\n\n", params.in_files[0].c_str(), layers);
-    
+
     if (legacy) {
         LOG_INF("%*s%s%9s%s%17s %10s %10s\n",
             w_lay, "Layer", sep,
