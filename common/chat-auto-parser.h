@@ -150,7 +150,7 @@ class template_analyzer {
 struct templates_params {
     json                                  messages;
     json                                  tools;
-    common_chat_tool_choice               tool_choice;
+    common_chat_tool_choice               tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
     json                                  json_schema;
     bool                                  parallel_tool_calls = true;
     common_reasoning_format               reasoning_format = COMMON_REASONING_FORMAT_AUTO;
