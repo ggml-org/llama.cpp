@@ -295,6 +295,14 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                         common_chat_msg_content_part msg_part;
                         msg_part.type = type;
                         msg_part.text = part.at("text");
+                        if (part.contains("source_lang_code") && part.at("source_lang_code").is_string()) {
+                            msg_part.source_lang_code = part.at("source_lang_code").get<std::string>();
+                            msg_part.has_source_lang_code = true;
+                        }
+                        if (part.contains("target_lang_code") && part.at("target_lang_code").is_string()) {
+                            msg_part.target_lang_code = part.at("target_lang_code").get<std::string>();
+                            msg_part.has_target_lang_code = true;
+                        }
                         msg.content_parts.push_back(msg_part);
                     }
                 } else if (!content.is_null()) {
@@ -363,7 +371,16 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
         if (!msg.content.empty()) {
             jmsg["content"] = msg.content;
         } else if (!msg.content_parts.empty()) {
-            if (concat_typed_text) {
+            bool keep_typed_content = false;
+            if (concat_typed_text && msg.role == "user") {
+                for (const auto & part : msg.content_parts) {
+                    if (part.has_source_lang_code || part.has_target_lang_code) {
+                        keep_typed_content = true;
+                        break;
+                    }
+                }
+            }
+            if (concat_typed_text && !keep_typed_content) {
                 std::string text;
                 for (const auto & part : msg.content_parts) {
                     if (part.type != "text") {
@@ -379,10 +396,17 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
             } else {
                 auto & parts = jmsg["content"] = json::array();
                 for (const auto & part : msg.content_parts) {
-                    parts.push_back({
+                    json part_obj = {
                         {"type", part.type},
                         {"text", part.text},
-                    });
+                    };
+                    if (part.has_source_lang_code) {
+                        part_obj["source_lang_code"] = part.source_lang_code;
+                    }
+                    if (part.has_target_lang_code) {
+                        part_obj["target_lang_code"] = part.target_lang_code;
+                    }
+                    parts.push_back(std::move(part_obj));
                 }
             }
         } else {
@@ -2691,6 +2715,142 @@ static common_chat_params common_chat_params_init_exaone_moe(const common_chat_t
     return data;
 }
 
+static common_chat_params common_chat_params_init_translategemma(
+    const common_chat_template & tmpl,
+    const struct templates_params & inputs) {
+    common_chat_params data;
+
+    std::string default_source_lang_code = "en";
+    std::string default_target_lang_code = "zh";
+    bool has_default_source = false;
+    bool has_default_target = false;
+    bool used_fallback_default = false;
+    if (inputs.extra_context.is_object()) {
+        if (inputs.extra_context.contains("source_lang_code") && inputs.extra_context.at("source_lang_code").is_string()) {
+            auto val = inputs.extra_context.at("source_lang_code").get<std::string>();
+            if (!val.empty()) {
+                default_source_lang_code = val;
+                has_default_source = true;
+            }
+        }
+        if (inputs.extra_context.contains("target_lang_code") && inputs.extra_context.at("target_lang_code").is_string()) {
+            auto val = inputs.extra_context.at("target_lang_code").get<std::string>();
+            if (!val.empty()) {
+                default_target_lang_code = val;
+                has_default_target = true;
+            }
+        }
+    }
+
+    const auto extract_lang_codes = [](const json & msg, std::string & source, std::string & target, bool & has_source, bool & has_target) {
+        if (!msg.contains("content") || !msg.at("content").is_array()) {
+            return;
+        }
+        const auto & arr = msg.at("content");
+        if (arr.size() != 1 || !arr[0].is_object()) {
+            return;
+        }
+        const auto & obj = arr[0];
+        if (obj.contains("source_lang_code") && obj.at("source_lang_code").is_string()) {
+            auto val = obj.at("source_lang_code").get<std::string>();
+            if (!val.empty()) {
+                source = val;
+                has_source = true;
+            }
+        }
+        if (obj.contains("target_lang_code") && obj.at("target_lang_code").is_string()) {
+            auto val = obj.at("target_lang_code").get<std::string>();
+            if (!val.empty()) {
+                target = val;
+                has_target = true;
+            }
+        }
+    };
+
+    auto adjusted_messages = json::array();
+    for (const auto & msg : inputs.messages) {
+        if (msg.value("role", "") != "user") {
+            adjusted_messages.push_back(msg);
+            continue;
+        }
+
+        std::string source_lang_code = default_source_lang_code;
+        std::string target_lang_code = default_target_lang_code;
+        bool has_source_lang = false;
+        bool has_target_lang = false;
+        extract_lang_codes(msg, source_lang_code, target_lang_code, has_source_lang, has_target_lang);
+
+        if (msg.contains("content") && msg.at("content").is_array()) {
+            const auto & arr = msg.at("content");
+            if (arr.size() == 1 && arr[0].is_object()) {
+                const auto & obj = arr[0];
+                if (obj.contains("type") && obj.contains("source_lang_code") && obj.contains("target_lang_code")) {
+                    adjusted_messages.push_back(msg);
+                    continue;
+                }
+            }
+        }
+
+        if (!has_source_lang && !has_default_source) {
+            used_fallback_default = true;
+        }
+        if (!has_target_lang && !has_default_target) {
+            used_fallback_default = true;
+        }
+
+        std::string text;
+        if (msg.contains("content")) {
+            const auto & content = msg.at("content");
+            if (content.is_string()) {
+                text = content.get<std::string>();
+            } else if (content.is_array()) {
+                for (const auto & part : content) {
+                    if (!part.is_object()) {
+                        continue;
+                    }
+                    const auto type = part.value("type", "");
+                    if (type == "text" && part.contains("text") && part.at("text").is_string()) {
+                        if (!text.empty()) {
+                            text += "\n";
+                        }
+                        text += part.at("text").get<std::string>();
+                    }
+                }
+            }
+        }
+
+        auto adjusted = msg;
+        adjusted["content"] = json::array({
+            {
+                {"type", "text"},
+                {"source_lang_code", source_lang_code},
+                {"target_lang_code", target_lang_code},
+                {"text", text},
+                {"image", nullptr},
+            }
+        });
+        adjusted_messages.push_back(adjusted);
+    }
+
+    if (used_fallback_default) {
+        LOG_WRN("%s: missing source_lang_code/target_lang_code, defaulting to '%s' -> '%s' (override via --chat-template-kwargs)\n",
+            __func__, default_source_lang_code.c_str(), default_target_lang_code.c_str());
+    }
+
+    data.prompt = apply(tmpl, inputs, /* messages_override= */ adjusted_messages);
+    data.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    data.grammar_lazy = false;
+    if (!inputs.json_schema.is_null()) {
+        if (!inputs.grammar.empty()) {
+            throw std::runtime_error("Either \"json_schema\" or \"grammar\" can be specified, but not both");
+        }
+        data.grammar = json_schema_to_grammar(inputs.json_schema);
+    } else {
+        data.grammar = inputs.grammar;
+    }
+    return data;
+}
+
 static common_chat_params common_chat_params_init_without_tools(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
     data.prompt = apply(tmpl, inputs);
@@ -3033,6 +3193,13 @@ static common_chat_params common_chat_templates_apply_jinja(
         src.find("<tool_calls>[") != std::string::npos &&
         src.find("]</tool_calls>") != std::string::npos) {
         return common_chat_params_init_apriel_1_5(tmpl, params);
+    }
+
+    // TranslateGemma format detection
+    if (src.find("source_lang_code") != std::string::npos &&
+        src.find("target_lang_code") != std::string::npos &&
+        src.find("You are a professional") != std::string::npos) {
+        return common_chat_params_init_translategemma(tmpl, params);
     }
 
     // Use generic handler when mixing tools + JSON schema.

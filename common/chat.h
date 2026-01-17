@@ -25,9 +25,18 @@ struct common_chat_tool_call {
 struct common_chat_msg_content_part {
     std::string type;
     std::string text;
+    std::string source_lang_code;
+    std::string target_lang_code;
+    bool has_source_lang_code = false;
+    bool has_target_lang_code = false;
 
     bool operator==(const common_chat_msg_content_part & other) const {
-        return type == other.type && text == other.text;
+        return type == other.type
+            && text == other.text
+            && source_lang_code == other.source_lang_code
+            && target_lang_code == other.target_lang_code
+            && has_source_lang_code == other.has_source_lang_code
+            && has_target_lang_code == other.has_target_lang_code;
     }
 };
 
