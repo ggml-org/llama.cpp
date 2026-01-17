@@ -790,9 +790,11 @@ use 1 SYCL GPUs: [0] with Max compute units:512
 | Name              | Value            | Function                                                                                                                  |
 |-------------------|------------------|---------------------------------------------------------------------------------------------------------------------------|
 | GGML_SYCL_DEBUG   | 0 (default) or 1 | Enable log function by macro: GGML_SYCL_DEBUG                                                                             |
-| GGML_SYCL_LAYOUT_OVERRIDE | (unset) | Force weight layout for debugging: `aos`, `soa`, `coalesced`, `xmx_tiled` |
 | GGML_SYCL_DISABLE_GRAPH | 0 or 1 (default) | Disable running computations through SYCL Graphs feature. Disabled by default because graph performance isn't yet better than non-graph performance. |
 | GGML_SYCL_DISABLE_DNN | 0 (default) or 1 | Disable running computations through oneDNN and always use oneMKL. |
+| GGML_SYCL_DMA_SLICE_MB | 1024 (default) | Unified-cache DMA streaming slice size in MB (aligned to row size). |
+| GGML_SYCL_DMA_BUFFERS | 2 (default) | Unified-cache DMA streaming buffer count (staging buffers). Alias: `GGML_SYCL_DMA_SLICES`. |
+| GGML_SYCL_DMA_RESERVE_MB | (auto) | VRAM headroom reserved for DMA staging buffers; overrides slice/buffer-derived default. |
 | ZES_ENABLE_SYSMAN | 0 (default) or 1 | Support to get free memory of GPU by sycl::aspect::ext_intel_free_memory.<br>Recommended to use when --split-mode = layer |
 | UR_L0_ENABLE_RELAXED_ALLOCATION_LIMITS | 0 (default) or 1 | Support malloc device memory more than 4GB.|
 
