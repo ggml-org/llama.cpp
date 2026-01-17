@@ -368,6 +368,9 @@ extern "C" {
     GGML_API ggml_backend_buffer_t      ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size);
     GGML_API ggml_backend_buffer_type_t ggml_backend_cpu_buffer_type(void);
 
+    // Demand-paged CPU buffer (Linux/macOS: true on-demand via mmap, Windows: fallback to regular)
+    GGML_API ggml_backend_buffer_type_t ggml_backend_cpu_buffer_mmap_type(void);
+
 #ifdef  __cplusplus
 }
 #endif

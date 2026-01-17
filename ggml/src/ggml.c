@@ -5328,6 +5328,60 @@ void ggml_flash_attn_ext_add_sinks(
     a->src[4] = sinks;
 }
 
+// ggml_flash_attn_ext_paged
+
+struct ggml_tensor * ggml_flash_attn_ext_paged(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * mask,
+        struct ggml_tensor  * block_table,
+        float                 scale,
+        float                 max_bias,
+        float                 logit_softcap,
+        int32_t               block_size) {
+    GGML_ASSERT(ggml_can_mul_mat(k, q));
+    // TODO: check if vT can be multiplied by (k*qT)
+
+    GGML_ASSERT(q->ne[3] == k->ne[3]);
+    GGML_ASSERT(q->ne[3] == v->ne[3]);
+
+    if (mask) {
+        GGML_ASSERT(ggml_is_contiguous(mask));
+
+        GGML_ASSERT(q->ne[2] % mask->ne[2] == 0);
+        GGML_ASSERT(q->ne[3] % mask->ne[3] == 0);
+    }
+
+    if (max_bias > 0.0f) {
+        GGML_ASSERT(mask);
+    }
+
+    // block_table must be I32 tensor [max_blocks, n_seqs]
+    GGML_ASSERT(block_table != NULL);
+    GGML_ASSERT(block_table->type == GGML_TYPE_I32);
+    GGML_ASSERT(block_size > 0);
+
+    // permute(0, 2, 1, 3)
+    int64_t ne[4] = { v->ne[0], q->ne[2], q->ne[1], q->ne[3] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    float params[] = { scale, max_bias, logit_softcap };
+    ggml_set_op_params(result, params, sizeof(params));
+    ggml_set_op_params_i32(result, 3, GGML_PREC_DEFAULT); // precision
+    ggml_set_op_params_i32(result, 4, block_size);        // block size for paging
+
+    result->op     = GGML_OP_FLASH_ATTN_EXT;  // Uses same op; kernel detects paging via src[4] type
+    result->src[0] = q;
+    result->src[1] = k;
+    result->src[2] = v;
+    result->src[3] = mask;
+    result->src[4] = block_table;
+
+    return result;
+}
+
 // ggml_flash_attn_back
 
 struct ggml_tensor * ggml_flash_attn_back(

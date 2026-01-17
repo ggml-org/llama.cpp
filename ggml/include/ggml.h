@@ -2342,6 +2342,21 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
 
+    // Paged flash attention with indirect KV access via block table
+    // block_table: I32 tensor [max_blocks, n_seqs] mapping logical → physical blocks
+    // op_params[4] encodes block_size
+    GGML_API struct ggml_tensor * ggml_flash_attn_ext_paged(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * mask,
+            struct ggml_tensor  * block_table,  // I32 [max_blocks, n_seqs] logical→physical mapping
+            float                 scale,
+            float                 max_bias,
+            float                 logit_softcap,
+            int32_t               block_size);
+
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
            struct ggml_context * ctx,

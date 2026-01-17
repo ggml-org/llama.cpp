@@ -17,6 +17,7 @@
 #include <codecvt>
 #include <chrono>
 #include <cstdarg>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -1423,6 +1424,18 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
+
+    // Set KV cache sizing environment variables if CLI flags are used
+    // This reduces upfront KV cache allocation (NOT per-token memory cost)
+    if (params.paged_attn_block_size > 0) {
+        setenv("LLAMA_PAGED_ATTN", std::to_string(params.paged_attn_block_size).c_str(), 1);
+    }
+    if (params.paged_attn_max_blocks > 0) {
+        setenv("LLAMA_PAGED_ATTN_MAX_BLOCKS", std::to_string(params.paged_attn_max_blocks).c_str(), 1);
+    }
+    if (params.kv_cache_demand_paged) {
+        setenv("LLAMA_KV_DEMAND_PAGED", "1", 1);
+    }
 
     return cparams;
 }

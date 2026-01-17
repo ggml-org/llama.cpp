@@ -360,6 +360,11 @@ struct common_params {
     enum llama_attention_type    attention_type    = LLAMA_ATTENTION_TYPE_UNSPECIFIED; // attention type for embeddings
     enum llama_flash_attn_type   flash_attn_type   = LLAMA_FLASH_ATTN_TYPE_AUTO; // whether to use Flash Attention
 
+    // KV cache sizing parameters (reduces upfront allocation, NOT per-token memory cost)
+    uint32_t paged_attn_block_size = 0;   // block size in tokens for tracking (0 = disabled)
+    uint32_t paged_attn_max_blocks = 0;   // max blocks to allocate (0 = use full context)
+    bool     kv_cache_demand_paged = false; // use demand-paged memory (Linux: true on-demand, memory grows with usage)
+
     struct common_params_sampling    sampling;
     struct common_params_speculative speculative;
     struct common_params_vocoder     vocoder;

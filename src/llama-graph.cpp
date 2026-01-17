@@ -387,6 +387,10 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_v_idxs(self_v_idxs, ubatch);
 
     mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
+
+    if (self_block_table != nullptr) {
+        mctx->set_input_block_table(self_block_table);
+    }
 }
 
 bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
@@ -1114,7 +1118,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     ggml_tensor * weights = ggml_get_rows(ctx0, probs, selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);
 
-
     if (gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT) {
         weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
         weights = ggml_soft_max(ctx0, weights); // [n_expert_used, n_tokens]
@@ -1236,26 +1239,27 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     ggml_tensor * cur_experts[LLAMA_MAX_EXPERTS] = { nullptr };
 
-    assert(n_expert_used > 0);
+    // Use hparams.n_expert_used for aggregation to avoid dynamic allocation issues during warmup
+    // ref: https://github.com/ggml-org/llama.cpp/pull/14753
+    const uint32_t n_expert_agg = hparams.n_expert_used;
+
+    assert(n_expert_agg > 0);
 
     // order the views before the adds
-    for (uint32_t i = 0; i < hparams.n_expert_used; ++i) {
+    for (uint32_t i = 0; i < n_expert_agg; ++i) {
         cur_experts[i] = ggml_view_2d(ctx0, experts, n_embd, n_tokens, experts->nb[2], i*experts->nb[1]);
 
         ggml_build_forward_expand(gf, cur_experts[i]);
     }
 
     // aggregate experts
-    // note: here we explicitly use hparams.n_expert_used instead of n_expert_used
-    //       to avoid potentially a large number of add nodes during warmup
-    //       ref: https://github.com/ggml-org/llama.cpp/pull/14753
     ggml_tensor * moe_out = cur_experts[0];
 
-    for (uint32_t i = 1; i < hparams.n_expert_used; ++i) {
+    for (uint32_t i = 1; i < n_expert_agg; ++i) {
         moe_out = ggml_add(ctx0, moe_out, cur_experts[i]);
     }
 
-    if (hparams.n_expert_used == 1) {
+    if (n_expert_agg == 1) {
         // avoid returning a non-contiguous tensor
         moe_out = ggml_cont(ctx0, moe_out);
     }
@@ -1473,7 +1477,9 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * sinks,
          ggml_tensor * v_mla,
                float   kq_scale,
-                 int   il) const {
+                 int   il,
+         ggml_tensor * block_table,
+             int32_t   block_size) const {
     const bool v_trans = v->nb[1] > v->nb[2];
 
     // split the batch into streams if needed
@@ -1503,12 +1509,21 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             v = ggml_cast(ctx0, v, GGML_TYPE_F16);
         }
 
-        cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
-                                  hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
-        cb(cur, LLAMA_TENSOR_NAME_FATTN, il);
-
-        ggml_flash_attn_ext_add_sinks(cur, sinks);
-        ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
+        if (block_table != nullptr && block_size > 0) {
+            // Use paged attention when block table is provided
+            cur = ggml_flash_attn_ext_paged(ctx0, q, k, v, kq_mask, block_table, kq_scale,
+                                            hparams.f_max_alibi_bias,
+                                            hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f,
+                                            block_size);
+            cb(cur, "fattn_paged", il);
+            // Note: paged attention uses src[4] for block_table, so sinks are not supported
+        } else {
+            cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
+                                      hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+            cb(cur, LLAMA_TENSOR_NAME_FATTN, il);
+            ggml_flash_attn_ext_add_sinks(cur, sinks);
+        }
+        ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
 
         if (v_mla) {
 #if 0
@@ -1694,6 +1709,14 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
         ggml_set_input(inp->self_kq_mask);
 
         inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+
+        // Create block table tensor for paged attention if enabled
+        if (mctx_cur->has_block_tracking() && cparams.flash_attn) {
+            const uint32_t block_size = mctx_cur->get_block_size();
+            const uint32_t max_blocks_per_seq = (n_kv + block_size - 1) / block_size;
+            const uint32_t n_seqs = ubatch.n_seqs_unq;
+            inp->self_block_table = mctx_cur->build_block_table_tensor(ctx0, n_seqs, max_blocks_per_seq);
+        }
     }
 
     return inp;
@@ -1743,7 +1766,10 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    ggml_tensor * block_table = inp->get_block_table();
+    int32_t block_size = block_table ? mctx_cur->get_block_size() : 0;
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il, block_table, block_size);
     cb(cur, "kqv_out", il);
 
     if (wo) {

@@ -8048,11 +8048,21 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
         const ggml_compute_params * params,
         ggml_tensor * dst,
         int ir0, int ir1) {
-    const ggml_tensor * q     = dst->src[0];
-    const ggml_tensor * k     = dst->src[1];
-    const ggml_tensor * v     = dst->src[2];
-    const ggml_tensor * mask  = dst->src[3];
-    const ggml_tensor * sinks = dst->src[4];
+    const ggml_tensor * q    = dst->src[0];
+    const ggml_tensor * k    = dst->src[1];
+    const ggml_tensor * v    = dst->src[2];
+    const ggml_tensor * mask = dst->src[3];
+    const ggml_tensor * src4 = dst->src[4];  // sinks (F32) or block_table (I32)
+
+    // Detect paging mode: src[4] is block_table if I32, sinks if F32
+    const bool use_paging = (src4 && src4->type == GGML_TYPE_I32);
+    const ggml_tensor * sinks = use_paging ? NULL : src4;
+    const ggml_tensor * block_table = use_paging ? src4 : NULL;
+
+    // Block table setup for paged attention
+    const int32_t * bt_data = use_paging ? (const int32_t *) block_table->data : NULL;
+    const int64_t max_blocks = use_paging ? block_table->ne[0] : 0;
+    const int32_t block_size = use_paging ? ggml_get_op_params_i32(dst, 4) : 0;
 
     GGML_TENSOR_LOCALS(int64_t, neq, q,   ne)
     GGML_TENSOR_LOCALS(size_t,  nbq, q,   nb)
@@ -8170,9 +8180,24 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
                 continue;
             }
 
+            // Compute physical position for paged attention
+            int64_t kv_pos = ic;  // default: identity mapping
+            if (use_paging) {
+                const int64_t logical_block = ic / block_size;
+                const int64_t offset_in_block = ic % block_size;
+                if (logical_block >= max_blocks) {
+                    continue;  // beyond allocated blocks
+                }
+                const int32_t physical_block = bt_data[iq3 * max_blocks + logical_block];
+                if (physical_block < 0) {
+                    continue;  // invalid block
+                }
+                kv_pos = physical_block * block_size + offset_in_block;
+            }
+
             float s; // KQ value
 
-            const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
+            const char * k_data = (const char *) k->data + (kv_pos*nbk1 + ik2*nbk2 + ik3*nbk3);
             kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
 
             s = s*scale; // scale KQ value
@@ -8188,7 +8213,7 @@ static void ggml_compute_forward_flash_attn_ext_f16_one_chunk(
             float ms = 1.0f; // upon new higher max val, scale VKQ and KQ sum with this value
             float vs = 1.0f; // post-softmax KQ value, expf(s - M)
 
-            const char * v_data = ((const char *) v->data + (ic*nbv1 + iv2*nbv2 + iv3*nbv3));
+            const char * v_data = ((const char *) v->data + (kv_pos*nbv1 + iv2*nbv2 + iv3*nbv3));
 
             if (v->type == GGML_TYPE_F16) {
                 if (s > M) {

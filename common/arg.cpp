@@ -1326,6 +1326,38 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                                    string_format("error: unknown value for --flash-attn: '%s'\n", value.c_str()));
                            }
                        }).set_env("LLAMA_ARG_FLASH_ATTN"));
+    // KV cache sizing - allocate space for fewer tokens when full context isn't needed
+    // Note: This reduces upfront allocation, NOT per-token memory cost
+    add_opt(common_arg(
+        {"--kv-cache-tokens"}, "N",
+        "limit KV cache to N tokens (reduces memory when full context not needed, 0 = use context size)",
+        [](common_params & params, int value) {
+            // Use block size of 64 by default for efficient memory alignment
+            params.paged_attn_block_size = 64;
+            params.paged_attn_max_blocks = (value + 63) / 64;  // Round up to nearest block
+        }
+    ).set_env("LLAMA_KV_CACHE_TOKENS"));
+    add_opt(common_arg(
+        {"--kv-block-size"}, "N",
+        string_format("KV cache block size in tokens for block tracking (default: %d, 0 = disabled)", params.paged_attn_block_size),
+        [](common_params & params, int value) {
+            params.paged_attn_block_size = value;
+        }
+    ).set_env("LLAMA_KV_BLOCK_SIZE"));
+    add_opt(common_arg(
+        {"--kv-max-blocks"}, "N",
+        string_format("max KV cache blocks to allocate (default: %d, 0 = unlimited)", params.paged_attn_max_blocks),
+        [](common_params & params, int value) {
+            params.paged_attn_max_blocks = value;
+        }
+    ).set_env("LLAMA_KV_MAX_BLOCKS"));
+    add_opt(common_arg(
+        {"--kv-cache-demand-paged"},
+        "use demand-paged KV cache (Linux: physical memory grows with usage, not allocated upfront)",
+        [](common_params & params) {
+            params.kv_cache_demand_paged = true;
+        }
+    ).set_env("LLAMA_KV_DEMAND_PAGED"));
     add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
         "prompt to start generation with; for system message, use -sys",
