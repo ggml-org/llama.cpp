@@ -12,11 +12,19 @@ struct common_speculative_params {
     float p_min         = 0.75f; // min probability required to accept a token in the draft
 };
 
+// comma separated list of all types
+std::string common_speculative_type_name_str();
+
+// convert string to type
+enum common_speculative_type common_speculative_type_from_name(const std::string & name);
+
+// convert type to string
+std::string common_speculative_type_to_str(enum common_speculative_type type);
+
 struct common_speculative * common_speculative_init(
         struct llama_context * ctx_tgt,
         struct llama_context * ctx_dft,
-        const uint16_t         self_mode = 0, // 0: off, 1: self speculative, 2: n-grams (keys) only, 3: n-grams/m-grams (key-values)
-        const std::vector<uint16_t> self_cfg = { 12, 48, 3, 1 } // ngram size, mgram size, check rate, min hits
+        const std::vector<common_speculative_config> configs = {} // incubator config (options not yet in common_params)
 );
 
 void common_speculative_free(struct common_speculative * spec);

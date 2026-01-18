@@ -260,7 +260,7 @@ struct server_slot {
 
     // Checks if a draft model is active or self-speculation using context-tokens
     bool can_speculate() const {
-        return ctx_dft || task->params.speculative.self_mode;
+        return task->params.speculative.configs.size() > 0;
     }
 
     void add_token(const completion_token_output & token) {
@@ -397,8 +397,8 @@ struct server_slot {
                     "draft acceptance rate = %0.5f (%5d accepted / %5d generated)\n",
                     draft_ratio, n_draft_accepted, n_draft_total
             );
-            common_speculative_print_stats(spec);
         }
+        common_speculative_print_stats(spec);
     }
 
     json to_json(bool only_metrics = false) const {
@@ -776,8 +776,7 @@ private:
                 }
 
                 slot.spec = common_speculative_init(slot.ctx, slot.ctx_dft,
-                        params_base.speculative.self_mode,
-                        params_base.speculative.self_cfg);
+                        params_base.speculative.configs);
                 if (slot.spec == nullptr) {
                     SRV_ERR("%s", "failed to create speculator\n");
                     return false;
@@ -785,11 +784,10 @@ private:
                 for (auto & pair : params_base.speculative.replacements) {
                     common_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
                 }
-            } else if (params_base.speculative.self_mode) {
-                SLT_INF(slot, "init spec for self-speculative decoding, slot %d\n", i);
+            } else if (params_base.speculative.configs.size() > 0) {
+                SLT_INF(slot, "init spec for speculative decoding without draft model, slot %d\n", i);
                 slot.spec = common_speculative_init(nullptr, nullptr,
-                        params_base.speculative.self_mode,
-                        params_base.speculative.self_cfg);
+                        params_base.speculative.configs);
             }
 
             SLT_INF(slot, "new slot, n_ctx = %d\n", slot.n_ctx);

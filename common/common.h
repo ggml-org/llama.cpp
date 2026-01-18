@@ -164,6 +164,17 @@ enum common_params_sampling_config : uint64_t {
     COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA    = 1 << 11,
 };
 
+enum common_speculative_type {
+    COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT,         // draft model
+    COMMON_SPECULATIVE_TYPE_EAGLE3,        // eagle draft model
+    COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding
+    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
+    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
+    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
+    COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
+};
+
 
 // sampling parameters
 struct common_params_sampling {
@@ -242,6 +253,14 @@ struct common_params_model {
     std::string name        = ""; // in format <user>/<model>[:<tag>] (tag is optional)     // NOLINT
 };
 
+struct common_speculative_config {
+    common_speculative_type type;
+    std::map<std::string, std::string> config; // map of incubative options (not yet in common_params)
+
+    common_speculative_config(common_speculative_type t,
+            const std::map<std::string, std::string>& c = {}) : type(t), config(c) {}
+};
+
 struct common_params_speculative {
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
@@ -251,8 +270,6 @@ struct common_params_speculative {
     int32_t n_gpu_layers =    -1; // number of layers to store in VRAM for the draft model (-1 - use default)
     float   p_split      =  0.1f; // speculative decoding split probability
     float   p_min        = 0.75f; // minimum speculative decoding probability (greedy)
-    int32_t self_mode    =     0; // mode of self-speculative decoding without draft model (default: 0 = off)
-    std::vector<uint16_t> self_cfg = {12, 48, 2, 1}; // self-speculative decoding config (n-gram size, m-gram size, check rate, min hits)
     std::vector<std::pair<std::string, std::string>> replacements; // main to speculative model replacements
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
 
@@ -263,6 +280,8 @@ struct common_params_speculative {
     struct cpu_params cpuparams_batch;
 
     struct common_params_model model;
+
+    std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
 };
 
 struct common_params_vocoder {
