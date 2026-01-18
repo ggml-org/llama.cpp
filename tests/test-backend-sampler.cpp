@@ -1007,6 +1007,82 @@ static void test_backend_max_outputs(const test_params & params) {
     printf("backend max outputs test PASSED\n");
 }
 
+static void test_backend_state_save_restore(const test_params & params) {
+    const int seq_id = 0;
+    int32_t batch_idx;
+
+    std::vector<uint8_t> state;
+    std::vector<float> saved_logits;
+    std::vector<llama_token> saved_candidates;
+
+    auto setup_backend_sampler = [](llama_sampler_ptr & chain) {
+        struct llama_sampler_chain_params params = llama_sampler_chain_default_params();
+        chain.reset(llama_sampler_chain_init(params));
+        llama_sampler_chain_add(chain.get(), llama_sampler_init_top_k(10));
+        return std::vector<llama_sampler_seq_config>{{ seq_id, chain.get() }};
+    };
+
+    // create a context, decode and then save the state.
+    {
+        llama_sampler_ptr backend_sampler_chain;
+        auto backend_sampler_configs = setup_backend_sampler(backend_sampler_chain);
+        test_context test_ctx(params, backend_sampler_configs);
+
+        if (!test_ctx.decode({{seq_id, "Hello"}})) {
+            GGML_ASSERT(false && "Failed to decode token");
+        }
+
+        batch_idx = test_ctx.idx_for_seq(seq_id);
+
+        float * logits = llama_get_sampled_logits_ith(test_ctx.ctx.get(), batch_idx);
+        saved_logits.assign(logits, logits + llama_get_sampled_logits_count_ith(test_ctx.ctx.get(), batch_idx));
+
+        llama_token * candidates = llama_get_sampled_candidates_ith(test_ctx.ctx.get(), batch_idx);
+        saved_candidates.assign(candidates, candidates + llama_get_sampled_candidates_count_ith(test_ctx.ctx.get(), batch_idx));
+
+        // save the state
+        const size_t state_size = llama_state_get_size(test_ctx.ctx.get());
+        state.resize(state_size);
+
+        size_t written = llama_state_get_data(test_ctx.ctx.get(), state.data(), state_size);
+        GGML_ASSERT(written <= state_size && "State write size mismatch");
+    }
+
+    // create a new context, restore the state and verify.
+    {
+        llama_sampler_ptr backend_sampler_chain;
+        auto backend_sampler_configs = setup_backend_sampler(backend_sampler_chain);
+        test_context test_ctx(params, backend_sampler_configs);
+
+        const size_t read = llama_state_set_data(test_ctx.ctx.get(), state.data(), state.size());
+        GGML_ASSERT(read == state.size());
+
+        float *  logits   = llama_get_sampled_logits_ith(test_ctx.ctx.get(), batch_idx);
+        uint32_t n_logits = llama_get_sampled_logits_count_ith(test_ctx.ctx.get(), batch_idx);
+        GGML_ASSERT(saved_logits.size() == n_logits && "Logits count mismatch");
+
+        for (size_t i = 0; i < n_logits; ++i) {
+            if (std::abs(saved_logits[i] - logits[i]) > 1e-6f) {
+                fprintf(stderr, "Logit mismatch at index %zu: %.6f vs %.6f\n", i, saved_logits[i], logits[i]);
+                GGML_ASSERT(false);
+            }
+        }
+
+        llama_token * candidates   = llama_get_sampled_candidates_ith(test_ctx.ctx.get(), batch_idx);
+        uint32_t      n_candidates = llama_get_sampled_candidates_count_ith(test_ctx.ctx.get(), batch_idx);
+        GGML_ASSERT(saved_candidates.size() == n_candidates && "Candidates count mismatch");
+
+        for (size_t i = 0; i < n_candidates; ++i) {
+            if (saved_candidates[i] != candidates[i]) {
+                fprintf(stderr, "Candidate mismatch at index %zu: %d vs %d\n", i, saved_candidates[i], candidates[i]);
+                GGML_ASSERT(false);
+            }
+        }
+    }
+
+    printf("backend state save/restore test PASSED\n");
+}
+
 struct backend_test_case {
     std::string name;
     void (*fn)(const test_params &);
@@ -1028,6 +1104,7 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "min_p",           test_backend_min_p_sampling,          true  },
     { "cpu_mixed",       test_backend_cpu_mixed_batch,         true  },
     { "top_p",           test_backend_top_p_sampling,          true  },
+    { "state_save",      test_backend_state_save_restore,      true  },
 };
 
 static test_args parse_cli(int argc, char ** argv) {
