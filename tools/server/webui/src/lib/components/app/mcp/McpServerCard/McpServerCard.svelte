@@ -2,6 +2,7 @@
 	import { onMount, tick } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
 	import type { MCPServerSettingsEntry, HealthCheckState } from '$lib/types';
+	import { getMcpServerLabel } from '$lib/utils/mcp';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpClient } from '$lib/clients/mcp.client';
@@ -15,16 +16,16 @@
 
 	interface Props {
 		server: MCPServerSettingsEntry;
-		displayName: string;
 		faviconUrl: string | null;
 		onToggle: (enabled: boolean) => void;
 		onUpdate: (updates: Partial<MCPServerSettingsEntry>) => void;
 		onDelete: () => void;
 	}
 
-	let { server, displayName, faviconUrl, onToggle, onUpdate, onDelete }: Props = $props();
+	let { server, faviconUrl, onToggle, onUpdate, onDelete }: Props = $props();
 
 	let healthState = $derived<HealthCheckState>(mcpStore.getHealthCheckState(server.id));
+	let displayName = $derived(getMcpServerLabel(server, healthState));
 	let isHealthChecking = $derived(healthState.status === HealthCheckStatus.Connecting);
 	let isConnected = $derived(healthState.status === HealthCheckStatus.Success);
 	let isError = $derived(healthState.status === HealthCheckStatus.Error);

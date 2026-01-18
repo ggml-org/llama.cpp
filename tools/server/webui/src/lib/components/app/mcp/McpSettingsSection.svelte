@@ -2,7 +2,7 @@
 	import { Plus, X } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
-	import { getServerDisplayName, getFaviconUrl } from '$lib/utils/mcp';
+	import { getFaviconUrl } from '$lib/utils/mcp';
 	import type { MCPServerSettingsEntry } from '$lib/types';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { McpServerCard } from '$lib/components/app/mcp/McpServerCard';
@@ -117,7 +117,6 @@
 			{#each servers as server (server.id)}
 				<McpServerCard
 					{server}
-					displayName={getServerDisplayName(server)}
 					faviconUrl={getFaviconUrl(server.url)}
 					onToggle={(enabled) => mcpStore.updateServer(server.id, { enabled })}
 					onUpdate={(updates) => mcpStore.updateServer(server.id, updates)}
