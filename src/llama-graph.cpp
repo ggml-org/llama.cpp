@@ -1951,7 +1951,6 @@ ggml_tensor * llm_graph_context::build_rs(
     ggml_tensor * output_states = get_state_rows(ctx0, states, state_copy_main);
     ggml_build_forward_expand(gf, output_states);
 
-    // copy extra states which won't be changed further (between n_seqs and n_rs)
     ggml_tensor * states_extra = ggml_get_rows(ctx0, states, state_copy_extra);
     ggml_build_forward_expand(gf,
         ggml_cpy(ctx0,
