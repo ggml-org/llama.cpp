@@ -469,19 +469,19 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx,
 
     ggml_sycl::unified_cache * cache = nullptr;
     struct inflight_pin {
-        const void *      key_ptr;
-        ggml_layout_mode  layout;
-        bool              keep_pinned;
+        ggml_sycl_cache_id key;
+        ggml_layout_mode   layout;
+        bool               keep_pinned;
     };
     inflight_pin pins[2] = {};
     int          pin_count = 0;
 
-    auto is_graph_pinned = [&](const void * key_ptr, ggml_layout_mode layout) -> bool {
-        if (!key_ptr || ctx.graph_pinned_entries.empty()) {
+    auto is_graph_pinned = [&](const ggml_sycl_cache_id & key, ggml_layout_mode layout) -> bool {
+        if (!key.valid || ctx.graph_pinned_entries.empty()) {
             return false;
         }
         for (const auto & entry : ctx.graph_pinned_entries) {
-            if (entry.first == key_ptr && entry.second == layout) {
+            if (entry.second == layout && ggml_sycl::detail::cache_id_equal(entry.first, key)) {
                 return true;
             }
         }
@@ -502,15 +502,18 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx,
                 return;
             }
         }
-        const void * key_ptr = ggml_backend_sycl_get_weight_cache_key(tensor, device);
-        if (!key_ptr || !cache->is_cached(key_ptr, layout->mode)) {
+        ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+        if (!key.valid || !cache->is_cached(key, layout->mode)) {
             return;
         }
-        cache->pin(key_ptr, layout->mode);
-        GGML_SYCL_DEBUG("[SYCL-BINBCAST] pin tensor=%s key=%p layout=%d\n", tensor->name, key_ptr,
+        cache->pin(key, layout->mode);
+        GGML_SYCL_DEBUG("[SYCL-BINBCAST] pin tensor=%s model=%llu name_hash=0x%llx layout=%d\n",
+                        tensor->name,
+                        (unsigned long long) key.model_id,
+                        (unsigned long long) key.name_hash,
                         (int) layout->mode);
         if (pin_count < 2) {
-            pins[pin_count++] = { key_ptr, layout->mode, is_graph_pinned(key_ptr, layout->mode) };
+            pins[pin_count++] = { key, layout->mode, is_graph_pinned(key, layout->mode) };
         }
     };
 
@@ -553,13 +556,13 @@ inline void ggml_sycl_op_bin_bcast(ggml_backend_sycl_context & ctx,
             sycl::event done_event = ggml_sycl_submit_binbcast_event(*main_stream, mode);
             for (int i = 0; i < pin_count; ++i) {
                 if (!pins[i].keep_pinned) {
-                    cache->unpin_on_event(pins[i].key_ptr, pins[i].layout, done_event);
+                    cache->unpin_on_event(pins[i].key, pins[i].layout, done_event);
                 }
             }
         } catch (...) {
             for (int i = 0; i < pin_count; ++i) {
                 if (!pins[i].keep_pinned) {
-                    cache->unpin(pins[i].key_ptr, pins[i].layout);
+                    cache->unpin(pins[i].key, pins[i].layout);
                 }
             }
         }

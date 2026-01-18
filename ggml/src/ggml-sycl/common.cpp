@@ -521,7 +521,23 @@ int64_t downsample_sycl_global_range(int64_t accumulate_block_num, int64_t block
     return sycl_down_blk_size;
 }
 
+void retain_extra_gpu(ggml_tensor_extra_gpu * extra) {
+    if (!extra) {
+        return;
+    }
+    extra->refcount.fetch_add(1, std::memory_order_relaxed);
+}
+
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams) {
+    if (!extra) {
+        return;
+    }
+    const int prev = extra->refcount.fetch_sub(1, std::memory_order_acq_rel);
+    GGML_ASSERT(prev > 0);
+    if (prev > 1) {
+        return;
+    }
+
     for (int i = 0; i < ggml_sycl_info().device_count; ++i) {
         for (int64_t is = 0; is < GGML_SYCL_MAX_STREAMS; ++is) {
             if (extra->events[i][is] != nullptr) {

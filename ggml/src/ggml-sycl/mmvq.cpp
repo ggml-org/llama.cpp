@@ -3505,9 +3505,11 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
             }
         } else {
             const bool allow_all_experts = false;
+            // force_cache_aos=true ensures experts are staged to GPU memory even for AoS layout
+            // This is critical for mmap'd weights which cannot be accessed directly by GPU kernels
             if (!ggml_sycl_update_moe_ptr_table(ctx, src0, ids, layout, &table_event, allow_all_experts, nullptr,
                                                 /*skip_device_copy=*/false,
-                                                /*force_cache_aos=*/false)) {
+                                                /*force_cache_aos=*/host_weights)) {
                 GGML_SYCL_DEBUG("[MMVQ] Failed to update expert pointer table for %s\n", src0->name);
                 return false;
             }
@@ -4664,9 +4666,10 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
 
     ggml_sycl::unified_cache * cache =
         ggml_sycl::unified_cache_enabled() ? ggml_sycl::get_unified_cache(*stream) : nullptr;
-    const void *               cache_key = cache ? ggml_backend_sycl_get_weight_cache_key(src0, device_id) : nullptr;
+    ggml_sycl_cache_id         cache_key =
+        cache ? ggml_backend_sycl_get_weight_cache_key(src0, device_id) : ggml_sycl_cache_id{};
     ggml_sycl::cache_ptr_view  view{};
-    if (cache && cache_key) {
+    if (cache && cache_key.valid) {
         view = cache->get_view(cache_key, dispatch_layout);
     }
     const void * view_ptr = dispatch_base ? dispatch_base : dispatch_ptr;
@@ -4687,12 +4690,12 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx,
         size_t buffer_count = 0;
         mmvq_resolve_dma_params(stream_ctx.row_total_bytes, slice_bytes, buffer_count);
         const size_t total_bytes = stream_ctx.row_total_bytes * static_cast<size_t>(row_diff);
-        if (cache_key) {
+        if (cache_key.valid) {
             cache->pin(cache_key, dispatch_layout);
         }
         auto result = cache->stream_dma(view, total_bytes, slice_bytes, buffer_count, mmvq_stream_slice, &stream_ctx,
                                         {}, custom_copy ? mmvq_stream_copy : nullptr);
-        if (cache_key) {
+        if (cache_key.valid) {
             if (result.ok) {
                 cache->unpin_on_event(cache_key, dispatch_layout, result.event);
             } else {

@@ -2,6 +2,9 @@
 
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml-sycl.h"
+
+#include <cstdint>
 
 namespace ggml_sycl {
 
@@ -14,6 +17,15 @@ void test_clear_host_weight_registry();
 bool test_backend_supports_graphs(ggml_backend_t backend);
 bool test_backend_graphs_disabled(ggml_backend_t backend);
 size_t test_graph_pinned_entry_count(ggml_backend_t backend);
+size_t test_layout_bytes(const ggml_tensor * tensor, ggml_layout_mode layout, int device);
+
+inline ggml_sycl_cache_id test_make_cache_id(const void * tag, uint64_t model_id = 1) {
+    ggml_sycl_cache_id id{};
+    id.valid    = true;
+    id.model_id = model_id;
+    id.aux_id   = reinterpret_cast<uintptr_t>(tag);
+    return id;
+}
 
 struct test_layout_override_guard {
     explicit test_layout_override_guard(ggml_layout_mode layout) {

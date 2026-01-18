@@ -28,6 +28,7 @@ option(GGML_SYCL_MMQ_XMX "Enable experimental XMX MMQ kernels for SYCL backend" 
 option(GGML_SYCL_XMX_GEMM "Enable experimental XMX GEMM for quantized matmul (known to be slower)" OFF)
 option(GGML_SYCL_DEBUG_SOA_LAYOUT "Enable SoA layout verification debug checks" OFF)
 option(GGML_SYCL_QUANTIZER_DEBUG "Enable quantizer kernel debug output" OFF)
+option(GGML_SYCL_ASAN_PARTIAL "Enable ASan for ggml-sycl.cpp and unified-cache.cpp only" OFF)
 
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
 list(FILTER GGML_SOURCES_SYCL EXCLUDE REGEX "test_joint_matrix.*\\.cpp$")
@@ -51,6 +52,13 @@ if (GGML_SYCL_QUANTIZER_DEBUG)
 endif()
 
 target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
+
+if (GGML_SYCL_ASAN_PARTIAL)
+    message(STATUS "GGML_SYCL_ASAN_PARTIAL: enabling ASan for ggml-sycl.cpp + unified-cache.cpp")
+    set_source_files_properties(ggml-sycl.cpp unified-cache.cpp
+        PROPERTIES COMPILE_OPTIONS "-fsanitize=address;-fno-omit-frame-pointer")
+    target_link_options(ggml-sycl PRIVATE "-fsanitize=address")
+endif()
 
 if (WIN32)
     # To generate a Visual Studio solution, using Intel C++ Compiler for ggml-sycl is mandatory

@@ -3615,9 +3615,10 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
 
     ggml_sycl::unified_cache * cache =
         ggml_sycl::unified_cache_enabled() ? ggml_sycl::get_unified_cache(*stream) : nullptr;
-    const void *               cache_key = cache ? ggml_backend_sycl_get_weight_cache_key(src0, device_id) : nullptr;
+    ggml_sycl_cache_id         cache_key =
+        cache ? ggml_backend_sycl_get_weight_cache_key(src0, device_id) : ggml_sycl_cache_id{};
     ggml_sycl::cache_ptr_view  view{};
-    if (cache && cache_key) {
+    if (cache && cache_key.valid) {
         view = cache->get_view(cache_key, dispatch_layout);
     }
     const void * view_ptr = dispatch_base ? dispatch_base : dispatch_ptr;
@@ -3638,12 +3639,12 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
         size_t buffer_count = 0;
         dmmv_resolve_dma_params(stream_ctx.row_total_bytes, slice_bytes, buffer_count);
         const size_t total_bytes = stream_ctx.row_total_bytes * static_cast<size_t>(row_diff);
-        if (cache_key) {
+        if (cache_key.valid) {
             cache->pin(cache_key, dispatch_layout);
         }
         auto result = cache->stream_dma(view, total_bytes, slice_bytes, buffer_count, dmmv_stream_slice, &stream_ctx,
                                         {}, custom_copy ? dmmv_stream_copy : nullptr);
-        if (cache_key) {
+        if (cache_key.valid) {
             if (result.ok) {
                 cache->unpin_on_event(cache_key, dispatch_layout, result.event);
             } else {

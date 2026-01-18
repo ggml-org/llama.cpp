@@ -1482,9 +1482,10 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
     ggml_sycl::unified_cache * cache =
         ggml_sycl::unified_cache_enabled() ? ggml_sycl::get_unified_cache(*ctx.stream()) : nullptr;
-    const void *               cache_key = cache ? ggml_backend_sycl_get_weight_cache_key(src0, device) : nullptr;
+    ggml_sycl_cache_id         cache_key =
+        cache ? ggml_backend_sycl_get_weight_cache_key(src0, device) : ggml_sycl_cache_id{};
 
-    if (cache && cache_key && ggml_sycl_tensor_is_weight(src0) && index_is_1d && n_rows_total > 0) {
+    if (cache && cache_key.valid && ggml_sycl_tensor_is_weight(src0) && index_is_1d && n_rows_total > 0) {
         ggml_sycl::cache_ptr_view view{};
         view = cache->get_view(cache_key, layout);
 

@@ -75,15 +75,40 @@ GGML_BACKEND_API void ggml_backend_sycl_set_unified_cache_host_budget_pct(int pc
 GGML_BACKEND_API void ggml_backend_sycl_register_host_weight_tensor(ggml_backend_dev_t   dev,
                                                                     struct ggml_tensor * tensor);
 
+// Cache identity for weights and MoE experts (no pointers, layout handled separately).
+// model_id: unique per model load
+// has_gguf/file_idx/file_offs/nbytes: GGUF-backed weights
+// name_hash/type/ne: non-GGUF weights (fallback identity)
+// aux_id: reserved for non-GGUF/MoE uniqueness (e.g., cache_uuid)
+struct ggml_sycl_cache_id {
+    bool           valid;
+    uint64_t       model_id;
+    bool           has_gguf;
+    uint16_t       file_idx;
+    size_t         file_offs;
+    size_t         nbytes;
+    uint64_t       name_hash;
+    enum ggml_type type;
+    int64_t        ne[GGML_MAX_DIMS];
+    bool           tp_sharded;
+    int            tp_rank;
+    int            tp_world_size;
+    int64_t        tp_local_ne[GGML_MAX_DIMS];
+    int64_t        tp_offset_ne[GGML_MAX_DIMS];
+    uint64_t       aux_id;
+};
+
 // Register GGUF metadata for stable weight identity in the unified cache.
-// tensor_name: GGUF tensor name
+// tensor: GGUF tensor
+// model_id: unique per model load
 // file_idx: GGUF split index
 // file_offs: byte offset in the GGUF file
 // tensor_nbytes: GGUF tensor byte size
-GGML_BACKEND_API void ggml_backend_sycl_register_weight_identity(const char * tensor_name,
-                                                                 uint16_t     file_idx,
-                                                                 size_t       file_offs,
-                                                                 size_t       tensor_nbytes);
+GGML_BACKEND_API void ggml_backend_sycl_register_weight_identity(const struct ggml_tensor * tensor,
+                                                                 uint16_t                   file_idx,
+                                                                 size_t                     file_offs,
+                                                                 size_t                     tensor_nbytes,
+                                                                 uint64_t                   model_id);
 
 // Weight usage categories for layout selection.
 enum ggml_backend_sycl_tensor_usage {
@@ -131,8 +156,9 @@ GGML_BACKEND_API bool ggml_backend_sycl_has_tensor_cache(ggml_backend_t backend)
 // hits/misses may be NULL if caller doesn't need that stat.
 GGML_BACKEND_API void ggml_backend_sycl_get_cache_stats(ggml_backend_t backend, uint64_t * hits, uint64_t * misses);
 
-// Get a stable cache key pointer for a weight tensor on the specified device.
-GGML_BACKEND_API const void * ggml_backend_sycl_get_weight_cache_key(const struct ggml_tensor * tensor, int device);
+// Get a stable cache identity for a weight tensor on the specified device.
+GGML_BACKEND_API struct ggml_sycl_cache_id ggml_backend_sycl_get_weight_cache_key(const struct ggml_tensor * tensor,
+                                                                                  int                        device);
 
 GGML_BACKEND_API void ggml_backend_sycl_print_sycl_devices(void);
 GGML_BACKEND_API void ggml_backend_sycl_get_gpu_list(int * id_list, int max_len);
@@ -566,6 +592,14 @@ GGML_BACKEND_API void ggml_backend_sycl_wait_barrier(ggml_backend_t backend);
 // When loading=false: weight caching is enabled for inference
 // Use this to bracket model loading to prevent cache allocation during load
 GGML_BACKEND_API void ggml_backend_sycl_set_model_loading(bool loading);
+
+// Release all host-backed weight extras (layout metadata, accessors, etc.)
+// Call this when unloading a model to free SYCL resources associated with tensors.
+// This is safe to call multiple times. Tensor->extra pointers are cleared before
+// freeing to prevent use-after-free.
+// Note: Extras are NOT automatically released when backends are freed, because
+// tensors may outlive backends (e.g., temporary backends during model loading).
+GGML_BACKEND_API void ggml_backend_sycl_release_host_weight_extras(void);
 
 #ifdef __cplusplus
 }

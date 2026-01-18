@@ -892,6 +892,7 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
     params.sinks     = sinks ? (const char *) ggml_sycl_get_data_ptr(sinks, device) : nullptr;
     params.dst       = (float *) ggml_sycl_get_data_ptr(dst, device);
 
+
     params.scale         = scale;
     params.max_bias      = max_bias;
     params.m0            = m0;
@@ -1097,6 +1098,19 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
 
     // Set paged layout flag (read from op_params[4], set via ggml_flash_attn_ext_set_paged_layout)
     params.use_paged_layout = use_paged_layout;
+
+    if (g_ggml_sycl_graph_recording && ctx.fa_graph_ptrs_recording) {
+        ggml_backend_sycl_context::fa_graph_ptr_snapshot snap;
+        snap.q           = params.Q;
+        snap.k           = params.K;
+        snap.v           = params.V;
+        snap.dst         = params.dst;
+        snap.mask        = params.mask;
+        snap.sinks       = params.sinks;
+        snap.block_table = params.block_table;
+        snap.seq_lens    = params.seq_lens;
+        ctx.fa_graph_ptrs.push_back(snap);
+    }
 
     // Set FP8 KV cache flag - enables on-the-fly dequantization in flash attention kernel
     params.kv_is_fp8 = (K->type == GGML_TYPE_F8_E4M3 && V->type == GGML_TYPE_F8_E4M3);

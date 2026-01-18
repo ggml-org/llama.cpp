@@ -39,6 +39,24 @@
 
 struct ggml_backend_sycl_context;
 
+struct ggml_sycl_fa_graph_snapshot {
+    const void * q_ptr = nullptr;
+    const void * k_ptr = nullptr;
+    const void * v_ptr = nullptr;
+    const void * mask_ptr = nullptr;
+    const void * sinks_ptr = nullptr;
+    const void * dst_ptr = nullptr;
+    const void * block_table = nullptr;
+    const void * seq_lens = nullptr;
+    int64_t      q_ne[GGML_MAX_DIMS] = { 0 };
+    int64_t      k_ne[GGML_MAX_DIMS] = { 0 };
+    int64_t      mask_ne[GGML_MAX_DIMS] = { 0 };
+    int32_t      use_paged_layout = 0;
+    int32_t      use_paged_attn = 0;
+    int32_t      block_size = 0;
+    int32_t      max_blocks_per_seq = 0;
+};
+
 bool ggml_sycl_cpu_fallback_graph(ggml_backend_sycl_context & ctx, ggml_tensor * dst, const char * reason);
 struct ggml_sycl_device_info;
 const ggml_sycl_device_info & ggml_sycl_info();
@@ -1317,7 +1335,9 @@ template <typename T> struct ggml_sycl_pool_alloc {
 // backend interface
 
 struct ggml_tensor_extra_gpu {
+    std::atomic<int> refcount{ 1 };
     uint64_t         cache_uuid = 0;                                        // Monotonic cache identity for weights
+    uint64_t         model_id   = 0;                                        // Model identifier for cache keys
     void *           data_device[GGML_SYCL_MAX_DEVICES];                    // 1 pointer for each device for split
                                                                             // tensors
     dpct::event_ptr  events[GGML_SYCL_MAX_DEVICES][GGML_SYCL_MAX_STREAMS];  // events for synchronizing multiple GPUs
@@ -1369,6 +1389,7 @@ struct ggml_tensor_extra_gpu {
     std::vector<float> moe_expert_scores;
 };
 
+void retain_extra_gpu(ggml_tensor_extra_gpu * extra);
 void release_extra_gpu(ggml_tensor_extra_gpu * extra, std::vector<queue_ptr> streams = {});
 
 // =============================================================================
@@ -1563,8 +1584,8 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
             if (layout != nullptr && layout->data_ptr != nullptr) {
                 if (layout->device_id < 0 || layout->device_id == device) {
                     if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
-                        const void * cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
-                        if (cache_key && cache->is_cached(cache_key, layout->mode)) {
+                        ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+                        if (cache_key.valid && cache->is_cached(cache_key, layout->mode)) {
                             ggml_sycl_layout_ptr_stat(ggml_sycl_layout_ptr_event::HOST_CACHE_LAYOUT_FALLBACK);
                             return ggml_tensor_get_layout_ptr(tensor);
                         }
@@ -1581,8 +1602,8 @@ inline void * ggml_sycl_get_layout_ptr(const ggml_tensor * tensor, int device) {
     if (layout != nullptr && layout->data_ptr != nullptr && ggml_sycl_tensor_is_weight(tensor) &&
         ggml_sycl::unified_cache_enabled()) {
         if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
-            const void * cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
-            layout_cached          = (cache_key != nullptr) && cache->is_cached(cache_key, layout->mode);
+            ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+            layout_cached          = cache_key.valid && cache->is_cached(cache_key, layout->mode);
         }
     }
     if (layout != nullptr && layout->data_ptr != nullptr && layout_cached) {
@@ -1643,8 +1664,8 @@ inline void * ggml_sycl_get_layout_ptr_for(const ggml_tensor * tensor,
     if (layout != nullptr && layout->data_ptr != nullptr && ggml_sycl_tensor_is_weight(tensor) &&
         ggml_sycl::unified_cache_enabled()) {
         if (auto * cache = ggml_sycl::get_unified_cache_for_device(device)) {
-            const void * cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
-            layout_cached          = (cache_key != nullptr) && cache->is_cached(cache_key, layout->mode);
+            ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(tensor, device);
+            layout_cached          = cache_key.valid && cache->is_cached(cache_key, layout->mode);
         }
     }
     if (layout != nullptr && layout->data_ptr != nullptr && layout_cached) {
@@ -2147,8 +2168,22 @@ struct ggml_backend_sycl_context {
 
     // Flag to disable graphs when weight streaming is active
     bool                                                   weight_streaming_graphs_disabled = false;
-    // Track graph-pinned cache entries (key_ptr + layout) for unpinning.
-    std::vector<std::pair<const void *, ggml_layout_mode>> graph_pinned_entries;
+    // Track graph-pinned cache entries (cache_id + layout) for unpinning.
+    std::vector<std::pair<ggml_sycl_cache_id, ggml_layout_mode>> graph_pinned_entries;
+
+    struct fa_graph_ptr_snapshot {
+        const void * q           = nullptr;
+        const void * k           = nullptr;
+        const void * v           = nullptr;
+        const void * dst         = nullptr;
+        const void * mask        = nullptr;
+        const void * sinks       = nullptr;
+        const void * block_table = nullptr;
+        const void * seq_lens    = nullptr;
+    };
+    std::vector<fa_graph_ptr_snapshot> fa_graph_ptrs;
+    bool                               fa_graph_ptrs_valid     = false;
+    bool                               fa_graph_ptrs_recording = false;
 
     // KV offload manager for long context support (initialized lazily when enabled)
     std::unique_ptr<ggml_sycl::kv_offload_manager> kv_offload_mgr_;
