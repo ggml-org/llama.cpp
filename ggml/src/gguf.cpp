@@ -734,7 +734,7 @@ struct gguf_context * gguf_init_from_file(const char * fname, struct gguf_init_p
     FILE * file = ggml_fopen(fname, "rb");
 
     if (!file) {
-        GGML_LOG_ERROR("%s: failed to open GGUF file '%s'\n", __func__, fname);
+        GGML_LOG_ERROR("%s: failed to open GGUF file '%s' (%s)\n", __func__, fname, strerror(errno));
         return nullptr;
     }
 
