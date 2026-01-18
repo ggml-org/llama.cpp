@@ -252,7 +252,8 @@ enum vk_device_architecture {
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
-    INTEL_XE2,
+    INTEL_PRE_XE2,
+    INTEL_XE2_ONWARD,
     NVIDIA_PRE_TURING,
 };
 
@@ -325,12 +326,15 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
         props2.pNext = &subgroup_size_control_props;
         device.getProperties2(&props2);
 
-        if (subgroup_size_control_props.minSubgroupSize == 16) {
-            // Xe2 architecture uses SIMD16 while previous Xe and Gen architecture uses SIMD8.
-            // Minimum subgroup size matches the SIMD width so we distinguish architecture by checking this value.
-            // https://www.intel.com/content/www/us/en/content-details/824434/2024-intel-tech-tour-xe2-and-lunar-lake-s-gpu.html
-            // https://www.intel.com/content/www/us/en/docs/oneapi/optimization-guide-gpu/2025-0/intel-xe-gpu-architecture.html
-            return vk_device_architecture::INTEL_XE2;
+        // Xe2 architecture uses SIMD16 while previous Xe and Gen architecture uses SIMD8.
+        // Minimum subgroup size matches the SIMD width so we distinguish architecture by checking this value.
+        // https://www.intel.com/content/www/us/en/content-details/824434/2024-intel-tech-tour-xe2-and-lunar-lake-s-gpu.html
+        // https://www.intel.com/content/www/us/en/docs/oneapi/optimization-guide-gpu/2025-0/intel-xe-gpu-architecture.html
+        switch (subgroup_size_control_props.minSubgroupSize) {
+            case 8:
+                return vk_device_architecture::INTEL_PRE_XE2;
+            case 16:
+                return vk_device_architecture::INTEL_XE2_ONWARD;
         }
     } else if (props.vendorID == VK_VENDOR_ID_NVIDIA) {
         const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
@@ -546,6 +550,9 @@ static constexpr std::initializer_list<std::array<int, 3>> rms_norm_mul_rope_vie
     { 4, 0, 3 }, // set_rows->src[0] == view
 };
 
+struct vk_matrix_dimension {
+    uint32_t m, n, k;
+};
 
 struct vk_device_struct {
     std::recursive_mutex mutex;
@@ -611,14 +618,10 @@ struct vk_device_struct {
     bool coopmat_support_16x16x16_f16acc {};
     bool coopmat_support_16x16x16_f32acc {};
     bool coopmat1_fa_support {};
-    uint32_t coopmat_m;
-    uint32_t coopmat_n;
-    uint32_t coopmat_k;
+    vk_matrix_dimension coopmat;
 
     bool coopmat_int_support;
-    uint32_t coopmat_int_m;
-    uint32_t coopmat_int_n;
-    uint32_t coopmat_int_k;
+    vk_matrix_dimension coopmat_int;
 
     bool coopmat2;
 
@@ -2024,6 +2027,10 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     GGML_ASSERT(parameter_count <= MAX_PARAMETER_COUNT);
     GGML_ASSERT(wg_denoms[0] > 0 && wg_denoms[1] > 0 && wg_denoms[2] > 0); // NOLINT
 
+    if (pipeline->name == "matmul_id_subgroup_q4_k_f32_f16acc_aligned_l") {
+        std::cout << "here" << std::endl;
+    }
+
     vk::ShaderModuleCreateInfo shader_module_create_info({}, spv_size, reinterpret_cast<const uint32_t *>(spv_data));
     pipeline->shader_module = device->device.createShaderModule(shader_module_create_info);
 
@@ -2829,14 +2836,26 @@ static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vec
     return supported;
 }
 
+// Pipeline configuration for a specific pipeline
+struct PipelineConfigParameter {
+    uint32_t subgroup_size;
+    // Specialization constants used for a specific pipeline.
+    // If empty we use the default.
+    // Some kernels must have matching values between subgroup size and
+    // specialization constants so we have an interface to override the default here.
+    std::vector<uint32_t> specialization_constants;
+};
+
+// Pipeline configuration for a target GPU.
+// This may contain a group of piplines
 struct GpuPipelineConfig {
     // GPU architecture identifier.
     // Example: vk_device_architecture::AMD_GCN
     vk_device_architecture arch;
 
-    // Mapping of pipeline names to their specific subgroup sizes.
-    // Example: {"soft_max_f32", 64}
-    std::unordered_map<std::string, uint32_t> pipelines;
+    // Mapping of pipeline names to their specific configuration parameters.
+    // Example: {"soft_max_f32", {64, {}}
+    std::unordered_map<std::string, PipelineConfigParameter> pipelines;
 
     // Default subgroup size for this GPU.
     // Defaults to 0 if not explicitly provided.
@@ -2844,62 +2863,107 @@ struct GpuPipelineConfig {
 };
 
 // Pipeline configuration for RDNA1 GPUs.
-static const std::unordered_map<std::string, uint32_t> rdna1_pipelines = {
-    {"soft_max", 64}, {"im2col", 64},
-    {"argmax", 64}, {"mul_mat_vec", 64},
-    {"mul_mat_vec_f16", 32}, {"mul_mat_vec_f32_f16", 32}
+static const std::unordered_map<std::string, PipelineConfigParameter> rdna1_pipelines = {
+    {"soft_max",            {64, {}}},
+    {"im2col",              {64, {}}},
+    {"argmax",              {64, {}}},
+    {"mul_mat_vec",         {64, {}}},
+    {"mul_mat_vec_f16",     {32, {}}},
+    {"mul_mat_vec_f32_f16", {32, {}}},
 };
 
 // Pipeline configuration for RDNA2 GPUs.
-static const std::unordered_map<std::string, uint32_t> rdna2_pipelines = {
-    {"soft_max", 64}, {"im2col", 64},
+static const std::unordered_map<std::string, PipelineConfigParameter> rdna2_pipelines = {
+    {"soft_max", {64, {}}},
+    {"im2col",   {64, {}}},
 };
 
 static constexpr uint32_t RDNA_DEFAULT_SUBGROUP_SIZE = 32;
 
-// Define configurations for different GPUs.
-static std::vector<GpuPipelineConfig> gpu_pipeline_configs = {
-    {
-        vk_device_architecture::AMD_RDNA1,
-        {
-            rdna1_pipelines,
-        },
-        RDNA_DEFAULT_SUBGROUP_SIZE
-    },
-    {
-        vk_device_architecture::AMD_RDNA2,
-        {
-            rdna2_pipelines,
-        },
-        RDNA_DEFAULT_SUBGROUP_SIZE
-    },
+static const std::unordered_map<std::string, PipelineConfigParameter> xe2_onward_pipelines = {
+    {"matmul_id_subgroup_q4_k_f32_f16acc_aligned_m", {16, {}}},
+    {"matmul_id_subgroup_q4_k_f32_f16acc_aligned_l", {16, {}}},
+    {"matmul_id_subgroup_q6_k_f32_f16acc_aligned_m", {16, {}}},
+    {"matmul_id_subgroup_q6_k_f32_f16acc_aligned_l", {16, {}}},
 };
 
-static uint32_t get_subgroup_size(const std::string &pipeline_name, const vk_device_architecture &arch) {
-    for (const auto &config : gpu_pipeline_configs) {
+// Intel GPU can use subgroup 8, 16, or 32 depending on architeture.
+// Pre-Xe2 is 8, 16, or 32. Xe2 onward is 16 or 32. 32 is the default if nothing is specified.
+static constexpr uint32_t INTEL_DEFAULT_SUBGROUP_SIZE = 32;
+
+// Define configurations for different GPUs.
+static std::vector<GpuPipelineConfig> gpu_pipeline_configs = {};
+
+// Initialize vendor/pipeline specific parameters to be used when creating pipelines
+static void init_gpu_pipeline_configs(std::vector<GpuPipelineConfig>& config) {
+    if (!config.empty()) {
+        // Already setup
+        return;
+    }
+    config.insert(config.end(),{
+        {
+            vk_device_architecture::AMD_RDNA1,
+            {
+                rdna1_pipelines,
+            },
+            RDNA_DEFAULT_SUBGROUP_SIZE
+        },
+        {
+            vk_device_architecture::AMD_RDNA2,
+            {
+                rdna2_pipelines,
+            },
+            RDNA_DEFAULT_SUBGROUP_SIZE
+        },
+        {
+            vk_device_architecture::INTEL_PRE_XE2,
+            {
+            },
+            INTEL_DEFAULT_SUBGROUP_SIZE
+        },
+        {
+            vk_device_architecture::INTEL_XE2_ONWARD,
+            {
+                xe2_onward_pipelines,
+            },
+            INTEL_DEFAULT_SUBGROUP_SIZE
+        }
+    });
+}
+
+static bool get_gpu_pipeline_config(GpuPipelineConfig* output, const std::vector<GpuPipelineConfig>& pipeline_configs, const vk_device_architecture& arch) {
+    for (const auto & config : pipeline_configs) {
         if (config.arch == arch) {
-            auto pipIt = config.pipelines.find(pipeline_name);
-            if (pipIt != config.pipelines.end()) {
-                return pipIt->second;
-            }
-            std::vector<std::pair<std::string, uint32_t>> sorted_pipelines(config.pipelines.begin(), config.pipelines.end());
-            std::sort(sorted_pipelines.begin(), sorted_pipelines.end(),
-                      [](const auto &a, const auto &b) { return a.first.size() > b.first.size(); });
-            for (const auto &entry : sorted_pipelines) {
-                if (pipeline_name.find(entry.first) != std::string::npos) {
-                    return entry.second;
-                }
-            }
-            return config.default_subgroup_size;
+            *output = config;
+            return true;
         }
     }
-    return 0; // If no matching configuration is found
+    return false;
+}
+
+static bool get_pipeline_config_parameter(PipelineConfigParameter* output, const GpuPipelineConfig& config, const std::string &pipeline_name) {
+    auto pipIt = config.pipelines.find(pipeline_name);
+    if (pipIt != config.pipelines.end()) {
+        *output = pipIt->second;
+        return true;
+    }
+    std::vector<std::pair<std::string, PipelineConfigParameter>> sorted_pipelines(config.pipelines.begin(), config.pipelines.end());
+    std::sort(sorted_pipelines.begin(), sorted_pipelines.end(),
+                [](const auto &a, const auto &b) { return a.first.size() > b.first.size(); });
+    for (const auto &entry : sorted_pipelines) {
+        if (pipeline_name.find(entry.first) != std::string::npos) {
+            *output = entry.second;
+            return true;
+        }
+    }
+    return false;
 }
 
 static void ggml_vk_load_shaders(vk_device& device) {
     VK_LOG_DEBUG("ggml_vk_load_shaders(" << device->name << ")");
 
     std::lock_guard<std::recursive_mutex> guard(device->mutex);
+
     // some shaders have a minimum subgroup size
     const uint32_t subgroup_size_8 = std::max(device->subgroup_size, 8u);
     const uint32_t subgroup_size_16 = std::max(device->subgroup_size, 16u);
@@ -2967,25 +3031,31 @@ static void ggml_vk_load_shaders(vk_device& device) {
         s_align =  32;
     } else {
         // Matrix cores require different warp group sizes
-        const uint32_t tm_l = device->coopmat_support ? device->coopmat_m : 4;
-        const uint32_t tm_m = device->coopmat_support ? device->coopmat_m : 4;
-        const uint32_t tm_s = device->coopmat_support ? device->coopmat_m : 2;
-        const uint32_t tn_l = device->coopmat_support ? device->coopmat_n : 4;
-        const uint32_t tn_m = device->coopmat_support ? device->coopmat_n : 2;
-        const uint32_t tn_s = device->coopmat_support ? device->coopmat_n : 2;
-        const uint32_t tk_l = device->coopmat_support ? device->coopmat_k : 1;
-        const uint32_t tk_m = device->coopmat_support ? device->coopmat_k : 1;
-        const uint32_t tk_s = device->coopmat_support ? device->coopmat_k : 1;
+        const vk_matrix_dimension l_t = {
+            device->coopmat_support ? device->coopmat.m : 4,
+            device->coopmat_support ? device->coopmat.n : 4,
+            device->coopmat_support ? device->coopmat.k : 1,
+        };
+        const vk_matrix_dimension m_t = {
+            device->coopmat_support ? device->coopmat.m : 4,
+            device->coopmat_support ? device->coopmat.n : 2,
+            device->coopmat_support ? device->coopmat.k : 1,
+        };
+        const vk_matrix_dimension s_t = {
+            device->coopmat_support ? device->coopmat.m : 2,
+            device->coopmat_support ? device->coopmat.n : 2,
+            device->coopmat_support ? device->coopmat.k : 1,
+        };
 
         const uint32_t s_warptile_wm = device->subgroup_size == 8 ? 8 : 32;
 
-        l_warptile = { 128,             128, 128, 16, subgroup_size_8 * 2, 64, 2, tm_l, tn_l, tk_l, subgroup_size_8 };
-        m_warptile = { 128,              64,  64, 16, subgroup_size_8,     32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
-        s_warptile = { subgroup_size_32, 32,  32, 16, s_warptile_wm,       32, 2, tm_s, tn_s, tk_s, subgroup_size_8 };
+        l_warptile = { 128,             128, 128, 16, subgroup_size_8 * 2, 64, 2, l_t.m, l_t.n, l_t.k, subgroup_size_8 };
+        m_warptile = { 128,              64,  64, 16, subgroup_size_8,     32, 2, m_t.m, m_t.n, m_t.k, subgroup_size_8 };
+        s_warptile = { subgroup_size_32, 32,  32, 16, s_warptile_wm,       32, 2, s_t.m, s_t.n, s_t.k, subgroup_size_8 };
 
-        l_warptile_mmq = { 128,             128, 128, 32, subgroup_size_8 * 2, 64, 2, tm_l, tn_l, tk_l, subgroup_size_8 };
-        m_warptile_mmq = { 128,              64,  64, 32, subgroup_size_8,     32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
-        s_warptile_mmq = { subgroup_size_32, 32,  32, 32, s_warptile_wm,       32, 2, tm_s, tn_s, tk_s, subgroup_size_8 };
+        l_warptile_mmq = { 128,             128, 128, 32, subgroup_size_8 * 2, 64, 2, l_t.m, l_t.n, l_t.k, subgroup_size_8 };
+        m_warptile_mmq = { 128,              64,  64, 32, subgroup_size_8,     32, 2, m_t.m, m_t.n, m_t.k, subgroup_size_8 };
+        s_warptile_mmq = { subgroup_size_32, 32,  32, 32, s_warptile_wm,       32, 2, s_t.m, s_t.n, s_t.k, subgroup_size_8 };
 
         // Integer MMQ has a smaller shared memory profile, but heavier register use
         l_warptile_mmq_int = { 128,             128, 128, 32, subgroup_size_8 * 2, 64, 2, 4, 4, 1, subgroup_size_8 };
@@ -2997,13 +3067,13 @@ static void ggml_vk_load_shaders(vk_device& device) {
         m_warptile_mmq_int_k = { 128,                64,  64, 32, subgroup_size_8,     32, 1, 2, 2, 1, subgroup_size_8 };
         s_warptile_mmq_int_k = { subgroup_size_32,   32,  32, 32, s_warptile_wm,       32, 1, 2, 1, 1, subgroup_size_8 };
 
-        l_warptile_id = { 128,                      128, 128, 16, mul_mat_subgroup_size_16 * 2, 64, 2, tm_l, tn_l, tk_l, mul_mat_subgroup_size_16 };
-        m_warptile_id = { 128,                       64,  64, 16, mul_mat_subgroup_size_16,     32, 2, tm_m, tn_m, tk_m, mul_mat_subgroup_size_16 };
-        s_warptile_id = { mul_mat_subgroup_size_16,  32,  32, 16, s_warptile_wm,                32, 2, tm_s, tn_s, tk_s, mul_mat_subgroup_size_16 };
+        l_warptile_id = { 128,                      128, 128, 16, mul_mat_subgroup_size_16 * 2, 64, 2, l_t.m, l_t.n, l_t.k, mul_mat_subgroup_size_16 };
+        m_warptile_id = { 128,                       64,  64, 16, mul_mat_subgroup_size_16,     32, 2, m_t.m, m_t.n, m_t.k, mul_mat_subgroup_size_16 };
+        s_warptile_id = { mul_mat_subgroup_size_16,  32,  32, 16, s_warptile_wm,                32, 2, s_t.m, s_t.n, s_t.k, mul_mat_subgroup_size_16 };
 
-        l_warptile_mmqid = { 128,                       128, 128, 32, mul_mat_subgroup_size_8 * 2, 64, 2, tm_l, tn_l, tk_l, mul_mat_subgroup_size_8 };
-        m_warptile_mmqid = { 128,                        64,  64, 32, mul_mat_subgroup_size_8,     32, 2, tm_m, tn_m, tk_m, mul_mat_subgroup_size_8 };
-        s_warptile_mmqid = { mul_mat_subgroup_size_32,   32,  32, 32, s_warptile_wm,               32, 2, tm_s, tn_s, tk_s, mul_mat_subgroup_size_8 };
+        l_warptile_mmqid = { 128,                       128, 128, 32, mul_mat_subgroup_size_8 * 2, 64, 2, l_t.m, l_t.n, l_t.k, mul_mat_subgroup_size_8 };
+        m_warptile_mmqid = { 128,                        64,  64, 32, mul_mat_subgroup_size_8,     32, 2, m_t.m, m_t.n, m_t.k, mul_mat_subgroup_size_8 };
+        s_warptile_mmqid = { mul_mat_subgroup_size_32,   32,  32, 32, s_warptile_wm,               32, 2, s_t.m, s_t.n, s_t.k, mul_mat_subgroup_size_8 };
 
         l_warptile_mmqid_int = { 128,                       128, 128, 32, mul_mat_subgroup_size_8 * 2, 64, 2, 4, 4, 1, mul_mat_subgroup_size_8 };
         m_warptile_mmqid_int = { 128,                        64,  64, 32, mul_mat_subgroup_size_8,     32, 2, 2, 2, 1, mul_mat_subgroup_size_8 };
@@ -3019,13 +3089,13 @@ static void ggml_vk_load_shaders(vk_device& device) {
             m_warptile_mmqid = m_warptile_mmqid_int = { 256, 64, 64, 32, 16, 16, 2, 2, 2, 1, 16 };
         } else if (device->vendor_id == VK_VENDOR_ID_AMD && device->coopmat_support && device->driver_id != vk::DriverId::eAmdProprietary) {
             // This is intentionally using tx_m values, slight performance increase
-            l_warptile = { 256, 128, 128, 16, subgroup_size_8, 64, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
-            l_warptile_mmq = l_warptile_mmq_int = { 256, 128, 128, 32, subgroup_size_8, 64, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
+            l_warptile = { 256, 128, 128, 16, subgroup_size_8, 64, 2, m_t.m, m_t.n, m_t.k, subgroup_size_8 };
+            l_warptile_mmq = l_warptile_mmq_int = { 256, 128, 128, 32, subgroup_size_8, 64, 2, m_t.m, m_t.n, m_t.k, subgroup_size_8 };
             l_warptile_mmq_int_k = { 256, 128, 128, 32, subgroup_size_16, 64, 1, 4, 2, 1, subgroup_size_16 };
-        } else if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support && device->architecture == INTEL_XE2) {
+        } else if (device->vendor_id == VK_VENDOR_ID_INTEL && device->coopmat_support && device->architecture == INTEL_XE2_ONWARD) {
             // Xe2/Xe3 with coopmat enabled - warptile performance tuning
-            l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
-            l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, tm_m, tn_m, tk_m, subgroup_size_8 };
+            l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, m_t.m, m_t.n, m_t.k, subgroup_size_8 };
+            l_warptile_mmq = { 512, 128, 128, 32, subgroup_size_8, 32, 2, m_t.m, m_t.n, m_t.k, subgroup_size_8 };
         }
 
         l_mmq_wg_denoms = l_wg_denoms = {128, 128, 1 };
@@ -3084,9 +3154,34 @@ static void ggml_vk_load_shaders(vk_device& device) {
     auto const &ggml_vk_create_pipeline = [&](vk_device& device, vk_pipeline& base_pipeline, const char *name, size_t spv_size, const void* spv_data, const char *entrypoint,
                                               uint32_t parameter_count, uint32_t push_constant_size, std::array<uint32_t, 3> wg_denoms, const std::vector<uint32_t>& specialization_constants,
                                               uint32_t align, bool disable_robustness = false, bool require_full_subgroups = false, uint32_t required_subgroup_size = 0) {
+        if (std::string(name) == "matmul_id_subgroup_q4_k_f32_f16acc_aligned_l") {
+            std::cout << "here" << std::endl;
+        }
 
-        if (!require_full_subgroups && required_subgroup_size == 0) {
-            required_subgroup_size = get_subgroup_size(name, device->architecture);
+        // Override subgroup size and specialization constant based on pipeline name
+        GpuPipelineConfig gpu_config = {};
+        PipelineConfigParameter pipeline_param = {};
+        bool param_found = false;
+        auto gpu_config_found = get_gpu_pipeline_config(&gpu_config, gpu_pipeline_configs, device->architecture);
+        if (gpu_config_found) {
+            param_found = get_pipeline_config_parameter(&pipeline_param, gpu_config, std::string(name));
+        }
+
+        if (required_subgroup_size == 0) {
+            // No requirement in subgroup size so we can override it
+            if (param_found) {
+                // set specific subgroup size for this pipeline
+                required_subgroup_size = pipeline_param.subgroup_size;
+            } else if (!param_found && gpu_config_found) {
+                // no specific parameter for this pipeline so set the default
+                required_subgroup_size = gpu_config.default_subgroup_size;
+            }
+        }
+
+        // We always override the specialization constant if a matching pipline name exists with valid parameters
+        std::vector<uint32_t> target_specilization_constants = specialization_constants;
+        if (param_found && !pipeline_param.specialization_constants.empty()) {
+            target_specilization_constants = pipeline_param.specialization_constants;
         }
 
         vk_pipeline *ptr = &base_pipeline;
@@ -3129,8 +3224,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
                 compile_count++;
             }
 
+
             compiles.push_back(std::async(ggml_vk_create_pipeline_func, std::ref(device), std::ref(pipeline), spv_size, spv_data, entrypoint,
-                                          parameter_count, wg_denoms, specialization_constants, disable_robustness, require_full_subgroups, required_subgroup_size));
+                                          parameter_count, wg_denoms, target_specilization_constants, disable_robustness, require_full_subgroups, required_subgroup_size));
         }
     };
 
@@ -3722,7 +3818,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
         m_wg_denoms = { 64,  64, 1 };
         s_wg_denoms = { 32,  32, 1 };
 
-        if (device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == INTEL_XE2) {
+        if (device->vendor_id == VK_VENDOR_ID_INTEL && device->architecture == INTEL_XE2_ONWARD) {
             // Xe2/Xe3 - bf16 warptile performance tuning
             l_warptile = { 512, 128, 128, 16, subgroup_size_8, 32, 2, 4, 4, 1, subgroup_size_8 };
         }
@@ -4341,8 +4437,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_rwkv_wkv7_f32, "rwkv_wkv7_f32", rwkv_wkv7_f32_len, rwkv_wkv7_f32_data, "main", 8, sizeof(vk_op_rwkv_wkv7_push_constants), {1, 1, 1}, {device->subgroup_size}, 1);
 
     if (device->subgroup_arithmetic && device->subgroup_require_full_support) {
-        ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_f32_d128, "ssm_scan_128_f32", ssm_scan_subgroup_f32_len, ssm_scan_subgroup_f32_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1}, {128, device->subgroup_size}, 1, true, true);
-        ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_f32_d256, "ssm_scan_256_f32", ssm_scan_subgroup_f32_len, ssm_scan_subgroup_f32_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1}, {256, device->subgroup_size}, 1, true, true);
+        ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_f32_d128, "ssm_scan_128_f32", ssm_scan_subgroup_f32_len, ssm_scan_subgroup_f32_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1}, {128, device->subgroup_size}, 1, true, true, device->subgroup_size);
+        ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_f32_d256, "ssm_scan_256_f32", ssm_scan_subgroup_f32_len, ssm_scan_subgroup_f32_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1}, {256, device->subgroup_size}, 1, true, true, device->subgroup_size);
     } else {
         ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_f32_d128, "ssm_scan_128_f32", ssm_scan_f32_len, ssm_scan_f32_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1}, {128, device->subgroup_size, 16}, 1, true, true);
         ggml_vk_create_pipeline(device, device->pipeline_ssm_scan_f32_d256, "ssm_scan_256_f32", ssm_scan_f32_len, ssm_scan_f32_data, "main", 8, sizeof(vk_op_ssm_scan_push_constants), {1, 1, 1}, {256, device->subgroup_size, 16}, 1, true, true);
@@ -4529,9 +4625,9 @@ static vk_device ggml_vk_get_device(size_t idx) {
             } else if (strcmp("VK_KHR_cooperative_matrix", properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_COOPMAT")) {
                 device->coopmat_support = true;
-                device->coopmat_m = 0;
-                device->coopmat_n = 0;
-                device->coopmat_k = 0;
+                device->coopmat.m = 0;
+                device->coopmat.n = 0;
+                device->coopmat.k = 0;
 #endif
 #if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
             } else if (strcmp("VK_NV_cooperative_matrix2", properties.extensionName) == 0 &&
@@ -5025,12 +5121,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
                     if ((vk::ComponentTypeKHR)prop.CType == vk::ComponentTypeKHR::eFloat32 &&
                         (vk::ComponentTypeKHR)prop.ResultType == vk::ComponentTypeKHR::eFloat32) {
                         // coopmat sizes not set yet
-                        if (device->coopmat_m == 0) {
+                        if (device->coopmat.m == 0) {
                             device->coopmat_acc_f32_support = true;
-                            device->coopmat_m = prop.MSize;
-                            device->coopmat_n = prop.NSize;
-                            device->coopmat_k = prop.KSize;
-                        } else if (device->coopmat_m == prop.MSize && device->coopmat_n == prop.NSize && device->coopmat_k == prop.KSize) {
+                            device->coopmat.m = prop.MSize;
+                            device->coopmat.n = prop.NSize;
+                            device->coopmat.k = prop.KSize;
+                        } else if (device->coopmat.m == prop.MSize && device->coopmat.n == prop.NSize && device->coopmat.k == prop.KSize) {
                             // Only enable if shape is identical
                             device->coopmat_acc_f32_support = true;
                         }
@@ -5040,12 +5136,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
                     } else if ((vk::ComponentTypeKHR)prop.CType == vk::ComponentTypeKHR::eFloat16 &&
                                (vk::ComponentTypeKHR)prop.ResultType == vk::ComponentTypeKHR::eFloat16) {
                         // coopmat sizes not set yet
-                        if (device->coopmat_m == 0) {
+                        if (device->coopmat.m == 0) {
                             device->coopmat_acc_f16_support = true;
-                            device->coopmat_m = prop.MSize;
-                            device->coopmat_n = prop.NSize;
-                            device->coopmat_k = prop.KSize;
-                        } else if (device->coopmat_m == prop.MSize && device->coopmat_n == prop.NSize && device->coopmat_k == prop.KSize) {
+                            device->coopmat.m = prop.MSize;
+                            device->coopmat.n = prop.NSize;
+                            device->coopmat.k = prop.KSize;
+                        } else if (device->coopmat.m == prop.MSize && device->coopmat.n == prop.NSize && device->coopmat.k == prop.KSize) {
                             // Only enable if shape is identical
                             device->coopmat_acc_f16_support = true;
                         }
@@ -5058,12 +5154,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
                            (vk::ComponentTypeKHR)prop.CType      == vk::ComponentTypeKHR::eSint32 &&
                            (vk::ComponentTypeKHR)prop.ResultType == vk::ComponentTypeKHR::eSint32 &&
                            (vk::ScopeKHR)prop.scope == vk::ScopeKHR::eSubgroup &&
-                           device->coopmat_int_m == 0
+                           device->coopmat_int.m == 0
                 ) {
                     device->coopmat_int_support = true;
-                    device->coopmat_int_m = prop.MSize;
-                    device->coopmat_int_n = prop.NSize;
-                    device->coopmat_int_k = prop.KSize;
+                    device->coopmat_int.m = prop.MSize;
+                    device->coopmat_int.n = prop.NSize;
+                    device->coopmat_int.k = prop.KSize;
                 }
 #if defined(VK_KHR_shader_bfloat16) && defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
                 if (prop.AType == VK_COMPONENT_TYPE_BFLOAT16_KHR &&
@@ -5073,12 +5169,12 @@ static vk_device ggml_vk_get_device(size_t idx) {
                     (vk::ScopeKHR)prop.scope == vk::ScopeKHR::eSubgroup
                 ) {
                     // coopmat sizes not set yet
-                    if (device->coopmat_m == 0) {
+                    if (device->coopmat.m == 0) {
                         device->coopmat_bf16_support = true;
-                        device->coopmat_m = prop.MSize;
-                        device->coopmat_n = prop.NSize;
-                        device->coopmat_k = prop.KSize;
-                    } else if (device->coopmat_m == prop.MSize && device->coopmat_n == prop.NSize && device->coopmat_k == prop.KSize) {
+                        device->coopmat.m = prop.MSize;
+                        device->coopmat.n = prop.NSize;
+                        device->coopmat.k = prop.KSize;
+                    } else if (device->coopmat.m == prop.MSize && device->coopmat.n == prop.NSize && device->coopmat.k == prop.KSize) {
                         // Only enable if shape is identical
                         device->coopmat_bf16_support = true;
                     }
@@ -5086,7 +5182,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #endif
             }
 
-            if (device->coopmat_m == 0 || !device->coopmat_acc_f32_support) {
+            if (device->coopmat.m == 0 || !device->coopmat_acc_f32_support) {
                 // No suitable matmul mode found
                 GGML_LOG_DEBUG("ggml_vulkan: WARNING: No suitable matrix core mode found. Disabling matrix cores.\n");
                 device->coopmat_support = false;
@@ -5133,7 +5229,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 device->mul_mat_id_s[i] = true;
                 break;
             case VK_VENDOR_ID_INTEL:
-                if (!device->coopmat_support || device->architecture != INTEL_XE2) {
+                if (!device->coopmat_support || device->architecture != INTEL_XE2_ONWARD) {
                     device->mul_mat_l[i] = false;
                     device->mul_mat_id_l[i] = false;
                 } else {
@@ -5355,7 +5451,12 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     bool bf16 = false;
 #endif
 
-    uint32_t default_subgroup_size = get_subgroup_size("", device_architecture);
+    uint32_t default_subgroup_size = 0;
+    GpuPipelineConfig gpu_config = {};
+    auto config_found = get_gpu_pipeline_config(&gpu_config, gpu_pipeline_configs, device_architecture);
+    if (config_found) {
+        default_subgroup_size = gpu_config.default_subgroup_size;
+    }
     const size_t subgroup_size = (default_subgroup_size != 0) ? default_subgroup_size : subgroup_props.subgroupSize;
     const bool uma = props2.properties.deviceType == vk::PhysicalDeviceType::eIntegratedGpu;
 
@@ -5607,6 +5708,7 @@ static void ggml_vk_instance_init() {
     }
     GGML_LOG_DEBUG("ggml_vulkan: Found %zu Vulkan devices:\n", vk_instance.device_indices.size());
 
+    init_gpu_pipeline_configs(gpu_pipeline_configs);
     for (size_t i = 0; i < vk_instance.device_indices.size(); i++) {
         vk::PhysicalDevice vkdev = devices[vk_instance.device_indices[i]];
         std::vector<vk::ExtensionProperties> extensionprops = vkdev.enumerateDeviceExtensionProperties();
@@ -15192,9 +15294,8 @@ static bool ggml_vk_device_is_supported(const vk::PhysicalDevice & vkdev) {
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
-        // Only allowing Xe2 GPU at the moment since Xe2 GPU can gain significant performance boost,
-        // while some older hardware (ex. Arc A770) has performance regressions
-        return arch == vk_device_architecture::INTEL_XE2;
+        // Only allowing Xe2 and newer GPU at the moment since some older hardware (ex. Arc A770) have performance regressions
+        return arch == vk_device_architecture::INTEL_XE2_ONWARD;
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
