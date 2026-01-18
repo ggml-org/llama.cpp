@@ -17,10 +17,12 @@ struct ggml_metal_device_deleter {
 
 typedef std::unique_ptr<ggml_metal_device, ggml_metal_device_deleter> ggml_metal_device_ptr;
 
-ggml_metal_device_t ggml_metal_device_get(void) {
-    static ggml_metal_device_ptr ctx { ggml_metal_device_init() };
+ggml_metal_device_t ggml_metal_device_get(int device) {
+    static std::vector<ggml_metal_device_ptr> devs;
 
-    return ctx.get();
+    devs.emplace_back(ggml_metal_device_init(device));
+
+    return devs.back().get();
 }
 
 struct ggml_metal_pipelines {
