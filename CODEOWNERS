@@ -15,6 +15,7 @@
 /common/common.*                        @ggerganov
 /common/console.*                       @ggerganov
 /common/http.*                          @angt
+/common/jinja/                          @ngxson @CISC @aldehir
 /common/llguidance.*                    @ggerganov
 /common/log.*                           @ggerganov
 /common/peg-parser.*                    @aldehir
