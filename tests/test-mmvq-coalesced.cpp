@@ -20,6 +20,7 @@ static inline int ceil_div(int a, int b) {
 // Constants from ggml-common.h
 #define QK4_0 32
 #define QK_K 256
+#define QK_MXFP4 32
 #define QK8_1 32
 #define QR8_1 1
 #define QI8_1 (QK8_1 / (4 * QR8_1))
@@ -36,10 +37,26 @@ static inline float half_to_float(sycl::half h) {
     return (float) h;
 }
 
+static inline float e8m0_to_fp32(uint8_t x) {
+    if (x == 0) {
+        return sycl::ldexp(1.0f, -126);
+    }
+    return sycl::ldexp(1.0f, (int) x - 127);
+}
+
+static constexpr int8_t kvalues_mxfp4[16] = {
+    0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12,
+};
+
 // Minimal block structures matching ggml layout (host + device)
 struct block_q4_0 {
     sycl::half d;
     uint8_t qs[QK4_0 / 2];
+};
+
+struct block_mxfp4 {
+    uint8_t e;
+    uint8_t qs[QK_MXFP4 / 2];
 };
 
 struct block_q6_K {
@@ -228,7 +245,38 @@ static void coalesce_q6_k_from_aos(const std::vector<block_q6_K> & aos, int ncol
             std::memcpy(dst + sc_offset, b.scales + word * 4, 4);
         }
 
-        std::memcpy(dst_d + ib * sizeof(sycl::half), &b.d, sizeof(sycl::half));
+    std::memcpy(dst_d + ib * sizeof(sycl::half), &b.d, sizeof(sycl::half));
+    }
+}
+
+static void coalesce_mxfp4_from_aos(const std::vector<block_mxfp4> & aos, int ncols, int nrows, std::vector<uint8_t> & coalesced) {
+    const int blocks_per_row = ncols / QK_MXFP4;
+    const int tiles_per_row = blocks_per_row / MMVQ_COALESCED_TILE_BLOCKS;
+    const int bytes_per_row = ncols / 2;
+    const size_t qs_bytes = (size_t) nrows * bytes_per_row;
+    const size_t e_bytes = (size_t) nrows * blocks_per_row;
+
+    coalesced.assign(qs_bytes + e_bytes, 0);
+    uint8_t * dst = coalesced.data();
+    uint8_t * dst_e = coalesced.data() + qs_bytes;
+
+    constexpr int WORD_PLANE_STRIDE = MMVQ_COALESCED_TILE_BLOCKS * 4;
+
+    for (int row = 0; row < nrows; ++row) {
+        for (int tile = 0; tile < tiles_per_row; ++tile) {
+            const int tile_base = row * bytes_per_row + tile * (MMVQ_COALESCED_TILE_BLOCKS * 16);
+            for (int block_in_tile = 0; block_in_tile < MMVQ_COALESCED_TILE_BLOCKS; ++block_in_tile) {
+                const int block_idx = row * blocks_per_row + tile * MMVQ_COALESCED_TILE_BLOCKS + block_in_tile;
+                const block_mxfp4 & b = aos[block_idx];
+
+                for (int word = 0; word < 4; ++word) {
+                    const int dst_offset = tile_base + word * WORD_PLANE_STRIDE + block_in_tile * 4;
+                    std::memcpy(dst + dst_offset, b.qs + word * 4, 4);
+                }
+
+                dst_e[row * blocks_per_row + tile * MMVQ_COALESCED_TILE_BLOCKS + block_in_tile] = b.e;
+            }
+        }
     }
 }
 
@@ -251,6 +299,29 @@ static float cpu_row_dot_q4_0(const block_q4_0 * x_row, const block_q8_1 * y, in
         const float d8 = half_to_float(by->d);
         const float s8 = half_to_float(by->s);
         sum += d4 * (sumi * d8 - 8.0f * s8);
+    }
+    return sum;
+}
+
+static float cpu_row_dot_mxfp4(const block_mxfp4 * x_row, const block_q8_1 * y, int ncols) {
+    const int blocks_per_row = ncols / QK_MXFP4;
+    float sum = 0.0f;
+
+    for (int ib = 0; ib < blocks_per_row; ++ib) {
+        const block_mxfp4 * bx = &x_row[ib];
+        const block_q8_1 * by = &y[ib];
+        const float d = e8m0_to_fp32(bx->e) * 0.5f;
+        const float d8 = half_to_float(by->d);
+
+        for (int j = 0; j < QK_MXFP4 / 2; ++j) {
+            const int8_t w0 = kvalues_mxfp4[bx->qs[j] & 0x0F];
+            const int8_t w1 = kvalues_mxfp4[bx->qs[j] >> 4];
+            const float x0 = w0 * d;
+            const float x1 = w1 * d;
+            const float y0 = by->qs[j] * d8;
+            const float y1 = by->qs[j + QK_MXFP4 / 2] * d8;
+            sum += x0 * y0 + x1 * y1;
+        }
     }
     return sum;
 }
@@ -313,6 +384,43 @@ static float cpu_row_dot_q4_0_coalesced(const uint8_t * x_coal, const uint8_t * 
 
                 sum += d4 * (sumi * d8 - 4.0f * s8);
             }
+        }
+    }
+    return sum;
+}
+
+static float cpu_row_dot_mxfp4_coalesced(const uint8_t * x_coal, const uint8_t * y_reordered, int ncols, int nrows, int row) {
+    const int blocks_per_row = ncols / QK_MXFP4;
+    const int x_row_stride = ncols / 2;
+    const int8_t * y_qs = (const int8_t *) y_reordered;
+    const sycl::half2 * y_ds = (const sycl::half2 *) (y_reordered + ncols);
+    const uint8_t * x_e = x_coal + nrows * x_row_stride;
+
+    float sum = 0.0f;
+    constexpr int WORD_PLANE_STRIDE = MMVQ_COALESCED_TILE_BLOCKS * 4;
+
+    for (int b = 0; b < blocks_per_row; ++b) {
+        const int tile = b / MMVQ_COALESCED_TILE_BLOCKS;
+        const int block_in_tile = b % MMVQ_COALESCED_TILE_BLOCKS;
+        const int tile_base = row * x_row_stride + tile * (MMVQ_COALESCED_TILE_BLOCKS * 16);
+        uint8_t qs[QK_MXFP4 / 2];
+
+        for (int word = 0; word < 4; ++word) {
+            const int src_offset = tile_base + word * WORD_PLANE_STRIDE + block_in_tile * 4;
+            std::memcpy(qs + word * 4, x_coal + src_offset, 4);
+        }
+
+        const float d = e8m0_to_fp32(x_e[row * blocks_per_row + b]) * 0.5f;
+        const float d8 = half_to_float(y_ds[b][0]);
+
+        for (int j = 0; j < QK_MXFP4 / 2; ++j) {
+            const int8_t w0 = kvalues_mxfp4[qs[j] & 0x0F];
+            const int8_t w1 = kvalues_mxfp4[qs[j] >> 4];
+            const float x0 = w0 * d;
+            const float x1 = w1 * d;
+            const float y0 = y_qs[b * QK8_1 + j] * d8;
+            const float y1 = y_qs[b * QK8_1 + j + QK_MXFP4 / 2] * d8;
+            sum += x0 * y0 + x1 * y1;
         }
     }
     return sum;
@@ -782,6 +890,125 @@ static bool run_q6_k_coalesced_test(sycl::queue & q) {
     return pass;
 }
 
+static bool run_mxfp4_coalesced_test(sycl::queue & q) {
+    const int nrows = 4;
+    const int ncols = 1024;
+    const int blocks_per_row = ncols / QK_MXFP4;
+
+    std::mt19937 rng(99);
+
+    std::vector<block_mxfp4> x_aos(nrows * blocks_per_row);
+    for (int ib = 0; ib < (int)x_aos.size(); ++ib) {
+        x_aos[ib].e = (uint8_t) (120 + (rng() % 16));
+        for (int i = 0; i < QK_MXFP4 / 2; ++i) {
+            const uint8_t lo = (uint8_t) (rng() % 16);
+            const uint8_t hi = (uint8_t) (rng() % 16);
+            x_aos[ib].qs[i] = (hi << 4) | lo;
+        }
+    }
+
+    std::vector<block_q8_1> y_q8(blocks_per_row);
+    for (int ib = 0; ib < blocks_per_row; ++ib) {
+        int sum = 0;
+        for (int i = 0; i < QK8_1; ++i) {
+            const int8_t v = (int8_t) (rng() % 255 - 127);
+            y_q8[ib].qs[i] = v;
+            sum += v;
+        }
+        const float d = 0.01f;
+        y_q8[ib].d = sycl::half(d);
+        y_q8[ib].s = sycl::half(d * sum);
+    }
+    std::vector<uint8_t> y_q8_reordered;
+    reorder_q8_1_to_qs_ds(y_q8, y_q8_reordered);
+
+    std::vector<uint8_t> x_coal;
+    coalesce_mxfp4_from_aos(x_aos, ncols, nrows, x_coal);
+
+    std::vector<float> ref(nrows);
+    for (int r = 0; r < nrows; ++r) {
+        ref[r] = cpu_row_dot_mxfp4(&x_aos[r * blocks_per_row], y_q8.data(), ncols);
+    }
+
+    for (int r = 0; r < nrows; ++r) {
+        const float ref_coal = cpu_row_dot_mxfp4_coalesced(x_coal.data(), y_q8_reordered.data(), ncols, nrows, r);
+        const float diff = std::abs(ref_coal - ref[r]);
+        const float denom = std::max(1.0f, std::abs(ref[r]));
+        if (diff / denom > 1e-5f) {
+            printf("MXFP4 coalesced CPU mismatch row %d: coal=%f ref=%f\n", r, ref_coal, ref[r]);
+            return false;
+        }
+    }
+
+    uint8_t * d_x = sycl::malloc_device<uint8_t>(x_coal.size(), q);
+    uint8_t * d_y = sycl::malloc_device<uint8_t>(y_q8_reordered.size(), q);
+    float *   d_out = sycl::malloc_device<float>(nrows, q);
+
+    q.memcpy(d_x, x_coal.data(), x_coal.size()).wait();
+    q.memcpy(d_y, y_q8_reordered.data(), y_q8_reordered.size()).wait();
+
+    q.submit([&](sycl::handler & cgh) {
+        cgh.parallel_for(sycl::range<1>(nrows), [=](sycl::id<1> idx) {
+            const int row = idx[0];
+            float sum = 0.0f;
+            const int x_row_stride = ncols / 2;
+            const uint8_t * x_qs = d_x;
+            const uint8_t * x_e = d_x + nrows * x_row_stride;
+            const int8_t * y_qs = (const int8_t *) d_y;
+            const sycl::half2 * y_ds = (const sycl::half2 *) ((const char *) d_y + ncols);
+
+            for (int b = 0; b < blocks_per_row; ++b) {
+                const int tile = b / MMVQ_COALESCED_TILE_BLOCKS;
+                const int block_in_tile = b % MMVQ_COALESCED_TILE_BLOCKS;
+                const int tile_base = row * x_row_stride + tile * (MMVQ_COALESCED_TILE_BLOCKS * 16);
+                const int word_stride = MMVQ_COALESCED_TILE_BLOCKS * 4;
+
+                uint8_t qs[QK_MXFP4 / 2];
+                for (int word = 0; word < 4; ++word) {
+                    const int base = tile_base + word * word_stride + block_in_tile * 4;
+                    qs[word * 4 + 0] = x_qs[base + 0];
+                    qs[word * 4 + 1] = x_qs[base + 1];
+                    qs[word * 4 + 2] = x_qs[base + 2];
+                    qs[word * 4 + 3] = x_qs[base + 3];
+                }
+
+                const float d = e8m0_to_fp32(x_e[row * blocks_per_row + b]) * 0.5f;
+                const float d8 = (float) y_ds[b][0];
+
+                for (int j = 0; j < QK_MXFP4 / 2; ++j) {
+                    const int8_t w0 = kvalues_mxfp4[qs[j] & 0x0F];
+                    const int8_t w1 = kvalues_mxfp4[qs[j] >> 4];
+                    const float x0 = w0 * d;
+                    const float x1 = w1 * d;
+                    const float y0 = y_qs[b * QK8_1 + j] * d8;
+                    const float y1 = y_qs[b * QK8_1 + j + QK_MXFP4 / 2] * d8;
+                    sum += x0 * y0 + x1 * y1;
+                }
+            }
+
+            d_out[row] = sum;
+        });
+    }).wait();
+
+    std::vector<float> out(nrows);
+    q.memcpy(out.data(), d_out, nrows * sizeof(float)).wait();
+
+    sycl::free(d_x, q);
+    sycl::free(d_y, q);
+    sycl::free(d_out, q);
+
+    bool pass = true;
+    for (int r = 0; r < nrows; ++r) {
+        const float diff = std::abs(out[r] - ref[r]);
+        const float denom = std::max(1.0f, std::abs(ref[r]));
+        if (diff / denom > 1e-2f) {
+            printf("MXFP4 coalesced mismatch row %d: gpu=%f ref=%f\n", r, out[r], ref[r]);
+            pass = false;
+        }
+    }
+    return pass;
+}
+
 int main() {
     sycl::queue q;
     bool pass = true;
@@ -798,6 +1025,13 @@ int main() {
         pass = false;
     } else {
         printf("Q6_K coalesced test PASS\n");
+    }
+
+    printf("Running MXFP4 coalesced MMVQ test...\n");
+    if (!run_mxfp4_coalesced_test(q)) {
+        pass = false;
+    } else {
+        printf("MXFP4 coalesced test PASS\n");
     }
 
     if (!pass) {

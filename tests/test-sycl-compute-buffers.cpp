@@ -180,3 +180,111 @@ static bool test_compute_buffer_pool() {
     return true;
 }
 
+static bool test_pool_resize() {
+    using namespace ggml_sycl;
+    ComputeBufferManager manager(*g_fixture.cache, 2);
+    TEST_ASSERT(manager.pool_size() == 2, "initial pool size should be 2");
+    manager.resize_pool(8);
+    TEST_ASSERT(manager.pool_size() == 8, "pool size should be 8 after resize");
+    std::vector<ComputeBuffer*> buffers;
+    for (size_t i = 0; i < 6; ++i) {
+        ComputeBuffer* buf = manager.acquire(128 * 1024, "resize_test");
+        if (buf) {
+            buffers.push_back(buf);
+        }
+    }
+    TEST_ASSERT(buffers.size() >= 2, "should be able to acquire at least 2 buffers");
+    for (auto* buf : buffers) {
+        manager.release(buf);
+    }
+    return true;
+}
+
+static bool test_concurrent_access() {
+    using namespace ggml_sycl;
+    ComputeBufferManager manager(*g_fixture.cache, 16);
+    std::atomic<int> success_count{0};
+    std::atomic<int> failure_count{0};
+    auto worker = [&](int thread_id) {
+        for (int i = 0; i < 10; ++i) {
+            std::string op = "t" + std::to_string(thread_id) + "_" + std::to_string(i);
+            ComputeBuffer* buf = manager.acquire(64 * 1024, op.c_str());
+            if (buf) {
+                success_count++;
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+                manager.release(buf);
+            } else {
+                failure_count++;
+            }
+        }
+    };
+    std::vector<std::thread> threads;
+    for (int t = 0; t < 4; ++t) {
+        threads.emplace_back(worker, t);
+    }
+    for (auto& t : threads) {
+        t.join();
+    }
+    TEST_ASSERT(success_count > 0, "at least some acquires should succeed");
+    TEST_ASSERT(manager.bytes_in_use() == 0, "all buffers should be released at end");
+    printf("    Concurrent: %d successes, %d failures\n", success_count.load(), failure_count.load());
+    return true;
+}
+
+static bool test_stats_tracking() {
+    using namespace ggml_sycl;
+    ComputeBufferManager manager(*g_fixture.cache, 4);
+    TEST_ASSERT(manager.total_allocations() == 0, "initial total_allocations should be 0");
+    TEST_ASSERT(manager.pool_hits() == 0, "initial pool_hits should be 0");
+    TEST_ASSERT(manager.pool_misses() == 0, "initial pool_misses should be 0");
+    TEST_ASSERT(manager.peak_usage() == 0, "initial peak_usage should be 0");
+    ComputeBuffer* buf1 = manager.acquire(1024 * 1024, "stats_op1");
+    TEST_ASSERT(buf1 != nullptr, "acquire should succeed");
+    TEST_ASSERT(manager.total_allocations() == 1, "should have 1 allocation");
+    TEST_ASSERT(manager.pool_misses() >= 1, "should have at least 1 pool miss");
+    size_t peak1 = manager.peak_usage();
+    TEST_ASSERT(peak1 > 0, "peak_usage should be > 0");
+    manager.release(buf1);
+    ComputeBuffer* buf2 = manager.acquire(1024 * 1024, "stats_op2");
+    TEST_ASSERT(buf2 != nullptr, "second acquire should succeed");
+    TEST_ASSERT(manager.pool_hits() >= 1, "should have at least 1 pool hit");
+    manager.release(buf2);
+    TEST_ASSERT(manager.peak_usage() >= peak1, "peak should not decrease");
+    return true;
+}
+
+int main() {
+    if (!std::getenv("ONEAPI_DEVICE_SELECTOR")) {
+        setenv("ONEAPI_DEVICE_SELECTOR", "level_zero:1", 1);
+    }
+    printf("SYCL Compute Buffer Management Tests\n");
+    printf("=====================================\n\n");
+    try {
+        sycl::queue q;
+        printf("Using device: %s\n\n",
+               q.get_device().get_info<sycl::info::device::name>().c_str());
+    } catch (const sycl::exception& e) {
+        fprintf(stderr, "SYCL error: %s\n", e.what());
+        return 1;
+    }
+    if (!g_fixture.setup()) {
+        fprintf(stderr, "Failed to setup test fixture\n");
+        return 1;
+    }
+    RUN_TEST(test_allocate_compute_buffer);
+    RUN_TEST(test_compute_buffer_never_evicted);
+    RUN_TEST(test_release_compute_buffer);
+    RUN_TEST(test_reuse_compute_buffer);
+    RUN_TEST(test_compute_buffer_pool);
+    RUN_TEST(test_pool_resize);
+    RUN_TEST(test_concurrent_access);
+    RUN_TEST(test_stats_tracking);
+    g_fixture.teardown();
+    printf("\n=====================================\n");
+    printf("Tests passed: %d\n", g_tests_passed);
+    printf("Tests failed: %d\n", g_tests_failed);
+    printf("Result: %s\n", g_tests_failed == 0 ? "PASS" : "FAIL");
+    return g_tests_failed == 0 ? 0 : 1;
+}
+
+#endif

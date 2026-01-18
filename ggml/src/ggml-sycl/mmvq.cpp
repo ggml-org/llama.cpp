@@ -3103,6 +3103,128 @@ static void mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
     }
 }
 
+static void mul_mat_vec_mxfp4_q8_1_coalesced_id_kernel(
+    const uint8_t * __restrict__ vx,
+    const uint8_t * const * __restrict__ expert_ptrs,
+    const void * __restrict__ vy,
+    float * __restrict__ dst,
+    const int32_t * __restrict__ ids,
+    const int                ncols,
+    const int                ncols_y,  // Q8_1 row size (for SoA ds offset)
+    const int                nrows_per_expert,
+    const int                n_ids,
+    const int                n_tokens,
+    const int                ne11,
+    const int64_t            total_qs_size,             // Offset to MXFP4 scale region
+    const int64_t            total_qs_size_per_expert,  // Offset to MXFP4 scale region (per-expert layout)
+    const int64_t            ids_nb0,
+    const int64_t            ids_nb1,
+    const int64_t            nb11,
+    const int64_t            nb12,
+    const int64_t            nb1,
+    const int64_t            nb2,
+    const sycl::nd_item<3> & item_ct1) {
+    const int batch_idx = item_ct1.get_group(1);
+    const int row       = item_ct1.get_group(2) * item_ct1.get_local_range(1) + item_ct1.get_local_id(1);
+
+    if (row >= nrows_per_expert) {
+        return;
+    }
+
+    const int id   = batch_idx / n_tokens;
+    const int iid1 = batch_idx - id * n_tokens;
+
+    int32_t expert_id = -1;
+    if (ids) {
+        expert_id = *(const int32_t *) ((const char *) ids + iid1 * ids_nb1 + id * ids_nb0);
+    }
+
+    const int64_t i11 = id % ne11;
+    const int64_t i12 = iid1;
+    const int64_t i1  = id;
+    const int64_t i2  = iid1;
+
+    const int blocks_per_row = ncols / QK_MXFP4;
+
+    const bool      use_expert_ptrs = (expert_ptrs != nullptr);
+    const uint8_t * base            = nullptr;
+    if (use_expert_ptrs) {
+        base = ids ? expert_ptrs[expert_id] : expert_ptrs[batch_idx];
+    } else {
+        base = vx;
+    }
+    const int64_t qs_offset = use_expert_ptrs ? total_qs_size_per_expert : total_qs_size;
+
+    const int64_t abs_row          = use_expert_ptrs ? row : (expert_id * nrows_per_expert + row);
+    const int64_t row_qs_offset    = abs_row * (ncols / 2);
+    const int64_t row_scale_offset = qs_offset + abs_row * blocks_per_row;
+
+    const uint8_t * x_qs = base + row_qs_offset;
+    const uint8_t * x_e  = base + row_scale_offset;
+
+    const char *        y_base = (const char *) vy + i11 * nb11 + i12 * nb12;
+    const int8_t *      y_qs   = (const int8_t *) y_base;
+    const sycl::half2 * y_ds   = (const sycl::half2 *) (y_base + ncols_y);
+
+    const int     lane_id       = item_ct1.get_local_id(2);
+    constexpr int TILE_BLOCKS   = MMVQ_COALESCED_TILE_BLOCKS;
+    const int     tiles_per_row = blocks_per_row / TILE_BLOCKS;
+    const int     word_stride   = TILE_BLOCKS * 4;
+
+    float acc = 0.0f;
+
+    for (int tile = 0; tile < tiles_per_row; ++tile) {
+        const int tile_base = row_qs_offset + tile * (TILE_BLOCKS * (QK_MXFP4 / 2));
+
+        for (int block_in_tile = lane_id; block_in_tile < TILE_BLOCKS; block_in_tile += WARP_SIZE) {
+            const int block_idx = tile * TILE_BLOCKS + block_in_tile;
+
+            const uint8_t e8m0  = x_e[block_idx];
+            const float   scale = ggml_sycl_e8m0_to_fp32(e8m0) * 0.5f;
+
+            const int y_block       = block_idx;
+            const int y_base_offset = y_block * QK8_1;
+
+            for (int half = 0; half < 2; ++half) {
+                const int word_base    = half * (2 * word_stride);
+                const int word0_offset = word_base + block_in_tile * 4;
+                const int word1_offset = word_base + word_stride + block_in_tile * 4;
+
+                const int v0 = *((const int *) (x_qs + tile_base + word0_offset));
+                const int v1 = *((const int *) (x_qs + tile_base + word1_offset));
+
+                const sycl::int2 dq0 = get_int_from_table_16(v0, kvalues_mxfp4);
+                const sycl::int2 dq1 = get_int_from_table_16(v1, kvalues_mxfp4);
+
+                const int y_offset = half * 8;
+                const int u0 = get_int_from_int8_aligned(y_qs + y_base_offset, y_offset / 4);
+                const int u1 = get_int_from_int8_aligned(y_qs + y_base_offset, y_offset / 4 + 4);
+                const int u2 = get_int_from_int8_aligned(y_qs + y_base_offset, y_offset / 4 + 1);
+                const int u3 = get_int_from_int8_aligned(y_qs + y_base_offset, y_offset / 4 + 5);
+
+                int sumi = 0;
+                sumi     = ggml_sycl_dp4a(dq0.x(), u0, sumi);
+                sumi     = ggml_sycl_dp4a(dq0.y(), u1, sumi);
+                sumi     = ggml_sycl_dp4a(dq1.x(), u2, sumi);
+                sumi     = ggml_sycl_dp4a(dq1.y(), u3, sumi);
+
+                const float d8 = (float) y_ds[y_block][0];
+                acc += scale * d8 * sumi;
+            }
+        }
+    }
+
+#pragma unroll
+    for (int mask = WARP_SIZE / 2; mask > 0; mask >>= 1) {
+        acc += dpct::permute_sub_group_by_xor(item_ct1.get_sub_group(), acc, mask);
+    }
+
+    if (lane_id == 0) {
+        float * dst_out = (float *) ((char *) dst + i1 * nb1 + i2 * nb2);
+        dst_out[row]    = acc;
+    }
+}
+
 // MoE dispatch: MXFP4 SoA layout with expert routing
 // Both MXFP4 weights and Q8_1 inputs must be in SoA layout
 static void reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(const void *         vx,
@@ -3139,6 +3261,49 @@ static void reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(const void *         vx,
         cgh.parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
                          [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                              mul_mat_vec_mxfp4_q8_1_soa_id_kernel(
+                                 (const uint8_t *) vx, (const uint8_t * const *) expert_ptrs, vy, dst, ids, ncols,
+                                 ncols_y, nrows_per_expert, n_ids, n_tokens, ne11, total_qs_size,
+                                 total_qs_size_per_expert, ids_nb0, ids_nb1, nb11, nb12, nb1, nb2, item_ct1);
+                         });
+    });
+}
+
+// MoE dispatch: MXFP4 Coalesced layout with expert routing
+// MXFP4 weights are coalesced; Q8_1 inputs remain SoA (qs then ds per row)
+static void coalesced_mul_mat_vec_mxfp4_q8_1_id_sycl(const void *         vx,
+                                                     const void * const * expert_ptrs,
+                                                     const void *         vy,
+                                                     float *              dst,
+                                                     const int32_t *      ids,
+                                                     const int            ncols,
+                                                     const int            ncols_y,  // Q8_1 row size (for SoA ds offset)
+                                                     const int            nrows_per_expert,
+                                                     const int            num_experts,
+                                                     const int            total_batches,
+                                                     const int            n_ids,
+                                                     const int            n_tokens,
+                                                     const int            ne11,
+                                                     const int64_t        ids_nb0,
+                                                     const int64_t        ids_nb1,
+                                                     const int64_t        nb11,
+                                                     const int64_t        nb12,
+                                                     const int64_t        nb1,
+                                                     const int64_t        nb2,
+                                                     dpct::queue_ptr      stream) {
+    GGML_ASSERT(ncols % QK_MXFP4 == 0);
+    GGML_ASSERT((ncols / QK_MXFP4) % MMVQ_COALESCED_TILE_BLOCKS == 0);
+    const int            block_num_z = (nrows_per_expert + GGML_SYCL_MMV_Y - 1) / GGML_SYCL_MMV_Y;
+    const sycl::range<3> block_nums(1, total_batches, block_num_z);
+    const sycl::range<3> block_dims(1, GGML_SYCL_MMV_Y, WARP_SIZE);
+
+    const int64_t total_rows               = (int64_t) nrows_per_expert * num_experts;
+    const int64_t total_qs_size            = (ncols / 2) * total_rows;
+    const int64_t total_qs_size_per_expert = (ncols / 2) * nrows_per_expert;
+
+    stream->submit([&](sycl::handler & cgh) {
+        cgh.parallel_for(sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                             mul_mat_vec_mxfp4_q8_1_coalesced_id_kernel(
                                  (const uint8_t *) vx, (const uint8_t * const *) expert_ptrs, vy, dst, ids, ncols,
                                  ncols_y, nrows_per_expert, n_ids, n_tokens, ne11, total_qs_size,
                                  total_qs_size_per_expert, ids_nb0, ids_nb1, nb11, nb12, nb1, nb2, item_ct1);
@@ -3420,6 +3585,8 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
                         src0->name ? src0->name : "?");
         return false;
     }
+    // MXFP4 MoE supports SoA/Coalesced layouts via unified cache staging + device ptr tables.
+    // Do not force AoS just because weights are host-backed.
     const bool use_ptr_table = host_weights;
 
     // XMX tiled layout is handled by XMX paths, not MMVQ
@@ -3688,13 +3855,14 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
             {
                 // Check if weights are in SoA layout (CPU reorder sets this during upload)
                 auto *     extra          = (ggml_tensor_extra_gpu *) src0->extra;
-                const bool x_is_soa       = (layout == GGML_LAYOUT_SOA || layout == GGML_LAYOUT_COALESCED);
-                const bool x_is_reordered = x_is_soa;
+                const bool x_is_soa       = (layout == GGML_LAYOUT_SOA);
+                const bool x_is_coalesced = (layout == GGML_LAYOUT_COALESCED);
+                const bool x_is_reordered = x_is_soa || x_is_coalesced;
 
-                GGML_SYCL_DEBUG("[MMVQ-MXFP4] X: is_soa=%d is_reordered=%d extra=%p tensor=%s\n", x_is_soa,
-                                x_is_reordered, extra, src0->name ? src0->name : "null");
+                GGML_SYCL_DEBUG("[MMVQ-MXFP4] X: is_soa=%d is_coalesced=%d is_reordered=%d extra=%p tensor=%s\n",
+                                x_is_soa, x_is_coalesced, x_is_reordered, extra, src0->name ? src0->name : "null");
 
-                if (x_is_soa) {
+                if (x_is_soa || x_is_coalesced) {
                     // SoA layout - both MXFP4 weights and Q8_1 input must be in SoA format
                     // Verify: is_soa should imply is_reordered
                     GGML_ASSERT(x_is_reordered && "X is_soa but not is_reordered - flag inconsistency");
@@ -3740,18 +3908,34 @@ bool ggml_sycl_mul_mat_id_vec_q(ggml_backend_sycl_context & ctx,
                                 (float) y_ds_sample[1][0], (float) y_ds_sample[1][1]);
                     }
 
-                    GGML_SYCL_DEBUG("[MMVQ-MXFP4-SoA] X=SoA Y=SoA ne00=%lld ne10=%lld ne01=%lld ne02=%lld\n",
-                                    (long long) ne00, (long long) ne10, (long long) ne01, (long long) ne02);
-                    reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(src0_d, dispatch_ptrs, q8_1_buffer, dst_d, dispatch_ids,
-                                                           ne00,     // ncols (MXFP4)
-                                                           ne10,     // ncols_y (Q8_1 row size for SoA ds offset)
-                                                           ne01,     // nrows_per_expert
-                                                           ne02,     // num_experts
-                                                           total_batches, n_ids, num_tokens, ne11, ids_nb0,
-                                                           ids_nb1,  // ids strides
-                                                           q8_nb11, q8_nb12,  // Q8_1 strides
-                                                           nb1, nb2,          // dst strides
-                                                           stream);
+                    if (x_is_coalesced) {
+                        GGML_SYCL_DEBUG("[MMVQ-MXFP4-Coalesced] X=Coalesced Y=SoA ne00=%lld ne10=%lld ne01=%lld ne02=%lld\n",
+                                        (long long) ne00, (long long) ne10, (long long) ne01, (long long) ne02);
+                        coalesced_mul_mat_vec_mxfp4_q8_1_id_sycl(src0_d, dispatch_ptrs, q8_1_buffer, dst_d,
+                                                                 dispatch_ids,
+                                                                 ne00,     // ncols (MXFP4)
+                                                                 ne10,     // ncols_y (Q8_1 row size for SoA ds offset)
+                                                                 ne01,     // nrows_per_expert
+                                                                 ne02,     // num_experts
+                                                                 total_batches, n_ids, num_tokens, ne11, ids_nb0,
+                                                                 ids_nb1,  // ids strides
+                                                                 q8_nb11, q8_nb12,  // Q8_1 strides
+                                                                 nb1, nb2,          // dst strides
+                                                                 stream);
+                    } else {
+                        GGML_SYCL_DEBUG("[MMVQ-MXFP4-SoA] X=SoA Y=SoA ne00=%lld ne10=%lld ne01=%lld ne02=%lld\n",
+                                        (long long) ne00, (long long) ne10, (long long) ne01, (long long) ne02);
+                        reorder_mul_mat_vec_mxfp4_q8_1_id_sycl(src0_d, dispatch_ptrs, q8_1_buffer, dst_d, dispatch_ids,
+                                                               ne00,     // ncols (MXFP4)
+                                                               ne10,     // ncols_y (Q8_1 row size for SoA ds offset)
+                                                               ne01,     // nrows_per_expert
+                                                               ne02,     // num_experts
+                                                               total_batches, n_ids, num_tokens, ne11, ids_nb0,
+                                                               ids_nb1,  // ids strides
+                                                               q8_nb11, q8_nb12,  // Q8_1 strides
+                                                               nb1, nb2,          // dst strides
+                                                               stream);
+                    }
                 } else {
                     // Original AoS layout
                     mul_mat_vec_mxfp4_q8_1_id_sycl(src0_d, dispatch_ptrs, q8_1_buffer, dst_d, dispatch_ids,
