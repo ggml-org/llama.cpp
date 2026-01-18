@@ -222,8 +222,17 @@ struct llm_build_glm4 : public llm_graph_context {
     llm_build_glm4(const llama_model & model, const llm_graph_params & params);
 };
 
+template <bool is_mtp>
 struct llm_build_glm4_moe : public llm_graph_context {
     llm_build_glm4_moe(const llama_model & model, const llm_graph_params & params);
+    ggml_tensor * build_layer(const llama_model & model,
+                              llm_graph_input_attn_kv * inp_attn,
+                              ggml_tensor * inpL,
+                              ggml_tensor * inp_pos,
+                              ggml_tensor * inp_out_ids,
+                              int sections[4],
+                              bool is_output_layer,
+                              int il);
 };
 
 struct llm_build_gpt2 : public llm_graph_context {

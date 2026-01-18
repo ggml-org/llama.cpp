@@ -77,6 +77,8 @@ struct llama_context {
     float * get_embeddings();
     float * get_embeddings_ith(int32_t i);
     float * get_embeddings_seq(llama_seq_id seq_id);
+    
+    int32_t cpy_mtp_state(llama_context & ctx_mtp);
 
     llama_token * get_sampled_tokens() const;
     llama_token   get_sampled_token_ith(int32_t idx);
@@ -348,6 +350,8 @@ private:
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
+
+    bool is_mtp = false;
 
     bool has_evaluated_once = false;
 
