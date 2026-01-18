@@ -507,21 +507,51 @@ void server_models::load(const std::string & name) {
         FILE * stdout_file = subprocess_stdout(child_proc.get()); // combined stdout/stderr
 
         std::thread log_thread([&]() {
-            // read stdout/stderr and forward to main server log
-            // also handle status report from child process
-            bool state_received = false; // true if child state received
-            if (stdout_file) {
-                char buffer[4096];
-                while (fgets(buffer, sizeof(buffer), stdout_file) != nullptr) {
-                    LOG("[%5d] %s", port, buffer);
-                    if (!state_received && std::strstr(buffer, CMD_CHILD_TO_ROUTER_READY) != nullptr) {
-                        // child process is ready
-                        this->update_status(name, SERVER_MODEL_STATUS_LOADED, 0);
-                        state_received = true;
+            bool state_received = false;
+
+            if (!stdout_file) {
+                SRV_ERR("failed to get stdout/stderr of child process for name=%s\n", name.c_str());
+                return;
+            }
+
+            char buffer[4096];
+            const int fd = fileno(stdout_file);
+
+            while (true) {
+                fd_set read_fds;
+                FD_ZERO(&read_fds);
+                FD_SET(fd, &read_fds);
+
+                struct timeval timeout;
+                timeout.tv_sec = 1;
+                timeout.tv_usec = 0;
+
+                const int ready = select(fd + 1, &read_fds, nullptr, nullptr, &timeout);
+
+                if (ready > 0 && FD_ISSET(fd, &read_fds)) {
+                    if (fgets(buffer, sizeof(buffer), stdout_file)) {
+                        LOG("[%5d] %s", port, buffer);
+
+                        if (!state_received &&
+                            std::strstr(buffer, CMD_CHILD_TO_ROUTER_READY) != nullptr) {
+                            this->update_status(name, SERVER_MODEL_STATUS_LOADED, 0);
+                            state_received = true;
+                        }
+                    } else {
+                        LOG("[%5d] EOF on child stdout, exiting log thread\n", port);
+                        break;
+                    }
+                } else if (ready == 0) {
+                    if (!subprocess_alive(child_proc)) {
+                        LOG("[%5d] Child process exited, stopping log thread\n", port);
+                        break;
+                    }
+                } else {
+                    if (errno != EINTR) {
+                        SRV_ERR("[%5d] select() failed: %s\n", port, strerror(errno));
+                        break;
                     }
                 }
-            } else {
-                SRV_ERR("failed to get stdout/stderr of child process for name=%s\n", name.c_str());
             }
         });
 
