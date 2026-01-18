@@ -191,6 +191,42 @@ static void test_conditionals(testing & t) {
         json::object(),
         "yes"
     );
+
+    test_template(t, "is undefined falsy",
+        "{{ 'yes' if not y else 'no' }}",
+        json::object(),
+        "yes"
+    );
+
+    test_template(t, "is undefined attribute falsy",
+        "{{ 'yes' if not y.x else 'no' }}",
+        {{"y", true}},
+        "yes"
+    );
+
+    test_template(t, "is undefined key falsy",
+        "{{ 'yes' if not y['x'] else 'no' }}",
+        {{"y", {{}}}},
+        "yes"
+    );
+
+    test_template(t, "is empty array falsy",
+        "{{ 'yes' if not y else 'no' }}",
+        {{"y", json::array()}},
+        "yes"
+    );
+
+    test_template(t, "is empty object falsy",
+        "{{ 'yes' if not y else 'no' }}",
+        {{"y", json::object()}},
+        "yes"
+    );
+
+    test_template(t, "is empty string falsy",
+        "{{ 'yes' if not y else 'no' }}",
+        {{"y", ""}},
+        "yes"
+    );
 }
 
 static void test_loops(testing & t) {
