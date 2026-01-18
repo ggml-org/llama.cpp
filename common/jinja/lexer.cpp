@@ -259,11 +259,6 @@ lexer_result lexer::tokenize(const std::string & source) {
 
                     // Check for numbers following the unary operator
                     std::string num = consume_while(is_integer);
-                    if (pos < src.size() && src[pos] == '.' && pos + 1 < src.size() && is_integer(src[pos + 1])) {
-                        ++pos; // Consume '.'
-                        std::string frac = consume_while(is_integer);
-                        num += "." + frac;
-                    }
                     std::string value = std::string(1, ch) + num;
                     token::type t = num.empty() ? token::unary_operator : token::numeric_literal;
                     // JJ_DEBUG("consumed unary operator or numeric literal: '%s'", value.c_str());
