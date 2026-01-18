@@ -8,6 +8,7 @@
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
 #include "llama-memory-hybrid.h"
+#include "llama-memory-hybrid-iswa.h"
 #include "llama-memory-recurrent.h"
 
 #include "ggml-cpp.h"
@@ -2280,6 +2281,13 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     case  8192: type = LLM_TYPE_1_2B; break;
                     case 10752: type = LLM_TYPE_2_6B; break;
                     default:    type = LLM_TYPE_UNKNOWN;
+                }
+
+                if (const auto is_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false); is_swa) {
+                    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+                    for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                        hparams.swa_layers[il] = !hparams.recurrent_layer_arr[il];
+                    }
                 }
             } break;
         case LLM_ARCH_LFM2MOE:
@@ -6591,7 +6599,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     }
 
                     // for LFM2-ColBert-350M
-                    dense_2_out_layers = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "weight"), {n_embd, hparams.get_n_embd_out()}, TENSOR_NOT_REQUIRED);
+                    dense_2_out_layers   = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "weight"), {n_embd, hparams.get_n_embd_out()}, TENSOR_NOT_REQUIRED);
+                    dense_2_out_layers_b = create_tensor(tn(LLM_TENSOR_DENSE_2_OUT, "bias"),   {hparams.get_n_embd_out()}, TENSOR_NOT_REQUIRED);
                 } break;
             case LLM_ARCH_SMALLTHINKER:
                 {
@@ -7523,23 +7532,44 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         };
                     }
 
-                    res = new llama_memory_hybrid(
-                        /* model             */ *this,
-                        /* attn_type_k       */ params.type_k,
-                        /* attn_type_v       */ params.type_v,
-                        /* attn_v_trans      */ !cparams.flash_attn,
-                        /* attn_kv_size      */ cparams.n_ctx,
-                        /* attn_n_pad        */ 1,
-                        /* attn_n_swa        */ hparams.n_swa,
-                        /* attn_swa_type     */ hparams.swa_type,
-                        /* recurrent_type_k  */ GGML_TYPE_F32,
-                        /* recurrent_type_v  */ GGML_TYPE_F32,
-                        /* recurrent_kv_size */ std::max((uint32_t) 1, cparams.n_seq_max),
-                        /* n_seq_max         */ cparams.n_seq_max,
-                        /* offload           */ cparams.offload_kqv,
-                        /* unified           */ cparams.kv_unified,
-                        /* filter_attn       */ std::move(filter_attn),
-                        /* filter_recr       */ std::move(filter_recr));
+                    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                        // Use hybrid-iswa for hybrid models with SWA
+                        res = new llama_memory_hybrid_iswa(
+                            /* model             */ *this,
+                            /* attn_type_k       */ params.type_k,
+                            /* attn_type_v       */ params.type_v,
+                            /* attn_v_trans      */ !cparams.flash_attn,
+                            /* attn_swa_full     */ params.swa_full,
+                            /* attn_kv_size      */ cparams.n_ctx,
+                            /* attn_n_ubatch     */ cparams.n_ubatch,
+                            /* attn_n_pad        */ 1,
+                            /* recurrent_type_r  */ GGML_TYPE_F32,
+                            /* recurrent_type_s  */ GGML_TYPE_F32,
+                            /* recurrent_rs_size */ std::max((uint32_t) 1, cparams.n_seq_max),
+                            /* n_seq_max         */ cparams.n_seq_max,
+                            /* offload           */ cparams.offload_kqv,
+                            /* unified           */ cparams.kv_unified,
+                            /* filter_attn       */ std::move(filter_attn),
+                            /* filter_recr       */ std::move(filter_recr));
+                    } else {
+                        res = new llama_memory_hybrid(
+                            /* model             */ *this,
+                            /* attn_type_k       */ params.type_k,
+                            /* attn_type_v       */ params.type_v,
+                            /* attn_v_trans      */ !cparams.flash_attn,
+                            /* attn_kv_size      */ cparams.n_ctx,
+                            /* attn_n_pad        */ 1,
+                            /* attn_n_swa        */ hparams.n_swa,
+                            /* attn_swa_type     */ hparams.swa_type,
+                            /* recurrent_type_k  */ GGML_TYPE_F32,
+                            /* recurrent_type_v  */ GGML_TYPE_F32,
+                            /* recurrent_kv_size */ std::max((uint32_t) 1, cparams.n_seq_max),
+                            /* n_seq_max         */ cparams.n_seq_max,
+                            /* offload           */ cparams.offload_kqv,
+                            /* unified           */ cparams.kv_unified,
+                            /* filter_attn       */ std::move(filter_attn),
+                            /* filter_recr       */ std::move(filter_recr));
+                    }
                 } else {
                     llama_memory_i::layer_reuse_cb reuse = nullptr;
 
@@ -8018,7 +8048,11 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
         case LLM_ARCH_LFM2:
         case LLM_ARCH_LFM2MOE:
             {
-                llm = std::make_unique<llm_build_lfm2>(*this, params);
+                if (hparams.swa_type == LLAMA_SWA_TYPE_STANDARD) {
+                    llm = std::make_unique<llm_build_lfm2<true>>(*this, params);
+                } else {
+                    llm = std::make_unique<llm_build_lfm2<false>>(*this, params);
+                }
             } break;
         case LLM_ARCH_SMALLTHINKER:
             {
@@ -8074,7 +8108,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     // there will be two additional dense projection layers
     // dense linear projections are applied after pooling
     // TODO: move reranking logic here and generalize
-    llm->build_dense_out(dense_2_out_layers, dense_3_out_layers);
+    llm->build_dense_out(dense_2_out_layers, dense_2_out_layers_b, dense_3_out_layers);
 
     llm->res->set_outputs();
 
