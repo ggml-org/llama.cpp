@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <string_view>
 #include <functional>
@@ -111,6 +112,8 @@ class common_peg_ast_arena {
 
     void visit(common_peg_ast_id id, const common_peg_ast_visitor & visitor) const;
     void visit(const common_peg_parse_result & result, const common_peg_ast_visitor & visitor) const;
+
+    std::string dump();
 };
 
 struct common_peg_parse_result {
@@ -139,6 +142,7 @@ struct common_peg_parse_result {
 struct common_peg_parse_context {
     std::string input;
     bool is_partial;
+    bool debug = false;  // Enable debug output for parser tracing
     common_peg_ast_arena ast;
 
     int parse_depth;
@@ -299,6 +303,8 @@ class common_peg_arena {
     friend class common_peg_parser_builder;
 
   private:
+    std::string dump_impl(common_peg_parser_id id, std::unordered_set<common_peg_parser_id> & visited) const;
+
     common_peg_parser_id add_parser(common_peg_parser_variant parser);
     void add_rule(const std::string & name, common_peg_parser_id id);
 
