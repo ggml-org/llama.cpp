@@ -1,0 +1,261 @@
+name: WebUI Auto-Build
+
+on:
+    pull_request:
+        types: [opened, synchronize, reopened]
+        paths:
+            - ".github/workflows/webui-auto-build.yml"
+            - "tools/server/webui/**"
+            - "!tools/server/webui/README.md"
+            - "!tools/server/public/index.html.gz"
+
+    push:
+        branches:
+            - master
+        paths:
+            - ".github/workflows/webui-auto-build.yml"
+            - "tools/server/webui/**"
+            - "!tools/server/webui/README.md"
+            - "!tools/server/public/index.html.gz"
+
+    workflow_dispatch:
+        inputs:
+            pr_number:
+                description: "PR number to rebuild (leave empty for all open PRs)"
+                required: false
+                type: string
+
+permissions:
+    contents: write
+    pull-requests: write
+
+concurrency:
+    group: webui-auto-build-${{ github.event.pull_request.number || github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    identify-prs:
+        name: Identify PRs to Rebuild
+        runs-on: ubuntu-latest
+        outputs:
+            pr_numbers: ${{ steps.get-prs.outputs.pr_numbers }}
+        steps:
+            - name: Get PR numbers
+              id: get-prs
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      let prNumbers = [];
+
+                      // If triggered by a PR event, only rebuild that PR
+                      if (context.eventName === 'pull_request') {
+                        prNumbers = [context.payload.pull_request.number];
+                      }
+                      // If manually triggered with a specific PR number
+                      else if (context.eventName === 'workflow_dispatch' && context.payload.inputs.pr_number) {
+                        prNumbers = [parseInt(context.payload.inputs.pr_number)];
+                      }
+                      // If triggered by master push or manual without PR number, rebuild all open PRs
+                      else {
+                        const { data: pullRequests } = await github.rest.pulls.list({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          state: 'open',
+                          per_page: 100
+                        });
+                        
+                        // Filter PRs that have webui changes
+                        for (const pr of pullRequests) {
+                          const { data: files } = await github.rest.pulls.listFiles({
+                            owner: context.repo.owner,
+                            repo: context.repo.repo,
+                            pull_number: pr.number
+                          });
+                          
+                          const hasWebuiChanges = files.some(file => 
+                            file.filename.startsWith('tools/server/webui/') && 
+                            !file.filename.endsWith('README.md') &&
+                            file.filename !== 'tools/server/public/index.html.gz'
+                          );
+                          
+                          if (hasWebuiChanges) {
+                            prNumbers.push(pr.number);
+                          }
+                        }
+                      }
+
+                      console.log(`PRs to rebuild: ${prNumbers.join(', ')}`);
+                      core.setOutput('pr_numbers', JSON.stringify(prNumbers));
+
+    rebuild-webui:
+        name: Rebuild WebUI for PR #${{ matrix.pr_number }}
+        needs: identify-prs
+        if: needs.identify-prs.outputs.pr_numbers != '[]'
+        runs-on: ubuntu-latest
+        strategy:
+            matrix:
+                pr_number: ${{ fromJson(needs.identify-prs.outputs.pr_numbers) }}
+            fail-fast: false
+            max-parallel: 3
+
+        steps:
+            - name: Get PR details
+              id: pr-details
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      const { data: pr } = await github.rest.pulls.get({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        pull_number: ${{ matrix.pr_number }}
+                      });
+
+                      core.setOutput('head_ref', pr.head.ref);
+                      core.setOutput('head_sha', pr.head.sha);
+                      core.setOutput('head_repo', pr.head.repo.full_name);
+                      core.setOutput('base_ref', pr.base.ref);
+                      core.setOutput('is_fork', pr.head.repo.full_name !== context.repo.owner + '/' + context.repo.repo);
+
+            - name: Checkout PR branch
+              uses: actions/checkout@v4
+              with:
+                  repository: ${{ steps.pr-details.outputs.head_repo }}
+                  ref: ${{ steps.pr-details.outputs.head_ref }}
+                  token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+                  fetch-depth: 0
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+                  cache: "npm"
+                  cache-dependency-path: "tools/server/webui/package-lock.json"
+
+            - name: Install dependencies
+              run: npm ci
+              working-directory: tools/server/webui
+
+            - name: Build WebUI
+              run: npm run build
+              working-directory: tools/server/webui
+
+            - name: Check for changes
+              id: check-changes
+              run: |
+                  # Decompress the newly built file and compute its hash
+                  NEW_HASH=$(gunzip -c tools/server/public/index.html.gz | sha256sum | cut -d' ' -f1)
+                  echo "New build hash: $NEW_HASH"
+
+                  # Get the original file from git, decompress it, and compute its hash
+                  if git show HEAD:tools/server/public/index.html.gz 2>/dev/null | gunzip -c | sha256sum > /tmp/old-hash.txt 2>&1; then
+                    OLD_HASH=$(cut -d' ' -f1 /tmp/old-hash.txt)
+                    echo "Original hash: $OLD_HASH"
+                    
+                    # Compare hashes
+                    if [ "$NEW_HASH" = "$OLD_HASH" ]; then
+                      echo "has_changes=false" >> $GITHUB_OUTPUT
+                      echo "✓ No changes detected in static output (HTML content is identical)"
+                    else
+                      echo "has_changes=true" >> $GITHUB_OUTPUT
+                      echo "✓ Changes detected in static output"
+                    fi
+                  else
+                    # File doesn't exist in repo yet (new file)
+                    echo "has_changes=true" >> $GITHUB_OUTPUT
+                    echo "✓ New static output file detected"
+                  fi
+
+                  # Cleanup
+                  rm -f /tmp/old-hash.txt
+
+            - name: Commit and push changes
+              if: steps.check-changes.outputs.has_changes == 'true'
+              id: commit-changes
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "github-actions[bot]@users.noreply.github.com"
+
+                  git add tools/server/public/index.html.gz
+                  git commit -m "chore(webui): auto-rebuild static output [skip ci]"
+                  
+                  # Try to push, capture exit code
+                  if git push origin ${{ steps.pr-details.outputs.head_ref }}; then
+                    echo "push_success=true" >> $GITHUB_OUTPUT
+                  else
+                    echo "push_success=false" >> $GITHUB_OUTPUT
+                    echo "::warning::Failed to push changes. This is expected for fork PRs without PAT_TOKEN configured."
+                  fi
+
+            - name: Add comment to PR
+              if: steps.check-changes.outputs.has_changes == 'true'
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      const { data: comments } = await github.rest.issues.listComments({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        issue_number: ${{ matrix.pr_number }}
+                      });
+
+                      const pushSuccess = '${{ steps.commit-changes.outputs.push_success }}' === 'true';
+                      const isFork = '${{ steps.pr-details.outputs.is_fork }}' === 'true';
+
+                      // Check if we already commented about auto-rebuild
+                      const botComment = comments.find(comment => 
+                        comment.user.type === 'Bot' && 
+                        comment.body.includes('🤖 WebUI static output')
+                      );
+
+                      let message;
+                      if (pushSuccess) {
+                        message = `🤖 **WebUI static output auto-rebuilt**
+
+                      The static build has been automatically updated to reflect the latest changes.
+
+                      <details>
+                      <summary>Build details</summary>
+
+                      - **Workflow run**: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+                      - **Commit**: ${{ steps.pr-details.outputs.head_sha }}
+                      - **Triggered by**: ${context.eventName === 'pull_request' ? 'PR update' : 'master branch update'}
+
+                      </details>`;
+                      } else {
+                        message = `🤖 **WebUI static output needs rebuild**
+
+                      The static build was generated successfully, but could not be automatically committed${isFork ? ' (fork PR requires PAT_TOKEN)' : ''}.
+
+                      **Action required:** Please run \`npm run build\` locally in \`tools/server/webui/\` and commit the updated \`tools/server/public/index.html.gz\`.
+
+                      <details>
+                      <summary>Build details</summary>
+
+                      - **Workflow run**: [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+                      - **Status**: Build succeeded, push failed
+                      ${isFork ? '- **Note**: Fork PRs require a PAT_TOKEN secret to auto-commit' : ''}
+
+                      </details>`;
+                      }
+
+                      if (botComment) {
+                        // Update existing comment
+                        await github.rest.issues.updateComment({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          comment_id: botComment.id,
+                          body: message
+                        });
+                      } else {
+                        // Create new comment
+                        await github.rest.issues.createComment({
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          issue_number: ${{ matrix.pr_number }},
+                          body: message
+                        });
+                      }
+
+            - name: Report no changes
+              if: steps.check-changes.outputs.has_changes == 'false'
+              run: |
+                  echo "✓ Static output is already up to date"
