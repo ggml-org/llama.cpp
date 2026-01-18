@@ -69,13 +69,6 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 		type: 'boolean',
 		canSync: true
 	},
-	{ key: 'showToolCalls', serverKey: 'showToolCalls', type: 'boolean', canSync: true },
-	{
-		key: 'disableReasoningFormat',
-		serverKey: 'disableReasoningFormat',
-		type: 'boolean',
-		canSync: true
-	},
 	{ key: 'keepStatsVisible', serverKey: 'keepStatsVisible', type: 'boolean', canSync: true },
 	{ key: 'showMessageStats', serverKey: 'showMessageStats', type: 'boolean', canSync: true },
 	{
@@ -107,9 +100,13 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = [
 ];
 
 export class ParameterSyncService {
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Extraction
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Extraction
+	 *
+	 *
+	 */
 
 	/**
 	 * Round floating-point numbers to avoid JavaScript precision issues
@@ -160,9 +157,13 @@ export class ParameterSyncService {
 		return extracted;
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Merging
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Merging
+	 *
+	 *
+	 */
 
 	/**
 	 * Merge server defaults with current user settings
@@ -185,9 +186,13 @@ export class ParameterSyncService {
 		return merged;
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Info
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Info
+	 *
+	 *
+	 */
 
 	/**
 	 * Get parameter information including source and values
@@ -245,9 +250,13 @@ export class ParameterSyncService {
 		}
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Diff
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Diff
+	 *
+	 *
+	 */
 
 	/**
 	 * Create a diff between current settings and server defaults

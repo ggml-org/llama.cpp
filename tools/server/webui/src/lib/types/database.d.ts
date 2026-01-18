@@ -1,11 +1,17 @@
 import type { ChatMessageTimings, ChatRole, ChatMessageType } from '$lib/types/chat';
 import { AttachmentType } from '$lib/enums';
 
+export interface McpServerOverride {
+	serverId: string;
+	enabled: boolean;
+}
+
 export interface DatabaseConversation {
 	currNode: string | null;
 	id: string;
 	lastModified: number;
 	name: string;
+	mcpServerOverrides?: McpServerOverride[];
 }
 
 export interface DatabaseMessageExtraAudioFile {
@@ -35,9 +41,9 @@ export interface DatabaseMessageExtraPdfFile {
 	type: AttachmentType.PDF;
 	base64Data: string;
 	name: string;
-	content: string; // Text content extracted from PDF
-	images?: string[]; // Optional: PDF pages as base64 images
-	processedAsImages: boolean; // Whether PDF was processed as images
+	content: string;
+	images?: string[];
+	processedAsImages: boolean;
 }
 
 export interface DatabaseMessageExtraTextFile {
@@ -69,17 +75,9 @@ export interface DatabaseMessage {
 	model?: string;
 }
 
-/**
- * Represents a single conversation with its associated messages,
- * typically used for import/export operations.
- */
 export type ExportedConversation = {
 	conv: DatabaseConversation;
 	messages: DatabaseMessage[];
 };
 
-/**
- * Type representing one or more exported conversations.
- * Can be a single conversation object or an array of them.
- */
 export type ExportedConversations = ExportedConversation | ExportedConversation[];

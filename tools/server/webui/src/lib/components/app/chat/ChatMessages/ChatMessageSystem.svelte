@@ -3,9 +3,10 @@
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { MarkdownContent } from '$lib/components/app';
-	import { INPUT_CLASSES } from '$lib/constants/input-classes';
+	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import { config } from '$lib/stores/settings.svelte';
 	import ChatMessageActions from './ChatMessageActions.svelte';
+	import { MessageRole } from '$lib/enums';
 
 	interface Props {
 		class?: string;
@@ -116,7 +117,7 @@
 
 				<Button class="h-8 px-3" onclick={onSaveEdit} disabled={!editedContent.trim()} size="sm">
 					<Check class="mr-1 h-3 w-3" />
-					Send
+					Save
 				</Button>
 			</div>
 		</div>
@@ -131,12 +132,12 @@
 					type="button"
 				>
 					<Card
-						class="rounded-[1.125rem] !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5 data-[multiline]:py-2.5"
+						class="overflow-y-auto rounded-[1.125rem] !border-2 !border-dashed !border-border/50 bg-muted px-3.75 py-1.5 data-[multiline]:py-2.5"
 						data-multiline={isMultiline ? '' : undefined}
-						style="border: 2px dashed hsl(var(--border));"
+						style="border: 2px dashed hsl(var(--border)); max-height: calc(100dvh - var(--chat-form-area-height));"
 					>
 						<div
-							class="relative overflow-hidden transition-all duration-300 {isExpanded
+							class="relative transition-all duration-300 {isExpanded
 								? 'cursor-text select-text'
 								: 'select-none'}"
 							style={!isExpanded && showExpandButton
@@ -145,7 +146,10 @@
 						>
 							{#if currentConfig.renderUserContentAsMarkdown}
 								<div bind:this={messageElement} class="text-md {isExpanded ? 'cursor-text' : ''}">
-									<MarkdownContent class="markdown-system-content" content={message.content} />
+									<MarkdownContent
+										class="markdown-system-content overflow-auto"
+										content={message.content}
+									/>
 								</div>
 							{:else}
 								<span
@@ -208,7 +212,7 @@
 					{onShowDeleteDialogChange}
 					{siblingInfo}
 					{showDeleteDialog}
-					role="user"
+					role={MessageRole.USER}
 				/>
 			</div>
 		{/if}

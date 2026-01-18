@@ -18,9 +18,13 @@ import { getJsonHeaders } from '$lib/utils';
  * - modelsStore: Primary consumer for model state management
  */
 export class ModelsService {
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Listing
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Listing
+	 *
+	 *
+	 */
 
 	/**
 	 * Fetch list of models from OpenAI-compatible endpoint
@@ -54,9 +58,13 @@ export class ModelsService {
 		return response.json() as Promise<ApiRouterModelsListResponse>;
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Load/Unload
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Load/Unload
+	 *
+	 *
+	 */
 
 	/**
 	 * Load a model (ROUTER mode)
@@ -104,9 +112,13 @@ export class ModelsService {
 		return response.json() as Promise<ApiRouterModelsUnloadResponse>;
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Status
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Status
+	 *
+	 *
+	 */
 
 	/**
 	 * Check if a model is loaded based on its metadata

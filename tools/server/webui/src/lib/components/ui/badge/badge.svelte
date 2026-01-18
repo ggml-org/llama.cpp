@@ -42,7 +42,7 @@
 	bind:this={ref}
 	data-slot="badge"
 	{href}
-	class={cn(badgeVariants({ variant }), className)}
+	class={cn(badgeVariants({ variant }), className, 'backdrop-blur-sm')}
 	{...restProps}
 >
 	{@render children?.()}

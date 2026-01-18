@@ -32,17 +32,15 @@ export type {
 	ApiRouterModelsUnloadResponse
 } from './api';
 
-// Chat types
+// Chat types - interfaces only (enums are in $lib/enums)
 export type {
-	ChatMessageType,
-	ChatRole,
 	ChatUploadedFile,
 	ChatAttachmentDisplayItem,
 	ChatAttachmentPreviewItem,
 	ChatMessageSiblingInfo,
 	ChatMessagePromptProgress,
 	ChatMessageTimings
-} from './chat';
+} from './chat.d';
 
 // Database types
 export type {
@@ -68,3 +66,31 @@ export type {
 	SettingsChatServiceOptions,
 	SettingsConfigType
 } from './settings';
+
+// Common types
+export type { KeyValuePair } from './common';
+
+// MCP types
+export type {
+	ClientCapabilities,
+	ServerCapabilities,
+	Implementation,
+	MCPConnectionLog,
+	MCPServerInfo,
+	MCPCapabilitiesInfo,
+	MCPToolInfo,
+	MCPConnectionDetails,
+	MCPPhaseCallback,
+	MCPConnection,
+	HealthCheckState,
+	HealthCheckParams,
+	MCPServerConfig,
+	MCPClientConfig,
+	MCPServerSettingsEntry,
+	McpServerUsageStats,
+	MCPToolCall,
+	OpenAIToolDefinition,
+	ServerStatus,
+	ToolCallParams,
+	ToolExecutionResult
+} from './mcp';

@@ -1,6 +1,8 @@
 export { AttachmentType } from './attachment';
 
-export { ChatMessageStatsView } from './chat';
+export { AgenticSectionType } from './agentic';
+
+export { ChatMessageStatsView, MessageRole, MessageType } from './chat';
 
 export {
 	FileTypeCategory,
@@ -17,6 +19,8 @@ export {
 	MimeTypeImage,
 	MimeTypeText
 } from './files';
+
+export { MCPConnectionPhase, MCPLogLevel, MCPTransportType, HealthCheckStatus } from './mcp';
 
 export { ModelModality } from './model';
 

@@ -1,5 +1,7 @@
 import type { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-import type { ChatMessageTimings } from './chat';
+import type { ChatMessagePromptProgress, ChatMessageTimings } from './chat';
+import type { OpenAIToolDefinition } from './mcp';
+import type { DatabaseMessageExtra } from './database';
 
 export type SettingsConfigValue = string | number | boolean;
 
@@ -18,8 +20,9 @@ export interface SettingsChatServiceOptions {
 	model?: string;
 	// System message to inject
 	systemMessage?: string;
-	// Disable reasoning format (use 'none' instead of 'auto')
-	disableReasoningFormat?: boolean;
+	// Disable reasoning parsing (use 'none' instead of 'auto')
+	disableReasoningParsing?: boolean;
+	tools?: OpenAIToolDefinition[];
 	// Generation parameters
 	temperature?: number;
 	max_tokens?: number;
@@ -51,6 +54,7 @@ export interface SettingsChatServiceOptions {
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
 	onToolCallChunk?: (chunk: string) => void;
+	onAttachments?: (extras: DatabaseMessageExtra[]) => void;
 	onModel?: (model: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
 	onComplete?: (

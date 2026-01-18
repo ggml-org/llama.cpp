@@ -37,7 +37,7 @@
 	--sidebar-accent-foreground: oklch(0.205 0 0);
 	--sidebar-border: oklch(0.922 0 0);
 	--sidebar-ring: oklch(0.708 0 0);
-	--code-background: oklch(0.975 0 0);
+	--code-background: oklch(0.985 0 0);
 	--code-foreground: oklch(0.145 0 0);
 	--layer-popover: 1000000;
 }
@@ -114,14 +114,19 @@
 	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
 	--color-sidebar-border: var(--sidebar-border);
 	--color-sidebar-ring: var(--sidebar-ring);
+
+	--chat-form-area-height: 24rem;
 }
 
 @layer base {
 	* {
 		@apply border-border outline-ring/50;
 	}
+
 	body {
 		@apply bg-background text-foreground;
+		scrollbar-width: thin;
+		scrollbar-gutter: stable;
 	}
 }
 

@@ -1,5 +1,7 @@
 import { getJsonHeaders } from '$lib/utils';
+import { AGENTIC_REGEX } from '$lib/constants/agentic';
 import { AttachmentType } from '$lib/enums';
+import type { ApiChatMessageContentPart } from '$lib/types/api';
 
 /**
  * ChatService - Low-level API communication layer for Chat Completions
@@ -34,9 +36,41 @@ import { AttachmentType } from '$lib/enums';
  * - Request lifecycle management (abort via AbortSignal)
  */
 export class ChatService {
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Messaging
-	// ─────────────────────────────────────────────────────────────────────────────
+	private static stripReasoningContent(
+		content: ApiChatMessageData['content'] | null | undefined
+	): ApiChatMessageData['content'] | null | undefined {
+		if (!content) {
+			return content;
+		}
+
+		if (typeof content === 'string') {
+			return content
+				.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
+				.replace(AGENTIC_REGEX.REASONING_OPEN, '');
+		}
+
+		if (!Array.isArray(content)) {
+			return content;
+		}
+
+		return content.map((part: ApiChatMessageContentPart) => {
+			if (part.type !== 'text' || !part.text) return part;
+			return {
+				...part,
+				text: part.text
+					.replace(AGENTIC_REGEX.REASONING_BLOCK, '')
+					.replace(AGENTIC_REGEX.REASONING_OPEN, '')
+			};
+		});
+	}
+
+	/**
+	 *
+	 *
+	 * Messaging
+	 *
+	 *
+	 */
 
 	/**
 	 * Sends a chat completion request to the llama.cpp server.
@@ -63,6 +97,8 @@ export class ChatService {
 			onToolCallChunk,
 			onModel,
 			onTimings,
+			// Tools for function calling
+			tools,
 			// Generation parameters
 			temperature,
 			max_tokens,
@@ -90,7 +126,7 @@ export class ChatService {
 			custom,
 			timings_per_token,
 			// Config options
-			disableReasoningFormat
+			disableReasoningParsing
 		} = options;
 
 		const normalizedMessages: ApiChatMessageData[] = messages
@@ -116,10 +152,15 @@ export class ChatService {
 		const requestBody: ApiChatCompletionRequest = {
 			messages: normalizedMessages.map((msg: ApiChatMessageData) => ({
 				role: msg.role,
-				content: msg.content
+				// Strip reasoning tags/content from the prompt to avoid polluting KV cache.
+				// TODO: investigate backend expectations for reasoning tags and add a toggle if needed.
+				content: ChatService.stripReasoningContent(msg.content),
+				tool_calls: msg.tool_calls,
+				tool_call_id: msg.tool_call_id
 			})),
 			stream,
-			return_progress: stream ? true : undefined
+			return_progress: stream ? true : undefined,
+			tools: tools && tools.length > 0 ? tools : undefined
 		};
 
 		// Include model in request if provided (required in ROUTER mode)
@@ -127,7 +168,7 @@ export class ChatService {
 			requestBody.model = options.model;
 		}
 
-		requestBody.reasoning_format = disableReasoningFormat ? 'none' : 'auto';
+		requestBody.reasoning_format = disableReasoningParsing ? 'none' : 'auto';
 
 		if (temperature !== undefined) requestBody.temperature = temperature;
 		if (max_tokens !== undefined) {
@@ -247,9 +288,13 @@ export class ChatService {
 		}
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Streaming
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Streaming
+	 *
+	 *
+	 */
 
 	/**
 	 * Handles streaming response from the chat completion API
@@ -309,6 +354,8 @@ export class ChatService {
 				return;
 			}
 
+			console.log('[ChatService] Tool call delta received:', JSON.stringify(toolCalls));
+
 			aggregatedToolCalls = ChatService.mergeToolCallDeltas(
 				aggregatedToolCalls,
 				toolCalls,
@@ -322,6 +369,8 @@ export class ChatService {
 			hasOpenToolCallBatch = true;
 
 			const serializedToolCalls = JSON.stringify(aggregatedToolCalls);
+
+			console.log('[ChatService] Aggregated tool calls:', serializedToolCalls);
 
 			if (!serializedToolCalls) {
 				return;
@@ -472,10 +521,6 @@ export class ChatService {
 			const reasoningContent = data.choices[0]?.message?.reasoning_content;
 			const toolCalls = data.choices[0]?.message?.tool_calls;
 
-			if (reasoningContent) {
-				console.log('Full reasoning content:', reasoningContent);
-			}
-
 			let serializedToolCalls: string | undefined;
 
 			if (toolCalls && toolCalls.length > 0) {
@@ -563,9 +608,13 @@ export class ChatService {
 		return result;
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Conversion
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Conversion
+	 *
+	 *
+	 */
 
 	/**
 	 * Converts a database message with attachments to API chat message format.
@@ -598,10 +647,14 @@ export class ChatService {
 			});
 		}
 
-		const imageFiles = message.extra.filter(
-			(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile =>
-				extra.type === AttachmentType.IMAGE
-		);
+		// Only include images for user messages (assistant images are for display only)
+		const imageFiles =
+			message.role === 'user'
+				? message.extra.filter(
+						(extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile =>
+							extra.type === AttachmentType.IMAGE
+					)
+				: [];
 
 		for (const image of imageFiles) {
 			contentParts.push({
@@ -677,9 +730,13 @@ export class ChatService {
 		};
 	}
 
-	// ─────────────────────────────────────────────────────────────────────────────
-	// Utilities
-	// ─────────────────────────────────────────────────────────────────────────────
+	/**
+	 *
+	 *
+	 * Utilities
+	 *
+	 *
+	 */
 
 	/**
 	 * Parses error response and creates appropriate error with context information

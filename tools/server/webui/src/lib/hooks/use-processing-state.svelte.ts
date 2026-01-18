@@ -163,7 +163,7 @@ export function useProcessingState(): UseProcessingStateReturn {
 		}
 
 		if (stateToUse.tokensPerSecond && stateToUse.tokensPerSecond > 0) {
-			details.push(`${stateToUse.tokensPerSecond.toFixed(1)} tokens/sec`);
+			details.push(`${stateToUse.tokensPerSecond.toFixed(1)} t/s`);
 		}
 
 		if (stateToUse.speculative) {

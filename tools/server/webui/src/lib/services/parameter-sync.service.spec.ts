@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ParameterSyncService } from './parameter-sync';
+import { ParameterSyncService } from './parameter-sync.service';
 
 describe('ParameterSyncService', () => {
 	describe('roundFloatingPoint', () => {

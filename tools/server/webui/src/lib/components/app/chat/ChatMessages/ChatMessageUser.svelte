@@ -4,6 +4,7 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import ChatMessageActions from './ChatMessageActions.svelte';
 	import ChatMessageEditForm from './ChatMessageEditForm.svelte';
+	import { MessageRole } from '$lib/enums';
 
 	interface Props {
 		class?: string;
@@ -99,7 +100,6 @@
 	{#if isEditing}
 		<ChatMessageEditForm
 			bind:textareaElement
-			messageId={message.id}
 			{editedContent}
 			{editedExtras}
 			{editedUploadedFiles}
@@ -123,8 +123,9 @@
 
 		{#if message.content.trim()}
 			<Card
-				class="max-w-[80%] rounded-[1.125rem] border-none bg-primary px-3.75 py-1.5 text-primary-foreground data-[multiline]:py-2.5"
+				class="max-w-[80%] overflow-y-auto rounded-[1.125rem] border-none bg-primary/5 px-3.75 py-1.5 text-foreground backdrop-blur-md data-[multiline]:py-2.5 dark:bg-primary/15"
 				data-multiline={isMultiline ? '' : undefined}
+				style="max-height: calc(100dvh - var(--chat-form-area-height)); overflow-wrap: anywhere; word-break: break-word;"
 			>
 				{#if currentConfig.renderUserContentAsMarkdown}
 					<div bind:this={messageElement} class="text-md">
@@ -155,7 +156,7 @@
 					{onShowDeleteDialogChange}
 					{siblingInfo}
 					{showDeleteDialog}
-					role="user"
+					role={MessageRole.USER}
 				/>
 			</div>
 		{/if}
