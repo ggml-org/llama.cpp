@@ -7664,6 +7664,237 @@ class DeepseekV2Model(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("VaetkiForCausalLM", "VaetkiVLForCausalLM")
+class VaetkiModel(TextModel):
+    """VAETKI MoE model with MLA attention and 4-norm layer structure"""
+    model_arch = gguf.MODEL_ARCH.VAETKI
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def set_vocab(self):
+        # VAETKI: hybrid tokenizer with SPM-style ▁ space markers + BPE rank-based merges + <0xXX> byte fallback
+        # manual token loading because VAETKI doesn't fit standard BPE or SPM vocab loading
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
+
+        tokens: list[str] = []
+        toktypes: list[int] = []
+
+        reverse_vocab = {id_: tok for tok, id_ in tokenizer.vocab.items()}
+        added_vocab = tokenizer.get_added_vocab()
+        added_tokens_decoder = tokenizer.added_tokens_decoder
+
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            else:
+                token: str = reverse_vocab[i]
+                if token in added_vocab:
+                    if not added_tokens_decoder[i].normalized:
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
+                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                else:
+                    toktypes.append(gguf.TokenType.NORMAL)
+                tokens.append(token)
+
+        self.gguf_writer.add_tokenizer_model("vaetki")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+        self.gguf_writer.add_add_space_prefix(False)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        hparams = self.hparams
+
+        # For MLA without absorption, n_head_kv = n_head (full MHA after decompression)
+        self.gguf_writer.add_head_count_kv(hparams["num_attention_heads"])
+
+        # MLA parameters (like DeepSeek2)
+        self.gguf_writer.add_q_lora_rank(hparams["q_lora_rank"])
+        self.gguf_writer.add_kv_lora_rank(hparams["kv_lora_rank"])
+
+        # For MLA without absorption, key_length/value_length are the full (MHA) dimensions
+        # key = qk_nope + qk_rope, value = v_head_dim
+        self.gguf_writer.add_key_length(hparams["qk_head_dim"])
+        self.gguf_writer.add_value_length(hparams["v_head_dim"])
+
+        # key_length_mla/value_length_mla are the MLA head dimensions (same as key/value for non-absorption)
+        self.gguf_writer.add_key_length_mla(hparams["qk_head_dim"])
+        self.gguf_writer.add_value_length_mla(hparams["v_head_dim"])
+        self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
+
+        # MoE parameters
+        self.gguf_writer.add_leading_dense_block_count(hparams.get("first_k_dense_replace", 1))
+        self.gguf_writer.add_expert_count(hparams["n_routed_experts"])
+        self.gguf_writer.add_expert_shared_count(hparams.get("n_shared_experts", 1))
+        self.gguf_writer.add_expert_feed_forward_length(hparams["moe_intermediate_size"])
+        if (routed_scale := hparams.get("routed_scaling_factor")) is not None:
+            self.gguf_writer.add_expert_weights_scale(routed_scale)
+        if hparams.get("norm_topk_prob", False):
+            self.gguf_writer.add_expert_weights_norm(True)
+
+        self.gguf_writer.add_sliding_window(hparams["sliding_window"])
+        sliding_window_pattern = []
+        for t in self.hparams["layer_types"]:
+            sliding_window_pattern.append(t == "sliding_attention")
+        self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Skip vision encoder tensors
+        if "vision_tower" in name or "vision_model" in name or "visual" in name:
+            return []
+        if name.startswith("model.vision_model.") or name.startswith("vision_model."):
+            return []
+
+        # Remove language_model prefix
+        if name.startswith("model.language_model."):
+            name = name.replace("model.language_model.", "model.")
+        elif name.startswith("language_model."):
+            name = name.replace("language_model.", "model.")
+
+        if name.endswith("q_b_proj.weight"):
+            n_head = self.hparams["num_attention_heads"]
+            qk_nope_head_dim = self.hparams["qk_nope_head_dim"]
+            qk_rope_head_dim = self.hparams["qk_rope_head_dim"]
+            qk_head_dim = qk_nope_head_dim + qk_rope_head_dim
+            data_torch = data_torch.view(n_head, qk_head_dim, -1)
+            data_torch = torch.cat([data_torch[:, qk_nope_head_dim:, :], data_torch[:, :qk_nope_head_dim, :]], dim=1)
+            data_torch = data_torch.reshape(n_head * qk_head_dim, -1)
+
+        # VAETKI WBLRMSNorm: add 1 to weights for standard RMSNorm compatibility
+        norm_weight_patterns = [
+            "input_layernorm.weight",
+            "post_attention_layernorm.weight",
+            "pre_mlp_layernorm.weight",
+            "post_mlp_layernorm.weight",
+            "q_a_layernorm.weight",
+            "kv_a_layernorm.weight",
+            "model.norm.weight",
+        ]
+        if any(pattern in name for pattern in norm_weight_patterns):
+            data_torch = data_torch + 1.0
+
+        # Handle MoE expert tensors
+        if ".mlp.experts." in name and ".shared_experts." not in name:
+            n_experts = self.hparams["n_routed_experts"]
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            # Check if all experts for this layer are collected (n_experts * 3 tensors: down/gate/up)
+            if len(self._experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+
+                # Merge experts into 3D tensors
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+                    new_name = self.map_tensor_name(merged_name)
+                    tensors.append((new_name, data_torch))
+
+                return tensors
+            else:
+                return []
+
+        return super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._experts is not None:
+            # Check for unprocessed experts
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("VaetkiVisionModel", "VaetkiVLForCausalLM")
+class VaetkiVisionModel(MmprojModel):
+    """VAETKI Vision Model (mmproj) - Rice ViT with CLS token and 2D RoPE"""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        # Remap vision config parameters to standard names
+        self.hparams_vision["num_attention_heads"] = self.hparams_vision.get("num_heads")
+        self.hparams_vision["num_hidden_layers"] = self.hparams_vision.get("depth")
+        if "embed_dim" in self.hparams_vision:
+            self.hparams_vision["hidden_size"] = self.hparams_vision.get("embed_dim")
+        if "image_size" not in self.hparams_vision:
+            self.hparams_vision["image_size"] = 560 # unused, set for compatibility
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+        hparams = self.hparams_vision
+
+        # VAETKI projector type - routes to vaetki.cpp graph builder
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.VAETKI)
+        self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("layer_norm_eps", 1e-5))
+        self.gguf_writer.add_vision_spatial_merge_size(hparams.get("spatial_merge_size", 2))
+
+        # support dynamic size
+        self.gguf_writer.add_vision_image_min_pixels(self.preprocessor_config["min_pixels"])
+        self.gguf_writer.add_vision_image_max_pixels(self.preprocessor_config["max_pixels"])
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if "class_pos_embd" in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        # Only process vision tensors
+        if not (name.startswith("model.visual.") or name.startswith("visual.")):
+            return []
+
+        # Handle merger tensors with special index mapping
+        # clip.cpp PROJECTOR_TYPE_VAETKI expects:
+        #   mm.input_norm.* -> ln_q (pre-norm)
+        #   mm.up.*         -> mlp.0 (up projection)
+        #   mm.down.*       -> mlp.2 (down projection)
+        if "merger.ln_q" in name:
+            suffix = ".weight" if name.endswith(".weight") else ".bias"
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_INP_NORM, suffix=suffix), data_torch)]
+        elif "merger.mlp.0" in name:
+            suffix = ".weight" if name.endswith(".weight") else ".bias"
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_UP, suffix=suffix), data_torch)]
+        elif "merger.mlp.2" in name:
+            suffix = ".weight" if name.endswith(".weight") else ".bias"
+            return [(self.format_tensor_name(gguf.MODEL_TENSOR.V_MM_DOWN, suffix=suffix), data_torch)]
+
+        # Handle class_embedding and class_pos_emb (keep model.visual. prefix for mapping)
+        if "class_embedding" in name or "class_pos_emb" in name:
+            return [(self.map_tensor_name(name), data_torch)]
+
+        # Strip model.visual. -> visual. for other tensors
+        if name.startswith("model.visual."):
+            name = name.replace("model.visual.", "visual.")
+
+        return [(self.map_tensor_name(name), data_torch)]
+
+
 @ModelBase.register("MiniMaxM2ForCausalLM")
 class MiniMaxM2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.MINIMAXM2

@@ -1281,6 +1281,11 @@ class TensorNameMap:
             "model.vision_tower.embeddings.cls_token", # Intern-S1
             "vision_model.class_embedding", # llama 4
             "model.vision.patch_embedding.cls_embedding", # cogvlm
+            "model.visual.class_embedding", # vaetki
+        ),
+
+        MODEL_TENSOR.V_ENC_EMBD_CLS_POS: (
+            "model.visual.class_pos_emb", # vaetki
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_PATCH: (
@@ -1466,6 +1471,7 @@ class TensorNameMap:
             "vision_tower.ln_pre", # pixtral-hf
             "vision_encoder.ln_pre", # pixtral
             "vision_model.layernorm_pre", # llama4
+            "visual.pre_layernorm", # vaetki
         ),
 
         MODEL_TENSOR.V_POST_NORM: (

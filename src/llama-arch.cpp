@@ -120,6 +120,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MIMO2,            "mimo2"           },
     { LLM_ARCH_LLAMA_EMBED,      "llama-embed"      },
     { LLM_ARCH_MAINCODER,        "maincoder"        },
+    { LLM_ARCH_VAETKI,           "vaetki"           },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -339,6 +340,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_ATTN_Q_NORM,                            "blk.%d.attn_q_norm" },
     { LLM_TENSOR_ATTN_K_NORM,                            "blk.%d.attn_k_norm" },
     { LLM_TENSOR_ATTN_GATE,                              "blk.%d.attn_gate" },
+    { LLM_TENSOR_FFN_PRE_NORM,                           "blk.%d.ffn_norm" },
     { LLM_TENSOR_FFN_POST_NORM,                          "blk.%d.post_ffw_norm" },
     { LLM_TENSOR_FFN_GATE_SHEXP,                         "blk.%d.ffn_gate_shexp" },
     { LLM_TENSOR_FFN_UP_SHEXP,                           "blk.%d.ffn_up_shexp" },
@@ -2288,6 +2290,35 @@ static std::set<llm_tensor> llm_get_tensor_names(llm_arch arch) {
                 LLM_TENSOR_FFN_GATE,
                 LLM_TENSOR_FFN_DOWN,
                 LLM_TENSOR_FFN_UP,
+            };
+        case LLM_ARCH_VAETKI:
+            return {
+                LLM_TENSOR_TOKEN_EMBD,
+                LLM_TENSOR_OUTPUT_NORM,
+                LLM_TENSOR_OUTPUT,
+                LLM_TENSOR_ATTN_NORM,
+                LLM_TENSOR_ATTN_Q_A_NORM,
+                LLM_TENSOR_ATTN_KV_A_NORM,
+                LLM_TENSOR_ATTN_Q_A,
+                LLM_TENSOR_ATTN_Q_B,
+                LLM_TENSOR_ATTN_KV_A_MQA,
+                LLM_TENSOR_ATTN_KV_B,
+                LLM_TENSOR_ATTN_K_B,
+                LLM_TENSOR_ATTN_V_B,
+                LLM_TENSOR_ATTN_OUT,
+                LLM_TENSOR_ATTN_POST_NORM,
+                LLM_TENSOR_FFN_NORM,
+                LLM_TENSOR_FFN_POST_NORM,
+                LLM_TENSOR_FFN_GATE,
+                LLM_TENSOR_FFN_UP,
+                LLM_TENSOR_FFN_DOWN,
+                LLM_TENSOR_FFN_GATE_INP,
+                LLM_TENSOR_FFN_GATE_EXPS,
+                LLM_TENSOR_FFN_DOWN_EXPS,
+                LLM_TENSOR_FFN_UP_EXPS,
+                LLM_TENSOR_FFN_GATE_SHEXP,
+                LLM_TENSOR_FFN_DOWN_SHEXP,
+                LLM_TENSOR_FFN_UP_SHEXP,
             };
         default:
             GGML_ABORT("unknown architecture for tensor mapping");
