@@ -387,6 +387,18 @@ const func_builtins & global_builtins() {
             bool res = it != builtins.end();
             return mk_val<value_bool>(res);
         }},
+        {"test_is_in", [](const func_args & args) -> value {
+            args.ensure_count(2, 2);
+            args.ensure_vals<value, value_array>();
+            const auto & needle = args.get_pos(0).get();
+            const auto & haystack = args.get_pos(1)->as_array();
+            for (auto it = haystack.cbegin(); it != haystack.cend(); it++) {
+                if (it->get() == needle) {
+                    return mk_val<value_bool>(true);
+                }
+            }
+            return mk_val<value_bool>(false);
+        }},
         {"test_is_sameas", [](const func_args & args) -> value {
             // Check if an object points to the same memory address as another object
             (void)args;

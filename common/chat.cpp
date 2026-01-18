@@ -129,6 +129,7 @@ std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const comm
         for (const auto & tc : msg_new.tool_calls) {
             err += "    - name: '" + tc.name + "', args: '" + tc.arguments + "'\n";
         }
+        err += "  Current msg text content:\n" + msg_new.content + "\n";
         throw std::runtime_error(err);
     }
 

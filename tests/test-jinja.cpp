@@ -878,6 +878,18 @@ static void test_tests(testing & t) {
         {{"x", {{"a", 1}}}},
         "yes"
     );
+
+    test_template(t, "is in",
+        "{% if x in y %}yes{% else %}no{% endif %}",
+        {{"x", "foo"}, {"y", json::array({"foo", "bar"})}},
+        "yes"
+    );
+
+    test_template(t, "not in",
+        "{% if x not in y %}yes{% else %}no{% endif %}",
+        {{"x", "baz"}, {"y", json::array({"foo", "bar"})}},
+        "yes"
+    );
 }
 
 static void test_string_methods(testing & t) {
