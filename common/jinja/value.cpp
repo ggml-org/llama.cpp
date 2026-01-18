@@ -698,6 +698,7 @@ const func_builtins & value_bool_t::get_builtins() const {
             bool val = args.get_pos(0)->as_bool();
             return mk_val<value_string>(val ? "True" : "False");
         }},
+        {"tojson", tojson},
     };
     return builtins;
 }
@@ -775,19 +776,30 @@ const func_builtins & value_array_t::get_builtins() const {
             if (!is_val<value_array>(args.get_pos(0))) {
                 throw raised_exception("join() first argument must be an array");
             }
-            value val_delim     = args.get_kwarg_or_pos("d",         1);
-            value val_attribute = args.get_kwarg_or_pos("attribute", 2);
-            if (!val_attribute->is_undefined()) {
-                throw not_implemented_exception("array attribute join not implemented");
-            }
+            value val_delim = args.get_kwarg_or_pos("d",         1);
+            value attribute = args.get_kwarg_or_pos("attribute", 2);
             const auto & arr = args.get_pos(0)->as_array();
-            std::string delim = is_val<value_string>(val_delim) ? val_delim->as_string().str() : "";
+            const bool attr_is_int = is_val<value_int>(attribute);
+            if (!attribute->is_undefined() && !is_val<value_string>(attribute) && !attr_is_int) {
+                throw raised_exception("join() attribute must be string or integer");
+            }
+            const int64_t attr_int = attr_is_int ? attribute->as_int() : 0;
+            const std::string delim = val_delim->is_undefined() ? "" : val_delim->as_string().str();
+            const std::string attr_name = attribute->is_undefined() ? "" : attribute->as_string().str();
             std::string result;
             for (size_t i = 0; i < arr.size(); ++i) {
-                if (!is_val<value_string>(arr[i]) && !is_val<value_int>(arr[i]) && !is_val<value_float>(arr[i])) {
+                value val_arr = arr[i];
+                if (!attribute->is_undefined()) {
+                    if (attr_is_int && is_val<value_array>(val_arr)) {
+                        val_arr = val_arr->at(attr_int);
+                    } else if (!attr_is_int && !attr_name.empty() && is_val<value_object>(val_arr)) {
+                        val_arr = val_arr->at(attr_name);
+                    }
+                }
+                if (!is_val<value_string>(val_arr) && !is_val<value_int>(val_arr) && !is_val<value_float>(val_arr)) {
                     throw raised_exception("join() can only join arrays of strings or numerics");
                 }
-                result += arr[i]->as_string().str();
+                result += val_arr->as_string().str();
                 if (i < arr.size() - 1) {
                     result += delim;
                 }
@@ -802,26 +814,30 @@ const func_builtins & value_array_t::get_builtins() const {
         }},
         {"tojson", tojson},
         {"map", [](const func_args & args) -> value {
-            args.ensure_count(2, 3);
+            args.ensure_count(2);
             if (!is_val<value_array>(args.get_pos(0))) {
                 throw raised_exception("map: first argument must be an array");
             }
-            value attribute = args.get_kwarg_or_pos("attribute", 1);
-            if (is_val<value_int>(attribute)) {
-                throw not_implemented_exception("map: integer attribute not implemented");
+            if (!is_val<value_kwarg>(args.get_args().at(1))) {
+                throw not_implemented_exception("map: filter-mapping not implemented");
             }
-            if (!is_val<value_string>(attribute)) {
+            value attribute = args.get_kwarg_or_pos("attribute", 1);
+            const bool attr_is_int = is_val<value_int>(attribute);
+            if (!is_val<value_string>(attribute) && !attr_is_int) {
                 throw raised_exception("map: attribute must be string or integer");
             }
-            std::string attr_name = attribute->as_string().str();
+            const int64_t attr_int = attr_is_int ? attribute->as_int() : 0;
+            const std::string attr_name = attribute->as_string().str();
             value default_val = args.get_kwarg("default", mk_val<value_undefined>());
             auto out = mk_val<value_array>();
             auto arr = args.get_pos(0)->as_array();
             for (const auto & item : arr) {
-                if (!is_val<value_object>(item)) {
-                    throw raised_exception("map: item is not an object");
+                value attr_val;
+                if (attr_is_int) {
+                    attr_val = is_val<value_array>(item) ? item->at(attr_int, default_val) : default_val;
+                } else {
+                    attr_val = is_val<value_object>(item) ? item->at(attr_name, default_val) : default_val;
                 }
-                value attr_val = item->at(attr_name, default_val);
                 out->push_back(attr_val);
             }
             return out;
@@ -847,29 +863,35 @@ const func_builtins & value_array_t::get_builtins() const {
             return arr_editable->pop_at(index);
         }},
         {"sort", [](const func_args & args) -> value {
-            args.ensure_count(1, 3);
+            args.ensure_count(1, 4);
             if (!is_val<value_array>(args.get_pos(0))) {
                 throw raised_exception("sort: first argument must be an array");
             }
-            bool reverse = args.get_kwarg("reverse", mk_val<value_undefined>())->as_bool();
-            value attribute = args.get_kwarg("attribute", mk_val<value_undefined>());
-            std::string attr = attribute->is_undefined() ? "" : attribute->as_string().str();
+            value val_reverse = args.get_kwarg_or_pos("reverse",        1);
+            value val_case    = args.get_kwarg_or_pos("case_sensitive", 2);
+            value attribute   = args.get_kwarg_or_pos("attribute",      3);
+            // FIXME: sorting is currently always case sensitive
+            //const bool case_sensitive = val_case->as_bool(); // undefined == false
+            const bool reverse = val_reverse->as_bool(); // undefined == false
+            const bool attr_is_int = is_val<value_int>(attribute);
+            const int64_t attr_int = attr_is_int ? attribute->as_int() : 0;
+            const std::string attr_name = attribute->is_undefined() ? "" : attribute->as_string().str();
             std::vector<value> arr = cast_val<value_array>(args.get_pos(0))->as_array(); // copy
             std::sort(arr.begin(), arr.end(),[&](const value & a, const value & b) {
                 value val_a = a;
                 value val_b = b;
                 if (!attribute->is_undefined()) {
-                    if (!is_val<value_object>(a) || !is_val<value_object>(b)) {
-                        throw raised_exception("sort: items are not objects");
+                    if (attr_is_int && is_val<value_array>(a) && is_val<value_array>(b)) {
+                        val_a = a->at(attr_int);
+                        val_b = b->at(attr_int);
+                    } else if (!attr_is_int && !attr_name.empty() && is_val<value_object>(a) && is_val<value_object>(b)) {
+                        val_a = a->at(attr_name);
+                        val_b = b->at(attr_name);
+                    } else {
+                        throw raised_exception("sort: unsupported object attribute comparison");
                     }
-                    val_a = attr.empty() ? a : a->at(attr);
-                    val_b = attr.empty() ? b : b->at(attr);
                 }
-                if (reverse) {
-                    return value_compare(val_a, val_b, value_compare_op::gt);
-                } else {
-                    return !value_compare(val_a, val_b, value_compare_op::gt);
-                }
+                return value_compare(val_a, val_b, reverse ? value_compare_op::gt : value_compare_op::lt);
             });
             return mk_val<value_array>(arr);
         }},
@@ -888,6 +910,11 @@ const func_builtins & value_array_t::get_builtins() const {
 
 
 const func_builtins & value_object_t::get_builtins() const {
+    if (!has_builtins) {
+        static const func_builtins no_builtins = {};
+        return no_builtins;
+    }
+
     static const func_builtins builtins = {
         // {"default", default_value}, // cause issue with gpt-oss
         {"get", [](const func_args & args) -> value {
@@ -902,18 +929,13 @@ const func_builtins & value_object_t::get_builtins() const {
             if (args.count() == 3) {
                 default_val = args.get_pos(2);
             }
-            const auto & obj = args.get_pos(0)->as_object();
+            const value obj = args.get_pos(0);
             std::string key = args.get_pos(1)->as_string().str();
-            auto it = obj.find(key);
-            if (it != obj.end()) {
-                return it->second;
-            } else {
-                return default_val;
-            }
+            return obj->at(key, default_val);
         }},
         {"keys", [](const func_args & args) -> value {
             args.ensure_vals<value_object>();
-            const auto & obj = args.get_pos(0)->as_object();
+            const auto & obj = args.get_pos(0)->as_ordered_object();
             auto result = mk_val<value_array>();
             for (const auto & pair : obj) {
                 result->push_back(mk_val<value_string>(pair.first));
@@ -922,7 +944,7 @@ const func_builtins & value_object_t::get_builtins() const {
         }},
         {"values", [](const func_args & args) -> value {
             args.ensure_vals<value_object>();
-            const auto & obj = args.get_pos(0)->as_object();
+            const auto & obj = args.get_pos(0)->as_ordered_object();
             auto result = mk_val<value_array>();
             for (const auto & pair : obj) {
                 result->push_back(pair.second);
@@ -931,7 +953,7 @@ const func_builtins & value_object_t::get_builtins() const {
         }},
         {"items", [](const func_args & args) -> value {
             args.ensure_vals<value_object>();
-            const auto & obj = args.get_pos(0)->as_object();
+            const auto & obj = args.get_pos(0)->as_ordered_object();
             auto result = mk_val<value_array>();
             for (const auto & pair : obj) {
                 auto item = mk_val<value_array>();
@@ -945,7 +967,7 @@ const func_builtins & value_object_t::get_builtins() const {
         {"string", tojson},
         {"length", [](const func_args & args) -> value {
             args.ensure_vals<value_object>();
-            const auto & obj = args.get_pos(0)->as_object();
+            const auto & obj = args.get_pos(0)->as_ordered_object();
             return mk_val<value_int>(static_cast<int64_t>(obj.size()));
         }},
         {"tojson", [](const func_args & args) -> value {
@@ -958,21 +980,18 @@ const func_builtins & value_object_t::get_builtins() const {
             value val_case    = args.get_kwarg_or_pos("case_sensitive", 1);
             value val_by      = args.get_kwarg_or_pos("by",             2);
             value val_reverse = args.get_kwarg_or_pos("reverse",        3);
-            // FIXME: sorting is case sensitive
+            // FIXME: sorting is currently always case sensitive
             //const bool case_sensitive = val_case->as_bool(); // undefined == false
             const bool reverse = val_reverse->as_bool(); // undefined == false
-            if (!val_by->is_undefined()) {
-                throw not_implemented_exception("dictsort by key not implemented");
-            }
-            if (reverse) {
-                throw not_implemented_exception("dictsort reverse not implemented");
-            }
-            value_t::map obj = val_input->val_obj; // copy
-            std::sort(obj.ordered.begin(), obj.ordered.end(), [&](const auto & a, const auto & b) {
-                return a.first < b.first;
+            const bool by_value = is_val<value_string>(val_by) && val_by->as_string().str() == "value" ? true : false;
+            auto result = mk_val<value_object>(val_input); // copy
+            std::sort(result->val_obj.ordered.begin(), result->val_obj.ordered.end(), [&](const auto & a, const auto & b) {
+                if (by_value) {
+                    return value_compare(a.second, b.second, reverse ? value_compare_op::gt : value_compare_op::lt);
+                } else {
+                    return reverse ? a.first > b.first : a.first < b.first;
+                }
             });
-            auto result = mk_val<value_object>();
-            result->val_obj = std::move(obj);
             return result;
         }},
         {"join", [](const func_args &) -> value {
@@ -1169,7 +1188,7 @@ static void value_to_json_internal(std::ostringstream & oss, const value & val, 
         }
         oss << "]";
     } else if (is_val<value_object>(val)) {
-        const auto & obj = val->val_obj.ordered; // IMPORTANT: need to keep exact order
+        const auto & obj = val->as_ordered_object(); // IMPORTANT: need to keep exact order
         oss << "{";
         if (!obj.empty()) {
             oss << newline();

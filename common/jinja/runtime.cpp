@@ -268,8 +268,7 @@ value binary_expression::execute_impl(context & ctx) {
     // String in object
     if (is_val<value_string>(left_val) && is_val<value_object>(right_val)) {
         auto key = left_val->as_string().str();
-        auto & obj = right_val->as_object();
-        bool has_key = obj.find(key) != obj.end();
+        bool has_key = right_val->has_key(key);
         if (op.value == "in") {
             return mk_val<value_bool>(has_key);
         } else if (op.value == "not in") {
@@ -464,7 +463,7 @@ value for_statement::execute_impl(context & ctx) {
     std::vector<value> items;
     if (is_val<value_object>(iterable_val)) {
         JJ_DEBUG("%s", "For loop over object keys");
-        auto & obj = iterable_val->as_object();
+        auto & obj = iterable_val->as_ordered_object();
         for (auto & p : obj) {
             auto tuple = mk_val<value_array>();
             if (iterable_val->val_obj.is_key_numeric) {
@@ -560,6 +559,7 @@ value for_statement::execute_impl(context & ctx) {
     for (size_t i = 0; i < filtered_items.size(); i++) {
         JJ_DEBUG("For loop iteration %zu/%zu", i + 1, filtered_items.size());
         value_object loop_obj = mk_val<value_object>();
+        loop_obj->has_builtins = false; // loop object has no builtins
         loop_obj->insert("index", mk_val<value_int>(i + 1));
         loop_obj->insert("index0", mk_val<value_int>(i));
         loop_obj->insert("revindex", mk_val<value_int>(filtered_items.size() - i));
@@ -717,6 +717,7 @@ value member_expression::execute_impl(context & ctx) {
 
     value property;
     if (this->computed) {
+        // syntax: obj[expr]
         JJ_DEBUG("Member expression, computing property type %s", this->property->type().c_str());
 
         int64_t arr_size = 0;
@@ -745,10 +746,24 @@ value member_expression::execute_impl(context & ctx) {
             property = this->property->execute(ctx);
         }
     } else {
+        // syntax: obj.prop
         if (!is_stmt<identifier>(this->property)) {
-            throw std::runtime_error("Non-computed member property must be an identifier");
+            throw std::runtime_error("Static member property must be an identifier");
         }
         property = mk_val<value_string>(cast_stmt<identifier>(this->property)->val);
+        std::string prop = property->as_string().str();
+        JJ_DEBUG("Member expression, object type %s, static property '%s'", object->type().c_str(), prop.c_str());
+
+        // behavior of jinja2: obj having prop as a built-in function AND 'prop', as an object key,
+        // then obj.prop returns the built-in function, not the property value.
+        // while obj['prop'] returns the property value.
+        // example: {"obj": {"items": 123}} -> obj.items is the built-in function, obj['items'] is 123
+
+        value val = try_builtin_func(ctx, prop, object, true);
+        if (!is_val<value_undefined>(val)) {
+            return val;
+        }
+        // else, fallthrough to normal property access below
     }
 
     JJ_DEBUG("Member expression on object type %s, property type %s", object->type().c_str(), property->type().c_str());
@@ -763,11 +778,8 @@ value member_expression::execute_impl(context & ctx) {
             throw std::runtime_error("Cannot access object with non-string: got " + property->type());
         }
         auto key = property->as_string().str();
-        auto & obj = object->as_object();
-        auto it = obj.find(key);
-        if (it != obj.end()) {
-            val = it->second;
-        } else {
+        val = object->at(key, val);
+        if (is_val<value_undefined>(val)) {
             val = try_builtin_func(ctx, key, object, true);
         }
         JJ_DEBUG("Accessed property '%s' value, got type: %s", key.c_str(), val->type().c_str());

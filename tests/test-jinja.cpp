@@ -4,6 +4,7 @@
 #include <cstdlib>
 
 #include <nlohmann/json.hpp>
+#include <sheredom/subprocess.h>
 
 #include "jinja/runtime.h"
 #include "jinja/parser.h"
@@ -31,12 +32,24 @@ static void test_array_methods(testing & t);
 static void test_object_methods(testing & t);
 static void test_fuzzing(testing & t);
 
+static bool g_python_mode = false;
+
 int main(int argc, char *argv[]) {
     testing t(std::cout);
     t.verbose = true;
 
-    if (argc >= 2) {
-        t.set_filter(argv[1]);
+    // usage: test-jinja [-py] [filter_regex]
+    //  -py : enable python mode (use python jinja2 for rendering expected output)
+    //        only use this for cross-checking, not for correctness
+    //        note: the implementation of this flag is basic, only intented to be used by maintainers
+
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if (arg == "-py") {
+            g_python_mode = true;
+        } else {
+            t.set_filter(arg);
+        }
     }
 
     t.test("whitespace control", test_whitespace_control);
@@ -53,7 +66,9 @@ int main(int argc, char *argv[]) {
     t.test("string methods", test_string_methods);
     t.test("array methods", test_array_methods);
     t.test("object methods", test_object_methods);
-    t.test("fuzzing", test_fuzzing);
+    if (!g_python_mode) {
+        t.test("fuzzing", test_fuzzing);
+    }
 
     return t.summary();
 }
@@ -247,6 +262,12 @@ static void test_expressions(testing & t) {
         "Bob"
     );
 
+    test_template(t, "negative float (not dot notation)",
+        "{{ -1.0 }}",
+        json::object(),
+        "-1.0"
+    );
+
     test_template(t, "bracket notation",
         "{{ user['name'] }}",
         {{"user", {{"name", "Bob"}}}},
@@ -381,6 +402,32 @@ static void test_filters(testing & t) {
         "{% for i in items|sort %}{{ i }}{% endfor %}",
         {{"items", json::array({3, 1, 2})}},
         "123"
+    );
+
+    test_template(t, "sort reverse",
+        "{% for i in items|sort(true) %}{{ i }}{% endfor %}",
+        {{"items", json::array({3, 1, 2})}},
+        "321"
+    );
+
+    test_template(t, "sort with attribute",
+        "{{ items|sort(attribute='name')|join(attribute='age') }}",
+        {{"items", json::array({
+            json({{"name", "c"}, {"age", 3}}),
+            json({{"name", "a"}, {"age", 1}}),
+            json({{"name", "b"}, {"age", 2}}),
+        })}},
+        "123"
+    );
+
+    test_template(t, "sort with numeric attribute",
+        "{{ items|sort(attribute=0)|join(attribute=1) }}",
+        {{"items", json::array({
+            json::array({3, "z"}),
+            json::array({1, "x"}),
+            json::array({2, "y"}),
+        })}},
+        "xyz"
     );
 
     test_template(t, "join",
@@ -533,6 +580,66 @@ static void test_literals(testing & t) {
         "{% set d = {'a': 1} %}{{ d.a }}",
         json::object(),
         "1"
+    );
+
+    test_template(t, "integer|abs",
+        "{{ -42 | abs }}",
+        json::object(),
+        "42"
+    );
+
+    test_template(t, "integer|float",
+        "{{ 42 | float }}",
+        json::object(),
+        "42.0"
+    );
+
+    test_template(t, "integer|tojson",
+        "{{ 42 | tojson }}",
+        json::object(),
+        "42"
+    );
+
+    test_template(t, "float|abs",
+        "{{ -3.14 | abs }}",
+        json::object(),
+        "3.14"
+    );
+
+    test_template(t, "float|int",
+        "{{ 3.14 | int }}",
+        json::object(),
+        "3"
+    );
+
+    test_template(t, "float|tojson",
+        "{{ 3.14 | tojson }}",
+        json::object(),
+        "3.14"
+    );
+
+    test_template(t, "string|tojson",
+        "{{ 'hello' | tojson }}",
+        json::object(),
+        "\"hello\""
+    );
+
+    test_template(t, "boolean|int",
+        "{{ true | int }}",
+        json::object(),
+        "1"
+    );
+
+    test_template(t, "boolean|float",
+        "{{ true | float }}",
+        json::object(),
+        "1.0"
+    );
+
+    test_template(t, "boolean|tojson",
+        "{{ true | tojson }}",
+        json::object(),
+        "true"
     );
 }
 
@@ -934,7 +1041,17 @@ static void test_array_methods(testing & t) {
     );
 
     test_template(t, "array|join attribute",
-        "{{ arr|join(attribute=0) }}",
+        "{{ arr|join(attribute='age') }}",
+        {{"arr", json::array({
+            json({{"name", "a"}, {"age", 1}}),
+            json({{"name", "b"}, {"age", 2}}),
+            json({{"name", "c"}, {"age", 3}}),
+        })}},
+        "123"
+    );
+
+    test_template(t, "array|join numeric attribute",
+        "{{ arr|join(attribute=-1) }}",
         {{"arr", json::array({json::array({1}), json::array({2}), json::array({3})})}},
         "123"
     );
@@ -957,8 +1074,8 @@ static void test_array_methods(testing & t) {
         "a,b,c,d"
     );
 
-    test_template(t, "array.map() with attribute",
-        "{% for v in arr.map('age') %}{{ v }} {% endfor %}",
+    test_template(t, "array|map with attribute",
+        "{% for v in arr|map(attribute='age') %}{{ v }} {% endfor %}",
         {{"arr", json::array({
             json({{"name", "a"}, {"age", 1}}),
             json({{"name", "b"}, {"age", 2}}),
@@ -967,14 +1084,50 @@ static void test_array_methods(testing & t) {
         "1 2 3 "
     );
 
-    test_template(t, "array.map() with numeric attribute",
-        "{% for v in arr.map(0) %}{{ v }} {% endfor %}",
+    test_template(t, "array|map with attribute default",
+        "{% for v in arr|map(attribute='age', default=3) %}{{ v }} {% endfor %}",
+        {{"arr", json::array({
+            json({{"name", "a"}, {"age", 1}}),
+            json({{"name", "b"}, {"age", 2}}),
+            json({{"name", "c"}}),
+        })}},
+        "1 2 3 "
+    );
+
+    test_template(t, "array|map without attribute default",
+        "{% for v in arr|map(attribute='age') %}{{ v }} {% endfor %}",
+        {{"arr", json::array({
+            json({{"name", "a"}, {"age", 1}}),
+            json({{"name", "b"}, {"age", 2}}),
+            json({{"name", "c"}}),
+        })}},
+        "1 2  "
+    );
+
+    test_template(t, "array|map with numeric attribute",
+        "{% for v in arr|map(attribute=0) %}{{ v }} {% endfor %}",
         {{"arr", json::array({
             json::array({10, "x"}),
             json::array({20, "y"}),
             json::array({30, "z"}),
         })}},
         "10 20 30 "
+    );
+
+    test_template(t, "array|map with negative attribute",
+        "{% for v in arr|map(attribute=-1) %}{{ v }} {% endfor %}",
+        {{"arr", json::array({
+            json::array({10, "x"}),
+            json::array({20, "y"}),
+            json::array({30, "z"}),
+        })}},
+        "x y z "
+    );
+
+    test_template(t, "array|map with filter",
+        "{{ arr|map('int')|sum }}",
+        {{"arr", json::array({"1", "2", "3"})}},
+        "6"
     );
 
     // not used by any chat templates
@@ -1063,9 +1216,21 @@ static void test_object_methods(testing & t) {
         {{"obj", {{"items", json::array({1, 2, 3})}}}},
         "{\"items\": [1, 2, 3]}"
     );
+
+    test_template(t, "object attribute and key access",
+        "{{ obj.keys()|join(',') }} vs {{ obj['keys'] }} vs {{ obj.test }}",
+        {{"obj", {{"keys", "value"}, {"test", "attr_value"}}}},
+        "keys,test vs value vs attr_value"
+    );
+
+    test_template(t, "env should not have object methods",
+        "{{ keys is undefined }} {{ obj.keys is defined }}",
+        {{"obj", {{"a", "b"}}}},
+        "True True"
+    );
 }
 
-static void test_template(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
+static void test_template_cpp(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
     t.test(name, [&tmpl, &vars, &expect](testing & t) {
         jinja::lexer lexer;
         auto lexer_res = lexer.tokenize(tmpl);
@@ -1096,6 +1261,99 @@ static void test_template(testing & t, const std::string & name, const std::stri
             t.log("Skipped: " + std::string(e.what()));
         }
     });
+}
+
+// keep this in-sync with https://github.com/huggingface/transformers/blob/main/src/transformers/utils/chat_template_utils.py
+// note: we use SandboxedEnvironment instead of ImmutableSandboxedEnvironment to allow usage of in-place array methods like append() and pop()
+static std::string py_script = R"(
+import jinja2
+import jinja2.ext as jinja2_ext
+import json
+import sys
+from datetime import datetime
+from jinja2.sandbox import SandboxedEnvironment
+
+tmpl = json.loads(sys.argv[1])
+vars_json = json.loads(sys.argv[2])
+
+env = SandboxedEnvironment(
+    trim_blocks=True,
+    lstrip_blocks=True,
+    extensions=[jinja2_ext.loopcontrols],
+)
+
+def raise_exception(message):
+    raise jinja2.exceptions.TemplateError(message)
+
+env.filters["tojson"] = lambda x, ensure_ascii=False, indent=None, separators=None, sort_keys=False: json.dumps(x, ensure_ascii=ensure_ascii, indent=indent, separators=separators, sort_keys=sort_keys)
+env.globals["strftime_now"] = lambda format: datetime.now().strftime(format)
+env.globals["raise_exception"] = raise_exception
+
+template = env.from_string(tmpl)
+result = template.render(**vars_json)
+print(result, end='')
+)";
+
+static void test_template_py(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
+    t.test(name, [&tmpl, &vars, &expect](testing & t) {
+        // Prepare arguments
+        std::string tmpl_json = json(tmpl).dump();
+        std::string vars_json = vars.dump();
+
+#ifdef _WIN32
+        const char * python_executable = "python.exe";
+#else
+        const char * python_executable = "python3";
+#endif
+
+        const char * command_line[] = {python_executable, "-c", py_script.c_str(), tmpl_json.c_str(), vars_json.c_str(), NULL};
+
+        struct subprocess_s subprocess;
+        int options = subprocess_option_combined_stdout_stderr
+                    | subprocess_option_no_window
+                    | subprocess_option_inherit_environment
+                    | subprocess_option_search_user_path;
+        int result = subprocess_create(command_line, options, &subprocess);
+
+        if (result != 0) {
+            t.log("Failed to create subprocess, error code: " + std::to_string(result));
+            t.assert_true("subprocess creation", false);
+            return;
+        }
+
+        // Read output
+        std::string output;
+        char buffer[1024];
+        FILE * p_stdout = subprocess_stdout(&subprocess);
+        while (fgets(buffer, sizeof(buffer), p_stdout)) {
+            output += buffer;
+        }
+
+        int process_return;
+        subprocess_join(&subprocess, &process_return);
+        subprocess_destroy(&subprocess);
+
+        if (process_return != 0) {
+            t.log("Python script failed with exit code: " + std::to_string(process_return));
+            t.log("Output: " + output);
+            t.assert_true("python execution", false);
+            return;
+        }
+
+        if (!t.assert_true("Template render mismatch", expect == output)) {
+            t.log("Template: " + json(tmpl).dump());
+            t.log("Expected: " + json(expect).dump());
+            t.log("Python  : " + json(output).dump());
+        }
+    });
+}
+
+static void test_template(testing & t, const std::string & name, const std::string & tmpl, const json & vars, const std::string & expect) {
+    if (g_python_mode) {
+        test_template_py(t, name, tmpl, vars, expect);
+    } else {
+        test_template_cpp(t, name, tmpl, vars, expect);
+    }
 }
 
 //
