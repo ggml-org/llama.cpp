@@ -162,6 +162,17 @@ enum common_params_sampling_config : uint64_t {
     COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA    = 1 << 11,
 };
 
+enum common_speculative_type {
+    COMMON_SPECULATIVE_TYPE_NONE,          // no speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT,         // draft model
+    COMMON_SPECULATIVE_TYPE_EAGLE3,        // eagle draft model
+    COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding
+    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
+    COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
+    COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
+    COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
+};
+
 
 // sampling parameters
 struct common_params_sampling {
@@ -240,6 +251,14 @@ struct common_params_model {
     std::string name        = ""; // in format <user>/<model>[:<tag>] (tag is optional)     // NOLINT
 };
 
+struct common_speculative_config {
+    common_speculative_type type;
+    std::map<std::string, std::string> config; // map of incubative options (not yet in common_params)
+
+    common_speculative_config(common_speculative_type t,
+            const std::map<std::string, std::string>& c = {}) : type(t), config(c) {}
+};
+
 struct common_params_speculative {
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
@@ -259,6 +278,8 @@ struct common_params_speculative {
     struct cpu_params cpuparams_batch;
 
     struct common_params_model model;
+
+    std::vector<common_speculative_config> configs = {}; // list of speculative configs to try
 };
 
 struct common_params_vocoder {
