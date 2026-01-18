@@ -215,8 +215,6 @@ std::string common_chat_format_example(
 const char*               common_chat_format_name(common_chat_format format);
 const char*               common_reasoning_format_name(common_reasoning_format format);
 common_reasoning_format   common_reasoning_format_from_name(const std::string & format);
-common_chat_msg           common_chat_parse(const std::string & input, bool is_partial, const common_chat_syntax & syntax);
-common_chat_msg           common_chat_peg_parse(const common_peg_arena & parser, const std::string & input, bool is_partial, const common_chat_syntax & syntax);
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice);
 

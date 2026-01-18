@@ -1520,7 +1520,7 @@ static void common_chat_parse_content_only(common_chat_msg_parser & builder) {
     builder.add_content(builder.consume_rest());
 }
 
-static void common_chat_parse(common_chat_msg_parser & builder) {
+static void common_chat_msg_parse(common_chat_msg_parser & builder) {
     LOG_DBG("Parsing input with format %s: %s\n", common_chat_format_name(builder.syntax().format), builder.input().c_str());
 
     switch (builder.syntax().format) {
@@ -1619,7 +1619,7 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
     }
     common_chat_msg_parser builder(input, is_partial, syntax);
     try {
-        common_chat_parse(builder);
+        common_chat_msg_parse(builder);
     } catch (const common_chat_msg_partial_exception & ex) {
         LOG_DBG("Partial parse: %s\n", ex.what());
         if (!is_partial) {
