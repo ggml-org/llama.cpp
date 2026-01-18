@@ -22,6 +22,8 @@ if (GGML_OPENCL_USE_ADRENO_KERNELS)
     add_compile_definitions(GGML_OPENCL_USE_ADRENO_KERNELS)
 endif ()
 
+target_include_directories(${TARGET_NAME} PRIVATE "${CMAKE_CURRENT_LIST_DIR}/kernels")
+
 if (GGML_OPENCL_EMBED_KERNELS)
     add_compile_definitions(GGML_OPENCL_EMBED_KERNELS)
 
