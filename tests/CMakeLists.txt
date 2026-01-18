@@ -1415,6 +1415,67 @@ if(GGML_SYCL)
     install(TARGETS test-unified-tensor-cache RUNTIME)
     add_test(NAME test-unified-tensor-cache COMMAND $<TARGET_FILE:test-unified-tensor-cache>)
 
+    # test-sycl-eviction-policy: Tests for priority-based LRU eviction policy
+    # Part of unified memory management system (epic llama.cpp-v3n, task llama.cpp-2oy)
+    add_executable(test-sycl-eviction-policy test-sycl-eviction-policy.cpp
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/eviction-policy.cpp)
+    target_link_libraries(test-sycl-eviction-policy PRIVATE ggml)
+    target_include_directories(test-sycl-eviction-policy PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-eviction-policy PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-eviction-policy PRIVATE "-fsycl")
+    install(TARGETS test-sycl-eviction-policy RUNTIME)
+    add_test(NAME test-sycl-eviction-policy COMMAND $<TARGET_FILE:test-sycl-eviction-policy>)
+
+    # test-sycl-expert-prefetch: Tests for hybrid expert prefetching with sorted caching
+    # Part of unified memory management system (epic llama.cpp-v3n, task llama.cpp-eqa)
+    # Note: Standalone test - does not require SYCL runtime, tests pure C++ logic only
+    add_executable(test-sycl-expert-prefetch test-sycl-expert-prefetch.cpp
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/expert-prefetch.cpp)
+    target_include_directories(test-sycl-expert-prefetch PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-expert-prefetch PRIVATE "-Wno-narrowing")
+    install(TARGETS test-sycl-expert-prefetch RUNTIME)
+    add_test(NAME test-sycl-expert-prefetch COMMAND $<TARGET_FILE:test-sycl-expert-prefetch>)
+
+    # test-sycl-kv-cache-manager: Unit tests for KV cache manager with per-head granularity
+    # Part of unified memory management system (epic llama.cpp-v3n, task llama.cpp-vr5)
+    # Conditionally built only if implementation exists
+    if(EXISTS "${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/kv-cache-manager.cpp")
+        add_executable(test-sycl-kv-cache-manager test-sycl-kv-cache-manager.cpp
+            ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/kv-cache-manager.cpp
+            ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/eviction-policy.cpp)
+        target_link_libraries(test-sycl-kv-cache-manager PRIVATE ggml)
+        target_include_directories(test-sycl-kv-cache-manager PRIVATE
+            ${PROJECT_SOURCE_DIR}/ggml/include
+            ${PROJECT_SOURCE_DIR}/ggml/src
+            ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+        target_compile_options(test-sycl-kv-cache-manager PRIVATE "-fsycl" "-Wno-narrowing")
+        target_link_options(test-sycl-kv-cache-manager PRIVATE "-fsycl")
+        install(TARGETS test-sycl-kv-cache-manager RUNTIME)
+        add_test(NAME test-sycl-kv-cache-manager COMMAND $<TARGET_FILE:test-sycl-kv-cache-manager>)
+    endif()
+
+    # test-sycl-compute-buffer-manager: Unit tests for compute buffer management
+    # Part of unified memory management system (epic llama.cpp-v3n, task llama.cpp-6s5)
+    # Conditionally built only if implementation exists
+    if(EXISTS "${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/compute-buffer-manager.cpp")
+        add_executable(test-sycl-compute-buffer-manager test-sycl-compute-buffer-manager.cpp
+            ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/compute-buffer-manager.cpp
+            ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl/eviction-policy.cpp)
+        target_link_libraries(test-sycl-compute-buffer-manager PRIVATE ggml)
+        target_include_directories(test-sycl-compute-buffer-manager PRIVATE
+            ${PROJECT_SOURCE_DIR}/ggml/include
+            ${PROJECT_SOURCE_DIR}/ggml/src
+            ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+        target_compile_options(test-sycl-compute-buffer-manager PRIVATE "-fsycl" "-Wno-narrowing")
+        target_link_options(test-sycl-compute-buffer-manager PRIVATE "-fsycl")
+        install(TARGETS test-sycl-compute-buffer-manager RUNTIME)
+        add_test(NAME test-sycl-compute-buffer-manager COMMAND $<TARGET_FILE:test-sycl-compute-buffer-manager>)
+    endif()
+
     # test-tiered-dispatch: Tests for tiered memory dispatch integration
     # Validates that tensor inventory and tiered mode affect kernel dispatch decisions
     add_executable(test-tiered-dispatch test-tiered-dispatch.cpp)
