@@ -1,7 +1,12 @@
-import type { MCPClientConfig, MCPServerConfig, MCPServerSettingsEntry } from '$lib/types';
+import type {
+	HealthCheckState,
+	MCPClientConfig,
+	MCPServerConfig,
+	MCPServerSettingsEntry
+} from '$lib/types';
 import type { SettingsConfigType } from '$lib/types/settings';
 import type { McpServerOverride } from '$lib/types/database';
-import { MCPTransportType, MCPLogLevel } from '$lib/enums';
+import { MCPTransportType, MCPLogLevel, HealthCheckStatus } from '$lib/enums';
 import { DEFAULT_MCP_CONFIG } from '$lib/constants/mcp';
 import { normalizePositiveNumber } from '$lib/utils/number';
 import { Info, AlertTriangle, XCircle } from '@lucide/svelte';
@@ -32,29 +37,19 @@ export function generateMcpServerId(id: unknown, index: number): string {
 }
 
 /**
- * Extracts a human-readable server name from a URL.
- * Strips common prefixes like 'www.' and 'mcp.' and capitalizes the result.
+ * Gets a display label for an MCP server based on health state.
  */
-export function extractServerNameFromUrl(url: string): string {
-	try {
-		const parsedUrl = new URL(url);
-		const host = parsedUrl.hostname.replace(/^(www\.|mcp\.)/, '');
-		const name = host.split('.')[0] || 'Unknown';
-
-		return name.charAt(0).toUpperCase() + name.slice(1);
-	} catch {
-		return 'New Server';
+export function getMcpServerLabel(
+	server: MCPServerSettingsEntry,
+	healthState?: HealthCheckState
+): string {
+	if (healthState?.status === HealthCheckStatus.Success) {
+		return (
+			healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || server.url
+		);
 	}
-}
 
-/**
- * Gets a display name for an MCP server.
- * Returns server.name if set, otherwise extracts name from URL.
- */
-export function getServerDisplayName(server: MCPServerSettingsEntry): string {
-	if (server.name) return server.name;
-
-	return extractServerNameFromUrl(server.url);
+	return server.url;
 }
 
 /**

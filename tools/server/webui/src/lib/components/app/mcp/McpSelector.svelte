@@ -8,7 +8,7 @@
 	import McpLogo from '$lib/components/app/misc/McpLogo.svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { parseMcpServerSettings, getServerDisplayName, getFaviconUrl } from '$lib/utils/mcp';
+	import { parseMcpServerSettings, getMcpServerLabel, getFaviconUrl } from '$lib/utils/mcp';
 	import type { MCPServerSettingsEntry } from '$lib/types';
 	import { HealthCheckStatus } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -44,6 +44,10 @@
 		return conversationsStore.getMcpServerOverride(serverId) !== undefined;
 	}
 
+	function getServerLabel(server: MCPServerSettingsEntry): string {
+		return getMcpServerLabel(server, mcpStore.getHealthCheckState(server.id));
+	}
+
 	let enabledMcpServersForChat = $derived(
 		mcpServers.filter((s) => isServerEnabledForChat(s) && s.url.trim())
 	);
@@ -68,7 +72,7 @@
 			if (usageB !== usageA) return usageB - usageA;
 
 			// Then alphabetically by name
-			return getServerDisplayName(a).localeCompare(getServerDisplayName(b));
+			return getServerLabel(a).localeCompare(getServerLabel(b));
 		})
 	);
 
@@ -76,7 +80,7 @@
 		const query = searchQuery.toLowerCase().trim();
 		if (query) {
 			return sortedMcpServers.filter((s) => {
-				const name = getServerDisplayName(s).toLowerCase();
+				const name = getServerLabel(s).toLowerCase();
 				const url = s.url.toLowerCase();
 				return name.includes(query) || url.includes(query);
 			});
@@ -173,7 +177,7 @@
 							}}
 						/>
 					{/if}
-					<span class="truncate text-sm">{getServerDisplayName(server)}</span>
+					<span class="truncate text-sm">{getServerLabel(server)}</span>
 					{#if hasError}
 						<span class="shrink-0 rounded bg-destructive/15 px-1.5 py-0.5 text-xs text-destructive"
 							>Error</span

@@ -58,9 +58,7 @@
 					</div>
 				{/if}
 
-				<p class="truncate leading-none font-medium">
-					{serverInfo?.title || serverInfo?.name || displayName}
-				</p>
+				<p class="truncate leading-none font-medium">{displayName}</p>
 
 				{#if serverInfo?.version}
 					<Badge variant="secondary" class="h-4 shrink-0 px-1 text-[10px]">
