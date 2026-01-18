@@ -6741,7 +6741,7 @@ static size_t ggml_visit_parents_graph(struct ggml_cgraph * cgraph, struct ggml_
             // update the compute flag regardless
             for (int i = 0; i < GGML_MAX_SRC; ++i) {
                 struct ggml_tensor * src = node->src[i];
-                if (src && (src->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+                if (src && ((src->flags & GGML_TENSOR_FLAG_COMPUTE) == 0)) {
                     ggml_visit_parents_graph(cgraph, src, true);
                 }
             }
