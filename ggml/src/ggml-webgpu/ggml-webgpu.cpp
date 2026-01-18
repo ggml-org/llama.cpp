@@ -1982,6 +1982,9 @@ static std::optional<webgpu_command> ggml_webgpu_encode_node(webgpu_context ctx,
     if (ggml_is_empty(node)) {
         return std::nullopt;
     }
+    if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+        return std::nullopt;
+    }
     WEBGPU_LOG_DEBUG("ggml_webgpu_encode_node(" << node << ", " << ggml_op_name(node->op) << ")");
 
     ggml_tensor * src0 = node->src[0];

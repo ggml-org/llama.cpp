@@ -203,6 +203,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
         GGML_ABORT("unsupported op");
     }
 
+    if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+        return 1;
+    }
+
     int n_fuse = 1;
 
     // check if the current node can run concurrently with other nodes before it
