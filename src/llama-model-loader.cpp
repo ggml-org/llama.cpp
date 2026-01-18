@@ -8,6 +8,7 @@
 #endif
 
 #include <array>
+#include <atomic>
 #include <cinttypes>
 #include <cstring>
 #include <future>
@@ -481,6 +482,10 @@ llama_model_loader::llama_model_loader(
         bool no_alloc,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p) {
+#ifdef GGML_USE_SYCL
+    static std::atomic<uint64_t> g_sycl_model_id{ 1 };
+    model_id = g_sycl_model_id.fetch_add(1, std::memory_order_relaxed);
+#endif
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -614,7 +619,7 @@ llama_model_loader::llama_model_loader(
         const llama_tensor_weight & w      = it.second;
         const ggml_tensor *         tensor = w.tensor;
         ggml_backend_sycl_register_weight_identity(
-            ggml_get_name(tensor), w.idx, w.offs, ggml_nbytes(tensor));
+            tensor, w.idx, w.offs, ggml_nbytes(tensor), model_id);
     }
 #endif
 

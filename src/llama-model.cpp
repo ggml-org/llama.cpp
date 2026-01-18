@@ -8516,6 +8516,47 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
 
+#ifdef GGML_USE_SYCL
+    // Early tensor inventory collection for SYCL tiered memory
+    // This MUST happen BEFORE buffer allocation so tiered mode can be enabled
+    // before ggml_backend_alloc_ctx_tensors_from_buft() is called
+    {
+        std::vector<ggml_sycl_tensor_info> sycl_tensors;
+        size_t                             total_size = 0;
+
+        // Iterate over all contexts to collect tensor inventory
+        for (auto & [buft, ctx_ptr] : ctx_map) {
+            ggml_context * ctx = ctx_ptr.get();
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                if (ggml_nbytes(t) > 0) {
+                    sycl_tensors.push_back({ ggml_get_name(t), ggml_nbytes(t) });
+                    total_size += ggml_nbytes(t);
+                }
+            }
+        }
+
+        if (!sycl_tensors.empty()) {
+            ggml_sycl_tensor_inventory inventory;
+            inventory.tensors    = sycl_tensors.data();
+            inventory.count      = sycl_tensors.size();
+            inventory.total_size = total_size;
+
+            // Set inventory for each SYCL backend device BEFORE allocation
+            for (int i = 0; i < ggml_backend_sycl_get_device_count(); i++) {
+                ggml_backend_t sycl_backend = ggml_backend_sycl_init(i);
+                if (sycl_backend) {
+                    ggml_backend_sycl_set_tensor_inventory(sycl_backend, &inventory);
+                    ggml_backend_free(sycl_backend);
+                }
+            }
+
+            LLAMA_LOG_INFO(
+                "%s: SYCL early tensor inventory: %zu tensors, %.2f GB (enables tiered mode before allocation)\n",
+                __func__, sycl_tensors.size(), total_size / (1024.0 * 1024.0 * 1024.0));
+        }
+    }
+#endif
+
     // create the backend buffers
     std::vector<std::pair<ggml_context *, llama_buf_map>> ctx_buf_maps;
     ctx_buf_maps.reserve(ctx_map.size());
@@ -8639,7 +8680,9 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     }
 
 #ifdef GGML_USE_SYCL
-    // Collect tensor inventory for SYCL tiered memory
+    // Post-allocation tensor inventory refresh for SYCL tiered memory
+    // Note: Early inventory was already set before allocation (see above)
+    // This refresh ensures the backend has final tensor names after allocation
     if (!tensors_by_name.empty()) {
         std::vector<ggml_sycl_tensor_info> sycl_tensors;
         sycl_tensors.reserve(tensors_by_name.size());
@@ -8658,7 +8701,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             inventory.count      = sycl_tensors.size();
             inventory.total_size = total_size;
 
-            // Set inventory for each SYCL backend device
+            // Refresh inventory for each SYCL backend device (post-allocation)
             for (int i = 0; i < ggml_backend_sycl_get_device_count(); i++) {
                 ggml_backend_t sycl_backend = ggml_backend_sycl_init(i);
                 if (sycl_backend) {
@@ -8667,8 +8710,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 }
             }
 
-            LLAMA_LOG_INFO("%s: SYCL tensor inventory: %zu tensors, %.2f GB\n", __func__, sycl_tensors.size(),
-                           total_size / (1024.0 * 1024.0 * 1024.0));
+            LLAMA_LOG_DEBUG("%s: SYCL tensor inventory refreshed: %zu tensors, %.2f GB\n", __func__,
+                            sycl_tensors.size(), total_size / (1024.0 * 1024.0 * 1024.0));
         }
     }
 #endif
