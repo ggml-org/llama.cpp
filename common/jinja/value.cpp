@@ -957,7 +957,7 @@ const func_builtins & value_object_t::get_builtins() const {
             //const bool case_sensitive = val_case->as_bool(); // undefined == false
             const bool reverse = val_reverse->as_bool(); // undefined == false
             const bool by_value = is_val<value_string>(val_by) && val_by->as_string().str() == "value" ? true : false;
-            auto result = mk_val<value_object>(val_input->as_ordered_object()); // copy
+            auto result = mk_val<value_object>(val_input); // copy
             std::sort(result->val_obj.ordered.begin(), result->val_obj.ordered.end(), [&](const auto & a, const auto & b) {
                 if (by_value) {
                     return value_compare(a.second, b.second, reverse ? value_compare_op::gt : value_compare_op::lt);
