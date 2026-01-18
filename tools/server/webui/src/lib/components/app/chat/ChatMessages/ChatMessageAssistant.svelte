@@ -11,7 +11,6 @@
 	import ChatMessageThinkingBlock from './ChatMessageThinkingBlock.svelte';
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { agenticStreamingToolCall } from '$lib/stores/agentic.svelte';
 	import { autoResizeTextarea, copyToClipboard } from '$lib/utils';
@@ -84,46 +83,6 @@
 	let showRawOutput = $state(false);
 
 	let displayedModel = $derived(message.model ?? null);
-
-		const yBefore = el.getBoundingClientRect().top;
-
-		await tick();
-
-		const delta = el.getBoundingClientRect().top - yBefore;
-		if (delta !== 0) {
-			scrollParent.scrollTop += delta;
-		}
-
-		// Correct any drift after browser paint
-		requestAnimationFrame(() => {
-			const drift = el.getBoundingClientRect().top - yBefore;
-
-			if (Math.abs(drift) > 1) {
-				scrollParent.scrollTop += drift;
-			}
-		});
-	}
-
-	let displayedModel = $derived(message.model ?? null);
-
-	let isCurrentlyLoading = $derived(isLoading());
-	let isStreaming = $derived(isChatStreaming());
-	let hasNoContent = $derived(!visibleMessageContent?.trim());
-	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
-
-	let showProcessingInfoTop = $derived(
-		message?.role === MessageRole.ASSISTANT &&
-			isActivelyProcessing &&
-			hasNoContent &&
-			isLastAssistantMessage
-	);
-
-	let showProcessingInfoBottom = $derived(
-		message?.role === MessageRole.ASSISTANT &&
-			isActivelyProcessing &&
-			!hasNoContent &&
-			isLastAssistantMessage
-	);
 
 	function handleCopyModel() {
 		void copyToClipboard(displayedModel ?? '');
@@ -220,21 +179,7 @@
 		{#if displayedModel}
 			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				{#if isRouter}
-					<ModelsSelector
-						currentModel={displayedModel}
-						onModelChange={handleModelChange}
-						disabled={isLoading()}
-						onModelChange={async (modelId, modelName) => {
-							const status = modelsStore.getModelStatus(modelId);
-
-							if (status !== ServerModelStatus.LOADED) {
-								await modelsStore.loadModel(modelId);
-							}
-
-							onRegenerate(modelName);
-							return true;
-						}}
-					/>
+					<ModelsSelector currentModel={displayedModel} disabled={isLoading()} />
 				{:else}
 					<ModelBadge model={displayedModel || undefined} onclick={handleCopyModel} />
 				{/if}

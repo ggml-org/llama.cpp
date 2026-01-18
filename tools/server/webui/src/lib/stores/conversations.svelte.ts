@@ -20,7 +20,6 @@
  */
 
 import { browser } from '$app/environment';
-import { AttachmentType } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
 
 class ConversationsStore {
@@ -41,14 +40,6 @@ class ConversationsStore {
 
 	/** Callback for title update confirmation dialog */
 	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
-
-	/**
-	 * Modalities used in the active conversation.
-	 * Computed from attachments in activeMessages.
-	 */
-	async init(): Promise<void> {
-		if (!browser) return;
-		if (this.isInitialized) return;
 
 	/** Reference to the client (lazy loaded to avoid circular dependency) */
 	private _client: typeof import('$lib/clients/conversations.client').conversationsClient | null =
@@ -89,57 +80,6 @@ class ConversationsStore {
 		});
 
 		await conversationsClient.initialize();
-	}
-
-	/**
-	 * Calculate modalities from a list of messages.
-	 */
-	private calculateModalitiesFromMessages(messages: DatabaseMessage[]): ModelModalities {
-		const modalities: ModelModalities = { vision: false, audio: false };
-
-		for (const message of messages) {
-			// Ignore assistant messages (MCP tool results)
-			if (message.role !== 'user') continue;
-
-			if (!message.extra) continue;
-
-			for (const extra of message.extra) {
-				if (extra.type === AttachmentType.IMAGE) {
-					modalities.vision = true;
-				}
-
-				// PDF only requires vision if processed as images
-				if (extra.type === AttachmentType.PDF) {
-					const pdfExtra = extra as DatabaseMessageExtraPdfFile;
-
-					if (pdfExtra.processedAsImages) {
-						modalities.vision = true;
-					}
-				}
-
-				if (extra.type === AttachmentType.AUDIO) {
-					modalities.audio = true;
-				}
-			}
-
-			if (modalities.vision && modalities.audio) break;
-		}
-
-		return modalities;
-	}
-
-	/**
-	 * Get modalities used in messages BEFORE the specified message.
-	 */
-	getModalitiesUpToMessage(messageId: string): ModelModalities {
-		const messageIndex = this.activeMessages.findIndex((m) => m.id === messageId);
-
-		if (messageIndex === -1) {
-			return this.usedModalities;
-		}
-
-		const messagesBefore = this.activeMessages.slice(0, messageIndex);
-		return this.calculateModalitiesFromMessages(messagesBefore);
 	}
 
 	/**

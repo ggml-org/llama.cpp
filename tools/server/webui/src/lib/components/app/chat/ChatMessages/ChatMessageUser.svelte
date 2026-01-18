@@ -77,8 +77,23 @@
 	class="group flex flex-col items-end gap-3 md:gap-2 {className}"
 	role="group"
 >
-	{#if editCtx.isEditing}
-		<ChatMessageEditForm />
+	{#if isEditing}
+		<ChatMessageEditForm
+			bind:textareaElement
+			{editedContent}
+			{editedExtras}
+			{editedUploadedFiles}
+			originalContent={message.content}
+			originalExtras={message.extra}
+			showSaveOnlyOption={!!onSaveEditOnly}
+			{onCancelEdit}
+			{onSaveEdit}
+			{onSaveEditOnly}
+			{onEditKeydown}
+			{onEditedContentChange}
+			{onEditedExtrasChange}
+			{onEditedUploadedFilesChange}
+		/>
 	{:else}
 		{#if message.extra && message.extra.length > 0}
 			<div class="mb-2 max-w-[80%]">

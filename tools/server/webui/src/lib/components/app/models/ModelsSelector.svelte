@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ChevronDown, EyeOff, Loader2, MicOff, Package, Power } from '@lucide/svelte';
+	import { ChevronDown, Loader2, Package, Power } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
 	import {
@@ -12,7 +12,7 @@
 		routerModels,
 		singleModelName
 	} from '$lib/stores/models.svelte';
-	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
+	import { ServerModelStatus } from '$lib/enums';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import {
 		DialogModelInformation,
@@ -329,62 +329,30 @@
 						{@const isLoaded = status === ServerModelStatus.LOADED}
 						{@const isLoading = status === ServerModelStatus.LOADING}
 						{@const isSelected = currentModel === option.model || activeId === option.id}
-						{@const isCompatible = isModelCompatible(option)}
 						{@const isHighlighted = index === highlightedIndex}
-						{@const missingModalities = getMissingModalities(option)}
 
 						<div
 							class={cn(
 								'group flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
-								isCompatible
-									? 'cursor-pointer hover:bg-muted focus:bg-muted'
-									: 'cursor-not-allowed opacity-50',
+								'cursor-pointer hover:bg-muted focus:bg-muted',
 								isSelected || isHighlighted
 									? 'bg-accent text-accent-foreground'
-									: isCompatible
-										? 'hover:bg-accent hover:text-accent-foreground'
-										: '',
+									: 'hover:bg-accent hover:text-accent-foreground',
 								isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
 							)}
 							role="option"
 							aria-selected={isSelected || isHighlighted}
-							aria-disabled={!isCompatible}
-							tabindex={isCompatible ? 0 : -1}
-							onclick={() => isCompatible && handleSelect(option.id)}
+							tabindex="0"
+							onclick={() => handleSelect(option.id)}
 							onmouseenter={() => (highlightedIndex = index)}
 							onkeydown={(e) => {
-								if (isCompatible && (e.key === 'Enter' || e.key === ' ')) {
+								if (e.key === 'Enter' || e.key === ' ') {
 									e.preventDefault();
 									handleSelect(option.id);
 								}
 							}}
 						>
 							<TruncatedText text={option.model} class="min-w-0 flex-1 text-left" />
-
-							{#if missingModalities}
-								<span class="flex shrink-0 items-center gap-1 text-muted-foreground/70">
-									{#if missingModalities.vision}
-										<Tooltip.Root>
-											<Tooltip.Trigger>
-												<EyeOff class="h-3.5 w-3.5" />
-											</Tooltip.Trigger>
-											<Tooltip.Content class="z-[9999]">
-												<p>No vision support</p>
-											</Tooltip.Content>
-										</Tooltip.Root>
-									{/if}
-									{#if missingModalities.audio}
-										<Tooltip.Root>
-											<Tooltip.Trigger>
-												<MicOff class="h-3.5 w-3.5" />
-											</Tooltip.Trigger>
-											<Tooltip.Content class="z-[9999]">
-												<p>No audio support</p>
-											</Tooltip.Content>
-										</Tooltip.Root>
-									{/if}
-								</span>
-							{/if}
 
 							{#if isLoading}
 								<Tooltip.Root>

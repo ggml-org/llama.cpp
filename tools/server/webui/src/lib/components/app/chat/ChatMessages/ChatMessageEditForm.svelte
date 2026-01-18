@@ -5,23 +5,47 @@
 	import { ChatAttachmentsList, DialogConfirmation, ModelsSelector } from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-	import { AttachmentType, FileTypeCategory, MimeTypeText } from '$lib/enums';
+	import { MimeTypeText } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
-	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { modelsStore } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
-	import {
-		autoResizeTextarea,
-		getFileTypeCategory,
-		getFileTypeCategoryByExtension,
-		parseClipboardContent
-	} from '$lib/utils';
+	import { autoResizeTextarea, parseClipboardContent } from '$lib/utils';
 
-	const editCtx = getMessageEditContext();
+	interface Props {
+		editedContent: string;
+		editedExtras?: DatabaseMessageExtra[];
+		editedUploadedFiles?: ChatUploadedFile[];
+		originalContent: string;
+		originalExtras?: DatabaseMessageExtra[];
+		showSaveOnlyOption?: boolean;
+		onCancelEdit: () => void;
+		onSaveEdit: () => void;
+		onSaveEditOnly?: () => void;
+		onEditKeydown: (event: KeyboardEvent) => void;
+		onEditedContentChange: (content: string) => void;
+		onEditedExtrasChange?: (extras: DatabaseMessageExtra[]) => void;
+		onEditedUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
+		textareaElement?: HTMLTextAreaElement;
+	}
 
-	let inputAreaRef: ChatForm | undefined = $state(undefined);
+	let {
+		editedContent,
+		editedExtras = [],
+		editedUploadedFiles = [],
+		originalContent,
+		originalExtras = [],
+		showSaveOnlyOption = false,
+		onCancelEdit,
+		onSaveEdit,
+		onSaveEditOnly,
+		onEditKeydown,
+		onEditedContentChange,
+		onEditedExtrasChange,
+		onEditedUploadedFilesChange,
+		textareaElement = $bindable()
+	}: Props = $props();
+
+	let fileInputElement: HTMLInputElement | undefined = $state();
 	let saveWithoutRegenerate = $state(false);
 	let showDiscardDialog = $state(false);
 
@@ -43,7 +67,17 @@
 			(editCtx.editedUploadedFiles && editCtx.editedUploadedFiles.length > 0)
 	);
 
-	let canSubmit = $derived(editCtx.editedContent.trim().length > 0 || hasAttachments);
+	let canSubmit = $derived(editedContent.trim().length > 0 || hasAttachments);
+
+	function handleFileInputChange(event: Event) {
+		const input = event.target as HTMLInputElement;
+		if (!input.files || input.files.length === 0) return;
+
+		const files = Array.from(input.files);
+
+		processNewFiles(files);
+		input.value = '';
+	}
 
 	function handleGlobalKeydown(event: KeyboardEvent) {
 		if (event.key === KeyboardKey.ESCAPE) {
@@ -118,6 +152,52 @@
 		onFilesAdd={handleFilesAdd}
 		onSubmit={handleSubmit}
 	/>
+
+	<div class="relative min-h-[48px] px-5 py-3">
+		<textarea
+			bind:this={textareaElement}
+			bind:value={editedContent}
+			class="field-sizing-content max-h-80 min-h-10 w-full resize-none bg-transparent text-sm outline-none"
+			onkeydown={onEditKeydown}
+			oninput={(e) => {
+				autoResizeTextarea(e.currentTarget);
+				onEditedContentChange(e.currentTarget.value);
+			}}
+			onpaste={handlePaste}
+			placeholder="Edit your message..."
+		></textarea>
+
+		<div class="flex w-full items-center gap-3" style="container-type: inline-size">
+			<Button
+				class="h-8 w-8 shrink-0 rounded-full bg-transparent p-0 text-muted-foreground hover:bg-foreground/10 hover:text-foreground"
+				onclick={() => fileInputElement?.click()}
+				type="button"
+				title="Add attachment"
+			>
+				<span class="sr-only">Attach files</span>
+
+				<Paperclip class="h-4 w-4" />
+			</Button>
+
+			<div class="flex-1"></div>
+
+			{#if isRouter}
+				<ModelsSelector forceForegroundText={true} useGlobalSelection={true} />
+			{/if}
+
+			<Button
+				class="h-8 w-8 shrink-0 rounded-full p-0"
+				onclick={handleSubmit}
+				disabled={!canSubmit}
+				type="button"
+				title={saveWithoutRegenerate ? 'Save changes' : 'Send and regenerate'}
+			>
+				<span class="sr-only">{saveWithoutRegenerate ? 'Save' : 'Send'}</span>
+
+				<ArrowUp class="h-5 w-5" />
+			</Button>
+		</div>
+	</div>
 </div>
 
 <div class="mt-2 flex w-full max-w-[80%] items-center justify-between">
