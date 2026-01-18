@@ -100,7 +100,6 @@
 	{#if isEditing}
 		<ChatMessageEditForm
 			bind:textareaElement
-			messageId={message.id}
 			{editedContent}
 			{editedExtras}
 			{editedUploadedFiles}

@@ -8,7 +8,6 @@
 		ModelsSelector
 	} from '$lib/components/app';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
-	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
 	import { agenticStreamingToolCall } from '$lib/stores/agentic.svelte';
 	import { autoResizeTextarea, copyToClipboard } from '$lib/utils';
@@ -20,7 +19,6 @@
 	import { MessageRole } from '$lib/enums';
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { config } from '$lib/stores/settings.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { AGENTIC_TAGS, REASONING_TAGS } from '$lib/constants/agentic';
 
@@ -96,11 +94,6 @@
 	let showRawOutput = $state(false);
 
 	let displayedModel = $derived(message.model ?? null);
-
-	const { handleModelChange } = useModelChangeValidation({
-		getRequiredModalities: () => conversationsStore.getModalitiesUpToMessage(message.id),
-		onSuccess: (modelName) => onRegenerate(modelName)
-	});
 
 	function handleCopyModel() {
 		void copyToClipboard(displayedModel ?? '');
@@ -190,12 +183,7 @@
 		{#if displayedModel}
 			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				{#if isRouter}
-					<ModelsSelector
-						currentModel={displayedModel}
-						onModelChange={handleModelChange}
-						disabled={isLoading()}
-						upToMessageId={message.id}
-					/>
+					<ModelsSelector currentModel={displayedModel} disabled={isLoading()} />
 				{:else}
 					<ModelBadge model={displayedModel || undefined} onclick={handleCopyModel} />
 				{/if}

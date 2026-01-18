@@ -15,8 +15,7 @@
 	import { modelsStore, modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { activeMessages, usedModalities } from '$lib/stores/conversations.svelte';
-	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
+	import { activeMessages } from '$lib/stores/conversations.svelte';
 
 	interface Props {
 		canSend?: boolean;
@@ -157,15 +156,6 @@
 		selectorModelRef?.open();
 	}
 
-	const { handleModelChange } = useModelChangeValidation({
-		getRequiredModalities: () => usedModalities(),
-		onValidationFailure: async (previousModelId) => {
-			if (previousModelId) {
-				await modelsStore.selectModelById(previousModelId);
-			}
-		}
-	});
-
 	let showMcpDialog = $state(false);
 </script>
 
@@ -189,7 +179,6 @@
 			currentModel={conversationModel}
 			forceForegroundText={true}
 			useGlobalSelection={true}
-			onModelChange={handleModelChange}
 		/>
 	</div>
 

@@ -5,22 +5,13 @@
 	import { ChatAttachmentsList, DialogConfirmation, ModelsSelector } from '$lib/components/app';
 	import { INPUT_CLASSES } from '$lib/constants/css-classes';
 	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-	import { AttachmentType, FileTypeCategory, MimeTypeText } from '$lib/enums';
+	import { MimeTypeText } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
-	import { useModelChangeValidation } from '$lib/hooks/use-model-change-validation.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import { modelsStore } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
-	import {
-		autoResizeTextarea,
-		getFileTypeCategory,
-		getFileTypeCategoryByExtension,
-		parseClipboardContent
-	} from '$lib/utils';
+	import { autoResizeTextarea, parseClipboardContent } from '$lib/utils';
 
 	interface Props {
-		messageId: string;
 		editedContent: string;
 		editedExtras?: DatabaseMessageExtra[];
 		editedUploadedFiles?: ChatUploadedFile[];
@@ -38,7 +29,6 @@
 	}
 
 	let {
-		messageId,
 		editedContent,
 		editedExtras = [],
 		editedUploadedFiles = [],
@@ -86,59 +76,6 @@
 	);
 
 	let canSubmit = $derived(editedContent.trim().length > 0 || hasAttachments);
-
-	function getEditedAttachmentsModalities(): ModelModalities {
-		const modalities: ModelModalities = { vision: false, audio: false };
-
-		for (const extra of editedExtras) {
-			if (extra.type === AttachmentType.IMAGE) {
-				modalities.vision = true;
-			}
-
-			if (
-				extra.type === AttachmentType.PDF &&
-				'processedAsImages' in extra &&
-				extra.processedAsImages
-			) {
-				modalities.vision = true;
-			}
-
-			if (extra.type === AttachmentType.AUDIO) {
-				modalities.audio = true;
-			}
-		}
-
-		for (const file of editedUploadedFiles) {
-			const category = getFileTypeCategory(file.type) || getFileTypeCategoryByExtension(file.name);
-			if (category === FileTypeCategory.IMAGE) {
-				modalities.vision = true;
-			}
-			if (category === FileTypeCategory.AUDIO) {
-				modalities.audio = true;
-			}
-		}
-
-		return modalities;
-	}
-
-	function getRequiredModalities(): ModelModalities {
-		const beforeModalities = conversationsStore.getModalitiesUpToMessage(messageId);
-		const editedModalities = getEditedAttachmentsModalities();
-
-		return {
-			vision: beforeModalities.vision || editedModalities.vision,
-			audio: beforeModalities.audio || editedModalities.audio
-		};
-	}
-
-	const { handleModelChange } = useModelChangeValidation({
-		getRequiredModalities,
-		onValidationFailure: async (previousModelId) => {
-			if (previousModelId) {
-				await modelsStore.selectModelById(previousModelId);
-			}
-		}
-	});
 
 	function handleFileInputChange(event: Event) {
 		const input = event.target as HTMLInputElement;
@@ -336,11 +273,7 @@
 			<div class="flex-1"></div>
 
 			{#if isRouter}
-				<ModelsSelector
-					forceForegroundText={true}
-					useGlobalSelection={true}
-					onModelChange={handleModelChange}
-				/>
+				<ModelsSelector forceForegroundText={true} useGlobalSelection={true} />
 			{/if}
 
 			<Button

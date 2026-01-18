@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { ChevronDown, EyeOff, Loader2, MicOff, Package, Power } from '@lucide/svelte';
+	import { ChevronDown, Loader2, Package, Power } from '@lucide/svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { cn } from '$lib/components/ui/utils';
 	import {
@@ -10,10 +10,8 @@
 		modelsUpdating,
 		selectedModelId,
 		routerModels,
-		propsCacheVersion,
 		singleModelName
 	} from '$lib/stores/models.svelte';
-	import { usedModalities, conversationsStore } from '$lib/stores/conversations.svelte';
 	import { ServerModelStatus } from '$lib/enums';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import {
@@ -32,12 +30,6 @@
 		forceForegroundText?: boolean;
 		/** When true, user's global selection takes priority over currentModel (for form selector) */
 		useGlobalSelection?: boolean;
-		/**
-		 * When provided, only consider modalities from messages BEFORE this message.
-		 * Used for regeneration - allows selecting models that don't support modalities
-		 * used in later messages.
-		 */
-		upToMessageId?: string;
 	}
 
 	let {
@@ -46,8 +38,7 @@
 		onModelChange,
 		disabled = false,
 		forceForegroundText = false,
-		useGlobalSelection = false,
-		upToMessageId
+		useGlobalSelection = false
 	}: Props = $props();
 
 	let options = $derived(modelOptions());
@@ -60,72 +51,9 @@
 	// Reactive router models state - needed for proper reactivity of status checks
 	let currentRouterModels = $derived(routerModels());
 
-	let requiredModalities = $derived(
-		upToMessageId ? conversationsStore.getModalitiesUpToMessage(upToMessageId) : usedModalities()
-	);
-
 	function getModelStatus(modelId: string): ServerModelStatus | null {
 		const model = currentRouterModels.find((m) => m.id === modelId);
 		return (model?.status?.value as ServerModelStatus) ?? null;
-	}
-
-	/**
-	 * Checks if a model supports all modalities used in the conversation.
-	 * Returns true if the model can be selected, false if it should be disabled.
-	 */
-	function isModelCompatible(option: ModelOption): boolean {
-		void propsCacheVersion();
-
-		const modelModalities = modelsStore.getModelModalities(option.model);
-
-		if (!modelModalities) {
-			const status = getModelStatus(option.model);
-
-			if (status === ServerModelStatus.LOADED) {
-				if (requiredModalities.vision || requiredModalities.audio) return false;
-			}
-
-			return true;
-		}
-
-		if (requiredModalities.vision && !modelModalities.vision) return false;
-		if (requiredModalities.audio && !modelModalities.audio) return false;
-
-		return true;
-	}
-
-	/**
-	 * Gets missing modalities for a model.
-	 * Returns object with vision/audio booleans indicating what's missing.
-	 */
-	function getMissingModalities(option: ModelOption): { vision: boolean; audio: boolean } | null {
-		void propsCacheVersion();
-
-		const modelModalities = modelsStore.getModelModalities(option.model);
-
-		if (!modelModalities) {
-			const status = getModelStatus(option.model);
-
-			if (status === ServerModelStatus.LOADED) {
-				const missing = {
-					vision: requiredModalities.vision,
-					audio: requiredModalities.audio
-				};
-
-				if (missing.vision || missing.audio) return missing;
-			}
-
-			return null;
-		}
-
-		const missing = {
-			vision: requiredModalities.vision && !modelModalities.vision,
-			audio: requiredModalities.audio && !modelModalities.audio
-		};
-
-		if (!missing.vision && !missing.audio) return null;
-
-		return missing;
 	}
 
 	let isHighlightedCurrentModelActive = $derived(
@@ -157,13 +85,6 @@
 					option.model.toLowerCase().includes(term) || option.name?.toLowerCase().includes(term)
 			);
 		})()
-	);
-
-	// Get indices of compatible options for keyboard navigation
-	let compatibleIndices = $derived(
-		filteredOptions
-			.map((option, index) => (isModelCompatible(option) ? index : -1))
-			.filter((i) => i !== -1)
 	);
 
 	// Reset highlighted index when search term changes
@@ -214,34 +135,30 @@
 
 		if (event.key === 'ArrowDown') {
 			event.preventDefault();
-			if (compatibleIndices.length === 0) return;
+			if (filteredOptions.length === 0) return;
 
-			const currentPos = compatibleIndices.indexOf(highlightedIndex);
-			if (currentPos === -1 || currentPos === compatibleIndices.length - 1) {
-				highlightedIndex = compatibleIndices[0];
+			if (highlightedIndex === -1 || highlightedIndex === filteredOptions.length - 1) {
+				highlightedIndex = 0;
 			} else {
-				highlightedIndex = compatibleIndices[currentPos + 1];
+				highlightedIndex += 1;
 			}
 		} else if (event.key === 'ArrowUp') {
 			event.preventDefault();
-			if (compatibleIndices.length === 0) return;
+			if (filteredOptions.length === 0) return;
 
-			const currentPos = compatibleIndices.indexOf(highlightedIndex);
-			if (currentPos === -1 || currentPos === 0) {
-				highlightedIndex = compatibleIndices[compatibleIndices.length - 1];
+			if (highlightedIndex === -1 || highlightedIndex === 0) {
+				highlightedIndex = filteredOptions.length - 1;
 			} else {
-				highlightedIndex = compatibleIndices[currentPos - 1];
+				highlightedIndex -= 1;
 			}
 		} else if (event.key === 'Enter') {
 			event.preventDefault();
 			if (highlightedIndex >= 0 && highlightedIndex < filteredOptions.length) {
 				const option = filteredOptions[highlightedIndex];
-				if (isModelCompatible(option)) {
-					handleSelect(option.id);
-				}
-			} else if (compatibleIndices.length > 0) {
-				// No selection - highlight first compatible option
-				highlightedIndex = compatibleIndices[0];
+				handleSelect(option.id);
+			} else if (filteredOptions.length > 0) {
+				// No selection - highlight first option
+				highlightedIndex = 0;
 			}
 		}
 	}
@@ -412,62 +329,30 @@
 						{@const isLoaded = status === ServerModelStatus.LOADED}
 						{@const isLoading = status === ServerModelStatus.LOADING}
 						{@const isSelected = currentModel === option.model || activeId === option.id}
-						{@const isCompatible = isModelCompatible(option)}
 						{@const isHighlighted = index === highlightedIndex}
-						{@const missingModalities = getMissingModalities(option)}
 
 						<div
 							class={cn(
 								'group flex w-full items-center gap-2 rounded-sm p-2 text-left text-sm transition focus:outline-none',
-								isCompatible
-									? 'cursor-pointer hover:bg-muted focus:bg-muted'
-									: 'cursor-not-allowed opacity-50',
+								'cursor-pointer hover:bg-muted focus:bg-muted',
 								isSelected || isHighlighted
 									? 'bg-accent text-accent-foreground'
-									: isCompatible
-										? 'hover:bg-accent hover:text-accent-foreground'
-										: '',
+									: 'hover:bg-accent hover:text-accent-foreground',
 								isLoaded ? 'text-popover-foreground' : 'text-muted-foreground'
 							)}
 							role="option"
 							aria-selected={isSelected || isHighlighted}
-							aria-disabled={!isCompatible}
-							tabindex={isCompatible ? 0 : -1}
-							onclick={() => isCompatible && handleSelect(option.id)}
+							tabindex="0"
+							onclick={() => handleSelect(option.id)}
 							onmouseenter={() => (highlightedIndex = index)}
 							onkeydown={(e) => {
-								if (isCompatible && (e.key === 'Enter' || e.key === ' ')) {
+								if (e.key === 'Enter' || e.key === ' ') {
 									e.preventDefault();
 									handleSelect(option.id);
 								}
 							}}
 						>
 							<TruncatedText text={option.model} class="min-w-0 flex-1 text-left" />
-
-							{#if missingModalities}
-								<span class="flex shrink-0 items-center gap-1 text-muted-foreground/70">
-									{#if missingModalities.vision}
-										<Tooltip.Root>
-											<Tooltip.Trigger>
-												<EyeOff class="h-3.5 w-3.5" />
-											</Tooltip.Trigger>
-											<Tooltip.Content class="z-[9999]">
-												<p>No vision support</p>
-											</Tooltip.Content>
-										</Tooltip.Root>
-									{/if}
-									{#if missingModalities.audio}
-										<Tooltip.Root>
-											<Tooltip.Trigger>
-												<MicOff class="h-3.5 w-3.5" />
-											</Tooltip.Trigger>
-											<Tooltip.Content class="z-[9999]">
-												<p>No audio support</p>
-											</Tooltip.Content>
-										</Tooltip.Root>
-									{/if}
-								</span>
-							{/if}
 
 							{#if isLoading}
 								<Tooltip.Root>
