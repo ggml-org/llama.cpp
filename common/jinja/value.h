@@ -146,7 +146,7 @@ struct value_t {
     virtual string as_string() const { throw std::runtime_error(type() + " is not a string value"); }
     virtual bool as_bool() const { throw std::runtime_error(type() + " is not a bool value"); }
     virtual const std::vector<value> & as_array() const { throw std::runtime_error(type() + " is not an array value"); }
-    virtual const std::map<std::string, value> & as_object() const { throw std::runtime_error(type() + " is not an object value"); }
+    virtual const std::vector<std::pair<std::string, value>> & as_ordered_object() const { throw std::runtime_error(type() + " is not an object value"); }
     virtual value invoke(const func_args &) const { throw std::runtime_error(type() + " is not a function value"); }
     virtual bool is_none() const { return false; }
     virtual bool is_undefined() const { return false; }
@@ -154,6 +154,9 @@ struct value_t {
         throw std::runtime_error("No builtins available for type " + type());
     }
 
+    virtual bool has_key(const std::string & key) {
+        return val_obj.unordered.find(key) != val_obj.unordered.end();
+    }
     virtual value & at(const std::string & key, value & default_val) {
         auto it = val_obj.unordered.find(key);
         if (it == val_obj.unordered.end()) {
@@ -308,11 +311,16 @@ struct value_object_t : public value_t {
             val_obj.insert(pair.first, pair.second);
         }
     }
+    value_object_t(const std::vector<std::pair<std::string, value>> & obj) {
+        for (const auto & pair : obj) {
+            val_obj.insert(pair.first, pair.second);
+        }
+    }
     void insert(const std::string & key, const value & val) {
         val_obj.insert(key, val);
     }
     virtual std::string type() const override { return "Object"; }
-    virtual const std::map<std::string, value> & as_object() const override { return val_obj.unordered; }
+    virtual const std::vector<std::pair<std::string, value>> & as_ordered_object() const override { return val_obj.ordered; }
     virtual bool as_bool() const override {
         return !val_obj.unordered.empty();
     }
