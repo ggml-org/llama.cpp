@@ -42,6 +42,7 @@ static std::atomic<int> g_host_cache_guard_enabled{ -1 };
 static constexpr size_t k_host_cache_guard_bytes   = 64;
 static constexpr uint8_t k_host_cache_guard_pattern = 0xA5;
 static std::atomic<int> g_cache_assert_enabled{ -1 };
+static std::atomic<int> g_copy_trace_enabled{ -1 };
 
 static bool parse_env_mb_value(const char * name, size_t & out_mb) {
     const char * env = std::getenv(name);
@@ -105,6 +106,17 @@ static bool cache_assert_enabled() {
     return enabled != 0;
 }
 
+static bool copy_trace_enabled() {
+    int enabled = g_copy_trace_enabled.load(std::memory_order_acquire);
+    if (enabled >= 0) {
+        return enabled != 0;
+    }
+    const char * env = std::getenv("GGML_SYCL_COPY_TRACE");
+    enabled = (env && std::atoi(env) != 0) ? 1 : 0;
+    g_copy_trace_enabled.store(enabled, std::memory_order_release);
+    return enabled != 0;
+}
+
 static bool host_cache_guard_enabled() {
     int enabled = g_host_cache_guard_enabled.load(std::memory_order_acquire);
     if (enabled >= 0) {
@@ -116,6 +128,63 @@ static bool host_cache_guard_enabled() {
     return enabled != 0;
 }
 
+static bool host_cache_check_guard_locked(const host_cache_entry & entry,
+                                          const ggml_sycl_cache_id & key,
+                                          const char * where) {
+    if (entry.guard_size == 0 || entry.host_ptr == nullptr) {
+        return true;
+    }
+    const uint8_t * guard = static_cast<const uint8_t *>(entry.host_ptr) + entry.size;
+    for (size_t i = 0; i < entry.guard_size; ++i) {
+        if (guard[i] != k_host_cache_guard_pattern) {
+            g_host_cache_guard_errors.fetch_add(1, std::memory_order_relaxed);
+            GGML_LOG_ERROR(
+                "[UNIFIED-CACHE] host_cache guard corrupted at %s: model=%llu name_hash=0x%llx layout=%d size=%zu guard=%zu type=%d L%d E%d\n",
+                where,
+                (unsigned long long) key.model_id,
+                (unsigned long long) key.name_hash,
+                (int) entry.layout,
+                entry.size,
+                entry.guard_size,
+                (int) entry.type,
+                entry.layer_id,
+                entry.expert_id);
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool host_cache_check_pinned_guard_locked(const host_cache_entry & entry,
+                                                 const ggml_sycl_cache_id & key,
+                                                 const char * where) {
+    if (!host_cache_guard_enabled()) {
+        return true;
+    }
+    if (!entry.pinned_alloc || !entry.owns_ptr || entry.guard_size == 0 || entry.host_ptr == nullptr) {
+        return true;
+    }
+    const uint8_t * guard = static_cast<const uint8_t *>(entry.host_ptr) + entry.size;
+    for (size_t i = 0; i < entry.guard_size; ++i) {
+        if (guard[i] != k_host_cache_guard_pattern) {
+            g_host_cache_guard_errors.fetch_add(1, std::memory_order_relaxed);
+            GGML_LOG_ERROR(
+                "[UNIFIED-CACHE] pinned pool guard corrupted at %s: model=%llu name_hash=0x%llx layout=%d size=%zu guard=%zu type=%d L%d E%d\n",
+                where,
+                (unsigned long long) key.model_id,
+                (unsigned long long) key.name_hash,
+                (int) entry.layout,
+                entry.size,
+                entry.guard_size,
+                (int) entry.type,
+                entry.layer_id,
+                entry.expert_id);
+            return false;
+        }
+    }
+    return true;
+}
+
 int host_cache_guard_error_count() {
     return g_host_cache_guard_errors.load(std::memory_order_acquire);
 }
@@ -123,6 +192,14 @@ int host_cache_guard_error_count() {
 void host_cache_guard_reset() {
     g_host_cache_guard_errors.store(0, std::memory_order_release);
     g_host_cache_guard_enabled.store(-1, std::memory_order_release);
+}
+
+bool host_cache_guard_check_all(int device_id, const char * where) {
+    host_cache * hcache = get_host_cache_for_device(device_id);
+    if (!hcache) {
+        return true;
+    }
+    return hcache->check_all_guards(where);
 }
 
 // atexit handler to prevent SYCL cleanup during static destruction
@@ -156,6 +233,10 @@ unified_cache::unified_cache(sycl::queue & queue, size_t budget_bytes, size_t st
 
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] Initialized: budget=%.1f MB, staging=%.1f MB\n", budget_ / (1024.0f * 1024.0f),
                   staging_size_ / (1024.0f * 1024.0f));
+
+    // Ensure unordered_map has buckets before any find() calls.
+    entries_.rehash(1);
+    id_to_key_.rehash(1);
 }
 
 unified_cache::~unified_cache() {
@@ -380,6 +461,9 @@ host_cache::host_cache(sycl::queue & queue, size_t budget_bytes) : queue_(queue)
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] Host cache initialized: budget=%.1f MB (using pinned pool)\n",
                   budget_ / (1024.0f * 1024.0f));
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] DEBUG: host_cache constructor finished\n");
+
+    // Ensure unordered_maps have buckets before any find() calls.
+    entries_.rehash(1);
 }
 
 host_cache::~host_cache() {
@@ -407,11 +491,10 @@ host_cache::~host_cache() {
         free_entry(pair.second);
     }
     entries_.clear();
-    ptr_to_key_.clear();
     // pinned_pool_ will be destroyed normally here (its destructor calls sycl::free)
 }
 
-void * host_cache::ensure_cached_alloc(const void *                  key_ptr,
+void * host_cache::ensure_cached_alloc(const ggml_sycl_cache_id &     key_id,
                                        const void *                  src_ptr,
                                        size_t                        src_size,
                                        size_t                        dst_size,
@@ -433,7 +516,7 @@ void * host_cache::ensure_cached_alloc(const void *                  key_ptr,
     if (location_out) {
         *location_out = cache_location::HOST_MMAP;
     }
-    if (!key_ptr || !src_ptr || src_size == 0 || dst_size == 0) {
+    if (!key_id.valid || !src_ptr || src_size == 0 || dst_size == 0) {
         return nullptr;
     }
 
@@ -443,29 +526,33 @@ void * host_cache::ensure_cached_alloc(const void *                  key_ptr,
     const bool     can_alias = host_accessible && layout == GGML_LAYOUT_AOS && src_size == dst_size;
 
     std::lock_guard<std::mutex> lock(mutex_);
+    const ggml_sycl_cache_id & key_id_ref = key_id;
 
-    // Enforce single layout per tensor in host cache.
-    for (auto it_other = entries_.begin(); it_other != entries_.end();) {
-        const auto & other_key = it_other->first;
-        if (other_key.key_ptr != key_ptr || other_key.type != type || other_key.layer_id != layer_id ||
-            other_key.expert_id != expert_id || other_key.layout == layout) {
-            ++it_other;
-            continue;
-        }
-        if (it_other->second.pinned) {
-            GGML_LOG_ERROR("[UNIFIED-CACHE] host_cache layout conflict key=%p layout=%d vs %d (pinned)\n",
-                           key_ptr, (int) layout, (int) other_key.layout);
+    unified_cache_key key{ type, key_id_ref, layer_id, expert_id };
+    auto              it = entries_.find(key);
+    if (it != entries_.end() && it->second.layout != layout) {
+        if (it->second.pinned) {
+            GGML_SYCL_DEBUG(
+                "[UNIFIED-CACHE] host_cache layout switch blocked (pinned) model=%llu name_hash=0x%llx have=%d want=%d\n",
+                (unsigned long long) key_id_ref.model_id,
+                (unsigned long long) key_id_ref.name_hash,
+                (int) it->second.layout,
+                (int) layout);
             return nullptr;
         }
-        free_entry(it_other->second);
-        ptr_to_key_.erase({ key_ptr, other_key.layout });
-        it_other = entries_.erase(it_other);
+        free_entry(it->second);
+        entries_.erase(it);
+        it = entries_.end();
     }
-
-    unified_cache_key key{ type, key_ptr, layer_id, expert_id, layout };
-    auto              it = entries_.find(key);
     if (it != entries_.end()) {
         auto & entry           = it->second;
+        if (!host_cache_check_guard_locked(entry, key_id_ref, "ensure_cached_alloc") ||
+            !host_cache_check_pinned_guard_locked(entry, key_id_ref, "ensure_cached_alloc")) {
+            if (cache_assert_enabled()) {
+                GGML_ABORT("host_cache guard corruption detected");
+            }
+            return nullptr;
+        }
         bool   size_changed    = (dst_size != entry.size);
         bool   content_changed = validate_content && can_hash && (entry.content_hash != new_hash);
         bool   src_changed     = entry.src_ptr != src_ptr;
@@ -522,6 +609,18 @@ void * host_cache::ensure_cached_alloc(const void *                  key_ptr,
                     if (xmx_info) {
                         entry.xmx_info = *xmx_info;
                     }
+                    if (g_ggml_sycl_debug >= 2) {
+                        GGML_SYCL_DEBUG(
+                            "[HOST-CACHE] alias reuse: model=%llu name_hash=0x%llx layout=%d size=%zu ptr=%p pinned=%d owns=%d loc=%d\n",
+                            (unsigned long long) key_id_ref.model_id,
+                            (unsigned long long) key_id_ref.name_hash,
+                            (int) layout,
+                            entry.size,
+                            entry.host_ptr,
+                            entry.pinned_alloc ? 1 : 0,
+                            entry.owns_ptr ? 1 : 0,
+                            (int) entry.location);
+                    }
                     return entry.host_ptr;
                 }
                 GGML_SYCL_DEBUG("[UNIFIED-CACHE] pinned pool alloc failed during realloc (%zu bytes)\n", alloc_size);
@@ -543,6 +642,19 @@ void * host_cache::ensure_cached_alloc(const void *                  key_ptr,
             entry.owns_ptr     = true;
             entry.location     = cache_location::HOST_PINNED;
             used_ += dst_size;
+            if (g_ggml_sycl_debug >= 2) {
+                GGML_SYCL_DEBUG(
+                    "[HOST-CACHE] realloc: model=%llu name_hash=0x%llx layout=%d size=%zu ptr=%p guard=%zu pinned=%d owns=%d loc=%d\n",
+                    (unsigned long long) key_id_ref.model_id,
+                    (unsigned long long) key_id_ref.name_hash,
+                    (int) layout,
+                    entry.size,
+                    entry.host_ptr,
+                    entry.guard_size,
+                    entry.pinned_alloc ? 1 : 0,
+                    entry.owns_ptr ? 1 : 0,
+                    (int) entry.location);
+            }
         }
 
         entry.src_ptr      = src_ptr;
@@ -607,8 +719,19 @@ void * host_cache::ensure_cached_alloc(const void *                  key_ptr,
             if (xmx_info) {
                 entry.xmx_info = *xmx_info;
             }
-            entries_[key]                    = entry;
-            ptr_to_key_[{ key_ptr, layout }] = key;
+            entries_[key] = entry;
+            if (g_ggml_sycl_debug >= 2) {
+                GGML_SYCL_DEBUG(
+                    "[HOST-CACHE] alias insert: model=%llu name_hash=0x%llx layout=%d size=%zu ptr=%p pinned=%d owns=%d loc=%d\n",
+                    (unsigned long long) key_id_ref.model_id,
+                    (unsigned long long) key_id_ref.name_hash,
+                    (int) layout,
+                    entry.size,
+                    entry.host_ptr,
+                    entry.pinned_alloc ? 1 : 0,
+                    entry.owns_ptr ? 1 : 0,
+                    (int) entry.location);
+            }
             if (needs_fill) {
                 *needs_fill = false;
             }
@@ -647,8 +770,7 @@ void * host_cache::ensure_cached_alloc(const void *                  key_ptr,
     entry.pinned_alloc = pooled_alloc;
     entry.location     = cache_location::HOST_PINNED;
 
-    entries_[key]                    = entry;
-    ptr_to_key_[{ key_ptr, layout }] = key;
+    entries_[key] = entry;
     used_ += dst_size;
 
     if (needs_fill) {
@@ -661,22 +783,72 @@ void * host_cache::ensure_cached_alloc(const void *                  key_ptr,
         *location_out = entry.location;
     }
 
+    if (g_ggml_sycl_debug >= 2) {
+        GGML_SYCL_DEBUG(
+            "[HOST-CACHE] alloc: model=%llu name_hash=0x%llx layout=%d size=%zu ptr=%p guard=%zu pinned=%d owns=%d loc=%d\n",
+            (unsigned long long) key_id_ref.model_id,
+            (unsigned long long) key_id_ref.name_hash,
+            (int) layout,
+            entry.size,
+            entry.host_ptr,
+            entry.guard_size,
+            entry.pinned_alloc ? 1 : 0,
+            entry.owns_ptr ? 1 : 0,
+            (int) entry.location);
+    }
     return host_ptr;
 }
 
-bool host_cache::is_cached(const void * key_ptr, ggml_layout_mode layout) const {
+bool host_cache::is_cached(const ggml_sycl_cache_id & key_id,
+                           cache_entry_type type,
+                           int layer_id,
+                           int expert_id,
+                           ggml_layout_mode layout) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return ptr_to_key_.find({ key_ptr, layout }) != ptr_to_key_.end();
+    if (!key_id.valid) {
+        return false;
+    }
+    if (entries_.bucket_count() == 0) {
+        const_cast<decltype(entries_) &>(entries_).rehash(1);
+        GGML_LOG_WARN("[UNIFIED-CACHE] host_cache entries_ had zero buckets; rehashing\n");
+    }
+    unified_cache_key key{ type, key_id, layer_id, expert_id };
+    auto              it = entries_.find(key);
+    if (it == entries_.end()) {
+        return false;
+    }
+    if (it->second.layout != layout) {
+        return false;
+    }
+    return true;
 }
 
-void * host_cache::get(const void * key_ptr, ggml_layout_mode layout) {
+void * host_cache::get(const ggml_sycl_cache_id & key_id,
+                       cache_entry_type type,
+                       int layer_id,
+                       int expert_id,
+                       ggml_layout_mode layout) {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto                        it = ptr_to_key_.find({ key_ptr, layout });
-    if (it == ptr_to_key_.end()) {
+    if (!key_id.valid) {
         return nullptr;
     }
-    auto entry_it = entries_.find(it->second);
+    if (entries_.bucket_count() == 0) {
+        entries_.rehash(1);
+        GGML_LOG_WARN("[UNIFIED-CACHE] host_cache entries_ had zero buckets; rehashing\n");
+    }
+    unified_cache_key key{ type, key_id, layer_id, expert_id };
+    auto entry_it = entries_.find(key);
     if (entry_it == entries_.end()) {
+        return nullptr;
+    }
+    if (entry_it->second.layout != layout) {
+        return nullptr;
+    }
+    if (!host_cache_check_guard_locked(entry_it->second, key_id, "get") ||
+        !host_cache_check_pinned_guard_locked(entry_it->second, key_id, "get")) {
+        if (cache_assert_enabled()) {
+            GGML_ABORT("host_cache guard corruption detected");
+        }
         return nullptr;
     }
     entry_it->second.access_count++;
@@ -684,57 +856,161 @@ void * host_cache::get(const void * key_ptr, ggml_layout_mode layout) {
     return entry_it->second.host_ptr;
 }
 
-cache_location host_cache::get_location(const void * key_ptr, ggml_layout_mode layout) const {
+cache_location host_cache::get_location(const ggml_sycl_cache_id & key_id,
+                                        cache_entry_type type,
+                                        int layer_id,
+                                        int expert_id,
+                                        ggml_layout_mode layout) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto                        it = ptr_to_key_.find({ key_ptr, layout });
-    if (it == ptr_to_key_.end()) {
+    if (!key_id.valid) {
         return cache_location::HOST_MMAP;
     }
-    auto entry_it = entries_.find(it->second);
+    if (entries_.bucket_count() == 0) {
+        const_cast<decltype(entries_) &>(entries_).rehash(1);
+        GGML_LOG_WARN("[UNIFIED-CACHE] host_cache entries_ had zero buckets; rehashing\n");
+    }
+    unified_cache_key key{ type, key_id, layer_id, expert_id };
+    auto entry_it = entries_.find(key);
     if (entry_it == entries_.end()) {
+        return cache_location::HOST_MMAP;
+    }
+    if (entry_it->second.layout != layout) {
+        return cache_location::HOST_MMAP;
+    }
+    if (!host_cache_check_guard_locked(entry_it->second, key_id, "get_location") ||
+        !host_cache_check_pinned_guard_locked(entry_it->second, key_id, "get_location")) {
+        if (cache_assert_enabled()) {
+            GGML_ABORT("host_cache guard corruption detected");
+        }
         return cache_location::HOST_MMAP;
     }
     return entry_it->second.location;
 }
 
-void host_cache::remove(const void *     key_ptr,
-                        cache_entry_type type,
-                        int              layer_id,
-                        int              expert_id,
-                        ggml_layout_mode layout) {
+bool host_cache::check_guard(const ggml_sycl_cache_id & key_id,
+                             cache_entry_type type,
+                             int layer_id,
+                             int expert_id,
+                             ggml_layout_mode layout) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    unified_cache_key           key{ type, key_ptr, layer_id, expert_id, layout };
+    if (!key_id.valid) {
+        return true;
+    }
+    if (entries_.bucket_count() == 0) {
+        const_cast<decltype(entries_) &>(entries_).rehash(1);
+        GGML_LOG_WARN("[UNIFIED-CACHE] host_cache entries_ had zero buckets; rehashing\n");
+    }
+    unified_cache_key key{ type, key_id, layer_id, expert_id };
+    auto entry_it = entries_.find(key);
+    if (entry_it == entries_.end()) {
+        return true;
+    }
+    if (entry_it->second.layout != layout) {
+        GGML_LOG_ERROR(
+            "[UNIFIED-CACHE] host_cache layout mismatch in check_guard model=%llu name_hash=0x%llx have=%d want=%d\n",
+            (unsigned long long) key_id.model_id,
+            (unsigned long long) key_id.name_hash,
+            (int) entry_it->second.layout,
+            (int) layout);
+        if (cache_assert_enabled()) {
+            GGML_ABORT("host_cache layout mismatch");
+        }
+        return false;
+    }
+    return host_cache_check_guard_locked(entry_it->second, key_id, "check_guard") &&
+           host_cache_check_pinned_guard_locked(entry_it->second, key_id, "check_guard");
+}
+
+bool host_cache::check_all_guards(const char * where) {
+    if (!host_cache_guard_enabled()) {
+        return true;
+    }
+    const char * tag = (where && where[0]) ? where : "check_all_guards";
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (entries_.bucket_count() == 0) {
+        entries_.rehash(1);
+        GGML_LOG_WARN("[UNIFIED-CACHE] host_cache entries_ had zero buckets; rehashing\n");
+    }
+    bool ok = true;
+    for (const auto & pair : entries_) {
+        const unified_cache_key & key   = pair.first;
+        const host_cache_entry &  entry = pair.second;
+        if (!host_cache_check_guard_locked(entry, key.id, tag) ||
+            !host_cache_check_pinned_guard_locked(entry, key.id, tag)) {
+            ok = false;
+        }
+    }
+    if (!ok && cache_assert_enabled()) {
+        GGML_ABORT("host_cache guard corruption detected");
+    }
+    return ok;
+}
+
+void host_cache::remove(const ggml_sycl_cache_id & key_id,
+                        cache_entry_type          type,
+                        int                       layer_id,
+                        int                       expert_id,
+                        ggml_layout_mode          layout) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!key_id.valid) {
+        return;
+    }
+    if (entries_.bucket_count() == 0) {
+        entries_.rehash(1);
+        GGML_LOG_WARN("[UNIFIED-CACHE] host_cache entries_ had zero buckets; rehashing\n");
+    }
+    unified_cache_key           key{ type, key_id, layer_id, expert_id };
     auto                        it = entries_.find(key);
     if (it == entries_.end()) {
         return;
     }
+    if (it->second.layout != layout) {
+        GGML_SYCL_DEBUG(
+            "[UNIFIED-CACHE] host_cache remove layout mismatch model=%llu name_hash=0x%llx have=%d want=%d (removing cached)\n",
+            (unsigned long long) key_id.model_id,
+            (unsigned long long) key_id.name_hash,
+            (int) it->second.layout,
+            (int) layout);
+    }
+    if (!host_cache_check_guard_locked(it->second, key_id, "remove") ||
+        !host_cache_check_pinned_guard_locked(it->second, key_id, "remove")) {
+        if (cache_assert_enabled()) {
+            GGML_ABORT("host_cache guard corruption detected");
+        }
+    }
     free_entry(it->second);
     entries_.erase(it);
-    auto ptr_it = ptr_to_key_.find({ key_ptr, layout });
-    if (ptr_it != ptr_to_key_.end() && ptr_it->second == key) {
-        ptr_to_key_.erase(ptr_it);
+}
+
+void host_cache::pin(const ggml_sycl_cache_id & key_id,
+                     cache_entry_type          type,
+                     int                       layer_id,
+                     int                       expert_id,
+                     ggml_layout_mode          layout) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!key_id.valid) {
+        return;
+    }
+    unified_cache_key key{ type, key_id, layer_id, expert_id };
+    auto entry_it = entries_.find(key);
+    if (entry_it != entries_.end() && entry_it->second.layout == layout) {
+        entry_it->second.pinned = true;
     }
 }
 
-void host_cache::pin(const void * key_ptr, ggml_layout_mode layout) {
+void host_cache::unpin(const ggml_sycl_cache_id & key_id,
+                       cache_entry_type          type,
+                       int                       layer_id,
+                       int                       expert_id,
+                       ggml_layout_mode          layout) {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto                        it = ptr_to_key_.find({ key_ptr, layout });
-    if (it != ptr_to_key_.end()) {
-        auto entry_it = entries_.find(it->second);
-        if (entry_it != entries_.end()) {
-            entry_it->second.pinned = true;
-        }
+    if (!key_id.valid) {
+        return;
     }
-}
-
-void host_cache::unpin(const void * key_ptr, ggml_layout_mode layout) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto                        it = ptr_to_key_.find({ key_ptr, layout });
-    if (it != ptr_to_key_.end()) {
-        auto entry_it = entries_.find(it->second);
-        if (entry_it != entries_.end()) {
-            entry_it->second.pinned = false;
-        }
+    unified_cache_key key{ type, key_id, layer_id, expert_id };
+    auto entry_it = entries_.find(key);
+    if (entry_it != entries_.end() && entry_it->second.layout == layout) {
+        entry_it->second.pinned = false;
     }
 }
 
@@ -785,7 +1061,6 @@ size_t host_cache::evict_one() {
     if (it != entries_.end()) {
         evicted_bytes = it->second.size;
         free_entry(it->second);
-        ptr_to_key_.erase({ evict_key.key_ptr, evict_key.layout });
         entries_.erase(it);
     }
     return evicted_bytes;
@@ -828,7 +1103,7 @@ void host_cache::free_entry(host_cache_entry & entry) {
     entry.guard_size = 0;
 }
 
-void * unified_cache::ensure_cached(const void *     key_ptr,
+void * unified_cache::ensure_cached(const ggml_sycl_cache_id & key_id,
                                     const void *     src_ptr,
                                     size_t           size,
                                     cache_entry_type type,
@@ -836,21 +1111,44 @@ void * unified_cache::ensure_cached(const void *     key_ptr,
                                     int              expert_id,
                                     ggml_layout_mode layout,
                                     bool             validate_content) {
-    if (!key_ptr || !src_ptr || size == 0) {
+    if (!key_id.valid || !src_ptr || size == 0) {
         return nullptr;
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
     process_deferred_frees();
 
-    // Create key for lookup (uses stable key_ptr, not source data pointer)
-    unified_cache_key key{ type, key_ptr, layer_id, expert_id, layout };
+    // Create key for lookup (identity-only, no layout)
+    unified_cache_key key{ type, key_id, layer_id, expert_id };
 
     // Check if already cached
     auto it = entries_.find(key);
     if (it != entries_.end()) {
+        auto id_it = id_to_key_.find(key_id);
+        if (id_it == id_to_key_.end()) {
+            id_to_key_.emplace(key_id, key);
+        } else if (!(id_it->second == key)) {
+            GGML_LOG_ERROR("[UNIFIED-CACHE] identity collision in ensure_cached model=%llu name_hash=0x%llx\n",
+                           (unsigned long long) key_id.model_id,
+                           (unsigned long long) key_id.name_hash);
+            if (cache_assert_enabled()) {
+                GGML_ABORT("unified_cache id_to_key mismatch");
+            }
+        }
+        if (it->second.layout != layout) {
+            GGML_LOG_ERROR(
+                "[UNIFIED-CACHE] layout mismatch in ensure_cached model=%llu name_hash=0x%llx have=%d want=%d\n",
+                (unsigned long long) key_id.model_id,
+                (unsigned long long) key_id.name_hash,
+                (int) it->second.layout,
+                (int) layout);
+            if (cache_assert_enabled()) {
+                GGML_ABORT("unified_cache layout mismatch");
+            }
+            return nullptr;
+        }
         // Entry exists - check if size or content changed
-        // This handles the ABA problem: same key_ptr may be reused after free/alloc cycle
+        // This handles ABA: same identity with new src_ptr/size
         bool need_realloc = (size != it->second.size);
         bool need_recopy  = need_realloc || (it->second.src_ptr != src_ptr) || validate_content;
 
@@ -860,8 +1158,12 @@ void * unified_cache::ensure_cached(const void *     key_ptr,
 
             if (need_realloc) {
                 // Size changed - need to reallocate device buffer
-                GGML_SYCL_DEBUG("[UNIFIED-CACHE] Size changed for key %p (%zu -> %zu bytes), reallocating\n", key_ptr,
-                                it->second.size, size);
+                GGML_SYCL_DEBUG(
+                    "[UNIFIED-CACHE] Size changed for model=%llu name_hash=0x%llx (%zu -> %zu bytes), reallocating\n",
+                    (unsigned long long) key_id.model_id,
+                    (unsigned long long) key_id.name_hash,
+                    it->second.size,
+                    size);
 
                 const bool   was_pinned = it->second.pinned;
                 const size_t old_size   = it->second.size;
@@ -906,8 +1208,12 @@ void * unified_cache::ensure_cached(const void *     key_ptr,
                 it->second.pinned = was_pinned;
             } else if (content_changed) {
                 // Same size but content changed - just re-upload
-                GGML_SYCL_DEBUG("[UNIFIED-CACHE] Content changed for key %p (hash %llx -> %llx), re-uploading\n",
-                                key_ptr, (unsigned long long) it->second.content_hash, (unsigned long long) new_hash);
+                GGML_SYCL_DEBUG(
+                    "[UNIFIED-CACHE] Content changed for model=%llu name_hash=0x%llx (hash %llx -> %llx), re-uploading\n",
+                    (unsigned long long) key_id.model_id,
+                    (unsigned long long) key_id.name_hash,
+                    (unsigned long long) it->second.content_hash,
+                    (unsigned long long) new_hash);
                 copy_to_device(it->second.device_ptr, src_ptr, size);
                 it->second.content_hash = new_hash;
                 it->second.src_ptr      = src_ptr;
@@ -977,8 +1283,18 @@ void * unified_cache::ensure_cached(const void *     key_ptr,
     // NOTE: Reorder state is tracked in tensor->extra->optimized_feature, not here
 
     // Store in cache
-    entries_[key]                    = entry;
-    ptr_to_key_[{ key_ptr, layout }] = key;
+    entries_[key] = entry;
+    auto id_it = id_to_key_.find(key_id);
+    if (id_it == id_to_key_.end()) {
+        id_to_key_.emplace(key_id, key);
+    } else if (!(id_it->second == key)) {
+        GGML_LOG_ERROR("[UNIFIED-CACHE] identity collision on insert model=%llu name_hash=0x%llx\n",
+                       (unsigned long long) key_id.model_id,
+                       (unsigned long long) key_id.name_hash);
+        if (cache_assert_enabled()) {
+            GGML_ABORT("unified_cache id_to_key mismatch");
+        }
+    }
     used_ += size;
 
     GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cached %s: %.2f MB (used=%.1f/%.1f MB)\n",
@@ -988,7 +1304,7 @@ void * unified_cache::ensure_cached(const void *     key_ptr,
     return device_ptr;
 }
 
-void * unified_cache::ensure_cached_alloc(const void *     key_ptr,
+void * unified_cache::ensure_cached_alloc(const ggml_sycl_cache_id & key_id,
                                           const void *     src_ptr,
                                           size_t           src_size,
                                           size_t           alloc_size,
@@ -1001,18 +1317,51 @@ void * unified_cache::ensure_cached_alloc(const void *     key_ptr,
     if (needs_fill) {
         *needs_fill = true;
     }
-    if (!key_ptr || !src_ptr || src_size == 0 || alloc_size == 0) {
+    if (!key_id.valid || !src_ptr || src_size == 0 || alloc_size == 0) {
         return nullptr;
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
     process_deferred_frees();
 
-    unified_cache_key key{ type, key_ptr, layer_id, expert_id, layout };
+    unified_cache_key key{ type, key_id, layer_id, expert_id };
     const uint64_t    new_hash = compute_content_hash(src_ptr, src_size);
 
     auto it = entries_.find(key);
     if (it != entries_.end()) {
+        auto id_it = id_to_key_.find(key_id);
+        if (id_it == id_to_key_.end()) {
+            id_to_key_.emplace(key_id, key);
+        } else if (!(id_it->second == key)) {
+            GGML_LOG_ERROR("[UNIFIED-CACHE] identity collision in ensure_cached_alloc model=%llu name_hash=0x%llx\n",
+                           (unsigned long long) key_id.model_id,
+                           (unsigned long long) key_id.name_hash);
+            if (cache_assert_enabled()) {
+                GGML_ABORT("unified_cache id_to_key mismatch");
+            }
+        }
+        if (it->second.layout != layout) {
+            if (it->second.pinned) {
+                GGML_SYCL_DEBUG(
+                    "[UNIFIED-CACHE] layout switch blocked (pinned) model=%llu name_hash=0x%llx have=%d want=%d\n",
+                    (unsigned long long) key_id.model_id,
+                    (unsigned long long) key_id.name_hash,
+                    (int) it->second.layout,
+                    (int) layout);
+                return nullptr;
+            }
+            void * stale_ptr      = it->second.device_ptr;
+            size_t stale_size     = it->second.size;
+            bool   stale_host_res = it->second.host_resident;
+            entries_.erase(it);
+            it = entries_.end();
+            if (!stale_host_res && stale_ptr && stale_size > 0) {
+                enqueue_deferred_free(stale_ptr, stale_size);
+            }
+        }
+        if (it == entries_.end()) {
+            // Fall through to allocation path below
+        } else {
         bool need_realloc = (alloc_size != it->second.size);
         bool content_changed =
             validate_content || (it->second.src_ptr != src_ptr) || (it->second.content_hash != new_hash);
@@ -1075,7 +1424,8 @@ void * unified_cache::ensure_cached_alloc(const void *     key_ptr,
         if (needs_fill) {
             *needs_fill = need_realloc || content_changed;
         }
-        return it->second.device_ptr;
+            return it->second.device_ptr;
+        }
     }
 
     // Need to allocate new entry
@@ -1118,8 +1468,18 @@ void * unified_cache::ensure_cached_alloc(const void *     key_ptr,
     entry.host_resident   = false;
     entry.location        = cache_location::DEVICE;
 
-    entries_[key]                    = entry;
-    ptr_to_key_[{ key_ptr, layout }] = key;
+    entries_[key] = entry;
+    auto id_it = id_to_key_.find(key_id);
+    if (id_it == id_to_key_.end()) {
+        id_to_key_.emplace(key_id, key);
+    } else if (!(id_it->second == key)) {
+        GGML_LOG_ERROR("[UNIFIED-CACHE] identity collision on insert model=%llu name_hash=0x%llx\n",
+                       (unsigned long long) key_id.model_id,
+                       (unsigned long long) key_id.name_hash);
+        if (cache_assert_enabled()) {
+            GGML_ABORT("unified_cache id_to_key mismatch");
+        }
+    }
     used_ += alloc_size;
 
     if (needs_fill) {
@@ -1135,9 +1495,22 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
     result.layout   = request.layout;
     result.xmx_info = request.xmx_info;
 
-    if (!request.key_ptr || !request.src_ptr || request.src_size == 0 || request.dst_size == 0) {
+    if (!request.key.valid || !request.src_ptr || request.src_size == 0 || request.dst_size == 0) {
         result.status = cache_layout_status::INVALID;
         return result;
+    }
+    if (request.dst_size < request.src_size) {
+        GGML_LOG_ERROR(
+            "[UNIFIED-CACHE] invalid size: dst_size(%zu) < src_size(%zu) model=%llu name_hash=0x%llx layout=%d type=%d layer=%d expert=%d\n",
+            request.dst_size,
+            request.src_size,
+            (unsigned long long) request.key.model_id,
+            (unsigned long long) request.key.name_hash,
+            (int) request.layout,
+            (int) request.type,
+            request.layer_id,
+            request.expert_id);
+        GGML_ASSERT(false && "cache layout dst_size < src_size");
     }
 
     if (g_ggml_sycl_debug) {
@@ -1147,9 +1520,10 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
         } catch (...) {
         }
         GGML_SYCL_DEBUG(
-            "[UNIFIED-CACHE] layout request key=%p type=%d layer=%d expert=%d layout=%d src=%p (%s) src_size=%zu "
+            "[UNIFIED-CACHE] layout request model=%llu name_hash=0x%llx type=%d layer=%d expert=%d layout=%d src=%p (%s) src_size=%zu "
             "dst_size=%zu used=%.1f MB budget=%.1f MB base=%.1f MB reserved=%.1f MB avail=%.1f MB\n",
-            request.key_ptr,
+            (unsigned long long) request.key.model_id,
+            (unsigned long long) request.key.name_hash,
             static_cast<int>(request.type),
             request.layer_id,
             request.expert_id,
@@ -1165,12 +1539,25 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             available() / (1024.0f * 1024.0f));
     }
 
-    const unified_cache_key key{ request.type, request.key_ptr, request.layer_id, request.expert_id, request.layout };
+    const unified_cache_key key{ request.type, request.key, request.layer_id, request.expert_id };
     if (ggml_sycl_graph_recording_active()) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto                        it = entries_.find(key);
         if (it != entries_.end() && it->second.state == cache_entry_state::READY &&
             it->second.size == request.dst_size) {
+            if (it->second.layout != request.layout) {
+                GGML_LOG_ERROR(
+                    "[UNIFIED-CACHE] layout mismatch in graph mode model=%llu name_hash=0x%llx have=%d want=%d\n",
+                    (unsigned long long) request.key.model_id,
+                    (unsigned long long) request.key.name_hash,
+                    (int) it->second.layout,
+                    (int) request.layout);
+                if (cache_assert_enabled()) {
+                    GGML_ABORT("unified_cache layout mismatch");
+                }
+                result.status = cache_layout_status::FAILED;
+                return result;
+            }
             result.device_ptr    = it->second.device_ptr;
             result.size          = it->second.size;
             result.status        = cache_layout_status::READY;
@@ -1192,53 +1579,26 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
         std::unique_lock<std::mutex> lock(mutex_);
         process_deferred_frees();
 
-        // Enforce single layout per tensor (key_ptr/type/layer/expert).
-        host_cache * hcache = nullptr;
-        bool         conflict_pinned = false;
-        bool         conflict_in_progress = false;
-        for (auto it_other = entries_.begin(); it_other != entries_.end();) {
-            const auto & other_key = it_other->first;
-            if (other_key.key_ptr != request.key_ptr || other_key.type != request.type ||
-                other_key.layer_id != request.layer_id || other_key.expert_id != request.expert_id ||
-                other_key.layout == request.layout) {
-                ++it_other;
-                continue;
-            }
-
-            auto & other_entry = it_other->second;
-            if (other_entry.state == cache_entry_state::IN_PROGRESS) {
-                conflict_in_progress = true;
-            }
-            if (other_entry.pinned) {
-                conflict_pinned = true;
-            }
-            if (conflict_in_progress || conflict_pinned) {
-                GGML_LOG_ERROR("[UNIFIED-CACHE] layout conflict key=%p layout=%d vs %d pinned=%d in_progress=%d\n",
-                               request.key_ptr, (int) request.layout, (int) other_key.layout,
-                               conflict_pinned ? 1 : 0, conflict_in_progress ? 1 : 0);
-                if (cache_assert_enabled()) {
-                    GGML_ASSERT(false && "conflicting layout pinned or in-progress");
-                }
-                result.status = cache_layout_status::FAILED;
-                return result;
-            }
-
-            if (!other_entry.host_resident && other_entry.device_ptr) {
-                enqueue_deferred_free(other_entry.device_ptr, other_entry.size);
-            }
-            ptr_to_key_.erase({ other_key.key_ptr, other_key.layout });
-            if (!hcache) {
-                hcache = get_host_cache(queue_);
-            }
-            if (hcache) {
-                hcache->remove(other_key.key_ptr, other_key.type, other_key.layer_id, other_key.expert_id,
-                               other_key.layout);
-            }
-            it_other = entries_.erase(it_other);
-        }
-
         auto it = entries_.find(key);
         if (it != entries_.end()) {
+            auto id_it = id_to_key_.find(request.key);
+            if (id_it == id_to_key_.end()) {
+                if (g_ggml_sycl_debug >= 2) {
+                    GGML_SYCL_DEBUG("[UNIFIED-CACHE] id_to_key pre-insert (existing): size=%zu buckets=%zu load=%.3f\n",
+                                    id_to_key_.size(), id_to_key_.bucket_count(), id_to_key_.load_factor());
+                }
+                if (id_to_key_.bucket_count() == 0) {
+                    id_to_key_.rehash(1);
+                }
+                id_to_key_.emplace(request.key, key);
+            } else if (!(id_it->second == key)) {
+                GGML_LOG_ERROR("[UNIFIED-CACHE] identity collision in ensure_cached_layout model=%llu name_hash=0x%llx\n",
+                               (unsigned long long) request.key.model_id,
+                               (unsigned long long) request.key.name_hash);
+                if (cache_assert_enabled()) {
+                    GGML_ABORT("unified_cache id_to_key mismatch");
+                }
+            }
             while (it != entries_.end() && it->second.state == cache_entry_state::IN_PROGRESS &&
                    !it->second.has_ready_event) {
                 entry_cv_.wait(lock, [&]() {
@@ -1247,6 +1607,30 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                            it_wait->second.has_ready_event;
                 });
                 it = entries_.find(key);
+            }
+        }
+
+        if (it != entries_.end()) {
+            auto & entry = it->second;
+            if (entry.layout != request.layout) {
+                if (entry.pinned || entry.state == cache_entry_state::IN_PROGRESS) {
+                    GGML_SYCL_DEBUG(
+                        "[UNIFIED-CACHE] layout switch blocked (pinned/in-progress) model=%llu name_hash=0x%llx have=%d want=%d\n",
+                        (unsigned long long) request.key.model_id,
+                        (unsigned long long) request.key.name_hash,
+                        (int) entry.layout,
+                        (int) request.layout);
+                    result.status = cache_layout_status::FAILED;
+                    return result;
+                }
+                void * stale_ptr      = entry.device_ptr;
+                size_t stale_size     = entry.size;
+                bool   stale_host_res = entry.host_resident;
+                entries_.erase(it);
+                it = entries_.end();
+                if (!stale_host_res && stale_ptr && stale_size > 0) {
+                    enqueue_deferred_free(stale_ptr, stale_size);
+                }
             }
         }
 
@@ -1263,8 +1647,13 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             entry.last_access = time_++;
 
             if (entry.state == cache_entry_state::IN_PROGRESS) {
-                GGML_SYCL_DEBUG("[UNIFIED-CACHE] layout pending: key=%p layout=%d size=%zu has_event=%d\n",
-                                request.key_ptr, (int) request.layout, entry.size, entry.has_ready_event ? 1 : 0);
+                GGML_SYCL_DEBUG(
+                    "[UNIFIED-CACHE] layout pending: model=%llu name_hash=0x%llx layout=%d size=%zu has_event=%d\n",
+                    (unsigned long long) request.key.model_id,
+                    (unsigned long long) request.key.name_hash,
+                    (int) request.layout,
+                    entry.size,
+                    entry.has_ready_event ? 1 : 0);
                 result.device_ptr                      = entry.device_ptr;
                 result.size                            = entry.size;
                 result.status                          = cache_layout_status::IN_PROGRESS;
@@ -1280,8 +1669,11 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
 
             // Handle previously failed entries - clean up and retry allocation
             if (entry.state == cache_entry_state::FAILED) {
-                GGML_SYCL_DEBUG("[UNIFIED-CACHE] Cleaning up failed entry: key=%p layout=%d, will retry\n", request.key_ptr,
-                              (int) request.layout);
+                GGML_SYCL_DEBUG(
+                    "[UNIFIED-CACHE] Cleaning up failed entry: model=%llu name_hash=0x%llx layout=%d, will retry\n",
+                    (unsigned long long) request.key.model_id,
+                    (unsigned long long) request.key.name_hash,
+                    (int) request.layout);
                 // Memory was already freed and used_ decremented in the exception handler.
                 // If device_ptr is still set (shouldn't happen), try to free it.
                 if (entry.device_ptr) {
@@ -1293,7 +1685,6 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                     }
                 }
                 entries_.erase(it);
-                ptr_to_key_.erase({ request.key_ptr, request.layout });
                 it = entries_.end();  // Force fall-through to allocation path below
                 // NOTE: 'entry' is now a dangling reference, do not use it after this point
             }
@@ -1305,19 +1696,28 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
 
             if (entry.size != request.dst_size) {
                 if (entry.pinned) {
-                    GGML_SYCL_DEBUG("[UNIFIED-CACHE] layout size mismatch: key=%p layout=%d cached=%zu req=%zu (pinned)\n",
-                                  request.key_ptr, (int) request.layout, entry.size, request.dst_size);
+                    GGML_SYCL_DEBUG(
+                        "[UNIFIED-CACHE] layout size mismatch: model=%llu name_hash=0x%llx layout=%d cached=%zu req=%zu (pinned)\n",
+                        (unsigned long long) request.key.model_id,
+                        (unsigned long long) request.key.name_hash,
+                        (int) request.layout,
+                        entry.size,
+                        request.dst_size);
                     result.status = cache_layout_status::FAILED;
                     return result;
                 }
 
-                GGML_SYCL_DEBUG("[UNIFIED-CACHE] layout size mismatch: key=%p layout=%d cached=%zu req=%zu, evicting\n",
-                              request.key_ptr, (int) request.layout, entry.size, request.dst_size);
+                GGML_SYCL_DEBUG(
+                    "[UNIFIED-CACHE] layout size mismatch: model=%llu name_hash=0x%llx layout=%d cached=%zu req=%zu, evicting\n",
+                    (unsigned long long) request.key.model_id,
+                    (unsigned long long) request.key.name_hash,
+                    (int) request.layout,
+                    entry.size,
+                    request.dst_size);
                 void * stale_ptr       = entry.device_ptr;
                 size_t stale_size      = entry.size;
                 bool   stale_host_res  = entry.host_resident;
                 entries_.erase(it);
-                ptr_to_key_.erase({ request.key_ptr, request.layout });
                 it = entries_.end();
                 if (!stale_host_res && stale_ptr && stale_size > 0) {
                     enqueue_deferred_free(stale_ptr, stale_size);
@@ -1337,8 +1737,14 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 GGML_ASSERT(entry.size == request.dst_size);
             }
             if (g_ggml_sycl_debug >= 2 && entry.src_ptr != request.src_ptr) {
-                GGML_SYCL_DEBUG("[UNIFIED-CACHE] layout src change key=%p layout=%d cached_src=%p new_src=%p size=%zu\n",
-                              request.key_ptr, (int) request.layout, entry.src_ptr, request.src_ptr, entry.size);
+                GGML_SYCL_DEBUG(
+                    "[UNIFIED-CACHE] layout src change model=%llu name_hash=0x%llx layout=%d cached_src=%p new_src=%p size=%zu\n",
+                    (unsigned long long) request.key.model_id,
+                    (unsigned long long) request.key.name_hash,
+                    (int) request.layout,
+                    entry.src_ptr,
+                    request.src_ptr,
+                    entry.size);
             }
             if (!content_changed) {
                 result.device_ptr = entry.device_ptr;
@@ -1357,8 +1763,12 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             entry.xmx_info        = request.xmx_info;
             device_ptr            = entry.device_ptr;
             needs_fill            = true;
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] layout refresh: key=%p layout=%d size=%zu\n", request.key_ptr,
-                            (int) request.layout, entry.size);
+            GGML_SYCL_DEBUG(
+                "[UNIFIED-CACHE] layout refresh: model=%llu name_hash=0x%llx layout=%d size=%zu\n",
+                (unsigned long long) request.key.model_id,
+                (unsigned long long) request.key.name_hash,
+                (int) request.layout,
+                entry.size);
         }
 
         // Allocate new entry if not found or was cleaned up due to FAILED state
@@ -1396,13 +1806,15 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 // Try host_cache fallback when device allocation fails
                 host_cache * hcache = get_host_cache(queue_);
                 if (hcache) {
-                    cache_location host_loc = hcache->get_location(request.key_ptr, request.layout);
-                    void *         host_ptr = hcache->get(request.key_ptr, request.layout);
+                    cache_location host_loc = hcache->get_location(request.key, request.type, request.layer_id,
+                                                                   request.expert_id, request.layout);
+                    void *         host_ptr = hcache->get(request.key, request.type, request.layer_id,
+                                                          request.expert_id, request.layout);
                     if (!host_ptr) {
                         // Try to create in host cache
                         bool           needs_host_fill = false;
                         bool           pinned_alloc    = false;
-                        host_ptr = hcache->ensure_cached_alloc(request.key_ptr, request.src_ptr, request.src_size,
+                        host_ptr = hcache->ensure_cached_alloc(request.key, request.src_ptr, request.src_size,
                                                                request.dst_size, request.type, request.layer_id,
                                                                request.expert_id, request.layout, false,
                                                                &needs_host_fill, &pinned_alloc, &host_loc,
@@ -1416,8 +1828,11 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                     }
 
                     if (host_ptr) {
-                        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Device full, using host-resident pointer for key=%p layout=%d\n",
-                                      request.key_ptr, (int) request.layout);
+                        GGML_SYCL_DEBUG(
+                            "[UNIFIED-CACHE] Device full, using host-resident pointer model=%llu name_hash=0x%llx layout=%d\n",
+                            (unsigned long long) request.key.model_id,
+                            (unsigned long long) request.key.name_hash,
+                            (int) request.layout);
                         new_device_ptr   = host_ptr;
                         is_host_resident = true;
                         host_location    = host_loc;
@@ -1462,12 +1877,34 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             entry.location        = is_host_resident ? host_location : cache_location::DEVICE;
 
             if (g_ggml_sycl_debug >= 2) {
-                GGML_SYCL_DEBUG("[UNIFIED-CACHE] layout insert key=%p layout=%d size=%zu entries=%zu buckets=%zu\n",
-                              request.key_ptr, (int) request.layout, request.dst_size, entries_.size(),
-                              entries_.bucket_count());
+                GGML_SYCL_DEBUG(
+                    "[UNIFIED-CACHE] layout insert model=%llu name_hash=0x%llx layout=%d size=%zu entries=%zu buckets=%zu\n",
+                    (unsigned long long) request.key.model_id,
+                    (unsigned long long) request.key.name_hash,
+                    (int) request.layout,
+                    request.dst_size,
+                    entries_.size(),
+                    entries_.bucket_count());
             }
-            entries_[key]                                    = entry;
-            ptr_to_key_[{ request.key_ptr, request.layout }] = key;
+            entries_[key] = entry;
+            auto id_it = id_to_key_.find(request.key);
+            if (id_it == id_to_key_.end()) {
+                if (g_ggml_sycl_debug >= 2) {
+                    GGML_SYCL_DEBUG("[UNIFIED-CACHE] id_to_key pre-insert (new): size=%zu buckets=%zu load=%.3f\n",
+                                    id_to_key_.size(), id_to_key_.bucket_count(), id_to_key_.load_factor());
+                }
+                if (id_to_key_.bucket_count() == 0) {
+                    id_to_key_.rehash(1);
+                }
+                id_to_key_.emplace(request.key, key);
+            } else if (!(id_it->second == key)) {
+                GGML_LOG_ERROR("[UNIFIED-CACHE] identity collision on layout insert model=%llu name_hash=0x%llx\n",
+                               (unsigned long long) request.key.model_id,
+                               (unsigned long long) request.key.name_hash);
+                if (cache_assert_enabled()) {
+                    GGML_ABORT("unified_cache id_to_key mismatch");
+                }
+            }
             if (!is_host_resident) {
                 // Only count device memory against unified cache budget
                 used_ += request.dst_size;
@@ -1484,8 +1921,12 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
                 result.event         = sycl::event{};
                 return result;
             }
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] layout allocate: key=%p layout=%d size=%zu\n", request.key_ptr,
-                            (int) request.layout, request.dst_size);
+            GGML_SYCL_DEBUG(
+                "[UNIFIED-CACHE] layout allocate: model=%llu name_hash=0x%llx layout=%d size=%zu\n",
+                (unsigned long long) request.key.model_id,
+                (unsigned long long) request.key.name_hash,
+                (int) request.layout,
+                request.dst_size);
         }
     }
 
@@ -1502,6 +1943,19 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
             "[DEBUG-FILL] Starting fill: device_ptr=%p src_ptr=%p dst_size=%zu src_size=%zu layout=%d fill_fn=%s\n",
             device_ptr, request.src_ptr, request.dst_size, request.src_size, (int) request.layout,
             request.fill_fn ? "yes" : "no");
+        if (copy_trace_enabled()) {
+            GGML_LOG_INFO(
+                "[SYCL] layout fill begin: model=%llu name_hash=0x%llx layout=%d dst=%p dst_size=%zu src=%p src_size=%zu fill_fn=%s\n",
+                (unsigned long long) request.key.model_id,
+                (unsigned long long) request.key.name_hash,
+                (int) request.layout,
+                device_ptr,
+                request.dst_size,
+                request.src_ptr,
+                request.src_size,
+                request.fill_fn ? "yes" : "no");
+            fflush(stderr);
+        }
 
         if (request.fill_fn) {
             GGML_SYCL_DEBUG("[DEBUG-FILL] Calling fill_fn...\n");
@@ -1530,9 +1984,10 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
         }
     } catch (const sycl::exception & e) {
         GGML_LOG_ERROR("[UNIFIED-CACHE] layout fill failed (sycl): %s\n", e.what());
-        GGML_LOG_ERROR("[UNIFIED-CACHE] layout fill context key=%p type=%d layer=%d expert=%d layout=%d src=%p "
+        GGML_LOG_ERROR("[UNIFIED-CACHE] layout fill context model=%llu name_hash=0x%llx type=%d layer=%d expert=%d layout=%d src=%p "
                        "src_size=%zu dst_size=%zu\n",
-                       request.key_ptr,
+                       (unsigned long long) request.key.model_id,
+                       (unsigned long long) request.key.name_hash,
                        static_cast<int>(request.type),
                        request.layer_id,
                        request.expert_id,
@@ -1651,57 +2106,90 @@ cache_layout_result unified_cache::ensure_cached_layout(const cache_layout_reque
     return result;
 }
 
-bool unified_cache::is_cached(const void * key_ptr, ggml_layout_mode layout) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return ptr_to_key_.find({ key_ptr, layout }) != ptr_to_key_.end();
-}
-
-bool unified_cache::is_cached_any(const void * key_ptr) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (const auto & pair : entries_) {
-        if (pair.first.key_ptr == key_ptr) {
-            return true;
-        }
+bool unified_cache::is_cached(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) const {
+    if (!key_id.valid) {
+        return false;
     }
-    return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto id_it = id_to_key_.find(key_id);
+    if (id_it == id_to_key_.end()) {
+        return false;
+    }
+    auto entry_it = entries_.find(id_it->second);
+    if (entry_it == entries_.end()) {
+        return false;
+    }
+    if (entry_it->second.layout != layout) {
+        return false;
+    }
+    return true;
 }
 
-void * unified_cache::get(const void * key_ptr, ggml_layout_mode layout) {
+bool unified_cache::is_cached_any(const ggml_sycl_cache_id & key_id) const {
+    if (!key_id.valid) {
+        return false;
+    }
     std::lock_guard<std::mutex> lock(mutex_);
-    auto                        it = ptr_to_key_.find({ key_ptr, layout });
-    if (it == ptr_to_key_.end()) {
+    auto id_it = id_to_key_.find(key_id);
+    if (id_it == id_to_key_.end()) {
+        return false;
+    }
+    return entries_.find(id_it->second) != entries_.end();
+}
+
+void * unified_cache::get(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) {
+    if (!key_id.valid) {
         return nullptr;
     }
-    auto entry_it = entries_.find(it->second);
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto id_it = id_to_key_.find(key_id);
+    if (id_it == id_to_key_.end()) {
+        return nullptr;
+    }
+    auto entry_it = entries_.find(id_it->second);
     if (entry_it == entries_.end()) {
         return nullptr;
     }
     auto & entry = entry_it->second;
+    if (entry.layout != layout) {
+        return nullptr;
+    }
     if (entry.state == cache_entry_state::IN_PROGRESS) {
         if (entry.has_ready_event && event_complete(entry.ready_event)) {
             entry.state           = cache_entry_state::READY;
             entry.has_ready_event = false;
         } else {
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] get pending: key=%p layout=%d size=%zu has_event=%d\n", key_ptr,
-                            (int) layout, entry.size, entry.has_ready_event ? 1 : 0);
+            GGML_SYCL_DEBUG(
+                "[UNIFIED-CACHE] get pending: model=%llu name_hash=0x%llx layout=%d size=%zu has_event=%d\n",
+                (unsigned long long) key_id.model_id,
+                (unsigned long long) key_id.name_hash,
+                (int) layout,
+                entry.size,
+                entry.has_ready_event ? 1 : 0);
             return nullptr;
         }
     }
     return entry.device_ptr;
 }
 
-cache_ptr_view unified_cache::get_view(const void * key_ptr, ggml_layout_mode layout) {
+cache_ptr_view unified_cache::get_view(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) {
     cache_ptr_view view{};
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto                        it = ptr_to_key_.find({ key_ptr, layout });
-    if (it == ptr_to_key_.end()) {
+    if (!key_id.valid) {
         return view;
     }
-    auto entry_it = entries_.find(it->second);
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto id_it = id_to_key_.find(key_id);
+    if (id_it == id_to_key_.end()) {
+        return view;
+    }
+    auto entry_it = entries_.find(id_it->second);
     if (entry_it == entries_.end()) {
         return view;
     }
     auto & entry = entry_it->second;
+    if (entry.layout != layout) {
+        return view;
+    }
     if (entry.state == cache_entry_state::IN_PROGRESS) {
         if (entry.has_ready_event && event_complete(entry.ready_event)) {
             entry.state           = cache_entry_state::READY;
@@ -1721,57 +2209,105 @@ cache_ptr_view unified_cache::get_view(const void * key_ptr, ggml_layout_mode la
     return view;
 }
 
-void unified_cache::remove(const void *     key_ptr,
-                           cache_entry_type type,
-                           int              layer_id,
-                           int              expert_id,
-                           ggml_layout_mode layout) {
+void unified_cache::remove(const ggml_sycl_cache_id & key_id,
+                           cache_entry_type          type,
+                           int                       layer_id,
+                           int                       expert_id,
+                           ggml_layout_mode          layout) {
+    if (!key_id.valid) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     process_deferred_frees();
-    unified_cache_key key{ type, key_ptr, layer_id, expert_id, layout };
+    unified_cache_key key{ type, key_id, layer_id, expert_id };
 
     auto it = entries_.find(key);
     if (it == entries_.end()) {
         return;
     }
+    if (it->second.layout != layout) {
+        GGML_LOG_ERROR("[UNIFIED-CACHE] layout mismatch in remove model=%llu name_hash=0x%llx have=%d want=%d\n",
+                       (unsigned long long) key_id.model_id,
+                       (unsigned long long) key_id.name_hash,
+                       (int) it->second.layout,
+                       (int) layout);
+        if (cache_assert_enabled()) {
+            GGML_ABORT("unified_cache layout mismatch");
+        }
+        return;
+    }
     if (it->second.state == cache_entry_state::IN_PROGRESS) {
-        GGML_SYCL_DEBUG("[UNIFIED-CACHE] remove skipped: entry in progress (key=%p)\n", key_ptr);
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] remove skipped: entry in progress model=%llu name_hash=0x%llx\n",
+                        (unsigned long long) key_id.model_id,
+                        (unsigned long long) key_id.name_hash);
         return;
     }
 
     enqueue_deferred_free(it->second.device_ptr, it->second.size);
 
     entries_.erase(it);
-
-    auto ptr_it = ptr_to_key_.find({ key_ptr, layout });
-    if (ptr_it != ptr_to_key_.end() && ptr_it->second == key) {
-        ptr_to_key_.erase(ptr_it);
-    }
+    id_to_key_.erase(key_id);
 }
 
 // NOTE: mark_reordered/is_reordered removed - reorder state tracked in tensor->extra->optimized_feature
 
-void unified_cache::pin(const void * key_ptr, ggml_layout_mode layout) {
+void unified_cache::pin(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) {
+    if (!key_id.valid) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(mutex_);
-    auto                        it = ptr_to_key_.find({ key_ptr, layout });
-    if (it != ptr_to_key_.end()) {
-        auto entry_it = entries_.find(it->second);
-        if (entry_it != entries_.end()) {
-            entry_it->second.pinned = true;
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] pin key=%p layout=%d\n", key_ptr, (int) layout);
+    auto id_it = id_to_key_.find(key_id);
+    if (id_it == id_to_key_.end()) {
+        return;
+    }
+    auto entry_it = entries_.find(id_it->second);
+    if (entry_it != entries_.end()) {
+        if (entry_it->second.layout != layout) {
+            GGML_LOG_ERROR("[UNIFIED-CACHE] layout mismatch in pin model=%llu name_hash=0x%llx have=%d want=%d\n",
+                           (unsigned long long) key_id.model_id,
+                           (unsigned long long) key_id.name_hash,
+                           (int) entry_it->second.layout,
+                           (int) layout);
+            if (cache_assert_enabled()) {
+                GGML_ABORT("unified_cache layout mismatch");
+            }
+            return;
         }
+        entry_it->second.pinned = true;
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] pin model=%llu name_hash=0x%llx layout=%d\n",
+                        (unsigned long long) key_id.model_id,
+                        (unsigned long long) key_id.name_hash,
+                        (int) layout);
     }
 }
 
-void unified_cache::unpin(const void * key_ptr, ggml_layout_mode layout) {
+void unified_cache::unpin(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) {
+    if (!key_id.valid) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(mutex_);
-    auto                        it = ptr_to_key_.find({ key_ptr, layout });
-    if (it != ptr_to_key_.end()) {
-        auto entry_it = entries_.find(it->second);
-        if (entry_it != entries_.end()) {
-            entry_it->second.pinned = false;
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] unpin key=%p layout=%d\n", key_ptr, (int) layout);
+    auto id_it = id_to_key_.find(key_id);
+    if (id_it == id_to_key_.end()) {
+        return;
+    }
+    auto entry_it = entries_.find(id_it->second);
+    if (entry_it != entries_.end()) {
+        if (entry_it->second.layout != layout) {
+            GGML_LOG_ERROR("[UNIFIED-CACHE] layout mismatch in unpin model=%llu name_hash=0x%llx have=%d want=%d\n",
+                           (unsigned long long) key_id.model_id,
+                           (unsigned long long) key_id.name_hash,
+                           (int) entry_it->second.layout,
+                           (int) layout);
+            if (cache_assert_enabled()) {
+                GGML_ABORT("unified_cache layout mismatch");
+            }
+            return;
         }
+        entry_it->second.pinned = false;
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] unpin model=%llu name_hash=0x%llx layout=%d\n",
+                        (unsigned long long) key_id.model_id,
+                        (unsigned long long) key_id.name_hash,
+                        (int) layout);
     }
 }
 
@@ -1791,14 +2327,31 @@ void unified_cache::unpin_all() {
     }
 }
 
-bool unified_cache::is_pinned(const void * key_ptr, ggml_layout_mode layout) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto                        it = ptr_to_key_.find({ key_ptr, layout });
-    if (it == ptr_to_key_.end()) {
+bool unified_cache::is_pinned(const ggml_sycl_cache_id & key_id, ggml_layout_mode layout) const {
+    if (!key_id.valid) {
         return false;
     }
-    auto entry_it = entries_.find(it->second);
-    return entry_it != entries_.end() && entry_it->second.pinned;
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto id_it = id_to_key_.find(key_id);
+    if (id_it == id_to_key_.end()) {
+        return false;
+    }
+    auto entry_it = entries_.find(id_it->second);
+    if (entry_it == entries_.end()) {
+        return false;
+    }
+    if (entry_it->second.layout != layout) {
+        GGML_LOG_ERROR("[UNIFIED-CACHE] layout mismatch in is_pinned model=%llu name_hash=0x%llx have=%d want=%d\n",
+                       (unsigned long long) key_id.model_id,
+                       (unsigned long long) key_id.name_hash,
+                       (int) entry_it->second.layout,
+                       (int) layout);
+        if (cache_assert_enabled()) {
+            GGML_ABORT("unified_cache layout mismatch");
+        }
+        return false;
+    }
+    return entry_it->second.pinned;
 }
 
 size_t unified_cache::evict(size_t bytes_needed) {
@@ -1842,14 +2395,20 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
                 entry.state           = cache_entry_state::READY;
                 entry.has_ready_event = false;
             } else {
-                GGML_SYCL_DEBUG("[UNIFIED-CACHE] evict skip: key=%p layout=%d in-progress size=%zu\n",
-                                pair.first.key_ptr, (int) pair.first.layout, entry.size);
+                GGML_SYCL_DEBUG("[UNIFIED-CACHE] evict skip: model=%llu name_hash=0x%llx layout=%d in-progress size=%zu\n",
+                                (unsigned long long) pair.first.id.model_id,
+                                (unsigned long long) pair.first.id.name_hash,
+                                (int) entry.layout,
+                                entry.size);
                 continue;
             }
         }
         if (entry.pinned) {
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] evict skip: key=%p layout=%d pinned size=%zu\n", pair.first.key_ptr,
-                            (int) pair.first.layout, entry.size);
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] evict skip: model=%llu name_hash=0x%llx layout=%d pinned size=%zu\n",
+                            (unsigned long long) pair.first.id.model_id,
+                            (unsigned long long) pair.first.id.name_hash,
+                            (int) entry.layout,
+                            entry.size);
             continue;
         }
 
@@ -1874,8 +2433,12 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
         size_t entry_size    = it->second.size;
         void * ptr           = it->second.device_ptr;
         bool   host_resident = it->second.host_resident;
-        GGML_SYCL_DEBUG("[UNIFIED-CACHE] evict key=%p layout=%d size=%zu host_resident=%d\n", evict_key.key_ptr,
-                        (int) evict_key.layout, entry_size, host_resident ? 1 : 0);
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] evict model=%llu name_hash=0x%llx layout=%d size=%zu host_resident=%d\n",
+                        (unsigned long long) evict_key.id.model_id,
+                        (unsigned long long) evict_key.id.name_hash,
+                        (int) it->second.layout,
+                        entry_size,
+                        host_resident ? 1 : 0);
 
         if (!host_resident) {
             // Only free device memory; host-resident entries are managed by host_cache
@@ -1885,13 +2448,16 @@ size_t unified_cache::evict_one(size_t /* new_size */) {
         // The host_cache still owns the memory and will evict it via its own LRU policy.
 
         // Remove from lookup
-        ptr_to_key_.erase({ evict_key.key_ptr, evict_key.layout });
+        id_to_key_.erase(evict_key.id);
 
         // Remove from entries
         entries_.erase(it);
 
-        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Evicted: key=%p layout=%d %.2f MB (used=%.1f/%.1f MB) host_resident=%d\n",
-                        evict_key.key_ptr, (int) evict_key.layout, entry_size / (1024.0f * 1024.0f),
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] Evicted: model=%llu name_hash=0x%llx layout=%d %.2f MB (used=%.1f/%.1f MB) host_resident=%d\n",
+                        (unsigned long long) evict_key.id.model_id,
+                        (unsigned long long) evict_key.id.name_hash,
+                        (int) it->second.layout,
+                        entry_size / (1024.0f * 1024.0f),
                         used_.load() / (1024.0f * 1024.0f), budget_ / (1024.0f * 1024.0f), host_resident ? 1 : 0);
         evicted_bytes = host_resident ? 0 : entry_size;  // Only count device bytes freed
     }
@@ -1957,6 +2523,17 @@ sycl::event unified_cache::copy_to_device_async(void *                          
                                                 size_t                           size,
                                                 const std::vector<sycl::event> & deps) {
     const sycl::usm::alloc src_type = sycl::get_pointer_type(src, queue_.get_context());
+    const sycl::usm::alloc dst_type = sycl::get_pointer_type(dst, queue_.get_context());
+    if (g_ggml_sycl_debug >= 2 || copy_trace_enabled()) {
+        GGML_LOG_INFO("[SYCL] copy_to_device_async ptr types: dst=%p type=%d src=%p type=%d size=%zu\n",
+                      dst, (int) dst_type, src, (int) src_type, size);
+        if (copy_trace_enabled()) {
+            fflush(stderr);
+        }
+    }
+    if (dst_type == sycl::usm::alloc::unknown && cache_assert_enabled()) {
+        GGML_ABORT("copy_to_device_async called with non-USM destination");
+    }
     if (src_type == sycl::usm::alloc::unknown) {
         // Stage mmap'd or non-USM pointers through host memory.
         // NOTE: We perform synchronous staging to avoid complex event dependency chains
@@ -2112,8 +2689,13 @@ void unified_cache::process_deferred_frees() {
     while (pin_it != inflight_unpins_.end()) {
         const bool ready = !pin_it->has_event || event_complete(pin_it->event);
         if (g_ggml_sycl_debug) {
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] unpin check key=%p layout=%d has_event=%d ready=%d\n", pin_it->key_ptr,
-                          (int) pin_it->layout, pin_it->has_event ? 1 : 0, ready ? 1 : 0);
+            GGML_SYCL_DEBUG(
+                "[UNIFIED-CACHE] unpin check model=%llu name_hash=0x%llx layout=%d has_event=%d ready=%d\n",
+                (unsigned long long) pin_it->key.model_id,
+                (unsigned long long) pin_it->key.name_hash,
+                (int) pin_it->layout,
+                pin_it->has_event ? 1 : 0,
+                ready ? 1 : 0);
         }
         if (!ready) {
             ++pin_it;
@@ -2126,13 +2708,28 @@ void unified_cache::process_deferred_frees() {
                 // Best-effort cleanup; event_complete already said ready.
             }
         }
-        auto key_it = ptr_to_key_.find({ pin_it->key_ptr, pin_it->layout });
-        if (key_it != ptr_to_key_.end()) {
-            auto entry_it = entries_.find(key_it->second);
+        auto id_it = id_to_key_.find(pin_it->key);
+        if (id_it != id_to_key_.end()) {
+            auto entry_it = entries_.find(id_it->second);
             if (entry_it != entries_.end()) {
-                entry_it->second.pinned = false;
-                GGML_SYCL_DEBUG("[UNIFIED-CACHE] in-flight unpin key=%p layout=%d\n", pin_it->key_ptr,
-                                (int) pin_it->layout);
+                if (entry_it->second.layout != pin_it->layout) {
+                    GGML_LOG_ERROR(
+                        "[UNIFIED-CACHE] layout mismatch in inflight unpin model=%llu name_hash=0x%llx have=%d want=%d\n",
+                        (unsigned long long) pin_it->key.model_id,
+                        (unsigned long long) pin_it->key.name_hash,
+                        (int) entry_it->second.layout,
+                        (int) pin_it->layout);
+                    if (cache_assert_enabled()) {
+                        GGML_ABORT("unified_cache layout mismatch");
+                    }
+                } else {
+                    entry_it->second.pinned = false;
+                    GGML_SYCL_DEBUG(
+                        "[UNIFIED-CACHE] in-flight unpin model=%llu name_hash=0x%llx layout=%d\n",
+                        (unsigned long long) pin_it->key.model_id,
+                        (unsigned long long) pin_it->key.name_hash,
+                        (int) pin_it->layout);
+                }
             }
         }
         pin_it = inflight_unpins_.erase(pin_it);
@@ -2224,24 +2821,29 @@ bool unified_cache::validate() const {
     for (const auto & pair : entries_) {
         const auto & key   = pair.first;
         const auto & entry = pair.second;
-        auto         it    = ptr_to_key_.find({ key.key_ptr, key.layout });
-        if (it == ptr_to_key_.end() || !(it->second == key)) {
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] validate: ptr_to_key mismatch key=%p layout=%d\n", key.key_ptr,
-                          (int) key.layout);
+        auto         it    = id_to_key_.find(key.id);
+        if (it == id_to_key_.end() || !(it->second == key)) {
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] validate: id_to_key mismatch model=%llu name_hash=0x%llx\n",
+                          (unsigned long long) key.id.model_id,
+                          (unsigned long long) key.id.name_hash);
             ok = false;
         }
         if (!entry.device_ptr || entry.size == 0) {
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] validate: entry missing data key=%p layout=%d size=%zu\n", key.key_ptr,
-                          (int) key.layout, entry.size);
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] validate: entry missing data model=%llu name_hash=0x%llx layout=%d size=%zu\n",
+                          (unsigned long long) key.id.model_id,
+                          (unsigned long long) key.id.name_hash,
+                          (int) entry.layout,
+                          entry.size);
             ok = false;
         }
     }
 
-    for (const auto & pair : ptr_to_key_) {
+    for (const auto & pair : id_to_key_) {
         auto it = entries_.find(pair.second);
         if (it == entries_.end()) {
-            GGML_SYCL_DEBUG("[UNIFIED-CACHE] validate: dangling ptr_to_key entry key=%p layout=%d\n", pair.first.key_ptr,
-                          (int) pair.first.layout);
+            GGML_SYCL_DEBUG("[UNIFIED-CACHE] validate: dangling id_to_key entry model=%llu name_hash=0x%llx\n",
+                          (unsigned long long) pair.first.model_id,
+                          (unsigned long long) pair.first.name_hash);
             ok = false;
         }
     }
@@ -2272,20 +2874,25 @@ void unified_cache::update_reserved_bytes(size_t reserved_bytes) {
     }
 }
 
-void unified_cache::unpin_on_event(const void * key_ptr, ggml_layout_mode layout, const sycl::event & event) {
-    if (!key_ptr) {
+void unified_cache::unpin_on_event(const ggml_sycl_cache_id & key_id,
+                                   ggml_layout_mode          layout,
+                                   const sycl::event &       event) {
+    if (!key_id.valid) {
         return;
     }
     std::lock_guard<std::mutex> lock(mutex_);
     inflight_unpin_entry        entry{};
-    entry.key_ptr   = key_ptr;
+    entry.key       = key_id;
     entry.layout    = layout;
     entry.event     = event;
     entry.has_event = true;
     inflight_unpins_.push_back(entry);
     if (g_ggml_sycl_debug) {
         const bool ready = entry.has_event ? event_complete(entry.event) : true;
-        GGML_SYCL_DEBUG("[UNIFIED-CACHE] in-flight pin key=%p layout=%d ready=%d\n", key_ptr, (int) layout,
+        GGML_SYCL_DEBUG("[UNIFIED-CACHE] in-flight pin model=%llu name_hash=0x%llx layout=%d ready=%d\n",
+                      (unsigned long long) key_id.model_id,
+                      (unsigned long long) key_id.name_hash,
+                      (int) layout,
                       ready ? 1 : 0);
     }
 }
@@ -2472,16 +3079,30 @@ unified_cache::dma_stream_result unified_cache::stream_dma(const cache_ptr_view 
     return result;
 }
 
-void unified_cache::set_hot(const void *     key_ptr,
-                            cache_entry_type type,
-                            int              layer_id,
-                            int              expert_id,
-                            ggml_layout_mode layout,
-                            bool             hot) {
+void unified_cache::set_hot(const ggml_sycl_cache_id & key_id,
+                            cache_entry_type          type,
+                            int                       layer_id,
+                            int                       expert_id,
+                            ggml_layout_mode          layout,
+                            bool                      hot) {
+    if (!key_id.valid) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(mutex_);
-    unified_cache_key           key{ type, key_ptr, layer_id, expert_id, layout };
+    unified_cache_key           key{ type, key_id, layer_id, expert_id };
     auto                        it = entries_.find(key);
     if (it != entries_.end()) {
+        if (it->second.layout != layout) {
+            GGML_LOG_ERROR("[UNIFIED-CACHE] layout mismatch in set_hot model=%llu name_hash=0x%llx have=%d want=%d\n",
+                           (unsigned long long) key_id.model_id,
+                           (unsigned long long) key_id.name_hash,
+                           (int) it->second.layout,
+                           (int) layout);
+            if (cache_assert_enabled()) {
+                GGML_ABORT("unified_cache layout mismatch");
+            }
+            return;
+        }
         it->second.hot = hot;
     }
 }
