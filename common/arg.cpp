@@ -6,6 +6,7 @@
 #include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
+#include "speculative.h"
 #include "preset.h"
 
 // fix problem with std::min and std::max
@@ -624,6 +625,26 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     if (!params.speculative.tensor_buft_overrides.empty()) {
         params.speculative.tensor_buft_overrides.push_back({nullptr, nullptr});
+    }
+    if (!params.speculative.model.path.empty()) {
+        bool found_draft = false;
+        bool found_eagle3 = false;
+        for (const auto & config : params.speculative.configs) {
+            if (config.type == COMMON_SPECULATIVE_TYPE_DRAFT) {
+                found_draft = true;
+            }
+            if (config.type == COMMON_SPECULATIVE_TYPE_EAGLE3) {
+                found_eagle3 = true;
+                break;
+            }
+        }
+        if (!found_draft) {
+            params.speculative.configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT));
+        }
+        // TODO PR-18039: if params.speculative.eagle3
+        //if (!found_eagle3) {
+        //    params.speculative.configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT));
+        //}
     }
 
     if (!params.chat_template.empty() && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
@@ -3393,45 +3414,34 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-self"}, "N",
-        "mode of self-speculation without a draft model: disabled(0), fixed(1), keys-only(2), key-values(3) (default: %d)\n",
-        [](common_params & params, int value) {
-            if (value < 0 || value > 3) {
-                throw std::invalid_argument("invalid value");
-            }
-            params.speculative.self_mode = value;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
-    add_opt(common_arg(
-        {"--spec-self-config"}, "N0,N1,N2,...",
-        "speculative self decoding config: ngram size (key), mgram size (value), check rate, min hits (default: %d,%d,%d,%d)",
+        {"--spec-config"}, "SPECULATIVE_CONFIG",
+        string_format("list of speculative decoding types, separated by ';', optionally followed by a colon and a comma-separated list of key=value pairs\n(types: %s)\n", common_speculative_type_name_str().c_str()),
         [](common_params & params, const std::string & value) {
-            std::string arg_next = value;
-
-            // split string by , and /
-            const std::regex regex{ R"([,/]+)" };
-            std::sregex_token_iterator it{ arg_next.begin(), arg_next.end(), regex, -1 };
-            std::vector<std::string> split_arg{ it, {} };
-            if (split_arg.size() > 4) {
-                throw std::invalid_argument(
-                    string_format("got %d input configs, but self-speculative decoding config require at most 4 values", (int)split_arg.size())
-                );
-            }
-            for (size_t i = 0; i < split_arg.size(); ++i) {
-                int val = std::stoi(split_arg[i]);
-                if (i == 0 && (val < 1 || val > 255)) {
-                    throw std::invalid_argument("ngram size must be between 1 and 255");
+            const auto config_strings = string_split<std::string>(value, ';');
+            for (const auto & config_string : config_strings) {
+                const auto parts = string_split<std::string>(config_string, ':');
+                if (parts.size() < 1 || parts.size() > 2) {
+                    throw std::invalid_argument("invalid speculative decoding config");
                 }
-                if (i == 1 && (val < 1 || val > 255)) {
-                    throw std::invalid_argument("mgram size must be between 1 and 255");
+                const auto type_str = parts[0];
+                const auto type = common_speculative_type_from_name(type_str);
+                if (type == COMMON_SPECULATIVE_TYPE_COUNT) {
+                    throw std::invalid_argument(string_format("unknown speculative decoding type: %s", type_str.c_str()));
                 }
-                if (i == 2 && val == 0) {
-                    throw std::invalid_argument("check rate must be greater than 0");
+                common_speculative_config spec_config = {type};
+                if (parts.size() == 2) {
+                    const auto key_value_pairs = string_split<std::string>(parts[1], ',');
+                    for (const auto & key_value_pair : key_value_pairs) {
+                        const auto key_value = string_split<std::string>(key_value_pair, '=');
+                        if (key_value.size() != 2) {
+                            throw std::invalid_argument("invalid key=value pair");
+                        }
+                        const auto & key = key_value[0];
+                        const auto & value = key_value[1];
+                        spec_config.config[key] = value;
+                    }
                 }
-                if (i == 3 && (val < 1 || val > 255)) {
-                    throw std::invalid_argument("min hits must be between 1 and 255");
-                }
-                params.speculative.self_cfg[i] = (uint16_t) val;
+                params.speculative.configs.push_back(spec_config);
             }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));

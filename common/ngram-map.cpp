@@ -117,7 +117,6 @@ void common_ngram_map_draft(common_ngram_map & map,
         map.last_draft_created = false;
         map.last_draft_key_idx     = key_offset;
         map.last_draft_value_idx   = 0; // value 0 is used for simple mode
-        map.drafts_generated_tokens += draft.size();
         return;
     }
 
@@ -236,7 +235,6 @@ void common_ngram_map_draft(common_ngram_map & map,
     map.last_draft_created       = true;
     map.last_draft_key_idx       = key_offset;
     map.last_draft_value_idx     = slot_max; // value used for draft generation.
-    map.drafts_generated_tokens += draft.size();
 }
 
 void common_ngram_map_send_accepted(common_ngram_map & map, uint16_t n_accepted) {
@@ -257,25 +255,6 @@ void common_ngram_map_send_accepted(common_ngram_map & map, uint16_t n_accepted)
     LOG_INF("common_ngram_map_send_accepted: n_accepted = %d, prev value_num = %d\n",
             n_accepted, curr_value.n_accepted);
     curr_value.n_accepted = n_accepted;
-
-    // draft statistics update
-    if (n_accepted > 0) {
-        map.drafts_accepted_count++;
-    } else {
-        map.drafts_rejected_count++;
-    }
-    map.drafts_accepted_tokens += n_accepted;
-}
-
-// Display statistics of the ngram map.
-void common_ngram_map_print_stats(const common_ngram_map & map) {
-    LOG_INF("ngram map: size_key = %d, size_value = %d, key_only = %s, min_hits = %d\n",
-            map.size_key, map.size_value,
-            map.key_only ? "true" : "false",
-            map.min_hits);
-    LOG_INF("drafts_accepted_count = %zu, drafts_rejected_count = %zu, drafts_generated_tokens = %zu, drafts_accepted_tokens = %zu\n",
-            map.drafts_accepted_count, map.drafts_rejected_count,
-            map.drafts_generated_tokens, map.drafts_accepted_tokens);
 }
 
 // Helper functions.
