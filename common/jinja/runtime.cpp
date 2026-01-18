@@ -268,8 +268,7 @@ value binary_expression::execute_impl(context & ctx) {
     // String in object
     if (is_val<value_string>(left_val) && is_val<value_object>(right_val)) {
         auto key = left_val->as_string().str();
-        auto & obj = right_val->as_object();
-        bool has_key = obj.find(key) != obj.end();
+        bool has_key = right_val->has_key(key);
         if (op.value == "in") {
             return mk_val<value_bool>(has_key);
         } else if (op.value == "not in") {
@@ -464,7 +463,7 @@ value for_statement::execute_impl(context & ctx) {
     std::vector<value> items;
     if (is_val<value_object>(iterable_val)) {
         JJ_DEBUG("%s", "For loop over object keys");
-        auto & obj = iterable_val->as_object();
+        auto & obj = iterable_val->as_ordered_object();
         for (auto & p : obj) {
             auto tuple = mk_val<value_array>();
             if (iterable_val->val_obj.is_key_numeric) {
@@ -779,11 +778,8 @@ value member_expression::execute_impl(context & ctx) {
             throw std::runtime_error("Cannot access object with non-string: got " + property->type());
         }
         auto key = property->as_string().str();
-        auto & obj = object->as_object();
-        auto it = obj.find(key);
-        if (it != obj.end()) {
-            val = it->second;
-        } else {
+        val = object->at(key, val);
+        if (is_val<value_undefined>(val)) {
             val = try_builtin_func(ctx, key, object, true);
         }
         JJ_DEBUG("Accessed property '%s' value, got type: %s", key.c_str(), val->type().c_str());
