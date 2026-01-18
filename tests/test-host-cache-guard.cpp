@@ -72,8 +72,8 @@ static bool test_host_cache_guard(int device_id) {
     fill_pattern(host_data);
     ggml_backend_tensor_set(weight, host_data.data(), 0, host_data.size());
 
-    const void * cache_key = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
-    if (!cache_key) {
+    ggml_sycl_cache_id cache_key = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
+    if (!cache_key.valid) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(cpu_backend);

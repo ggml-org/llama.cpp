@@ -5,6 +5,7 @@
 
 #include "ggml-sycl.h"
 #include "ggml-sycl/unified-cache.hpp"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 #include "ggml.h"
 
 #include <atomic>
@@ -48,8 +49,14 @@ static bool test_concurrent_ensure_cached(sycl::queue & q) {
             for (int i = 0; i < iters; ++i) {
                 size_t idx = dist(rng);
                 void * ptr =
-                    cache.ensure_cached(payloads[idx].data(), payloads[idx].data(), payloads[idx].size(),
-                                        ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false);
+                    cache.ensure_cached(ggml_sycl::test_make_cache_id(payloads[idx].data()),
+                                        payloads[idx].data(),
+                                        payloads[idx].size(),
+                                        ggml_sycl::cache_entry_type::DENSE_WEIGHT,
+                                        -1,
+                                        -1,
+                                        GGML_LAYOUT_AOS,
+                                        false);
                 if (!ptr) {
                     ok.store(false, std::memory_order_release);
                     return;
@@ -84,14 +91,17 @@ static bool test_concurrent_evict(sycl::queue & q) {
 
     bool needs_fill = false;
     for (auto & payload : payloads) {
-        void * ptr = cache.ensure_cached_alloc(payload.data(), payload.data(), payload.size(), payload.size(),
+        void * ptr = cache.ensure_cached_alloc(ggml_sycl::test_make_cache_id(payload.data()),
+                                               payload.data(),
+                                               payload.size(),
+                                               payload.size(),
                                                ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS,
                                                false, &needs_fill);
         if (!ptr) {
             fprintf(stderr, "Failed to allocate entry for concurrent evict test\n");
             return false;
         }
-        cache.pin(payload.data(), GGML_LAYOUT_AOS);
+        cache.pin(ggml_sycl::test_make_cache_id(payload.data()), GGML_LAYOUT_AOS);
     }
 
     const size_t used_before = cache.used();
@@ -122,7 +132,7 @@ static bool test_concurrent_evict(sycl::queue & q) {
     }
 
     for (auto & payload : payloads) {
-        if (!cache.is_cached(payload.data(), GGML_LAYOUT_AOS)) {
+        if (!cache.is_cached(ggml_sycl::test_make_cache_id(payload.data()), GGML_LAYOUT_AOS)) {
             fprintf(stderr, "Pinned entry missing after concurrent evict\n");
             return false;
         }
@@ -155,20 +165,29 @@ static bool test_mixed_ops(sycl::queue & q) {
                 int    op  = op_dist(rng);
                 if (op < 60) {
                     void * ptr =
-                        cache.ensure_cached(payloads[idx].data(), payloads[idx].data(), payloads[idx].size(),
-                                            ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false);
+                        cache.ensure_cached(ggml_sycl::test_make_cache_id(payloads[idx].data()),
+                                            payloads[idx].data(),
+                                            payloads[idx].size(),
+                                            ggml_sycl::cache_entry_type::DENSE_WEIGHT,
+                                            -1,
+                                            -1,
+                                            GGML_LAYOUT_AOS,
+                                            false);
                     if (!ptr) {
                         ok.store(false, std::memory_order_release);
                         return;
                     }
                 } else if (op < 75) {
-                    cache.pin(payloads[idx].data(), GGML_LAYOUT_AOS);
+                    cache.pin(ggml_sycl::test_make_cache_id(payloads[idx].data()), GGML_LAYOUT_AOS);
                 } else if (op < 90) {
-                    cache.unpin(payloads[idx].data(), GGML_LAYOUT_AOS);
+                    cache.unpin(ggml_sycl::test_make_cache_id(payloads[idx].data()), GGML_LAYOUT_AOS);
                 } else if (op < 95) {
                     cache.evict(256);
                 } else {
-                    cache.remove(payloads[idx].data(), ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1,
+                    cache.remove(ggml_sycl::test_make_cache_id(payloads[idx].data()),
+                                 ggml_sycl::cache_entry_type::DENSE_WEIGHT,
+                                 -1,
+                                 -1,
                                  GGML_LAYOUT_AOS);
                 }
             }

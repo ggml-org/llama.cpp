@@ -6,6 +6,7 @@
 
 #include "ggml-sycl/pinned-pool.hpp"
 #include "ggml-sycl/unified-cache.hpp"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 #include "ggml.h"
 
 #include <algorithm>
@@ -206,14 +207,15 @@ int main() {
             std::vector<void *> host_ptrs;
             std::vector<void *> dev_ptrs;
             std::vector<std::vector<uint8_t>> src_buffers;
-            std::vector<uint64_t> keys(static_cast<size_t>(chunks));
+            std::vector<ggml_sycl_cache_id> keys(static_cast<size_t>(chunks));
             host_ptrs.reserve(chunks);
             dev_ptrs.reserve(chunks);
             src_buffers.reserve(chunks);
 
             for (int c = 0; c < chunks; ++c) {
-                keys[static_cast<size_t>(c)] = static_cast<uint64_t>(c + 1);
-                const void * key_ptr = &keys[static_cast<size_t>(c)];
+                keys[static_cast<size_t>(c)] = ggml_sycl::test_make_cache_id(
+                    reinterpret_cast<const void *>(static_cast<uintptr_t>(c + 1)));
+                const ggml_sycl_cache_id key = keys[static_cast<size_t>(c)];
                 void * host = nullptr;
                 void * dev_buf = nullptr;
 
@@ -243,7 +245,7 @@ int main() {
                     bool pinned_alloc = false;
                     ggml_sycl::cache_location location = ggml_sycl::cache_location::HOST_MMAP;
                     host = host_cache->ensure_cached_alloc(
-                        key_ptr,
+                        key,
                         src.data(),
                         src.size(),
                         chunk_bytes,
@@ -285,7 +287,7 @@ int main() {
                 } else if (use_device && mode_cache && !mode_dma) {
                     bool dev_needs_fill = false;
                     dev_buf = device_cache->ensure_cached_alloc(
-                        key_ptr,
+                        key,
                         host,
                         chunk_bytes,
                         chunk_bytes,
@@ -393,17 +395,17 @@ int main() {
 
             if (mode_cache) {
                 for (int c = 0; c < static_cast<int>(host_ptrs.size()); ++c) {
-                    const void * key_ptr = &keys[static_cast<size_t>(c)];
+                    const ggml_sycl_cache_id key = keys[static_cast<size_t>(c)];
                     if (!mode_pinned && device_cache) {
                         device_cache->remove(
-                            key_ptr,
+                            key,
                             ggml_sycl::cache_entry_type::DENSE_WEIGHT,
                             -1,
                             -1,
                             GGML_LAYOUT_AOS);
                     }
                     host_cache->remove(
-                        key_ptr,
+                        key,
                         ggml_sycl::cache_entry_type::DENSE_WEIGHT,
                         -1,
                         -1,

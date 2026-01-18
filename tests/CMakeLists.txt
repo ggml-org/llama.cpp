@@ -226,6 +226,10 @@ llama_build_and_test(test-backend-ops.cpp)
 
 llama_build_and_test(test-model-load-cancel.cpp  LABEL "model")
 llama_build_and_test(test-autorelease.cpp        LABEL "model")
+llama_build_and_test(test-sycl-model-repro.cpp   LABEL "model")
+if (GGML_SYCL_ASAN_PARTIAL)
+    target_link_options(test-sycl-model-repro PRIVATE "-fsanitize=address")
+endif()
 
 # Test for state restore with fragmented KV cache
 # Requires a model, uses same args pattern as test-thread-safety
@@ -681,6 +685,48 @@ if(GGML_SYCL)
     add_test(NAME test-unified-cache-integrity COMMAND $<TARGET_FILE:test-unified-cache-integrity>)
 endif()
 
+# test-host-cache-stress: stress host_cache map + guard checks under heavy layout caching
+if(GGML_SYCL)
+    add_executable(test-host-cache-stress test-host-cache-stress.cpp)
+    target_link_libraries(test-host-cache-stress PRIVATE ggml ggml-cpu)
+    target_include_directories(test-host-cache-stress PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_definitions(test-host-cache-stress PRIVATE GGML_SYCL_WARP_SIZE=32)
+    target_compile_options(test-host-cache-stress PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-host-cache-stress PRIVATE "-fsycl")
+    install(TARGETS test-host-cache-stress RUNTIME)
+    add_test(NAME test-host-cache-stress COMMAND $<TARGET_FILE:test-host-cache-stress>)
+endif()
+
+# test-host-cache-layout-rehash: stress ggml_sycl_get_weight_layout_ptr insertion path
+if(GGML_SYCL)
+    add_executable(test-host-cache-layout-rehash test-host-cache-layout-rehash.cpp)
+    target_link_libraries(test-host-cache-layout-rehash PRIVATE ggml ggml-cpu)
+    target_include_directories(test-host-cache-layout-rehash PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_definitions(test-host-cache-layout-rehash PRIVATE GGML_SYCL_WARP_SIZE=32)
+    target_compile_options(test-host-cache-layout-rehash PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-host-cache-layout-rehash PRIVATE "-fsycl")
+    install(TARGETS test-host-cache-layout-rehash RUNTIME)
+    add_test(NAME test-host-cache-layout-rehash COMMAND $<TARGET_FILE:test-host-cache-layout-rehash>)
+endif()
+
+# test-layout-bytes: validate layout-specific byte sizes
+if(GGML_SYCL)
+    add_executable(test-layout-bytes test-layout-bytes.cpp)
+    target_link_libraries(test-layout-bytes PRIVATE ggml ggml-cpu)
+    target_include_directories(test-layout-bytes PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_definitions(test-layout-bytes PRIVATE GGML_SYCL_WARP_SIZE=32)
+    target_compile_options(test-layout-bytes PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-layout-bytes PRIVATE "-fsycl")
+    install(TARGETS test-layout-bytes RUNTIME)
+    add_test(NAME test-layout-bytes COMMAND $<TARGET_FILE:test-layout-bytes>)
+endif()
+
 # test-unified-cache-unpin-event: compare event sources for unpin_on_event
 if(GGML_SYCL)
     add_executable(test-unified-cache-unpin-event test-unified-cache-unpin-event.cpp)
@@ -1089,6 +1135,65 @@ if(GGML_SYCL)
     target_link_options(test-sycl-layout-choice PRIVATE "-fsycl")
     install(TARGETS test-sycl-layout-choice RUNTIME)
     add_test(NAME test-sycl-layout-choice COMMAND $<TARGET_FILE:test-sycl-layout-choice>)
+
+    # test-sycl-weight-key-stability: key should remain stable across repeated lookups.
+    add_executable(test-sycl-weight-key-stability test-sycl-weight-key-stability.cpp)
+    target_link_libraries(test-sycl-weight-key-stability PRIVATE ggml)
+    target_include_directories(test-sycl-weight-key-stability PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-weight-key-stability PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-weight-key-stability PRIVATE "-fsycl")
+    install(TARGETS test-sycl-weight-key-stability RUNTIME)
+    add_test(NAME test-sycl-weight-key-stability COMMAND $<TARGET_FILE:test-sycl-weight-key-stability>)
+
+    # test-sycl-weight-key-uniqueness: detect key collisions across multiple weights.
+    add_executable(test-sycl-weight-key-uniqueness test-sycl-weight-key-uniqueness.cpp)
+    target_link_libraries(test-sycl-weight-key-uniqueness PRIVATE ggml)
+    target_include_directories(test-sycl-weight-key-uniqueness PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-weight-key-uniqueness PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-weight-key-uniqueness PRIVATE "-fsycl")
+    install(TARGETS test-sycl-weight-key-uniqueness RUNTIME)
+    add_test(NAME test-sycl-weight-key-uniqueness COMMAND $<TARGET_FILE:test-sycl-weight-key-uniqueness>)
+
+    # test-sycl-weight-cache-guard: stress weight cache guard + host reorders.
+    add_executable(test-sycl-weight-cache-guard test-sycl-weight-cache-guard.cpp)
+    target_link_libraries(test-sycl-weight-cache-guard PRIVATE ggml)
+    target_include_directories(test-sycl-weight-cache-guard PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-weight-cache-guard PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-weight-cache-guard PRIVATE "-fsycl")
+    install(TARGETS test-sycl-weight-cache-guard RUNTIME)
+    add_test(NAME test-sycl-weight-cache-guard COMMAND $<TARGET_FILE:test-sycl-weight-cache-guard>)
+
+    # test-sycl-tensor-usage: validates tensor usage inference by name.
+    add_executable(test-sycl-tensor-usage test-sycl-tensor-usage.cpp)
+    target_link_libraries(test-sycl-tensor-usage PRIVATE ggml)
+    target_include_directories(test-sycl-tensor-usage PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-tensor-usage PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-tensor-usage PRIVATE "-fsycl")
+    install(TARGETS test-sycl-tensor-usage RUNTIME)
+    add_test(NAME test-sycl-tensor-usage COMMAND $<TARGET_FILE:test-sycl-tensor-usage>)
+
+    # test-sycl-pointer-types: validates sycl::get_pointer_type classification.
+    add_executable(test-sycl-pointer-types test-sycl-pointer-types.cpp)
+    target_link_libraries(test-sycl-pointer-types PRIVATE ggml)
+    target_include_directories(test-sycl-pointer-types PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src)
+    target_compile_options(test-sycl-pointer-types PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-pointer-types PRIVATE "-fsycl")
+    install(TARGETS test-sycl-pointer-types RUNTIME)
+    add_test(NAME test-sycl-pointer-types COMMAND $<TARGET_FILE:test-sycl-pointer-types>)
 
     # test-q6k-dispatch: Tests Q6_K MMVQ dispatch path using actual ggml backend API
     add_executable(test-q6k-dispatch test-q6k-dispatch.cpp)

@@ -12,6 +12,7 @@
 // Include the header we're testing
 #include "pinned-pool.hpp"
 #include "unified-cache.hpp"
+#include "ggml-sycl/ggml-sycl-test.hpp"
 
 void test_basic_allocation() {
     sycl::queue q;
@@ -188,13 +189,14 @@ void test_host_cache_uses_pool() {
         bool pinned     = false;
         ggml_sycl::cache_location location = ggml_sycl::cache_location::HOST_MMAP;
 
-        // Use fake but non-null pointers for key_ptr and src_ptr
+        // Use fake but non-null pointers for cache id and src_ptr
         // (host_cache checks for nullptr and returns early)
-        const void * fake_key = reinterpret_cast<const void *>(static_cast<uintptr_t>(0x1000 + i));
+        const ggml_sycl_cache_id fake_key = ggml_sycl::test_make_cache_id(
+            reinterpret_cast<const void *>(static_cast<uintptr_t>(0x1000 + i)));
         const void * fake_src = reinterpret_cast<const void *>(static_cast<uintptr_t>(0x2000 + i));
 
         void * ptr =
-            cache->ensure_cached_alloc(fake_key,     // key_ptr - stable identifier
+            cache->ensure_cached_alloc(fake_key,     // cache id - stable identifier
                                        fake_src,     // src_ptr - source data pointer (non-null to pass validation)
                                        TENSOR_SIZE,  // src_size
                                        TENSOR_SIZE,  // dst_size
@@ -229,7 +231,8 @@ void test_host_cache_mmap_alias() {
     bool                 pinned     = false;
     ggml_sycl::cache_location location = ggml_sycl::cache_location::HOST_MMAP;
 
-    const void * fake_key = reinterpret_cast<const void *>(static_cast<uintptr_t>(0x4000));
+    const ggml_sycl_cache_id fake_key = ggml_sycl::test_make_cache_id(
+        reinterpret_cast<const void *>(static_cast<uintptr_t>(0x4000)));
     void * ptr = cache.ensure_cached_alloc(fake_key, data.data(), data.size(), data.size(),
                                            ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1,
                                            GGML_LAYOUT_AOS, false, &needs_fill, &pinned, &location, nullptr);

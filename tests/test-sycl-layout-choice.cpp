@@ -146,9 +146,9 @@ static bool run_layout_choice_test() {
         return true;
     }
 
-    const void * key = ggml_backend_sycl_get_weight_cache_key(weight, 0);
-    const bool   soa_cached = cache->is_cached(key, GGML_LAYOUT_SOA);
-    const bool   coa_cached = cache->is_cached(key, GGML_LAYOUT_COALESCED);
+    ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(weight, 0);
+    const bool   soa_cached = key.valid && cache->is_cached(key, GGML_LAYOUT_SOA);
+    const bool   coa_cached = key.valid && cache->is_cached(key, GGML_LAYOUT_COALESCED);
 
     ggml_backend_buffer_free(weight_buf);
     ggml_backend_buffer_free(input_buf);

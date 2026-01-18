@@ -151,8 +151,8 @@ static bool test_aos_drop(int device_id) {
     fill_pattern(host_data);
     ggml_backend_tensor_set(weight, host_data.data(), 0, host_data.size());
 
-    const void * key_ptr = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
-    if (!key_ptr) {
+    ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
+    if (!key.valid) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(cpu_backend);
@@ -170,7 +170,7 @@ static bool test_aos_drop(int device_id) {
     }
 
     void * aos_ptr = ggml_sycl_get_weight_layout_ptr(weight, device_id, GGML_LAYOUT_AOS);
-    if (!aos_ptr || !cache->is_cached(key_ptr, GGML_LAYOUT_AOS)) {
+    if (!aos_ptr || !cache->is_cached(key, GGML_LAYOUT_AOS)) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(cpu_backend);
@@ -179,7 +179,7 @@ static bool test_aos_drop(int device_id) {
     }
 
     void * coalesced_ptr = ggml_sycl_get_weight_layout_ptr(weight, device_id, GGML_LAYOUT_COALESCED);
-    if (!coalesced_ptr || !cache->is_cached(key_ptr, GGML_LAYOUT_COALESCED)) {
+    if (!coalesced_ptr || !cache->is_cached(key, GGML_LAYOUT_COALESCED)) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(cpu_backend);
@@ -187,7 +187,7 @@ static bool test_aos_drop(int device_id) {
         return false;
     }
 
-    if (cache->is_cached(key_ptr, GGML_LAYOUT_AOS)) {
+    if (cache->is_cached(key, GGML_LAYOUT_AOS)) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(cpu_backend);
@@ -411,8 +411,8 @@ static bool test_device_weight_layout_cache(int device_id) {
     fill_pattern(host_data);
     ggml_backend_tensor_set(weight, host_data.data(), 0, host_data.size());
 
-    const void * key_ptr = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
-    if (!key_ptr) {
+    ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
+    if (!key.valid) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(backend);
@@ -430,7 +430,7 @@ static bool test_device_weight_layout_cache(int device_id) {
     }
 
     void * aos_ptr = ggml_sycl_get_weight_layout_ptr(weight, device_id, GGML_LAYOUT_AOS);
-    if (!aos_ptr || !cache->is_cached(key_ptr, GGML_LAYOUT_AOS)) {
+    if (!aos_ptr || !cache->is_cached(key, GGML_LAYOUT_AOS)) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(backend);
@@ -439,7 +439,7 @@ static bool test_device_weight_layout_cache(int device_id) {
     }
 
     void * coalesced_ptr = ggml_sycl_get_weight_layout_ptr(weight, device_id, GGML_LAYOUT_COALESCED);
-    if (!coalesced_ptr || !cache->is_cached(key_ptr, GGML_LAYOUT_COALESCED)) {
+    if (!coalesced_ptr || !cache->is_cached(key, GGML_LAYOUT_COALESCED)) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(backend);
@@ -447,7 +447,7 @@ static bool test_device_weight_layout_cache(int device_id) {
         return false;
     }
 
-    if (cache->is_cached(key_ptr, GGML_LAYOUT_AOS)) {
+    if (cache->is_cached(key, GGML_LAYOUT_AOS)) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(backend);
@@ -503,8 +503,8 @@ static bool test_host_reorder_uses_host_cache(int device_id) {
     fill_pattern(host_data);
     ggml_backend_tensor_set(weight, host_data.data(), 0, host_data.size());
 
-    const void * key_ptr = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
-    if (!key_ptr) {
+    ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
+    if (!key.valid) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(cpu_backend);
@@ -531,7 +531,7 @@ static bool test_host_reorder_uses_host_cache(int device_id) {
         return false;
     }
 
-    if (!cache->is_cached(key_ptr, GGML_LAYOUT_COALESCED)) {
+    if (!cache->is_cached(key, GGML_LAYOUT_COALESCED)) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(cpu_backend);
@@ -539,7 +539,7 @@ static bool test_host_reorder_uses_host_cache(int device_id) {
         return false;
     }
 
-    if (!host_cache->is_cached(key_ptr, GGML_LAYOUT_COALESCED)) {
+    if (!host_cache->is_cached(key, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_COALESCED)) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(cpu_backend);
@@ -547,8 +547,8 @@ static bool test_host_reorder_uses_host_cache(int device_id) {
         return false;
     }
 
-    cache->remove(key_ptr, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_COALESCED);
-    host_cache->remove(key_ptr, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_COALESCED);
+    cache->remove(key, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_COALESCED);
+    host_cache->remove(key, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_COALESCED);
 
     ggml_backend_buffer_free(weight_buffer);
     ggml_free(ctx);
@@ -604,8 +604,8 @@ static bool test_device_reorder_skips_host_cache(int device_id) {
     fill_pattern(host_data);
     ggml_backend_tensor_set(weight, host_data.data(), 0, host_data.size());
 
-    const void * key_ptr = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
-    if (!key_ptr) {
+    ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
+    if (!key.valid) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(backend);
@@ -632,7 +632,7 @@ static bool test_device_reorder_skips_host_cache(int device_id) {
         return false;
     }
 
-    if (!cache->is_cached(key_ptr, GGML_LAYOUT_COALESCED)) {
+    if (!cache->is_cached(key, GGML_LAYOUT_COALESCED)) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(backend);
@@ -640,7 +640,7 @@ static bool test_device_reorder_skips_host_cache(int device_id) {
         return false;
     }
 
-    if (host_cache->is_cached(key_ptr, GGML_LAYOUT_COALESCED)) {
+    if (host_cache->is_cached(key, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_COALESCED)) {
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
         ggml_backend_free(backend);
@@ -648,7 +648,7 @@ static bool test_device_reorder_skips_host_cache(int device_id) {
         return false;
     }
 
-    cache->remove(key_ptr, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_COALESCED);
+    cache->remove(key, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_COALESCED);
 
     ggml_backend_buffer_free(weight_buffer);
     ggml_free(ctx);
@@ -701,8 +701,8 @@ static bool test_layout_ptr_eviction_guard(int device_id) {
     auto * extra = new ggml_tensor_extra_gpu();
     weight->extra = extra;
 
-    const void * key_ptr = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
-    if (!key_ptr) {
+    ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
+    if (!key.valid) {
         delete extra;
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
@@ -724,9 +724,9 @@ static bool test_layout_ptr_eviction_guard(int device_id) {
     std::vector<float> host_data(ggml_nelements(weight), 1.0f);
     bool               needs_fill = false;
     void *             layout_ptr = cache->ensure_cached_alloc(
-        key_ptr, host_data.data(), ggml_nbytes(weight), ggml_nbytes(weight),
+        key, host_data.data(), ggml_nbytes(weight), ggml_nbytes(weight),
         ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false, &needs_fill);
-    if (!layout_ptr || !cache->is_cached(key_ptr, GGML_LAYOUT_AOS)) {
+    if (!layout_ptr || !cache->is_cached(key, GGML_LAYOUT_AOS)) {
         delete extra;
         ggml_backend_buffer_free(weight_buffer);
         ggml_free(ctx);
@@ -744,7 +744,7 @@ static bool test_layout_ptr_eviction_guard(int device_id) {
     extra->layout.n_elements = ggml_nelements(weight);
     extra->layout.n_experts  = 1;
 
-    cache->remove(key_ptr, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS);
+    cache->remove(key, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS);
 
     void * resolved_ptr = ggml_sycl_get_layout_ptr(weight, device_id);
     if (resolved_ptr != weight->data) {
@@ -843,8 +843,8 @@ static bool test_model_load_preload_caches_weight(int device_id) {
     ggml_backend_sycl_set_model_loading(false);
 
     ggml_sycl::unified_cache * cache = ggml_sycl::get_unified_cache_for_device(device_id);
-    const void * key = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
-    if (!cache || !key || !cache->is_cached_any(key)) {
+    ggml_sycl_cache_id key = ggml_backend_sycl_get_weight_cache_key(weight, device_id);
+    if (!cache || !key.valid || !cache->is_cached_any(key)) {
         fprintf(stderr, "test_model_load_preload_caches_weight: cache miss\n");
         ggml_backend_buffer_free(weight_buf);
         ggml_free(ctx);

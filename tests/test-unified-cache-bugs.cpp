@@ -29,12 +29,14 @@ static bool test_evict_returns_bytes(sycl::queue & q) {
     ggml_sycl::unified_cache cache(q, 4 * 1024);
     std::vector<uint8_t>     data_a(512, 0x11);
     std::vector<uint8_t>     data_b(512, 0x22);
+    ggml_sycl_cache_id       key_a = ggml_sycl::test_make_cache_id(data_a.data());
+    ggml_sycl_cache_id       key_b = ggml_sycl::test_make_cache_id(data_b.data());
 
     bool   needs_fill = false;
-    void * ptr_a      = cache.ensure_cached_alloc(data_a.data(), data_a.data(), data_a.size(), data_a.size(),
+    void * ptr_a      = cache.ensure_cached_alloc(key_a, data_a.data(), data_a.size(), data_a.size(),
                                                   ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false,
                                                   &needs_fill);
-    void * ptr_b      = cache.ensure_cached_alloc(data_b.data(), data_b.data(), data_b.size(), data_b.size(),
+    void * ptr_b      = cache.ensure_cached_alloc(key_b, data_b.data(), data_b.size(), data_b.size(),
                                                   ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false,
                                                   &needs_fill);
 
@@ -60,12 +62,12 @@ static bool test_realloc_failure_keeps_entry(sycl::queue & q) {
     ggml_sycl::unified_cache cache(q, budget);
 
     std::vector<uint8_t> data(256, 0x33);
-    const void *         key_ptr   = data.data();
+    ggml_sycl_cache_id   key       = ggml_sycl::test_make_cache_id(data.data());
     const size_t         orig_size = data.size();
 
     bool   needs_fill = false;
     void * ptr =
-        cache.ensure_cached_alloc(key_ptr, data.data(), orig_size, orig_size, ggml_sycl::cache_entry_type::DENSE_WEIGHT,
+        cache.ensure_cached_alloc(key, data.data(), orig_size, orig_size, ggml_sycl::cache_entry_type::DENSE_WEIGHT,
                                   -1, -1, GGML_LAYOUT_AOS, false, &needs_fill);
     if (!ptr) {
         fprintf(stderr, "Failed to allocate initial cache entry\n");
@@ -75,7 +77,7 @@ static bool test_realloc_failure_keeps_entry(sycl::queue & q) {
     const size_t used_before = cache.used();
     const size_t huge_alloc  = 1ULL << 40;  // 1 TB, should fail on all current devices
 
-    void * realloc_ptr = cache.ensure_cached_alloc(key_ptr, data.data(), orig_size, huge_alloc,
+    void * realloc_ptr = cache.ensure_cached_alloc(key, data.data(), orig_size, huge_alloc,
                                                    ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS,
                                                    false, &needs_fill);
     if (realloc_ptr) {
@@ -83,7 +85,7 @@ static bool test_realloc_failure_keeps_entry(sycl::queue & q) {
         return false;
     }
 
-    if (!cache.is_cached(key_ptr, GGML_LAYOUT_AOS)) {
+    if (!cache.is_cached(key, GGML_LAYOUT_AOS)) {
         fprintf(stderr, "Existing entry was dropped after realloc failure\n");
         return false;
     }
@@ -102,10 +104,10 @@ static bool test_realloc_eviction_failure_keeps_entry(sycl::queue & q) {
 
     ggml_sycl::unified_cache cache(q, 1024);
     std::vector<uint8_t>     data(512, 0x44);
-    const void *             key_ptr = data.data();
+    ggml_sycl_cache_id       key = ggml_sycl::test_make_cache_id(data.data());
 
     bool   needs_fill = false;
-    void * ptr        = cache.ensure_cached_alloc(key_ptr, data.data(), data.size(), data.size(),
+    void * ptr        = cache.ensure_cached_alloc(key, data.data(), data.size(), data.size(),
                                                   ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false,
                                                   &needs_fill);
     if (!ptr) {
@@ -113,11 +115,11 @@ static bool test_realloc_eviction_failure_keeps_entry(sycl::queue & q) {
         return false;
     }
 
-    cache.pin(key_ptr, GGML_LAYOUT_AOS);
+    cache.pin(key, GGML_LAYOUT_AOS);
     const size_t used_before = cache.used();
 
     void * realloc_ptr =
-        cache.ensure_cached_alloc(key_ptr, data.data(), data.size(), 2048, ggml_sycl::cache_entry_type::DENSE_WEIGHT,
+        cache.ensure_cached_alloc(key, data.data(), data.size(), 2048, ggml_sycl::cache_entry_type::DENSE_WEIGHT,
                                   -1, -1, GGML_LAYOUT_AOS, false, &needs_fill);
 
     if (realloc_ptr) {
@@ -125,7 +127,7 @@ static bool test_realloc_eviction_failure_keeps_entry(sycl::queue & q) {
         return false;
     }
 
-    if (!cache.is_cached(key_ptr, GGML_LAYOUT_AOS)) {
+    if (!cache.is_cached(key, GGML_LAYOUT_AOS)) {
         fprintf(stderr, "Entry dropped after eviction failure during realloc\n");
         return false;
     }
@@ -146,7 +148,7 @@ static bool test_layout_size_mismatch_recaches(sycl::queue & q) {
     std::vector<uint8_t>     data(128, 0xad);
 
     ggml_sycl::cache_layout_request req{};
-    req.key_ptr   = data.data();
+    req.key       = ggml_sycl::test_make_cache_id(data.data());
     req.src_ptr   = data.data();
     req.src_size  = data.size();
     req.dst_size  = data.size();
@@ -185,7 +187,7 @@ static bool test_layout_size_mismatch_pinned_fails(sycl::queue & q) {
     std::vector<uint8_t>     data(128, 0xbe);
 
     ggml_sycl::cache_layout_request req{};
-    req.key_ptr   = data.data();
+    req.key       = ggml_sycl::test_make_cache_id(data.data());
     req.src_ptr   = data.data();
     req.src_size  = data.size();
     req.dst_size  = data.size();
@@ -203,7 +205,7 @@ static bool test_layout_size_mismatch_pinned_fails(sycl::queue & q) {
         return false;
     }
 
-    cache.pin(req.key_ptr, req.layout);
+    cache.pin(req.key, req.layout);
     req.dst_size = data.size() * 2;
     result       = cache.ensure_cached_layout(req, {});
     if (result.status != ggml_sycl::cache_layout_status::FAILED) {
@@ -439,10 +441,16 @@ static bool test_all_pinned_eviction_failure_new_entry(sycl::queue & q) {
     std::vector<uint8_t>     data_c(512, 0x77);
 
     bool   needs_fill = false;
-    void * ptr_a      = cache.ensure_cached_alloc(data_a.data(), data_a.data(), data_a.size(), data_a.size(),
+    void * ptr_a      = cache.ensure_cached_alloc(ggml_sycl::test_make_cache_id(data_a.data()),
+                                                  data_a.data(),
+                                                  data_a.size(),
+                                                  data_a.size(),
                                                   ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false,
                                                   &needs_fill);
-    void * ptr_b      = cache.ensure_cached_alloc(data_b.data(), data_b.data(), data_b.size(), data_b.size(),
+    void * ptr_b      = cache.ensure_cached_alloc(ggml_sycl::test_make_cache_id(data_b.data()),
+                                                  data_b.data(),
+                                                  data_b.size(),
+                                                  data_b.size(),
                                                   ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false,
                                                   &needs_fill);
 
@@ -451,11 +459,14 @@ static bool test_all_pinned_eviction_failure_new_entry(sycl::queue & q) {
         return false;
     }
 
-    cache.pin(data_a.data(), GGML_LAYOUT_AOS);
-    cache.pin(data_b.data(), GGML_LAYOUT_AOS);
+    cache.pin(ggml_sycl::test_make_cache_id(data_a.data()), GGML_LAYOUT_AOS);
+    cache.pin(ggml_sycl::test_make_cache_id(data_b.data()), GGML_LAYOUT_AOS);
     const size_t used_before = cache.used();
 
-    void * ptr_c = cache.ensure_cached_alloc(data_c.data(), data_c.data(), data_c.size(), data_c.size(),
+    void * ptr_c = cache.ensure_cached_alloc(ggml_sycl::test_make_cache_id(data_c.data()),
+                                             data_c.data(),
+                                             data_c.size(),
+                                             data_c.size(),
                                              ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false,
                                              &needs_fill);
 
@@ -464,7 +475,8 @@ static bool test_all_pinned_eviction_failure_new_entry(sycl::queue & q) {
         return false;
     }
 
-    if (!cache.is_cached(data_a.data(), GGML_LAYOUT_AOS) || !cache.is_cached(data_b.data(), GGML_LAYOUT_AOS)) {
+    if (!cache.is_cached(ggml_sycl::test_make_cache_id(data_a.data()), GGML_LAYOUT_AOS) ||
+        !cache.is_cached(ggml_sycl::test_make_cache_id(data_b.data()), GGML_LAYOUT_AOS)) {
         fprintf(stderr, "Pinned entries were evicted unexpectedly\n");
         return false;
     }
@@ -487,10 +499,16 @@ static bool test_partial_eviction_insufficient(sycl::queue & q) {
     std::vector<uint8_t>     data_c(1024, 0xaa);
 
     bool   needs_fill = false;
-    void * ptr_a      = cache.ensure_cached_alloc(data_a.data(), data_a.data(), data_a.size(), data_a.size(),
+    void * ptr_a      = cache.ensure_cached_alloc(ggml_sycl::test_make_cache_id(data_a.data()),
+                                                  data_a.data(),
+                                                  data_a.size(),
+                                                  data_a.size(),
                                                   ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false,
                                                   &needs_fill);
-    void * ptr_b      = cache.ensure_cached_alloc(data_b.data(), data_b.data(), data_b.size(), data_b.size(),
+    void * ptr_b      = cache.ensure_cached_alloc(ggml_sycl::test_make_cache_id(data_b.data()),
+                                                  data_b.data(),
+                                                  data_b.size(),
+                                                  data_b.size(),
                                                   ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false,
                                                   &needs_fill);
 
@@ -499,10 +517,13 @@ static bool test_partial_eviction_insufficient(sycl::queue & q) {
         return false;
     }
 
-    cache.pin(data_a.data(), GGML_LAYOUT_AOS);
+    cache.pin(ggml_sycl::test_make_cache_id(data_a.data()), GGML_LAYOUT_AOS);
     const size_t used_before = cache.used();
 
-    void * ptr_c = cache.ensure_cached_alloc(data_c.data(), data_c.data(), data_c.size(), data_c.size(),
+    void * ptr_c = cache.ensure_cached_alloc(ggml_sycl::test_make_cache_id(data_c.data()),
+                                             data_c.data(),
+                                             data_c.size(),
+                                             data_c.size(),
                                              ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false,
                                              &needs_fill);
 
@@ -511,7 +532,7 @@ static bool test_partial_eviction_insufficient(sycl::queue & q) {
         return false;
     }
 
-    if (!cache.is_cached(data_a.data(), GGML_LAYOUT_AOS)) {
+    if (!cache.is_cached(ggml_sycl::test_make_cache_id(data_a.data()), GGML_LAYOUT_AOS)) {
         fprintf(stderr, "Pinned entry was evicted during partial eviction test\n");
         return false;
     }
@@ -539,7 +560,10 @@ static bool test_allocation_failure_new_entry(sycl::queue & q) {
     const size_t         huge_alloc = 1ULL << 40;
 
     bool   needs_fill = false;
-    void * ptr        = cache.ensure_cached_alloc(data.data(), data.data(), data.size(), huge_alloc,
+    void * ptr        = cache.ensure_cached_alloc(ggml_sycl::test_make_cache_id(data.data()),
+                                                  data.data(),
+                                                  data.size(),
+                                                  huge_alloc,
                                                   ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false,
                                                   &needs_fill);
 
@@ -548,7 +572,7 @@ static bool test_allocation_failure_new_entry(sycl::queue & q) {
         return false;
     }
 
-    if (cache.is_cached(data.data(), GGML_LAYOUT_AOS)) {
+    if (cache.is_cached(ggml_sycl::test_make_cache_id(data.data()), GGML_LAYOUT_AOS)) {
         fprintf(stderr, "Cache entry created despite allocation failure\n");
         return false;
     }
@@ -569,7 +593,10 @@ static bool test_deferred_free_stress(sycl::queue & q) {
 
     bool needs_fill = false;
     for (auto & payload : payloads) {
-        void * ptr = cache.ensure_cached_alloc(payload.data(), payload.data(), payload.size(), payload.size(),
+        void * ptr = cache.ensure_cached_alloc(ggml_sycl::test_make_cache_id(payload.data()),
+                                               payload.data(),
+                                               payload.size(),
+                                               payload.size(),
                                                ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS,
                                                false, &needs_fill);
         if (!ptr) {
@@ -579,7 +606,11 @@ static bool test_deferred_free_stress(sycl::queue & q) {
     }
 
     for (auto & payload : payloads) {
-        cache.remove(payload.data(), ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS);
+        cache.remove(ggml_sycl::test_make_cache_id(payload.data()),
+                     ggml_sycl::cache_entry_type::DENSE_WEIGHT,
+                     -1,
+                     -1,
+                     GGML_LAYOUT_AOS);
     }
 
     q.wait();
@@ -603,15 +634,21 @@ static bool test_unaligned_hash(sycl::queue & q) {
     uint8_t *            misaligned = raw.data() + 1;
     const size_t         size       = 127;
 
-    void * ptr = cache.ensure_cached(misaligned, misaligned, size, ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1,
-                                     GGML_LAYOUT_AOS, true);
+    void * ptr = cache.ensure_cached(ggml_sycl::test_make_cache_id(misaligned),
+                                     misaligned,
+                                     size,
+                                     ggml_sycl::cache_entry_type::DENSE_WEIGHT,
+                                     -1,
+                                     -1,
+                                     GGML_LAYOUT_AOS,
+                                     true);
 
     if (!ptr) {
         fprintf(stderr, "ensure_cached failed for misaligned input\n");
         return false;
     }
 
-    if (!cache.is_cached(misaligned, GGML_LAYOUT_AOS)) {
+    if (!cache.is_cached(ggml_sycl::test_make_cache_id(misaligned), GGML_LAYOUT_AOS)) {
         fprintf(stderr, "Cache entry missing for misaligned input\n");
         return false;
     }
@@ -627,28 +664,36 @@ static bool test_unpin_experts(sycl::queue & q) {
     std::vector<uint8_t>     expert(128, 0x6c);
 
     bool needs_fill = false;
-    if (!cache.ensure_cached_alloc(dense.data(), dense.data(), dense.size(), dense.size(),
+    if (!cache.ensure_cached_alloc(ggml_sycl::test_make_cache_id(dense.data()),
+                                   dense.data(),
+                                   dense.size(),
+                                   dense.size(),
                                    ggml_sycl::cache_entry_type::DENSE_WEIGHT, -1, -1, GGML_LAYOUT_AOS, false,
                                    &needs_fill)) {
         fprintf(stderr, "Failed to allocate dense entry for unpin test\n");
         return false;
     }
-    if (!cache.ensure_cached_alloc(expert.data(), expert.data(), expert.size(), expert.size(),
+    if (!cache.ensure_cached_alloc(ggml_sycl::test_make_cache_id(expert.data()),
+                                   expert.data(),
+                                   expert.size(),
+                                   expert.size(),
                                    ggml_sycl::cache_entry_type::MOE_EXPERT, 0, 0, GGML_LAYOUT_AOS, false,
                                    &needs_fill)) {
         fprintf(stderr, "Failed to allocate expert entry for unpin test\n");
         return false;
     }
 
-    cache.pin(dense.data(), GGML_LAYOUT_AOS);
-    cache.pin(expert.data(), GGML_LAYOUT_AOS);
+    const ggml_sycl_cache_id dense_key  = ggml_sycl::test_make_cache_id(dense.data());
+    const ggml_sycl_cache_id expert_key = ggml_sycl::test_make_cache_id(expert.data());
+    cache.pin(dense_key, GGML_LAYOUT_AOS);
+    cache.pin(expert_key, GGML_LAYOUT_AOS);
     cache.unpin_experts();
 
-    if (!cache.is_pinned(dense.data(), GGML_LAYOUT_AOS)) {
+    if (!cache.is_pinned(dense_key, GGML_LAYOUT_AOS)) {
         fprintf(stderr, "Dense entry was unpinned unexpectedly\n");
         return false;
     }
-    if (cache.is_pinned(expert.data(), GGML_LAYOUT_AOS)) {
+    if (cache.is_pinned(expert_key, GGML_LAYOUT_AOS)) {
         fprintf(stderr, "Expert entry remained pinned after unpin_experts\n");
         return false;
     }
@@ -664,7 +709,7 @@ static bool test_moe_overcommit_cap(sycl::queue & q) {
 
     std::vector<uint8_t>            data_a(budget, 0x1a);
     ggml_sycl::cache_layout_request req{};
-    req.key_ptr          = data_a.data();
+    req.key              = ggml_sycl::test_make_cache_id(data_a.data());
     req.src_ptr          = data_a.data();
     req.src_size         = data_a.size();
     req.dst_size         = data_a.size();
@@ -681,10 +726,10 @@ static bool test_moe_overcommit_cap(sycl::queue & q) {
     if (result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
         result.event.wait();
     }
-    cache.pin(data_a.data(), GGML_LAYOUT_AOS);
+    cache.pin(req.key, GGML_LAYOUT_AOS);
 
     std::vector<uint8_t> data_b(40, 0x2b);
-    req.key_ptr   = data_b.data();
+    req.key       = ggml_sycl::test_make_cache_id(data_b.data());
     req.src_ptr   = data_b.data();
     req.src_size  = data_b.size();
     req.dst_size  = data_b.size();
@@ -701,10 +746,10 @@ static bool test_moe_overcommit_cap(sycl::queue & q) {
     if (result.status == ggml_sycl::cache_layout_status::IN_PROGRESS) {
         result.event.wait();
     }
-    cache.pin(data_b.data(), GGML_LAYOUT_AOS);
+    cache.pin(req.key, GGML_LAYOUT_AOS);
 
     std::vector<uint8_t> data_c(100, 0x3c);
-    req.key_ptr   = data_c.data();
+    req.key       = ggml_sycl::test_make_cache_id(data_c.data());
     req.src_ptr   = data_c.data();
     req.src_size  = data_c.size();
     req.dst_size  = data_c.size();
@@ -730,7 +775,7 @@ static bool test_single_layout_enforced(sycl::queue & q) {
     std::vector<uint8_t>     data(512, 0x7a);
 
     ggml_sycl::cache_layout_request req{};
-    req.key_ptr  = data.data();
+    req.key      = ggml_sycl::test_make_cache_id(data.data());
     req.src_ptr  = data.data();
     req.src_size = data.size();
     req.dst_size = data.size();
@@ -742,7 +787,7 @@ static bool test_single_layout_enforced(sycl::queue & q) {
         fprintf(stderr, "Failed to cache AoS layout\n");
         return false;
     }
-    if (!cache.is_cached(req.key_ptr, GGML_LAYOUT_AOS)) {
+    if (!cache.is_cached(req.key, GGML_LAYOUT_AOS)) {
         fprintf(stderr, "AoS entry missing after caching\n");
         return false;
     }
@@ -753,11 +798,11 @@ static bool test_single_layout_enforced(sycl::queue & q) {
         fprintf(stderr, "Failed to cache SoA layout\n");
         return false;
     }
-    if (cache.is_cached(req.key_ptr, GGML_LAYOUT_AOS)) {
+    if (cache.is_cached(req.key, GGML_LAYOUT_AOS)) {
         fprintf(stderr, "AoS entry still cached after SoA request\n");
         return false;
     }
-    if (!cache.is_cached(req.key_ptr, GGML_LAYOUT_SOA)) {
+    if (!cache.is_cached(req.key, GGML_LAYOUT_SOA)) {
         fprintf(stderr, "SoA entry missing after request\n");
         return false;
     }
