@@ -16716,6 +16716,14 @@ static bool try_xmx_sorted_moe(ggml_backend_sycl_context & ctx,
     // Select the required layout for XMX sorted path (single optimal layout per kernel)
     ggml_tensor_extra_gpu * src0_extra          = (ggml_tensor_extra_gpu *) src0->extra;
     const bool              host_weights        = src0->buffer && ggml_backend_buffer_is_host(src0->buffer);
+    // Host weights (mmap'd memory) cannot be accessed directly by GPU kernels.
+    // The streaming DMA path has issues with Q8_0 MoE - fall back to MMVQ or host routing.
+    // TODO: Debug the unified cache streaming path for Q8_0 MoE with host weights.
+    if (host_weights) {
+        GGML_SYCL_DEBUG("[XMX MoE] Host weights detected for %s, falling back (GPU cannot access host pointers)\n",
+                        src0->name ? src0->name : "?");
+        return false;
+    }
     const bool              require_tiled_mxfp4 = tiled_enabled && src0->type == GGML_TYPE_MXFP4;
     const layout_mode       target_layout       = require_tiled_mxfp4 ? GGML_LAYOUT_XMX_TILED : GGML_LAYOUT_SOA;
     const layout_mode       layout              = ggml_sycl_adjust_layout_for_tensor(src0, target_layout, ctx.device);
