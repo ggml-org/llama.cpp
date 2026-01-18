@@ -356,8 +356,22 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
             }
         }
 
-        // For RDNA4 MMQ is consistently faster than dequantization + hipBLAS:
-        // https://github.com/ggml-org/llama.cpp/pull/18537#issuecomment-3706422301
+        if (GGML_CUDA_CC_IS_RDNA4(cc)){
+
+            if (n_experts > 64 || ne11 <= 128) {
+                return true;
+            }
+
+            if (type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1 || type == GGML_TYPE_Q5_0 || type == GGML_TYPE_Q5_1) {
+                return true;
+            }
+
+            if (ne11 <= 256 && (type == GGML_TYPE_Q4_K || type == GGML_TYPE_Q5_K)) {
+                return true;
+            }
+
+            return false;
+        }
         return true;
     }
 
