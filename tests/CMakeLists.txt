@@ -1337,6 +1337,19 @@ if(GGML_SYCL)
     install(TARGETS test-pinned-chunk-pool RUNTIME)
     add_test(NAME test-pinned-chunk-pool COMMAND $<TARGET_FILE:test-pinned-chunk-pool>)
 
+    # test-sycl-chunk-manager: Unit tests for sub-tensor streaming chunk abstraction
+    # Part of unified memory management system (epic llama.cpp-v3n, task llama.cpp-4ye)
+    add_executable(test-sycl-chunk-manager test-sycl-chunk-manager.cpp)
+    target_link_libraries(test-sycl-chunk-manager PRIVATE ggml)
+    target_include_directories(test-sycl-chunk-manager PRIVATE
+        ${PROJECT_SOURCE_DIR}/ggml/include
+        ${PROJECT_SOURCE_DIR}/ggml/src
+        ${PROJECT_SOURCE_DIR}/ggml/src/ggml-sycl)
+    target_compile_options(test-sycl-chunk-manager PRIVATE "-fsycl" "-Wno-narrowing")
+    target_link_options(test-sycl-chunk-manager PRIVATE "-fsycl")
+    install(TARGETS test-sycl-chunk-manager RUNTIME)
+    add_test(NAME test-sycl-chunk-manager COMMAND $<TARGET_FILE:test-sycl-chunk-manager>)
+
     # test-tensor-placement: Tests for tensor classification and buffer type routing
     # Part of tiered memory architecture for MoE models
     add_executable(test-tensor-placement test-tensor-placement.cpp)
