@@ -297,6 +297,28 @@ static common_chat_tool todo_list{
     })",
 };
 
+static common_chat_tool edit_tool{
+    /* .name = */ "edit",
+    /* .description = */ "Edit file",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "filename": {
+                "type": "string",
+                "description": "Path of file to edit"
+            },
+            "oldString": {
+                "type": "string",
+                "description": "String to replace"
+            },
+            "newString": {
+                "type": "string",
+                "description": "New (replacement) value"
+            }
+        },
+        "required": ["filename", "oldString", "newString"]
+    })",
+};
 
 static std::vector<common_chat_tool> tools{ special_function_tool, special_function_tool_with_optional_param,
                                             python_tool, html_tool, todo_list };
@@ -1407,6 +1429,35 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .run();
 
+        // single-quote normalization and tool call with inside quotes
+        tst.test(
+               "<seed:tool_call>\n"
+               "<function=edit>\n"
+               "<parameter=filename>\n"
+               "foo.cpp\n"
+               "</parameter>\n"
+               "<parameter=oldString>\n"
+               "def foo(arg = \"14\"):\n"
+               "    return arg + \"bar\"\n"
+               "\n"
+               "</parameter>\n"
+               "<parameter=newString>\n"
+               "def foo(arg = \"15\"):\n"
+               "    pass\n"
+               "\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</seed:tool_call>")
+            .tools({
+                edit_tool
+        })
+            .expect_tool_calls({
+                { "edit", "{\"filename\": \"foo.cpp\", "
+                    "\"oldString\": \"def foo(arg = \\\"14\\\"):\\n    return arg + \\\"bar\\\"\\n\", "
+                    "\"newString\": \"def foo(arg = \\\"15\\\"):\\n    pass\\n\"}", {}
+                }
+            })
+            .run();
     }
 
     {

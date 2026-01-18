@@ -10,7 +10,7 @@ using json = nlohmann::ordered_json;
 static std::string_view trim_trailing_space(std::string_view sv, int max = -1) {
     int count = 0;
     while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.back()))) {
-        if (max != -1 && count <= max) {
+        if (max != -1 && count >= max) {
             break;
         }
         sv.remove_suffix(1);
@@ -19,18 +19,30 @@ static std::string_view trim_trailing_space(std::string_view sv, int max = -1) {
     return sv;
 }
 
-static std::string_view trim(std::string_view sv) {
+static std::string_view trim_leading_space(std::string_view sv, int max = -1) {
+    int count = 0;
     while (!sv.empty() && std::isspace(static_cast<unsigned char>(sv.front()))) {
+        if (max != -1 && count >= max) {
+            break;
+        }
         sv.remove_prefix(1);
+        count++;
     }
-    return trim_trailing_space(sv);
+    return sv;
+}
+
+static std::string_view trim(std::string_view sv) {
+    return trim_trailing_space(trim_leading_space(sv, 1));
 }
 
 // Convert Python-style single-quoted strings to JSON double-quoted strings
-// e.g., {'key': 'value'} -> {"key": "value"}
+// Only converts outer string delimiters, properly handling escape sequences:
+// - {'key': 'value'} -> {"key": "value"}
+// - {'code': 'print(\'hello\')'} -> {"code": "print('hello')"}
+// - {'msg': 'He said "hi"'} -> {"msg": "He said \"hi\""}
 static std::string normalize_quotes_to_json(const std::string & input) {
     std::string result;
-    result.reserve(input.size());
+    result.reserve(input.size() + 16);  // May need extra space for escaping
 
     bool in_single_quoted = false;
     bool in_double_quoted = false;
@@ -41,33 +53,64 @@ static std::string normalize_quotes_to_json(const std::string & input) {
         // Handle escape sequences
         if (c == '\\' && i + 1 < input.size()) {
             char next = input[i + 1];
-            if (in_single_quoted && next == '\'') {
-                // \' inside single-quoted string -> just '
-                result += '\'';
+
+            if (in_single_quoted) {
+                // Inside a single-quoted string being converted to double quotes
+                if (next == '\'') {
+                    // \' -> ' (escaped single quote becomes unescaped in double-quoted string)
+                    result += '\'';
+                    ++i;
+                    continue;
+                }
+                if (next == '"') {
+                    // \" stays as \" (already escaped, works in double-quoted string)
+                    result += "\\\"";
+                    ++i;
+                    continue;
+                }
+                // Other escapes (\n, \\, etc.): pass through both characters
+                result += c;
+                result += next;
                 ++i;
                 continue;
             }
-            if (in_double_quoted && next == '"') {
-                // \" inside double-quoted string -> keep as \"
-                result += "\\\"";
+
+            if (in_double_quoted) {
+                // Inside a double-quoted string - pass through escape sequences as-is
+                result += c;
+                result += next;
                 ++i;
                 continue;
             }
-            // Other escapes: pass through
+
+            // Outside any string - just pass through the backslash
             result += c;
             continue;
         }
 
-        if (c == '"' && !in_single_quoted) {
-            in_double_quoted = !in_double_quoted;
-            result += c;
-        } else if (c == '\'' && !in_double_quoted) {
-            // Single quote acting as string delimiter -> convert to double quote
-            in_single_quoted = !in_single_quoted;
-            result += '"';
-        } else if (c == '"' && in_single_quoted) {
-            // Double quote inside single-quoted string -> escape it
-            result += "\\\"";
+        // Handle quote characters
+        if (c == '"') {
+            if (in_single_quoted) {
+                // Unescaped double quote inside single-quoted string -> must escape for JSON
+                result += "\\\"";
+            } else {
+                // Double quote as string delimiter or outside strings
+                in_double_quoted = !in_double_quoted;
+                result += c;
+            }
+        } else if (c == '\'') {
+            if (in_double_quoted) {
+                // Single quote inside double-quoted string -> pass through
+                result += c;
+            } else if (in_single_quoted) {
+                // Closing single quote -> convert to double quote
+                in_single_quoted = false;
+                result += '"';
+            } else {
+                // Opening single quote -> convert to double quote
+                in_single_quoted = true;
+                result += '"';
+            }
         } else {
             result += c;
         }
@@ -788,7 +831,7 @@ void common_chat_peg_unified_mapper::map(const common_peg_ast_node & node) {
     }
 
     if (is_arg_value && current_tool) {
-        std::string value_content = std::string(trim(node.text));
+        std::string value_content = std::string(trim_trailing_space(trim_leading_space(node.text, 1), 1));
 
         std::string value_to_add;
         if (!value_content.empty()) {
