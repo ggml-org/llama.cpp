@@ -24,6 +24,8 @@ struct ggml_metal_command_buffer {
 };
 
 struct ggml_metal {
+    char name[128];
+
     ggml_metal_device_t  dev;
     ggml_metal_library_t lib;
 
@@ -117,7 +119,9 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
         }
     }
 
-    //const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
+    const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
+
+    snprintf(res->name, sizeof(res->name), "%s", props_dev->name);
 
     res->d_queue = dispatch_queue_create("ggml-metal", DISPATCH_QUEUE_CONCURRENT);
 
@@ -207,6 +211,10 @@ void ggml_metal_free(ggml_metal_t ctx) {
     dispatch_release(ctx->d_queue);
 
     free(ctx);
+}
+
+const char * ggml_metal_get_name(ggml_metal_t ctx) {
+    return ctx->name;
 }
 
 void ggml_metal_synchronize(ggml_metal_t ctx) {
