@@ -5,7 +5,7 @@
         <meta http-equiv="refresh" content="5">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>llama.cpp - loading...</title>
-        <link rel="icon" type="image/x-icon" href="favicon.svg">
+        <link rel="icon" type="image/svg+xml" href="favicon.svg">
         <style>
             :root{
                 color-scheme: light dark;
@@ -85,6 +85,16 @@
             }
 
             .colored-borders {
+                position: relative;
+                width: 100%;
+                box-sizing: border-box;
+                user-select: none;
+                overflow: hidden;
+                border: solid;
+                border-radius: 1.5rem;
+                border-width: 1px;
+                border-color: color-mix(in oklab, var(--border) 20%, transparent);
+                background-color: color-mix(in oklab, var(--muted) 85%, transparent);
                 animation-name: borderColors;
                 animation-duration: 5s;
                 animation-timing-function: ease-out;
@@ -92,8 +102,14 @@
         </style>
         <script>
           // Attempt to read llama.cpp config from browser local storage
-          const config = JSON.parse(window.localStorage.getItem("LlamaCppWebui.config"));
+          let config;
+          try{
+            config = JSON.parse(window.localStorage.getItem("LlamaCppWebui.config"));
+          } catch (error){
+            config = null;
+          }
 
+          // If the user has configured llama.cpp to use either light or dark mode, respect their setting
           if(config !== null){
             const colorTheme = config["theme"];
             if(colorTheme === "light"){
@@ -114,7 +130,7 @@
                     </p>
                 </div>
                 <div aria-label="Loading animation">
-                    <div class="colored-borders" style="position: relative; width: 100%; box-sizing: border-box; user-select: none; overflow: hidden; border: solid; border-radius: 1.5rem; border-width: 1px; border-color: color-mix(in oklab, var(--border) 20%, transparent); background-color: color-mix(in oklab, var(--muted) 85%, transparent);">
+                    <div class="colored-borders">
                         <div style="filter: blur(3rem) saturate(200%); display: flex; flex-direction: column; align-items: center; width: 100%; min-height: 3rem; box-sizing: border-box; padding-left: 1.25rem; padding-right: 1.25rem; padding-top: 0.75rem; padding-bottom: 0.75rem;">
                             <div style="flex-basis: 0%; flex-grow: 1; flex-shrink: 1; width: 100%;">
                                 <div id="text-placeholder" style="min-height: 3rem; width: 100%; margin-top: 0; margin-left: 0; margin-right: 0; margin-bottom: 0.375rem;"></div>
