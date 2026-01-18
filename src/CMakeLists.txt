@@ -56,6 +56,7 @@ add_library(llama
             models/deci.cpp
             models/deepseek.cpp
             models/deepseek2.cpp
+            models/delta.cpp
             models/dots1.cpp
             models/dream.cpp
             models/ernie4-5-moe.cpp
