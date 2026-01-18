@@ -358,12 +358,7 @@ const func_builtins & global_builtins() {
             args.ensure_vals<value_string>();
             return mk_val<value_bool>(args.get_pos(0)->val_str.is_uppercase());
         }},
-        {"test_is_none", [](const func_args & args) -> value {
-            args.ensure_count(1);
-            bool res = args.get_pos(0)->is_none();
-            JJ_DEBUG("test_is_none: result=%d", res ? 1 : 0);
-            return mk_val<value_bool>(res);
-        }},
+        {"test_is_none", test_type_fn<value_none>},
         {"test_is_defined", [](const func_args & args) -> value {
             args.ensure_count(1);
             bool res = !args.get_pos(0)->is_undefined();
@@ -389,12 +384,16 @@ const func_builtins & global_builtins() {
         }},
         {"test_is_in", [](const func_args & args) -> value {
             args.ensure_count(2, 2);
-            args.ensure_vals<value, value_array>();
-            const auto & needle = args.get_pos(0).get();
-            const auto & haystack = args.get_pos(1)->as_array();
+            value val_needle = args.get_pos(0);
+            value val_haystack = args.get_pos(1);
+            const auto & haystack = is_val<value_array>(val_haystack) ? val_haystack->as_array() : std::vector<value>(1, val_haystack);
             for (auto it = haystack.cbegin(); it != haystack.cend(); it++) {
-                if (it->get() == needle) {
-                    return mk_val<value_bool>(true);
+                if ((*it)->type() == val_needle->type()) {
+                    if (is_val<value_string>(val_haystack) ?
+                        (*it)->as_string().str().find(val_needle->as_string().str()) != std::string::npos :
+                        value_compare(*it, val_needle, value_compare_op::eq)) {
+                        return mk_val<value_bool>(true);
+                    }
                 }
             }
             return mk_val<value_bool>(false);

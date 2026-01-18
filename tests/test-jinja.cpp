@@ -879,16 +879,16 @@ static void test_tests(testing & t) {
         "yes"
     );
 
-    test_template(t, "is in",
-        "{% if x in y %}yes{% else %}no{% endif %}",
-        {{"x", "foo"}, {"y", json::array({"foo", "bar"})}},
-        "yes"
+    test_template(t, "select in",
+        "{% for item in items|select('in', '0020') %}{{ item }} {% endfor %}",
+        {{"items", json::array({"1", "0", "20"})}},
+        "0 20 "
     );
 
-    test_template(t, "not in",
-        "{% if x not in y %}yes{% else %}no{% endif %}",
-        {{"x", "baz"}, {"y", json::array({"foo", "bar"})}},
-        "yes"
+    test_template(t, "select in",
+        "{% for item in items|select('in', ['0','20']) %}{{ item }} {% endfor %}",
+        {{"items", json::array({0, "0", false, "20"})}},
+        "0 20 "
     );
 }
 
