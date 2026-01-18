@@ -207,6 +207,15 @@ add_library(ggml-base
             ggml-quants.h
             gguf.cpp)
 
+if (GGML_USE_STFMA)
+    target_sources(ggml-base PRIVATE
+        ggml-stfma-adapter.h
+        ggml-stfma-adapter.c
+        ggml-stfma/src/sparse_ternary_fma.c
+    )
+    target_include_directories(ggml-base PRIVATE ggml-stfma/include)
+endif()
+
 set_target_properties(ggml-base PROPERTIES
     VERSION ${GGML_VERSION}
     SOVERSION ${GGML_VERSION_MAJOR}

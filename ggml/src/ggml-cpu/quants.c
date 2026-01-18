@@ -384,7 +384,20 @@ void ggml_vec_dot_tq1_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     *s = sumf;
 }
 
+#ifdef GGML_USE_STFMA
+#include "ggml-stfma-adapter.h"
+#endif
+
 void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+#ifdef GGML_USE_STFMA
+    // Use sparse-ternary-fma for large operations
+    if (n >= GGML_STFMA_THRESHOLD) {
+        ggml_vec_dot_tq2_0_q8_K_stfma(n, s, bs, vx, bx, vy, by, nrc);
+        return;
+    }
+#endif
+
+    // Original implementation for small operations or when STFMA is disabled
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
